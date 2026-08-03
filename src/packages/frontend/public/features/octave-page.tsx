@@ -7,17 +7,25 @@ import { Button, Col, Flex, Row, Typography } from "antd";
 
 import type { IconName } from "@cocalc/frontend/components/icon";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
+import { COLORS } from "@cocalc/util/theme";
 import {
   PUBLIC_ELEVATION,
   PUBLIC_COLORS,
   PUBLIC_RADIUS,
   PUBLIC_TYPE,
 } from "@cocalc/frontend/public/theme";
-import { BulletList, featureAppPath as appPath } from "./page-components";
+import {
+  BulletList,
+  featureAppPath as appPath,
+  LinkButton,
+} from "./page-components";
 import { FEATURE_ACCENTS } from "./feature-accents";
-import { ContextList, FeatureFinalBand, IconBadge } from "./feature-visuals";
+import { FeatureInfo, FeatureInfoHeading } from "./feature-info";
+import { FeatureFinalBand, IconBadge } from "./feature-visuals";
 
 const { Paragraph, Text, Title } = Typography;
+
+const OCTAVE_KERNEL_GUIDE = "docs/jupyter/install-octave-kernel";
 
 function OctaveProjectMock() {
   const projectItems = [
@@ -84,47 +92,6 @@ function OctaveProjectMock() {
   );
 }
 
-function OctaveFlow() {
-  return (
-    <PublicSection>
-      <Row gutter={[24, 24]} align="middle">
-        <Col xs={24} lg={12}>
-          <Flex vertical gap={12}>
-            <Title level={3} style={{ margin: 0 }}>
-              Run reproducible Octave work without local setup drift.
-            </Title>
-            <Paragraph style={{ margin: 0 }}>
-              Everyone opens the same reproducible project: notebooks,{" "}
-              <code>.m</code> files, plots, data, packages, and TimeTravel
-              history stay with the work instead of drifting across laptops.
-            </Paragraph>
-          </Flex>
-        </Col>
-        <Col xs={24} lg={12}>
-          <ContextList
-            accent={FEATURE_ACCENTS.octave}
-            items={[
-              {
-                icon: "users",
-                label: "Collaborators open the same environment",
-              },
-              {
-                icon: "history",
-                label: "Reopen earlier versions with TimeTravel",
-              },
-              {
-                icon: "jupyter",
-                label: "Use notebooks with real-time collaboration",
-              },
-            ]}
-            title="Project context"
-          />
-        </Col>
-      </Row>
-    </PublicSection>
-  );
-}
-
 export default function OctaveFeaturePage({
   helpEmail,
   isAuthenticated,
@@ -139,29 +106,27 @@ export default function OctaveFeaturePage({
   const finalLabel = isAuthenticated ? "Open projects" : "Start using Octave";
 
   return (
-    <Flex vertical gap={22}>
+    <Flex vertical gap={36}>
       <PublicSection>
-        <Row gutter={[28, 28]} align="middle">
+        <Row align="top" gutter={[28, 28]}>
           <Col xs={24} lg={11}>
             <Flex vertical gap={14}>
               <Title level={2} style={{ margin: 0 }}>
-                Run GNU Octave with notebooks, .m files, and shared numerical
-                work.
+                Run GNU Octave online in a project you control.
               </Title>
               <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
-                The numerical work lives in one durable project — no local
-                installs to maintain.
+                Octave is the free numerical computing language that is largely
+                compatible with MATLAB. In CoCalc it runs in a full Linux
+                project: work in notebooks, terminals, and <code>.m</code> files
+                with your team.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryHref}>
                   {primaryLabel}
                 </Button>
-                <Button href={appPath("features/jupyter-notebook")}>
-                  Jupyter notebooks
-                </Button>
-                <Button href={appPath("features/terminal")}>
-                  Terminal workflows
-                </Button>
+                <LinkButton href={appPath(OCTAVE_KERNEL_GUIDE)}>
+                  Octave setup guide
+                </LinkButton>
               </Flex>
             </Flex>
           </Col>
@@ -171,20 +136,83 @@ export default function OctaveFeaturePage({
         </Row>
       </PublicSection>
 
-      <OctaveFlow />
+      <PublicSection>
+        <FeatureInfoHeading
+          anchor="a-overview"
+          description={
+            <>
+              Octave lives inside a full CoCalc project, so collaboration,
+              history, and backups come with it.
+            </>
+          }
+        >
+          Octave, with a real project around it
+        </FeatureInfoHeading>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent={COLORS.FEATURE_OCTAVE_BLUE}
+          alt="A Jupyter notebook running the GNU Octave kernel in CoCalc"
+          anchor="a-notebooks"
+          icon="jupyter"
+          image="cocalc-octave-jupyter-20200511.png"
+          title="Octave in Jupyter notebooks"
+        >
+          <Paragraph>
+            With the Octave Jupyter kernel in place, following the{" "}
+            <a href={appPath(OCTAVE_KERNEL_GUIDE)}>setup guide</a>, notebooks
+            gain <strong>Octave as a selectable kernel</strong>: run cells,
+            render plots inline, and keep narrative text next to the code.
+          </Paragraph>
+          <Paragraph>
+            The notebook itself is a collaborative CoCalc document:{" "}
+            <strong>real-time editing with visible cursors</strong>, chat
+            threads anchored to cells, and TimeTravel recording every change.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent={COLORS.RUN}
+          anchor="a-scripts"
+          icon="terminal"
+          title=".m files, plots, and the command line"
+        >
+          <Paragraph>
+            <code>.m</code> files open in the collaborative code editor with{" "}
+            <strong>Octave syntax highlighting</strong>, and the editor's Shell
+            button starts <code>octave</code> in a pane right next to your file.
+          </Paragraph>
+          <Paragraph>
+            Longer runs belong in the{" "}
+            <a href={appPath("features/terminal")}>terminal</a>:{" "}
+            <strong>sessions survive disconnects</strong>, so you can start a
+            computation, close the laptop, and check the result later.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
 
       <PublicSection>
         <FeatureFinalBand
           action={{
-            body: "Open a project and use Octave in notebooks, terminals, scripts, or teaching workflows.",
+            body: "Open a project and keep the numerical work in one durable place.",
             href: primaryHref,
             label: finalLabel,
             title: "Start in a project",
           }}
           relatedLinks={[
+            {
+              href: appPath(OCTAVE_KERNEL_GUIDE),
+              label: "Octave setup guide",
+            },
             { href: appPath("features/linux"), label: "Linux environment" },
+            {
+              href: appPath("features/jupyter-notebook"),
+              label: "Jupyter notebooks",
+            },
             { href: appPath("features/teaching"), label: "Teaching" },
-            { href: appPath("products"), label: "Compare operating models" },
             ...(helpEmail
               ? [{ href: `mailto:${helpEmail}`, label: "Contact support" }]
               : []),

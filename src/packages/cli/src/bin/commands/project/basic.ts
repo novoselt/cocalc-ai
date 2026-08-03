@@ -257,6 +257,27 @@ export function registerProjectBasicCommands(
       });
     });
 
+  project
+    .command("status")
+    .description("show project lifecycle and runtime capabilities")
+    .option("-w, --project <project>", "project id or name")
+    .action(async (opts: { project?: string }, command: Command) => {
+      await withContext(command, "project status", async (ctx) => {
+        const ws = await resolveProjectFromArgOrContext(ctx, opts.project);
+        const getStatus = ctx.hub.projects.status;
+        if (getStatus == null) {
+          throw new Error("project status is unavailable on this server");
+        }
+        const status = await getStatus({ project_id: ws.project_id });
+        return {
+          project_id: ws.project_id,
+          title: ws.title,
+          host_id: ws.host_id,
+          ...status,
+        };
+      });
+    });
+
   const label = project.command("label").description("manage project labels");
 
   label
@@ -616,13 +637,27 @@ export function registerProjectBasicCommands(
     .command("start")
     .description("start a project (defaults to context)")
     .option("-w, --project <project>", "project id or name")
+    .option(
+      "--restore-backup-id <id>",
+      "atomically restore this backup before starting",
+    )
     .option("--wait", "wait for completion")
     .action(
-      async (opts: { project?: string; wait?: boolean }, command: Command) => {
+      async (
+        opts: {
+          project?: string;
+          restoreBackupId?: string;
+          wait?: boolean;
+        },
+        command: Command,
+      ) => {
         await withContext(command, "project start", async (ctx) => {
           const ws = await resolveProjectFromArgOrContext(ctx, opts.project);
           const op = await ctx.hub.projects.start({
             project_id: ws.project_id,
+            ...(opts.restoreBackupId
+              ? { restore_backup_id: opts.restoreBackupId }
+              : {}),
             wait: false,
           });
 

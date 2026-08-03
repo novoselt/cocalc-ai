@@ -90,6 +90,7 @@ type ChallengeInfo = {
   current_display_name?: string | null;
   current_matches_account?: boolean | null;
   requested_duration?: "default" | "extended" | null;
+  elevated_login?: boolean;
   state: "pending" | "approved" | "redeemed" | "canceled";
   expires_at: string;
 };
@@ -255,6 +256,8 @@ export function PublicCliLoginApprovalView({
   const [signingOut, setSigningOut] = useState(false);
   const authOrigin = getControlPlaneOrigin();
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction({
+    defaultExtended:
+      info?.elevated_login === true && info?.requested_duration === "extended",
     origin: authOrigin,
   });
 
@@ -292,7 +295,11 @@ export function PublicCliLoginApprovalView({
         }>({
           endpoint: "auth/cli/login/approval-token",
           origin: authOrigin,
-          body: { challenge_id: challengeId },
+          body: {
+            challenge_id: challengeId,
+            elevated_login: info?.elevated_login === true,
+            requested_duration: info?.requested_duration ?? "default",
+          },
         });
         await postAuthApi({
           endpoint: "auth/cli/login/approve",
@@ -361,19 +368,28 @@ export function PublicCliLoginApprovalView({
       {error ? <Alert kind="error">{error}</Alert> : undefined}
       {approved ? (
         <Alert kind="success">
-          CLI login approved. Return to your terminal to finish signing in.
+          {info?.elevated_login
+            ? "Elevated CLI login approved. Return to your terminal to finish signing in."
+            : "CLI login approved. Return to your terminal to finish signing in."}
         </Alert>
       ) : (
         <Alert kind="info">
-          Approve a CLI sign-in for {currentCliLoginAccountLabel(info)}. This
-          creates a separate CLI session and does not reuse your browser
-          session.
+          Approve {info?.elevated_login ? "an elevated" : "a"} CLI sign-in for{" "}
+          {currentCliLoginAccountLabel(info)}. This creates a separate CLI
+          session and does not reuse your browser session.
+          {info?.elevated_login && info.requested_duration === "extended"
+            ? " The terminal session will stay elevated for 8 hours."
+            : ""}
           {loginHintLabel(info)}
         </Alert>
       )}
       {!approved ? (
         <ActionButton disabled={approving} onClick={approve}>
-          {approving ? "Approving..." : "Approve CLI Login"}
+          {approving
+            ? "Approving..."
+            : info?.elevated_login
+              ? "Approve Elevated CLI Login"
+              : "Approve CLI Login"}
         </ActionButton>
       ) : undefined}
       <FreshAuthModal {...freshAuthModalProps} />

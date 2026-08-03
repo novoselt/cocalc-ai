@@ -75,6 +75,7 @@ import {
   len,
 } from "@cocalc/util/misc";
 import { buildMarketingConsentOtherSettings } from "@cocalc/util/notification-preferences";
+import { normalizeEmailAuthenticationMode } from "@cocalc/util/auth/email-auth";
 
 import getAccountId from "@cocalc/http-api/lib/account/get-account";
 import { apiRoute, apiRouteOperation } from "@cocalc/http-api/lib/api";
@@ -157,7 +158,11 @@ export async function signUp(req, res) {
   // The UI doesn't let users try to make an account via signUp if
   // email isn't enabled.  However, they might try to directly POST
   // to the API, so we check here as well.
-  const { email_signup } = await getServerSettings();
+  const settings = await getServerSettings();
+  const { email_enabled, email_signup, verify_emails } = settings;
+  const emailAuthenticationMode = normalizeEmailAuthenticationMode(
+    settings.email_authentication_mode,
+  );
 
   const owner_id = await getAccountId(req);
   if (owner_id) {
@@ -194,6 +199,17 @@ export async function signUp(req, res) {
     res.json({
       issues: {
         email: "Email account creation is disabled.",
+      },
+    });
+    return;
+  }
+  if (
+    emailAuthenticationMode !== "password_required" &&
+    (!email_enabled || !verify_emails)
+  ) {
+    res.json({
+      issues: {
+        api: "Email signup is temporarily unavailable because verification email delivery is not configured.",
       },
     });
     return;

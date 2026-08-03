@@ -2,12 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC_ROOT="$(realpath "${SCRIPT_DIR}/../../..")"
-REPO_ROOT="$(realpath "${SRC_ROOT}/..")"
+SRC_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+REPO_ROOT="$(cd "${SRC_ROOT}/.." && pwd -P)"
 BUILD_RELEASE="${SRC_ROOT}/scripts/star/build-star-release.sh"
 
 TAG="${COCALC_STAR_DOCKER_TAG:-cocalc/star:preview}"
 RELEASE_ARTIFACT="${COCALC_STAR_DOCKER_RELEASE_ARTIFACT:-}"
+IMAGE_RELEASE_ID="${COCALC_STAR_DOCKER_RELEASE_ID:-unknown}"
+IMAGE_GIT_REVISION="${COCALC_STAR_DOCKER_GIT_REVISION:-unknown}"
+IMAGE_TARGETARCH="${COCALC_STAR_DOCKER_TARGETARCH:-unknown}"
 BUILD_RUNTIME="${COCALC_STAR_DOCKER_BUILD_RUNTIME:-1}"
 BUILD_ROOTFS_CACHE="${COCALC_STAR_DOCKER_BUILD_ROOTFS_CACHE:-1}"
 ROOTFS_CACHE_ARTIFACT="${COCALC_STAR_DOCKER_ROOTFS_CACHE_ARTIFACT:-}"
@@ -52,6 +55,9 @@ Options:
 Environment:
   COCALC_STAR_DOCKER_TAG
   COCALC_STAR_DOCKER_RELEASE_ARTIFACT
+  COCALC_STAR_DOCKER_RELEASE_ID
+  COCALC_STAR_DOCKER_GIT_REVISION
+  COCALC_STAR_DOCKER_TARGETARCH
   COCALC_STAR_DOCKER_BUILD_RUNTIME=0
   COCALC_STAR_DOCKER_BUILD_ROOTFS_CACHE=0
   COCALC_STAR_DOCKER_ROOTFS_CACHE_ARTIFACT
@@ -157,7 +163,8 @@ if [[ -z "$RELEASE_ARTIFACT" ]]; then
       "$BUILD_RELEASE" "$RELEASE_ARTIFACT"
   )
 else
-  RELEASE_ARTIFACT="$(realpath "$RELEASE_ARTIFACT")"
+  release_artifact_dir="$(cd "$(dirname "$RELEASE_ARTIFACT")" && pwd -P)"
+  RELEASE_ARTIFACT="${release_artifact_dir}/$(basename "$RELEASE_ARTIFACT")"
   [ -f "$RELEASE_ARTIFACT" ] || die "release artifact does not exist: $RELEASE_ARTIFACT"
 fi
 
@@ -196,7 +203,11 @@ build_image() {
   local rootfs_cache="${2:-}"
   make_context "$rootfs_cache"
   log "building Docker image $tag"
-  docker_cli build -t "$tag" "$context"
+  docker_cli build \
+    --build-arg "COCALC_STAR_RELEASE_ID=${IMAGE_RELEASE_ID}" \
+    --build-arg "COCALC_STAR_GIT_REVISION=${IMAGE_GIT_REVISION}" \
+    --build-arg "COCALC_STAR_TARGETARCH=${IMAGE_TARGETARCH}" \
+    -t "$tag" "$context"
 }
 
 dump_builder_diagnostics() {
@@ -381,7 +392,8 @@ tar --numeric-owner -C /cache/images -czf /tmp/cocalc-star-rootfs-cache.tar.gz .
 }
 
 if [[ -n "$ROOTFS_CACHE_ARTIFACT" ]]; then
-  ROOTFS_CACHE_ARTIFACT="$(realpath "$ROOTFS_CACHE_ARTIFACT")"
+  rootfs_cache_artifact_dir="$(cd "$(dirname "$ROOTFS_CACHE_ARTIFACT")" && pwd -P)"
+  ROOTFS_CACHE_ARTIFACT="${rootfs_cache_artifact_dir}/$(basename "$ROOTFS_CACHE_ARTIFACT")"
   [ -f "$ROOTFS_CACHE_ARTIFACT" ] || die "RootFS cache artifact does not exist: $ROOTFS_CACHE_ARTIFACT"
 elif [[ "$BUILD_ROOTFS_CACHE" == "1" ]]; then
   rootfs_cache_dir="${REPO_ROOT}/dist/star/docker-preview"

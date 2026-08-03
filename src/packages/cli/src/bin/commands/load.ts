@@ -1,11 +1,14 @@
 import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { Command } from "commander";
 
 import { connect } from "@cocalc/conat/core/client";
 import { sysApiMany } from "@cocalc/conat/core/sys";
 import type { ConnectionStats } from "@cocalc/conat/core/types";
 import { inboxPrefix } from "@cocalc/conat/names";
+import { dstream, type DStream } from "@cocalc/conat/sync/dstream";
 
 import { durationToMs } from "../../core/utils";
 
@@ -98,6 +101,21 @@ function parseOptionalDurationMs(raw: string | undefined): number | undefined {
     return undefined;
   }
   return Math.max(1, durationToMs(raw, 0));
+}
+
+function parseNonNegativeInteger(
+  raw: string | undefined,
+  flag: string,
+  defaultValue: number,
+): number {
+  if (raw == null || `${raw}`.trim() === "") {
+    return defaultValue;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${flag} must be a non-negative integer`);
+  }
+  return value;
 }
 
 function roundMs(value: number): number {
@@ -796,6 +814,135 @@ export function registerLoadCommand(
   const load = program
     .command("load")
     .description("load-test harness commands");
+
+  load
+    .command("ephemeral-persistence")
+    .description(
+      "open bounded ephemeral streams for staging persistence memory diagnostics",
+    )
+    .option("--count <n>", "streams to open", "100")
+    .option("--concurrency <n>", "parallel stream open workers", "20")
+    .option(
+      "--payload-bytes <n>",
+      "random payload bytes stored per stream",
+      "0",
+    )
+    .option("--hold <duration>", "time to hold streams open", "30s")
+    .action(
+      async (
+        opts: {
+          count?: string;
+          concurrency?: string;
+          payloadBytes?: string;
+          hold?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "load ephemeral-persistence",
+          async (ctx) => {
+            const api = new URL(ctx.apiBaseUrl);
+            if (api.hostname === "cocalc.ai") {
+              throw new Error(
+                "load ephemeral-persistence refuses the production cocalc.ai API",
+              );
+            }
+            const count = parsePositiveInteger(opts.count, "--count", 100);
+            const concurrency = parsePositiveInteger(
+              opts.concurrency,
+              "--concurrency",
+              20,
+            );
+            const payloadBytes = parseNonNegativeInteger(
+              opts.payloadBytes,
+              "--payload-bytes",
+              0,
+            );
+            const holdMs = durationToMs(opts.hold, 30_000);
+            if (count > 2_000) {
+              throw new Error("--count must not exceed 2000");
+            }
+            if (payloadBytes > 1024 * 1024) {
+              throw new Error("--payload-bytes must not exceed 1048576");
+            }
+            if (count * payloadBytes > 512 * 1024 * 1024) {
+              throw new Error(
+                "total requested payload must not exceed 512 MiB",
+              );
+            }
+            if (holdMs < 1_000 || holdMs > 10 * 60_000) {
+              throw new Error("--hold must be between 1s and 10m");
+            }
+
+            const runId = `${Date.now()}-${randomBytes(6).toString("hex")}`;
+            const streams: DStream<{
+              index: number;
+              payload?: string;
+            }>[] = [];
+            let nextIndex = 0;
+            const started = performance.now();
+            try {
+              await Promise.all(
+                Array.from(
+                  { length: Math.min(count, concurrency) },
+                  async () => {
+                    while (true) {
+                      const index = nextIndex++;
+                      if (index >= count) {
+                        return;
+                      }
+                      const stream = await dstream<{
+                        index: number;
+                        payload?: string;
+                      }>({
+                        client: ctx.remote.client,
+                        account_id: ctx.accountId,
+                        name: `cli-ephemeral-load-${runId}-${index}`,
+                        ephemeral: true,
+                        noCache: true,
+                        noInventory: true,
+                        config: {
+                          max_msgs: 1,
+                          max_bytes: Math.max(1024, payloadBytes * 2),
+                        },
+                      });
+                      streams.push(stream);
+                      if (payloadBytes > 0) {
+                        stream.push({
+                          index,
+                          payload: randomBytes(payloadBytes).toString("base64"),
+                        });
+                        await stream.save();
+                      }
+                    }
+                  },
+                ),
+              );
+              const openedMs = performance.now() - started;
+              await delay(holdMs);
+              return {
+                api: ctx.apiBaseUrl,
+                account_id: ctx.accountId,
+                streams_opened: streams.length,
+                payload_bytes_per_stream: payloadBytes,
+                total_payload_bytes: streams.length * payloadBytes,
+                open_duration_ms: roundMs(openedMs),
+                hold_duration_ms: holdMs,
+              };
+            } finally {
+              for (const stream of streams) {
+                try {
+                  stream.close();
+                } catch {
+                  // Best-effort cleanup if a load worker failed.
+                }
+              }
+            }
+          },
+        );
+      },
+    );
 
   load
     .command("conat-messages")

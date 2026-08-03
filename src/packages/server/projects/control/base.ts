@@ -24,7 +24,6 @@ environments.
 import { callback2, until } from "@cocalc/util/async-utils";
 import { db } from "@cocalc/database";
 import { EventEmitter } from "events";
-import { setTimeout as delay } from "timers/promises";
 import { isEqual } from "lodash";
 import { ProjectState, ProjectStatus } from "@cocalc/util/db-schema/projects";
 import { Quota, quota } from "@cocalc/util/upgrades/quota";
@@ -55,8 +54,8 @@ import {
   upsertPublishedRootfsRelease,
 } from "@cocalc/server/rootfs/releases";
 import {
-  getMembershipIoClassForAccount,
   getMembershipProjectDefaultsForAccount,
+  getMembershipRuntimeSchedulingForAccount,
 } from "@cocalc/server/membership/project-defaults";
 import { applyProjectEntitlementOverrideToRunQuota } from "@cocalc/server/membership/project-entitlement-overrides";
 import { assertLocalProjectOwnership } from "@cocalc/server/conat/project-local-access";
@@ -66,6 +65,7 @@ import {
   resolveRuntimeSponsorAccountId,
   type ProjectUsers,
 } from "@cocalc/server/projects/runtime-sponsor";
+import { isWorkspaceProjectRuntime } from "@cocalc/server/launchpad/project-runtime";
 export type { ProjectState, ProjectStatus };
 
 const logger = getLogger("project-control");
@@ -82,18 +82,8 @@ export type Action = "open" | "start" | "stop" | "restart";
 const projectCache: { [project_id: string]: WeakRef<BaseProject> } = {};
 const ROOTFS_SEAL_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const FILE_SERVER_READY_TIMEOUT_MS = 60_000;
-const DEFAULT_PROJECT_RESTART_SETTLE_MS = 1500;
 const DISABLE_ROOTFS_PORTABILITY_SEAL_ENV =
   "COCALC_DISABLE_ROOTFS_PORTABILITY_SEAL";
-const PROJECT_RESTART_SETTLE_MS_ENV = "COCALC_PROJECT_RESTART_SETTLE_MS";
-
-function getProjectRestartSettleMs(): number {
-  const configured = Number(process.env[PROJECT_RESTART_SETTLE_MS_ENV]);
-  if (Number.isFinite(configured) && configured >= 0) {
-    return configured;
-  }
-  return DEFAULT_PROJECT_RESTART_SETTLE_MS;
-}
 
 function isActiveProjectState(state?: string | null): boolean {
   return state === "running" || state === "starting" || state === "pending";
@@ -147,6 +137,9 @@ function runQuotaForRestartComparison(
   if (run_quota == null || typeof run_quota !== "object") {
     return {};
   }
+  // idle_timeout is retained as legacy/future-policy metadata.  The current
+  // CoCalc-AI project-host does not enforce it, so changing it must not restart
+  // a running project.
   const { idle_timeout: _idle_timeout, ...rest } = run_quota as Record<
     string,
     unknown
@@ -183,6 +176,7 @@ export class BaseProject extends EventEmitter {
   public is_freed: boolean = false;
   protected stateChanging: ProjectState | undefined = undefined;
   private localOwnershipChecked?: Promise<void>;
+  private runQuotaRevision?: number;
 
   constructor(project_id: string) {
     super();
@@ -355,6 +349,10 @@ export class BaseProject extends EventEmitter {
     restore_backup_id?: string;
   }): Promise<void> => {
     await this.ensureLocalOwnership();
+    if (isWorkspaceProjectRuntime()) {
+      await this.projectRunner().start({ project_id: this.project_id });
+      return;
+    }
     await this.startOnHost(opts);
     if (process.env[DISABLE_ROOTFS_PORTABILITY_SEAL_ENV] === "1") {
       logger.warn("skipping project RootFS portability seal", {
@@ -399,6 +397,13 @@ export class BaseProject extends EventEmitter {
 
   stop = async ({ force }: { force?: boolean } = {}): Promise<void> => {
     await this.ensureLocalOwnership();
+    if (isWorkspaceProjectRuntime()) {
+      await this.projectRunner().stop({
+        project_id: this.project_id,
+        force,
+      });
+      return;
+    }
     if (force) {
       logger.debug("stop -- TODO -- force not implemented");
     }
@@ -435,14 +440,6 @@ export class BaseProject extends EventEmitter {
   }): Promise<void> => {
     this.dbg("restart")();
     await this.stop();
-    const settleMs = getProjectRestartSettleMs();
-    if (settleMs > 0) {
-      logger.debug("restart settling after stop", {
-        project_id: this.project_id,
-        settle_ms: settleMs,
-      });
-      await delay(settleMs);
-    }
     await this.start(opts);
   };
 
@@ -538,6 +535,7 @@ export class BaseProject extends EventEmitter {
           await updateProjectRunQuotaOnHost({
             project_id: this.project_id,
             run_quota: nextRunQuota,
+            run_quota_revision: this.runQuotaRevision,
           });
           dbg("live quota reconfiguration worked");
         } catch (err) {
@@ -557,9 +555,9 @@ export class BaseProject extends EventEmitter {
     await this.setRunQuota(null, account_id);
   };
 
-  // The run_quota is now explicitly used in singule-user and multi-user
-  // to control at least idle timeout of projects; also it is very useful
-  // for development since it is shown in the UI (in project settings).
+  // run_quota controls project resource limits and is shown in project
+  // settings.  It still includes idle_timeout for compatibility and possible
+  // future use, but current CoCalc-AI project hosts do not enforce idle stops.
   setRunQuota = async (
     run_quota: Quota | null,
     account_id?: string,
@@ -610,13 +608,15 @@ export class BaseProject extends EventEmitter {
         last_active,
         last_started_by,
       });
-      const [runtimeDefaults, ioClass] = await Promise.all([
+      const [runtimeDefaults, runtimeScheduling] = await Promise.all([
         getMembershipProjectDefaultsForAccount(runtime_account_id),
-        getMembershipIoClassForAccount(runtime_account_id),
+        getMembershipRuntimeSchedulingForAccount(runtime_account_id),
       ]);
       const site_settings = await getQuotaSiteSettings(); // quick, usually cached
       nextRunQuota = quota(runtimeDefaults, undefined, site_settings);
-      nextRunQuota.io_class = ioClass;
+      nextRunQuota.io_class = runtimeScheduling.io_class;
+      nextRunQuota.shared_compute_priority =
+        runtimeScheduling.shared_compute_priority;
 
       if (storage_account_id && storage_account_id !== runtime_account_id) {
         const storageDefaults =
@@ -641,19 +641,52 @@ export class BaseProject extends EventEmitter {
       throw new Error("unable to compute project run_quota");
     }
 
-    const set: Record<string, unknown> = { run_quota: nextRunQuota };
-    if (account_id) {
-      set.last_started_by = account_id;
+    const serialized = JSON.stringify(nextRunQuota);
+    try {
+      const { rows } = await getPool().query<{ run_quota_revision: string }>(
+        `
+          UPDATE projects
+          SET run_quota_revision =
+                CASE
+                  WHEN run_quota IS DISTINCT FROM $2::jsonb
+                    THEN COALESCE(run_quota_revision, 0) + 1
+                  ELSE COALESCE(run_quota_revision, 0)
+                END,
+              run_quota = $2::jsonb,
+              last_started_by = CASE WHEN $3::uuid IS NULL
+                                     THEN last_started_by
+                                     ELSE $3::uuid END
+          WHERE project_id = $1
+          RETURNING COALESCE(run_quota_revision, 0)::text AS run_quota_revision
+        `,
+        [this.project_id, serialized, account_id ?? null],
+      );
+      if (!rows[0]) {
+        throw new Error(`project ${this.project_id} not found`);
+      }
+      this.runQuotaRevision = Number(rows[0].run_quota_revision);
+    } catch (err) {
+      if ((err as { code?: string })?.code !== "42703") {
+        throw err;
+      }
+      // Mixed-version rollout compatibility until the additive column exists.
+      await query({
+        db: db(),
+        query: "UPDATE projects",
+        where: { project_id: this.project_id },
+        set: {
+          run_quota: nextRunQuota,
+          ...(account_id ? { last_started_by: account_id } : {}),
+        },
+      });
+      this.runQuotaRevision = 0;
     }
 
-    await query({
-      db: db(),
-      query: "UPDATE projects",
-      where: { project_id: this.project_id },
-      set,
+    logger.debug("updated run_quota", {
+      project_id: this.project_id,
+      run_quota_revision: this.runQuotaRevision,
+      run_quota: nextRunQuota,
     });
-
-    logger.debug("updated run_quota=", JSON.stringify(nextRunQuota));
     return nextRunQuota;
   };
 }

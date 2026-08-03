@@ -149,6 +149,13 @@ export class PageActions extends Actions<PageState> {
   }
 
   set_active_tab = async (key, change_history = true): Promise<void> => {
+    const customize = redux.getStore("customize");
+    if (customize?.get("exam_mode")) {
+      const examProjectId = customize.get("project_id");
+      if (examProjectId) {
+        key = examProjectId;
+      }
+    }
     if (lite) {
       if (!LITE_TABS.has(key)) {
         key = project_id;

@@ -4,6 +4,7 @@
  */
 
 import { executeCode } from "@cocalc/backend/execute-code";
+import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 
 import {
   ProjectRusticUnsupportedError,
@@ -96,6 +97,31 @@ describe("project rustic wrapper", () => {
     );
   });
 
+  it("moves scheduled backups through the maintenance wrapper command", async () => {
+    mockedExecuteCode.mockResolvedValue({
+      type: "blocking",
+      stdout:
+        '{"time":"2026-03-31T12:34:56.000Z","id":"backup-id","summary":{}}',
+      stderr: "",
+      exit_code: 0,
+    } as any);
+
+    await withBtrfsMutationContext({ priority: "scheduled" }, async () => {
+      await projectRusticBackup({
+        src: "/mnt/cocalc/project-1/.snapshots/temp",
+        repoProfile: "/mnt/cocalc/data/secrets/rustic/project-1.toml",
+        host: "project-1",
+        timeoutMs: 30_000,
+      });
+    });
+
+    expect(mockedExecuteCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["project-rustic-backup-maintenance"]),
+      }),
+    );
+  });
+
   it("surfaces old-wrapper incompatibility distinctly", async () => {
     mockedExecuteCode.mockResolvedValue({
       type: "blocking",
@@ -119,7 +145,8 @@ describe("project rustic wrapper", () => {
     mockedExecuteCode.mockResolvedValue({
       type: "blocking",
       stdout: "",
-      stderr: "SECURITY_DENY code=project-rustic-backup-bad-args detail=--parent",
+      stderr:
+        "SECURITY_DENY code=project-rustic-backup-bad-args detail=--parent",
       exit_code: 2,
     } as any);
 

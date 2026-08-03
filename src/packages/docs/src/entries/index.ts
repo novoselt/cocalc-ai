@@ -93,6 +93,7 @@ const DOCS_ENTRY_IDS = [
   "troubleshooting.memory",
   "troubleshooting.connectivity",
   "hosts.project-hosts",
+  "hosts.exam-scratchpads",
   "hosts.access-and-ram",
   "hosts.move-projects",
   "hosts.lifecycle",

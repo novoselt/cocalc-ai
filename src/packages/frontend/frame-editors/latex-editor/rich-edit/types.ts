@@ -52,7 +52,7 @@ export type WidgetType =
   // Math (Phase 4)
   | "math-inline" // $…$, \(…\)
   | "math-display" // \[…\], $$…$$ (single-line)
-  | "math-env" // \begin{equation|align|gather|multline}…\end{…} (+ starred)
+  | "math-env" // \begin{equation|align|gather|multline|displaymath|eqnarray}…\end{…} (+ starred)
   // Lists (Phase 5)
   | "list-env-begin" // \begin{itemize|enumerate|description}
   | "list-env-end" // \end{itemize|enumerate|description}

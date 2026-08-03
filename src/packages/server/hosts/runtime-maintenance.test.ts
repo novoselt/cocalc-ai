@@ -381,6 +381,8 @@ describe("project-host runtime maintenance policy", () => {
       result: {
         public_url: "https://host.example.test",
         origin: "https://cocalc.example.test",
+        expected_host_id: row.id,
+        health_host_id: row.id,
         health_status: 200,
         preflight_status: 204,
         session_status: 401,
@@ -410,6 +412,8 @@ describe("project-host runtime maintenance policy", () => {
       result: {
         public_url: "https://host.example.test",
         origin: "https://cocalc.example.test",
+        expected_host_id: row.id,
+        health_host_id: row.id,
         health_status: 200,
         preflight_status: 204,
         session_status: 401,
@@ -460,6 +464,66 @@ describe("project-host runtime maintenance policy", () => {
       healthy_origin_failures: 2,
       shared_ingress_failure: false,
     });
+
+    failures[1].origin_health.status = "unknown";
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 4, failures }),
+    ).toMatchObject({
+      healthy_origin_failures: 1,
+      shared_ingress_failure: false,
+    });
+  });
+
+  it("classifies correlated fetch failures with healthy origins as shared", () => {
+    const failures: any[] = Array.from({ length: 9 }, (_, index) => ({
+      row: degradedCloudHost({ name: `host-${index}` }),
+      error:
+        "ProjectHostPublicRouteProbeError: public project-host health check failed: TypeError: fetch failed",
+      consecutive_failures: 0,
+      probe: {},
+      origin_health: {
+        status: "healthy",
+        checked_at: new Date(NOW).toISOString(),
+        duration_ms: 2,
+      },
+    }));
+
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 10, failures }),
+    ).toMatchObject({
+      checked_hosts: 10,
+      failed_hosts: 9,
+      healthy_origin_failures: 9,
+      failure_classes: { network_fetch: 9 },
+      correlated_failure: true,
+      shared_ingress_failure: true,
+    });
+  });
+
+  it("does not classify two transient resets in a large batch as shared", () => {
+    const failures: any[] = Array.from({ length: 2 }, (_, index) => ({
+      row: degradedCloudHost({ name: `host-${index}` }),
+      error:
+        "ProjectHostPublicRouteProbeError: public project-host health check failed: Error: read ECONNRESET code=ECONNRESET",
+      consecutive_failures: 0,
+      probe: {},
+      origin_health: {
+        status: "healthy",
+        checked_at: new Date(NOW).toISOString(),
+        duration_ms: 2,
+      },
+    }));
+
+    expect(
+      _test.publicRouteFleetContext({ checked_hosts: 16, failures }),
+    ).toMatchObject({
+      checked_hosts: 16,
+      failed_hosts: 2,
+      healthy_origin_failures: 2,
+      failure_classes: { network_fetch: 2 },
+      correlated_failure: true,
+      shared_ingress_failure: false,
+    });
   });
 
   it("preserves host failure state during a shared ingress incident", () => {
@@ -486,7 +550,7 @@ describe("project-host runtime maintenance policy", () => {
     });
   });
 
-  it("escalates persistent or correlated public-route incidents once", () => {
+  it("escalates quarantined or persistent public-route incidents once", () => {
     const row = degradedCloudHost();
     const failure = {
       row,
@@ -519,6 +583,8 @@ describe("project-host runtime maintenance policy", () => {
     failure.probe.incident_started_at = new Date(NOW).toISOString();
     failure.fleet.correlated_failure = true;
     failure.fleet.failed_hosts = 2;
+    expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(false);
+    failure.probe.quarantined = true;
     expect(_test.publicRouteFailureEscalationDue(failure, NOW)).toBe(true);
 
     expect(
@@ -548,20 +614,29 @@ describe("project-host runtime maintenance policy", () => {
       public_route_probe: probe,
     });
     expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
-      action: "restart",
+      action: "restart-tunnel",
     });
 
     row.metadata.public_route = { active_mode: "cloudflare-proxy" };
+    row.metadata.machine = { cloud: "gcp" };
+    row.metadata.runtime = {
+      instance_id: "host-instance",
+      zone: "us-west1-a",
+      public_ip: "203.0.113.20",
+    };
+    row.metadata.cloudflared_restart_supported = false;
     expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
-      action: "wait",
-      reason: "direct public route does not use Cloudflare Tunnel",
+      action: "reconcile-direct",
     });
     delete row.metadata.public_route;
+    delete row.metadata.machine;
+    delete row.metadata.runtime;
+    row.metadata.cloudflared_restart_supported = true;
 
     probe.failure_impact_suppressed = true;
     expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
       action: "wait",
-      reason: "shared ingress failure suppresses per-host tunnel repair",
+      reason: "shared ingress failure suppresses per-host route repair",
     });
     delete probe.failure_impact_suppressed;
 
@@ -584,7 +659,7 @@ describe("project-host runtime maintenance policy", () => {
     };
     expect(_test.publicRouteAutoRepairDecision(row, probe, NOW)).toEqual({
       action: "wait",
-      reason: "host tunnel repair is in cooldown",
+      reason: "host route repair is in cooldown",
     });
   });
 

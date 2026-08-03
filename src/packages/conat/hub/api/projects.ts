@@ -23,6 +23,7 @@ import {
   type SnapshotRestoreMode,
 } from "@cocalc/conat/files/file-server";
 import type { ProjectState } from "@cocalc/util/db-schema/projects";
+import type { ProjectRuntimeConfiguration } from "@cocalc/util/project-runtime";
 import type {
   ProjectRootfsPublishLroRef,
   RootfsConfigExport,
@@ -1169,6 +1170,7 @@ export const projects = {
   start: authFirstRequireAccount,
   startFromHost: authFirstRequireHost,
   stop: authFirstRequireAccount,
+  status: authFirstRequireAccount,
   restart: authFirstRequireAccount,
   archiveProject: authFirstRequireAccount,
   getProjectState: authFirstRequireAccount,
@@ -2064,6 +2066,7 @@ export interface Projects {
     project_id: string;
     authorized_keys?: string;
     run_quota?: any;
+    run_quota_revision?: number;
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
@@ -2072,12 +2075,17 @@ export interface Projects {
     // When false, enqueue start and return immediately; callers can watch
     // LRO/changefeed for progress.
     wait?: boolean;
+    // With wait=false, keep the request open for at most this many
+    // milliseconds so ordinary warm starts can return a terminal ack while
+    // long preparation continues through the LRO.
+    foreground_wait_ms?: number;
   }) => Promise<{
     op_id: string;
     scope_type: "project";
     scope_id: string;
     service: string;
     stream_name: string;
+    terminal_status?: "succeeded";
   }>;
   startFromHost: (opts: {
     host_id?: string;
@@ -2085,12 +2093,14 @@ export interface Projects {
     project_id: string;
     autostart?: boolean;
     wait?: boolean;
+    foreground_wait_ms?: number;
   }) => Promise<{
     op_id: string;
     scope_type: "project";
     scope_id: string;
     service: string;
     stream_name: string;
+    terminal_status?: "succeeded";
   }>;
   stop: (opts: {
     account_id?: string;
@@ -2099,6 +2109,7 @@ export interface Projects {
     runtime_exit_reason?: ProjectState["runtime_exit_reason"];
   }) => Promise<void>;
   status?: (opts: { account_id?: string; project_id: string }) => Promise<{
+    runtime: ProjectRuntimeConfiguration;
     state?: string;
     http_port?: number;
     ssh_port?: number;

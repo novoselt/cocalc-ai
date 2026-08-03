@@ -2569,7 +2569,11 @@ async function assertHostProjectAccess(host_id: string, project_id: string) {
     source_host_id: string | null;
     dest_host_id: string | null;
   }>(
-    "SELECT source_host_id, dest_host_id FROM project_moves WHERE project_id=$1",
+    `
+      SELECT source_host_id, dest_host_id
+      FROM project_moves
+      WHERE project_id=$1 AND expires_at > now()
+    `,
     [project_id],
   );
   const move = moveRows[0];
@@ -2614,6 +2618,15 @@ async function ensureProjectMovesSchema() {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       )
     `,
+    );
+    await pool().query(
+      "ALTER TABLE project_moves ADD COLUMN IF NOT EXISTS move_id UUID",
+    );
+    await pool().query(
+      "ALTER TABLE project_moves ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ",
+    );
+    await pool().query(
+      "ALTER TABLE project_moves ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
     );
   })();
   return projectMovesSchemaReady;

@@ -7,6 +7,7 @@ import {
 
 class FakeKV {
   private data: Record<string, ProjectReadStateEntry> = {};
+  closed = false;
 
   get(key?: string) {
     if (key == null) {
@@ -27,7 +28,13 @@ class FakeKV {
     delete this.data[key];
   }
 
-  close() {}
+  isClosed() {
+    return this.closed;
+  }
+
+  close() {
+    this.closed = true;
+  }
 }
 
 describe("project read state", () => {
@@ -60,6 +67,26 @@ describe("project read state", () => {
       m: "msg-1",
       t: at,
     });
+  });
+
+  it("returns empty read state after the backing stream closes", () => {
+    const kv = new FakeKV();
+    const store = createProjectReadStateStore({
+      account_id: "a",
+      project_id: "p",
+      store: kv,
+    });
+    store.touchChatThread("/tmp/a.chat", "thread-1", {
+      message_id: "msg-1",
+    });
+
+    kv.closed = true;
+
+    expect(store.isClosed()).toBe(true);
+    expect(store.get("/tmp/a.chat")).toBeUndefined();
+    expect(store.getChatThread("/tmp/a.chat", "thread-1")).toBeUndefined();
+    expect(store.listEntries()).toEqual([]);
+    expect(store.listRecent()).toEqual([]);
   });
 
   it("does not regress a chat watermark when given an older timestamp", () => {

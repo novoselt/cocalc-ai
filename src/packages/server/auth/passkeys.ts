@@ -28,6 +28,7 @@ import {
   revokeOtherAuthSessions,
   setCurrentSessionFreshAuth,
   setSessionFreshAuth,
+  type AuthPrimaryMethod,
   type FreshAuthDuration,
 } from "@cocalc/server/auth/auth-sessions";
 import {
@@ -79,6 +80,8 @@ type ChallengeRow = {
   account_id: string;
   purpose: string;
   password_verified_at?: Date | null;
+  primary_verified_at?: Date | null;
+  primary_auth_method?: AuthPrimaryMethod | null;
   target_session_hash?: string | null;
   expire: Date;
   attempt_count: number;
@@ -114,9 +117,12 @@ export type PasskeyAuthenticationStart = {
 export type PasskeySignInResult = {
   account_id: string;
   factor_level: "passkey";
-  password_verified_at: Date;
+  password_verified_at: Date | null;
+  primary_verified_at: Date;
+  primary_auth_method: AuthPrimaryMethod;
   factor_verified_at: Date;
   fresh_auth_until: Date;
+  email_auth_challenge_id?: string;
 };
 
 export type PasskeyFreshAuthStart = {
@@ -764,7 +770,13 @@ export async function finishSignInPasskeyAuthentication({
       const factor_verified_at = new Date();
       const password_verified_at = challenge.password_verified_at
         ? new Date(challenge.password_verified_at)
-        : new Date();
+        : null;
+      const primary_verified_at = challenge.primary_verified_at
+        ? new Date(challenge.primary_verified_at)
+        : (password_verified_at ?? new Date());
+      const primary_auth_method =
+        challenge.primary_auth_method ??
+        (password_verified_at ? "password" : "legacy_sso");
       await q.query(
         `
           UPDATE account_second_factors
@@ -799,8 +811,15 @@ export async function finishSignInPasskeyAuthentication({
         account_id: accountId,
         factor_level: FACTOR_TYPE_PASSKEY,
         password_verified_at,
+        primary_verified_at,
+        primary_auth_method,
         factor_verified_at,
         fresh_auth_until: new Date(Date.now() + FRESH_AUTH_DEFAULT_MS),
+        email_auth_challenge_id: isValidUUID(
+          `${metadata.email_auth_challenge_id ?? ""}`,
+        )
+          ? `${metadata.email_auth_challenge_id}`
+          : undefined,
       };
     },
   });

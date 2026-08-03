@@ -20,6 +20,8 @@ import {
 } from "@cocalc/frontend/project/new/navigator-intents";
 import { COLORS } from "@cocalc/util/theme";
 
+import { prepareMathEnvSource, stripMathLabels } from "./widgets/math-source";
+
 const DEFAULT_FORMULA_AGENT_MODEL = "gpt-5.4-mini";
 
 interface Position {
@@ -94,12 +96,10 @@ export function createFormulaAgentPrompt(opts: FormulaAgentOpts): string {
 function FormulaPreview({ opts }: { opts: FormulaAgentOpts }) {
   const isInline = opts.formulaType === "math-inline";
   let math = opts.formulaContent ?? opts.source;
-  if (opts.formulaType === "math-env") {
-    math = math.replace(
-      /\\(begin|end)\{(equation|align|gather|multline)\}/g,
-      "\\$1{$2*}",
-    );
-  }
+  math =
+    opts.formulaType === "math-env"
+      ? prepareMathEnvSource(math)
+      : stripMathLabels(math);
   const { __html, err } = mathToHtml(math, isInline, opts.macros);
   return (
     <div

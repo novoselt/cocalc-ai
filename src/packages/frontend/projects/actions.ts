@@ -49,6 +49,7 @@ import {
   publishProjectDetailInvalidation,
 } from "@cocalc/frontend/project/use-project-field";
 import { ensureProjectCourseInfo } from "@cocalc/frontend/project/use-project-course";
+import { getProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 import { getBackups as getProjectBackups } from "@cocalc/frontend/project/archive-info";
 import {
   buildOfflineMoveConfirmationDialog,
@@ -192,9 +193,66 @@ type ProjectIndexBootstrapRow = AccountProjectListWindowRow & {
 
 type ProjectStartUxSegment =
   | "warm_provisioned"
+  | "rootfs_prepare"
   | "project_restore"
   | "host_start_or_unknown"
   | "unknown";
+
+type ProjectStartCompletion = {
+  status: LroSummary["status"];
+  error?: LroSummary["error"];
+  finished_at?: LroSummary["finished_at"];
+  updated_at?: LroSummary["updated_at"];
+  created_at?: LroSummary["created_at"];
+  result?: LroSummary["result"];
+  progress_summary?: LroSummary["progress_summary"];
+};
+
+const ROOTFS_PREPARE_SEGMENT_MIN_MS = 1_000;
+
+function classifyCompletedProjectStartUxSegment({
+  initialSegment,
+  completion,
+}: {
+  initialSegment: ProjectStartUxSegment;
+  completion?: ProjectStartCompletion;
+}): {
+  segment: ProjectStartUxSegment;
+  lro_status?: LroSummary["status"];
+  rootfs_cache_ms?: number;
+} {
+  if (initialSegment !== "warm_provisioned") {
+    return { segment: initialSegment, lro_status: completion?.status };
+  }
+  if (completion?.status !== "succeeded") {
+    return {
+      segment: "host_start_or_unknown",
+      lro_status: completion?.status,
+    };
+  }
+  const phaseTimings =
+    completion.result?.phase_timings_ms ??
+    completion.progress_summary?.phase_timings_ms;
+  const rootfsCacheMs = Number(phaseTimings?.cache_rootfs);
+  if (Number.isFinite(rootfsCacheMs)) {
+    if (rootfsCacheMs >= ROOTFS_PREPARE_SEGMENT_MIN_MS) {
+      return {
+        segment: "rootfs_prepare",
+        lro_status: completion.status,
+        rootfs_cache_ms: rootfsCacheMs,
+      };
+    }
+    return {
+      segment: initialSegment,
+      lro_status: completion.status,
+      rootfs_cache_ms: rootfsCacheMs,
+    };
+  }
+  return {
+    segment: "host_start_or_unknown",
+    lro_status: completion.status,
+  };
+}
 
 function buildProjectRecordFromProjectIndexRow({
   row,
@@ -3696,6 +3754,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     client_event_id,
     segment,
     op_id,
+    completion,
     details,
     deadline_ms = 20 * 60 * 1000,
     stuck_after_ms = ProjectsActions.PROJECT_START_USER_OBSERVED_STUCK_MS,
@@ -3705,6 +3764,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     client_event_id: string;
     segment: ProjectStartUxSegment;
     op_id?: string;
+    completion?: Promise<ProjectStartCompletion | undefined>;
     details?: Record<string, unknown>;
     deadline_ms?: number;
     stuck_after_ms?: number;
@@ -3735,27 +3795,43 @@ export class ProjectsActions extends Actions<ProjectsState> {
     };
     const recordRunning = ({ observed_state }: { observed_state?: string }) => {
       const duration_ms = elapsedUxMs(timer);
-      recordUxLatencyEvent({
-        event_type: "project_start",
-        metric: "project_start_running",
-        duration_ms,
-        project_id,
-        host_id: projectHostId(),
-        client_event_id,
-        segment,
-        details: {
-          ...details,
-          observed_state,
-          state_source: "project_stream",
-        },
-      });
-      void this.project_log(project_id, {
-        event: "project_started",
-        duration_ms,
-        op_id,
-        stage: segment,
-        ...store.classify_project(project_id),
-      });
+      void (async () => {
+        let terminal: ProjectStartCompletion | undefined;
+        try {
+          terminal = completion
+            ? await withTimeout(completion, 5_000)
+            : undefined;
+        } catch {
+          // Missing LRO telemetry must not manufacture a warm-start sample.
+        }
+        const classification = classifyCompletedProjectStartUxSegment({
+          initialSegment: segment,
+          completion: terminal,
+        });
+        recordUxLatencyEvent({
+          event_type: "project_start",
+          metric: "project_start_running",
+          duration_ms,
+          project_id,
+          host_id: projectHostId(),
+          client_event_id,
+          segment: classification.segment,
+          details: {
+            ...details,
+            observed_state,
+            state_source: "project_stream",
+            lro_status: classification.lro_status,
+            rootfs_cache_ms: classification.rootfs_cache_ms,
+          },
+        });
+        void this.project_log(project_id, {
+          event: "project_started",
+          duration_ms,
+          op_id,
+          stage: classification.segment,
+          ...store.classify_project(project_id),
+        });
+      })();
     };
     const recordProjectStreamStale = ({
       observed_state,
@@ -3955,8 +4031,24 @@ export class ProjectsActions extends Actions<ProjectsState> {
         "host_id",
       ]) as string | undefined;
       if (assignedHostId) {
-        const hostInfo = await this.ensure_host_info(assignedHostId);
-        const hostState = evaluateHostOperational(hostInfo as any);
+        const cachedHostInfo = store.get("host_info")?.get(assignedHostId);
+        let hostInfo = cachedHostInfo;
+        let hostState = evaluateHostOperational(hostInfo as any);
+        if (hostState.state === "unavailable") {
+          const updatedAt = cachedHostInfo?.get?.("updated_at");
+          const fresh =
+            typeof updatedAt === "number" &&
+            Date.now() - updatedAt < ProjectsActions.HOST_INFO_TTL_MS;
+          if (!fresh) {
+            hostInfo = await this.ensure_host_info(assignedHostId, true);
+            hostState = evaluateHostOperational(hostInfo as any);
+          }
+        } else {
+          // Host availability is also enforced by the start RPC. Refresh an
+          // operational or missing cache in parallel instead of adding a
+          // control-plane round trip to every normal start.
+          void this.ensure_host_info(assignedHostId);
+        }
         if (hostState.state === "unavailable") {
           const hostName = hostLabel(hostInfo as any, assignedHostId);
           const reason = hostState.reason ?? "Assigned host is unavailable.";
@@ -4011,15 +4103,55 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           ...(opts.autostart ? { autostart: true } : {}),
           wait: false,
+          foreground_wait_ms: 5_000,
         });
         actions.trackStartOp(resp);
         opts.onStartOp?.(resp);
+        const applySucceededStart = (summary: ProjectStartCompletion) => {
+          if (summary.status === "succeeded") {
+            // The bay saves authoritative running state before publishing the
+            // terminal LRO summary. Use that causal acknowledgement directly
+            // for lifecycle convergence; the projection read repairs the rest
+            // of the row in the background.
+            this.projectStartSucceededStateUpdate(project_id, summary);
+            void this.repairProjectProjection({
+              kind: "project-ids",
+              project_ids: [project_id],
+              reason: "project-start",
+            }).catch((err) => {
+              logger.debug("project start projection repair failed", {
+                project_id,
+                op_id: resp?.op_id,
+                error: `${err}`,
+              });
+            });
+          }
+          return summary;
+        };
+        const startConvergence =
+          resp.terminal_status === "succeeded"
+            ? Promise.resolve(
+                applySucceededStart({
+                  status: "succeeded",
+                }),
+              )
+            : this.waitForProjectStartOp({
+                op: resp,
+                timeout_ms: opts.waitTimeoutMs,
+              }).then(applySucceededStart);
+        const telemetryCompletion =
+          resp.terminal_status === "succeeded" && resp.op_id
+            ? webapp_client.conat_client.hub.lro
+                .get({ op_id: resp.op_id })
+                .catch(() => undefined)
+            : startConvergence;
         this.recordProjectStartUxLatencyWhenRunning({
           project_id,
           timer: uxTimer,
           client_event_id: uxClientEventId,
           segment: uxSegment,
           op_id: resp?.op_id,
+          completion: telemetryCompletion,
           details: {
             ...uxDetails,
             op_id: resp?.op_id,
@@ -4033,13 +4165,20 @@ export class ProjectsActions extends Actions<ProjectsState> {
           void this.ensure_host_info(host_id, true);
         }
         if (opts.waitForStart) {
-          const summary = await this.waitForProjectStartOp({
-            op: resp,
-            timeout_ms: opts.waitTimeoutMs,
-          });
+          const summary = await startConvergence;
           if (summary.status !== "succeeded") {
             throw Error(summary.error ?? `project start ${summary.status}`);
           }
+        } else {
+          void startConvergence.catch((err) => {
+            // Scheduled lifecycle reconciliation remains the fallback when a
+            // browser misses or loses the terminal LRO stream.
+            console.warn("project start LRO convergence failed", {
+              project_id,
+              op_id: resp?.op_id,
+              err: `${err}`,
+            });
+          });
         }
       } catch (err) {
         recordUxLatencyEvent({
@@ -4089,6 +4228,9 @@ export class ProjectsActions extends Actions<ProjectsState> {
     project_id: string;
     autostart: boolean;
   }): Promise<boolean> {
+    if (!getProjectRuntimeCapabilities().host_placement) {
+      return true;
+    }
     if (store.getIn(["project_map", project_id, "host_id"])) {
       return true;
     }
@@ -4254,6 +4396,39 @@ export class ProjectsActions extends Actions<ProjectsState> {
         });
       }
     }
+  };
+
+  private projectStartSucceededStateUpdate = (
+    project_id: string,
+    summary: {
+      finished_at?: LroSummary["finished_at"];
+      updated_at?: LroSummary["updated_at"];
+      created_at?: LroSummary["created_at"];
+    },
+  ) => {
+    const project_map = store.get("project_map");
+    const project = project_map?.get(project_id);
+    if (project_map == null || project == null) {
+      return;
+    }
+    const time =
+      summary.finished_at ??
+      summary.updated_at ??
+      summary.created_at ??
+      new Date();
+    this.setState({
+      project_map: project_map.set(
+        project_id,
+        project.set(
+          "state",
+          fromJS({
+            state: "running",
+            time,
+            source: "project-start-lro",
+          }),
+        ),
+      ),
+    });
   };
 
   public mark_project_hard_delete_accepted = (

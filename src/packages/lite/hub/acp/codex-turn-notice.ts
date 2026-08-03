@@ -12,6 +12,7 @@ import type {
 import type { Client as ConatClient } from "@cocalc/conat/core/client";
 
 export type CodexTurnTerminalState = "complete" | "error";
+const CODEX_TURN_NOTICE_TIMEOUT_MS = 5_000;
 
 function normalizeThreadLabel(value?: string | null): string {
   const label = `${value ?? ""}`.trim();
@@ -27,7 +28,17 @@ function normalizeErrorText(value?: string | null): string | undefined {
 export function shouldNotifyOnCodexTurnFinish(
   config?: CodexThreadConfig | null,
 ): boolean {
-  return config?.notifyOnTurnFinish === true;
+  return codexTurnNotifyPreference(config) === true;
+}
+
+export function codexTurnNotifyPreference(
+  config?: CodexThreadConfig | null,
+): boolean | undefined {
+  const value =
+    config && typeof (config as any).get === "function"
+      ? (config as any).get("notifyOnTurnFinish")
+      : config?.notifyOnTurnFinish;
+  return typeof value === "boolean" ? value : undefined;
 }
 
 export function buildCodexTurnNoticeOptions(opts: {
@@ -79,5 +90,6 @@ export async function publishCodexTurnNotice(opts: {
     project_id: opts.project_id,
     name: "notifications.createCodexTurnNotice",
     args: [opts.notice],
+    timeout: CODEX_TURN_NOTICE_TIMEOUT_MS,
   });
 }

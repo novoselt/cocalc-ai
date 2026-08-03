@@ -29,6 +29,7 @@ import {
   uuid,
   walltime,
 } from "@cocalc/util/misc";
+import { projectRuntimePathForProcess } from "@cocalc/util/project-runtime";
 import {
   ExecuteCodeOutputAsync,
   ExecuteCodeOutputBlocking,
@@ -225,6 +226,7 @@ async function executeCodeNoAggregate(
   if (opts.cwd) {
     opts.path = opts.cwd;
   }
+  opts.path = projectRuntimePathForProcess(opts.path);
 
   let tempDir: string | undefined = undefined;
 

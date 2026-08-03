@@ -43,7 +43,9 @@ export async function touch(project_id: string, path: string): Promise<void> {
   }
 }
 
-// Resets the idle timeout timer and makes it known we are using the project.
+// Records project activity and wakes the project.  Current CoCalc-AI project
+// hosts do not enforce an idle timeout, though the activity metadata is kept
+// for compatibility and possible future policy.
 export async function touch_project(project_id: string): Promise<void> {
   try {
     await webapp_client.project_client.touch_project(project_id);

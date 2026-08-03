@@ -13,6 +13,7 @@ import { humanSize } from "@cocalc/util/misc";
 import { isValidUUID } from "@cocalc/util/misc";
 
 import { printArrayTable } from "../core/cli-output";
+import { registerHostExamCommands } from "./host-exam";
 
 type HostRuntimeLogRow = {
   host_id: string;
@@ -78,8 +79,10 @@ function parseBootstrapReconcileScope(
   value: string | undefined,
 ): HostBootstrapReconcileScope | undefined {
   if (value == null) return undefined;
-  if (value === "full" || value === "helpers") return value;
-  throw new Error("--bootstrap-scope must be full or helpers");
+  if (value === "full" || value === "helpers" || value === "environment") {
+    return value;
+  }
+  throw new Error("--bootstrap-scope must be full, helpers, or environment");
 }
 
 export function assertHostRehomeConfirmed({
@@ -640,6 +643,86 @@ function formatBytesValue(value: unknown): string {
   const bytes = Number(value ?? 0);
   if (!Number.isFinite(bytes) || bytes <= 0) return "";
   return humanSize(bytes, { binary: true });
+}
+
+function formatEpochMilliseconds(value: unknown): string {
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "";
+  return new Date(milliseconds).toISOString();
+}
+
+function hostConatPersistRow(host: any): Record<string, unknown> {
+  const current = host.metrics?.current;
+  const latestHistory = host.metrics?.history?.points?.at(-1);
+  const persist =
+    current?.conat_persist ??
+    latestHistory?.conat_persist ??
+    host.metrics?.history?.latest?.conat_persist;
+  return {
+    host_id: host.id,
+    name: host.name ?? "",
+    status: host.status ?? "",
+    collected_at:
+      persist?.collected_at ??
+      latestHistory?.collected_at ??
+      current?.collected_at ??
+      null,
+    available: persist?.available === true,
+    ready: persist?.ready === true,
+    pid: persist?.pid ?? null,
+    uptime_seconds: persist?.uptime_seconds ?? null,
+    rss_bytes: persist?.rss_bytes ?? null,
+    heap_used_bytes: persist?.heap_used_bytes ?? null,
+    heap_total_bytes: persist?.heap_total_bytes ?? null,
+    external_bytes: persist?.external_bytes ?? null,
+    array_buffers_bytes: persist?.array_buffers_bytes ?? null,
+    v8_large_object_space_used_bytes:
+      persist?.v8_large_object_space_used_bytes ?? null,
+    event_loop_utilization: persist?.event_loop_utilization ?? null,
+    subscriptions: persist?.local_client_subscriptions ?? null,
+    open_streams: persist?.open_streams ?? null,
+    open_disk_streams: persist?.open_disk_streams ?? null,
+    open_ephemeral_streams: persist?.open_ephemeral_streams ?? null,
+    cached_streams: persist?.cached_streams ?? null,
+    cached_references: persist?.cached_references ?? null,
+    opened_streams_total: persist?.opened_streams_total ?? null,
+    closed_streams_total: persist?.closed_streams_total ?? null,
+    maintenance_enabled: persist?.maintenance_enabled ?? null,
+    maintenance_catalog_healthy: persist?.maintenance_catalog_healthy ?? null,
+    maintenance_tracking_coverage:
+      persist?.maintenance_tracking_coverage ?? null,
+    maintenance_open_paths: persist?.maintenance_open_paths ?? null,
+    maintenance_present_databases:
+      persist?.maintenance_present_databases ?? null,
+    maintenance_present_file_bytes:
+      persist?.maintenance_present_file_bytes ?? null,
+    maintenance_present_wal_bytes:
+      persist?.maintenance_present_wal_bytes ?? null,
+    maintenance_last_scan_completed_at_ms:
+      persist?.maintenance_last_scan_completed_at_ms ?? null,
+    diagnostics_duration_ms: persist?.diagnostics_duration_ms ?? null,
+    error: persist?.error ?? null,
+  };
+}
+
+function formatHostConatPersistRows(
+  rows: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return rows.map((row) => ({
+    name: row.name || row.host_id,
+    state: !row.available ? "unavailable" : row.ready ? "ready" : "starting",
+    rss: formatBytesValue(row.rss_bytes),
+    heap_used: formatBytesValue(row.heap_used_bytes),
+    streams: row.open_streams ?? "",
+    disk: row.open_disk_streams ?? "",
+    ephemeral: row.open_ephemeral_streams ?? "",
+    databases: row.maintenance_present_databases ?? "",
+    sqlite: formatBytesValue(row.maintenance_present_file_bytes),
+    wal: formatBytesValue(row.maintenance_present_wal_bytes),
+    scan_at: formatEpochMilliseconds(row.maintenance_last_scan_completed_at_ms),
+    sampled_at: row.collected_at ?? "",
+    error: row.error ?? "",
+  }));
 }
 
 function formatArtifactReferences(value: unknown): string {
@@ -1496,6 +1579,7 @@ export function registerHostCommand(
     });
   }
   const host = program.command("host").description("host operations");
+  registerHostExamCommands({ hostCommand: host, deps });
 
   host
     .command("list")
@@ -1707,6 +1791,34 @@ export function registerHostCommand(
         });
       });
     });
+
+  host
+    .command("machine-type <host> <machine-type>")
+    .description("change the provider machine type of a stopped host")
+    .action(
+      async (hostIdentifier: string, machineType: string, command: Command) => {
+        await withContext(command, "host machine-type", async (ctx) => {
+          const h = await resolveHost(ctx, hostIdentifier, {
+            admin_view: true,
+          });
+          const requestedMachineType = `${machineType}`.trim();
+          if (!requestedMachineType) {
+            throw new Error("machine type must not be empty");
+          }
+          const updated = await ctx.hub.hosts.updateHostMachine({
+            id: h.id,
+            machine_type: requestedMachineType,
+          });
+          return {
+            host_id: updated.id,
+            name: updated.name ?? h.name ?? null,
+            status: updated.status ?? null,
+            machine_type: updated.machine?.machine_type ?? updated.size ?? null,
+            pricing_model: updated.pricing_model ?? null,
+          };
+        });
+      },
+    );
 
   host
     .command("cloud-refresh <host>")
@@ -2112,6 +2224,83 @@ export function registerHostCommand(
     );
 
   host
+    .command("persistence [host]")
+    .description("show project-host persistence memory and stream diagnostics")
+    .action(async (hostIdentifier: string | undefined, command: Command) => {
+      await withContext(command, "host persistence", async (ctx) => {
+        const hosts = hostIdentifier
+          ? [await resolveHost(ctx, hostIdentifier)]
+          : (
+              await listHosts(ctx, {
+                include_deleted: false,
+                admin_view: true,
+              })
+            ).filter((host: any) => {
+              const status = `${host.status ?? ""}`.trim().toLowerCase();
+              return status === "running" || status === "active";
+            });
+        const rows = hosts.map(hostConatPersistRow).sort((left, right) => {
+          const rssDifference =
+            Number(right.rss_bytes ?? -1) - Number(left.rss_bytes ?? -1);
+          if (rssDifference !== 0) return rssDifference;
+          return `${left.name || left.host_id}`.localeCompare(
+            `${right.name || right.host_id}`,
+          );
+        });
+        const reporting = rows.filter((row) => row.available === true);
+        const summary = {
+          hosts: rows.length,
+          reporting: reporting.length,
+          unavailable: rows.length - reporting.length,
+          total_rss_bytes: reporting.reduce(
+            (total, row) => total + Number(row.rss_bytes ?? 0),
+            0,
+          ),
+          total_open_streams: reporting.reduce(
+            (total, row) => total + Number(row.open_streams ?? 0),
+            0,
+          ),
+          total_file_bytes: reporting.reduce(
+            (total, row) =>
+              total + Number(row.maintenance_present_file_bytes ?? 0),
+            0,
+          ),
+          total_wal_bytes: reporting.reduce(
+            (total, row) =>
+              total + Number(row.maintenance_present_wal_bytes ?? 0),
+            0,
+          ),
+          max_rss_bytes: reporting.reduce(
+            (maximum, row) => Math.max(maximum, Number(row.rss_bytes ?? 0)),
+            0,
+          ),
+          max_open_streams: reporting.reduce(
+            (maximum, row) => Math.max(maximum, Number(row.open_streams ?? 0)),
+            0,
+          ),
+        };
+        if (!ctx.globals.json && ctx.globals.output !== "json") {
+          printNamedSection("Summary", [
+            {
+              hosts: summary.hosts,
+              reporting: summary.reporting,
+              unavailable: summary.unavailable,
+              total_rss: formatBytesValue(summary.total_rss_bytes),
+              total_streams: summary.total_open_streams,
+              sqlite_files: formatBytesValue(summary.total_file_bytes),
+              sqlite_wal: formatBytesValue(summary.total_wal_bytes),
+              max_rss: formatBytesValue(summary.max_rss_bytes),
+              max_streams: summary.max_open_streams,
+            },
+          ]);
+          printNamedSection("Persistence", formatHostConatPersistRows(rows));
+          return null;
+        }
+        return { summary, hosts: rows };
+      });
+    });
+
+  host
     .command("projects <host>")
     .description("list projects assigned to a host (running only by default)")
     .option("--limit <limit>", "max rows to return", "50")
@@ -2469,7 +2658,7 @@ export function registerHostCommand(
         await withContext(command, "host metrics", async (ctx) => {
           const h = await resolveHost(ctx, hostIdentifier);
           const max_points = Math.max(
-            10,
+            1,
             Math.min(1440, Number(opts.points ?? "60") || 60),
           );
           const history = await ctx.hub.hosts.getHostMetricsHistory({
@@ -2840,7 +3029,7 @@ Examples:
     )
     .option(
       "--bootstrap-scope <scope>",
-      "forced bootstrap scope: full restarts project-host; helpers updates privileged helpers without daemon restarts",
+      "forced bootstrap scope: full reconciles all software; helpers updates privileged helpers; environment updates managed configuration without daemon restarts",
     )
     .option("--wait", "wait for completion")
     .action(

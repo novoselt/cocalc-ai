@@ -514,7 +514,13 @@ export function registerAuthCommand(
 
   async function runBrowserLogin(
     globals: any,
-    opts: { email?: string; pollMs?: string; setCurrent?: boolean },
+    opts: {
+      duration?: "default" | "extended";
+      elevatedLogin?: boolean;
+      email?: string;
+      pollMs?: string;
+      setCurrent?: boolean;
+    },
   ): Promise<Record<string, unknown>> {
     const effective = resolveEffectiveGlobals(globals);
     const emailHint = `${opts.email ?? ""}`.trim();
@@ -524,11 +530,19 @@ export function registerAuthCommand(
     const start = await postCliAuthApi<CliChallengeStart>({
       apiBaseUrl,
       endpoint: "auth/cli/login/start",
-      body: emailHint ? { email: emailHint } : {},
+      body: {
+        ...(emailHint ? { email: emailHint } : {}),
+        ...(opts.elevatedLogin
+          ? {
+              elevated_login: true,
+              duration: opts.duration ?? "default",
+            }
+          : {}),
+      },
     });
 
     process.stderr.write(
-      `Open this URL in your browser to approve CLI login:\n${start.approval_url}\n`,
+      `Open this URL in your browser to approve ${opts.elevatedLogin ? "elevated " : ""}CLI login:\n${start.approval_url}\n`,
     );
 
     const status = await waitForCliChallenge({
@@ -552,6 +566,8 @@ export function registerAuthCommand(
       display_name?: string | null;
       first_name?: string | null;
       last_name?: string | null;
+      factor_level?: string | null;
+      fresh_auth_until?: string | Date | null;
     }>({
       apiBaseUrl,
       endpoint: "auth/cli/login/redeem",
@@ -603,6 +619,10 @@ export function registerAuthCommand(
       email_address: next.email_address,
       display_name: next.display_name,
       expires_at: new Date(redeemed.expire).toISOString(),
+      factor_level: redeemed.factor_level ?? "none",
+      fresh_auth_until: redeemed.fresh_auth_until
+        ? new Date(redeemed.fresh_auth_until).toISOString()
+        : null,
       interactive_session: true,
     };
   }
@@ -946,10 +966,23 @@ Examples:
           command,
           "auth bootstrap",
           async (globals: any) => {
-            const login = hasLegacyStoredCredentials(globals)
+            const usesStoredCredentials = hasLegacyStoredCredentials(globals);
+            const combinedBrowserLogin = !usesStoredCredentials && !opts.dev;
+            const duration = opts.short ? "default" : "extended";
+            const login = usesStoredCredentials
               ? await saveAuthProfile(globals, opts)
-              : await runBrowserLogin(globals, opts);
-            const elevation = await runAuthElevate(globals, opts);
+              : await runBrowserLogin(globals, {
+                  ...opts,
+                  duration,
+                  elevatedLogin: combinedBrowserLogin,
+                });
+            const elevation = combinedBrowserLogin
+              ? {
+                  factor_level: (login as any).factor_level ?? "none",
+                  fresh_auth_until: (login as any).fresh_auth_until ?? null,
+                  interactive_session: true,
+                }
+              : await runAuthElevate(globals, opts);
             const status = await checkCookieSession(globals);
             return {
               profile:

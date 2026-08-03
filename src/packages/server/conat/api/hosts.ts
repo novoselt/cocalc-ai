@@ -52,6 +52,8 @@ import type {
   HostAvailabilityReport,
   HostAvailabilityEvent,
   HostAvailabilityCategory,
+  HostExamConfigInput,
+  HostExamState,
 } from "@cocalc/conat/hub/api/hosts";
 import { getAccountProductAccessTrust } from "@cocalc/server/accounts/trusted-product-access";
 import { getClusterAccountsByIdsDirect } from "@cocalc/server/accounts/cluster-directory";
@@ -93,6 +95,7 @@ import {
   getHostAccessForAccount,
   hostAccessRoleCan,
   listHostAccessEntries,
+  requireHostPermission,
   removeHostAccessEntry,
   setHostAccessEntry,
 } from "@cocalc/server/project-host/access";
@@ -184,6 +187,7 @@ import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
 import { computeAIUsageUnits } from "@cocalc/server/ai/usage-units";
 import { saveAIResponse } from "@cocalc/server/ai/save-response";
 import { moneyToDbString, type MoneyValue } from "@cocalc/util/money";
+import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
 import {
   isCoreLanguageModel,
   type LanguageModelCore,
@@ -210,7 +214,7 @@ import {
 } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionForAccount,
-  estimateDedicatedHostRateUsdPerHour,
+  estimateDedicatedHostRate,
   getDedicatedHostWindowUsageForHostLocal,
   reconcileDedicatedHostPurchaseSessionForAccount,
   type DedicatedHostFundingLane,
@@ -294,6 +298,17 @@ import {
   setHostDesiredStateInternal as setHostDesiredStateInternalHelper,
 } from "./hosts-teardown";
 import { upgradeHostConnectorInternalHelper } from "./hosts-self-host-connectors";
+import {
+  createExamRunLocal,
+  eraseActiveExamRunBeforeHostStopLocal,
+  getExamStateLocal,
+  increaseExamCapacityLocal,
+  openExamRunLocal,
+  rotateExamTokenLocal,
+  setExamConfigLocal,
+  stopAndEraseExamRunLocal,
+  updateExamDeadlineLocal,
+} from "@cocalc/server/project-host/exam";
 import {
   assertCloudHostBootstrapReconcileSupported,
   reconcileCloudHostBootstrapOverSsh,
@@ -2232,6 +2247,7 @@ export async function getProjectStartMetadata({
   image?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   project_secrets_cache?: ProjectSecretsRuntimeCache;
@@ -2275,6 +2291,7 @@ export async function getProjectStartMetadataLocal({
   image?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   project_secrets_cache?: ProjectSecretsRuntimeCache;
@@ -2285,16 +2302,34 @@ export async function getProjectStartMetadataLocal({
   if (!project_id) {
     throw new Error("project_id must be specified");
   }
-  const { rows } = await pool().query(
-    `SELECT title, users, rootfs_image AS image, run_quota, env,
-            autostart_enabled
-       FROM projects
-      WHERE project_id=$1
-        AND host_id=$2
-        AND deleted IS NOT true
-      LIMIT 1`,
-    [project_id, host_id],
-  );
+  let rows: any[];
+  try {
+    ({ rows } = await pool().query(
+      `SELECT title, users, rootfs_image AS image, run_quota,
+              COALESCE(run_quota_revision, 0)::bigint AS run_quota_revision, env,
+              autostart_enabled
+         FROM projects
+        WHERE project_id=$1
+          AND host_id=$2
+          AND deleted IS NOT true
+        LIMIT 1`,
+      [project_id, host_id],
+    ));
+  } catch (err) {
+    if ((err as { code?: string })?.code !== "42703") {
+      throw err;
+    }
+    ({ rows } = await pool().query(
+      `SELECT title, users, rootfs_image AS image, run_quota, env,
+              autostart_enabled
+         FROM projects
+        WHERE project_id=$1
+          AND host_id=$2
+          AND deleted IS NOT true
+        LIMIT 1`,
+      [project_id, host_id],
+    ));
+  }
   const row = rows[0];
   if (!row) {
     if (allowMissing) {
@@ -2315,6 +2350,7 @@ export async function getProjectStartMetadataLocal({
     image,
     authorized_keys: authorized_keys || undefined,
     run_quota: row.run_quota ?? undefined,
+    run_quota_revision: Number(row.run_quota_revision ?? 0),
     env: row.env ?? undefined,
     autostart_enabled: row.autostart_enabled,
     project_secrets_cache: await getProjectSecretsRuntimeCache({ project_id }),
@@ -4972,6 +5008,456 @@ export async function gcDeletedHostRootfsImages({
   };
 }
 
+async function loadHostForExam({
+  id,
+  account_id,
+  require_entitlement,
+}: {
+  id: string;
+  account_id?: string;
+  require_entitlement: boolean;
+}): Promise<{ row: any; eligible: boolean; eligibility_reason?: string }> {
+  const actor = requireAccount(account_id);
+  const access = await requireHostPermission({
+    host_id: id,
+    account_id: actor,
+    permission: "start-stop",
+    admin_view: true,
+  });
+  const { rows } = await pool().query(
+    `SELECT * FROM project_hosts WHERE id=$1 AND deleted IS NULL`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) throw new Error("host not found");
+  const membership = await loadMembership(actor);
+  const eligible =
+    access.is_admin || membership.entitlements?.features?.exam_mode === true;
+  const eligibility_reason = eligible
+    ? undefined
+    : "Exam mode is currently available only to explicitly enabled accounts.";
+  if (require_entitlement && !eligible) {
+    throw new Error(eligibility_reason);
+  }
+  return { row, eligible, eligibility_reason };
+}
+
+async function requireFreshExamMutation({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+}): Promise<string | undefined> {
+  if (internalAuth === HOST_DANGEROUS_INTERNAL_AUTH) {
+    return session_hash ?? undefined;
+  }
+  const auth = await maybeRequireFreshAuthForInteractiveHostAction({
+    account_id,
+    browser_id: browser_id ?? undefined,
+    session_hash: session_hash ?? undefined,
+    required: true,
+  });
+  return auth.session_hash ?? session_hash ?? undefined;
+}
+
+export async function getHostExamState({
+  account_id,
+  id,
+}: {
+  account_id?: string;
+  id: string;
+}): Promise<HostExamState> {
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .getHostExamState({
+        account_id,
+        id,
+      });
+  }
+  const { row, eligible, eligibility_reason } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: false,
+  });
+  return await getExamStateLocal({ host: row, eligible, eligibility_reason });
+}
+
+export async function setHostExamConfig({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  config,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  config: HostExamConfigInput;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .setHostExamConfig({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        config,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await setExamConfigLocal({
+    host: row,
+    actor_account_id: requireAccount(account_id),
+    input: config,
+  });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function createHostExamRun({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  rootfs_image,
+  scheduled_stop_at,
+  stop_host_at_deadline,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  rootfs_image: string;
+  scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
+  idempotency_key: string;
+}): Promise<HostExamState & { token: string }> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .createHostExamRun({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        rootfs_image,
+        scheduled_stop_at,
+        stop_host_at_deadline,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  const { token } = await createExamRunLocal({
+    host: row,
+    actor_account_id: requireAccount(account_id),
+    rootfs_image,
+    scheduled_stop_at,
+    stop_host_at_deadline,
+    idempotency_key,
+  });
+  return {
+    ...(await getExamStateLocal({ host: row, eligible: true })),
+    token,
+  };
+}
+
+export async function rotateHostExamToken({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  run_id,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  run_id: string;
+  idempotency_key: string;
+}): Promise<HostExamState & { token: string }> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .rotateHostExamToken({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  const { token } = await rotateExamTokenLocal({
+    host: row,
+    run_id,
+    idempotency_key,
+  });
+  return {
+    ...(await getExamStateLocal({ host: row, eligible: true })),
+    token,
+  };
+}
+
+export async function openHostExamRun({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  run_id,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  run_id: string;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge().hostConnection(remoteBay).openHostExamRun({
+      account_id,
+      browser_id,
+      session_hash: freshSessionHash,
+      id,
+      run_id,
+      idempotency_key,
+    });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await openExamRunLocal({ host: row, run_id });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function updateHostExamDeadline({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  run_id,
+  scheduled_stop_at,
+  stop_host_at_deadline,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  run_id: string;
+  scheduled_stop_at: string;
+  stop_host_at_deadline?: boolean;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .updateHostExamDeadline({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        scheduled_stop_at,
+        stop_host_at_deadline,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await updateExamDeadlineLocal({
+    host: row,
+    run_id,
+    scheduled_stop_at,
+    stop_host_at_deadline,
+  });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function increaseHostExamCapacity({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  run_id,
+  max_projects,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  run_id: string;
+  max_projects: number;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .increaseHostExamCapacity({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        max_projects,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await increaseExamCapacityLocal({ host: row, run_id, max_projects });
+  return await getExamStateLocal({ host: row, eligible: true });
+}
+
+export async function stopAndEraseHostExamRun({
+  account_id,
+  browser_id,
+  session_hash,
+  internalAuth,
+  id,
+  run_id,
+  stop_host = true,
+  idempotency_key,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
+  id: string;
+  run_id: string;
+  stop_host?: boolean;
+  idempotency_key: string;
+}): Promise<HostExamState> {
+  const freshSessionHash = await requireFreshExamMutation({
+    account_id,
+    browser_id,
+    session_hash,
+    internalAuth,
+  });
+  const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
+  if (remoteBay) {
+    return await getInterBayBridge()
+      .hostConnection(remoteBay)
+      .stopAndEraseHostExamRun({
+        account_id,
+        browser_id,
+        session_hash: freshSessionHash,
+        id,
+        run_id,
+        stop_host,
+        idempotency_key,
+      });
+  }
+  const { row } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  await stopAndEraseExamRunLocal({
+    host: row,
+    run_id,
+    poweroff: false,
+  });
+  if (stop_host) {
+    await stopHostInternal({ account_id, id });
+  }
+  // The row loaded before cleanup still says "running". Reload it after a
+  // requested shutdown so state rendering does not try to contact the now
+  // disconnected project-host or briefly re-enable preparation controls.
+  const { row: currentRow } = await loadHostForExam({
+    id,
+    account_id,
+    require_entitlement: true,
+  });
+  return await getExamStateLocal({ host: currentRow, eligible: true });
+}
+
 export async function listHostSshAuthorizedKeys({
   account_id,
   id,
@@ -5415,6 +5901,7 @@ export async function stopHost({
       });
   }
   const row = await loadHostForStartStop(id, account_id);
+  await eraseActiveExamRunBeforeHostStopLocal({ host: row });
   return await createHostLro({
     kind: HOST_STOP_LRO_KIND,
     row,
@@ -6696,11 +7183,13 @@ export async function updateHostMachine({
         funding_mode: "account-prepaid";
         funding_lane: "prepaid";
         hourly_cost_usd: MoneyValue;
+        pricing_snapshot: DedicatedHostPricingSnapshot;
       }
     | {
         funding_mode: "account-postpaid";
         funding_lane: "credit";
         hourly_cost_usd: MoneyValue;
+        pricing_snapshot: DedicatedHostPricingSnapshot;
       }
     | {
         funding_mode: "site-funded";
@@ -6712,7 +7201,7 @@ export async function updateHostMachine({
     isBillableDedicatedHostCloud(nextMachineCloud) &&
     HOST_RUNNING_STATUSES.has(String(row.status ?? ""))
   ) {
-    const hourlyCostUsd = await estimateDedicatedHostRateUsdPerHour({
+    const rate = await estimateDedicatedHostRate({
       provider: nextMachineCloud,
       region: nextRegion,
       zone: nextMachine.zone,
@@ -6726,8 +7215,9 @@ export async function updateHostMachine({
       gpu_count: nextMachine.gpu_count,
       pricing_model:
         normalizeHostPricingModel(metadata.pricing_model) ?? "on_demand",
+      billing_state: "running",
     });
-    if (!hourlyCostUsd) {
+    if (!rate) {
       throw Object.assign(
         new Error(
           `unable to determine the resize hourly rate for provider '${nextMachineCloud}'`,
@@ -6754,7 +7244,7 @@ export async function updateHostMachine({
       const enforcement = evaluateDedicatedHostBillingEnforcement({
         snapshot,
         funding_lane: fundingLane as DedicatedHostFundingLane,
-        hourly_cost_usd: hourlyCostUsd,
+        hourly_cost_usd: rate.hourly_cost_usd,
         lane_allowed: true,
       });
       if (enforcement.action === "request_drain") {
@@ -6772,13 +7262,15 @@ export async function updateHostMachine({
         activeBillableSession = {
           funding_mode: "account-prepaid",
           funding_lane: "prepaid",
-          hourly_cost_usd: hourlyCostUsd,
+          hourly_cost_usd: rate.hourly_cost_usd,
+          pricing_snapshot: rate.pricing_snapshot,
         };
       } else {
         activeBillableSession = {
           funding_mode: "account-postpaid",
           funding_lane: "credit",
-          hourly_cost_usd: hourlyCostUsd,
+          hourly_cost_usd: rate.hourly_cost_usd,
+          pricing_snapshot: rate.pricing_snapshot,
         };
       }
     }
@@ -7087,6 +7579,7 @@ export async function updateHostMachine({
         funding_mode: activeBillableSession.funding_mode,
         funding_lane: activeBillableSession.funding_lane,
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
+        pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
           metadata.billing?.started_at ?? metadata.billing?.updated_at,
       };
@@ -7095,6 +7588,7 @@ export async function updateHostMachine({
         funding_mode: activeBillableSession.funding_mode,
         funding_lane: activeBillableSession.funding_lane,
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
+        pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
           metadata.billing?.started_at ?? metadata.billing?.updated_at,
       };
@@ -7131,12 +7625,13 @@ export async function updateHostMachine({
       host_bay_id: getConfiguredBayId(),
       provider: nextMachineCloud,
       region: nextRegion,
+      billing_state: "running",
       machine_type: nextMachine.machine_type ?? metadata.size,
       pricing_model:
         normalizeHostPricingModel(metadata.pricing_model) ?? "on_demand",
       funding_lane: activeBillableSession.funding_lane,
       hourly_cost_usd: activeBillableSession.hourly_cost_usd,
-      started_at: nextMetadata.billing?.started_at,
+      pricing_snapshot: activeBillableSession.pricing_snapshot,
     });
   }
   await logCloudVmEvent({
@@ -7451,9 +7946,10 @@ export async function reconcileHostSoftware({
   if (
     bootstrap_scope != null &&
     bootstrap_scope !== "full" &&
-    bootstrap_scope !== "helpers"
+    bootstrap_scope !== "helpers" &&
+    bootstrap_scope !== "environment"
   ) {
-    throw new Error("bootstrap_scope must be full or helpers");
+    throw new Error("bootstrap_scope must be full, helpers, or environment");
   }
   if (bootstrap_scope && !force_bootstrap) {
     throw new Error("bootstrap_scope requires force_bootstrap");
@@ -7482,9 +7978,7 @@ export async function reconcileHostSoftware({
       ...(bootstrap_scope ? { bootstrap_scope } : {}),
     },
     dedupe_key: force_bootstrap
-      ? bootstrap_scope === "helpers"
-        ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap:helpers`
-        : `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap`
+      ? `${HOST_RECONCILE_LRO_KIND}:${row.id}:force-bootstrap:${bootstrap_scope ?? "full"}`
       : `${HOST_RECONCILE_LRO_KIND}:${row.id}`,
   });
 }
@@ -7995,12 +8489,14 @@ export async function rolloutHostManagedComponents({
   account_id,
   id,
   components,
+  desired_version,
   base_url,
   reason,
 }: {
   account_id?: string;
   id: string;
   components: ManagedComponentKind[];
+  desired_version?: string;
   base_url?: string;
   reason?: string;
 }): Promise<HostLroResponse> {
@@ -8012,6 +8508,7 @@ export async function rolloutHostManagedComponents({
         account_id,
         id,
         components,
+        desired_version,
         base_url,
         reason,
       });
@@ -8022,10 +8519,18 @@ export async function rolloutHostManagedComponents({
     kind: HOST_ROLLOUT_MANAGED_COMPONENTS_LRO_KIND,
     row,
     account_id,
-    input: { id: row.id, account_id, components, base_url, reason },
+    input: {
+      id: row.id,
+      account_id,
+      components,
+      desired_version,
+      base_url,
+      reason,
+    },
     dedupe_key: hostManagedComponentRolloutDedupeKey({
       hostId: row.id,
       components,
+      desiredVersion: desired_version,
       baseUrl: base_url,
       reason,
     }),
@@ -8067,9 +8572,10 @@ export async function reconcileHostSoftwareInternal({
   if (
     bootstrap_scope != null &&
     bootstrap_scope !== "full" &&
-    bootstrap_scope !== "helpers"
+    bootstrap_scope !== "helpers" &&
+    bootstrap_scope !== "environment"
   ) {
-    throw new Error("bootstrap_scope must be full or helpers");
+    throw new Error("bootstrap_scope must be full, helpers, or environment");
   }
   if (bootstrap_scope && !force_bootstrap) {
     throw new Error("bootstrap_scope requires force_bootstrap");
@@ -8429,6 +8935,7 @@ export async function rolloutHostManagedComponentsInternal({
   account_id,
   id,
   components,
+  desired_version,
   base_url,
   reason,
   record_runtime_deployments,
@@ -8437,6 +8944,7 @@ export async function rolloutHostManagedComponentsInternal({
   account_id?: string;
   id: string;
   components: HostManagedComponentRolloutRequest["components"];
+  desired_version?: string;
   base_url?: string;
   reason?: string;
   record_runtime_deployments?: boolean;
@@ -8448,6 +8956,7 @@ export async function rolloutHostManagedComponentsInternal({
     account_id,
     id,
     components,
+    desired_version,
     reason,
     record_runtime_deployments,
     loadHostForStartStop: loadHostForRootfsManagement,

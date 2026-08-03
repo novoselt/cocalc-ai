@@ -14,6 +14,10 @@ export const CURRENT_DATE = "September 2020";
 //
 // NOTE: This upgrade-spec is assumed as part of kucalc to be here; if you move
 // or rename it you will break kucalc.
+//
+// mintime is the legacy source of run_quota.idle_timeout.  Keep it for schema,
+// billing, and deployment compatibility, but note that the current CoCalc-AI
+// project-host does not enforce idle stopping.
 
 export const DEFAULT_QUOTAS = {
   disk_quota: 1000,
@@ -21,7 +25,7 @@ export const DEFAULT_QUOTAS = {
   cpu_shares: 0,
   memory: 1000,
   memory_request: 0,
-  mintime: 1800, // 30 minutes
+  mintime: 1800, // legacy idle-timeout value; not enforced by project-host
   network: 0,
   member_host: 0,
   ephemeral_state: 0,
@@ -47,7 +51,7 @@ export const upgrades = {
     cpu_shares: 0,
     memory: 1000,
     memory_request: 0,
-    mintime: 1800, // 30 minutes
+    mintime: 1800, // legacy idle-timeout value; not enforced by project-host
     network: 0,
     member_host: 0,
     ephemeral_state: 0,

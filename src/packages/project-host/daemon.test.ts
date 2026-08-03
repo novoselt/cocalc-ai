@@ -1919,6 +1919,38 @@ describe("project-host daemon stop", () => {
     expect(resolved.env.COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS).toBe("1");
   });
 
+  it("reloads env files over stale inherited values for an app-only restart", () => {
+    const tempDir = mkTempDir("cocalc-project-host-daemon-env-");
+    const envFile = path.join(tempDir, "project-host.env");
+    const localEnvFile = path.join(tempDir, "project-host.local.env");
+    fs.writeFileSync(
+      envFile,
+      ["COCALC_DATA=/tmp/project-host-data", "ADMISSION_MODE=observe"].join(
+        "\n",
+      ) + "\n",
+    );
+    fs.writeFileSync(localEnvFile, "ADMISSION_MODE=enforce\n");
+    process.env.COCALC_PROJECT_HOST_DAEMON_ENV_FILE = envFile;
+    process.env.COCALC_PROJECT_HOST_DAEMON_LOCAL_ENV_FILE = localEnvFile;
+    process.env.COCALC_PROJECT_HOST_RELOAD_ENV_FILES = "1";
+    process.env.ADMISSION_MODE = "stale";
+    process.env.COCALC_PROJECT_HOST_STORAGE_ADMISSION_MODE = "enforce";
+    process.env.EXTERNAL_CREDENTIAL = "preserved";
+
+    const resolved = __test__.resolveEnv(0);
+
+    expect(resolved.env.ADMISSION_MODE).toBe("enforce");
+    expect(
+      resolved.env.COCALC_PROJECT_HOST_STORAGE_ADMISSION_MODE,
+    ).toBeUndefined();
+    expect(resolved.env.EXTERNAL_CREDENTIAL).toBe("preserved");
+    expect(resolved.env.COCALC_PROJECT_HOST_DAEMON_ENV_FILE).toBe(envFile);
+    expect(resolved.env.COCALC_PROJECT_HOST_DAEMON_LOCAL_ENV_FILE).toBe(
+      localEnvFile,
+    );
+    expect(resolved.env.COCALC_PROJECT_HOST_RELOAD_ENV_FILES).toBeUndefined();
+  });
+
   it("prefers the explicit public http port over PORT when resolving daemon env", () => {
     const dataDir = mkTempDir("cocalc-project-host-daemon-env-");
     process.env.COCALC_DATA = dataDir;

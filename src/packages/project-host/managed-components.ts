@@ -20,6 +20,7 @@ import {
   workerBundleVersionOf,
   resolveProjectHostAcpWorkerLaunch,
 } from "./hub/acp/worker-manager";
+import { readProjectHostAcpWorkerTarget } from "./hub/acp/worker-target";
 
 type ManagedComponentSpec = {
   component: ManagedComponentKind;
@@ -259,7 +260,8 @@ function persistSnapshot(): ManagedComponentSnapshot {
 
 function acpWorkerSnapshot(): ManagedComponentSnapshot {
   const launch = resolveProjectHostAcpWorkerLaunch();
-  const desired_version = currentProjectHostVersion();
+  const desired_version =
+    readProjectHostAcpWorkerTarget()?.build_id ?? currentProjectHostVersion();
   const workers = listProjectHostAcpWorkers();
   return {
     enabled: true,

@@ -7,7 +7,11 @@ import { podmanEnv } from "@cocalc/backend/podman/env";
 import { getGeneration } from "@cocalc/file-server/btrfs/subvolume-snapshots";
 import { DEFAULT_PROJECT_PROXY_PORT } from "@cocalc/project-runner/run/env";
 import { pidFilename, pidUpdateIntervalMs } from "@cocalc/util/project-info";
-import { listProjects, upsertProject } from "./sqlite/projects";
+import {
+  getProject,
+  listProjectsByStates,
+  upsertProject,
+} from "./sqlite/projects";
 import {
   markProjectLastChangedRunning,
   resetProjectLastChangedRunning,
@@ -39,7 +43,6 @@ const cgroupReconciledAt = new Map<string, number>();
 let networkReconciledAt = 0;
 
 export interface ReconcileOptions {
-  recoverStaleRuntime?: (project_id: string) => Promise<string | undefined>;
   reconcileProjectCgroup?: (opts: {
     project_id: string;
     run_quota?: any;
@@ -209,15 +212,14 @@ async function reportRuntimeLost(project_id: string, now: number) {
 
 export async function reconcileOnce(options: ReconcileOptions = {}) {
   const now = Date.now();
-  const knownProjects = listProjects();
-  const knownIds = new Set(knownProjects.map((p) => p.project_id));
-  const knownById = new Map(knownProjects.map((p) => [p.project_id, p]));
+  const activeProjects = listProjectsByStates(["running", "starting"]);
+  const knownById = new Map(activeProjects.map((p) => [p.project_id, p]));
   const { ok, states: containers } = await getContainerStates();
   if (!ok) {
     logger.debug(
       "skipping reconcile state downgrade after failed podman probe",
       {
-        known_projects: knownProjects.length,
+        active_projects: activeProjects.length,
       },
     );
     return;
@@ -237,7 +239,9 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
   };
   // Update rows for containers we see that belong to this host (ignore other hosts on same machine).
   for (const info of containers.values()) {
-    if (!knownIds.has(info.project_id)) continue;
+    const known = knownById.get(info.project_id) ?? getProject(info.project_id);
+    if (!known) continue;
+    knownById.set(info.project_id, known);
     missingSince.delete(info.project_id);
     const row: any = {
       project_id: info.project_id,
@@ -293,41 +297,20 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
         heartbeatAgeMs <= staleProjectHeartbeatMs()
       ) {
         staleHeartbeatCycles.delete(info.project_id);
-      } else if (options.recoverStaleRuntime != null && base != null) {
+      } else if (base != null) {
         const cycles = (staleHeartbeatCycles.get(info.project_id) ?? 0) + 1;
         staleHeartbeatCycles.set(info.project_id, cycles);
-        if (cycles >= staleProjectHeartbeatCycles()) {
+        if (cycles === staleProjectHeartbeatCycles()) {
           logger.warn(
-            "running project daemon heartbeat is stale; recovering runtime",
+            "running project daemon heartbeat is stale; preserving container",
             {
               project_id: info.project_id,
               heartbeat_age_ms: heartbeatAgeMs,
               stale_after_ms: staleProjectHeartbeatMs(),
               stale_cycles: cycles,
+              action: "none",
             },
           );
-          try {
-            const recoveredState = await options.recoverStaleRuntime(
-              info.project_id,
-            );
-            if (recoveredState === "opened") {
-              staleHeartbeatCycles.delete(info.project_id);
-              await reportRuntimeLost(info.project_id, now);
-              continue;
-            }
-            logger.debug(
-              "stale project runtime recovery did not reach opened state",
-              {
-                project_id: info.project_id,
-                state: recoveredState,
-              },
-            );
-          } catch (err) {
-            logger.warn("stale project runtime recovery failed", {
-              project_id: info.project_id,
-              err: `${err}`,
-            });
-          }
         }
       }
       if (shouldCheckProjectLastChangedRunning(info.project_id)) {
@@ -379,7 +362,7 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
   }
 
   // Any project we think is active but has no container should be marked stopped.
-  for (const row of knownProjects) {
+  for (const row of activeProjects) {
     if (
       !containers.has(row.project_id) &&
       (row.state === "running" || row.state === "starting")

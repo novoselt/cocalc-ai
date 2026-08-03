@@ -4,6 +4,7 @@
  */
 
 import getLogger from "@cocalc/backend/logger";
+import adminAlert from "@cocalc/server/messages/admin-alert";
 import sendSystemMessage from "@cocalc/server/messages/send";
 import type {
   DedicatedHostBillingEnforcementState,
@@ -106,6 +107,24 @@ function bodyMarkdown(opts: {
   return lines.join("\n");
 }
 
+async function sendRequiredBillingMessage({
+  owner_account_id,
+  subject,
+  body,
+}: {
+  owner_account_id: string;
+  subject: string;
+  body: string;
+}) {
+  await sendSystemMessage({
+    to_ids: [owner_account_id],
+    subject,
+    body,
+    dedupMinutes: 24 * 60,
+    requireAccountNoticeDelivery: true,
+  });
+}
+
 export async function notifyDedicatedHostBillingEnforcement(opts: {
   owner_account_id: string;
   host_id: string;
@@ -123,19 +142,68 @@ export async function notifyDedicatedHostBillingEnforcement(opts: {
   const display = STATE_DISPLAY[opts.state];
   const title = display.title(hostLabel(opts.host_name));
   const body_markdown = bodyMarkdown(opts);
-  await sendSystemMessage({
-    to_ids: [owner],
+  await sendRequiredBillingMessage({
+    owner_account_id: owner,
     subject: title,
     body: `${body_markdown}\n\nOpen dedicated hosts: [/hosts](/hosts)`,
-    dedupMinutes: 24 * 60,
+  });
+}
+
+export async function notifyDedicatedHostDeprovisionReminder(opts: {
+  owner_account_id: string;
+  host_id: string;
+  host_name?: string | null;
+  deprovision_after: string;
+}) {
+  const owner = `${opts.owner_account_id ?? ""}`.trim();
+  if (!owner) return;
+  const removalTime = formatDateTime(opts.deprovision_after);
+  const hostName = hostLabel(opts.host_name);
+  await sendRequiredBillingMessage({
+    owner_account_id: owner,
+    subject: `Dedicated host ${hostName} disk will be removed within 24 hours`,
+    body: [
+      "Billing still needs attention. The retained provider disk will be removed unless billing is fixed.",
+      "",
+      `Host: **${hostName}**`,
+      `Host ID: \`${opts.host_id}\``,
+      ...(removalTime ? [`Provider disk removal after: ${removalTime}`] : []),
+      "",
+      "Open dedicated hosts: [/hosts](/hosts)",
+    ].join("\n"),
+  });
+}
+
+async function alertNotificationFailure({
+  owner_account_id,
+  host_id,
+  kind,
+  err,
+}: {
+  owner_account_id: string;
+  host_id: string;
+  kind: string;
+  err: unknown;
+}) {
+  await adminAlert({
+    subject: "Required dedicated-host billing notice failed",
+    body: [
+      `Notice: ${kind}`,
+      `Host ID: ${host_id}`,
+      `Owner account ID: ${owner_account_id}`,
+      `Error: ${err}`,
+    ].join("\n"),
+    dedupMinutes: 4 * 60,
+    dedupBySubject: true,
   });
 }
 
 export async function notifyDedicatedHostBillingEnforcementBestEffort(
   opts: Parameters<typeof notifyDedicatedHostBillingEnforcement>[0],
-) {
+): Promise<boolean> {
   try {
     await notifyDedicatedHostBillingEnforcement(opts);
+    return true;
   } catch (err) {
     logger.warn("failed to create dedicated host billing notification", {
       host_id: opts.host_id,
@@ -143,5 +211,34 @@ export async function notifyDedicatedHostBillingEnforcementBestEffort(
       state: opts.state,
       err: `${err}`,
     });
+    await alertNotificationFailure({
+      owner_account_id: opts.owner_account_id,
+      host_id: opts.host_id,
+      kind: `billing state ${opts.state}`,
+      err,
+    });
+    return false;
+  }
+}
+
+export async function notifyDedicatedHostDeprovisionReminderBestEffort(
+  opts: Parameters<typeof notifyDedicatedHostDeprovisionReminder>[0],
+): Promise<boolean> {
+  try {
+    await notifyDedicatedHostDeprovisionReminder(opts);
+    return true;
+  } catch (err) {
+    logger.warn("failed to create dedicated host deprovision reminder", {
+      host_id: opts.host_id,
+      owner_account_id: opts.owner_account_id,
+      err: `${err}`,
+    });
+    await alertNotificationFailure({
+      owner_account_id: opts.owner_account_id,
+      host_id: opts.host_id,
+      kind: "24-hour provider disk removal reminder",
+      err,
+    });
+    return false;
   }
 }

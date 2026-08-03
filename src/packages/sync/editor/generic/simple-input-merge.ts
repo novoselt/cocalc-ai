@@ -23,6 +23,7 @@
  *   it differs.
  */
 import { applyPatch, makePatch } from "patchflow";
+import { diff_main } from "@cocalc/util/patch";
 
 type Getter = () => string;
 type Setter = (value: string) => void;
@@ -30,6 +31,10 @@ type Setter = (value: string) => void;
 export class SimpleInputMerge {
   private last: string;
   private pending: string[] = [];
+  private requestedLocalUpdate?: {
+    latest: string;
+    renderCandidates: string[];
+  };
 
   constructor(initialValue: string) {
     this.last = initialValue ?? "";
@@ -40,6 +45,7 @@ export class SimpleInputMerge {
     // console.log("reset", { value });
     this.last = value ?? "";
     this.pending = [];
+    this.requestedLocalUpdate = undefined;
   }
 
   // Mark that the current value has been saved/committed locally.
@@ -85,7 +91,8 @@ export class SimpleInputMerge {
     applyMerged: Setter;
   }): void {
     const remote = opts.remote ?? "";
-    const local = opts.getLocal() ?? "";
+    const observedLocal = opts.getLocal() ?? "";
+    const { local, base } = this.resolveLocal(observedLocal);
     // console.log("handleRemote", { remote, local, last: this.last });
 
     // Pending value has been echoed.  IMPORTANT: local may already have
@@ -109,18 +116,62 @@ export class SimpleInputMerge {
     if (local === this.last && this.pending.length === 0) {
       this.noteApplied(remote);
       if (remote !== local) {
-        opts.applyMerged(remote);
+        this.applyMerged(opts.applyMerged, observedLocal, remote);
       }
       return;
     }
 
     // Local diverged: rebase local delta onto remote.
-    const delta = makePatch(this.last, local);
+    const delta = makePatch(base, local);
     const [merged] = applyPatch(delta, remote);
     this.noteApplied(merged);
     if (merged !== local) {
-      opts.applyMerged(merged);
+      this.applyMerged(opts.applyMerged, observedLocal, merged);
     }
+  }
+
+  private applyMerged(
+    apply: Setter,
+    observedLocal: string,
+    requested: string,
+  ): void {
+    const renderCandidates = [
+      ...(this.requestedLocalUpdate?.renderCandidates ?? []),
+    ];
+    for (const candidate of [observedLocal, requested]) {
+      if (!renderCandidates.includes(candidate)) {
+        renderCandidates.push(candidate);
+      }
+    }
+    this.requestedLocalUpdate = { latest: requested, renderCandidates };
+    apply(requested);
+  }
+
+  private resolveLocal(observed: string): { local: string; base: string } {
+    const requested = this.requestedLocalUpdate;
+    if (requested == null) {
+      return { local: observed, base: this.last };
+    }
+    if (observed === requested.latest) {
+      this.requestedLocalUpdate = undefined;
+      return { local: observed, base: this.last };
+    }
+    if (requested.renderCandidates.includes(observed)) {
+      // The setter has not reached the latest value yet. Treat any known value
+      // from the asynchronous render chain as stale UI, not a new local edit.
+      return { local: requested.latest, base: this.last };
+    }
+
+    // The user edited while the requested update was being rendered. Decide
+    // which value in the render chain that edit started from, then rebase only
+    // that genuine local delta.
+    this.requestedLocalUpdate = undefined;
+    const base = requested.renderCandidates.reduce((closest, candidate) =>
+      editCost(candidate, observed) < editCost(closest, observed)
+        ? candidate
+        : closest,
+    );
+    return { local: observed, base };
   }
 
   public previewMerge(opts: { remote: string; local: string }): {
@@ -147,4 +198,12 @@ export class SimpleInputMerge {
     const [merged] = applyPatch(delta, remote);
     return { merged, changed: merged !== local };
   }
+}
+
+function editCost(from: string, to: string): number {
+  return diff_main(from, to).reduce(
+    (total, [operation, value]) =>
+      operation === 0 ? total : total + value.length,
+    0,
+  );
 }

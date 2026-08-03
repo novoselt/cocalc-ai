@@ -89,6 +89,51 @@ describe("parseLines — representative cases per family", () => {
     expect(d.payload).toMatchObject({ envName: "equation" });
   });
 
+  it("align env with \\label, &, \\\\ and \\notag is one math-env", () => {
+    const ds = parse([
+      "\\begin{align}",
+      "  a &= b, \\label{eq:tail} \\\\",
+      "  c &= d. \\notag",
+      "\\end{align}",
+    ]);
+    const d = first(ds, "math-env")!;
+    expect(d).toBeDefined();
+    expect(d.from).toEqual({ line: 0, ch: 0 });
+    expect(d.to).toEqual({ line: 3, ch: 11 });
+    expect(d.payload).toMatchObject({ envName: "align" });
+    // the inner \label chip must be subsumed by the math env
+    expect(first(ds, "label")).toBeUndefined();
+  });
+
+  it("equation env with an inner \\label subsumes the label chip", () => {
+    const ds = parse([
+      "\\begin{equation}",
+      "  \\label{eq:gap}",
+      "  x \\ge 1 - \\varepsilon",
+      "\\end{equation}",
+    ]);
+    const d = first(ds, "math-env")!;
+    expect(d).toBeDefined();
+    expect(first(ds, "label")).toBeUndefined();
+  });
+
+  it("classic displaymath and eqnarray envs are math envs", () => {
+    const ds = parse([
+      "\\begin{displaymath}",
+      "  a = b",
+      "\\end{displaymath}",
+      "\\begin{eqnarray}",
+      "  x &=& y \\\\",
+      "  u &=& v",
+      "\\end{eqnarray}",
+    ]);
+    const envs = ds.filter((d) => d.type === "math-env");
+    expect(envs.map((d) => d.payload?.envName)).toEqual([
+      "displaymath",
+      "eqnarray",
+    ]);
+  });
+
   it("list env itemize with items", () => {
     const ds = parse([
       "\\begin{itemize}",

@@ -73,6 +73,7 @@ overrides:
 
 patchedDependencies:
   '@rc-component/portal@2.2.0': b6f877518e590497afc1bc08045e7388a098c2d276d59c861683811ebfb8da04
+  '@rc-component/tabs@1.7.0': 012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5
   fs-ext@2.1.1: 8de34bb8636073ff75cba28e1092a4e6bd4b0f9f8b2cc05b5fc95f80d978408b
   slate-react@0.124.0: 480c324a03628679a405b79a110bbd6bd6802f7d1379a491163e19156c5d7c85
 
@@ -693,6 +694,9 @@ importers:
       '@playwright/test':
         specifier: ^1.57.0
         version: 1.57.0
+      '@rc-component/tabs':
+        specifier: 1.7.0
+        version: 1.7.0(patch_hash=012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@react-hook/mouse-position':
         specifier: ^4.1.3
         version: 4.1.3(react@19.2.1)
@@ -1444,6 +1448,9 @@ importers:
       '@cocalc/ai':
         specifier: workspace:*
         version: link:../ai
+      '@cocalc/assets':
+        specifier: workspace:*
+        version: link:../assets
       '@cocalc/backend':
         specifier: workspace:*
         version: link:../backend
@@ -1468,6 +1475,9 @@ importers:
       '@cocalc/project-runner':
         specifier: workspace:*
         version: link:../project-runner
+      '@cocalc/static':
+        specifier: workspace:*
+        version: link:../static
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util
@@ -1505,6 +1515,9 @@ importers:
       '@cocalc/backend':
         specifier: workspace:*
         version: link:../backend
+      '@cocalc/conat':
+        specifier: workspace:*
+        version: link:../conat
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util
@@ -1595,6 +1608,9 @@ importers:
       '@cocalc/gcloud-pricing-calculator':
         specifier: ^1.17.0
         version: 1.17.0
+      '@cocalc/jupyter':
+        specifier: workspace:*
+        version: link:../jupyter
       '@cocalc/project-runner':
         specifier: workspace:*
         version: link:../project-runner
@@ -3817,6 +3833,7 @@ packages:
   '@plotly/mapbox-gl@1.13.4':
     resolution: {integrity: sha512-sR3/Pe5LqT/fhYgp4rT4aSFf1rTsxMbGiH6Hojc7PH36ny5Bn17iVFUjpzycafETURuFbLZUfjODO8LvSI+5zQ==}
     engines: {node: '>=6.4.0'}
+    deprecated: This package is deprecated as of August 2026. plotly.js v4 uses MapLibre for map traces — see https://github.com/maplibre/maplibre-gl-js.
 
   '@plotly/point-cluster@3.1.9':
     resolution: {integrity: sha512-MwaI6g9scKf68Orpr1pHZ597pYx9uP8UEFXLPbsCmuw3a84obwz6pnMXGc90VhgDNeNiLEdlmuK7CPo+5PIxXw==}
@@ -13219,7 +13236,7 @@ snapshots:
       react: 19.2.1
       react-dom: 19.2.1(react@19.2.1)
 
-  '@rc-component/tabs@1.7.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1)':
+  '@rc-component/tabs@1.7.0(patch_hash=012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)':
     dependencies:
       '@rc-component/dropdown': 1.0.2(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@rc-component/menu': 1.2.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -14432,7 +14449,7 @@ snapshots:
       '@rc-component/steps': 1.2.2(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@rc-component/switch': 1.0.3(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@rc-component/table': 1.9.1(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
-      '@rc-component/tabs': 1.7.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
+      '@rc-component/tabs': 1.7.0(patch_hash=012320e45fed87a7ebc8585e9bff0595e697985e698f0b21fece4ab202a0bee5)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@rc-component/textarea': 1.1.2(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@rc-component/tooltip': 1.4.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       '@rc-component/tour': 2.3.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1)

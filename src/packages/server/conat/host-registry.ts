@@ -20,7 +20,11 @@ import {
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
 import { enqueueCloudVmWorkOnce } from "@cocalc/server/cloud/db";
-import { shouldAutoRestoreInterruptedSpotHost } from "@cocalc/server/cloud/spot-restore";
+import {
+  recordProviderSpotPreemption,
+  shouldAutoRestoreInterruptedSpotHost,
+  spotRecoveryPolicy,
+} from "@cocalc/server/cloud/spot-restore";
 import {
   ensureAutomaticHostArtifactDeploymentsReconcile,
   ensureAutomaticHostRuntimeDeploymentsReconcile,
@@ -153,13 +157,32 @@ function getHostRuntimeHealth(metadata: any): {
   };
 }
 
-function hostRuntimeAvailability(metadata: any) {
+function getSpotRecoveryPhase(
+  metadata: any,
+  controlPlaneMetadata?: any,
+): string | undefined {
+  const reportedPhase = `${metadata?.spot_recovery_state?.phase ?? ""}`.trim();
+  if (reportedPhase) {
+    return reportedPhase;
+  }
+  return (
+    `${controlPlaneMetadata?.spot_recovery_state?.phase ?? ""}`.trim() ||
+    undefined
+  );
+}
+
+function hostRuntimeAvailability(metadata: any, controlPlaneMetadata?: any) {
   const runtime = getHostRuntimeHealth(metadata);
   if (runtime.ready) {
+    const recoveryPhase = getSpotRecoveryPhase(metadata, controlPlaneMetadata);
     return {
       state: "online" as const,
       category: "unknown" as const,
-      summary: "Host is online.",
+      summary:
+        recoveryPhase === "running_standard_fallback" ||
+        recoveryPhase === "probing_spot"
+          ? "Host is online on standard fallback."
+          : "Host is online.",
     };
   }
   if (runtime.status === "starting") {
@@ -1363,7 +1386,10 @@ export async function initHostRegistryService() {
           last_seen: new Date(),
           host_session_id: nextSessionId,
         });
-        const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
+        const runtimeAvailability = hostRuntimeAvailability(
+          sanitized.metadata,
+          previousRows[0]?.metadata,
+        );
         const plannedRuntimeTransition = getPlannedProjectHostRuntimeTransition(
           previousRows[0]?.metadata,
         );
@@ -1460,7 +1486,10 @@ export async function initHostRegistryService() {
           last_seen: new Date(),
           host_session_id: nextSessionId,
         });
-        const runtimeAvailability = hostRuntimeAvailability(sanitized.metadata);
+        const runtimeAvailability = hostRuntimeAvailability(
+          sanitized.metadata,
+          previousRows[0]?.metadata,
+        );
         const plannedRuntimeTransition = getPlannedProjectHostRuntimeTransition(
           previousRows[0]?.metadata,
         );
@@ -1542,6 +1571,7 @@ export async function initHostRegistryService() {
           });
           return;
         }
+        const previousShutdownNotice = row.metadata?.shutdown_notice;
         const notice = {
           at: new Date().toISOString(),
           signal:
@@ -1554,6 +1584,18 @@ export async function initHostRegistryService() {
               : undefined,
           host_session_id: currentSessionId ?? announcedSessionId ?? undefined,
         };
+        if (
+          notice.reason === "host-shutdown" &&
+          notice.host_session_id &&
+          previousShutdownNotice?.reason === "host-shutdown" &&
+          previousShutdownNotice?.host_session_id === notice.host_session_id
+        ) {
+          logger.debug("shutdown notice ignored (duplicate session)", {
+            host_id,
+            host_session_id: notice.host_session_id,
+          });
+          return;
+        }
         const nextMetadata = {
           ...(row.metadata ?? {}),
           shutdown_notice: notice,
@@ -1579,12 +1621,22 @@ export async function initHostRegistryService() {
         }
         const now = new Date();
         const retryAt = new Date(now.getTime() + 5_000);
-        const previousRecovery = nextMetadata.spot_recovery_state ?? {};
+        const recoveryPolicy = spotRecoveryPolicy({
+          status: row.status,
+          metadata: nextMetadata,
+        });
+        const preemption = recordProviderSpotPreemption({
+          state: nextMetadata.spot_recovery_state,
+          policy: recoveryPolicy,
+          now,
+        });
+        const previousRecovery = preemption.state;
         nextMetadata.spot_recovery_state = {
           ...previousRecovery,
           phase: "retrying_spot",
-          outage_started_at:
-            previousRecovery.outage_started_at ?? now.toISOString(),
+          outage_started_at: preemption.recorded
+            ? now.toISOString()
+            : (previousRecovery.outage_started_at ?? now.toISOString()),
           next_retry_at: retryAt.toISOString(),
           active_machine_type:
             previousRecovery.active_machine_type ??
@@ -1603,7 +1655,13 @@ export async function initHostRegistryService() {
           source: "host_shutdown_notice",
           summary:
             "Cloud provider is stopping this Spot VM; automatic recovery has started.",
-          details: notice,
+          details: {
+            ...notice,
+            rapid_preemption_circuit_breaker:
+              preemption.circuit_breaker_triggered || undefined,
+            standard_hold_until:
+              preemption.state.standard_hold_until ?? undefined,
+          },
         });
         await notifyProjectHostUpdate({ host_id });
         const enqueued = await enqueueCloudVmWorkOnce({
@@ -1620,6 +1678,9 @@ export async function initHostRegistryService() {
           host_id,
           signal: notice.signal,
           reason: notice.reason,
+          rapid_preemption_circuit_breaker:
+            preemption.circuit_breaker_triggered,
+          standard_hold_until: preemption.state.standard_hold_until,
           enqueued,
         });
       },
@@ -1903,3 +1964,7 @@ export async function initHostRegistryService() {
     },
   });
 }
+
+export const _test = {
+  hostRuntimeAvailability,
+};

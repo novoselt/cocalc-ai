@@ -40,6 +40,11 @@ import {
 import { useMentionableUsers } from "./mentionable-users";
 import { normalizeMentionSearch } from "./mention-search";
 import { submit_mentions } from "./mentions";
+import {
+  clearLocalHistory,
+  saveLocalHistory,
+  takeLocalHistory,
+} from "./local-history-cache";
 import { EditorFunctions, SelectionController } from "./types";
 import { resolveUndoHandler } from "./undo-policy";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
@@ -78,6 +83,7 @@ const MENTION_CSS =
   "color:#7289da; background:rgba(114,137,218,.1); border-radius: 3px; padding: 0 2px;";
 
 interface Props {
+  localHistoryCacheId?: string;
   project_id?: string; // must be set if enableUpload or enableMentions is set  (todo: enforce via typescript)
   path?: string; // must be set if enableUpload or enableMentions is set (todo: enforce via typescript)
   value?: string;
@@ -157,6 +163,7 @@ export function MarkdownInput(props: Props) {
     hideHelp,
     instructionsStyle,
     isFocused,
+    localHistoryCacheId,
     onBlur,
     onChange,
     onCursorBottom,
@@ -737,6 +744,17 @@ export function MarkdownInput(props: Props) {
       // UNCOMMENT FOR DEBUGGING ONLY
       // (window as any).cm = cm.current;
       cm.current.setValue(value ?? "");
+      if (localHistoryCacheId != null) {
+        const history = takeLocalHistory(
+          localHistoryCacheId,
+          cm.current.getValue(),
+        );
+        if (history == null) {
+          cm.current.clearHistory();
+        } else {
+          cm.current.setHistory(history);
+        }
+      }
       cm.current.on("change", saveValue);
       if (dirtyRef != null) {
         cm.current.on("change", () => {
@@ -952,6 +970,13 @@ export function MarkdownInput(props: Props) {
     return () => {
       cancelled = true;
       if (cm.current == null) return;
+      if (localHistoryCacheId != null) {
+        saveLocalHistory(
+          localHistoryCacheId,
+          cm.current.getValue(),
+          cm.current.getHistory(),
+        );
+      }
       cm.current.off("change", saveValue);
       cm.current.off("paste", handle_paste_event as any);
       if (onBlur) {
@@ -1067,7 +1092,12 @@ export function MarkdownInput(props: Props) {
         remote: value ?? "",
         getLocal: () => cm.current?.getValue() ?? "",
         applyMerged: (v) => {
+          const changed = cm.current?.getValue() !== v;
           setValueNoJump(v);
+          if (changed) {
+            cm.current?.clearHistory();
+            clearLocalHistory(localHistoryCacheId);
+          }
         },
       });
     }

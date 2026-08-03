@@ -47,6 +47,50 @@ def make_cfg(tmpdir: str) -> bootstrap.BootstrapConfig:
                 }
             ],
         },
+        project_io_policy={
+            "version": 1,
+            "mode": "enforce",
+            "mountpoint": "/mnt/cocalc",
+            "profile": "gcp-pd-balanced-dynamic",
+            "capacitySource": "gcp-pd-balanced-size-formula-2026-07-24",
+            "capacity": {"mode": "gcp-pd-balanced"},
+            "pool": {
+                "rbps": 67108864,
+                "wbps": 33554432,
+                "riops": 2000,
+                "wiops": 1000,
+            },
+            "leafClasses": {
+                "standard": {
+                    "weight": 100,
+                    "rbps": 16777216,
+                    "wbps": 8388608,
+                    "riops": 500,
+                    "wiops": 250,
+                },
+                "member": {
+                    "weight": 200,
+                    "rbps": 33554432,
+                    "wbps": 16777216,
+                    "riops": 1000,
+                    "wiops": 500,
+                },
+                "premium": {
+                    "weight": 400,
+                    "rbps": 50331648,
+                    "wbps": 25165824,
+                    "riops": 1500,
+                    "wiops": 750,
+                },
+            },
+            "adaptive": {
+                "enabled": False,
+                "sampleMs": 5000,
+                "enterSamples": 6,
+                "recoverSamples": 24,
+            },
+            "ioCost": {"mode": "disabled"},
+        },
         apt_packages=[],
         has_gpu=False,
         ssh_user="missing-runtime-user",
@@ -88,7 +132,6 @@ class ProjectHostStartTest(unittest.TestCase):
                 "",
             ),
         )
-
     def test_start_project_host_runs_ctl_from_runtime_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = self.make_project_host_cfg(tmpdir)
@@ -151,6 +194,68 @@ class ProjectHostStartTest(unittest.TestCase):
             )
 
 
+class ProjectIoConfigurationTest(unittest.TestCase):
+    def test_derives_managed_policy_from_existing_capacity_metadata(self) -> None:
+        policy = bootstrap.build_project_io_policy(
+            {
+                "version": 1,
+                "provider": "gcp",
+                "targets": [
+                    {
+                        "mountpoint": "/mnt/cocalc",
+                        "discovery": "btrfs",
+                        "disk_type": "balanced",
+                        "required": True,
+                    }
+                ],
+            }
+        )
+        self.assertEqual(policy["mode"], "enforce")
+        self.assertEqual(policy["capacity"]["mode"], "gcp-pd-balanced")
+        self.assertEqual(policy["leafClasses"]["premium"]["wiops"], 750)
+
+    def test_fails_safe_for_unsupported_capacity_metadata(self) -> None:
+        policy = bootstrap.build_project_io_policy(
+            {
+                "version": 1,
+                "provider": "gcp",
+                "targets": [{"disk_type": "ssd"}],
+            }
+        )
+        self.assertEqual(policy["mode"], "disabled")
+        self.assertEqual(policy["capacity"]["mode"], "static")
+
+    def test_replaces_managed_policy_and_preserves_local_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            policy_path = Path(tmpdir) / "policy.json"
+            override_path = Path(tmpdir) / "override.json"
+            capacity_path = Path(tmpdir) / "capacity.json"
+            policy_path.write_text('{"mode":"disabled"}\n', encoding="utf-8")
+            override_text = '{"mode":"observe"}\n'
+            override_path.write_text(override_text, encoding="utf-8")
+            original_chown = bootstrap.os.chown
+            try:
+                bootstrap.os.chown = lambda *_args, **_kwargs: None
+                bootstrap.write_project_io_configuration(
+                    cfg,
+                    policy_path=policy_path,
+                    override_path=override_path,
+                    capacity_path=capacity_path,
+                )
+            finally:
+                bootstrap.os.chown = original_chown
+
+            self.assertEqual(
+                json.loads(policy_path.read_text()), cfg.project_io_policy
+            )
+            self.assertEqual(
+                json.loads(capacity_path.read_text()), cfg.project_io_capacity
+            )
+            self.assertEqual(override_path.read_text(), override_text)
+            self.assertEqual(override_path.stat().st_mode & 0o777, 0o600)
+
+
 class BootstrapSharedScratchTest(unittest.TestCase):
     def test_reconcile_mounts_scratch_before_containment(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -173,6 +278,7 @@ class BootstrapSharedScratchTest(unittest.TestCase):
                 "reconcile_bees_runtime_policy",
                 "reconcile_project_network_limits",
                 "reconcile_project_io_policy",
+                "reconcile_host_service_cgroup",
             ]
             try:
                 for name in names:
@@ -1245,6 +1351,52 @@ class BootstrapBundleRetentionTest(unittest.TestCase):
             )
             self.assertEqual(remaining, ["v2", "v3", "v6", "v7"])
 
+    def test_prune_preserves_live_process_bundle_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            root = Path(tmpdir) / "bundles"
+            root.mkdir(parents=True, exist_ok=True)
+            created: list[Path] = []
+            for index in range(1, 8):
+                version_dir = root / f"v{index}"
+                version_dir.mkdir()
+                (version_dir / "supervisor").mkdir()
+                os.utime(version_dir, (index, index))
+                created.append(version_dir)
+            current = root / "current"
+            current.symlink_to(created[5], target_is_directory=True)
+            proc_root = Path(tmpdir) / "proc"
+            pid_dir = proc_root / "123"
+            pid_dir.mkdir(parents=True)
+            (pid_dir / "cmdline").write_bytes(
+                b"project-host:conat-persist\0"
+                + os.fsencode(created[1] / "supervisor" / "index.js")
+                + b"\0"
+            )
+            bundle = bootstrap.BundleSpec(
+                url="",
+                sha256=None,
+                remote="",
+                root=str(root),
+                dir=str(created[6]),
+                current=str(current),
+                version="v7",
+            )
+
+            original_proc_root = bootstrap.PROC_ROOT
+            try:
+                bootstrap.PROC_ROOT = proc_root
+                bootstrap.prune_bundle_versions(cfg, bundle, keep=3)
+            finally:
+                bootstrap.PROC_ROOT = original_proc_root
+
+            remaining = sorted(
+                child.name
+                for child in root.iterdir()
+                if child.is_dir() and not child.is_symlink()
+            )
+            self.assertEqual(remaining, ["v2", "v6", "v7"])
+
 
 class BootstrapOwnershipScopeTest(unittest.TestCase):
     def test_ensure_bootstrap_paths_does_not_recurse_over_bootstrap_root(self) -> None:
@@ -1562,6 +1714,27 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
             self.assertEqual(row["limits"]["riops"], 1293)
             self.assertEqual(row["limits"]["wiops"], 646)
 
+        maintenance = self.run_calculation(devices, "maintenance")
+        self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
+        for row in json.loads(maintenance.stdout)["rows"]:
+            self.assertEqual(row["limits"]["rbps"], 6 * 1024**2)
+            self.assertEqual(row["limits"]["wbps"], 2_621_440)
+            self.assertEqual(row["limits"]["riops"], 172)
+            self.assertEqual(row["limits"]["wiops"], 86)
+
+        startup = self.run_calculation(devices, "startup")
+        self.assertEqual(startup.returncode, 0, startup.stderr)
+        for row in json.loads(startup.stdout)["rows"]:
+            self.assertEqual(
+                row["limits"],
+                {
+                    "rbps": 60 * 1024**2,
+                    "wbps": 25 * 1024**2,
+                    "riops": 1725,
+                    "wiops": 862,
+                },
+            )
+
     def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
         result = self.run_calculation(
             [
@@ -1708,7 +1881,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertNotEqual(parser_result.returncode, 0)
             self.assertIn("leaf rbps exceeds pool rbps", parser_result.stderr)
             self.assertIn("metacopy=on,redirect_dir=on,index=off", script)
-            self.assertIn("project-rustic-backup)", script)
+            self.assertIn(
+                "project-rustic-backup|project-rustic-backup-maintenance)",
+                script,
+            )
             self.assertIn("project-rustic-restore)", script)
             self.assertIn(
                 '--glob "!.snapshots" --glob "!.snapshots/**"',
@@ -1768,10 +1944,97 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("enter-project-cgroup)", script)
             self.assertIn("verify-project-pool)", script)
             self.assertIn("attach-project-cgroup)", script)
+            self.assertIn("attach-prepared-project-runtime)", script)
+            self.assertIn("finish-project-startup-cgroup)", script)
+            finish_startup_body = script.split(
+                "  attach-prepared-project-runtime)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertIn('> "$pool/cpu.weight"', finish_startup_body)
+            self.assertIn("project-cgroup-cpu-weight-mismatch", finish_startup_body)
+            self.assertIn(
+                "[<init-pid> <conmon-pid> [<final-cpu-weight> [<final-io-weight>]]]",
+                script,
+            )
+            self.assertIn('> "$pool/io.weight"', finish_startup_body)
+            self.assertIn("project-cgroup-io-weight-mismatch", finish_startup_body)
+            self.assertIn("project_pid_is_in_pool", finish_startup_body)
+            self.assertIn('require_runtime_owned_pid "$conmon_pid"', script)
+            self.assertIn("is_trusted_conmon_executable()", script)
+            self.assertIn(
+                "/opt/cocalc/container-runtime/*/bin/conmon)",
+                script,
+            )
+            self.assertIn(
+                'is_trusted_conmon_executable "$conmon_exe"',
+                script,
+            )
+            self.assertIn('runtime_uid="${SUDO_UID:-0}"', script)
+            self.assertIn('[ "$owner_uid" = "$runtime_uid" ]', script)
+            self.assertIn(
+                'deny "project-conmon-executable-invalid"',
+                script,
+            )
+            self.assertIn(
+                'verify_project_pid_in_pool "$project_id" "$init_pid"',
+                script,
+            )
+            self.assertIn(
+                "Compatibility with project-host versions deployed before helper v18",
+                script,
+            )
             self.assertIn("verify-project-network-limits)", script)
             self.assertIn("verify-project-io-limits)", script)
             self.assertIn("verify-project-io-policy)", script)
             self.assertIn("project-io-status)", script)
+            self.assertIn("configure_maintenance_cgroup", script)
+            self.assertIn("configure_project_startup_cgroup", script)
+            self.assertIn("prepare-project-startup-cgroup)", script)
+            self.assertIn("prepare-project-startup-runtime-cgroup)", script)
+            self.assertIn("attach-host-service-cgroup)", script)
+            self.assertIn("verify-host-service-cgroup)", script)
+            self.assertIn("reconcile-host-service-cgroup)", script)
+            self.assertIn(
+                'HOST_SERVICE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-host-services"',
+                script,
+            )
+            self.assertIn(
+                '"$HOST_SERVICE_CGROUP_IO_WEIGHT" > "${HOST_SERVICE_CGROUP_DEFAULT}/io.weight"',
+                script,
+            )
+            self.assertIn(
+                'PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"',
+                script,
+            )
+            self.assertIn("project-startup-runtime-cgroup-verification-failed", script)
+            self.assertIn("move_project_startup_runtime_to_pool", script)
+            self.assertIn("attach_maintenance_worker", script)
+            self.assertIn("btrfs|btrfs-maintenance)", script)
+            self.assertIn(
+                "project-rustic-backup|project-rustic-backup-maintenance)",
+                script,
+            )
+            self.assertIn(
+                'MAINTENANCE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-maintenance"',
+                script,
+            )
+            self.assertIn(
+                'apply_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance" "$mode"',
+                script,
+            )
+            self.assertIn(
+                'apply_io_max "$PROJECT_STARTUP_CGROUP_DEFAULT" "startup" "$mode"',
+                script,
+            )
+            self.assertIn(
+                'PROJECT_STARTUP_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-project-startup"',
+                script,
+            )
+            self.assertIn("cocalc-project-network-startup", script)
+            self.assertIn('counter drop comment "%s-deny"', script)
+            self.assertIn(
+                '"maintenance_process_count": len(maintenance_processes.split())',
+                script,
+            )
             self.assertIn('result["capability"] = "validated"', script)
             self.assertIn(
                 'PROJECT_IO_CAPACITY_DEFAULT="/etc/cocalc/project-io-capacity.json"',
@@ -1825,6 +2088,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("ensure_project_network_rule", script)
             self.assertIn("emit_project_metadata_rules", script)
             self.assertIn("emit_project_network_rules", script)
+            self.assertIn("set-project-network-policy)", script)
+            self.assertIn("verify-project-network-policy)", script)
+            self.assertIn("set-current-exam-run)", script)
+            self.assertIn("poweroff-exam-host)", script)
+            emit_network_body = script.split(
+                "emit_project_network_rules() {", 1
+            )[1].split("\n}\n\napply_pasta_resource_limits()", 1)[0]
+            self.assertIn('comment "%s-disabled-dns"', emit_network_body)
+            self.assertIn('comment "%s-disabled-local"', emit_network_body)
+            self.assertIn('comment "%s-disabled-reject"', emit_network_body)
+            self.assertLess(
+                emit_network_body.index('comment "%s-disabled-dns"'),
+                emit_network_body.index('comment "%s-disabled-local"'),
+            )
             emit_metadata_body = script.split(
                 "emit_project_metadata_rules() {", 1
             )[1].split("\n}\n\nemit_project_network_rules()", 1)[0]
@@ -1877,6 +2154,8 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn('PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"', script)
+            self.assertIn("acquire_project_cgroup_shared_lock", script)
+            self.assertIn("project_pool_hierarchy_ready", script)
             self.assertIn('PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"', script)
             self.assertIn(
                 'PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"', script
@@ -1941,6 +2220,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )[1].split("\n    ;;", 1)[0]
             self.assertIn('ensure_project_network_rule "$project_id"', prepare_body)
             self.assertNotIn("acquire_project_network_lock", prepare_body)
+            startup_prepare_body = script.split(
+                "  prepare-project-startup-runtime-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertIn(
+                "configure_project_startup_runtime_leaf",
+                startup_prepare_body,
+            )
+            self.assertIn(
+                'ensure_project_network_rule "$project_id"',
+                startup_prepare_body,
+            )
             cleanup_body = script.split(
                 "  cleanup-project-cgroup)", 1
             )[1].split("\n    ;;", 1)[0]
@@ -2289,6 +2579,14 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                f'PROJECT_POOL_CPU_RESERVE_DYNAMIC_DIVISOR="{bootstrap.DYNAMIC_PROJECT_POOL_CPU_RESERVE_DIVISOR}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'reserve_cores="$((cpu_count / PROJECT_POOL_CPU_RESERVE_DYNAMIC_DIVISOR))"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 f'MIN_PROJECT_POOL_CPU_CORES="{bootstrap.MIN_PROJECT_POOL_CPU_CORES}"',
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -2524,6 +2822,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 f"COCALC_PROJECT_POOL_CPU_RESERVE_CORES={bootstrap.DEFAULT_PROJECT_POOL_CPU_RESERVE_CORES}",
                 text,
             )
+            self.assertIn("COCALC_PROJECT_QUOTA_LEDGER_MODE=enforce", text)
             self.assertIn("COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS=1", text)
             self.assertIn(
                 "COCALC_PROJECT_HOST_DAEMON_CAPTURE_FORENSICS_SEC=5", text
@@ -2550,6 +2849,23 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
 
             self.assertIn(
                 f"COCALC_PROJECT_POOL_MEMORY_RESERVE_MB={bootstrap.DEFAULT_PROJECT_POOL_MEMORY_RESERVE_MB}",
+                env_path.read_text(encoding="utf-8"),
+            )
+
+    def test_write_env_preserves_explicit_quota_ledger_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = replace(
+                make_cfg(tmpdir),
+                ssh_user="",
+                env_lines=["COCALC_PROJECT_QUOTA_LEDGER_MODE=observe"],
+            )
+            env_path = Path(cfg.env_file)
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+
+            bootstrap.write_env(cfg, 10)
+
+            self.assertIn(
+                "COCALC_PROJECT_QUOTA_LEDGER_MODE=observe",
                 env_path.read_text(encoding="utf-8"),
             )
 
@@ -3169,6 +3485,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                     True,
                     hostname="host.example.test",
                     port=9002,
+                    exam_hostname="exam.example.test",
                     token="token",
                     tunnel_id="tunnel-id",
                     creds_json='{"TunnelSecret":"secret"}',
@@ -3221,6 +3538,7 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("credentials-file: /etc/cloudflared/tunnel-id.json", config)
             self.assertIn("protocol: auto", config)
             self.assertIn("grace-period: 10s", config)
+            self.assertIn('hostname: "exam.example.test"', config)
             self.assertIn("--no-autoupdate", unit)
             self.assertNotIn("--token", unit)
             self.assertNotIn("EnvironmentFile=/etc/cloudflared/token.env", unit)
@@ -3467,10 +3785,12 @@ class BootstrapModesTest(unittest.TestCase):
                 "ensure_runtime_user",
                 "ensure_bootstrap_paths",
                 "install_privileged_wrappers",
+                "write_helpers",
                 "configure_runtime_sudoers",
                 "verify_runtime_sudoers",
                 "reconcile_project_network_limits",
                 "reconcile_project_io_policy",
+                "reconcile_host_service_cgroup",
             ):
                 patch(name, lambda _cfg, name=name: events.append(name))
             patch(
@@ -3513,11 +3833,83 @@ class BootstrapModesTest(unittest.TestCase):
                     "ensure_runtime_user",
                     "ensure_bootstrap_paths",
                     "install_privileged_wrappers",
+                    "write_helpers",
                     "configure_runtime_sudoers",
                     "verify_runtime_sudoers",
                     "reconcile_project_network_limits",
                     "reconcile_project_io_policy",
+                    "reconcile_host_service_cgroup",
                     "configure_cloudflared:False",
+                    "success:reconcile",
+                ],
+            )
+
+    def test_environment_reconcile_only_writes_managed_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            events: list[str] = []
+            originals = {}
+
+            def patch(name: str, replacement) -> None:
+                originals[name] = getattr(bootstrap, name)
+                setattr(bootstrap, name, replacement)
+
+            patch(
+                "ensure_runtime_user",
+                lambda _cfg: events.append("ensure_runtime_user"),
+            )
+            patch(
+                "ensure_bootstrap_paths",
+                lambda _cfg: events.append("ensure_bootstrap_paths"),
+            )
+            patch("compute_image_size", lambda _cfg: 123)
+            patch(
+                "write_env",
+                lambda _cfg, image_size_gb: events.append(
+                    f"write_env:{image_size_gb}"
+                ),
+            )
+            patch(
+                "write_bootstrap_state_files",
+                lambda _cfg: events.append("write_bootstrap_state_files"),
+            )
+            patch(
+                "start_project_host",
+                lambda _cfg: self.fail(
+                    "environment reconcile restarted project-host"
+                ),
+            )
+            patch(
+                "record_operation_start",
+                lambda _cfg, operation: events.append(f"start:{operation}"),
+            )
+            patch(
+                "record_operation_success",
+                lambda _cfg, operation: events.append(f"success:{operation}"),
+            )
+            patch(
+                "record_operation_failure",
+                lambda _cfg, operation, error: events.append(
+                    f"failure:{operation}:{error}"
+                ),
+            )
+            patch("report_bootstrap_status", lambda *_args, **_kwargs: None)
+            patch("log_line", lambda *_args, **_kwargs: None)
+            try:
+                result = bootstrap.run_reconcile_environment(cfg)
+            finally:
+                for name, original in originals.items():
+                    setattr(bootstrap, name, original)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                events,
+                [
+                    "start:reconcile",
+                    "ensure_runtime_user",
+                    "ensure_bootstrap_paths",
+                    "write_env:123",
+                    "write_bootstrap_state_files",
                     "success:reconcile",
                 ],
             )
@@ -3574,6 +3966,17 @@ class BootstrapModesTest(unittest.TestCase):
                             "dir": str(Path(tmpdir) / "project-host" / "v1"),
                             "current": str(Path(tmpdir) / "project-host" / "current"),
                         },
+                        "container_runtime_bundle": {
+                            "url": "",
+                            "sha256": None,
+                            "remote": "",
+                            "root": str(Path(tmpdir) / "container-runtime"),
+                            "dir": str(Path(tmpdir) / "container-runtime" / "v1"),
+                            "current": str(
+                                Path(tmpdir) / "container-runtime" / "current"
+                            ),
+                            "version": "v1",
+                        },
                         "project_bundle": {
                             "url": "",
                             "sha256": None,
@@ -3597,6 +4000,7 @@ class BootstrapModesTest(unittest.TestCase):
             )
 
             originals = {}
+            events: list[str] = []
 
             def patch(name: str, replacement) -> None:
                 originals[name] = getattr(bootstrap, name)
@@ -3614,16 +4018,23 @@ class BootstrapModesTest(unittest.TestCase):
             patch("install_privileged_wrappers", lambda _cfg: None)
             patch("reconcile_project_network_limits", lambda _cfg: None)
             patch("reconcile_project_io_policy", lambda _cfg: None)
+            patch("reconcile_host_service_cgroup", lambda _cfg: None)
             patch("ensure_cocalc_mount", lambda _cfg: None)
             patch("ensure_btrfs_data", lambda _cfg: None)
             patch("ensure_subuids", lambda _cfg: None)
-            patch("configure_podman", lambda _cfg: None)
+            patch("configure_podman", lambda _cfg: events.append("configure_podman"))
             patch("verify_runtime_user_contract", lambda _cfg: None)
             patch("write_env", lambda _cfg, _size: None)
             patch("ensure_runtime_user_manager", lambda _cfg: None)
             patch("configure_runtime_shell_env", lambda _cfg: None)
             patch("setup_master_conat_token", lambda _cfg: None)
-            patch("extract_bundle", lambda _cfg, bundle: bundle)
+            patch(
+                "extract_bundle",
+                lambda _cfg, bundle: (
+                    events.append(f"extract:{bundle.root}"),
+                    bundle,
+                )[1],
+            )
             patch("install_node", lambda _cfg: None)
             patch("write_wrapper", lambda _cfg: None)
             patch("write_helpers", lambda _cfg: None)
@@ -3644,6 +4055,10 @@ class BootstrapModesTest(unittest.TestCase):
                     setattr(bootstrap, name, original)
 
             self.assertEqual(result, 0)
+            self.assertLess(
+                events.index(f"extract:{Path(tmpdir) / 'container-runtime'}"),
+                events.index("configure_podman"),
+            )
             state = json.loads(
                 (Path(cfg.bootstrap_dir) / "bootstrap-state.json").read_text(
                     encoding="utf-8"

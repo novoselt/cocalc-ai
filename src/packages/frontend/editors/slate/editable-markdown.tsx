@@ -58,8 +58,14 @@ import {
 } from "slate";
 import {
   HistoryEditor as SlateHistoryEditor,
+  type History as SlateHistory,
   withHistory,
 } from "slate-history";
+import {
+  clearLocalHistory,
+  saveLocalHistory,
+  takeLocalHistory,
+} from "@cocalc/frontend/editors/markdown-input/local-history-cache";
 import { resetSelection } from "./control";
 import * as control from "./control";
 import { SimpleInputMerge } from "@cocalc/sync/editor/generic/simple-input-merge";
@@ -76,6 +82,7 @@ import { getCodeBlockText, toCodeLines } from "./elements/code-block/utils";
 import { shouldDirectSetExternalSlateValue } from "./external-value-strategy";
 import { withAutoFormat } from "./format";
 import { getHandler as getKeyboardHandler } from "./keyboard";
+import { handleLocalHistoryHotkey } from "./local-history";
 import Leaf from "./leaf-with-cursor";
 import { markdown_to_slate } from "./markdown-to-slate";
 import { withBlockSpacerParagraphs, withNormalize } from "./normalize";
@@ -440,6 +447,7 @@ interface Props {
   disableBlockEditor?: boolean;
   externalMultilinePasteAsCodeBlock?: boolean;
   localHistory?: boolean;
+  localHistoryCacheId?: string;
   onSlateChange?: (
     value: Descendant[],
     opts: { onlySelectionOps: boolean; syncCausedUpdate: boolean },
@@ -496,6 +504,7 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
     preserveBlankLines: preserveBlankLinesProp,
     externalMultilinePasteAsCodeBlock = false,
     localHistory = false,
+    localHistoryCacheId,
     onSlateChange,
     jupyterGapCursor,
     setJupyterGapCursor,
@@ -944,6 +953,40 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
       preserveBlankLines ? doc : stripBlankParagraphs(doc),
     );
   });
+
+  useEffect(() => {
+    if (
+      !localHistory ||
+      localHistoryCacheId == null ||
+      !SlateHistoryEditor.isHistoryEditor(editor)
+    ) {
+      return;
+    }
+    const history = takeLocalHistory<SlateHistory>(
+      localHistoryCacheId,
+      editor.getMarkdownValue(),
+    );
+    editor.history = history ?? { undos: [], redos: [] };
+    return () => {
+      const trim = (batches: SlateHistory["undos"]) => batches.slice(-200);
+      saveLocalHistory<SlateHistory>(
+        localHistoryCacheId,
+        editor.getMarkdownValue(),
+        {
+          undos: trim(editor.history.undos),
+          redos: trim(editor.history.redos),
+        },
+      );
+    };
+  }, [editor, localHistory, localHistoryCacheId]);
+
+  function resetLocalHistory(): void {
+    if (localHistory && SlateHistoryEditor.isHistoryEditor(editor)) {
+      editor.history = { undos: [], redos: [] };
+      clearLocalHistory(localHistoryCacheId);
+    }
+  }
+
   const bumpChangeRef = useRef<() => void>(() => {});
   useEffect(() => {
     bumpChangeRef.current = () => {
@@ -2005,6 +2048,10 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
       !e.altKey &&
       (e.key === "z" || e.key === "Z")
     ) {
+      if (handleLocalHistoryHotkey(e, editor, localHistory)) {
+        e.preventDefault();
+        return;
+      }
       if (e.shiftKey) {
         if (actions?.redo != null) {
           editor.saveValue(true);
@@ -2013,12 +2060,14 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
           e.preventDefault();
           return;
         }
-      } else if (actions?.undo != null) {
-        editor.saveValue(true);
-        actions.undo(id);
-        editor.resetHasUnsavedChanges();
-        e.preventDefault();
-        return;
+      } else {
+        if (actions?.undo != null) {
+          editor.saveValue(true);
+          actions.undo(id);
+          editor.resetHasUnsavedChanges();
+          e.preventDefault();
+          return;
+        }
       }
     }
 
@@ -2128,6 +2177,7 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
     if (isEqual(nextEditorValue, editor.children)) {
       return;
     }
+    resetLocalHistory();
     const normalizedValue = slate_to_markdown(nextEditorValue, {
       cache: editor.syncCache,
       preserveBlankLines,
@@ -2142,6 +2192,9 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
     (saveValueDebounce as any).cancel?.();
     (setSyncstringFromSlate as any).cancel?.();
     if (value == null) return;
+    if (value !== editor.getMarkdownValue()) {
+      resetLocalHistory();
+    }
     editor.syncCache = {};
     const nextEditorValueRaw = markdown_to_slate(
       value,
@@ -2237,6 +2290,7 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
       // as ambiguity is resolved while typing...
       return;
     }
+    resetLocalHistory();
 
     const mergeFocused = isMergeFocused();
     const blockPatchEnabled = isBlockPatchEnabled() && mergeFocused;

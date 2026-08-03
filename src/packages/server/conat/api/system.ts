@@ -32,6 +32,7 @@ import {
   getAccountNotificationIndexProjectionBacklogStatus,
 } from "@cocalc/database/postgres/account-notification-index-projector";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { assertProjectRuntimeCapability } from "@cocalc/server/launchpad/project-runtime";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { runBayDrainPreflight } from "@cocalc/server/bay-drain/preflight";
 import { recordBrowserAutomationAuditEvent } from "./browser-automation-audit";
@@ -261,6 +262,15 @@ import {
   resolvePublicAppDnsTarget,
   reserveProjectAppPublicSubdomain as reserveProjectAppPublicSubdomainRaw,
 } from "@cocalc/server/app-public-subdomains";
+import {
+  getPrivateAppRouteByHostname as getPrivateAppRouteByHostnameRaw,
+  getProjectAppPrivateHostnamePolicy as getProjectAppPrivateHostnamePolicyRaw,
+  inspectProjectAppPrivateHostname as inspectProjectAppPrivateHostnameRaw,
+  listProjectAppPrivateHostnames as listProjectAppPrivateHostnamesRaw,
+  reconcileProjectAppPrivateHostnamesForProject as reconcileProjectAppPrivateHostnamesForProjectRaw,
+  releaseProjectAppPrivateHostname as releaseProjectAppPrivateHostnameRaw,
+  reserveProjectAppPrivateHostname as reserveProjectAppPrivateHostnameRaw,
+} from "@cocalc/server/app-private-hostnames";
 import { getBayPublicOrigin } from "@cocalc/server/bay-public-origin";
 import { conat } from "@cocalc/backend/conat";
 import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
@@ -5028,6 +5038,7 @@ export async function publishProjectRootfsImage(
     session_hash?: string | null;
   },
 ): Promise<ProjectRootfsPublishLroRef> {
+  assertProjectRuntimeCapability("rootfs");
   const { account_id, browser_id, session_hash, project_id, ...body } = opts;
   if (!account_id) {
     throw Error("user must be signed in");
@@ -5085,6 +5096,7 @@ export async function setProjectRootfsImage(opts: {
   image: string;
   image_id?: string;
 }): Promise<ProjectRootfsStateEntry[]> {
+  assertProjectRuntimeCapability("rootfs");
   const { account_id, project_id, image, image_id } = opts;
   if (!account_id) {
     throw Error("user must be signed in");
@@ -6694,6 +6706,19 @@ async function getProjectOwnerAccountIds(
   return rows.map((row) => `${row.account_id ?? ""}`.trim()).filter(Boolean);
 }
 
+async function assertProjectOwnerOrAdmin(
+  account_id: string,
+  project_id: string,
+): Promise<void> {
+  if (await isAdmin(account_id)) return;
+  const owners = await getProjectOwnerAccountIds(project_id);
+  if (!owners.includes(account_id)) {
+    throw new Error(
+      "permission denied: only a project owner or site administrator can manage private app hostnames",
+    );
+  }
+}
+
 export async function assertProjectPublicSharingAllowed({
   account_id,
   host_id,
@@ -6861,6 +6886,193 @@ export async function releaseProjectAppPublicSubdomain({
   return await releaseProjectAppPublicSubdomainRaw({
     project_id: resolvedProjectId,
     app_id,
+  });
+}
+
+export async function getProjectAppPrivateHostnamePolicy({
+  account_id,
+  host_id,
+  project_id,
+}: {
+  account_id?: string;
+  host_id?: string;
+  project_id: string;
+}) {
+  const resolvedProjectId = await resolveProjectContext({
+    account_id,
+    host_id,
+    project_id,
+  });
+  if (!account_id && !host_id) throw new Error("must be signed in");
+  return await getProjectAppPrivateHostnamePolicyRaw(resolvedProjectId);
+}
+
+export async function inspectProjectAppPrivateHostname({
+  account_id,
+  host_id,
+  project_id,
+  app_id,
+}: {
+  account_id?: string;
+  host_id?: string;
+  project_id: string;
+  app_id: string;
+}) {
+  const resolvedProjectId = await resolveProjectContext({
+    account_id,
+    host_id,
+    project_id,
+  });
+  if (!account_id && !host_id) throw new Error("must be signed in");
+  return await inspectProjectAppPrivateHostnameRaw({
+    project_id: resolvedProjectId,
+    app_id,
+  });
+}
+
+export async function listProjectAppPrivateHostnames({
+  account_id,
+  host_id,
+  project_id,
+}: {
+  account_id?: string;
+  host_id?: string;
+  project_id: string;
+}) {
+  const resolvedProjectId = await resolveProjectContext({
+    account_id,
+    host_id,
+    project_id,
+  });
+  if (!account_id && !host_id) throw new Error("must be signed in");
+  return await listProjectAppPrivateHostnamesRaw({
+    project_id: resolvedProjectId,
+  });
+}
+
+export async function tracePrivateAppHostname({
+  account_id,
+  host_id,
+  hostname,
+}: {
+  account_id?: string;
+  host_id?: string;
+  hostname: string;
+}) {
+  const normalized = `${hostname ?? ""}`.trim().toLowerCase();
+  if (!normalized) throw new Error("hostname is required");
+  const target = await getPrivateAppRouteByHostnameRaw(normalized);
+  if (!target) {
+    return { matched: false, hostname: normalized };
+  }
+  if (!account_id && !host_id) {
+    throw new Error("must be signed in");
+  }
+  if (account_id) {
+    await assertProjectCollaborator(account_id, target.project_id);
+  }
+  if (host_id) {
+    await resolveProjectContext({
+      host_id,
+      project_id: target.project_id,
+    });
+  }
+  return {
+    matched: true,
+    hostname: normalized,
+    project_id: target.project_id,
+    app_id: target.app_id,
+    base_path: target.base_path,
+  };
+}
+
+export async function reserveProjectAppPrivateHostname({
+  account_id,
+  host_id,
+  project_id,
+  app_id,
+}: {
+  account_id?: string;
+  host_id?: string;
+  project_id: string;
+  app_id: string;
+}) {
+  const resolvedProjectId = await resolveProjectContext({
+    account_id,
+    host_id,
+    project_id,
+  });
+  let createdBy = account_id;
+  if (account_id) {
+    await assertProjectOwnerOrAdmin(account_id, resolvedProjectId);
+    await assertAccountTrustedForProductAccess(
+      account_id,
+      "create private project app hostnames",
+    );
+  } else if (host_id) {
+    const owners = await getProjectOwnerAccountIds(resolvedProjectId);
+    if (owners.length === 0) {
+      throw new Error("project has no owner account");
+    }
+    for (const owner of owners) {
+      await assertAccountTrustedForProductAccess(
+        owner,
+        "create private project app hostnames",
+      );
+    }
+    createdBy = owners[0];
+  } else {
+    throw new Error("must be signed in");
+  }
+  return await reserveProjectAppPrivateHostnameRaw({
+    project_id: resolvedProjectId,
+    app_id,
+    created_by: createdBy!,
+  });
+}
+
+export async function releaseProjectAppPrivateHostname({
+  account_id,
+  host_id,
+  project_id,
+  app_id,
+}: {
+  account_id?: string;
+  host_id?: string;
+  project_id: string;
+  app_id: string;
+}) {
+  const resolvedProjectId = await resolveProjectContext({
+    account_id,
+    host_id,
+    project_id,
+  });
+  if (account_id) {
+    await assertProjectOwnerOrAdmin(account_id, resolvedProjectId);
+  } else if (!host_id) {
+    throw new Error("must be signed in");
+  }
+  return await releaseProjectAppPrivateHostnameRaw({
+    project_id: resolvedProjectId,
+    app_id,
+  });
+}
+
+export async function reconcileProjectAppPrivateHostnames({
+  account_id,
+  project_id,
+}: {
+  account_id?: string;
+  project_id: string;
+}) {
+  if (!account_id) throw new Error("must be signed in");
+  const resolvedProjectId = await resolveProjectContext({
+    account_id,
+    project_id,
+  });
+  await assertProjectOwnerOrAdmin(account_id, resolvedProjectId);
+  return await reconcileProjectAppPrivateHostnamesForProjectRaw({
+    project_id: resolvedProjectId,
   });
 }
 

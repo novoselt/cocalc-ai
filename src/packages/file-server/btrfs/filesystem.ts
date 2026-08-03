@@ -26,7 +26,10 @@ import bees, {
 import { type ChildProcess } from "node:child_process";
 import { install } from "@cocalc/backend/sandbox/install";
 import { getBtrfsQuotaQueueStatus, startBtrfsQuotaQueue } from "./quota-queue";
-import { ensureBtrfsQuotaMode } from "./quota-mode";
+import {
+  ensureBtrfsQuotaModeDetails,
+  type BtrfsQuotaRuntimeDetails,
+} from "./quota-mode";
 import {
   collectBeesTelemetry,
   recordBeesTelemetryError,
@@ -68,6 +71,17 @@ export interface Options {
   // Otherwise, if this path does not exist, it will be created a new rustic repo
   // initialized here.
   rustic: string;
+
+  // Managed callers can durably account for temporary quota headroom. Return
+  // undefined for subvolumes that are not managed by the caller.
+  withTemporaryQuotaOverride?: <T>(opts: {
+    subvolume_name: string;
+    operation: string;
+    minimum_bytes: number;
+    current_size: number;
+    current_used: number;
+    run: () => Promise<T>;
+  }) => Promise<T> | undefined;
 }
 
 let mountLock = false;
@@ -84,6 +98,7 @@ export class Filesystem {
   private beesTelemetryRunning = false;
   private beesDisabledByConfig = false;
   private beesStopping = false;
+  private quotaRuntime?: BtrfsQuotaRuntimeDetails;
   private beesLastExit?: {
     code: number | null;
     signal: NodeJS.Signals | null;
@@ -98,15 +113,22 @@ export class Filesystem {
   init = async () => {
     await mkdirp([this.opts.mount]);
     await this.initDevice();
-    await this.mountFilesystem();
-    await this.sync();
+    const mountedNow = await this.mountFilesystem();
+    // A newly mounted development loopback image benefits from an explicit
+    // flush before quota setup. Never put a host-wide filesystem sync on the
+    // startup path for an already-mounted production filesystem: active
+    // project writeback can make that flush take an unbounded amount of time.
+    if (mountedNow) {
+      await this.sync();
+    }
     // Reconcile the mounted filesystem to CoCalc's only supported quota modes:
     // simple quotas or fully disabled quotas. Classic btrfs qgroups are
     // intentionally unsupported here because they caused severe latency,
     // hangs, and daemon failures under our snapshot-heavy workload. Keep this
     // startup reconciliation so old hosts are forced away from qgroups even if
     // somebody tries to re-enable them via stale config.
-    const quotaStatus = await ensureBtrfsQuotaMode(this.opts.mount);
+    this.quotaRuntime = await ensureBtrfsQuotaModeDetails(this.opts.mount);
+    const quotaStatus = this.quotaRuntime.status;
     if (!quotaStatus.enabled) {
       logger.warn("Btrfs quota operations disabled by configuration", {
         mount: this.opts.mount,
@@ -126,7 +148,9 @@ export class Filesystem {
         err,
       );
     }
-    await this.sync();
+    if (mountedNow) {
+      await this.sync();
+    }
     await this.startBees("startup");
     this.startBeesTelemetry();
   };
@@ -222,6 +246,13 @@ export class Filesystem {
 
   getQuotaQueueStatus = () => {
     return getBtrfsQuotaQueueStatus(this.opts.mount);
+  };
+
+  getQuotaRuntime = (): BtrfsQuotaRuntimeDetails => {
+    if (!this.quotaRuntime) {
+      throw new Error("Btrfs quota runtime has not been initialized");
+    }
+    return this.quotaRuntime;
   };
 
   private scheduleBeesRestart(reason: string) {
@@ -370,16 +401,17 @@ export class Filesystem {
     return obj;
   };
 
-  private mountFilesystem = async () => {
+  private mountFilesystem = async (): Promise<boolean> => {
     try {
       await this.info();
       // already mounted
-      return;
+      return false;
     } catch {}
     const { stderr, exit_code } = await this._mountFilesystem();
     if (exit_code) {
       throw Error(stderr);
     }
+    return true;
   };
 
   private _mountFilesystem = async () => {

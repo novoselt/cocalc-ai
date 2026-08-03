@@ -15,6 +15,7 @@ import { useIntl } from "react-intl";
 import { useActions, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { Icon, Tooltip } from "@cocalc/frontend/components";
 import {
+  AccessibleAddTabIcon,
   renderTabBar,
   SortableTabs,
   useItemContext,
@@ -619,7 +620,12 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
                 items={items}
                 activeKey={activeKey}
                 type={"editable-card"}
-                hideAdd
+                hideAdd={viewer}
+                addIcon={
+                  <AccessibleAddTabIcon label="Create file">
+                    <Icon name="plus" />
+                  </AccessibleAddTabIcon>
+                }
                 onChange={(key) => {
                   if (actions == null || !key) return;
                   actions.set_active_tab(path_to_tab(keyToPath(key)));
@@ -629,17 +635,6 @@ export default function FileTabs({ openFiles, project_id, activeTab }) {
             </div>
           </SortableTabs>
         </div>
-        {!viewer && (
-          <Tooltip title="Create a new file">
-            <Button
-              aria-label="Create file"
-              icon={<Icon name="plus" />}
-              onClick={() => onEdit("", "add")}
-              size="small"
-              style={{ flex: "0 0 auto" }}
-            />
-          </Tooltip>
-        )}
       </div>
     );
   }

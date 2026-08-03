@@ -129,6 +129,8 @@ export interface HostSpotRecoveryPolicy {
   spot_restore_backoff_seconds?: number;
   standard_fallback_enabled?: boolean;
   standard_fallback_min_minutes?: number;
+  rapid_preemption_window_minutes?: number;
+  rapid_preemption_standard_hold_minutes?: number;
   spot_probe_interval_minutes?: number;
   spot_return_requires_probe?: boolean;
   max_restore_attempts_before_fallback?: number;
@@ -143,6 +145,8 @@ export interface HostSpotRecoveryState {
   attempt?: number;
   next_retry_at?: string;
   fallback_started_at?: string;
+  last_preempted_at?: string;
+  standard_hold_until?: string;
   last_probe_at?: string;
   last_probe_result?: "success" | "failure";
   last_probe_error?: string;
@@ -616,6 +620,125 @@ export interface HostRootfsImage {
   host_gc_eligible?: boolean;
 }
 
+export type HostExamNetworkMode = "disabled";
+
+export type HostExamRunStatus =
+  | "preparing"
+  | "ready"
+  | "open"
+  | "closing"
+  | "cleaning"
+  | "stopped"
+  | "error";
+
+export interface HostExamConfig {
+  host_id: string;
+  enabled: boolean;
+  title: string;
+  hostname: string;
+  dns_record_id?: string | null;
+  dns_target?: string | null;
+  generation: number;
+  max_projects: number;
+  project_cpu: number;
+  project_memory_mb: number;
+  project_disk_mb: number;
+  project_ttl_minutes: number;
+  cleanup_grace_minutes: number;
+  terminal_enabled: boolean;
+  network_mode: HostExamNetworkMode;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by: string;
+}
+
+export interface HostExamRun {
+  run_id: string;
+  host_id: string;
+  config_generation: number;
+  status: HostExamRunStatus;
+  rootfs_image: string;
+  rootfs_digest: string;
+  run_quota: {
+    cpu_limit: number;
+    memory_limit: number;
+    disk_quota: number;
+    pids_limit: number;
+  };
+  max_projects: number;
+  terminal_enabled: boolean;
+  network_mode: HostExamNetworkMode;
+  scheduled_stop_at: string;
+  stop_host_at_deadline: boolean;
+  owner_account_id: string;
+  opened_at?: string | null;
+  admission_closed_at?: string | null;
+  cleanup_started_at?: string | null;
+  cleaned_at?: string | null;
+  stopped_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+export interface HostExamReadinessCheck {
+  name:
+    | "host_running"
+    | "on_demand"
+    | "public_route"
+    | "rootfs"
+    | "local_snapshot"
+    | "network_policy"
+    | "project_smoke"
+    | "watchdog";
+  ok: boolean;
+  detail?: string;
+}
+
+export interface HostExamRuntimeStatus {
+  run_id?: string;
+  status?: HostExamRunStatus;
+  config_generation?: number;
+  admission_open: boolean;
+  active_projects: number;
+  max_projects?: number;
+  scheduled_stop_at?: string;
+  stop_host_at_deadline?: boolean;
+  cleanup_deadline_at?: string;
+  hostname?: string;
+  title?: string;
+  terminal_enabled?: boolean;
+  network_mode?: HostExamNetworkMode;
+  last_error?: string;
+  updated_at?: string;
+  readiness?: HostExamReadinessCheck[];
+}
+
+export interface HostExamState {
+  eligible: boolean;
+  eligibility_reason?: string;
+  host_status?: string;
+  config?: HostExamConfig;
+  run?: HostExamRun;
+  runtime?: HostExamRuntimeStatus;
+  token?: string;
+}
+
+export interface HostExamConfigInput {
+  enabled: boolean;
+  title?: string;
+  max_projects: number;
+  project_cpu: number;
+  project_memory_mb: number;
+  project_disk_mb: number;
+  project_ttl_minutes: number;
+  cleanup_grace_minutes: number;
+  terminal_enabled?: boolean;
+  network_mode?: HostExamNetworkMode;
+}
+
 export interface HostRootfsGcItem {
   image: string;
   status: "removed" | "skipped" | "failed";
@@ -773,7 +896,109 @@ export interface HostIoContainmentMetrics {
   truncated: boolean;
   sampling_error?: string;
   legacy_process_count?: number;
+  maintenance_cgroup?: string;
+  maintenance_io_max?: string;
+  maintenance_io_weight?: string;
+  maintenance_pressure_some_percent?: number;
+  maintenance_pressure_full_percent?: number;
+  maintenance_pressure_some_total?: number;
+  maintenance_pressure_full_total?: number;
+  maintenance_process_count?: number;
+  maintenance_cpu_max?: string;
+  maintenance_memory_high?: string;
+  maintenance_memory_max?: string;
+  maintenance_pids_max?: string;
   last_reconcile_error?: string;
+}
+
+export type HostStorageAdmissionMode = "disabled" | "observe" | "enforce";
+
+export type HostStoragePressureState =
+  | "normal"
+  | "contended"
+  | "emergency"
+  | "recovery";
+
+export interface HostStorageAdmissionDecision {
+  decided_at: string;
+  operation_kind: string;
+  priority: "lifecycle" | "interactive" | "scheduled" | "scavenger";
+  project_id?: string;
+  admitted: boolean;
+  would_defer: boolean;
+  reason?: string;
+  pressure_state: HostStoragePressureState;
+}
+
+export interface HostStorageAdmissionMetrics {
+  schema_version: 1;
+  collected_at: string;
+  mode: HostStorageAdmissionMode;
+  pressure_state: HostStoragePressureState;
+  state_since: string;
+  host_io_full_avg10?: number;
+  project_pool_io_full_avg10?: number;
+  effective_io_full_avg10?: number;
+  lifecycle_active: number;
+  starting_projects: number;
+  stopping_projects: number;
+  active_by_priority: {
+    lifecycle: number;
+    interactive: number;
+    scheduled: number;
+    scavenger: number;
+  };
+  btrfs_mutation_locks: number;
+  btrfs_mutation_waiters: number;
+  admitted_total: number;
+  deferred_total: number;
+  observed_deferral_total: number;
+  transition_count: number;
+  last_transition_reason?: string;
+  last_decision?: HostStorageAdmissionDecision;
+  sample_error?: string;
+}
+
+export interface HostConatPersistMetrics {
+  schema_version: number;
+  collected_at: string;
+  available: boolean;
+  ready?: boolean;
+  server_id?: string;
+  pid?: number;
+  uptime_seconds?: number;
+  rss_bytes?: number;
+  heap_total_bytes?: number;
+  heap_used_bytes?: number;
+  external_bytes?: number;
+  array_buffers_bytes?: number;
+  v8_heap_limit_bytes?: number;
+  v8_large_object_space_used_bytes?: number;
+  event_loop_utilization?: number;
+  local_client_subscriptions?: number;
+  opened_streams_total?: number;
+  closed_streams_total?: number;
+  open_streams?: number;
+  open_ephemeral_streams?: number;
+  open_disk_streams?: number;
+  cached_streams?: number;
+  cached_references?: number;
+  max_cached_references?: number;
+  maintenance_enabled?: boolean;
+  maintenance_catalog_healthy?: boolean;
+  maintenance_tracking_coverage?: boolean;
+  maintenance_open_paths?: number;
+  maintenance_present_databases?: number;
+  maintenance_missing_databases?: number;
+  maintenance_unverified_databases?: number;
+  maintenance_present_file_bytes?: number;
+  maintenance_present_wal_bytes?: number;
+  maintenance_last_scan_completed_at_ms?: number;
+  maintenance_scanned_files?: number;
+  maintenance_pause_reason?: string;
+  maintenance_last_error?: string;
+  diagnostics_duration_ms?: number;
+  error?: string;
 }
 
 export interface HostCurrentMetrics {
@@ -812,6 +1037,8 @@ export interface HostCurrentMetrics {
   kernel_sysctls?: HostKernelSysctlSnapshot;
   resource_pressure?: HostResourcePressureMetrics;
   io_containment?: HostIoContainmentMetrics;
+  storage_admission?: HostStorageAdmissionMetrics;
+  conat_persist?: HostConatPersistMetrics;
 }
 
 export type HostPressureZone = "normal" | "observe" | "pressure" | "emergency";
@@ -1186,7 +1413,7 @@ export type HostSoftwareArtifact =
   | "bootstrap-environment";
 
 export type HostSoftwareChannel = "latest" | "staging";
-export type HostBootstrapReconcileScope = "full" | "helpers";
+export type HostBootstrapReconcileScope = "full" | "helpers" | "environment";
 
 export interface HostSoftwareUpgradeTarget {
   artifact: HostSoftwareArtifact;
@@ -1206,7 +1433,7 @@ export interface HostSoftwareUpgradeResponse {
   results: Array<{
     artifact: HostSoftwareArtifact;
     version: string;
-    status: "updated" | "noop";
+    status: "updated" | "staged" | "noop";
   }>;
 }
 
@@ -1418,6 +1645,7 @@ export interface HostRuntimeDeploymentUpsert {
 export interface HostManagedComponentRolloutRequest {
   id: string;
   components: ManagedComponentKind[];
+  desired_version?: string;
   reason?: string;
 }
 
@@ -1470,6 +1698,14 @@ export const hosts = {
   pullHostRootfsImage: authFirstRequireAccount,
   deleteHostRootfsImage: authFirstRequireAccount,
   gcDeletedHostRootfsImages: authFirstRequireAccount,
+  getHostExamState: authFirstRequireAccount,
+  setHostExamConfig: authFirstRequireAccount,
+  createHostExamRun: authFirstRequireAccount,
+  rotateHostExamToken: authFirstRequireAccount,
+  openHostExamRun: authFirstRequireAccount,
+  updateHostExamDeadline: authFirstRequireAccount,
+  increaseHostExamCapacity: authFirstRequireAccount,
+  stopAndEraseHostExamRun: authFirstRequireAccount,
   listHostSshAuthorizedKeys: authFirstRequireAccount,
   addHostSshAuthorizedKey: authFirstRequireAccount,
   removeHostSshAuthorizedKey: authFirstRequireAccount,
@@ -1686,6 +1922,79 @@ export interface Hosts {
     session_hash?: string | null;
     id: string;
   }) => Promise<HostRootfsGcResult>;
+  getHostExamState: (opts: {
+    account_id?: string;
+    id: string;
+    timeout?: number;
+  }) => Promise<HostExamState>;
+  setHostExamConfig: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    config: HostExamConfigInput;
+    timeout?: number;
+  }) => Promise<HostExamState>;
+  createHostExamRun: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    rootfs_image: string;
+    scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
+    idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState & { token: string }>;
+  rotateHostExamToken: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState & { token: string }>;
+  openHostExamRun: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState>;
+  updateHostExamDeadline: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
+    idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState>;
+  increaseHostExamCapacity: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    max_projects: number;
+    idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState>;
+  stopAndEraseHostExamRun: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    id: string;
+    run_id: string;
+    stop_host?: boolean;
+    idempotency_key: string;
+    timeout?: number;
+  }) => Promise<HostExamState>;
   listHostSshAuthorizedKeys: (opts: {
     account_id?: string;
     id: string;
@@ -1830,6 +2139,7 @@ export interface Hosts {
     image?: string;
     authorized_keys?: string;
     run_quota?: any;
+    run_quota_revision?: number;
     env?: ProjectEnv;
     autostart_enabled?: boolean | null;
     project_secrets_cache?: ProjectSecretsRuntimeCache;
@@ -2104,6 +2414,7 @@ export interface Hosts {
     account_id?: string;
     id: string;
     components: ManagedComponentKind[];
+    desired_version?: string;
     base_url?: string;
     reason?: string;
   }) => Promise<HostLroResponse>;

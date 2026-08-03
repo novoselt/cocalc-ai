@@ -13,6 +13,7 @@ export type PublicAuthRoute =
   | { challengeId: string; kind: "auth-cli-login" }
   | { kind: "auth-password-reset-done" }
   | { kind: "auth-password-reset-redeem"; passwordResetId: string }
+  | { challengeId: string; kind: "auth-email-continue" }
   | { email?: string; kind: "auth-verify-email"; token: string }
   | {
       inviteId?: string;
@@ -141,6 +142,18 @@ export function getPublicAuthRouteFromPath(
 
   if (
     routeParts[0] === "auth" &&
+    routeParts[1] === "email" &&
+    routeParts[2] === "continue" &&
+    routeParts[3]
+  ) {
+    return {
+      challengeId: routeParts[3],
+      kind: "auth-email-continue",
+    };
+  }
+
+  if (
+    routeParts[0] === "auth" &&
     routeParts[1] === "second-factor" &&
     routeParts[2]
   ) {
@@ -238,6 +251,12 @@ export function isPublicAuthRoutePath(
     case "cli-login":
     case "cli-elevate":
       return routeParts.length === 3;
+    case "email":
+      return (
+        routeParts.length === 4 &&
+        routeParts[2] === "continue" &&
+        !!routeParts[3]
+      );
     case "verify":
       return true;
     default:

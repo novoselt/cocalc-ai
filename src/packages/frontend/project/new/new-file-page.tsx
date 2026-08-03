@@ -110,6 +110,9 @@ export default function NewFilePage(props: Props) {
     "customize",
     LAUNCHER_SITE_DEFAULTS_QUICK_KEY,
   );
+  const examMode = useTypedRedux("customize", "exam_mode") === true;
+  const examTerminalEnabled =
+    useTypedRedux("customize", "terminal_enabled") === true;
   const [extensionWarning, setExtensionWarning] = useState<boolean>(false);
   const current_path_abs = useTypedRedux({ project_id }, "current_path_abs");
   const effective_current_path = current_path_abs ?? "/";
@@ -162,6 +165,7 @@ export default function NewFilePage(props: Props) {
 
   const quickCreateIds = mergedLauncher.quickCreate
     .filter((id) => id !== "sage")
+    .filter((id) => id !== "term" || !examMode || examTerminalEnabled)
     .filter((id) => isQuickCreateAvailable(id, availableFeatures));
   const quickCreateSpecs = quickCreateIds.map(getQuickCreateSpec);
 
@@ -177,6 +181,7 @@ export default function NewFilePage(props: Props) {
       if (data?.name) seen.add(data.name);
       const value = data?.ext ?? ext;
       if (!value || value === "sage") continue;
+      if (value === "term" && examMode && !examTerminalEnabled) continue;
       const info = file_options(`x.${value}`);
       const icon = (info.icon ?? "file") as IconName;
       options.push({
@@ -190,7 +195,7 @@ export default function NewFilePage(props: Props) {
       });
     }
     return options;
-  }, []);
+  }, [examMode, examTerminalEnabled]);
 
   function getActions(): ProjectActions {
     if (actions == null) throw new Error("bug");

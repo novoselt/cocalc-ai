@@ -121,12 +121,11 @@ export default function Crash() {
       <hr />
 
       <div>
-        If this happens repeatedly for a specific file or action, please report
-        all details in <A href={getSupport}>a support ticket</A>, via email to{" "}
+        This error was reported automatically. If reloading does not recover or
+        this happens repeatedly for a specific file or action, please add those
+        details to <A href={getSupport}>a support ticket</A>, email{" "}
         <A href={`mailto:${HELP_EMAIL}`}>{HELP_EMAIL}</A>, or consult our{" "}
         <A href={joinUrlPath(appBasePath, "info")}>other support resources</A>.
-        Thank you! Unfortunately, if you don't explain how you hit this problem
-        so we can reproduce it, then we probably will not be able to fix it.
       </div>
     </div>
   );

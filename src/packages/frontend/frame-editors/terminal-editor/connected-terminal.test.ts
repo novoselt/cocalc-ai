@@ -1,12 +1,14 @@
 /** @jest-environment jsdom */
 
 import { EventEmitter } from "events";
-import { Map } from "immutable";
+import { fromJS, Map } from "immutable";
 
 function loadTerminalModule({
   projectState = "running",
   runtimeGeneration,
   runtimeRecoveryNotice,
+  startLro,
+  terminalSpawnError,
   project,
 }: {
   projectState?: string;
@@ -19,6 +21,8 @@ function loadTerminalModule({
       | "project_runtime_lost";
     occurred_at: number;
   };
+  startLro?: any;
+  terminalSpawnError?: Error;
   project?: any;
 } = {}) {
   class MockProjectStore extends EventEmitter {
@@ -31,6 +35,7 @@ function loadTerminalModule({
       runtime_recovery_notice: runtimeRecoveryNotice
         ? Map(runtimeRecoveryNotice)
         : undefined,
+      start_lro: startLro ? fromJS(startLro) : undefined,
     });
 
     get = (key: string) => this.data.get(key);
@@ -62,7 +67,12 @@ function loadTerminalModule({
     },
     on: jest.fn(),
     once: jest.fn((_event: string, cb?: () => void) => cb?.()),
-    spawn: jest.fn(async () => ""),
+    spawn: jest.fn(async () => {
+      if (terminalSpawnError != null) {
+        throw terminalSpawnError;
+      }
+      return "";
+    }),
     resize: jest.fn(async () => {}),
     sizes: jest.fn(async () => []),
     cwd: jest.fn(async () => "/tmp"),
@@ -965,6 +975,59 @@ describe("connected terminal resizing", () => {
     } finally {
       terminal?.close();
     }
+  });
+
+  it("waits for an active RootFS start before lifecycle state catches up", async () => {
+    const { Terminal, terminalClient, reconnectResources } = loadTerminalModule(
+      {
+        projectState: "opened",
+        startLro: {
+          summary: { status: "running" },
+          last_progress: { phase: "cache_rootfs" },
+        },
+      },
+    );
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const terminal = new Terminal(makeActions(), 0, "term-1", parent);
+
+    await terminal.connect();
+
+    expect(terminalClient).not.toHaveBeenCalled();
+    expect(reconnectResources[0].requestReconnect).not.toHaveBeenCalled();
+    expect(terminal["terminal"].write).toHaveBeenCalledWith(
+      expect.stringContaining("Preparing project image"),
+      expect.any(Function),
+    );
+    expect(terminal["terminal"].write).toHaveBeenCalledWith(
+      expect.stringContaining("connect automatically"),
+      expect.any(Function),
+    );
+
+    terminal.close();
+  });
+
+  it("treats a RootFS spawn race as preparation instead of a reconnect failure", async () => {
+    const { Terminal, ptys, reconnectResources } = loadTerminalModule({
+      terminalSpawnError: new Error(
+        "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+      ),
+    });
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const terminal = new Terminal(makeActions(), 0, "term-1", parent);
+
+    await terminal.connect();
+
+    expect(ptys[0].close).toHaveBeenCalled();
+    expect(terminal["pty"]).toBeNull();
+    expect(reconnectResources[0].requestReconnect).not.toHaveBeenCalled();
+    expect(terminal["terminal"].write).toHaveBeenCalledWith(
+      expect.stringContaining("Preparing project image"),
+      expect.any(Function),
+    );
+
+    terminal.close();
   });
 
   it("keeps first-connect autostart intent while project startup is in progress", async () => {

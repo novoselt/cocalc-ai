@@ -86,6 +86,9 @@ describe("rolloutManagedComponents", () => {
       ],
     });
     expect(scheduleProjectHostRestartMock).toHaveBeenCalledTimes(1);
+    expect(restartManagedLocalConatRouterMock).not.toHaveBeenCalled();
+    expect(restartManagedLocalConatPersistMock).not.toHaveBeenCalled();
+    expect(rolloutProjectHostAcpWorkerMock).not.toHaveBeenCalled();
   });
 
   it("restarts managed local router and persist components", async () => {
@@ -143,6 +146,7 @@ describe("rolloutManagedComponents", () => {
       rolloutManagedComponents({
         components: ["acp-worker"],
         reason: "bundle_upgrade",
+        desired_version: "artifact-v2",
       }),
     ).resolves.toEqual({
       results: [
@@ -155,6 +159,7 @@ describe("rolloutManagedComponents", () => {
     });
     expect(rolloutProjectHostAcpWorkerMock).toHaveBeenCalledWith({
       restartReason: "bundle_upgrade",
+      desiredVersion: "artifact-v2",
     });
   });
 });

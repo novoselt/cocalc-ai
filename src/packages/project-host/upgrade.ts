@@ -15,6 +15,7 @@ import type {
   SoftwareArtifact,
   SoftwareChannel,
 } from "@cocalc/conat/project-host/api";
+import { readProjectHostAcpWorkerTarget } from "./hub/acp/worker-target";
 import { readHostAgentState } from "./host-agent-state";
 import {
   retentionPolicyForArtifact,
@@ -57,6 +58,7 @@ type ResolvedArtifact = {
   root: string;
   versionDir: string;
   currentLink: string;
+  activate?: boolean;
   retentionPolicy?: HostRuntimeRetentionPolicy;
   containerRuntimeContract?: ContainerRuntimeContract;
 };
@@ -995,6 +997,10 @@ async function protectedArtifactVersions({
     versions.add(desired);
   }
   if (artifact === "project-host") {
+    const acpWorkerTarget = readProjectHostAcpWorkerTarget();
+    if (acpWorkerTarget?.artifact_version) {
+      versions.add(acpWorkerTarget.artifact_version);
+    }
     const hostAgentState = readHostAgentState();
     const lastKnownGood =
       `${hostAgentState.project_host?.last_known_good_version ?? ""}`.trim();
@@ -1264,6 +1270,35 @@ async function downloadAndInstallUnlocked(
     version: resolved.version,
     dir: resolved.versionDir,
   });
+  if (resolved.activate === false) {
+    const retentionPolicy = retentionPolicyForArtifact(
+      resolved.artifact === "project" ? "project-bundle" : resolved.artifact,
+      resolved.retentionPolicy,
+    );
+    await pruneVersionDirs({
+      root: resolved.root,
+      currentLink: resolved.currentLink,
+      desiredDir: resolved.versionDir,
+      protectedVersions: await protectedArtifactVersions({
+        artifact: resolved.canonicalArtifact,
+        desiredVersion: resolved.version,
+        root: resolved.root,
+      }),
+      keep: retentionPolicy.keep_count,
+      maxBytes: retentionPolicy.max_bytes,
+    });
+    logger.info("upgrade: staged artifact without changing current symlink", {
+      artifact: resolved.artifact,
+      version: resolved.version,
+      dir: resolved.versionDir,
+      current: resolved.currentLink,
+    });
+    return {
+      artifact: resolved.artifact,
+      version: resolved.version,
+      status: "staged",
+    };
+  }
   const previousTarget = await fs.promises
     .realpath(resolved.currentLink)
     .catch(() => undefined);
@@ -1367,7 +1402,7 @@ export async function scheduleProjectHostRestart() {
 }
 
 function scheduledProjectHostReconcileCommand(bin: string): string {
-  return `sleep 3; ${bin} daemon restart-project-host || true`;
+  return `sleep 3; COCALC_PROJECT_HOST_RELOAD_ENV_FILES=1 ${bin} daemon restart-project-host || true`;
 }
 
 export async function activateInstalledProjectHostVersion(
@@ -1427,6 +1462,9 @@ export async function upgradeSoftware(
     let restartForContainerRuntime = false;
     for (const target of targets) {
       const resolved = await resolveArtifact(target, baseUrl);
+      resolved.activate =
+        resolved.canonicalArtifact !== "project-host" ||
+        opts.activate_project_host !== false;
       resolved.retentionPolicy = opts.retention_policy;
       logger.info("upgrade: resolved artifact", {
         artifact: resolved.artifact,

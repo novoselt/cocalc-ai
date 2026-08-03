@@ -14,6 +14,7 @@ import {
   vacuumChatStore,
 } from "@cocalc/backend/chat-store/sqlite-offload";
 import { uuid, isValidUUID } from "@cocalc/util/misc";
+import { projectRuntimeConfiguration } from "@cocalc/util/project-runtime";
 import {
   deleteProjectLocal,
   getProject,
@@ -45,6 +46,7 @@ import type {
 import type { CodexUsageStatusInfo } from "@cocalc/conat/hub/api/system";
 import type { MembershipEffectiveLimits } from "@cocalc/conat/hub/api/purchases";
 import type { ProjectSecretsRuntimeCache } from "@cocalc/util/project-secrets";
+import type { HostProjectStartMetadata } from "@cocalc/conat/project-host/api";
 import type { client as projectRunnerClient } from "@cocalc/conat/project/runner/run";
 import { getCodexAppServerAccountStatus } from "@cocalc/ai/acp";
 import {
@@ -66,8 +68,12 @@ import {
   getVolume,
   ensureVolume,
   getMountPoint,
+  resetScratchVolume,
   resolveProjectContainerPath,
+  ensureProjectVolumeIdentity,
+  reconcileManagedProjectVolumeQuota,
 } from "../file-server";
+import { currentProjectVolumeLifecycleGeneration } from "../project-volume-lifecycle";
 import { INTERNAL_SSH_CONFIG } from "@cocalc/conat/project/runner/constants";
 import type { Configuration } from "@cocalc/conat/project/runner/types";
 import { lroStreamName } from "@cocalc/conat/lro/names";
@@ -143,6 +149,16 @@ import {
   isProjectDiskQuotaStartBlocked,
 } from "../project-start-quota";
 import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
+import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  acceptProjectVolumeQuotaDesired,
+  getProjectVolumeQuota,
+  invalidateProjectVolumeQuota,
+  markProjectVolumeQuotaFailed,
+  projectVolumeQuotaIsApplied,
+} from "../sqlite/volume-quotas";
+import { getRecordedProjectVolumeIdentity } from "../sqlite/project-volumes";
+import { effectiveProjectVolumeQuotaBytes } from "../sqlite/volume-quota-overrides";
 
 const logger = getLogger("project-host:hub:projects");
 const CODEX_DEVICE_AUTH_VERIFY_TIMEOUT_MS = 45_000;
@@ -567,6 +583,14 @@ function createPhaseTimingRecorder() {
         phase_timings_ms[phase] = Date.now() - started;
       }
     },
+    measureSync<T>(phase: string, fn: () => T): T {
+      const started = Date.now();
+      try {
+        return fn();
+      } finally {
+        phase_timings_ms[phase] = Date.now() - started;
+      }
+    },
   };
 }
 
@@ -585,6 +609,7 @@ type StartMetadata = {
   image?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   env?: ProjectEnv;
   autostart_enabled?: boolean | null;
   secrets?: Record<string, string>;
@@ -597,6 +622,11 @@ type LocalProjectOptions = CreateProjectOptions & {
   users?: any;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
+  local_only?: boolean;
+  exam_run_id?: string;
+  usage_account_id?: string;
+  terminal_enabled?: boolean;
 };
 
 async function loadProjectStartMetadataFromMaster(
@@ -636,14 +666,18 @@ async function resolveStartMetadata({
   project_id,
   authorized_keys,
   run_quota,
+  run_quota_revision,
   image,
   autostart,
+  start_metadata,
 }: {
   project_id: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
   image?: string;
   autostart?: boolean;
+  start_metadata?: HostProjectStartMetadata;
 }): Promise<StartMetadata> {
   const existing = getProject(project_id);
   const cachedSecretNames = (existing as any)?.secret_names;
@@ -668,6 +702,8 @@ async function resolveStartMetadata({
   let resolved: StartMetadata = {
     authorized_keys: authorized_keys ?? existing?.authorized_keys ?? undefined,
     run_quota: run_quota ?? (existing as any)?.run_quota,
+    run_quota_revision:
+      run_quota_revision ?? (existing as any)?.run_quota_revision,
     image: image ?? existing?.image ?? undefined,
     env: (existing as any)?.env,
     autostart_enabled: (existing as any)?.autostart_enabled,
@@ -683,10 +719,11 @@ async function resolveStartMetadata({
     resolved.secrets == null ||
     (autostart && resolved.autostart_enabled == null) ||
     !existing?.title;
-  if (needsMaster) {
+  if (needsMaster || start_metadata != null) {
     try {
-      const authoritative =
-        await loadProjectStartMetadataFromMaster(project_id);
+      const authoritative: StartMetadata | undefined =
+        start_metadata ??
+        (await loadProjectStartMetadataFromMaster(project_id));
       if (authoritative) {
         let secrets = authoritative.secrets;
         let secret_names =
@@ -710,6 +747,8 @@ async function resolveStartMetadata({
           authorized_keys:
             resolved.authorized_keys ?? authoritative.authorized_keys,
           run_quota: resolved.run_quota ?? authoritative.run_quota,
+          run_quota_revision:
+            resolved.run_quota_revision ?? authoritative.run_quota_revision,
           env: resolved.env ?? authoritative.env,
           autostart_enabled:
             authoritative.autostart_enabled ?? resolved.autostart_enabled,
@@ -787,6 +826,7 @@ export function ensureProjectRow({
   const row: any = {
     project_id,
     state,
+    state_updated_at: now,
     updated_at: now,
     last_seen: now,
   };
@@ -796,6 +836,7 @@ export function ensureProjectRow({
   const run_quota = normalizeRunQuota((opts as any)?.run_quota);
   if (run_quota) {
     row.run_quota = run_quota;
+    row.run_quota_revision = (opts as any)?.run_quota_revision;
     if (run_quota.disk_quota != null) {
       const disk = Math.floor(run_quota.disk_quota * MB);
       row.disk = disk;
@@ -858,22 +899,25 @@ export function ensureProjectRow({
       // this is obviously temporary
       row.users[account_id] = { group: "owner" };
     }
+    row.local_only = opts.local_only === true;
+    row.exam_run_id = opts.exam_run_id ?? null;
+    row.usage_account_id = opts.usage_account_id ?? null;
+    row.terminal_enabled = opts.terminal_enabled === true;
   }
   upsertProject(row);
   if (state) {
-    if (syntheticRuntimeProbeProjects.has(project_id)) {
+    if (
+      syntheticRuntimeProbeProjects.has(project_id) ||
+      opts?.local_only === true ||
+      getProject(project_id)?.local_only === true
+    ) {
       markProjectStateReported(project_id, state);
     } else {
-      reportProjectStateToMaster(
-        project_id,
-        runtime_exit_reason == null
-          ? state
-          : {
-              state: state as any,
-              time: new Date(now),
-              runtime_exit_reason,
-            },
-      );
+      reportProjectStateToMaster(project_id, {
+        state: state as any,
+        time: new Date(now),
+        ...(runtime_exit_reason == null ? {} : { runtime_exit_reason }),
+      });
     }
   }
 }
@@ -905,6 +949,8 @@ async function getRunnerConfig(
     lro_op_id?: string;
     rotate_ports?: boolean;
     avoid_port_offsets?: Iterable<number>;
+    storage_quota_prepared?: boolean;
+    scratch_prepared?: boolean;
   },
 ) {
   const run_quota = normalizeRunQuota(resolved.run_quota);
@@ -914,10 +960,7 @@ async function getRunnerConfig(
   const scratch = limits.scratch ?? existing?.scratch;
   const ssh_proxy_public_key = await getSshProxyPublicKey();
   const secret = getOrCreateProjectLocalSecretToken(project_id);
-  const avoidOffsets = await getOccupiedProjectPortOffsets();
-  for (const offset of getRecentFailedProjectPortOffsets()) {
-    avoidOffsets.add(offset);
-  }
+  const avoidOffsets = getRecentFailedProjectPortOffsets();
   for (const offset of opts?.avoid_port_offsets ?? []) {
     if (Number.isInteger(offset)) {
       avoidOffsets.add(Number(offset));
@@ -941,6 +984,8 @@ async function getRunnerConfig(
     restore: opts?.restore,
     restore_backup_id: opts?.restore_backup_id,
     lro_op_id: opts?.lro_op_id,
+    storage_quota_prepared: opts?.storage_quota_prepared,
+    scratch_prepared: opts?.scratch_prepared,
     ...limits,
     disk,
     scratch,
@@ -1008,64 +1053,208 @@ function requestedDiskQuotaBytes(run_quota?: any): number | undefined {
   return Math.floor(value * MB);
 }
 
+function projectQuotaLedgerMode(): "off" | "observe" | "enforce" {
+  switch (
+    `${process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE ?? "observe"}`
+      .trim()
+      .toLowerCase()
+  ) {
+    case "off":
+      return "off";
+    case "enforce":
+      return "enforce";
+    default:
+      return "observe";
+  }
+}
+
 async function assertStartDiskQuotaAllowed({
   project_id,
   run_quota,
+  run_quota_revision,
+  reset_scratch = false,
+  scratch_lifecycle_generation,
 }: {
   project_id: string;
   run_quota?: any;
-}): Promise<void> {
+  run_quota_revision?: number;
+  reset_scratch?: boolean;
+  scratch_lifecycle_generation?: number;
+}): Promise<{
+  storage_quota_prepared: boolean;
+  scratch_prepared: boolean;
+}> {
   const requestedDiskBytes = requestedDiskQuotaBytes(run_quota);
-  if (requestedDiskBytes != null) {
+  if (requestedDiskBytes == null) {
+    await assertProjectDiskQuotaStartAllowed({
+      project_id,
+      logger,
+      getQuota: async (id) => {
+        const vol = await getVolume(id);
+        return await vol.quota.get();
+      },
+    });
+    return {
+      storage_quota_prepared: false,
+      scratch_prepared: false,
+    };
+  }
+
+  const ledgerMode = projectQuotaLedgerMode();
+  const reconcile = async ({
+    volume_kind,
+    desired_bytes,
+    reset,
+  }: {
+    volume_kind: "home" | "scratch";
+    desired_bytes: number;
+    reset?: boolean;
+  }): Promise<boolean> => {
+    let resetVolume: Awaited<ReturnType<typeof resetScratchVolume>> | undefined;
+    if (ledgerMode === "enforce" && volume_kind === "scratch" && reset) {
+      resetVolume =
+        scratch_lifecycle_generation == null
+          ? await resetScratchVolume(project_id)
+          : await resetScratchVolume(project_id, {
+              expected_lifecycle_generation: scratch_lifecycle_generation,
+            });
+    }
+    const acceptance = acceptProjectVolumeQuotaDesired({
+      project_id,
+      volume_kind,
+      desired_bytes,
+      desired_revision: run_quota_revision,
+    });
+    const desired = acceptance.row;
+    const effective = effectiveProjectVolumeQuotaBytes({
+      project_id,
+      volume_kind,
+      persistent_bytes: desired.desired_bytes,
+    });
+    const targetDiskBytes = effective.effective_bytes;
+    let volumeIdentity = getRecordedProjectVolumeIdentity(
+      project_id,
+      volume_kind,
+    );
+    if (
+      ledgerMode === "enforce" &&
+      effective.overrides.length === 0 &&
+      acceptance?.status !== "stale" &&
+      projectVolumeQuotaIsApplied(desired, {
+        volume_identity: volumeIdentity,
+      })
+    ) {
+      logger.debug("project disk quota ledger fast path", {
+        project_id,
+        volume_kind,
+        requested_size: targetDiskBytes,
+        desired_revision: desired.desired_revision,
+      });
+      return true;
+    }
     try {
-      const vol = await getVolume(project_id);
-      const quota = await vol.quota.get();
+      const vol =
+        resetVolume ?? (await getVolume(project_id, volume_kind === "scratch"));
+      volumeIdentity = await ensureProjectVolumeIdentity(
+        project_id,
+        volume_kind === "scratch",
+      );
+      // A freshly recreated scratch subvolume is empty and has no limit. A
+      // physical qgroup read here adds no safety, but can block for seconds
+      // while Btrfs quota accounting catches up after I/O pressure.
+      const quota = resetVolume ? { used: 0, size: 0 } : await vol.quota.get();
       if (
         isProjectDiskQuotaStartBlocked({
           used: quota.used,
-          size: requestedDiskBytes,
+          size: targetDiskBytes,
         })
       ) {
+        if (desired) {
+          markProjectVolumeQuotaFailed({
+            project_id,
+            volume_kind,
+            state: "blocked",
+            error: `quota usage ${quota.used} exceeds desired limit ${targetDiskBytes}`,
+          });
+        }
         throw new ProjectDiskQuotaExceededError({
           used: quota.used,
-          size: requestedDiskBytes,
+          size: targetDiskBytes,
         });
       }
       const currentSize = Number(quota.size);
       if (
         !Number.isFinite(currentSize) ||
         currentSize <= 0 ||
-        requestedDiskBytes > currentSize
+        targetDiskBytes !== currentSize
       ) {
-        await vol.quota.set(requestedDiskBytes);
-        logger.info("raised project disk quota before start", {
+        logger.info("reconciled project disk quota before start", {
           project_id,
+          volume_kind,
           previous_size: quota.size,
-          requested_size: requestedDiskBytes,
+          requested_size: targetDiskBytes,
           used: quota.used,
         });
       }
-      return;
+      await reconcileManagedProjectVolumeQuota({
+        project_id,
+        volume_kind,
+        operation_class: "project_volume_prepare",
+        priority: "lifecycle",
+        ...(resetVolume != null ? { force_write: true } : undefined),
+      });
+      return ledgerMode === "enforce";
     } catch (err) {
       if (err instanceof ProjectDiskQuotaExceededError) {
         throw err;
       }
+      if (desired) {
+        markProjectVolumeQuotaFailed({
+          project_id,
+          volume_kind,
+          error: err,
+        });
+      }
       logger.warn("unable to reconcile project disk quota before start", {
         project_id,
-        requested_size: requestedDiskBytes,
+        volume_kind,
+        requested_size: targetDiskBytes,
         err: `${err}`,
       });
-      return;
+      if (ledgerMode === "enforce") {
+        throw err;
+      }
+      return false;
     }
-  }
-  await assertProjectDiskQuotaStartAllowed({
-    project_id,
-    logger,
-    getQuota: async (id) => {
-      const vol = await getVolume(id);
-      return await vol.quota.get();
-    },
+  };
+
+  const homePrepared = await reconcile({
+    volume_kind: "home",
+    desired_bytes: requestedDiskBytes,
   });
+  const scratchLimit = runnerConfigFromQuota(
+    normalizeRunQuota(run_quota),
+  ).scratch;
+  if (scratchLimit === 0) {
+    return {
+      storage_quota_prepared: homePrepared,
+      scratch_prepared: true,
+    };
+  }
+  const requestedScratchBytes =
+    Number.isFinite(Number(scratchLimit)) && Number(scratchLimit) > 0
+      ? Math.floor(Number(scratchLimit))
+      : requestedDiskBytes;
+  const scratchPrepared = await reconcile({
+    volume_kind: "scratch",
+    desired_bytes: requestedScratchBytes,
+    reset: reset_scratch,
+  });
+  return {
+    storage_quota_prepared: homePrepared && scratchPrepared,
+    scratch_prepared:
+      ledgerMode === "enforce" && (!reset_scratch || scratchPrepared),
+  };
 }
 
 function publishStartProgress({
@@ -1276,6 +1465,83 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         promise: Promise<SyntheticRuntimeProbeResult>;
       }
     | undefined;
+  const stoppedVolumePreparationInFlight = new Map<string, Promise<boolean>>();
+
+  function scratchVolumeQuotaIsPrepared(project_id: string): boolean {
+    const row = getProjectVolumeQuota(project_id, "scratch");
+    return (
+      row != null &&
+      projectVolumeQuotaIsApplied(row, {
+        volume_identity: getRecordedProjectVolumeIdentity(
+          project_id,
+          "scratch",
+        ),
+      })
+    );
+  }
+
+  function scheduleStoppedVolumePreparation(project_id: string): void {
+    if (
+      projectQuotaLedgerMode() !== "enforce" ||
+      syntheticRuntimeProbeProjects.has(project_id)
+    ) {
+      return;
+    }
+    const project = getProject(project_id);
+    if (
+      project == null ||
+      requestedDiskQuotaBytes(project.run_quota) == null ||
+      runnerConfigFromQuota(normalizeRunQuota(project.run_quota)).scratch === 0
+    ) {
+      return;
+    }
+    invalidateProjectVolumeQuota({
+      project_id,
+      volume_kind: "scratch",
+      reason: "project stopped; scratch reset pending",
+    });
+    if (stoppedVolumePreparationInFlight.has(project_id)) {
+      return;
+    }
+    const operation_id = `post-stop-volume-prepare:${project_id}:${uuid()}`;
+    const scratch_lifecycle_generation =
+      currentProjectVolumeLifecycleGeneration(project_id);
+    const preparation = withBtrfsMutationContext(
+      {
+        operation_id,
+        project_id,
+        priority: "interactive",
+        operation_class: "post_stop_volume_prepare",
+      },
+      async () => {
+        const prepared = await assertStartDiskQuotaAllowed({
+          project_id,
+          run_quota: project.run_quota,
+          run_quota_revision: project.run_quota_revision,
+          reset_scratch: true,
+          scratch_lifecycle_generation,
+        });
+        return (
+          prepared.storage_quota_prepared && prepared.scratch_prepared === true
+        );
+      },
+    )
+      .catch((err) => {
+        logger.warn("post-stop project volume preparation failed", {
+          project_id,
+          operation_id,
+          err: `${err}`,
+        });
+        return false;
+      })
+      .finally(() => {
+        if (stoppedVolumePreparationInFlight.get(project_id) === preparation) {
+          stoppedVolumePreparationInFlight.delete(project_id);
+        }
+      });
+    stoppedVolumePreparationInFlight.set(project_id, preparation);
+    void preparation;
+  }
 
   async function performSyntheticRuntimeProbe(): Promise<SyntheticRuntimeProbeResult> {
     const project_id = uuid();
@@ -1414,6 +1680,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         project_id,
         authorized_keys: (opts as any)?.authorized_keys,
         run_quota: (opts as any)?.run_quota,
+        run_quota_revision: (opts as any)?.run_quota_revision,
         image: opts?.image,
       });
       upsertProjectStopState({
@@ -1430,7 +1697,24 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       });
       beginProjectHostActivity(activity_id, "start");
       try {
-        const initialConfig = await getRunnerConfig(project_id, resolved);
+        const volumePreparation = await withBtrfsMutationContext(
+          {
+            operation_id: activity_id,
+            project_id,
+            priority: "lifecycle",
+            operation_class: "project_volume_prepare",
+          },
+          async () =>
+            await assertStartDiskQuotaAllowed({
+              project_id,
+              run_quota: resolved.run_quota,
+              run_quota_revision: resolved.run_quota_revision,
+              reset_scratch: true,
+            }),
+        );
+        const initialConfig = await getRunnerConfig(project_id, resolved, {
+          ...volumePreparation,
+        });
         noteProjectHostActivityProgress(activity_id);
         const buildRetryConfig = async (retryOpts: {
           avoid_port_offsets: Iterable<number>;
@@ -1438,6 +1722,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           await getRunnerConfig(project_id, resolved, {
             rotate_ports: true,
             avoid_port_offsets: retryOpts.avoid_port_offsets,
+            ...volumePreparation,
           });
         const startRunner = async (config: Configuration) =>
           await startRunnerWithStorageReservation({
@@ -1483,49 +1768,120 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     project_id,
     authorized_keys,
     run_quota,
+    run_quota_revision,
     image,
     restore,
     restore_backup_id,
+    apply_pending_copies = true,
     lro_op_id,
     autostart,
     managed_egress_override,
+    skip_if_running,
+    start_metadata,
   }: {
     project_id: string;
     authorized_keys?: string;
     run_quota?: any;
+    run_quota_revision?: number;
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
+    apply_pending_copies?: boolean;
     lro_op_id?: string;
     autostart?: boolean;
     managed_egress_override?: ManagedProjectEgressOverride;
+    skip_if_running?: boolean;
+    start_metadata?: HostProjectStartMetadata;
   }): Promise<{
     op_id: string;
     scope_type: "project";
     scope_id: string;
     service: string;
     stream_name: string;
+    state?: string;
     phase_timings_ms?: Record<string, number>;
     runner_phase_timings_ms?: Record<string, number>;
   }> {
     const op_id = lro_op_id ?? uuid();
     const activity_id = `start:${op_id}`;
     const timings = createPhaseTimingRecorder();
+    const projectHostStarted = Date.now();
     let runnerPhaseTimings: Record<string, number> | undefined;
+    let volumePreparation = {
+      storage_quota_prepared: false,
+      scratch_prepared: false,
+    };
     beginProjectHostActivity(activity_id, "start");
     let resolved: StartMetadata | undefined;
     try {
-      await assertManagedRawNetworkStartAllowedBestEffort({
-        project_id,
-        managed_egress_override,
+      const cachedLifecycleState = `${getProject(project_id)?.state ?? ""}`;
+      // A successful stop durably records "opened" locally. In that normal
+      // warm-start case, avoid a redundant Podman status round trip: the
+      // runner's container preflight remains authoritative and fail-safe. If
+      // local state is absent or says the runtime may be live, retain the
+      // explicit idempotency probe.
+      const shouldProbeExistingRuntime =
+        !cachedLifecycleState ||
+        cachedLifecycleState === "running" ||
+        cachedLifecycleState === "starting";
+      if (
+        skip_if_running &&
+        !restore_backup_id &&
+        runnerApi.status &&
+        shouldProbeExistingRuntime
+      ) {
+        try {
+          const current = await timings.measure(
+            "check_existing_runtime",
+            async () => await runnerApi.status({ project_id }),
+          );
+          if (current?.state === "running" || current?.state === "starting") {
+            timings.phase_timings_ms.total = Object.values(
+              timings.phase_timings_ms,
+            ).reduce((sum, value) => sum + value, 0);
+            publishStartProgress({
+              activity_id,
+              project_id,
+              op_id,
+              phase: "done",
+              progress: 100,
+              message: "project already running",
+              detail: { phase_timings_ms: timings.phase_timings_ms },
+            });
+            return {
+              op_id,
+              scope_type: "project",
+              scope_id: project_id,
+              service: PERSIST_SERVICE,
+              stream_name: lroStreamName(op_id),
+              state: current.state,
+              phase_timings_ms: timings.phase_timings_ms,
+            };
+          }
+        } catch (err) {
+          logger.debug(
+            "idempotent start could not inspect current runtime; continuing with start",
+            { project_id, err: `${err}` },
+          );
+        }
+      }
+      await timings.measure("managed_network_admission", async () => {
+        await assertManagedRawNetworkStartAllowedBestEffort({
+          project_id,
+          managed_egress_override,
+        });
       });
-      resolved = await resolveStartMetadata({
-        project_id,
-        authorized_keys,
-        run_quota,
-        image,
-        autostart,
-      });
+      resolved = await timings.measure("resolve_start_metadata", async () =>
+        resolveStartMetadata({
+          project_id,
+          authorized_keys,
+          run_quota,
+          run_quota_revision,
+          image,
+          autostart,
+          start_metadata,
+        }),
+      );
       const startMetadata = resolved;
       if (autostart && startMetadata.autostart_enabled === false) {
         throw new Error(
@@ -1560,27 +1916,61 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         message: "checking project disk quota",
       });
       await timings.measure("check_quota", async () => {
-        await assertStartDiskQuotaAllowed({
+        let scratchPrepared = scratchVolumeQuotaIsPrepared(project_id);
+        const stoppedPreparation = scratchPrepared
+          ? undefined
+          : stoppedVolumePreparationInFlight.get(project_id);
+        if (stoppedPreparation != null) {
+          await stoppedPreparation;
+          scratchPrepared = scratchVolumeQuotaIsPrepared(project_id);
+        }
+        // The authoritative quota ledger settles the normal case without a
+        // Podman round trip. Runtime state only matters when scratch remains
+        // unprepared, since resetting a live project's scratch is unsafe.
+        const runtimeState =
+          !scratchPrepared &&
+          projectQuotaLedgerMode() === "enforce" &&
+          runnerApi.status
+            ? (await runnerApi.status({ project_id }))?.state
+            : undefined;
+        const resetScratch = runtimeState !== "running" && !scratchPrepared;
+        await withBtrfsMutationContext(
+          {
+            operation_id: op_id,
+            project_id,
+            priority: "lifecycle",
+            operation_class: "project_volume_prepare",
+          },
+          async () => {
+            volumePreparation = await assertStartDiskQuotaAllowed({
+              project_id,
+              run_quota: startMetadata.run_quota,
+              run_quota_revision: startMetadata.run_quota_revision,
+              reset_scratch: resetScratch,
+            });
+          },
+        );
+      });
+      timings.measureSync("mark_starting_state", () => {
+        upsertProjectStopState({
           project_id,
-          run_quota: startMetadata.run_quota,
+          last_started_ms: Date.now(),
         });
-      });
-      upsertProjectStopState({
-        project_id,
-        last_started_ms: Date.now(),
-      });
-      // Mark as starting immediately so hub/clients see progress even if image pulls are slow.
-      ensureProjectRow({
-        project_id,
-        opts: {
-          title: startMetadata.title,
-          users: startMetadata.users,
-          authorized_keys: startMetadata.authorized_keys,
-          run_quota: startMetadata.run_quota,
-          image: startMetadata.image,
-        },
-        state: "starting",
-        secret_names: startMetadata.secret_names,
+        // Mark as starting immediately so hub/clients see progress even if
+        // image pulls are slow.
+        ensureProjectRow({
+          project_id,
+          opts: {
+            title: startMetadata.title,
+            users: startMetadata.users,
+            authorized_keys: startMetadata.authorized_keys,
+            run_quota: startMetadata.run_quota,
+            run_quota_revision: startMetadata.run_quota_revision,
+            image: startMetadata.image,
+          },
+          state: "starting",
+          secret_names: startMetadata.secret_names,
+        });
       });
       publishStartProgress({
         activity_id,
@@ -1590,9 +1980,13 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         progress: 5,
         message: "preparing project state",
       });
-      await timings.measure("apply_pending_copies", async () => {
-        await applyPendingCopies({ project_id });
-      });
+      if (apply_pending_copies) {
+        await timings.measure("apply_pending_copies", async () => {
+          await applyPendingCopies({ project_id });
+        });
+      } else {
+        timings.phase_timings_ms.apply_pending_copies = 0;
+      }
       publishStartProgress({
         activity_id,
         project_id,
@@ -1616,6 +2010,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
             restore,
             restore_backup_id,
             lro_op_id: op_id,
+            ...volumePreparation,
           },
         );
       });
@@ -1671,6 +2066,7 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
                 lro_op_id: op_id,
                 rotate_ports: true,
                 avoid_port_offsets: retryOpts.avoid_port_offsets,
+                ...volumePreparation,
               },
             ),
           startRunner: async (runnerConfig: Configuration) =>
@@ -1708,21 +2104,23 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         });
       }
       runnerPhaseTimings = (status as any)?.phase_timings_ms;
-      ensureProjectRow({
-        project_id,
-        opts: {
-          title: startMetadata.title,
-          users: startMetadata.users,
-          authorized_keys: startMetadata.authorized_keys,
-          run_quota: startMetadata.run_quota,
-          image: getImage(config),
-        },
-        state: status?.state ?? "running",
-        http_port: (status as any)?.http_port,
-        ssh_port: (status as any)?.ssh_port,
-        project_bundle_version: (status as any)?.project_bundle_version,
-        tools_version: (status as any)?.tools_version,
-        secret_names: startMetadata.secret_names,
+      timings.measureSync("mark_running_state", () => {
+        ensureProjectRow({
+          project_id,
+          opts: {
+            title: startMetadata.title,
+            users: startMetadata.users,
+            authorized_keys: startMetadata.authorized_keys,
+            run_quota: startMetadata.run_quota,
+            image: getImage(config),
+          },
+          state: status?.state ?? "running",
+          http_port: (status as any)?.http_port,
+          ssh_port: (status as any)?.ssh_port,
+          project_bundle_version: (status as any)?.project_bundle_version,
+          tools_version: (status as any)?.tools_version,
+          secret_names: startMetadata.secret_names,
+        });
       });
       // During move/restore the destination project root may not exist until
       // runnerApi.start has created or restored it, so ACP rehydrate must wait.
@@ -1746,6 +2144,22 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       timings.phase_timings_ms.total = Object.entries(timings.phase_timings_ms)
         .filter(([phase]) => !phase.startsWith("runner_start."))
         .reduce((sum, [_phase, value]) => sum + value, 0);
+      timings.phase_timings_ms["project_host.wall_total"] =
+        Date.now() - projectHostStarted;
+      const attributedProjectHostMs = Object.entries(timings.phase_timings_ms)
+        .filter(
+          ([phase]) =>
+            phase !== "total" &&
+            phase !== "project_host.wall_total" &&
+            phase !== "project_host.unattributed" &&
+            !phase.startsWith("runner_start."),
+        )
+        .reduce((sum, [_phase, value]) => sum + value, 0);
+      timings.phase_timings_ms["project_host.unattributed"] = Math.max(
+        0,
+        timings.phase_timings_ms["project_host.wall_total"] -
+          attributedProjectHostMs,
+      );
       publishStartProgress({
         activity_id,
         project_id,
@@ -1858,6 +2272,11 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           resetProjectLastChangedRunning(project_id);
         }
       }
+      // Start the destructive scratch reset only after stop bookkeeping. The
+      // reset is deliberately fire-and-forget, but a concurrent Btrfs mutation
+      // can otherwise block the generation read above and keep the lifecycle
+      // lock in `stopping` for tens of seconds under storage pressure.
+      scheduleStoppedVolumePreparation(project_id);
       logger.debug("stop: project-host request finished", {
         project_id,
         force,
@@ -1868,7 +2287,10 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
   }
 
   async function status({ project_id }: { project_id: string }) {
-    return await getProjectRuntimeStatus({ runnerApi, project_id });
+    return {
+      runtime: projectRuntimeConfiguration("podman"),
+      ...(await getProjectRuntimeStatus({ runnerApi, project_id })),
+    };
   }
 
   async function restoreSnapshot({
@@ -1890,6 +2312,9 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
   }> {
     if (!isValidUUID(project_id)) {
       throw Error("invalid project_id");
+    }
+    if (getProject(project_id)?.local_only) {
+      throw Error("snapshots are disabled for ephemeral exam workspaces");
     }
     if (!snapshot?.trim()) {
       throw Error("snapshot is required");
@@ -2726,6 +3151,9 @@ export async function createBackup({
   if (!isValidUUID(project_id)) {
     throw Error("invalid project_id");
   }
+  if (getProject(project_id)?.local_only) {
+    throw Error("backups are disabled for ephemeral exam workspaces");
+  }
   const createdBy = _account_id ?? account_id ?? null;
   const op_id = uuid();
   const now = new Date();
@@ -3047,6 +3475,9 @@ export async function getBackups({
   project_id: string;
   indexed_only?: boolean;
 }) {
+  if (getProject(project_id)?.local_only) {
+    throw Error("backups are disabled for ephemeral exam workspaces");
+  }
   if (!isValidUUID(project_id)) {
     throw Error("invalid project_id");
   }

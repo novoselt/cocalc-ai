@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { LineItem } from "@cocalc/util/stripe/types";
-import { Button, Table } from "antd";
-import { currency, plural } from "@cocalc/util/misc";
+import { Table } from "antd";
+import { currency } from "@cocalc/util/misc";
 
 export function moneyToString(amount, currency0 = "usd") {
   if (currency0 == "usd") {
@@ -115,36 +115,6 @@ export function LineItemsTable({
           columns={EXTRA_LINE_ITEMS_COLUMNS}
         />
       )}
-    </div>
-  );
-}
-
-export function LineItemsButton({ lineItems, style }: { lineItems?; style? }) {
-  const [show, setShow] = useState<boolean>(false);
-  const n = lineItems?.length ?? 0;
-  if (n == 0) {
-    return null;
-  }
-  if (!show) {
-    return (
-      <Button size="small" type="link" onClick={() => setShow(true)}>
-        {n} {plural(n, "Line Item")}
-      </Button>
-    );
-  }
-  return (
-    <div
-      style={{
-        display: "inline-block",
-        maxWidth: "450px",
-        width: "100%",
-        ...style,
-      }}
-    >
-      <Button size="small" type="link" onClick={() => setShow(false)}>
-        Hide
-      </Button>
-      {show && <LineItemsTable lineItems={lineItems} />}
     </div>
   );
 }

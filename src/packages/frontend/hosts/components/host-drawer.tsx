@@ -90,6 +90,7 @@ import { HostCurrentMetrics } from "./host-current-metrics";
 import { HostPlacementSummary, HostPressureTag } from "../pressure-ui";
 import { HostAccessPolicySummary } from "./host-access-policy";
 import { HostAvailabilityPanel } from "./host-availability-panel";
+import { HostExamPanel } from "./host-exam-panel";
 import { confirmHostDeprovision } from "./host-confirm";
 import { HostBillingEnforcementStatus } from "./host-billing-enforcement";
 import {
@@ -2637,9 +2638,11 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
       <Card size="small" title="Project resource policy">
         <Space orientation="vertical" style={{ width: "100%" }} size="small">
           <Typography.Text type="secondary">
-            RAM available to each project on this host. On a private host this
-            replaces the membership RAM limit; on a shared-pool host it is only
-            a downward safety cap. The aggregate host reserve remains enforced.
+            RAM available to each project on this host. A private host uses its
+            maximum safe capacity by default; an explicit value caps each
+            project below that maximum. On a shared-pool host this is only a
+            downward safety cap on membership RAM. The aggregate host reserve
+            remains enforced.
           </Typography.Text>
           <Space wrap>
             <InputNumber
@@ -2647,7 +2650,11 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
               max={maxProjectRamMb}
               step={500}
               addonAfter="MB"
-              placeholder="No override"
+              placeholder={
+                host.tier == null
+                  ? "Host maximum (default)"
+                  : "Membership limit (default)"
+              }
               value={projectRamLimitMb}
               disabled={!host.can_manage_access || !onSetHostProjectRamLimit}
               onChange={(value) =>
@@ -5283,6 +5290,16 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
       key: "access",
       label: "Access",
       children: accessContent,
+    },
+    {
+      key: "exams",
+      label: "Exams",
+      children: (
+        <HostExamPanel
+          host={host}
+          rootfsImages={rootfsInventory?.entries ?? []}
+        />
+      ),
     },
     {
       key: "projects",

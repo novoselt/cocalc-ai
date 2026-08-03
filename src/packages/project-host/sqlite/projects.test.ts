@@ -1,6 +1,8 @@
-import { closeDatabase } from "@cocalc/lite/hub/sqlite/database";
+import { closeDatabase, getDatabase } from "@cocalc/lite/hub/sqlite/database";
 import {
   getProject,
+  getProjectsUsingRootfsImage,
+  listProjectQuotaRepairBatch,
   listUnreportedProjects,
   listRuntimeArtifactReferences,
   markProjectStateReported,
@@ -58,7 +60,9 @@ describe("project sqlite runtime ports", () => {
     // overwritten the master after opened was accepted. Requeue the current
     // state so the periodic reporter restores convergence.
     expect(markProjectStateReported(project_id, "running")).toBe(false);
-    expect(listUnreportedProjects()).toEqual([{ project_id, state: "opened" }]);
+    expect(listUnreportedProjects()).toEqual([
+      { project_id, state: "opened", state_updated_at: expect.any(Number) },
+    ]);
 
     expect(markProjectStateReported(project_id, "opened")).toBe(true);
     expect(listUnreportedProjects()).toEqual([]);
@@ -75,6 +79,7 @@ describe("project sqlite runtime ports", () => {
       {
         project_id,
         state: "opened",
+        state_updated_at: expect.any(Number),
         runtime_exit_reason: "container_missing",
       },
     ]);
@@ -85,6 +90,29 @@ describe("project sqlite runtime ports", () => {
 
     upsertProject({ project_id, state: "starting" });
     expect(getProject(project_id)?.runtime_exit_reason).toBeNull();
+  });
+
+  it("does not move the lifecycle timestamp during metadata refreshes", () => {
+    upsertProject({
+      project_id,
+      state: "running",
+      state_updated_at: 1_785_552_000_000,
+      updated_at: 1_785_552_000_000,
+    });
+    upsertProject({
+      project_id,
+      state: "running",
+      title: "metadata refresh",
+      updated_at: 1_785_552_010_000,
+    });
+
+    expect(listUnreportedProjects()).toEqual([
+      {
+        project_id,
+        state: "running",
+        state_updated_at: 1_785_552_000_000,
+      },
+    ]);
   });
 
   it("stores and aggregates running project bundle/tools references", () => {
@@ -116,6 +144,49 @@ describe("project sqlite runtime ports", () => {
         { version: "tools-v6", project_count: 1 },
       ],
     });
+  });
+
+  it("uses keyed RootFS lookup and bounded quota repair batches at 10K projects", () => {
+    upsertProject({
+      project_id: "project-00000",
+      state: "opened",
+      image: "ubuntu:latest",
+      disk: 1_000_000,
+      scratch: 1_000_000,
+    });
+    const db = getDatabase();
+    const insert = db.prepare(
+      `INSERT INTO projects(project_id, state, image, disk, scratch)
+       VALUES (?, 'opened', ?, ?, ?)`,
+    );
+    db.exec("BEGIN");
+    try {
+      for (let i = 1; i < 10_050; i += 1) {
+        insert.run(
+          `project-${`${i}`.padStart(5, "0")}`,
+          i === 9_999 ? "docker.io/ubuntu:latest" : "docker.io/debian:latest",
+          1_000_000,
+          1_000_000,
+        );
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+
+    expect(getProjectsUsingRootfsImage("ubuntu:latest")).toEqual([
+      expect.objectContaining({ project_id: "project-00000" }),
+      expect.objectContaining({ project_id: "project-09999" }),
+    ]);
+    const first = listProjectQuotaRepairBatch({ limit: 32 });
+    expect(first).toHaveLength(32);
+    const second = listProjectQuotaRepairBatch({
+      after_project_id: first.at(-1)!.project_id,
+      limit: 32,
+    });
+    expect(second).toHaveLength(32);
+    expect(second[0].project_id).toBe("project-00032");
   });
 
   it("persists project secret names without storing values", () => {

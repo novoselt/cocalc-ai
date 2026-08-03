@@ -149,16 +149,56 @@ export type DocsPrivateDetailState = {
   renderToolbarActions?: (entry: DocsEntry) => React.ReactNode;
 };
 
-type DocsLinearNavigationState = {
+export type DocsLinearNavigationState = {
   count: number;
   currentIndex: number;
   entry: DocsEntry;
+  hrefForEntry?: (entry: DocsEntry) => string;
   next?: DocsEntry;
   nextChapter?: DocsEntry;
   onSelectEntry: (entry: DocsEntry) => void;
   previous?: DocsEntry;
   previousChapter?: DocsEntry;
 };
+
+export function getDocsLinearNavigation({
+  entries,
+  entry,
+  hrefForEntry,
+  onSelectEntry,
+}: {
+  entries: DocsEntry[];
+  entry: DocsEntry;
+  hrefForEntry?: (entry: DocsEntry) => string;
+  onSelectEntry: (entry: DocsEntry) => void;
+}): DocsLinearNavigationState | undefined {
+  const selectedGlobalIndex = entries.findIndex(
+    (candidate) => candidate.id === entry.id,
+  );
+  const categoryEntries = entries.filter(
+    (candidate) => candidate.category === entry.category,
+  );
+  const currentIndex = categoryEntries.findIndex(
+    (candidate) => candidate.id === entry.id,
+  );
+  if (selectedGlobalIndex < 0 || currentIndex < 0) return undefined;
+  return {
+    count: categoryEntries.length,
+    currentIndex,
+    entry,
+    hrefForEntry,
+    next: categoryEntries[currentIndex + 1],
+    nextChapter: entries
+      .slice(selectedGlobalIndex + 1)
+      .find((candidate) => candidate.category !== entry.category),
+    onSelectEntry,
+    previous: categoryEntries[currentIndex - 1],
+    previousChapter: entries
+      .slice(0, selectedGlobalIndex)
+      .reverse()
+      .find((candidate) => candidate.category !== entry.category),
+  };
+}
 
 function clampDocsFontSize(value: number): number {
   if (!Number.isFinite(value)) return 14;
@@ -1319,13 +1359,14 @@ function DocsLinearNavigation({
   layout?: DocsBrowserLayout;
   navigation?: DocsLinearNavigationState;
 }) {
-  if (navigation == null || navigation.count <= 1) return null;
+  if (navigation == null) return null;
 
   const isFlyout = layout === "flyout";
   const previousEntry = navigation.previous ?? navigation.previousChapter;
   const previousLabel = navigation.previous ? "Previous" : "Previous Chapter";
   const nextEntry = navigation.next ?? navigation.nextChapter;
   const nextLabel = navigation.next ? "Next" : "Next Chapter";
+  if (previousEntry == null && nextEntry == null) return null;
   const content = (
     <Flex
       align={isFlyout ? "stretch" : "center"}
@@ -1344,9 +1385,14 @@ function DocsLinearNavigation({
       <Space.Compact block={isFlyout}>
         <Button
           disabled={previousEntry == null}
+          href={
+            previousEntry == null
+              ? undefined
+              : navigation.hrefForEntry?.(previousEntry)
+          }
           icon={<ArrowLeftOutlined />}
           onClick={() => {
-            if (previousEntry != null) {
+            if (previousEntry != null && navigation.hrefForEntry == null) {
               navigation.onSelectEntry(previousEntry);
             }
           }}
@@ -1361,10 +1407,13 @@ function DocsLinearNavigation({
         </Button>
         <Button
           disabled={nextEntry == null}
+          href={
+            nextEntry == null ? undefined : navigation.hrefForEntry?.(nextEntry)
+          }
           icon={<ArrowRightOutlined />}
           iconPlacement="end"
           onClick={() => {
-            if (nextEntry != null) {
+            if (nextEntry != null && navigation.hrefForEntry == null) {
               navigation.onSelectEntry(nextEntry);
             }
           }}
@@ -1439,15 +1488,19 @@ function DocsDetailToolbar({
   layout = "page",
   linearNavigation,
   onBack,
+  onBackHref,
   privateState,
 }: {
   entry: DocsEntry;
   layout?: DocsBrowserLayout;
   linearNavigation?: DocsLinearNavigationState;
   onBack?: () => void;
+  onBackHref?: string;
   privateState?: DocsPrivateDetailState;
 }) {
   const isFlyout = layout === "flyout";
+  const fontSizeControl = useContext(DocsFontSizeContext);
+  const privateToolbarActions = privateState?.renderToolbarActions?.(entry);
   const previousEntry =
     linearNavigation?.previous ?? linearNavigation?.previousChapter;
   const previousLabel = linearNavigation?.previous
@@ -1455,85 +1508,106 @@ function DocsDetailToolbar({
     : "Previous Chapter";
   const nextEntry = linearNavigation?.next ?? linearNavigation?.nextChapter;
   const nextLabel = linearNavigation?.next ? "Next" : "Next Chapter";
+  const hasAdjacentEntry = previousEntry != null || nextEntry != null;
+  const hasBackAction = onBack != null || onBackHref != null;
 
   return (
     <div style={docsDetailToolbarStyle(layout)}>
-      <div style={DOCS_TOOLBAR_GROUP_STYLE}>
-        {onBack != null ? (
-          <Tooltip title="Back to all docs">
-            <Button
-              aria-label="All docs index"
-              icon={<UnorderedListOutlined />}
-              onClick={onBack}
-              size="small"
-            >
-              {isFlyout ? null : "All docs"}
-            </Button>
-          </Tooltip>
-        ) : null}
-        {onBack != null &&
-        linearNavigation != null &&
-        linearNavigation.count > 1 ? (
-          <span aria-hidden="true" style={DOCS_TOOLBAR_DIVIDER_STYLE} />
-        ) : null}
-        {linearNavigation != null && linearNavigation.count > 1 ? (
-          <>
-            <Space.Compact>
-              <Tooltip
-                title={
-                  previousEntry != null
-                    ? `${previousLabel}: ${previousEntry.title}`
-                    : "This is the first page in this section"
-                }
+      {hasBackAction || hasAdjacentEntry ? (
+        <div style={DOCS_TOOLBAR_GROUP_STYLE}>
+          {hasBackAction ? (
+            <Tooltip title="Back to all docs">
+              <Button
+                aria-label="All docs index"
+                href={onBackHref}
+                icon={<UnorderedListOutlined />}
+                onClick={onBack}
+                size="small"
               >
-                <Button
-                  aria-label={previousLabel}
-                  disabled={previousEntry == null}
-                  icon={<ArrowLeftOutlined />}
-                  onClick={() => {
-                    if (previousEntry != null) {
-                      linearNavigation.onSelectEntry(previousEntry);
+                {isFlyout ? null : "All docs"}
+              </Button>
+            </Tooltip>
+          ) : null}
+          {hasBackAction && hasAdjacentEntry ? (
+            <span aria-hidden="true" style={DOCS_TOOLBAR_DIVIDER_STYLE} />
+          ) : null}
+          {linearNavigation != null && hasAdjacentEntry ? (
+            <>
+              <Space.Compact>
+                <Tooltip
+                  title={
+                    previousEntry != null
+                      ? `${previousLabel}: ${previousEntry.title}`
+                      : "This is the first page in this section"
+                  }
+                >
+                  <Button
+                    aria-label={previousLabel}
+                    disabled={previousEntry == null}
+                    href={
+                      previousEntry == null
+                        ? undefined
+                        : linearNavigation.hrefForEntry?.(previousEntry)
                     }
-                  }}
-                  size="small"
-                />
-              </Tooltip>
-              <Tooltip
-                title={
-                  nextEntry != null
-                    ? `${nextLabel}: ${nextEntry.title}`
-                    : "This is the last page"
-                }
-              >
-                <Button
-                  aria-label={nextLabel}
-                  disabled={nextEntry == null}
-                  icon={<ArrowRightOutlined />}
-                  onClick={() => {
-                    if (nextEntry != null) {
-                      linearNavigation.onSelectEntry(nextEntry);
+                    icon={<ArrowLeftOutlined />}
+                    onClick={() => {
+                      if (
+                        previousEntry != null &&
+                        linearNavigation.hrefForEntry == null
+                      ) {
+                        linearNavigation.onSelectEntry(previousEntry);
+                      }
+                    }}
+                    size="small"
+                  />
+                </Tooltip>
+                <Tooltip
+                  title={
+                    nextEntry != null
+                      ? `${nextLabel}: ${nextEntry.title}`
+                      : "This is the last page"
+                  }
+                >
+                  <Button
+                    aria-label={nextLabel}
+                    disabled={nextEntry == null}
+                    href={
+                      nextEntry == null
+                        ? undefined
+                        : linearNavigation.hrefForEntry?.(nextEntry)
                     }
-                  }}
-                  size="small"
-                />
-              </Tooltip>
-            </Space.Compact>
-            {!isFlyout ? (
-              <Tooltip
-                title={`Page ${linearNavigation.currentIndex + 1} of ${linearNavigation.count} in ${linearNavigation.entry.category}`}
-              >
-                <Text type="secondary">
-                  {linearNavigation.currentIndex + 1}/{linearNavigation.count}
-                </Text>
-              </Tooltip>
-            ) : null}
-          </>
-        ) : null}
-      </div>
-      <div style={DOCS_TOOLBAR_GROUP_STYLE}>
-        <DocsFontSizeControl framed={false} />
-        {privateState?.renderToolbarActions?.(entry)}
-      </div>
+                    icon={<ArrowRightOutlined />}
+                    onClick={() => {
+                      if (
+                        nextEntry != null &&
+                        linearNavigation.hrefForEntry == null
+                      ) {
+                        linearNavigation.onSelectEntry(nextEntry);
+                      }
+                    }}
+                    size="small"
+                  />
+                </Tooltip>
+              </Space.Compact>
+              {!isFlyout ? (
+                <Tooltip
+                  title={`Page ${linearNavigation.currentIndex + 1} of ${linearNavigation.count} in ${linearNavigation.entry.category}`}
+                >
+                  <Text type="secondary">
+                    {linearNavigation.currentIndex + 1}/{linearNavigation.count}
+                  </Text>
+                </Tooltip>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {fontSizeControl != null || privateToolbarActions != null ? (
+        <div style={DOCS_TOOLBAR_GROUP_STYLE}>
+          <DocsFontSizeControl framed={false} />
+          {privateToolbarActions}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1545,6 +1619,7 @@ export function DocsDetailContent({
   linearNavigation,
   layout = "page",
   onBack,
+  onBackHref,
   onRunAction,
   privateState,
 }: {
@@ -1554,6 +1629,7 @@ export function DocsDetailContent({
   linearNavigation?: DocsLinearNavigationState;
   layout?: DocsBrowserLayout;
   onBack?: () => void;
+  onBackHref?: string;
   onRunAction?: (
     action: DocsBrowserAction,
     parameters?: DocsBrowserActionParameters,
@@ -1573,6 +1649,7 @@ export function DocsDetailContent({
           layout={layout}
           linearNavigation={linearNavigation}
           onBack={onBack}
+          onBackHref={onBackHref}
           privateState={privateState}
         />
         <Flex gap="small" vertical>
@@ -1615,6 +1692,7 @@ export function DocsDetailContent({
         layout={layout}
         linearNavigation={linearNavigation}
         onBack={onBack}
+        onBackHref={onBackHref}
         privateState={privateState}
       />
       <Card
@@ -1975,33 +2053,11 @@ export function DocsBrowser({
   }
 
   if (selectedEntry != null) {
-    const selectedGlobalIndex = allEntries.findIndex(
-      (entry) => entry.id === selectedEntry.id,
-    );
-    const categoryEntries = allEntries.filter(
-      (entry) => entry.category === selectedEntry.category,
-    );
-    const currentIndex = categoryEntries.findIndex(
-      (entry) => entry.id === selectedEntry.id,
-    );
-    const linearNavigation =
-      currentIndex >= 0
-        ? {
-            count: categoryEntries.length,
-            currentIndex,
-            entry: selectedEntry,
-            next: categoryEntries[currentIndex + 1],
-            nextChapter: allEntries
-              .slice(selectedGlobalIndex + 1)
-              .find((entry) => entry.category !== selectedEntry.category),
-            onSelectEntry: selectEntry,
-            previous: categoryEntries[currentIndex - 1],
-            previousChapter: allEntries
-              .slice(0, selectedGlobalIndex)
-              .reverse()
-              .find((entry) => entry.category !== selectedEntry.category),
-          }
-        : undefined;
+    const linearNavigation = getDocsLinearNavigation({
+      entries: allEntries,
+      entry: selectedEntry,
+      onSelectEntry: selectEntry,
+    });
     return (
       <DocsDetailContent
         actionAvailability={actionMap}

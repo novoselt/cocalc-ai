@@ -335,6 +335,42 @@ describe("ChatMessageCache message_id index", () => {
     cache.dispose();
   });
 
+  it("keeps the initial disk preview when the first ready snapshot has no messages", async () => {
+    const threadId = "preview-thread";
+    const message = {
+      event: "chat",
+      sender_id: "user-1",
+      date: "2026-01-05T00:00:00.000Z",
+      message_id: "preview-1",
+      thread_id: threadId,
+      history: [],
+    };
+    const config = {
+      ...threadConfigRecordKey(threadId),
+      anchor: { id: "anchor-1" },
+    };
+    const syncdb = new MockSyncdb([], "loading");
+    const cache = new ChatMessageCache(syncdb as any);
+    cache.applyPreviewRows([message, config]);
+
+    syncdb.setSyncState("ready");
+    syncdb.emit("ready");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cache.getByMessageId("preview-1")).toBeDefined();
+    expect(cache.getThreadIndex().get(threadId)?.messageCount).toBe(1);
+    expect(cache.listThreadConfigPreviewRows()).toEqual([
+      expect.objectContaining({ thread_id: threadId }),
+    ]);
+
+    // A later reload is authoritative; the initial-preview bridge is not
+    // permanent retained state.
+    syncdb.emit("reload");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cache.getByMessageId("preview-1")).toBeUndefined();
+    cache.dispose();
+  });
+
   it("prefers the canonical thread-config row in preview snapshots", async () => {
     const threadId = "preview-thread-config";
     const legacyRow = {

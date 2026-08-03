@@ -64,9 +64,10 @@ import {
 } from "@cocalc/server/project-host/admission";
 import { evaluateDedicatedHostBillingEnforcement } from "@cocalc/server/project-host/spend-enforcement";
 import {
-  estimateDedicatedHostRateUsdPerHour,
+  estimateDedicatedHostRate,
   reconcileDedicatedHostPurchaseSessionForAccount,
 } from "@cocalc/server/project-host/spend";
+import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
 
 function pool() {
   return getPool();
@@ -81,11 +82,13 @@ function billingMetadataFromSession({
         funding_mode: "account-prepaid";
         funding_lane: "prepaid";
         hourly_cost_usd: MoneyValue;
+        pricing_snapshot: DedicatedHostPricingSnapshot;
       }
     | {
         funding_mode: "account-postpaid";
         funding_lane: "credit";
         hourly_cost_usd: MoneyValue;
+        pricing_snapshot: DedicatedHostPricingSnapshot;
       }
     | {
         funding_mode: "site-funded";
@@ -102,6 +105,7 @@ function billingMetadataFromSession({
     funding_mode: billableSession.funding_mode,
     funding_lane: billableSession.funding_lane,
     hourly_cost_usd: billableSession.hourly_cost_usd,
+    pricing_snapshot: billableSession.pricing_snapshot,
     ...(started_at ? { started_at } : {}),
   };
 }
@@ -172,11 +176,13 @@ async function resolveBillableHostSessionConfig({
       funding_mode: "account-prepaid";
       funding_lane: "prepaid";
       hourly_cost_usd: MoneyValue;
+      pricing_snapshot: DedicatedHostPricingSnapshot;
     }
   | {
       funding_mode: "account-postpaid";
       funding_lane: "credit";
       hourly_cost_usd: MoneyValue;
+      pricing_snapshot: DedicatedHostPricingSnapshot;
     }
   | {
       funding_mode: "site-funded";
@@ -186,7 +192,7 @@ async function resolveBillableHostSessionConfig({
   if (!isBillableDedicatedHostCloud(provider)) {
     return undefined;
   }
-  const hourly_cost_usd = await estimateDedicatedHostRateUsdPerHour({
+  const rate = await estimateDedicatedHostRate({
     provider,
     region,
     zone: machine?.zone,
@@ -199,8 +205,9 @@ async function resolveBillableHostSessionConfig({
     gpu_type: machine?.gpu_type,
     gpu_count: machine?.gpu_count,
     pricing_model,
+    billing_state: "running",
   });
-  if (!hourly_cost_usd) {
+  if (!rate) {
     throw Object.assign(
       new Error(
         `unable to determine the ${action} hourly rate for provider '${provider}'`,
@@ -227,7 +234,7 @@ async function resolveBillableHostSessionConfig({
   const enforcement = evaluateDedicatedHostBillingEnforcement({
     snapshot,
     funding_lane,
-    hourly_cost_usd,
+    hourly_cost_usd: rate.hourly_cost_usd,
     lane_allowed: true,
   });
   if (enforcement.action === "request_drain") {
@@ -247,14 +254,24 @@ async function resolveBillableHostSessionConfig({
         `unexpected dedicated-host funding lane '${funding_lane}' for prepaid mode`,
       );
     }
-    return { funding_mode: "account-prepaid", funding_lane, hourly_cost_usd };
+    return {
+      funding_mode: "account-prepaid",
+      funding_lane,
+      hourly_cost_usd: rate.hourly_cost_usd,
+      pricing_snapshot: rate.pricing_snapshot,
+    };
   }
   if (funding_lane !== "credit") {
     throw new Error(
       `unexpected dedicated-host funding lane '${funding_lane}' for postpaid mode`,
     );
   }
-  return { funding_mode: "account-postpaid", funding_lane, hourly_cost_usd };
+  return {
+    funding_mode: "account-postpaid",
+    funding_lane,
+    hourly_cost_usd: rate.hourly_cost_usd,
+    pricing_snapshot: rate.pricing_snapshot,
+  };
 }
 
 export async function createHostInternalHelper({
@@ -468,10 +485,12 @@ export async function createHostInternalHelper({
       host_bay_id: getConfiguredBayId(),
       provider: machineCloud!,
       region: resolvedRegion,
+      billing_state: "running",
       machine_type: normalizedMachine.machine_type ?? size,
       pricing_model: pricingModel,
       funding_lane: billableSession.funding_lane,
       hourly_cost_usd: billableSession.hourly_cost_usd,
+      pricing_snapshot: billableSession.pricing_snapshot,
       started_at: billingStartedAt,
     });
   }
@@ -615,10 +634,12 @@ export async function startHostInternalHelper({
       host_bay_id: getConfiguredBayId(),
       provider: machineCloud!,
       region: row.region,
+      billing_state: "running",
       machine_type: machine.machine_type ?? nextMetadata?.size,
       pricing_model: effectivePricingModel,
       funding_lane: billableSession.funding_lane,
       hourly_cost_usd: billableSession.hourly_cost_usd,
+      pricing_snapshot: billableSession.pricing_snapshot,
       started_at: billingStartedAt,
     });
   }

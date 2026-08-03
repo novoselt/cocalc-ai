@@ -694,85 +694,92 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("forces helper-only bootstrap reconcile without runtime rollout", async () => {
-    const ssh = makeSshChild();
-    spawnMock = jest.fn(() => ssh.child);
-    const row = makeHostRow({
-      version: "1776486535462",
-      lifecycleStatus: "in_sync",
-      publicIp: "34.11.143.149",
-    });
-    row.metadata.bootstrap = {
-      status: "done",
-      updated_at: "2026-05-10T15:00:00Z",
-      message: "Host software reconciled",
-    };
-    row.metadata.bootstrap_lifecycle = {
-      summary_status: "in_sync",
-      last_reconcile_started_at: "2026-05-10T14:59:00Z",
-      last_reconcile_finished_at: "2026-05-10T15:00:00Z",
-    };
+  it.each(["helpers", "environment"] as const)(
+    "forces %s-only bootstrap reconcile without runtime rollout",
+    async (bootstrapScope) => {
+      const ssh = makeSshChild();
+      spawnMock = jest.fn(() => ssh.child);
+      const row = makeHostRow({
+        version: "1776486535462",
+        lifecycleStatus: "in_sync",
+        publicIp: "34.11.143.149",
+      });
+      row.metadata.bootstrap = {
+        status: "done",
+        updated_at: "2026-05-10T15:00:00Z",
+        message: "Host software reconciled",
+      };
+      row.metadata.bootstrap_lifecycle = {
+        summary_status: "in_sync",
+        last_reconcile_started_at: "2026-05-10T14:59:00Z",
+        last_reconcile_finished_at: "2026-05-10T15:00:00Z",
+      };
 
-    let stateLoads = 0;
-    queryMock = jest.fn(async (sql: string) => {
-      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
-        return { rows: [row] };
-      }
-      if (sql.includes("SELECT status, deleted, metadata FROM project_hosts")) {
-        stateLoads += 1;
-        if (stateLoads === 1) {
+      let stateLoads = 0;
+      queryMock = jest.fn(async (sql: string) => {
+        if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+          return { rows: [row] };
+        }
+        if (
+          sql.includes("SELECT status, deleted, metadata FROM project_hosts")
+        ) {
+          stateLoads += 1;
+          if (stateLoads === 1) {
+            return {
+              rows: [
+                {
+                  status: "running",
+                  deleted: null,
+                  metadata: row.metadata,
+                },
+              ],
+            };
+          }
           return {
             rows: [
               {
                 status: "running",
                 deleted: null,
-                metadata: row.metadata,
+                metadata: {
+                  ...row.metadata,
+                  bootstrap: {
+                    status: "done",
+                    updated_at: "2026-05-10T15:02:00Z",
+                    message: "Host software reconciled",
+                  },
+                  bootstrap_lifecycle: {
+                    summary_status: "in_sync",
+                    last_reconcile_started_at: "2026-05-10T15:01:00Z",
+                    last_reconcile_finished_at: "2026-05-10T15:02:00Z",
+                  },
+                },
               },
             ],
           };
         }
-        return {
-          rows: [
-            {
-              status: "running",
-              deleted: null,
-              metadata: {
-                ...row.metadata,
-                bootstrap: {
-                  status: "done",
-                  updated_at: "2026-05-10T15:02:00Z",
-                  message: "Host software reconciled",
-                },
-                bootstrap_lifecycle: {
-                  summary_status: "in_sync",
-                  last_reconcile_started_at: "2026-05-10T15:01:00Z",
-                  last_reconcile_finished_at: "2026-05-10T15:02:00Z",
-                },
-              },
-            },
-          ],
-        };
-      }
-      throw new Error(`unexpected query: ${sql}`);
-    });
+        throw new Error(`unexpected query: ${sql}`);
+      });
 
-    const { reconcileHostSoftwareInternal } = await import("./hosts");
-    await expect(
-      reconcileHostSoftwareInternal({
-        account_id: ACCOUNT_ID,
-        id: HOST_ID,
-        force_bootstrap: true,
-        bootstrap_scope: "helpers",
-      }),
-    ).resolves.toBeUndefined();
+      const { reconcileHostSoftwareInternal } = await import("./hosts");
+      await expect(
+        reconcileHostSoftwareInternal({
+          account_id: ACCOUNT_ID,
+          id: HOST_ID,
+          force_bootstrap: true,
+          bootstrap_scope: bootstrapScope,
+        }),
+      ).resolves.toBeUndefined();
 
-    expect(spawnMock).toHaveBeenCalled();
-    expect(ssh.getScript()).toContain('COCALC_BOOTSTRAP_RECONCILE_SCOPE="$3"');
-    expect(ssh.getScript()).toContain('"helpers")');
-    expect(
-      loadEffectiveProjectHostRuntimeDeploymentsMock,
-    ).not.toHaveBeenCalled();
-  });
+      expect(spawnMock).toHaveBeenCalled();
+      expect(ssh.getScript()).toContain(
+        'COCALC_BOOTSTRAP_RECONCILE_SCOPE="$3"',
+      );
+      expect(ssh.getScript()).toContain(`"${bootstrapScope}")`);
+      expect(
+        loadEffectiveProjectHostRuntimeDeploymentsMock,
+      ).not.toHaveBeenCalled();
+    },
+  );
 
   it("ignores an unchanged lifecycle error while a new helper reconcile starts", async () => {
     const ssh = makeSshChild();

@@ -151,7 +151,7 @@ export const CellOutputMessages: React.FC<CellOutputMessagesProps> = React.memo(
       hasError && id && actions && aiTools ? (
         <aiTools.toolComponents.AIError
           style={{ margin: "5px 0" }}
-          input={actions.store.getIn(["cells", id, "input"]) ?? ""}
+          input={actions.store?.getIn?.(["cells", id, "input"]) ?? ""}
           traceback={Anser.ansiToText(traceback.trim())}
         />
       ) : undefined;

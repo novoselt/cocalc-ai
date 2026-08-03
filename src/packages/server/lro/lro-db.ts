@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import getLogger from "@cocalc/backend/logger";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
+import { createIndexConcurrentlyBestEffort } from "../database/concurrent-index";
 import type {
   LroScopeType,
   LroStatus,
@@ -20,35 +21,10 @@ let ensuredSchema: Promise<void> | undefined;
 let expiryIndexReady: Promise<void> | undefined;
 
 async function ensureExpiryIndexBestEffort(): Promise<void> {
-  const db = pool();
-  if (typeof (db as any).connect !== "function") {
-    await db.query(
-      "CREATE INDEX IF NOT EXISTS lro_expiry_idx ON long_running_operations(expires_at) WHERE dismissed_at IS NULL AND status IN ('queued', 'running')",
-    );
-    return;
-  }
-  const client = await db.connect();
-  let locked = false;
-  try {
-    const { rows } = await client.query<{ locked: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-      ["lro_expiry_idx"],
-    );
-    locked = rows[0]?.locked === true;
-    if (!locked) return;
-    await client.query(
-      "CREATE INDEX CONCURRENTLY IF NOT EXISTS lro_expiry_idx ON long_running_operations(expires_at) WHERE dismissed_at IS NULL AND status IN ('queued', 'running')",
-    );
-  } catch (err) {
-    logger.warn("failed to create LRO expiration index", { err: `${err}` });
-  } finally {
-    if (locked) {
-      await client
-        .query("SELECT pg_advisory_unlock(hashtext($1))", ["lro_expiry_idx"])
-        .catch(() => undefined);
-    }
-    client.release();
-  }
+  await createIndexConcurrentlyBestEffort({
+    name: "lro_expiry_idx",
+    sql: "CREATE INDEX CONCURRENTLY IF NOT EXISTS lro_expiry_idx ON long_running_operations(expires_at) WHERE dismissed_at IS NULL AND status IN ('queued', 'running')",
+  });
 }
 
 async function hasColumn({

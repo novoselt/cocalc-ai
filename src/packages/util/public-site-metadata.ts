@@ -20,6 +20,12 @@ import {
 // with the route-specific head block when serving a public page.
 export const PUBLIC_HEAD_PLACEHOLDER = "<title>CoCalc</title>";
 
+// Rspack renders this exact element inside the public application container.
+// The hub replaces it with route-specific, crawler-visible fallback content.
+// The React public app then replaces that fallback during normal startup.
+export const PUBLIC_BODY_PLACEHOLDER =
+  '<template id="cocalc-public-body-placeholder"></template>';
+
 // Rspack emits the public.html script/link URLs with this prefix instead of
 // relative paths; the hub replaces it with the serve-time static location
 // (e.g. "/static" or "/<base-path>/static"). Absolute asset URLs let the
@@ -125,7 +131,10 @@ const PUBLIC_IMAGE_DIMENSIONS: Record<string, PublicImageDimensions> = {
     height: 672,
     width: 1065,
   },
-  "/public/features/cocalc-r-jupyter.png": { height: 1013, width: 1866 },
+  "/public/features/cocalc-r-hero-ggplot2-20260731.png": {
+    height: 817,
+    width: 1226,
+  },
   "/public/features/cocalc-shell-script-run.png": {
     height: 742,
     width: 1312,

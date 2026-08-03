@@ -6,6 +6,7 @@
 import {
   clearBtrfsOperationCachesForTest,
   getBtrfsMutationLockStatus,
+  withBtrfsMutationContext,
   withBtrfsMutationLock,
 } from "./operation-cache";
 
@@ -102,5 +103,82 @@ describe("btrfs mutation lock", () => {
         run: async () => "ok",
       }),
     ).resolves.toBe("ok");
+  });
+
+  it("orders queued lifecycle work ahead of scheduled work", async () => {
+    let releaseHolder!: () => void;
+    let holderStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const order: string[] = [];
+    const holder = withBtrfsMutationLock({
+      mount: "/mnt/test",
+      operation: "holder",
+      run: async () => {
+        holderStarted();
+        await new Promise<void>((resolve) => {
+          releaseHolder = resolve;
+        });
+      },
+    });
+    await started;
+
+    const scheduled = withBtrfsMutationLock({
+      mount: "/mnt/test",
+      operation: "scheduled",
+      context: { priority: "scheduled", project_id: "project-scheduled" },
+      run: async () => {
+        order.push("scheduled");
+      },
+    });
+    const lifecycle = withBtrfsMutationLock({
+      mount: "/mnt/test",
+      operation: "lifecycle",
+      context: { priority: "lifecycle", project_id: "project-lifecycle" },
+      run: async () => {
+        order.push("lifecycle");
+      },
+    });
+
+    expect(getBtrfsMutationLockStatus()).toEqual([
+      expect.objectContaining({
+        queued: 2,
+        next_waiter_priority: "lifecycle",
+        next_waiter_project_id: "project-lifecycle",
+      }),
+    ]);
+    releaseHolder();
+    await Promise.all([holder, scheduled, lifecycle]);
+    expect(order).toEqual(["lifecycle", "scheduled"]);
+  });
+
+  it("propagates operation context without changing every Btrfs call", async () => {
+    await withBtrfsMutationContext(
+      {
+        operation_id: "operation-1",
+        project_id: "project-1",
+        priority: "scheduled",
+        operation_class: "scheduled_snapshot",
+        checkpointable: true,
+      },
+      async () => {
+        await withBtrfsMutationLock({
+          mount: "/mnt/test",
+          operation: "snapshot-delete",
+          run: async () => {
+            expect(getBtrfsMutationLockStatus()).toEqual([
+              expect.objectContaining({
+                operation_id: "operation-1",
+                project_id: "project-1",
+                priority: "scheduled",
+                operation_class: "scheduled_snapshot",
+                checkpointable: true,
+              }),
+            ]);
+          },
+        });
+      },
+    );
   });
 });

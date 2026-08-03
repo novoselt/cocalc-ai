@@ -1,8 +1,8 @@
 // Handles reporting project state from a project-host to the master. We send
-// state updates immediately on change, mark them as reported when the master
-// confirms, and retry every 15s for any states that have not been reported
-// (covers outages or restarts). This keeps the master view in sync even if
-// connectivity is intermittent.
+// state updates immediately on change, serialize and briefly retry each
+// project's newest state, then retain a 15s reconciliation scan for outages or
+// process restarts. This prevents delayed starting reports from racing newer
+// running reports while keeping the master view convergent during disconnects.
 import type { Client } from "@cocalc/conat/core/client";
 import getLogger from "@cocalc/backend/logger";
 import { clearLocalAcpAutomationsForProject } from "@cocalc/lite/hub/acp";
@@ -31,15 +31,26 @@ import { deleteProjectLocal } from "./sqlite/projects";
 import { deleteVolume } from "./file-server";
 import { recordProjectHostRpcTraffic } from "./rpc-traffic-audit";
 import { setProjectStateReporter } from "./project-state-reporter";
+import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 
 let statusClient: HostStatusApi | undefined;
 let hostInfo: Pick<HostProjectStatus, "host_id" | "host"> | undefined;
 const logger = getLogger("project-host:master-status");
 let resendTimer: NodeJS.Timeout | undefined;
 let masterClient: Client | undefined;
+const PROJECT_STATE_RETRY_DELAYS_MS = [100, 250, 500, 1_000] as const;
+interface ProjectStateReportQueue {
+  pending?: HostProjectStatus["state"];
+  activeKey?: string;
+  drain?: Promise<void>;
+  wakeRetry?: () => void;
+}
+const projectStateReportQueues = new Map<string, ProjectStateReportQueue>();
 let pendingInventory: { project_ids: string[]; checked_at: number } | null =
   null;
 const DEFAULT_PROVISIONED_INVENTORY_INTERVAL_MS = 5 * 60 * 1000;
+const pendingProjectDeletions = new Map<string, number>();
+let projectDeletionWorkerRunning = false;
 
 function provisionedInventoryIntervalMs(): number {
   const raw = Number(process.env.COCALC_PROJECT_HOST_INVENTORY_INTERVAL_MS);
@@ -50,11 +61,7 @@ function provisionedInventoryIntervalMs(): number {
 }
 
 async function deleteProjectDataLocal(project_id: string) {
-  try {
-    await deleteVolume(project_id, { reportProvisioned: false });
-  } catch (err) {
-    logger.debug("deleteVolume failed", { project_id, err });
-  }
+  await deleteVolume(project_id, { reportProvisioned: false });
   try {
     clearLocalAcpAutomationsForProject(project_id);
   } catch (err) {
@@ -72,6 +79,53 @@ async function deleteProjectDataLocal(project_id: string) {
     deleteProjectProvisioning(project_id);
   } catch (err) {
     logger.debug("deleteProjectProvisioning failed", { project_id, err });
+  }
+}
+
+function queueProjectDataDeletion(project_id: string): void {
+  if (!pendingProjectDeletions.has(project_id)) {
+    pendingProjectDeletions.set(project_id, 0);
+  }
+  void drainProjectDataDeletions();
+}
+
+async function drainProjectDataDeletions(): Promise<void> {
+  if (projectDeletionWorkerRunning) return;
+  projectDeletionWorkerRunning = true;
+  try {
+    while (pendingProjectDeletions.size > 0) {
+      const entry = pendingProjectDeletions.entries().next().value as
+        | [string, number]
+        | undefined;
+      if (!entry) break;
+      const [project_id, attempts] = entry;
+      try {
+        await withBtrfsMutationContext(
+          {
+            operation_id: `stale-project-delete:${project_id}`,
+            project_id,
+            priority: "scavenger",
+            operation_class: "stale_project_cleanup",
+          },
+          async () => await deleteProjectDataLocal(project_id),
+        );
+        pendingProjectDeletions.delete(project_id);
+      } catch (err) {
+        const nextAttempts = attempts + 1;
+        pendingProjectDeletions.set(project_id, nextAttempts);
+        logger.warn("stale project data deletion failed", {
+          project_id,
+          attempts: nextAttempts,
+          err: `${err}`,
+        });
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(30_000, 250 * 2 ** attempts)),
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  } finally {
+    projectDeletionWorkerRunning = false;
   }
 }
 
@@ -106,16 +160,111 @@ export function setMasterConatClient(client: Client | undefined): void {
 export async function reportProjectStateToMaster(
   project_id: string,
   state: HostProjectStatus["state"],
-) {
-  if (!statusClient || !hostInfo) return;
+): Promise<void> {
+  const normalized = normalizeReportedProjectState(state);
+  let queue = projectStateReportQueues.get(project_id);
+  if (!queue) {
+    queue = {};
+    projectStateReportQueues.set(project_id, queue);
+  }
+  const key = projectStateReportKey(normalized);
+  if (queue.activeKey !== key) {
+    queue.pending = normalized;
+  }
+  queue.wakeRetry?.();
+  if (!queue.drain) {
+    queue.drain = drainProjectStateReports(project_id, queue).finally(() => {
+      projectStateReportQueues.delete(project_id);
+    });
+  }
+  await queue.drain;
+}
+
+function normalizeReportedProjectState(
+  state: HostProjectStatus["state"],
+): HostProjectStatus["state"] {
+  if (typeof state === "string") {
+    return { state: state as any, time: new Date() };
+  }
+  return state.time == null ? { ...state, time: new Date() } : state;
+}
+
+function projectStateReportKey(state: HostProjectStatus["state"]): string {
+  if (typeof state === "string") return state;
+  return `${state.state ?? ""}:${state.runtime_exit_reason ?? ""}`;
+}
+
+async function waitForProjectStateRetry(
+  queue: ProjectStateReportQueue,
+  delayMs: number,
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (queue.wakeRetry === done) queue.wakeRetry = undefined;
+      resolve();
+    };
+    const timer = setTimeout(done, delayMs);
+    timer.unref();
+    queue.wakeRetry = done;
+  });
+}
+
+async function drainProjectStateReports(
+  project_id: string,
+  queue: ProjectStateReportQueue,
+): Promise<void> {
+  let retry = 0;
+  let current: HostProjectStatus["state"] | undefined;
+  while (queue.pending || current) {
+    if (queue.pending) {
+      current = queue.pending;
+      queue.pending = undefined;
+      retry = 0;
+    }
+    if (!current) break;
+    queue.activeKey = projectStateReportKey(current);
+    try {
+      await sendProjectStateToMaster(project_id, current);
+      current = undefined;
+      retry = 0;
+    } catch (err) {
+      logger.debug("reportProjectStateToMaster failed", {
+        project_id,
+        state: current,
+        retry,
+        err,
+      });
+      if (queue.pending) continue;
+      if (retry >= PROJECT_STATE_RETRY_DELAYS_MS.length) break;
+      await waitForProjectStateRetry(
+        queue,
+        PROJECT_STATE_RETRY_DELAYS_MS[retry++],
+      );
+    } finally {
+      queue.activeKey = undefined;
+    }
+  }
+}
+
+async function sendProjectStateToMaster(
+  project_id: string,
+  state: HostProjectStatus["state"],
+): Promise<void> {
+  if (!statusClient || !hostInfo) {
+    throw new Error("master status client is not connected");
+  }
   const request = {
     ...hostInfo,
     project_id,
     state,
   };
   const started = Date.now();
+  logger.debug("reportProjectStateToMaster", { project_id, state });
   try {
-    logger.debug("reportProjectStateToMaster", { project_id, state });
     const res = await statusClient.reportProjectState(request);
     recordProjectHostRpcTraffic({
       channel: "status",
@@ -126,7 +275,7 @@ export async function reportProjectStateToMaster(
     });
     if ((res as any)?.action === "delete") {
       logger.debug("master requested local project deletion", { project_id });
-      await deleteProjectDataLocal(project_id);
+      queueProjectDataDeletion(project_id);
       return;
     }
     // A newer local state may have been written while this RPC was in flight.
@@ -148,7 +297,7 @@ export async function reportProjectStateToMaster(
       error: true,
       duration_ms: Date.now() - started,
     });
-    logger.debug("reportProjectStateToMaster failed", { project_id, err });
+    throw err;
   }
 }
 
@@ -163,38 +312,62 @@ export function queueProvisionedInventory(project_ids: string[]) {
 }
 
 export function startProvisionedInventoryReporter({
-  listProjectIds,
+  bootstrapProjectIds,
+  verifyBatch,
   intervalMs = provisionedInventoryIntervalMs(),
 }: {
-  listProjectIds: () => Promise<string[]> | string[];
+  bootstrapProjectIds: () =>
+    | Promise<string[] | undefined>
+    | string[]
+    | undefined;
+  verifyBatch?: () => Promise<unknown> | unknown;
   intervalMs?: number;
 }): () => void {
   let closed = false;
   let running = false;
-  const report = async () => {
+  const bootstrap = async () => {
     if (closed || running) return;
     running = true;
     try {
+      const listed = await bootstrapProjectIds();
+      if (listed == null) return;
       const project_ids = Array.from(
         new Set(
-          (await listProjectIds())
+          listed
             .map((project_id) => `${project_id ?? ""}`.trim())
             .filter(Boolean),
         ),
       );
       queueProvisionedInventory(project_ids);
     } catch (err) {
-      logger.warn("provisioned inventory report skipped", { err: `${err}` });
+      logger.warn("provisioned inventory bootstrap skipped", {
+        err: `${err}`,
+      });
     } finally {
       running = false;
     }
   };
-  void report();
-  const timer = setInterval(() => void report(), intervalMs);
-  timer.unref();
+  void bootstrap();
+  const timer =
+    verifyBatch == null
+      ? undefined
+      : setInterval(() => {
+          if (closed || running) return;
+          running = true;
+          Promise.resolve(verifyBatch())
+            .catch((err) =>
+              logger.warn("bounded provisioned inventory audit failed", {
+                err: `${err}`,
+              }),
+            )
+            .finally(() => {
+              running = false;
+            });
+        }, intervalMs);
+  timer?.unref();
   return () => {
     closed = true;
-    clearInterval(timer);
+    if (timer) clearInterval(timer);
   };
 }
 
@@ -206,7 +379,13 @@ export function resetMasterStatusForTests(): void {
   statusClient = undefined;
   hostInfo = undefined;
   masterClient = undefined;
+  for (const queue of projectStateReportQueues.values()) {
+    queue.wakeRetry?.();
+  }
+  projectStateReportQueues.clear();
   pendingInventory = null;
+  pendingProjectDeletions.clear();
+  projectDeletionWorkerRunning = false;
 }
 
 async function reportProvisionedInventory() {
@@ -236,9 +415,11 @@ async function reportProvisionedInventory() {
     });
     const deleteIds = (res as any)?.delete_project_ids ?? [];
     if (Array.isArray(deleteIds) && deleteIds.length) {
-      logger.info("deleting stale project data", { count: deleteIds.length });
+      logger.info("queueing stale project data deletion", {
+        count: deleteIds.length,
+      });
       for (const project_id of deleteIds) {
-        await deleteProjectDataLocal(project_id);
+        queueProjectDataDeletion(project_id);
       }
     }
     pendingInventory = null;
@@ -296,7 +477,7 @@ async function reportProjectProvisionedToMaster(
     });
     if ((res as any)?.action === "delete") {
       logger.debug("master requested local project deletion", { project_id });
-      await deleteProjectDataLocal(project_id);
+      queueProjectDataDeletion(project_id);
       return;
     }
     markProjectProvisionedReported(project_id);
@@ -321,16 +502,13 @@ async function reportPendingStates() {
   const pending = listUnreportedProjects();
   for (const row of pending) {
     if (!row.state) continue;
-    await reportProjectStateToMaster(
-      row.project_id,
-      row.runtime_exit_reason
-        ? {
-            state: row.state as any,
-            time: new Date(),
-            runtime_exit_reason: row.runtime_exit_reason as any,
-          }
-        : row.state,
-    );
+    await reportProjectStateToMaster(row.project_id, {
+      state: row.state as any,
+      time: new Date(row.state_updated_at ?? row.updated_at ?? Date.now()),
+      ...(row.runtime_exit_reason
+        ? { runtime_exit_reason: row.runtime_exit_reason as any }
+        : {}),
+    });
   }
   await reportPendingProvisioning();
   await reportPendingProjectTouches();

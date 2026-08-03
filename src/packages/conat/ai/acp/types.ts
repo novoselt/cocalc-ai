@@ -100,6 +100,9 @@ export interface AcpChatContext {
   recovery_parent_op_id?: string;
   recovery_reason?: string;
   recovery_count?: number;
+  // Capture the thread preference when the turn is submitted. The chat writer
+  // uses this if its completion-time sync view has not received the config row.
+  notify_on_turn_finish?: boolean;
 }
 
 export type AcpRequest = {

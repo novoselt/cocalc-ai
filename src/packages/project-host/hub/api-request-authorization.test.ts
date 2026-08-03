@@ -12,6 +12,7 @@ jest.mock("@cocalc/lite/hub/sqlite/database", () => ({
 import {
   ACCOUNT_PROJECT_HOST_HUB_METHODS,
   authorizeProjectHostHubApiRequest,
+  EXAM_PROJECT_HOST_HUB_METHODS,
   PROJECT_PROJECT_HOST_HUB_METHODS,
 } from "./api-request-authorization";
 
@@ -84,6 +85,25 @@ describe("project-host hub API request authorization", () => {
     );
   });
 
+  it("denies embedded hub API methods to exam accounts", () => {
+    mockGetRow.mockImplementation((table) =>
+      table === "accounts"
+        ? { exam_mode: true, exam_project_id: project_id }
+        : { users: { [account_id]: { group: "owner" } } },
+    );
+    expectForbidden(() =>
+      authorizeProjectHostHubApiRequest(
+        accountRequest("projects.codexDeviceAuthStart"),
+      ),
+    );
+    expect(() =>
+      authorizeProjectHostHubApiRequest({
+        ...accountRequest("system.ping"),
+        args: [],
+      }),
+    ).not.toThrow();
+  });
+
   it.each(["owner", "collaborator"])("accepts the %s project role", (group) => {
     mockGetRow.mockReturnValue({ users: { [account_id]: group } });
     expect(() =>
@@ -139,7 +159,32 @@ describe("project-host hub API request authorization", () => {
         authorizeProjectHostHubApiRequest(projectRequest(name)),
       ).not.toThrow();
     }
-    expect(mockGetRow).not.toHaveBeenCalled();
+    expect(mockGetRow).toHaveBeenCalledWith(
+      "projects",
+      JSON.stringify({ project_id }),
+    );
+  });
+
+  it("restricts exam project identities to non-publication methods", () => {
+    mockGetRow.mockImplementation((table) =>
+      table === "projects"
+        ? { local_only: true, exam_run_id: host_id }
+        : undefined,
+    );
+    for (const name of EXAM_PROJECT_HOST_HUB_METHODS) {
+      expect(() =>
+        authorizeProjectHostHubApiRequest(projectRequest(name)),
+      ).not.toThrow();
+    }
+    for (const name of [
+      "system.assertProjectPublicSharingAllowed",
+      "system.reserveProjectAppPublicSubdomain",
+      "system.reserveProjectAppPrivateHostname",
+    ]) {
+      expectForbidden(() =>
+        authorizeProjectHostHubApiRequest(projectRequest(name)),
+      );
+    }
   });
 
   it("rejects a project identity targeting another project", () => {

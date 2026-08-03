@@ -35,7 +35,8 @@ import {
   shouldAutoRestoreInterruptedSpotHost,
   spotProbeIntervalMs,
   spotRecoveryPolicy,
-  standardFallbackMinMs,
+  spotStandardHoldIsActive,
+  standardFallbackProbeNotBeforeMs,
   spotRecoveryState,
   spotRetryWindowMs,
 } from "./spot-restore";
@@ -51,6 +52,10 @@ import { maybeAutoGrowHostDiskForReservationFailure } from "@cocalc/server/proje
 import { computeHostOperationalAvailability } from "@cocalc/server/conat/api/hosts-normalization";
 import { enqueueRootfsPrepullForHost } from "./rootfs-prepull";
 import { removeHostSshKnownHostAlias } from "./host-ssh-known-hosts";
+import {
+  enqueueHostDnsReconciliation,
+  handleHostDnsReconciliationWork,
+} from "./host-dns-reconciliation";
 import {
   activeHostPublicRouteMode,
   ensureDirectCloudflareIngressForHost,
@@ -626,6 +631,12 @@ function compactIdleSpotRecoveryState(
   if (state.active_machine_type) {
     next.active_machine_type = state.active_machine_type;
   }
+  if (state.last_preempted_at) {
+    next.last_preempted_at = state.last_preempted_at;
+  }
+  if (state.standard_hold_until) {
+    next.standard_hold_until = state.standard_hold_until;
+  }
   return next;
 }
 
@@ -748,8 +759,12 @@ async function scheduleSpotProbe(opts: {
   row: any;
   provider?: string;
   not_before: Date;
+  after_current_probe?: boolean;
 }) {
-  await enqueueCloudVmWorkOnce({
+  const enqueue = opts.after_current_probe
+    ? enqueueCloudVmWork
+    : enqueueCloudVmWorkOnce;
+  await enqueue({
     vm_id: opts.row.id,
     action: "probe_spot",
     not_before: opts.not_before,
@@ -791,12 +806,7 @@ function gcpAlternateSpotMachineTypes(opts: {
 }): string[] {
   const desired = `${opts.desiredMachineType ?? ""}`.trim();
   const configured = opts.policy.alternate_spot_machine_types;
-  const derived: string[] = [];
-  const match = /^t2d-standard-(\d+)$/.exec(desired);
-  if (match) derived.push(`n2d-standard-${match[1]}`);
-  return Array.from(
-    new Set([desired, ...configured, ...derived].filter(Boolean)),
-  );
+  return Array.from(new Set([desired, ...configured].filter(Boolean)));
 }
 
 function hostFundingMode(row: any): HostFundingMode | undefined {
@@ -934,8 +944,8 @@ async function ensureDnsForHost(row: any) {
   if (activeHostPublicRouteMode(row) === "cloudflare-proxy") {
     if (!row?.metadata?.runtime?.public_ip) return;
     if (!(await hasDns())) return;
+    await enqueueHostDnsReconciliation(row.id, "ensure-dns-for-host");
     try {
-      await ensureDirectCloudflareIngressForHost(row);
       const dns = await ensureHostDns({
         host_id: row.id,
         ipAddress: row.metadata.runtime.public_ip,
@@ -953,7 +963,18 @@ async function ensureDnsForHost(row: any) {
           `https://${dns.name}`,
       });
     } catch (err) {
-      logger.warn("direct project-host ingress/DNS update failed", {
+      logger.warn(
+        "direct project-host DNS update failed; durable retry queued",
+        {
+          host_id: row.id,
+          err,
+        },
+      );
+    }
+    try {
+      await ensureDirectCloudflareIngressForHost(row);
+    } catch (err) {
+      logger.warn("direct project-host ingress update failed", {
         host_id: row.id,
         err,
       });
@@ -1122,6 +1143,37 @@ async function scheduleRuntimeRefresh(row: any, opts?: { force?: boolean }) {
       instance_id: runtime.instance_id,
     });
   }
+}
+
+async function reconcileRuntimeNetworkAfterStart(
+  row: any,
+  providerId: string | undefined,
+): Promise<void> {
+  if (providerId === "gcp") {
+    try {
+      // A restarted GCP VM can receive a new ephemeral public IP. Refresh it
+      // before readiness verification so direct Cloudflare routes converge
+      // without waiting for a later queued worker or failed public probe.
+      await handleRefreshRuntime({
+        ...row,
+        payload: {
+          provider: providerId,
+          force: true,
+          attempt: 0,
+          source: "post_start",
+        },
+      });
+      return;
+    } catch (err) {
+      logger.warn("post-start runtime network reconciliation failed", {
+        host_id: row.id,
+        provider: providerId,
+        err,
+      });
+    }
+  }
+  await ensureDnsForHost(row);
+  await scheduleRuntimeRefresh(row, { force: providerId === "gcp" });
 }
 
 function maybeReplaceIpInUrl(
@@ -1528,6 +1580,7 @@ async function handleStart(row: any) {
       managedSpotRecovery &&
       desiredPricing === "spot" &&
       currentEffectivePricing === "on_demand" &&
+      !spotStandardHoldIsActive(currentRecoveryState) &&
       (row.status === "off" ||
         row.status === "stopped" ||
         runtimeProviderStatusIsStopped(runtime));
@@ -1855,6 +1908,19 @@ async function handleStart(row: any) {
         managedSpotRecovery &&
         startMode === "spot" &&
         recoveryPolicy &&
+        spotStandardHoldIsActive(nextRecoveryState)
+      ) {
+        if (
+          (await promoteToStandardFallback(
+            "rapid-preemption-circuit-breaker",
+          )) === "recreated"
+        ) {
+          return;
+        }
+      } else if (
+        managedSpotRecovery &&
+        startMode === "spot" &&
+        recoveryPolicy &&
         shouldFallbackToStandard({
           state: nextRecoveryState,
           policy: recoveryPolicy,
@@ -2138,8 +2204,7 @@ async function handleStart(row: any) {
       last_seen: null,
     });
     const nextRow = { ...row, status: "starting", metadata: nextMetadata };
-    await ensureDnsForHost(nextRow);
-    await scheduleRuntimeRefresh(nextRow, { force: providerId === "gcp" });
+    await reconcileRuntimeNetworkAfterStart(nextRow, providerId);
     await scheduleHostReadyVerification({
       row: nextRow,
       provider: providerId,
@@ -2166,8 +2231,7 @@ async function handleStart(row: any) {
     metadata: nextMetadata,
   });
   const nextRow = { ...row, status: "running", metadata: nextMetadata };
-  await ensureDnsForHost(nextRow);
-  await scheduleRuntimeRefresh(nextRow, { force: providerId === "gcp" });
+  await reconcileRuntimeNetworkAfterStart(nextRow, providerId);
   if (providerId) {
     await bumpReconcile(providerId, DEFAULT_INTERVALS.running_ms);
   }
@@ -2733,17 +2797,14 @@ async function handleVerifyHostReady(row: any) {
         );
         await updateHostRow(host.id, { metadata: nextMetadata });
         if (policy) {
-          const fallbackStartedAt = fallbackState.fallback_started_at
-            ? new Date(fallbackState.fallback_started_at)
-            : new Date();
           await scheduleSpotProbe({
             row: { ...host, metadata: nextMetadata },
             provider: providerId ?? host.metadata?.machine?.cloud,
             not_before: new Date(
-              Math.max(
-                Date.now(),
-                fallbackStartedAt.getTime() + standardFallbackMinMs(policy),
-              ),
+              standardFallbackProbeNotBeforeMs({
+                state: fallbackState,
+                policy,
+              }),
             ),
           });
         }
@@ -3043,6 +3104,15 @@ async function handleProbeSpot(row: any) {
   if (currentEffectivePricing !== "on_demand" && !alternateMachineType) return;
   const providerId = normalizeProviderId(host.metadata?.machine?.cloud);
   if (!providerId || !policy) return;
+  if (spotStandardHoldIsActive(state)) {
+    await scheduleSpotProbe({
+      row: host,
+      provider: providerId,
+      not_before: new Date(standardFallbackProbeNotBeforeMs({ state, policy })),
+      after_current_probe: true,
+    });
+    return;
+  }
   const { entry, creds } = await getProviderContext(providerId, {
     region: host.region,
   });
@@ -3096,6 +3166,7 @@ async function handleProbeSpot(row: any) {
       row: { ...host, metadata: failedMetadata },
       provider: providerId,
       not_before: new Date(Date.now() + spotProbeIntervalMs(policy)),
+      after_current_probe: true,
     });
     return;
   }
@@ -3257,6 +3328,9 @@ export const cloudHostHandlers: CloudVmWorkHandlers = {
       await markHostError(host, err);
       throw err;
     }
+  },
+  reconcile_dns: async (row) => {
+    await handleHostDnsReconciliationWork(row);
   },
   verify_host_ready: async (row) => {
     try {

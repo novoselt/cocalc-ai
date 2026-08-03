@@ -35,6 +35,90 @@ describe("parseRow host metrics normalization", () => {
       shared_scratch_available_bytes: 375,
     });
   });
+
+  it("preserves valid I/O containment and storage admission telemetry", () => {
+    const ioContainment = {
+      collected_at: "2026-07-29T12:00:00.000Z",
+      policy_mode: "enforce",
+      mountpoint: "/mnt/cocalc",
+      capability: "validated",
+      pool_cgroup: "/sys/fs/cgroup/cocalc-project-pool",
+      devices: [],
+      top_projects: [],
+      sampled_project_count: 3,
+      total_project_count: 3,
+      stale_project_count: 0,
+      truncated: false,
+      maintenance_cgroup: "/sys/fs/cgroup/cocalc-maintenance",
+      maintenance_process_count: 1,
+    };
+    const storageAdmission = {
+      schema_version: 1,
+      collected_at: "2026-07-29T12:00:00.000Z",
+      mode: "observe",
+      pressure_state: "contended",
+      state_since: "2026-07-29T11:59:00.000Z",
+      lifecycle_active: 1,
+      starting_projects: 1,
+      stopping_projects: 0,
+      active_by_priority: {
+        lifecycle: 1,
+        interactive: 0,
+        scheduled: 0,
+        scavenger: 0,
+      },
+      btrfs_mutation_locks: 1,
+      btrfs_mutation_waiters: 2,
+      admitted_total: 4,
+      deferred_total: 0,
+      observed_deferral_total: 2,
+      transition_count: 1,
+    };
+    const host = parseRow({
+      id: "host-1",
+      name: "host-1",
+      status: "running",
+      region: "us-west3",
+      metadata: {
+        metrics: {
+          current: {
+            io_containment: ioContainment,
+            storage_admission: storageAdmission,
+          },
+        },
+      },
+    });
+
+    expect(host.metrics?.current?.io_containment).toEqual(ioContainment);
+    expect(host.metrics?.current?.storage_admission).toEqual(storageAdmission);
+  });
+
+  it("rejects malformed I/O control telemetry", () => {
+    const host = parseRow({
+      id: "host-1",
+      name: "host-1",
+      status: "running",
+      region: "us-west3",
+      metadata: {
+        metrics: {
+          current: {
+            io_containment: {
+              collected_at: "2026-07-29T12:00:00.000Z",
+              policy_mode: "unlimited",
+            },
+            storage_admission: {
+              schema_version: 1,
+              mode: "enforce",
+              pressure_state: "unknown",
+            },
+          },
+        },
+      },
+    });
+
+    expect(host.metrics?.current?.io_containment).toBeUndefined();
+    expect(host.metrics?.current?.storage_admission).toBeUndefined();
+  });
 });
 
 describe("parseRow BEES telemetry normalization", () => {

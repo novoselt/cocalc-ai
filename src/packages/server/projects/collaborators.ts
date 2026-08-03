@@ -2024,6 +2024,33 @@ function projectAccessRequestDisplayName(
   );
 }
 
+async function projectAccessRequestIdentity(
+  request: Pick<
+    ProjectAccessRequestRow,
+    | "requester_account_id"
+    | "requester_name"
+    | "requester_first_name"
+    | "requester_last_name"
+  >,
+): Promise<string> {
+  let account: Awaited<ReturnType<typeof getClusterAccountById>> = null;
+  try {
+    account = await getClusterAccountById(request.requester_account_id);
+  } catch (err) {
+    logger.warn("failed to resolve project access requester identity", {
+      err,
+      requester_account_id: request.requester_account_id,
+    });
+  }
+  const email = `${account?.email_address ?? ""}`.trim();
+  const name =
+    displayNameFromAccount(account) || projectAccessRequestDisplayName(request);
+  if (!name || name === request.requester_account_id) {
+    return email || request.requester_account_id;
+  }
+  return email && email !== name ? `${name} (${email})` : name;
+}
+
 function projectTitleForNotification(
   project_id: string,
   title?: string | null,
@@ -2074,12 +2101,12 @@ async function notifyProjectAccessRequestCreatedBestEffort({
       account_ids: target_account_ids,
       default_bay_id: source_bay_id,
     });
-    const requester = projectAccessRequestDisplayName(request);
+    const requester = await projectAccessRequestIdentity(request);
     const title = `${requester} requested ${request.requested_role} access`;
     const projectTitle = projectTitleForNotification(project_id, project_title);
     const body = request.message
-      ? `${requester} requested ${request.requested_role} access to **${projectTitle}**.\n\n> ${request.message}`
-      : `${requester} requested ${request.requested_role} access to **${projectTitle}**.`;
+      ? `Project: **${projectTitle}**\n\nNote from the requester: ${request.message}`
+      : `Project: **${projectTitle}**`;
     await createNotificationEventGraph({
       kind: "account_notice",
       source_bay_id,

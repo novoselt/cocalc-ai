@@ -44,10 +44,17 @@ import {
   CHAT_THREAD_META_ROW_DATE,
   addToHistory,
   threadConfigRecordKey,
+  type ChatThreadAnchor,
+  type ChatThreadResolvedMeta,
   type CodexThreadConfig,
   type ChatThreadAutomationConfig,
   type ChatThreadAutomationState,
 } from "@cocalc/chat";
+import {
+  chooseAnchorThread,
+  parseThreadAnchor,
+  parseThreadResolved,
+} from "./anchors";
 import {
   DEFAULT_CODEX_MODEL_NAME,
   normalizeCodexSessionId,
@@ -191,6 +198,8 @@ export interface PreparedChatSendIdentity {
 export interface ThreadMetadataSnapshot {
   thread_date?: string;
   name?: string;
+  anchor?: ChatThreadAnchor;
+  resolved?: ChatThreadResolvedMeta;
   thread_color?: string;
   thread_accent_color?: string;
   thread_icon?: string;
@@ -711,7 +720,10 @@ export class ChatActions extends Actions<ChatState> {
     }
     const key = `${project_id}:${account_id}`;
     if (this.projectReadStateKey === key && this.projectReadState != null) {
-      return this.projectReadState;
+      if (!this.projectReadState.isClosed?.()) {
+        return this.projectReadState;
+      }
+      this.clearProjectReadState();
     }
     if (this.projectReadStateKey === key && this.projectReadStateInit != null) {
       return undefined;
@@ -1127,11 +1139,13 @@ export class ChatActions extends Actions<ChatState> {
     threadAgent,
     threadAppearance,
     preserveSelectedThread,
+    anchor,
   }: {
     name?: string;
     threadAgent?: NewThreadAgentOptions;
     threadAppearance?: NewThreadAppearanceOptions;
     preserveSelectedThread?: boolean;
+    anchor?: ChatThreadAnchor;
   } = {}): string => {
     if (this.syncdb == null || this.store == null) {
       console.warn(
@@ -1146,6 +1160,9 @@ export class ChatActions extends Actions<ChatState> {
       threadAgent,
       threadAppearance,
     });
+    if (anchor != null) {
+      (threadConfigPatch as Record<string, unknown>).anchor = anchor;
+    }
     if (
       !this.setThreadConfigRecord(thread_id, threadConfigPatch, {
         threadId: thread_id,
@@ -1691,6 +1708,147 @@ export class ChatActions extends Actions<ChatState> {
     return true;
   };
 
+  setThreadAnchor = (
+    threadKey: string,
+    anchor: ChatThreadAnchor | null,
+  ): boolean => {
+    if (this.syncdb == null) {
+      return false;
+    }
+    if (
+      !this.setThreadConfigRecord(threadKey, {
+        anchor: anchor ?? null,
+      })
+    ) {
+      return false;
+    }
+    this.syncdb.commit();
+    return true;
+  };
+
+  // List every thread whose live anchor id equals anchorId (there can be
+  // more than one thread per anchor).  Resolved threads never match.
+  listAnchoredThreadKeys = (anchorId: string): string[] => {
+    const id = `${anchorId ?? ""}`.trim();
+    if (!id) return [];
+    const keys: string[] = [];
+    for (const row of this.listThreadConfigRows()) {
+      const threadId = `${(row as any)?.thread_id ?? ""}`.trim();
+      if (!threadId) continue;
+      if (parseThreadResolved((row as any)?.resolved) != null) continue;
+      const anchor = parseThreadAnchor((row as any)?.anchor);
+      if (anchor?.id === id) {
+        keys.push(threadId);
+      }
+    }
+    return keys;
+  };
+
+  // Sort key for a thread: newest message time, falling back to the
+  // config row's updated_at (config-only threads have no messages yet).
+  private threadRecencyTime = (threadId: string, row?: any): number => {
+    const fromIndex =
+      this.messageCache?.getThreadIndex?.()?.get(threadId)?.newestTime ?? 0;
+    const updatedAt = Date.parse(`${row?.updated_at ?? ""}`);
+    return Math.max(fromIndex, Number.isFinite(updatedAt) ? updatedAt : 0);
+  };
+
+  // Select the newest existing thread anchored to anchorId, or create a
+  // new empty anchored thread.  Returns the selected/created thread key.
+  // The selection policy (archived / resolved / hydration-race
+  // semantics) lives in chooseAnchorThread -- see anchors.ts.
+  findOrCreateAnchorThread = ({
+    anchorId,
+    label,
+    path,
+  }: {
+    anchorId: string;
+    label?: string;
+    path?: string;
+  }): string => {
+    const id = `${anchorId ?? ""}`.trim();
+    if (!id) return "";
+    const choice = chooseAnchorThread({
+      rows: this.listThreadConfigRows(),
+      anchorId: id,
+      recencyTime: this.threadRecencyTime,
+    });
+    if (choice.action === "select") {
+      this.clearAllFilters();
+      this.setSelectedThread(choice.key);
+      return choice.key;
+    }
+    return this.createAnchorThread({ anchorId: id, label, path });
+  };
+
+  // Always create a fresh empty thread anchored to anchorId.
+  createAnchorThread = ({
+    anchorId,
+    label,
+    path,
+  }: {
+    anchorId: string;
+    label?: string;
+    path?: string;
+  }): string => {
+    const id = `${anchorId ?? ""}`.trim();
+    if (!id) return "";
+    const anchor: ChatThreadAnchor = { id };
+    if (path) {
+      anchor.path = path;
+    }
+    return this.createEmptyThread({
+      name: label?.trim() || undefined,
+      anchor,
+    });
+  };
+
+  // Resolve an anchored thread: move the live anchor into resolved
+  // metadata so it no longer matches its source location.  Idempotent.
+  resolveAnchoredThread = (
+    threadKey: string,
+    opts: { label?: string } = {},
+  ): boolean => {
+    if (this.syncdb == null) {
+      return false;
+    }
+    const metadata = this.getThreadMetadata(threadKey, { threadId: threadKey });
+    if (metadata.resolved != null) {
+      return true;
+    }
+    const anchor = metadata.anchor;
+    if (anchor == null) {
+      return false;
+    }
+    const account_id = this.redux.getStore("account").get_account_id() ?? "";
+    const resolved: ChatThreadResolvedMeta = {
+      account_id,
+      at: new Date().toISOString(),
+      anchorId: anchor.id,
+    };
+    if (anchor.path) {
+      resolved.path = anchor.path;
+    }
+    const label = opts.label?.trim();
+    if (label) {
+      resolved.label = label;
+    }
+    if (
+      !this.setThreadConfigRecord(threadKey, {
+        anchor: null,
+        resolved,
+        // Resolved threads are archival: hide them from the normal
+        // thread sections and unread rollups (reuses the existing
+        // archive semantics); the composer is disabled separately.
+        archived: true,
+      })
+    ) {
+      return false;
+    }
+    this.syncdb.commit();
+    return true;
+  };
+
   markThreadRead = (
     threadKey: string,
     count: number,
@@ -1954,6 +2112,8 @@ export class ChatActions extends Actions<ChatState> {
     return {
       thread_date: this.getThreadRootDateIso(normalizedThreadId),
       name: readString("name"),
+      anchor: parseThreadAnchor(field<any>(cfg, "anchor")),
+      resolved: parseThreadResolved(field<any>(cfg, "resolved")),
       thread_color: readString("thread_color"),
       thread_accent_color: readString("thread_accent_color"),
       thread_icon: readString("thread_icon"),

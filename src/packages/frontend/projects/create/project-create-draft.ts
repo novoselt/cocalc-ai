@@ -93,6 +93,16 @@ function isRootfsProjectPreset(
   return mode === "standard" || mode === "gpu" || mode === "teaching";
 }
 
+export function rootfsEntryMatchesProjectMode(
+  entry: RootfsImageEntry,
+  mode: ProjectCreateMode,
+): boolean {
+  if (!isRootfsProjectPreset(mode)) return true;
+  if (mode === "gpu" && entry.gpu === true) return true;
+  const tags = normalizedRootfsTags(entry);
+  return ROOTFS_PROJECT_PRESET_TAGS[mode].some((tag) => tags.has(tag));
+}
+
 function rootfsPresetTagRank(
   entry: RootfsImageEntry,
   mode: ProjectCreateMode,
@@ -213,8 +223,11 @@ function defaultRootfsForDraft({
   context: ProjectCreateContext;
 }): ProjectRootfsSelection {
   const gpu = wantsGpu(draft, context);
+  const images = context.rootfsImages.filter((entry) =>
+    rootfsEntryMatchesProjectMode(entry, draft.mode),
+  );
   const entry = chooseNewProjectRootfsDefault({
-    images: context.rootfsImages,
+    images,
     isGpu: gpu,
     isAdmin: context.isAdmin,
     preferredImages: preferredRootfsImages({ draft, context, gpu }),
@@ -319,10 +332,15 @@ export function applyProjectPreset(
   mode: ProjectCreateMode,
   context: ProjectCreateContext,
 ): ProjectCreateDraft {
+  const selectedHost = selectedHostForDraft(draft, context);
   return normalizeProjectDraft(
     {
       ...draft,
       mode,
+      host_id:
+        mode === "gpu" && selectedHost?.gpu !== true
+          ? undefined
+          : draft.host_id,
       rootfs_touched: false,
     },
     context,

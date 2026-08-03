@@ -427,7 +427,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
       a.save_input_editor();
     }
 
-    if (!this.jupyter_actions.syncdb?.has_unsaved_changes()) {
+    if (!this.jupyter_actions.hasPendingIpynbChanges()) {
       return;
     }
 
@@ -557,11 +557,9 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     this.close_recently_focused_frame_of_type("introspect");
   }
 
-  async gotoFragment(fragmentId: FragmentId) {
-    if (fragmentId.chat) {
-      // deal with side chat in base class
-      await super.gotoFragment(fragmentId);
-    }
+  // Focus a notebook frame (preferring an existing one) and scroll to the
+  // given cell.  Returns the frame id used, or undefined if none is ready.
+  private async focusNotebookFrame(): Promise<string | undefined> {
     // Prefer an existing notebook frame (minimal or default) rather than
     // always creating a jupyter_cell_notebook which overrides the saved layout.
     const existingMinimal =
@@ -573,6 +571,44 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
       type: frameType,
       syncdoc: this.jupyter_actions.syncdb,
     });
+    return frameId ? frameId : undefined;
+  }
+
+  // 1-based human label for a cell, e.g. "Cell 3"; undefined if the cell
+  // no longer exists.
+  public getCellLabel(cellId: string): string | undefined {
+    const cellList = this.jupyter_actions.store.get("cell_list");
+    if (cellList == null) return undefined;
+    const index = cellList.indexOf(cellId);
+    if (index === -1) return undefined;
+    return `Cell ${index + 1}`;
+  }
+
+  // Anchored side-chat thread adapter (shared chat UI duck-types on
+  // these; the anchor id for Jupyter is the cell's UUID).
+  public jumpToAnchor = (anchorId: string): void => {
+    this.jump_to_cell(anchorId, "top");
+  };
+
+  public canJumpToAnchor = (anchorId: string): boolean => {
+    const cellList = this.jupyter_actions.store.get("cell_list");
+    return cellList?.includes(anchorId) === true;
+  };
+
+  public getMissingAnchorMessage = (_anchorId: string): string => {
+    return "This cell was deleted";
+  };
+
+  public getAnchorLabel = (anchorId: string): string | undefined => {
+    return this.getCellLabel(anchorId);
+  };
+
+  async gotoFragment(fragmentId: FragmentId) {
+    if (fragmentId.chat) {
+      // deal with side chat in base class
+      await super.gotoFragment(fragmentId);
+    }
+    const frameId = await this.focusNotebookFrame();
     if (!frameId) return;
     const { id, anchor } = fragmentId;
 
@@ -693,14 +729,14 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
 
   languageModelGetLanguage(): string {
     return (
-      this.jupyter_actions.store?.getIn(["kernel_info", "language"]) ?? "py"
+      this.jupyter_actions?.store?.getIn(["kernel_info", "language"]) ?? "py"
     );
   }
 
   // used to add extra context like ", which is a Jupyter notebook using the Python 3 kernel"
   languageModelExtraFileInfo(): string {
     const kernel =
-      this.jupyter_actions.store.getIn(["kernel_info", "display_name"]) ?? "";
+      this.jupyter_actions?.store?.getIn(["kernel_info", "display_name"]) ?? "";
     return `Jupyter notebook using the ${kernel} kernel`;
   }
 
@@ -717,7 +753,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
 
   codexCodeDescription(): string {
     const kernel =
-      this.jupyter_actions.store.getIn(["kernel_info", "display_name"]) ?? "";
+      this.jupyter_actions?.store?.getIn(["kernel_info", "display_name"]) ?? "";
     return `Jupyter notebook using the ${kernel} kernel`;
   }
 

@@ -6,14 +6,34 @@ const SETTINGS_FIELDS = ["memory", "memory_request", "disk_quota"] as const;
 type SettingsField = (typeof SETTINGS_FIELDS)[number];
 export type MembershipProjectDefaults = Partial<Record<SettingsField, number>>;
 export type MembershipIoClass = "standard" | "member" | "premium";
+export type MembershipRuntimeScheduling = {
+  io_class: MembershipIoClass;
+  shared_compute_priority: number;
+};
+
+export function normalizeSharedComputePriority(priority: unknown): number {
+  const value = Number(priority);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
 
 export function ioClassFromSharedComputePriority(
   priority: unknown,
 ): MembershipIoClass {
-  const value = Number(priority);
-  if (!Number.isFinite(value) || value <= 0) return "standard";
+  const value = normalizeSharedComputePriority(priority);
+  if (value <= 0) return "standard";
   if (value >= 4) return "premium";
   return "member";
+}
+
+export function runtimeSchedulingFromSharedComputePriority(
+  priority: unknown,
+): MembershipRuntimeScheduling {
+  const shared_compute_priority = normalizeSharedComputePriority(priority);
+  return {
+    shared_compute_priority,
+    io_class: ioClassFromSharedComputePriority(shared_compute_priority),
+  };
 }
 
 function coerceNumber(value: unknown): number | undefined {
@@ -66,12 +86,12 @@ export async function getMembershipProjectDefaultsForAccount(
   );
 }
 
-export async function getMembershipIoClassForAccount(
+export async function getMembershipRuntimeSchedulingForAccount(
   account_id?: string,
-): Promise<MembershipIoClass> {
-  if (!account_id) return "standard";
+): Promise<MembershipRuntimeScheduling> {
+  if (!account_id) return runtimeSchedulingFromSharedComputePriority(0);
   const resolution = await resolveMembershipForAccount(account_id);
-  return ioClassFromSharedComputePriority(
+  return runtimeSchedulingFromSharedComputePriority(
     resolution.effective_limits?.shared_compute_priority ??
       resolution.entitlements?.usage_limits?.shared_compute_priority,
   );

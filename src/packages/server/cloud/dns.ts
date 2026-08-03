@@ -8,6 +8,10 @@ import { resolvePublicViewerDns } from "@cocalc/util/public-viewer-origin";
 
 // Default TTL is ignored by Cloudflare when proxied.
 const TTL = 120;
+const CLOUDFLARE_API_TIMEOUT_MS = Math.max(
+  5_000,
+  Number(process.env.COCALC_CLOUDFLARE_API_TIMEOUT_MS) || 15_000,
+);
 
 const logger = getLogger("server:cloud:dns");
 
@@ -51,6 +55,17 @@ type DnsRecord = {
   name?: string;
   content?: string;
   type?: string;
+  proxied?: boolean;
+};
+
+export type HostDnsObservation = {
+  name: string;
+  records: Array<{
+    record_id: string;
+    type: string;
+    content: string;
+    proxied: boolean;
+  }>;
 };
 
 export type CloudflareZoneSslMode = {
@@ -107,6 +122,7 @@ async function cloudflareRequest<T>(
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(CLOUDFLARE_API_TIMEOUT_MS),
   });
   let data: CloudflareResponse<T> | undefined;
   try {
@@ -159,6 +175,7 @@ async function getZoneId(token: string, dns: string) {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(CLOUDFLARE_API_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(
@@ -305,6 +322,35 @@ export async function ensureHostDns(opts: {
     ipAddress: opts.ipAddress,
     record_id: opts.record_id,
   });
+}
+
+export async function inspectHostDns(opts: {
+  host_id: string;
+}): Promise<HostDnsObservation> {
+  if (!opts.host_id) throw new Error("host_id required for DNS inspection");
+
+  const { settings } = await getClient();
+  const name = deriveProjectHostHostname(opts.host_id, settings);
+  if (!name) throw new Error("cloudflare DNS not configured");
+  const { token } = await getClient();
+  const zoneId = await getZoneIdForHostname(token, name);
+  const records = (await listDnsRecordsByName(token, zoneId, name))
+    .filter((record) =>
+      ADDRESS_ROUTE_RECORD_TYPES.has(`${record.type ?? ""}`.toUpperCase()),
+    )
+    .flatMap((record) => {
+      const record_id = `${record.id ?? ""}`.trim();
+      if (!record_id) return [];
+      return [
+        {
+          record_id,
+          type: `${record.type ?? ""}`.trim().toUpperCase(),
+          content: `${record.content ?? ""}`.trim(),
+          proxied: record.proxied === true,
+        },
+      ];
+    });
+  return { name, records };
 }
 
 export async function ensureProxiedAddressDns(opts: {
@@ -463,14 +509,14 @@ export function projectHostSslRuleExpression(opts: {
   const hostId = `${opts.hostId ?? ""}`.trim().toLowerCase();
   const labels = hostname.split(".").filter(Boolean);
   const idOffset = labels[0]?.indexOf(hostId) ?? -1;
-  const zoneHostname =
-    normalizeCloudflareHostname(opts.zoneHostname) ?? labels.slice(1).join(".");
+  const explicitZoneHostname = normalizeCloudflareHostname(opts.zoneHostname);
+  const zoneHostname = explicitZoneHostname ?? labels.slice(1).join(".");
   if (
     !hostname ||
     !hostId ||
     idOffset <= 0 ||
     !zoneHostname ||
-    !hostname.endsWith(`.${zoneHostname}`)
+    (!explicitZoneHostname && !hostname.endsWith(`.${zoneHostname}`))
   ) {
     throw new Error(
       "cannot derive project-host Cloudflare SSL rule expression",
@@ -483,6 +529,10 @@ export function projectHostSslRuleExpression(opts: {
     `(starts_with(http.host, ${JSON.stringify(stablePrefix)}) and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     " or ",
     `(starts_with(http.host, "direct-check-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
+    " or ",
+    `(starts_with(http.host, "dev-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
+    " or ",
+    `(starts_with(http.host, "exam-") and ends_with(http.host, ${JSON.stringify(zoneSuffix)}))`,
     ")",
   ].join("");
 }
@@ -504,9 +554,10 @@ function configurationRuleMatches(
 export async function ensureCloudflareProjectHostSslRule(opts: {
   hostname: string;
   host_id: string;
+  zone_hostname?: string;
 }): Promise<CloudflareProjectHostSslRule> {
   const { token, zoneId, zoneHostname } = await getZoneClientForHostname(
-    opts.hostname,
+    opts.zone_hostname ?? opts.hostname,
   );
   const expression = projectHostSslRuleExpression({
     hostname: opts.hostname,
@@ -627,6 +678,7 @@ export async function ensureHostnameCnameDns(opts: {
   hostname: string;
   target_hostname: string;
   record_id?: string;
+  adopt_existing?: boolean;
 }): Promise<{ record_id: string }> {
   const hostname = `${opts.hostname ?? ""}`.trim().toLowerCase();
   const target = `${opts.target_hostname ?? ""}`.trim().toLowerCase();
@@ -688,6 +740,18 @@ export async function ensureHostnameCnameDns(opts: {
     }
   }
   if (!record_id) {
+    if (opts.adopt_existing === false) {
+      const existingRecords = await listDnsRecordsByName(
+        token,
+        zoneId,
+        hostname,
+      );
+      if (existingRecords.length > 0) {
+        throw new Error(
+          `refusing to replace existing DNS record for '${hostname}'`,
+        );
+      }
+    }
     if (!recordIds.length) {
       await deleteAddressRecordsConflictingWithCname({
         token,
@@ -729,6 +793,7 @@ export async function ensureAppSubdomainDns(opts: {
   hostname: string;
   target_hostname: string;
   record_id?: string;
+  adopt_existing?: boolean;
 }): Promise<{ record_id: string }> {
   return await ensureHostnameCnameDns(opts);
 }

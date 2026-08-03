@@ -259,6 +259,98 @@ describe("projects.start", () => {
     expect(publishLroSummaryMock).toHaveBeenCalled();
   });
 
+  it("returns a terminal acknowledgement for a fast bounded foreground start", async () => {
+    const { start } = await import("./projects");
+
+    const response = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      wait: false,
+      foreground_wait_ms: 5_000,
+    });
+
+    expect(response).toEqual({
+      op_id: "op-1",
+      scope_type: "project",
+      scope_id: "proj-1",
+      service: "persist-service",
+      stream_name: "stream:op-1",
+      terminal_status: "succeeded",
+    });
+    expect(updateLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "succeeded" }),
+    );
+  });
+
+  it("does not delay foreground acknowledgement for historical LRO cleanup", async () => {
+    supersedeOlderProjectStartLrosMock.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const { start } = await import("./projects");
+
+    await expect(
+      start({
+        account_id: "acct-1",
+        project_id: "proj-1",
+        wait: false,
+        foreground_wait_ms: 5_000,
+      }),
+    ).resolves.toMatchObject({ terminal_status: "succeeded" });
+    expect(supersedeOlderProjectStartLrosMock).toHaveBeenCalledWith({
+      project_id: "proj-1",
+      keep_op_id: "op-1",
+    });
+  });
+
+  it("returns the LRO while a bounded foreground start continues", async () => {
+    let finishStart: (() => void) | undefined;
+    interBayStartMock = jest.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishStart = resolve;
+        }),
+    );
+    const { start } = await import("./projects");
+
+    const response = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      wait: false,
+      foreground_wait_ms: 5,
+    });
+
+    expect(response).toEqual({
+      op_id: "op-1",
+      scope_type: "project",
+      scope_id: "proj-1",
+      service: "persist-service",
+      stream_name: "stream:op-1",
+    });
+    expect(
+      updateLroMock.mock.calls.some(([opts]) => opts.status === "succeeded"),
+    ).toBe(false);
+
+    finishStart?.();
+    await flushBackgroundStartTask();
+    expect(updateLroMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "succeeded" }),
+    );
+  });
+
+  it("rejects an invalid foreground wait before creating an LRO", async () => {
+    const { start } = await import("./projects");
+
+    await expect(
+      start({
+        account_id: "acct-1",
+        project_id: "proj-1",
+        wait: false,
+        foreground_wait_ms: 5_001,
+      }),
+    ).rejects.toThrow("foreground_wait_ms must be an integer");
+    expect(createLroMock).not.toHaveBeenCalled();
+  });
+
   it("does not initialize optional progress mirroring before project start", async () => {
     mirrorStartLroProgressMock = jest.fn(() => new Promise(() => undefined));
     const { start } = await import("./projects");
@@ -314,7 +406,130 @@ describe("projects.start", () => {
     ).toHaveLength(1);
     expect(createLroDetailedMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        dedupe_key: "project-start:start:default",
+        dedupe_key: "project-start",
+      }),
+    );
+  });
+
+  it("returns a terminal acknowledgement when joining a fast active start", async () => {
+    let created = true;
+    let finishStart: (() => void) | undefined;
+    interBayStartMock = jest.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishStart = resolve;
+        }),
+    );
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: created ? ((created = false), true) : false,
+    }));
+    getLroMock = jest.fn(async () => ({
+      op_id: "op-1",
+      kind: "project-start",
+      scope_type: "project",
+      scope_id: "proj-1",
+      status: "succeeded",
+    }));
+    const { start } = await import("./projects");
+
+    const first = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      wait: false,
+    });
+    const joined = await start({
+      account_id: "acct-2",
+      project_id: "proj-1",
+      wait: false,
+      foreground_wait_ms: 5_000,
+    });
+
+    expect(joined).toEqual({
+      ...first,
+      terminal_status: "succeeded",
+    });
+    expect(getLroMock).toHaveBeenCalledWith("op-1");
+    expect(interBayStartMock).toHaveBeenCalledTimes(1);
+
+    finishStart?.();
+    await flushBackgroundStartTask();
+  });
+
+  it("propagates terminal failure when joining an active start", async () => {
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: false,
+    }));
+    getLroMock = jest.fn(async () => ({
+      op_id: "op-1",
+      kind: "project-start",
+      scope_type: "project",
+      scope_id: "proj-1",
+      status: "failed",
+      error: "runtime failed",
+    }));
+    const { start } = await import("./projects");
+
+    await expect(
+      start({
+        account_id: "acct-2",
+        project_id: "proj-1",
+        wait: false,
+        foreground_wait_ms: 5_000,
+      }),
+    ).rejects.toThrow("runtime failed");
+    expect(interBayStartMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let autostart supersede an active backup restore", async () => {
+    let created = true;
+    createLroDetailedMock = jest.fn(async (...args: any[]) => ({
+      lro: await createLroMock(...args),
+      created: created ? ((created = false), true) : false,
+    }));
+    const { start } = await import("./projects");
+
+    const restore = await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      restore_backup_id: "backup-1",
+      wait: false,
+    });
+    const autostart = await start({
+      account_id: "acct-2",
+      project_id: "proj-1",
+      autostart: true,
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(restore.op_id).toBe("op-1");
+    expect(autostart.op_id).toBe("op-1");
+    expect(createLroDetailedMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          restore_backup_id: "backup-1",
+        }),
+        dedupe_key: "project-start",
+      }),
+    );
+    expect(createLroDetailedMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          autostart: true,
+        }),
+        dedupe_key: "project-start",
+      }),
+    );
+    expect(interBayStartMock).toHaveBeenCalledTimes(1);
+    expect(interBayStartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: "proj-1",
+        restore_backup_id: "backup-1",
+        lro_op_id: "op-1",
       }),
     );
   });
@@ -349,6 +564,47 @@ describe("projects.start", () => {
       source_bay_id: "bay-0",
       epoch: 0,
     });
+  });
+
+  it("forwards an internally authorized project move id", async () => {
+    const { start, PROJECT_DANGEROUS_INTERNAL_AUTH } =
+      await import("./projects");
+
+    await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      restore_backup_id: "backup-1",
+      project_move_id: "move-1",
+      project_move_auth: PROJECT_DANGEROUS_INTERNAL_AUTH,
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(interBayCheckStartAdmissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: "move-1" }),
+    );
+    expect(interBayStartMock).toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: "move-1" }),
+    );
+  });
+
+  it("does not forward a caller-supplied project move id", async () => {
+    const { start } = await import("./projects");
+
+    await start({
+      account_id: "acct-1",
+      project_id: "proj-1",
+      project_move_id: "move-1",
+      wait: false,
+    });
+    await flushBackgroundStartTask();
+
+    expect(interBayCheckStartAdmissionMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: expect.anything() }),
+    );
+    expect(interBayStartMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ project_move_id: expect.anything() }),
+    );
   });
 
   it("uses finalized migration backup id when starting archived migration destination", async () => {

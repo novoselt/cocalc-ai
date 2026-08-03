@@ -34,6 +34,10 @@ import { countRunningAcpTurnLeasesForWorker } from "@cocalc/lite/hub/sqlite/acp-
 import { getSoftwareVersions } from "../../software";
 import { getProjectHostConatClient } from "../../runtime-client";
 import { getProjectHostProcessTitle } from "../../process-role";
+import {
+  readProjectHostAcpWorkerTarget,
+  writeProjectHostAcpWorkerTarget,
+} from "./worker-target";
 
 const logger = getLogger("project-host:hub:acp:worker-manager");
 const ACP_WORKER_PID_FILE = path.join(data, "acp-worker.pid");
@@ -71,7 +75,12 @@ const ACP_WORKER_QUEUE_STALL_MS = Math.max(
 
 let supervisorStarted = false;
 let workerEntryPoint: string | undefined;
-let ensureWorkerPromise: Promise<boolean> | undefined;
+let ensureWorkerPromise:
+  | {
+      replaceMismatchedBundle: boolean;
+      promise: Promise<boolean>;
+    }
+  | undefined;
 let workerSpawnAttemptCount = 0;
 let nextWorkerSpawnAllowedAt = 0;
 
@@ -119,10 +128,12 @@ export function planProjectHostAcpWorkerRollout({
   workers,
   launch,
   drainingWorkerIds,
+  preserveMismatchedActive = false,
 }: {
   workers: WorkerProcessInfo[];
   launch: WorkerLaunch;
   drainingWorkerIds?: Iterable<string>;
+  preserveMismatchedActive?: boolean;
 }): ProjectHostAcpWorkerRolloutPlan {
   const drainingIds = new Set(drainingWorkerIds ?? []);
   const matchingCurrent = workers
@@ -132,7 +143,13 @@ export function planProjectHostAcpWorkerRollout({
         !drainingIds.has(workerIdOf(worker)),
     )
     .sort((left, right) => right.pid - left.pid);
-  const activePid = matchingCurrent[0]?.pid;
+  const preservedMismatched =
+    preserveMismatchedActive && matchingCurrent.length === 0
+      ? workers
+          .filter((worker) => !drainingIds.has(workerIdOf(worker)))
+          .sort((left, right) => right.pid - left.pid)
+      : [];
+  const activePid = matchingCurrent[0]?.pid ?? preservedMismatched[0]?.pid;
   const drainingPids: number[] = [];
   const terminatePids: number[] = [];
   for (const worker of workers) {
@@ -219,7 +236,8 @@ function noteProjectHostAcpWorkerSpawn(now = Date.now()): {
 
 export function resolveProjectHostAcpWorkerLaunch({
   command = process.env.COCALC_PROJECT_HOST_DAEMON_EXEC ?? process.execPath,
-  entryPoint = workerEntryPoint,
+  entryPoint = readProjectHostAcpWorkerTarget()?.entry_point ??
+    workerEntryPoint,
 }: {
   command?: string;
   entryPoint?: string;
@@ -257,6 +275,13 @@ function safeRealpath(value?: string): string | undefined {
 }
 
 function resolveProjectHostWorkerBundlePath(launch: WorkerLaunch): string {
+  const target = readProjectHostAcpWorkerTarget();
+  if (
+    target &&
+    launch.resolvedEntryPoint === path.resolve(target.entry_point)
+  ) {
+    return target.bundle_path;
+  }
   const explicit =
     `${process.env.COCALC_PROJECT_HOST_BUNDLE_PATH ?? ""}`.trim() ||
     `${process.env.COCALC_PROJECT_HOST_CURRENT ?? ""}`.trim();
@@ -269,6 +294,8 @@ function resolveProjectHostWorkerBundlePath(launch: WorkerLaunch): string {
 }
 
 function resolveProjectHostWorkerBundleVersion(bundlePath: string): string {
+  const target = readProjectHostAcpWorkerTarget();
+  if (target?.bundle_path === bundlePath) return target.build_id;
   const explicit = `${process.env.COCALC_PROJECT_HOST_VERSION ?? ""}`.trim();
   if (explicit) return explicit;
   const software = getSoftwareVersions();
@@ -789,7 +816,11 @@ function reconcileStaleAcpWorkerRows({
   });
 }
 
-async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
+async function reconcileProjectHostAcpWorkers({
+  replaceMismatchedBundle = false,
+}: {
+  replaceMismatchedBundle?: boolean;
+} = {}): Promise<number | undefined> {
   const launch = workerLaunchSignature();
   const { managedWorkers: observedWorkers } =
     partitionManageableProjectHostAcpWorkers({
@@ -894,6 +925,7 @@ async function reconcileProjectHostAcpWorkers(): Promise<number | undefined> {
     planProjectHostAcpWorkerRollout({
       workers: workers.map(({ status, ...worker }) => worker),
       launch,
+      preserveMismatchedActive: !replaceMismatchedBundle,
       drainingWorkerIds: workers
         .map((worker) => {
           return worker.status?.state === "draining"
@@ -1003,11 +1035,14 @@ function spawnProjectHostAcpWorker({
 
 async function ensureProjectHostAcpWorkerRunningOnce({
   restartReason,
+  replaceMismatchedBundle,
 }: {
   restartReason?: string;
+  replaceMismatchedBundle?: boolean;
 } = {}): Promise<boolean> {
   const existingPid =
-    (await reconcileProjectHostAcpWorkers()) ?? readWorkerPid();
+    (await reconcileProjectHostAcpWorkers({ replaceMismatchedBundle })) ??
+    readWorkerPid();
   if (isPidAlive(existingPid)) {
     resetProjectHostAcpWorkerSpawnBackoff();
     return true;
@@ -1017,18 +1052,31 @@ async function ensureProjectHostAcpWorkerRunningOnce({
 
 export async function ensureProjectHostAcpWorkerRunning({
   restartReason,
+  replaceMismatchedBundle,
 }: {
   restartReason?: string;
+  replaceMismatchedBundle?: boolean;
 } = {}): Promise<boolean> {
+  const replacementRequested = replaceMismatchedBundle === true;
   if (ensureWorkerPromise != null) {
-    return await ensureWorkerPromise;
+    const active = ensureWorkerPromise;
+    const result = await active.promise;
+    if (active.replaceMismatchedBundle || !replacementRequested) {
+      return result;
+    }
   }
-  const promise = ensureProjectHostAcpWorkerRunningOnce({ restartReason });
-  ensureWorkerPromise = promise;
+  const promise = ensureProjectHostAcpWorkerRunningOnce({
+    restartReason,
+    replaceMismatchedBundle,
+  });
+  ensureWorkerPromise = {
+    replaceMismatchedBundle: replacementRequested,
+    promise,
+  };
   try {
     return await promise;
   } finally {
-    if (ensureWorkerPromise === promise) {
+    if (ensureWorkerPromise?.promise === promise) {
       ensureWorkerPromise = undefined;
     }
   }
@@ -1036,9 +1084,14 @@ export async function ensureProjectHostAcpWorkerRunning({
 
 export async function rolloutProjectHostAcpWorker({
   restartReason = "managed_component_rollout",
+  desiredVersion,
 }: {
   restartReason?: string;
+  desiredVersion?: string;
 } = {}): Promise<ProjectHostAcpWorkerRolloutOutcome> {
+  if (desiredVersion) {
+    writeProjectHostAcpWorkerTarget(desiredVersion);
+  }
   const launch = workerLaunchSignature();
   const { managedWorkers: workers } = partitionManageableProjectHostAcpWorkers({
     workers: listProjectHostAcpWorkers(),
@@ -1075,7 +1128,10 @@ export async function rolloutProjectHostAcpWorker({
       ),
   });
   if (plan.activePid == null) {
-    const spawned = await ensureProjectHostAcpWorkerRunning({ restartReason });
+    const spawned = await ensureProjectHostAcpWorkerRunning({
+      restartReason,
+      replaceMismatchedBundle: true,
+    });
     return spawned
       ? {
           action: "spawned",
@@ -1096,7 +1152,10 @@ export async function rolloutProjectHostAcpWorker({
       cmdline: activeWorker.cmdline,
     });
     await terminateWorker(activeWorker, "rollout_replacement");
-    const spawned = await ensureProjectHostAcpWorkerRunning({ restartReason });
+    const spawned = await ensureProjectHostAcpWorkerRunning({
+      restartReason,
+      replaceMismatchedBundle: true,
+    });
     return spawned
       ? {
           action: "spawned",
@@ -1117,7 +1176,10 @@ export async function rolloutProjectHostAcpWorker({
       `failed requesting drain for ACP worker ${workerIdOf(activeWorker) || activeWorker.pid}`,
     );
   }
-  await ensureProjectHostAcpWorkerRunning({ restartReason });
+  await ensureProjectHostAcpWorkerRunning({
+    restartReason,
+    replaceMismatchedBundle: true,
+  });
   return {
     action: "drain_requested",
     pid: activeWorker.pid,

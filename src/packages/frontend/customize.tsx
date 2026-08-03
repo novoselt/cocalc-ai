@@ -25,6 +25,7 @@ import { Locale } from "@cocalc/frontend/i18n";
 import { callback2, retry_until_success } from "@cocalc/util/async-utils";
 import type { AIServicesAvailable } from "@cocalc/util/db-schema/ai-models";
 import type { SignupEmailDomainPublicPolicy } from "@cocalc/util/accounts/signup-email-domain-policy";
+import type { EmailAuthenticationMode } from "@cocalc/util/auth/email-auth";
 import {
   Config,
   PLATFORM_MODE_CLOUD,
@@ -36,9 +37,15 @@ import { deep_copy, dict } from "@cocalc/util/misc";
 import * as theme from "@cocalc/util/theme";
 import type { CustomAIModelPublic } from "@cocalc/util/types/ai";
 import { DefaultQuotaSetting, Upgrades } from "@cocalc/util/upgrades/quota";
+import type { ProjectRuntimeConfiguration } from "@cocalc/util/project-runtime";
 export { TermsOfService } from "@cocalc/frontend/customize/terms-of-service";
 import { delay } from "awaiting";
 import { init as initLite } from "./lite";
+import { setExamModeConfiguration } from "./customize/exam-mode";
+import {
+  applyExamSessionBootstrap,
+  type ExamSessionBootstrap,
+} from "./customize/exam-bootstrap";
 
 // update every 2 minutes.
 const UPDATE_INTERVAL = 2 * 60000;
@@ -101,6 +108,7 @@ export interface CustomizeState {
   dns: string; // e.g. "cocalc.ai"
   public_viewer_dns?: string;
   email_enabled: false;
+  email_authentication_mode?: EmailAuthenticationMode;
   email_signup: boolean;
   public_signup_without_registration_token: boolean;
   cookie_banner_enabled?: boolean;
@@ -178,8 +186,11 @@ export interface CustomizeState {
   i18n?: List<Locale>;
 
   lite?: boolean;
+  exam_mode?: boolean;
+  terminal_enabled?: boolean;
   account_id?: string;
   project_id?: string;
+  project_runtime?: ProjectRuntimeConfiguration;
 }
 
 export class CustomizeStore extends Store<CustomizeState> {
@@ -250,9 +261,16 @@ async function loadCustomizeState() {
     strategies,
     ollama = null, // the derived public information
     custom_openai = null,
+    exam_session,
   } = customize;
   processLite(configuration);
   processPlatformMode(configuration);
+  if (configuration.exam_mode === true) {
+    applyExamSessionBootstrap({
+      redux,
+      session: exam_session as ExamSessionBootstrap | undefined,
+    });
+  }
   process_customize(configuration); // this sets _is_configured to true
   process_ollama(ollama);
   process_custom_openai(custom_openai);
@@ -299,6 +317,7 @@ function process_customize(obj) {
   // always set time, so other code can know for sure that customize was loaded.
   // it also might be helpful to know when
   obj["time"] = Date.now();
+  setExamModeConfiguration(obj.exam_mode === true);
   set_customize(obj);
 }
 

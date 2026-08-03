@@ -75,6 +75,7 @@ import { type Filesystem, type Stats } from "@cocalc/conat/files/fs";
 import { getLogger } from "@cocalc/conat/logger";
 import * as remote from "./remote";
 import type { JSONValue } from "@cocalc/util/types";
+import { rebaseLocalDocument } from "./rebase-local-document";
 
 const fallbackCursorPresence = new PatchflowMemoryPresenceAdapter();
 
@@ -845,6 +846,9 @@ export class SyncDoc extends EventEmitter {
   };
 
   exit_undo_mode = (): void => {
+    if (!this.undo_mode) {
+      return;
+    }
     this.undo_mode = false;
     if (this.patchflowReady()) {
       this.patchflowSession?.resetUndo();
@@ -1866,16 +1870,7 @@ export class SyncDoc extends EventEmitter {
       this.patchflowSession.on("cursors", this.handlePatchflowCursors);
     }
     this.patchflowSession.on("patch", this.handlePatchflowPatch);
-    this.patchflowSession.on("change", (doc) => {
-      const next = doc as Document;
-      if (!this.doc || !this.doc.is_equal(next)) {
-        this.last = this.doc = next;
-        if (this.state === "ready") {
-          this.emit("after-change");
-          this.emit_change();
-        }
-      }
-    });
+    this.patchflowSession.on("change", this.handlePatchflowChange);
     try {
       await this.patchflowSession.init();
     } catch (err) {
@@ -3213,6 +3208,28 @@ export class SyncDoc extends EventEmitter {
     }
   };
 
+  private handlePatchflowChange = (doc: Document): void => {
+    const committed = doc as Document;
+    const previous = this.doc;
+    const next =
+      previous == null
+        ? committed
+        : rebaseLocalDocument({
+            base: this.last,
+            draft: previous,
+            committed,
+          });
+    this.last = committed;
+    this.doc = next;
+    if (previous != null && previous.is_equal(next) && this.state === "ready") {
+      return;
+    }
+    if (this.state === "ready") {
+      this.emit("after-change");
+      this.emit_change();
+    }
+  };
+
   private patchflowPrevSeqForMoreHistory = (): number | undefined => {
     if (!this.patchflowReady() || this.patchflowSession == null) return;
     const history = this.patchflowSession.history({ includeSnapshots: true });
@@ -3377,8 +3394,8 @@ export class SyncDoc extends EventEmitter {
     if (!this.patchflowReady() || this.patchflowSession == null) {
       throw new Error("patchflow session is not initialized");
     }
-    const next = this.doc;
-    if (next == null) {
+    const draft = this.doc;
+    if (draft == null) {
       return false;
     }
     let current: Document | undefined;
@@ -3394,6 +3411,14 @@ export class SyncDoc extends EventEmitter {
       // session not initialized yet
       return false;
     }
+    // A remote patch can advance the committed graph while this.doc still
+    // contains a local draft. Replay only the local delta onto that graph.
+    const next = rebaseLocalDocument({
+      base: this.last,
+      draft,
+      committed: current,
+    });
+    this.doc = next;
     const compareAgainst = current;
     if (
       !allowDuplicate &&
@@ -3451,6 +3476,12 @@ export class SyncDoc extends EventEmitter {
     allowDuplicate?: boolean;
     meta?: { [key: string]: JSONValue };
   } = {}): boolean => {
+    // UI callbacks can briefly retain a sync document while it is opening or
+    // after teardown. A disconnected ready document still has patchflow and
+    // must continue accepting offline edits; only a missing session is a no-op.
+    if (!this.patchflowReady() || this.patchflowSession == null) {
+      return false;
+    }
     return this.commitWithPatchflow({
       emitChangeImmediately,
       file,

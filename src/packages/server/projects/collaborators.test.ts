@@ -2171,113 +2171,140 @@ describe("project collaborators local bay access", () => {
     });
   });
 
-  it("lets a non-member request viewer access", async () => {
-    const requestId = "88888888-8888-4888-8888-888888888888";
-    queryMock = jest.fn(async (sql: string) => {
-      if (sql.includes("AS current_group")) {
-        return {
-          rows: [
-            {
-              title: "Private Project",
-              users: {
-                [TARGET_ACCOUNT_ID]: { group: "owner" },
-              },
-              manage_users_owner_only: false,
-              current_group: null,
-              blocked: false,
-            },
-          ],
-        };
-      }
-      if (sql.includes("INSERT INTO project_access_requests")) {
-        return { rows: [{ request_id: requestId }] };
-      }
-      if (sql.includes("FROM project_access_requests r")) {
-        return {
-          rows: [
-            {
-              request_id: requestId,
-              project_id: PROJECT_ID,
-              project_title: "Private Project",
-              requester_account_id: ACCOUNT_ID,
-              requester_name: "Requester",
-              requester_first_name: "Request",
-              requester_last_name: "User",
-              requester_profile: null,
-              requested_role: "viewer",
-              read_policy: null,
-              message: "Please let me view this.",
-              status: "pending",
-              source: "project-url",
-              created: new Date("2026-05-29T00:00:00Z"),
-              updated: new Date("2026-05-29T00:00:00Z"),
-              decided: null,
-              decided_by_account_id: null,
-              decision_message: null,
-            },
-          ],
-        };
-      }
-      return { rows: [] };
-    });
-
-    const { requestProjectAccess } = await import("./collaborators");
-    await expect(
-      requestProjectAccess({
+  it.each([
+    {
+      label: "with a note",
+      message: "Please let me view this.",
+      expectedBody:
+        "Project: **Private Project**\n\nNote from the requester: Please let me view this.",
+    },
+    {
+      label: "without a note",
+      message: undefined,
+      expectedBody: "Project: **Private Project**",
+    },
+  ])(
+    "lets a non-member request viewer access $label",
+    async ({ message, expectedBody }) => {
+      const requestId = "88888888-8888-4888-8888-888888888888";
+      getClusterAccountByIdMock.mockResolvedValue({
         account_id: ACCOUNT_ID,
-        project_id: PROJECT_ID,
-        requested_role: "viewer",
-        message: "Please let me view this.",
-        source: "project-url",
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        request_id: requestId,
-        requested_role: "viewer",
-        status: "pending",
-      }),
-    );
-    expect(assertAccountTrustedForProductAccessMock).toHaveBeenCalledWith(
-      ACCOUNT_ID,
-      "request project access",
-    );
-    expect(appendProjectLogRowBestEffortMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        project_id: PROJECT_ID,
-        context: "project-access-request",
-        row: expect.objectContaining({
-          id: `project-access-request:${requestId}:created`,
+        display_name: "Ada Lovelace",
+        email_address: "ada@example.com",
+        home_bay_id: "bay-0",
+      });
+      queryMock = jest.fn(async (sql: string) => {
+        if (sql.includes("AS current_group")) {
+          return {
+            rows: [
+              {
+                title: "Private Project",
+                users: {
+                  [TARGET_ACCOUNT_ID]: { group: "owner" },
+                },
+                manage_users_owner_only: false,
+                current_group: null,
+                blocked: false,
+              },
+            ],
+          };
+        }
+        if (sql.includes("INSERT INTO project_access_requests")) {
+          return { rows: [{ request_id: requestId }] };
+        }
+        if (sql.includes("FROM project_access_requests r")) {
+          return {
+            rows: [
+              {
+                request_id: requestId,
+                project_id: PROJECT_ID,
+                project_title: "Private Project",
+                requester_account_id: ACCOUNT_ID,
+                requester_name: "Requester",
+                requester_first_name: "Request",
+                requester_last_name: "User",
+                requester_profile: null,
+                requested_role: "viewer",
+                read_policy: null,
+                message: message ?? null,
+                status: "pending",
+                source: "project-url",
+                created: new Date("2026-05-29T00:00:00Z"),
+                updated: new Date("2026-05-29T00:00:00Z"),
+                decided: null,
+                decided_by_account_id: null,
+                decision_message: null,
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      });
+
+      const { requestProjectAccess } = await import("./collaborators");
+      await expect(
+        requestProjectAccess({
           account_id: ACCOUNT_ID,
-          event: expect.objectContaining({
-            event: "project_access_request_created",
-            request_id: requestId,
-            requester_account_id: ACCOUNT_ID,
-            requested_role: "viewer",
-          }),
+          project_id: PROJECT_ID,
+          requested_role: "viewer",
+          message,
+          source: "project-url",
         }),
-      }),
-    );
-    expect(createNotificationEventGraphMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "account_notice",
-        source_project_id: PROJECT_ID,
-        actor_account_id: ACCOUNT_ID,
-        targets: [
-          expect.objectContaining({
-            target_account_id: TARGET_ACCOUNT_ID,
-            dedupe_key: expect.stringContaining(
-              `project-access-request:${PROJECT_ID}:${ACCOUNT_ID}:${TARGET_ACCOUNT_ID}`,
-            ),
-            summary_json: expect.objectContaining({
-              action_label: "Review request",
-              notice_type: "project_access_request",
+      ).resolves.toEqual(
+        expect.objectContaining({
+          request_id: requestId,
+          requested_role: "viewer",
+          status: "pending",
+        }),
+      );
+      expect(assertAccountTrustedForProductAccessMock).toHaveBeenCalledWith(
+        ACCOUNT_ID,
+        "request project access",
+      );
+      expect(appendProjectLogRowBestEffortMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          project_id: PROJECT_ID,
+          context: "project-access-request",
+          row: expect.objectContaining({
+            id: `project-access-request:${requestId}:created`,
+            account_id: ACCOUNT_ID,
+            event: expect.objectContaining({
+              event: "project_access_request_created",
+              request_id: requestId,
+              requester_account_id: ACCOUNT_ID,
               requested_role: "viewer",
             }),
           }),
-        ],
-      }),
-    );
-  });
+        }),
+      );
+      expect(createNotificationEventGraphMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "account_notice",
+          source_project_id: PROJECT_ID,
+          actor_account_id: ACCOUNT_ID,
+          payload_json: expect.objectContaining({
+            title: "Ada Lovelace (ada@example.com) requested viewer access",
+            body_markdown: expectedBody,
+          }),
+          targets: [
+            expect.objectContaining({
+              target_account_id: TARGET_ACCOUNT_ID,
+              dedupe_key: expect.stringContaining(
+                `project-access-request:${PROJECT_ID}:${ACCOUNT_ID}:${TARGET_ACCOUNT_ID}`,
+              ),
+              summary_json: expect.objectContaining({
+                action_label: "Review request",
+                title: "Ada Lovelace (ada@example.com) requested viewer access",
+                body_markdown: expectedBody,
+                notice_type: "project_access_request",
+                requested_role: "viewer",
+              }),
+            }),
+          ],
+        }),
+      );
+    },
+  );
 
   it("notifies only owners about access requests when collaborator management is owner-only", async () => {
     const ownerAccountId = "44444444-4444-4444-8444-444444444444";

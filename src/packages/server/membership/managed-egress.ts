@@ -32,6 +32,7 @@ import {
   recordAccountUsageCounterDelta,
   type AccountUsageWindows,
 } from "./usage-counters";
+import { createIndexConcurrentlyBestEffort } from "../database/concurrent-index";
 
 export {
   getProjectOwnerAccountId,
@@ -123,45 +124,6 @@ const adminOverviewCache = new LRU<
   max: 100,
   ttl: ADMIN_OVERVIEW_CACHE_TTL_MS,
 });
-
-async function createIndexConcurrentlyBestEffort({
-  name,
-  sql,
-}: {
-  name: string;
-  sql: string;
-}): Promise<void> {
-  const pool = getPool();
-  if (typeof (pool as any).connect !== "function") {
-    await pool.query(sql.replace("CREATE INDEX CONCURRENTLY", "CREATE INDEX"));
-    return;
-  }
-  const client = await (pool as any).connect();
-  let locked = false;
-  try {
-    const { rows } = await client.query(
-      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-      [name],
-    );
-    locked = rows[0]?.locked === true;
-    if (!locked) {
-      return;
-    }
-    await client.query(sql);
-  } catch (err) {
-    logger.warn("failed to create admin overview index", {
-      index: name,
-      err: `${err}`,
-    });
-  } finally {
-    if (locked) {
-      await client
-        .query("SELECT pg_advisory_unlock(hashtext($1))", [name])
-        .catch(() => undefined);
-    }
-    client.release();
-  }
-}
 
 function ensureAdminTimeIndexBestEffort(): void {
   adminTimeIndexReady ??= createIndexConcurrentlyBestEffort({

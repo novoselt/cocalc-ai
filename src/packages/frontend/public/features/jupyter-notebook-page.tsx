@@ -7,69 +7,19 @@ import { Button, Col, Flex, Row, Typography } from "antd";
 
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
 import { CodeBlock } from "@cocalc/frontend/public/common";
-import {
-  PUBLIC_ELEVATION,
-  PUBLIC_COLORS,
-  PUBLIC_RADIUS,
-  PUBLIC_TYPE,
-} from "@cocalc/frontend/public/theme";
+import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureAsset,
   LinkButton,
 } from "./page-components";
-import {
-  ContextList,
-  FeatureFinalBand,
-  IconBadge,
-  StoryCard,
-  TerminalMock,
-} from "./feature-visuals";
+import { FeatureInfo, FeatureInfoHeading, ZoomableImage } from "./feature-info";
+import { ContextList, FeatureFinalBand, StoryCard } from "./feature-visuals";
 
-const { Paragraph, Text, Title } = Typography;
+const { Paragraph, Title } = Typography;
 
 const GUIDE_BASE = "https://sagemathinc.github.io/cocalc-guides";
-
-function NotebookEvidencePanel() {
-  return (
-    <div
-      aria-label="Illustration of a CoCalc Jupyter notebook beside project files"
-      role="img"
-      style={{
-        background:
-          "linear-gradient(145deg, #ffffff 0%, #f4f9ff 58%, #fff8e8 100%)",
-        border: `1px solid ${PUBLIC_COLORS.border}`,
-        borderRadius: PUBLIC_RADIUS.panel,
-        boxShadow: PUBLIC_ELEVATION.lg,
-        padding: 20,
-        width: "100%",
-      }}
-    >
-      <Flex vertical gap={16}>
-        <Flex align="center" gap={10}>
-          <IconBadge accent="#f37726" icon="jupyter" />
-          <div>
-            <Text strong>analysis.ipynb</Text>
-            <div style={{ color: PUBLIC_COLORS.mutedText }}>
-              notebook, data, packages, scripts, and outputs stay together
-            </div>
-          </div>
-        </Flex>
-        <TerminalMock
-          title="CoCalc notebook"
-          rows={[
-            "[1] df = load_experiment('spectral-gap')",
-            "data loaded",
-            "[2] plot_gap_distribution(df)",
-            "interactive widget + figure",
-            "[3] fit = model(df); fit.summary()",
-            "model summary ready",
-          ]}
-        />
-      </Flex>
-    </div>
-  );
-}
 
 export default function JupyterNotebookFeaturePage({
   helpEmail,
@@ -87,17 +37,18 @@ export default function JupyterNotebookFeaturePage({
     : "Start using Jupyter in CoCalc";
 
   return (
-    <Flex vertical gap={22}>
+    <Flex vertical gap={36}>
       <PublicSection>
-        <Row gutter={[28, 28]} align="top">
+        <Row align="top" gutter={[44, 32]} style={{ padding: "22px 0 14px" }}>
           <Col xs={24} lg={14}>
-            <Flex vertical gap={14}>
+            <Flex vertical gap={20}>
               <Title level={2} style={{ margin: 0 }}>
-                Jupyter notebooks for work that needs to keep going
+                Online Jupyter notebooks, built for collaboration
               </Title>
               <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
-                Keep live notebooks reviewable while collaborators and Codex
-                inspect real session state.
+                Fully compatible Jupyter notebooks in your browser. They keep
+                running when you close the tab, and collaborators and Codex see
+                the real session state.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryCtaHref}>
@@ -113,28 +64,47 @@ export default function JupyterNotebookFeaturePage({
             <ContextList
               accent="#f37726"
               items={[
-                { icon: "server", label: "Kernel sessions stay inspectable" },
-                { icon: "database", label: "Cell commands target real output" },
+                {
+                  icon: "stopwatch",
+                  label: "Runs keep going when you close the tab",
+                },
+                { icon: "comment", label: "Chat anchored to any cell" },
+                {
+                  icon: "history",
+                  label: "TimeTravel history of every change",
+                },
+                {
+                  icon: "server",
+                  label: "Python, R, Julia, and SageMath kernels",
+                },
               ]}
-              title="Notebook context"
+              title="Highlights"
             />
           </Col>
         </Row>
       </PublicSection>
 
+      <PublicSection>
+        <div style={{ margin: "0 auto", maxWidth: 940 }}>
+          <ZoomableImage
+            alt="A Jupyter notebook in CoCalc with code cells, printed output, and a matplotlib plot"
+            priority
+            src={featureAsset("jupyter-regular-20260730.png")}
+          />
+        </div>
+      </PublicSection>
+
       <Row className="cocalc-jupyter-story-row" gutter={[16, 16]}>
         <Col xs={24} md={8}>
           <StoryCard icon="stopwatch" title="Keep runs alive">
-            Start a long cell, disconnect, and return to the captured output.
-            CoCalc keeps the run and output available for review when you
-            reconnect.
+            Start a long computation, close the tab, and come back later: the
+            run continues and the output is waiting for you.
           </StoryCard>
         </Col>
         <Col xs={24} md={8}>
           <StoryCard accent="#389e0d" icon="users" title="Work together live">
-            Multiple people can edit with visible cursors, discuss the work, and
-            share kernel sessions in the same notebook. Collaboration stays in
-            the document instead of becoming a screen-share workaround.
+            Everyone edits with visible cursors and shares the same kernel
+            session, with no screen-share workarounds.
           </StoryCard>
         </Col>
         <Col xs={24} md={8}>
@@ -143,79 +113,254 @@ export default function JupyterNotebookFeaturePage({
             icon="history"
             title="Review and recover changes"
           >
-            TimeTravel records notebook edits with authorship, so teams can
-            recover work, review results, and understand how an analysis
-            evolved.
+            TimeTravel records every edit with authorship. Recover lost work and
+            see how an analysis evolved.
           </StoryCard>
         </Col>
       </Row>
 
       <PublicSection>
-        <Row
-          align="stretch"
-          className="cocalc-jupyter-evidence-row"
-          gutter={[24, 24]}
+        <FeatureInfoHeading
+          anchor="a-overview"
+          description={
+            <>
+              CoCalc's collaborative Jupyter notebooks are fully compatible with
+              the <code>.ipynb</code> format, and they add what plain Jupyter is
+              missing.
+            </>
+          }
         >
-          <Col xs={24} lg={12} style={{ display: "flex" }}>
-            <NotebookEvidencePanel />
-          </Col>
-          <Col xs={24} lg={12} style={{ display: "flex" }}>
-            <div
-              className="cocalc-jupyter-balance-panel"
-              style={{
-                alignItems: "center",
-                background: PUBLIC_COLORS.surface,
-                border: `1px solid ${PUBLIC_COLORS.border}`,
-                borderRadius: PUBLIC_RADIUS.panel,
-                boxShadow: PUBLIC_ELEVATION.media,
-                display: "flex",
-                height: "100%",
-                minHeight: 240,
-                padding: 24,
-                width: "100%",
-              }}
-            >
-              <Flex vertical gap={12}>
-                <Title level={3} style={{ margin: 0 }}>
-                  When the notebook depends on more than cells
-                </Title>
-                <Paragraph style={{ margin: 0 }}>
-                  Notebooks are often the visible part of a larger analysis.
-                  CoCalc keeps terminal and Linux tools, collaborators, and
-                  review history close enough to understand what produced a
-                  result.
-                </Paragraph>
-              </Flex>
-            </div>
-          </Col>
-        </Row>
+          Feature overview
+        </FeatureInfoHeading>
       </PublicSection>
 
       <PublicSection>
-        <Row gutter={[24, 24]} align="middle">
-          <Col xs={24} lg={12}>
-            <Flex vertical gap={12}>
-              <Title level={3} style={{ margin: 0 }}>
-                Let people and Codex inspect live notebook state
-              </Title>
-              <Paragraph style={{ margin: 0 }}>
-                Saving an <code>.ipynb</code> file is not the same as
-                understanding the current session. CoCalc gives Codex
-                project-scoped notebook commands, so focused runs can start from
-                actual cells, outputs, and errors, then summarize real output
-                instead of guessing from a saved file.
-              </Paragraph>
-            </Flex>
-          </Col>
-          <Col xs={24} lg={12}>
+        <FeatureInfo
+          accent="#389e0d"
+          alt="Two browser windows editing the same Jupyter notebook cell, with the collaborator's cursor and name label visible in the other window"
+          anchor="a-collaboration"
+          caption={
+            <>
+              The same cell in two browser windows: each side sees the other
+              collaborator's cursor, with a name label, exactly where they are
+              typing.
+            </>
+          }
+          icon="users"
+          image="jupyter-cursor-sync-20260730.png"
+          title="Real-time collaborative editing"
+        >
+          <Paragraph>
+            Share a notebook with collaborators and{" "}
+            <strong>edit it together</strong>: everyone sees each other's
+            cursors and changes as they type, and you see who is online.
+          </Paragraph>
+          <Paragraph>
+            Because the kernel session runs in the shared project, the status
+            and results of all computations are <strong>synchronized</strong>{" "}
+            too, including interactive ipywidgets. Everyone experiences the
+            notebook in the same way.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          alt="A chat thread anchored to a Jupyter cell, with the unread count on the cell's chat button and the anchored cell shown in the side panel"
+          anchor="a-cell-chat"
+          caption={
+            <>
+              A discussion attached to one cell: the cell's chat button shows
+              the unread count, and the thread in the side panel links back to
+              its cell.
+            </>
+          }
+          icon="comment"
+          image="jupyter-cell-chat-20260730.png"
+          title="Chat anchored to any cell"
+        >
+          <Paragraph>
+            Start a discussion thread <strong>on a specific cell</strong>. The
+            thread stays attached to that cell, an unread badge appears right
+            where the conversation is, and collaborators are notified about new
+            messages.
+          </Paragraph>
+          <Paragraph>
+            There is also a classic side chat for the notebook as a whole, with
+            markdown formatting and LaTeX formulas in messages.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#f37726"
+          alt="A Jupyter notebook in the Minimal view, with a mini table of contents on the left, rendered cells in the middle, and collapsed source code with a minimap on the right"
+          anchor="a-minimal"
+          caption={
+            <>
+              The Minimal view of a notebook: mini table of contents on the
+              left, content in the middle, collapsed source code and a minimap
+              on the right.
+            </>
+          }
+          icon="layout"
+          image="jupyter-minimal-20260730.png"
+          title="Jupyter Minimal: a focused notebook view"
+        >
+          <Paragraph>
+            Every notebook can switch between the regular interface and{" "}
+            <strong>Jupyter Minimal</strong>, a calm, distraction-free view that
+            puts the content first. A sticky mini table of contents and a
+            minimap keep long notebooks navigable, and a zen mode removes the
+            remaining chrome when you want to read or present.
+          </Paragraph>
+          <Paragraph>
+            Toggle between the views at any time; both work on the same live
+            notebook, together with collaborators and anchored chats.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#7c3aed"
+          alt="Video of the TimeTravel slider moving through the history of a Jupyter notebook"
+          anchor="a-timetravel"
+          icon="history"
+          title="TimeTravel: every change, recorded"
+          video={[
+            "cocalc-jupyter2-timetravel-20170515-3x.webm",
+            "cocalc-jupyter2-timetravel-20170515-3x.mp4",
+          ]}
+        >
+          <Paragraph>
+            TimeTravel records the changes in your notebook in fine detail. Move
+            back and forth across <strong>thousands of revisions</strong> to see
+            every previous edit, with authorship, then copy anything you need
+            back into the current version.
+          </Paragraph>
+          <Paragraph>
+            This makes it easy to recover lost work, review how an analysis
+            evolved, or understand what a student or collaborator tried along
+            the way.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          alt="The kernel panel of a Jupyter notebook, listing the kernels of the project's software environment with restart, halt, and install controls"
+          anchor="a-software"
+          caption={
+            <>
+              The kernel panel: switch between the kernels your software
+              environment provides, restart or halt the session, and install
+              additional kernels.
+            </>
+          }
+          icon="server"
+          image="jupyter-kernel-selector-20260730.png"
+          title="Kernels from your software environment"
+        >
+          <Paragraph>
+            Each project runs on a{" "}
+            <strong>software environment you choose</strong>, and the kernels
+            available in a notebook come from that environment: Python,
+            SageMath, R, Julia, Octave, and more, depending on the image you
+            pick.
+          </Paragraph>
+          <Paragraph>
+            The project is a full Linux system, so you stay in control: install
+            your own packages on top or register custom kernels.
+          </Paragraph>
+          <Paragraph>
+            <LinkButton href={appPath("features/software-environment")}>
+              Learn about software environments
+            </LinkButton>
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          alt="A busy Jupyter notebook with live CPU and RAM gauges in the toolbar, a running-time counter on the cell, and a Stop button"
+          anchor="a-monitoring"
+          caption={
+            <>
+              A runaway cell: the toolbar gauges show CPU and RAM load, the cell
+              displays how long it has been running, and the Stop button
+              interrupts it.
+            </>
+          }
+          icon="line-chart"
+          image="jupyter-cpu-memory-20260730.png"
+          title="CPU and memory monitoring"
+        >
+          <Paragraph>
+            Per-notebook <strong>CPU and memory indicators</strong> help you
+            keep an eye on resource consumption before a heavy computation slows
+            everything down or terminates the session.
+          </Paragraph>
+          <Paragraph>
+            If a computation goes off the rails, you see it immediately and can
+            interrupt or restart the kernel before the session dies.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#389e0d"
+          alt="Overview of an nbgrader-enhanced Jupyter notebook"
+          anchor="a-nbgrader"
+          icon="graduation-cap"
+          image="cocalc-jupyter-nbgrader-overview.png"
+          title="nbgrader: grading assignments"
+        >
+          <Paragraph>
+            CoCalc's notebooks support both{" "}
+            <strong>automatic and manual grading</strong> via nbgrader. The
+            teacher's notebook contains exercise and test cells; students run
+            some of them for immediate feedback, and after collecting the
+            assignments, CoCalc runs the full test suite across all student
+            notebooks and tabulates the results.
+          </Paragraph>
+          <Paragraph>
+            <LinkButton href={appPath("features/teaching")}>
+              Explore the course management workflow
+            </LinkButton>
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent="#7c3aed"
+          anchor="a-codex"
+          icon="robot"
+          imageComponent={
             <CodeBlock
               ariaLabel="Project-scoped Jupyter commands"
               code={`cocalc project jupyter cells --path analysis.ipynb
 cocalc project jupyter run --path analysis.ipynb --cell-index 3
 cocalc project jupyter exec --path analysis.ipynb --stdin`}
             />
-          </Col>
-        </Row>
+          }
+          title="Codex works with the live notebook"
+        >
+          <Paragraph>
+            A saved <code>.ipynb</code> file is not the same as the running
+            session. In CoCalc, Codex gets{" "}
+            <strong>project-scoped notebook commands</strong>: it can list your
+            cells, run one, and read the actual outputs and errors.
+          </Paragraph>
+          <Paragraph>
+            That means AI help starts from the{" "}
+            <strong>real state of your analysis</strong>, not from guessing what
+            a stale file might have produced.
+          </Paragraph>
+        </FeatureInfo>
       </PublicSection>
 
       <PublicSection>
@@ -233,20 +378,22 @@ cocalc project jupyter exec --path analysis.ipynb --stdin`}
             },
             { href: appPath("features/terminal"), label: "Terminal workflows" },
             { href: appPath("features/linux"), label: "Linux environment" },
+            { href: appPath("features/teaching"), label: "Teaching" },
             { href: appPath("features/whiteboard"), label: "Whiteboards" },
-            { href: appPath("products"), label: "Compare operating models" },
             ...(helpEmail
               ? [{ href: `mailto:${helpEmail}`, label: "Contact support" }]
               : []),
           ]}
-          title="Choose the notebook path that fits"
+          title="Jupyter notebooks, with a whole project behind them"
         >
           <BulletList
             items={[
-              "Use CoCalc.ai when notebooks need hosted kernels, terminals, and review history.",
-              "Use teaching workflows when notebooks become assignments in student projects.",
-              "Use whiteboards when notebook cells need a directed graph beside diagrams or explanations.",
-              "Compare operating models when procurement, licensing, or deployment control matters.",
+              <>
+                Your notebooks stay standard <code>.ipynb</code> files —
+                download them anytime and keep working anywhere.
+              </>,
+              "The same project gives you terminals, LaTeX documents, files, and Codex right next to the notebook.",
+              "For courses, notebooks become assignments: distribute, collect, and grade them with nbgrader.",
             ]}
           />
         </FeatureFinalBand>

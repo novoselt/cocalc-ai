@@ -1589,6 +1589,26 @@ describe("deleteMessage rewiring", () => {
 });
 
 describe("markThreadRead with UUID keys", () => {
+  it("discards a closed project read-state store before reading it", () => {
+    const actions = makeActions();
+    const close = jest.fn();
+    actions.projectReadStateKey = "proj-1:00000000-1000-4000-8000-000000000001";
+    actions.projectReadState = {
+      close,
+      isClosed: jest.fn(() => true),
+    };
+    (webapp_client.conat_client as any).projectConat = jest.fn(
+      () => new Promise(() => {}),
+    );
+
+    expect(actions.isProjectReadStateReady()).toBe(false);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(webapp_client.conat_client.projectConat).toHaveBeenCalledWith({
+      project_id: "proj-1",
+      caller: "ChatActions.ensureProjectReadState",
+    });
+  });
+
   it("stores read watermarks outside patchflow for UUID-thread roots", () => {
     const threadId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
     const d1 = new Date("2026-02-21T21:00:00.000Z");

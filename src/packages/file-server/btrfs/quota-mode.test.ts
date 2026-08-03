@@ -6,6 +6,7 @@ describe("btrfs quota mode reconciliation", () => {
     jest.resetModules();
     delete process.env.COCALC_DISABLE_BTRFS_QUOTAS;
     delete process.env.COCALC_BTRFS_QUOTA_MODE;
+    delete process.env.COCALC_BTRFS_QUOTA_MODE_CACHE_MS;
   });
 
   afterAll(() => {
@@ -112,5 +113,45 @@ Quotas on /mnt/test:
         args: ["quota", "enable", "--simple", "/mnt/test"],
       }),
     );
+  });
+
+  it("collapses and caches repeated quota mode reconciliation", async () => {
+    process.env.COCALC_BTRFS_QUOTA_MODE = "simple";
+    const readFileMock = jest.fn(async (path: string) => {
+      if (path.endsWith("/enabled")) {
+        return "1\n";
+      }
+      if (path.endsWith("/mode")) {
+        return "simple\n";
+      }
+      throw new Error(`unexpected readFile path: ${path}`);
+    });
+    const btrfsMock = jest.fn(async ({ args }: { args: string[] }) => {
+      if (args.join(" ") === "filesystem show /mnt/test") {
+        return {
+          exit_code: 0,
+          stdout: "Label: none  uuid: 11111111-2222-4333-8444-555555555555\n",
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected btrfs args: ${args.join(" ")}`);
+    });
+
+    jest.doMock("./util", () => ({
+      btrfs: (opts: { args: string[] }) => btrfsMock(opts),
+    }));
+    jest.doMock("node:fs/promises", () => ({
+      readFile: (path: string, encoding: string) =>
+        readFileMock(path, encoding),
+    }));
+
+    const { ensureBtrfsQuotaMode } = await import("./quota-mode");
+    await Promise.all([
+      ensureBtrfsQuotaMode("/mnt/test"),
+      ensureBtrfsQuotaMode("/mnt/test"),
+    ]);
+    await ensureBtrfsQuotaMode("/mnt/test");
+
+    expect(btrfsMock).toHaveBeenCalledTimes(1);
   });
 });

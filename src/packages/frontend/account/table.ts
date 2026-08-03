@@ -15,6 +15,7 @@ import { getSharedAccountDStream } from "@cocalc/frontend/conat/account-dstream"
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { redux as appRedux } from "@cocalc/frontend/app-framework";
 import { lite } from "@cocalc/frontend/lite";
+import { isExamMode } from "@cocalc/frontend/customize/exam-mode";
 import {
   attachProjectionFeedDiagnostics,
   recordProjectionFeedEvent,
@@ -166,6 +167,10 @@ function closeRealtimeFeed(): void {
 }
 
 async function ensureRealtimeFeedForCurrentAccount(): Promise<void> {
+  if (isExamMode()) {
+    closeRealtimeFeed();
+    return;
+  }
   if (!webapp_client.is_signed_in()) {
     closeRealtimeFeed();
     return;
@@ -270,7 +275,7 @@ export function initAccountRealtime(opts: {
     return;
   }
   signedInListener = () => {
-    if (!lite) {
+    if (!lite && !isExamMode()) {
       opts.recreate_account_table(opts.redux);
     }
     void ensureRealtimeFeedForCurrentAccount();

@@ -119,6 +119,54 @@ describe("notification email outbox maintenance", () => {
     });
   });
 
+  it.each([
+    {
+      label: "with a requester note",
+      body_markdown:
+        "Project: **Private Project**\n\nNote from the requester: Please let me view this.",
+      expectedNote: "Note from the requester: Please let me view this.",
+    },
+    {
+      label: "without a requester note",
+      body_markdown: "Project: **Private Project**",
+      expectedNote: null,
+    },
+  ])(
+    "renders project access email $label",
+    async ({ body_markdown, expectedNote }) => {
+      const subject = "Ada Lovelace (ada@example.com) requested viewer access";
+      claimQueuedNotificationEmails.mockResolvedValue([
+        {
+          ...ROW,
+          category: "access_requests",
+          lane: "transactional",
+          subject,
+          summary_json: {
+            summary: {
+              body_markdown,
+            },
+          },
+        },
+      ]);
+      const sender = jest.fn(async () => undefined);
+
+      await sendQueuedNotificationEmailBatch({
+        sender,
+        emailConfigured: jest.fn(async () => true),
+        sendLimitChecker: jest.fn(async () => ({ allowed: true })),
+      });
+
+      const message = sender.mock.calls[0]?.[0];
+      expect(message.subject).toBe(subject);
+      expect(message.text).toContain("Project: Private Project");
+      if (expectedNote) {
+        expect(message.text).toContain(expectedNote);
+      } else {
+        expect(message.text).not.toContain("Note from the requester:");
+      }
+    },
+  );
+
   it("uses display_path in immediate notification email body", async () => {
     claimQueuedNotificationEmails.mockResolvedValue([
       {

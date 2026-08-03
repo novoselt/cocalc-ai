@@ -31,6 +31,14 @@ type FreshAuthStatus = {
   actor_email_address?: string | null;
 };
 
+type EmailFreshAuthChallenge = {
+  challenge_id: string;
+  purpose: "email_fresh_auth";
+  state: string;
+  masked_email: string;
+  resend_available_at: string;
+};
+
 export type FreshAuthActionRunner = (
   action: () => Promise<void>,
 ) => Promise<boolean>;
@@ -75,11 +83,13 @@ export function isFreshAuthRequiredError(err: unknown): boolean {
 }
 
 export function FreshAuthModal({
+  defaultExtended = false,
   open,
   onCancel,
   onSuccess,
   origin,
 }: {
+  defaultExtended?: boolean;
   open: boolean;
   onCancel: () => void;
   onSuccess: () => Promise<void>;
@@ -94,6 +104,11 @@ export function FreshAuthModal({
   const [error, setError] = useState("");
   const [factorEnabled, setFactorEnabled] = useState<boolean | null>(null);
   const [status, setStatus] = useState<FreshAuthStatus | null>(null);
+  const [emailChallenge, setEmailChallenge] =
+    useState<EmailFreshAuthChallenge | null>(null);
+  const [emailCode, setEmailCode] = useState("");
+  const [emailProofComplete, setEmailProofComplete] = useState(false);
+  const emailCompletingRef = useRef(false);
   const inferredMethod = inferSecondFactorInputMethod(code);
   const expectedEmailAddress = getFreshAuthEmail(status);
   const authOrigin = origin ?? getControlPlaneOrigin();
@@ -103,8 +118,12 @@ export function FreshAuthModal({
   const canUseGoogleFreshAuth =
     status?.mode === "account" && googleFreshAuth != null;
   const hasPassword = status?.has_password !== false;
-  const showPassword =
-    factorEnabled === false && (hasPassword || !canUseGoogleFreshAuth);
+  const showPassword = factorEnabled === false && hasPassword;
+  const emailAuthAvailable =
+    status?.mode === "account" &&
+    status.has_password === false &&
+    expectedEmailAddress.length > 0;
+  const emailAuthPending = emailAuthAvailable && !emailProofComplete;
   const canUseSecondFactor =
     factorEnabled === true && (usePasskey || inferredMethod === "totp");
   const canUseExtended = canUseGoogleFreshAuth || canUseSecondFactor;
@@ -119,6 +138,9 @@ export function FreshAuthModal({
       if (!open) {
         setStatus(null);
         setEmailAddress("");
+        setEmailChallenge(null);
+        setEmailCode("");
+        setEmailProofComplete(false);
         return;
       }
       setError("");
@@ -150,10 +172,49 @@ export function FreshAuthModal({
   }, [authOrigin, open]);
 
   useEffect(() => {
+    if (!emailChallenge || emailProofComplete || !open) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const next = await postAuthApi<EmailFreshAuthChallenge>({
+            endpoint: "auth/email/status",
+            origin: authOrigin,
+            body: { challenge_id: emailChallenge.challenge_id },
+          });
+          if (cancelled) return;
+          setEmailChallenge(next);
+          if (next.state === "email_proved") {
+            await finishEmailProof(next.challenge_id);
+          }
+        } catch {
+          // Polling is best effort; entering the code reports actionable errors.
+        }
+      })();
+    }, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    authOrigin,
+    emailChallenge?.challenge_id,
+    emailProofComplete,
+    factorEnabled,
+    open,
+  ]);
+
+  useEffect(() => {
     if (!canUseExtended) {
       setExtended(false);
     }
   }, [canUseExtended]);
+
+  useEffect(() => {
+    if (open && defaultExtended && canUseExtended) {
+      setExtended(true);
+    }
+  }, [canUseExtended, defaultExtended, open]);
 
   function getExpectedPopupOrigin(): string {
     if (authOrigin) {
@@ -226,7 +287,74 @@ export function FreshAuthModal({
     }
   }
 
+  async function finishEmailProof(challengeId: string): Promise<void> {
+    if (emailCompletingRef.current) return;
+    emailCompletingRef.current = true;
+    try {
+      setEmailProofComplete(true);
+      if (factorEnabled === false) {
+        await postAuthApi({
+          endpoint: "auth/email/fresh-finalize",
+          origin: authOrigin,
+          body: { challenge_id: challengeId },
+        });
+        await onSuccess();
+        resetEmailFreshAuth();
+      }
+    } catch (err) {
+      setEmailProofComplete(false);
+      setError(`${err}`);
+    } finally {
+      emailCompletingRef.current = false;
+    }
+  }
+
+  function resetEmailFreshAuth(): void {
+    setEmailChallenge(null);
+    setEmailCode("");
+    setEmailProofComplete(false);
+  }
+
+  async function submitEmailFreshAuth(): Promise<void> {
+    if (emailMismatch || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      if (!emailChallenge) {
+        const challenge = await postAuthApi<EmailFreshAuthChallenge>({
+          endpoint: "auth/email/fresh-start",
+          origin: authOrigin,
+          body: {},
+        });
+        setEmailChallenge(challenge);
+        setEmailCode("");
+        return;
+      }
+      if (!/^\d{6}$/.test(emailCode)) {
+        throw new Error("Enter the six-digit code from your email.");
+      }
+      const proved = await postAuthApi<EmailFreshAuthChallenge>({
+        endpoint: "auth/email/fresh-redeem-code",
+        origin: authOrigin,
+        body: {
+          challenge_id: emailChallenge.challenge_id,
+          code: emailCode,
+        },
+      });
+      setEmailChallenge(proved);
+      await finishEmailProof(proved.challenge_id);
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function submit() {
+    if (emailAuthPending) {
+      await submitEmailFreshAuth();
+      return;
+    }
     if (emailMismatch) {
       setError(
         "Use the signed-in account email address for this confirmation.",
@@ -255,11 +383,19 @@ export function FreshAuthModal({
           },
         });
       }
+      if (emailChallenge && emailProofComplete) {
+        await postAuthApi({
+          endpoint: "auth/email/fresh-finalize",
+          origin: authOrigin,
+          body: { challenge_id: emailChallenge.challenge_id },
+        });
+      }
       await onSuccess();
       setCurrentPassword("");
       setCode("");
       setUsePasskey(false);
       setExtended(false);
+      resetEmailFreshAuth();
     } catch (err) {
       setError(`${err}`);
     } finally {
@@ -273,16 +409,31 @@ export function FreshAuthModal({
       title="Confirm security action"
       onCancel={onCancel}
       onOk={submit}
-      okText={saving ? "Verifying..." : "Verify"}
+      okText={
+        saving
+          ? "Verifying..."
+          : emailAuthPending && !emailChallenge
+            ? "Email me a code"
+            : "Verify"
+      }
       zIndex={FRESH_AUTH_MODAL_Z_INDEX}
       okButtonProps={{
         disabled:
           saving ||
           factorEnabled == null ||
           emailMismatch ||
+          (emailAuthPending &&
+            emailChallenge != null &&
+            !/^\d{6}$/.test(emailCode)) ||
           (showPassword && currentPassword.length === 0) ||
-          (factorEnabled === false && !showPassword) ||
-          (factorEnabled === true && !usePasskey && code.trim().length === 0),
+          (factorEnabled === false &&
+            !showPassword &&
+            !emailAuthAvailable &&
+            !canUseGoogleFreshAuth) ||
+          (factorEnabled === true &&
+            !emailAuthPending &&
+            !usePasskey &&
+            code.trim().length === 0),
       }}
     >
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -301,7 +452,7 @@ export function FreshAuthModal({
             message={
               showPassword
                 ? "This account does not have 2FA enabled. Verify with your current password or a linked sign-in provider."
-                : "This account does not have a CoCalc password. Verify with a linked sign-in provider."
+                : "This account does not have a CoCalc password. Approve by email or use a linked sign-in provider."
             }
           />
         ) : undefined}
@@ -336,6 +487,33 @@ export function FreshAuthModal({
             </span>
           </Button>
         ) : undefined}
+        {emailAuthPending ? (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              message="Approve this action by email"
+              description={
+                emailChallenge
+                  ? `We sent a six-digit code and approval link to ${emailChallenge.masked_email}.`
+                  : `We will send a code and approval link to ${expectedEmailAddress}. Add a password after approval to make similar confirmations faster.`
+              }
+            />
+            {emailChallenge ? (
+              <Input
+                aria-label="Six-digit email approval code"
+                autoComplete="one-time-code"
+                maxLength={6}
+                placeholder="123456"
+                value={emailCode}
+                onChange={(e) =>
+                  setEmailCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                }
+                onPressEnter={submitEmailFreshAuth}
+              />
+            ) : undefined}
+          </>
+        ) : undefined}
         {showPassword ? (
           <div>
             <div>Current password</div>
@@ -349,7 +527,7 @@ export function FreshAuthModal({
             />
           </div>
         ) : undefined}
-        {factorEnabled === true ? (
+        {factorEnabled === true && !emailAuthPending ? (
           <>
             <div>
               <div style={{ marginBottom: "8px" }}>Second factor</div>
@@ -410,7 +588,10 @@ export function FreshAuthModal({
   );
 }
 
-export function useFreshAuthAction({ origin }: { origin?: string } = {}) {
+export function useFreshAuthAction({
+  defaultExtended,
+  origin,
+}: { defaultExtended?: boolean; origin?: string } = {}) {
   // Frontend counterpart to backend requireFreshAuth checks. Any browser UI
   // action that can hit a fresh-auth-protected HTTP route or Conat RPC should
   // run the mutation through runFreshAuthAction and render FreshAuthModal with
@@ -471,6 +652,7 @@ export function useFreshAuthAction({ origin }: { origin?: string } = {}) {
   return {
     runFreshAuthAction,
     freshAuthModalProps: {
+      defaultExtended,
       open,
       origin,
       onCancel: cancelFreshAuth,

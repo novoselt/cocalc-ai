@@ -375,6 +375,8 @@ export async function verifyClusterAccountSignInPassword({
 export async function createLocalCliLoginSession({
   account_id,
   approved_challenge_id,
+  factor_level = "none",
+  fresh_auth_until,
   ip_address,
   user_agent,
 }: AccountLocalCreateCliLoginSessionRequest): Promise<AccountLocalCreateCliLoginSessionResult> {
@@ -382,18 +384,34 @@ export async function createLocalCliLoginSession({
     account_id,
     DEFAULT_MAX_AGE_MS / 1000,
   );
+  const requestedFreshAuthUntil = fresh_auth_until
+    ? new Date(fresh_auth_until)
+    : null;
+  const validFreshAuthUntil =
+    requestedFreshAuthUntil != null &&
+    Number.isFinite(requestedFreshAuthUntil.valueOf()) &&
+    requestedFreshAuthUntil.valueOf() > Date.now()
+      ? new Date(
+          Math.min(
+            requestedFreshAuthUntil.valueOf(),
+            new Date(expire).valueOf(),
+          ),
+        )
+      : null;
+  const effectiveFactorLevel = validFreshAuthUntil ? factor_level : "none";
   await recordNewAuthSession({
     account_id,
     session_hash: hash,
     expire,
     authenticated_at: new Date(),
     password_verified_at: null,
-    factor_verified_at: null,
-    factor_level: "none",
-    fresh_auth_until: null,
+    factor_verified_at: effectiveFactorLevel === "none" ? null : new Date(),
+    factor_level: effectiveFactorLevel,
+    fresh_auth_until: validFreshAuthUntil,
     metadata: {
       auth_client: "cli",
       approved_challenge_id,
+      elevated_login: validFreshAuthUntil != null,
       ip_address: ip_address ?? undefined,
       user_agent: user_agent ?? undefined,
     },
@@ -797,6 +815,12 @@ export async function provisionLocalClusterAccount(
     other_settings: opts.other_settings,
     trusted_product_access: opts.trusted_product_access,
     trusted_product_access_reason: opts.trusted_product_access_reason,
+    verified_email: opts.verified_email
+      ? {
+          address: opts.verified_email.address,
+          verified_at: new Date(opts.verified_email.verified_at),
+        }
+      : undefined,
   });
   return (
     (await getClusterAccountByIdDirect(account_id)) ?? {
@@ -922,6 +946,7 @@ async function createClusterAccountDirect(
       first_name: entry.first_name ?? opts.first_name,
       last_name: entry.last_name ?? opts.last_name,
       home_bay_id: entry.home_bay_id ?? home_bay_id,
+      email_address_verified: opts.verified_email != null,
     });
     return {
       ...entry,

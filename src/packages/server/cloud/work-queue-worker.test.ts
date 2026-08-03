@@ -43,17 +43,42 @@ describe("cloud vm worker loop", () => {
     expect(rows.map((r) => r.state)).toEqual(["done", "done"]);
   });
 
-  it("marks missing handlers as failed", async () => {
+  it("defers missing handlers for rolling-upgrade compatibility", async () => {
     await enqueueCloudVmWork({ vm_id: "vm-1", action: "resize" });
     await processCloudVmWorkOnce({
       worker_id: "worker-test",
       handlers: {},
     });
     const { rows } = await getPool().query(
-      "SELECT state, error FROM cloud_vm_work",
+      "SELECT state, error, attempt, not_before FROM cloud_vm_work",
     );
-    expect(rows[0].state).toBe("failed");
+    expect(rows[0].state).toBe("queued");
     expect(rows[0].error).toContain("no handler for resize");
+    expect(rows[0].attempt).toBe(1);
+    expect(new Date(rows[0].not_before).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("eventually fails work whose handler never becomes available", async () => {
+    const id = await enqueueCloudVmWork({
+      vm_id: "vm-unknown",
+      action: "unknown-action",
+    });
+    await getPool().query("UPDATE cloud_vm_work SET attempt=12 WHERE id=$1", [
+      id,
+    ]);
+    await processCloudVmWorkOnce({
+      worker_id: "worker-test",
+      handlers: {},
+    });
+    const { rows } = await getPool().query(
+      "SELECT state, error, attempt FROM cloud_vm_work WHERE id=$1",
+      [id],
+    );
+    expect(rows[0]).toEqual({
+      state: "failed",
+      error: "no handler for unknown-action",
+      attempt: 12,
+    });
   });
 
   it("retries stale in-progress items before claiming new work", async () => {

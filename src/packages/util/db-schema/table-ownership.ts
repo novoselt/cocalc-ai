@@ -216,6 +216,8 @@ export const TABLE_OWNERSHIP = {
     [
       "project_host_access",
       "project_host_bootstrap_tokens",
+      "project_host_exam_configs",
+      "project_host_exam_runs",
       "project_host_route_invalidations",
       "project_hosts",
       "project_runtime_slots",
@@ -227,6 +229,8 @@ export const TABLE_OWNERSHIP = {
       secondary_reference_fields: {
         account_id:
           "Account reference for access or allocation, not host placement authority.",
+        owner_account_id:
+          "Host owner or billing account reference, not host placement authority.",
         project_id:
           "Project reference for access or allocation, not host placement authority.",
       },
@@ -266,6 +270,7 @@ export const TABLE_OWNERSHIP = {
       "crm_support_tickets",
       "crm_tags",
       "crm_tasks",
+      "email_auth_challenges",
       "global_config_bay_state",
       "global_config_events",
       "global_config_versions",
@@ -495,6 +500,16 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     migrate_to_schema: true,
     notes:
       "Account-scoped usage counter state keyed by account_usage_windows. Authority is inherited from the referenced window's account_id; these rows must move or be removed with that account's usage windows.",
+  }),
+
+  ...adHocEntries(["project_app_private_hostnames"], {
+    ownership: "project-owning",
+    authority: "project_id",
+    portability: "unsupported",
+    source: "server Postgres schema bootstrap",
+    migrate_to_schema: true,
+    notes:
+      "Private project-app hostname routes are authoritative on the project's owning bay. Cross-bay project rehome must release and recreate them until explicit portable DNS handoff exists.",
   }),
 
   ...adHocEntries(["ai_sessions"], {

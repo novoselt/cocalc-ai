@@ -10,7 +10,10 @@ import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import isValidAccount from "@cocalc/server/accounts/is-valid-account";
 import { getUser } from "@cocalc/server/purchases/statements/email-statement";
 import type { Message } from "@cocalc/util/db-schema/messages";
-import { mirrorSystemMessageToAccountNoticeBestEffort } from "./account-notice";
+import {
+  mirrorSystemMessageToAccountNotice,
+  mirrorSystemMessageToAccountNoticeBestEffort,
+} from "./account-notice";
 import { getSupportAccountId } from "./support-account";
 import siteUrl from "@cocalc/server/hub/site-url";
 
@@ -29,6 +32,7 @@ export default async function send({
   reply_id,
   dedupMinutes,
   dedupBySubject,
+  requireAccountNoticeDelivery,
 }: {
   // account_id's of user (or users) to send the message to.
   to_ids: string[];
@@ -49,6 +53,9 @@ export default async function send({
   // Ignore body differences when checking for a recent duplicate. This is
   // useful for alerts whose diagnostics vary across control-plane workers.
   dedupBySubject?: boolean;
+  // Wait for the durable notification event to be created. Use this for
+  // required operational notices whose delivery failure must be observable.
+  requireAccountNoticeDelivery?: boolean;
 }) {
   logger.debug("send a message");
   const isInternalSystemMessage = !from_id;
@@ -103,6 +110,15 @@ export default async function send({
     });
     if (id != null) {
       logger.debug(`message is duplicate of id=${id}`);
+      if (isInternalSystemMessage && requireAccountNoticeDelivery) {
+        await mirrorSystemMessageToAccountNotice({
+          from_id,
+          to_ids,
+          subject,
+          body,
+          message_id: id,
+        });
+      }
       return id;
     }
   }
@@ -122,13 +138,18 @@ export default async function send({
 
   updateUnread(to_ids); // don't block on this...
   if (isInternalSystemMessage) {
-    void mirrorSystemMessageToAccountNoticeBestEffort({
+    const mirror = {
       from_id,
       to_ids,
       subject,
       body,
       message_id: id,
-    });
+    };
+    if (requireAccountNoticeDelivery) {
+      await mirrorSystemMessageToAccountNotice(mirror);
+    } else {
+      void mirrorSystemMessageToAccountNoticeBestEffort(mirror);
+    }
   }
   return id;
 }

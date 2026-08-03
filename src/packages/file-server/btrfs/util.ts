@@ -6,6 +6,7 @@ import {
 import { executeCode } from "@cocalc/backend/execute-code";
 import getLogger from "@cocalc/backend/logger";
 import { stat } from "node:fs/promises";
+import { isBackgroundBtrfsMutation } from "./mutation-context";
 
 const logger = getLogger("file-server:storage:util");
 
@@ -135,7 +136,10 @@ export async function sudo(
 export async function btrfs(
   opts: Partial<ExecuteCodeOptions & { desc?: string }>,
 ) {
-  return await sudo({ ...opts, command: "btrfs" });
+  return await sudo({
+    ...opts,
+    command: isBackgroundBtrfsMutation() ? "btrfs-maintenance" : "btrfs",
+  });
 }
 
 export async function isDir(path: string) {

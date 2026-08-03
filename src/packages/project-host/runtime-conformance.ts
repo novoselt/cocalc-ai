@@ -6,7 +6,7 @@ What this checks:
   - /usr/local/sbin/cocalc-runtime-storage
   - /etc/sudoers.d/cocalc-project-host-runtime
 - Sudo policy behavior:
-  - allows the intended wrapper path (sudo -n cocalc-runtime-storage sync)
+  - allows the intended wrapper path through non-mutating command-contract probes
   - denies broad root execution (sudo -n /bin/true)
   - denies generic mount escalation through the wrapper
 
@@ -29,6 +29,11 @@ const logger = getLogger("project-host:runtime-conformance");
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const REQUIRED_PROJECT_CGROUP_COMMANDS = [
   "enter-project-cgroup",
+  "attach-prepared-project-runtime",
+  "prepare-project-startup-cgroup",
+  "prepare-project-startup-runtime-cgroup",
+  "attach-host-service-cgroup",
+  "verify-host-service-cgroup",
   "verify-project-io-limits",
   "verify-project-network-limits",
 ] as const;
@@ -155,29 +160,6 @@ async function checkRootOwnedNotWritable(path: string): Promise<CheckResult> {
   }
 }
 
-async function checkSudoWhitelistAllowsWrapper(): Promise<CheckResult> {
-  const probe = await run("sudo", ["-n", STORAGE_WRAPPER, "sync"]);
-  if (probe.exitCode === 0) {
-    return {
-      name: "sudo-wrapper-allow",
-      ok: true,
-      level: "warning",
-      message: "runtime sudo wrapper allow check passed",
-    };
-  }
-  return {
-    name: "sudo-wrapper-allow",
-    ok: false,
-    level: "warning",
-    message: "runtime sudo wrapper allow check failed",
-    details: {
-      exitCode: probe.exitCode,
-      stderr: probe.stderr.trim(),
-      stdout: probe.stdout.trim(),
-    },
-  };
-}
-
 function helperCommandSupported(
   result: { exitCode: number; stdout: string; stderr: string },
   command: string = REQUIRED_PROJECT_CGROUP_COMMANDS[0],
@@ -231,6 +213,33 @@ async function checkProjectIoPolicy(): Promise<CheckResult> {
       probe.exitCode === 0
         ? "project I/O policy conforms"
         : "project I/O policy does not conform",
+    ...(probe.exitCode === 0
+      ? {}
+      : {
+          details: {
+            exitCode: probe.exitCode,
+            stderr: probe.stderr.trim(),
+            stdout: probe.stdout.trim(),
+          },
+        }),
+  };
+}
+
+async function checkHostServiceCgroup(): Promise<CheckResult> {
+  const probe = await run("sudo", [
+    "-n",
+    STORAGE_WRAPPER,
+    "verify-host-service-cgroup",
+    String(process.pid),
+  ]);
+  return {
+    name: "host-service-cgroup",
+    ok: probe.exitCode === 0,
+    level: "error",
+    message:
+      probe.exitCode === 0
+        ? "project-host service cgroup conforms"
+        : "project-host service cgroup does not conform",
     ...(probe.exitCode === 0
       ? {}
       : {
@@ -331,6 +340,7 @@ const STARTUP_CHECK_FACTORIES: CheckFactory[] = [
     id: "project-cgroup-helper-contract",
     run: checkProjectCgroupHelperContract,
   },
+  { id: "host-service-cgroup", run: checkHostServiceCgroup },
   { id: "project-io-policy", run: checkProjectIoPolicy },
   { id: "sudo-direct-deny", run: checkSudoWhitelistDeniesDirectRoot },
   {
@@ -349,8 +359,8 @@ const PERIODIC_CHECK_FACTORIES: CheckFactory[] = [
     id: "project-cgroup-helper-contract",
     run: checkProjectCgroupHelperContract,
   },
+  { id: "host-service-cgroup", run: checkHostServiceCgroup },
   { id: "project-io-policy", run: checkProjectIoPolicy },
-  { id: "sudo-wrapper-allow", run: checkSudoWhitelistAllowsWrapper },
 ];
 
 function startupChecks(): Promise<CheckResult>[] {

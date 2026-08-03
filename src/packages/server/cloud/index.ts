@@ -7,6 +7,7 @@ export {
   requeueStaleCloudVmWork,
   markCloudVmWorkDone,
   markCloudVmWorkFailed,
+  deferCloudVmWork,
   type CloudVmLogEvent,
   type CloudVmLogEntry,
   type CloudVmWorkRow,
@@ -27,8 +28,10 @@ export {
   shouldAutoRestoreInterruptedSpotHost,
   type ReconcileRunResult,
   classifyCloudOrphanInstances,
+  ensureHostReadyVerificationWork,
   hasPendingRestoreBlockingWork,
   listCloudOrphanInstances,
+  runtimeSshServerForProviderReconcile,
   type CloudOrphanInstance,
   bumpReconcile,
 } from "./reconcile";

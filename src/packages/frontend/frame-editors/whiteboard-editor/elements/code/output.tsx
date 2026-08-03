@@ -73,7 +73,6 @@ export default function Output({ element, onClick }) {
         project_id={project_id}
         directory={path_split(path).head}
         trust={true}
-        complete={false}
         hidePrompt
         divRef={divRef}
         style={{

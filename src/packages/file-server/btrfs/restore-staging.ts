@@ -292,6 +292,16 @@ export async function cleanupRestoreStaging(opts: {
   }
   const remaining = await readdir(stagingRoot);
   if (remaining.length === 0) {
-    await rm(stagingRoot, { recursive: true, force: true });
+    try {
+      await rm(stagingRoot, { recursive: true, force: true });
+    } catch (err: any) {
+      if (err?.code !== "EACCES" && err?.code !== "EPERM") {
+        throw err;
+      }
+      // Older deployments could leave this otherwise-empty directory owned
+      // by root. The path is derived from the trusted restore root and has
+      // just been verified empty, so use the constrained root helper.
+      await sudo({ command: "rm", args: ["-rf", stagingRoot] });
+    }
   }
 }

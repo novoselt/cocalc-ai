@@ -8,11 +8,20 @@ import {
   createRusticProgressHandler,
   type RusticProgressUpdate,
 } from "@cocalc/file-server/btrfs/rustic-progress";
+import { getBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 import type { ExecuteCodeStreamEvent } from "@cocalc/util/types/execute-code";
 
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 
-type ProjectRusticCommand = "project-rustic-backup" | "project-rustic-restore";
+function isBackgroundBtrfsMutation(): boolean {
+  const priority = getBtrfsMutationContext().priority;
+  return priority === "scheduled" || priority === "scavenger";
+}
+
+type ProjectRusticCommand =
+  | "project-rustic-backup"
+  | "project-rustic-backup-maintenance"
+  | "project-rustic-restore";
 
 export class ProjectRusticUnsupportedError extends Error {
   constructor(
@@ -72,7 +81,7 @@ function isUnsupportedCommandError(
   stderr: string,
 ): boolean {
   if (
-    command === "project-rustic-backup" &&
+    command.startsWith("project-rustic-backup") &&
     stderr.includes("SECURITY_DENY") &&
     stderr.includes("project-rustic-backup-bad-args") &&
     stderr.includes("detail=--parent")
@@ -150,7 +159,9 @@ export async function projectRusticBackup({
     .flatMap((tag) => ["--tag", tag]);
   const parentArgs = parent ? ["--parent", parent] : [];
   const { stdout } = await runProjectRustic({
-    command: "project-rustic-backup",
+    command: isBackgroundBtrfsMutation()
+      ? "project-rustic-backup-maintenance"
+      : "project-rustic-backup",
     args: [src, repoProfile, host, ...tagArgs, ...parentArgs],
     timeoutMs,
     onProgress: progress,

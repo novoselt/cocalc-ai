@@ -328,7 +328,6 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
         directory={props.directory}
         more_output={props.more_output}
         trust={props.trust}
-        complete={props.is_current && props.complete != null}
         aiTools={props.aiTools}
         isDragging={props.isDragging}
         stdin={props.stdin}

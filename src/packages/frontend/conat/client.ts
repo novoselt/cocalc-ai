@@ -41,6 +41,7 @@ import { info as refCacheInfo } from "@cocalc/util/refcache";
 import { connect as connectToConat } from "@cocalc/conat/core/client";
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import { isPublicTarget } from "@cocalc/frontend/public/routes";
 import {
   clearStoredControlPlaneOrigin,
   getControlPlaneAppUrl,
@@ -104,6 +105,11 @@ import {
   isViewerProjectRole,
 } from "@cocalc/frontend/project/realtime-access";
 import { isPublicDirectoryShareHost } from "@cocalc/frontend/projects/host-info";
+import { usesHubProjectRuntime } from "@cocalc/frontend/project/runtime-capabilities";
+import {
+  isExamMode,
+  waitForExamModeConfiguration,
+} from "@cocalc/frontend/customize/exam-mode";
 
 export interface ConatConnectionStatus {
   state: "connected" | "connecting" | "disconnected";
@@ -129,6 +135,11 @@ const AGENT_PLAN_TIMEOUT = 10 * 60_000;
 const AGENT_RUN_TIMEOUT = 20 * 60_000;
 
 const DEBUG = false;
+
+function usesDefaultProjectConnection(): boolean {
+  return lite || usesHubProjectRuntime() || isExamMode();
+}
+
 const PROJECT_HOST_ROUTED_HUB_METHODS = new Set<string>([
   "projects.codexDeviceAuthStart",
   "projects.codexDeviceAuthStatus",
@@ -469,6 +480,9 @@ export class ConatClient extends EventEmitter {
 
   private bootstrapControlPlaneOrigin = reuseInFlight(async () => {
     if (this.remote || typeof window === "undefined") {
+      return;
+    }
+    if (await waitForExamModeConfiguration()) {
       return;
     }
     const stored = getStoredControlPlaneOrigin();
@@ -1282,7 +1296,7 @@ export class ConatClient extends EventEmitter {
   private getProjectRoutingInfo(
     project_id: string,
   ): HostRoutingInfo | undefined {
-    if (lite) {
+    if (usesDefaultProjectConnection()) {
       return;
     }
     const publicShareRouting =
@@ -1320,7 +1334,7 @@ export class ConatClient extends EventEmitter {
   }
 
   private getProjectHostId(project_id: string): string | undefined {
-    if (lite) {
+    if (usesDefaultProjectConnection()) {
       return;
     }
     const project_map = redux.getStore("projects")?.get("project_map");
@@ -1344,7 +1358,7 @@ export class ConatClient extends EventEmitter {
   private ensureProjectRoutingInfo = async (
     project_id: string,
   ): Promise<HostRoutingInfo | undefined> => {
-    if (lite) {
+    if (usesDefaultProjectConnection()) {
       return;
     }
     const project_map = redux.getStore("projects")?.get("project_map");
@@ -2878,13 +2892,19 @@ export class ConatClient extends EventEmitter {
           account_id: info.user.account_id,
           hub: info.id ?? "",
         });
-        void this.browserSessionAutomation
-          .start(info.user.account_id)
-          .catch((err) =>
-            console.warn(`failed to start browser session automation: ${err}`),
-          );
+        const browserSessionAction = isExamMode()
+          ? this.browserSessionAutomation.stop()
+          : this.browserSessionAutomation.start(info.user.account_id);
+        void browserSessionAction.catch((err) =>
+          console.warn(`failed to start browser session automation: ${err}`),
+        );
         const cookie = Cookies.get(ACCOUNT_ID_COOKIE);
-        if (!lite && cookie && cookie != client.info.user.account_id) {
+        if (
+          !lite &&
+          !isExamMode() &&
+          cookie &&
+          cookie != client.info.user.account_id
+        ) {
           // make sure account_id cookie is set to the actual account we're
           // signed in as, then refresh since some things are going to be
           // broken otherwise. To test this use dev tools and just change the account_id
@@ -2917,7 +2937,11 @@ export class ConatClient extends EventEmitter {
         }
         this.signInFailed(error);
         void this.browserSessionAutomation.stop();
-        if (!this.isAuthPage()) {
+        // Public pages (landing, features, pricing, ...) work signed out, so
+        // failing to sign in there must not raise a blocking alert.
+        const pathname =
+          typeof window === "undefined" ? null : window.location.pathname;
+        if (!this.isAuthPage() && !isPublicTarget(pathname)) {
           this.client.alert_message({
             type: "error",
             message: "You must sign in.",
@@ -3133,7 +3157,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id = '${project_id}' must be a valid uuid`);
     }
-    if (lite) {
+    if (usesDefaultProjectConnection()) {
       return this.conat();
     }
     const routing = await this.ensureProjectRoutingInfo(project_id);
@@ -3171,7 +3195,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id = '${project_id}' must be a valid uuid`);
     }
-    if (lite) {
+    if (usesDefaultProjectConnection()) {
       return this.conat();
     }
     const routing = this.getProjectRoutingInfo(project_id);
@@ -3215,7 +3239,7 @@ export class ConatClient extends EventEmitter {
     }
     const subject = `hub.account.${account_id}.${service}`;
     const routeToProjectHost =
-      !lite &&
+      !usesDefaultProjectConnection() &&
       !!project_id &&
       PROJECT_HOST_ROUTED_HUB_METHODS.has(name) &&
       isValidUUID(project_id);
@@ -3322,7 +3346,7 @@ export class ConatClient extends EventEmitter {
     if (!isValidUUID(project_id)) {
       throw Error(`project_id='${project_id}' must be a valid uuid`);
     }
-    if (lite) {
+    if (usesDefaultProjectConnection()) {
       try {
         const { bytes, count } = await this.conat().publish(subject, mesg, {
           timeout,

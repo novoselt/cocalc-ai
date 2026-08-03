@@ -18,6 +18,9 @@ let currentThread = {
   isPinned: false,
   isArchived: false,
 };
+let currentThreads = [currentThread];
+let currentThreadMetadata: any;
+let latestThreadPanelProps: any;
 
 jest.mock("@cocalc/frontend/feature", () => ({
   IS_MOBILE: false,
@@ -41,7 +44,7 @@ jest.mock("@cocalc/frontend/app-framework", () => {
 
 jest.mock("../threads", () => ({
   useThreadSections: () => ({
-    threads: [currentThread],
+    threads: currentThreads.length === 1 ? [currentThread] : currentThreads,
     archivedThreads: [],
     threadSections: [],
   }),
@@ -116,7 +119,10 @@ jest.mock("../chatroom-thread-actions", () => ({
 }));
 
 jest.mock("../chatroom-thread-panel", () => ({
-  ChatRoomThreadPanel: () => null,
+  ChatRoomThreadPanel: (props: any) => {
+    latestThreadPanelProps = props;
+    return null;
+  },
   getDefaultNewThreadSetup: () => ({
     codexConfig: {
       workingDirectory: "/",
@@ -148,6 +154,9 @@ describe("ChatPanel selected thread read tracking", () => {
       isPinned: false,
       isArchived: false,
     };
+    currentThreads = [currentThread];
+    currentThreadMetadata = undefined;
+    latestThreadPanelProps = undefined;
   });
 
   function renderPanel() {
@@ -155,7 +164,7 @@ describe("ChatPanel selected thread read tracking", () => {
       markThreadRead: jest.fn(),
       scrollToIndex: jest.fn(),
       getCodexConfig: jest.fn(),
-      getThreadMetadata: jest.fn(),
+      getThreadMetadata: jest.fn(() => currentThreadMetadata),
       getMessagesInThread: jest.fn(() => []),
       frameTreeActions: undefined,
       frameId: undefined,
@@ -179,6 +188,43 @@ describe("ChatPanel selected thread read tracking", () => {
 
     expect(actions.markThreadRead).toHaveBeenCalledTimes(1);
     expect(actions.markThreadRead).toHaveBeenCalledWith("thread-1", 2);
+  });
+
+  it("makes resolved thread messages read-only", () => {
+    currentThreadMetadata = {
+      resolved: {
+        account_id: "acct",
+        at: "2026-07-29T00:00:00.000Z",
+        anchorId: "cell-1",
+      },
+    };
+
+    renderPanel();
+
+    expect(latestThreadPanelProps.readOnly).toBe(true);
+  });
+
+  it("does not mark another unread thread when opening the selected one", () => {
+    currentThreads = [
+      currentThread,
+      {
+        ...currentThread,
+        key: "thread-2",
+        label: "Thread 2",
+        displayLabel: "Thread 2",
+        messageCount: 4,
+        unreadCount: 2,
+      },
+    ];
+
+    const { actions } = renderPanel();
+
+    expect(actions.markThreadRead).toHaveBeenCalledTimes(1);
+    expect(actions.markThreadRead).toHaveBeenCalledWith("thread-1", 2);
+    expect(actions.markThreadRead).not.toHaveBeenCalledWith(
+      "thread-2",
+      expect.anything(),
+    );
   });
 
   it("marks the selected thread read again when unread state advances", () => {

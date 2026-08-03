@@ -2,7 +2,10 @@ import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 import type { Host, HostPressureZone } from "@cocalc/conat/hub/api/hosts";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
-import type { HostControlApi } from "@cocalc/conat/project-host/api";
+import type {
+  HostControlApi,
+  HostProjectStartMetadata,
+} from "@cocalc/conat/project-host/api";
 import sshKeys from "../projects/get-ssh-keys";
 import { notifyProjectHostUpdate } from "../conat/route-project";
 import { getConfiguredBayId } from "../bay-config";
@@ -45,6 +48,10 @@ import type {
   HostEffectiveAccessRole,
 } from "@cocalc/conat/hub/api/hosts";
 import { applyHostRuntimePolicyToRunQuota } from "./run-quota";
+import { reconcileProjectAppPrivateHostnamesForProject } from "@cocalc/server/app-private-hostnames";
+import { getProjectSecretsRuntimeCache } from "@cocalc/server/projects/project-secrets";
+import type { ProjectEnv } from "@cocalc/conat/hub/api/projects";
+import type { ProjectSecretsRuntimeCache } from "@cocalc/util/project-secrets";
 
 const log = getLogger("server:project-host:control");
 // Project starts can include large restores, so allow a long RPC timeout.
@@ -63,6 +70,50 @@ type StartProjectInFlight = {
   promise: Promise<void>;
 };
 const startProjectInFlight = new Map<string, StartProjectInFlight>();
+
+async function projectNeedsPendingCopyCheck(
+  project_id: string,
+): Promise<boolean> {
+  try {
+    const { rows } = await pool().query<{ exists: boolean }>(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM project_copies
+          WHERE dest_project_id=$1
+            AND status IN ('queued', 'applying')
+            AND expires_at > now()
+        ) AS exists
+      `,
+      [project_id],
+    );
+    return rows[0]?.exists !== false;
+  } catch (err) {
+    // Mixed-schema or temporarily unavailable copy state must retain the
+    // conservative host-side claim. This optimization may fail open only for
+    // latency, never for copy correctness.
+    log.warn("unable to establish pending-copy warm-start fast path", {
+      project_id,
+      err: `${err}`,
+    });
+    return true;
+  }
+}
+
+function isIdempotentStartUnavailable(err: unknown): boolean {
+  const text = `${(err as any)?.message ?? err ?? ""}`.toLowerCase();
+  const namesMethod =
+    text.includes("startprojectidempotent") ||
+    text.includes("start-project-idempotent");
+  return (
+    namesMethod &&
+    (text.includes("no subscribers matching") ||
+      text.includes("unknown method") ||
+      text.includes("method not found") ||
+      text.includes("not implemented") ||
+      text.includes("not available"))
+  );
+}
 
 type HostPlacement = {
   host_id: string;
@@ -124,6 +175,10 @@ export type ProjectMeta = {
   owning_bay_id?: string;
   authorized_keys?: string;
   run_quota?: any;
+  run_quota_revision?: number;
+  env?: ProjectEnv;
+  autostart_enabled?: boolean | null;
+  project_secrets_cache?: ProjectSecretsRuntimeCache;
 };
 
 const pool = () => getPool();
@@ -494,12 +549,32 @@ export function shouldSkipStartForSnapshot({
   return { skip: false };
 }
 
-export async function loadProject(project_id: string): Promise<ProjectMeta> {
+export async function loadProject(
+  project_id: string,
+  { include_start_metadata = false }: { include_start_metadata?: boolean } = {},
+): Promise<ProjectMeta> {
   const { rows } = await pool().query(
     "SELECT title, users, rootfs_image as image, host_id, region, owning_bay_id, run_quota FROM projects WHERE project_id=$1",
     [project_id],
   );
   if (!rows[0]) throw Error(`project ${project_id} not found`);
+  let run_quota_revision = 0;
+  try {
+    const revision = await pool().query(
+      "SELECT COALESCE(run_quota_revision, 0)::bigint AS run_quota_revision, env, autostart_enabled FROM projects WHERE project_id=$1",
+      [project_id],
+    );
+    run_quota_revision = Number(revision.rows[0]?.run_quota_revision ?? 0);
+    rows[0].env = revision.rows[0]?.env;
+    rows[0].autostart_enabled = revision.rows[0]?.autostart_enabled;
+  } catch (err) {
+    // Compatibility with a control plane whose additive schema migration has
+    // not run yet. Revision zero is accepted only until versioned state lands.
+    log.debug("loadProject: quota revision unavailable", {
+      project_id,
+      err: `${err}`,
+    });
+  }
   const keys = await sshKeys(project_id);
   const authorized_keys = Object.values(keys)
     .map((k: any) => k.value)
@@ -508,7 +583,15 @@ export async function loadProject(project_id: string): Promise<ProjectMeta> {
     `${rows[0].image ?? ""}`.trim() ||
     (await getCurrentProjectRootfsBinding({ project_id }))?.image ||
     DEFAULT_PROJECT_IMAGE;
-  return { ...rows[0], image, authorized_keys };
+  return {
+    ...rows[0],
+    image,
+    authorized_keys,
+    run_quota_revision,
+    project_secrets_cache: include_start_metadata
+      ? await getProjectSecretsRuntimeCache({ project_id })
+      : undefined,
+  };
 }
 
 export async function loadHostFromRegistry(host_id: string) {
@@ -703,6 +786,20 @@ export async function savePlacement(
     project_id,
     host_id: placement.host_id,
   });
+  try {
+    const result = await reconcileProjectAppPrivateHostnamesForProject({
+      project_id,
+    });
+    if (result.errors.length > 0) {
+      log.warn("private app hostname placement reconcile incomplete", result);
+    }
+  } catch (err) {
+    log.warn("private app hostname placement reconcile failed", {
+      project_id,
+      host_id: placement.host_id,
+      err: `${err}`,
+    });
+  }
 }
 
 export async function ensurePlacement(
@@ -718,24 +815,15 @@ export async function ensurePlacement(
       // Project is already placed. In multi-bay mode the assigned host may be
       // registered on another bay, so only reject if it cannot be resolved at all.
       if (await hostExistsAnywhere(meta.host_id)) {
-        await registerProjectOnHost({
-          project_id,
-          host_id: meta.host_id,
-          meta,
-          account_id,
-        });
         return { host_id: meta.host_id };
       }
       throw Error(
         `project is assigned to host ${meta.host_id} but it is unavailable`,
       );
     }
-    await registerProjectOnHost({
-      project_id,
-      host_id: meta.host_id,
-      meta,
-      account_id,
-    });
+    // startProject is the authoritative warm-path operation. The host resolves
+    // missing metadata from the owning bay and upserts its local project row,
+    // so an unconditional createProject RPC here only adds a network round trip.
     return { host_id: meta.host_id };
   }
 
@@ -808,6 +896,7 @@ async function registerProjectOnHost({
     start: false,
     authorized_keys: meta.authorized_keys,
     run_quota,
+    run_quota_revision: Number(meta.run_quota_revision ?? 0),
   });
 }
 
@@ -859,17 +948,32 @@ export async function startProjectOnHost(
     }
   }
   const task = (async () => {
+    const hostControlStarted = Date.now();
+    const hostControlTimings: Record<string, number> = {};
+    const markHostControl = (name: string, started: number) => {
+      hostControlTimings[`host_control.${name}`] = Date.now() - started;
+    };
+    let phaseStarted = Date.now();
     await cancelStaleProjectStartLros({ project_id });
+    markHostControl("cancel_stale_lros", phaseStarted);
+    const explicitRestoreBackupId = `${opts?.restore_backup_id ?? ""}`.trim();
+    phaseStarted = Date.now();
     const snapshot = await getProjectStateSnapshot(project_id);
     const activeStartLro =
       snapshot.state === "starting"
         ? await hasActiveProjectStartLro(project_id)
         : false;
+    markHostControl("state_snapshot", phaseStarted);
     const startDecision = shouldSkipStartForSnapshot({
       state: snapshot.state,
       timeMs: snapshot.timeMs,
       hasActiveStartLro: activeStartLro,
-      ignoreRecentState: opts?.ignore_recent_state_snapshot === true,
+      // An explicit restore is an atomic data replacement, not a duplicate
+      // runtime start. A recent state snapshot may describe the previous host
+      // after placement changed and must never suppress the restore.
+      ignoreRecentState:
+        !!explicitRestoreBackupId ||
+        opts?.ignore_recent_state_snapshot === true,
     });
     if (startDecision.skip) {
       log.debug("startProjectOnHost skipping duplicate start", {
@@ -896,53 +1000,14 @@ export async function startProjectOnHost(
       );
     }
 
+    phaseStarted = Date.now();
     const placement = await ensurePlacement(project_id, opts?.account_id);
-    const explicitRestoreBackupId = `${opts?.restore_backup_id ?? ""}`.trim();
     const client = await getRoutedHostControlClient({
       host_id: placement.host_id,
       timeout: START_PROJECT_TIMEOUT_MS,
     });
-    try {
-      if (typeof client.getProjectStatus === "function") {
-        const live = await client.getProjectStatus({ project_id });
-        if (
-          explicitRestoreBackupId &&
-          (live?.state === "running" || live?.state === "starting")
-        ) {
-          log.warn(
-            "startProjectOnHost ignoring active destination state because an explicit restore backup was requested",
-            {
-              project_id,
-              host_id: placement.host_id,
-              snapshot_state: snapshot.state,
-              live_state: live.state,
-              restore_backup_id: explicitRestoreBackupId,
-            },
-          );
-        } else if (live?.state === "running" || live?.state === "starting") {
-          log.warn(
-            "startProjectOnHost found project already active on assigned host; skipping restart",
-            {
-              project_id,
-              host_id: placement.host_id,
-              snapshot_state: snapshot.state,
-              live_state: live.state,
-            },
-          );
-          await saveProjectStateSnapshot(project_id, live.state, {
-            project_bundle_version: live.project_bundle_version,
-            tools_version: live.tools_version,
-          });
-          return;
-        }
-      }
-    } catch (err) {
-      log.debug("startProjectOnHost live status probe failed", {
-        project_id,
-        host_id: placement.host_id,
-        err: `${err}`,
-      });
-    }
+    markHostControl("placement_and_client", phaseStarted);
+    phaseStarted = Date.now();
     let cpuPolicyBlockMessage: string | undefined;
     try {
       if (
@@ -966,41 +1031,132 @@ export async function startProjectOnHost(
     if (cpuPolicyBlockMessage) {
       throw new Error(cpuPolicyBlockMessage);
     }
-    const meta = await loadProject(project_id);
+    markHostControl("cpu_policy", phaseStarted);
+    phaseStarted = Date.now();
+    const meta = await loadProject(project_id, {
+      include_start_metadata: true,
+    });
+    markHostControl("load_project", phaseStarted);
+    phaseStarted = Date.now();
     const run_quota = await applyHostRuntimePolicyToRunQuota(
       meta.run_quota,
       placement.host_id,
     );
-    const { rows } = await pool().query<{
-      backup_repo_id: string | null;
-      provisioned: boolean | null;
-    }>("SELECT backup_repo_id, provisioned FROM projects WHERE project_id=$1", [
-      project_id,
+    markHostControl("runtime_policy", phaseStarted);
+    phaseStarted = Date.now();
+    const [projectStorage, applyPendingCopies] = await Promise.all([
+      pool().query<{
+        backup_repo_id: string | null;
+        provisioned: boolean | null;
+      }>(
+        "SELECT backup_repo_id, provisioned FROM projects WHERE project_id=$1",
+        [project_id],
+      ),
+      projectNeedsPendingCopyCheck(project_id),
     ]);
+    const { rows } = projectStorage;
     if (rows[0]?.backup_repo_id && rows[0]?.provisioned === false) {
       await assertCanRestoreProvisionedProjectStorage({ project_id });
     }
-    const restore = rows[0]?.backup_repo_id ? "auto" : "none";
-    try {
-      const response = await client.startProject({
-        project_id,
+    markHostControl("restore_metadata", phaseStarted);
+    // A provisioned project already has authoritative local storage. Asking
+    // the runner to auto-restore still performs a file-server round trip even
+    // when there is nothing to restore, adding latency to every warm start.
+    // Preserve automatic restore for unprovisioned/unknown storage and every
+    // explicit restore request.
+    const restore =
+      explicitRestoreBackupId ||
+      (rows[0]?.backup_repo_id && rows[0]?.provisioned !== true)
+        ? "auto"
+        : "none";
+    const startRequest: Parameters<HostControlApi["startProject"]>[0] = {
+      project_id,
+      authorized_keys: meta.authorized_keys,
+      run_quota,
+      run_quota_revision: Number(meta.run_quota_revision ?? 0),
+      image: meta.image,
+      restore,
+      restore_backup_id: explicitRestoreBackupId || undefined,
+      apply_pending_copies: applyPendingCopies,
+      lro_op_id: opts?.lro_op_id,
+      start_metadata: {
+        title: meta.title,
+        users: meta.users,
+        image: meta.image,
         authorized_keys: meta.authorized_keys,
         run_quota,
-        image: meta.image,
-        restore,
-        restore_backup_id: explicitRestoreBackupId || undefined,
-        lro_op_id: opts?.lro_op_id,
-        ...(opts?.managed_egress_override
-          ? { managed_egress_override: opts.managed_egress_override }
-          : {}),
-      });
+        run_quota_revision: Number(meta.run_quota_revision ?? 0),
+        env: meta.env,
+        autostart_enabled: meta.autostart_enabled,
+        project_secrets_cache: meta.project_secrets_cache,
+      } satisfies HostProjectStartMetadata,
+      ...(opts?.managed_egress_override
+        ? { managed_egress_override: opts.managed_egress_override }
+        : {}),
+    };
+    try {
+      phaseStarted = Date.now();
+      let response;
+      if (typeof client.startProjectIdempotent === "function") {
+        try {
+          response = await client.startProjectIdempotent(startRequest);
+        } catch (err) {
+          if (!isIdempotentStartUnavailable(err)) {
+            throw err;
+          }
+          markHostControl("idempotent_capability_fallback", phaseStarted);
+        }
+      }
+      if (response == null) {
+        const liveStatusStarted = Date.now();
+        try {
+          const live = await client.getProjectStatus({ project_id });
+          if (
+            !explicitRestoreBackupId &&
+            (live?.state === "running" || live?.state === "starting")
+          ) {
+            markHostControl("live_status_probe", liveStatusStarted);
+            await saveProjectStateSnapshot(project_id, live.state, {
+              project_bundle_version: live.project_bundle_version,
+              tools_version: live.tools_version,
+            });
+            return;
+          }
+        } catch (err) {
+          log.debug("startProjectOnHost live status probe failed", {
+            project_id,
+            host_id: placement.host_id,
+            err: `${err}`,
+          });
+        }
+        markHostControl("live_status_probe", liveStatusStarted);
+        phaseStarted = Date.now();
+        response = await client.startProject(startRequest);
+      }
+      markHostControl("start_rpc", phaseStarted);
+      const projectHostWallMs = Number(
+        response.phase_timings_ms?.["project_host.wall_total"],
+      );
+      if (Number.isFinite(projectHostWallMs)) {
+        hostControlTimings["host_control.start_rpc_transport"] = Math.max(
+          0,
+          hostControlTimings["host_control.start_rpc"] - projectHostWallMs,
+        );
+      }
+      const saveRunningStateStarted = Date.now();
       await saveProjectStateSnapshot(project_id, response.state ?? "running", {
         runtime_started: true,
         project_bundle_version: response.project_bundle_version,
         tools_version: response.tools_version,
       });
-      if (opts?.lro_op_id && response.phase_timings_ms) {
-        mergeStartProjectTimings(opts.lro_op_id, response.phase_timings_ms);
+      if (opts?.lro_op_id) {
+        mergeStartProjectTimings(opts.lro_op_id, {
+          ...response.phase_timings_ms,
+          ...hostControlTimings,
+          "control.save_authoritative_running_state":
+            Date.now() - saveRunningStateStarted,
+          "host_control.total": Date.now() - hostControlStarted,
+        });
       }
     } catch (err) {
       const autoGrow = await maybeAutoGrowHostDiskForReservationFailure({
@@ -1013,25 +1169,19 @@ export async function startProjectOnHost(
           host_id: placement.host_id,
           next_disk_gb: autoGrow.next_disk_gb,
         });
-        const retry = await client.startProject({
-          project_id,
-          authorized_keys: meta.authorized_keys,
-          run_quota,
-          image: meta.image,
-          restore,
-          restore_backup_id: explicitRestoreBackupId || undefined,
-          lro_op_id: opts?.lro_op_id,
-          ...(opts?.managed_egress_override
-            ? { managed_egress_override: opts.managed_egress_override }
-            : {}),
-        });
+        const retry = await client.startProject(startRequest);
+        const saveRunningStateStarted = Date.now();
         await saveProjectStateSnapshot(project_id, retry.state ?? "running", {
           runtime_started: true,
           project_bundle_version: retry.project_bundle_version,
           tools_version: retry.tools_version,
         });
-        if (opts?.lro_op_id && retry.phase_timings_ms) {
-          mergeStartProjectTimings(opts.lro_op_id, retry.phase_timings_ms);
+        if (opts?.lro_op_id) {
+          mergeStartProjectTimings(opts.lro_op_id, {
+            ...retry.phase_timings_ms,
+            "control.save_authoritative_running_state":
+              Date.now() - saveRunningStateStarted,
+          });
         }
         return;
       }
@@ -1061,9 +1211,11 @@ export async function startProjectOnHost(
 export async function updateProjectRunQuotaOnHost({
   project_id,
   run_quota,
+  run_quota_revision,
 }: {
   project_id: string;
   run_quota?: any;
+  run_quota_revision?: number;
 }): Promise<void> {
   const { host_id } = await getAssignedProjectHostInfo(project_id);
   const client = await getRoutedHostControlClient({
@@ -1073,6 +1225,7 @@ export async function updateProjectRunQuotaOnHost({
   await client.updateProjectRunQuota({
     project_id,
     run_quota: await applyHostRuntimePolicyToRunQuota(run_quota, host_id),
+    run_quota_revision,
   });
 }
 

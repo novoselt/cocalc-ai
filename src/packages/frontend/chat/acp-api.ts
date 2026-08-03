@@ -392,6 +392,7 @@ export async function processAcpLLM({
     message_id,
     parent_message_id: user_message_id,
     sendMode: sendMode,
+    notifyOnTurnFinish: config.notifyOnTurnFinish === true,
   });
   let acknowledged = false;
   try {
@@ -917,6 +918,7 @@ function buildChatMetadata({
   message_id,
   parent_message_id,
   sendMode,
+  notifyOnTurnFinish,
 }: {
   project_id?: string;
   path?: string;
@@ -931,6 +933,7 @@ function buildChatMetadata({
   message_id?: string;
   parent_message_id?: string;
   sendMode?: "immediate";
+  notifyOnTurnFinish?: boolean;
 }): AcpChatContext {
   if (!project_id) {
     throw new Error("Codex requires a project context to run");
@@ -955,5 +958,6 @@ function buildChatMetadata({
     message_id,
     parent_message_id,
     send_mode: sendMode,
+    notify_on_turn_finish: notifyOnTurnFinish,
   } as AcpChatContext;
 }

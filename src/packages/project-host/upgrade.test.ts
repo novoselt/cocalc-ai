@@ -164,7 +164,7 @@ describe("project host upgrade installer", () => {
         "/opt/cocalc/project-host/current/cocalc-project-host",
       ),
     ).toBe(
-      "sleep 3; /opt/cocalc/project-host/current/cocalc-project-host daemon restart-project-host || true",
+      "sleep 3; COCALC_PROJECT_HOST_RELOAD_ENV_FILES=1 /opt/cocalc/project-host/current/cocalc-project-host daemon restart-project-host || true",
     );
   });
 
@@ -301,6 +301,45 @@ describe("project host upgrade installer", () => {
       expect(fs.statSync(versionDir).ino).toBe(inode);
       expect(fs.readFileSync(path.join(versionDir, "README.txt"), "utf8")).toBe(
         "existing\n",
+      );
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("stages an immutable project-host artifact without changing current", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "cocalc-upgrade-test-"));
+    try {
+      const root = path.join(base, "project-host-bundles");
+      const oldDir = path.join(root, "v0");
+      const versionDir = path.join(root, "v1");
+      const currentLink = path.join(root, "current");
+      fs.mkdirSync(oldDir, { recursive: true });
+      fs.mkdirSync(versionDir, { recursive: true });
+      fs.writeFileSync(path.join(oldDir, "README.txt"), "old\n");
+      fs.writeFileSync(path.join(versionDir, "README.txt"), "staged\n");
+      fs.symlinkSync(oldDir, currentLink);
+
+      const result = await __test__.downloadAndInstall({
+        artifact: "project-host",
+        canonicalArtifact: "project-host",
+        version: "v1",
+        url: "http://127.0.0.1:1/must-not-download.tar.xz",
+        stripComponents: 1,
+        root,
+        versionDir,
+        currentLink,
+        activate: false,
+      } as any);
+
+      expect(result).toEqual({
+        artifact: "project-host",
+        version: "v1",
+        status: "staged",
+      });
+      expect(fs.realpathSync(currentLink)).toBe(oldDir);
+      expect(fs.readFileSync(path.join(versionDir, "README.txt"), "utf8")).toBe(
+        "staged\n",
       );
     } finally {
       fs.rmSync(base, { recursive: true, force: true });

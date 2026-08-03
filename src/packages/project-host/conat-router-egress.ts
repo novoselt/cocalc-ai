@@ -9,6 +9,7 @@ import { sysApiMany } from "@cocalc/conat/core/sys";
 import type { ConnectionStats } from "@cocalc/conat/core/types";
 import type { ConatServer } from "@cocalc/conat/core/server";
 import { hubApi } from "@cocalc/lite/hub/api";
+import { getExamUsageAccountId } from "./exam/usage";
 import type { ManagedProjectEgressCategory } from "@cocalc/conat/hub/api/system";
 import { capitalize, humanSize } from "@cocalc/util/misc";
 import {
@@ -345,7 +346,7 @@ export function startConatRouterManagedEgressLoop({
               browser_ids: delta.browser_ids,
             });
             await hubApi.system.recordManagedProjectEgress({
-              account_id,
+              account_id: getExamUsageAccountId(account_id) ?? account_id,
               category: CATEGORY,
               bytes: delta.bytes,
               metadata: {

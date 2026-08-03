@@ -79,7 +79,10 @@ jest.mock("@cocalc/server/projects/rootfs-state", () => ({
 jest.mock("@cocalc/server/membership/project-defaults", () => ({
   __esModule: true,
   getMembershipProjectDefaultsForAccount: jest.fn(async () => ({})),
-  getMembershipIoClassForAccount: jest.fn(async () => "standard"),
+  getMembershipRuntimeSchedulingForAccount: jest.fn(async () => ({
+    io_class: "standard",
+    shared_compute_priority: 0,
+  })),
 }));
 
 jest.mock("@cocalc/server/membership/project-entitlement-overrides", () => ({
@@ -117,8 +120,6 @@ describe("BaseProject.start RootFS sealing", () => {
   const HOST_ID = "33333333-3333-4333-8333-333333333333";
   const ORIGINAL_DISABLE_ROOTFS_PORTABILITY_SEAL =
     process.env.COCALC_DISABLE_ROOTFS_PORTABILITY_SEAL;
-  const ORIGINAL_PROJECT_RESTART_SETTLE_MS =
-    process.env.COCALC_PROJECT_RESTART_SETTLE_MS;
 
   beforeEach(() => {
     jest.resetModules();
@@ -135,6 +136,9 @@ describe("BaseProject.start RootFS sealing", () => {
         "SELECT host_id, state->>'state' AS state FROM projects WHERE project_id=$1"
       ) {
         return { rows: [{ host_id: HOST_ID, state: "running" }] };
+      }
+      if (sql.includes("SET run_quota_revision =")) {
+        return { rows: [{ run_quota_revision: "1" }] };
       }
       if (sql.includes("project_hosts.id IS NOT NULL AS host_found")) {
         return {
@@ -209,30 +213,43 @@ describe("BaseProject.start RootFS sealing", () => {
       process.env.COCALC_DISABLE_ROOTFS_PORTABILITY_SEAL =
         ORIGINAL_DISABLE_ROOTFS_PORTABILITY_SEAL;
     }
-    if (ORIGINAL_PROJECT_RESTART_SETTLE_MS == null) {
-      delete process.env.COCALC_PROJECT_RESTART_SETTLE_MS;
-    } else {
-      process.env.COCALC_PROJECT_RESTART_SETTLE_MS =
-        ORIGINAL_PROJECT_RESTART_SETTLE_MS;
-    }
   });
 
-  it("settles briefly between stop and start during restart", async () => {
+  it("starts only after stop completes during restart", async () => {
     process.env.COCALC_DISABLE_ROOTFS_PORTABILITY_SEAL = "1";
-    process.env.COCALC_PROJECT_RESTART_SETTLE_MS = "1";
+    let resolveStop: (() => void) | undefined;
+    stopProjectOnHostMock.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        }),
+    );
     const { BaseProject } = await import("./base");
     const project = new BaseProject(PROJECT_ID);
+    project.computeQuota = jest.fn(async () => undefined);
 
-    await project.restart({ account_id: ACCOUNT_ID, lro_op_id: "op-restart" });
+    const restarting = project.restart({
+      account_id: ACCOUNT_ID,
+      lro_op_id: "op-restart",
+    });
+    for (
+      let attempt = 0;
+      attempt < 20 && !stopProjectOnHostMock.mock.calls.length;
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
 
     expect(stopProjectOnHostMock).toHaveBeenCalledWith(PROJECT_ID);
+    expect(startProjectOnHostMock).not.toHaveBeenCalled();
+
+    resolveStop?.();
+    await restarting;
+
     expect(startProjectOnHostMock).toHaveBeenCalledWith(PROJECT_ID, {
       account_id: ACCOUNT_ID,
       lro_op_id: "op-restart",
     });
-    expect(stopProjectOnHostMock.mock.invocationCallOrder[0]).toBeLessThan(
-      startProjectOnHostMock.mock.invocationCallOrder[0],
-    );
   });
 
   it("restarts on a sealed managed RootFS when the current binding is unsealed", async () => {
@@ -309,8 +326,6 @@ describe("BaseProject.start RootFS sealing", () => {
     const OWNER_ID = "33333333-3333-4333-8333-333333333333";
     const RUNTIME_SPONSOR_ID = "44444444-4444-4444-8444-444444444444";
     const ACTOR_ID = "55555555-5555-4555-8555-555555555555";
-    const updateCalls: any[] = [];
-
     queryTableMock = jest.fn(async (opts: any) => {
       if (opts?.select?.includes("runtime_sponsor_account_id")) {
         return {
@@ -324,10 +339,6 @@ describe("BaseProject.start RootFS sealing", () => {
           usage_account_id: null,
           host_id: HOST_ID,
         };
-      }
-      if (opts?.query === "UPDATE projects") {
-        updateCalls.push(opts);
-        return {};
       }
       throw new Error(`unexpected query table call: ${JSON.stringify(opts)}`);
     });
@@ -357,16 +368,17 @@ describe("BaseProject.start RootFS sealing", () => {
 
     await project.computeQuota(ACTOR_ID);
 
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].set).toMatchObject({
-      last_started_by: ACTOR_ID,
-      run_quota: {
-        memory_limit: 2000,
-        disk_quota: 10000,
-        network: true,
-        member_host: true,
-      },
+    const quotaUpdate = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("SET run_quota_revision ="),
+    );
+    expect(quotaUpdate).toBeDefined();
+    expect(JSON.parse(quotaUpdate![1][1])).toMatchObject({
+      memory_limit: 2000,
+      disk_quota: 10000,
+      network: true,
+      member_host: true,
     });
+    expect(quotaUpdate![1][2]).toBe(ACTOR_ID);
     expect(hostRunQuota.applyHostRuntimePolicyToRunQuota).toHaveBeenCalledWith(
       expect.objectContaining({ memory_limit: 2000, disk_quota: 10000 }),
       HOST_ID,
@@ -375,8 +387,6 @@ describe("BaseProject.start RootFS sealing", () => {
 
   it("recomputes stored run_quota for stopped projects without restarting", async () => {
     const OWNER_ID = "33333333-3333-4333-8333-333333333333";
-    const updateCalls: any[] = [];
-
     queryTableMock = jest.fn(async (opts: any) => {
       if (opts?.select?.includes("state")) {
         return {
@@ -392,10 +402,6 @@ describe("BaseProject.start RootFS sealing", () => {
           runtime_sponsor_account_id: null,
           usage_account_id: null,
         };
-      }
-      if (opts?.query === "UPDATE projects") {
-        updateCalls.push(opts);
-        return {};
       }
       throw new Error(`unexpected query table call: ${JSON.stringify(opts)}`);
     });
@@ -421,15 +427,17 @@ describe("BaseProject.start RootFS sealing", () => {
 
     await project.setAllQuotas();
 
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].set).toEqual({
-      run_quota: {
-        memory_limit: 4000,
-        disk_quota: 5000,
-        io_class: "standard",
-        network: true,
-        member_host: true,
-      },
+    const quotaUpdate = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("SET run_quota_revision ="),
+    );
+    expect(quotaUpdate).toBeDefined();
+    expect(JSON.parse(quotaUpdate![1][1])).toEqual({
+      memory_limit: 4000,
+      disk_quota: 5000,
+      io_class: "standard",
+      shared_compute_priority: 0,
+      network: true,
+      member_host: true,
     });
     expect(startProjectOnHostMock).not.toHaveBeenCalled();
     expect(stopProjectOnHostMock).not.toHaveBeenCalled();
@@ -495,6 +503,7 @@ describe("BaseProject.start RootFS sealing", () => {
         memory_limit: 4000,
         disk_quota: 5000,
       }),
+      run_quota_revision: 1,
     });
     expect(restartMock).not.toHaveBeenCalled();
 

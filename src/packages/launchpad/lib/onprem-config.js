@@ -180,6 +180,22 @@ async function applyLaunchpadDefaults() {
   process.env.DATA ??= dataDir;
   process.env.COCALC_DATA_DIR ??= process.env.DATA;
   process.env.COCALC_PGLITE_DATA_DIR ??= join(process.env.DATA, "pglite");
+  if (
+    String(process.env.COCALC_PROJECT_RUNTIME ?? "")
+      .trim()
+      .toLowerCase() === "workspace"
+  ) {
+    process.env.COCALC_PROJECT_PATH ??= join(process.env.DATA, "projects");
+    process.env.COCALC_WORKSPACE_RUNTIME_STATE ??= join(
+      process.env.DATA,
+      "runtime",
+    );
+    process.env.COCALC_WORKSPACE_RUNTIME_LOGS ??= join(
+      process.env.DATA,
+      "logs",
+      "projects",
+    );
+  }
 
   const baseEnvRaw =
     getRawEnv("COCALC_BASE_PORT") ??

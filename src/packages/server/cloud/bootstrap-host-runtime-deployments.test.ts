@@ -97,6 +97,15 @@ describe("bootstrap-host promoted artifact defaults", () => {
         });
         return;
       }
+      if (path === "/software/container-runtime/latest-linux-amd64.json") {
+        sendJson({
+          url: `${softwareBaseUrl}/container-runtime/runtime-latest/container-runtime-linux-amd64.tar.xz`,
+          sha256: "e".repeat(64),
+          os: "linux",
+          arch: "amd64",
+        });
+        return;
+      }
       if (path.endsWith(".sha256")) {
         if (path.includes("/missing-build/")) {
           res.statusCode = 404;
@@ -112,17 +121,22 @@ describe("bootstrap-host promoted artifact defaults", () => {
     await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
     const address = server.address() as AddressInfo;
     softwareBaseUrl = `http://${testHost}:${address.port}/software`;
-  });
+    process.env.MASTER_CONAT_SERVER = "http://master.example.test";
+    process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE = "disabled";
+    await import("./bootstrap-host");
+  }, 30_000);
 
   afterAll(async () => {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),
     );
+    delete process.env.MASTER_CONAT_SERVER;
+    delete process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE;
   });
 
   beforeEach(() => {
-    jest.resetModules();
     process.env.MASTER_CONAT_SERVER = "http://master.example.test";
+    process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE = "disabled";
     getServerSettingsMock = jest.fn(async () => ({
       project_hosts_software_base_url: softwareBaseUrl,
       project_hosts_bootstrap_channel: "latest",
@@ -137,6 +151,7 @@ describe("bootstrap-host promoted artifact defaults", () => {
 
   afterEach(() => {
     delete process.env.MASTER_CONAT_SERVER;
+    delete process.env.COCALC_GCP_INTERNAL_MASTER_CONAT_MODE;
   });
 
   async function loadBootstrapHost() {
@@ -163,6 +178,45 @@ describe("bootstrap-host promoted artifact defaults", () => {
       },
     };
   }
+
+  it("enforces storage admission for site-funded hosts", async () => {
+    const { resolveBootstrapStorageAdmissionMode } = await loadBootstrapHost();
+
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "site-funded" },
+      }),
+    ).toBe("enforce");
+  });
+
+  it("observes storage admission for account-funded hosts by default", async () => {
+    const { resolveBootstrapStorageAdmissionMode } = await loadBootstrapHost();
+
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "account-prepaid" },
+      }),
+    ).toBe("observe");
+  });
+
+  it("honors explicit storage admission overrides", async () => {
+    const { resolveBootstrapStorageAdmissionMode } = await loadBootstrapHost();
+
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "site-funded" },
+        storage_admission_mode: "observe",
+      }),
+    ).toBe("observe");
+    expect(
+      resolveBootstrapStorageAdmissionMode({
+        billing: { funding_mode: "account-postpaid" },
+        machine: {
+          metadata: { storage_admission_mode: "enforce" },
+        },
+      }),
+    ).toBe("enforce");
+  });
 
   it("uses promoted global artifact versions for bootstrap of new hosts", async () => {
     loadEffectiveProjectHostRuntimeDeploymentsMock.mockResolvedValue([
@@ -191,6 +245,13 @@ describe("bootstrap-host promoted artifact defaults", () => {
         scope_type: "global",
         scope_id: "global",
         target_type: "artifact",
+        target: "container-runtime",
+        desired_version: "runtime-v6",
+      },
+      {
+        scope_type: "global",
+        scope_id: "global",
+        target_type: "artifact",
         target: "bootstrap-environment",
         desired_version: "bootstrap-v5",
       },
@@ -212,6 +273,10 @@ describe("bootstrap-host promoted artifact defaults", () => {
     );
     expect(scripts.toolsVersion).toBe("tools-v4");
     expect(scripts.toolsManifestUrl).toBe("");
+    expect(scripts.containerRuntimeUrl).toBe(
+      `${softwareBaseUrl}/container-runtime/runtime-v6/container-runtime-linux-amd64.tar.xz`,
+    );
+    expect(scripts.containerRuntimeVersion).toBe("runtime-v6");
     expect(scripts.bootstrapSelector).toBe("bootstrap-v5");
     expect(scripts.bootstrapPyUrl).toBe(
       `${softwareBaseUrl}/bootstrap/bootstrap-v5/bootstrap.py`,
@@ -228,6 +293,10 @@ describe("bootstrap-host promoted artifact defaults", () => {
     expect(scripts.toolsManifestUrl).toBe(
       `${softwareBaseUrl}/tools/latest-linux-amd64.json`,
     );
+    expect(scripts.containerRuntimeUrl).toBe(
+      `${softwareBaseUrl}/container-runtime/runtime-latest/container-runtime-linux-amd64.tar.xz`,
+    );
+    expect(scripts.containerRuntimeVersion).toBe("runtime-latest");
     expect(scripts.bootstrapSelector).toBe("latest");
   });
 
@@ -271,6 +340,9 @@ describe("bootstrap-host promoted artifact defaults", () => {
     expect(scripts.envLines).toContain("PORT=9002");
     expect(scripts.envLines).toContain("COCALC_PROJECT_HOST_HTTPS=0");
     expect(scripts.cloudflaredConfig.enabled).toBe(true);
+    expect(scripts.cloudflaredConfig.examHostname).toBe(
+      "exam-host-123-staging.example.com",
+    );
   });
 
   it("does not let bootstrap replace an active direct route with a tunnel cname", async () => {

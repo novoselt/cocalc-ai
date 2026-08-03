@@ -12,7 +12,7 @@ import { once } from "node:events";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { URL } from "node:url";
-import express from "express";
+import express, { type NextFunction } from "express";
 import TTL from "@isaacs/ttlcache";
 import getPort from "@cocalc/backend/get-port";
 import getLogger from "@cocalc/backend/logger";
@@ -36,9 +36,10 @@ import {
   ensureShareFileDownloadReadServer,
   ensureFileUploadWriteServer,
   ensureViewerFileDownloadReadServer,
+  bootstrapProvisionedProjectInventory,
   initFileServer,
   initFsServer,
-  listProvisionedProjects,
+  verifyProvisionedProjectInventoryBatch,
   PROJECT_HOST_FILE_UPLOAD_WRITE_SERVICE,
 } from "./file-server";
 import { handleProjectHostUpload } from "./upload";
@@ -48,7 +49,6 @@ import {
   getOrCreateProjectLocalSecretToken,
   getProject,
   getProjectPorts,
-  listProjects,
 } from "./sqlite/projects";
 import {
   PROJECT_PROXY_ACCOUNT_ID_HEADER,
@@ -69,6 +69,12 @@ import {
 import { wireHostsApi } from "./hub/hosts";
 import { wireNotificationsApi } from "./hub/notifications";
 import { wireSystemApi } from "./hub/system";
+import {
+  createAppHostnameRequestRewriteBarrier,
+  createPrivateAppHostnameRequestRewriter,
+  PRIVATE_APP_HOST_HEADER,
+  rewritePrivateAppHostnameResponseLocation,
+} from "./private-app-hostname";
 import { startMasterRegistration } from "./master";
 import { startProvisionedInventoryReporter } from "./master-status";
 import { startReconciler } from "./reconcile";
@@ -80,7 +86,6 @@ import {
   rehydrateAcpAutomationsForProject,
   setAcpAdmissionLimitsProvider,
 } from "@cocalc/lite/hub/acp";
-import { partitionAcpStartupProjectIds } from "./acp-startup-rehydrate";
 import { setContainerExec } from "@cocalc/lite/hub/acp/executor/container";
 import { initCodexProjectRunner } from "./codex/codex-project";
 import { initCodexSiteKeyGovernor } from "./codex/codex-site-metering";
@@ -103,6 +108,7 @@ import { startConatRevocationKickLoop } from "./conat-revocation-kick";
 import { getOrCreateProjectHostConatPassword } from "./local-conat-password";
 import { getProjectHostMasterConatToken } from "./master-conat-token";
 import { applyProjectHostProcessTitle } from "./process-role";
+import { attachCurrentProcessToHostServiceCgroup } from "./host-service-cgroup";
 import { startProjectWithAdmission } from "./project-start-admission";
 import {
   runRuntimeConformanceStartupChecks,
@@ -111,6 +117,7 @@ import {
 import { ensureProjectHostKernelSysctls } from "./host-sysctl";
 import { startRuntimePostureMonitor } from "./runtime-posture";
 import { startProjectSnapshotBackupMaintenance } from "./snapshot-backup-maintenance";
+import { startStorageAdmissionController } from "./storage-admission";
 import {
   assertLocalBindOrInsecure,
   assertSecureUrlOrLocal,
@@ -148,6 +155,7 @@ import { getProjectHostActivitySnapshot } from "./health-progress";
 import {
   attachProjectHostConatRouterProxy,
   resolveProjectHostConatRouterUrl,
+  shouldRouteProjectHostIngressToApp,
 } from "./conat-router";
 import { PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH } from "@cocalc/conat/auth/project-host-browser-session";
 import {
@@ -185,6 +193,8 @@ import {
   startManagedRawNetworkEgressLoop,
 } from "./raw-network-egress";
 import { startManagedCpuUsageLoop } from "./cpu-usage";
+import { startExamWatchdog } from "./exam/controller";
+import { getExamUsageAccountId } from "./exam/usage";
 import { managedProjectEgressResidualTracker } from "./managed-egress-residual";
 import { startGcpPreemptionWatcher } from "./gcp-preemption";
 export { runPrivilegedRmHelper } from "./privileged-rm-helper";
@@ -217,6 +227,10 @@ const ACP_STARTUP_REHYDRATE_CONCURRENCY = Math.max(
 const PUBLIC_APP_ROUTE_CACHE_MS = Math.max(
   1000,
   Number(process.env.COCALC_PROJECT_HOST_PUBLIC_APP_ROUTE_CACHE_MS ?? 30_000),
+);
+const PRIVATE_APP_ROUTE_CACHE_MS = Math.max(
+  1000,
+  Number(process.env.COCALC_PROJECT_HOST_PRIVATE_APP_ROUTE_CACHE_MS ?? 30_000),
 );
 
 function formatManagedEgressCategory(category: string): string {
@@ -383,15 +397,16 @@ async function waitForProjectHttpPort(project_id: string): Promise<number> {
 }
 
 async function rehydrateAcpAutomationsOnStartup(): Promise<void> {
-  const provisionedProjectIds = listProjects()
-    .map((row) => `${row.project_id ?? ""}`.trim())
-    .filter(Boolean);
   const localAutomationProjectIds = listAcpAutomationProjectIds();
-  const { rehydrateProjectIds, staleProjectIds } =
-    partitionAcpStartupProjectIds({
-      provisionedProjectIds,
-      localAutomationProjectIds,
-    });
+  const rehydrateProjectIds: string[] = [];
+  const staleProjectIds: string[] = [];
+  for (const project_id of localAutomationProjectIds) {
+    if (getProject(project_id)) {
+      rehydrateProjectIds.push(project_id);
+    } else {
+      staleProjectIds.push(project_id);
+    }
+  }
 
   for (const project_id of staleProjectIds) {
     try {
@@ -415,7 +430,6 @@ async function rehydrateAcpAutomationsOnStartup(): Promise<void> {
   let restored = 0;
   let failed = 0;
   logger.info("starting ACP automation rehydrate after startup", {
-    provisioned_projects: provisionedProjectIds.length,
     local_automation_projects: localAutomationProjectIds.length,
     stale_local_projects: staleProjectIds.length,
     projects: rehydrateProjectIds.length,
@@ -440,7 +454,6 @@ async function rehydrateAcpAutomationsOnStartup(): Promise<void> {
     Array.from({ length: concurrency }, async () => await worker()),
   );
   logger.info("completed ACP automation rehydrate after startup", {
-    provisioned_projects: provisionedProjectIds.length,
     local_automation_projects: localAutomationProjectIds.length,
     stale_local_projects: staleProjectIds.length,
     projects: rehydrateProjectIds.length,
@@ -495,23 +508,34 @@ export async function main(
 
   // 1) HTTP + conat server
   const app = express();
+  let handlePrivateAppHttpRequest:
+    | ((
+        req: IncomingMessage,
+        res: ServerResponse,
+        next: NextFunction,
+      ) => Promise<void>)
+    | undefined;
+  // Private hostnames own their complete URL namespace, including paths such
+  // as /healthz and /conat that the project-host itself also serves.
+  app.use((req, res, next) => {
+    if (!handlePrivateAppHttpRequest) {
+      return next();
+    }
+    void handlePrivateAppHttpRequest(req, res, next).catch(next);
+  });
   app.use(express.json());
   const { httpServer } = await startHttpListener(app, port, host, tls);
   app.get("/healthz", (_req, res) =>
     res.json({
       ok: true,
       ready: healthState.ready,
+      host_id: hostId,
       pid: process.pid,
       activity: getProjectHostActivitySnapshot(),
       event_loop: getProjectHostEventLoopStallStatus(),
     }),
   );
   const conatRouterUrl = resolveProjectHostConatRouterUrl();
-  attachProjectHostConatRouterProxy({
-    app,
-    httpServer,
-    target: conatRouterUrl,
-  });
   const conatClient: ConatClient = connectToConat({
     address: conatRouterUrl,
     systemAccountPassword: localConatPassword,
@@ -875,7 +899,10 @@ export async function main(
     if (!(bytes > 0) || !isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
-        account_id,
+        account_id:
+          getProject(project_id)?.usage_account_id ??
+          (account_id ? getExamUsageAccountId(account_id) : undefined) ??
+          account_id,
         project_id,
         category: "file-download",
         bytes,
@@ -981,6 +1008,7 @@ export async function main(
     if (!(bytes > 0) || !isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
+        account_id: getProject(project_id)?.usage_account_id ?? undefined,
         project_id,
         category: MANAGED_HTTP_EGRESS_CATEGORY,
         bytes,
@@ -1098,6 +1126,7 @@ export async function main(
     if (!isProjectHostManagedEgressTrackingEnabled()) return;
     try {
       await hubApi.system.recordManagedProjectEgress({
+        account_id: getProject(project_id)?.usage_account_id ?? undefined,
         project_id,
         category: MANAGED_WS_EGRESS_CATEGORY,
         bytes,
@@ -1152,8 +1181,23 @@ export async function main(
     max: 20_000,
     ttl: PUBLIC_APP_ROUTE_CACHE_MS,
   });
-  const maybeRewritePublicHostnameRequest = async (req: IncomingMessage) => {
-    const currentUrl = `${req.url ?? ""}`;
+  const maybeRewritePrivateHostnameRequest =
+    createPrivateAppHostnameRequestRewriter({
+      cacheMs: PRIVATE_APP_ROUTE_CACHE_MS,
+      trace: async (hostname) =>
+        await hubApi.system.tracePrivateAppHostname({ hostname }),
+      onTraceError: (hostname, err) => {
+        logger.debug("private hostname trace failed", {
+          hostname,
+          err: `${err}`,
+        });
+      },
+    });
+  const maybeRewritePublicHostnameRequest = async (
+    req: IncomingMessage,
+    originalUrl?: string,
+  ) => {
+    const currentUrl = `${originalUrl ?? req.url ?? ""}`;
     if (!currentUrl || currentUrl.startsWith(`/${hostId}/`)) {
       return;
     }
@@ -1198,10 +1242,43 @@ export async function main(
     });
     req.headers[PUBLIC_APP_HOST_HEADER] = hostname;
   };
-  attachProjectProxy({
+  const maybeRewriteAppHostnameRequest = createAppHostnameRequestRewriteBarrier(
+    {
+      shouldClaim: (req) => {
+        if (
+          req.headers[PRIVATE_APP_HOST_HEADER] ||
+          req.headers[PUBLIC_APP_HOST_HEADER]
+        ) {
+          return false;
+        }
+        const parsed = new URL(
+          `${req.url ?? "/"}`,
+          "http://project-host.local",
+        );
+        const maybeProjectPrefix = (parsed.pathname || "/").split("/")[1];
+        if (maybeProjectPrefix && isValidUUID(maybeProjectPrefix)) {
+          return false;
+        }
+        return shouldRouteProjectHostIngressToApp(req);
+      },
+      rewrite: async (req, originalUrl) => {
+        await maybeRewritePrivateHostnameRequest(req, originalUrl);
+        if (req.headers[PRIVATE_APP_HOST_HEADER]) return;
+        await maybeRewritePublicHostnameRequest(req, originalUrl);
+      },
+    },
+  );
+  attachProjectHostConatRouterProxy({
+    app,
+    httpServer,
+    target: conatRouterUrl,
+    rewriteIngressRequest: maybeRewriteAppHostnameRequest,
+  });
+  const projectProxyHandlers = attachProjectProxy({
     httpServers: [httpServer],
     app,
-    rewriteRequest: maybeRewritePublicHostnameRequest,
+    rewriteRequest: maybeRewriteAppHostnameRequest,
+    rewriteResponse: rewritePrivateAppHostnameResponseLocation,
     noteUpstreamHttpBytes: ({ req, bytes }) => {
       noteManagedBoundaryClassifiedBytes({
         req,
@@ -1385,6 +1462,8 @@ export async function main(
       }
       const publicAppHost =
         `${req.headers[PUBLIC_APP_HOST_HEADER] ?? ""}`.trim();
+      const privateAppHost =
+        `${req.headers[PRIVATE_APP_HOST_HEADER] ?? ""}`.trim();
       const isManagedHttpRoute =
         !!res && isManagedProjectHttpEgressRequest(req, project_id);
       const isManagedWsRoute =
@@ -1437,10 +1516,11 @@ export async function main(
           exposure_mode: publicAppHost ? "public" : "private",
         });
       }
-      if (publicAppHost) {
-        req.headers.host = publicAppHost;
+      if (publicAppHost || privateAppHost) {
+        req.headers.host = publicAppHost || privateAppHost;
       }
       delete req.headers[PUBLIC_APP_HOST_HEADER];
+      delete req.headers[PRIVATE_APP_HOST_HEADER];
       if (res) {
         const match = await matchAppRequest({
           project_id,
@@ -1495,6 +1575,13 @@ export async function main(
       return { handled: true, target: { host: "127.0.0.1", port: http_port } };
     },
   });
+  handlePrivateAppHttpRequest = async (req, res, next) => {
+    await maybeRewritePrivateHostnameRequest(req);
+    if (!req.headers[PRIVATE_APP_HOST_HEADER]) {
+      return next();
+    }
+    await projectProxyHandlers.handleRequest(req, res, next);
+  };
 
   logger.info(
     "Serve per-project files via the fs.* conat service, mounting from the local file-server.",
@@ -1513,6 +1600,7 @@ export async function main(
     timeout: PROJECT_RUNNER_RPC_TIMEOUT_MS,
   });
   wireProjectsApi(runnerApi);
+  startExamWatchdog();
   const stopRawNetworkEgressLoop = startManagedRawNetworkEgressLoop({
     runnerApi,
   });
@@ -1575,13 +1663,6 @@ export async function main(
         force,
       }),
     reconcileProjectNetworkLimits,
-    recoverStaleRuntime: async (project_id) => {
-      const stopped = await runnerApi.stop({ project_id, force: true });
-      if (stopped?.state === "opened") {
-        return stopped.state;
-      }
-      return (await runnerApi.status({ project_id }))?.state;
-    },
   });
   const stopDataPermissionHardener = startDataPermissionHardener(dataDir);
 
@@ -1590,6 +1671,7 @@ export async function main(
   logger.info("File-server (local btrfs + optional ssh proxy if enabled)");
   let stopRuntimePostureMonitor: () => void = () => {};
   let stopSnapshotBackupMaintenance: () => void = () => {};
+  let stopStorageAdmissionController: () => void = () => {};
   try {
     await initFileServer({ client: conatClient });
     if (!stopOnPremTunnel) {
@@ -1598,9 +1680,7 @@ export async function main(
       });
     }
     stopRuntimePostureMonitor = startRuntimePostureMonitor();
-    stopProvisionedInventoryReporter = startProvisionedInventoryReporter({
-      listProjectIds: listProvisionedProjects,
-    });
+    stopStorageAdmissionController = startStorageAdmissionController();
     stopSnapshotBackupMaintenance = startProjectSnapshotBackupMaintenance({
       hostId,
     });
@@ -1619,6 +1699,10 @@ export async function main(
   resolveStartupReady();
   await masterRegistration?.heartbeat();
   logger.info("project-host ready");
+  stopProvisionedInventoryReporter = startProvisionedInventoryReporter({
+    bootstrapProjectIds: bootstrapProvisionedProjectInventory,
+    verifyBatch: verifyProvisionedProjectInventoryBatch,
+  });
   void rehydrateAcpAutomationsOnStartup().catch((err) => {
     logger.warn("startup ACP automation rehydrate failed", {
       err: `${err}`,
@@ -1663,6 +1747,7 @@ export async function main(
     stopRuntimeConformanceMonitor?.();
     stopRuntimePostureMonitor?.();
     stopSnapshotBackupMaintenance?.();
+    stopStorageAdmissionController?.();
     stopRawNetworkEgressLoop?.();
     stopCpuUsageLoop?.();
     stopEventLoopStallMonitor?.();
@@ -1711,6 +1796,7 @@ if (require.main === module) {
   applyProjectHostProcessTitle();
   process.env.COCALC_CONAT_CLUSTER_NODE_ENTRYPOINT = __filename;
   if (`${process.env.COCALC_CONAT_CLUSTER_NODE ?? ""}`.trim() === "1") {
+    attachCurrentProcessToHostServiceCgroup();
     runConatRouterClusterNodeMain().catch((err) => {
       console.error("project-host conat router cluster node failed:", err);
       process.exit(1);
@@ -1718,6 +1804,7 @@ if (require.main === module) {
   } else if (
     `${process.env.COCALC_PROJECT_HOST_ACP_WORKER ?? ""}`.trim() === "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runAcpWorkerMain()
       .then(() => {
         process.exit(0);
@@ -1730,6 +1817,7 @@ if (require.main === module) {
     `${process.env.COCALC_PROJECT_HOST_CONAT_ROUTER_DAEMON ?? ""}`.trim() ===
     "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runConatRouterDaemonMain().catch((err) => {
       console.error("project-host conat router daemon failed:", err);
       process.exit(1);
@@ -1738,11 +1826,13 @@ if (require.main === module) {
     `${process.env.COCALC_PROJECT_HOST_CONAT_PERSIST_DAEMON ?? ""}`.trim() ===
     "1"
   ) {
+    attachCurrentProcessToHostServiceCgroup();
     runConatPersistDaemonMain().catch((err) => {
       console.error("project-host conat persist daemon failed:", err);
       process.exit(1);
     });
   } else if (`${process.env.COCALC_PROJECT_HOST_AGENT ?? ""}`.trim() === "1") {
+    attachCurrentProcessToHostServiceCgroup();
     runHostAgentMain(process.argv.slice(2)).catch((err) => {
       console.error("project-host host-agent failed:", err);
       process.exit(1);
@@ -1760,6 +1850,7 @@ if (require.main === module) {
       console.error(`${err}`);
       process.exit(1);
     }
+    attachCurrentProcessToHostServiceCgroup();
     main().catch((err) => {
       console.error("project-host failed to start:", err);
       process.exitCode = 1;

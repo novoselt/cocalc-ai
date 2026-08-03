@@ -6,6 +6,8 @@
 import {
   ioClassFromSharedComputePriority,
   normalizeMembershipProjectDefaults,
+  normalizeSharedComputePriority,
+  runtimeSchedulingFromSharedComputePriority,
 } from "./project-defaults";
 
 describe("normalizeMembershipProjectDefaults", () => {
@@ -42,5 +44,22 @@ describe("membership project I/O class", () => {
     [99, "premium"],
   ])("maps shared compute priority %p to %s", (priority, expected) => {
     expect(ioClassFromSharedComputePriority(priority)).toBe(expected);
+  });
+
+  it.each([
+    [undefined, 0],
+    [-1, 0],
+    [0, 0],
+    [1.9, 1],
+    ["4", 4],
+  ])("normalizes shared compute priority %p to %p", (priority, expected) => {
+    expect(normalizeSharedComputePriority(priority)).toBe(expected);
+  });
+
+  it("preserves exact CPU priority alongside the storage class", () => {
+    expect(runtimeSchedulingFromSharedComputePriority(2)).toEqual({
+      io_class: "member",
+      shared_compute_priority: 2,
+    });
   });
 });

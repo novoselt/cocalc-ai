@@ -9,13 +9,19 @@ import type {
   ProjectState,
 } from "@cocalc/util/db-schema/projects";
 import type { SnapshotSchedule } from "@cocalc/util/consts/snapshots";
-import type { HostPressureZone } from "@cocalc/conat/hub/api/hosts";
+import type {
+  HostExamConfig,
+  HostExamRun,
+  HostExamRuntimeStatus,
+  HostPressureZone,
+} from "@cocalc/conat/hub/api/hosts";
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
 import type {
   ProjectSecretsRuntimeCache,
   ProjectSecretsRuntimeRefreshResult,
   ProjectSecretSshKeySetupResult,
 } from "@cocalc/util/project-secrets";
+import type { ProjectEnv } from "@cocalc/conat/hub/api/projects";
 import type {
   RootfsTrivyHostScanRequest,
   RootfsTrivyHostScanResponse,
@@ -29,6 +35,9 @@ export interface HostCreateProjectRequest extends CreateProjectOptions {
   users?: any;
   authorized_keys?: string;
   run_quota?: any;
+  local_only?: boolean;
+  exam_run_id?: string;
+  usage_account_id?: string;
 }
 
 export interface HostCreateProjectResponse {
@@ -37,6 +46,18 @@ export interface HostCreateProjectResponse {
   project_bundle_version?: string;
   tools_version?: string;
   phase_timings_ms?: Record<string, number>;
+}
+
+export interface HostProjectStartMetadata {
+  title?: string;
+  users?: any;
+  image?: string;
+  authorized_keys?: string;
+  run_quota?: any;
+  run_quota_revision?: number;
+  env?: ProjectEnv;
+  autostart_enabled?: boolean | null;
+  project_secrets_cache?: ProjectSecretsRuntimeCache;
 }
 
 export interface HostProjectStateResponse {
@@ -414,6 +435,7 @@ export type HostManagedComponentRolloutAction =
 export interface HostManagedComponentRolloutRequest {
   components: ManagedComponentKind[];
   reason?: string;
+  desired_version?: string;
 }
 
 export interface HostManagedComponentRolloutResult {
@@ -494,6 +516,12 @@ export interface ProjectHostOriginHealth {
   error?: string;
 }
 
+export interface ApplyHostExamRunRequest {
+  config: HostExamConfig;
+  run: HostExamRun;
+  token_hash: string;
+}
+
 export interface HostControlApi {
   probePublicRouteOrigin: () => Promise<ProjectHostOriginHealth>;
   restartCloudflared: (opts: {
@@ -513,6 +541,37 @@ export interface HostControlApi {
     finished_at: string;
     duration_ms: number;
   }>;
+  applyExamRun: (
+    opts: ApplyHostExamRunRequest,
+  ) => Promise<HostExamRuntimeStatus>;
+  getExamRunStatus: (opts?: {
+    run_id?: string;
+  }) => Promise<HostExamRuntimeStatus>;
+  openExamRun: (opts: {
+    run_id: string;
+    config_generation: number;
+  }) => Promise<HostExamRuntimeStatus>;
+  updateExamRunDeadline: (opts: {
+    run_id: string;
+    config_generation: number;
+    scheduled_stop_at: string;
+    stop_host_at_deadline?: boolean;
+  }) => Promise<HostExamRuntimeStatus>;
+  increaseExamRunCapacity: (opts: {
+    run_id: string;
+    config_generation: number;
+    max_projects: number;
+  }) => Promise<HostExamRuntimeStatus>;
+  rotateExamRunToken: (opts: {
+    run_id: string;
+    config_generation: number;
+    token_hash: string;
+  }) => Promise<HostExamRuntimeStatus>;
+  closeAndCleanupExamRun: (opts: {
+    run_id: string;
+    config_generation: number;
+    poweroff?: boolean;
+  }) => Promise<HostExamRuntimeStatus>;
   createProject: (
     opts: HostCreateProjectRequest,
   ) => Promise<HostCreateProjectResponse>;
@@ -520,11 +579,29 @@ export interface HostControlApi {
     project_id: string;
     authorized_keys?: string;
     run_quota?: any;
+    run_quota_revision?: number;
     image?: string;
     restore?: "none" | "auto" | "required";
     restore_backup_id?: string;
+    apply_pending_copies?: boolean;
     lro_op_id?: string;
     managed_egress_override?: ManagedProjectEgressOverride;
+    start_metadata?: HostProjectStartMetadata;
+  }) => Promise<HostCreateProjectResponse>;
+  // A distinct method keeps mixed-version rollout safe: old hosts reject it,
+  // allowing the bay to fall back to status + legacy start.
+  startProjectIdempotent: (opts: {
+    project_id: string;
+    authorized_keys?: string;
+    run_quota?: any;
+    run_quota_revision?: number;
+    image?: string;
+    restore?: "none" | "auto" | "required";
+    restore_backup_id?: string;
+    apply_pending_copies?: boolean;
+    lro_op_id?: string;
+    managed_egress_override?: ManagedProjectEgressOverride;
+    start_metadata?: HostProjectStartMetadata;
   }) => Promise<HostCreateProjectResponse>;
   stopProject: (opts: {
     project_id: string;
@@ -543,6 +620,7 @@ export interface HostControlApi {
   updateProjectRunQuota: (opts: {
     project_id: string;
     run_quota?: any;
+    run_quota_revision?: number;
   }) => Promise<{
     status: "already_current" | "repaired" | "not_running";
     requested_memory_max?: string;
@@ -565,6 +643,11 @@ export interface HostControlApi {
   deleteProjectData: (opts: { project_id: string }) => Promise<void>;
   upgradeSoftware: (
     opts: UpgradeSoftwareRequest,
+  ) => Promise<UpgradeSoftwareResponse>;
+  // A distinct RPC makes old hosts reject stage-only requests instead of
+  // interpreting them as normal project-host activation.
+  stageProjectHostArtifact: (
+    opts: StageProjectHostArtifactRequest,
   ) => Promise<UpgradeSoftwareResponse>;
   growBtrfs: (opts: { disk_gb?: number }) => Promise<{ ok: boolean }>;
   growSharedScratch: (opts: { disk_gb?: number }) => Promise<{ ok: boolean }>;
@@ -787,17 +870,26 @@ export interface UpgradeSoftwareRequest {
   targets: SoftwareUpgradeTarget[];
   base_url?: string;
   restart_project_host?: boolean;
+  // Install component code without changing the project-host process selected
+  // by the shared current link.
+  activate_project_host?: boolean;
   retention_policy?: HostRuntimeRetentionPolicy;
 }
 
 export interface UpgradeSoftwareResult {
   artifact: SoftwareArtifact;
   version: string;
-  status: "updated" | "noop";
+  status: "updated" | "staged" | "noop";
 }
 
 export interface UpgradeSoftwareResponse {
   results: UpgradeSoftwareResult[];
+}
+
+export interface StageProjectHostArtifactRequest {
+  version: string;
+  base_url?: string;
+  retention_policy?: HostRuntimeRetentionPolicy;
 }
 
 export interface HostStatusApi {

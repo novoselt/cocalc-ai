@@ -76,38 +76,58 @@ export function projectPortOffsetFromHttpPort(
   return offsetFromHttpPort(port);
 }
 
-function currentRunningProjectPorts(project_id: string): {
-  sshOffsets: Set<number>;
-  httpOffsets: Set<number>;
-} {
-  const sshOffsets = new Set<number>();
-  const httpOffsets = new Set<number>();
+export function projectPortLeasePreferredOffset(project_id: string): number {
+  // FNV-1a distributes first probes across the fixed port range. This avoids
+  // walking a dense prefix as the host accumulates projects.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < project_id.length; i += 1) {
+    hash ^= project_id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % PROJECT_PORT_LEASE_CAPACITY;
+}
+
+function projectPortOffsetIsActive(
+  project_id: string,
+  offset: number,
+): boolean {
   const db = getDatabase();
   try {
-    const rows = db
+    const row = db
       .prepare(
         `
-          SELECT project_id, ssh_port, http_port
+          SELECT 1
           FROM projects
           WHERE project_id != ?
             AND state IN ('running', 'starting')
+            AND (ssh_port = ? OR http_port = ?)
+          LIMIT 1
         `,
       )
-      .all(project_id) as Array<{
-      project_id: string;
-      ssh_port?: number | null;
-      http_port?: number | null;
-    }>;
-    for (const row of rows) {
-      const sshOffset = offsetFromSshPort(row.ssh_port);
-      if (sshOffset != null) sshOffsets.add(sshOffset);
-      const httpOffset = offsetFromHttpPort(row.http_port);
-      if (httpOffset != null) httpOffsets.add(httpOffset);
-    }
+      .get(
+        project_id,
+        SSH_PORT_LEASE_START + offset,
+        HTTP_PORT_LEASE_START + offset,
+      );
+    return row != null;
   } catch {
     // The projects table may not exist yet during early startup/tests.
+    return false;
   }
-  return { sshOffsets, httpOffsets };
+}
+
+function projectPortOffsetIsCooling(offset: number, now: number): boolean {
+  const db = getDatabase();
+  db.prepare(
+    "DELETE FROM project_port_cooldowns WHERE offset=? AND expires_at<=?",
+  ).run(offset, now);
+  return (
+    db
+      .prepare(
+        "SELECT 1 FROM project_port_cooldowns WHERE offset=? AND expires_at>?",
+      )
+      .get(offset, now) != null
+  );
 }
 
 export function getProjectPortLease(
@@ -231,59 +251,47 @@ export function acquireProjectPortLease(
     );
   }
 
-  const rows = db
-    .prepare(
-      `
-        SELECT project_id, ssh_port, http_port
-        FROM project_port_leases
-        WHERE project_id != ?
-      `,
-    )
-    .all(project_id) as Array<{
-    project_id: string;
-    ssh_port: number;
-    http_port: number;
-  }>;
-  const usedOffsets = new Set<number>();
+  const avoidOffsets = new Set<number>();
   if (opts?.rotate) {
     const previousSshOffset = offsetFromSshPort(previous?.ssh_port);
-    if (previousSshOffset != null) usedOffsets.add(previousSshOffset);
+    if (previousSshOffset != null) avoidOffsets.add(previousSshOffset);
     const previousHttpOffset = offsetFromHttpPort(previous?.http_port);
-    if (previousHttpOffset != null) usedOffsets.add(previousHttpOffset);
-  }
-  for (const row of rows) {
-    const sshOffset = offsetFromSshPort(row.ssh_port);
-    if (sshOffset != null) usedOffsets.add(sshOffset);
-    const httpOffset = offsetFromHttpPort(row.http_port);
-    if (httpOffset != null) usedOffsets.add(httpOffset);
-  }
-  const runningPorts = currentRunningProjectPorts(project_id);
-  for (const offset of runningPorts.sshOffsets) usedOffsets.add(offset);
-  for (const offset of runningPorts.httpOffsets) usedOffsets.add(offset);
-  for (const offset of getCoolingProjectPortOffsets()) {
-    usedOffsets.add(offset);
+    if (previousHttpOffset != null) avoidOffsets.add(previousHttpOffset);
   }
   for (const offset of opts?.avoidOffsets ?? []) {
     if (Number.isInteger(offset)) {
-      usedOffsets.add(Number(offset));
+      avoidOffsets.add(Number(offset));
     }
   }
 
-  for (let offset = 0; offset < PROJECT_PORT_LEASE_CAPACITY; offset += 1) {
-    if (usedOffsets.has(offset)) continue;
+  const preferredOffset = projectPortLeasePreferredOffset(project_id);
+  for (let probe = 0; probe < PROJECT_PORT_LEASE_CAPACITY; probe += 1) {
+    const offset = (preferredOffset + probe) % PROJECT_PORT_LEASE_CAPACITY;
+    if (avoidOffsets.has(offset)) continue;
+    const now = Date.now();
+    if (projectPortOffsetIsCooling(offset, now)) continue;
+    if (projectPortOffsetIsActive(project_id, offset)) continue;
     const row: ProjectPortLeaseRow = {
       project_id,
       ssh_port: SSH_PORT_LEASE_START + offset,
       http_port: HTTP_PORT_LEASE_START + offset,
-      updated_at: Date.now(),
+      updated_at: now,
     };
-    db.prepare(
-      `
-        INSERT INTO project_port_leases(project_id, ssh_port, http_port, updated_at)
-        VALUES (?, ?, ?, ?)
-      `,
-    ).run(row.project_id, row.ssh_port, row.http_port, row.updated_at);
-    return row;
+    const inserted = db
+      .prepare(
+        `
+          INSERT OR IGNORE INTO project_port_leases(
+            project_id, ssh_port, http_port, updated_at
+          )
+          VALUES (?, ?, ?, ?)
+        `,
+      )
+      .run(row.project_id, row.ssh_port, row.http_port, row.updated_at);
+    if (Number(inserted.changes) === 1) {
+      return row;
+    }
+    const concurrent = getProjectPortLease(project_id);
+    if (concurrent) return concurrent;
   }
 
   throw new Error(

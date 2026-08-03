@@ -147,6 +147,23 @@ async function ensureSupplementalSchemas(): Promise<void> {
       PRIMARY KEY (project_id, app_id)
     )
   `);
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS project_app_private_hostnames (
+      project_id UUID NOT NULL,
+      app_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      hostname TEXT NOT NULL,
+      base_path TEXT NOT NULL,
+      dns_record_id TEXT,
+      dns_target TEXT,
+      created_by UUID NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_dns_error TEXT,
+      PRIMARY KEY (project_id, app_id),
+      UNIQUE (hostname)
+    )
+  `);
 }
 
 async function seedProject(project_id: string): Promise<void> {
@@ -235,6 +252,15 @@ async function seedCleanupRows(): Promise<void> {
        (project_id, app_id, label, hostname, base_path, ttl_s, dns_record_id)
      VALUES ($1, 'server', 'server', 'server.example.com', '/', 60, 'dns-1')`,
     [PROJECT_ID],
+  );
+  await getPool().query(
+    `INSERT INTO project_app_private_hostnames
+       (project_id, app_id, label, hostname, base_path, dns_record_id,
+        dns_target, created_by)
+     VALUES
+       ($1, 'private-server', 'dev-private', 'dev-private.example.com',
+        '/apps/private-server', 'dns-private-1', 'host.example.com', $2)`,
+    [PROJECT_ID, ACCOUNT_ID],
   );
   await getPool().query(
     `INSERT INTO project_events_outbox
@@ -335,6 +361,7 @@ describe("hard delete project cleanup", () => {
         notification_events_outbox,
         patches,
         project_active_operations,
+        project_app_private_hostnames,
         project_app_public_subdomains,
         project_backup_indexes,
         project_backup_repo_assignments,
@@ -370,6 +397,7 @@ describe("hard delete project cleanup", () => {
         "notification_events_outbox",
         "patches",
         "project_active_operations",
+        "project_app_private_hostnames",
         "project_app_public_subdomains",
         "project_backup_indexes",
         "project_backup_repo_assignments",
@@ -397,6 +425,9 @@ describe("hard delete project cleanup", () => {
     await expect(
       countRows("project_app_public_subdomains", "project_id=$1"),
     ).resolves.toBe(0);
+    await expect(
+      countRows("project_app_private_hostnames", "project_id=$1"),
+    ).resolves.toBe(0);
     await expect(countRows("project_labels", "project_id=$1")).resolves.toBe(0);
     await expect(
       countRows("project_rootfs_builds", "project_id=$1"),
@@ -404,6 +435,10 @@ describe("hard delete project cleanup", () => {
     expect(deleteAppSubdomainDnsMock).toHaveBeenCalledWith({
       record_id: "dns-1",
       hostname: "server.example.com",
+    });
+    expect(deleteAppSubdomainDnsMock).toHaveBeenCalledWith({
+      record_id: "dns-private-1",
+      hostname: "dev-private.example.com",
     });
     await expect(countRows("syncstrings", "project_id=$1")).resolves.toBe(0);
     await expect(

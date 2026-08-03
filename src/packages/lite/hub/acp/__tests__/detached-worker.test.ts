@@ -1315,6 +1315,20 @@ describe("shouldCompleteAcpTurnAfterTerminalStorageFailure", () => {
     ).toBe(true);
   });
 
+  it("completes summary turns retained in the durable payload queue", () => {
+    expect(
+      shouldCompleteAcpTurnAfterTerminalStorageFailure({
+        err: Object.assign(new Error("terminal storage timed out"), {
+          code: "ACP_TERMINAL_STORAGE_TIMEOUT",
+        }),
+        phase: "terminal-summary",
+        finishedBy: "summary",
+        terminalRowAlreadyPersisted: false,
+        recoverableSummaryQueued: true,
+      }),
+    ).toBe(true);
+  });
+
   it("does not hide real storage failures or unverified terminal rows", () => {
     expect(
       shouldCompleteAcpTurnAfterTerminalStorageFailure({

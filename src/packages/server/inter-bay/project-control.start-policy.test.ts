@@ -12,6 +12,7 @@ let heartbeatSlotMock: jest.Mock;
 let isAdminMock: jest.Mock;
 let countsTowardManagedCpuBudgetForHostMock: jest.Mock;
 let getManagedProjectCpuPolicyMock: jest.Mock;
+let assertProjectStartAllowedDuringMoveMock: jest.Mock;
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -68,6 +69,12 @@ jest.mock("@cocalc/server/projects/runtime-slots", () => ({
   releaseProjectRuntimeSlot: jest.fn(async () => undefined),
   getProjectRuntimeSlotDenial: jest.fn(async () => null),
   RuntimeSponsorSlotsExhaustedError: class RuntimeSponsorSlotsExhaustedError extends Error {},
+}));
+
+jest.mock("@cocalc/server/projects/move-guard", () => ({
+  __esModule: true,
+  assertProjectStartAllowedDuringMove: (...args: any[]) =>
+    assertProjectStartAllowedDuringMoveMock(...args),
 }));
 
 jest.mock("@cocalc/server/membership/managed-cpu-scope", () => ({
@@ -147,6 +154,7 @@ describe("project-control runtime sponsor start policy", () => {
     isAdminMock = jest.fn(async () => false);
     countsTowardManagedCpuBudgetForHostMock = jest.fn(async () => true);
     getManagedProjectCpuPolicyMock = jest.fn(async () => ({ allowed: true }));
+    assertProjectStartAllowedDuringMoveMock = jest.fn(async () => undefined);
   });
 
   it("blocks ordinary collaborator starts when sponsor starts are disabled", async () => {
@@ -205,6 +213,46 @@ describe("project-control runtime sponsor start policy", () => {
 
     expect(reserveSlotMock).not.toHaveBeenCalled();
     expect(startMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks starts while another project move owns the guard", async () => {
+    mockProjectRow({});
+    assertProjectStartAllowedDuringMoveMock.mockRejectedValue(
+      new Error("Project is being moved"),
+    );
+    const { handleProjectControlStart } = await import("./project-control");
+
+    await expect(
+      handleProjectControlStart({
+        project_id: "project-1",
+        account_id: "owner",
+        lro_op_id: "op-1",
+        source_bay_id: "bay-0",
+        epoch: 0,
+      }),
+    ).rejects.toThrow("Project is being moved");
+
+    expect(reserveSlotMock).not.toHaveBeenCalled();
+    expect(startMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the move id to the owning-bay guard", async () => {
+    mockProjectRow({});
+    const { handleProjectControlCheckStartAdmission } =
+      await import("./project-control");
+
+    await handleProjectControlCheckStartAdmission({
+      project_id: "project-1",
+      account_id: "owner",
+      project_move_id: "move-1",
+      source_bay_id: "bay-0",
+      epoch: 0,
+    });
+
+    expect(assertProjectStartAllowedDuringMoveMock).toHaveBeenCalledWith({
+      project_id: "project-1",
+      project_move_id: "move-1",
+    });
   });
 
   it("allows explicit manual start when automatic starts are disabled", async () => {

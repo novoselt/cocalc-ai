@@ -7,7 +7,12 @@ import {
 } from "@cocalc/lite/hub/sqlite/database";
 import { account_id } from "@cocalc/backend/data";
 import { randomBytes } from "crypto";
+import { normalizeRootfsImageName } from "@cocalc/util/rootfs-images";
 import { releaseProjectPortLease } from "./port-leases";
+import {
+  acceptProjectVolumeQuotaDesired,
+  deleteProjectVolumeQuotas,
+} from "./volume-quotas";
 
 function parseRunQuota(run_quota?: any): any | undefined {
   if (run_quota == null) return undefined;
@@ -83,6 +88,7 @@ function serializeStringArray(value?: string[]): string | null {
 // - authorized_keys: concatenated SSH keys from master (account + project keys); the project’s own
 //   ~/.ssh/authorized_keys is read directly from the filesystem at auth time.
 // - run_quota: resource limits/settings passed from the master (mirrors projects.run_quota in Postgres)
+// - run_quota_revision: monotonic owning-bay revision for run_quota
 // - secret_names: names of project secrets seen in authoritative metadata.
 //   Values are not persisted locally; this lets project start fail closed when
 //   the master is unavailable but the project is known to require secrets.
@@ -91,6 +97,7 @@ export interface ProjectRow {
   title?: string;
   state?: string;
   state_reported?: boolean;
+  state_updated_at?: number;
   runtime_exit_reason?: string | null;
   image?: string;
   disk?: number;
@@ -105,12 +112,24 @@ export interface ProjectRow {
   secret_token?: string | null;
   authorized_keys?: string | null;
   run_quota?: any;
+  run_quota_revision?: number;
   secret_names?: string[];
+  local_only?: boolean;
+  exam_run_id?: string | null;
+  usage_account_id?: string | null;
 }
 
 export interface ProjectRuntimeArtifactReference {
   version: string;
   project_count: number;
+}
+
+export interface ProjectQuotaRepairRow {
+  project_id: string;
+  state?: string;
+  disk?: number;
+  scratch?: number;
+  run_quota_revision?: number;
 }
 
 function ensureProjectsTable() {
@@ -123,6 +142,7 @@ function ensureProjectsTable() {
       title TEXT,
       state TEXT,
       state_reported INTEGER,
+      state_updated_at INTEGER,
       runtime_exit_reason TEXT,
       image TEXT,
       disk INTEGER,
@@ -136,7 +156,11 @@ function ensureProjectsTable() {
       secret_token TEXT,
       authorized_keys TEXT,
       run_quota TEXT,
-      secret_names TEXT
+      run_quota_revision INTEGER,
+      secret_names TEXT,
+      local_only INTEGER,
+      exam_run_id TEXT,
+      usage_account_id TEXT
     )
   `);
   // Older tables won't have state_reported; add it if missing.
@@ -145,6 +169,9 @@ function ensureProjectsTable() {
   } catch (err) {
     // ignore - column already exists
   }
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN state_updated_at INTEGER");
+  } catch {}
   try {
     db.exec("ALTER TABLE projects ADD COLUMN runtime_exit_reason TEXT");
   } catch {}
@@ -170,10 +197,35 @@ function ensureProjectsTable() {
     db.exec("ALTER TABLE projects ADD COLUMN run_quota TEXT");
   } catch {}
   try {
+    db.exec("ALTER TABLE projects ADD COLUMN run_quota_revision INTEGER");
+  } catch {}
+  try {
     db.exec("ALTER TABLE projects ADD COLUMN secret_names TEXT");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN local_only INTEGER");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN exam_run_id TEXT");
+  } catch {}
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN usage_account_id TEXT");
   } catch {}
   db.exec(
     "CREATE INDEX IF NOT EXISTS projects_state_idx ON projects(state, updated_at)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_active_ssh_port_idx ON projects(ssh_port) WHERE state IN ('running', 'starting')",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_active_http_port_idx ON projects(http_port) WHERE state IN ('running', 'starting')",
+  );
+  db.exec("CREATE INDEX IF NOT EXISTS projects_image_idx ON projects(image)");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_quota_repair_idx ON projects(project_id) WHERE disk > 0 OR scratch > 0",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS projects_exam_run_idx ON projects(exam_run_id) WHERE exam_run_id IS NOT NULL",
   );
 }
 
@@ -187,7 +239,7 @@ export function upsertProject(row: ProjectRow) {
   const existingProjectsRow =
     db
       .prepare(
-        "SELECT state, state_reported, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
+        "SELECT state, state_reported, state_updated_at, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects WHERE project_id=?",
       )
       .get(row.project_id) || {};
   const existing = getRow("projects", pk) || {};
@@ -210,7 +262,39 @@ export function upsertProject(row: ProjectRow) {
   const existingRunQuota = parseRunQuota(
     (existingProjectsRow as any).run_quota ?? (existing as any).run_quota,
   );
-  const run_quota = incomingRunQuota ?? existingRunQuota;
+  const existingRunQuotaRevision = Number(
+    (existingProjectsRow as any).run_quota_revision ??
+      (existing as any).run_quota_revision ??
+      0,
+  );
+  const hasIncomingRunQuotaRevision =
+    row.run_quota_revision != null &&
+    Number.isFinite(Number(row.run_quota_revision));
+  const incomingRunQuotaRevision = hasIncomingRunQuotaRevision
+    ? Math.max(0, Math.floor(Number(row.run_quota_revision)))
+    : undefined;
+  if (
+    incomingRunQuota != null &&
+    incomingRunQuotaRevision != null &&
+    incomingRunQuotaRevision === existingRunQuotaRevision &&
+    existingRunQuota != null &&
+    serializeRunQuota(incomingRunQuota) !== serializeRunQuota(existingRunQuota)
+  ) {
+    throw new Error(
+      `conflicting run_quota for project ${row.project_id} at revision ${incomingRunQuotaRevision}`,
+    );
+  }
+  const acceptIncomingRunQuota =
+    incomingRunQuota != null &&
+    (incomingRunQuotaRevision == null
+      ? existingRunQuotaRevision === 0
+      : incomingRunQuotaRevision >= existingRunQuotaRevision);
+  const run_quota = acceptIncomingRunQuota
+    ? incomingRunQuota
+    : existingRunQuota;
+  const run_quota_revision = acceptIncomingRunQuota
+    ? (incomingRunQuotaRevision ?? existingRunQuotaRevision)
+    : existingRunQuotaRevision;
   const diskFromQuota =
     run_quota?.disk_quota != null
       ? Math.floor(run_quota.disk_quota * 1_000_000)
@@ -265,6 +349,18 @@ export function upsertProject(row: ProjectRow) {
     ? (parseStringArray(row.secret_names) ?? [])
     : parseStringArray((existingProjectsRow as any).secret_names);
   const secret_names_json = serializeStringArray(secret_names);
+  const local_only =
+    row.local_only ?? Boolean((existingProjectsRow as any).local_only);
+  const exam_run_id =
+    row.exam_run_id ??
+    (existingProjectsRow as any).exam_run_id ??
+    (existing as any).exam_run_id ??
+    null;
+  const usage_account_id =
+    row.usage_account_id ??
+    (existingProjectsRow as any).usage_account_id ??
+    (existing as any).usage_account_id ??
+    null;
 
   // Track whether the latest state has been reported to the master.
   // If a state is explicitly provided and differs from the current one,
@@ -277,6 +373,12 @@ export function upsertProject(row: ProjectRow) {
     (row.state !== undefined && row.state !== existingProjectsRow.state) ||
     (hasRuntimeExitReason &&
       runtime_exit_reason !== existingProjectsRow.runtime_exit_reason);
+  const state_updated_at = stateChanged
+    ? (row.state_updated_at ?? row.updated_at ?? now)
+    : (existingProjectsRow.state_updated_at ??
+      row.state_updated_at ??
+      row.updated_at ??
+      now);
   if (state_reported === undefined) {
     if (stateChanged) {
       state_reported = 0;
@@ -288,12 +390,13 @@ export function upsertProject(row: ProjectRow) {
   }
 
   const stmt = db.prepare(`
-    INSERT INTO projects(project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects(project_id, title, state, state_reported, state_updated_at, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id) DO UPDATE SET
       title=excluded.title,
       state=excluded.state,
       state_reported=excluded.state_reported,
+      state_updated_at=excluded.state_updated_at,
       runtime_exit_reason=excluded.runtime_exit_reason,
       image=excluded.image,
       disk=excluded.disk,
@@ -307,13 +410,18 @@ export function upsertProject(row: ProjectRow) {
       secret_token=excluded.secret_token,
       authorized_keys=excluded.authorized_keys,
       run_quota=excluded.run_quota,
-      secret_names=excluded.secret_names
+      run_quota_revision=excluded.run_quota_revision,
+      secret_names=excluded.secret_names,
+      local_only=excluded.local_only,
+      exam_run_id=excluded.exam_run_id,
+      usage_account_id=excluded.usage_account_id
   `);
   stmt.run(
     row.project_id,
     title,
     state,
     state_reported,
+    state_updated_at,
     runtime_exit_reason,
     image,
     disk,
@@ -327,8 +435,37 @@ export function upsertProject(row: ProjectRow) {
     secret_token,
     authorized_keys,
     run_quota_json,
+    run_quota_revision,
     secret_names_json,
+    local_only ? 1 : 0,
+    exam_run_id,
+    usage_account_id,
   );
+  const ledgerRevision = hasIncomingRunQuotaRevision
+    ? run_quota_revision
+    : existingRunQuotaRevision > 0
+      ? existingRunQuotaRevision
+      : undefined;
+  if (disk != null && Number.isFinite(Number(disk)) && Number(disk) > 0) {
+    acceptProjectVolumeQuotaDesired({
+      project_id: row.project_id,
+      volume_kind: "home",
+      desired_bytes: Number(disk),
+      desired_revision: ledgerRevision,
+    });
+  }
+  if (
+    scratch != null &&
+    Number.isFinite(Number(scratch)) &&
+    Number(scratch) > 0
+  ) {
+    acceptProjectVolumeQuotaDesired({
+      project_id: row.project_id,
+      volume_kind: "scratch",
+      desired_bytes: Number(scratch),
+      desired_revision: ledgerRevision,
+    });
+  }
 
   // Also mirror into the generic data table for changefeeds/UI.
   upsertRow("projects", pk, {
@@ -338,6 +475,7 @@ export function upsertProject(row: ProjectRow) {
     state: state
       ? {
           state,
+          time: new Date(state_updated_at),
           ...(runtime_exit_reason ? { runtime_exit_reason } : {}),
         }
       : existing.state,
@@ -352,6 +490,28 @@ export function upsertProject(row: ProjectRow) {
     tools_version,
     authorized_keys,
     run_quota: run_quota ?? existing.run_quota,
+    run_quota_revision,
+    local_only,
+    exam_run_id,
+    usage_account_id,
+    course:
+      exam_run_id == null
+        ? existing.course
+        : {
+            ...(existing.course ?? {}),
+            student_project_functionality: {
+              ...(existing.course?.student_project_functionality ?? {}),
+              disableTerminals: row.users
+                ? (row as any).terminal_enabled !== true
+                : (existing.course?.student_project_functionality
+                    ?.disableTerminals ?? true),
+              disableActions: false,
+              disableUploads: true,
+              disableAI: true,
+              disableCollaborators: true,
+              disableProjectControl: true,
+            },
+          },
   });
 }
 
@@ -363,7 +523,7 @@ export function listProjects(): ProjectRow[] {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, secret_names FROM projects",
+    "SELECT project_id, title, state, state_reported, state_updated_at, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects",
   );
   return stmt.all().map((row: any) => ({
     ...row,
@@ -372,11 +532,121 @@ export function listProjects(): ProjectRow[] {
   })) as ProjectRow[];
 }
 
+export function listProjectsByStates(states: string[]): ProjectRow[] {
+  ensureProjectsTable();
+  const normalized = Array.from(
+    new Set(states.map((state) => `${state}`.trim()).filter(Boolean)),
+  );
+  if (normalized.length === 0) return [];
+  const placeholders = normalized.map(() => "?").join(",");
+  return getDatabase()
+    .prepare(
+      `SELECT project_id, title, state, state_reported, state_updated_at, runtime_exit_reason,
+              image, disk, scratch, last_seen, updated_at, http_port, ssh_port,
+              project_bundle_version, tools_version, secret_token, run_quota,
+              run_quota_revision, secret_names, local_only, exam_run_id,
+              usage_account_id
+         FROM projects
+        WHERE state IN (${placeholders})`,
+    )
+    .all(...normalized)
+    .map((row: any) => ({
+      ...row,
+      run_quota: parseRunQuota(row.run_quota),
+      secret_names: parseStringArray(row.secret_names),
+    })) as ProjectRow[];
+}
+
+export function countProjectsByStates(
+  states: string[],
+): Record<string, number> {
+  ensureProjectsTable();
+  const normalized = Array.from(
+    new Set(states.map((state) => `${state}`.trim()).filter(Boolean)),
+  );
+  const counts: Record<string, number> = {};
+  for (const state of normalized) counts[state] = 0;
+  if (normalized.length === 0) return counts;
+  const placeholders = normalized.map(() => "?").join(",");
+  const rows = getDatabase()
+    .prepare(
+      `SELECT state, COUNT(*) AS count
+         FROM projects
+        WHERE state IN (${placeholders})
+        GROUP BY state`,
+    )
+    .all(...normalized) as Array<{ state: string; count: number }>;
+  for (const row of rows) counts[row.state] = Number(row.count);
+  return counts;
+}
+
+export function getProjectStateCounts(): {
+  total: number;
+  by_state: Record<string, number>;
+} {
+  ensureProjectsTable();
+  const rows = getDatabase()
+    .prepare("SELECT state, COUNT(*) AS count FROM projects GROUP BY state")
+    .all() as Array<{ state?: string | null; count: number }>;
+  const by_state: Record<string, number> = {};
+  let total = 0;
+  for (const row of rows) {
+    const count = Number(row.count);
+    total += count;
+    if (row.state) by_state[row.state] = count;
+  }
+  return { total, by_state };
+}
+
+export function listProjectQuotaRepairBatch({
+  after_project_id = "",
+  limit = 32,
+}: {
+  after_project_id?: string;
+  limit?: number;
+} = {}): ProjectQuotaRepairRow[] {
+  ensureProjectsTable();
+  const boundedLimit = Math.max(1, Math.min(256, Math.floor(limit)));
+  return getDatabase()
+    .prepare(
+      `SELECT project_id, state, disk, scratch, run_quota_revision
+        FROM projects
+        WHERE project_id > ?
+          AND (disk > 0 OR scratch > 0)
+        ORDER BY project_id
+        LIMIT ?`,
+    )
+    .all(after_project_id, boundedLimit) as ProjectQuotaRepairRow[];
+}
+
+export function getProjectsUsingRootfsImage(image: string): ProjectRow[] {
+  ensureProjectsTable();
+  const normalized = normalizeRootfsImageName(image);
+  if (!normalized) return [];
+  const candidates = new Set([`${image}`.trim(), normalized]);
+  if (normalized.startsWith("docker.io/")) {
+    candidates.add(normalized.slice("docker.io/".length));
+  }
+  const values = [...candidates].filter(Boolean);
+  const placeholders = values.map(() => "?").join(", ");
+  const rows = getDatabase()
+    .prepare(
+      `SELECT project_id, state, image
+         FROM projects
+        WHERE image IN (${placeholders})
+        ORDER BY project_id`,
+    )
+    .all(...values) as ProjectRow[];
+  return rows.filter(
+    (row) => normalizeRootfsImageName(row.image) === normalized,
+  );
+}
+
 export function getProject(project_id: string): ProjectRow | undefined {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, title, state, state_reported, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, secret_names FROM projects WHERE project_id=?",
+    "SELECT project_id, title, state, state_reported, state_updated_at, runtime_exit_reason, image, disk, scratch, last_seen, updated_at, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects WHERE project_id=?",
   );
   const row = stmt.get(project_id) as any;
   if (!row) {
@@ -423,11 +693,15 @@ export function listUnreportedProjects(): ProjectRow[] {
   ensureProjectsTable();
   const db = getDatabase();
   const stmt = db.prepare(
-    "SELECT project_id, state, runtime_exit_reason FROM projects WHERE state_reported = 0",
+    "SELECT project_id, state, state_updated_at, updated_at, runtime_exit_reason FROM projects WHERE state_reported = 0",
   );
   return stmt.all().map((row: any) => ({
     project_id: row.project_id,
     state: row.state,
+    state_updated_at: row.state_updated_at,
+    ...(row.state_updated_at == null && row.updated_at != null
+      ? { updated_at: row.updated_at }
+      : {}),
     ...(row.runtime_exit_reason
       ? { runtime_exit_reason: row.runtime_exit_reason }
       : {}),
@@ -465,6 +739,7 @@ export function deleteProjectLocal(project_id: string) {
   db.prepare("DELETE FROM projects WHERE project_id=?").run(project_id);
   deleteRow("projects", JSON.stringify({ project_id }));
   releaseProjectPortLease(project_id);
+  deleteProjectVolumeQuotas(project_id);
 }
 
 export function getProjectPorts(project_id: string): {
@@ -499,7 +774,7 @@ export function listRuntimeArtifactReferences(): {
   project_bundle: ProjectRuntimeArtifactReference[];
   tools: ProjectRuntimeArtifactReference[];
 } {
-  const rows = listProjects();
+  const rows = listProjectsByStates(["running", "starting"]);
   return {
     project_bundle: summarizeReferences(rows, "project_bundle_version"),
     tools: summarizeReferences(rows, "tools_version"),

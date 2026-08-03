@@ -50,6 +50,7 @@ The URI schema handled by the single page app is as follows:
 import { join } from "path";
 
 import { redux } from "@cocalc/frontend/app-framework";
+import { alert_message } from "@cocalc/frontend/alerts";
 import {
   applyAccountSettingsRoute,
   getAccountSettingsRouteFromState,
@@ -63,6 +64,8 @@ import {
   type ParsedPageTarget,
 } from "@cocalc/frontend/page-routing";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
+import { handoffToPrivateProjectApp } from "@cocalc/frontend/project/private-app-handoff";
+import { parsePrivateProjectAppHandoffTarget } from "@cocalc/frontend/project-routing";
 import { getNotificationFilterFromFragment } from "./notifications/fragment";
 
 // Determine query params part of URL based on state of the project store.
@@ -165,7 +168,29 @@ export function load_target(
     return;
   }
   switch (parsed.page) {
-    case "project":
+    case "project": {
+      const privateApp = parsePrivateProjectAppHandoffTarget(parsed.target);
+      if (privateApp != null) {
+        void handoffToPrivateProjectApp({
+          projectId: privateApp.projectId,
+          appId: privateApp.appId,
+        }).catch((err) => {
+          alert_message({
+            type: "error",
+            message: `Unable to open private project app: ${err}`,
+          });
+          redux
+            .getActions("projects")
+            .load_target(
+              `${privateApp.projectId}/servers`,
+              true,
+              ignore_kiosk,
+              change_history,
+              Fragment.get(),
+            );
+        });
+        return;
+      }
       redux
         .getActions("projects")
         .load_target(
@@ -176,6 +201,7 @@ export function load_target(
           Fragment.get(),
         );
       break;
+    }
 
     case "projects":
       redux.getActions("page").set_active_tab("projects", change_history);

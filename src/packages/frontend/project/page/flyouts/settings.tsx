@@ -37,6 +37,7 @@ import { getFlyoutSettings, storeFlyoutState } from "./state";
 import ProjectControlError from "@cocalc/frontend/project/settings/project-control-error";
 import { normalizeProjectStateForDisplay } from "@cocalc/frontend/projects/host-operational";
 import { useProjectSettingsSections } from "@cocalc/frontend/project/settings/sections";
+import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 
 interface Props {
   project_id: string;
@@ -52,6 +53,7 @@ function SettingsFlyoutContent(_: Readonly<Props>): React.JSX.Element {
   const { project_id, wrap } = _;
   const intl = useIntl();
   const { status, project } = useProjectContext();
+  const runtime = useProjectRuntimeCapabilities();
   const account_id = useTypedRedux("account", "account_id");
   const host_info = useTypedRedux("projects", "host_info");
   const active_top_tab = useTypedRedux("page", "active_top_tab");
@@ -192,7 +194,7 @@ function SettingsFlyoutContent(_: Readonly<Props>): React.JSX.Element {
             project_id={project_id}
             disabled={effectiveState !== "running"}
           />
-          <MoveProject project_id={project_id} />
+          {runtime.move && <MoveProject project_id={project_id} />}
         </Space.Compact>
         <ProjectControlError style={{ marginTop: "15px" }} />
       </div>

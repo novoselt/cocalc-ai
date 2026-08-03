@@ -1011,6 +1011,7 @@ export async function markClusterAccountProvisioned({
   first_name,
   last_name,
   home_bay_id,
+  email_address_verified,
 }: {
   account_id: string;
   email_address: string;
@@ -1018,6 +1019,7 @@ export async function markClusterAccountProvisioned({
   first_name?: string;
   last_name?: string;
   home_bay_id: string;
+  email_address_verified?: boolean;
 }): Promise<void> {
   await ensureClusterAccountDirectorySchema();
   await getPool().query(
@@ -1027,6 +1029,7 @@ export async function markClusterAccountProvisioned({
             first_name=$4,
             last_name=$5,
             home_bay_id=$6,
+            email_address_verified=$7,
             provisioned=TRUE
       WHERE account_id=$1`,
     [
@@ -1036,6 +1039,7 @@ export async function markClusterAccountProvisioned({
       null,
       null,
       normalizedHomeBayId(home_bay_id),
+      !!email_address_verified,
     ],
   );
 }

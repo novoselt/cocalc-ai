@@ -28,6 +28,7 @@ let interBayHostListMock: jest.Mock;
 let interBayHostControlCreateProjectMock: jest.Mock;
 let interBayHostControlStartProjectMock: jest.Mock;
 let getLroMock: jest.Mock;
+let getProjectSecretsRuntimeCacheMock: jest.Mock;
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -120,6 +121,8 @@ jest.mock("@cocalc/server/inter-bay/bridge", () => ({
         interBayHostControlCreateProjectMock(...args),
       startProject: (...args: any[]) =>
         interBayHostControlStartProjectMock(...args),
+      startProjectIdempotent: (...args: any[]) =>
+        interBayHostControlStartProjectMock(...args),
     })),
   })),
 }));
@@ -128,6 +131,12 @@ jest.mock("@cocalc/server/projects/rootfs-state", () => ({
   __esModule: true,
   getCurrentProjectRootfsBinding: (...args: any[]) =>
     getCurrentProjectRootfsBindingMock(...args),
+}));
+
+jest.mock("@cocalc/server/projects/project-secrets", () => ({
+  __esModule: true,
+  getProjectSecretsRuntimeCache: (...args: any[]) =>
+    getProjectSecretsRuntimeCacheMock(...args),
 }));
 
 jest.mock("./run-quota", () => ({
@@ -208,6 +217,10 @@ describe("startProjectOnHost placement", () => {
       state: "running",
     }));
     getLroMock = jest.fn(async () => undefined);
+    getProjectSecretsRuntimeCacheMock = jest.fn(async () => ({
+      generation: 0,
+      secrets: {},
+    }));
     releaseMock = jest.fn();
     resolveHostBayMock = jest.fn(async (host_id: string) => ({
       bay_id: host_id === "host-2" ? "bay-7" : "bay-0",
@@ -548,7 +561,10 @@ describe("startProjectOnHost placement", () => {
         sql ===
         "SELECT backup_repo_id, provisioned FROM projects WHERE project_id=$1"
       ) {
-        return { rows: [{ backup_repo_id: null, provisioned: true }] };
+        return { rows: [{ backup_repo_id: "repo-1", provisioned: true }] };
+      }
+      if (sql.includes("FROM project_copies")) {
+        return { rows: [{ exists: false }] };
       }
       throw new Error(`unexpected query: ${sql}`);
     });
@@ -569,22 +585,36 @@ describe("startProjectOnHost placement", () => {
       ensure_volume: false,
       authorized_keys: "ssh-ed25519 AAAATEST user@test",
       run_quota: {},
+      run_quota_revision: 0,
     });
-    expect(startProjectMock).toHaveBeenCalledWith({
-      project_id: "proj-1",
-      authorized_keys: "ssh-ed25519 AAAATEST user@test",
-      run_quota: {},
+    expect(startProjectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: "proj-1",
+        authorized_keys: "ssh-ed25519 AAAATEST user@test",
+        run_quota: {},
+        run_quota_revision: 0,
+        image: "sagemathinc/sagemath-x86_64:10.7",
+        restore: "none",
+        apply_pending_copies: false,
+        lro_op_id: "op-1",
+      }),
+    );
+    expect(startProjectMock.mock.calls[0][0].start_metadata).toMatchObject({
+      title: "OCI test",
+      users: { owner: { group: "owner" } },
       image: "sagemathinc/sagemath-x86_64:10.7",
-      restore: "none",
-      lro_op_id: "op-1",
+      run_quota_revision: 0,
     });
+    expect(
+      assertCanRestoreProvisionedProjectStorageMock,
+    ).not.toHaveBeenCalled();
     expect(notifyProjectHostUpdateMock).toHaveBeenCalledWith({
       project_id: "proj-1",
       host_id: "host-1",
     });
   });
 
-  it("re-registers a project that already has an assigned host", async () => {
+  it("does not re-register a project that already has an assigned host", async () => {
     const createProjectMock = jest.fn(async () => ({
       project_id: "proj-1",
       state: "opened",
@@ -649,16 +679,7 @@ describe("startProjectOnHost placement", () => {
       host_id: "host-1",
     });
 
-    expect(createProjectMock).toHaveBeenCalledWith({
-      project_id: "proj-1",
-      title: "Already placed",
-      users: { owner: { group: "owner" } },
-      image: "cocalc.local/rootfs/course",
-      ensure_volume: false,
-      start: false,
-      authorized_keys: "ssh-ed25519 AAAATEST user@test",
-      run_quota: {},
-    });
+    expect(createProjectMock).not.toHaveBeenCalled();
   });
 
   it("passes account_id when automatic placement registers a project on a remote shared-pool host", async () => {
@@ -764,18 +785,21 @@ describe("startProjectOnHost placement", () => {
         ensure_volume: false,
         authorized_keys: "ssh-ed25519 AAAATEST user@test",
         run_quota: {},
+        run_quota_revision: 0,
       },
     });
     expect(interBayHostControlStartProjectMock).toHaveBeenCalledWith({
       host_id: "host-2",
-      start: {
+      start: expect.objectContaining({
         project_id: "proj-1",
         authorized_keys: "ssh-ed25519 AAAATEST user@test",
         run_quota: {},
         image: "cocalc.local/rootfs/release",
         restore: "none",
+        restore_backup_id: undefined,
+        run_quota_revision: 0,
         lro_op_id: "op-1",
-      },
+      }),
     });
   });
 
@@ -788,9 +812,12 @@ describe("startProjectOnHost placement", () => {
       project_id: "proj-1",
       state: "running",
     }));
+    const getProjectStatusMock = jest.fn();
     createHostControlClientMock = jest.fn(() => ({
       createProject: createProjectMock,
-      startProject: startProjectMock,
+      startProject: jest.fn(),
+      startProjectIdempotent: startProjectMock,
+      getProjectStatus: getProjectStatusMock,
     }));
 
     let loadProjectCalls = 0;
@@ -887,6 +914,7 @@ describe("startProjectOnHost placement", () => {
         managed_egress_override: "admin-host-drain",
       }),
     );
+    expect(getProjectStatusMock).not.toHaveBeenCalled();
   });
 
   it("retries start once after a successful guarded auto-grow", async () => {
@@ -1048,9 +1076,15 @@ describe("startProjectOnHost placement", () => {
       project_id: "proj-1",
       state: "running",
     }));
+    const startProjectIdempotentMock = jest.fn(async () => {
+      throw new Error(
+        "request -- no subscribers matching 'host.start-project-idempotent'",
+      );
+    });
     createHostControlClientMock = jest.fn(() => ({
       createProject: jest.fn(async () => ({ project_id: "proj-1" })),
       startProject: startProjectMock,
+      startProjectIdempotent: startProjectIdempotentMock,
       getProjectStatus: getProjectStatusMock,
     }));
 
@@ -1142,6 +1176,7 @@ describe("startProjectOnHost placement", () => {
     expect(getProjectStatusMock).toHaveBeenCalledWith({
       project_id: "proj-1",
     });
+    expect(startProjectIdempotentMock).toHaveBeenCalledTimes(1);
     expect(startProjectMock).not.toHaveBeenCalled();
   });
 
@@ -1592,7 +1627,14 @@ describe("startProjectOnHost placement", () => {
       }
       if (sql === "SELECT state FROM projects WHERE project_id=$1") {
         return {
-          rows: [{ state: { state: "opened", time: "2026-03-29T00:00:00Z" } }],
+          rows: [
+            {
+              state: {
+                state: "running",
+                time: new Date().toISOString(),
+              },
+            },
+          ],
         };
       }
       if (sql.includes("FROM long_running_operations")) {

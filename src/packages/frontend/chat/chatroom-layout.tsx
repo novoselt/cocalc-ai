@@ -7,7 +7,6 @@ import { Badge, Button, Drawer, Layout } from "antd";
 import { React } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components";
 import { KeyboardBoundary } from "@cocalc/frontend/keyboard/boundary";
-import { COLORS } from "@cocalc/util/theme";
 import { ChatRoomSidebar } from "./chatroom-sidebar";
 
 const CHAT_LAYOUT_STYLE: React.CSSProperties = {
@@ -78,14 +77,7 @@ export function ChatRoomLayout({
             onClick={() => setSidebarVisible(true)}
           >
             Chats
-            <Badge
-              count={totalUnread}
-              overflowCount={99}
-              style={{
-                backgroundColor: COLORS.GRAY_L0,
-                color: COLORS.GRAY_D,
-              }}
-            />
+            <Badge count={totalUnread} overflowCount={99} />
           </Button>
           <Button
             type={newChatSelected ? "primary" : "default"}

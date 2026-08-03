@@ -1006,6 +1006,16 @@ const DOCS_APP_ACTIONS: Record<string, DocsAppAction> = {
         tab: "access",
       }),
   },
+  "hosts.exam.open": {
+    id: "hosts.exam.open",
+    run: ({ parameters, projectId }) =>
+      revealHostsPage({
+        actionId: "hosts.exam.open",
+        hostId: parameters?.hostId,
+        projectId,
+        tab: "exams",
+      }),
+  },
   "hosts.change-rules.open": {
     id: "hosts.change-rules.open",
     run: ({ parameters, projectId }) =>

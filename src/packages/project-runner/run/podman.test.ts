@@ -168,6 +168,15 @@ function mockProjectStartPodman(project_id: string) {
   mockPodman.mockImplementation(async (args: string[]) => {
     if (
       args[0] === "inspect" &&
+      args.includes(
+        "{{.State.Running}}|{{.State.Pid}}|{{.State.ConmonPid}}|{{.NetworkSettings.SandboxKey}}",
+      ) &&
+      args.includes(name)
+    ) {
+      return { stdout: "true|4242|4241|\n" };
+    }
+    if (
+      args[0] === "inspect" &&
       args.includes("{{.State.Pid}}") &&
       args.includes(name)
     ) {
@@ -252,6 +261,11 @@ describe("project-runner podman orphan fallback", () => {
           "2000000000",
           "0",
         ]),
+      }),
+    );
+    expect(mockExecuteCode).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["finish-project-startup-cgroup"]),
       }),
     );
     expect(mockPodman).not.toHaveBeenCalledWith(
@@ -387,7 +401,9 @@ describe("project-runner podman orphan fallback", () => {
         ],
       }),
     );
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("force-kills a live project when podman rm reports success but conmon is still alive", async () => {
@@ -465,7 +481,9 @@ describe("project-runner podman orphan fallback", () => {
         ],
       }),
     );
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("force-kills a live project when podman rm times out and the retry still leaves conmon alive", async () => {
@@ -529,7 +547,9 @@ describe("project-runner podman orphan fallback", () => {
     expect(processKillSpy).toHaveBeenCalledWith(-500, "SIGKILL");
     expect(processKillSpy).toHaveBeenCalledWith(501, "SIGKILL");
     expect(processKillSpy).toHaveBeenCalledWith(-501, "SIGKILL");
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("force-kills every duplicate main conmon tree for one project", async () => {
@@ -592,7 +612,9 @@ describe("project-runner podman orphan fallback", () => {
         ],
       }),
     );
-    expect(mockUnmountAll).toHaveBeenCalledWith(project1);
+    expect(mockUnmountAll).toHaveBeenCalledWith(project1, {
+      immediate: false,
+    });
   });
 
   it("uses caller-provided host ports when starting a project", async () => {
@@ -640,6 +662,7 @@ describe("project-runner podman orphan fallback", () => {
     expect(getPort).not.toHaveBeenCalled();
     expect(mockPodman).toHaveBeenCalledWith(
       expect.arrayContaining([
+        "create",
         "--cgroups=disabled",
         "-p",
         "127.0.0.1:30123:22",
@@ -657,13 +680,44 @@ describe("project-runner podman orphan fallback", () => {
         launcher: expect.objectContaining({
           command: "bash",
           argsPrefix: expect.arrayContaining([
-            "cocalc-project-podman",
+            "cocalc-project-podman-create",
             project1,
           ]),
         }),
       }),
     );
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["start", `project-${project1}`],
+      expect.objectContaining({
+        launcher: expect.objectContaining({
+          command: "bash",
+          argsPrefix: expect.arrayContaining([
+            expect.stringContaining("prepare-project-startup-runtime-cgroup"),
+            "cocalc-project-podman",
+            project1,
+            "10000",
+            "10000",
+          ]),
+        }),
+      }),
+    );
     expect(mockExecuteCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "sudo",
+        args: [
+          "-n",
+          "/usr/local/sbin/cocalc-runtime-storage",
+          "attach-prepared-project-runtime",
+          project1,
+          "-",
+          "4242",
+          "4241",
+          "100",
+          "100",
+        ],
+      }),
+    );
+    expect(mockExecuteCode).not.toHaveBeenCalledWith(
       expect.objectContaining({
         command: "sudo",
         args: [
@@ -696,6 +750,102 @@ describe("project-runner podman orphan fallback", () => {
         name: `project-${project1}`,
       }),
     ).rejects.toThrow("escaped project cgroup containment");
+  });
+
+  it("fails closed when the startup CPU weight cannot be restored", async () => {
+    mockProjectStartPodman(project1);
+    mockExecuteCode.mockImplementation(async ({ args }) =>
+      args?.includes("attach-prepared-project-runtime")
+        ? {
+            exit_code: 1,
+            stdout: "",
+            stderr: "unable to restore cpu weight",
+          }
+        : { exit_code: 0, stdout: "", stderr: "" },
+    );
+
+    await expect(
+      start({
+        project_id: project1,
+        localPath: async () => ({
+          home: `/tmp/project-${project1}`,
+          quota_applied: true,
+        }),
+        config: {
+          image: "docker.io/library/ubuntu:latest",
+          ssh_port: 30123,
+          http_port: 45123,
+        },
+      }),
+    ).rejects.toThrow("failed to finalize project runtime cgroup");
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["rm", "-f", "-t", "0", `project-${project1}`],
+      { timeout: 10 },
+    );
+  });
+
+  it("removes a partial container when podman create fails", async () => {
+    mockProjectStartPodman(project1);
+    const defaultPodman = mockPodman.getMockImplementation()!;
+    mockPodman.mockImplementation(async (args: string[]) => {
+      if (args[0] === "create") {
+        throw Error("create failed");
+      }
+      return await defaultPodman(args);
+    });
+
+    await expect(
+      start({
+        project_id: project1,
+        localPath: async () => ({
+          home: `/tmp/project-${project1}`,
+          quota_applied: true,
+        }),
+        config: {
+          image: "docker.io/library/ubuntu:latest",
+          ssh_port: 30123,
+          http_port: 45123,
+        },
+      }),
+    ).rejects.toThrow("create failed");
+    expect(mockPodman).not.toHaveBeenCalledWith(
+      ["start", `project-${project1}`],
+      expect.anything(),
+    );
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["rm", "-f", "-t", "0", `project-${project1}`],
+      { timeout: 10 },
+    );
+  });
+
+  it("removes a created container when podman start fails", async () => {
+    mockProjectStartPodman(project1);
+    const defaultPodman = mockPodman.getMockImplementation()!;
+    mockPodman.mockImplementation(async (args: string[]) => {
+      if (args[0] === "start") {
+        throw Error("start failed");
+      }
+      return await defaultPodman(args);
+    });
+
+    await expect(
+      start({
+        project_id: project1,
+        localPath: async () => ({
+          home: `/tmp/project-${project1}`,
+          quota_applied: true,
+        }),
+        config: {
+          image: "docker.io/library/ubuntu:latest",
+          ssh_port: 30123,
+          http_port: 45123,
+        },
+      }),
+    ).rejects.toThrow("start failed");
+    expect(mockPodman).toHaveBeenCalledWith(
+      ["rm", "-f", "-t", "0", `project-${project1}`],
+      { timeout: 10 },
+    );
   });
 
   it("does not set project quota twice when localPath already applied it", async () => {
@@ -743,6 +893,7 @@ describe("project-runner podman orphan fallback", () => {
       disk: 1024,
       scratch: undefined,
       ensure: false,
+      applyQuota: true,
     });
     expect(localPath).toHaveBeenNthCalledWith(2, {
       project_id: project1,
@@ -750,6 +901,7 @@ describe("project-runner podman orphan fallback", () => {
       scratch: undefined,
       ensure: true,
       resetScratch: true,
+      applyQuota: true,
     });
     expect(mountArg).toHaveBeenCalledWith({
       source: `/tmp/project-${project1}-scratch`,
@@ -797,6 +949,38 @@ describe("project-runner podman orphan fallback", () => {
       scratch: undefined,
       ensure: true,
       resetScratch: false,
+      applyQuota: true,
+    });
+  });
+
+  it("trusts host-prepared storage without resetting scratch or applying quotas", async () => {
+    mockProjectStartPodman(project1);
+    const localPath = jest.fn(async () => ({
+      home: `/tmp/project-${project1}`,
+      scratch: `/tmp/project-${project1}-scratch`,
+      quota_applied: true,
+    }));
+
+    await start({
+      project_id: project1,
+      localPath,
+      config: {
+        disk: 1024,
+        image: "docker.io/library/ubuntu:latest",
+        ssh_port: 30123,
+        http_port: 45123,
+        storage_quota_prepared: true,
+        scratch_prepared: true,
+      },
+    });
+
+    expect(localPath).toHaveBeenNthCalledWith(2, {
+      project_id: project1,
+      disk: 1024,
+      scratch: undefined,
+      ensure: true,
+      resetScratch: false,
+      applyQuota: false,
     });
   });
 

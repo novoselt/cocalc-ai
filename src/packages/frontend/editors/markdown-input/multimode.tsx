@@ -90,6 +90,10 @@ export default function MultiMarkdownInput({
   } = frameContext;
   const project_id = explicitProjectId ?? frameProjectId;
   const path = explicitPath ?? framePath;
+  const localHistoryCachePrefix =
+    cacheId == null
+      ? undefined
+      : `${project_id ?? ""}:${path ?? ""}:${cacheId}`;
   const isFrameScoped = Boolean(frameContext.id || project_id || path);
   const modeSwitchFrameFocused = isFrameScoped ? isFocusedFrame : true;
   const modeSwitchFrameVisible = isFrameScoped ? isVisible : true;
@@ -322,6 +326,12 @@ export default function MultiMarkdownInput({
       >
         {mode === "markdown" ? (
           <MarkdownTextAdapter
+            localHistoryCacheId={
+              localHistoryCachePrefix != null &&
+              (undoMode === "local" || redoMode === "local")
+                ? `${localHistoryCachePrefix}:markdown`
+                : undefined
+            }
             editorDivRef={editorDivRef}
             selectionRef={selectionRef}
             value={value}
@@ -397,6 +407,12 @@ export default function MultiMarkdownInput({
         ) : undefined}
         {mode === "editor" ? (
           <SlateRichTextAdapter
+            localHistoryCacheId={
+              localHistoryCachePrefix != null &&
+              (undoMode === "local" || redoMode === "local")
+                ? `${localHistoryCachePrefix}:editor`
+                : undefined
+            }
             selectionRef={selectionRef}
             editorDivRef={editorDivRef}
             noVfill={noVfill}

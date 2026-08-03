@@ -18,6 +18,7 @@ import {
   selectActiveHost,
   deleteProjectDataOnHost,
   savePlacement,
+  startProjectOnHost,
   stopProjectOnHost,
 } from "../project-host/control";
 import { getRoutedHostControlClient } from "../project-host/client";
@@ -46,6 +47,11 @@ import {
   type ProjectBackupPurgeResult,
 } from "./backup-purge";
 import { getLro, updateLro } from "@cocalc/server/lro/lro-db";
+import {
+  acquireProjectMoveGuard,
+  heartbeatProjectMoveGuard,
+  releaseProjectMoveGuard,
+} from "./move-guard";
 
 const log = getLogger("server:projects:move");
 const BACKUP_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -58,6 +64,10 @@ const MOVE_START_DEST_TIMEOUT_MS = Math.max(
   Number(process.env.COCALC_MOVE_START_DEST_TIMEOUT_MS) || 2 * 60 * 60 * 1000,
 );
 const TRANSIENT_MOVE_RPC_RETRY_DELAY_MS = 1000;
+const MOVE_GUARD_HEARTBEAT_MS = Math.max(
+  1000,
+  Number(process.env.COCALC_PROJECT_MOVE_GUARD_HEARTBEAT_MS) || 30 * 1000,
+);
 const BACKUP_CONFIG_INVALIDATION_TIMEOUT_MS = Math.max(
   1,
   Number(process.env.COCALC_MOVE_BACKUP_CONFIG_INVALIDATION_TIMEOUT_MS) ||
@@ -249,6 +259,7 @@ async function openProjectLogStream(
   return await client.sync.dstream<ProjectLogRow>({
     project_id,
     name: PROJECT_LOG_STREAM_NAME,
+    bootstrapRetry: false,
     noAutosave: true,
     noCache: true,
     noInventory: true,
@@ -577,7 +588,17 @@ async function cleanupDestinationOnFailure(
   }
   progress({
     step: "cleanup-dest",
-    message: "removing destination data after failed move",
+    message: "stopping destination runtime after failed move",
+    detail: { dest_host_id: context.dest_host_id },
+  });
+  const client = await getRoutedHostControlClient({
+    host_id: context.dest_host_id,
+    timeout: MOVE_STOP_PROJECT_TIMEOUT_MS,
+  });
+  await client.stopProject({ project_id: context.project_id });
+  progress({
+    step: "cleanup-dest",
+    message: "destination runtime stopped",
     detail: { dest_host_id: context.dest_host_id },
   });
   await deleteProjectDataOnHost({
@@ -588,6 +609,57 @@ async function cleanupDestinationOnFailure(
     step: "cleanup-dest",
     message: "destination data removed",
     detail: { dest_host_id: context.dest_host_id },
+  });
+}
+
+function sourceRuntimeWasActive(context: MoveProjectContext): boolean {
+  return (
+    context.project_state === "running" ||
+    context.project_state === "starting" ||
+    context.project_state === "pending"
+  );
+}
+
+async function reconcileSourceRuntimeAfterMoveAbort(
+  context: MoveProjectContext,
+  progress: (update: MoveProjectProgressUpdate) => void,
+  managed_egress_override?: ManagedBackupEgressOverride,
+) {
+  if (
+    !context.project_host_id ||
+    context.project_host_id === context.dest_host_id ||
+    !isSourceHostAvailable(context)
+  ) {
+    return;
+  }
+  progress({
+    step: "revert-placement",
+    message: "reconciling source runtime after move abort",
+    detail: { source_host_id: context.project_host_id },
+  });
+  // Destination startup can leave a recent global "running" snapshot after
+  // placement is reverted. Stop is idempotent and resets that snapshot to the
+  // source host's actual state before deciding whether to restart it.
+  await stopProjectOnHost(context.project_id, {
+    timeout_ms: MOVE_STOP_PROJECT_TIMEOUT_MS,
+  });
+  if (!sourceRuntimeWasActive(context)) {
+    progress({
+      step: "revert-placement",
+      message: "source runtime reconciled in stopped state",
+      detail: { source_host_id: context.project_host_id },
+    });
+    return;
+  }
+  await startProjectOnHost(context.project_id, {
+    account_id: context.account_id,
+    ignore_recent_state_snapshot: true,
+    ...(managed_egress_override ? { managed_egress_override } : {}),
+  });
+  progress({
+    step: "revert-placement",
+    message: "source runtime restarted after move abort",
+    detail: { source_host_id: context.project_host_id },
   });
 }
 
@@ -752,7 +824,9 @@ function isSourceHostAvailable(context: MoveProjectContext): boolean {
   if (!context.project_host_id) return false;
   if (context.source_host_deleted) return false;
   const status = String(context.source_host_status ?? "");
-  if (!["running", "starting", "restarting", "error"].includes(status)) {
+  if (
+    !["running", "starting", "restarting", "draining", "error"].includes(status)
+  ) {
     return false;
   }
   const lastSeenMs = context.source_host_last_seen?.getTime?.() ?? 0;
@@ -948,6 +1022,7 @@ async function waitForChildLroCompletion({
   onSummary,
   shouldCancel,
   cancelStage,
+  deferParentCancelUntilChildFinishes = false,
 }: {
   op_id: string;
   scope_type: "project" | "account" | "host" | "hub";
@@ -957,6 +1032,7 @@ async function waitForChildLroCompletion({
   onSummary?: (summary: LroSummary) => void;
   shouldCancel?: () => Promise<boolean>;
   cancelStage?: string;
+  deferParentCancelUntilChildFinishes?: boolean;
 }): Promise<LroSummary> {
   const stream = await openChildLroStreamWithTimeout({
     op_id,
@@ -966,6 +1042,7 @@ async function waitForChildLroCompletion({
 
   let done = false;
   let lastIndex = 0;
+  let parentCancelRequested = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let pollId: ReturnType<typeof setInterval> | undefined;
 
@@ -986,6 +1063,10 @@ async function waitForChildLroCompletion({
 
     const finish = (summary: LroSummary) => {
       if (done) return;
+      if (parentCancelRequested) {
+        fail(new MoveCanceledError(cancelStage ?? "child-lro"));
+        return;
+      }
       done = true;
       cleanup();
       resolve(summary);
@@ -1036,13 +1117,17 @@ async function waitForChildLroCompletion({
     const pollSummary = async () => {
       if (done) return;
       try {
-        if (shouldCancel && (await shouldCancel())) {
-          await cancelChildLro({
-            op_id,
-            error: `parent move canceled${cancelStage ? ` during ${cancelStage}` : ""}`,
-          });
-          fail(new MoveCanceledError(cancelStage ?? "child-lro"));
-          return;
+        if (!parentCancelRequested && shouldCancel && (await shouldCancel())) {
+          if (deferParentCancelUntilChildFinishes) {
+            parentCancelRequested = true;
+          } else {
+            await cancelChildLro({
+              op_id,
+              error: `parent move canceled${cancelStage ? ` during ${cancelStage}` : ""}`,
+            });
+            fail(new MoveCanceledError(cancelStage ?? "child-lro"));
+            return;
+          }
         }
         const summary = await getLro(op_id);
         if (!summary) return;
@@ -1512,6 +1597,25 @@ export async function moveProjectToHost(
     project_id: context.project_id,
     operation: "move",
   });
+  await acquireProjectMoveGuard({
+    project_id: context.project_id,
+    move_id: move_log_id,
+    source_host_id: context.project_host_id,
+    dest_host_id: context.dest_host_id,
+  });
+  const moveGuardHeartbeat = setInterval(() => {
+    heartbeatProjectMoveGuard({
+      project_id: context.project_id,
+      move_id: move_log_id,
+    }).catch((err) => {
+      log.warn("moveProjectToHost move guard heartbeat failed", {
+        project_id: context.project_id,
+        move_log_id,
+        err,
+      });
+    });
+  }, MOVE_GUARD_HEARTBEAT_MS);
+  moveGuardHeartbeat.unref?.();
   log.debug("moveProjectToHost context", {
     project_id: context.project_id,
     dest_host_id: context.dest_host_id,
@@ -1576,8 +1680,10 @@ export async function moveProjectToHost(
       stage,
     });
     if (placementUpdated) {
+      let sourcePlacementRestored = false;
       try {
         await revertPlacementIfPossible(context, progress);
+        sourcePlacementRestored = true;
       } catch (err) {
         log.warn("moveProjectToHost cancel placement revert failed", {
           project_id: context.project_id,
@@ -1606,6 +1712,29 @@ export async function moveProjectToHost(
             error: `${cleanupErr}`,
           },
         });
+      }
+      if (sourcePlacementRestored) {
+        try {
+          await reconcileSourceRuntimeAfterMoveAbort(
+            context,
+            progress,
+            input.managed_egress_override,
+          );
+        } catch (reconcileErr) {
+          log.warn("moveProjectToHost cancel source recovery failed", {
+            project_id: context.project_id,
+            source_host_id: context.project_host_id,
+            err: reconcileErr,
+          });
+          progress({
+            step: "revert-placement",
+            message: "source runtime recovery failed",
+            detail: {
+              source_host_id: context.project_host_id,
+              error: `${reconcileErr}`,
+            },
+          });
+        }
       }
     }
     progress({
@@ -1859,6 +1988,24 @@ export async function moveProjectToHost(
         }
       }
       await checkCanceled("backup");
+      currentStage = "stop-source-final";
+      progress({
+        step: "stop-source",
+        message: "confirming source project is stopped after final backup",
+      });
+      await retryOnceOnTransientMoveError({
+        operation: "stop-source",
+        detail: {
+          project_id: context.project_id,
+          stage: "post-backup-confirmation",
+        },
+        progress,
+        run: async () =>
+          await stopProjectOnHost(context.project_id, {
+            timeout_ms: MOVE_STOP_PROJECT_TIMEOUT_MS,
+          }),
+      });
+      await checkCanceled("stop-source-final");
     }
     if (startDest && finalBackupId && context.provisioned !== false) {
       currentStage = "prepare-destination-restore";
@@ -1948,6 +2095,8 @@ export async function moveProjectToHost(
               managed_egress_override_auth: input.managed_egress_override
                 ? PROJECT_DANGEROUS_INTERNAL_AUTH
                 : undefined,
+              project_move_id: move_log_id,
+              project_move_auth: PROJECT_DANGEROUS_INTERNAL_AUTH,
               wait: false,
             });
             progress({
@@ -1995,8 +2144,15 @@ export async function moveProjectToHost(
                 },
                 shouldCancel,
                 cancelStage: "start-dest",
+                // Canceling the durable LRO does not interrupt the underlying
+                // restore RPC. Let it settle before deleting destination data
+                // or restarting the source, otherwise rollback races startup.
+                deferParentCancelUntilChildFinishes: true,
               });
             } catch (err) {
+              if ((err as any)?.code === MOVE_CANCELED_CODE) {
+                throw err;
+              }
               const snapshot = await loadProjectPlacementState(
                 context.project_id,
               );
@@ -2151,8 +2307,10 @@ export async function moveProjectToHost(
           message: "destination start failed",
           detail: { dest_host_id: context.dest_host_id, error: `${err}` },
         });
+        let sourcePlacementRestored = false;
         try {
           await revertPlacementIfPossible(context, progress);
+          sourcePlacementRestored = true;
         } catch (revertErr) {
           log.warn("moveProjectToHost placement revert failed", {
             project_id: context.project_id,
@@ -2184,6 +2342,29 @@ export async function moveProjectToHost(
               error: `${cleanupErr}`,
             },
           });
+        }
+        if (sourcePlacementRestored) {
+          try {
+            await reconcileSourceRuntimeAfterMoveAbort(
+              context,
+              progress,
+              input.managed_egress_override,
+            );
+          } catch (reconcileErr) {
+            log.warn("moveProjectToHost source recovery failed", {
+              project_id: context.project_id,
+              source_host_id: context.project_host_id,
+              err: reconcileErr,
+            });
+            progress({
+              step: "revert-placement",
+              message: "source runtime recovery failed",
+              detail: {
+                source_host_id: context.project_host_id,
+                error: `${reconcileErr}`,
+              },
+            });
+          }
         }
         if (moveSentinel) {
           await deleteMoveSentinelBestEffort({
@@ -2293,6 +2474,18 @@ export async function moveProjectToHost(
       fresh: true,
     });
   } catch (err) {
+    if ((err as any)?.code === MOVE_CANCELED_CODE) {
+      await handleCancel((err as any).stage ?? "unknown");
+      if (moveSentinel) {
+        await deleteMoveSentinelBestEffort({
+          project_id: context.project_id,
+          path: moveSentinel.path,
+          stage: "canceled-move-source-cleanup",
+        });
+        moveSentinel = undefined;
+      }
+      throw err;
+    }
     if (moveSentinel) {
       await deleteMoveSentinelBestEffort({
         project_id: context.project_id,
@@ -2300,10 +2493,6 @@ export async function moveProjectToHost(
         stage: "move-error-cleanup",
       });
       moveSentinel = undefined;
-    }
-    if ((err as any)?.code === MOVE_CANCELED_CODE) {
-      await handleCancel((err as any).stage ?? "unknown");
-      throw err;
     }
     const stagedError =
       err instanceof MoveDestinationVerificationError
@@ -2340,6 +2529,18 @@ export async function moveProjectToHost(
       fresh: true,
     });
     throw stagedError;
+  } finally {
+    clearInterval(moveGuardHeartbeat);
+    await releaseProjectMoveGuard({
+      project_id: context.project_id,
+      move_id: move_log_id,
+    }).catch((err) => {
+      log.warn("moveProjectToHost move guard release failed", {
+        project_id: context.project_id,
+        move_log_id,
+        err,
+      });
+    });
   }
 }
 

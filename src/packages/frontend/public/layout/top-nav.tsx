@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 
-import { MenuOutlined } from "@ant-design/icons";
+import { DownOutlined, MenuOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 
 import { Button, Drawer, Flex, Menu, Space, Typography, theme } from "antd";
@@ -19,6 +19,12 @@ import {
   usePublicConfig,
   usesDefaultCoCalcBranding,
 } from "@cocalc/frontend/public/config";
+import { Icon } from "@cocalc/frontend/components/icon";
+import { featureMeta } from "@cocalc/frontend/public/features/nav-meta";
+import {
+  getPublicFeaturePage,
+  PUBLIC_FEATURE_NAV_ITEMS,
+} from "@cocalc/util/public-feature-pages";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
 type PublicInfoPageKey =
@@ -45,6 +51,21 @@ const COMPACT_NAV_MEDIA_QUERY = "(max-width: 875px)";
 const DESKTOP_LOGO_MENU_GAP_PX = 32;
 const { Text } = Typography;
 
+// Compact styling for the Features dropdown popup (16 entries): smaller
+// rows than antd's default menu size, scrollable if the viewport is low.
+const FEATURES_POPUP_CSS = `
+  .cocalc-features-nav-popup .ant-menu {
+    max-height: min(560px, 75vh);
+    overflow-y: auto;
+  }
+
+  .cocalc-features-nav-popup .ant-menu-item {
+    font-size: 13px;
+    height: 30px !important;
+    line-height: 30px !important;
+  }
+`;
+
 function appPath(path: string): string {
   return joinUrlPath(appBasePath, path);
 }
@@ -68,6 +89,33 @@ function useCompactNav(): boolean {
   }, []);
 
   return isCompact;
+}
+
+const HOVER_CAPABLE_MEDIA_QUERY = "(hover: hover)";
+
+function matchesHoverCapable(): boolean {
+  if (typeof window === "undefined") return true;
+  if (typeof window.matchMedia !== "function") return true;
+  return window.matchMedia(HOVER_CAPABLE_MEDIA_QUERY).matches;
+}
+
+// Touch-only devices (no hover) need the features submenu to open on tap;
+// a single tap must not hover-open and then click-close it again, so the
+// submenu trigger follows the device's hover capability instead of using
+// both triggers at once.
+function useHoverCapable(): boolean {
+  const [hoverCapable, setHoverCapable] = useState(matchesHoverCapable);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mediaQuery = window.matchMedia(HOVER_CAPABLE_MEDIA_QUERY);
+    const update = () => setHoverCapable(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener("change", update);
+    return () => mediaQuery.removeEventListener("change", update);
+  }, []);
+
+  return hoverCapable;
 }
 
 function HomeLogoLink({
@@ -139,6 +187,7 @@ export default function PublicTopNav({
   const isAuthenticated = !!config?.is_authenticated;
   const accountDisplayName = config?.account_display_name?.trim();
   const isCompact = useCompactNav();
+  const hoverCapable = useHoverCapable();
   const logoSquare = getLogoSquare(config);
   const showPolicies = arePublicPoliciesVisible(config);
   const siteName = getSiteName(config);
@@ -169,21 +218,61 @@ export default function PublicTopNav({
     key: "support",
     label: "Support",
   });
-  const menuItems: MenuProps["items"] = publicInfoItems.map((item) => ({
-    key: item.key,
-    label: (
-      <a
-        href={item.href}
-        rel={item.rel}
-        style={{
-          color: active === item.key ? token.colorPrimaryActive : undefined,
-        }}
-        target={item.target}
-      >
-        {item.label}
-      </a>
-    ),
-  }));
+  // On a features page the "Features" entry becomes a dropdown over all
+  // feature pages (with a caret); everywhere else it is a plain link.
+  const featuresDropdownItems: MenuProps["items"] | undefined =
+    active === "features"
+      ? [
+          {
+            icon: <Icon name="star" style={{ color: token.colorPrimary }} />,
+            key: "features-all",
+            label: <a href={appPath("features")}>All features</a>,
+          },
+          ...PUBLIC_FEATURE_NAV_ITEMS.filter(({ slug }) =>
+            getPublicFeaturePage(slug),
+          ).map(({ label, slug }) => {
+            const meta = featureMeta(slug);
+            return {
+              icon: <Icon name={meta.icon} style={{ color: meta.accent }} />,
+              key: `features-${slug}`,
+              label: <a href={appPath(`features/${slug}`)}>{label}</a>,
+            };
+          }),
+        ]
+      : undefined;
+  const menuItems: MenuProps["items"] = publicInfoItems.map((item) => {
+    if (item.key === "features" && featuresDropdownItems != null) {
+      return {
+        children: featuresDropdownItems,
+        key: item.key,
+        popupClassName: "cocalc-features-nav-popup",
+        label: (
+          <span style={{ color: token.colorPrimaryActive }}>
+            {item.label}
+            {/* the drawer's inline menu brings its own expand caret */}
+            {!isCompact && (
+              <DownOutlined style={{ fontSize: 10, marginInlineStart: 6 }} />
+            )}
+          </span>
+        ),
+      };
+    }
+    return {
+      key: item.key,
+      label: (
+        <a
+          href={item.href}
+          rel={item.rel}
+          style={{
+            color: active === item.key ? token.colorPrimaryActive : undefined,
+          }}
+          target={item.target}
+        >
+          {item.label}
+        </a>
+      ),
+    };
+  });
   const selectedKeys =
     active != null && !active.startsWith("auth") && active !== "home"
       ? [active]
@@ -271,7 +360,7 @@ export default function PublicTopNav({
           <Menu
             aria-label="Public pages"
             items={menuItems}
-            mode="vertical"
+            mode="inline"
             onClick={() => setMobileMenuOpen(false)}
             selectedKeys={selectedKeys}
           />
@@ -282,6 +371,7 @@ export default function PublicTopNav({
 
   return (
     <Flex align="center">
+      {featuresDropdownItems != null && <style>{FEATURES_POPUP_CSS}</style>}
       <HomeLogoLink
         active={active}
         config={config}
@@ -294,6 +384,7 @@ export default function PublicTopNav({
         items={menuItems}
         mode="horizontal"
         selectedKeys={selectedKeys}
+        triggerSubMenuAction={hoverCapable ? "hover" : "click"}
         style={{
           background: "transparent",
           borderBottom: 0,

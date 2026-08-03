@@ -62,6 +62,7 @@ import type {
   TeamLicenseQuote,
 } from "@cocalc/conat/hub/api/purchases";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
+import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
 import type {
   AuthorizePublicDirectoryShareReadOptions,
   AuthorizePublicDirectoryShareReadResponse,
@@ -193,6 +194,7 @@ import type {
   HostRuntimeLogResponse,
   HostSshAuthorizedKeysResponse,
   HostStaticAppPathInspection,
+  StageProjectHostArtifactRequest,
   UpgradeSoftwareRequest,
   UpgradeSoftwareResponse,
 } from "@cocalc/conat/project-host/api";
@@ -293,6 +295,7 @@ export interface ProjectControlStartRequest {
   project_id: string;
   account_id: string;
   restore_backup_id?: string;
+  project_move_id?: string;
   lro_op_id?: string;
   source_bay_id?: string;
   autostart?: boolean;
@@ -624,6 +627,104 @@ export interface AccountDirectoryEntry extends UserSearchResult {
   home_bay_id?: string;
 }
 
+export type EmailAuthChallengeState =
+  | "pending"
+  | "email_proved"
+  | "account_creating"
+  | "account_ready"
+  | "mfa_required"
+  | "completed"
+  | "superseded"
+  | "expired"
+  | "blocked"
+  | "failed";
+
+export interface EmailAuthChallengeStatus {
+  challenge_id: string;
+  purpose: "sign_in_or_sign_up" | "email_fresh_auth";
+  state: EmailAuthChallengeState;
+  masked_email: string;
+  expires_at: string;
+  resend_available_at: string;
+  send_count: number;
+  message_sent: boolean;
+  message_failed: boolean;
+}
+
+export interface EmailAuthChallengeStartRequest {
+  email_address: string;
+  browser_binding: string;
+  request_ip?: string;
+  analytics_token?: string;
+  purpose?: "sign_in_or_sign_up" | "email_fresh_auth";
+  prospective_home_bay_id?: string;
+  terms_accepted?: boolean;
+  terms_version?: string;
+  continuation_target?: string;
+  expected_account_id?: string;
+}
+
+export interface EmailAuthChallengeStatusRequest {
+  challenge_id: string;
+  browser_binding: string;
+}
+
+export interface EmailAuthChallengeRedeemCodeRequest {
+  challenge_id: string;
+  code: string;
+  browser_binding?: string;
+}
+
+export interface EmailAuthChallengeRedeemLinkRequest {
+  challenge_id: string;
+  token: string;
+  browser_binding?: string;
+}
+
+export interface EmailAuthExchangePrepareRequest {
+  challenge_id: string;
+  auth_method: "email_code" | "email_link";
+}
+
+export interface EmailAuthExchangeResult {
+  challenge_id: string;
+  exchange_token: string;
+  exchange_expires_at: string;
+  home_bay_id: string;
+  redirect_to?: string;
+  state: "account_ready";
+}
+
+export interface EmailAuthExchangeConsumeRequest {
+  account_id: string;
+  challenge_id: string;
+  completion: "completed" | "mfa_required";
+  exchange_id: string;
+  home_bay_id: string;
+}
+
+export interface EmailAuthExchangeConsumeResult {
+  account_id: string;
+  auth_method: "email_code" | "email_link";
+  email_proved_at: string;
+}
+
+export interface EmailAuthMfaCompleteRequest {
+  account_id: string;
+  challenge_id: string;
+  home_bay_id: string;
+}
+
+export interface EmailFreshAuthCompleteRequest {
+  account_id: string;
+  challenge_id: string;
+}
+
+export interface EmailFreshAuthCompleteResult {
+  auth_method: "email_code" | "email_link";
+  email_proved_at: string;
+}
+
 export interface AccountApiKeyDirectoryEntry {
   key_id: string;
   account_id: string;
@@ -665,7 +766,7 @@ export interface AccountApiKeyDirectoryTouchRequest {
 
 export interface AccountDirectoryCreateRequest {
   email_address: string;
-  password: string;
+  password?: string;
   display_name?: string;
   first_name?: string;
   last_name?: string;
@@ -680,6 +781,11 @@ export interface AccountDirectoryCreateRequest {
   other_settings?: Record<string, unknown>;
   trusted_product_access?: boolean;
   trusted_product_access_reason?: string;
+  verified_email?: {
+    address: string;
+    verified_at: string;
+    method: "email_code" | "email_link" | "google_oidc" | "saml";
+  };
 }
 
 export type MembershipClaimIdentityState = "pending" | "active" | "revoked";
@@ -923,10 +1029,12 @@ export interface AccountLocalReconcileDedicatedHostPurchaseSessionRequest {
   host_bay_id?: string | null;
   provider: string;
   region?: string | null;
+  billing_state: DedicatedHostPricingSnapshot["billing_state"];
   machine_type?: string | null;
   pricing_model?: "on_demand" | "spot" | null;
   funding_lane: "prepaid" | "credit";
   hourly_cost_usd: MoneyValue;
+  pricing_snapshot: DedicatedHostPricingSnapshot;
   started_at?: Date | string | number | null;
 }
 
@@ -1079,6 +1187,8 @@ export interface AccountLocalVerifySignInPasswordResult {
 export interface AccountLocalCreateCliLoginSessionRequest {
   account_id: string;
   approved_challenge_id: string;
+  factor_level?: "none" | "totp" | "recovery_code" | "passkey" | "google_oidc";
+  fresh_auth_until?: Date | string | number | null;
   ip_address?: string | null;
   user_agent?: string | null;
 }
@@ -2089,6 +2199,14 @@ export type HostConnectionMethod =
   | "pull-host-rootfs-image"
   | "delete-host-rootfs-image"
   | "gc-deleted-host-rootfs-images"
+  | "get-host-exam-state"
+  | "set-host-exam-config"
+  | "create-host-exam-run"
+  | "rotate-host-exam-token"
+  | "open-host-exam-run"
+  | "update-host-exam-deadline"
+  | "increase-host-exam-capacity"
+  | "stop-and-erase-host-exam-run"
   | "list-host-ssh-authorized-keys"
   | "add-host-ssh-authorized-key"
   | "remove-host-ssh-authorized-key"
@@ -2120,8 +2238,16 @@ export type HostConnectionMethod =
 export type HostControlMethod =
   | "probe-public-route-origin"
   | "restart-cloudflared"
+  | "apply-exam-run"
+  | "get-exam-run-status"
+  | "open-exam-run"
+  | "update-exam-run-deadline"
+  | "increase-exam-run-capacity"
+  | "rotate-exam-run-token"
+  | "close-and-cleanup-exam-run"
   | "create-project"
   | "start-project"
+  | "start-project-idempotent"
   | "stop-project"
   | "get-project-status"
   | "update-authorized-keys"
@@ -2132,6 +2258,7 @@ export type HostControlMethod =
   | "apply-pending-copies"
   | "delete-project-data"
   | "upgrade-software"
+  | "stage-project-host-artifact"
   | "rollout-managed-components"
   | "grow-btrfs"
   | "grow-shared-scratch"
@@ -2179,6 +2306,15 @@ export type AccountDirectoryMethod =
   | "update-email-address-verified"
   | "update-banned"
   | "touch"
+  | "start-email-auth-challenge"
+  | "get-email-auth-challenge-status"
+  | "resend-email-auth-challenge"
+  | "redeem-email-auth-code"
+  | "redeem-email-auth-link"
+  | "prepare-email-auth-exchange"
+  | "consume-email-auth-exchange"
+  | "complete-email-auth-mfa"
+  | "complete-email-fresh-auth"
   | "get-api-key"
   | "upsert-api-key"
   | "delete-api-key"
@@ -2839,6 +2975,30 @@ export interface InterBayHostConnectionApi {
   gcDeletedHostRootfsImages: (
     opts: Parameters<Hosts["gcDeletedHostRootfsImages"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["gcDeletedHostRootfsImages"]>>>;
+  getHostExamState: (
+    opts: Parameters<Hosts["getHostExamState"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["getHostExamState"]>>>;
+  setHostExamConfig: (
+    opts: Parameters<Hosts["setHostExamConfig"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["setHostExamConfig"]>>>;
+  createHostExamRun: (
+    opts: Parameters<Hosts["createHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["createHostExamRun"]>>>;
+  rotateHostExamToken: (
+    opts: Parameters<Hosts["rotateHostExamToken"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["rotateHostExamToken"]>>>;
+  openHostExamRun: (
+    opts: Parameters<Hosts["openHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["openHostExamRun"]>>>;
+  updateHostExamDeadline: (
+    opts: Parameters<Hosts["updateHostExamDeadline"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["updateHostExamDeadline"]>>>;
+  increaseHostExamCapacity: (
+    opts: Parameters<Hosts["increaseHostExamCapacity"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["increaseHostExamCapacity"]>>>;
+  stopAndEraseHostExamRun: (
+    opts: Parameters<Hosts["stopAndEraseHostExamRun"]>[0],
+  ) => Promise<Awaited<ReturnType<Hosts["stopAndEraseHostExamRun"]>>>;
   listHostSshAuthorizedKeys: (
     opts: Parameters<Hosts["listHostSshAuthorizedKeys"]>[0],
   ) => Promise<Awaited<ReturnType<Hosts["listHostSshAuthorizedKeys"]>>>;
@@ -3047,6 +3207,23 @@ const HOST_CONNECTION_METHOD_SPECS = [
     name: "gcDeletedHostRootfsImages",
     method: "gc-deleted-host-rootfs-images",
   },
+  { name: "getHostExamState", method: "get-host-exam-state" },
+  { name: "setHostExamConfig", method: "set-host-exam-config" },
+  { name: "createHostExamRun", method: "create-host-exam-run" },
+  { name: "rotateHostExamToken", method: "rotate-host-exam-token" },
+  { name: "openHostExamRun", method: "open-host-exam-run" },
+  {
+    name: "updateHostExamDeadline",
+    method: "update-host-exam-deadline",
+  },
+  {
+    name: "increaseHostExamCapacity",
+    method: "increase-host-exam-capacity",
+  },
+  {
+    name: "stopAndEraseHostExamRun",
+    method: "stop-and-erase-host-exam-run",
+  },
   {
     name: "listHostSshAuthorizedKeys",
     method: "list-host-ssh-authorized-keys",
@@ -3176,6 +3353,34 @@ export interface InterBayHostControlApi {
   runSyntheticRuntimeProbe: (opts: {
     host_id: string;
   }) => ReturnType<HostControlApi["runSyntheticRuntimeProbe"]>;
+  applyExamRun: (opts: {
+    host_id: string;
+    apply: HostControlArg<"applyExamRun">;
+  }) => ReturnType<HostControlApi["applyExamRun"]>;
+  getExamRunStatus: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getExamRunStatus">;
+  }) => ReturnType<HostControlApi["getExamRunStatus"]>;
+  openExamRun: (opts: {
+    host_id: string;
+    open: HostControlArg<"openExamRun">;
+  }) => ReturnType<HostControlApi["openExamRun"]>;
+  updateExamRunDeadline: (opts: {
+    host_id: string;
+    update: HostControlArg<"updateExamRunDeadline">;
+  }) => ReturnType<HostControlApi["updateExamRunDeadline"]>;
+  increaseExamRunCapacity: (opts: {
+    host_id: string;
+    increase: HostControlArg<"increaseExamRunCapacity">;
+  }) => ReturnType<HostControlApi["increaseExamRunCapacity"]>;
+  rotateExamRunToken: (opts: {
+    host_id: string;
+    rotate: HostControlArg<"rotateExamRunToken">;
+  }) => ReturnType<HostControlApi["rotateExamRunToken"]>;
+  closeAndCleanupExamRun: (opts: {
+    host_id: string;
+    close: HostControlArg<"closeAndCleanupExamRun">;
+  }) => ReturnType<HostControlApi["closeAndCleanupExamRun"]>;
   createProject: (opts: {
     account_id: string;
     host_id: string;
@@ -3184,6 +3389,10 @@ export interface InterBayHostControlApi {
   startProject: (opts: {
     host_id: string;
     start: HostControlArg<"startProject">;
+  }) => Promise<HostCreateProjectResponse>;
+  startProjectIdempotent: (opts: {
+    host_id: string;
+    start: HostControlArg<"startProjectIdempotent">;
   }) => Promise<HostCreateProjectResponse>;
   stopProject: (opts: {
     host_id: string;
@@ -3226,6 +3435,10 @@ export interface InterBayHostControlApi {
   upgradeSoftware: (opts: {
     host_id: string;
     upgrade: UpgradeSoftwareRequest;
+  }) => Promise<UpgradeSoftwareResponse>;
+  stageProjectHostArtifact: (opts: {
+    host_id: string;
+    stage: StageProjectHostArtifactRequest;
   }) => Promise<UpgradeSoftwareResponse>;
   rolloutManagedComponents: (opts: {
     host_id: string;
@@ -3387,6 +3600,31 @@ export interface InterBayAccountDirectoryApi {
     opts: AccountDirectoryUpdateBannedRequest,
   ) => Promise<AccountDirectoryEntry>;
   touch: (opts: AccountDirectoryTouchRequest) => Promise<void>;
+  startEmailAuthChallenge: (
+    opts: EmailAuthChallengeStartRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  getEmailAuthChallengeStatus: (
+    opts: EmailAuthChallengeStatusRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  resendEmailAuthChallenge: (
+    opts: EmailAuthChallengeStatusRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  redeemEmailAuthCode: (
+    opts: EmailAuthChallengeRedeemCodeRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  redeemEmailAuthLink: (
+    opts: EmailAuthChallengeRedeemLinkRequest,
+  ) => Promise<EmailAuthChallengeStatus>;
+  prepareEmailAuthExchange: (
+    opts: EmailAuthExchangePrepareRequest,
+  ) => Promise<EmailAuthExchangeResult>;
+  consumeEmailAuthExchange: (
+    opts: EmailAuthExchangeConsumeRequest,
+  ) => Promise<EmailAuthExchangeConsumeResult>;
+  completeEmailAuthMfa: (opts: EmailAuthMfaCompleteRequest) => Promise<void>;
+  completeEmailFreshAuth: (
+    opts: EmailFreshAuthCompleteRequest,
+  ) => Promise<EmailFreshAuthCompleteResult>;
   create: (
     opts: AccountDirectoryCreateRequest,
   ) => Promise<AccountDirectoryEntry>;
@@ -4036,8 +4274,25 @@ type HostControlName = keyof InterBayHostControlApi;
 const HOST_CONTROL_METHOD_SPECS = [
   { name: "probePublicRouteOrigin", method: "probe-public-route-origin" },
   { name: "restartCloudflared", method: "restart-cloudflared" },
+  { name: "applyExamRun", method: "apply-exam-run" },
+  { name: "getExamRunStatus", method: "get-exam-run-status" },
+  { name: "openExamRun", method: "open-exam-run" },
+  {
+    name: "updateExamRunDeadline",
+    method: "update-exam-run-deadline",
+  },
+  {
+    name: "increaseExamRunCapacity",
+    method: "increase-exam-run-capacity",
+  },
+  { name: "rotateExamRunToken", method: "rotate-exam-run-token" },
+  {
+    name: "closeAndCleanupExamRun",
+    method: "close-and-cleanup-exam-run",
+  },
   { name: "createProject", method: "create-project" },
   { name: "startProject", method: "start-project" },
+  { name: "startProjectIdempotent", method: "start-project-idempotent" },
   { name: "stopProject", method: "stop-project" },
   { name: "getProjectStatus", method: "get-project-status" },
   { name: "updateAuthorizedKeys", method: "update-authorized-keys" },
@@ -4048,6 +4303,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "applyPendingCopies", method: "apply-pending-copies" },
   { name: "deleteProjectData", method: "delete-project-data" },
   { name: "upgradeSoftware", method: "upgrade-software" },
+  {
+    name: "stageProjectHostArtifact",
+    method: "stage-project-host-artifact",
+  },
   { name: "rolloutManagedComponents", method: "rollout-managed-components" },
   { name: "growBtrfs", method: "grow-btrfs" },
   { name: "growSharedScratch", method: "grow-shared-scratch" },
@@ -5123,6 +5382,72 @@ export function createInterBayAccountDirectoryClient({
     ...serviceClientOptions({ client, timeout }),
     subject: accountDirectorySubject({ method: "touch" }),
   });
+  const startEmailAuthChallengeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "startEmailAuthChallenge">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({ method: "start-email-auth-challenge" }),
+  });
+  const getEmailAuthChallengeStatusClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "getEmailAuthChallengeStatus">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "get-email-auth-challenge-status",
+    }),
+  });
+  const resendEmailAuthChallengeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "resendEmailAuthChallenge">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "resend-email-auth-challenge",
+    }),
+  });
+  const redeemEmailAuthCodeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "redeemEmailAuthCode">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({ method: "redeem-email-auth-code" }),
+  });
+  const redeemEmailAuthLinkClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "redeemEmailAuthLink">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({ method: "redeem-email-auth-link" }),
+  });
+  const prepareEmailAuthExchangeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "prepareEmailAuthExchange">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "prepare-email-auth-exchange",
+    }),
+  });
+  const consumeEmailAuthExchangeClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "consumeEmailAuthExchange">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "consume-email-auth-exchange",
+    }),
+  });
+  const completeEmailAuthMfaClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "completeEmailAuthMfa">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "complete-email-auth-mfa",
+    }),
+  });
+  const completeEmailFreshAuthClient = createServiceClient<
+    Pick<InterBayAccountDirectoryApi, "completeEmailFreshAuth">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountDirectorySubject({
+      method: "complete-email-fresh-auth",
+    }),
+  });
   const createClient = createServiceClient<
     Pick<InterBayAccountDirectoryApi, "create">
   >({
@@ -5236,6 +5561,24 @@ export function createInterBayAccountDirectoryClient({
       await updateEmailAddressVerifiedClient.updateEmailAddressVerified(opts),
     updateBanned: async (opts) => await updateBannedClient.updateBanned(opts),
     touch: async (opts) => await touchClient.touch(opts),
+    startEmailAuthChallenge: async (opts) =>
+      await startEmailAuthChallengeClient.startEmailAuthChallenge(opts),
+    getEmailAuthChallengeStatus: async (opts) =>
+      await getEmailAuthChallengeStatusClient.getEmailAuthChallengeStatus(opts),
+    resendEmailAuthChallenge: async (opts) =>
+      await resendEmailAuthChallengeClient.resendEmailAuthChallenge(opts),
+    redeemEmailAuthCode: async (opts) =>
+      await redeemEmailAuthCodeClient.redeemEmailAuthCode(opts),
+    redeemEmailAuthLink: async (opts) =>
+      await redeemEmailAuthLinkClient.redeemEmailAuthLink(opts),
+    prepareEmailAuthExchange: async (opts) =>
+      await prepareEmailAuthExchangeClient.prepareEmailAuthExchange(opts),
+    consumeEmailAuthExchange: async (opts) =>
+      await consumeEmailAuthExchangeClient.consumeEmailAuthExchange(opts),
+    completeEmailAuthMfa: async (opts) =>
+      await completeEmailAuthMfaClient.completeEmailAuthMfa(opts),
+    completeEmailFreshAuth: async (opts) =>
+      await completeEmailFreshAuthClient.completeEmailFreshAuth(opts),
     create: async (opts) => await createClient.create(opts),
     delete: async (opts) => await deleteClient.delete(opts),
     getApiKey: async (opts) => await getApiKeyClient.getApiKey(opts),
@@ -5374,6 +5717,119 @@ export function createInterBayAccountDirectoryHandlers({
       subject: accountDirectorySubject({ method: "touch" }),
       impl: {
         touch: async (opts) => await impl.touch(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "startEmailAuthChallenge">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "start-email-auth-challenge",
+      }),
+      impl: {
+        startEmailAuthChallenge: async (opts) =>
+          await impl.startEmailAuthChallenge(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "getEmailAuthChallengeStatus">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "get-email-auth-challenge-status",
+      }),
+      impl: {
+        getEmailAuthChallengeStatus: async (opts) =>
+          await impl.getEmailAuthChallengeStatus(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "resendEmailAuthChallenge">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "resend-email-auth-challenge",
+      }),
+      impl: {
+        resendEmailAuthChallenge: async (opts) =>
+          await impl.resendEmailAuthChallenge(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "redeemEmailAuthCode">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({ method: "redeem-email-auth-code" }),
+      impl: {
+        redeemEmailAuthCode: async (opts) =>
+          await impl.redeemEmailAuthCode(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "redeemEmailAuthLink">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({ method: "redeem-email-auth-link" }),
+      impl: {
+        redeemEmailAuthLink: async (opts) =>
+          await impl.redeemEmailAuthLink(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "prepareEmailAuthExchange">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "prepare-email-auth-exchange",
+      }),
+      impl: {
+        prepareEmailAuthExchange: async (opts) =>
+          await impl.prepareEmailAuthExchange(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "consumeEmailAuthExchange">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "consume-email-auth-exchange",
+      }),
+      impl: {
+        consumeEmailAuthExchange: async (opts) =>
+          await impl.consumeEmailAuthExchange(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "completeEmailAuthMfa">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "complete-email-auth-mfa",
+      }),
+      impl: {
+        completeEmailAuthMfa: async (opts) =>
+          await impl.completeEmailAuthMfa(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountDirectoryApi, "completeEmailFreshAuth">
+    >({
+      ...options,
+      service: "inter-bay-account-directory",
+      subject: accountDirectorySubject({
+        method: "complete-email-fresh-auth",
+      }),
+      impl: {
+        completeEmailFreshAuth: async (opts) =>
+          await impl.completeEmailFreshAuth(opts),
       },
     }),
     createServiceHandler<Pick<InterBayAccountDirectoryApi, "create">>({

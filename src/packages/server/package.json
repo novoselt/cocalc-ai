@@ -61,6 +61,7 @@
     "@cocalc/conat": "workspace:*",
     "@cocalc/database": "workspace:*",
     "@cocalc/gcloud-pricing-calculator": "^1.17.0",
+    "@cocalc/jupyter": "workspace:*",
     "@cocalc/project-runner": "workspace:*",
     "@cocalc/server": "workspace:*",
     "@cocalc/util": "workspace:*",

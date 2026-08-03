@@ -1,6 +1,9 @@
 import immutable from "immutable";
 import { COLORS } from "@cocalc/util/theme";
-import { resolveThreadStatusDot } from "../chatroom-sidebar";
+import {
+  openArchivedThread,
+  resolveThreadStatusDot,
+} from "../chatroom-sidebar";
 
 describe("resolveThreadStatusDot", () => {
   const baseThread = {
@@ -68,5 +71,41 @@ describe("resolveThreadStatusDot", () => {
       dotColor: COLORS.RUN,
       dotTitle: "Codex active",
     });
+  });
+});
+
+describe("openArchivedThread", () => {
+  it("selects an archived thread and closes the archive dialog", () => {
+    const setSelectedThreadKey = jest.fn();
+    const setAllowAutoSelectThread = jest.fn();
+    const setArchivedOpen = jest.fn();
+    const setSidebarVisible = jest.fn();
+
+    openArchivedThread({
+      threadKey: "resolved-thread",
+      isCompact: false,
+      setSelectedThreadKey,
+      setAllowAutoSelectThread,
+      setArchivedOpen,
+      setSidebarVisible,
+    });
+
+    expect(setAllowAutoSelectThread).toHaveBeenCalledWith(false);
+    expect(setSelectedThreadKey).toHaveBeenCalledWith("resolved-thread");
+    expect(setArchivedOpen).toHaveBeenCalledWith(false);
+    expect(setSidebarVisible).not.toHaveBeenCalled();
+  });
+
+  it("also closes the sidebar in compact mode", () => {
+    const setSidebarVisible = jest.fn();
+    openArchivedThread({
+      threadKey: "resolved-thread",
+      isCompact: true,
+      setSelectedThreadKey: jest.fn(),
+      setAllowAutoSelectThread: jest.fn(),
+      setArchivedOpen: jest.fn(),
+      setSidebarVisible,
+    });
+    expect(setSidebarVisible).toHaveBeenCalledWith(false);
   });
 });

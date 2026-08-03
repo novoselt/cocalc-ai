@@ -56,6 +56,10 @@ import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import {
+  assertProjectRuntimeCapability,
+  getProjectRuntimeConfiguration,
+} from "@cocalc/server/launchpad/project-runtime";
 import { resolveProjectCollabInviteDirectory } from "@cocalc/server/projects/collab-invite-directory";
 import { resolveOnPremHost } from "@cocalc/server/onprem";
 import { posix } from "path";
@@ -1451,6 +1455,7 @@ export async function getProjectRootfsPublishConfig({
   account_id: string;
   project_id: string;
 }): Promise<ProjectRootfsPublishConfig | null> {
+  assertProjectRuntimeCapability("rootfs");
   return (await getProjectReadDetailsAllowRemote({ account_id, project_id }))
     .rootfs_publish_config;
 }
@@ -1481,6 +1486,7 @@ export async function setProjectRootfsPublishConfig({
   project_id: string;
   config: ProjectRootfsPublishConfig | null;
 }): Promise<void> {
+  assertProjectRuntimeCapability("rootfs");
   const normalized = validateProjectRootfsPublishConfig(config);
   await assertCollab({ account_id, project_id });
   await withProjectRehomeWriteFence({
@@ -1537,6 +1543,7 @@ async function getProjectRootfsBuildClient({
   project_id: string;
   timeout?: number;
 }) {
+  assertProjectRuntimeCapability("rootfs");
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   const host_id = await getProjectHostId(project_id);
   const client = await getRoutedHostControlClient({
@@ -1706,6 +1713,7 @@ export async function listProjectRootfsBuilds({
   project_id,
   limit,
 }: ProjectRootfsBuildListRequest): Promise<ProjectRootfsBuildRecord[]> {
+  assertProjectRuntimeCapability("rootfs");
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   return await listProjectRootfsBuildRecords({ project_id, limit });
 }
@@ -1716,6 +1724,7 @@ export async function recordProjectRootfsBuildPublish({
   build_id,
   publish_op_id,
 }: ProjectRootfsBuildPublishRecordRequest): Promise<ProjectRootfsBuildPublishRecordResponse> {
+  assertProjectRuntimeCapability("rootfs");
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   const build = await getProjectRootfsBuildRecord({ project_id, build_id });
   if (!build) {
@@ -2684,6 +2693,7 @@ export async function generateProjectSshKeySecret({
   project_id: string;
   secret_name?: string;
 }): Promise<GenerateProjectSshKeySecretResult> {
+  assertProjectRuntimeCapability("ssh");
   const actor = requireAccountId(account_id);
   const authSession = await requireDangerousProjectMutationAuth({
     account_id: actor,
@@ -2723,6 +2733,7 @@ export async function getProjectSnapshotSchedule({
   account_id: string;
   project_id: string;
 }): Promise<ProjectSnapshotSchedule> {
+  assertProjectRuntimeCapability("snapshots");
   return (await getProjectReadDetailsAllowRemote({ account_id, project_id }))
     .snapshots;
 }
@@ -2734,6 +2745,7 @@ export async function getProjectBackupSchedule({
   account_id: string;
   project_id: string;
 }): Promise<ProjectBackupSchedule> {
+  assertProjectRuntimeCapability("backups");
   return (await getProjectReadDetailsAllowRemote({ account_id, project_id }))
     .backups;
 }
@@ -4383,6 +4395,7 @@ export async function resolveWorkspaceSshConnection({
   project_id: string;
   direct?: boolean;
 }): Promise<WorkspaceSshConnectionInfo> {
+  assertProjectRuntimeCapability("ssh");
   await assertCollab({ account_id, project_id });
   const row = await getAssignedProjectHostInfo(project_id);
   const metadata = row.metadata ?? {};
@@ -4451,7 +4464,10 @@ export async function start({
   autostart,
   managed_egress_override,
   managed_egress_override_auth,
+  project_move_id,
+  project_move_auth,
   wait = true,
+  foreground_wait_ms,
 }: {
   account_id: string;
   project_id: string;
@@ -4463,13 +4479,17 @@ export async function start({
   autostart?: boolean;
   managed_egress_override?: ManagedProjectEgressOverride;
   managed_egress_override_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
+  project_move_id?: string;
+  project_move_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
   wait?: boolean;
+  foreground_wait_ms?: number;
 }): Promise<{
   op_id: string;
   scope_type: "project";
   scope_id: string;
   service: string;
   stream_name: string;
+  terminal_status?: "succeeded";
 }> {
   return await runProjectStartLikeAction({
     kind: "start",
@@ -4479,7 +4499,10 @@ export async function start({
     autostart,
     managed_egress_override,
     managed_egress_override_auth,
+    project_move_id,
+    project_move_auth,
     wait,
+    foreground_wait_ms,
   });
 }
 
@@ -4489,19 +4512,23 @@ export async function startFromHost({
   project_id,
   autostart,
   wait = true,
+  foreground_wait_ms,
 }: {
   host_id?: string;
   account_id: string;
   project_id: string;
   autostart?: boolean;
   wait?: boolean;
+  foreground_wait_ms?: number;
 }): Promise<{
   op_id: string;
   scope_type: "project";
   scope_id: string;
   service: string;
   stream_name: string;
+  terminal_status?: "succeeded";
 }> {
+  assertProjectRuntimeCapability("host_placement");
   await assertProjectAssignedToHostForStart({ host_id, project_id });
   return await runProjectStartLikeAction({
     kind: "start",
@@ -4509,6 +4536,7 @@ export async function startFromHost({
     project_id,
     autostart,
     wait,
+    foreground_wait_ms,
   });
 }
 
@@ -4573,7 +4601,10 @@ async function runProjectStartLikeAction({
   autostart,
   managed_egress_override,
   managed_egress_override_auth,
+  project_move_id,
+  project_move_auth,
   wait = true,
+  foreground_wait_ms,
 }: {
   kind: "start" | "restart";
   account_id: string;
@@ -4582,14 +4613,28 @@ async function runProjectStartLikeAction({
   autostart?: boolean;
   managed_egress_override?: ManagedProjectEgressOverride;
   managed_egress_override_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
+  project_move_id?: string;
+  project_move_auth?: typeof PROJECT_DANGEROUS_INTERNAL_AUTH;
   wait?: boolean;
+  foreground_wait_ms?: number;
 }): Promise<{
   op_id: string;
   scope_type: "project";
   scope_id: string;
   service: string;
   stream_name: string;
+  terminal_status?: "succeeded";
 }> {
+  if (
+    foreground_wait_ms != null &&
+    (!Number.isInteger(foreground_wait_ms) ||
+      foreground_wait_ms < 1 ||
+      foreground_wait_ms > 5_000)
+  ) {
+    throw new Error(
+      "foreground_wait_ms must be an integer from 1 through 5000",
+    );
+  }
   await assertCollabAllowRemoteProjectAccess({ account_id, project_id });
   await assertProjectNotHardDeleting({ project_id });
   if (
@@ -4606,6 +4651,10 @@ async function runProjectStartLikeAction({
       : undefined;
   const effectiveRestoreBackupId =
     explicitRestoreBackupId || implicitMigrationRestore?.snapshot_id;
+  const effectiveProjectMoveId =
+    project_move_auth === PROJECT_DANGEROUS_INTERNAL_AUTH
+      ? project_move_id
+      : undefined;
   try {
     const ownership = await resolveProjectBay(project_id);
     if (ownership == null) {
@@ -4622,6 +4671,9 @@ async function runProjectStartLikeAction({
         account_id,
         ...(effectiveRestoreBackupId
           ? { restore_backup_id: effectiveRestoreBackupId }
+          : {}),
+        ...(effectiveProjectMoveId
+          ? { project_move_id: effectiveProjectMoveId }
           : {}),
         ...(autostart ? { autostart } : {}),
         source_bay_id: getConfiguredBayId(),
@@ -4653,11 +4705,9 @@ async function runProjectStartLikeAction({
         : {}),
       ...(autostart ? { autostart } : {}),
     },
-    dedupe_key: [
-      "project-start",
-      kind,
-      effectiveRestoreBackupId || "default",
-    ].join(":"),
+    // A project can have only one active start lifecycle. In particular, an
+    // ordinary autostart must join rather than supersede an in-flight restore.
+    dedupe_key: "project-start",
     status: "queued",
   });
   const response = {
@@ -4673,6 +4723,15 @@ async function runProjectStartLikeAction({
       op_id: op.op_id,
       status: op.status,
     });
+    if (foreground_wait_ms != null && foreground_wait_ms > 0) {
+      const terminalStatus = await waitForJoinedProjectStart({
+        op_id: op.op_id,
+        timeout_ms: foreground_wait_ms,
+      });
+      if (terminalStatus === "succeeded") {
+        return { ...response, terminal_status: "succeeded" };
+      }
+    }
     return response;
   }
   publishStartLroSummaryBestEffort({
@@ -4744,6 +4803,9 @@ async function runProjectStartLikeAction({
           ...(effectiveRestoreBackupId
             ? { restore_backup_id: effectiveRestoreBackupId }
             : {}),
+          ...(effectiveProjectMoveId
+            ? { project_move_id: effectiveProjectMoveId }
+            : {}),
           ...(autostart ? { autostart } : {}),
           lro_op_id: op.op_id,
           source_bay_id: getConfiguredBayId(),
@@ -4802,9 +4864,18 @@ async function runProjectStartLikeAction({
           context: `${kind}: succeeded`,
         });
       }
-      await supersedeOlderProjectStartLros({
+      // The current operation is already durably terminal. Historical cleanup
+      // must not delay the foreground acknowledgement that converges browser
+      // state to running.
+      void supersedeOlderProjectStartLros({
         project_id,
         keep_op_id: op.op_id,
+      }).catch((err) => {
+        log.warn("unable to supersede older project-start operations", {
+          project_id,
+          keep_op_id: op.op_id,
+          err: `${err}`,
+        });
       });
     } catch (err) {
       const runtimeSponsorDenial = extractRuntimeSponsorDenial(err);
@@ -4849,12 +4920,76 @@ async function runProjectStartLikeAction({
 
   if (wait) {
     await runStart();
+  } else if (foreground_wait_ms != null && foreground_wait_ms > 0) {
+    type ForegroundStartResult =
+      | { status: "succeeded" }
+      | { status: "failed"; error: unknown };
+    const completion: Promise<ForegroundStartResult> = runStart().then(
+      () => ({ status: "succeeded" }),
+      (error) => ({ status: "failed", error }),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timed = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), foreground_wait_ms);
+    });
+    const result = await Promise.race([completion, timed]);
+    if (timer != null) {
+      clearTimeout(timer);
+    }
+    if (result?.status === "failed") {
+      throw result.error;
+    }
+    if (result?.status === "succeeded") {
+      return { ...response, terminal_status: "succeeded" };
+    }
+    void completion.then((lateResult) => {
+      if (lateResult.status === "failed") {
+        log.warn("async start failed", {
+          project_id,
+          err: `${lateResult.error}`,
+        });
+      }
+    });
   } else {
     runStart().catch((err) =>
       log.warn("async start failed", { project_id, err: `${err}` }),
     );
   }
   return response;
+}
+
+async function waitForJoinedProjectStart({
+  op_id,
+  timeout_ms,
+}: {
+  op_id: string;
+  timeout_ms: number;
+}): Promise<"succeeded" | undefined> {
+  const deadline = Date.now() + timeout_ms;
+  let delay_ms = 10;
+  while (true) {
+    const summary = await getLro(op_id);
+    if (summary?.status === "succeeded") {
+      return "succeeded";
+    }
+    if (
+      summary?.status === "failed" ||
+      summary?.status === "canceled" ||
+      summary?.status === "expired"
+    ) {
+      throw new Error(
+        summary.error ?? `project start ${summary.status} (${op_id})`,
+      );
+    }
+    const remaining_ms = deadline - Date.now();
+    if (remaining_ms <= 0) {
+      return undefined;
+    }
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(delay_ms, remaining_ms)),
+    );
+    delay_ms = Math.min(100, Math.ceil(delay_ms * 1.5));
+  }
 }
 
 export async function stop({
@@ -4883,6 +5018,7 @@ export async function archiveProject({
   account_id?: string;
   project_id: string;
 }): Promise<void> {
+  assertProjectRuntimeCapability("archive");
   await assertCanPerformDestructiveStorageAction({
     account_id,
     project_id,
@@ -5128,6 +5264,7 @@ export async function status({
       epoch: ownership.epoch,
     });
   return {
+    runtime: getProjectRuntimeConfiguration(),
     state: state.state,
     http_port: state.http_port,
     ssh_port: state.ssh_port,
@@ -5529,6 +5666,7 @@ export async function updateAuthorizedKeysOnHost({
   account_id: string;
   project_id: string;
 }): Promise<void> {
+  assertProjectRuntimeCapability("ssh");
   await assertCollab({ account_id, project_id });
   await updateAuthorizedKeysOnHostControl(project_id);
 }
@@ -5878,6 +6016,7 @@ export async function setProjectSshKey({
   creation_date?: number;
   last_use_date?: number;
 }): Promise<void> {
+  assertProjectRuntimeCapability("ssh");
   await requireDangerousProjectMutationAuth({
     account_id,
     browser_id,
@@ -5920,6 +6059,7 @@ export async function deleteProjectSshKey({
   project_id: string;
   fingerprint: string;
 }): Promise<void> {
+  assertProjectRuntimeCapability("ssh");
   await requireDangerousProjectMutationAuth({
     account_id,
     browser_id,
@@ -5967,6 +6107,7 @@ export async function moveProject({
   service: string;
   stream_name: string;
 }> {
+  assertProjectRuntimeCapability("move");
   const authSession = await requireDangerousProjectMutationAuth({
     account_id,
     browser_id,
@@ -6128,6 +6269,7 @@ export async function assignProjectHost({
   dest_host_id: string;
   skip_owner_route?: boolean;
 }): Promise<void> {
+  assertProjectRuntimeCapability("host_placement");
   if (!account_id) {
     throw new Error("user must be signed in");
   }

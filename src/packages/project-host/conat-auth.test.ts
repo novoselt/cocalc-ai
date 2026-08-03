@@ -320,22 +320,27 @@ describe("project-host Conat auth", () => {
   });
 
   it("does not reuse stale collaborator authorization after an account becomes a viewer", async () => {
-    mockGetRow
-      .mockReturnValueOnce({
-        users: {
-          [account_id]: "collaborator",
-        },
-      })
-      .mockReturnValue({
-        users: {
-          [account_id]: {
-            group: "viewer",
-            read_policy: {
-              rules: [{ action: "include", path: "public/**" }],
+    let projectRead = 0;
+    mockGetRow.mockImplementation((table) => {
+      if (table === "accounts") return undefined;
+      projectRead += 1;
+      return projectRead === 1
+        ? {
+            users: {
+              [account_id]: "collaborator",
             },
-          },
-        },
-      });
+          }
+        : {
+            users: {
+              [account_id]: {
+                group: "viewer",
+                read_policy: {
+                  rules: [{ action: "include", path: "public/**" }],
+                },
+              },
+            },
+          };
+    });
     const { isAllowed } = createProjectHostConatAuth({ host_id });
 
     await expect(
@@ -527,6 +532,44 @@ describe("project-host Conat auth", () => {
         }),
       ).resolves.toBe(false);
     });
+
+    it("denies ACP and unrelated project subjects to exam accounts", async () => {
+      mockGetRow.mockImplementation((table, key) => {
+        if (table === "accounts") {
+          return {
+            exam_mode: true,
+            exam_project_id: project_id,
+          };
+        }
+        const requestedProjectId = JSON.parse(key).project_id;
+        return requestedProjectId === project_id
+          ? { users: { [account_id]: { group: "owner" } } }
+          : { users: { [account_id]: { group: "owner" } } };
+      });
+      const { isAllowed } = createProjectHostConatAuth({ host_id });
+
+      await expect(
+        isAllowed({
+          user: { account_id },
+          type: "pub",
+          subject: `acp.project-${project_id}.account-${account_id}.api`,
+        }),
+      ).resolves.toBe(false);
+      await expect(
+        isAllowed({
+          user: { account_id },
+          type: "pub",
+          subject: `fs.project-${project_id}`,
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        isAllowed({
+          user: { account_id },
+          type: "pub",
+          subject: "fs.project-00000000-1000-4000-8000-000000000003",
+        }),
+      ).resolves.toBe(false);
+    });
   });
 
   it("allows only hub principals to use file-server management subjects", async () => {
@@ -555,12 +598,19 @@ describe("project-host Conat auth", () => {
   });
 
   it("does not cache negative collaborator decisions across user syncs", async () => {
-    mockGetRow.mockReturnValueOnce({ users: {} }).mockReturnValue({
-      users: {
-        [account_id]: {
-          group: "owner",
-        },
-      },
+    let projectRead = 0;
+    mockGetRow.mockImplementation((table) => {
+      if (table === "accounts") return undefined;
+      projectRead += 1;
+      return projectRead === 1
+        ? { users: {} }
+        : {
+            users: {
+              [account_id]: {
+                group: "owner",
+              },
+            },
+          };
     });
     const { isAllowed } = createProjectHostConatAuth({ host_id });
 

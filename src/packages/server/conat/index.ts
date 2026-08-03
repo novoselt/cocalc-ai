@@ -3,7 +3,11 @@ import { initAPI } from "./api";
 import { loadConatConfiguration } from "./configuration";
 import { createTimeService } from "@cocalc/conat/service/time";
 import { listenForUpdates as listenForProjectHostUpdates } from "./route-project";
-export { getConatPersistDiagnostics, initConatPersist } from "./persist";
+export {
+  getConatPersistDiagnostics,
+  getConatPersistSqliteDiagnostics,
+  initConatPersist,
+} from "./persist";
 import { conatApiCount, projectRunnerCount } from "@cocalc/backend/data";
 import * as Module from "module";
 import { conat } from "@cocalc/backend/conat";
@@ -20,11 +24,12 @@ import { startHostLroWorker } from "@cocalc/server/hosts/start-worker";
 import { startHostRuntimeFleetRolloutWorker } from "@cocalc/server/hosts/runtime-fleet-rollout-worker";
 import { startLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
 import { startLegacyMigrationArtifactRefreshMaintenance } from "@cocalc/server/legacy-migration/artifact-refresh-maintenance";
-import { isLaunchpadProduct } from "@cocalc/server/launchpad/mode";
+import { getProjectRuntimeMode } from "@cocalc/server/launchpad/project-runtime";
 import { startRootfsReleaseGcMaintenance } from "@cocalc/server/rootfs/gc-maintenance";
 import { startRootfsScanMaintenance } from "@cocalc/server/rootfs/scan-maintenance";
 import { startBackgroundAutoGrowMaintenance } from "@cocalc/server/project-host/auto-grow-maintenance";
 import { startDedicatedHostSpendMaintenance } from "@cocalc/server/project-host/spend-maintenance";
+import { startExamHostMaintenance } from "@cocalc/server/project-host/exam";
 import { startAccountProjectIndexProjectionMaintenance } from "@cocalc/server/projections/account-project-index-maintenance";
 import { startAccountCollaboratorIndexProjectionMaintenance } from "@cocalc/server/projections/account-collaborator-index-maintenance";
 import { startAccountNotificationIndexProjectionMaintenance } from "@cocalc/server/projections/account-notification-index-maintenance";
@@ -86,23 +91,13 @@ function isPrimaryBayWorker(): boolean {
   return !workerId || workerId === "1";
 }
 
-export async function initConatApi() {
-  logger.debug("initConatApi: the central api services", {
-    conatApiCount,
-    projectRunnerCount,
-  });
-  await loadConatConfiguration();
-  configureHubServiceAdmissionDenialRecorder();
-  startConatAdmissionSettingsRefresh();
-  logProjectionReadModes();
-  enableDbAccountRowFeedPublishing();
-  enableDbCollaboratorAccountFeedPublishing();
-  enableDbProjectAccountFeedPublishing();
+let conatApiBackgroundWorkersStarted = false;
 
-  // do not block on any of these!
-  for (let i = 0; i < conatApiCount; i++) {
-    initAPI();
-  }
+export function startConatApiBackgroundWorkers(): void {
+  if (conatApiBackgroundWorkersStarted) return;
+  conatApiBackgroundWorkersStarted = true;
+
+  logger.info("starting Conat API background workers");
   startBackupLroWorker();
   startCopyLroWorker();
   startCourseCollectLroWorker();
@@ -128,6 +123,7 @@ export async function initConatApi() {
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();
     startHostRuntimeFleetRolloutWorker();
+    startExamHostMaintenance();
   }
   startAccountProjectIndexProjectionMaintenance();
   if (isPrimaryBayWorker()) {
@@ -155,26 +151,71 @@ export async function initConatApi() {
   }
   startBayBackupMaintenance();
   startBayWalArchiveMaintenance();
+}
+
+export async function initConatApi({
+  startBackgroundWorkers = true,
+}: {
+  startBackgroundWorkers?: boolean;
+} = {}) {
+  logger.debug("initConatApi: the central api services", {
+    conatApiCount,
+    projectRunnerCount,
+  });
+  await loadConatConfiguration();
+  configureHubServiceAdmissionDenialRecorder();
+  startConatAdmissionSettingsRefresh();
+  logProjectionReadModes();
+  enableDbAccountRowFeedPublishing();
+  enableDbCollaboratorAccountFeedPublishing();
+  enableDbProjectAccountFeedPublishing();
+
+  // do not block on any of these!
+  for (let i = 0; i < conatApiCount; i++) {
+    initAPI();
+  }
   initInterBayServices().catch((err) => {
     logger.warn("failed to initialize inter-bay services", { err: `${err}` });
   });
-  if (!isLaunchpadProduct()) {
+  const projectRuntime = getProjectRuntimeMode();
+  if (projectRuntime === "workspace" && !isPrimaryBayWorker()) {
+    logger.info(
+      "workspace project runtime skipped on non-primary Launchpad worker",
+      {
+        worker_id: process.env.COCALC_BAY_WORKER_ID,
+      },
+    );
+  } else if (projectRuntime !== "external") {
     const { init: initProjectRunner } = lazyRequire("./project/run") as {
-      init: () => Promise<void>;
+      init: (count?: number) => Promise<void>;
     };
-    for (let i = 0; i < projectRunnerCount; i++) {
-      initProjectRunner();
-    }
+    const runnerCount = projectRuntime === "workspace" ? 1 : projectRunnerCount;
     const { init: initProjectRunnerLoadBalancer } = lazyRequire(
       "./project/load-balancer",
     ) as {
       init: () => Promise<void>;
     };
-    initProjectRunnerLoadBalancer();
+    void (async () => {
+      await initProjectRunner(runnerCount);
+      await initProjectRunnerLoadBalancer();
+      logger.info("embedded project runtime services initialized", {
+        runtime: projectRuntime,
+        runner_count: runnerCount,
+      });
+    })().catch((err) => {
+      logger.error("failed to initialize embedded project runtime services", {
+        runtime: projectRuntime,
+        runner_count: runnerCount,
+        err: `${err}`,
+      });
+    });
   } else {
-    logger.info("launchpad product: skipping project runner services");
+    logger.info("external project runtime: skipping embedded runner services");
   }
   createTimeService({ client: conat() });
+  if (startBackgroundWorkers) {
+    startConatApiBackgroundWorkers();
+  }
 }
 
 export async function initConatHostRegistry() {

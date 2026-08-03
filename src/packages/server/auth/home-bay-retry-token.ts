@@ -28,13 +28,18 @@ export interface HomeBayRetryClaims {
   email?: string;
   account_id?: string;
   challenge_id?: string;
+  factor_level?: "none" | "totp" | "recovery_code" | "passkey" | "google_oidc";
+  fresh_auth_until?: string;
+  primary_auth_method?: "email_code" | "email_link";
+  primary_verified_at?: string;
   home_bay_id: string;
   purpose:
     | "sign-in"
     | "sign-up"
     | "impersonate"
     | "cli-login"
-    | "password-reset";
+    | "password-reset"
+    | "email-auth";
 }
 
 function base64UrlEncode(input: Buffer | string): string {
@@ -101,22 +106,33 @@ export function issueHomeBayRetryToken({
   email,
   account_id,
   challenge_id,
+  factor_level,
+  fresh_auth_until,
+  primary_auth_method,
+  primary_verified_at,
   home_bay_id,
   purpose,
   ttl_seconds,
+  token_id,
   now_ms = Date.now(),
 }: {
   email?: string;
   account_id?: string;
   challenge_id?: string;
+  factor_level?: "none" | "totp" | "recovery_code" | "passkey" | "google_oidc";
+  fresh_auth_until?: string;
+  primary_auth_method?: "email_code" | "email_link";
+  primary_verified_at?: string;
   home_bay_id: string;
   purpose:
     | "sign-in"
     | "sign-up"
     | "impersonate"
     | "cli-login"
-    | "password-reset";
+    | "password-reset"
+    | "email-auth";
   ttl_seconds?: number;
+  token_id?: string;
   now_ms?: number;
 }): {
   token: string;
@@ -133,12 +149,16 @@ export function issueHomeBayRetryToken({
   if (
     purpose === "impersonate" ||
     purpose === "password-reset" ||
-    purpose === "cli-login"
+    purpose === "cli-login" ||
+    purpose === "email-auth"
   ) {
     if (!normalizedAccountId) {
       throw new Error("account_id is required");
     }
-    if (purpose === "cli-login" && !normalizedChallengeId) {
+    if (
+      (purpose === "cli-login" || purpose === "email-auth") &&
+      !normalizedChallengeId
+    ) {
       throw new Error("challenge_id is required");
     }
   } else if (!normalizedEmail) {
@@ -152,11 +172,15 @@ export function issueHomeBayRetryToken({
     aud: AUDIENCE,
     iat,
     exp,
-    jti: randomUUID(),
+    jti: `${token_id ?? ""}`.trim() || randomUUID(),
     v: TOKEN_VERSION,
     ...(normalizedEmail ? { email: normalizedEmail } : {}),
     ...(normalizedAccountId ? { account_id: normalizedAccountId } : {}),
     ...(normalizedChallengeId ? { challenge_id: normalizedChallengeId } : {}),
+    ...(factor_level ? { factor_level } : {}),
+    ...(fresh_auth_until ? { fresh_auth_until } : {}),
+    ...(primary_auth_method ? { primary_auth_method } : {}),
+    ...(primary_verified_at ? { primary_verified_at } : {}),
     home_bay_id: normalizedBay,
     purpose,
   };
@@ -191,7 +215,8 @@ export function verifyHomeBayRetryToken({
     | "sign-up"
     | "impersonate"
     | "cli-login"
-    | "password-reset";
+    | "password-reset"
+    | "email-auth";
   now_ms?: number;
 }): HomeBayRetryClaims {
   const { header, claims, signingInput, signature } = parseClaims(token);

@@ -649,7 +649,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     id: string,
     patch: JupyterRuntimeCellState,
   ): void => {
-    if (!id) {
+    if (!id || this.is_closed()) {
       return;
     }
     const key = jupyterRuntimeCellKey(id);
@@ -673,7 +673,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   };
 
   public clear_runtime_cell_state = (id: string): void => {
-    if (!id) {
+    if (!id || this.is_closed()) {
       return;
     }
     this.deleteRuntimeRecord(jupyterRuntimeCellKey(id));
@@ -1143,10 +1143,13 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     const doInit = this._state === "init";
     let cell_list_needs_recompute = false;
 
-    if (changes == "all" || this.store.get("cells") == null) {
+    if (doInit || changes == "all" || this.store.get("cells") == null) {
       // changes == 'all' is used by nbgrader to set the state...
-      // First time initialization, rather than some small
-      // update.  We could use the same code, e.g.,
+      // Initial hydration must replace all cells. In particular, the frontend
+      // may already contain a read-only optimistic preview loaded from disk;
+      // incrementally merging SyncDoc changes would leave preview-only cells
+      // behind and allow them to be committed as incomplete records.
+      // We could use the same code, e.g.,
       // calling syncdb_cell_change, but that SCALES HORRIBLY
       // as the number of cells gets large!
 
@@ -1478,16 +1481,22 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     this.deprecated("move_selected_cells", delta);
   };
 
-  undo = (): void => {
-    if (this.syncdb != null) {
-      this.syncdb.undo();
+  undo = (): boolean => {
+    const syncdb = this.syncdb;
+    if (!syncdb?.isReady()) {
+      return false;
     }
+    syncdb.undo();
+    return true;
   };
 
-  redo = (): void => {
-    if (this.syncdb != null) {
-      this.syncdb.redo();
+  redo = (): boolean => {
+    const syncdb = this.syncdb;
+    if (!syncdb?.isReady()) {
+      return false;
     }
+    syncdb.redo();
+    return true;
   };
 
   in_undo_mode(): boolean {
@@ -1683,9 +1692,11 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   }
 
   public studentProjectFunctionality() {
-    return this.redux
-      .getStore("projects")
-      .get_student_project_functionality(this.project_id);
+    return (
+      this.redux
+        .getStore("projects")
+        ?.get_student_project_functionality(this.project_id) ?? {}
+    );
   }
 
   public requireToggleReadonly(): void {

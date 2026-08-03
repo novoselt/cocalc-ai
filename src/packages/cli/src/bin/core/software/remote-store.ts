@@ -670,22 +670,25 @@ export async function publishHostBootstrapArtifact({
   if (!body) {
     throw new Error(`software host-bootstrap artifact is missing: ${file.key}`);
   }
+  for (const publishedSelector of new Set([selector, file.sha256])) {
+    const publishedKey = `software/bootstrap/${publishedSelector}/bootstrap.py`;
+    await client.putR2ObjectFromBuffer({
+      auth: config.auth,
+      key: publishedKey,
+      body,
+      contentType: "text/x-python",
+      cacheControl: config.indexCacheControl,
+    });
+    await client.putR2ObjectFromBuffer({
+      auth: config.auth,
+      key: `${publishedKey}.sha256`,
+      body: Buffer.from(`${file.sha256}  bootstrap.py\n`, "utf8"),
+      contentType: "text/plain",
+      cacheControl: config.indexCacheControl,
+    });
+  }
   const key = `software/bootstrap/${selector}/bootstrap.py`;
-  await client.putR2ObjectFromBuffer({
-    auth: config.auth,
-    key,
-    body,
-    contentType: "text/x-python",
-    cacheControl: config.indexCacheControl,
-  });
   const sha256Key = `${key}.sha256`;
-  await client.putR2ObjectFromBuffer({
-    auth: config.auth,
-    key: sha256Key,
-    body: Buffer.from(`${file.sha256}  bootstrap.py\n`, "utf8"),
-    contentType: "text/plain",
-    cacheControl: config.indexCacheControl,
-  });
   return {
     selector,
     key,

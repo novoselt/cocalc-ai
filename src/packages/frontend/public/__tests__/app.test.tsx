@@ -18,7 +18,12 @@ import type { PublicNewsRoute } from "../news/routes";
 import { getNewsRouteFromPath } from "../news/routes";
 import type { PublicPoliciesRoute } from "../policies/routes";
 import { getPoliciesRouteFromPath } from "../policies/routes";
-import { getPublicRouteFromPath, isPublicTarget, publicPath } from "../routes";
+import {
+  getPublicRouteFromPath,
+  isPublicTarget,
+  preservePublicTargetFragment,
+  publicPath,
+} from "../routes";
 import type { PublicProductsRoute } from "../products/routes";
 import { getProductsRouteFromPath } from "../products/routes";
 
@@ -198,6 +203,18 @@ describe("section route parsers", () => {
     expect(isPublicTarget("/base/auth/sign-up")).toBe(true);
     expect(isPublicTarget("/auth/google")).toBe(false);
     expect(isPublicTarget("/base/auth/google")).toBe(false);
+  });
+
+  it("preserves email-link fragments while restoring clean public routes", () => {
+    expect(
+      preservePublicTargetFragment(
+        "/auth/email/continue/challenge-id",
+        "#token=secret",
+      ),
+    ).toBe("/auth/email/continue/challenge-id#token=secret");
+    expect(
+      preservePublicTargetFragment("/docs/page#section", "#token=secret"),
+    ).toBe("/docs/page#section");
   });
 
   it("uses an explicit not-found route for unknown public paths", () => {

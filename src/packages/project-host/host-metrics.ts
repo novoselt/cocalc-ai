@@ -2,7 +2,7 @@ import getLogger from "@cocalc/backend/logger";
 import type { HostCurrentMetrics } from "@cocalc/conat/hub/api/hosts";
 import { cpus, loadavg, totalmem } from "node:os";
 import { readFile } from "node:fs/promises";
-import { listProjects } from "./sqlite/projects";
+import { getProjectStateCounts } from "./sqlite/projects";
 import {
   computeDiskAdmissionAvailableBytes,
   parseBtrfsUsageOutput,
@@ -14,6 +14,8 @@ import { getActiveStorageReservationSummary } from "./storage-reservations";
 import { readProjectHostKernelSysctls } from "./host-sysctl";
 import { refreshResourcePressureMetrics } from "./resource-pressure";
 import { readIoContainmentMetrics } from "./io-metrics";
+import { readConatPersistMetrics } from "./conat-persist-metrics";
+import { getStorageAdmissionStatus } from "./storage-admission";
 
 const logger = getLogger("project-host:host-metrics");
 
@@ -135,20 +137,12 @@ function readProjectCounts(): Pick<
   | "starting_project_count"
   | "stopping_project_count"
 > {
-  const rows = listProjects();
-  let running = 0;
-  let starting = 0;
-  let stopping = 0;
-  for (const row of rows) {
-    if (row.state === "running") running += 1;
-    if (row.state === "starting") starting += 1;
-    if (row.state === "stopping") stopping += 1;
-  }
+  const counts = getProjectStateCounts();
   return {
-    assigned_project_count: rows.length,
-    running_project_count: running,
-    starting_project_count: starting,
-    stopping_project_count: stopping,
+    assigned_project_count: counts.total,
+    running_project_count: counts.by_state.running ?? 0,
+    starting_project_count: counts.by_state.starting ?? 0,
+    stopping_project_count: counts.by_state.stopping ?? 0,
   };
 }
 
@@ -163,6 +157,7 @@ async function collectSnapshot(
     kernel_sysctls,
     resource_pressure,
     io_containment,
+    conat_persist,
   ] = await Promise.all([
     readMeminfo(),
     readDiskMetrics(),
@@ -170,6 +165,7 @@ async function collectSnapshot(
     readProjectHostKernelSysctls(),
     refreshResourcePressureMetrics(),
     readIoContainmentMetrics(),
+    readConatPersistMetrics(),
   ]);
   const projects = readProjectCounts();
   const reservation_bytes = getActiveStorageReservationSummary().total_bytes;
@@ -177,6 +173,7 @@ async function collectSnapshot(
     disk,
     reservation_bytes,
   );
+  const storageAdmission = getStorageAdmissionStatus();
   return {
     cpuSample,
     snapshot: {
@@ -194,6 +191,8 @@ async function collectSnapshot(
       kernel_sysctls,
       ...(resource_pressure ? { resource_pressure } : {}),
       io_containment,
+      ...(storageAdmission ? { storage_admission: storageAdmission } : {}),
+      ...(conat_persist ? { conat_persist } : {}),
     },
   };
 }

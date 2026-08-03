@@ -158,6 +158,7 @@ import {
   newestProjectLogCursor,
   oldestProjectLogCursor,
 } from "@cocalc/frontend/project/log-state";
+import { getPrivateProjectAppOpenUrl } from "@cocalc/frontend/project/app-server-open";
 import { publishProjectDetailInvalidation } from "@cocalc/frontend/project/use-project-field";
 import { createSharedLroListClient } from "@cocalc/frontend/lro/shared-list";
 import {
@@ -791,7 +792,8 @@ export class ProjectActions extends Actions<ProjectStoreState> {
 
   // Records in the backend database that we are actively
   // using this project and wakes up the project.
-  // This resets the idle timeout, among other things.
+  // Current CoCalc-AI project hosts do not enforce an idle timeout; retaining
+  // activity timestamps preserves compatibility and possible future policy.
   // This is throttled, so multiple calls are spaced out.
   touch = async (): Promise<void> => {
     if (this.isViewerProjectUser()) {
@@ -3406,6 +3408,25 @@ export class ProjectActions extends Actions<ProjectStoreState> {
           } catch (err) {
             console.warn("project/load_target: failed app handoff", err);
           }
+        }
+        this.set_active_tab("servers", { change_history: change_history });
+        break;
+
+      case "private-app":
+        try {
+          const authedUrl = await getPrivateProjectAppOpenUrl({
+            project_id: this.project_id,
+            app_id: route.appId,
+          });
+          if (typeof window !== "undefined") {
+            window.location.assign(authedUrl);
+            return;
+          }
+        } catch (err) {
+          alert_message({
+            type: "error",
+            message: `Unable to open private project app: ${err}`,
+          });
         }
         this.set_active_tab("servers", { change_history: change_history });
         break;

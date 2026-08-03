@@ -1,5 +1,18 @@
 import getLogger from "@cocalc/backend/logger";
+import {
+  type BtrfsMutationContext,
+  type BtrfsMutationPriority,
+  effectiveBtrfsMutationContext,
+} from "./mutation-context";
 import { btrfs } from "./util";
+
+export {
+  type BtrfsMutationContext,
+  type BtrfsMutationPriority,
+  effectiveBtrfsMutationContext,
+  getBtrfsMutationContext,
+  withBtrfsMutationContext,
+} from "./mutation-context";
 
 const logger = getLogger("file-server:btrfs:operation-cache");
 
@@ -20,12 +33,14 @@ type MutationLockHolder = {
   token: symbol;
   operation: string;
   startedAt: number;
+  context: BtrfsMutationContext;
 };
 
 type MutationLockWaiter = {
   token: symbol;
   operation: string;
   queuedAt: number;
+  context: BtrfsMutationContext;
   timeout: ReturnType<typeof setTimeout>;
   resolve: (release: () => void) => void;
   reject: (err: Error) => void;
@@ -42,9 +57,31 @@ export type BtrfsMutationLockStatus = {
   held_ms: number;
   queued: number;
   oldest_wait_ms?: number;
+  operation_id?: string;
+  project_id?: string;
+  priority: BtrfsMutationPriority;
+  operation_class?: string;
+  cgroup_path?: string;
+  checkpointable?: boolean;
+  yield_requested?: boolean;
+  lifecycle_backlog?: number;
+  next_waiter_priority?: BtrfsMutationPriority;
+  next_waiter_project_id?: string;
 };
 
 const mutationLocks = new Map<string, MutationLockState>();
+const MUTATION_PRIORITY_ORDER: Record<BtrfsMutationPriority, number> = {
+  lifecycle: 0,
+  interactive: 1,
+  scheduled: 2,
+  scavenger: 3,
+};
+
+function mutationPriority(
+  context: BtrfsMutationContext,
+): BtrfsMutationPriority {
+  return context.priority ?? "interactive";
+}
 
 function envDurationMs(name: string, fallback: number): number {
   const value = Number.parseInt(`${process.env[name] ?? ""}`, 10);
@@ -108,24 +145,30 @@ async function cached<T>({
   }
 }
 
-export async function cachedBtrfsQgroupShowRaw(
-  mount: string,
+export async function cachedBtrfsQgroupShowRawForPath(
+  path: string,
 ): Promise<BtrfsOutput> {
   return await cached({
     cache: qgroupShowCache,
     inflight: qgroupShowInflight,
-    key: mount,
+    key: path,
     ttlMs: qgroupShowCacheMs(),
     run: async () =>
       await btrfs({
         verbose: false,
-        args: ["qgroup", "show", "-prc", "--raw", mount],
+        // -f restricts output to qgroups affecting this subvolume. Without it,
+        // qgroup show enumerates every qgroup on the filesystem.
+        args: ["qgroup", "show", "-prcf", "--raw", path],
       }),
   });
 }
 
-export function invalidateBtrfsQgroupShowRaw(mount: string): void {
-  qgroupShowCache.delete(mount);
+export function invalidateBtrfsQgroupShowRaw(pathOrMount: string): void {
+  for (const key of qgroupShowCache.keys()) {
+    if (key === pathOrMount || key.startsWith(`${pathOrMount}/`)) {
+      qgroupShowCache.delete(key);
+    }
+  }
 }
 
 export async function cachedBtrfsSubvolumeShow(
@@ -155,17 +198,20 @@ export function invalidateBtrfsSubvolumeShow(path: string): void {
 export async function withBtrfsMutationLock<T>({
   mount,
   operation,
+  context,
   run,
   wait_ms = mutationLockWaitMs(),
 }: {
   mount: string;
   operation: string;
+  context?: BtrfsMutationContext;
   run: () => Promise<T>;
   wait_ms?: number;
 }): Promise<T> {
   const release = await acquireBtrfsMutationLock({
     mount,
     operation,
+    context: effectiveBtrfsMutationContext(context),
     wait_ms,
   });
   try {
@@ -178,21 +224,27 @@ export async function withBtrfsMutationLock<T>({
 async function acquireBtrfsMutationLock({
   mount,
   operation,
+  context,
   wait_ms,
 }: {
   mount: string;
   operation: string;
+  context: BtrfsMutationContext;
   wait_ms: number;
 }): Promise<() => void> {
   const token = Symbol(operation);
   const existing = mutationLocks.get(mount);
   if (!existing) {
     const state: MutationLockState = {
-      holder: { token, operation, startedAt: Date.now() },
+      holder: { token, operation, startedAt: Date.now(), context },
       waiters: [],
     };
     mutationLocks.set(mount, state);
-    logger.debug("acquired btrfs mutation lock", { mount, operation });
+    logger.debug("acquired btrfs mutation lock", {
+      mount,
+      operation,
+      ...context,
+    });
     return () => releaseBtrfsMutationLock({ mount, token });
   }
 
@@ -200,7 +252,9 @@ async function acquireBtrfsMutationLock({
   logger.debug("waiting for btrfs mutation lock", {
     mount,
     operation,
+    ...context,
     holder_operation: existing.holder.operation,
+    holder_priority: mutationPriority(existing.holder.context),
     held_ms: queuedAt - existing.holder.startedAt,
     queued: existing.waiters.length + 1,
   });
@@ -231,14 +285,25 @@ async function acquireBtrfsMutationLock({
       Math.max(0, wait_ms),
     );
     timeout.unref?.();
-    existing.waiters.push({
+    const waiter: MutationLockWaiter = {
       token,
       operation,
       queuedAt,
+      context,
       timeout,
       resolve,
       reject,
-    });
+    };
+    const priority = MUTATION_PRIORITY_ORDER[mutationPriority(context)];
+    const insertionIndex = existing.waiters.findIndex(
+      (queued) =>
+        MUTATION_PRIORITY_ORDER[mutationPriority(queued.context)] > priority,
+    );
+    if (insertionIndex < 0) {
+      existing.waiters.push(waiter);
+    } else {
+      existing.waiters.splice(insertionIndex, 0, waiter);
+    }
   });
 }
 
@@ -259,6 +324,7 @@ function releaseBtrfsMutationLock({
     logger.debug("released btrfs mutation lock", {
       mount,
       operation: released.operation,
+      ...released.context,
       held_ms: Date.now() - released.startedAt,
       queued: 0,
     });
@@ -270,12 +336,14 @@ function releaseBtrfsMutationLock({
     token: next.token,
     operation: next.operation,
     startedAt: Date.now(),
+    context: next.context,
   };
   logger.debug("handed off btrfs mutation lock", {
     mount,
     released_operation: released.operation,
     released_held_ms: Date.now() - released.startedAt,
     operation: next.operation,
+    ...next.context,
     waited_ms: Date.now() - next.queuedAt,
     queued: state.waiters.length,
   });
@@ -290,8 +358,18 @@ export function getBtrfsMutationLockStatus(): BtrfsMutationLockStatus[] {
       holder_operation: state.holder.operation,
       held_ms: Math.max(0, now - state.holder.startedAt),
       queued: state.waiters.length,
+      ...state.holder.context,
+      priority: mutationPriority(state.holder.context),
       ...(state.waiters[0]
-        ? { oldest_wait_ms: Math.max(0, now - state.waiters[0].queuedAt) }
+        ? {
+            oldest_wait_ms: Math.max(0, now - state.waiters[0].queuedAt),
+            next_waiter_priority: mutationPriority(state.waiters[0].context),
+            ...(state.waiters[0].context.project_id
+              ? {
+                  next_waiter_project_id: state.waiters[0].context.project_id,
+                }
+              : {}),
+          }
         : {}),
     }))
     .sort((a, b) => a.mount.localeCompare(b.mount));

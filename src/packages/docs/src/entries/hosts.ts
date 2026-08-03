@@ -9,6 +9,7 @@ import {
   PROJECT_HOSTS_BODY,
   PROJECT_HOST_ACCESS_BODY,
   PROJECT_HOST_CHANGE_RULES_BODY,
+  PROJECT_HOST_EXAMS_BODY,
   PROJECT_HOST_LIFECYCLE_BODY,
   PROJECT_HOST_LOGS_BODY,
   PROJECT_HOST_MOVE_BODY,
@@ -20,6 +21,32 @@ import {
 } from "../content";
 
 export const HOSTS_ENTRIES: DocsEntry[] = [
+  {
+    actions: [
+      {
+        description:
+          "Open project hosts and select a private host's Exams tab.",
+        executable: true,
+        id: "hosts.exam.open",
+        label: "Open project hosts",
+        parameters: projectHostActionParameters(),
+      },
+    ],
+    audiences: ["agents", "instructors"],
+    body: PROJECT_HOST_EXAMS_BODY.trim(),
+    category: "Project hosts",
+    id: "hosts.exam-scratchpads",
+    image: docsIcon(
+      "/public/docs/exam-scratchpad-301d1929.webp",
+      "A locked computational exam project with a notebook, timer, and disabled Internet access",
+    ),
+    lastReviewed: "2026-07-31",
+    slug: "hosts/exam-scratchpads",
+    status: "ready",
+    summary:
+      "Run ephemeral, network-isolated notebook scratchpads for in-person exams on an on-demand private host.",
+    title: "Use an exam scratchpad host",
+  },
   {
     actions: [
       {

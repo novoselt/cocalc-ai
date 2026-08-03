@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import PublicFeaturesApp from "../app";
 import { getFeatureIndexPages } from "../catalog";
@@ -145,6 +145,41 @@ describe("PublicFeaturesApp", () => {
     expect(screen.queryByText("Create account")).toBeNull();
   });
 
+  it("shows the feature sub-nav with the active pill marked", () => {
+    const { container } = render(
+      <PublicFeaturesApp
+        config={{ site_name: "Launchpad" }}
+        initialRoute={{ slug: "terminal", view: "detail" }}
+      />,
+    );
+
+    const nav = container.querySelector('nav[aria-label="Feature pages"]');
+    expect(nav).not.toBeNull();
+    const active = nav!.querySelector('[aria-current="page"]');
+    expect(active?.getAttribute("href")).toBe(featurePath("terminal"));
+    expect(
+      nav!.querySelector(`a[href="${featurePath("latex-editor")}"]`),
+    ).not.toBeNull();
+    expect(
+      nav!.querySelector(`a[href="${featurePath("software-environment")}"]`),
+    ).not.toBeNull();
+    expect(nav!.querySelector(`a[href="${featurePath()}"]`)).not.toBeNull();
+  });
+
+  it("marks the all-features pill active on the index", () => {
+    const { container } = render(
+      <PublicFeaturesApp
+        config={{ site_name: "Launchpad" }}
+        initialRoute={{ view: "index" }}
+      />,
+    );
+
+    const nav = container.querySelector('nav[aria-label="Feature pages"]');
+    expect(
+      nav?.querySelector('[aria-current="page"]')?.getAttribute("href"),
+    ).toBe(featurePath());
+  });
+
   it("renders the richer jupyter feature page", () => {
     render(
       <PublicFeaturesApp
@@ -154,10 +189,25 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("Jupyter notebooks for work that needs to keep going"),
+      screen.getByText("Online Jupyter notebooks, built for collaboration"),
     ).not.toBeNull();
     expect(
-      screen.getByText("When the notebook depends on more than cells"),
+      screen.getByRole("heading", {
+        name: "Codex works with the live notebook",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Chat anchored to any cell" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "Jupyter Minimal: a focused notebook view",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "TimeTravel: every change, recorded",
+      }),
     ).not.toBeNull();
     expect(screen.getByText("Ready to use Jupyter in CoCalc?")).not.toBeNull();
   });
@@ -191,9 +241,24 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("LaTeX project with source, PDF preview, and build log"),
+      screen.getByText("An online LaTeX editor with a full project behind it"),
     ).not.toBeNull();
-    expect(screen.getByText("Keep the working tree together")).not.toBeNull();
+    expect(
+      screen.getByText("A full workspace, not one document"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Forward and inverse search" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "Chat and bookmarks anchored to your source",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "Rich text editing, real LaTeX",
+      }),
+    ).not.toBeNull();
     expect(screen.getByText("Ready to write LaTeX in CoCalc?")).not.toBeNull();
   });
 
@@ -215,6 +280,22 @@ describe("PublicFeaturesApp", () => {
       expect(link.getAttribute("href")).toBe("/projects");
     }
     expect(screen.queryByText("Start writing LaTeX on CoCalc")).toBeNull();
+  });
+
+  it("opens and closes the screenshot zoom viewer on click", () => {
+    render(
+      <PublicFeaturesApp
+        config={{ help_email: "help@example.com", site_name: "Launchpad" }}
+        initialRoute={{ slug: "latex-editor", view: "detail" }}
+      />,
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getAllByTitle("Click to enlarge")[0]);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).not.toBeNull();
+    fireEvent.click(dialog);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("renders the richer teaching feature page", () => {
@@ -265,13 +346,22 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("A Linux terminal that lives in your project."),
+      screen.getByText("An online Linux terminal that lives in your project."),
     ).not.toBeNull();
     expect(
-      screen.getAllByText("Each terminal opens in its own folder.").length,
-    ).toBeGreaterThan(0);
+      screen.getByRole("heading", {
+        name: "Edit and run scripts side by side",
+      }),
+    ).not.toBeNull();
     expect(
-      screen.getByText("Put the shell beside the work it changes"),
+      screen.getByRole("heading", {
+        name: "Real-time collaboration in the shell",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "Pick the software, install more on top",
+      }),
     ).not.toBeNull();
   });
 
@@ -295,6 +385,35 @@ describe("PublicFeaturesApp", () => {
     expect(screen.queryByText("Create account")).toBeNull();
   });
 
+  it("renders the software-environment feature page", () => {
+    render(
+      <PublicFeaturesApp
+        config={{ help_email: "help@example.com", site_name: "Launchpad" }}
+        initialRoute={{ slug: "software-environment", view: "detail" }}
+      />,
+    );
+
+    expect(
+      screen.getByText("Your project's software is an image you choose"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "Ready-made images for real workflows",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Pick per project, switch anytime" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "Build and share your own images",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Browse the image catalog" }),
+    ).not.toBeNull();
+  });
+
   it("renders the richer linux environment page", () => {
     render(
       <PublicFeaturesApp
@@ -304,13 +423,15 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("A Linux workspace you can actually administer."),
+      screen.getByText("A complete Linux environment in your browser."),
     ).not.toBeNull();
     expect(
-      screen.getByText(
-        "Install at the right layer, verify, and document what changed",
-      ),
+      screen.getByText("Root access with sudo, and installs that persist"),
     ).not.toBeNull();
+    expect(
+      screen.getByText("Snapshots every 15 minutes, backups off the host"),
+    ).not.toBeNull();
+    expect(screen.getByText("SSH, scp, and rsync")).not.toBeNull();
     expect(screen.getByText("Ready to use Linux in CoCalc?")).not.toBeNull();
   });
 
@@ -411,8 +532,8 @@ describe("PublicFeaturesApp", () => {
   it.each([
     {
       slug: "sage",
-      title: "Use SageMath inside collaborative mathematics projects.",
-      section: "Use Sage with the surrounding project.",
+      title: "Use SageMath online, without installing anything.",
+      section: "SageTeX: Sage inside LaTeX documents",
     },
     {
       slug: "julia",
@@ -421,14 +542,13 @@ describe("PublicFeaturesApp", () => {
     },
     {
       slug: "r-statistical-software",
-      title: "Use R for statistics and reproducible reporting.",
-      section: "Keep R close to the rest of the analysis.",
+      title: "R statistical software online, from analysis to report.",
+      section: "Knitr documents in the LaTeX editor",
     },
     {
       slug: "octave",
-      title:
-        "Run GNU Octave with notebooks, .m files, and shared numerical work.",
-      section: "Run reproducible Octave work without local setup drift.",
+      title: "Run GNU Octave online in a project you control.",
+      section: "Octave in Jupyter notebooks",
     },
     {
       slug: "slides",

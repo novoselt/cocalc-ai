@@ -11,6 +11,7 @@ export const ADMIN_DATA_EXPLORER_SQL_DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 export const ADMIN_DATA_EXPLORER_SQL_MAX_BYTES = 32 * 1024 * 1024;
 
 export const ADMIN_DATA_EXPLORER_ALLOWED_SQL_RELATIONS = [
+  "account_admin_audit_log",
   "account_cpu_usage_events",
   "account_managed_egress_events",
   "account_security_state",
@@ -57,6 +58,15 @@ export const ADMIN_DATA_EXPLORER_ALLOWED_SQL_FUNCTIONS = [
 ] as const;
 
 export const ADMIN_DATA_EXPLORER_ALLOWED_SQL_COLUMNS = {
+  account_admin_audit_log: [
+    "id",
+    "account_id",
+    "action",
+    "actor_account_id",
+    "reason",
+    "metadata",
+    "created",
+  ],
   account_cpu_usage_events: [
     "account_id",
     "project_id",

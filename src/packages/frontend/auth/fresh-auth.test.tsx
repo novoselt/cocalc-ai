@@ -204,6 +204,60 @@ describe("FreshAuthModal", () => {
     );
   });
 
+  it("approves a passwordless account by email", async () => {
+    const challenge = {
+      challenge_id: "11111111-1111-4111-8111-111111111111",
+      purpose: "email_fresh_auth",
+      state: "pending",
+      masked_email: "us…@example.com",
+      resend_available_at: "2026-07-29T01:00:30.000Z",
+    };
+    jest.mocked(postAuthApi).mockImplementation(async ({ endpoint }: any) => {
+      if (endpoint === "auth/fresh-auth-status") {
+        return {
+          mode: "account",
+          enabled: false,
+          has_password: false,
+          email_address: "user@example.com",
+        };
+      }
+      if (endpoint === "auth/email/fresh-start") {
+        return challenge;
+      }
+      if (endpoint === "auth/email/fresh-redeem-code") {
+        return { ...challenge, state: "email_proved" };
+      }
+      if (endpoint === "auth/email/fresh-finalize") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    });
+    const onSuccess = jest.fn(async () => undefined);
+
+    render(<FreshAuthModal open onCancel={jest.fn()} onSuccess={onSuccess} />);
+
+    const sendButton = await screen.findByRole("button", {
+      name: "Email me a code",
+    });
+    fireEvent.click(sendButton);
+    const input = await screen.findByLabelText("Six-digit email approval code");
+    fireEvent.change(input, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    expect(postAuthApi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: "auth/email/fresh-finalize",
+        body: {
+          challenge_id: "11111111-1111-4111-8111-111111111111",
+        },
+      }),
+    );
+    expect(
+      screen.queryByPlaceholderText("Enter your current password"),
+    ).toBeNull();
+  });
+
   it("renders above ordinary confirmation modals", async () => {
     jest
       .mocked(postAuthApi)
