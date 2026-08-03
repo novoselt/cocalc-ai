@@ -214,7 +214,7 @@ verify:
   - pythontex --version
   - julia --version
   - JULIA_DEPOT_PATH=/opt/julia-depot julia --startup-file=no -e 'using IJulia'
-  - Rscript --vanilla -e 'stopifnot(requireNamespace("IRkernel", quietly=TRUE))'
+  - Rscript --vanilla -e 'stopifnot(requireNamespace("IRkernel", quietly=TRUE), requireNamespace("ggplot2", quietly=TRUE), requireNamespace("dplyr", quietly=TRUE), requireNamespace("tidyverse", quietly=TRUE))'
   - kpsewhich comment.sty
   - kpsewhich french.ldf
   - jupyter kernelspec list | grep -q python3
@@ -244,7 +244,7 @@ publish:
       - JupyterLab
       - Full LaTeX
       - Julia
-      - R and RStudio
+      - R, RStudio, and the tidyverse
       - VS Code
       - User pip installs
   tags:

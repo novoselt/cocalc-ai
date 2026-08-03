@@ -22,7 +22,28 @@ jupyter_prefix="${JUPYTER_PREFIX:-/opt/cocalc-r-jupyter}"
 $SUDO apt-get update
 run_noninteractive apt-get install -y --no-install-recommends \
   ca-certificates curl gfortran libcurl4-openssl-dev libssl-dev libxml2-dev \
-  python3 python3-venv r-base r-base-dev
+  python3 python3-venv r-base r-base-dev \
+  r-cran-biocmanager \
+  r-cran-car \
+  r-cran-caret \
+  r-cran-corrplot \
+  r-cran-data.table \
+  r-cran-devtools \
+  r-cran-dplyr \
+  r-cran-e1071 \
+  r-cran-forecast \
+  r-cran-ggplot2 \
+  r-cran-knitr \
+  r-cran-lme4 \
+  r-cran-plotly \
+  r-cran-psych \
+  r-cran-randomforest \
+  r-cran-remotes \
+  r-cran-rmarkdown \
+  r-cran-roxygen2 \
+  r-cran-shiny \
+  r-cran-testthat \
+  r-cran-tidyverse
 
 $SUDO mkdir -p "$jupyter_prefix"
 $SUDO chown -R "$(id -u):$(id -g)" "$jupyter_prefix"
