@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260802-v31"
+HELPER_SCHEMA_VERSION = "20260803-v32"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -8392,6 +8392,83 @@ cleanup_podman_runtime_state() {
   repair_runtime_environment
 }
 
+project_runtime_processes_active() {
+  local proc comm cmdline
+  for proc in /proc/[0-9]*; do
+    comm="$(cat "${proc}/comm" 2>/dev/null || true)"
+    case "${comm}" in
+      conmon|crun|podman|podman-init)
+        return 0
+        ;;
+    esac
+    cmdline="$(tr '\0' ' ' < "${proc}/cmdline" 2>/dev/null || true)"
+    case "${cmdline}" in
+      *project-host:app*|*cocalc-project-podman*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+prepare_podman_boot() {
+  local home config_dir storage_conf desired_runroot legacy_runroot current_runroot
+  local runtime_dir cgroup_manager tmp
+  if ! mountpoint -q /mnt/cocalc; then
+    echo "/mnt/cocalc is not mounted; refusing Podman boot preparation" >&2
+    return 1
+  fi
+  if project_runtime_processes_active; then
+    echo "project runtime processes are active; refusing Podman boot preparation" >&2
+    return 1
+  fi
+  home="$(getent passwd "${RUNTIME_USER}" | cut -d: -f6)"
+  if [ -z "${home}" ]; then
+    echo "unable to resolve home directory for ${RUNTIME_USER}" >&2
+    return 1
+  fi
+  config_dir="${home}/.config/containers"
+  storage_conf="${config_dir}/storage.conf"
+  desired_runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"
+  legacy_runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  current_runroot="$(sed -n 's/^[[:space:]]*runroot[[:space:]]*=[[:space:]]*"\\([^"]*\\)".*/\\1/p' "${storage_conf}" 2>/dev/null | head -n1)"
+  case "${current_runroot}" in
+    ""|"${desired_runroot}"|"${legacy_runroot}")
+      ;;
+    *)
+      echo "refusing unexpected Podman runroot migration from ${current_runroot}" >&2
+      return 1
+      ;;
+  esac
+
+  runtime_dir="$(podman_runtime_dir)"
+  remove_safe_runtime_dir "${runtime_dir}"
+  rm -rf --one-file-system "${desired_runroot}"
+  rm -rf --one-file-system "${legacy_runroot}"
+  repair_runtime_environment
+
+  install -d -o "${RUNTIME_USER}" -g "${RUNTIME_USER}" -m 0700 "${config_dir}"
+  tmp="$(mktemp "${config_dir}/storage.conf.tmp.XXXXXX")"
+  cat > "${tmp}" <<EOF
+[storage]
+driver = "overlay"
+runroot = "${desired_runroot}"
+graphroot = "/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/storage"
+EOF
+  chown "${RUNTIME_USER}:${RUNTIME_USER}" "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${storage_conf}"
+  rm -f /mnt/cocalc/data/containers/runroot-migration-pending
+
+  cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
+  if [ -z "${cgroup_manager}" ]; then
+    cgroup_manager="cgroupfs"
+  fi
+  run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate
+  podman_info_once "${runtime_dir}" "${cgroup_manager}"
+  podman_ps_once "${runtime_dir}" "${cgroup_manager}"
+}
+
 preflight_podman_runtime() {
   local runtime_dir cgroup_manager output status
   if [ -z "$(container_runtime_current)" ] && \
@@ -8901,7 +8978,7 @@ doctor() {
 }
 
 case "${cmd}" in
-  start|ensure|restart|stop|protect)
+  start|ensure|restart|stop|protect|prepare-podman-boot)
     acquire_daemon_control_lock
     ;;
 esac
@@ -8942,6 +9019,9 @@ case "${cmd}" in
     apply_project_host_sysctls
     reconcile_app_core_dumps
     ;;
+  prepare-podman-boot)
+    prepare_podman_boot
+    ;;
   noop)
     exit 0
     ;;
@@ -8968,7 +9048,7 @@ case "${cmd}" in
     doctor
     ;;
   *)
-    echo "usage: ${0} {start|stop|restart|ensure|status|doctor|protect|capture-forensics|apply-sysctls|noop}" >&2
+    echo "usage: ${0} {start|stop|restart|ensure|status|doctor|protect|capture-forensics|apply-sysctls|prepare-podman-boot|noop}" >&2
     exit 2
     ;;
 esac
@@ -9149,6 +9229,7 @@ exec python3 "{bootstrap_py}" --bootstrap-dir "{bootstrap_dir}" --only tools_bun
 def configure_autostart(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring project-host autostart")
     runtime_root = project_host_runtime_root(cfg)
+    rootctl = project_host_rootctl_path(cfg)
     watchdog_log = "/mnt/cocalc/data/logs/project-host-watchdog.log"
     watchdog_lock = "/mnt/cocalc/data/tmp/project-host-watchdog.lock"
     watchdog_command = (
@@ -9184,10 +9265,29 @@ Unit=cocalc-project-host-watchdog.service
 [Install]
 WantedBy=timers.target
 """
+    prepare_service = f"""[Unit]
+Description=Prepare CoCalc Podman runtime after boot
+After=mnt-cocalc.mount
+Before=cocalc-project-host-start.service
+RequiresMountsFor=/mnt/cocalc
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/
+ExecStart={rootctl} prepare-podman-boot
+TimeoutStartSec=180
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
     boot_service = f"""[Unit]
 Description=Start CoCalc project-host after boot
-After=network-online.target
+After=network-online.target cocalc-project-host-prepare.service
 Wants=network-online.target
+Requires=cocalc-project-host-prepare.service
 ConditionPathIsMountPoint=/mnt/cocalc
 
 [Service]
@@ -9229,6 +9329,9 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/cocalc-project-host-watchdog.timer").write_text(
         watchdog_timer, encoding="utf-8"
     )
+    Path("/etc/systemd/system/cocalc-project-host-prepare.service").write_text(
+        prepare_service, encoding="utf-8"
+    )
     Path("/etc/systemd/system/cocalc-project-host-start.service").write_text(
         boot_service, encoding="utf-8"
     )
@@ -9237,9 +9340,15 @@ WantedBy=multi-user.target
     )
     os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.timer", 0o644)
+    os.chmod("/etc/systemd/system/cocalc-project-host-prepare.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-start.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-shutdown.service", 0o644)
     run_best_effort(cfg, ["systemctl", "daemon-reload"], "reload systemd")
+    run_best_effort(
+        cfg,
+        ["systemctl", "enable", "cocalc-project-host-prepare.service"],
+        "enable Podman boot preparation service",
+    )
     run_best_effort(
         cfg,
         ["systemctl", "enable", "cocalc-project-host-start.service"],
@@ -9855,6 +9964,7 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         write_helpers(cfg)
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)
+        configure_autostart(cfg)
         reconcile_project_network_limits(cfg)
         reconcile_project_io_policy(cfg)
         reconcile_host_service_cgroup(cfg)

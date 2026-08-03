@@ -2790,7 +2790,24 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'flock -x -w "${DAEMON_CONTROL_LOCK_WAIT_SECONDS}" 8',
                 rootctl_text,
             )
-            self.assertIn("start|ensure|restart|stop|protect)", rootctl_text)
+            self.assertIn(
+                "start|ensure|restart|stop|protect|prepare-podman-boot)",
+                rootctl_text,
+            )
+            self.assertIn("prepare_podman_boot()", rootctl_text)
+            self.assertIn(
+                "project runtime processes are active; refusing Podman boot preparation",
+                rootctl_text,
+            )
+            self.assertIn(
+                'runroot = "${desired_runroot}"',
+                rootctl_text,
+            )
+            self.assertIn(
+                'run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate',
+                rootctl_text,
+            )
+            self.assertIn("prepare-podman-boot)", rootctl_text)
             self.assertIn(
                 'COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900',
                 rootctl_text,
@@ -3358,6 +3375,26 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 written,
             )
             self.assertIn(
+                "/etc/systemd/system/cocalc-project-host-prepare.service",
+                written,
+            )
+            self.assertIn(
+                f"ExecStart={bootstrap.project_host_rootctl_path(cfg)} prepare-podman-boot",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-prepare.service"
+                ],
+            )
+            self.assertIn(
+                "Before=cocalc-project-host-start.service",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-prepare.service"
+                ],
+            )
+            self.assertIn(
+                "Requires=cocalc-project-host-prepare.service",
+                written["/etc/systemd/system/cocalc-project-host-start.service"],
+            )
+            self.assertIn(
                 f"ExecStart={runtime_root}/bin/start-project-host",
                 written["/etc/systemd/system/cocalc-project-host-start.service"],
             )
@@ -3389,6 +3426,13 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 (
                     ["systemctl", "daemon-reload"],
                     "reload systemd",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    ["systemctl", "enable", "cocalc-project-host-prepare.service"],
+                    "enable Podman boot preparation service",
                 ),
                 recorded,
             )
@@ -4053,6 +4097,7 @@ class BootstrapModesTest(unittest.TestCase):
                 "write_helpers",
                 "configure_runtime_sudoers",
                 "verify_runtime_sudoers",
+                "configure_autostart",
                 "reconcile_project_network_limits",
                 "reconcile_project_io_policy",
                 "reconcile_host_service_cgroup",
@@ -4101,6 +4146,7 @@ class BootstrapModesTest(unittest.TestCase):
                     "write_helpers",
                     "configure_runtime_sudoers",
                     "verify_runtime_sudoers",
+                    "configure_autostart",
                     "reconcile_project_network_limits",
                     "reconcile_project_io_policy",
                     "reconcile_host_service_cgroup",
