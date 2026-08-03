@@ -694,6 +694,9 @@ export class GcpProvider implements CloudProvider {
       });
     }
 
+    const subnetwork =
+      `${spec.metadata?.subnetwork_uri ?? ""}`.trim() ||
+      `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`;
     const networkInterfaces = [
       {
         accessConfigs: [
@@ -703,7 +706,7 @@ export class GcpProvider implements CloudProvider {
           },
         ],
         stackType: "IPV4_ONLY",
-        subnetwork: `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`,
+        subnetwork,
       },
     ];
 
@@ -1432,6 +1435,9 @@ export class GcpProvider implements CloudProvider {
       spec.metadata?.boot_disk_gb ??
       spec.metadata?.bootDiskGb ??
       (spec.gpu ? 20 : 10);
+    const subnetwork =
+      `${spec.metadata?.subnetwork_uri ?? ""}`.trim() ||
+      `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`;
     const networkInterfaces = [
       {
         accessConfigs: [
@@ -1441,7 +1447,7 @@ export class GcpProvider implements CloudProvider {
           },
         ],
         stackType: "IPV4_ONLY",
-        subnetwork: `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`,
+        subnetwork,
       },
     ];
     const guestAccelerators = spec.gpu

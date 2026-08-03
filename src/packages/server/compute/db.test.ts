@@ -15,6 +15,8 @@ import {
 } from "./db";
 import type { ComputeVmRow } from "./types";
 
+const postgresIt = process.env.COCALC_TEST_USE_PGLITE ? it.skip : it;
+
 beforeAll(async () => await before({ noConat: true }), 15_000);
 afterAll(after);
 
@@ -80,6 +82,39 @@ describe("compute VM durable state", () => {
     expect(
       await listOwnedComputeVms({ owner_account_id: input.owner_account_id }),
     ).toHaveLength(1);
+  });
+
+  it("enforces account admission limits", async () => {
+    const owner = randomUUID();
+    await insertComputeVm(vmInput({ owner_account_id: owner }), {
+      max_active_per_account: 1,
+      max_active_total: 10,
+    });
+    await expect(
+      insertComputeVm(vmInput({ owner_account_id: owner, name: "second-vm" }), {
+        max_active_per_account: 1,
+        max_active_total: 10,
+      }),
+    ).rejects.toThrow("account limit reached");
+  });
+
+  postgresIt("serializes concurrent site-wide admission", async () => {
+    const limits = { max_active_per_account: 10, max_active_total: 1 };
+    const results = await Promise.allSettled([
+      insertComputeVm(vmInput({ name: "first-vm" }), limits),
+      insertComputeVm(vmInput({ name: "second-vm" }), limits),
+    ]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(
+      1,
+    );
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(
+      1,
+    );
+    expect(
+      await getPool().query(
+        "SELECT id FROM compute_vms WHERE deleted_at IS NULL",
+      ),
+    ).toHaveProperty("rowCount", 1);
   });
 
   it("deduplicates active work and claims it with a worker lease", async () => {

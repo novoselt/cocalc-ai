@@ -6,12 +6,14 @@
 import { GcpProvider, type HostRuntime, type HostSpec } from "@cocalc/cloud";
 import { getProviderContext } from "@cocalc/server/cloud/provider-context";
 import { getComputeMachine } from "./catalog";
+import { getComputeVmConfig, type ComputeVmConfig } from "./config";
 import type { ComputeVmRow } from "./types";
 
 const provider = new GcpProvider();
 
 function specFor(
   vm: ComputeVmRow,
+  config: ComputeVmConfig,
   pricingModel = vm.effective_pricing_model,
 ): HostSpec {
   const machine = getComputeMachine(vm.machine_type);
@@ -24,6 +26,7 @@ function specFor(
     ram_gb: machine.ram_gb,
     disk_gb: 0,
     disk_type: "balanced",
+    tags: [config.gcp_network_tag],
     metadata: {
       machine_type: machine.machine_type,
       storage_mode: "boot-only",
@@ -36,11 +39,12 @@ function specFor(
       ssh_public_key: vm.ssh_public_key,
       block_project_ssh_keys: true,
       disable_service_account: true,
+      subnetwork_uri: config.gcp_subnetwork,
       labels: {
         "managed-by": "cocalc-compute",
         "logical-vm": vm.id.replaceAll("-", "").slice(0, 40),
         owner: vm.owner_account_id.replaceAll("-", "").slice(0, 40),
-        environment: "staging",
+        environment: config.environment,
       },
     },
   };
@@ -65,12 +69,28 @@ function runtimeFor(vm: ComputeVmRow): HostRuntime {
 }
 
 async function context() {
-  return await getProviderContext("gcp");
+  const config = await getComputeVmConfig();
+  if (config.gcp_service_account_json) {
+    return {
+      config,
+      creds: {
+        service_account_json: config.gcp_service_account_json,
+        prefix: "cocalc-vm",
+      },
+    };
+  }
+  if (config.staging_legacy_provider) {
+    const { creds } = await getProviderContext("gcp");
+    return { config, creds };
+  }
+  throw new Error(
+    "managed compute VM provider credentials are not configured for this environment",
+  );
 }
 
 export async function createProviderComputeVm(vm: ComputeVmRow) {
-  const { creds } = await context();
-  return await provider.createHost(specFor(vm), creds);
+  const { config, creds } = await context();
+  return await provider.createHost(specFor(vm, config), creds);
 }
 
 export async function startProviderComputeVm(vm: ComputeVmRow) {
@@ -120,8 +140,12 @@ export async function setProviderComputePricing(
 }
 
 export async function probeProviderComputeSpot(vm: ComputeVmRow) {
-  const { creds } = await context();
-  return await provider.probeSpotAvailability(specFor(vm, "spot"), creds, {
-    stableForMs: 10_000,
-  });
+  const { config, creds } = await context();
+  return await provider.probeSpotAvailability(
+    specFor(vm, config, "spot"),
+    creds,
+    {
+      stableForMs: 10_000,
+    },
+  );
 }

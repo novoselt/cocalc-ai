@@ -4,14 +4,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 
 export type VmCommandDeps = {
   withContext: any;
+  runSsh?: (args: string[]) => void;
 };
 
 function expandHome(path: string) {
@@ -35,6 +36,81 @@ function readPublicKey(path?: string) {
     );
   }
   return { path: selected, key: readFileSync(selected, "utf8").trim() };
+}
+
+function normalizeSshConfigAlias(value: string) {
+  const alias = `${value ?? ""}`.trim();
+  if (!/^[a-zA-Z0-9._-]+$/.test(alias)) {
+    throw new Error(`ssh config alias '${alias}' must match [a-zA-Z0-9._-]+`);
+  }
+  return alias;
+}
+
+function sshConfigPath(path?: string) {
+  return path ? expandHome(path) : resolve(homedir(), ".ssh/config");
+}
+
+function defaultIdentityPath(path?: string) {
+  if (path) {
+    const selected = expandHome(path);
+    if (!existsSync(selected))
+      throw new Error(`SSH identity not found: ${selected}`);
+    return selected;
+  }
+  return ["id_ed25519", "id_rsa", "id_ecdsa"]
+    .map((name) => resolve(homedir(), `.ssh/${name}`))
+    .find(existsSync);
+}
+
+function sshConfigMarkers(alias: string) {
+  return {
+    start: `# >>> cocalc vm ssh ${alias} >>>`,
+    end: `# <<< cocalc vm ssh ${alias} <<<`,
+  };
+}
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function removeVmSshConfigBlock(content: string, alias: string) {
+  const { start, end } = sshConfigMarkers(alias);
+  const pattern = new RegExp(
+    `(?:^|\\n)${escapeRegExp(start)}\\n[\\s\\S]*?\\n${escapeRegExp(end)}(?:\\n|$)`,
+    "g",
+  );
+  const next = content.replace(pattern, "\n").replace(/\n{3,}/g, "\n\n");
+  return { content: next, removed: next !== content };
+}
+
+export function buildVmSshConfigBlock(opts: {
+  alias: string;
+  hostname: string;
+  username: string;
+  identity?: string;
+}) {
+  const markers = sshConfigMarkers(opts.alias);
+  const lines = [
+    markers.start,
+    `Host ${opts.alias}`,
+    `  HostName ${opts.hostname}`,
+    `  User ${opts.username}`,
+    "  ForwardAgent no",
+    "  StrictHostKeyChecking accept-new",
+    "  ServerAliveInterval 15",
+    "  ServerAliveCountMax 2",
+  ];
+  if (opts.identity) {
+    lines.push(`  IdentityFile ${opts.identity}`, "  IdentitiesOnly yes");
+  }
+  lines.push(
+    "  BatchMode yes",
+    "  PreferredAuthentications publickey",
+    "  PasswordAuthentication no",
+    "  KbdInteractiveAuthentication no",
+    markers.end,
+  );
+  return `${lines.join("\n")}\n`;
 }
 
 function parseTtlMinutes(value: string) {
@@ -90,7 +166,7 @@ function sshArgs(vm: any, opts: { identity?: string }, command?: string[]) {
   return args;
 }
 
-function runSsh(args: string[]) {
+function defaultRunSsh(args: string[]) {
   const result = spawnSync("ssh", args, { stdio: "inherit" });
   if (result.error) throw result.error;
   if ((result.status ?? 0) !== 0) {
@@ -98,8 +174,21 @@ function runSsh(args: string[]) {
   }
 }
 
+export function vmListSummary(rows: any[]) {
+  return rows.map((row) => ({
+    name: row.name,
+    state: row.state,
+    machine: row.machine_type,
+    pricing: row.effective_pricing_model,
+    zone: row.zone,
+    ip: row.public_ip ?? "",
+    expires: row.expires_at,
+    project: row.project_id,
+  }));
+}
+
 export function registerVmCommand(program: Command, deps: VmCommandDeps) {
-  const { withContext } = deps;
+  const { withContext, runSsh = defaultRunSsh } = deps;
   const vm = program
     .command("vm")
     .description("short-lived account-owned managed compute VMs");
@@ -108,16 +197,22 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("list compute VMs owned by the current account")
     .option("--project <project_id>", "filter by attached project")
     .option("--include-deleted", "include deleted lease records", false)
+    .option("--long", "show the full durable VM records", false)
     .action(
       async (
-        opts: { project?: string; includeDeleted?: boolean },
+        opts: {
+          project?: string;
+          includeDeleted?: boolean;
+          long?: boolean;
+        },
         command: Command,
       ) => {
         await withContext(command, "vm list", async (ctx) => {
-          return await ctx.hub.compute.listVms({
+          const rows = await ctx.hub.compute.listVms({
             project_id: opts.project,
             include_deleted: opts.includeDeleted === true,
           });
+          return opts.long ? rows : vmListSummary(rows);
         });
       },
     );
@@ -250,48 +345,116 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       },
     );
 
-  vm.command("ssh <vm>")
-    .description("connect directly to an SSH-ready compute VM")
+  vm.command("ssh <vm> [remote_command...]")
+    .description(
+      "connect directly to a compute VM, or run a remote command after the VM name",
+    )
     .option("--identity <path>", "SSH private key")
     .option("--print", "print the SSH command instead of running it", false)
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
     .action(
       async (
         idOrName: string,
+        remoteCommand: string[],
         opts: { identity?: string; print?: boolean },
         command: Command,
       ) => {
         await withContext(command, "vm ssh", async (ctx) => {
           const row = await ctx.hub.compute.getVm({ id_or_name: idOrName });
-          const args = sshArgs(row, opts);
+          const args = sshArgs(row, opts, remoteCommand);
           const rendered = `ssh ${args.map((arg) => JSON.stringify(arg)).join(" ")}`;
           if (opts.print || ctx.globals.json || ctx.globals.output === "json") {
             return { id: row.id, name: row.name, command: rendered };
           }
           runSsh(args);
-          return { id: row.id, name: row.name, status: "connected" };
+          return {
+            id: row.id,
+            name: row.name,
+            status: remoteCommand.length ? "completed" : "connected",
+          };
         });
       },
     );
 
-  vm.command("exec <vm> [remote_command...]")
-    .description("run a command directly over SSH")
+  const sshConfig = vm
+    .command("ssh-config")
+    .description("manage local OpenSSH config entries for compute VMs");
+
+  sshConfig
+    .command("add <vm>")
+    .description("add or update a managed ~/.ssh/config entry")
+    .option("--alias <alias>", "SSH Host alias (defaults to the VM name)")
     .option("--identity <path>", "SSH private key")
-    .action(
-      async (
-        idOrName: string,
-        remoteCommand: string[],
-        opts: { identity?: string },
-        command: Command,
-      ) => {
-        await withContext(command, "vm exec", async (ctx) => {
-          if (!remoteCommand.length)
-            throw new Error("a remote command is required");
-          const row = await ctx.hub.compute.getVm({ id_or_name: idOrName });
-          runSsh(sshArgs(row, opts, remoteCommand));
-          return { id: row.id, name: row.name, status: "completed" };
+    .option("--config <path>", "SSH config path (default: ~/.ssh/config)")
+    .action(async (idOrName: string, opts: any, command: Command) => {
+      await withContext(command, "vm ssh-config add", async (ctx) => {
+        const row = await ctx.hub.compute.getVm({ id_or_name: idOrName });
+        if (!row.public_ip || row.state !== "ready") {
+          throw new Error(
+            `compute VM '${row.name}' is not SSH-ready (state=${row.state})`,
+          );
+        }
+        const alias = normalizeSshConfigAlias(opts.alias ?? row.name);
+        const configPath = sshConfigPath(opts.config);
+        const identity = defaultIdentityPath(opts.identity);
+        const existing = existsSync(configPath)
+          ? readFileSync(configPath, "utf8")
+          : "";
+        const stripped = removeVmSshConfigBlock(
+          existing,
+          alias,
+        ).content.trimEnd();
+        const block = buildVmSshConfigBlock({
+          alias,
+          hostname: row.public_ip,
+          username: row.ssh_user || "ubuntu",
+          identity,
         });
-      },
-    );
+        mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
+        writeFileSync(
+          configPath,
+          stripped ? `${stripped}\n\n${block}` : block,
+          {
+            encoding: "utf8",
+            mode: 0o600,
+          },
+        );
+        return {
+          id: row.id,
+          name: row.name,
+          alias,
+          config_path: configPath,
+          identity: identity ?? null,
+          command: `ssh ${alias}`,
+        };
+      });
+    });
+
+  sshConfig
+    .command("remove <alias>")
+    .description("remove a managed compute VM entry from ~/.ssh/config")
+    .option("--config <path>", "SSH config path (default: ~/.ssh/config)")
+    .action(async (aliasValue: string, opts: any, command: Command) => {
+      await withContext(command, "vm ssh-config remove", async () => {
+        const alias = normalizeSshConfigAlias(aliasValue);
+        const configPath = sshConfigPath(opts.config);
+        if (!existsSync(configPath)) {
+          return { alias, config_path: configPath, removed: false };
+        }
+        const stripped = removeVmSshConfigBlock(
+          readFileSync(configPath, "utf8"),
+          alias,
+        );
+        if (stripped.removed) {
+          writeFileSync(configPath, `${stripped.content.trimEnd()}\n`, {
+            encoding: "utf8",
+            mode: 0o600,
+          });
+        }
+        return { alias, config_path: configPath, removed: stripped.removed };
+      });
+    });
 
   return vm;
 }

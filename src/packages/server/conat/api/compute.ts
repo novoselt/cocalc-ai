@@ -24,10 +24,13 @@ import { getComputeMachine } from "@cocalc/server/compute/catalog";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
 import { computeLeaseAuthorization } from "@cocalc/server/compute/pricing";
+import {
+  getComputeVmConfig,
+  requireComputeVmCreateAllowed,
+  requireComputeVmStartAllowed,
+} from "@cocalc/server/compute/config";
 
-const MAX_STAGING_TTL_MINUTES = 24 * 60;
 const MIN_BOOT_DISK_GB = 10;
-const MAX_BOOT_DISK_GB = 200;
 
 function requireAccount(accountId?: string) {
   const value = `${accountId ?? ""}`.trim();
@@ -123,6 +126,8 @@ async function resolveOwned(
 export async function createVm(opts: CreateComputeVmRequest) {
   const accountId = requireAccount(opts.account_id);
   await requireStagingAdmin(accountId);
+  const config = await getComputeVmConfig();
+  requireComputeVmCreateAllowed(config, accountId);
   await requireDangerousSessionAuth({
     account_id: accountId,
     browser_id: opts.browser_id,
@@ -134,6 +139,11 @@ export async function createVm(opts: CreateComputeVmRequest) {
   const name = normalizeName(opts.name);
   const zone = normalizeZone(opts.zone);
   const machine = getComputeMachine(opts.machine_type);
+  if (machine.cpu > config.max_vcpus) {
+    throw new Error(
+      `machine_type exceeds the ${config.max_vcpus} vCPU managed compute VM limit`,
+    );
+  }
   const pricingModel = opts.pricing_model;
   if (pricingModel !== "spot" && pricingModel !== "on_demand") {
     throw new Error("pricing_model must be spot or on_demand");
@@ -142,20 +152,20 @@ export async function createVm(opts: CreateComputeVmRequest) {
   if (
     !Number.isInteger(ttlMinutes) ||
     ttlMinutes < 5 ||
-    ttlMinutes > MAX_STAGING_TTL_MINUTES
+    ttlMinutes > config.max_ttl_minutes
   ) {
     throw new Error(
-      `ttl_minutes must be an integer from 5 to ${MAX_STAGING_TTL_MINUTES}`,
+      `ttl_minutes must be an integer from 5 to ${config.max_ttl_minutes}`,
     );
   }
   const bootDiskGb = Number(opts.boot_disk_gb ?? 20);
   if (
     !Number.isInteger(bootDiskGb) ||
     bootDiskGb < MIN_BOOT_DISK_GB ||
-    bootDiskGb > MAX_BOOT_DISK_GB
+    bootDiskGb > config.max_boot_disk_gb
   ) {
     throw new Error(
-      `boot_disk_gb must be an integer from ${MIN_BOOT_DISK_GB} to ${MAX_BOOT_DISK_GB}`,
+      `boot_disk_gb must be an integer from ${MIN_BOOT_DISK_GB} to ${config.max_boot_disk_gb}`,
     );
   }
   const { authorizedFallbackHours, maximumCostUsd } = computeLeaseAuthorization(
@@ -173,51 +183,64 @@ export async function createVm(opts: CreateComputeVmRequest) {
       `authorized_cost must be at least ${maximumCostUsd.toFixed(4)} USD for this staging lease`,
     );
   }
+  if (authorizedCost > config.max_authorized_cost_usd) {
+    throw new Error(
+      `authorized_cost must not exceed ${config.max_authorized_cost_usd.toFixed(2)} USD for this canary`,
+    );
+  }
   const id = randomUUID();
   const providerInstanceId = `cocalc-vm-${id.replaceAll("-", "").slice(0, 24)}`;
-  const vm = await insertComputeVm({
-    id,
-    name,
-    owner_account_id: accountId,
-    owning_bay_id: getConfiguredBayId(),
-    project_id: opts.project_id,
-    provider: "gcp",
-    region: regionFromZone(zone),
-    zone,
-    architecture: machine.architecture,
-    machine_type: machine.machine_type,
-    desired_pricing_model: pricingModel,
-    effective_pricing_model: pricingModel,
-    boot_disk_gb: bootDiskGb,
-    boot_disk_id: `${providerInstanceId}-boot`,
-    state: "requested",
-    desired_state: "running",
-    instance_generation: 1,
-    provider_instance_id: providerInstanceId,
-    public_ip: null,
-    ssh_user: "ubuntu",
-    ssh_public_key: normalizeSshPublicKey(opts.ssh_public_key),
-    expires_at: new Date(Date.now() + ttlMinutes * 60_000),
-    allow_on_demand_fallback: opts.allow_on_demand_fallback === true,
-    authorized_fallback_hours: authorizedFallbackHours,
-    spot_hourly_price: machine.spot_hourly_usd.toFixed(6),
-    on_demand_hourly_price: machine.on_demand_hourly_usd.toFixed(6),
-    authorized_cost: authorizedCost.toFixed(6),
-    accrued_cost: "0.000000",
-    billing_state: "staging_admin_unbilled",
-    spot_recovery_policy: {
-      ...DEFAULT_SPOT_RECOVERY_POLICY,
-      standard_fallback_enabled: opts.allow_on_demand_fallback === true,
+  const vm = await insertComputeVm(
+    {
+      id,
+      name,
+      owner_account_id: accountId,
+      owning_bay_id: getConfiguredBayId(),
+      project_id: opts.project_id,
+      provider: "gcp",
+      region: regionFromZone(zone),
+      zone,
+      architecture: machine.architecture,
+      machine_type: machine.machine_type,
+      desired_pricing_model: pricingModel,
+      effective_pricing_model: pricingModel,
+      boot_disk_gb: bootDiskGb,
+      boot_disk_id: `${providerInstanceId}-boot`,
+      state: "requested",
+      desired_state: "running",
+      instance_generation: 1,
+      provider_instance_id: providerInstanceId,
+      public_ip: null,
+      ssh_user: "ubuntu",
+      ssh_public_key: normalizeSshPublicKey(opts.ssh_public_key),
+      expires_at: new Date(Date.now() + ttlMinutes * 60_000),
+      allow_on_demand_fallback: opts.allow_on_demand_fallback === true,
+      authorized_fallback_hours: authorizedFallbackHours,
+      spot_hourly_price: machine.spot_hourly_usd.toFixed(6),
+      on_demand_hourly_price: machine.on_demand_hourly_usd.toFixed(6),
+      authorized_cost: authorizedCost.toFixed(6),
+      accrued_cost: "0.000000",
+      billing_state: `${config.environment}_admin_unbilled`,
+      spot_recovery_policy: {
+        ...DEFAULT_SPOT_RECOVERY_POLICY,
+        standard_fallback_enabled: opts.allow_on_demand_fallback === true,
+      },
+      spot_recovery_state: { phase: "idle" },
+      idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+      error: null,
+      metadata: {
+        provider_context: config.staging_legacy_provider
+          ? "project-host-provider-context"
+          : "dedicated-compute-provider-context",
+        price_snapshot_kind: `${config.environment}-static-unbilled`,
+        max_ttl_minutes: config.max_ttl_minutes,
+      },
     },
-    spot_recovery_state: { phase: "idle" },
-    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
-    error: null,
-    metadata: {
-      staging_credentials: "project-host-provider-context",
-      price_snapshot_kind: "staging-static-unbilled",
-      max_staging_ttl_minutes: MAX_STAGING_TTL_MINUTES,
+    {
+      max_active_per_account: config.max_active_per_account,
+      max_active_total: config.max_active_total,
     },
-  });
+  );
   await appendComputeEvent({
     vm,
     actor_account_id: accountId,
@@ -270,6 +293,9 @@ async function requestState(opts: {
 }) {
   const accountId = requireAccount(opts.account_id);
   await requireStagingAdmin(accountId);
+  if (opts.desired_state === "running") {
+    requireComputeVmStartAllowed(await getComputeVmConfig(), accountId);
+  }
   const vm = await resolveOwned(accountId, opts.id_or_name);
   if (vm.expires_at.valueOf() <= Date.now()) {
     throw new Error("compute VM lease has expired");

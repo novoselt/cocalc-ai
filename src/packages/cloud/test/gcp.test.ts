@@ -322,6 +322,8 @@ describe("GcpProvider", () => {
     const spec = buildSpec({
       metadata: {
         bootstrap_url: "https://example.com/bootstrap.sh",
+        subnetwork_uri:
+          "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
       },
     });
     const runtime = await provider.createHost(spec, {
@@ -337,6 +339,9 @@ describe("GcpProvider", () => {
       insertArgs.instanceResource.networkInterfaces[0].accessConfigs[0]
         .networkTier,
     ).toBe("STANDARD");
+    expect(insertArgs.instanceResource.networkInterfaces[0].subnetwork).toBe(
+      "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
+    );
     expect(disks[0].boot).toBe(true);
     expect(disks[0].initializeParams.diskSizeGb).toBe("10");
     expect(disks[1].boot).toBe(false);
@@ -981,6 +986,10 @@ describe("GcpProvider", () => {
       buildSpec({
         zone: "us-west1-a",
         pricing_model: "spot",
+        metadata: {
+          subnetwork_uri:
+            "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
+        },
       }),
       {
         project_id: "proj-1",
@@ -996,6 +1005,8 @@ describe("GcpProvider", () => {
         instanceResource: expect.objectContaining({
           networkInterfaces: [
             expect.objectContaining({
+              subnetwork:
+                "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
               accessConfigs: [
                 expect.objectContaining({
                   networkTier: "STANDARD",
