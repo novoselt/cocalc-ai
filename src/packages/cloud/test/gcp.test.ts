@@ -1117,4 +1117,52 @@ describe("GcpProvider", () => {
     ).toBe("projects/custom/global/images/custom-image");
     expect(insertArgs.instanceResource.machineType).toContain("us-east1-b");
   });
+
+  it("reports observed hostile-guest security settings", async () => {
+    getMock.mockResolvedValueOnce([
+      {
+        name: "compute-vm",
+        canIpForward: false,
+        deletionProtection: false,
+        serviceAccounts: [],
+        tags: { items: ["cocalc-compute-vm"] },
+        metadata: {
+          items: [{ key: "block-project-ssh-keys", value: "TRUE" }],
+        },
+        networkInterfaces: [
+          {
+            subnetwork:
+              "projects/compute-prod/regions/us-central1/subnetworks/hostile-guests",
+            accessConfigs: [{ natIP: "203.0.113.10", networkTier: "STANDARD" }],
+            ipv6AccessConfigs: [],
+          },
+        ],
+      },
+    ]);
+    const provider = new GcpProvider();
+    const observed = await provider.getInstance(
+      {
+        provider: "gcp",
+        instance_id: "compute-vm",
+        zone: "us-central1-a",
+        ssh_user: "ubuntu",
+      },
+      {
+        project_id: "compute-prod",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+    expect(observed?.metadata?.gcp_security).toEqual({
+      service_account_count: 0,
+      can_ip_forward: false,
+      deletion_protection: false,
+      block_project_ssh_keys: true,
+      tags: ["cocalc-compute-vm"],
+      subnetwork:
+        "projects/compute-prod/regions/us-central1/subnetworks/hostile-guests",
+      network_tier: "STANDARD",
+      external_ipv6: false,
+    });
+  });
 });

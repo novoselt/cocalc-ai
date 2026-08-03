@@ -8,6 +8,7 @@ import { getProviderContext } from "@cocalc/server/cloud/provider-context";
 import { getComputeMachine } from "./catalog";
 import { getComputeVmConfig, type ComputeVmConfig } from "./config";
 import type { ComputeVmRow } from "./types";
+import { assertComputeVmSecurity } from "./security";
 
 const provider = new GcpProvider();
 
@@ -115,13 +116,14 @@ export async function deleteProviderComputeVm(vm: ComputeVmRow) {
 }
 
 export async function inspectProviderComputeVm(vm: ComputeVmRow) {
-  const { creds } = await context();
+  const { config, creds } = await context();
   try {
     const runtime = runtimeFor(vm);
     const [status, instance] = await Promise.all([
       provider.getStatus(runtime, creds),
       provider.getInstance(runtime, creds),
     ]);
+    if (instance) assertComputeVmSecurity(instance, config);
     return { status, instance };
   } catch (err) {
     if (/not found|was not found|code.?5/i.test(`${err}`)) {

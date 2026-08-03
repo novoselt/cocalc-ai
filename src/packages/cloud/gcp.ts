@@ -2043,6 +2043,11 @@ export class GcpProvider implements CloudProvider {
     const public_ip =
       instance?.networkInterfaces?.[0]?.accessConfigs?.[0]?.natIP ?? undefined;
     const private_ip = instance?.networkInterfaces?.[0]?.networkIP ?? undefined;
+    const networkInterface = instance?.networkInterfaces?.[0];
+    const metadataItems = instance?.metadata?.items ?? [];
+    const blockProjectSshKeys = metadataItems.find(
+      (item) => item.key === "block-project-ssh-keys",
+    )?.value;
     return {
       instance_id: runtime.instance_id,
       name: instance.name ?? runtime.instance_id,
@@ -2055,6 +2060,21 @@ export class GcpProvider implements CloudProvider {
         instanceName: instance.name ?? runtime.instance_id,
         projectId: credentials.projectId,
       }),
+      metadata: {
+        gcp_security: {
+          service_account_count: instance?.serviceAccounts?.length ?? 0,
+          can_ip_forward: instance?.canIpForward === true,
+          deletion_protection: instance?.deletionProtection === true,
+          block_project_ssh_keys:
+            `${blockProjectSshKeys ?? ""}`.toUpperCase() === "TRUE",
+          tags: instance?.tags?.items ?? [],
+          subnetwork: networkInterface?.subnetwork,
+          network_tier: networkInterface?.accessConfigs?.[0]?.networkTier,
+          external_ipv6:
+            (networkInterface?.ipv6AccessConfigs?.length ?? 0) > 0 ||
+            !!networkInterface?.ipv6Address,
+        },
+      },
     };
   }
 }
