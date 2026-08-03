@@ -1233,14 +1233,18 @@ export class NotebookFrameActions {
   };
 
   undo = () => {
-    const before = this.jupyter_actions.store.get("cells");
-    this.jupyter_actions.syncdb.undo();
+    const before = this.jupyter_actions?.store?.get("cells");
+    if (before == null || !this.jupyter_actions.undo()) {
+      return;
+    }
     setTimeout(() => this.focusFirstChangedCell(before), 1);
   };
 
   redo = () => {
-    const before = this.jupyter_actions.store.get("cells");
-    this.jupyter_actions.syncdb.redo();
+    const before = this.jupyter_actions?.store?.get("cells");
+    if (before == null || !this.jupyter_actions.redo()) {
+      return;
+    }
     setTimeout(() => this.focusFirstChangedCell(before), 1);
   };
 }
