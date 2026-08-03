@@ -400,10 +400,14 @@ async function publishLiteAccountFeedEventBestEffort(opts: {
       ephemeral: true,
       config: ACCOUNT_FEED_STREAM_CONFIG,
     });
-    await stream.publish({
-      ...opts.event,
-      account_id,
-    });
+    try {
+      await stream.publish({
+        ...opts.event,
+        account_id,
+      });
+    } finally {
+      stream.close();
+    }
   } catch (err) {
     logger.warn("failed to publish lite account feed event", {
       account_id,
