@@ -222,10 +222,15 @@
   white-space: nowrap;
 }
 
+.CodeMirror .CodeMirror-latex-chat {
+  min-width: 36px;
+}
+
 .CodeMirror .cc-chat-cursor-insert {
   display: inline-flex;
   align-items: center;
-  margin-left: -8px;
+  justify-content: center;
+  min-width: 32px;
   font-size: 0.9em;
 }
 
