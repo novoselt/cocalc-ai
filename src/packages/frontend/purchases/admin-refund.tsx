@@ -40,12 +40,14 @@ export default function AdminRefund({
   service,
   cost,
   subscription_id,
+  membership_package,
   refresh,
 }: {
   purchase_id: number;
   service: Service;
   cost: number;
   subscription_id?: number | string | null;
+  membership_package?: boolean;
   refresh?;
 }) {
   const [error, setError] = useState<string>("");
@@ -93,6 +95,8 @@ export default function AdminRefund({
     service == "membership" &&
     Number.isInteger(Number(subscription_id)) &&
     Number(subscription_id) > 0;
+  const membershipPackage =
+    service == "membership" && membership_package === true;
 
   return (
     <>
@@ -125,9 +129,20 @@ export default function AdminRefund({
             credit transaction separately when appropriate.
           </>
         )}
+        {membershipPackage && (
+          <>
+            This membership package purchase will be reversed. For an original
+            package purchase, the package will expire immediately and its active
+            seats will be revoked. For a seat expansion, the purchased
+            unassigned seats will be removed. Any related credit transaction and
+            Stripe payment will not be changed; refund that credit transaction
+            separately when appropriate.
+          </>
+        )}
         {service != "credit" &&
           service != "auto-credit" &&
-          !personalMembership && (
+          !personalMembership &&
+          !membershipPackage && (
             <>
               The amount {currency(amount, 2)} will be reversed in the CoCalc
               account. This does not undo resources that have already been
