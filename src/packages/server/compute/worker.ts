@@ -39,6 +39,20 @@ import type { ComputeVmRow, ComputeWorkRow } from "./types";
 
 const logger = getLogger("server:compute:worker");
 
+export class RetryableComputeWorkError extends Error {
+  constructor(
+    message: string,
+    readonly retryAt: Date,
+  ) {
+    super(message);
+    this.name = "RetryableComputeWorkError";
+  }
+}
+
+export function computeWorkFailureState(err: unknown) {
+  return err instanceof RetryableComputeWorkError ? "recovering" : "failed";
+}
+
 function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
@@ -168,6 +182,10 @@ async function start(vm: ComputeVmRow) {
       ) {
         return await switchToOnDemand(next);
       }
+      throw new RetryableComputeWorkError(
+        `${err}`,
+        new Date(recoveryState.next_retry_at),
+      );
     }
     throw err;
   }
@@ -399,6 +417,42 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
               action: row.action,
               err,
             });
+            if (
+              computeWorkFailureState(err) === "recovering" &&
+              err instanceof RetryableComputeWorkError
+            ) {
+              const vm = await getComputeVmById(row.resource_id);
+              if (vm) {
+                await appendComputeEvent({
+                  vm,
+                  actor_kind: "worker",
+                  action: row.action,
+                  idempotency_key: row.idempotency_key,
+                  old_state: vm.state,
+                  new_state: "recovering",
+                  status: "retrying",
+                  details: {
+                    error,
+                    retry_at: err.retryAt.toISOString(),
+                  },
+                });
+              }
+              // Close this work item before enqueueing its replacement so the
+              // per-resource work deduplication does not suppress the retry.
+              await finishComputeWork({
+                id: row.id,
+                state: "failed",
+                error,
+              });
+              await enqueueComputeWork({
+                resource_id: row.resource_id,
+                action: row.action,
+                idempotency_key: `retry:${row.resource_id}:${row.action}:${err.retryAt.toISOString()}`,
+                payload: row.payload,
+                not_before: err.retryAt,
+              });
+              return;
+            }
             const vm = await getComputeVmById(row.resource_id);
             if (vm) {
               await updateComputeVm(vm.id, { state: "failed", error });
