@@ -335,6 +335,7 @@ export type SiteSettingsExtrasKeys =
   | "compute_vm_max_ttl_minutes"
   | "compute_vm_max_boot_disk_gb"
   | "compute_vm_max_authorized_cost_usd"
+  | "compute_vm_max_project_budget_usd"
   | "compute_vm_max_volumes_per_account"
   | "compute_vm_max_volume_gb"
   | "lambda_cloud_api_key"
@@ -1562,6 +1563,16 @@ export const EXTRAS: SettingsExtras = {
     name: "Managed Compute VMs: Maximum Authorized Cost USD",
     desc: "Maximum fixed compute authorization accepted for one admin-canary lease.",
     default: "25",
+    to_val: toFloat,
+    valid: onlyPosFloat,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_project_budget_usd: {
+    name: "Managed Compute VMs: Maximum Project Budget USD",
+    desc: "Maximum recurring weekly or monthly managed-compute budget an account may authorize for one project.",
+    default: "1000",
     to_val: toFloat,
     valid: onlyPosFloat,
     tags: ["Cloud"],

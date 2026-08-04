@@ -62,20 +62,21 @@ export async function insertComputeVolume(
     }
     const { rows } = await client.query<ComputeVolumeRow>(
       `INSERT INTO compute_volumes (
-         id, name, owner_account_id, owning_bay_id, provider, region, zone,
+         id, name, owner_account_id, owning_bay_id, project_id, provider, region, zone,
          disk_type, filesystem, size_gb, desired_size_gb, provider_disk_id,
          state, desired_state, attached_vm_id, attachment_generation,
          attachment_state, created_at, updated_at, monthly_price_per_gb,
          authorized_monthly_cost, billing_state, idempotency_key, error, metadata
        ) VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-         NOW(),NOW(),$18,$19,$20,$21,$22,$23
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+         NOW(),NOW(),$19,$20,$21,$22,$23,$24
        ) RETURNING *`,
       [
         row.id,
         row.name,
         row.owner_account_id,
         row.owning_bay_id,
+        row.project_id ?? null,
         row.provider,
         row.region,
         row.zone,
@@ -149,6 +150,7 @@ export async function updateComputeVolume(
   updates: Partial<ComputeVolumeRow>,
 ) {
   const allowed = new Set([
+    "project_id",
     "size_gb",
     "desired_size_gb",
     "state",

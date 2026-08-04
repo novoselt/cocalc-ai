@@ -103,6 +103,10 @@ Table({
       type: "string",
       desc: "Reconciled fixed compute cost accrued so far.",
     },
+    billing_updated_at: {
+      type: "timestamp",
+      desc: "End of the last interval written to the usage ledger.",
+    },
     billing_state: {
       type: "string",
       desc: "Billing and price-envelope enforcement state.",

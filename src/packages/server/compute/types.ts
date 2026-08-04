@@ -53,6 +53,7 @@ export interface ComputeVmRow {
   on_demand_hourly_price: string;
   authorized_cost: string;
   accrued_cost: string;
+  billing_updated_at?: Date | null;
   billing_state: string;
   spot_recovery_policy: Record<string, any>;
   spot_recovery_state: Record<string, any>;
@@ -90,6 +91,7 @@ export interface ComputeVolumeRow {
   name: string;
   owner_account_id: string;
   owning_bay_id: string;
+  project_id?: string | null;
   provider: "gcp";
   region: string;
   zone: string;
@@ -112,7 +114,29 @@ export interface ComputeVolumeRow {
   monthly_price_per_gb: string;
   authorized_monthly_cost: string;
   billing_state: string;
+  billing_updated_at?: Date | null;
   idempotency_key: string;
   error?: string | null;
   metadata: Record<string, any>;
+}
+
+export type ComputeBudgetPeriod = "week" | "month";
+
+export interface ComputeProjectBudgetRow {
+  id: string;
+  owner_account_id: string;
+  owning_bay_id: string;
+  project_id: string;
+  period: ComputeBudgetPeriod;
+  limit_usd: string;
+  enabled: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ComputeProjectBudgetSummary extends ComputeProjectBudgetRow {
+  period_started_at: Date;
+  period_ends_at: Date;
+  spent_usd: string;
+  remaining_usd: string;
 }

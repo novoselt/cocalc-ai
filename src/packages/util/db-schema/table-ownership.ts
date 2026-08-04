@@ -407,16 +407,25 @@ export const TABLE_OWNERSHIP = {
       "Recreate from a later browser presence observation or durable worker source state.",
   }),
 
-  ...entries(["compute_vms", "compute_vm_instances", "compute_volumes"], {
-    ownership: "account-home",
-    authority: "owner_account_id",
-    portability: "stable",
-    secondary_reference_fields: {
-      project_id: "Project attachment controls discovery but not authority.",
+  ...entries(
+    [
+      "compute_vms",
+      "compute_vm_instances",
+      "compute_volumes",
+      "compute_project_budgets",
+      "compute_usage_charges",
+    ],
+    {
+      ownership: "account-home",
+      authority: "owner_account_id",
+      portability: "stable",
+      secondary_reference_fields: {
+        project_id: "Project attachment controls discovery but not authority.",
+      },
+      notes:
+        "Account-owned managed compute state. Project attachment controls discovery but does not transfer ownership.",
     },
-    notes:
-      "Account-owned managed compute state. Project attachment controls discovery but does not transfer ownership.",
-  }),
+  ),
 
   ...entries(["compute_resource_work"], {
     ownership: "ephemeral",

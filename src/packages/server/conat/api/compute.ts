@@ -39,6 +39,11 @@ import {
   resolveOwnedComputeVolume,
   updateComputeVolume,
 } from "@cocalc/server/compute/volume-db";
+import {
+  getComputeProjectBudgetSummary,
+  setComputeProjectBudget,
+} from "@cocalc/server/compute/budget-db";
+import type { ComputeBudgetPeriod } from "@cocalc/server/compute/types";
 
 const MIN_BOOT_DISK_GB = 10;
 const MIN_VOLUME_GB = 10;
@@ -166,8 +171,10 @@ function normalizeVolumeName(value: string) {
 
 function volumeAuthorization(opts: {
   size_gb: number;
-  authorized_monthly_cost: string;
+  authorized_monthly_cost?: string;
   max_volume_gb: number;
+  budget_remaining_usd?: number;
+  budget_period?: ComputeBudgetPeriod;
 }) {
   const sizeGb = Number(opts.size_gb);
   if (
@@ -180,7 +187,30 @@ function volumeAuthorization(opts: {
     );
   }
   const minimumMonthlyCost = sizeGb * BALANCED_DISK_MONTHLY_USD_PER_GB;
-  const authorizedMonthlyCost = Number(opts.authorized_monthly_cost);
+  const budgetPeriodCost =
+    opts.budget_period === "week"
+      ? (minimumMonthlyCost * 12) / 52
+      : minimumMonthlyCost;
+  if (
+    opts.authorized_monthly_cost == null &&
+    opts.budget_remaining_usd == null
+  ) {
+    throw new Error(
+      "set a project compute budget or provide authorized_monthly_cost",
+    );
+  }
+  if (
+    opts.budget_remaining_usd != null &&
+    opts.budget_remaining_usd < budgetPeriodCost
+  ) {
+    throw new Error(
+      `project compute budget has ${opts.budget_remaining_usd.toFixed(2)} USD remaining, but this volume requires about ${budgetPeriodCost.toFixed(2)} USD per ${opts.budget_period}`,
+    );
+  }
+  const authorizedMonthlyCost =
+    opts.authorized_monthly_cost == null
+      ? minimumMonthlyCost
+      : Number(opts.authorized_monthly_cost);
   if (
     !Number.isFinite(authorizedMonthlyCost) ||
     authorizedMonthlyCost < minimumMonthlyCost
@@ -199,6 +229,78 @@ function volumeAuthorization(opts: {
   return { sizeGb, authorizedMonthlyCost };
 }
 
+async function budgetForAdmission(accountId: string, projectId: string) {
+  const budget = await getComputeProjectBudgetSummary({
+    owner_account_id: accountId,
+    project_id: projectId,
+  });
+  return budget?.enabled ? budget : undefined;
+}
+
+export async function getProjectBudget(opts: {
+  account_id?: string;
+  project_id: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  await requireProjectMembership(accountId, opts.project_id);
+  return (
+    (await getComputeProjectBudgetSummary({
+      owner_account_id: accountId,
+      project_id: opts.project_id,
+    })) ?? null
+  );
+}
+
+export async function setProjectBudget(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  project_id: string;
+  period: ComputeBudgetPeriod;
+  limit_usd: string;
+  enabled?: boolean;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  const config = await getComputeVmConfig();
+  requireComputeVmCreateAllowed(config, accountId);
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  await requireProjectMembership(accountId, opts.project_id);
+  if (opts.period !== "week" && opts.period !== "month") {
+    throw new Error("compute budget period must be week or month");
+  }
+  const limitUsd = Number(opts.limit_usd);
+  if (
+    !Number.isFinite(limitUsd) ||
+    limitUsd <= 0 ||
+    limitUsd > config.max_project_budget_usd
+  ) {
+    throw new Error(
+      `compute budget must be greater than zero and at most ${config.max_project_budget_usd.toFixed(2)} USD`,
+    );
+  }
+  const budget = await setComputeProjectBudget({
+    owner_account_id: accountId,
+    owning_bay_id: getConfiguredBayId(),
+    project_id: opts.project_id,
+    period: opts.period,
+    limit_usd: limitUsd,
+    enabled: opts.enabled,
+  });
+  const summary = await getComputeProjectBudgetSummary({
+    owner_account_id: budget.owner_account_id,
+    project_id: budget.project_id,
+  });
+  if (!summary) throw new Error("compute project budget was not persisted");
+  return summary;
+}
+
 export async function createVm(opts: CreateComputeVmRequest) {
   const accountId = requireAccount(opts.account_id);
   await requireStagingAdmin(accountId);
@@ -214,13 +316,26 @@ export async function createVm(opts: CreateComputeVmRequest) {
 
   const name = normalizeName(opts.name);
   const zone = normalizeZone(opts.zone);
-  const attachedVolume = opts.volume
+  let attachedVolume = opts.volume
     ? await resolveOwnedVolume(accountId, opts.volume)
     : undefined;
   if (attachedVolume && attachedVolume.zone !== zone) {
     throw new Error(
       `compute volume '${attachedVolume.name}' is in ${attachedVolume.zone}; create the VM in the same zone`,
     );
+  }
+  if (
+    attachedVolume?.project_id &&
+    attachedVolume.project_id !== opts.project_id
+  ) {
+    throw new Error(
+      `compute volume '${attachedVolume.name}' belongs to a different project budget`,
+    );
+  }
+  if (attachedVolume && !attachedVolume.project_id) {
+    attachedVolume = (await updateComputeVolume(attachedVolume.id, {
+      project_id: opts.project_id,
+    }))!;
   }
   const machine = getComputeMachine(opts.machine_type);
   if (machine.cpu > config.max_vcpus) {
@@ -261,10 +376,21 @@ export async function createVm(opts: CreateComputeVmRequest) {
       onDemandHourlyUsd: machine.on_demand_hourly_usd,
     },
   );
-  const authorizedCost = Number(opts.authorized_cost);
+  const budget = await budgetForAdmission(accountId, opts.project_id);
+  if (budget && Number(budget.remaining_usd) < maximumCostUsd) {
+    throw new Error(
+      `project compute budget has ${Number(budget.remaining_usd).toFixed(2)} USD remaining, but this lease can cost up to ${maximumCostUsd.toFixed(2)} USD`,
+    );
+  }
+  const authorizedCost =
+    opts.authorized_cost == null
+      ? budget
+        ? maximumCostUsd
+        : Number.NaN
+      : Number(opts.authorized_cost);
   if (!Number.isFinite(authorizedCost) || authorizedCost < maximumCostUsd) {
     throw new Error(
-      `authorized_cost must be at least ${maximumCostUsd.toFixed(4)} USD for this staging lease`,
+      `set a project compute budget or provide authorized_cost of at least ${maximumCostUsd.toFixed(4)} USD for this staging lease`,
     );
   }
   if (authorizedCost > config.max_authorized_cost_usd) {
@@ -361,12 +487,20 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
     session_hash: opts.session_hash,
     require_second_factor: "if_enabled",
   });
+  if (opts.project_id) {
+    await requireProjectMembership(accountId, opts.project_id);
+  }
   const name = normalizeVolumeName(opts.name);
   const zone = normalizeZone(opts.zone);
+  const budget = opts.project_id
+    ? await budgetForAdmission(accountId, opts.project_id)
+    : undefined;
   const { sizeGb, authorizedMonthlyCost } = volumeAuthorization({
     size_gb: opts.size_gb,
     authorized_monthly_cost: opts.authorized_monthly_cost,
     max_volume_gb: config.max_volume_gb,
+    budget_remaining_usd: budget ? Number(budget.remaining_usd) : undefined,
+    budget_period: budget?.period,
   });
   const id = randomUUID();
   const volume = await insertComputeVolume(
@@ -375,6 +509,7 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
       name,
       owner_account_id: accountId,
       owning_bay_id: getConfiguredBayId(),
+      project_id: opts.project_id ?? null,
       provider: "gcp",
       region: regionFromZone(zone),
       zone,
@@ -455,7 +590,7 @@ export async function resizeVolume(opts: {
   session_hash?: string;
   id_or_name: string;
   size_gb: number;
-  authorized_monthly_cost: string;
+  authorized_monthly_cost?: string;
   idempotency_key: string;
 }) {
   const accountId = requireAccount(opts.account_id);
@@ -469,10 +604,15 @@ export async function resizeVolume(opts: {
     require_second_factor: "if_enabled",
   });
   const volume = await resolveOwnedVolume(accountId, opts.id_or_name);
+  const budget = volume.project_id
+    ? await budgetForAdmission(accountId, volume.project_id)
+    : undefined;
   const { sizeGb, authorizedMonthlyCost } = volumeAuthorization({
     size_gb: opts.size_gb,
     authorized_monthly_cost: opts.authorized_monthly_cost,
     max_volume_gb: config.max_volume_gb,
+    budget_remaining_usd: budget ? Number(budget.remaining_usd) : undefined,
+    budget_period: budget?.period,
   });
   if (sizeGb < volume.size_gb) {
     throw new Error("compute volumes cannot be shrunk");

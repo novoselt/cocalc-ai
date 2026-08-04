@@ -7,7 +7,10 @@ import { Alert, Button, Flex, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 
-import type { ComputeVm } from "@cocalc/conat/hub/api/compute";
+import type {
+  ComputeProjectBudget,
+  ComputeVm,
+} from "@cocalc/conat/hub/api/compute";
 import { Icon } from "@cocalc/frontend/components";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 
@@ -106,16 +109,19 @@ export function ProjectComputeVms({
   isVisible?: boolean;
 }) {
   const [rows, setRows] = useState<ComputeVm[]>([]);
+  const [budget, setBudget] = useState<ComputeProjectBudget | null>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
   const load = async () => {
     setLoading(true);
     try {
-      const vms = await webapp_client.conat_client.hub.compute.listVms({
-        project_id,
-      });
+      const [vms, projectBudget] = await Promise.all([
+        webapp_client.conat_client.hub.compute.listVms({ project_id }),
+        webapp_client.conat_client.hub.compute.getProjectBudget({ project_id }),
+      ]);
       setRows(vms);
+      setBudget(projectBudget);
       setError(undefined);
     } catch (err) {
       setError(`${err}`);
@@ -166,6 +172,32 @@ export function ProjectComputeVms({
           style={{ marginBottom: 12 }}
         />
       )}
+      {budget ? (
+        <Alert
+          showIcon
+          type={Number(budget.remaining_usd) > 0 ? "info" : "warning"}
+          message={`$${Number(budget.spent_usd).toFixed(2)} of $${Number(budget.limit_usd).toFixed(2)} used this ${budget.period}`}
+          description={`$${Number(budget.remaining_usd).toFixed(2)} remains until ${new Date(budget.period_ends_at).toLocaleString()}. VMs are deleted if the budget is exhausted; persistent volumes are retained.`}
+          style={{ marginBottom: 12 }}
+        />
+      ) : budget === null ? (
+        <Alert
+          showIcon
+          type="info"
+          message="No project compute budget is configured"
+          description={
+            <span>
+              Set one with{" "}
+              <Text code>
+                cocalc vm budget set --project {project_id} --limit 100 --period
+                month
+              </Text>
+              .
+            </span>
+          }
+          style={{ marginBottom: 12 }}
+        />
+      ) : null}
       <Table<ComputeVm>
         columns={columns}
         dataSource={rows}

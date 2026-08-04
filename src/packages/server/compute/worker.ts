@@ -49,6 +49,7 @@ import {
   getComputeVolumeById,
   updateComputeVolume,
 } from "./volume-db";
+import { accrueComputeUsage, enforceComputeProjectBudgets } from "./budget-db";
 
 const logger = getLogger("server:compute:worker");
 
@@ -649,6 +650,8 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
       await enqueueExpiredComputeVms();
       if (Date.now() - lastReconcile >= 15_000) {
         lastReconcile = Date.now();
+        await accrueComputeUsage();
+        await enforceComputeProjectBudgets();
         const config = await getComputeVmConfig();
         if (config.emergency_stop) {
           await enqueueComputeEmergencyStops();

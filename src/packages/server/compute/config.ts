@@ -29,6 +29,7 @@ export interface ComputeVmConfig {
   max_ttl_minutes: number;
   max_boot_disk_gb: number;
   max_authorized_cost_usd: number;
+  max_project_budget_usd: number;
   max_volumes_per_account: number;
   max_volume_gb: number;
 }
@@ -152,6 +153,10 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
     max_authorized_cost_usd: positiveNumber(
       settings.compute_vm_max_authorized_cost_usd,
       25,
+    ),
+    max_project_budget_usd: positiveNumber(
+      settings.compute_vm_max_project_budget_usd,
+      1000,
     ),
     max_volumes_per_account: positiveInteger(
       settings.compute_vm_max_volumes_per_account,

@@ -12,6 +12,7 @@ Table({
     pg_indexes: [
       "owner_account_id",
       "owning_bay_id",
+      "project_id",
       "state",
       "desired_state",
       "attached_vm_id",
@@ -26,6 +27,10 @@ Table({
       type: "string",
       pg_type: "VARCHAR(64)",
       desc: "Account-home bay authoritative for this volume.",
+    },
+    project_id: {
+      type: "uuid",
+      desc: "Optional project used for budget grouping and discovery.",
     },
     provider: { type: "string", desc: "Cloud provider; GCP in the MVP." },
     region: { type: "string", desc: "Cloud region." },
@@ -61,6 +66,10 @@ Table({
       desc: "Owner-confirmed recurring storage cost ceiling.",
     },
     billing_state: { type: "string", desc: "Storage billing state." },
+    billing_updated_at: {
+      type: "timestamp",
+      desc: "End of the last interval written to the usage ledger.",
+    },
     idempotency_key: { type: "string", desc: "Owner-scoped create identity." },
     error: { type: "string", desc: "Latest bounded lifecycle error." },
     metadata: { type: "map", desc: "Non-authoritative provider diagnostics." },

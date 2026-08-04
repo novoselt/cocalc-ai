@@ -40,6 +40,8 @@ import "./cloud-vm-usage";
 import "./cloud-vm-work";
 import "./compute-resource-events";
 import "./compute-resource-work";
+import "./compute-project-budgets";
+import "./compute-usage-charges";
 import "./compute-vm-instances";
 import "./compute-vms";
 import "./compute-volumes";
