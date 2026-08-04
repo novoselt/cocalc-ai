@@ -57,7 +57,7 @@ function specFor(
   };
 }
 
-function volumeMountScript(volume: ComputeVolumeRow) {
+export function volumeMountScript(volume: ComputeVolumeRow) {
   const device = `/dev/disk/by-id/google-${volume.provider_disk_id}`;
   return `#!/bin/bash
 set -euo pipefail
@@ -74,9 +74,55 @@ mkdir -p /work
 uuid=$(blkid -s UUID -o value "$device")
 grep -q "UUID=$uuid " /etc/fstab || echo "UUID=$uuid /work ext4 defaults,nofail 0 2" >> /etc/fstab
 mountpoint -q /work || mount /work
-resize2fs "$device" || true
 chown ubuntu:ubuntu /work
 chmod 0755 /work
+
+cat >/usr/local/sbin/cocalc-grow-work-filesystem <<'EOF'
+#!/bin/bash
+set -euo pipefail
+device=${device}
+test -b "$device" || exit 0
+mountpoint -q /work || exit 0
+mounted_device=$(findmnt -n -o SOURCE /work)
+test "$(readlink -f "$mounted_device")" = "$(readlink -f "$device")" || exit 0
+block_bytes=$(blockdev --getsize64 "$device")
+block_size=$(dumpe2fs -h "$device" 2>/dev/null | awk -F: '/Block size:/{gsub(/ /, "", $2); print $2}')
+block_count=$(dumpe2fs -h "$device" 2>/dev/null | awk -F: '/Block count:/{gsub(/ /, "", $2); print $2}')
+test -n "$block_size" -a -n "$block_count" || exit 1
+filesystem_bytes=$((block_size * block_count))
+if test "$filesystem_bytes" -lt "$block_bytes"; then
+  resize2fs "$device"
+fi
+EOF
+chmod 0755 /usr/local/sbin/cocalc-grow-work-filesystem
+
+cat >/etc/systemd/system/cocalc-grow-work-filesystem.service <<'EOF'
+[Unit]
+Description=Grow the CoCalc /work filesystem to its block device
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cocalc-grow-work-filesystem
+EOF
+
+cat >/etc/systemd/system/cocalc-grow-work-filesystem.timer <<'EOF'
+[Unit]
+Description=Detect online growth of the CoCalc /work disk
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=cocalc-grow-work-filesystem.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now cocalc-grow-work-filesystem.timer
+systemctl start cocalc-grow-work-filesystem.service
 `;
 }
 

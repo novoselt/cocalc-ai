@@ -9,3 +9,4 @@ export { SearchFlyout } from "./search";
 export { ServersFlyout } from "./servers";
 export { SettingsFlyout } from "./settings";
 export { WorkspacesFlyout } from "./workspaces";
+export { VmsFlyout } from "./vms";

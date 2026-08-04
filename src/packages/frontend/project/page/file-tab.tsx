@@ -53,6 +53,7 @@ import {
   SearchFlyout,
   ServersFlyout,
   SettingsFlyout,
+  VmsFlyout,
   WorkspacesFlyout,
 } from "./flyouts";
 import { ActiveFlyout } from "./flyouts/active";
@@ -75,6 +76,7 @@ export type FixedTab =
   | "search"
   | "servers"
   | "settings"
+  | "vms"
   | "info"
   | "users";
 
@@ -232,6 +234,14 @@ export const FIXED_PROJECT_TABS: FixedTabs = {
       id: "project.page.flyout.settings.title",
       defaultMessage: "Status and Settings",
     }),
+  },
+  vms: {
+    label: "VMs",
+    icon: "server",
+    flyout: VmsFlyout,
+    noAnonymous: true,
+    noLite: true,
+    flyoutTitle: "Virtual machines",
   },
 } as const;
 

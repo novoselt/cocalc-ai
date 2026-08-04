@@ -1265,6 +1265,12 @@ export class ProjectActions extends Actions<ProjectStoreState> {
         }
         break;
 
+      case "vms":
+        if (opts.change_history) {
+          this.push_state("vms", "");
+        }
+        break;
+
       case "workspaces":
         if (opts.change_history) {
           this.push_state("workspaces", "");

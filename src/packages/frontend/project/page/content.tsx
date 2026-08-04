@@ -40,6 +40,7 @@ import DeletedFile from "@cocalc/frontend/project/deleted-file";
 import { Explorer } from "@cocalc/frontend/project/explorer";
 import { ProjectLog } from "@cocalc/frontend/project/history";
 import { ProjectInfo } from "@cocalc/frontend/project/info";
+import { ProjectComputeVms } from "@cocalc/frontend/project/compute-vms";
 import { ProjectNew } from "@cocalc/frontend/project/new";
 import { ProjectSearch } from "@cocalc/frontend/project/search/search";
 import { ProjectServers } from "@cocalc/frontend/project/servers";
@@ -276,6 +277,10 @@ const TabContent: React.FC<TabContentProps> = (props: TabContentProps) => {
         return <ProjectSettings project_id={project_id} />;
       case "info":
         return <ProjectInfo project_id={project_id} />;
+      case "vms":
+        return (
+          <ProjectComputeVms project_id={project_id} isVisible={is_visible} />
+        );
       case "agents":
         if (!agentAIEnabled) {
           return (

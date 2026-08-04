@@ -12,6 +12,7 @@ export type ProjectFixedRouteTab =
   | "servers"
   | "settings"
   | "users"
+  | "vms"
   | "workspaces";
 
 export type ParsedProjectTarget =
@@ -134,6 +135,7 @@ export function parseProjectTarget(
     case "servers":
     case "settings":
     case "users":
+    case "vms":
     case "workspaces":
       return { kind: "tab", tab: mainSegment };
 

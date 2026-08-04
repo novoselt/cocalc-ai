@@ -12,12 +12,14 @@ const DEFAULT_ORDER: readonly FixedTab[] = [
   "search",
   "docs",
   "settings",
+  "vms",
   "workspaces",
   "rootfs",
   "active",
   "log",
   "servers",
   "info",
+  "vms",
 ] as const;
 
 const DEFAULT_HIDDEN: readonly FixedTab[] = [
