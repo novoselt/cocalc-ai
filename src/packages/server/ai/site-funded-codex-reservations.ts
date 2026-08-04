@@ -570,17 +570,17 @@ export async function recordSiteFundedCodexUsageEvent(
       await client.query("COMMIT");
       return result(false);
     }
+    if (row.status !== "active") {
+      throw new Error(
+        `site-funded Codex reservation is not active (${row.status})`,
+      );
+    }
     if (event.requestSequence < lastRequestSequence) {
       throw new Error("site-funded Codex usage event sequence is stale");
     }
     if (event.requestSequence !== lastRequestSequence + 1) {
       throw new Error(
         `site-funded Codex usage event sequence ${event.requestSequence} follows ${lastRequestSequence}`,
-      );
-    }
-    if (row.status !== "active") {
-      throw new Error(
-        `site-funded Codex reservation is not active (${row.status})`,
       );
     }
     const committedMicrousd = int(row.committed_microusd) + cost.costMicrousd;

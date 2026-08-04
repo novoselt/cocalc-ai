@@ -168,6 +168,13 @@ describe("site-funded Codex reservations", () => {
         status: "committed",
       }),
     ).resolves.toEqual(finished);
+    await expect(
+      recordSiteFundedCodexUsageEvent({
+        ...event,
+        eventId: uuid(),
+        requestSequence: 3,
+      }),
+    ).rejects.toThrow("reservation is not active (committed)");
     expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
       reservedMicrousd: 0,
       committedMicrousd: 1_520,
