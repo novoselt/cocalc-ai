@@ -131,6 +131,8 @@ function runtimeFor(vm: ComputeVmRow): HostRuntime {
     provider: "gcp",
     instance_id: vm.provider_instance_id,
     public_ip: vm.public_ip ?? undefined,
+    private_ip: vm.metadata?.runtime?.private_ip,
+    internal_hostname: vm.metadata?.runtime?.internal_hostname,
     ssh_user: vm.ssh_user,
     zone: vm.zone,
     metadata: {

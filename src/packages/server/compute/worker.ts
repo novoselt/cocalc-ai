@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import getLogger from "@cocalc/backend/logger";
+import type { HostRuntime, RemoteInstance } from "@cocalc/cloud";
 import {
   computeSpotRetryDelayMs,
   DEFAULT_SPOT_RECOVERY_POLICY,
@@ -135,13 +136,47 @@ async function waitForVolumeAttachment(
   );
 }
 
-async function markReady(vm: ComputeVmRow, publicIp?: string) {
+type ObservedRuntime = Pick<
+  HostRuntime | RemoteInstance,
+  "public_ip" | "private_ip" | "internal_hostname" | "metadata"
+>;
+
+export function computeRuntimeMetadata(
+  current: Record<string, any> | undefined,
+  runtime: ObservedRuntime,
+) {
+  return {
+    ...(current ?? {}),
+    ...(runtime.metadata ?? {}),
+    private_ip: runtime.private_ip ?? current?.private_ip,
+    internal_hostname: runtime.internal_hostname ?? current?.internal_hostname,
+  };
+}
+
+function runtimeIdentityChanged(
+  current: Record<string, any>,
+  observed: ObservedRuntime,
+) {
+  return (
+    (observed.private_ip != null &&
+      observed.private_ip !== current.private_ip) ||
+    (observed.internal_hostname != null &&
+      observed.internal_hostname !== current.internal_hostname)
+  );
+}
+
+async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
+  const publicIp = runtime.public_ip;
   if (!publicIp) throw new Error("provider VM has no public IPv4 address");
   await waitForSsh(publicIp);
   const next = await updateComputeVm(vm.id, {
     state: "ready",
     desired_state: "running",
     public_ip: publicIp,
+    metadata: {
+      ...(vm.metadata ?? {}),
+      runtime: computeRuntimeMetadata(vm.metadata?.runtime, runtime),
+    },
     ready_at: new Date(),
     stopped_at: null,
     error: null,
@@ -261,7 +296,7 @@ async function provision(vm: ComputeVmRow) {
   }
   const metadata = {
     ...(provisioning.metadata ?? {}),
-    runtime: runtime.metadata ?? {},
+    runtime: computeRuntimeMetadata(provisioning.metadata?.runtime, runtime),
   };
   const starting = (await updateComputeVm(vm.id, {
     state: "starting",
@@ -279,7 +314,7 @@ async function provision(vm: ComputeVmRow) {
       },
     });
   }
-  await markReady(starting, runtime.public_ip);
+  await markReady(starting, runtime);
 }
 
 async function start(vm: ComputeVmRow) {
@@ -304,7 +339,7 @@ async function start(vm: ComputeVmRow) {
         },
       });
     }
-    await markReady(vm, observed.instance?.public_ip);
+    await markReady(vm, observed.instance ?? {});
   } catch (err) {
     if (
       vm.desired_pricing_model === "spot" &&
@@ -370,7 +405,7 @@ async function switchToOnDemand(vm: ComputeVmRow) {
   }))!;
   await startProviderComputeVm(fallback);
   const observed = await inspectProviderComputeVm(fallback);
-  await markReady(fallback, observed.instance?.public_ip);
+  await markReady(fallback, observed.instance ?? {});
 }
 
 async function probeAndReturnToSpot(vm: ComputeVmRow) {
@@ -628,8 +663,13 @@ async function reconcile(vm: ComputeVmRow) {
         idempotency_key: `probe-spot:${vm.id}:${Date.now()}`,
       });
     }
-    if (vm.state !== "ready" || observed.instance?.public_ip !== vm.public_ip) {
-      await markReady(vm, observed.instance?.public_ip);
+    const runtimeMetadata = vm.metadata?.runtime ?? {};
+    if (
+      vm.state !== "ready" ||
+      observed.instance?.public_ip !== vm.public_ip ||
+      runtimeIdentityChanged(runtimeMetadata, observed.instance ?? {})
+    ) {
+      await markReady(vm, observed.instance ?? {});
     }
     return;
   }

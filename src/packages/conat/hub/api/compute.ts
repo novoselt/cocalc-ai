@@ -29,6 +29,8 @@ export interface ComputeVm {
   instance_generation: number;
   provider_instance_id: string;
   public_ip?: string | null;
+  private_ip?: string | null;
+  internal_hostname?: string | null;
   ssh_user: string;
   created_at: string | Date;
   updated_at: string | Date;

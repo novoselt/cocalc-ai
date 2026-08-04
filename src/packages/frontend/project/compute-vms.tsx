@@ -834,14 +834,24 @@ export function ProjectComputeVms({
     },
     { title: "Zone", dataIndex: "zone" },
     {
-      title: "IP",
-      dataIndex: "public_ip",
-      render: (ip?: string | null) =>
-        ip ? (
-          <Text copyable={{ text: ip }}>{ip}</Text>
-        ) : (
-          <Text type="secondary">-</Text>
-        ),
+      title: "Network",
+      render: (_, vm) => (
+        <div>
+          {vm.public_ip ? (
+            <Text copyable={{ text: vm.public_ip }}>{vm.public_ip}</Text>
+          ) : (
+            <Text type="secondary">No public IP</Text>
+          )}
+          {vm.private_ip && (
+            <>
+              <br />
+              <Text type="secondary" copyable={{ text: vm.private_ip }}>
+                private {vm.private_ip}
+              </Text>
+            </>
+          )}
+        </div>
+      ),
     },
     {
       title: "Expires",

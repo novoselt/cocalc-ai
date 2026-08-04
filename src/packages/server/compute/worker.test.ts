@@ -5,6 +5,7 @@
 
 import {
   computeWorkFailureState,
+  computeRuntimeMetadata,
   isSpotCapacityError,
   RetryableComputeWorkError,
 } from "./worker";
@@ -33,5 +34,27 @@ describe("compute VM work failure state", () => {
       ),
     ).toBe(true);
     expect(isSpotCapacityError(new Error("invalid machine type"))).toBe(false);
+  });
+
+  it("preserves and refreshes provider network identity", () => {
+    expect(
+      computeRuntimeMetadata(
+        {
+          private_ip: "10.0.0.1",
+          internal_hostname: "old.internal",
+          boot_disk_name: "disk-1",
+        },
+        {
+          private_ip: "10.0.0.2",
+          internal_hostname: "new.internal",
+          metadata: { machine_type: "e2-standard-2" },
+        },
+      ),
+    ).toEqual({
+      private_ip: "10.0.0.2",
+      internal_hostname: "new.internal",
+      boot_disk_name: "disk-1",
+      machine_type: "e2-standard-2",
+    });
   });
 });

@@ -126,7 +126,11 @@ function publicVm(vm: ComputeVmRow): ComputeVm {
     idempotency_key: _key,
     ...result
   } = vm;
-  return result;
+  return {
+    ...result,
+    private_ip: vm.metadata?.runtime?.private_ip ?? null,
+    internal_hostname: vm.metadata?.runtime?.internal_hostname ?? null,
+  };
 }
 
 function publicVolume(volume: ComputeVolumeRow): ComputeVolume {
