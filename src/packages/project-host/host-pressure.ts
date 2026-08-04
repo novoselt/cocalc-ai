@@ -218,7 +218,10 @@ function memoryAvailableThreshold(
   ratio: number,
 ): number {
   if (totalBytes == null || totalBytes <= 0 || ratio <= 0) return fixedBytes;
-  return Math.max(fixedBytes, Math.floor(totalBytes * ratio));
+  // Fixed reserves are a fallback for old/incomplete metrics. Applying them
+  // to small hosts can make the host permanently pressured (for example, a
+  // 6 GiB reserve on an 8 GiB host) even when most memory is available.
+  return Math.floor(totalBytes * ratio);
 }
 
 function parseRunQuota(run_quota: unknown): Record<string, any> | undefined {
