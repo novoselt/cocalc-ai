@@ -166,6 +166,16 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
   };
 }
 
+export function computeVmUiEnabled(settings: Settings): boolean {
+  try {
+    const environment = environmentFromSettings(settings);
+    const { mode } = parseMode(settings.compute_vm_mode, environment);
+    return mode === "admin_canary";
+  } catch {
+    return false;
+  }
+}
+
 export async function getComputeVmConfig(): Promise<ComputeVmConfig> {
   return resolveComputeVmConfig((await getServerSettings()) as Settings);
 }

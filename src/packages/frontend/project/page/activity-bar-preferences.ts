@@ -19,7 +19,6 @@ const DEFAULT_ORDER: readonly FixedTab[] = [
   "log",
   "servers",
   "info",
-  "vms",
 ] as const;
 
 const DEFAULT_HIDDEN: readonly FixedTab[] = [

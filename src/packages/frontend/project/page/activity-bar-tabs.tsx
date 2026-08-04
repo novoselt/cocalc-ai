@@ -143,12 +143,14 @@ function themedRootfsIconStyle({
 
 function filterTabsForProjectAccess({
   agentAIEnabled,
+  computeVmEnabled,
   liteMode,
   names,
   rootfsEnabled = true,
   viewer,
 }: {
   agentAIEnabled: boolean;
+  computeVmEnabled: boolean;
   liteMode: boolean;
   names: readonly FixedTab[];
   rootfsEnabled?: boolean;
@@ -156,6 +158,7 @@ function filterTabsForProjectAccess({
 }): FixedTab[] {
   return names.filter((name) => {
     if (!agentAIEnabled && name === "agents") return false;
+    if (!computeVmEnabled && name === "vms") return false;
     if (!rootfsEnabled && name === "rootfs") return false;
     if (liteMode && FIXED_PROJECT_TABS[name].noLite) return false;
     if (viewer && !VIEWER_FIXED_TABS.has(name)) return false;
@@ -165,6 +168,7 @@ function filterTabsForProjectAccess({
 
 function preserveUnavailableTabs(opts: {
   agentAIEnabled: boolean;
+  computeVmEnabled: boolean;
   hiddenTabs: readonly FixedTab[];
   liteMode: boolean;
   nextHidden: FixedTab[];
@@ -176,6 +180,7 @@ function preserveUnavailableTabs(opts: {
   const available = new Set(
     filterTabsForProjectAccess({
       agentAIEnabled: opts.agentAIEnabled,
+      computeVmEnabled: opts.computeVmEnabled,
       liteMode: opts.liteMode,
       names: opts.originalOrder,
       rootfsEnabled: opts.rootfsEnabled,
@@ -277,6 +282,8 @@ export function VerticalFixedTabs({
   const accountStoreReady = useAccountStoreReady();
   const { showActBarLabels } = useAppContext();
   const account_id = useTypedRedux("account", "account_id");
+  const computeVmEnabled =
+    useTypedRedux("customize", "compute_vm_enabled") === true;
   const active_flyout = useTypedRedux({ project_id }, "flyout");
   const viewer = projectAccess?.role === "viewer";
   const runtime = useProjectRuntimeCapabilities();
@@ -296,6 +303,7 @@ export function VerticalFixedTabs({
   const { visible: pinnedTabs, overflow: overflowTabs } = useMemo(() => {
     const filteredOrder = filterTabsForProjectAccess({
       agentAIEnabled,
+      computeVmEnabled,
       liteMode: lite,
       names: tabOrder,
       rootfsEnabled: runtime.rootfs,
@@ -303,13 +311,21 @@ export function VerticalFixedTabs({
     });
     const filteredHidden = filterTabsForProjectAccess({
       agentAIEnabled,
+      computeVmEnabled,
       liteMode: lite,
       names: hiddenTabs,
       rootfsEnabled: runtime.rootfs,
       viewer,
     });
     return splitRailTabs(filteredOrder, filteredHidden);
-  }, [agentAIEnabled, hiddenTabs, runtime.rootfs, tabOrder, viewer]);
+  }, [
+    agentAIEnabled,
+    computeVmEnabled,
+    hiddenTabs,
+    runtime.rootfs,
+    tabOrder,
+    viewer,
+  ]);
 
   const calcCondensed = throttle(
     () => {
@@ -625,6 +641,7 @@ export function VerticalFixedTabs({
         onSave={(nextOrder, nextHidden) => {
           const preserved = preserveUnavailableTabs({
             agentAIEnabled,
+            computeVmEnabled,
             hiddenTabs,
             liteMode: lite,
             nextHidden,
@@ -639,6 +656,7 @@ export function VerticalFixedTabs({
         }}
         order={filterTabsForProjectAccess({
           agentAIEnabled,
+          computeVmEnabled,
           liteMode: lite,
           names: tabOrder,
           rootfsEnabled: runtime.rootfs,
@@ -656,6 +674,8 @@ export function HiddenActivityBarLauncher() {
   const accountStoreReady = useAccountStoreReady();
   const { showActBarLabels } = useAppContext();
   const account_id = useTypedRedux("account", "account_id");
+  const computeVmEnabled =
+    useTypedRedux("customize", "compute_vm_enabled") === true;
   const viewer = projectAccess?.role === "viewer";
   const runtime = useProjectRuntimeCapabilities();
   const rootfsTheme = useRootfsFixedTabTheme(!viewer && !lite);
@@ -671,6 +691,7 @@ export function HiddenActivityBarLauncher() {
     intl,
     names: filterTabsForProjectAccess({
       agentAIEnabled,
+      computeVmEnabled,
       liteMode: lite,
       names: tabOrder,
       rootfsEnabled: runtime.rootfs,
@@ -763,6 +784,7 @@ export function HiddenActivityBarLauncher() {
         onSave={(nextOrder, nextHidden) => {
           const preserved = preserveUnavailableTabs({
             agentAIEnabled,
+            computeVmEnabled,
             hiddenTabs,
             liteMode: lite,
             nextHidden,
@@ -777,6 +799,7 @@ export function HiddenActivityBarLauncher() {
         }}
         order={filterTabsForProjectAccess({
           agentAIEnabled,
+          computeVmEnabled,
           liteMode: lite,
           names: tabOrder,
           rootfsEnabled: runtime.rootfs,

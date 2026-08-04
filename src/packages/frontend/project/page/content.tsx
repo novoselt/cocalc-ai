@@ -152,6 +152,8 @@ interface TabContentProps {
 const TabContent: React.FC<TabContentProps> = (props: TabContentProps) => {
   const { tab_name, is_visible } = props;
   const { agentAIEnabled, project_id, projectAccess } = useProjectContext();
+  const computeVmEnabled =
+    useTypedRedux("customize", "compute_vm_enabled") === true;
 
   const open_files =
     useTypedRedux({ project_id }, "open_files") ?? Map<string, any>();
@@ -278,6 +280,7 @@ const TabContent: React.FC<TabContentProps> = (props: TabContentProps) => {
       case "info":
         return <ProjectInfo project_id={project_id} />;
       case "vms":
+        if (!computeVmEnabled) return null;
         return (
           <ProjectComputeVms project_id={project_id} isVisible={is_visible} />
         );

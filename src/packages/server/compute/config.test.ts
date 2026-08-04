@@ -4,6 +4,7 @@
  */
 
 import {
+  computeVmUiEnabled,
   requireComputeVmCreateAllowed,
   resolveComputeVmConfig,
 } from "./config";
@@ -21,6 +22,35 @@ describe("managed compute VM configuration", () => {
     } else {
       process.env.COCALC_COMPUTE_VM_ENVIRONMENT = originalEnvironment;
     }
+  });
+
+  it("hides production auto mode and exposes explicit canary mode", () => {
+    expect(computeVmUiEnabled({ dns: "cocalc.ai" })).toBe(false);
+    expect(computeVmUiEnabled({ dns: "staging.cocalc.ai" })).toBe(true);
+    expect(
+      computeVmUiEnabled({
+        dns: "cocalc.ai",
+        compute_vm_mode: "admin_canary",
+      }),
+    ).toBe(true);
+    expect(
+      computeVmUiEnabled({
+        dns: "staging.cocalc.ai",
+        compute_vm_mode: "disabled",
+      }),
+    ).toBe(false);
+    expect(
+      computeVmUiEnabled({
+        dns: "staging.cocalc.ai",
+        compute_vm_mode: "enabled",
+      }),
+    ).toBe(false);
+    expect(
+      computeVmUiEnabled({
+        dns: "staging.cocalc.ai",
+        compute_vm_mode: "invalid",
+      }),
+    ).toBe(false);
   });
 
   it("fails closed on production defaults", () => {
