@@ -40,6 +40,11 @@ const SITE_KEY_FAIL_OPEN_MS = Math.max(
   Number(process.env.COCALC_CODEX_SITE_FAIL_OPEN_MS ?? 5 * 60_000),
 );
 
+const SITE_FUNDED_OUTBOX_FLUSH_MS = Math.max(
+  5_000,
+  Number(process.env.COCALC_CODEX_SITE_OUTBOX_FLUSH_MS ?? 30_000),
+);
+
 function getConfiguredMaxTurnMs(): number | undefined {
   const raw = process.env.COCALC_CODEX_SITE_MAX_TURN_MS;
   if (raw == null || raw.trim() === "") return undefined;
@@ -54,6 +59,8 @@ let meteringHealth: {
   failingSince?: number;
   lastError?: string;
 } = {};
+
+let outboxFlushTimer: NodeJS.Timeout | undefined;
 
 function markMeteringSuccess() {
   meteringHealth = {};
@@ -164,6 +171,12 @@ export function initCodexSiteKeyGovernor(): void {
     },
   });
   void flushSiteFundedCodexOutbox();
+  if (!outboxFlushTimer) {
+    outboxFlushTimer = setInterval(() => {
+      void flushSiteFundedCodexOutbox();
+    }, SITE_FUNDED_OUTBOX_FLUSH_MS);
+    outboxFlushTimer.unref();
+  }
 }
 
 type OutboxRecord = {
