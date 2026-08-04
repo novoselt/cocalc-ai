@@ -193,47 +193,130 @@ function enqueueOutbox(kind: OutboxRecord["kind"], payload: unknown): void {
     .run(kind, JSON.stringify(payload), Date.now());
 }
 
-let flushingOutbox = false;
+const OUTBOX_SCAN_BATCH_SIZE = 100;
 
-export async function flushSiteFundedCodexOutbox(): Promise<void> {
-  if (flushingOutbox) return;
+let flushingOutbox: Promise<void> | undefined;
+
+function outboxReservationId(
+  row: OutboxRecord,
+  payload: Record<string, unknown>,
+): string | undefined {
+  const value =
+    row.kind === "usage" ? payload.reservationId : payload.reservation_id;
+  const reservationId = `${value ?? ""}`.trim();
+  return reservationId || undefined;
+}
+
+function isTerminalUsageOutboxError(err: unknown): boolean {
+  const message = `${err}`.toLowerCase();
+  return (
+    message.includes("reservation is not active") ||
+    message.includes("reservation not found") ||
+    message.includes("usage event sequence is stale")
+  );
+}
+
+function deleteOutboxRecord(id: number): void {
+  getDatabase()
+    .prepare(`DELETE FROM site_funded_codex_outbox WHERE id = ?`)
+    .run(id);
+}
+
+async function sendOutboxRecord(
+  caller: NonNullable<ReturnType<typeof getHubCaller>>,
+  row: OutboxRecord,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  if (row.kind === "usage") {
+    await callHub({
+      ...caller,
+      name: "hosts.recordSiteFundedCodexUsageEvent",
+      args: [{ event: payload }],
+      timeout: 15_000,
+    });
+    return;
+  }
+  await callHub({
+    ...caller,
+    name: "hosts.finishSiteFundedCodexTurn",
+    args: [payload],
+    timeout: 15_000,
+  });
+}
+
+async function flushSiteFundedCodexOutboxImpl(): Promise<void> {
   const caller = getHubCaller();
   if (!caller) return;
   ensureOutbox();
-  flushingOutbox = true;
-  try {
+
+  while (true) {
+    const blockedReservations = new Set<string>();
+    let cursor = 0;
+    let deletedInPass = 0;
     while (true) {
-      const row = getDatabase()
+      const rows = getDatabase()
         .prepare(
           `SELECT id, kind, payload FROM site_funded_codex_outbox
-           ORDER BY id LIMIT 1`,
+           WHERE id > ? ORDER BY id LIMIT ?`,
         )
-        .get() as OutboxRecord | undefined;
-      if (!row) return;
-      const payload = JSON.parse(row.payload);
-      if (row.kind === "usage") {
-        await callHub({
-          ...caller,
-          name: "hosts.recordSiteFundedCodexUsageEvent",
-          args: [{ event: payload }],
-          timeout: 15_000,
-        });
-      } else {
-        await callHub({
-          ...caller,
-          name: "hosts.finishSiteFundedCodexTurn",
-          args: [payload],
-          timeout: 15_000,
-        });
+        .all(cursor, OUTBOX_SCAN_BATCH_SIZE) as OutboxRecord[];
+      if (!rows.length) break;
+      cursor = rows[rows.length - 1].id;
+      for (const row of rows) {
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(row.payload);
+        } catch (err) {
+          logger.error("discarding malformed site-funded Codex outbox row", {
+            id: row.id,
+            kind: row.kind,
+            err: `${err}`,
+          });
+          deleteOutboxRecord(row.id);
+          deletedInPass += 1;
+          continue;
+        }
+        const reservationId = outboxReservationId(row, payload);
+        if (reservationId && blockedReservations.has(reservationId)) {
+          continue;
+        }
+        try {
+          await sendOutboxRecord(caller, row, payload);
+          deleteOutboxRecord(row.id);
+          deletedInPass += 1;
+        } catch (err) {
+          if (row.kind === "usage" && isTerminalUsageOutboxError(err)) {
+            logger.warn("discarding stale site-funded Codex usage outbox row", {
+              id: row.id,
+              reservationId,
+              err: `${err}`,
+            });
+            deleteOutboxRecord(row.id);
+            deletedInPass += 1;
+            continue;
+          }
+          if (reservationId) blockedReservations.add(reservationId);
+          logger.warn("site-funded Codex outbox record flush failed", {
+            id: row.id,
+            kind: row.kind,
+            reservationId,
+            err: `${err}`,
+          });
+        }
       }
-      getDatabase()
-        .prepare(`DELETE FROM site_funded_codex_outbox WHERE id = ?`)
-        .run(row.id);
     }
-  } catch (err) {
-    logger.warn("site-funded Codex outbox flush failed", { err: `${err}` });
+    if (deletedInPass === 0) return;
+  }
+}
+
+export async function flushSiteFundedCodexOutbox(): Promise<void> {
+  if (flushingOutbox) return await flushingOutbox;
+  const currentFlush = flushSiteFundedCodexOutboxImpl();
+  flushingOutbox = currentFlush;
+  try {
+    await currentFlush;
   } finally {
-    flushingOutbox = false;
+    if (flushingOutbox === currentFlush) flushingOutbox = undefined;
   }
 }
 
@@ -269,6 +352,10 @@ export async function beginSiteFundedCodexTurn({
   const reserve = async (
     request: CodexSiteFundedTurnRequest,
   ): Promise<Extract<SiteFundedCodexAdmission, { allowed: true }>> => {
+    // A transient settlement failure from the preceding turn must be retried
+    // before admission, otherwise the account concurrency guard sees its old
+    // reservation as active and strands an otherwise healthy retained runtime.
+    await flushSiteFundedCodexOutbox();
     const admission = (await callHub({
       ...caller,
       name: "hosts.reserveSiteFundedCodexTurn",
