@@ -153,6 +153,16 @@ function normalizeRevision(raw: string | undefined): string {
   return revision;
 }
 
+async function lockAccountNotificationRevision(
+  db: Queryable,
+  account_id: string,
+): Promise<void> {
+  await db.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, [
+    ACCOUNT_NOTIFICATION_REVISION_LOCK,
+    account_id,
+  ]);
+}
+
 type ListProjectedNotificationsOptions = {
   account_id: string;
   limit?: number;
@@ -239,10 +249,7 @@ export async function listProjectedNotificationSnapshotForAccount(
     // Projection writes take the same per-account transaction lock before
     // allocating their revision. Waiting here makes the boundary reflect only
     // rows that can also be observed by the following list.
-    await client.query(
-      `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
-      [ACCOUNT_NOTIFICATION_REVISION_LOCK, account_id],
-    );
+    await lockAccountNotificationRevision(client, account_id);
     const { rows } = await client.query<{ revision: string }>(
       `SELECT nextval('${ACCOUNT_NOTIFICATION_REVISION_SEQUENCE}')::TEXT AS revision`,
     );
@@ -541,6 +548,10 @@ export async function replaceAccountNotificationIndexRows(opts: {
   rows: MentionNotificationSourceRow[];
 }): Promise<{ deleted_rows: number; inserted_rows: number }> {
   const account_id = normalizeAccountId(opts.account_id);
+  // Serialize the delete and replacement inserts with snapshots. Otherwise a
+  // snapshot can observe rows deleted by this uncommitted transaction, then
+  // receive a watermark older than the replacement rows.
+  await lockAccountNotificationRevision(opts.db, account_id);
   const deleted = await opts.db.query(
     `DELETE FROM account_notification_index
       WHERE account_id = $1`,

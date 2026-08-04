@@ -11,6 +11,7 @@ import {
   listProjectedNotificationsForAccount,
   markProjectedNotificationsReadThrough,
   rebuildAccountNotificationIndex,
+  replaceAccountNotificationIndexRows,
   setProjectedNotificationArchivedState,
   setProjectedNotificationReadState,
   setProjectedNotificationSavedState,
@@ -505,6 +506,93 @@ describe("account_notification_index rebuild", () => {
       throw err;
     } finally {
       writer.release();
+    }
+  });
+
+  it("waits for an in-flight rebuild replacement before taking a snapshot", async () => {
+    await seedBaseRows();
+    await rebuildAccountNotificationIndex({
+      account_id: ACCOUNT_ID,
+      bay_id: LOCAL_BAY_ID,
+      dry_run: false,
+    });
+    const replacementTime = new Date();
+    let releaseDelete!: () => void;
+    const deleteCanReturn = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    let deleteFinished!: () => void;
+    const deleteDidFinish = new Promise<void>((resolve) => {
+      deleteFinished = resolve;
+    });
+    const rebuilder = await getPool().connect();
+    try {
+      await rebuilder.query("BEGIN");
+      const replacementPromise = replaceAccountNotificationIndexRows({
+        db: {
+          query: async (sql, params) => {
+            const result = await rebuilder.query(sql, params);
+            if (/^\s*DELETE FROM account_notification_index/.test(sql)) {
+              deleteFinished();
+              await deleteCanReturn;
+            }
+            return result;
+          },
+        },
+        account_id: ACCOUNT_ID,
+        rows: [
+          {
+            time: replacementTime,
+            project_id: PROJECT_A,
+            path: "chat/rebuilt.md",
+            target: ACCOUNT_ID,
+            source: SOURCE_ACCOUNT_ID,
+            priority: 1,
+            description: "rebuilt mention",
+            fragment_id: "chat=true,id=rebuilt",
+            read_state: { read: false, saved: false },
+            owning_bay_id: LOCAL_BAY_ID,
+          },
+        ],
+      });
+      await deleteDidFinish;
+
+      let snapshotSettled = false;
+      const snapshotPromise = listProjectedNotificationSnapshotForAccount({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_A,
+      }).finally(() => {
+        snapshotSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(snapshotSettled).toBe(false);
+
+      releaseDelete();
+      await replacementPromise;
+      await rebuilder.query("COMMIT");
+
+      const snapshot = await snapshotPromise;
+      expect(snapshot.rows).toEqual([
+        expect.objectContaining({
+          project_id: PROJECT_A,
+          summary: expect.objectContaining({
+            description: "rebuilt mention",
+          }),
+        }),
+      ]);
+      await expect(
+        markProjectedNotificationsReadThrough({
+          account_id: ACCOUNT_ID,
+          project_id: PROJECT_A,
+          read_through_revision: snapshot.read_through_revision,
+        }),
+      ).resolves.toEqual({ updated_count: 1 });
+    } catch (err) {
+      releaseDelete();
+      await rebuilder.query("ROLLBACK");
+      throw err;
+    } finally {
+      rebuilder.release();
     }
   });
 });
