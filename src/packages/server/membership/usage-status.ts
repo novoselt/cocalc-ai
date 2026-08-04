@@ -5,15 +5,12 @@
 
 import getLogger from "@cocalc/backend/logger";
 import TTL from "@isaacs/ttlcache";
-import {
-  getDiskQuota,
-  type ProjectDiskQuota,
-} from "@cocalc/conat/project/storage-info";
+import type { ProjectDiskQuota } from "@cocalc/conat/project/storage-info";
 import type {
   MembershipResolution,
   MembershipUsageStatus,
 } from "@cocalc/conat/hub/api/purchases";
-import { conatWithProjectRoutingForAccount } from "@cocalc/server/conat/route-client";
+import { getProjectFileServerClient } from "@cocalc/server/conat/file-server-client";
 import {
   getManagedEgressUsageForAccount,
   getRecentManagedEgressEventsForAccount,
@@ -105,17 +102,22 @@ async function listAttributedProjects(
 }
 
 async function sampleProjectStorageBytes({
+  account_id,
   project_id,
-  client,
 }: {
+  account_id: string;
   project_id: string;
-  client: ReturnType<typeof conatWithProjectRoutingForAccount>;
 }): Promise<number> {
   const quota = await withTimeout(
-    getDiskQuota({
-      client,
-      project_id,
-    }),
+    (async () => {
+      const fileServer = await getProjectFileServerClient({
+        project_id,
+        account_id,
+        timeout: STORAGE_SAMPLE_TIMEOUT_MS,
+        fresh: false,
+      });
+      return await fileServer.getQuota({ project_id });
+    })(),
     STORAGE_SAMPLE_TIMEOUT_MS,
   );
   return extractQuotaUsedBytes(quota);
@@ -148,47 +150,40 @@ export async function getMembershipUsageStatusForAccount({
     const provisionedRows = attributedProjects.filter(
       (row) => !!row.host_id && row.provisioned !== false,
     );
-    const client = conatWithProjectRoutingForAccount({ account_id });
     let total_storage_bytes = 0;
     let sampled_project_count = 0;
     let measurement_error_count = 0;
-    try {
-      for (
-        let start = 0;
-        start < provisionedRows.length;
-        start += STORAGE_SAMPLE_CONCURRENCY
-      ) {
-        const chunk = provisionedRows.slice(
-          start,
-          start + STORAGE_SAMPLE_CONCURRENCY,
-        );
-        const settled = await Promise.allSettled(
-          chunk.map(async ({ project_id }) => {
-            const used = await sampleProjectStorageBytes({
-              project_id,
-              client,
-            });
-            return { project_id, used };
-          }),
-        );
-        for (const result of settled) {
-          if (result.status === "fulfilled") {
-            total_storage_bytes += result.value.used;
-            sampled_project_count += 1;
-          } else {
-            measurement_error_count += 1;
-            log.debug("unable to sample attributed project storage", {
-              account_id,
-              err: `${result.reason ?? ""}`,
-            });
-          }
+    for (
+      let start = 0;
+      start < provisionedRows.length;
+      start += STORAGE_SAMPLE_CONCURRENCY
+    ) {
+      const chunk = provisionedRows.slice(
+        start,
+        start + STORAGE_SAMPLE_CONCURRENCY,
+      );
+      const settled = await Promise.allSettled(
+        chunk.map(async ({ project_id }) => {
+          const used = await sampleProjectStorageBytes({
+            account_id,
+            project_id,
+          });
+          return { project_id, used };
+        }),
+      );
+      for (const [index, result] of settled.entries()) {
+        if (result.status === "fulfilled") {
+          total_storage_bytes += result.value.used;
+          sampled_project_count += 1;
+        } else {
+          measurement_error_count += 1;
+          log.debug("unable to sample attributed project storage", {
+            account_id,
+            project_id: chunk[index]?.project_id,
+            host_id: chunk[index]?.host_id,
+            err: `${result.reason ?? ""}`,
+          });
         }
-      }
-    } finally {
-      try {
-        client.close();
-      } catch {
-        // ignore close errors
       }
     }
 
