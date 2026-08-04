@@ -1938,6 +1938,12 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         message: "checking project disk quota",
       });
       await timings.measure("check_quota", async () => {
+        // Host registration intentionally does not materialize storage. A
+        // create-immediately-start workflow therefore has no volume identity
+        // yet, while warm starts retain the O(1) SQLite fast path.
+        if (!getRecordedProjectVolumeIdentity(project_id, "home")) {
+          await ensureVolume(project_id);
+        }
         let scratchPrepared = scratchVolumeQuotaIsPrepared(project_id);
         const stoppedPreparation = scratchPrepared
           ? undefined

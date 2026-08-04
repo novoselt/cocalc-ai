@@ -566,11 +566,34 @@ function hasIoPressureReason(reason: string | undefined): boolean {
   return !!reason?.split(",").some((part) => part.startsWith("storage_io_"));
 }
 
+function storagePressureIsLifecycleOnly(
+  storage: HostCurrentMetrics["storage_admission"],
+): boolean {
+  if (!storage) return false;
+  const projectPool = parseNonNegativeNumber(
+    storage.project_pool_io_full_avg10,
+  );
+  const lifecycleActive =
+    storage.lifecycle_active > 0 ||
+    storage.starting_projects > 0 ||
+    (storage.active_by_priority?.lifecycle ?? 0) > 0;
+  return (
+    lifecycleActive &&
+    (projectPool == null || projectPool < IO_EVICTION_FULL_AVG10)
+  );
+}
+
 function storagePressureCanEvict(
   storage: HostCurrentMetrics["storage_admission"],
 ): boolean {
   if (!storage || storage.pressure_state !== "emergency") return false;
   const uncontained = parseNonNegativeNumber(storage.uncontained_io_full_avg10);
+  // RootFS extraction and other lifecycle preparation run outside the
+  // project pool. Stopping unrelated projects cannot relieve that pressure
+  // when the pool itself is healthy, and only adds more Btrfs cleanup work.
+  if (storagePressureIsLifecycleOnly(storage)) {
+    return false;
+  }
   // Older project-host versions do not publish the split signal. Preserve
   // their behavior during rolling upgrades, then require the signal once it
   // is available.
@@ -623,7 +646,13 @@ function storagePressureFindings(
     return { observeReasons, pressureReasons, emergencyReasons };
   }
   if (!storagePressureCanEvict(storage)) {
-    observeReasons.push(`storage_io_pool_throttled:${detail}`);
+    observeReasons.push(
+      `${
+        storagePressureIsLifecycleOnly(storage)
+          ? "storage_io_lifecycle_active"
+          : "storage_io_pool_throttled"
+      }:${detail}`,
+    );
     return { observeReasons, pressureReasons, emergencyReasons };
   }
   if (dwellMs >= IO_EMERGENCY_DWELL_MS) {

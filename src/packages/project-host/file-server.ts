@@ -124,12 +124,16 @@ import execSandbox, { parseOutput } from "@cocalc/backend/sandbox/exec";
 import rustic from "@cocalc/backend/sandbox/rustic";
 import { envToInt } from "@cocalc/backend/misc/env-to-number";
 import { isValidUUID } from "@cocalc/util/misc";
-import { getProject, listProjectQuotaRepairBatch } from "./sqlite/projects";
+import { getProject } from "./sqlite/projects";
 import {
   acceptProjectVolumeQuotaDesired,
+  bootstrapProjectVolumeQuotaLedger,
   deleteProjectVolumeQuotas,
   invalidateProjectVolumeQuota,
+  listProjectVolumeQuotaAuditBatch,
+  markProjectVolumeQuotaApplied,
   markProjectVolumeQuotaFailed,
+  type ProjectVolumeQuotaRow,
 } from "./sqlite/volume-quotas";
 import {
   deleteProjectVolumeQuotaOverrides,
@@ -222,7 +226,11 @@ import {
   parseCreatedBackupSnapshot,
 } from "./backup-created";
 import { btrfs, sudo } from "@cocalc/file-server/btrfs/util";
-import { withBtrfsMutationLock } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  BtrfsMutationDeferredError,
+  withBtrfsMutationContext,
+  withBtrfsMutationLock,
+} from "@cocalc/file-server/btrfs/operation-cache";
 import { subvolume } from "@cocalc/file-server/btrfs/subvolume";
 import { ensureRootfsRusticRepoProfile } from "./rootfs-rustic";
 import {
@@ -2411,43 +2419,26 @@ function projectQuotaRepairEnabled(): boolean {
   return !["0", "false", "no", "off"].includes(raw);
 }
 
-function positiveFiniteBytes(value: unknown): number | undefined {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
-  return Math.floor(n);
-}
-
 async function repairProjectVolumeQuota({
-  project_id,
-  scratch,
-  desired,
-  desired_revision,
+  row,
 }: {
-  project_id: string;
-  scratch?: boolean;
-  desired: number;
-  desired_revision?: number;
+  row: ProjectVolumeQuotaRow;
 }): Promise<"repaired" | "ok" | "missing"> {
   if (fs == null) {
     throw Error("file server not initialized");
   }
-  const acceptance = acceptProjectVolumeQuotaDesired({
-    project_id,
-    volume_kind: scratch ? "scratch" : "home",
-    desired_bytes: desired,
-    desired_revision,
-  });
   const effective = effectiveProjectVolumeQuotaBytes({
-    project_id,
-    volume_kind: scratch ? "scratch" : "home",
-    persistent_bytes: acceptance.row.desired_bytes,
+    project_id: row.project_id,
+    volume_kind: row.volume_kind,
+    persistent_bytes: row.desired_bytes,
   });
   const target = effective.effective_bytes;
-  const vol = await fs.subvolumes.get(volumeName(project_id, scratch));
+  const scratch = row.volume_kind === "scratch";
+  const vol = await fs.subvolumes.get(volumeName(row.project_id, scratch));
   if (!(await exists(vol.path))) {
     markProjectVolumeQuotaFailed({
-      project_id,
-      volume_kind: scratch ? "scratch" : "home",
+      project_id: row.project_id,
+      volume_kind: row.volume_kind,
       state: "missing",
       error: "volume missing during bounded quota audit",
     });
@@ -2457,25 +2448,39 @@ async function repairProjectVolumeQuota({
   const repaired = current.size !== target;
   if (repaired) {
     logger.warn("repairing project btrfs quota limit", {
-      project_id,
-      scratch: scratch === true,
+      project_id: row.project_id,
+      volume_kind: row.volume_kind,
       current_size: current.size,
       desired_size: target,
       warning: current.warning,
     });
   }
-  await reconcileManagedProjectVolumeQuota({
-    project_id,
-    volume_kind: scratch ? "scratch" : "home",
-    operation_class: "scheduled_quota_audit",
-    priority: "scheduled",
-  });
+  if (!repaired && effective.overrides.length === 0) {
+    const volume_identity = await recordManagedProjectVolume({
+      project_id: row.project_id,
+      scratch,
+      path: vol.path,
+    });
+    markProjectVolumeQuotaApplied({
+      project_id: row.project_id,
+      volume_kind: row.volume_kind,
+      desired_bytes: row.desired_bytes,
+      desired_revision: row.desired_revision,
+      volume_identity,
+    });
+  } else {
+    await reconcileManagedProjectVolumeQuota({
+      project_id: row.project_id,
+      volume_kind: row.volume_kind,
+      operation_class: "scheduled_quota_audit",
+      priority: "scheduled",
+    });
+  }
   return repaired ? "repaired" : "ok";
 }
 
 let quotaRepairRunning = false;
 let quotaRepairTimer: ReturnType<typeof setInterval> | undefined;
-let quotaRepairCursor = "";
 let quotaOverrideScavengerRunning = false;
 let quotaOverrideScavengerTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -2531,59 +2536,59 @@ async function repairProjectQuotaLimits(
     errors: 0,
   };
   try {
-    const projects = listProjectQuotaRepairBatch({
-      after_project_id: quotaRepairCursor,
+    const projects = listProjectVolumeQuotaAuditBatch({
       limit: PROJECT_QUOTA_REPAIR_BATCH_SIZE,
     });
-    if (projects.length === 0) {
-      quotaRepairCursor = "";
-      return;
-    }
     for (const project of projects) {
-      quotaRepairCursor = project.project_id;
       if (projectQuotaGraceActive.has(project.project_id)) {
         counts.skipped += 1;
         continue;
       }
-      const disk = positiveFiniteBytes(project.disk);
-      const scratch = positiveFiniteBytes(project.scratch ?? project.disk);
-      if (disk == null && scratch == null) {
-        counts.skipped += 1;
-        continue;
-      }
-      for (const entry of [
-        { scratch: false, desired: disk },
-        { scratch: true, desired: scratch },
-      ]) {
-        if (entry.desired == null) continue;
-        counts.checked += 1;
-        try {
-          const result = await repairProjectVolumeQuota({
+      counts.checked += 1;
+      try {
+        const result = await withBtrfsMutationContext(
+          {
             project_id: project.project_id,
-            scratch: entry.scratch,
-            desired: entry.desired,
-            desired_revision: project.run_quota_revision,
-          });
-          if (result === "repaired") {
-            counts.repaired += 1;
-          } else if (result === "missing") {
-            counts.missing += 1;
-          }
-        } catch (err) {
-          counts.errors += 1;
-          markProjectVolumeQuotaFailed({
+            priority: "scheduled",
+            operation_class: "scheduled_quota_audit",
+          },
+          async () => await repairProjectVolumeQuota({ row: project }),
+        );
+        if (result === "repaired") {
+          counts.repaired += 1;
+        } else if (result === "missing") {
+          counts.missing += 1;
+        }
+      } catch (err) {
+        if (err instanceof BtrfsMutationDeferredError) {
+          counts.skipped += 1;
+          invalidateProjectVolumeQuota({
             project_id: project.project_id,
-            volume_kind: entry.scratch ? "scratch" : "home",
-            error: err,
+            volume_kind: project.volume_kind,
+            reason: err.message,
+            retry_at: Date.now() + 60_000,
           });
-          logger.warn("project quota repair failed", {
+          logger.info("deferred project quota audit at mutation boundary", {
             context,
             project_id: project.project_id,
-            scratch: entry.scratch,
-            desired: entry.desired,
-            err: `${err}`,
+            volume_kind: project.volume_kind,
+            reason: err.reason,
           });
+          continue;
         }
+        counts.errors += 1;
+        markProjectVolumeQuotaFailed({
+          project_id: project.project_id,
+          volume_kind: project.volume_kind,
+          error: err,
+        });
+        logger.warn("project quota repair failed", {
+          context,
+          project_id: project.project_id,
+          volume_kind: project.volume_kind,
+          desired: project.desired_bytes,
+          err: `${err}`,
+        });
       }
     }
     if (counts.repaired > 0 || counts.errors > 0) {
@@ -2604,6 +2609,7 @@ async function repairProjectQuotaLimits(
 
 function startProjectQuotaRepairMonitor(): void {
   if (!projectQuotaRepairEnabled() || quotaRepairTimer != null) return;
+  const bootstrapped = bootstrapProjectVolumeQuotaLedger();
   quotaRepairTimer = setInterval(() => {
     void repairProjectQuotaLimits("periodic");
   }, PROJECT_QUOTA_REPAIR_SWEEP_MS);
@@ -2611,6 +2617,7 @@ function startProjectQuotaRepairMonitor(): void {
   logger.info("started project quota repair monitor", {
     sweepMs: PROJECT_QUOTA_REPAIR_SWEEP_MS,
     batchSize: PROJECT_QUOTA_REPAIR_BATCH_SIZE,
+    bootstrapped,
   });
 }
 

@@ -51,16 +51,16 @@ function parseArgs(argv) {
   if (
     !Number.isInteger(options.concurrency) ||
     options.concurrency < 1 ||
-    options.concurrency > 16
+    options.concurrency > 128
   ) {
-    throw new Error("--concurrency must be an integer from 1 through 16");
+    throw new Error("--concurrency must be an integer from 1 through 128");
   }
   if (
     !Number.isInteger(options.stop_concurrency) ||
     options.stop_concurrency < 1 ||
-    options.stop_concurrency > 16
+    options.stop_concurrency > 128
   ) {
-    throw new Error("--stop-concurrency must be an integer from 1 through 16");
+    throw new Error("--stop-concurrency must be an integer from 1 through 128");
   }
   if (
     !Number.isInteger(options.settle_ms) ||
@@ -150,6 +150,17 @@ function percentile(values, fraction) {
   return sorted[Math.ceil(sorted.length * fraction) - 1];
 }
 
+function distribution(values) {
+  const finite = values.filter(Number.isFinite);
+  return {
+    p50: percentile(finite, 0.5),
+    p90: percentile(finite, 0.9),
+    p95: percentile(finite, 0.95),
+    p99: percentile(finite, 0.99),
+    max: finite.length ? Math.max(...finite) : null,
+  };
+}
+
 async function sleep(ms) {
   if (ms > 0) {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
@@ -161,6 +172,7 @@ await mkdir(dirname(resolve(options.output)), { recursive: true });
 await writeFile(options.output, "", "utf8");
 
 const samples = [];
+const bursts = [];
 for (let round = 1; round <= options.rounds; round += 1) {
   const preparationStarted = performance.now();
   await mapLimit(
@@ -175,41 +187,70 @@ for (let round = 1; round <= options.rounds; round += 1) {
   const preparationElapsedMs = Math.round(
     performance.now() - preparationStarted,
   );
-  await mapLimit(options.projects, options.concurrency, async (projectId) => {
-    const requestedAt = new Date().toISOString();
-    const started = performance.now();
-    const response = await runCli(options.api, [
-      "project",
-      "start",
-      "-w",
-      projectId,
-      "--wait",
-    ]);
-    const clientElapsedMs = Math.round(performance.now() - started);
-    const operation = await runCli(options.api, [
-      "op",
-      "get",
-      response.data.op_id,
-    ]);
-    const sample = {
-      scenario: options.scenario,
-      round,
-      project_id: projectId,
-      op_id: response.data.op_id,
-      requested_at: requestedAt,
-      stop_elapsed_ms: stopElapsedMs,
-      settle_ms: options.settle_ms,
-      preparation_elapsed_ms: preparationElapsedMs,
-      client_elapsed_ms: clientElapsedMs,
-      operation_started_at: operation.data.started_at,
-      operation_finished_at: operation.data.finished_at,
-      phase_timings_ms: operation.data.result?.phase_timings_ms ?? {},
-    };
-    samples.push(sample);
-    await appendFile(options.output, `${JSON.stringify(sample)}\n`, "utf8");
-  });
+  const roundSamples = await mapLimit(
+    options.projects,
+    options.concurrency,
+    async (projectId) => {
+      const requestedAt = new Date().toISOString();
+      const started = performance.now();
+      const response = await runCli(options.api, [
+        "project",
+        "start",
+        "-w",
+        projectId,
+        "--wait",
+      ]);
+      const clientElapsedMs = Math.round(performance.now() - started);
+      const operation = await runCli(options.api, [
+        "op",
+        "get",
+        response.data.op_id,
+      ]);
+      const sample = {
+        scenario: options.scenario,
+        round,
+        project_id: projectId,
+        op_id: response.data.op_id,
+        requested_at: requestedAt,
+        stop_elapsed_ms: stopElapsedMs,
+        settle_ms: options.settle_ms,
+        preparation_elapsed_ms: preparationElapsedMs,
+        client_elapsed_ms: clientElapsedMs,
+        operation_started_at: operation.data.started_at,
+        operation_finished_at: operation.data.finished_at,
+        phase_timings_ms: operation.data.result?.phase_timings_ms ?? {},
+      };
+      samples.push(sample);
+      await appendFile(options.output, `${JSON.stringify(sample)}\n`, "utf8");
+      return sample;
+    },
+  );
+  const requestedAt = roundSamples.map((sample) =>
+    Date.parse(sample.requested_at),
+  );
+  const operationStartedAt = roundSamples.map((sample) =>
+    Date.parse(sample.operation_started_at),
+  );
+  const operationFinishedAt = roundSamples.map((sample) =>
+    Date.parse(sample.operation_finished_at),
+  );
+  const burstMs = Math.max(...operationFinishedAt) - Math.min(...requestedAt);
+  const burst = {
+    round,
+    count: roundSamples.length,
+    burst_ms: burstMs,
+    throughput_projects_per_s:
+      burstMs > 0
+        ? Number(((roundSamples.length * 1_000) / burstMs).toFixed(3))
+        : null,
+    request_dispatch_spread_ms:
+      Math.max(...requestedAt) - Math.min(...requestedAt),
+    operation_start_spread_ms:
+      Math.max(...operationStartedAt) - Math.min(...operationStartedAt),
+  };
+  bursts.push(burst);
   process.stderr.write(
-    `completed ${round}/${options.rounds} rounds (${samples.length} samples)\n`,
+    `completed ${round}/${options.rounds} rounds (${samples.length} samples, ${burst.burst_ms}ms burst, ${burst.throughput_projects_per_s} projects/s)\n`,
   );
 }
 
@@ -223,20 +264,16 @@ process.stdout.write(
       scenario: options.scenario,
       output: resolve(options.output),
       samples: samples.length,
-      client_ms: {
-        p50: percentile(client, 0.5),
-        p90: percentile(client, 0.9),
-        p95: percentile(client, 0.95),
-        p99: percentile(client, 0.99),
-        max: Math.max(...client),
+      client_ms: distribution(client),
+      backend_ms: distribution(backend),
+      burst_ms: distribution(bursts.map((burst) => burst.burst_ms)),
+      throughput_projects_per_s: {
+        ...distribution(bursts.map((burst) => burst.throughput_projects_per_s)),
+        min: bursts.length
+          ? Math.min(...bursts.map((burst) => burst.throughput_projects_per_s))
+          : null,
       },
-      backend_ms: {
-        p50: percentile(backend, 0.5),
-        p90: percentile(backend, 0.9),
-        p95: percentile(backend, 0.95),
-        p99: percentile(backend, 0.99),
-        max: Math.max(...backend),
-      },
+      bursts,
     },
     null,
     2,

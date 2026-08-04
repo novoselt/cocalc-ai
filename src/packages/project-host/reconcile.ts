@@ -24,7 +24,8 @@ const DEFAULT_INTERVAL = 15_000;
 const DEFAULT_MISSING_CYCLES_BEFORE_OPENED = 2;
 const DEFAULT_STALE_HEARTBEAT_MS = pidUpdateIntervalMs * 2.5;
 const DEFAULT_STALE_HEARTBEAT_CYCLES = 3;
-const DEFAULT_CGROUP_RECONCILE_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_CGROUP_AUDIT_INTERVAL_MS = 6 * 60 * 60_000;
+const DEFAULT_CGROUP_RETRY_MS = 5 * 60_000;
 // The privileged helper serializes cgroup hierarchy mutations globally. More
 // concurrency only creates lock waiters and can starve foreground project
 // starts while a large host is repairing every running project at startup.
@@ -39,7 +40,10 @@ const DEFAULT_PROJECT_PROXY_PORT_NUMBER = Number(DEFAULT_PROJECT_PROXY_PORT);
 const logger = getLogger("project-host:reconcile");
 const missingSince = new Map<string, number>();
 const staleHeartbeatCycles = new Map<string, number>();
-const cgroupReconciledAt = new Map<string, number>();
+const cgroupReconciledState = new Map<
+  string,
+  { signature: string; audited_at: number; retry_at?: number }
+>();
 let networkReconciledAt = 0;
 
 export interface ReconcileOptions {
@@ -54,6 +58,7 @@ export interface ReconcileOptions {
 
 interface ContainerState {
   project_id: string;
+  container_id?: string;
   state: "running" | "opened";
   http_port?: number | null;
   ssh_port?: number | null;
@@ -107,7 +112,7 @@ export async function getContainerStates(): Promise<ContainerProbeResult> {
     }
     const child = spawn(
       "podman",
-      ["ps", "-a", "--format", "{{.Names}}|{{.State}}|{{.Ports}}"],
+      ["ps", "-a", "--format", "{{.Names}}|{{.ID}}|{{.State}}|{{.Ports}}"],
       {
         env,
       },
@@ -135,17 +140,30 @@ export async function getContainerStates(): Promise<ContainerProbeResult> {
       for (const line of stdout.split(/\r?\n/)) {
         if (!line.trim()) continue;
         const parts = line.split("|");
-        if (parts.length < 2) continue;
+        if (parts.length < 3) continue;
         const name = parts[0]?.trim();
-        const stateRaw = parts[1]?.trim().toLowerCase();
-        const portsRaw = parts[2]?.trim();
+        // Accept the previous three-field format while old hosts and focused
+        // tests are rolling forward, but use container identity whenever the
+        // new four-field probe is available.
+        const hasContainerId = parts.length >= 4;
+        const container_id = hasContainerId
+          ? parts[1]?.trim() || undefined
+          : undefined;
+        const stateRaw = parts[hasContainerId ? 2 : 1]?.trim().toLowerCase();
+        const portsRaw = parts[hasContainerId ? 3 : 2]?.trim();
         const m = name.match(/^project-([0-9a-fA-F-]{36})$/);
         if (!m) continue;
         const project_id = m[1];
         const state: "running" | "opened" =
           stateRaw && stateRaw.startsWith("running") ? "running" : "opened";
         const { http_port, ssh_port } = parsePorts(portsRaw);
-        states.set(project_id, { project_id, state, http_port, ssh_port });
+        states.set(project_id, {
+          project_id,
+          container_id,
+          state,
+          http_port,
+          ssh_port,
+        });
       }
       getConmonContainerProcesses()
         .then((conmonStates) => {
@@ -258,15 +276,28 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
     upsertProject(row);
     if (info.state === "running") {
       if (options.reconcileProjectCgroup != null) {
-        const lastReconciled = cgroupReconciledAt.get(info.project_id) ?? 0;
+        const known = knownById.get(info.project_id);
+        const policySignature = JSON.stringify({
+          container_id: info.container_id ?? null,
+          run_quota_revision: Number(known?.run_quota_revision) || 0,
+          run_quota: known?.run_quota ?? null,
+        });
+        const lastReconciled = cgroupReconciledState.get(info.project_id);
         const due =
           options.forceProjectCgroupRepair === true ||
-          now - lastReconciled >= cgroupReconcileIntervalMs();
+          lastReconciled?.signature !== policySignature ||
+          (lastReconciled?.retry_at != null
+            ? now >= lastReconciled.retry_at
+            : now - (lastReconciled?.audited_at ?? 0) >=
+              cgroupAuditIntervalMs());
         if (due && cgroupRepairs.length < cgroupReconcileMaxPerTick()) {
           // Record the attempt before starting it. A timed-out privileged helper
           // must not be queued again by every 15-second reconcile tick.
-          cgroupReconciledAt.set(info.project_id, now);
-          const run_quota = knownById.get(info.project_id)?.run_quota;
+          cgroupReconciledState.set(info.project_id, {
+            signature: policySignature,
+            audited_at: now,
+          });
+          const run_quota = known?.run_quota;
           cgroupRepairs.push(async () => {
             try {
               const result = await options.reconcileProjectCgroup!({
@@ -278,8 +309,20 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
                 logger.info("repaired project cgroup policy", {
                   project_id: info.project_id,
                 });
+              } else if (result.status === "not_running") {
+                cgroupReconciledState.delete(info.project_id);
               }
             } catch (err) {
+              if (
+                cgroupReconciledState.get(info.project_id)?.signature ===
+                policySignature
+              ) {
+                cgroupReconciledState.set(info.project_id, {
+                  signature: policySignature,
+                  audited_at: now,
+                  retry_at: now + cgroupRetryMs(),
+                });
+              }
               logger.warn("project cgroup reconciliation failed", {
                 project_id: info.project_id,
                 err: `${err}`,
@@ -335,7 +378,7 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
         }
       }
     } else {
-      cgroupReconciledAt.delete(info.project_id);
+      cgroupReconciledState.delete(info.project_id);
       staleHeartbeatCycles.delete(info.project_id);
       resetProjectLastChangedRunning(info.project_id);
     }
@@ -367,7 +410,7 @@ export async function reconcileOnce(options: ReconcileOptions = {}) {
       !containers.has(row.project_id) &&
       (row.state === "running" || row.state === "starting")
     ) {
-      cgroupReconciledAt.delete(row.project_id);
+      cgroupReconciledState.delete(row.project_id);
       const misses = (missingSince.get(row.project_id) ?? 0) + 1;
       missingSince.set(row.project_id, misses);
       if (misses < missingCyclesBeforeOpened()) {
@@ -416,10 +459,18 @@ function staleProjectHeartbeatCycles(): number {
   return Math.max(1, Math.floor(raw));
 }
 
-function cgroupReconcileIntervalMs(): number {
-  const raw = Number(process.env.COCALC_PROJECT_CGROUP_RECONCILE_INTERVAL_MS);
+function cgroupAuditIntervalMs(): number {
+  const raw = Number(process.env.COCALC_PROJECT_CGROUP_AUDIT_INTERVAL_MS);
   if (!Number.isFinite(raw) || raw <= 0) {
-    return DEFAULT_CGROUP_RECONCILE_INTERVAL_MS;
+    return DEFAULT_CGROUP_AUDIT_INTERVAL_MS;
+  }
+  return Math.max(DEFAULT_INTERVAL, Math.floor(raw));
+}
+
+function cgroupRetryMs(): number {
+  const raw = Number(process.env.COCALC_PROJECT_CGROUP_RETRY_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_CGROUP_RETRY_MS;
   }
   return Math.max(DEFAULT_INTERVAL, Math.floor(raw));
 }
@@ -466,7 +517,7 @@ async function runWithConcurrency(
 export function resetReconcileStateForTests(): void {
   missingSince.clear();
   staleHeartbeatCycles.clear();
-  cgroupReconciledAt.clear();
+  cgroupReconciledState.clear();
   networkReconciledAt = 0;
 }
 

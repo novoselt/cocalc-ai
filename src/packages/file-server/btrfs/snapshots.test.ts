@@ -108,4 +108,27 @@ describe("rolling btrfs snapshot retention", () => {
     expect(snapshots.delete).toHaveBeenCalledTimes(1);
     expect(snapshots.delete).toHaveBeenCalledWith(stale);
   });
+
+  it("reuses one snapshot inventory for discovery and creation", async () => {
+    const { updateRollingSnapshots } = await import("./snapshots");
+    const inventory = [snapshotAtAgeDays(1), "manual"];
+    const snapshots = {
+      subvolume: { name: "project-1" },
+      hasUnsavedChanges: jest.fn(async () => true),
+      readdir: jest.fn(async () => inventory),
+      create: jest.fn(async () => undefined),
+      delete: jest.fn(async () => undefined),
+    };
+
+    await updateRollingSnapshots({
+      snapshots: snapshots as any,
+      counts: { frequent: 1, daily: 0, weekly: 0, monthly: 0 },
+    });
+
+    expect(snapshots.readdir).toHaveBeenCalledTimes(1);
+    expect(snapshots.hasUnsavedChanges).toHaveBeenCalledWith(inventory);
+    expect(snapshots.create).toHaveBeenCalledWith(expect.any(String), {
+      existingSnapshotNames: inventory,
+    });
+  });
 });

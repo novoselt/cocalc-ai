@@ -64,6 +64,7 @@ const projectVolumeQuotaIsApplied = jest.fn();
 const getProjectVolumeQuota = jest.fn();
 const invalidateProjectVolumeQuota = jest.fn();
 const currentProjectVolumeLifecycleGeneration = jest.fn(() => 0);
+const getRecordedProjectVolumeIdentity = jest.fn();
 
 jest.mock("@cocalc/lite/hub/api", () => ({ hubApi: { projects: {} as any } }));
 jest.mock("@cocalc/backend/data", () => ({
@@ -221,7 +222,8 @@ jest.mock("../sqlite/volume-quotas", () => ({
     projectVolumeQuotaIsApplied(...args),
 }));
 jest.mock("../sqlite/project-volumes", () => ({
-  getRecordedProjectVolumeIdentity: jest.fn(() => "volume-identity"),
+  getRecordedProjectVolumeIdentity: (...args: any[]) =>
+    getRecordedProjectVolumeIdentity(...args),
 }));
 jest.mock("../sqlite/volume-quota-overrides", () => ({
   effectiveProjectVolumeQuotaBytes: ({
@@ -339,6 +341,8 @@ describe("project host start ACP rehydrate ordering", () => {
     invalidateProjectVolumeQuota.mockReset();
     currentProjectVolumeLifecycleGeneration.mockReset();
     currentProjectVolumeLifecycleGeneration.mockReturnValue(0);
+    getRecordedProjectVolumeIdentity.mockReset();
+    getRecordedProjectVolumeIdentity.mockReturnValue("volume-identity");
     projectPortOffsetFromSshPort.mockReset();
     projectPortOffsetFromHttpPort.mockReset();
     projectPortOffsetFromSshPort.mockImplementation((port?: number | null) => {
@@ -473,6 +477,41 @@ describe("project host start ACP rehydrate ordering", () => {
         process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
       }
     }
+  });
+
+  it("materializes an unprovisioned project before reading its quota", async () => {
+    const order: string[] = [];
+    getRecordedProjectVolumeIdentity.mockReturnValue(undefined);
+    ensureVolume.mockImplementationOnce(async () => {
+      order.push("ensure-volume");
+    });
+    getVolume.mockImplementationOnce(async () => {
+      order.push("read-quota");
+      return {
+        path: `/mnt/cocalc/project-${project_id}`,
+        quota: { get: jest.fn(async () => ({ size: 0, used: 0 })) },
+      };
+    });
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      run_quota: { disk_quota: 10_000 },
+    });
+
+    expect(ensureVolume).toHaveBeenCalledWith(project_id);
+    expect(order).toEqual(["ensure-volume", "read-quota"]);
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
   });
 
   it("returns an existing runtime without restarting it for idempotent start", async () => {

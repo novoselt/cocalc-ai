@@ -10,7 +10,10 @@ import type {
   HostStorageAdmissionMode,
   HostStoragePressureState,
 } from "@cocalc/conat/hub/api/hosts";
-import { getBtrfsMutationLockStatus } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  configureBtrfsBackgroundMutationGuard,
+  getBtrfsMutationLockStatus,
+} from "@cocalc/file-server/btrfs/operation-cache";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -33,6 +36,7 @@ const DEFAULT_EMERGENCY_FULL_AVG10 = 10;
 const DEFAULT_RECOVERY_FULL_AVG10 = 1;
 const DEFAULT_RECOVERY_MS = 60_000;
 const DEFAULT_CONTENDED_SAMPLES = 2;
+const DEFAULT_BACKGROUND_QUIET_MS = 2_000;
 
 type StorageAdmissionInputs = {
   sampled_at_ms: number;
@@ -67,12 +71,14 @@ type StorageAdmissionControllerOptions = {
   recoveryFullAvg10?: number;
   recoveryMs?: number;
   contendedSamples?: number;
+  backgroundQuietMs?: number;
   onPressureStateChange?: (state: HostStoragePressureState) => void;
 };
 
 export interface StorageAdmissionController {
   sample: () => HostStorageAdmissionMetrics;
   admit: (request: StorageAdmissionRequest) => StorageAdmissionTicket;
+  backgroundDeferralReason: () => string | undefined;
   getStatus: () => HostStorageAdmissionMetrics;
 }
 
@@ -191,6 +197,12 @@ export function createStorageAdmissionController(
       process.env.COCALC_PROJECT_HOST_STORAGE_IO_CONTENDED_SAMPLES,
       DEFAULT_CONTENDED_SAMPLES,
     );
+  const backgroundQuietMs =
+    options.backgroundQuietMs ??
+    positiveInteger(
+      process.env.COCALC_PROJECT_HOST_STORAGE_BACKGROUND_QUIET_MS,
+      DEFAULT_BACKGROUND_QUIET_MS,
+    );
 
   let pressureState: HostStoragePressureState = "normal";
   let stateSince = now();
@@ -206,6 +218,7 @@ export function createStorageAdmissionController(
     btrfs_mutation_waiters: 0,
   };
   let lastDecision: HostStorageAdmissionDecision | undefined;
+  let lastLifecycleActiveAt: number | undefined;
   let admittedTotal = 0;
   let deferredTotal = 0;
   let observedDeferralTotal = 0;
@@ -344,7 +357,35 @@ export function createStorageAdmissionController(
       };
     }
     updateState(lastInputs);
+    if (lastInputs.starting_projects + lastInputs.stopping_projects > 0) {
+      lastLifecycleActiveAt = lastInputs.sampled_at_ms;
+    }
     return status();
+  };
+
+  const backgroundReason = (
+    current: HostStorageAdmissionMetrics,
+  ): string | undefined => {
+    if (current.lifecycle_active > 0) {
+      return "lifecycle_active";
+    }
+    if (
+      lastLifecycleActiveAt != null &&
+      now() - lastLifecycleActiveAt < backgroundQuietMs
+    ) {
+      return "lifecycle_settle";
+    }
+    if (current.sample_error) {
+      return "io_pressure_unavailable";
+    }
+    if (current.pressure_state !== "normal") {
+      return `io_pressure_${current.pressure_state}`;
+    }
+    return undefined;
+  };
+
+  const backgroundDeferralReason = (): string | undefined => {
+    return backgroundReason(sample());
   };
 
   const admit = ({
@@ -355,14 +396,7 @@ export function createStorageAdmissionController(
     const spec = getStorageOperationSpec(operation_kind);
     const background =
       spec.priority === "scheduled" || spec.priority === "scavenger";
-    let reason: string | undefined;
-    if (background && current.lifecycle_active > 0) {
-      reason = "lifecycle_active";
-    } else if (background && current.sample_error) {
-      reason = "io_pressure_unavailable";
-    } else if (background && current.pressure_state !== "normal") {
-      reason = `io_pressure_${current.pressure_state}`;
-    }
+    const reason = background ? backgroundReason(current) : undefined;
     const wouldDefer = reason != null;
     const admitted = mode !== "enforce" || !wouldDefer;
     if (admitted) {
@@ -404,7 +438,7 @@ export function createStorageAdmissionController(
   };
 
   sample();
-  return { sample, admit, getStatus: status };
+  return { sample, admit, backgroundDeferralReason, getStatus: status };
 }
 
 let activeController: StorageAdmissionController | undefined;
@@ -456,6 +490,9 @@ export function startStorageAdmissionController(): () => void {
   activeController = createStorageAdmissionController({
     onPressureStateChange: setProjectPoolPressurePolicy,
   });
+  configureBtrfsBackgroundMutationGuard(() =>
+    activeController?.backgroundDeferralReason(),
+  );
   // Reconcile even when the initial sample is normal; /run state may have
   // survived a project-host restart but not the controller's in-memory state.
   setProjectPoolPressurePolicy(activeController.getStatus().pressure_state);
@@ -472,6 +509,7 @@ export function startStorageAdmissionController(): () => void {
   return () => {
     if (activeTimer) clearInterval(activeTimer);
     activeTimer = undefined;
+    configureBtrfsBackgroundMutationGuard(undefined);
     activeController = undefined;
     lastRequestedPressureMode = undefined;
   };
@@ -502,6 +540,7 @@ export function getStorageAdmissionStatus():
 export function resetStorageAdmissionControllerForTest(): void {
   if (activeTimer) clearInterval(activeTimer);
   activeTimer = undefined;
+  configureBtrfsBackgroundMutationGuard(undefined);
   activeController = undefined;
 }
 
