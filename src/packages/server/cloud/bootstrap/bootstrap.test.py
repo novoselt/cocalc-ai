@@ -1008,6 +1008,36 @@ class BootstrapStateFilesTest(unittest.TestCase):
 
 
 class BootstrapRuntimeUserContractTest(unittest.TestCase):
+    def test_runtime_user_manager_creates_default_podman_runtime_dir(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        created = []
+        original_getpwnam = bootstrap.pwd.getpwnam
+        original_which = bootstrap.shutil.which
+        original_read_env = bootstrap.read_env_assignments
+        original_ensure_dir = bootstrap.ensure_owned_runtime_dir
+        try:
+            bootstrap.pwd.getpwnam = lambda _user: namedtuple(
+                "RuntimeUser", ["pw_uid", "pw_gid"]
+            )(2000, 2000)
+            bootstrap.shutil.which = lambda _name: None
+            bootstrap.read_env_assignments = lambda _path: {}
+            bootstrap.ensure_owned_runtime_dir = (
+                lambda path, uid, gid: created.append((path, uid, gid))
+            )
+
+            bootstrap.ensure_runtime_user_manager(cfg)
+        finally:
+            bootstrap.pwd.getpwnam = original_getpwnam
+            bootstrap.shutil.which = original_which
+            bootstrap.read_env_assignments = original_read_env
+            bootstrap.ensure_owned_runtime_dir = original_ensure_dir
+
+        self.assertIn((Path("/run/user/2000"), 2000, 2000), created)
+        self.assertIn(
+            (Path(bootstrap.default_podman_runtime_dir(2000)), 2000, 2000),
+            created,
+        )
+
     def test_bounded_capture_kills_hung_process_group(self) -> None:
         started = time.monotonic()
         result = bootstrap.run_bounded_capture(
@@ -2030,7 +2060,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn("cocalc-project-network-startup", script)
+            self.assertIn('counter accept comment "%s-established"', script)
             self.assertIn('counter drop comment "%s-deny"', script)
+            self.assertLess(
+                script.index('counter accept comment "%s-established"'),
+                script.index('counter drop comment "%s-deny"'),
+            )
             self.assertIn(
                 '"maintenance_process_count": len(maintenance_processes.split())',
                 script,
