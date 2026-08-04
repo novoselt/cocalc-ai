@@ -55,6 +55,7 @@ import type {
   LegacyMigrationMatchedAccount,
   LegacyMigrationProjectSummary,
 } from "@cocalc/conat/hub/api/legacy-migration";
+import { firstLegacyMigrationRootfs } from "./legacy-migration-rootfs";
 import type { SettingsPageDefinition } from "./settings-page";
 
 const { Text } = Typography;
@@ -107,6 +108,27 @@ type LegacyProjectStatusFilter =
   | "restored"
   | "not-available"
   | "failed";
+
+function useLegacyMigrationRootfsDefault({
+  open,
+  rootfsLoading,
+  rootfsTouched,
+  selectableRootfsImages,
+  setRootfs,
+}: {
+  open: boolean;
+  rootfsLoading: boolean;
+  rootfsTouched: boolean;
+  selectableRootfsImages: ReturnType<typeof latestRootfsVersionEntries>;
+  setRootfs: (rootfs: { image: string; image_id?: string }) => void;
+}) {
+  useEffect(() => {
+    if (!open || rootfsLoading || rootfsTouched) return;
+    const entry = firstLegacyMigrationRootfs(selectableRootfsImages);
+    if (!entry) return;
+    setRootfs({ image: entry.image, image_id: entry.id });
+  }, [open, rootfsLoading, rootfsTouched, selectableRootfsImages, setRootfs]);
+}
 
 function formatDate(value?: Date | string | null): string {
   if (!value) return "Unknown";
@@ -518,6 +540,13 @@ function LegacyProjectImportModal({
       ),
     [draft.rootfs_image_id, isAdmin, rootfsImages, summary.gpu],
   );
+  useLegacyMigrationRootfsDefault({
+    open,
+    rootfsLoading,
+    rootfsTouched: draft.rootfs_touched,
+    selectableRootfsImages,
+    setRootfs,
+  });
 
   useEffect(() => {
     const legacyProjectId = open ? project?.legacy_project_id : undefined;
@@ -729,6 +758,13 @@ function LegacyProjectBulkImportModal({
       ),
     [draft.rootfs_image_id, isAdmin, rootfsImages, summary.gpu],
   );
+  useLegacyMigrationRootfsDefault({
+    open,
+    rootfsLoading,
+    rootfsTouched: draft.rootfs_touched,
+    selectableRootfsImages,
+    setRootfs,
+  });
   const hasDiskEstimate = projects.some((project) => project.disk_mb != null);
   const lastKnownDiskMb = hasDiskEstimate
     ? projects.reduce((total, project) => total + (project.disk_mb ?? 0), 0)
