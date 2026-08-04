@@ -1068,6 +1068,25 @@ function projectQuotaLedgerMode(): "off" | "observe" | "enforce" {
   }
 }
 
+function isMissingProjectHomeVolumeError(err: unknown): boolean {
+  const text = `${(err as any)?.message ?? err ?? ""}`.toLowerCase();
+  return text.includes("project volume does not exist");
+}
+
+async function getOrEnsureProjectHomeVolume(project_id: string) {
+  try {
+    return await getVolume(project_id);
+  } catch (err) {
+    if (!isMissingProjectHomeVolumeError(err)) {
+      throw err;
+    }
+    logger.info("creating missing project volume during start", {
+      project_id,
+    });
+    return await ensureVolume(project_id);
+  }
+}
+
 async function assertStartDiskQuotaAllowed({
   project_id,
   run_quota,
@@ -1090,7 +1109,7 @@ async function assertStartDiskQuotaAllowed({
       project_id,
       logger,
       getQuota: async (id) => {
-        const vol = await getVolume(id);
+        const vol = await getOrEnsureProjectHomeVolume(id);
         return await vol.quota.get();
       },
     });
@@ -1154,7 +1173,10 @@ async function assertStartDiskQuotaAllowed({
     }
     try {
       const vol =
-        resetVolume ?? (await getVolume(project_id, volume_kind === "scratch"));
+        resetVolume ??
+        (volume_kind === "home"
+          ? await getOrEnsureProjectHomeVolume(project_id)
+          : await getVolume(project_id, true));
       volumeIdentity = await ensureProjectVolumeIdentity(
         project_id,
         volume_kind === "scratch",

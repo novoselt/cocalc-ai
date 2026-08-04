@@ -410,6 +410,71 @@ describe("project host start ACP rehydrate ordering", () => {
     );
   });
 
+  it("creates a missing home volume before starting a newly placed project", async () => {
+    const volume = {
+      path: `/mnt/cocalc/project-${project_id}`,
+      quota: {
+        get: jest.fn(async () => ({ used: 0, size: 0 })),
+      },
+    };
+    getVolume.mockRejectedValueOnce(
+      new Error(`project volume does not exist: ${volume.path}`),
+    );
+    ensureVolume.mockResolvedValueOnce(volume);
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({ project_id });
+
+    expect(ensureVolume).toHaveBeenCalledWith(project_id);
+    expect(volume.quota.get).toHaveBeenCalledTimes(1);
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replace an invalid project volume during start", async () => {
+    const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+    process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
+    try {
+      getProject.mockReturnValue({
+        image: DEFAULT_PROJECT_IMAGE,
+        run_quota: { disk_quota: 65_000 },
+      });
+      getVolume.mockRejectedValueOnce(
+        new Error(
+          `project volume is not a btrfs subvolume: /mnt/cocalc/project-${project_id}`,
+        ),
+      );
+      const runnerApi = {
+        start: jest.fn(),
+        stop: jest.fn(),
+      } as any;
+
+      const { wireProjectsApi } = await import("./projects");
+      wireProjectsApi(runnerApi);
+
+      await expect(hubApi.projects.start({ project_id })).rejects.toThrow(
+        "project volume is not a btrfs subvolume",
+      );
+      expect(ensureVolume).not.toHaveBeenCalled();
+      expect(runnerApi.start).not.toHaveBeenCalled();
+    } finally {
+      if (previousMode == null) {
+        delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+      } else {
+        process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
+      }
+    }
+  });
+
   it("returns an existing runtime without restarting it for idempotent start", async () => {
     const runnerApi = {
       start: jest.fn(),
