@@ -2581,13 +2581,8 @@ describe("CodexAppServerAgent", () => {
           threadId: "chat-thread-1",
         }),
       }),
-      expect.objectContaining({
-        spawn: 2,
-        params: expect.objectContaining({
-          threadId: "thr-live-1",
-        }),
-      }),
     ]);
+    expect(spawnCount).toBe(1);
   });
 
   it("never replaces an established session when resume fails", async () => {
@@ -3816,6 +3811,11 @@ describe("CodexAppServerAgent", () => {
         case "turn/interrupt":
           interrupted = true;
           fake.sendResponse(message.id, {});
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-interrupt-1", status: "interrupted" },
+            });
+          });
           break;
         default:
           if (typeof message.id === "number") {
@@ -3864,8 +3864,7 @@ describe("CodexAppServerAgent", () => {
     ).toBeUndefined();
   });
 
-  it("waits for the app-server process to exit before resolving interrupt", async () => {
-    let releaseExit: (() => void) | undefined;
+  it("interrupts a turn without killing its retained app-server", async () => {
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {
         case "initialize":
@@ -3888,6 +3887,14 @@ describe("CodexAppServerAgent", () => {
           break;
         case "turn/interrupt":
           fake.sendResponse(message.id, {});
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: {
+                id: "turn-interrupt-wait-1",
+                status: "interrupted",
+              },
+            });
+          });
           break;
         default:
           if (typeof message.id === "number") {
@@ -3895,16 +3902,6 @@ describe("CodexAppServerAgent", () => {
           }
       }
     });
-    proc.kill = ((signal: NodeJS.Signals = "SIGTERM") => {
-      if (proc.exitCode != null) return true;
-      proc.killed = true;
-      proc.exitCode = signal === "SIGKILL" ? 137 : 0;
-      releaseExit = () => {
-        setImmediate(() => proc.emit("exit", proc.exitCode, signal));
-      };
-      return true;
-    }) as any;
-
     setCodexProjectSpawner({
       spawnCodexExec: async () => {
         throw new Error("unexpected codex exec spawn");
@@ -3931,21 +3928,11 @@ describe("CodexAppServerAgent", () => {
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    let interruptResolved = false;
-    const interruptPromise = agent
-      .interrupt("thr-interrupt-wait-1")
-      .then(() => {
-        interruptResolved = true;
-      });
-
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(interruptResolved).toBe(false);
-    expect(typeof releaseExit).toBe("function");
-
-    releaseExit?.();
-    await interruptPromise;
+    await expect(agent.interrupt("thr-interrupt-wait-1")).resolves.toBe(true);
     await expect(pending).resolves.toBeUndefined();
-    expect(interruptResolved).toBe(true);
+    expect(proc.killed).toBe(false);
+    await agent.dispose();
+    expect(proc.killed).toBe(true);
   });
 
   it("steers an active app-server turn without interrupting it", async () => {
@@ -4750,7 +4737,7 @@ describe("CodexAppServerAgent", () => {
       requests.find(({ method }) => method === "turn/start")?.params,
     ).toMatchObject({
       model: "gpt-5.6-luna",
-      effort: "low",
+      effort: "medium",
       serviceTier: null,
     });
     expect(streamPayloads).toEqual(
@@ -4760,7 +4747,7 @@ describe("CodexAppServerAgent", () => {
           event: expect.objectContaining({
             type: "config",
             model: "gpt-5.6-luna",
-            reasoning: "low",
+            reasoning: "medium",
             serviceTier: "standard",
           }),
         }),
