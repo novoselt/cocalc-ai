@@ -67,6 +67,17 @@ export function computeWorkFailureState(err: unknown) {
   return err instanceof RetryableComputeWorkError ? "recovering" : "failed";
 }
 
+export function isSpotCapacityError(err: unknown): boolean {
+  const message = `${err ?? ""}`.toUpperCase();
+  return [
+    "ZONE_RESOURCE_POOL_EXHAUSTED",
+    "RESOURCE_POOL_EXHAUSTED",
+    "RESOURCE_NOT_READY",
+    "INSUFFICIENT CAPACITY",
+    "STOCKOUT",
+  ].some((pattern) => message.includes(pattern));
+}
+
 function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
@@ -193,7 +204,61 @@ async function provision(vm: ComputeVmRow) {
     }))!;
   }
   await insertComputeInstance(provisioning);
-  const runtime = await createProviderComputeVm(provisioning, volume);
+  let runtime;
+  try {
+    runtime = await createProviderComputeVm(provisioning, volume);
+  } catch (err) {
+    if (
+      provisioning.desired_pricing_model === "spot" &&
+      provisioning.effective_pricing_model === "spot" &&
+      isSpotCapacityError(err)
+    ) {
+      const attempt =
+        Number(provisioning.spot_recovery_state?.attempt ?? 0) + 1;
+      const retryAt = new Date(
+        Date.now() +
+          computeSpotRetryDelayMs({
+            attempt,
+            policy: provisioning.spot_recovery_policy,
+          }),
+      );
+      if (
+        attempt >=
+          DEFAULT_SPOT_RECOVERY_POLICY.max_restore_attempts_before_fallback &&
+        provisioning.allow_on_demand_fallback
+      ) {
+        const fallback = (await updateComputeVm(provisioning.id, {
+          state: "provisioning",
+          effective_pricing_model: "on_demand",
+          error: null,
+          spot_recovery_state: {
+            ...(provisioning.spot_recovery_state ?? {}),
+            phase: "running_standard_fallback",
+            attempt: 0,
+            fallback_started_at: new Date().toISOString(),
+            standard_hold_until: new Date(
+              Date.now() +
+                DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_standard_hold_minutes *
+                  60_000,
+            ).toISOString(),
+          },
+        }))!;
+        return await provision(fallback);
+      }
+      await updateComputeVm(provisioning.id, {
+        state: "recovering",
+        error: `${err}`.slice(0, 4000),
+        spot_recovery_state: {
+          ...(provisioning.spot_recovery_state ?? {}),
+          phase: "retrying_spot",
+          attempt,
+          next_retry_at: retryAt.toISOString(),
+        },
+      });
+      throw new RetryableComputeWorkError(`${err}`, retryAt);
+    }
+    throw err;
+  }
   const metadata = {
     ...(provisioning.metadata ?? {}),
     runtime: runtime.metadata ?? {},
@@ -536,6 +601,14 @@ async function reconcile(vm: ComputeVmRow) {
         stopped_at: new Date(),
       });
     }
+    return;
+  }
+  const nextRetryAt = vm.spot_recovery_state?.next_retry_at;
+  if (
+    vm.state === "recovering" &&
+    nextRetryAt &&
+    new Date(nextRetryAt).valueOf() > Date.now()
+  ) {
     return;
   }
   if (observed.status === "running") {

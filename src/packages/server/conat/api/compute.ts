@@ -22,7 +22,10 @@ import {
   resolveOwnedComputeVm,
   updateComputeVm,
 } from "@cocalc/server/compute/db";
-import { getComputeMachine } from "@cocalc/server/compute/catalog";
+import {
+  COMPUTE_MACHINE_CATALOG,
+  getComputeMachine,
+} from "@cocalc/server/compute/catalog";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
@@ -235,6 +238,28 @@ async function budgetForAdmission(accountId: string, projectId: string) {
     project_id: projectId,
   });
   return budget?.enabled ? budget : undefined;
+}
+
+export async function getCatalog(opts: { account_id?: string }) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  const config = await getComputeVmConfig();
+  return {
+    machines: Object.values(COMPUTE_MACHINE_CATALOG).filter(
+      ({ cpu }) => cpu <= config.max_vcpus,
+    ),
+    defaults: {
+      zone: "us-central1-a",
+      machine_type: "e2-standard-2",
+      ttl_minutes: 30,
+      boot_disk_gb: 20,
+    },
+    limits: {
+      max_ttl_minutes: config.max_ttl_minutes,
+      max_boot_disk_gb: config.max_boot_disk_gb,
+      max_volume_gb: config.max_volume_gb,
+    },
+  };
 }
 
 export async function getProjectBudget(opts: {
@@ -561,6 +586,7 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
 
 export async function listVolumes(opts: {
   account_id?: string;
+  project_id?: string;
   include_deleted?: boolean;
 }) {
   const accountId = requireAccount(opts.account_id);
@@ -568,6 +594,7 @@ export async function listVolumes(opts: {
   return (
     await listOwnedComputeVolumes({
       owner_account_id: accountId,
+      project_id: opts.project_id,
       include_deleted: opts.include_deleted,
     })
   ).map(publicVolume);

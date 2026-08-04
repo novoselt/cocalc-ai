@@ -13,6 +13,7 @@ import {
   resolveVmRsyncEndpoint,
   vmListSummary,
   vmRsyncArgs,
+  vmWaitProgress,
   volumeListSummary,
 } from "./vm";
 
@@ -167,6 +168,21 @@ describe("vm list", () => {
         },
       ],
     );
+  });
+});
+
+describe("vm wait", () => {
+  it("explains retryable Spot capacity recovery", () => {
+    assert.match(
+      vmWaitProgress({
+        state: "recovering",
+        zone: "us-central1-a",
+        error: "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS",
+        spot_recovery_state: {},
+      }) ?? "",
+      /Spot capacity is unavailable in us-central1-a; retrying automatically/,
+    );
+    assert.equal(vmWaitProgress({ state: "ready" }), undefined);
   });
 });
 

@@ -129,7 +129,30 @@ export interface ComputeProjectBudget {
   remaining_usd: string;
 }
 
+export interface ComputeCatalog {
+  machines: Array<{
+    machine_type: string;
+    architecture: "x86_64" | "arm64";
+    cpu: number;
+    ram_gb: number;
+    spot_hourly_usd: number;
+    on_demand_hourly_usd: number;
+  }>;
+  defaults: {
+    zone: string;
+    machine_type: string;
+    ttl_minutes: number;
+    boot_disk_gb: number;
+  };
+  limits: {
+    max_ttl_minutes: number;
+    max_boot_disk_gb: number;
+    max_volume_gb: number;
+  };
+}
+
 export const compute = {
+  getCatalog: authFirstRequireAccount,
   createVm: authFirstRequireAccount,
   listVms: authFirstRequireAccount,
   getVm: authFirstRequireAccount,
@@ -146,6 +169,7 @@ export const compute = {
 };
 
 export interface ComputeApi {
+  getCatalog: (opts: { account_id?: string }) => Promise<ComputeCatalog>;
   createVm: (opts: CreateComputeVmRequest) => Promise<ComputeVm>;
   listVms: (opts: {
     account_id?: string;
@@ -176,6 +200,7 @@ export interface ComputeApi {
   createVolume: (opts: CreateComputeVolumeRequest) => Promise<ComputeVolume>;
   listVolumes: (opts: {
     account_id?: string;
+    project_id?: string;
     include_deleted?: boolean;
   }) => Promise<ComputeVolume[]>;
   getVolume: (opts: {

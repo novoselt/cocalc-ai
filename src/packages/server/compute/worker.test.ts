@@ -3,7 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { computeWorkFailureState, RetryableComputeWorkError } from "./worker";
+import {
+  computeWorkFailureState,
+  isSpotCapacityError,
+  RetryableComputeWorkError,
+} from "./worker";
 
 describe("compute VM work failure state", () => {
   it("keeps scheduled Spot retries in recovering state", () => {
@@ -20,5 +24,14 @@ describe("compute VM work failure state", () => {
     expect(
       computeWorkFailureState(new Error("invalid provider response")),
     ).toBe("failed");
+  });
+
+  it("recognizes provider capacity errors as retryable Spot failures", () => {
+    expect(
+      isSpotCapacityError(
+        new Error("ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS: unavailable"),
+      ),
+    ).toBe(true);
+    expect(isSpotCapacityError(new Error("invalid machine type"))).toBe(false);
   });
 });

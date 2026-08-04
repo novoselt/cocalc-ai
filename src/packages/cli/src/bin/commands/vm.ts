@@ -136,17 +136,40 @@ async function waitForState(
 ) {
   const deadline = Date.now() + timeoutMs;
   let last: any;
+  let lastProgress = "";
   while (Date.now() < deadline) {
     last = await hub.compute.getVm({ id_or_name: idOrName });
     if (desired.has(last.state)) return last;
     if (last.state === "failed") {
       throw new Error(last.error || `compute VM '${idOrName}' failed`);
     }
+    const progress = vmWaitProgress(last);
+    if (progress && progress !== lastProgress) {
+      process.stderr.write(`[vm wait] ${progress}\n`);
+      lastProgress = progress;
+    }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000));
   }
   throw new Error(
     `timed out waiting for compute VM '${idOrName}'; last state=${last?.state ?? "unknown"}`,
   );
+}
+
+export function vmWaitProgress(vm: any): string | undefined {
+  if (vm?.state !== "recovering") return;
+  const error = `${vm?.error ?? ""}`.toUpperCase();
+  const retryAt = vm?.spot_recovery_state?.next_retry_at;
+  if (
+    error.includes("ZONE_RESOURCE_POOL_EXHAUSTED") ||
+    error.includes("RESOURCE_POOL_EXHAUSTED") ||
+    error.includes("INSUFFICIENT CAPACITY")
+  ) {
+    const when = retryAt
+      ? `; next attempt ${new Date(retryAt).toLocaleTimeString()}`
+      : "";
+    return `Spot capacity is unavailable in ${vm.zone}; retrying automatically${when}`;
+  }
+  return "VM recovery is in progress; waiting for SSH readiness";
 }
 
 async function waitForVolumeState(

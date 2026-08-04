@@ -133,14 +133,21 @@ export async function resolveOwnedComputeVolume(opts: {
 
 export async function listOwnedComputeVolumes(opts: {
   owner_account_id: string;
+  project_id?: string;
   include_deleted?: boolean;
 }) {
+  const params: any[] = [opts.owner_account_id];
+  let projectClause = "";
+  if (opts.project_id) {
+    params.push(opts.project_id);
+    projectClause = `AND project_id=$${params.length}`;
+  }
   const deletedClause = opts.include_deleted ? "" : "AND deleted_at IS NULL";
   const { rows } = await pool().query<ComputeVolumeRow>(
     `SELECT * FROM compute_volumes
-     WHERE owner_account_id=$1 ${deletedClause}
+     WHERE owner_account_id=$1 ${projectClause} ${deletedClause}
      ORDER BY created_at DESC`,
-    [opts.owner_account_id],
+    params,
   );
   return rows;
 }

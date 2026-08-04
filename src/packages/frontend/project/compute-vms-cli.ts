@@ -1,0 +1,84 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL – see LICENSE.md for details
+ */
+
+export interface VmCreateCliValues {
+  name: string;
+  zone: string;
+  machine_type: string;
+  pricing_model: "spot" | "on_demand";
+  allow_on_demand_fallback: boolean;
+  ttl_minutes: number;
+  boot_disk_gb: number;
+  volume?: string;
+}
+
+export interface VolumeCreateCliValues {
+  name: string;
+  zone: string;
+  size_gb: number;
+}
+
+function shellQuote(value: string): string {
+  if (/^[a-zA-Z0-9_./:@=-]+$/.test(value)) return value;
+  return `'${value.split("'").join(`'\\''`)}'`;
+}
+
+function ttlArgument(minutes: number): string {
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+export function vmCreateCli(opts: {
+  api: string;
+  project_id: string;
+  values: Partial<VmCreateCliValues>;
+}): string {
+  const { values } = opts;
+  const args = [
+    "cocalc",
+    "--api",
+    shellQuote(opts.api),
+    "vm",
+    "create",
+    "--project",
+    opts.project_id,
+    "--zone",
+    values.zone ?? "us-central1-a",
+    "--machine",
+    values.machine_type ?? "e2-standard-2",
+    `--ttl=${ttlArgument(values.ttl_minutes ?? 30)}`,
+    `--boot-disk-gb=${values.boot_disk_gb ?? 20}`,
+  ];
+  if (values.pricing_model === "spot") args.push("--spot");
+  if (values.allow_on_demand_fallback) {
+    args.push("--allow-on-demand-fallback");
+  }
+  if (values.volume) args.push("--volume", shellQuote(values.volume));
+  args.push("--wait", shellQuote(values.name || "vm-name"));
+  return args.join(" ");
+}
+
+export function volumeCreateCli(opts: {
+  api: string;
+  project_id: string;
+  values: Partial<VolumeCreateCliValues>;
+}): string {
+  return [
+    "cocalc",
+    "--api",
+    shellQuote(opts.api),
+    "vm",
+    "volume",
+    "create",
+    "--project",
+    opts.project_id,
+    "--zone",
+    opts.values.zone ?? "us-central1-a",
+    `--size-gb=${opts.values.size_gb ?? 50}`,
+    "--wait",
+    shellQuote(opts.values.name || "volume-name"),
+  ].join(" ");
+}
