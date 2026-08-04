@@ -3,7 +3,7 @@
  *  License: MS-RSL – see https://github.com/sagemathinc/cocalc-ai/blob/master/LICENSE.md
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -16,7 +16,6 @@ import {
   type SiteFundedCodexReservation,
   type SiteFundedCodexUsageEvent,
 } from "@cocalc/util/ai/site-funded-codex";
-import { uuid } from "@cocalc/util/misc";
 
 const logger = getLogger("project-host:codex:site-funded-proxy");
 const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
@@ -29,6 +28,23 @@ const HOSTED_TOOL_TYPES = new Set([
   "web_search",
   "web_search_preview",
 ]);
+
+export function siteFundedUsageEventId(
+  reservationId: string,
+  requestSequence: number,
+): string {
+  const bytes = Buffer.from(
+    createHash("sha256")
+      .update(`${reservationId}:${requestSequence}`)
+      .digest()
+      .subarray(0, 16),
+  );
+  // Version 8 is reserved for application-defined deterministic UUIDs.
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 type ActiveTurn = {
   reservation: SiteFundedCodexReservation;
@@ -346,7 +362,10 @@ class SiteFundedCodexProxy {
     const usage = usageFromProviderPayload(payload);
     if (!usage) return false;
     const event: SiteFundedCodexUsageEvent = {
-      eventId: uuid(),
+      eventId: siteFundedUsageEventId(
+        turn.reservation.reservationId,
+        requestSequence,
+      ),
       reservationId: turn.reservation.reservationId,
       providerRequestId: usage.providerRequestId ?? providerRequestId,
       requestSequence,

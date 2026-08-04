@@ -147,6 +147,9 @@ describe("site-funded Codex reservations", () => {
     await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toMatchObject(
       { costMicrousd: 1_520, inserted: false },
     );
+    await expect(
+      recordSiteFundedCodexUsageEvent({ ...event, eventId: uuid() }),
+    ).resolves.toMatchObject({ costMicrousd: 1_520, inserted: false });
 
     const finished = await finishSiteFundedCodexTurn({
       reservationId: first.reservation.reservationId,

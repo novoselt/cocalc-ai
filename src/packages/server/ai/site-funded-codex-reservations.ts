@@ -563,11 +563,10 @@ export async function recordSiteFundedCodexUsageEvent(
       homeBayId: row.home_bay_id ?? undefined,
     });
     if (event.requestSequence === lastRequestSequence) {
-      if (`${row.last_event_id ?? ""}` !== event.eventId) {
-        throw new Error(
-          "site-funded Codex usage event sequence was reused with a different event id",
-        );
-      }
+      // The monotonically increasing request sequence is the canonical
+      // idempotency key. Older project hosts generated a fresh event UUID when
+      // redelivering the same request, so requiring both keys to match could
+      // strand the reservation without protecting against double charging.
       await client.query("COMMIT");
       return result(false);
     }

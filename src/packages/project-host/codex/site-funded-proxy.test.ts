@@ -12,6 +12,7 @@ import {
 import { uuid } from "@cocalc/util/misc";
 import {
   shutdownSiteFundedCodexProxyForTests,
+  siteFundedUsageEventId,
   startSiteFundedCodexProxySession,
 } from "./site-funded-proxy";
 
@@ -33,6 +34,19 @@ function reservation(): SiteFundedCodexReservation {
 }
 
 describe("site-funded Codex provider proxy", () => {
+  it("uses a stable usage event id for reservation request retries", () => {
+    const reservationId = uuid();
+    expect(siteFundedUsageEventId(reservationId, 1)).toBe(
+      siteFundedUsageEventId(reservationId, 1),
+    );
+    expect(siteFundedUsageEventId(reservationId, 1)).not.toBe(
+      siteFundedUsageEventId(reservationId, 2),
+    );
+    expect(siteFundedUsageEventId(reservationId, 1)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
   it("forces policy and records streaming usage without exposing the real key", async () => {
     let upstreamAuthorization = "";
     let upstreamBody: any;
