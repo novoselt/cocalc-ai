@@ -10151,6 +10151,7 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)
         configure_autostart(cfg)
+        reconcile_bees_runtime_policy(cfg)
         reconcile_project_network_limits(cfg)
         reconcile_project_io_policy(cfg)
         reconcile_host_service_cgroup(cfg)

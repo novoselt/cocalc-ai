@@ -62,6 +62,56 @@ describe("storage admission controller", () => {
     });
   });
 
+  it("does not classify BEES-only waits as actionable host pressure", () => {
+    const controller = createStorageAdmissionController({
+      mode: "enforce",
+      now: () => now,
+      readInputs: () => ({
+        sampled_at_ms: now,
+        host_io_full_avg10: 22,
+        project_pool_io_full_avg10: 0,
+        bees_io_full_avg10: 22,
+        starting_projects: 0,
+        stopping_projects: 0,
+        btrfs_mutation_locks: 0,
+        btrfs_mutation_waiters: 0,
+      }),
+    });
+
+    expect(controller.sample()).toMatchObject({
+      pressure_state: "normal",
+      host_io_full_avg10: 22,
+      project_pool_io_full_avg10: 0,
+      bees_io_full_avg10: 22,
+      uncontained_io_full_avg10: 0,
+      effective_io_full_avg10: 0,
+    });
+  });
+
+  it("preserves host pressure above BEES and project-pool waits", () => {
+    const controller = createStorageAdmissionController({
+      mode: "enforce",
+      now: () => now,
+      readInputs: () => ({
+        sampled_at_ms: now,
+        host_io_full_avg10: 18,
+        project_pool_io_full_avg10: 4,
+        bees_io_full_avg10: 11,
+        starting_projects: 0,
+        stopping_projects: 0,
+        btrfs_mutation_locks: 0,
+        btrfs_mutation_waiters: 0,
+      }),
+      contendedSamples: 1,
+    });
+
+    expect(controller.sample()).toMatchObject({
+      pressure_state: "contended",
+      uncontained_io_full_avg10: 7,
+      effective_io_full_avg10: 7,
+    });
+  });
+
   it("requires a healthy recovery interval before returning to normal", () => {
     const controller = create();
     full = 10;
