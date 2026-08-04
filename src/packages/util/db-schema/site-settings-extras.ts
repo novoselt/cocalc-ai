@@ -1081,7 +1081,7 @@ export const EXTRAS: SettingsExtras = {
   },
   site_funded_codex_openai_project_id: {
     name: "OpenAI Platform Project ID (proj_...)",
-    desc: "Optional OpenAI Platform project that owns the API key used for included Codex turns. Set this together with the organization admin key to compare OpenAI's reported project costs with CoCalc's ledger.",
+    desc: "Optional OpenAI Platform project that owns the API key used for included Codex turns. Use a dedicated project and API key, and configure that project with an enforced hard spend limit rather than only a notification threshold. Set this ID together with the organization admin key to compare OpenAI's reported project costs with CoCalc's ledger.",
     default: "",
     to_val: to_trimmed_str,
     tags: ["AI", "OpenAI", "Commercialization"],

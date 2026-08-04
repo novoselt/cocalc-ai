@@ -7,6 +7,7 @@ import getPool from "@cocalc/database/pool";
 import { after, before } from "@cocalc/server/test";
 import {
   DEFAULT_SITE_FUNDED_CODEX_POLICY,
+  siteFundedCodexFinalRequestHeadroomMicrousd,
   type SiteFundedCodexPolicy,
 } from "@cocalc/util/ai/site-funded-codex";
 import { uuid } from "@cocalc/util/misc";
@@ -62,6 +63,13 @@ function options({
   };
 }
 
+function poolReservation(opts: ReturnType<typeof options>): number {
+  return (
+    opts.policy.maxTurnCostMicrousd +
+    siteFundedCodexFinalRequestHeadroomMicrousd(opts.policy)
+  );
+}
+
 describe("site-funded Codex reservations", () => {
   beforeEach(async () => {
     await getPool().query("DELETE FROM site_ai_turn_reservations");
@@ -70,6 +78,7 @@ describe("site-funded Codex reservations", () => {
   });
 
   it("atomically refuses reservations beyond the global pool", async () => {
+    const expectedReservation = poolReservation(options());
     const attempts = await Promise.all(
       [uuid(), uuid(), uuid()].map((accountId) =>
         reserveSiteFundedCodexTurn(options({ accountId })),
@@ -85,13 +94,14 @@ describe("site-funded Codex reservations", () => {
     expect(status[0]).toMatchObject({
       poolId: "site-funded-codex-global",
       limitMicrousd: 100_000,
-      reservedMicrousd: 63_700,
+      reservedMicrousd: expectedReservation,
       committedMicrousd: 0,
       activeReservations: 1,
     });
   });
 
   it("shares one hard parent budget across free and paid sub-pools", async () => {
+    const expectedReservation = poolReservation(options());
     const [free, paid] = await Promise.all([
       reserveSiteFundedCodexTurn(
         options({
@@ -114,7 +124,7 @@ describe("site-funded Codex reservations", () => {
     });
     expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
       poolId: "site-funded-codex-global",
-      reservedMicrousd: 63_700,
+      reservedMicrousd: expectedReservation,
     });
   });
 
@@ -159,7 +169,7 @@ describe("site-funded Codex reservations", () => {
     expect(finished).toMatchObject({
       status: "committed",
       reservedMicrousd: 50_000,
-      poolReservedMicrousd: 53_700,
+      poolReservedMicrousd: poolReservation(opts),
       committedMicrousd: 1_520,
     });
     await expect(
@@ -179,6 +189,35 @@ describe("site-funded Codex reservations", () => {
       reservedMicrousd: 0,
       committedMicrousd: 1_520,
       activeReservations: 0,
+    });
+  });
+
+  it("records real provider liability when usage exceeds its reservation", async () => {
+    const opts = options({
+      maxTurnCostMicrousd: 1_000,
+      poolLimitMicrousd: 10_000_000,
+      globalPoolLimitMicrousd: 10_000_000,
+    });
+    const admission = await reserveSiteFundedCodexTurn(opts);
+    if (!admission.allowed) throw new Error("expected reservation");
+    const usage = await recordSiteFundedCodexUsageEvent({
+      eventId: uuid(),
+      reservationId: admission.reservation.reservationId,
+      requestSequence: 1,
+      model: "gpt-5.6-luna",
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+    });
+    expect(usage.costMicrousd).toBeGreaterThan(
+      admission.reservation.poolReservedMicrousd,
+    );
+    await finishSiteFundedCodexTurn({
+      reservationId: admission.reservation.reservationId,
+      status: "committed",
+    });
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      reservedMicrousd: 0,
+      committedMicrousd: usage.costMicrousd,
     });
   });
 

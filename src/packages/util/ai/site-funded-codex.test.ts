@@ -5,8 +5,11 @@
 
 import {
   computeSiteFundedCodexRequestCost,
+  DEFAULT_SITE_FUNDED_CODEX_POLICY,
   getSiteFundedCodexPrice,
   microusdToUsageUnits,
+  siteFundedCodexFinalRequestHeadroomMicrousd,
+  siteFundedCodexMaxRequestBodyBytes,
   usdToMicrousd,
 } from "./site-funded-codex";
 
@@ -93,5 +96,15 @@ describe("site-funded Codex accounting", () => {
   it("converts configured dollar limits exactly to microusd", () => {
     expect(usdToMicrousd("0.05")).toBe(50_000);
     expect(usdToMicrousd(100)).toBe(100_000_000);
+  });
+
+  it("reserves a conservative final request exposure", () => {
+    const policy = {
+      ...DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      contextWindowTokens: 10_000,
+      maxOutputTokensPerRequest: 1_000,
+    };
+    expect(siteFundedCodexMaxRequestBodyBytes(policy)).toBe(80_000);
+    expect(siteFundedCodexFinalRequestHeadroomMicrousd(policy)).toBe(23_248);
   });
 });

@@ -49,9 +49,17 @@ describe("site-funded Codex provider proxy", () => {
 
   it("forces policy and records streaming usage without exposing the real key", async () => {
     let upstreamAuthorization = "";
+    let upstreamProjectHeader: string | undefined;
+    let upstreamCustomHeader: string | undefined;
     let upstreamBody: any;
     const upstream = createServer(async (request, response) => {
       upstreamAuthorization = `${request.headers.authorization ?? ""}`;
+      upstreamProjectHeader = request.headers["openai-project"] as
+        | string
+        | undefined;
+      upstreamCustomHeader = request.headers["x-project-controlled"] as
+        | string
+        | undefined;
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       upstreamBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -97,11 +105,15 @@ describe("site-funded Codex provider proxy", () => {
       headers: {
         authorization: `Bearer ${session.token}`,
         "content-type": "application/json",
+        "openai-project": "proj-attacker-selected",
+        "x-project-controlled": "do-not-forward",
       },
       body: JSON.stringify({
         model: "gpt-5.6-sol",
         reasoning: { effort: "high" },
         service_tier: "priority",
+        background: true,
+        store: true,
         tools: [{ type: "function", name: "shell" }],
         // This is intentionally larger than the old byte-based pseudo-token
         // cap. Codex context management, not JSON byte length, owns compaction.
@@ -111,10 +123,14 @@ describe("site-funded Codex provider proxy", () => {
     expect(result.status).toBe(200);
     await result.text();
     expect(upstreamAuthorization).toBe("Bearer real-site-key");
+    expect(upstreamProjectHeader).toBeUndefined();
+    expect(upstreamCustomHeader).toBeUndefined();
     expect(upstreamBody).toMatchObject({
       model: "gpt-5.6-luna",
       reasoning: { effort: "medium" },
       service_tier: "default",
+      background: false,
+      store: false,
     });
     expect(upstreamBody.max_output_tokens).toBeGreaterThan(0);
     expect(upstreamBody.max_output_tokens).toBeLessThanOrEqual(32_000);
@@ -130,6 +146,65 @@ describe("site-funded Codex provider proxy", () => {
         reasoningOutputTokens: 200,
       }),
     ]);
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  it("permits only one provider request in flight per funded turn", async () => {
+    let releaseUpstream!: () => void;
+    let noteUpstreamStarted!: () => void;
+    const upstreamStarted = new Promise<void>((resolve) => {
+      noteUpstreamStarted = resolve;
+    });
+    const upstreamRelease = new Promise<void>((resolve) => {
+      releaseUpstream = resolve;
+    });
+    let upstreamRequests = 0;
+    const upstream = createServer(async (_request, response) => {
+      upstreamRequests += 1;
+      noteUpstreamStarted();
+      await upstreamRelease;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: "resp-serialized",
+          usage: { input_tokens: 10, output_tokens: 1 },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const session = await startSiteFundedCodexProxySession({
+      reservation: reservation(),
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async () => {},
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = () =>
+      fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "hello" }),
+      });
+
+    const first = request();
+    await upstreamStarted;
+    const second = await request();
+    expect(second.status).toBe(429);
+    expect(upstreamRequests).toBe(1);
+
+    releaseUpstream();
+    expect((await first).status).toBe(200);
     session.close();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   });
@@ -160,6 +235,55 @@ describe("site-funded Codex provider proxy", () => {
     await expect(result.json()).resolves.toMatchObject({
       error: { type: "site_funded_codex_policy_error" },
     });
+    session.close();
+  });
+
+  it("rejects provider-side context references and oversized requests", async () => {
+    const limited = reservation();
+    limited.policy = {
+      ...limited.policy,
+      contextWindowTokens: 100,
+      autoCompactTokenLimit: 75,
+    };
+    const session = await startSiteFundedCodexProxySession({
+      reservation: limited,
+      apiKey: "real-site-key",
+      upstreamBaseUrl: "http://127.0.0.1:1/v1",
+      onUsage: async () => {},
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = async (body: any) =>
+      await fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+    expect(
+      (await request({ input: "hello", previous_response_id: "resp-1" }))
+        .status,
+    ).toBe(403);
+    expect(
+      (
+        await request({
+          input: [
+            {
+              role: "user",
+              content: [
+                { type: "input_image", image_url: "https://example.com/a" },
+              ],
+            },
+          ],
+        })
+      ).status,
+    ).toBe(403);
+    expect((await request({ input: "x".repeat(1_000) })).status).toBe(413);
     session.close();
   });
 

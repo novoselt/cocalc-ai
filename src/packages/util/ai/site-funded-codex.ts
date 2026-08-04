@@ -6,8 +6,10 @@
 import Decimal from "decimal.js-light";
 
 export const MICROUSD_PER_USD = 1_000_000;
-export const SITE_FUNDED_CODEX_POLICY_VERSION = 3;
+export const SITE_FUNDED_CODEX_POLICY_VERSION = 4;
 export const SITE_FUNDED_CODEX_PRICE_VERSION = "openai-2026-07-30";
+export const SITE_FUNDED_CODEX_REQUEST_BYTES_PER_CONTEXT_TOKEN = 8;
+export const SITE_FUNDED_CODEX_PROVIDER_INPUT_OVERHEAD_TOKENS = 8_192;
 
 export type SiteFundedCodexPolicy = {
   version: number;
@@ -334,6 +336,34 @@ export function computeSiteFundedCodexRequestCost({
     providerToolFeesMicrousd,
     costMicrousd: ceilMicrousd(total),
   };
+}
+
+export function siteFundedCodexMaxRequestBodyBytes(
+  policy: SiteFundedCodexPolicy,
+): number {
+  const bytes =
+    policy.contextWindowTokens *
+    SITE_FUNDED_CODEX_REQUEST_BYTES_PER_CONTEXT_TOKEN;
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) {
+    throw new Error("site-funded Codex request body limit is invalid");
+  }
+  return bytes;
+}
+
+export function siteFundedCodexFinalRequestHeadroomMicrousd(
+  policy: SiteFundedCodexPolicy,
+): number {
+  const inputTokens =
+    siteFundedCodexMaxRequestBodyBytes(policy) +
+    SITE_FUNDED_CODEX_PROVIDER_INPUT_OVERHEAD_TOKENS;
+  return computeSiteFundedCodexRequestCost({
+    model: policy.model,
+    usage: {
+      inputTokens,
+      cacheWriteInputTokens: inputTokens,
+      outputTokens: policy.maxOutputTokensPerRequest,
+    },
+  }).costMicrousd;
 }
 
 export function microusdToUsageUnits(microusd: number): number {

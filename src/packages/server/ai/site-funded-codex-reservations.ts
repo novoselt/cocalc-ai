@@ -8,6 +8,7 @@ import getPool from "@cocalc/database/pool";
 import type { PoolClient } from "@cocalc/database/pool";
 import {
   computeSiteFundedCodexRequestCost,
+  siteFundedCodexFinalRequestHeadroomMicrousd,
   type SiteFundedCodexAdmission,
   type SiteFundedCodexPoolId,
   type SiteFundedCodexPoolStatus,
@@ -232,17 +233,6 @@ async function expireCurrentPeriodReservations({
   }
 }
 
-function finalRequestHeadroomMicrousd(policy: SiteFundedCodexPolicy): number {
-  return computeSiteFundedCodexRequestCost({
-    model: policy.model,
-    usage: {
-      inputTokens: policy.contextWindowTokens,
-      cacheWriteInputTokens: policy.contextWindowTokens,
-      outputTokens: policy.maxOutputTokensPerRequest,
-    },
-  }).costMicrousd;
-}
-
 function denied(
   code: Exclude<SiteFundedCodexAdmission, { allowed: true }>["code"],
   reason: string,
@@ -396,7 +386,7 @@ export async function reserveSiteFundedCodexTurn(
       maxTurnCostMicrousd: requested,
     };
     const poolRequested =
-      requested + finalRequestHeadroomMicrousd(effectivePolicy);
+      requested + siteFundedCodexFinalRequestHeadroomMicrousd(effectivePolicy);
     if (
       int(globalPeriodRow.committed_microusd) +
         int(globalPeriodRow.reserved_microusd) +
@@ -588,9 +578,14 @@ export async function recordSiteFundedCodexUsageEvent(
       row.pool_reserved_microusd ?? row.reserved_microusd,
     );
     if (committedMicrousd > hardBoundMicrousd) {
-      throw new Error(
-        `site-funded Codex turn cost ${committedMicrousd} exceeds its ${hardBoundMicrousd} microusd reservation`,
-      );
+      // The provider liability already exists. Preserve exact accounting so
+      // the pool fails closed for later admissions instead of hiding the
+      // overrun and allowing it to be repeated.
+      logger.error("site-funded Codex usage exceeded its reservation", {
+        reservationId: event.reservationId,
+        committedMicrousd,
+        hardBoundMicrousd,
+      });
     }
     await client.query(
       `UPDATE site_ai_turn_reservations

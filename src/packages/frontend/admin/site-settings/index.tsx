@@ -1430,7 +1430,7 @@ export default function SiteSettings({
             type="info"
             style={{ marginBottom: 20 }}
             message="Site-funded Codex is disabled"
-            description="Configure the OpenAI API key and pool controls below, then enable site-funded Codex when you are ready to admit turns. Personal ChatGPT subscriptions and API keys are unaffected."
+            description="Configure the OpenAI API key and pool controls below, then enable site-funded Codex when you are ready to admit turns. Use a dedicated OpenAI Platform project and API key with an enforced hard spend limit, not only a notification threshold. Personal ChatGPT subscriptions and API keys are unaffected."
           />
         ) : null}
         {scope === "codex-pools" && to_bool(data?.site_funded_codex_enabled) ? (

@@ -12,21 +12,18 @@ import {
 import getLogger from "@cocalc/backend/logger";
 import {
   computeSiteFundedCodexRequestCost,
+  siteFundedCodexMaxRequestBodyBytes,
   type SiteFundedCodexPolicy,
   type SiteFundedCodexReservation,
   type SiteFundedCodexUsageEvent,
 } from "@cocalc/util/ai/site-funded-codex";
 
 const logger = getLogger("project-host:codex:site-funded-proxy");
-const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 const DEFAULT_UPSTREAM_BASE_URL = "https://api.openai.com/v1";
-const HOSTED_TOOL_TYPES = new Set([
-  "code_interpreter",
-  "computer_use_preview",
-  "file_search",
-  "image_generation",
-  "web_search",
-  "web_search_preview",
+const UNBILLED_PROVIDER_TOOL_TYPES = new Set([
+  "custom",
+  "function",
+  "local_shell",
 ]);
 
 export function siteFundedUsageEventId(
@@ -52,6 +49,7 @@ type ActiveTurn = {
   startedAt: number;
   requestSequence: number;
   costMicrousd: number;
+  requestInFlight: boolean;
   closed: boolean;
   blockedReason?: string;
   onUsage: (event: SiteFundedCodexUsageEvent) => Promise<void>;
@@ -94,13 +92,16 @@ function jsonResponse(
   );
 }
 
-async function readBody(request: IncomingMessage): Promise<Buffer> {
+async function readBody(
+  request: IncomingMessage,
+  maxBytes: number,
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > MAX_REQUEST_BODY_BYTES) {
+    if (size > maxBytes) {
       throw Object.assign(new Error("provider request body is too large"), {
         statusCode: 413,
       });
@@ -108,6 +109,52 @@ async function readBody(request: IncomingMessage): Promise<Buffer> {
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+function assertSelfContainedProviderInput(body: any): void {
+  for (const field of ["conversation", "previous_response_id", "prompt"]) {
+    if (body[field] != null) {
+      throw Object.assign(
+        new Error(
+          `Provider-side '${field}' references are not available in site-funded Codex mode`,
+        ),
+        { statusCode: 403 },
+      );
+    }
+  }
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const item = value as Record<string, unknown>;
+    const type = `${item.type ?? ""}`;
+    if (type === "input_image") {
+      const imageUrl = `${item.image_url ?? ""}`;
+      if (imageUrl && !imageUrl.startsWith("data:")) {
+        throw Object.assign(
+          new Error(
+            "Externally referenced images are not available in site-funded Codex mode",
+          ),
+          { statusCode: 403 },
+        );
+      }
+    }
+    if (
+      type === "input_file" &&
+      (item.file_id != null || item.file_url != null)
+    ) {
+      throw Object.assign(
+        new Error(
+          "Provider-side file references are not available in site-funded Codex mode",
+        ),
+        { statusCode: 403 },
+      );
+    }
+    for (const entry of Object.values(item)) visit(entry);
+  };
+  visit(body.input);
 }
 
 function usageFromProviderPayload(payload: any): {
@@ -157,10 +204,10 @@ function assertAllowedTools(tools: unknown): void {
   if (!Array.isArray(tools)) return;
   for (const tool of tools) {
     const type = `${(tool as any)?.type ?? ""}`.trim();
-    if (HOSTED_TOOL_TYPES.has(type)) {
+    if (!UNBILLED_PROVIDER_TOOL_TYPES.has(type)) {
       throw Object.assign(
         new Error(
-          `OpenAI hosted tool '${type}' is not available in site-funded Codex mode`,
+          `OpenAI tool '${type || "unknown"}' is not available in site-funded Codex mode`,
         ),
         { statusCode: 403 },
       );
@@ -204,6 +251,7 @@ function boundedProviderRequest({
       { statusCode: 403 },
     );
   }
+  assertSelfContainedProviderInput(body);
   assertAllowedTools(body.tools);
   const requestedOutput = Number(body.max_output_tokens);
   const outputLimit = Math.min(
@@ -215,6 +263,8 @@ function boundedProviderRequest({
 
   return {
     ...body,
+    background: false,
+    store: false,
     model: turn.policy.model,
     reasoning: {
       ...(body.reasoning && typeof body.reasoning === "object"
@@ -289,6 +339,7 @@ class SiteFundedCodexProxy {
       startedAt: Date.now(),
       requestSequence: 0,
       costMicrousd: 0,
+      requestInFlight: false,
       closed: false,
       onUsage,
     });
@@ -423,7 +474,10 @@ class SiteFundedCodexProxy {
     let bodyBuffer: Buffer;
     let body: any;
     try {
-      bodyBuffer = await readBody(request);
+      bodyBuffer = await readBody(
+        request,
+        siteFundedCodexMaxRequestBodyBytes(turn.policy),
+      );
       body = boundedProviderRequest({
         body: JSON.parse(bodyBuffer.toString("utf8")),
         turn,
@@ -433,113 +487,119 @@ class SiteFundedCodexProxy {
       return;
     }
 
-    turn.requestSequence += 1;
-    const requestSequence = turn.requestSequence;
-    const headers = new Headers();
-    for (const [name, value] of Object.entries(request.headers)) {
-      if (
-        value == null ||
-        ["authorization", "connection", "content-length", "host"].includes(
-          name.toLowerCase(),
-        )
-      ) {
-        continue;
-      }
-      headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+    if (turn.requestInFlight) {
+      jsonResponse(
+        response,
+        429,
+        "a site-funded Codex provider request is already in progress",
+      );
+      return;
     }
-    headers.set("authorization", `Bearer ${session.apiKey}`);
-    headers.set("content-type", "application/json");
-
-    let upstream: Response;
+    turn.requestInFlight = true;
     try {
-      upstream = await fetch(`${session.upstreamBaseUrl}/responses`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
+      turn.requestSequence += 1;
+      const requestSequence = turn.requestSequence;
+      // Do not forward project-controlled OpenAI organization, project, or
+      // feature headers with the site's credential.
+      const headers = new Headers({
+        authorization: `Bearer ${session.apiKey}`,
+        "content-type": "application/json",
       });
-    } catch (err) {
-      jsonResponse(response, 502, `OpenAI request failed: ${err}`);
-      return;
-    }
-    const responseHeaders: Record<string, string> = {};
-    upstream.headers.forEach((value, name) => {
-      if (
-        !["content-encoding", "content-length", "transfer-encoding"].includes(
-          name,
-        )
-      ) {
-        responseHeaders[name] = value;
-      }
-    });
-    response.writeHead(upstream.status, responseHeaders);
-    const providerRequestId = upstream.headers.get("x-request-id") ?? undefined;
-    const contentType = upstream.headers.get("content-type") ?? "";
-    if (!upstream.body) {
-      response.end();
-      turn.blockedReason = "OpenAI response did not include usage data.";
-      return;
-    }
 
-    if (!contentType.includes("text/event-stream")) {
-      const text = await upstream.text();
-      response.end(text);
+      let upstream: Response;
       try {
-        const recorded = await this.recordUsage({
-          turn,
-          requestSequence,
-          payload: JSON.parse(text),
-          providerRequestId,
-          durationMs: Date.now() - startedAt,
+        upstream = await fetch(`${session.upstreamBaseUrl}/responses`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
         });
-        if (!recorded) {
-          turn.blockedReason = "OpenAI response did not include usage data.";
-        }
       } catch (err) {
-        turn.blockedReason = `Invalid OpenAI usage response: ${err}`;
+        jsonResponse(response, 502, `OpenAI request failed: ${err}`);
+        return;
       }
-      return;
-    }
+      const responseHeaders: Record<string, string> = {};
+      upstream.headers.forEach((value, name) => {
+        if (
+          !["content-encoding", "content-length", "transfer-encoding"].includes(
+            name,
+          )
+        ) {
+          responseHeaders[name] = value;
+        }
+      });
+      response.writeHead(upstream.status, responseHeaders);
+      const providerRequestId =
+        upstream.headers.get("x-request-id") ?? undefined;
+      const contentType = upstream.headers.get("content-type") ?? "";
+      if (!upstream.body) {
+        response.end();
+        turn.blockedReason = "OpenAI response did not include usage data.";
+        return;
+      }
 
-    const decoder = new TextDecoder();
-    let pending = "";
-    let usageRecorded = false;
-    try {
-      for await (const chunk of upstream.body as any) {
-        const buffer = Buffer.from(chunk);
-        response.write(buffer);
-        pending += decoder.decode(buffer, { stream: true });
-        const lines = pending.split("\n");
-        pending = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (!data || data === "[DONE]") continue;
-          try {
-            const payload = JSON.parse(data);
-            if (
-              !usageRecorded &&
-              (payload.type === "response.completed" ||
-                payload.type === "response.incomplete" ||
-                payload.type === "response.failed")
-            ) {
-              usageRecorded = await this.recordUsage({
-                turn,
-                requestSequence,
-                payload,
-                providerRequestId,
-                durationMs: Date.now() - startedAt,
-              });
+      if (!contentType.includes("text/event-stream")) {
+        const text = await upstream.text();
+        response.end(text);
+        try {
+          const recorded = await this.recordUsage({
+            turn,
+            requestSequence,
+            payload: JSON.parse(text),
+            providerRequestId,
+            durationMs: Date.now() - startedAt,
+          });
+          if (!recorded) {
+            turn.blockedReason = "OpenAI response did not include usage data.";
+          }
+        } catch (err) {
+          turn.blockedReason = `Invalid OpenAI usage response: ${err}`;
+        }
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let pending = "";
+      let usageRecorded = false;
+      try {
+        for await (const chunk of upstream.body as any) {
+          const buffer = Buffer.from(chunk);
+          response.write(buffer);
+          pending += decoder.decode(buffer, { stream: true });
+          const lines = pending.split("\n");
+          pending = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === "[DONE]") continue;
+            try {
+              const payload = JSON.parse(data);
+              if (
+                !usageRecorded &&
+                (payload.type === "response.completed" ||
+                  payload.type === "response.incomplete" ||
+                  payload.type === "response.failed")
+              ) {
+                usageRecorded = await this.recordUsage({
+                  turn,
+                  requestSequence,
+                  payload,
+                  providerRequestId,
+                  durationMs: Date.now() - startedAt,
+                });
+              }
+            } catch {
+              // Ignore non-JSON SSE comments and partial diagnostic events.
             }
-          } catch {
-            // Ignore non-JSON SSE comments and partial diagnostic events.
           }
         }
+      } finally {
+        response.end();
+      }
+      if (!usageRecorded) {
+        turn.blockedReason = "OpenAI response did not include usage data.";
       }
     } finally {
-      response.end();
-    }
-    if (!usageRecorded) {
-      turn.blockedReason = "OpenAI response did not include usage data.";
+      turn.requestInFlight = false;
     }
   }
 }
