@@ -397,7 +397,10 @@ export async function resolveCodexAuthRuntime({
   const siteKey =
     preference === "auto" || preference === "site-api-key"
       ? await getSiteOpenAiApiKeyFromHub({
-          forceRefresh: forceRefreshSiteKey,
+          // An explicitly selected site-funded session must use the current
+          // credential. ACP workers outlive project restarts, so their normal
+          // cache may still contain a recently replaced site key.
+          forceRefresh: forceRefreshSiteKey || preference === "site-api-key",
         })
       : undefined;
 

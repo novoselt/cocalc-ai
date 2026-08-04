@@ -272,6 +272,8 @@ describe("initCodexProjectRunner", () => {
       },
     });
     expect(spawned.authSource).toBe("account-api-key");
+    expect(spawned.logArgs).toContain("COCALC_BEARER_TOKEN=***");
+    expect(spawned.logArgs).not.toContain("issued-project-host-token");
     expect(spawned.runtimeEnv).toMatchObject({
       COCALC_API_URL: "http://host.containers.internal:7103",
       COCALC_BEARER_TOKEN: "issued-project-host-token",
