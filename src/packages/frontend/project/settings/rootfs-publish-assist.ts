@@ -31,6 +31,25 @@ export type PublishDraft = {
   hidden: boolean;
 };
 
+export function rootfsSupersedesOptions({
+  images,
+  publishMode,
+  publishSourceEntryId,
+}: {
+  images: RootfsImageEntry[];
+  publishMode: "copy" | "manage";
+  publishSourceEntryId?: string;
+}): { value: string; label: string }[] {
+  return images
+    .filter(
+      (entry) => publishMode !== "manage" || entry.id !== publishSourceEntryId,
+    )
+    .map((entry) => ({
+      value: entry.id,
+      label: `${entry.label || entry.image}${entry.version ? ` (${entry.version})` : ""}`,
+    }));
+}
+
 function rootfsThemeHasVisuals(theme: ThemeEditorDraft): boolean {
   return [theme.color, theme.accent_color, theme.icon, theme.image_blob].some(
     (value) => `${value ?? ""}`.trim().length > 0,
