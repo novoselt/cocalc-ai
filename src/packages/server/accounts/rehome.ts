@@ -309,6 +309,10 @@ async function replacePortableRows({
   account_id: string;
   rows: Record<string, unknown>[];
 }): Promise<void> {
+  const portableRows =
+    table === "account_notification_index"
+      ? rows.map(({ revision: _sourceRevision, ...row }) => row)
+      : rows;
   const primaryKey =
     table === "account_project_index"
       ? ["account_id", "project_id"]
@@ -345,7 +349,7 @@ async function replacePortableRows({
       account_id,
     ]);
   }
-  for (const row of rows) {
+  for (const row of portableRows) {
     const nextRow =
       table === "api_keys"
         ? Object.fromEntries(

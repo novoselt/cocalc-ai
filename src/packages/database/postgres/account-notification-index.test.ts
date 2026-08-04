@@ -7,7 +7,9 @@ import getPool, { initEphemeralDatabase } from "@cocalc/database/pool";
 import { testCleanup } from "@cocalc/database/test-utils";
 import {
   getProjectedNotificationCounts,
+  listProjectedNotificationSnapshotForAccount,
   listProjectedNotificationsForAccount,
+  markProjectedNotificationsReadThrough,
   rebuildAccountNotificationIndex,
   setProjectedNotificationArchivedState,
   setProjectedNotificationReadState,
@@ -337,5 +339,172 @@ describe("account_notification_index rebuild", () => {
         },
       },
     });
+  });
+
+  it("marks an entire project read without clearing notifications after the snapshot", async () => {
+    await seedBaseRows();
+
+    const notificationIds = Array.from(
+      { length: 301 },
+      (_, i) => `90000000-0000-4000-8000-${`${i}`.padStart(12, "0")}`,
+    );
+    for (let start = 0; start < notificationIds.length; start += 100) {
+      const chunk = notificationIds.slice(start, start + 100);
+      const params: unknown[] = [ACCOUNT_ID, PROJECT_A];
+      const values = chunk.map((notification_id) => {
+        params.push(notification_id);
+        return `($1, $${params.length}::UUID, 'mention', $2, '{}'::JSONB,
+                 '{}'::JSONB, NOW(), NOW())`;
+      });
+      await getPool().query(
+        `INSERT INTO account_notification_index
+           (account_id, notification_id, kind, project_id, summary, read_state,
+            created_at, updated_at)
+         VALUES ${values.join(", ")}`,
+        params,
+      );
+    }
+    await getPool().query(
+      `UPDATE account_notification_index
+          SET revision = NULL
+        WHERE account_id = $1
+          AND notification_id = $2`,
+      [ACCOUNT_ID, notificationIds[0]],
+    );
+    await getPool().query(
+      `INSERT INTO account_notification_index
+         (account_id, notification_id, kind, project_id, summary, read_state,
+          created_at, updated_at)
+       VALUES
+         ($1, '91000000-0000-4000-8000-000000000001', 'account_notice', NULL,
+          '{}'::JSONB, '{}'::JSONB, NOW(), NOW()),
+         ($1, '91000000-0000-4000-8000-000000000002', 'mention', $2,
+          '{}'::JSONB, '{}'::JSONB, NOW(), NOW()),
+         ($1, '91000000-0000-4000-8000-000000000003', 'mention', $3,
+          '{}'::JSONB, '{"archived":true}'::JSONB, NOW(), NOW())`,
+      [ACCOUNT_ID, PROJECT_B, PROJECT_A],
+    );
+
+    const snapshot = await listProjectedNotificationSnapshotForAccount({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_A,
+      state: "unread",
+      limit: 300,
+    });
+    expect(snapshot.rows).toHaveLength(300);
+
+    const lateNotificationId = "92000000-0000-4000-8000-000000000001";
+    await getPool().query(
+      `INSERT INTO account_notification_index
+         (account_id, notification_id, kind, project_id, summary, read_state,
+          created_at, updated_at)
+       VALUES ($1, $2, 'mention', $3, '{}'::JSONB, '{}'::JSONB, NOW(), NOW())`,
+      [ACCOUNT_ID, lateNotificationId, PROJECT_A],
+    );
+
+    await expect(
+      markProjectedNotificationsReadThrough({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_A,
+        read_through_revision: snapshot.read_through_revision,
+      }),
+    ).resolves.toEqual({ updated_count: 301 });
+
+    const { rows } = await getPool().query<{
+      initial_unread: number;
+      late_unread: boolean;
+      general_unread: boolean;
+      other_project_unread: boolean;
+      archived_read: boolean;
+      legacy_row_read: boolean;
+      late_revision: string;
+    }>(
+      `SELECT
+         COUNT(*) FILTER (
+           WHERE project_id = $2
+             AND notification_id <> $3
+             AND COALESCE((read_state ->> 'archived')::BOOLEAN, FALSE) IS NOT TRUE
+             AND COALESCE((read_state ->> 'read')::BOOLEAN, FALSE) IS NOT TRUE
+         )::INT AS initial_unread,
+         BOOL_OR(
+           notification_id = $3
+           AND COALESCE((read_state ->> 'read')::BOOLEAN, FALSE) IS NOT TRUE
+         ) AS late_unread,
+         BOOL_OR(
+           project_id IS NULL
+           AND COALESCE((read_state ->> 'read')::BOOLEAN, FALSE) IS NOT TRUE
+         ) AS general_unread,
+         BOOL_OR(
+           project_id = $4
+           AND COALESCE((read_state ->> 'read')::BOOLEAN, FALSE) IS NOT TRUE
+         ) AS other_project_unread,
+         BOOL_OR(
+           notification_id = '91000000-0000-4000-8000-000000000003'
+           AND COALESCE((read_state ->> 'read')::BOOLEAN, FALSE) IS TRUE
+         ) AS archived_read,
+         BOOL_OR(
+           notification_id = $5
+           AND COALESCE((read_state ->> 'read')::BOOLEAN, FALSE) IS TRUE
+         ) AS legacy_row_read,
+         MAX(revision) FILTER (WHERE notification_id = $3)::TEXT AS late_revision
+       FROM account_notification_index
+      WHERE account_id = $1`,
+      [
+        ACCOUNT_ID,
+        PROJECT_A,
+        lateNotificationId,
+        PROJECT_B,
+        notificationIds[0],
+      ],
+    );
+    expect(rows[0]).toEqual({
+      initial_unread: 0,
+      late_unread: true,
+      general_unread: true,
+      other_project_unread: true,
+      archived_read: false,
+      legacy_row_read: true,
+      late_revision: expect.any(String),
+    });
+    expect(BigInt(rows[0].late_revision)).toBeGreaterThan(
+      BigInt(snapshot.read_through_revision),
+    );
+  });
+
+  it("waits for an in-flight projection before taking the snapshot boundary", async () => {
+    await seedBaseRows();
+    const notificationId = "93000000-0000-4000-8000-000000000001";
+    const writer = await getPool().connect();
+    try {
+      await writer.query("BEGIN");
+      await writer.query(
+        `INSERT INTO account_notification_index
+           (account_id, notification_id, kind, project_id, summary, read_state,
+            created_at, updated_at)
+         VALUES ($1, $2, 'mention', $3, '{}'::JSONB, '{}'::JSONB, NOW(), NOW())`,
+        [ACCOUNT_ID, notificationId, PROJECT_A],
+      );
+
+      let snapshotSettled = false;
+      const snapshotPromise = listProjectedNotificationSnapshotForAccount({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_A,
+      }).finally(() => {
+        snapshotSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(snapshotSettled).toBe(false);
+
+      await writer.query("COMMIT");
+      const snapshot = await snapshotPromise;
+      expect(snapshot.rows).toEqual([
+        expect.objectContaining({ notification_id: notificationId }),
+      ]);
+    } catch (err) {
+      await writer.query("ROLLBACK");
+      throw err;
+    } finally {
+      writer.release();
+    }
   });
 });

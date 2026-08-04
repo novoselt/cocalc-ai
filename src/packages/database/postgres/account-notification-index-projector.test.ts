@@ -237,6 +237,12 @@ describe("account_notification_index projector", () => {
         read_state: {},
       }),
     );
+    const firstRevision = await getPool().query<{ revision: string }>(
+      `SELECT revision::TEXT AS revision
+         FROM account_notification_index
+        WHERE account_id = $1 AND notification_id = $2`,
+      [LOCAL_ACCOUNT_ID, NOTIFICATION_ID],
+    );
 
     await expect(
       getPool().query(
@@ -269,6 +275,14 @@ describe("account_notification_index projector", () => {
       notification_ids: [NOTIFICATION_ID],
       read: true,
     });
+    await expect(
+      getPool().query(
+        `SELECT revision::TEXT AS revision
+           FROM account_notification_index
+          WHERE account_id = $1 AND notification_id = $2`,
+        [LOCAL_ACCOUNT_ID, NOTIFICATION_ID],
+      ),
+    ).resolves.toMatchObject({ rows: firstRevision.rows });
     await appendMentionOutboxRow({
       notification_id: NOTIFICATION_ID,
       description: "updated mention summary",
@@ -305,6 +319,15 @@ describe("account_notification_index projector", () => {
         },
       }),
     ]);
+    const updatedRevision = await getPool().query<{ revision: string }>(
+      `SELECT revision::TEXT AS revision
+         FROM account_notification_index
+        WHERE account_id = $1 AND notification_id = $2`,
+      [LOCAL_ACCOUNT_ID, NOTIFICATION_ID],
+    );
+    expect(BigInt(updatedRevision.rows[0].revision)).toBeGreaterThan(
+      BigInt(firstRevision.rows[0].revision),
+    );
 
     const emailRows = await getPool().query(
       `SELECT email_id

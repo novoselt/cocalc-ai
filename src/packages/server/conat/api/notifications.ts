@@ -8,7 +8,9 @@ import isAdmin from "@cocalc/server/accounts/is-admin";
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import {
   getProjectedNotificationCounts,
+  listProjectedNotificationSnapshotForAccount,
   listProjectedNotificationsForAccount,
+  markProjectedNotificationsReadThrough,
   setProjectedNotificationArchivedState,
   setProjectedNotificationReadState,
   setProjectedNotificationSavedState,
@@ -26,17 +28,23 @@ import type {
   CreateMentionNotificationOptions,
   CreateNotificationResult,
   ListNotificationsOptions,
+  MarkAllNotificationsReadOptions,
+  MarkAllNotificationsReadResult,
   MarkNotificationReadOptions,
   MarkNotificationReadResult,
   MentionNotificationReason,
   NotificationCountsResult,
   NotificationListRow,
+  NotificationListSnapshot,
   NotificationPriority,
   NotificationSeverity,
   SaveNotificationOptions,
 } from "@cocalc/conat/hub/api/notifications";
 import { isValidUUID } from "@cocalc/util/misc";
-import { publishProjectedNotificationFeedUpdatesBestEffort } from "@cocalc/server/notifications/feed";
+import {
+  publishProjectedNotificationFeedCountsBestEffort,
+  publishProjectedNotificationFeedUpdatesBestEffort,
+} from "@cocalc/server/notifications/feed";
 import { forwardRemoteNotificationTargetsBestEffort } from "@cocalc/server/notifications/remote-feed";
 
 const MAX_MENTION_TARGETS = 25;
@@ -554,6 +562,20 @@ export async function list(
   });
 }
 
+export async function listSnapshot(
+  opts: ListNotificationsOptions = {},
+): Promise<NotificationListSnapshot> {
+  const account_id = requireAccountId(opts.account_id);
+  return await listProjectedNotificationSnapshotForAccount({
+    account_id,
+    limit: opts.limit,
+    notification_id: opts.notification_id,
+    kind: opts.kind,
+    project_id: opts.project_id,
+    state: opts.state,
+  });
+}
+
 export async function counts(opts?: {
   account_id?: string;
 }): Promise<NotificationCountsResult> {
@@ -584,6 +606,24 @@ export async function markRead(
     ...result,
     notification_ids,
   };
+}
+
+export async function markAllRead(
+  opts: MarkAllNotificationsReadOptions,
+): Promise<MarkAllNotificationsReadResult> {
+  const account_id = requireAccountId(opts.account_id);
+  const result = await markProjectedNotificationsReadThrough({
+    account_id,
+    project_id: opts.project_id,
+    read_through_revision: opts.read_through_revision,
+  });
+  if (result.updated_count > 0) {
+    await publishProjectedNotificationFeedCountsBestEffort({
+      account_id,
+      reason: "read_state_updated",
+    });
+  }
+  return result;
 }
 
 export async function save(

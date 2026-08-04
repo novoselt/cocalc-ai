@@ -82,6 +82,11 @@ export interface ListNotificationsOptions {
   state?: NotificationInboxState;
 }
 
+export interface NotificationListSnapshot {
+  rows: NotificationListRow[];
+  read_through_revision: string;
+}
+
 export interface NotificationCountsResult {
   total: number;
   unread: number;
@@ -131,6 +136,16 @@ export interface MarkNotificationReadResult {
   notification_ids?: string[];
 }
 
+export interface MarkAllNotificationsReadOptions {
+  account_id?: string;
+  project_id: string | null;
+  read_through_revision: string;
+}
+
+export interface MarkAllNotificationsReadResult {
+  updated_count: number;
+}
+
 export interface SaveNotificationOptions {
   account_id?: string;
   notification_ids: string[];
@@ -154,10 +169,16 @@ export interface Notifications {
     opts: CreateCodexTurnNoticeOptions,
   ) => Promise<CreateNotificationResult>;
   list: (opts?: ListNotificationsOptions) => Promise<NotificationListRow[]>;
+  listSnapshot: (
+    opts?: ListNotificationsOptions,
+  ) => Promise<NotificationListSnapshot>;
   counts: (opts?: { account_id?: string }) => Promise<NotificationCountsResult>;
   markRead: (
     opts: MarkNotificationReadOptions,
   ) => Promise<MarkNotificationReadResult>;
+  markAllRead: (
+    opts: MarkAllNotificationsReadOptions,
+  ) => Promise<MarkAllNotificationsReadResult>;
   save: (opts: SaveNotificationOptions) => Promise<MarkNotificationReadResult>;
   archive: (
     opts: ArchiveNotificationOptions,
@@ -195,8 +216,10 @@ export const notifications = {
     throw Error("must be signed in as an account, project, or host");
   },
   list: authFirstRequireAccount,
+  listSnapshot: authFirstRequireAccount,
   counts: authFirstRequireAccount,
   markRead: authFirstRequireAccount,
+  markAllRead: authFirstRequireAccount,
   save: authFirstRequireAccount,
   archive: authFirstRequireAccount,
 };
