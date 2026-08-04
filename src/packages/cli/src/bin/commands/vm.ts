@@ -467,6 +467,8 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             return { id: row.id, name: row.name, command: rendered };
           }
           runSsh(args);
+          // SSH owns stdout/stderr. Returning data here would add a CLI result
+          // table after the interactive session or remote command completes.
           return undefined;
         });
       },
