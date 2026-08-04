@@ -24,6 +24,12 @@ Guidance for Claude Code, Gemini CLI, and OpenAI Codex when working in this repo
 - Tests: run focused package/tests first; avoid full test suite unless needed
 - Dependency consistency check: `pnpm -C src version-check`
 
+### Fresh Worktrees
+
+- A new git worktree does not have built workspace package outputs. Before running package tests, run `pnpm -C src install`, then build/typecheck the target package (for example, `cd src/packages/<pkg> && pnpm tsc --build`) so TypeScript project references produce their `dist` entrypoints.
+- Do not run Jest first in a fresh worktree: imports such as `@cocalc/cloud` can fail misleadingly when the linked workspace package exists but has not been built.
+- Use `pnpm -C src build:dev` when preparing a release or when the required dependency scope is unclear; otherwise prefer the package-local build before focused tests.
+
 ## Live Hub Env
 
 - Before running live Lite/Launchpad control-plane commands such as `cocalc host ...`, `cocalc project ...`, or browser-driven validation against the local dev hub, refresh the hub env first:
