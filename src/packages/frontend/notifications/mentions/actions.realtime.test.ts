@@ -14,12 +14,17 @@ jest.mock("../codex-turn-toast", () => ({
 }));
 
 jest.mock("@cocalc/frontend/webapp-client", () => {
+  const list = jest.fn(async () => []);
   const webappClient = Object.assign(new EventEmitter(), {
     is_signed_in: jest.fn(() => true),
     conat_client: Object.assign(new EventEmitter(), {
       hub: {
         notifications: {
-          list: jest.fn(async () => []),
+          list,
+          listSnapshot: jest.fn(async (opts) => ({
+            rows: await list(opts),
+            read_through_revision: "1",
+          })),
           counts: jest.fn(async () => ({
             total: 0,
             unread: 0,
@@ -30,6 +35,9 @@ jest.mock("@cocalc/frontend/webapp-client", () => {
           markRead: jest.fn(async () => ({
             updated_count: 0,
             notification_ids: [],
+          })),
+          markAllRead: jest.fn(async () => ({
+            updated_count: 0,
           })),
           save: jest.fn(async () => ({
             updated_count: 0,
@@ -57,8 +65,10 @@ const mockedWebappClient = webapp_client as unknown as EventEmitter & {
     hub: {
       notifications: {
         list: jest.Mock;
+        listSnapshot: jest.Mock;
         counts: jest.Mock;
         markRead: jest.Mock;
+        markAllRead: jest.Mock;
         save: jest.Mock;
       };
     };
@@ -112,6 +122,11 @@ describe("MentionsActions realtime feed", () => {
       {
         updated_count: 0,
         notification_ids: [],
+      },
+    );
+    mockedWebappClient.conat_client.hub.notifications.markAllRead.mockResolvedValue(
+      {
+        updated_count: 0,
       },
     );
     mockedWebappClient.conat_client.hub.notifications.save.mockResolvedValue({
@@ -537,8 +552,7 @@ describe("MentionsActions realtime feed", () => {
       ).toHaveBeenCalledTimes(1);
       expect(mentionsStore.get("loading")).toBe(false);
 
-      jest.advanceTimersByTime(5000);
-      await flushMicrotasks();
+      await jest.advanceTimersByTimeAsync(5000);
       await flushMicrotasks();
 
       expect(
@@ -610,7 +624,7 @@ describe("MentionsActions realtime feed", () => {
     expect(reduxSubscriber).toBeDefined();
 
     accountStore.setReady();
-    await flushMicrotasks();
+    await flush();
 
     expect(
       mockedWebappClient.conat_client.hub.notifications.list,
@@ -675,7 +689,7 @@ describe("MentionsActions realtime feed", () => {
 
     accountStore = new MockAccountStore("acct-2", true);
     reduxSubscriber?.();
-    await flushMicrotasks();
+    await flush();
 
     expect(
       mockedWebappClient.conat_client.hub.notifications.list,
@@ -854,6 +868,120 @@ describe("MentionsActions realtime feed", () => {
       expect(mentionsStore.get("unread_count")).toBe(0);
     } finally {
       jest.useRealTimers();
+    }
+  });
+
+  it("marks a project read through the loaded snapshot without sending ids", async () => {
+    const project_id = "project-1";
+    const initialRow = {
+      notification_id: "n-1",
+      kind: "mention",
+      project_id,
+      summary: { description: "Initial notification" },
+      read_state: { read: false, saved: false },
+      created_at: new Date("2026-04-05T00:00:00.000Z"),
+      updated_at: new Date("2026-04-05T00:00:00.000Z"),
+    };
+    mockedWebappClient.conat_client.hub.notifications.listSnapshot.mockResolvedValueOnce(
+      {
+        rows: [initialRow],
+        read_through_revision: "37",
+      },
+    );
+    mockedWebappClient.conat_client.hub.notifications.list.mockResolvedValue(
+      [],
+    );
+    mockedWebappClient.conat_client.hub.notifications.counts.mockResolvedValue({
+      total: 1,
+      unread: 1,
+      saved: 0,
+      archived: 0,
+      by_kind: {
+        mention: {
+          total: 1,
+          unread: 1,
+          saved: 0,
+          archived: 0,
+        },
+      },
+    });
+    mockedWebappClient.conat_client.hub.notifications.markAllRead.mockImplementation(
+      async () => {
+        mockedWebappClient.conat_client.hub.notifications.counts.mockResolvedValue(
+          {
+            total: 1,
+            unread: 0,
+            saved: 0,
+            archived: 0,
+            by_kind: {
+              mention: {
+                total: 1,
+                unread: 0,
+                saved: 0,
+                archived: 0,
+              },
+            },
+          },
+        );
+        return { updated_count: 1 };
+      },
+    );
+
+    let mentionsStore = ImmutableMap({
+      mentions: ImmutableMap(),
+      loading: true,
+    });
+    const redux = {
+      getStore: jest.fn((name: string) => {
+        if (name === "account") {
+          return ImmutableMap({ account_id: "acct-1", is_ready: true });
+        }
+        if (name === "mentions") {
+          return mentionsStore;
+        }
+        return ImmutableMap();
+      }),
+      _set_state: jest.fn((patch) => {
+        if (patch.mentions != null) {
+          mentionsStore = mentionsStore.merge(patch.mentions);
+        }
+      }),
+      removeActions: jest.fn(),
+    } as any;
+    const actions = new MentionsActions("mentions", redux);
+
+    try {
+      actions._init();
+      await flush();
+
+      const feed = await getSharedAccountDStreamMock.mock.results[0].value;
+      feed.emit("change", {
+        type: "notification.upsert",
+        account_id: "acct-1",
+        reason: "projected_upsert",
+        ts: Date.now(),
+        notification: {
+          ...initialRow,
+          notification_id: "n-after-snapshot",
+          created_at: "2026-04-05T00:01:00.000Z",
+          updated_at: "2026-04-05T00:01:00.000Z",
+        },
+      });
+      await flushMicrotasks();
+
+      await actions.markAll(project_id, "read");
+
+      expect(
+        mockedWebappClient.conat_client.hub.notifications.markAllRead,
+      ).toHaveBeenCalledWith({
+        project_id,
+        read_through_revision: "37",
+      });
+      expect(
+        mockedWebappClient.conat_client.hub.notifications.markRead,
+      ).not.toHaveBeenCalled();
+    } finally {
+      actions.destroy();
     }
   });
 });

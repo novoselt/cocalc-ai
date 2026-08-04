@@ -5,7 +5,10 @@
 
 import getPool, { initEphemeralDatabase } from "@cocalc/database/pool";
 import { ensureClusterAccountDirectorySchema } from "@cocalc/server/accounts/cluster-directory";
-import { publishProjectedNotificationFeedUpdatesBestEffort } from "@cocalc/server/notifications/feed";
+import {
+  publishProjectedNotificationFeedCountsBestEffort,
+  publishProjectedNotificationFeedUpdatesBestEffort,
+} from "@cocalc/server/notifications/feed";
 import { forwardRemoteNotificationTargetsBestEffort } from "@cocalc/server/notifications/remote-feed";
 import {
   MAX_NOTIFICATION_ID_BATCH,
@@ -18,11 +21,14 @@ import {
   createCodexTurnNotice,
   createMention,
   list,
+  listSnapshot,
+  markAllRead,
   markRead,
   save,
 } from "./notifications";
 
 jest.mock("@cocalc/server/notifications/feed", () => ({
+  publishProjectedNotificationFeedCountsBestEffort: jest.fn(),
   publishProjectedNotificationFeedUpdatesBestEffort: jest.fn(),
 }));
 
@@ -570,5 +576,56 @@ describe("conat notifications api", () => {
     ).rejects.toThrow(
       `at most ${MAX_NOTIFICATION_ID_BATCH} notification ids are allowed`,
     );
+  });
+
+  it("marks only notifications covered by a list snapshot", async () => {
+    await seedMentionContext();
+    await getPool().query(
+      `INSERT INTO account_notification_index
+         (account_id, notification_id, kind, project_id, summary, read_state,
+          created_at, updated_at)
+       VALUES
+         ($1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', 'mention', $2,
+          '{}'::JSONB, '{}'::JSONB, NOW(), NOW())`,
+      [ACTOR_ACCOUNT_ID, PROJECT_ID],
+    );
+    const snapshot = await listSnapshot({
+      account_id: ACTOR_ACCOUNT_ID,
+      project_id: PROJECT_ID,
+    });
+    await getPool().query(
+      `INSERT INTO account_notification_index
+         (account_id, notification_id, kind, project_id, summary, read_state,
+          created_at, updated_at)
+       VALUES
+         ($1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', 'mention', $2,
+          '{}'::JSONB, '{}'::JSONB, NOW(), NOW())`,
+      [ACTOR_ACCOUNT_ID, PROJECT_ID],
+    );
+
+    await expect(
+      markAllRead({
+        account_id: ACTOR_ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        read_through_revision: snapshot.read_through_revision,
+      }),
+    ).resolves.toEqual({ updated_count: 1 });
+    expect(
+      publishProjectedNotificationFeedCountsBestEffort,
+    ).toHaveBeenCalledWith({
+      account_id: ACTOR_ACCOUNT_ID,
+      reason: "read_state_updated",
+    });
+    await expect(
+      list({
+        account_id: ACTOR_ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        state: "unread",
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        notification_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+      }),
+    ]);
   });
 });
