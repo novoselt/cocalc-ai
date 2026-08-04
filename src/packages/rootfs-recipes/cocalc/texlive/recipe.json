@@ -1,0 +1,64 @@
+{
+  "id": "cocalc/texlive",
+  "version": 1,
+  "description": "Run a script from the texlive-installer repository: install or update a full upstream TeX Live tree, add the R/Python document layer, verify the tree, or compile the document test suite.",
+  "timeout": 14400,
+  "inputs": {
+    "repo_url": {
+      "type": "string",
+      "default": "https://github.com/sagemathinc/texlive-installer.git"
+    },
+    "repo_ref": { "type": "string", "default": "main" },
+    "script": { "type": "string", "default": "install.sh" },
+
+    "mode": { "type": "string", "default": "install" },
+    "year": { "type": "string", "default": "2026" },
+    "scheme": { "type": "string", "default": "scheme-full" },
+    "mirror": {
+      "type": "string",
+      "default": "https://mirror.ctan.org/systems/texlive/tlnet"
+    },
+    "paper": { "type": "string", "default": "letter" },
+    "docfiles": { "type": "boolean", "default": false },
+    "srcfiles": { "type": "boolean", "default": false },
+    "autobackup": { "type": "boolean", "default": false },
+    "fontconfig": { "type": "boolean", "default": true },
+    "disable_apt_texlive": { "type": "boolean", "default": true },
+    "purge_apt_texlive": { "type": "boolean", "default": true },
+    "required_tl_packages": {
+      "type": "string[]",
+      "default": ["texcount", "pythontex", "latexmk", "biber"]
+    },
+    "luaotfload_db": { "type": "boolean", "default": true },
+    "min_free_kb": { "type": "string", "default": "9000000" },
+
+    "cran": { "type": "string", "default": "https://cloud.r-project.org" },
+    "reticulate_python": { "type": "string", "default": "/usr/bin/python3" },
+    "install_reticulate": { "type": "boolean", "default": true },
+    "clean": { "type": "boolean", "default": true },
+
+    "wordcount": { "type": "boolean", "default": true },
+    "pythontex": { "type": "boolean", "default": true },
+    "knitr": { "type": "boolean", "default": true },
+    "rmarkdown": { "type": "boolean", "default": true },
+    "quarto": { "type": "boolean", "default": true }
+  },
+  "run": { "shell": "bash", "script": "install.sh" },
+  "contributes": {
+    "metadata": {
+      "family": "texlive",
+      "tags": ["latex", "texlive", "publishing", "pdf"]
+    },
+    "content": {
+      "version": 1,
+      "title": "TeX Live",
+      "subtitle": "A complete upstream TeX Live installation with PythonTeX, knitr, R Markdown and Quarto support.",
+      "highlights": [
+        "Full upstream TeX Live",
+        "latexmk, biber, PythonTeX, texcount",
+        "knitr, R Markdown and Quarto",
+        "System-wide fontconfig integration"
+      ]
+    }
+  }
+}

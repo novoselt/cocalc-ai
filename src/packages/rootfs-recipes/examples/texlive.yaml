@@ -1,0 +1,93 @@
+version: 1
+name: texlive
+
+# TODO(TeX Live 2027): pin `base` to the then-current Jupyter image.
+#
+# The published TeX Live images are built on top of the Jupyter image rather
+# than a bare base, which is where JupyterLab and the standard app launcher come
+# from. A from-scratch rebuild without `base` starts from DEFAULT_PROJECT_IMAGE
+# and silently lacks JupyterLab while the catalog entry still advertises the
+# launcher.
+#
+# Deliberately unpinned for now: this spec is only needed again at the next
+# yearly TeX Live release, roughly mid-2027, since tlmgr cannot move between
+# releases and the monthly refresh runs texlive-update.yaml instead. Any image
+# id recorded today would be long stale by then, so resolve it at that point:
+#
+#   cocalc rootfs list --json    # find the current Jupyter catalog image id
+#
+# then add:
+#
+#   base:
+#     image_id: <jupyter catalog image id>
+
+builder:
+  run_quota:
+    disk_quota: 30000
+
+# Every step runs a script from the texlive-installer repository, pinned by
+# `repo_ref`. Pin a tag rather than a branch for anything published, so that
+# rebuilding reproduces the same image.
+steps:
+  - name: Install TeX Live
+    uses: cocalc/texlive
+    with:
+      script: install.sh
+      mode: install
+      year: "2026"
+      scheme: scheme-full
+      paper: letter
+    timeout: 14400
+
+  - name: Verify the TeX Live tree
+    uses: cocalc/texlive
+    with:
+      script: verify.sh
+    timeout: 1800
+
+  - name: Install the R and Python document layer
+    uses: cocalc/texlive
+    with:
+      script: r-python.sh
+    timeout: 3600
+
+  - uses: cocalc/quarto
+    timeout: 1800
+
+  # Runs last, so every engine the fixtures need is present.
+  - name: Compile the document test suite
+    uses: cocalc/texlive
+    with:
+      script: tests/run.sh
+    timeout: 3600
+
+verify:
+  - command -v tex
+  - command -v latexmk
+  # Upstream TeX Live installs `pythontex`; `pythontex3` is a Debian packaging
+  # artifact. CoCalc probes for both, so accept either here too.
+  - command -v pythontex || command -v pythontex3
+  - command -v texcount
+  - command -v quarto
+  - command -v Rscript
+  - tlmgr --version
+
+publish:
+  label: TeX Live
+  # Catalog slugs are globally unique, so this is versioned per release and must
+  # be bumped together with `version` below. Only one spec is published per
+  # cycle: a fresh install from this file, or the monthly texlive-update.yaml.
+  slug: texlive-2026-08
+  description: Full upstream TeX Live with latexmk, PythonTeX, knitr, R Markdown, and Quarto, plus system-wide fontconfig integration.
+  family: texlive
+  version: "2026.08"
+  channel: stable
+  visibility: private
+  tags:
+    - preset:standard
+    - latex
+    - texlive
+    - pythontex
+    - rmarkdown
+    - quarto
+    - knitr
