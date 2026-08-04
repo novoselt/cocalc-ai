@@ -153,8 +153,14 @@ export function startConatApiBackgroundWorkers(): void {
       worker_id: process.env.COCALC_BAY_WORKER_ID,
     });
   }
-  startBayBackupMaintenance();
-  startBayWalArchiveMaintenance();
+  if (isPrimaryBayWorker()) {
+    startBayBackupMaintenance();
+    startBayWalArchiveMaintenance();
+  } else {
+    logger.info("bay backup maintenance skipped on non-primary bay worker", {
+      worker_id: process.env.COCALC_BAY_WORKER_ID,
+    });
+  }
 }
 
 export async function initConatApi({
