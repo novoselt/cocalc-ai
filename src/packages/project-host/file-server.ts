@@ -1274,11 +1274,30 @@ export async function ensureVolume(
 
 export async function resetScratchVolume(
   project_id: string,
-  opts: { expected_lifecycle_generation?: number } = {},
+  opts: {
+    expected_lifecycle_generation?: number;
+    onTiming?: (phase: string, duration_ms: number) => void;
+  } = {},
 ) {
   if (fs == null) {
     throw Error("file server not initialized");
   }
+  const measure = async <T>(phase: string, fn: () => Promise<T>) => {
+    const started = Date.now();
+    try {
+      return await fn();
+    } finally {
+      try {
+        opts.onTiming?.(phase, Date.now() - started);
+      } catch (err) {
+        logger.warn("scratch reset timing callback failed", {
+          project_id,
+          phase,
+          err: `${err}`,
+        });
+      }
+    }
+  };
   return await withProjectVolumeLifecycleLock(project_id, async () => {
     if (opts.expected_lifecycle_generation != null) {
       assertProjectVolumeLifecycleGeneration(
@@ -1287,22 +1306,30 @@ export async function resetScratchVolume(
       );
     }
     const name = scratchVolName(project_id);
-    const vol = await fs!.subvolumes.get(name);
+    const vol = await measure(
+      "get",
+      async () => await fs!.subvolumes.get(name),
+    );
     invalidateProjectVolumeQuota({
       project_id,
       volume_kind: "scratch",
       reason: "scratch volume reset started",
     });
     markProjectVolumeAbsent(project_id, "scratch");
-    if (await exists(vol.path)) {
-      await fs!.subvolumes.delete(name);
+    if (await measure("exists", async () => await exists(vol.path))) {
+      await measure("delete", async () => await fs!.subvolumes.delete(name));
     }
-    const next = await fs!.subvolumes.ensure(name);
-    await recordManagedProjectVolume({
-      project_id,
-      scratch: true,
-      path: next.path,
-      force: true,
+    const next = await measure(
+      "create",
+      async () => await fs!.subvolumes.ensure(name),
+    );
+    await measure("record", async () => {
+      await recordManagedProjectVolume({
+        project_id,
+        scratch: true,
+        path: next.path,
+        force: true,
+      });
     });
     invalidateProjectFsServer(project_id);
     invalidateQuotaCache(project_id, true);
