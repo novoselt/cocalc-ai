@@ -1012,3 +1012,20 @@ The MVP is complete when:
 
 Anything beyond these criteria is a follow-up product, not unfinished MVP
 work.
+
+## 2026-08-03 MVP Refinements
+
+- A recurring project budget is the primary spending guardrail. VM TTL is an
+  optional additional deletion deadline, not a required guess at job duration.
+  Creating without a TTL requires an enabled project budget.
+- Users can set, extend, or clear a VM deadline without recreating it. Budget
+  exhaustion still deletes VMs and retains persistent volumes.
+- Add one narrow cluster-network primitive after TTL: VMs with the same owner,
+  project, and zone receive an isolated private network scope, stable private
+  names, and private IP discovery. Do not add Slurm, Dask, MPI, Ray, or other
+  cluster orchestration to CoCalc.
+- The supported cluster path is same-zone private traffic only. It is
+  zero-rated and excluded from customer egress charges.
+- Do not bill from the aggregate Compute Engine sent-bytes metric because it
+  includes free private traffic. Classify external flows, never charge
+  ambiguous flows, and reconcile against provider billable-network usage.

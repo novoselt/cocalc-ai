@@ -68,6 +68,11 @@ interface BudgetDraft {
   period: "week" | "month";
 }
 
+interface TtlDraft {
+  action: "set" | "extend" | "clear";
+  minutes: number;
+}
+
 function shortProjectId(projectId: string): string {
   return projectId.slice(0, 8);
 }
@@ -212,11 +217,13 @@ function VmCreateModal({
           </Form.Item>
           <Form.Item
             name="ttl_minutes"
-            label="Delete after"
-            rules={[{ required: true }]}
+            label="Optional deletion deadline"
+            extra="Leave blank to rely only on the project budget."
             style={{ flex: "1 1 160px" }}
           >
             <Select
+              allowClear
+              placeholder="No deadline"
               options={[
                 { value: 30, label: "30 minutes" },
                 { value: 60, label: "1 hour" },
@@ -451,6 +458,94 @@ function BudgetModal({
   );
 }
 
+function VmTtlModal({
+  vm,
+  saving,
+  onCancel,
+  onSave,
+}: {
+  vm?: ComputeVm;
+  saving: boolean;
+  onCancel: () => void;
+  onSave: (values: TtlDraft) => Promise<void>;
+}) {
+  const [form] = Form.useForm<TtlDraft>();
+  const [draft, setDraft] = useState<TtlDraft>({
+    action: vm?.expires_at ? "extend" : "set",
+    minutes: 60,
+  });
+
+  useEffect(() => {
+    if (!vm) return;
+    const initial: TtlDraft = {
+      action: vm.expires_at ? "extend" : "set",
+      minutes: 60,
+    };
+    form.setFieldsValue(initial);
+    setDraft(initial);
+  }, [form, vm]);
+
+  const duration =
+    draft.minutes % 60 === 0 ? `${draft.minutes / 60}h` : `${draft.minutes}m`;
+  const command = vm
+    ? draft.action === "clear"
+      ? `cocalc vm ttl ${vm.name} --clear`
+      : `cocalc vm ttl ${vm.name} --${draft.action} ${duration}`
+    : "";
+
+  return (
+    <Modal
+      open={vm != null}
+      title={vm ? `Deletion deadline for ${vm.name}` : "Deletion deadline"}
+      okText="Save deadline"
+      confirmLoading={saving}
+      onCancel={onCancel}
+      onOk={() => void form.validateFields().then(onSave)}
+    >
+      <Form<TtlDraft>
+        form={form}
+        layout="vertical"
+        onValuesChange={(_, values) => setDraft(values)}
+      >
+        <Form.Item name="action" label="Change">
+          <Select
+            options={[
+              { value: "set", label: "Set deadline from now" },
+              ...(vm?.expires_at
+                ? [{ value: "extend", label: "Extend current deadline" }]
+                : []),
+              { value: "clear", label: "Remove deadline (budget only)" },
+            ]}
+          />
+        </Form.Item>
+        {draft.action !== "clear" && (
+          <Form.Item
+            name="minutes"
+            label="Duration"
+            rules={[{ required: true }]}
+          >
+            <Select
+              options={[
+                { value: 30, label: "30 minutes" },
+                { value: 60, label: "1 hour" },
+                { value: 240, label: "4 hours" },
+                { value: 480, label: "8 hours" },
+                { value: 1440, label: "1 day" },
+              ]}
+            />
+          </Form.Item>
+        )}
+      </Form>
+      <Alert
+        showIcon
+        type="info"
+        message="The project budget remains the spending limit. Removing this deadline does not disable budget enforcement."
+      />
+      <CopyToClipBoard value={command} {...COPYABLE_PROPS} />
+    </Modal>
+  );
+}
+
 export function ProjectComputeVms({
   project_id,
   compact = false,
@@ -473,6 +568,7 @@ export function ProjectComputeVms({
   const [vmModalOpen, setVmModalOpen] = useState(false);
   const [volumeModalOpen, setVolumeModalOpen] = useState(false);
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
+  const [ttlVm, setTtlVm] = useState<ComputeVm>();
   const [vmInitial, setVmInitial] = useState<VmDraft>();
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction({
     origin: "project managed compute",
@@ -515,30 +611,32 @@ export function ProjectComputeVms({
     machine_type: catalog?.defaults.machine_type ?? "e2-standard-2",
     pricing_model: "spot",
     allow_on_demand_fallback: false,
-    ttl_minutes: catalog?.defaults.ttl_minutes ?? 30,
+    ttl_minutes: catalog?.defaults.ttl_minutes ?? null,
     boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
     ssh_public_key: sshKeys[0]?.value ?? "",
   });
 
   const openSimilar = (vm: ComputeVm) => {
-    const ttlMinutes = Math.max(
-      5,
-      Math.round(
-        (new Date(vm.expires_at).valueOf() -
-          new Date(vm.created_at).valueOf()) /
-          60_000,
-      ),
-    );
+    const ttlMinutes = vm.expires_at
+      ? Math.max(
+          5,
+          Math.round(
+            (new Date(vm.expires_at).valueOf() -
+              new Date(vm.created_at).valueOf()) /
+              60_000,
+          ),
+        )
+      : null;
     setVmInitial({
       name: similarName(vm.name, rows),
       zone: vm.zone,
       machine_type: vm.machine_type,
       pricing_model: vm.desired_pricing_model,
       allow_on_demand_fallback: vm.allow_on_demand_fallback,
-      ttl_minutes: Math.min(
-        ttlMinutes,
-        catalog?.limits.max_ttl_minutes ?? ttlMinutes,
-      ),
+      ttl_minutes:
+        ttlMinutes == null
+          ? null
+          : Math.min(ttlMinutes, catalog?.limits.max_ttl_minutes ?? ttlMinutes),
       boot_disk_gb: vm.boot_disk_gb,
       ssh_public_key: sshKeys[0]?.value ?? "",
     });
@@ -557,7 +655,7 @@ export function ProjectComputeVms({
           machine_type: values.machine_type,
           pricing_model: values.pricing_model,
           allow_on_demand_fallback: values.allow_on_demand_fallback,
-          ttl_minutes: values.ttl_minutes,
+          ttl_minutes: values.ttl_minutes ?? null,
           boot_disk_gb: values.boot_disk_gb,
           volume: values.volume,
           ssh_public_key: values.ssh_public_key,
@@ -591,6 +689,34 @@ export function ProjectComputeVms({
       await load();
     } catch (err) {
       setError(`${err}`);
+    }
+  };
+
+  const saveVmTtl = async (values: TtlDraft) => {
+    if (!ttlVm) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const completed = await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.compute.setVmTtl({
+          id_or_name: ttlVm.id,
+          ...(values.action === "extend"
+            ? { extend_minutes: values.minutes }
+            : {
+                ttl_minutes: values.action === "clear" ? null : values.minutes,
+              }),
+          idempotency_key: uuid(),
+          browser_id: webapp_client.browser_id,
+        });
+      });
+      if (!completed) return;
+      setNotice(`Deletion deadline for '${ttlVm.name}' updated.`);
+      setTtlVm(undefined);
+      await load();
+    } catch (err) {
+      setError(`${err}`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -720,11 +846,14 @@ export function ProjectComputeVms({
     {
       title: "Expires",
       dataIndex: "expires_at",
-      render: (expiresAt: string | Date) => (
-        <Text title={new Date(expiresAt).toLocaleString()}>
-          {expiresIn(expiresAt)}
-        </Text>
-      ),
+      render: (expiresAt?: string | Date | null) =>
+        expiresAt ? (
+          <Text title={new Date(expiresAt).toLocaleString()}>
+            {expiresIn(expiresAt)}
+          </Text>
+        ) : (
+          <Text type="secondary">Budget only</Text>
+        ),
     },
     {
       title: "Connect",
@@ -739,6 +868,9 @@ export function ProjectComputeVms({
       fixed: "right",
       render: (_, vm) => (
         <Space size={4}>
+          <Button size="small" onClick={() => setTtlVm(vm)}>
+            Deadline
+          </Button>
           <Button size="small" onClick={() => openSimilar(vm)}>
             Create similar
           </Button>
@@ -999,6 +1131,12 @@ export function ProjectComputeVms({
         saving={saving}
         onCancel={() => setBudgetModalOpen(false)}
         onSave={saveBudget}
+      />
+      <VmTtlModal
+        vm={ttlVm}
+        saving={saving}
+        onCancel={() => setTtlVm(undefined)}
+        onSave={saveVmTtl}
       />
       <FreshAuthModal {...freshAuthModalProps} />
     </div>

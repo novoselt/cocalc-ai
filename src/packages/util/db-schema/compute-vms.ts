@@ -76,7 +76,10 @@ Table({
     created_at: { type: "timestamp", desc: "Lease creation time." },
     updated_at: { type: "timestamp", desc: "Last control-plane update." },
     ready_at: { type: "timestamp", desc: "Current generation readiness." },
-    expires_at: { type: "timestamp", desc: "Hard guest-independent deadline." },
+    expires_at: {
+      type: "timestamp",
+      desc: "Optional guest-independent deletion deadline; null uses only the project budget.",
+    },
     stopped_at: { type: "timestamp", desc: "Most recent stop time." },
     deleted_at: { type: "timestamp", desc: "Logical deletion completion." },
     allow_on_demand_fallback: {

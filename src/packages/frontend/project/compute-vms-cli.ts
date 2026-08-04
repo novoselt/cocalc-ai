@@ -9,7 +9,7 @@ export interface VmCreateCliValues {
   machine_type: string;
   pricing_model: "spot" | "on_demand";
   allow_on_demand_fallback: boolean;
-  ttl_minutes: number;
+  ttl_minutes?: number | null;
   boot_disk_gb: number;
   volume?: string;
 }
@@ -49,9 +49,11 @@ export function vmCreateCli(opts: {
     values.zone ?? "us-central1-a",
     "--machine",
     values.machine_type ?? "e2-standard-2",
-    `--ttl=${ttlArgument(values.ttl_minutes ?? 30)}`,
-    `--boot-disk-gb=${values.boot_disk_gb ?? 20}`,
   ];
+  if (values.ttl_minutes != null) {
+    args.push(`--ttl=${ttlArgument(values.ttl_minutes)}`);
+  }
+  args.push(`--boot-disk-gb=${values.boot_disk_gb ?? 20}`);
   if (values.pricing_model === "spot") args.push("--spot");
   if (values.allow_on_demand_fallback) {
     args.push("--allow-on-demand-fallback");

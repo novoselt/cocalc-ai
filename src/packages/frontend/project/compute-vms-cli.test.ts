@@ -27,6 +27,16 @@ describe("managed compute CLI equivalents", () => {
     );
   });
 
+  it("omits TTL when the project budget is the only guardrail", () => {
+    expect(
+      vmCreateCli({
+        api: "https://staging.cocalc.ai",
+        project_id: "project-id",
+        values: { name: "open-ended", ttl_minutes: null },
+      }),
+    ).not.toContain("--ttl");
+  });
+
   it("shows the project-scoped persistent volume command", () => {
     expect(
       volumeCreateCli({

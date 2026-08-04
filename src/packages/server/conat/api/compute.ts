@@ -251,7 +251,7 @@ export async function getCatalog(opts: { account_id?: string }) {
     defaults: {
       zone: "us-central1-a",
       machine_type: "e2-standard-2",
-      ttl_minutes: 30,
+      ttl_minutes: null,
       boot_disk_gb: 20,
     },
     limits: {
@@ -372,11 +372,13 @@ export async function createVm(opts: CreateComputeVmRequest) {
   if (pricingModel !== "spot" && pricingModel !== "on_demand") {
     throw new Error("pricing_model must be spot or on_demand");
   }
-  const ttlMinutes = Number(opts.ttl_minutes);
+  const ttlMinutes =
+    opts.ttl_minutes == null ? undefined : Number(opts.ttl_minutes);
   if (
-    !Number.isInteger(ttlMinutes) ||
-    ttlMinutes < 5 ||
-    ttlMinutes > config.max_ttl_minutes
+    ttlMinutes != null &&
+    (!Number.isInteger(ttlMinutes) ||
+      ttlMinutes < 5 ||
+      ttlMinutes > config.max_ttl_minutes)
   ) {
     throw new Error(
       `ttl_minutes must be an integer from 5 to ${config.max_ttl_minutes}`,
@@ -392,33 +394,46 @@ export async function createVm(opts: CreateComputeVmRequest) {
       `boot_disk_gb must be an integer from ${MIN_BOOT_DISK_GB} to ${config.max_boot_disk_gb}`,
     );
   }
-  const { authorizedFallbackHours, maximumCostUsd } = computeLeaseAuthorization(
-    {
-      pricingModel,
-      allowOnDemandFallback: opts.allow_on_demand_fallback === true,
-      ttlMinutes,
-      spotHourlyUsd: machine.spot_hourly_usd,
-      onDemandHourlyUsd: machine.on_demand_hourly_usd,
-    },
-  );
   const budget = await budgetForAdmission(accountId, opts.project_id);
-  if (budget && Number(budget.remaining_usd) < maximumCostUsd) {
+  if (!budget && ttlMinutes == null) {
     throw new Error(
-      `project compute budget has ${Number(budget.remaining_usd).toFixed(2)} USD remaining, but this lease can cost up to ${maximumCostUsd.toFixed(2)} USD`,
+      "a VM without a TTL requires an enabled project compute budget",
     );
   }
+  if (budget && Number(budget.remaining_usd) <= 0) {
+    throw new Error("project compute budget is exhausted");
+  }
+  const leaseAuthorization =
+    ttlMinutes == null
+      ? undefined
+      : computeLeaseAuthorization({
+          pricingModel,
+          allowOnDemandFallback: opts.allow_on_demand_fallback === true,
+          ttlMinutes,
+          spotHourlyUsd: machine.spot_hourly_usd,
+          onDemandHourlyUsd: machine.on_demand_hourly_usd,
+        });
+  const authorizedFallbackHours =
+    leaseAuthorization?.authorizedFallbackHours ??
+    (pricingModel === "spot" && opts.allow_on_demand_fallback === true
+      ? 24
+      : 0);
+  const minimumAuthorizedCost = leaseAuthorization?.maximumCostUsd ?? 0;
   const authorizedCost =
-    opts.authorized_cost == null
-      ? budget
-        ? maximumCostUsd
-        : Number.NaN
-      : Number(opts.authorized_cost);
-  if (!Number.isFinite(authorizedCost) || authorizedCost < maximumCostUsd) {
+    budget != null
+      ? Number(budget.remaining_usd)
+      : opts.authorized_cost == null
+        ? Number.NaN
+        : Number(opts.authorized_cost);
+  if (
+    !Number.isFinite(authorizedCost) ||
+    (!budget && authorizedCost < minimumAuthorizedCost)
+  ) {
     throw new Error(
-      `set a project compute budget or provide authorized_cost of at least ${maximumCostUsd.toFixed(4)} USD for this staging lease`,
+      `set a project compute budget or provide authorized_cost of at least ${minimumAuthorizedCost.toFixed(4)} USD for this staging lease`,
     );
   }
-  if (authorizedCost > config.max_authorized_cost_usd) {
+  if (!budget && authorizedCost > config.max_authorized_cost_usd) {
     throw new Error(
       `authorized_cost must not exceed ${config.max_authorized_cost_usd.toFixed(2)} USD for this canary`,
     );
@@ -449,7 +464,8 @@ export async function createVm(opts: CreateComputeVmRequest) {
       public_ip: null,
       ssh_user: "ubuntu",
       ssh_public_key: normalizeSshPublicKey(opts.ssh_public_key),
-      expires_at: new Date(Date.now() + ttlMinutes * 60_000),
+      expires_at:
+        ttlMinutes == null ? null : new Date(Date.now() + ttlMinutes * 60_000),
       allow_on_demand_fallback: opts.allow_on_demand_fallback === true,
       authorized_fallback_hours: authorizedFallbackHours,
       spot_hourly_price: machine.spot_hourly_usd.toFixed(6),
@@ -470,6 +486,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
           : "dedicated-compute-provider-context",
         price_snapshot_kind: `${config.environment}-static-unbilled`,
         max_ttl_minutes: config.max_ttl_minutes,
+        authorization_kind: budget ? "project_budget" : "legacy_lease",
       },
     },
     {
@@ -752,7 +769,7 @@ async function requestState(opts: {
     requireComputeVmStartAllowed(await getComputeVmConfig(), accountId);
   }
   const vm = await resolveOwned(accountId, opts.id_or_name);
-  if (vm.expires_at.valueOf() <= Date.now()) {
+  if (vm.expires_at && vm.expires_at.valueOf() <= Date.now()) {
     throw new Error("compute VM lease has expired");
   }
   const action = opts.desired_state === "running" ? "start" : "stop";
@@ -793,6 +810,97 @@ export async function stopVm(opts: {
   idempotency_key: string;
 }) {
   return await requestState({ ...opts, desired_state: "stopped" });
+}
+
+export async function setVmTtl(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  ttl_minutes?: number | null;
+  extend_minutes?: number;
+  idempotency_key: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  const config = await getComputeVmConfig();
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  if (vm.desired_state === "deleted" || vm.state === "deleting") {
+    throw new Error("cannot change the TTL of a deleting VM");
+  }
+  if (vm.expires_at && vm.expires_at.valueOf() <= Date.now()) {
+    throw new Error("cannot change the TTL of an expired VM");
+  }
+  const hasTtl = Object.prototype.hasOwnProperty.call(opts, "ttl_minutes");
+  const hasExtension = opts.extend_minutes != null;
+  if (hasTtl === hasExtension) {
+    throw new Error("specify exactly one of ttl_minutes or extend_minutes");
+  }
+
+  let expiresAt: Date | null;
+  if (hasExtension) {
+    const minutes = Number(opts.extend_minutes);
+    if (!Number.isInteger(minutes) || minutes < 1) {
+      throw new Error("extend_minutes must be a positive integer");
+    }
+    if (!vm.expires_at) {
+      throw new Error("this VM has no TTL; use ttl_minutes to set one");
+    }
+    expiresAt = new Date(vm.expires_at.valueOf() + minutes * 60_000);
+  } else if (opts.ttl_minutes == null) {
+    expiresAt = null;
+  } else {
+    const minutes = Number(opts.ttl_minutes);
+    if (!Number.isInteger(minutes) || minutes < 5) {
+      throw new Error("ttl_minutes must be null or an integer of at least 5");
+    }
+    expiresAt = new Date(Date.now() + minutes * 60_000);
+  }
+  if (
+    expiresAt &&
+    expiresAt.valueOf() > Date.now() + config.max_ttl_minutes * 60_000
+  ) {
+    throw new Error(
+      `the resulting TTL must be at most ${config.max_ttl_minutes} minutes from now`,
+    );
+  }
+
+  const increasesExposure =
+    expiresAt == null ||
+    vm.expires_at == null ||
+    expiresAt.valueOf() > vm.expires_at.valueOf();
+  if (increasesExposure) {
+    const budget = await budgetForAdmission(accountId, vm.project_id);
+    if (!budget || Number(budget.remaining_usd) <= 0) {
+      throw new Error(
+        "extending or clearing a VM TTL requires an enabled project compute budget with remaining funds",
+      );
+    }
+  }
+
+  const next = (await updateComputeVm(vm.id, { expires_at: expiresAt }))!;
+  await appendComputeEvent({
+    vm: next,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    action: "set_ttl",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: vm.state,
+    new_state: next.state,
+    status: "completed",
+    details: {
+      previous_expires_at: vm.expires_at ?? null,
+      expires_at: expiresAt,
+      extend_minutes: opts.extend_minutes ?? null,
+    },
+  });
+  return publicVm(next);
 }
 
 export async function deleteVm(opts: {

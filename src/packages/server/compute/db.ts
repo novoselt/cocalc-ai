@@ -220,6 +220,7 @@ export async function updateComputeVm(
     "error",
     "metadata",
     "spot_recovery_state",
+    "expires_at",
   ]);
   const entries = Object.entries(updates).filter(([key]) => allowed.has(key));
   if (!entries.length) return await getComputeVmById(id);
@@ -430,7 +431,8 @@ export async function enqueueExpiredComputeVms(limit = 100) {
          error='lease expired'
      WHERE id IN (
        SELECT id FROM compute_vms
-       WHERE deleted_at IS NULL AND expires_at <= NOW()
+       WHERE deleted_at IS NULL AND expires_at IS NOT NULL
+         AND expires_at <= NOW()
        ORDER BY expires_at LIMIT $1 FOR UPDATE SKIP LOCKED
      )
      RETURNING id`,
@@ -472,7 +474,7 @@ export async function enqueueComputeEmergencyStops(limit = 100) {
 export async function enqueueComputeReconciliation(limit = 100) {
   const { rows } = await pool().query<{ id: string }>(
     `SELECT id FROM compute_vms
-     WHERE deleted_at IS NULL AND expires_at > NOW()
+     WHERE deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
      ORDER BY updated_at ASC LIMIT $1`,
     [limit],
   );

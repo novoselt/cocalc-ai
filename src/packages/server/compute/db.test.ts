@@ -10,6 +10,7 @@ import {
   enqueueComputeWork,
   enqueueComputeEmergencyStops,
   enqueueExpiredComputeVms,
+  enqueueComputeReconciliation,
   finishComputeWork,
   insertComputeVm,
   listOwnedComputeVms,
@@ -62,7 +63,9 @@ function vmInput(
     public_ip: null,
     ssh_user: "ubuntu",
     ssh_public_key: "ssh-ed25519 AAAATEST owner",
-    expires_at: overrides.expires_at ?? new Date(Date.now() + 60_000),
+    expires_at: Object.prototype.hasOwnProperty.call(overrides, "expires_at")
+      ? overrides.expires_at
+      : new Date(Date.now() + 60_000),
     allow_on_demand_fallback: false,
     authorized_fallback_hours: 0,
     spot_hourly_price: "0.020000",
@@ -244,6 +247,18 @@ describe("compute VM durable state", () => {
       [vm.id],
     );
     expect(work.rows).toEqual([{ action: "delete", state: "queued" }]);
+  });
+
+  it("keeps budget-only VMs out of expiry while reconciling them", async () => {
+    const vm = await insertComputeVm(vmInput({ expires_at: null }));
+    expect(vm.expires_at).toBeNull();
+    expect(await enqueueExpiredComputeVms()).toBe(0);
+    expect(await enqueueComputeReconciliation()).toBe(1);
+    const work = await getPool().query(
+      "SELECT action, state FROM compute_resource_work WHERE resource_id=$1",
+      [vm.id],
+    );
+    expect(work.rows).toEqual([{ action: "reconcile", state: "queued" }]);
   });
 
   it("turns running leases into durable emergency-stop reconciliation", async () => {

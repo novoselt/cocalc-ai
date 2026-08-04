@@ -33,7 +33,7 @@ export interface ComputeVm {
   created_at: string | Date;
   updated_at: string | Date;
   ready_at?: string | Date | null;
-  expires_at: string | Date;
+  expires_at?: string | Date | null;
   stopped_at?: string | Date | null;
   deleted_at?: string | Date | null;
   allow_on_demand_fallback: boolean;
@@ -59,7 +59,7 @@ export interface CreateComputeVmRequest {
   machine_type: string;
   pricing_model: ComputeVmPricingModel;
   allow_on_demand_fallback?: boolean;
-  ttl_minutes: number;
+  ttl_minutes?: number | null;
   boot_disk_gb?: number;
   volume?: string;
   authorized_cost?: string;
@@ -141,7 +141,7 @@ export interface ComputeCatalog {
   defaults: {
     zone: string;
     machine_type: string;
-    ttl_minutes: number;
+    ttl_minutes?: number | null;
     boot_disk_gb: number;
   };
   limits: {
@@ -159,6 +159,7 @@ export const compute = {
   startVm: authFirstRequireAccount,
   stopVm: authFirstRequireAccount,
   deleteVm: authFirstRequireAccount,
+  setVmTtl: authFirstRequireAccount,
   createVolume: authFirstRequireAccount,
   listVolumes: authFirstRequireAccount,
   getVolume: authFirstRequireAccount,
@@ -195,6 +196,15 @@ export interface ComputeApi {
     browser_id?: string;
     session_hash?: string;
     id_or_name: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVm>;
+  setVmTtl: (opts: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
+    id_or_name: string;
+    ttl_minutes?: number | null;
+    extend_minutes?: number;
     idempotency_key: string;
   }) => Promise<ComputeVm>;
   createVolume: (opts: CreateComputeVolumeRequest) => Promise<ComputeVolume>;

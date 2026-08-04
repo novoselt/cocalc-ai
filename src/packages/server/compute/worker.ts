@@ -283,7 +283,9 @@ async function provision(vm: ComputeVmRow) {
 }
 
 async function start(vm: ComputeVmRow) {
-  if (vm.expires_at.valueOf() <= Date.now()) return await remove(vm);
+  if (vm.expires_at && vm.expires_at.valueOf() <= Date.now()) {
+    return await remove(vm);
+  }
   if (vm.desired_state === "stopped") return await reconcile(vm);
   await updateComputeVm(vm.id, { state: "starting", error: null });
   try {
@@ -586,7 +588,10 @@ async function reconcileVolume(volume: ComputeVolumeRow) {
 }
 
 async function reconcile(vm: ComputeVmRow) {
-  if (vm.expires_at.valueOf() <= Date.now() || vm.desired_state === "deleted") {
+  if (
+    (vm.expires_at && vm.expires_at.valueOf() <= Date.now()) ||
+    vm.desired_state === "deleted"
+  ) {
     return await remove(vm);
   }
   const observed = await inspectProviderComputeVm(vm);

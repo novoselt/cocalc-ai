@@ -114,7 +114,7 @@ export function buildVmSshConfigBlock(opts: {
   return `${lines.join("\n")}\n`;
 }
 
-function parseTtlMinutes(value: string) {
+export function parseTtlMinutes(value: string) {
   const match = `${value ?? ""}`.trim().match(/^(\d+)(m|h|d)$/i);
   if (!match)
     throw new Error("--ttl must use minutes, hours, or days, e.g. 30m or 8h");
@@ -286,7 +286,7 @@ export function vmListSummary(rows: any[]) {
     pricing: row.effective_pricing_model,
     zone: row.zone,
     ip: row.public_ip ?? "",
-    expires: row.expires_at,
+    expires: row.expires_at ?? "never",
     project: row.project_id,
   }));
 }
@@ -311,7 +311,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
   } = deps;
   const vm = program
     .command("vm")
-    .description("short-lived account-owned managed compute VMs");
+    .description("account-owned managed compute VMs");
 
   vm.command("list")
     .description("list compute VMs owned by the current account")
@@ -346,7 +346,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     });
 
   vm.command("create <name>")
-    .description("create a bounded staging compute VM lease")
+    .description("create a managed compute VM")
     .requiredOption("--project <project_id>", "attached CoCalc project")
     .option("--zone <zone>", "GCP zone", "us-central1-a")
     .option(
@@ -360,7 +360,10 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "authorize 24-hour project-host-compatible fallback",
       false,
     )
-    .option("--ttl <duration>", "hard lease deadline, e.g. 30m or 8h", "30m")
+    .option(
+      "--ttl <duration>",
+      "optional deletion deadline, e.g. 30m or 8h; otherwise the project budget is the guardrail",
+    )
     .option("--boot-disk-gb <gb>", "persistent root disk size", "20")
     .option("--volume <name>", "existing persistent volume mounted at /work")
     .option(
@@ -379,7 +382,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           machine_type: opts.machine,
           pricing_model: opts.spot ? "spot" : "on_demand",
           allow_on_demand_fallback: opts.allowOnDemandFallback === true,
-          ttl_minutes: parseTtlMinutes(opts.ttl),
+          ttl_minutes: opts.ttl ? parseTtlMinutes(opts.ttl) : null,
           boot_disk_gb: Number(opts.bootDiskGb),
           volume: opts.volume,
           authorized_cost: opts.authorizedCost,
@@ -414,6 +417,44 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         });
       },
     );
+
+  vm.command("ttl <vm>")
+    .description("show, set, extend, or clear a VM deletion deadline")
+    .option("--set <duration>", "set a deadline from now, e.g. 8h")
+    .option("--extend <duration>", "extend the current deadline, e.g. 2h")
+    .option("--clear", "remove the deadline and rely on the project budget")
+    .action(async (idOrName: string, opts: any, command: Command) => {
+      await withContext(command, "vm ttl", async (ctx) => {
+        const selected = [
+          opts.set != null,
+          opts.extend != null,
+          opts.clear,
+        ].filter(Boolean).length;
+        if (selected === 0) {
+          const current = await ctx.hub.compute.getVm({
+            id_or_name: idOrName,
+          });
+          return {
+            id: current.id,
+            name: current.name,
+            expires_at: current.expires_at ?? null,
+          };
+        }
+        if (selected !== 1) {
+          throw new Error("specify exactly one of --set, --extend, or --clear");
+        }
+        return await ctx.hub.compute.setVmTtl({
+          id_or_name: idOrName,
+          ...(opts.extend != null
+            ? { extend_minutes: parseTtlMinutes(opts.extend) }
+            : {
+                ttl_minutes:
+                  opts.set != null ? parseTtlMinutes(opts.set) : null,
+              }),
+          idempotency_key: randomUUID(),
+        });
+      });
+    });
 
   for (const action of ["start", "stop"] as const) {
     vm.command(`${action} <vm>`)

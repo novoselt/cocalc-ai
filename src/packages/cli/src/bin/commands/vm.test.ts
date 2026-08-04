@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import { Command } from "commander";
 import {
   buildVmSshConfigBlock,
+  parseTtlMinutes,
   registerVmCommand,
   removeVmSshConfigBlock,
   resolveVmRsyncEndpoint,
@@ -21,6 +22,7 @@ function harness() {
   const sshCalls: string[][] = [];
   const rsyncCalls: string[][] = [];
   const callbackResults: unknown[] = [];
+  const ttlCalls: any[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -37,6 +39,10 @@ function harness() {
               public_ip: "203.0.113.10",
               ssh_user: "ubuntu",
             }),
+            setVmTtl: async (opts: any) => {
+              ttlCalls.push(opts);
+              return { id: "vm-id", name: "build-vm", ...opts };
+            },
           },
         },
       });
@@ -46,8 +52,40 @@ function harness() {
     runSsh: (args) => sshCalls.push(args),
     runRsync: (args) => rsyncCalls.push(args),
   });
-  return { program, sshCalls, rsyncCalls, callbackResults };
+  return { program, sshCalls, rsyncCalls, callbackResults, ttlCalls };
 }
+
+describe("vm ttl", () => {
+  it("parses human durations and extends an existing deadline", async () => {
+    assert.equal(parseTtlMinutes("2h"), 120);
+    const { program, ttlCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "ttl",
+      "build-vm",
+      "--extend",
+      "2h",
+    ]);
+    assert.equal(ttlCalls[0]?.id_or_name, "build-vm");
+    assert.equal(ttlCalls[0]?.extend_minutes, 120);
+    assert.equal(typeof ttlCalls[0]?.idempotency_key, "string");
+  });
+
+  it("clears the deadline explicitly", async () => {
+    const { program, ttlCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "ttl",
+      "build-vm",
+      "--clear",
+    ]);
+    assert.equal(ttlCalls[0]?.ttl_minutes, null);
+  });
+});
 
 describe("vm ssh", () => {
   it("opens an interactive SSH session when no command is supplied", async () => {

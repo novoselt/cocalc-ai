@@ -44,7 +44,7 @@ export interface ComputeVmRow {
   created_at: Date;
   updated_at: Date;
   ready_at?: Date | null;
-  expires_at: Date;
+  expires_at?: Date | null;
   stopped_at?: Date | null;
   deleted_at?: Date | null;
   allow_on_demand_fallback: boolean;
