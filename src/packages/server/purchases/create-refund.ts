@@ -15,6 +15,12 @@ import { moneyToCurrency, toDecimal } from "@cocalc/util/money";
 import send, { support } from "@cocalc/server/messages/send";
 import { refreshAccountBalanceAndPublishBestEffort } from "./refresh-balance";
 import cancelSubscription from "./cancel-subscription";
+import {
+  getMembershipPackage,
+  listMembershipPackageAssignments,
+  revokeMembershipPackageSeat,
+  updateMembershipPackage,
+} from "@cocalc/server/membership/packages";
 
 const logger = getLogger("purchase:create-refund");
 
@@ -69,8 +75,24 @@ export default async function createRefund(opts: {
       notes,
     });
   }
+  if (
+    service === "membership" &&
+    description?.type === "membership-package" &&
+    nonemptyString(description?.package_id) != null
+  ) {
+    return await refundMembershipPackage({
+      purchase_id,
+      reason,
+      notes,
+    });
+  }
   if (service === "refund") {
     throw Error("Refund transactions cannot themselves be refunded");
+  }
+  if (service === "membership") {
+    throw Error(
+      `Membership transaction ${purchase_id} is neither a subscription nor a membership package`,
+    );
   }
   return await refundInternalPurchase({
     purchase_id,
@@ -366,6 +388,178 @@ async function refundMembership({
   return refundPurchaseId;
 }
 
+async function refundMembershipPackage({
+  purchase_id,
+  reason,
+  notes,
+}: {
+  purchase_id: number;
+  reason: Reason;
+  notes: string;
+}): Promise<number> {
+  const client = await getTransactionClient();
+  let purchase!: PurchaseRow;
+  let refundPurchaseId!: number;
+  let packageId = "";
+  let expiredPackage = false;
+  let refundedSeats = 0;
+  try {
+    purchase = await getPurchase(purchase_id, client, true);
+    const existing = getExistingRefundPurchaseId(purchase.description);
+    if (existing != null) {
+      await client.query("COMMIT");
+      return existing;
+    }
+    if (
+      purchase.service !== "membership" ||
+      purchase.description?.type !== "membership-package"
+    ) {
+      throw Error(
+        `Transaction ${purchase_id} is not a membership package purchase`,
+      );
+    }
+    if (purchase.cost == null) {
+      throw Error(`Membership transaction ${purchase_id} is not finalized`);
+    }
+    packageId = nonemptyString(purchase.description?.package_id) ?? "";
+    if (!packageId) {
+      throw Error(
+        `Membership package transaction ${purchase_id} has no package id`,
+      );
+    }
+    const pkg = await getMembershipPackage({
+      package_id: packageId,
+      client,
+    });
+    if (!pkg) {
+      throw Error(`Membership package ${packageId} does not exist`);
+    }
+    if (pkg.owner_account_id !== purchase.account_id) {
+      throw Error(
+        `Membership package ${packageId} is not owned by the purchase account`,
+      );
+    }
+
+    refundedSeats = positiveInteger(purchase.description?.seat_count) ?? 0;
+    if (!refundedSeats) {
+      throw Error(
+        `Membership package transaction ${purchase_id} has no seat count`,
+      );
+    }
+    const expandedExistingPackage =
+      purchase.description?.expanded_existing_package === true;
+    if (expandedExistingPackage) {
+      const nextSeatCount = pkg.seat_count - refundedSeats;
+      if (nextSeatCount <= 0) {
+        throw Error(
+          `Refunding transaction ${purchase_id} would remove every seat from membership package ${packageId}`,
+        );
+      }
+      const activeAssignments = await listMembershipPackageAssignments({
+        package_id: packageId,
+        client,
+      });
+      if (activeAssignments.length > nextSeatCount) {
+        throw Error(
+          `Revoke at least ${activeAssignments.length - nextSeatCount} assigned seat(s) from membership package ${packageId} before refunding transaction ${purchase_id}`,
+        );
+      }
+      await updateMembershipPackage({
+        package_id: packageId,
+        seat_count: nextSeatCount,
+        client,
+      });
+    } else {
+      if (pkg.purchase_id != null && Number(pkg.purchase_id) !== purchase_id) {
+        throw Error(
+          `Membership package ${packageId} belongs to purchase ${pkg.purchase_id}, not transaction ${purchase_id}`,
+        );
+      }
+      const { rows: activeExpansions } = await client.query<{ id: number }>(
+        `SELECT id
+           FROM purchases
+          WHERE account_id=$1
+            AND service='membership'
+            AND id<>$2
+            AND description->>'type'='membership-package'
+            AND description->>'package_id'=$3
+            AND description->>'expanded_existing_package'='true'
+            AND NOT (description ? 'refund_purchase_id')
+          LIMIT 1`,
+        [purchase.account_id, purchase_id, packageId],
+      );
+      if (activeExpansions[0]) {
+        throw Error(
+          `Refund membership package expansion transaction ${activeExpansions[0].id} before refunding original transaction ${purchase_id}`,
+        );
+      }
+      const assignments = await listMembershipPackageAssignments({
+        package_id: packageId,
+        client,
+      });
+      for (const assignment of assignments) {
+        const revoked = await revokeMembershipPackageSeat(
+          {
+            package_id: packageId,
+            account_id: assignment.account_id ?? undefined,
+            email_address: assignment.account_id
+              ? undefined
+              : (assignment.email_address ?? undefined),
+          },
+          client,
+        );
+        if (!revoked) {
+          throw Error(
+            `Unable to revoke membership package assignment ${assignment.id}`,
+          );
+        }
+      }
+      await updateMembershipPackage({
+        package_id: packageId,
+        expires_at: new Date(),
+        client,
+      });
+      expiredPackage = true;
+    }
+
+    const description: Refund = {
+      type: "refund",
+      purchase_id,
+      notes,
+      reason,
+    };
+    refundPurchaseId = await createPurchase({
+      account_id: purchase.account_id,
+      service: "refund",
+      cost: toDecimal(purchase.cost).neg(),
+      description,
+      client,
+    });
+    await markPurchaseRefunded({ client, purchase, refundPurchaseId });
+    await client.query("COMMIT");
+    await refreshAccountBalanceAndPublishBestEffort({
+      account_id: purchase.account_id,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await sendRefundMessage({
+    account_id: purchase.account_id,
+    purchase_id,
+    amount: purchase.cost,
+    reason,
+    notes,
+    details: expiredPackage
+      ? `Membership package ${packageId} was expired and its active seat assignments were revoked. The purchase amount was restored to the account balance. Any related credit transaction must be refunded separately.`
+      : `${refundedSeats} seat(s) were removed from membership package ${packageId}. The purchase amount was restored to the account balance. Any related credit transaction must be refunded separately.`,
+  });
+  return refundPurchaseId;
+}
+
 async function refundInternalPurchase({
   purchase_id,
   reason,
@@ -475,6 +669,11 @@ async function markPurchaseRefunded({
 function positiveInteger(value: unknown): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function nonemptyString(value: unknown): string | undefined {
+  const normalized = `${value ?? ""}`.trim();
+  return normalized || undefined;
 }
 
 function adminRefundReason({

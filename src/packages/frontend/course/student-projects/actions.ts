@@ -32,6 +32,10 @@ import { Result, run_in_all_projects } from "./run-in-all-projects";
 import type { StudentRecord } from "../store";
 import { getEmailInviteValidationError } from "../configuration/email-invite-validation";
 import { configureNewCourseSshTarget } from "../configuration/course-ssh-service";
+import {
+  courseConfigurationErrorMessage,
+  retryCourseConfigurationWrite,
+} from "./configuration-retry";
 
 // Project starts can mount RootFS overlays and update host/control-plane state.
 // Keep course-wide start/stop fanout conservative for single-host Star installs.
@@ -558,10 +562,12 @@ export class StudentProjectsActions {
     project_id: string,
     fields: { title?: string; description?: string },
   ): Promise<void> => {
-    await webapp_client.async_query({
-      query: {
-        projects: { project_id, ...fields },
-      },
+    await retryCourseConfigurationWrite(async () => {
+      await webapp_client.async_query({
+        query: {
+          projects: { project_id, ...fields },
+        },
+      });
     });
   };
 
@@ -1086,9 +1092,7 @@ export class StudentProjectsActions {
       await this.ensure_course_manager_access();
     } catch (err) {
       console.warn(err);
-      this.course_actions.set_error(
-        `Error configuring student projects - ${err}`,
-      );
+      this.course_actions.set_error(courseConfigurationErrorMessage(err));
     } finally {
       if (this.course_actions.is_closed()) return;
       this.course_actions.setState({ configuring_projects: false });
