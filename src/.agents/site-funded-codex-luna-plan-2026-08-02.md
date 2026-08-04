@@ -336,7 +336,7 @@ usage_units = cost_microusd * 100 / 1_000_000
 Do not round each turn to a whole usage unit. Round only microusd provider
 liability, then sum integers.
 
-## Seed-Authoritative Funding Ledger
+## Seed-Authoritative Budget Reservations
 
 Global funded spend is one of the deliberately small global billing concerns
 in the multibay architecture. The seed/global billing database is authoritative
@@ -386,6 +386,11 @@ reasoning
 service_tier
 reserved_microusd
 committed_microusd
+last_request_sequence
+last_event_id
+last_event_cost_microusd
+last_event_price_version
+last_event_long_context
 status active|committed|released|expired|interrupted|failed
 started_at
 heartbeat_at
@@ -394,38 +399,26 @@ completed_at
 outcome
 ```
 
-Do not store prompt or response content in this ledger. Avoid storing full file
-paths; a coarse surface tag such as `chat`, `jupyter`, or `editor` is enough for
-product analysis.
+This is bounded operational reservation state, not a second user-usage ledger.
+Do not store prompt or response content here. Avoid storing full file paths; a
+coarse surface tag such as `chat`, `jupyter`, or `editor` is enough for product
+analysis.
 
-### `site_ai_provider_usage_events`
+### Canonical `ai_usage_log`
 
-```text
-event_id UUID PRIMARY KEY
-reservation_id
-provider_request_id
-request_sequence
-price_version
-input_tokens
-cached_input_tokens
-cache_write_input_tokens
-output_tokens
-reasoning_output_tokens
-long_context
-provider_tool_fees_microusd
-cost_microusd
-duration_ms
-recorded_at
-```
-
-Unique provider request ID or `(reservation_id, request_sequence)` constraints
-make retries idempotent.
+Write every exact site-funded provider request directly to the account home
+bay's existing `ai_usage_log`. `funded_event_id` is the immutable idempotency
+key, while `funded_turn_id` groups requests from one Codex turn. Store exact
+token categories, price version, provider request ID, tool fees, long-context
+status, request sequence, duration, and `cost_microusd` on the same row. This is
+the only user AI usage ledger; do not maintain or backfill a parallel funded
+Codex event table.
 
 ### Aggregates
 
-Build daily aggregates from the immutable ledger instead of deleting raw
-financial records prematurely. Keep raw provider events for a defined audit
-window, then retain non-content daily aggregates longer.
+Build daily aggregates from `ai_usage_log` instead of deleting raw financial
+records prematurely. Keep exact non-content request rows for a defined audit
+window, then retain daily aggregates longer.
 
 ## Atomic Reservation Semantics
 
@@ -805,7 +798,7 @@ Each stage requires cost, discrepancy, failure, abuse, and conversion review.
 
 - simultaneous reservations at the exact pool boundary;
 - idempotent admission and completion retries;
-- duplicate provider usage events;
+- duplicate exact provider events in `ai_usage_log`;
 - expired and abandoned reservations;
 - actual cost below, equal to, and unexpectedly above reservation;
 - UTC week rollover;

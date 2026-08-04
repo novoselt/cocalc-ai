@@ -1,4 +1,4 @@
-import { Button, Popover, Progress, Space } from "antd";
+import { Button, Popover, Space } from "antd";
 import { BaseType } from "antd/es/typography/Base";
 
 import { CSS } from "@cocalc/frontend/app-framework";
@@ -12,6 +12,10 @@ import { round2down, round2up } from "@cocalc/util/misc";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { useEffect, useState } from "react";
 import { lite } from "@cocalc/frontend/lite";
+import {
+  UsageWindowMeters,
+  type UsageWindowMeter,
+} from "@cocalc/frontend/account/usage-window-meters";
 
 /*
 NOTE: To get a quick idea about the numbers of how many completion tokens are returned, run this:
@@ -92,8 +96,8 @@ export function AIUsageHelpContent() {
   return (
     <>
       <Paragraph>
-        Site-provided AI usage may be limited or unavailable. CoCalc membership
-        upgrades do not currently include additional AI usage on cocalc.ai.
+        Your CoCalc membership determines the site-provided AI allowance shown
+        here. Usage resets automatically with the displayed windows.
       </Paragraph>
       <Paragraph>
         To use AI in CoCalc, sign up for a ChatGPT plan at{" "}
@@ -159,10 +163,7 @@ export function AIUsageStatus({
 
   const content = (
     <>
-      <div style={{ textAlign: "left" }}>
-        <UsageBar label="5-hour limit" window={window5h} />
-        <UsageBar label="7-day limit" window={window7d} />
-      </div>
+      <AIUsageMeters status={status} />
       {showHelp && (
         <HelpIcon title="AI Usage Limits" placement={"topLeft"}>
           <AIUsageHelpContent />
@@ -202,57 +203,46 @@ export function AIUsageStatus({
   return content;
 }
 
-function formatResetAt(resetAt?: Date | string): string | undefined {
-  if (!resetAt) return;
-  const date = new Date(resetAt);
-  if (!Number.isFinite(date.getTime())) return;
-  return date.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
+export function getAIUsageWindows(
+  status?: AIUsageStatusResponse | null,
+): UsageWindowMeter[] {
+  if (!status) return [];
+  return status.windows.map((window) => {
+    const limit = window.limit;
+    const remaining =
+      window.remaining ??
+      (typeof limit === "number"
+        ? Math.max(0, limit - window.used)
+        : undefined);
+    const remainingPercent =
+      typeof limit === "number" && limit > 0 && typeof remaining === "number"
+        ? Math.max(0, Math.min(100, Math.round((100 * remaining) / limit)))
+        : undefined;
+    const resetAtValue = window.reset_at ?? window.resets_at;
+    const resetAt = resetAtValue ? new Date(resetAtValue) : undefined;
+    return {
+      key: window.window,
+      label: window.window === "5h" ? "5-hour limit" : "7-day limit",
+      remainingPercent,
+      resetAt:
+        resetAt && Number.isFinite(resetAt.getTime()) ? resetAt : undefined,
+    };
   });
 }
 
-function UsageBar({
-  label,
-  window,
+export function AIUsageMeters({
+  status,
+  compact = false,
 }: {
-  label: string;
-  window?: AIUsageWindowStatus;
-}) {
-  if (!window || window.limit == null) {
-    return (
-      <div style={{ marginBottom: "6px" }}>
-        <Text type="secondary">{label}: no limit</Text>
-      </div>
-    );
-  }
-  const limit = window.limit;
-  const percent =
-    limit > 0
-      ? Math.min(100, (100 * window.used) / limit)
-      : window.used > 0
-        ? 100
-        : 0;
-  const remaining = window.remaining ?? Math.max(0, limit - window.used);
+  status?: AIUsageStatusResponse | null;
+  compact?: boolean;
+}): React.JSX.Element | null {
   return (
-    <div style={{ marginBottom: "6px" }}>
-      <Text type="secondary">
-        {label}: {window.used} / {limit} units{" "}
-        {window.reset_at
-          ? `· next reset ${formatResetAt(window.reset_at)}`
-          : ""}
-        {window.reset_in ? ` · in ${window.reset_in}` : ""}
-      </Text>
-      <Progress
-        aria-label={`${label}: ${window.used} of ${limit} units used`}
-        percent={percent}
-        size="small"
-        showInfo={false}
-        status={remaining === 0 ? "exception" : "active"}
-      />
-    </div>
+    <UsageWindowMeters
+      compact={compact}
+      statusLabel="AI usage"
+      windows={getAIUsageWindows(status)}
+    />
   );
 }
 

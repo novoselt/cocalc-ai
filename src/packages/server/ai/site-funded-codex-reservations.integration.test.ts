@@ -11,18 +11,17 @@ import {
 } from "@cocalc/util/ai/site-funded-codex";
 import { uuid } from "@cocalc/util/misc";
 import {
-  ensureSiteFundedCodexLedgerTables,
+  ensureSiteFundedCodexReservationTables,
   expireAbandonedSiteFundedCodexReservations,
   finishSiteFundedCodexTurn,
-  getSiteFundedCodexAccountStatus,
   getSiteFundedCodexPoolStatus,
   recordSiteFundedCodexUsageEvent,
   reserveSiteFundedCodexTurn,
-} from "./site-funded-codex-ledger";
+} from "./site-funded-codex-reservations";
 
 beforeAll(async () => {
   await before({ noConat: true });
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
 }, 15_000);
 
 afterAll(after);
@@ -63,9 +62,8 @@ function options({
   };
 }
 
-describe("site-funded Codex seed ledger", () => {
+describe("site-funded Codex reservations", () => {
   beforeEach(async () => {
-    await getPool().query("DELETE FROM site_ai_provider_usage_events");
     await getPool().query("DELETE FROM site_ai_turn_reservations");
     await getPool().query("DELETE FROM site_ai_funding_periods");
     await getPool().query("DELETE FROM site_ai_account_holds");
@@ -137,13 +135,21 @@ describe("site-funded Codex seed ledger", () => {
       cachedInputTokens: 6_000,
       outputTokens: 500,
     };
-    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toEqual({
-      costMicrousd: 1_520,
-      inserted: true,
-    });
+    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toMatchObject(
+      {
+        costMicrousd: 1_520,
+        inserted: true,
+        fundedTurnId: opts.fundedTurnId,
+        accountId: opts.accountId,
+        projectId: opts.projectId,
+      },
+    );
+    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toMatchObject(
+      { costMicrousd: 1_520, inserted: false },
+    );
     await expect(
       recordSiteFundedCodexUsageEvent({ ...event, eventId: uuid() }),
-    ).resolves.toEqual({ costMicrousd: 1_520, inserted: false });
+    ).resolves.toMatchObject({ costMicrousd: 1_520, inserted: false });
 
     const finished = await finishSiteFundedCodexTurn({
       reservationId: first.reservation.reservationId,
@@ -162,27 +168,21 @@ describe("site-funded Codex seed ledger", () => {
         status: "committed",
       }),
     ).resolves.toEqual(finished);
+    await expect(
+      recordSiteFundedCodexUsageEvent({
+        ...event,
+        eventId: uuid(),
+        requestSequence: 3,
+      }),
+    ).rejects.toThrow("reservation is not active (committed)");
     expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
       reservedMicrousd: 0,
       committedMicrousd: 1_520,
       activeReservations: 0,
     });
-    await expect(
-      getSiteFundedCodexAccountStatus({
-        accountId: opts.accountId,
-        limit5hMicrousd: 10_000,
-        limit7dMicrousd: 20_000,
-      }),
-    ).resolves.toMatchObject({
-      committed5hMicrousd: 1_520,
-      committed7dMicrousd: 1_520,
-      activeReservedMicrousd: 0,
-      remaining5hMicrousd: 8_480,
-      remaining7dMicrousd: 18_480,
-    });
   });
 
-  it("enforces account concurrency and rolling cost limits", async () => {
+  it("enforces account concurrency and canonical remaining allowance", async () => {
     const accountId = uuid();
     const first = await reserveSiteFundedCodexTurn(
       options({ accountId, maxTurnCostMicrousd: 10_000 }),
@@ -210,7 +210,7 @@ describe("site-funded Codex seed ledger", () => {
     });
     const limited = await reserveSiteFundedCodexTurn({
       ...options({ accountId, maxTurnCostMicrousd: 10_000 }),
-      accountLimit5hMicrousd: 5_000,
+      accountRemaining5hMicrousd: 3_000,
     });
     expect(limited).toMatchObject({
       allowed: true,
@@ -226,7 +226,7 @@ describe("site-funded Codex seed ledger", () => {
     });
     const exhausted = await reserveSiteFundedCodexTurn({
       ...options({ accountId, maxTurnCostMicrousd: 10_000 }),
-      accountLimit5hMicrousd: 2_000,
+      accountRemaining5hMicrousd: 0,
     });
     expect(exhausted).toMatchObject({
       allowed: false,

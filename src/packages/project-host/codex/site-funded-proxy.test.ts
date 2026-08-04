@@ -12,6 +12,7 @@ import {
 import { uuid } from "@cocalc/util/misc";
 import {
   shutdownSiteFundedCodexProxyForTests,
+  siteFundedUsageEventId,
   startSiteFundedCodexProxySession,
 } from "./site-funded-proxy";
 
@@ -33,6 +34,19 @@ function reservation(): SiteFundedCodexReservation {
 }
 
 describe("site-funded Codex provider proxy", () => {
+  it("uses a stable usage event id for reservation request retries", () => {
+    const reservationId = uuid();
+    expect(siteFundedUsageEventId(reservationId, 1)).toBe(
+      siteFundedUsageEventId(reservationId, 1),
+    );
+    expect(siteFundedUsageEventId(reservationId, 1)).not.toBe(
+      siteFundedUsageEventId(reservationId, 2),
+    );
+    expect(siteFundedUsageEventId(reservationId, 1)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
   it("forces policy and records streaming usage without exposing the real key", async () => {
     let upstreamAuthorization = "";
     let upstreamBody: any;
@@ -99,7 +113,7 @@ describe("site-funded Codex provider proxy", () => {
     expect(upstreamAuthorization).toBe("Bearer real-site-key");
     expect(upstreamBody).toMatchObject({
       model: "gpt-5.6-luna",
-      reasoning: { effort: "low" },
+      reasoning: { effort: "medium" },
       service_tier: "default",
     });
     expect(upstreamBody.max_output_tokens).toBeGreaterThan(0);
@@ -147,5 +161,66 @@ describe("site-funded Codex provider proxy", () => {
       error: { type: "site_funded_codex_policy_error" },
     });
     session.close();
+  });
+
+  it("reuses one runtime credential with isolated per-turn reservations", async () => {
+    const upstream = createServer(async (_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: "resp-rebound",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+          },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const first = reservation();
+    const second = reservation();
+    const events: SiteFundedCodexUsageEvent[] = [];
+    const session = await startSiteFundedCodexProxySession({
+      reservation: first,
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async (event) => events.push(event),
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = async () => {
+      const response = await fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "hello" }),
+      });
+      await response.text();
+      return response.status;
+    };
+
+    expect(await request()).toBe(200);
+    session.deactivate(first.reservationId);
+    expect(await request()).toBe(403);
+    session.activate({
+      reservation: second,
+      onUsage: async (event) => events.push(event),
+    });
+    expect(await request()).toBe(200);
+    expect(events.map((event) => event.reservationId)).toEqual([
+      first.reservationId,
+      second.reservationId,
+    ]);
+
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
   });
 });

@@ -6,6 +6,7 @@ import {
 } from "@cocalc/server/membership/usage-windows";
 import { AI_USAGE_UNITS_PER_DOLLAR } from "./usage-units";
 import isValidAccount from "../accounts/is-valid-account";
+import { ensureExactAIUsageSchema } from "./save-response";
 
 export interface AIUsageWindowStatus {
   window: "5h" | "7d";
@@ -35,6 +36,7 @@ export async function getAIUsageStatus({
   account_id?: string;
   analytics_cookie?: string;
 }): Promise<AIUsageStatus> {
+  await ensureExactAIUsageSchema();
   if (account_id && !(await isValidAccount(account_id))) {
     throw Error(`invalid account_id ${account_id}`);
   }
@@ -140,14 +142,23 @@ async function recentUsageUnitsInFixedWindow({
 }): Promise<number> {
   const pool = getPool(cache);
   const { rows } = await pool.query(
-    `SELECT SUM(COALESCE(usage_units, 0)) AS usage
+    `SELECT SUM(COALESCE(
+       cost_microusd * $4::numeric / 1000000,
+       usage_units,
+       0
+     )) AS usage
      FROM ai_usage_log
      WHERE account_id=$1
        AND time >= $2
        AND time < $3`,
-    [account_id, usageWindow.starts_at, usageWindow.resets_at],
+    [
+      account_id,
+      usageWindow.starts_at,
+      usageWindow.resets_at,
+      AI_USAGE_UNITS_PER_DOLLAR,
+    ],
   );
-  return parseInt(rows[0]?.["usage"] ?? 0);
+  return Number(rows[0]?.["usage"] ?? 0);
 }
 
 async function recentUsageUnits({
@@ -165,16 +176,16 @@ async function recentUsageUnits({
   let query;
   let args: string[] = [];
   if (account_id) {
-    query = `SELECT SUM(COALESCE(usage_units, 0)) AS usage FROM ai_usage_log WHERE account_id=$1 AND time >= NOW() - INTERVAL '${period}'`;
+    query = `SELECT SUM(COALESCE(cost_microusd * ${AI_USAGE_UNITS_PER_DOLLAR}::numeric / 1000000, usage_units, 0)) AS usage FROM ai_usage_log WHERE account_id=$1 AND time >= NOW() - INTERVAL '${period}'`;
     args = [account_id];
   } else if (analytics_cookie) {
-    query = `SELECT SUM(COALESCE(usage_units, 0)) AS usage FROM ai_usage_log WHERE analytics_cookie=$1 AND time >= NOW() - INTERVAL '${period}'`;
+    query = `SELECT SUM(COALESCE(cost_microusd * ${AI_USAGE_UNITS_PER_DOLLAR}::numeric / 1000000, usage_units, 0)) AS usage FROM ai_usage_log WHERE analytics_cookie=$1 AND time >= NOW() - INTERVAL '${period}'`;
     args = [analytics_cookie];
   } else {
-    query = `SELECT SUM(COALESCE(usage_units, 0)) AS usage FROM ai_usage_log WHERE time >= NOW() - INTERVAL '${period}'`;
+    query = `SELECT SUM(COALESCE(cost_microusd * ${AI_USAGE_UNITS_PER_DOLLAR}::numeric / 1000000, usage_units, 0)) AS usage FROM ai_usage_log WHERE time >= NOW() - INTERVAL '${period}'`;
   }
   const { rows } = await pool.query(query, args);
-  return parseInt(rows[0]?.["usage"] ?? 0);
+  return Number(rows[0]?.["usage"] ?? 0);
 }
 
 async function getWindowResetAt({

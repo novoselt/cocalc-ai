@@ -266,6 +266,13 @@ export async function startCodexDeviceAuth(
         } catch (err) {
           const current = sessions.get(session.id);
           if (!current || current.state === "canceled") return;
+          logger.warn("codex device auth verification failed", {
+            id,
+            projectId,
+            accountId,
+            syncedToRegistry: session.syncedToRegistry,
+            err: `${err}`,
+          });
           session.state = "failed";
           session.syncedToRegistry = session.syncedToRegistry === true;
           session.syncError = `${err}`;

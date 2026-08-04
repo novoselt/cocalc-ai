@@ -5894,6 +5894,7 @@ export function shouldStopDetachedWorkerForDrain({
   isDraining,
   runningJobs,
   runningTurnLeases,
+  backgroundTerminalProcesses = 0,
   exitRequestedAt,
   quiesceMs,
   now = Date.now(),
@@ -5901,12 +5902,19 @@ export function shouldStopDetachedWorkerForDrain({
   isDraining: boolean;
   runningJobs: number;
   runningTurnLeases: number;
+  backgroundTerminalProcesses?: number;
   exitRequestedAt?: number | null;
   quiesceMs?: number | null;
   now?: number;
 }): boolean {
   if (!isDraining) return false;
-  if (runningJobs > 0 || runningTurnLeases > 0) return false;
+  if (
+    runningJobs > 0 ||
+    runningTurnLeases > 0 ||
+    backgroundTerminalProcesses > 0
+  ) {
+    return false;
+  }
   if (quiesceMs == null || quiesceMs < 0) return true;
   if (!exitRequestedAt || !Number.isFinite(exitRequestedAt)) return false;
   return now - exitRequestedAt >= quiesceMs;
@@ -6214,6 +6222,7 @@ export async function runDetachedAcpQueueWorker(
     const runningTurnLeases = countRunningAcpTurnLeasesForWorker(
       workerContext.worker_id,
     );
+    const runtimeStatus = getAcpAgentRuntimeStatus();
     return {
       worker_id: workerContext.worker_id,
       host_id: workerContext.host_id,
@@ -6231,6 +6240,8 @@ export async function runDetachedAcpQueueWorker(
         currentDetachedWorkerContext.started_at ??
         Date.now(),
       running_turn_leases: runningTurnLeases,
+      live_app_server_runtimes: runtimeStatus.liveAppServerRuntimes,
+      background_terminal_processes: runtimeStatus.backgroundTerminalProcesses,
       exit_requested_at: currentDetachedWorkerContext.exit_requested_at ?? null,
       stop_reason: currentDetachedWorkerContext.stop_reason ?? null,
     };
@@ -6242,6 +6253,32 @@ export async function runDetachedAcpQueueWorker(
   } = {}): AcpDaemonStatus => {
     if (!workerContext || !currentDetachedWorkerContext) {
       throw new Error("detached ACP worker context is not initialized");
+    }
+    const runningJobs = countRunningAcpJobsForWorker(workerContext.worker_id);
+    const runningTurnLeases = countRunningAcpTurnLeasesForWorker(
+      workerContext.worker_id,
+    );
+    const runtimeStatus = getAcpAgentRuntimeStatus();
+    if (
+      runningJobs > 0 ||
+      runningTurnLeases > 0 ||
+      runtimeStatus.activeTurns > 0 ||
+      runtimeStatus.backgroundTerminalProcesses > 0
+    ) {
+      logger.info("deferring ACP worker drain while Codex work is active", {
+        worker_id: workerContext.worker_id,
+        running_jobs: runningJobs,
+        running_turn_leases: runningTurnLeases,
+        active_turns: runtimeStatus.activeTurns,
+        background_terminal_processes:
+          runtimeStatus.backgroundTerminalProcesses,
+        reason,
+      });
+      const status = snapshotDetachedWorkerState();
+      if (status == null) {
+        throw new Error("detached ACP worker status unavailable");
+      }
+      return status;
     }
     currentDetachedWorkerContext.state = "draining";
     currentDetachedWorkerContext.exit_requested_at ??= Date.now();
@@ -6259,6 +6296,7 @@ export async function runDetachedAcpQueueWorker(
     state: AcpWorkerState;
     runningJobs: number;
     runningTurnLeases: number;
+    backgroundTerminalProcesses: number;
   } | null => {
     if (!workerContext || !currentDetachedWorkerContext) {
       return null;
@@ -6270,6 +6308,7 @@ export async function runDetachedAcpQueueWorker(
     const runningTurnLeases = countRunningAcpTurnLeasesForWorker(
       workerContext.worker_id,
     );
+    const runtimeStatus = getAcpAgentRuntimeStatus();
     currentDetachedWorkerContext.last_heartbeat_at = now;
     currentDetachedWorkerContext.last_seen_running_jobs = runningJobs;
     heartbeatAcpWorker({
@@ -6277,6 +6316,8 @@ export async function runDetachedAcpQueueWorker(
       pid: process.pid,
       state: nextState,
       last_seen_running_jobs: runningJobs,
+      live_app_server_runtimes: runtimeStatus.liveAppServerRuntimes,
+      background_terminal_processes: runtimeStatus.backgroundTerminalProcesses,
       last_queue_progress_at:
         currentDetachedWorkerContext.last_queue_progress_at ?? null,
     });
@@ -6285,6 +6326,7 @@ export async function runDetachedAcpQueueWorker(
         isDraining: nextState === "draining",
         runningJobs,
         runningTurnLeases,
+        backgroundTerminalProcesses: runtimeStatus.backgroundTerminalProcesses,
         exitRequestedAt: currentDetachedWorkerContext.exit_requested_at ?? null,
         quiesceMs: ACP_WORKER_DRAIN_QUIESCE_MS,
         now,
@@ -6294,7 +6336,12 @@ export async function runDetachedAcpQueueWorker(
         currentDetachedWorkerContext.stop_reason ?? "drained";
     }
     workerHeartbeatFailureCount = 0;
-    return { state: nextState, runningJobs, runningTurnLeases };
+    return {
+      state: nextState,
+      runningJobs,
+      runningTurnLeases,
+      backgroundTerminalProcesses: runtimeStatus.backgroundTerminalProcesses,
+    };
   };
   try {
     recordAcpWorkerHeartbeat({ pid: process.pid });
@@ -6416,7 +6463,11 @@ export async function runDetachedAcpQueueWorker(
               : "ACP worker stopped before turn startup",
         });
       }
-      const hasWork = hasQueuedOrRunningAcpJobs();
+      const runtimeStatus = getAcpAgentRuntimeStatus();
+      const hasWork =
+        hasQueuedOrRunningAcpJobs() ||
+        runtimeStatus.activeTurns > 0 ||
+        runtimeStatus.backgroundTerminalProcesses > 0;
       if (hasWork) {
         idleSince = 0;
       } else if (!idleSince) {
@@ -9948,6 +9999,28 @@ export async function disposeAcpAgents(): Promise<void> {
   }
   await Promise.all(pending);
   agents.clear();
+}
+
+export function getAcpAgentRuntimeStatus(): {
+  liveAppServerRuntimes: number;
+  activeTurns: number;
+  backgroundTerminalProcesses: number;
+} {
+  let liveAppServerRuntimes = 0;
+  let activeTurns = 0;
+  let backgroundTerminalProcesses = 0;
+  for (const agent of agents.values()) {
+    const status = agent.getRuntimeStatus?.();
+    if (!status) continue;
+    liveAppServerRuntimes += Math.max(0, status.liveRuntimes);
+    activeTurns += Math.max(0, status.activeTurns);
+    backgroundTerminalProcesses += Math.max(0, status.backgroundTerminals);
+  }
+  return {
+    liveAppServerRuntimes,
+    activeTurns,
+    backgroundTerminalProcesses,
+  };
 }
 
 export const acpTestInternals = {

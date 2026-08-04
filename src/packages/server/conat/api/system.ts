@@ -93,13 +93,10 @@ import {
 } from "@cocalc/server/external-credentials/routing";
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
-import { getAIUsageLimits } from "@cocalc/server/ai/usage-status";
+import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
 import { aiUsageUnitsToMicrousd } from "@cocalc/server/ai/usage-units";
 import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
-import {
-  getSiteFundedCodexAccountStatus,
-  getSiteFundedCodexPoolStatus,
-} from "@cocalc/server/ai/site-funded-codex-ledger";
+import { getSiteFundedCodexPoolStatus } from "@cocalc/server/ai/site-funded-codex-reservations";
 import { reconcileSiteFundedCodexCosts } from "@cocalc/server/ai/site-funded-codex-reconciliation";
 import {
   enqueueRootfsPrepullForHost,
@@ -6410,12 +6407,24 @@ export async function getCodexPaymentSource({
     to_bool(settings.openai_enabled) &&
     !(await isAiLaunchDisabled()) &&
     !!`${settings.openai_api_key ?? ""}`.trim();
-  const siteAiUsageLimits = hasSiteApiKey
-    ? await getAIUsageLimits({ account_id })
+  const siteAiUsageStatus = hasSiteApiKey
+    ? await getAIUsageStatus({ account_id })
+    : undefined;
+  const usage5h = siteAiUsageStatus?.windows.find(
+    ({ window }) => window === "5h",
+  );
+  const usage7d = siteAiUsageStatus?.windows.find(
+    ({ window }) => window === "7d",
+  );
+  const siteAiUsageLimits = siteAiUsageStatus
+    ? {
+        units_5h: usage5h?.limit ?? 0,
+        units_7d: usage7d?.limit ?? 0,
+      }
     : undefined;
   const siteAiUsageLimitPositive =
-    siteAiUsageLimits != null
-      ? siteAiUsageLimits.units_5h > 0 && siteAiUsageLimits.units_7d > 0
+    usage5h?.limit != null && usage7d?.limit != null
+      ? usage5h.limit > 0 && usage7d.limit > 0
       : undefined;
   let siteFundedCodex:
     | import("@cocalc/conat/hub/api/system").CodexPaymentSourceInfo["siteFundedCodex"]
@@ -6426,34 +6435,33 @@ export async function getCodexPaymentSource({
       if (!configuration.enabled) {
         siteFundedCodex = { enabled: false };
       } else {
-        const limit5hMicrousd = aiUsageUnitsToMicrousd(
-          siteAiUsageLimits?.units_5h,
-        );
-        const limit7dMicrousd = aiUsageUnitsToMicrousd(
-          siteAiUsageLimits?.units_7d,
-        );
+        const limit5hMicrousd = aiUsageUnitsToMicrousd(usage5h?.limit);
+        const limit7dMicrousd = aiUsageUnitsToMicrousd(usage7d?.limit);
+        const account = {
+          accountId: account_id,
+          committed5hMicrousd: aiUsageUnitsToMicrousd(usage5h?.used),
+          committed7dMicrousd: aiUsageUnitsToMicrousd(usage7d?.used),
+          activeReservedMicrousd: 0,
+          limit5hMicrousd,
+          limit7dMicrousd,
+          remaining5hMicrousd: aiUsageUnitsToMicrousd(usage5h?.remaining),
+          remaining7dMicrousd: aiUsageUnitsToMicrousd(usage7d?.remaining),
+          reset5hAt: usage5h?.reset_at?.toISOString(),
+          reset7dAt: usage7d?.reset_at?.toISOString(),
+        };
         const seedBayId = getConfiguredClusterSeedBayId();
-        const status =
+        const fundingStatus =
           seedBayId === getConfiguredBayId()
             ? {
                 pools: await getSiteFundedCodexPoolStatus(),
-                account: await getSiteFundedCodexAccountStatus({
-                  accountId: account_id,
-                  limit5hMicrousd,
-                  limit7dMicrousd,
-                }),
               }
             : await getInterBayBridge()
                 .bayOps(seedBayId, { timeout_ms: 15_000 })
-                .getSiteFundedCodexStatus({
-                  account_id,
-                  limit5hMicrousd,
-                  limit7dMicrousd,
-                });
+                .getSiteFundedCodexStatus({});
         siteFundedCodex = {
           enabled: true,
           policy: configuration.policy,
-          status,
+          status: { ...fundingStatus, account },
         };
       }
     } catch (err) {

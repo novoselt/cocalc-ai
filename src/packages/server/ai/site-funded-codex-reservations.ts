@@ -9,17 +9,17 @@ import type { PoolClient } from "@cocalc/database/pool";
 import {
   computeSiteFundedCodexRequestCost,
   type SiteFundedCodexAdmission,
-  type SiteFundedCodexAccountStatus,
   type SiteFundedCodexPoolId,
   type SiteFundedCodexPoolStatus,
   type SiteFundedCodexPolicy,
   type SiteFundedCodexReservation,
   type SiteFundedCodexReservationStatus,
   type SiteFundedCodexUsageEvent,
+  type SiteFundedCodexUsageRecordResult,
 } from "@cocalc/util/ai/site-funded-codex";
 import { uuid } from "@cocalc/util/misc";
 
-const logger = getLogger("server:ai:site-funded-codex-ledger");
+const logger = getLogger("server:ai:site-funded-codex-reservations");
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const GLOBAL_POOL_ID = "site-funded-codex-global" as const;
 
@@ -39,8 +39,8 @@ export type ReserveSiteFundedCodexTurnOptions = {
   owningBayId?: string;
   membershipTier: string;
   policy: SiteFundedCodexPolicy;
-  accountLimit5hMicrousd?: number | null;
-  accountLimit7dMicrousd?: number | null;
+  accountRemaining5hMicrousd?: number | null;
+  accountRemaining7dMicrousd?: number | null;
   surface?: string;
 };
 
@@ -80,6 +80,9 @@ function reservationFromRow(row: any): SiteFundedCodexReservation {
   return {
     reservationId: row.reservation_id,
     fundedTurnId: row.funded_turn_id,
+    accountId: row.account_id,
+    projectId: row.project_id,
+    homeBayId: row.home_bay_id ?? undefined,
     poolId: row.pool_id,
     policy: row.policy,
     reservedMicrousd: int(row.reserved_microusd),
@@ -87,13 +90,14 @@ function reservationFromRow(row: any): SiteFundedCodexReservation {
       row.pool_reserved_microusd ?? row.reserved_microusd,
     ),
     committedMicrousd: int(row.committed_microusd),
+    completedAt: row.completed_at ? iso(row.completed_at) : undefined,
     expiresAt: iso(row.expires_at),
     heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
     status: row.status,
   };
 }
 
-export async function ensureSiteFundedCodexLedgerTables(): Promise<void> {
+export async function ensureSiteFundedCodexReservationTables(): Promise<void> {
   const statements = [
     `
     CREATE TABLE IF NOT EXISTS site_ai_funding_periods (
@@ -130,6 +134,11 @@ export async function ensureSiteFundedCodexLedgerTables(): Promise<void> {
       reserved_microusd BIGINT NOT NULL CHECK (reserved_microusd >= 0),
       pool_reserved_microusd BIGINT NOT NULL CHECK (pool_reserved_microusd >= 0),
       committed_microusd BIGINT NOT NULL DEFAULT 0 CHECK (committed_microusd >= 0),
+      last_request_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_request_sequence >= 0),
+      last_event_id UUID,
+      last_event_cost_microusd BIGINT NOT NULL DEFAULT 0 CHECK (last_event_cost_microusd >= 0),
+      last_event_price_version TEXT,
+      last_event_long_context BOOLEAN,
       status TEXT NOT NULL CHECK (status IN ('active','committed','released','expired','interrupted','failed')),
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -144,6 +153,16 @@ export async function ensureSiteFundedCodexLedgerTables(): Promise<void> {
       ON site_ai_turn_reservations(account_id, started_at DESC)`,
     `ALTER TABLE site_ai_turn_reservations
        ADD COLUMN IF NOT EXISTS pool_reserved_microusd BIGINT NOT NULL DEFAULT 0`,
+    `ALTER TABLE site_ai_turn_reservations
+       ADD COLUMN IF NOT EXISTS last_request_sequence INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE site_ai_turn_reservations
+       ADD COLUMN IF NOT EXISTS last_event_id UUID`,
+    `ALTER TABLE site_ai_turn_reservations
+       ADD COLUMN IF NOT EXISTS last_event_cost_microusd BIGINT NOT NULL DEFAULT 0`,
+    `ALTER TABLE site_ai_turn_reservations
+       ADD COLUMN IF NOT EXISTS last_event_price_version TEXT`,
+    `ALTER TABLE site_ai_turn_reservations
+       ADD COLUMN IF NOT EXISTS last_event_long_context BOOLEAN`,
     `UPDATE site_ai_turn_reservations
        SET pool_reserved_microusd = reserved_microusd
        WHERE status = 'active' AND pool_reserved_microusd = 0`,
@@ -151,30 +170,6 @@ export async function ensureSiteFundedCodexLedgerTables(): Promise<void> {
     CREATE INDEX IF NOT EXISTS site_ai_turn_reservations_active_idx
       ON site_ai_turn_reservations(status, expires_at)
       WHERE status = 'active'`,
-    `
-    CREATE TABLE IF NOT EXISTS site_ai_provider_usage_events (
-      event_id UUID PRIMARY KEY,
-      reservation_id UUID NOT NULL REFERENCES site_ai_turn_reservations(reservation_id),
-      provider_request_id TEXT,
-      request_sequence INTEGER NOT NULL CHECK (request_sequence > 0),
-      price_version TEXT NOT NULL,
-      model TEXT NOT NULL,
-      input_tokens BIGINT NOT NULL CHECK (input_tokens >= 0),
-      cached_input_tokens BIGINT NOT NULL CHECK (cached_input_tokens >= 0),
-      cache_write_input_tokens BIGINT NOT NULL CHECK (cache_write_input_tokens >= 0),
-      output_tokens BIGINT NOT NULL CHECK (output_tokens >= 0),
-      reasoning_output_tokens BIGINT NOT NULL CHECK (reasoning_output_tokens >= 0),
-      long_context BOOLEAN NOT NULL,
-      provider_tool_fees_microusd BIGINT NOT NULL DEFAULT 0,
-      cost_microusd BIGINT NOT NULL CHECK (cost_microusd >= 0),
-      duration_ms INTEGER,
-      recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (reservation_id, request_sequence)
-    )`,
-    `
-    CREATE UNIQUE INDEX IF NOT EXISTS site_ai_provider_request_id_idx
-      ON site_ai_provider_usage_events(provider_request_id)
-      WHERE provider_request_id IS NOT NULL`,
     `
     CREATE TABLE IF NOT EXISTS site_ai_account_holds (
       account_id UUID PRIMARY KEY,
@@ -200,7 +195,8 @@ async function expireCurrentPeriodReservations({
 }): Promise<void> {
   const { rows } = await client.query(
     `
-      SELECT reservation_id, reserved_microusd, pool_reserved_microusd
+      SELECT reservation_id, reserved_microusd, pool_reserved_microusd,
+             committed_microusd
       FROM site_ai_turn_reservations
       WHERE pool_id = $1 AND period_start = $2 AND status = 'active'
         AND expires_at <= NOW()
@@ -211,12 +207,7 @@ async function expireCurrentPeriodReservations({
   let released = 0;
   let committed = 0;
   for (const row of rows) {
-    const usage = await client.query(
-      `SELECT COALESCE(SUM(cost_microusd), 0) AS cost
-       FROM site_ai_provider_usage_events WHERE reservation_id = $1`,
-      [row.reservation_id],
-    );
-    const reservationCommitted = int(usage.rows[0]?.cost);
+    const reservationCommitted = int(row.committed_microusd);
     released += int(row.pool_reserved_microusd ?? row.reserved_microusd);
     committed += reservationCommitted;
     await client.query(
@@ -252,27 +243,6 @@ function finalRequestHeadroomMicrousd(policy: SiteFundedCodexPolicy): number {
   }).costMicrousd;
 }
 
-async function committedInWindow({
-  client,
-  accountId,
-  interval,
-}: {
-  client: DbClient;
-  accountId: string;
-  interval: "5 hours" | "7 days";
-}): Promise<number> {
-  const { rows } = await client.query(
-    `
-      SELECT COALESCE(SUM(committed_microusd), 0) AS committed
-      FROM site_ai_turn_reservations
-      WHERE account_id = $1 AND completed_at >= NOW() - $2::interval
-        AND status IN ('committed', 'interrupted', 'failed')
-    `,
-    [accountId, interval],
-  );
-  return int(rows[0]?.committed);
-}
-
 function denied(
   code: Exclude<SiteFundedCodexAdmission, { allowed: true }>["code"],
   reason: string,
@@ -283,7 +253,7 @@ function denied(
 export async function reserveSiteFundedCodexTurn(
   opts: ReserveSiteFundedCodexTurnOptions,
 ): Promise<SiteFundedCodexAdmission> {
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -398,26 +368,14 @@ export async function reserveSiteFundedCodexTurn(
         "Site-funded Codex is temporarily at its global concurrency limit.",
       );
     }
-    const [used5h, used7d] = await Promise.all([
-      committedInWindow({
-        client,
-        accountId: opts.accountId,
-        interval: "5 hours",
-      }),
-      committedInWindow({
-        client,
-        accountId: opts.accountId,
-        interval: "7 days",
-      }),
-    ]);
     const remaining5h =
-      opts.accountLimit5hMicrousd == null
+      opts.accountRemaining5hMicrousd == null
         ? Number.MAX_SAFE_INTEGER
-        : Math.max(0, opts.accountLimit5hMicrousd - used5h);
+        : Math.max(0, opts.accountRemaining5hMicrousd);
     const remaining7d =
-      opts.accountLimit7dMicrousd == null
+      opts.accountRemaining7dMicrousd == null
         ? Number.MAX_SAFE_INTEGER
-        : Math.max(0, opts.accountLimit7dMicrousd - used7d);
+        : Math.max(0, opts.accountRemaining7dMicrousd);
     const requested = Math.min(
       opts.policy.maxTurnCostMicrousd,
       remaining5h,
@@ -531,7 +489,7 @@ export async function heartbeatSiteFundedCodexTurn({
 }: {
   reservationId: string;
 }): Promise<boolean> {
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
   const { rowCount } = await getPool().query(
     `
       UPDATE site_ai_turn_reservations
@@ -550,7 +508,7 @@ export async function assertSiteFundedCodexReservationHost({
   reservationId: string;
   hostId: string;
 }): Promise<void> {
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
   const { rows } = await getPool().query(
     `SELECT host_id FROM site_ai_turn_reservations WHERE reservation_id = $1`,
     [reservationId],
@@ -562,53 +520,109 @@ export async function assertSiteFundedCodexReservationHost({
 
 export async function recordSiteFundedCodexUsageEvent(
   event: SiteFundedCodexUsageEvent,
-): Promise<{ costMicrousd: number; inserted: boolean }> {
-  await ensureSiteFundedCodexLedgerTables();
+): Promise<SiteFundedCodexUsageRecordResult> {
+  await ensureSiteFundedCodexReservationTables();
+  if (
+    !Number.isSafeInteger(event.requestSequence) ||
+    event.requestSequence < 1
+  ) {
+    throw new Error("site-funded Codex request sequence must be positive");
+  }
   const cost = computeSiteFundedCodexRequestCost({
     model: event.model,
     usage: event,
   });
-  const { rowCount, rows } = await getPool().query(
-    `
-      INSERT INTO site_ai_provider_usage_events (
-        event_id, reservation_id, provider_request_id, request_sequence,
-        price_version, model, input_tokens, cached_input_tokens,
-        cache_write_input_tokens, output_tokens, reasoning_output_tokens,
-        long_context, provider_tool_fees_microusd, cost_microusd, duration_ms
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
-      )
-      ON CONFLICT (reservation_id, request_sequence) DO NOTHING
-      RETURNING cost_microusd
-    `,
-    [
-      event.eventId,
-      event.reservationId,
-      event.providerRequestId ?? null,
-      event.requestSequence,
-      cost.priceVersion,
-      cost.model,
-      event.inputTokens,
-      event.cachedInputTokens ?? 0,
-      event.cacheWriteInputTokens ?? 0,
-      event.outputTokens,
-      event.reasoningOutputTokens ?? 0,
-      cost.longContext,
-      event.providerToolFeesMicrousd ?? 0,
-      cost.costMicrousd,
-      event.durationMs ?? null,
-    ],
-  );
-  return {
-    costMicrousd: rowCount ? int(rows[0]?.cost_microusd) : cost.costMicrousd,
-    inserted: (rowCount ?? 0) > 0,
-  };
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const found = await client.query(
+      `SELECT * FROM site_ai_turn_reservations
+       WHERE reservation_id = $1 FOR UPDATE`,
+      [event.reservationId],
+    );
+    const row = found.rows[0];
+    if (!row) throw new Error("site-funded Codex reservation not found");
+    const lastRequestSequence = int(row.last_request_sequence);
+    const result = (inserted: boolean): SiteFundedCodexUsageRecordResult => ({
+      costMicrousd:
+        !inserted && event.requestSequence === lastRequestSequence
+          ? int(row.last_event_cost_microusd)
+          : cost.costMicrousd,
+      inserted,
+      priceVersion:
+        !inserted && event.requestSequence === lastRequestSequence
+          ? (row.last_event_price_version ?? cost.priceVersion)
+          : cost.priceVersion,
+      longContext:
+        !inserted && event.requestSequence === lastRequestSequence
+          ? (row.last_event_long_context ?? cost.longContext)
+          : cost.longContext,
+      fundedTurnId: row.funded_turn_id,
+      accountId: row.account_id,
+      projectId: row.project_id,
+      homeBayId: row.home_bay_id ?? undefined,
+    });
+    if (event.requestSequence === lastRequestSequence) {
+      // The monotonically increasing request sequence is the canonical
+      // idempotency key. Older project hosts generated a fresh event UUID when
+      // redelivering the same request, so requiring both keys to match could
+      // strand the reservation without protecting against double charging.
+      await client.query("COMMIT");
+      return result(false);
+    }
+    if (row.status !== "active") {
+      throw new Error(
+        `site-funded Codex reservation is not active (${row.status})`,
+      );
+    }
+    if (event.requestSequence < lastRequestSequence) {
+      throw new Error("site-funded Codex usage event sequence is stale");
+    }
+    if (event.requestSequence !== lastRequestSequence + 1) {
+      throw new Error(
+        `site-funded Codex usage event sequence ${event.requestSequence} follows ${lastRequestSequence}`,
+      );
+    }
+    const committedMicrousd = int(row.committed_microusd) + cost.costMicrousd;
+    const hardBoundMicrousd = int(
+      row.pool_reserved_microusd ?? row.reserved_microusd,
+    );
+    if (committedMicrousd > hardBoundMicrousd) {
+      throw new Error(
+        `site-funded Codex turn cost ${committedMicrousd} exceeds its ${hardBoundMicrousd} microusd reservation`,
+      );
+    }
+    await client.query(
+      `UPDATE site_ai_turn_reservations
+       SET committed_microusd = $2, last_request_sequence = $3,
+           last_event_id = $4, last_event_cost_microusd = $5,
+           last_event_price_version = $6, last_event_long_context = $7,
+           heartbeat_at = NOW()
+       WHERE reservation_id = $1`,
+      [
+        event.reservationId,
+        committedMicrousd,
+        event.requestSequence,
+        event.eventId,
+        cost.costMicrousd,
+        cost.priceVersion,
+        cost.longContext,
+      ],
+    );
+    await client.query("COMMIT");
+    return result(true);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function finishSiteFundedCodexTurn(
   opts: FinishSiteFundedCodexTurnOptions,
 ): Promise<SiteFundedCodexReservation> {
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -622,14 +636,7 @@ export async function finishSiteFundedCodexTurn(
       await client.query("COMMIT");
       return reservationFromRow(row);
     }
-    const usage = await client.query(
-      `
-        SELECT COALESCE(SUM(cost_microusd), 0) AS cost
-        FROM site_ai_provider_usage_events WHERE reservation_id = $1
-      `,
-      [opts.reservationId],
-    );
-    const committed = int(usage.rows[0]?.cost);
+    const committed = int(row.committed_microusd);
     const updated = await client.query(
       `
         UPDATE site_ai_turn_reservations
@@ -677,7 +684,7 @@ export async function finishSiteFundedCodexTurn(
 export async function getSiteFundedCodexPoolStatus(): Promise<
   SiteFundedCodexPoolStatus[]
 > {
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
   const { start } = periodBounds();
   const { rows } = await getPool().query(
     `
@@ -713,58 +720,8 @@ export async function getSiteFundedCodexPoolStatus(): Promise<
   });
 }
 
-export async function getSiteFundedCodexAccountStatus({
-  accountId,
-  limit5hMicrousd,
-  limit7dMicrousd,
-}: {
-  accountId: string;
-  limit5hMicrousd?: number | null;
-  limit7dMicrousd?: number | null;
-}): Promise<SiteFundedCodexAccountStatus> {
-  await ensureSiteFundedCodexLedgerTables();
-  const { rows } = await getPool().query(
-    `SELECT
-       COALESCE(SUM(committed_microusd) FILTER (
-         WHERE completed_at >= NOW() - INTERVAL '5 hours'
-       ), 0) AS committed_5h,
-       COALESCE(SUM(committed_microusd) FILTER (
-         WHERE completed_at >= NOW() - INTERVAL '7 days'
-       ), 0) AS committed_7d,
-       COALESCE(SUM(reserved_microusd) FILTER (
-         WHERE status = 'active'
-       ), 0) AS active_reserved
-     FROM site_ai_turn_reservations
-     WHERE account_id = $1`,
-    [accountId],
-  );
-  const committed5hMicrousd = int(rows[0]?.committed_5h);
-  const committed7dMicrousd = int(rows[0]?.committed_7d);
-  const activeReservedMicrousd = int(rows[0]?.active_reserved);
-  const normalized5h =
-    limit5hMicrousd == null ? undefined : Math.max(0, limit5hMicrousd);
-  const normalized7d =
-    limit7dMicrousd == null ? undefined : Math.max(0, limit7dMicrousd);
-  return {
-    accountId,
-    committed5hMicrousd,
-    committed7dMicrousd,
-    activeReservedMicrousd,
-    limit5hMicrousd: normalized5h,
-    limit7dMicrousd: normalized7d,
-    remaining5hMicrousd:
-      normalized5h == null
-        ? undefined
-        : Math.max(0, normalized5h - committed5hMicrousd),
-    remaining7dMicrousd:
-      normalized7d == null
-        ? undefined
-        : Math.max(0, normalized7d - committed7dMicrousd),
-  };
-}
-
 export async function expireAbandonedSiteFundedCodexReservations(): Promise<number> {
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
   const { rows } = await getPool().query(
     `SELECT DISTINCT pool_id, period_start FROM site_ai_turn_reservations
      WHERE status = 'active' AND expires_at <= NOW()`,

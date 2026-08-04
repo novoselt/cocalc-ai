@@ -168,12 +168,11 @@ import {
 import {
   assertSiteFundedCodexReservationHost,
   finishSiteFundedCodexTurn,
-  getSiteFundedCodexAccountStatus,
   getSiteFundedCodexPoolStatus,
   heartbeatSiteFundedCodexTurn,
   recordSiteFundedCodexUsageEvent,
   reserveSiteFundedCodexTurn,
-} from "@cocalc/server/ai/site-funded-codex-ledger";
+} from "@cocalc/server/ai/site-funded-codex-reservations";
 import { reconcileSiteFundedCodexCosts } from "@cocalc/server/ai/site-funded-codex-reconciliation";
 import { createImpersonationGrantLocal } from "@cocalc/server/auth/impersonation";
 import { getAccountIdFromRememberMe as getLocalAccountIdFromRememberMe } from "@cocalc/server/auth/get-account";
@@ -251,6 +250,7 @@ import {
 import * as legacyMigration from "@cocalc/server/legacy-migration";
 import * as publicDirectoryShares from "@cocalc/server/public-directory-shares";
 import { getAccountUsageOverviewForAccount } from "@cocalc/server/membership/account-usage-overview";
+import { recordSiteFundedCodexAccountUsage } from "@cocalc/server/ai/save-response";
 import {
   clearAccountEntitlementOverrideLocal,
   getAccountEntitlementOverrideLocal,
@@ -692,23 +692,11 @@ async function startBayOpsService(): Promise<void> {
         outcome,
       });
     },
-    getSiteFundedCodexStatus: async ({
-      account_id,
-      limit5hMicrousd,
-      limit7dMicrousd,
-      reconcile,
-    }) => {
+    getSiteFundedCodexStatus: async ({ reconcile }) => {
       assertSiteFundedCodexSeedAuthority();
       const pools = await getSiteFundedCodexPoolStatus();
       return {
         pools,
-        account: account_id
-          ? await getSiteFundedCodexAccountStatus({
-              accountId: account_id,
-              limit5hMicrousd,
-              limit7dMicrousd,
-            })
-          : undefined,
         reconciliation: reconcile
           ? await reconcileSiteFundedCodexCosts(pools)
           : undefined,
@@ -1050,6 +1038,8 @@ async function startAccountLocalService(): Promise<void> {
       }),
     getAccountUsageOverview: async ({ account_id }) =>
       await getAccountUsageOverviewForAccount({ account_id }),
+    recordSiteFundedCodexUsage: async (opts) =>
+      await recordSiteFundedCodexAccountUsage(opts),
     getVerifiedEmailAddresses: async ({ account_id }) => ({
       email_addresses: await getVerifiedEmailAddressesForAccount(account_id),
     }),
