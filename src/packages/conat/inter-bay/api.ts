@@ -933,6 +933,14 @@ export interface AccountLocalGetUsageOverviewRequest {
   account_id: string;
 }
 
+export interface AccountLocalRecordSiteFundedCodexUsageRequest {
+  account_id: string;
+  funded_turn_id: string;
+  project_id: string;
+  cost_microusd: number;
+  occurred_at?: Date | string;
+}
+
 export interface AccountLocalGetVerifiedEmailAddressesRequest {
   account_id: string;
 }
@@ -1888,8 +1896,8 @@ export interface BayOpsReserveSiteFundedCodexTurnRequest {
   owningBayId?: string;
   membershipTier: string;
   policy: SiteFundedCodexPolicy;
-  accountLimit5hMicrousd?: number | null;
-  accountLimit7dMicrousd?: number | null;
+  accountRemaining5hMicrousd?: number | null;
+  accountRemaining7dMicrousd?: number | null;
   surface?: string;
 }
 
@@ -1909,9 +1917,6 @@ export interface BayOpsFinishSiteFundedCodexTurnRequest extends BayOpsSiteFunded
 }
 
 export interface BayOpsSiteFundedCodexStatusRequest {
-  account_id?: string;
-  limit5hMicrousd?: number | null;
-  limit7dMicrousd?: number | null;
   reconcile?: boolean;
 }
 
@@ -2415,6 +2420,7 @@ export type AccountLocalMethod =
   | "get-membership"
   | "get-membership-details"
   | "get-account-usage-overview"
+  | "record-site-funded-codex-usage"
   | "get-verified-email-addresses"
   | "create-legacy-migration-project"
   | "get-admin-assigned-membership"
@@ -3828,6 +3834,9 @@ export interface InterBayAccountLocalApi {
   getAccountUsageOverview: (
     opts: AccountLocalGetUsageOverviewRequest,
   ) => Promise<AccountUsageOverview>;
+  recordSiteFundedCodexUsage: (
+    opts: AccountLocalRecordSiteFundedCodexUsageRequest,
+  ) => Promise<void>;
   getVerifiedEmailAddresses: (
     opts: AccountLocalGetVerifiedEmailAddressesRequest,
   ) => Promise<AccountLocalGetVerifiedEmailAddressesResult>;
@@ -6380,6 +6389,15 @@ export function createInterBayAccountLocalClient({
       method: "get-account-usage-overview",
     }),
   });
+  const recordSiteFundedCodexUsageClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "recordSiteFundedCodexUsage">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "record-site-funded-codex-usage",
+    }),
+  });
   const getVerifiedEmailAddressesClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "getVerifiedEmailAddresses">
   >({
@@ -7236,6 +7254,8 @@ export function createInterBayAccountLocalClient({
       await getMembershipDetailsClient.getMembershipDetails(opts),
     getAccountUsageOverview: async (opts) =>
       await getAccountUsageOverviewClient.getAccountUsageOverview(opts),
+    recordSiteFundedCodexUsage: async (opts) =>
+      await recordSiteFundedCodexUsageClient.recordSiteFundedCodexUsage(opts),
     getVerifiedEmailAddresses: async (opts) =>
       await getVerifiedEmailAddressesClient.getVerifiedEmailAddresses(opts),
     createLegacyMigrationProject: async (opts) =>
@@ -7994,6 +8014,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         getAccountUsageOverview: async (opts) =>
           await impl.getAccountUsageOverview(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "recordSiteFundedCodexUsage">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "record-site-funded-codex-usage",
+      }),
+      impl: {
+        recordSiteFundedCodexUsage: async (opts) =>
+          await impl.recordSiteFundedCodexUsage(opts),
       },
     }),
     createServiceHandler<

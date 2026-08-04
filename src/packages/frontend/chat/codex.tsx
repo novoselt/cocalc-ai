@@ -37,7 +37,7 @@ import {
   writeCachedCodexUsageStatus,
 } from "@cocalc/frontend/account/codex-usage";
 import LiteAISettings from "@cocalc/frontend/account/lite-ai-settings";
-import { AIUsageStatus } from "@cocalc/frontend/misc/ai-usage-status";
+import { UsageWindowMeters } from "@cocalc/frontend/account/usage-window-meters";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
   defaultWorkingDirectoryForChat,
@@ -143,6 +143,58 @@ type LiteCodexLocalStatus = {
   error?: string;
   checkedAt?: number;
 };
+
+function MembershipUsageMeters({
+  status,
+  compact = false,
+}: {
+  status: NonNullable<
+    NonNullable<CodexPaymentSourceInfo["siteFundedCodex"]>["status"]
+  >["account"];
+  compact?: boolean;
+}) {
+  if (!status) return null;
+  const windows = [
+    {
+      key: "5h",
+      label: "5-hour limit",
+      limit: status.limit5hMicrousd,
+      remaining: status.remaining5hMicrousd,
+      resetAt: status.reset5hAt,
+    },
+    {
+      key: "7d",
+      label: "7-day limit",
+      limit: status.limit7dMicrousd,
+      remaining: status.remaining7dMicrousd,
+      resetAt: status.reset7dAt,
+    },
+  ]
+    .filter(
+      ({ limit, remaining }) =>
+        typeof limit === "number" &&
+        Number.isFinite(limit) &&
+        limit > 0 &&
+        typeof remaining === "number" &&
+        Number.isFinite(remaining),
+    )
+    .map(({ key, label, limit = 0, remaining = 0, resetAt }) => ({
+      key,
+      label,
+      remainingPercent: Math.max(
+        0,
+        Math.min(100, Math.round((remaining / limit) * 100)),
+      ),
+      resetAt: resetAt ? new Date(resetAt) : undefined,
+    }));
+  return (
+    <UsageWindowMeters
+      windows={windows}
+      compact={compact}
+      statusLabel="CoCalc Membership usage"
+    />
+  );
+}
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <Text strong style={{ color: COLORS.GRAY_D }}>
@@ -476,6 +528,8 @@ export function CodexConfigButton({
     paymentSource.siteFundedCodex?.enabled
       ? paymentSource.siteFundedCodex.policy
       : undefined;
+  const siteFundedAccountStatus =
+    paymentSource?.siteFundedCodex?.status?.account;
   const allModeOptions = useMemo(() => getModeOptions(), []);
   const availableModeValues = useMemo(
     () => new Set(getCodexNewChatModeOptions().map(({ value }) => value)),
@@ -507,9 +561,11 @@ export function CodexConfigButton({
     paymentSource?.source === "site-api-key" ? (
       <Space orientation="vertical" size={0}>
         <span>{sourceTooltip}</span>
-        <div style={{ marginTop: 4, width: 390 }}>
-          <AIUsageStatus variant="full" showHelp={false} />
-        </div>
+        {siteFundedAccountStatus ? (
+          <div style={{ marginTop: 4, width: 390 }}>
+            <MembershipUsageMeters status={siteFundedAccountStatus} compact />
+          </div>
+        ) : null}
       </Space>
     ) : paymentSource?.source === "subscription" && codexUsageStatus ? (
       <Space orientation="vertical" size={4}>
@@ -1202,9 +1258,13 @@ export function CodexConfigButton({
                         !paymentSource?.hasAccountApiKey
                           ? " Connect a personal ChatGPT plan or OpenAI API key to choose other settings."
                           : null}
-                        <div style={{ marginTop: 10 }}>
-                          <AIUsageStatus variant="full" showHelp={false} />
-                        </div>
+                        {siteFundedAccountStatus ? (
+                          <div style={{ marginTop: 10 }}>
+                            <MembershipUsageMeters
+                              status={siteFundedAccountStatus}
+                            />
+                          </div>
+                        ) : null}
                       </>
                     }
                   />

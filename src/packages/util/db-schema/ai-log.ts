@@ -8,7 +8,9 @@ export interface AIUsageLogEntry {
   id: number;
   account_id?: string;
   analytics_cookie?: string; // at least one of analytics_cookie or account_id will be set
+  cost_microusd?: number;
   expire?: Date;
+  funded_turn_id?: string;
   history?: History;
   input: string;
   model?: LanguageModel;
@@ -35,6 +37,15 @@ Table({
       desc: "The analytics cookie for the user that asked this question.",
     },
     account_id: CREATED_BY,
+    cost_microusd: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Exact provider cost in millionths of one US dollar.",
+    },
+    funded_turn_id: {
+      type: "uuid",
+      desc: "Idempotency key for a site-funded Codex turn.",
+    },
     system: {
       title: "System Context",
       type: "string",
@@ -114,6 +125,7 @@ Table({
           id: null,
           time: null,
           account_id: null,
+          cost_microusd: null,
           input: null,
           system: null,
           output: null,
@@ -155,6 +167,7 @@ Table({
           id: null,
           time: null,
           account_id: null,
+          cost_microusd: null,
           analytics_cookie: null,
           input: null,
           system: null,
@@ -166,6 +179,7 @@ Table({
           project_id: null,
           path: null,
           history: null,
+          funded_turn_id: null,
           model: null,
           tag: null,
         },

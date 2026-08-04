@@ -121,11 +121,15 @@ export type SiteFundedCodexReservationStatus =
 export type SiteFundedCodexReservation = {
   reservationId: string;
   fundedTurnId: string;
+  accountId: string;
+  projectId: string;
+  homeBayId?: string;
   poolId: SiteFundedCodexPoolId;
   policy: SiteFundedCodexPolicy;
   reservedMicrousd: number;
   poolReservedMicrousd: number;
   committedMicrousd: number;
+  completedAt?: string;
   expiresAt: string;
   heartbeatIntervalMs: number;
   status: SiteFundedCodexReservationStatus;
@@ -184,6 +188,8 @@ export type SiteFundedCodexAccountStatus = {
   limit7dMicrousd?: number;
   remaining5hMicrousd?: number;
   remaining7dMicrousd?: number;
+  reset5hAt?: string;
+  reset7dAt?: string;
 };
 
 export type SiteFundedCodexStatus = {

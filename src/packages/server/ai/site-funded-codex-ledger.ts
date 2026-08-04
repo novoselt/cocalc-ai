@@ -9,7 +9,6 @@ import type { PoolClient } from "@cocalc/database/pool";
 import {
   computeSiteFundedCodexRequestCost,
   type SiteFundedCodexAdmission,
-  type SiteFundedCodexAccountStatus,
   type SiteFundedCodexPoolId,
   type SiteFundedCodexPoolStatus,
   type SiteFundedCodexPolicy,
@@ -39,8 +38,8 @@ export type ReserveSiteFundedCodexTurnOptions = {
   owningBayId?: string;
   membershipTier: string;
   policy: SiteFundedCodexPolicy;
-  accountLimit5hMicrousd?: number | null;
-  accountLimit7dMicrousd?: number | null;
+  accountRemaining5hMicrousd?: number | null;
+  accountRemaining7dMicrousd?: number | null;
   surface?: string;
 };
 
@@ -80,6 +79,9 @@ function reservationFromRow(row: any): SiteFundedCodexReservation {
   return {
     reservationId: row.reservation_id,
     fundedTurnId: row.funded_turn_id,
+    accountId: row.account_id,
+    projectId: row.project_id,
+    homeBayId: row.home_bay_id ?? undefined,
     poolId: row.pool_id,
     policy: row.policy,
     reservedMicrousd: int(row.reserved_microusd),
@@ -87,6 +89,7 @@ function reservationFromRow(row: any): SiteFundedCodexReservation {
       row.pool_reserved_microusd ?? row.reserved_microusd,
     ),
     committedMicrousd: int(row.committed_microusd),
+    completedAt: row.completed_at ? iso(row.completed_at) : undefined,
     expiresAt: iso(row.expires_at),
     heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
     status: row.status,
@@ -252,27 +255,6 @@ function finalRequestHeadroomMicrousd(policy: SiteFundedCodexPolicy): number {
   }).costMicrousd;
 }
 
-async function committedInWindow({
-  client,
-  accountId,
-  interval,
-}: {
-  client: DbClient;
-  accountId: string;
-  interval: "5 hours" | "7 days";
-}): Promise<number> {
-  const { rows } = await client.query(
-    `
-      SELECT COALESCE(SUM(committed_microusd), 0) AS committed
-      FROM site_ai_turn_reservations
-      WHERE account_id = $1 AND completed_at >= NOW() - $2::interval
-        AND status IN ('committed', 'interrupted', 'failed')
-    `,
-    [accountId, interval],
-  );
-  return int(rows[0]?.committed);
-}
-
 function denied(
   code: Exclude<SiteFundedCodexAdmission, { allowed: true }>["code"],
   reason: string,
@@ -398,26 +380,14 @@ export async function reserveSiteFundedCodexTurn(
         "Site-funded Codex is temporarily at its global concurrency limit.",
       );
     }
-    const [used5h, used7d] = await Promise.all([
-      committedInWindow({
-        client,
-        accountId: opts.accountId,
-        interval: "5 hours",
-      }),
-      committedInWindow({
-        client,
-        accountId: opts.accountId,
-        interval: "7 days",
-      }),
-    ]);
     const remaining5h =
-      opts.accountLimit5hMicrousd == null
+      opts.accountRemaining5hMicrousd == null
         ? Number.MAX_SAFE_INTEGER
-        : Math.max(0, opts.accountLimit5hMicrousd - used5h);
+        : Math.max(0, opts.accountRemaining5hMicrousd);
     const remaining7d =
-      opts.accountLimit7dMicrousd == null
+      opts.accountRemaining7dMicrousd == null
         ? Number.MAX_SAFE_INTEGER
-        : Math.max(0, opts.accountLimit7dMicrousd - used7d);
+        : Math.max(0, opts.accountRemaining7dMicrousd);
     const requested = Math.min(
       opts.policy.maxTurnCostMicrousd,
       remaining5h,
@@ -711,56 +681,6 @@ export async function getSiteFundedCodexPoolStatus(): Promise<
       utilization: limit > 0 ? (reserved + committed) / limit : 1,
     };
   });
-}
-
-export async function getSiteFundedCodexAccountStatus({
-  accountId,
-  limit5hMicrousd,
-  limit7dMicrousd,
-}: {
-  accountId: string;
-  limit5hMicrousd?: number | null;
-  limit7dMicrousd?: number | null;
-}): Promise<SiteFundedCodexAccountStatus> {
-  await ensureSiteFundedCodexLedgerTables();
-  const { rows } = await getPool().query(
-    `SELECT
-       COALESCE(SUM(committed_microusd) FILTER (
-         WHERE completed_at >= NOW() - INTERVAL '5 hours'
-       ), 0) AS committed_5h,
-       COALESCE(SUM(committed_microusd) FILTER (
-         WHERE completed_at >= NOW() - INTERVAL '7 days'
-       ), 0) AS committed_7d,
-       COALESCE(SUM(reserved_microusd) FILTER (
-         WHERE status = 'active'
-       ), 0) AS active_reserved
-     FROM site_ai_turn_reservations
-     WHERE account_id = $1`,
-    [accountId],
-  );
-  const committed5hMicrousd = int(rows[0]?.committed_5h);
-  const committed7dMicrousd = int(rows[0]?.committed_7d);
-  const activeReservedMicrousd = int(rows[0]?.active_reserved);
-  const normalized5h =
-    limit5hMicrousd == null ? undefined : Math.max(0, limit5hMicrousd);
-  const normalized7d =
-    limit7dMicrousd == null ? undefined : Math.max(0, limit7dMicrousd);
-  return {
-    accountId,
-    committed5hMicrousd,
-    committed7dMicrousd,
-    activeReservedMicrousd,
-    limit5hMicrousd: normalized5h,
-    limit7dMicrousd: normalized7d,
-    remaining5hMicrousd:
-      normalized5h == null
-        ? undefined
-        : Math.max(0, normalized5h - committed5hMicrousd),
-    remaining7dMicrousd:
-      normalized7d == null
-        ? undefined
-        : Math.max(0, normalized7d - committed7dMicrousd),
-  };
 }
 
 export async function expireAbandonedSiteFundedCodexReservations(): Promise<number> {

@@ -97,6 +97,10 @@ jest.mock("@cocalc/frontend/lite", () => ({
   lite: false,
 }));
 
+jest.mock("@cocalc/frontend/components/time-ago", () => ({
+  TimeAgo: () => <span>later</span>,
+}));
+
 jest.mock("@cocalc/frontend/account/codex-credentials-panel", () => ({
   CodexCredentialsPanel: () => null,
   CodexUsageMeters: ({ compact, status, stale, updating }: any) => (
@@ -110,15 +114,6 @@ jest.mock("@cocalc/frontend/account/codex-credentials-panel", () => ({
 }));
 
 jest.mock("@cocalc/frontend/account/lite-ai-settings", () => () => null);
-
-jest.mock("@cocalc/frontend/misc/ai-usage-status", () => ({
-  AIUsageStatus: () => (
-    <div>
-      <div aria-label="5-hour limit: 75% remaining" />
-      <div aria-label="7-day limit: 80% remaining" />
-    </div>
-  ),
-}));
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
@@ -439,6 +434,8 @@ describe("CodexConfigButton", () => {
                   limit7dMicrousd: 500_000,
                   remaining5hMicrousd: 150_000,
                   remaining7dMicrousd: 400_000,
+                  reset5hAt: "2026-08-04T04:00:00.000Z",
+                  reset7dAt: "2026-08-10T23:00:00.000Z",
                 },
               },
             },

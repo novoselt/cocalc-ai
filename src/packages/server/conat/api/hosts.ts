@@ -57,7 +57,10 @@ import type {
 } from "@cocalc/conat/hub/api/hosts";
 import { getAccountProductAccessTrust } from "@cocalc/server/accounts/trusted-product-access";
 import { getClusterAccountsByIdsDirect } from "@cocalc/server/accounts/cluster-directory";
-import type { MembershipEffectiveLimits } from "@cocalc/conat/hub/api/purchases";
+import type {
+  AccountUsageOverview,
+  MembershipEffectiveLimits,
+} from "@cocalc/conat/hub/api/purchases";
 import {
   normalizeProviderId,
   type HostSpec,
@@ -188,7 +191,12 @@ import {
   aiUsageUnitsToMicrousd,
   computeAIUsageUnits,
 } from "@cocalc/server/ai/usage-units";
-import { saveAIResponse } from "@cocalc/server/ai/save-response";
+import {
+  recordSiteFundedCodexAccountUsage,
+  saveAIResponse,
+} from "@cocalc/server/ai/save-response";
+import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
+import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import {
   assertSiteFundedCodexReservationHost,
   finishSiteFundedCodexTurn as finishSiteFundedCodexTurnLedger,
@@ -3090,12 +3098,26 @@ export async function recordCodexSiteUsage({
   return { usage_units };
 }
 
-function usageLimitMicrousd(
+function usageLimitAndRemainingMicrousd(
   status: Awaited<ReturnType<typeof getAIUsageStatus>>,
   window: "5h" | "7d",
-): number {
-  const limit = status.windows.find((entry) => entry.window === window)?.limit;
-  return aiUsageUnitsToMicrousd(limit);
+): { limit: number; remaining: number } {
+  const usage = status.windows.find((entry) => entry.window === window);
+  return {
+    limit: aiUsageUnitsToMicrousd(usage?.limit),
+    remaining: aiUsageUnitsToMicrousd(usage?.remaining),
+  };
+}
+
+function overviewLimitAndRemainingMicrousd(
+  overview: AccountUsageOverview,
+  window: "5h" | "7d",
+): { limit: number; remaining: number } {
+  const meter = overview.meters.find(({ id }) => id === `ai-${window}`);
+  return {
+    limit: aiUsageUnitsToMicrousd(meter?.limit),
+    remaining: aiUsageUnitsToMicrousd(meter?.remaining),
+  };
 }
 
 function remoteSiteFundedCodexSeed() {
@@ -3159,11 +3181,7 @@ export async function reserveSiteFundedCodexTurn({
         "Site-funded Codex is disabled. Connect a ChatGPT plan or personal OpenAI API key to continue.",
     };
   }
-  const [membership, usageStatus, accounts] = await Promise.all([
-    resolveMembershipForAccount(account_id),
-    getAIUsageStatus({ account_id }),
-    getClusterAccountsByIdsDirect([account_id]),
-  ]);
+  const accounts = await getClusterAccountsByIdsDirect([account_id]);
   const account = accounts.find((entry) => entry.account_id === account_id);
   if (!account || account.banned || !account.email_address_verified) {
     return {
@@ -3173,10 +3191,38 @@ export async function reserveSiteFundedCodexTurn({
         "A verified, active CoCalc account is required for included Codex usage.",
     };
   }
+  const homeBayId =
+    `${account.home_bay_id ?? ""}`.trim() || getConfiguredBayId();
+  const [membership, account5h, account7d] =
+    homeBayId === getConfiguredBayId()
+      ? await (async () => {
+          const [membership, usageStatus] = await Promise.all([
+            resolveMembershipForAccount(account_id),
+            getAIUsageStatus({ account_id }),
+          ]);
+          return [
+            membership,
+            usageLimitAndRemainingMicrousd(usageStatus, "5h"),
+            usageLimitAndRemainingMicrousd(usageStatus, "7d"),
+          ] as const;
+        })()
+      : await (async () => {
+          const accountHome = createInterBayAccountLocalClient({
+            client: getInterBayFabricClient(),
+            dest_bay: homeBayId,
+          });
+          const [membership, overview] = await Promise.all([
+            accountHome.getMembership({ account_id }),
+            accountHome.getAccountUsageOverview({ account_id }),
+          ]);
+          return [
+            membership,
+            overviewLimitAndRemainingMicrousd(overview, "5h"),
+            overviewLimitAndRemainingMicrousd(overview, "7d"),
+          ] as const;
+        })();
   const paid = membership.source !== "free";
-  const accountLimit5hMicrousd = usageLimitMicrousd(usageStatus, "5h");
-  const accountLimit7dMicrousd = usageLimitMicrousd(usageStatus, "7d");
-  if (accountLimit5hMicrousd <= 0 || accountLimit7dMicrousd <= 0) {
+  if (account5h.limit <= 0 || account7d.limit <= 0) {
     return {
       allowed: false,
       code: "ineligible",
@@ -3196,12 +3242,12 @@ export async function reserveSiteFundedCodexTurn({
     accountId: account_id,
     projectId: project_id,
     hostId: host_id,
-    homeBayId: account.home_bay_id ?? undefined,
+    homeBayId,
     owningBayId: getConfiguredBayId(),
     membershipTier: membership.class,
     policy: configuration.policy,
-    accountLimit5hMicrousd,
-    accountLimit7dMicrousd,
+    accountRemaining5hMicrousd: account5h.remaining,
+    accountRemaining7dMicrousd: account7d.remaining,
     surface: path?.endsWith(".ipynb")
       ? "jupyter"
       : path?.endsWith(".chat")
@@ -3277,23 +3323,54 @@ export async function finishSiteFundedCodexTurn({
 }): Promise<SiteFundedCodexReservation> {
   if (!host_id) throw new Error("host_id must be specified");
   const remoteSeed = remoteSiteFundedCodexSeed();
+  let reservation: SiteFundedCodexReservation;
   if (remoteSeed) {
-    return await remoteSeed.finishSiteFundedCodexTurn({
+    reservation = await remoteSeed.finishSiteFundedCodexTurn({
       reservationId: reservation_id,
       hostId: host_id,
       status,
       outcome,
     });
+  } else {
+    await assertSiteFundedCodexReservationHost({
+      reservationId: reservation_id,
+      hostId: host_id,
+    });
+    reservation = await finishSiteFundedCodexTurnLedger({
+      reservationId: reservation_id,
+      status,
+      outcome,
+    });
   }
-  await assertSiteFundedCodexReservationHost({
-    reservationId: reservation_id,
-    hostId: host_id,
-  });
-  return await finishSiteFundedCodexTurnLedger({
-    reservationId: reservation_id,
-    status,
-    outcome,
-  });
+  if (reservation.committedMicrousd > 0) {
+    const usage = {
+      account_id: reservation.accountId,
+      funded_turn_id: reservation.fundedTurnId,
+      project_id: reservation.projectId,
+      cost_microusd: reservation.committedMicrousd,
+      occurred_at: reservation.completedAt,
+    };
+    const homeBayId =
+      `${reservation.homeBayId ?? ""}`.trim() ||
+      `${
+        (
+          await resolveAccountHomeBay({
+            account_id: reservation.accountId,
+            user_account_id: reservation.accountId,
+          })
+        ).home_bay_id ?? ""
+      }`.trim() ||
+      getConfiguredBayId();
+    if (homeBayId === getConfiguredBayId()) {
+      await recordSiteFundedCodexAccountUsage(usage);
+    } else {
+      await createInterBayAccountLocalClient({
+        client: getInterBayFabricClient(),
+        dest_bay: homeBayId,
+      }).recordSiteFundedCodexUsage(usage);
+    }
+  }
+  return reservation;
 }
 
 export async function getSiteFundedCodexPoolStatus({
