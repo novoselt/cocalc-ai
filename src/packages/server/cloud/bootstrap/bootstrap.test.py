@@ -51,8 +51,8 @@ def make_cfg(tmpdir: str) -> bootstrap.BootstrapConfig:
             "version": 1,
             "mode": "enforce",
             "mountpoint": "/mnt/cocalc",
-            "profile": "gcp-pd-balanced-dynamic",
-            "capacitySource": "gcp-pd-balanced-size-formula-2026-07-24",
+            "profile": "gcp-pd-balanced-btrfs-headroom",
+            "capacitySource": "gcp-pd-balanced-btrfs-headroom-2026-08-04",
             "capacity": {"mode": "gcp-pd-balanced"},
             "pool": {
                 "rbps": 67108864,
@@ -212,6 +212,9 @@ class ProjectIoConfigurationTest(unittest.TestCase):
         )
         self.assertEqual(policy["mode"], "enforce")
         self.assertEqual(policy["capacity"]["mode"], "gcp-pd-balanced")
+        self.assertEqual(
+            policy["profile"], "gcp-pd-balanced-btrfs-headroom"
+        )
         self.assertEqual(policy["leafClasses"]["premium"]["wiops"], 750)
 
     def test_fails_safe_for_unsupported_capacity_metadata(self) -> None:
@@ -1828,10 +1831,10 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
         self.assertEqual(
             calculated["rows"][0]["limits"],
             {
-                "rbps": 91 * 1024**2,
-                "wbps": 47_710_208,
-                "riops": 1950,
-                "wiops": 975,
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
             },
         )
         self.assertEqual(
@@ -1850,10 +1853,10 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
         self.assertEqual(
             premium_rows[0]["limits"],
             {
-                "rbps": 71_565_312,
-                "wbps": 35_782_656,
-                "riops": 1462,
-                "wiops": 731,
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
             },
         )
         self.assertEqual(
@@ -1893,10 +1896,10 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
         self.assertEqual(
             json.loads(startup.stdout)["rows"][0]["limits"],
             {
-                "rbps": 91 * 1024**2,
-                "wbps": 95_420_416,
-                "riops": 1950,
-                "wiops": 1950,
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
             },
         )
         self.assertEqual(
@@ -1915,10 +1918,10 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
         self.assertEqual(
             lifecycle_rows[0]["limits"],
             {
-                "rbps": 91 * 1024**2,
-                "wbps": 28_626_124,
-                "riops": 1950,
-                "wiops": 585,
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
             },
         )
         self.assertEqual(

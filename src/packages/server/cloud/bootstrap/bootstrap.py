@@ -122,6 +122,7 @@ MIB = 1024 * 1024
 POLICY_VERSION = 1
 CAPACITY_VERSION = 1
 DYNAMIC_CAPACITY_MODE = "gcp-pd-balanced"
+GCP_BALANCED_BTRFS_HEADROOM_PERCENT = 90
 CLASSES = ("standard", "member", "premium")
 SCOPES = ("pool", "lifecycle-pool", "maintenance", "startup", *CLASSES)
 METRICS = ("rbps", "wbps", "riops", "wiops")
@@ -534,17 +535,62 @@ def effective_limits(
     capacities = [balanced_device_capacity(row) for row in devices]
     rows = []
     for row, capacity in zip(devices, capacities):
-        pool = {
-            "rbps": max(1, (capacity["physical_read_bps"] * 50) // 100),
-            "wbps": max(1, (capacity["physical_write_bps"] * 25) // 100),
-            "riops": max(1, (capacity["physical_iops"] * 50) // 100),
-            "wiops": max(1, (capacity["physical_iops"] * 25) // 100),
-        }
+        btrfs_project_data = (
+            "btrfs" in row.get("filesystems", []) and scope != "maintenance"
+        )
+        if btrfs_project_data:
+            # Low nested io.max ceilings turn Btrfs metadata transactions into
+            # throttled filesystem-wide lock holders. Give project and lifecycle
+            # work nearly the physical device envelope instead; io.weight and
+            # direct offender eviction provide fairness under real contention.
+            pool = {
+                "rbps": max(
+                    1,
+                    (
+                        capacity["physical_read_bps"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+                "wbps": max(
+                    1,
+                    (
+                        capacity["physical_write_bps"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+                "riops": max(
+                    1,
+                    (
+                        capacity["physical_iops"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+                "wiops": max(
+                    1,
+                    (
+                        capacity["physical_iops"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+            }
+            scope_factors = {key: 100 for key in METRICS}
+        else:
+            pool = {
+                "rbps": max(1, (capacity["physical_read_bps"] * 50) // 100),
+                "wbps": max(1, (capacity["physical_write_bps"] * 25) // 100),
+                "riops": max(1, (capacity["physical_iops"] * 50) // 100),
+                "wiops": max(1, (capacity["physical_iops"] * 25) // 100),
+            }
+            scope_factors = factors
         rows.append(
             {
                 **row,
                 "limits": {
-                    key: max(1, (pool[key] * factors[key]) // 100)
+                    key: max(1, (pool[key] * scope_factors[key]) // 100)
                     for key in METRICS
                 },
             }
@@ -868,12 +914,12 @@ def build_project_io_policy(capacity: dict[str, Any]) -> dict[str, Any]:
         "mode": "enforce" if supports_dynamic_capacity else "disabled",
         "mountpoint": "/mnt/cocalc",
         "profile": (
-            "gcp-pd-balanced-dynamic"
+            "gcp-pd-balanced-btrfs-headroom"
             if supports_dynamic_capacity
             else "unconfigured"
         ),
         "capacitySource": (
-            "gcp-pd-balanced-size-formula-2026-07-24"
+            "gcp-pd-balanced-btrfs-headroom-2026-08-04"
             if supports_dynamic_capacity
             else "unconfigured"
         ),

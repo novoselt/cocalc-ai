@@ -8,6 +8,7 @@ import { _test } from "./host-pressure";
 const {
   buildStopCandidates,
   classifyHostPressure,
+  directIoPressureOffenders,
   pressureStopStateUpdate,
   resourcePressureFindings,
 } = _test;
@@ -219,6 +220,58 @@ describe("host pressure controller helpers", () => {
         ioPressureSinceMs: now - 60 * 60_000,
       }),
     ).toMatchObject({ zone: "observe" });
+
+    const headroomMetrics = {
+      ...metrics,
+      io_containment: {
+        collected_at: new Date(now).toISOString(),
+        policy_mode: "enforce" as const,
+        policy_profile: "gcp-pd-balanced-btrfs-headroom",
+        mountpoint: "/mnt/cocalc",
+        capability: "validated" as const,
+        pool_cgroup: "/sys/fs/cgroup/cocalc-project-pool",
+        devices: [],
+        top_projects: [],
+        sampled_project_count: 0,
+        total_project_count: 0,
+        stale_project_count: 0,
+        truncated: false,
+      },
+    };
+    expect(
+      classifyHostPressure(headroomMetrics, now, {
+        ioPressureMode: "enforce",
+        ioPressureSinceMs: now - 60 * 60_000,
+      }),
+    ).toMatchObject({ zone: "emergency" });
+  });
+
+  it("attributes direct I/O pressure to the stalling project", () => {
+    const offenders = directIoPressureOffenders(
+      new Map([
+        [
+          "busy",
+          {
+            cpu_cores: 0.2,
+            io_bytes_per_second: 9 * 1024 * 1024,
+            io_operations_per_second: 300,
+            io_full_pressure_percent: 63.5,
+          },
+        ],
+        [
+          "healthy",
+          {
+            cpu_cores: 0.2,
+            io_bytes_per_second: 20 * 1024 * 1024,
+            io_operations_per_second: 500,
+            io_full_pressure_percent: 2,
+          },
+        ],
+      ]),
+      25,
+    );
+    expect([...offenders.keys()]).toEqual(["busy"]);
+    expect(offenders.get("busy")?.reason).toContain("63.5%");
   });
 
   it("does not evict unrelated projects for lifecycle-only I/O pressure", () => {
@@ -635,7 +688,7 @@ describe("host pressure controller helpers", () => {
             project_id: "proj-protected",
             owner_account_id: "owner-2",
             shared_compute_priority: 100,
-            authoritative_last_edited_ms: 1000,
+            authoritative_last_edited_ms: now - 60_000,
             policy_updated_ms: 1000,
             stop_override: "protect",
           },

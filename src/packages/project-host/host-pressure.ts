@@ -21,6 +21,7 @@ import {
 import {
   ProjectWorkloadActivityTracker,
   sampleProjectWorkloads,
+  type ProjectWorkloadRates,
 } from "./project-workload-activity";
 
 const logger = getLogger("project-host:host-pressure");
@@ -143,6 +144,11 @@ const IO_EVICTION_FULL_AVG10 = clampPercent(
     process.env.COCALC_PROJECT_HOST_STORAGE_IO_EMERGENCY_FULL_AVG10,
   10,
 );
+const IO_DIRECT_OFFENDER_FULL_PERCENT = clampPercent(
+  process.env.COCALC_PROJECT_HOST_IO_DIRECT_OFFENDER_FULL_PERCENT,
+  25,
+);
+const BTRFS_HEADROOM_POLICY_PROFILE = "gcp-pd-balanced-btrfs-headroom";
 const IO_PRESSURE_MIN_IDLE_MS = Math.max(
   STARTUP_PROTECTION_MS,
   Number(
@@ -583,9 +589,8 @@ function storagePressureIsLifecycleOnly(
   );
 }
 
-function storagePressureCanEvict(
-  storage: HostCurrentMetrics["storage_admission"],
-): boolean {
+function storagePressureCanEvict(metrics: HostCurrentMetrics): boolean {
+  const storage = metrics.storage_admission;
   if (!storage || storage.pressure_state !== "emergency") return false;
   const uncontained = parseNonNegativeNumber(storage.uncontained_io_full_avg10);
   // RootFS extraction and other lifecycle preparation run outside the
@@ -593,6 +598,19 @@ function storagePressureCanEvict(
   // when the pool itself is healthy, and only adds more Btrfs cleanup work.
   if (storagePressureIsLifecycleOnly(storage)) {
     return false;
+  }
+  const projectPool = parseNonNegativeNumber(
+    storage.project_pool_io_full_avg10,
+  );
+  const host = parseNonNegativeNumber(storage.host_io_full_avg10);
+  if (
+    metrics.io_containment?.policy_profile === BTRFS_HEADROOM_POLICY_PROFILE &&
+    projectPool != null &&
+    projectPool >= IO_EVICTION_FULL_AVG10 &&
+    host != null &&
+    host >= IO_EVICTION_FULL_AVG10
+  ) {
+    return true;
   }
   // Older project-host versions do not publish the split signal. Preserve
   // their behavior during rolling upgrades, then require the signal once it
@@ -645,7 +663,7 @@ function storagePressureFindings(
     observeReasons.push(`storage_io_contended:${detail}`);
     return { observeReasons, pressureReasons, emergencyReasons };
   }
-  if (!storagePressureCanEvict(storage)) {
+  if (!storagePressureCanEvict(metrics)) {
     observeReasons.push(
       `${
         storagePressureIsLifecycleOnly(storage)
@@ -663,6 +681,27 @@ function storagePressureFindings(
     observeReasons.push(`storage_io_transient:${detail}`);
   }
   return { observeReasons, pressureReasons, emergencyReasons };
+}
+
+export function directIoPressureOffenders(
+  ratesByProject: ReadonlyMap<string, ProjectWorkloadRates>,
+  fullPressurePercent: number = IO_DIRECT_OFFENDER_FULL_PERCENT,
+): Map<string, DirectResourceOffender> {
+  const offenders = new Map<string, DirectResourceOffender>();
+  for (const [project_id, rates] of ratesByProject) {
+    if (rates.io_full_pressure_percent < fullPressurePercent) continue;
+    offenders.set(project_id, {
+      project_id,
+      reason: `storage_io_full_project:${rates.io_full_pressure_percent.toFixed(
+        1,
+      )}%`,
+      score:
+        rates.io_full_pressure_percent * 1_000_000 +
+        rates.io_operations_per_second,
+      zone: "pressure",
+    });
+  }
+  return offenders;
 }
 
 function countsTowardResourceQuarantine(reason: string): boolean {
@@ -881,6 +920,7 @@ export function buildStopCandidates({
     }
     if (
       minimumIdleMs != null &&
+      !directResourceOffender &&
       (policy?.authoritative_last_edited_ms == null ||
         now - policy.authoritative_last_edited_ms < minimumIdleMs)
     ) {
@@ -1113,7 +1153,8 @@ export function startHostPressureController({
     if (
       !storageAdmission ||
       storageAdmission.mode === "disabled" ||
-      !storagePressureCanEvict(storageAdmission)
+      !metrics ||
+      !storagePressureCanEvict(metrics)
     ) {
       ioPressureSinceMs = undefined;
     } else if (ioPressureSinceMs == null) {
@@ -1197,13 +1238,20 @@ export function startHostPressureController({
     const policies = new Map(
       listProjectStopPolicies().map((row) => [row.project_id, row]),
     );
+    const ioOffenders = ioOnlyPressure
+      ? directIoPressureOffenders(workloadTracker.ratesByProject())
+      : undefined;
+    const stopOffenders = new Map(directResourceOffenders ?? []);
+    for (const [projectId, offender] of ioOffenders ?? []) {
+      stopOffenders.set(projectId, offender);
+    }
     const candidates = buildStopCandidates({
       projects,
       policies,
       getStopState: (project_id) => getProjectStopState(project_id),
       zone: classified.zone,
       now,
-      directResourceOffenders,
+      directResourceOffenders: stopOffenders,
       ...(ioOnlyPressure
         ? {
             minimumIdleMs:
@@ -1259,8 +1307,9 @@ export function startHostPressureController({
       });
       return;
     }
-    const maxStops =
-      classified.zone === "emergency"
+    const maxStops = ioOnlyPressure
+      ? 1
+      : classified.zone === "emergency"
         ? EMERGENCY_MAX_STOPS_PER_CYCLE
         : PRESSURE_MAX_STOPS_PER_CYCLE;
     let stoppedCount = 0;
@@ -1436,6 +1485,7 @@ export function startHostPressureController({
 export const _test = {
   classifyHostPressure,
   buildStopCandidates,
+  directIoPressureOffenders,
   resourcePressureFindings,
   pressureStopStateUpdate,
 };

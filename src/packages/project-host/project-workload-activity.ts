@@ -14,6 +14,14 @@ export type ProjectWorkloadSample = {
   cpu_usage_usec?: number;
   io_bytes?: number;
   io_operations?: number;
+  io_full_pressure_usec?: number;
+};
+
+export type ProjectWorkloadRates = {
+  cpu_cores: number;
+  io_bytes_per_second: number;
+  io_operations_per_second: number;
+  io_full_pressure_percent: number;
 };
 
 export function parseCpuUsageUsec(raw: string): number | undefined {
@@ -41,6 +49,11 @@ export function parseIoTotals(raw: string): {
   return { bytes, operations };
 }
 
+export function parseIoFullPressureUsec(raw: string): number | undefined {
+  const value = Number(raw.match(/(?:^|\n)full\s+[^\n]*\btotal=(\d+)/u)?.[1]);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 export async function sampleProjectWorkloads({
   now = Date.now(),
   projectPool = PROJECT_POOL,
@@ -56,9 +69,10 @@ export async function sampleProjectWorkloads({
     entries.map(async (entry): Promise<ProjectWorkloadSample> => {
       const project_id = entry.name.slice("project-".length);
       try {
-        const [cpuRaw, ioRaw] = await Promise.all([
+        const [cpuRaw, ioRaw, ioPressureRaw] = await Promise.all([
           readFile(join(projectPool, entry.name, "cpu.stat"), "utf8"),
           readFile(join(projectPool, entry.name, "io.stat"), "utf8"),
+          readFile(join(projectPool, entry.name, "io.pressure"), "utf8"),
         ]);
         const io = parseIoTotals(ioRaw);
         return {
@@ -67,6 +81,7 @@ export async function sampleProjectWorkloads({
           cpu_usage_usec: parseCpuUsageUsec(cpuRaw),
           io_bytes: io.bytes,
           io_operations: io.operations,
+          io_full_pressure_usec: parseIoFullPressureUsec(ioPressureRaw),
         };
       } catch {
         return { project_id, sampled_at_ms: now };
@@ -78,6 +93,7 @@ export async function sampleProjectWorkloads({
 export class ProjectWorkloadActivityTracker {
   private readonly previous = new Map<string, ProjectWorkloadSample>();
   private readonly lastActiveMs = new Map<string, number>();
+  private readonly latestRates = new Map<string, ProjectWorkloadRates>();
 
   constructor(
     private readonly opts: {
@@ -94,13 +110,20 @@ export class ProjectWorkloadActivityTracker {
       if (!currentIds.has(projectId)) {
         this.previous.delete(projectId);
         this.lastActiveMs.delete(projectId);
+        this.latestRates.delete(projectId);
       }
     }
 
     const protectedProjects = new Set<string>();
     for (const sample of samples) {
       const previous = this.previous.get(sample.project_id);
-      const active = this.isActive(previous, sample);
+      const rates = this.rates(previous, sample);
+      if (rates) {
+        this.latestRates.set(sample.project_id, rates);
+      } else {
+        this.latestRates.delete(sample.project_id);
+      }
+      const active = rates == null || this.isActive(rates);
       if (active) {
         this.lastActiveMs.set(sample.project_id, now);
       }
@@ -113,32 +136,59 @@ export class ProjectWorkloadActivityTracker {
     return protectedProjects;
   }
 
-  private isActive(
+  ratesByProject(): ReadonlyMap<string, ProjectWorkloadRates> {
+    return this.latestRates;
+  }
+
+  private rates(
     previous: ProjectWorkloadSample | undefined,
     current: ProjectWorkloadSample,
-  ): boolean {
+  ): ProjectWorkloadRates | undefined {
     if (
       !previous ||
       previous.cpu_usage_usec == null ||
       previous.io_bytes == null ||
       previous.io_operations == null ||
+      previous.io_full_pressure_usec == null ||
       current.cpu_usage_usec == null ||
       current.io_bytes == null ||
-      current.io_operations == null
+      current.io_operations == null ||
+      current.io_full_pressure_usec == null
     ) {
-      return true;
+      return undefined;
     }
     const elapsedSeconds =
       (current.sampled_at_ms - previous.sampled_at_ms) / 1000;
-    if (!(elapsedSeconds > 0)) return true;
+    if (!(elapsedSeconds > 0)) return undefined;
     const cpuUsec = current.cpu_usage_usec - previous.cpu_usage_usec;
     const ioBytes = current.io_bytes - previous.io_bytes;
     const ioOperations = current.io_operations - previous.io_operations;
-    if (cpuUsec < 0 || ioBytes < 0 || ioOperations < 0) return true;
+    const ioFullPressureUsec =
+      current.io_full_pressure_usec - previous.io_full_pressure_usec;
+    if (
+      cpuUsec < 0 ||
+      ioBytes < 0 ||
+      ioOperations < 0 ||
+      ioFullPressureUsec < 0
+    ) {
+      return undefined;
+    }
+    return {
+      cpu_cores: cpuUsec / 1_000_000 / elapsedSeconds,
+      io_bytes_per_second: ioBytes / elapsedSeconds,
+      io_operations_per_second: ioOperations / elapsedSeconds,
+      io_full_pressure_percent: Math.min(
+        100,
+        (ioFullPressureUsec / 1_000_000 / elapsedSeconds) * 100,
+      ),
+    };
+  }
+
+  private isActive(rates: ProjectWorkloadRates): boolean {
     return (
-      cpuUsec / 1_000_000 / elapsedSeconds >= this.opts.activeCpuCores ||
-      ioBytes / elapsedSeconds >= this.opts.activeBytesPerSecond ||
-      ioOperations / elapsedSeconds >= this.opts.activeOperationsPerSecond
+      rates.cpu_cores >= this.opts.activeCpuCores ||
+      rates.io_bytes_per_second >= this.opts.activeBytesPerSecond ||
+      rates.io_operations_per_second >= this.opts.activeOperationsPerSecond
     );
   }
 }
