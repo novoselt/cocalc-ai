@@ -5,6 +5,45 @@ Date: 2026-08-01
 Status: implementation in progress. The staging-admin CLI checkpoint described
 below is deployed only to staging; production behavior is unchanged.
 
+## Implementation Checkpoint: 2026-08-03
+
+Commits `4e2742e08f` and `9a43074b82` add the next staging-only product slice:
+
+- newly created VMs with a persistent `/work` volume install an idempotent
+  systemd timer that detects block-device growth and expands ext4 online;
+- a project page named **VMs** is available from the project activity-bar
+  overflow menu and lists the current account's project-attached VMs, state,
+  machine, pricing, zone, IP, expiry, and SSH command;
+- account-owned project compute budgets can recur by UTC week or month;
+- an append-only interval ledger meters running VM compute and retained
+  project-scoped `/work` storage;
+- budget-backed VM and volume creation no longer requires awkward per-resource
+  authorization flags, while those flags remain as a compatibility fallback;
+- admission checks the current period's remaining budget; reaching the ceiling
+  requests deletion of the account's VMs attached to that project but does not
+  delete persistent volumes; and
+- an existing unscoped volume is assigned to the VM's project budget when it is
+  first attached. A volume already assigned to another project is rejected.
+
+Staging artifacts:
+
+- hub: `20260804T010434Z-9a43074b-compute-vm-budget-ui-9a43074b82`;
+- static: `20260804T010656Z-9a43074b-compute-vm-budget-ui-9a43074b82`.
+
+Staging validation used project `af027aca-e308-41c2-b528-a3e73de50996` and a
+real `$100/month` budget. A 20 GB volume and Spot `e2-standard-2` VM were
+created without either legacy authorization flag. The attached disk was grown
+to 30 GB while the VM remained running. Within one 30-second timer interval,
+the guest reported a `32,212,254,720` byte block device and a
+`31,526,436,864` byte ext4 filesystem at `/work`. The VM and volume were then
+deleted, all four staging hub workers remained healthy, and hub/static smoke
+checks passed.
+
+The current budget is an estimated staging meter, not final invoicing. It
+includes machine runtime and persistent `/work` storage. Provider egress and
+persistent boot-disk prices are not yet represented in the managed-compute
+catalog and must be added before customer billing is enabled.
+
 Supersedes
 [Agent Compute VM Leases And Volumes Plan](./agent-compute-vm-leases-and-volumes-plan-2026-07-29.md).
 The earlier document remains useful design history, but it combines VM leases,
