@@ -30,12 +30,9 @@ const HOSTED_TOOL_TYPES = new Set([
   "web_search_preview",
 ]);
 
-type Session = {
-  token: string;
-  apiKey: string;
+type ActiveTurn = {
   reservation: SiteFundedCodexReservation;
   policy: SiteFundedCodexPolicy;
-  upstreamBaseUrl: string;
   startedAt: number;
   requestSequence: number;
   costMicrousd: number;
@@ -44,11 +41,24 @@ type Session = {
   onUsage: (event: SiteFundedCodexUsageEvent) => Promise<void>;
 };
 
+type Session = {
+  token: string;
+  apiKey: string;
+  upstreamBaseUrl: string;
+  closed: boolean;
+  activeTurn?: ActiveTurn;
+};
+
 export type SiteFundedProxySession = {
   reservationId: string;
   baseUrl: string;
   token: string;
   policy: SiteFundedCodexPolicy;
+  activate: (opts: {
+    reservation: SiteFundedCodexReservation;
+    onUsage: (event: SiteFundedCodexUsageEvent) => Promise<void>;
+  }) => void;
+  deactivate: (reservationId: string) => void;
   close: () => void;
 };
 
@@ -144,25 +154,25 @@ function assertAllowedTools(tools: unknown): void {
 
 function boundedProviderRequest({
   body,
-  session,
+  turn,
 }: {
   body: any;
-  session: Session;
+  turn: ActiveTurn;
 }): any {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw Object.assign(new Error("provider request must be a JSON object"), {
       statusCode: 400,
     });
   }
-  if (session.closed) {
+  if (turn.closed) {
     throw Object.assign(new Error("site-funded Codex turn is closed"), {
       statusCode: 403,
     });
   }
-  if (session.blockedReason) {
-    throw Object.assign(new Error(session.blockedReason), { statusCode: 403 });
+  if (turn.blockedReason) {
+    throw Object.assign(new Error(turn.blockedReason), { statusCode: 403 });
   }
-  if (Date.now() - session.startedAt >= session.policy.maxTurnDurationMs) {
+  if (Date.now() - turn.startedAt >= turn.policy.maxTurnDurationMs) {
     throw Object.assign(
       new Error(
         "This included Codex turn reached its emergency duration limit. Start a new turn, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key.",
@@ -170,7 +180,7 @@ function boundedProviderRequest({
       { statusCode: 403 },
     );
   }
-  if (session.requestSequence >= session.policy.maxRequestsPerTurn) {
+  if (turn.requestSequence >= turn.policy.maxRequestsPerTurn) {
     throw Object.assign(
       new Error(
         "This included Codex turn reached its emergency request limit. Start a new turn, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key.",
@@ -181,20 +191,20 @@ function boundedProviderRequest({
   assertAllowedTools(body.tools);
   const requestedOutput = Number(body.max_output_tokens);
   const outputLimit = Math.min(
-    session.policy.maxOutputTokensPerRequest,
+    turn.policy.maxOutputTokensPerRequest,
     Number.isSafeInteger(requestedOutput) && requestedOutput > 0
       ? requestedOutput
-      : session.policy.maxOutputTokensPerRequest,
+      : turn.policy.maxOutputTokensPerRequest,
   );
 
   return {
     ...body,
-    model: session.policy.model,
+    model: turn.policy.model,
     reasoning: {
       ...(body.reasoning && typeof body.reasoning === "object"
         ? body.reasoning
         : {}),
-      effort: session.policy.reasoning,
+      effort: turn.policy.reasoning,
     },
     service_tier: "default",
     max_output_tokens: outputLimit,
@@ -251,17 +261,27 @@ class SiteFundedCodexProxy {
   }): Promise<SiteFundedProxySession> {
     const port = await this.ensureListening();
     const token = randomBytes(32).toString("base64url");
-    const session: Session = {
-      token,
-      apiKey,
+    const makeActiveTurn = ({
+      reservation,
+      onUsage,
+    }: {
+      reservation: SiteFundedCodexReservation;
+      onUsage: (event: SiteFundedCodexUsageEvent) => Promise<void>;
+    }): ActiveTurn => ({
       reservation,
       policy: reservation.policy,
-      upstreamBaseUrl: upstreamBaseUrl.replace(/\/$/, ""),
       startedAt: Date.now(),
       requestSequence: 0,
       costMicrousd: 0,
       closed: false,
       onUsage,
+    });
+    const session: Session = {
+      token,
+      apiKey,
+      upstreamBaseUrl: upstreamBaseUrl.replace(/\/$/, ""),
+      closed: false,
+      activeTurn: makeActiveTurn({ reservation, onUsage }),
     };
     this.sessions.set(token, session);
     return {
@@ -269,8 +289,25 @@ class SiteFundedCodexProxy {
       baseUrl: `http://host.containers.internal:${port}/v1`,
       token,
       policy: reservation.policy,
+      activate: (opts) => {
+        if (session.closed) {
+          throw new Error("site-funded Codex proxy runtime is closed");
+        }
+        if (session.activeTurn && !session.activeTurn.closed) {
+          throw new Error("site-funded Codex proxy already has an active turn");
+        }
+        session.activeTurn = makeActiveTurn(opts);
+      },
+      deactivate: (reservationId) => {
+        const turn = session.activeTurn;
+        if (!turn || turn.reservation.reservationId !== reservationId) return;
+        turn.closed = true;
+        session.activeTurn = undefined;
+      },
       close: () => {
         session.closed = true;
+        if (session.activeTurn) session.activeTurn.closed = true;
+        session.activeTurn = undefined;
         this.sessions.delete(token);
       },
     };
@@ -294,13 +331,13 @@ class SiteFundedCodexProxy {
   }
 
   private async recordUsage({
-    session,
+    turn,
     requestSequence,
     payload,
     providerRequestId,
     durationMs,
   }: {
-    session: Session;
+    turn: ActiveTurn;
     requestSequence: number;
     payload: any;
     providerRequestId?: string;
@@ -310,10 +347,10 @@ class SiteFundedCodexProxy {
     if (!usage) return false;
     const event: SiteFundedCodexUsageEvent = {
       eventId: uuid(),
-      reservationId: session.reservation.reservationId,
+      reservationId: turn.reservation.reservationId,
       providerRequestId: usage.providerRequestId ?? providerRequestId,
       requestSequence,
-      model: session.policy.model,
+      model: turn.policy.model,
       inputTokens: usage.inputTokens,
       cachedInputTokens: usage.cachedInputTokens,
       cacheWriteInputTokens: usage.cacheWriteInputTokens,
@@ -325,18 +362,18 @@ class SiteFundedCodexProxy {
       model: event.model,
       usage: event,
     });
-    session.costMicrousd += cost.costMicrousd;
-    if (session.costMicrousd >= session.policy.maxTurnCostMicrousd) {
-      session.blockedReason =
+    turn.costMicrousd += cost.costMicrousd;
+    if (turn.costMicrousd >= turn.policy.maxTurnCostMicrousd) {
+      turn.blockedReason =
         "This included Codex turn reached its emergency cost limit. Start a new turn, upgrade your CoCalc membership, or connect a ChatGPT plan or personal OpenAI API key.";
     }
     try {
-      await session.onUsage(event);
+      await turn.onUsage(event);
     } catch (err) {
-      session.blockedReason =
+      turn.blockedReason =
         "Site-funded usage accounting is temporarily unavailable.";
       logger.error("failed to persist site-funded Codex provider usage", {
-        reservationId: session.reservation.reservationId,
+        reservationId: turn.reservation.reservationId,
         requestSequence,
         err: `${err}`,
       });
@@ -349,8 +386,13 @@ class SiteFundedCodexProxy {
     response: ServerResponse,
   ): Promise<void> {
     const session = this.sessionFor(request);
-    if (!session) {
+    if (!session || session.closed) {
       jsonResponse(response, 401, "invalid or expired funded proxy credential");
+      return;
+    }
+    const turn = session.activeTurn;
+    if (!turn || turn.closed) {
+      jsonResponse(response, 403, "site-funded Codex turn is not active");
       return;
     }
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
@@ -365,15 +407,15 @@ class SiteFundedCodexProxy {
       bodyBuffer = await readBody(request);
       body = boundedProviderRequest({
         body: JSON.parse(bodyBuffer.toString("utf8")),
-        session,
+        turn,
       });
     } catch (err: any) {
       jsonResponse(response, err?.statusCode ?? 400, `${err?.message ?? err}`);
       return;
     }
 
-    session.requestSequence += 1;
-    const requestSequence = session.requestSequence;
+    turn.requestSequence += 1;
+    const requestSequence = turn.requestSequence;
     const headers = new Headers();
     for (const [name, value] of Object.entries(request.headers)) {
       if (
@@ -415,7 +457,7 @@ class SiteFundedCodexProxy {
     const contentType = upstream.headers.get("content-type") ?? "";
     if (!upstream.body) {
       response.end();
-      session.blockedReason = "OpenAI response did not include usage data.";
+      turn.blockedReason = "OpenAI response did not include usage data.";
       return;
     }
 
@@ -424,17 +466,17 @@ class SiteFundedCodexProxy {
       response.end(text);
       try {
         const recorded = await this.recordUsage({
-          session,
+          turn,
           requestSequence,
           payload: JSON.parse(text),
           providerRequestId,
           durationMs: Date.now() - startedAt,
         });
         if (!recorded) {
-          session.blockedReason = "OpenAI response did not include usage data.";
+          turn.blockedReason = "OpenAI response did not include usage data.";
         }
       } catch (err) {
-        session.blockedReason = `Invalid OpenAI usage response: ${err}`;
+        turn.blockedReason = `Invalid OpenAI usage response: ${err}`;
       }
       return;
     }
@@ -462,7 +504,7 @@ class SiteFundedCodexProxy {
                 payload.type === "response.failed")
             ) {
               usageRecorded = await this.recordUsage({
-                session,
+                turn,
                 requestSequence,
                 payload,
                 providerRequestId,
@@ -478,7 +520,7 @@ class SiteFundedCodexProxy {
       response.end();
     }
     if (!usageRecorded) {
-      session.blockedReason = "OpenAI response did not include usage data.";
+      turn.blockedReason = "OpenAI response did not include usage data.";
     }
   }
 }

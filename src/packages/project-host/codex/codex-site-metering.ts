@@ -1,10 +1,13 @@
 import getLogger from "@cocalc/backend/logger";
 import callHub from "@cocalc/conat/hub/call-hub";
-import { setCodexSiteKeyGovernor } from "@cocalc/ai/acp";
+import {
+  setCodexSiteKeyGovernor,
+  type CodexSiteFundedTurnRequest,
+  type CodexSiteFundedTurnRuntime,
+} from "@cocalc/ai/acp";
 import { getMasterConatClient } from "../master-status";
 import { getLocalHostId } from "../sqlite/hosts";
 import { getDatabase, initDatabase } from "@cocalc/lite/hub/sqlite/database";
-import type { CodexSiteFundedTurnRuntime } from "@cocalc/ai/acp";
 import type {
   SiteFundedCodexAdmission,
   SiteFundedCodexUsageEvent,
@@ -263,23 +266,31 @@ export async function beginSiteFundedCodexTurn({
       { code: "unavailable" },
     );
   }
-  const admission = (await callHub({
-    ...caller,
-    name: "hosts.reserveSiteFundedCodexTurn",
-    args: [
-      {
-        account_id: accountId,
-        project_id: projectId,
-        funded_turn_id: fundedTurnId,
-        idempotency_key: idempotencyKey,
-        path,
-      },
-    ],
-    timeout: 20_000,
-  })) as SiteFundedCodexAdmission;
-  if (!admission.allowed) {
-    throw Object.assign(new Error(admission.reason), { code: admission.code });
-  }
+  const reserve = async (
+    request: CodexSiteFundedTurnRequest,
+  ): Promise<Extract<SiteFundedCodexAdmission, { allowed: true }>> => {
+    const admission = (await callHub({
+      ...caller,
+      name: "hosts.reserveSiteFundedCodexTurn",
+      args: [
+        {
+          account_id: accountId,
+          project_id: projectId,
+          funded_turn_id: request.fundedTurnId,
+          idempotency_key: request.idempotencyKey,
+          path: request.path,
+        },
+      ],
+      timeout: 20_000,
+    })) as SiteFundedCodexAdmission;
+    if (!admission.allowed) {
+      throw Object.assign(new Error(admission.reason), {
+        code: admission.code,
+      });
+    }
+    return admission;
+  };
+  const admission = await reserve({ fundedTurnId, idempotencyKey, path });
   let proxySession;
   try {
     proxySession = await startSiteFundedCodexProxySession({
@@ -296,41 +307,100 @@ export async function beginSiteFundedCodexTurn({
     await flushSiteFundedCodexOutbox();
     throw err;
   }
-  let finished = false;
-  const heartbeat = setInterval(() => {
-    void callHub({
-      ...caller,
-      name: "hosts.heartbeatSiteFundedCodexTurn",
-      args: [{ reservation_id: admission.reservation.reservationId }],
-      timeout: 15_000,
-    })
-      .then((result) => {
-        if (!result?.active) proxySession.close();
+  let runtimeClosed = false;
+  let activeFinish:
+    | ((opts: {
+        status: "committed" | "interrupted" | "failed" | "released";
+        outcome?: string;
+      }) => Promise<void>)
+    | undefined;
+
+  const createTurnRuntime = (
+    currentAdmission: Extract<SiteFundedCodexAdmission, { allowed: true }>,
+  ): CodexSiteFundedTurnRuntime => {
+    let finished = false;
+    const reservationId = currentAdmission.reservation.reservationId;
+    const heartbeat = setInterval(() => {
+      void callHub({
+        ...caller,
+        name: "hosts.heartbeatSiteFundedCodexTurn",
+        args: [{ reservation_id: reservationId }],
+        timeout: 15_000,
       })
-      .catch((err) => {
-        logger.warn("site-funded Codex heartbeat failed", {
-          reservationId: admission.reservation.reservationId,
-          err: `${err}`,
+        .then((result) => {
+          if (!result?.active) proxySession.deactivate(reservationId);
+        })
+        .catch((err) => {
+          logger.warn("site-funded Codex heartbeat failed", {
+            reservationId,
+            err: `${err}`,
+          });
         });
-      });
-  }, admission.reservation.heartbeatIntervalMs);
-  heartbeat.unref();
-  return {
-    reservation: admission.reservation,
-    policy: admission.reservation.policy,
-    providerBaseUrl: proxySession.baseUrl,
-    providerToken: proxySession.token,
-    finish: async ({ status, outcome }) => {
+    }, currentAdmission.reservation.heartbeatIntervalMs);
+    heartbeat.unref();
+
+    const finish: CodexSiteFundedTurnRuntime["finish"] = async ({
+      status,
+      outcome,
+    }) => {
       if (finished) return;
       finished = true;
       clearInterval(heartbeat);
-      proxySession.close();
+      proxySession.deactivate(reservationId);
       enqueueOutbox("finish", {
-        reservation_id: admission.reservation.reservationId,
+        reservation_id: reservationId,
         status,
         outcome,
       });
       await flushSiteFundedCodexOutbox();
-    },
+    };
+    activeFinish = finish;
+
+    return {
+      reservation: currentAdmission.reservation,
+      policy: currentAdmission.reservation.policy,
+      providerBaseUrl: proxySession.baseUrl,
+      providerToken: proxySession.token,
+      finish,
+      beginTurn: async (request) => {
+        if (runtimeClosed) {
+          throw new Error("site-funded Codex runtime is closed");
+        }
+        if (!finished) {
+          throw new Error(
+            "cannot begin a site-funded Codex turn before the previous turn finishes",
+          );
+        }
+        const nextAdmission = await reserve(request);
+        try {
+          proxySession.activate({
+            reservation: nextAdmission.reservation,
+            onUsage: persistUsageEvent,
+          });
+        } catch (err) {
+          enqueueOutbox("finish", {
+            reservation_id: nextAdmission.reservation.reservationId,
+            status: "released",
+            outcome: "provider proxy failed to activate",
+          });
+          await flushSiteFundedCodexOutbox();
+          throw err;
+        }
+        return createTurnRuntime(nextAdmission);
+      },
+      close: async () => {
+        if (runtimeClosed) return;
+        runtimeClosed = true;
+        if (activeFinish) {
+          await activeFinish({
+            status: "released",
+            outcome: "app-server runtime closed",
+          });
+        }
+        proxySession.close();
+      },
+    };
   };
+
+  return createTurnRuntime(admission);
 }

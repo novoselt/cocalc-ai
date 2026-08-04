@@ -4759,6 +4759,113 @@ describe("CodexAppServerAgent", () => {
     });
   });
 
+  it("reuses a funded app-server with a fresh reservation for each turn", async () => {
+    let turnSequence = 0;
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/resume":
+          fake.sendError(message.id, "thread not found");
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-funded-reuse" } });
+          break;
+        case "turn/start": {
+          const turnId = `turn-funded-${++turnSequence}`;
+          fake.sendResponse(message.id, { turn: { id: turnId } });
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: { id: turnId, status: "completed" },
+            });
+          });
+          break;
+        }
+        case "thread/backgroundTerminals/list":
+          fake.sendResponse(message.id, { data: [], nextCursor: null });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    const firstFinish = jest.fn(async () => {});
+    const secondFinish = jest.fn(async () => {});
+    const close = jest.fn(async () => {});
+    const secondTurn: any = {
+      reservation: {
+        reservationId: "reservation-funded-2",
+        fundedTurnId: "funded-turn-2",
+        poolId: "site-funded-codex-free",
+        policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      },
+      policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      providerBaseUrl: "http://host.containers.internal:1234/v1",
+      providerToken: "stable-proxy-token",
+      finish: secondFinish,
+      beginTurn: jest.fn(),
+      close,
+    };
+    const beginTurn = jest.fn(async () => secondTurn);
+    const firstTurn: any = {
+      reservation: {
+        reservationId: "reservation-funded-1",
+        fundedTurnId: "funded-turn-1",
+        poolId: "site-funded-codex-free",
+        policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      },
+      policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      providerBaseUrl: "http://host.containers.internal:1234/v1",
+      providerToken: "stable-proxy-token",
+      finish: firstFinish,
+      beginTurn,
+      close,
+    };
+    const spawnCodexAppServer = jest.fn(async () => ({
+      proc: proc as any,
+      cmd: "fake-codex",
+      args: ["app-server"],
+      cwd: "/tmp/project",
+      authSource: "site-api-key",
+      siteFundedTurn: firstTurn,
+    }));
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer,
+    });
+    const agent = new CodexAppServerAgent();
+    const request = {
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      session_id: "chat-funded-reuse",
+      stream: async () => {},
+      config: {
+        workingDirectory: "/tmp/project",
+        paymentSource: "site-api-key" as const,
+      },
+    };
+
+    await agent.evaluate({ ...request, prompt: "first" });
+    await agent.evaluate({ ...request, prompt: "second" });
+
+    expect(spawnCodexAppServer).toHaveBeenCalledTimes(1);
+    expect(beginTurn).toHaveBeenCalledTimes(1);
+    expect(firstFinish).toHaveBeenCalledWith({
+      status: "committed",
+      outcome: "turn completed",
+    });
+    expect(secondFinish).toHaveBeenCalledWith({
+      status: "committed",
+      outcome: "turn completed",
+    });
+    expect(proc.killed).toBe(false);
+    await agent.dispose();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(proc.killed).toBe(true);
+  });
+
   it("falls back to persisted rollout usage when live usage is missing", async () => {
     const checkAllowed = jest.fn(async () => ({ allowed: true }));
     const reportUsage = jest.fn(async () => {});

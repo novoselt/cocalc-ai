@@ -396,6 +396,7 @@ type CodexAppServerRuntime = {
   paymentSource: CodexSessionConfig["paymentSource"];
   spawned: SpawnedCodexAppServer;
   client: AppServerClient;
+  fundedTurn?: CodexSiteFundedTurnRuntime;
   threadId?: string;
   active: boolean;
   backgroundTerminalCount: number;
@@ -1738,6 +1739,16 @@ export class CodexAppServerAgent implements AcpAgent {
       backgroundTerminals: runtime.backgroundTerminalCount,
       reason,
     });
+    if (runtime.spawned.siteFundedTurn) {
+      try {
+        await runtime.spawned.siteFundedTurn.close();
+      } catch (err) {
+        logger.warn("codex app-server: failed closing funded runtime", {
+          threadId: runtime.threadId,
+          err: `${err}`,
+        });
+      }
+    }
     if (runtime.spawned.proc.exitCode == null && !runtime.spawned.proc.killed) {
       runtime.spawned.proc.kill("SIGKILL");
     }
@@ -1869,6 +1880,19 @@ export class CodexAppServerAgent implements AcpAgent {
       }
       this.clearRuntimeTimers(runtime);
       runtime.active = true;
+      if (runtime.spawned.siteFundedTurn) {
+        try {
+          runtime.fundedTurn = await runtime.spawned.siteFundedTurn.beginTurn({
+            fundedTurnId: randomUUID(),
+            idempotencyKey: randomUUID(),
+            path: request.chat?.path,
+          });
+        } catch (err) {
+          runtime.active = false;
+          void this.refreshRuntimeLifecycle(runtime);
+          throw err;
+        }
+      }
       return { runtime, created: false };
     }
 
@@ -1922,6 +1946,7 @@ export class CodexAppServerAgent implements AcpAgent {
       paymentSource: request.config?.paymentSource,
       spawned,
       client,
+      fundedTurn: spawned.siteFundedTurn,
       active: true,
       backgroundTerminalCount: 0,
       disposed: false,
@@ -2011,15 +2036,15 @@ export class CodexAppServerAgent implements AcpAgent {
       runtimeEnv,
     });
     const { spawned, client } = runtime;
-    const effectiveConfig: CodexSessionConfig | undefined =
-      spawned.siteFundedTurn
-        ? {
-            ...config,
-            model: spawned.siteFundedTurn.policy.model,
-            reasoning: spawned.siteFundedTurn.policy.reasoning,
-            serviceTier: spawned.siteFundedTurn.policy.serviceTier,
-          }
-        : config;
+    const fundedTurn = runtime.fundedTurn;
+    const effectiveConfig: CodexSessionConfig | undefined = fundedTurn
+      ? {
+          ...config,
+          model: fundedTurn.policy.model,
+          reasoning: fundedTurn.policy.reasoning,
+          serviceTier: fundedTurn.policy.serviceTier,
+        }
+      : config;
     if (effectiveConfig !== config) {
       session = this.resolveSession(session_id, effectiveConfig);
     }
@@ -2054,7 +2079,7 @@ export class CodexAppServerAgent implements AcpAgent {
     const siteKeyGovernor = getCodexSiteKeyGovernor();
     const siteKeyEnforced =
       spawned.authSource === "site-api-key" &&
-      !spawned.siteFundedTurn &&
+      !fundedTurn &&
       !!siteKeyGovernor &&
       !!request.account_id &&
       !!(request.chat?.project_id ?? request.project_id);
@@ -2877,27 +2902,23 @@ export class CodexAppServerAgent implements AcpAgent {
       throw new Error(userFacingPrimaryError);
     } finally {
       this.running.delete(currentThreadId);
-      if (spawned.siteFundedTurn) {
+      if (fundedTurn) {
         try {
-          await spawned.siteFundedTurn.finish({
+          await fundedTurn.finish({
             status: fundedFinishStatus,
             outcome: fundedFinishOutcome,
           });
         } catch (err) {
           logger.warn("codex app-server: funded turn settlement failed", {
-            reservationId: spawned.siteFundedTurn.reservation.reservationId,
+            reservationId: fundedTurn.reservation.reservationId,
             status: fundedFinishStatus,
             err: `${err}`,
           });
         }
       }
       runtime.active = false;
-      if (spawned.siteFundedTurn) {
-        await this.disposeRuntime(
-          runtime,
-          "site-funded runtime does not yet support turn rebinding",
-        );
-      } else if (!runtimeHealthy) {
+      runtime.fundedTurn = undefined;
+      if (!runtimeHealthy) {
         await this.disposeRuntime(runtime, "turn failed");
       } else {
         void this.refreshRuntimeLifecycle(runtime);

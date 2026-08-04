@@ -20,6 +20,10 @@ export type CodexSiteFundedTurnRuntime = {
     status: "committed" | "interrupted" | "failed" | "released";
     outcome?: string;
   }) => Promise<void>;
+  beginTurn: (
+    request: CodexSiteFundedTurnRequest,
+  ) => Promise<CodexSiteFundedTurnRuntime>;
+  close: () => Promise<void>;
 };
 
 export type CodexProjectSpawnOptions = {
