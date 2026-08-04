@@ -3414,6 +3414,42 @@ if __name__ == "__main__":
 '''
 
 
+LEGACY_MANAGED_PROJECT_IO_OVERRIDE = {
+    "version": 1,
+    "mode": "enforce",
+    "mountpoint": "/mnt/cocalc",
+    "profile": "prod-gcp-pd-balanced-dynamic-v1",
+    "capacitySource": "gcp-pd-balanced-size-formula-2026-07-24",
+    "capacity": {"mode": "gcp-pd-balanced"},
+    "adaptive": {
+        "enabled": False,
+        "sampleMs": 5000,
+        "enterSamples": 6,
+        "recoverSamples": 24,
+    },
+    "ioCost": {"mode": "disabled"},
+}
+
+
+def retire_legacy_managed_project_io_override(override_path: Path) -> None:
+    if not override_path.exists():
+        return
+    try:
+        override = json.loads(override_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+    if override != LEGACY_MANAGED_PROJECT_IO_OVERRIDE:
+        return
+    retired_path = override_path.with_name(
+        f"{override_path.name}.retired-gcp-pd-balanced-size-formula-2026-07-24"
+    )
+    if retired_path.exists():
+        retired_path.unlink()
+    override_path.replace(retired_path)
+    os.chown(retired_path, 0, 0)
+    retired_path.chmod(0o600)
+
+
 def write_project_io_configuration(
     cfg: BootstrapConfig,
     *,
@@ -3421,6 +3457,7 @@ def write_project_io_configuration(
     override_path: Path = Path("/etc/cocalc/project-io-policy.override.json"),
     capacity_path: Path = Path("/etc/cocalc/project-io-capacity.json"),
 ) -> None:
+    retire_legacy_managed_project_io_override(override_path)
     text_write_atomic(
         policy_path,
         json.dumps(cfg.project_io_policy, indent=2, sort_keys=True) + "\n",

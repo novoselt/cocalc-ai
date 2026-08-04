@@ -258,6 +258,38 @@ class ProjectIoConfigurationTest(unittest.TestCase):
             self.assertEqual(override_path.read_text(), override_text)
             self.assertEqual(override_path.stat().st_mode & 0o777, 0o600)
 
+    def test_archives_legacy_managed_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            policy_path = Path(tmpdir) / "policy.json"
+            override_path = Path(tmpdir) / "override.json"
+            capacity_path = Path(tmpdir) / "capacity.json"
+            override_path.write_text(
+                json.dumps(bootstrap.LEGACY_MANAGED_PROJECT_IO_OVERRIDE),
+                encoding="utf-8",
+            )
+            original_chown = bootstrap.os.chown
+            try:
+                bootstrap.os.chown = lambda *_args, **_kwargs: None
+                bootstrap.write_project_io_configuration(
+                    cfg,
+                    policy_path=policy_path,
+                    override_path=override_path,
+                    capacity_path=capacity_path,
+                )
+            finally:
+                bootstrap.os.chown = original_chown
+
+            retired_path = override_path.with_name(
+                f"{override_path.name}.retired-gcp-pd-balanced-size-formula-2026-07-24"
+            )
+            self.assertFalse(override_path.exists())
+            self.assertEqual(
+                json.loads(retired_path.read_text()),
+                bootstrap.LEGACY_MANAGED_PROJECT_IO_OVERRIDE,
+            )
+            self.assertEqual(retired_path.stat().st_mode & 0o777, 0o600)
+
 
 class BootstrapSharedScratchTest(unittest.TestCase):
     def test_reconcile_mounts_scratch_before_containment(self) -> None:
