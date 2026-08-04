@@ -1367,6 +1367,7 @@ type SpawnCodexAppServerInProjectRuntimeResult = {
   proc: ReturnType<typeof spawn>;
   cmd: string;
   args: string[];
+  logArgs: string;
   cwd?: string;
   authRuntime: CodexAuthRuntime;
   home: string;
@@ -1565,6 +1566,7 @@ async function spawnCodexAppServerInProjectRuntime({
     proc,
     cmd: "podman",
     args: execArgs,
+    logArgs: redactPodmanArgs(execArgs),
     cwd,
     authRuntime,
     home,
@@ -1638,6 +1640,7 @@ export function initCodexProjectRunner(): void {
         proc: spawned.proc,
         cmd: spawned.cmd,
         args: spawned.args,
+        logArgs: spawned.logArgs,
         cwd: spawned.cwd,
         authSource: spawned.authRuntime.source,
         containerPathMap: {

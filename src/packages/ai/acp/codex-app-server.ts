@@ -329,6 +329,7 @@ type SpawnedCodexAppServer = {
   proc: ReturnType<typeof spawn>;
   cmd: string;
   args: string[];
+  logArgs?: string;
   cwd?: string;
   authSource?: string;
   containerPathMap?: CodexProjectContainerPathMap;
@@ -2850,7 +2851,7 @@ export class CodexAppServerAgent implements AcpAgent {
         turnId,
         cwd,
         cmd: spawned.cmd,
-        args: argsJoin(spawned.args),
+        args: spawned.logArgs ?? argsJoin(spawned.args),
         authSource: spawned.authSource,
         err: `${err}`,
         normalizedErrors: normalizeErrorMessages(errors),
@@ -3182,7 +3183,7 @@ export class CodexAppServerAgent implements AcpAgent {
       });
       logger.debug("codex app-server: spawning via project container", {
         cmd: spawned.cmd,
-        args: argsJoin(spawned.args),
+        args: spawned.logArgs ?? argsJoin(spawned.args),
         cwd: spawned.cwd ?? cwd,
         authSource: spawned.authSource,
       });

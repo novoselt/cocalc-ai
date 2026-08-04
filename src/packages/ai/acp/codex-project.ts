@@ -83,6 +83,7 @@ export type CodexProjectSpawner = {
     proc: ChildProcess;
     cmd: string;
     args: string[];
+    logArgs?: string;
     cwd?: string;
     authSource?: string;
     containerPathMap?: CodexProjectContainerPathMap;
