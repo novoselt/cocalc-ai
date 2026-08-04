@@ -163,6 +163,219 @@ describe("site-funded Codex provider proxy", () => {
     session.close();
   });
 
+  it("forwards upstream errors without poisoning a retry", async () => {
+    let requestCount = 0;
+    const upstream = createServer(async (_request, response) => {
+      requestCount += 1;
+      response.writeHead(403, {
+        "content-type": "application/json",
+        "x-request-id": `req-rejected-${requestCount}`,
+      });
+      response.end(
+        JSON.stringify({
+          error: {
+            message: "The API key cannot use this model.",
+            type: "invalid_request_error",
+          },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const session = await startSiteFundedCodexProxySession({
+      reservation: reservation(),
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async () => {},
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = async () => {
+      const response = await fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "hello" }),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+
+    await expect(request()).resolves.toMatchObject({
+      status: 403,
+      body: { error: { message: "The API key cannot use this model." } },
+    });
+    await expect(request()).resolves.toMatchObject({
+      status: 403,
+      body: { error: { message: "The API key cannot use this model." } },
+    });
+    expect(requestCount).toBe(2);
+
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  it("allows a retry after a failed response that has no usage", async () => {
+    let requestCount = 0;
+    const upstream = createServer(async (_request, response) => {
+      requestCount += 1;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          type: "response.failed",
+          response: {
+            id: `resp-failed-${requestCount}`,
+            status: "failed",
+            error: { message: "temporary provider error" },
+          },
+        })}\n\n`,
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const session = await startSiteFundedCodexProxySession({
+      reservation: reservation(),
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async () => {},
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = async () => {
+      const response = await fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "hello" }),
+      });
+      await response.text();
+      return response.status;
+    };
+
+    await expect(request()).resolves.toBe(200);
+    await expect(request()).resolves.toBe(200);
+    expect(requestCount).toBe(2);
+
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  it("accounts for a final SSE event without a trailing newline", async () => {
+    const upstream = createServer(async (_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "resp-final-line",
+            status: "completed",
+            usage: { input_tokens: 120, output_tokens: 30 },
+          },
+        })}`,
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const events: SiteFundedCodexUsageEvent[] = [];
+    const session = await startSiteFundedCodexProxySession({
+      reservation: reservation(),
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async (event) => events.push(event),
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const response = await fetch(`${localUrl}/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ input: "hello" }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(events).toEqual([
+      expect.objectContaining({
+        providerRequestId: "resp-final-line",
+        inputTokens: 120,
+        outputTokens: 30,
+      }),
+    ]);
+
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  it("stops a funded turn after a completed response omits usage", async () => {
+    let requestCount = 0;
+    const upstream = createServer(async (_request, response) => {
+      requestCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ id: "resp-unmetered", status: "completed" }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const session = await startSiteFundedCodexProxySession({
+      reservation: reservation(),
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async () => {},
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = async () => {
+      const response = await fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "hello" }),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+
+    await expect(request()).resolves.toMatchObject({ status: 200 });
+    await expect(request()).resolves.toMatchObject({
+      status: 403,
+      body: {
+        error: {
+          message: expect.stringContaining("without usage data"),
+        },
+      },
+    });
+    expect(requestCount).toBe(1);
+
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
   it("reuses one runtime credential with isolated per-turn reservations", async () => {
     const upstream = createServer(async (_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });

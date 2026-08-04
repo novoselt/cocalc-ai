@@ -153,6 +153,21 @@ function usageFromProviderPayload(payload: any): {
   };
 }
 
+type ProviderResponseStatus = "completed" | "failed" | "incomplete";
+
+function providerResponseStatus(payload: any): ProviderResponseStatus | null {
+  const eventType = `${payload?.type ?? ""}`;
+  if (eventType === "response.completed") return "completed";
+  if (eventType === "response.failed") return "failed";
+  if (eventType === "response.incomplete") return "incomplete";
+  const status = `${(payload?.response ?? payload)?.status ?? ""}`;
+  return status === "completed" ||
+    status === "failed" ||
+    status === "incomplete"
+    ? status
+    : null;
+}
+
 function assertAllowedTools(tools: unknown): void {
   if (!Array.isArray(tools)) return;
   for (const tool of tools) {
@@ -400,6 +415,27 @@ class SiteFundedCodexProxy {
     return true;
   }
 
+  private blockCompletedResponseWithoutUsage({
+    turn,
+    requestSequence,
+    providerRequestId,
+    contentType,
+  }: {
+    turn: ActiveTurn;
+    requestSequence: number;
+    providerRequestId?: string;
+    contentType: string;
+  }): void {
+    turn.blockedReason =
+      "OpenAI completed a response without usage data, so CoCalc paused this included turn to prevent unmetered spending.";
+    logger.error("completed site-funded Codex response omitted usage", {
+      reservationId: turn.reservation.reservationId,
+      requestSequence,
+      providerRequestId,
+      contentType,
+    });
+  }
+
   private async handle(
     request: IncomingMessage,
     response: ServerResponse,
@@ -476,23 +512,46 @@ class SiteFundedCodexProxy {
     const contentType = upstream.headers.get("content-type") ?? "";
     if (!upstream.body) {
       response.end();
-      turn.blockedReason = "OpenAI response did not include usage data.";
+      if (upstream.ok) {
+        this.blockCompletedResponseWithoutUsage({
+          turn,
+          requestSequence,
+          providerRequestId,
+          contentType,
+        });
+      }
       return;
     }
 
     if (!contentType.includes("text/event-stream")) {
       const text = await upstream.text();
       response.end(text);
+      if (!upstream.ok) {
+        logger.warn("OpenAI rejected site-funded Codex request", {
+          reservationId: turn.reservation.reservationId,
+          requestSequence,
+          providerRequestId,
+          status: upstream.status,
+        });
+        return;
+      }
       try {
+        const payload = JSON.parse(text);
         const recorded = await this.recordUsage({
           turn,
           requestSequence,
-          payload: JSON.parse(text),
+          payload,
           providerRequestId,
           durationMs: Date.now() - startedAt,
         });
-        if (!recorded) {
-          turn.blockedReason = "OpenAI response did not include usage data.";
+        const status = providerResponseStatus(payload);
+        if (!recorded && status !== "failed" && status !== "incomplete") {
+          this.blockCompletedResponseWithoutUsage({
+            turn,
+            requestSequence,
+            providerRequestId,
+            contentType,
+          });
         }
       } catch (err) {
         turn.blockedReason = `Invalid OpenAI usage response: ${err}`;
@@ -503,6 +562,28 @@ class SiteFundedCodexProxy {
     const decoder = new TextDecoder();
     let pending = "";
     let usageRecorded = false;
+    let terminalStatus: ProviderResponseStatus | null = null;
+    const processEventLine = async (line: string): Promise<void> => {
+      if (!line.startsWith("data:")) return;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") return;
+      try {
+        const payload = JSON.parse(data);
+        const status = providerResponseStatus(payload);
+        if (status) terminalStatus = status;
+        if (!usageRecorded && status) {
+          usageRecorded = await this.recordUsage({
+            turn,
+            requestSequence,
+            payload,
+            providerRequestId,
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      } catch {
+        // Ignore non-JSON SSE comments and partial diagnostic events.
+      }
+    };
     try {
       for await (const chunk of upstream.body as any) {
         const buffer = Buffer.from(chunk);
@@ -511,35 +592,34 @@ class SiteFundedCodexProxy {
         const lines = pending.split("\n");
         pending = lines.pop() ?? "";
         for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (!data || data === "[DONE]") continue;
-          try {
-            const payload = JSON.parse(data);
-            if (
-              !usageRecorded &&
-              (payload.type === "response.completed" ||
-                payload.type === "response.incomplete" ||
-                payload.type === "response.failed")
-            ) {
-              usageRecorded = await this.recordUsage({
-                turn,
-                requestSequence,
-                payload,
-                providerRequestId,
-                durationMs: Date.now() - startedAt,
-              });
-            }
-          } catch {
-            // Ignore non-JSON SSE comments and partial diagnostic events.
-          }
+          await processEventLine(line);
         }
+      }
+      pending += decoder.decode();
+      for (const line of pending.split("\n")) {
+        await processEventLine(line);
       }
     } finally {
       response.end();
     }
-    if (!usageRecorded) {
-      turn.blockedReason = "OpenAI response did not include usage data.";
+    if (!upstream.ok) {
+      logger.warn("OpenAI rejected streaming site-funded Codex request", {
+        reservationId: turn.reservation.reservationId,
+        requestSequence,
+        providerRequestId,
+        status: upstream.status,
+      });
+    } else if (
+      !usageRecorded &&
+      terminalStatus !== "failed" &&
+      terminalStatus !== "incomplete"
+    ) {
+      this.blockCompletedResponseWithoutUsage({
+        turn,
+        requestSequence,
+        providerRequestId,
+        contentType,
+      });
     }
   }
 }
