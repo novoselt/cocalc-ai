@@ -2585,6 +2585,72 @@ describe("CodexAppServerAgent", () => {
     expect(spawnCount).toBe(1);
   });
 
+  it("reports and retains app-server background terminals after a turn", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-background" } });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-background" } });
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-background", status: "completed" },
+            });
+          });
+          break;
+        case "thread/backgroundTerminals/list":
+          fake.sendResponse(message.id, {
+            data: [
+              {
+                itemId: "item-build",
+                processId: "42",
+                command: "pnpm build",
+                cwd: "/tmp/project",
+              },
+            ],
+            nextCursor: null,
+          });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+    const agent = new CodexAppServerAgent();
+
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      session_id: "chat-background",
+      prompt: "start a build",
+      stream: async () => {},
+      config: { workingDirectory: "/tmp/project" },
+    });
+
+    expect(agent.getRuntimeStatus()).toEqual({
+      liveRuntimes: 1,
+      activeTurns: 0,
+      backgroundTerminals: 1,
+    });
+    expect(proc.killed).toBe(false);
+    await agent.dispose();
+    expect(proc.killed).toBe(true);
+  });
+
   it("never replaces an established session when resume fails", async () => {
     const appServerCalls: string[] = [];
     const proc = new FakeCodexAppServerProc((fake, message) => {

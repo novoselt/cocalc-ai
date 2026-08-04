@@ -113,4 +113,30 @@ describe("heartbeatAcpWorker", () => {
     });
     expect(afterProgress?.last_queue_progress_at).toBe(3000);
   });
+
+  it("persists retained app-server and background-terminal counts", () => {
+    upsertAcpWorker({
+      worker_id: "worker-runtime",
+      host_id: "host-1",
+      bundle_version: "bundle-1",
+      bundle_path: "/bundle",
+      pid: 123,
+      state: "active",
+      started_at: 1000,
+      last_heartbeat_at: 1000,
+      last_seen_running_jobs: 0,
+      last_queue_progress_at: 1000,
+    });
+
+    const after = heartbeatAcpWorker({
+      worker_id: "worker-runtime",
+      state: "active",
+      last_seen_running_jobs: 0,
+      live_app_server_runtimes: 2,
+      background_terminal_processes: 3,
+    });
+
+    expect(after?.live_app_server_runtimes).toBe(2);
+    expect(after?.background_terminal_processes).toBe(3);
+  });
 });

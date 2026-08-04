@@ -2921,7 +2921,7 @@ export class CodexAppServerAgent implements AcpAgent {
       if (!runtimeHealthy) {
         await this.disposeRuntime(runtime, "turn failed");
       } else {
-        void this.refreshRuntimeLifecycle(runtime);
+        await this.refreshRuntimeLifecycle(runtime);
       }
     }
     return "completed";
@@ -2937,6 +2937,24 @@ export class CodexAppServerAgent implements AcpAgent {
 
   hasRunningTurn(threadId: string): boolean {
     return this.running.has(threadId);
+  }
+
+  getRuntimeStatus(): {
+    liveRuntimes: number;
+    activeTurns: number;
+    backgroundTerminals: number;
+  } {
+    let activeTurns = 0;
+    let backgroundTerminals = 0;
+    for (const runtime of this.runtimes) {
+      if (runtime.active) activeTurns += 1;
+      backgroundTerminals += runtime.backgroundTerminalCount;
+    }
+    return {
+      liveRuntimes: this.runtimes.size,
+      activeTurns,
+      backgroundTerminals,
+    };
   }
 
   async steer(
