@@ -1599,14 +1599,21 @@ export async function getCodexAppServerAccountStatus(opts: {
     await client.initialize(timeoutMs);
     const appServerLogin = spawned.appServerLogin ?? opts.appServerLogin;
     await loginAppServerIfNeeded(client, appServerLogin, timeoutMs);
-    const [accountResult, rateLimitsResult] = await Promise.allSettled([
+    // account/read may refresh an expired ChatGPT access token. Wait for that
+    // refresh before asking for rate limits, or the two requests can race and
+    // make a successful reconnect fail its immediate verification probe.
+    const [accountResult] = await Promise.allSettled([
       client.request("account/read", { refreshToken: true }, timeoutMs),
+    ]);
+    const [rateLimitsResult] = await Promise.allSettled([
       client.request("account/rateLimits/read", {}, timeoutMs),
     ]);
     let rateLimits = settledValue(rateLimitsResult);
     if (isRateLimitsAuthError(rateLimits.error) && appServerLogin) {
       try {
-        await loginAppServerIfNeeded(client, appServerLogin, timeoutMs);
+        // account/read has already had a chance to refresh the app-server's
+        // token. Do not log in again with the originally captured token here:
+        // that can replace the refreshed token with the stale one.
         rateLimits = {
           value: await client.request("account/rateLimits/read", {}, timeoutMs),
         };
