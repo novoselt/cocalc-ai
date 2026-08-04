@@ -58,7 +58,7 @@ export default function SiteFundedCodexStatusCard() {
           Refresh
         </Button>
       }
-      style={{ margin: "12px auto", maxWidth: 900 }}
+      style={{ marginBottom: 20, width: "100%" }}
     >
       {error ? (
         <Alert
