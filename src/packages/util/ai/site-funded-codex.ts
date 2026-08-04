@@ -6,13 +6,13 @@
 import Decimal from "decimal.js-light";
 
 export const MICROUSD_PER_USD = 1_000_000;
-export const SITE_FUNDED_CODEX_POLICY_VERSION = 2;
+export const SITE_FUNDED_CODEX_POLICY_VERSION = 3;
 export const SITE_FUNDED_CODEX_PRICE_VERSION = "openai-2026-07-30";
 
 export type SiteFundedCodexPolicy = {
   version: number;
   model: string;
-  reasoning: "low";
+  reasoning: "low" | "medium";
   serviceTier: "standard";
   maxConcurrentTurnsPerAccount: number;
   maxTurnCostMicrousd: number;
@@ -29,7 +29,7 @@ export type SiteFundedCodexPolicy = {
 export const DEFAULT_SITE_FUNDED_CODEX_POLICY: SiteFundedCodexPolicy = {
   version: SITE_FUNDED_CODEX_POLICY_VERSION,
   model: "gpt-5.6-luna",
-  reasoning: "low",
+  reasoning: "medium",
   serviceTier: "standard",
   maxConcurrentTurnsPerAccount: 1,
   maxTurnCostMicrousd: 250_000,

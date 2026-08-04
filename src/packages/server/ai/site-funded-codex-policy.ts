@@ -51,7 +51,10 @@ export function siteFundedCodexConfigurationFromSettings(
   const policy: SiteFundedCodexPolicy = {
     ...DEFAULT_SITE_FUNDED_CODEX_POLICY,
     model,
-    reasoning: "low",
+    reasoning:
+      settings.site_funded_codex_reasoning === "low"
+        ? "low"
+        : DEFAULT_SITE_FUNDED_CODEX_POLICY.reasoning,
     serviceTier: "standard",
     maxTurnCostMicrousd: positiveUsdMicrousd(
       settings.site_funded_codex_max_turn_usd,

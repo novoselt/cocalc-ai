@@ -931,9 +931,9 @@ export const EXTRAS: SettingsExtras = {
   },
   site_funded_codex_reasoning: {
     name: "Funded Codex Reasoning",
-    desc: "Reasoning level forced at the backend and provider proxy for site-funded turns.",
-    default: "low",
-    valid: (value) => value === "low",
+    desc: "Reasoning level forced at the backend and provider proxy for site-funded turns. Medium is the default; low remains available as a lower-cost operator override.",
+    default: "medium",
+    valid: (value) => value === "low" || value === "medium",
     to_val: to_trimmed_str,
     tags: ["AI", "OpenAI", "Commercialization"],
     group: "AI & Agents",

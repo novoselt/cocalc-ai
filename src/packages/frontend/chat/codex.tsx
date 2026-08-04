@@ -669,7 +669,11 @@ export function CodexConfigButton({
       : "standard";
   const serviceTierLabel = effectiveServiceTier === "fast" ? "Fast" : undefined;
   const displayedModel = siteFundedPolicy?.model ?? selectedModelValue;
-  const displayedReasoning = siteFundedPolicy ? "Low" : reasoningLabel;
+  const displayedReasoning = siteFundedPolicy
+    ? (reasoningOptions.find(
+        (option) => option.value === siteFundedPolicy.reasoning,
+      )?.label ?? siteFundedPolicy.reasoning)
+    : reasoningLabel;
   const displayedServiceTier = siteFundedPolicy ? undefined : serviceTierLabel;
   const paymentNeedsAttention =
     paymentSourceLoading || paymentSource?.source === "none" || !paymentSource;
@@ -1007,7 +1011,7 @@ export function CodexConfigButton({
                   {siteFundedPolicy ? (
                     <button
                       type="button"
-                      title="CoCalc Membership uses low reasoning"
+                      title={`CoCalc Membership uses ${siteFundedPolicy.reasoning} reasoning`}
                       style={pillSegmentStyle("reasoning")}
                       {...pillSegmentHandlers("reasoning")}
                     >
