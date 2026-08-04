@@ -7,7 +7,7 @@ import { GcpProvider, type HostRuntime, type HostSpec } from "@cocalc/cloud";
 import { getProviderContext } from "@cocalc/server/cloud/provider-context";
 import { getComputeMachine } from "./catalog";
 import { getComputeVmConfig, type ComputeVmConfig } from "./config";
-import type { ComputeVmRow } from "./types";
+import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 import { assertComputeVmSecurity } from "./security";
 
 const provider = new GcpProvider();
@@ -16,6 +16,7 @@ function specFor(
   vm: ComputeVmRow,
   config: ComputeVmConfig,
   pricingModel = vm.effective_pricing_model,
+  volume?: ComputeVolumeRow,
 ): HostSpec {
   const machine = getComputeMachine(vm.machine_type);
   return {
@@ -27,6 +28,8 @@ function specFor(
     ram_gb: machine.ram_gb,
     disk_gb: 0,
     disk_type: "balanced",
+    shared_disk_gb: volume?.size_gb,
+    shared_disk_type: volume ? "balanced" : undefined,
     tags: [config.gcp_network_tag],
     metadata: {
       machine_type: machine.machine_type,
@@ -47,8 +50,34 @@ function specFor(
         owner: vm.owner_account_id.replaceAll("-", "").slice(0, 40),
         environment: config.environment,
       },
+      shared_disk_name: volume?.provider_disk_id,
+      shared_disk_id: volume?.provider_disk_id,
+      startup_script: volume ? volumeMountScript(volume) : undefined,
     },
   };
+}
+
+function volumeMountScript(volume: ComputeVolumeRow) {
+  const device = `/dev/disk/by-id/google-${volume.provider_disk_id}`;
+  return `#!/bin/bash
+set -euo pipefail
+device=${device}
+for _ in $(seq 1 60); do
+  test -b "$device" && break
+  sleep 1
+done
+test -b "$device"
+if ! blkid "$device" >/dev/null 2>&1; then
+  mkfs.ext4 -F -m 0 "$device"
+fi
+mkdir -p /work
+uuid=$(blkid -s UUID -o value "$device")
+grep -q "UUID=$uuid " /etc/fstab || echo "UUID=$uuid /work ext4 defaults,nofail 0 2" >> /etc/fstab
+mountpoint -q /work || mount /work
+resize2fs "$device" || true
+chown ubuntu:ubuntu /work
+chmod 0755 /work
+`;
 }
 
 function runtimeFor(vm: ComputeVmRow): HostRuntime {
@@ -89,9 +118,15 @@ async function context() {
   );
 }
 
-export async function createProviderComputeVm(vm: ComputeVmRow) {
+export async function createProviderComputeVm(
+  vm: ComputeVmRow,
+  volume?: ComputeVolumeRow,
+) {
   const { config, creds } = await context();
-  return await provider.createHost(specFor(vm, config), creds);
+  return await provider.createHost(
+    specFor(vm, config, undefined, volume),
+    creds,
+  );
 }
 
 export async function startProviderComputeVm(vm: ComputeVmRow) {
@@ -149,5 +184,51 @@ export async function probeProviderComputeSpot(vm: ComputeVmRow) {
     {
       stableForMs: 10_000,
     },
+  );
+}
+
+export async function ensureProviderComputeVolume(volume: ComputeVolumeRow) {
+  const { creds } = await context();
+  return await provider.ensurePersistentDisk(
+    {
+      name: volume.provider_disk_id,
+      zone: volume.zone,
+      size_gb: volume.desired_size_gb,
+      disk_type: "balanced",
+      labels: {
+        "managed-by": "cocalc-compute",
+        "logical-volume": volume.id.replaceAll("-", "").slice(0, 40),
+        owner: volume.owner_account_id.replaceAll("-", "").slice(0, 40),
+      },
+    },
+    creds,
+  );
+}
+
+export async function inspectProviderComputeVolume(volume: ComputeVolumeRow) {
+  const { creds } = await context();
+  return await provider.inspectPersistentDisk(
+    { name: volume.provider_disk_id, zone: volume.zone },
+    creds,
+  );
+}
+
+export async function resizeProviderComputeVolume(volume: ComputeVolumeRow) {
+  const { creds } = await context();
+  await provider.resizePersistentDisk(
+    {
+      name: volume.provider_disk_id,
+      zone: volume.zone,
+      size_gb: volume.desired_size_gb,
+    },
+    creds,
+  );
+}
+
+export async function deleteProviderComputeVolume(volume: ComputeVolumeRow) {
+  const { creds } = await context();
+  await provider.deletePersistentDisk(
+    { name: volume.provider_disk_id, zone: volume.zone },
+    creds,
   );
 }

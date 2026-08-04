@@ -33,6 +33,7 @@ export interface ComputeVmRow {
   effective_pricing_model: ComputeVmPricingModel;
   boot_disk_gb: number;
   boot_disk_id: string;
+  attached_volume_id?: string | null;
   state: ComputeVmState;
   desired_state: ComputeVmDesiredState;
   instance_generation: number;
@@ -62,7 +63,7 @@ export interface ComputeVmRow {
 
 export interface ComputeWorkRow {
   id: string;
-  resource_kind: "vm";
+  resource_kind: "vm" | "volume";
   resource_id: string;
   action: string;
   idempotency_key: string;
@@ -73,4 +74,45 @@ export interface ComputeWorkRow {
   locked_by?: string | null;
   locked_at?: Date | null;
   error?: string | null;
+}
+
+export type ComputeVolumeState =
+  | "requested"
+  | "provisioning"
+  | "ready"
+  | "resizing"
+  | "deleting"
+  | "deleted"
+  | "failed";
+
+export interface ComputeVolumeRow {
+  id: string;
+  name: string;
+  owner_account_id: string;
+  owning_bay_id: string;
+  provider: "gcp";
+  region: string;
+  zone: string;
+  disk_type: "balanced";
+  filesystem: "ext4";
+  size_gb: number;
+  desired_size_gb: number;
+  provider_disk_id: string;
+  state: ComputeVolumeState;
+  desired_state: "ready" | "deleted";
+  attached_vm_id?: string | null;
+  attachment_generation: number;
+  attachment_state: "detached" | "reserved" | "attached" | "unknown";
+  created_at: Date;
+  updated_at: Date;
+  ready_at?: Date | null;
+  resized_at?: Date | null;
+  detached_at?: Date | null;
+  deleted_at?: Date | null;
+  monthly_price_per_gb: string;
+  authorized_monthly_cost: string;
+  billing_state: string;
+  idempotency_key: string;
+  error?: string | null;
+  metadata: Record<string, any>;
 }

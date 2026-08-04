@@ -1751,6 +1751,145 @@ export class GcpProvider implements CloudProvider {
     }
   }
 
+  async ensurePersistentDisk(
+    opts: {
+      name: string;
+      zone: string;
+      size_gb: number;
+      disk_type: "balanced";
+      labels?: Record<string, string>;
+    },
+    creds: any,
+  ): Promise<{ name: string; uri: string; size_gb: number; users: string[] }> {
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    let disk: any;
+    try {
+      [disk] = await client.get({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+      try {
+        const [response] = await client.insert({
+          project: credentials.projectId,
+          zone: opts.zone,
+          diskResource: {
+            name: opts.name,
+            sizeGb: `${Math.floor(opts.size_gb)}`,
+            type: `projects/${credentials.projectId}/zones/${opts.zone}/diskTypes/pd-balanced`,
+            labels: opts.labels,
+          },
+        } as any);
+        await waitUntilOperationComplete({
+          response,
+          zone: opts.zone,
+          credentials,
+        });
+      } catch (insertErr) {
+        // A VM provision and the independent volume reconciler may both prove
+        // the same durable disk concurrently. Provider identity makes the
+        // resulting AlreadyExists response an idempotent success.
+        if (!isAlreadyExistsError(insertErr)) throw insertErr;
+      }
+      [disk] = await client.get({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+    }
+    return {
+      name: opts.name,
+      uri:
+        disk?.selfLink ??
+        `projects/${credentials.projectId}/zones/${opts.zone}/disks/${opts.name}`,
+      size_gb: Number(disk?.sizeGb ?? opts.size_gb),
+      users: Array.isArray(disk?.users)
+        ? disk.users.map((user) => `${user}`)
+        : [],
+    };
+  }
+
+  async inspectPersistentDisk(
+    opts: { name: string; zone: string },
+    creds: any,
+  ): Promise<
+    { name: string; uri: string; size_gb: number; users: string[] } | undefined
+  > {
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    try {
+      const [disk] = await client.get({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+      return {
+        name: opts.name,
+        uri:
+          disk?.selfLink ??
+          `projects/${credentials.projectId}/zones/${opts.zone}/disks/${opts.name}`,
+        size_gb: Number(disk?.sizeGb ?? 0),
+        users: Array.isArray(disk?.users)
+          ? disk.users.map((user) => `${user}`)
+          : [],
+      };
+    } catch (err) {
+      if (isNotFoundError(err)) return undefined;
+      throw err;
+    }
+  }
+
+  async resizePersistentDisk(
+    opts: { name: string; zone: string; size_gb: number },
+    creds: any,
+  ): Promise<void> {
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    const [response] = await client.resize({
+      project: credentials.projectId,
+      zone: opts.zone,
+      disk: opts.name,
+      disksResizeRequestResource: { sizeGb: Math.floor(opts.size_gb) },
+    });
+    await waitUntilOperationComplete({
+      response,
+      zone: opts.zone,
+      credentials,
+    });
+  }
+
+  async deletePersistentDisk(
+    opts: { name: string; zone: string },
+    creds: any,
+  ): Promise<void> {
+    const observed = await this.inspectPersistentDisk(opts, creds);
+    if (!observed) return;
+    if (observed.users.length) {
+      throw new Error(
+        `gcp: refusing to delete attached disk '${opts.name}' (${observed.users.join(", ")})`,
+      );
+    }
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    try {
+      const [response] = await client.delete({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+      await waitUntilOperationComplete({
+        response,
+        zone: opts.zone,
+        credentials,
+      });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+    }
+  }
+
   async resizeDisk(
     runtime: HostRuntime,
     newSizeGb: number,

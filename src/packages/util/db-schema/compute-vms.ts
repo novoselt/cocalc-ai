@@ -53,6 +53,10 @@ Table({
       type: "string",
       desc: "Provider boot disk retained across instance recovery.",
     },
+    attached_volume_id: {
+      type: "uuid",
+      desc: "Optional account-owned volume mounted at /work.",
+    },
     state: { type: "string", desc: "Observed logical VM state." },
     desired_state: { type: "string", desc: "Requested logical VM state." },
     instance_generation: {

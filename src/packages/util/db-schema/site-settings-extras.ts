@@ -335,6 +335,8 @@ export type SiteSettingsExtrasKeys =
   | "compute_vm_max_ttl_minutes"
   | "compute_vm_max_boot_disk_gb"
   | "compute_vm_max_authorized_cost_usd"
+  | "compute_vm_max_volumes_per_account"
+  | "compute_vm_max_volume_gb"
   | "lambda_cloud_api_key"
   | "project_hosts_lambda_prefix"
   | "nebius_region_config_json"
@@ -1562,6 +1564,26 @@ export const EXTRAS: SettingsExtras = {
     default: "25",
     to_val: toFloat,
     valid: onlyPosFloat,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_volumes_per_account: {
+    name: "Managed Compute VMs: Maximum Volumes Per Account",
+    desc: "Maximum undeleted persistent /work volumes owned by one canary account.",
+    default: "2",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_volume_gb: {
+    name: "Managed Compute VMs: Maximum Volume GB",
+    desc: "Largest persistent /work volume allowed by the canary.",
+    default: "500",
+    to_val: to_int,
+    valid: only_pos_int,
     tags: ["Cloud"],
     group: "Compute / Managed VMs",
     subgroup: "Limits",

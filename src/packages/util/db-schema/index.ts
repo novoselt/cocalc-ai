@@ -42,6 +42,7 @@ import "./compute-resource-events";
 import "./compute-resource-work";
 import "./compute-vm-instances";
 import "./compute-vms";
+import "./compute-volumes";
 import "./collaborators";
 import "./crm";
 import "./deleted-projects";

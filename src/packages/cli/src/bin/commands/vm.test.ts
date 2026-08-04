@@ -10,17 +10,22 @@ import {
   buildVmSshConfigBlock,
   registerVmCommand,
   removeVmSshConfigBlock,
+  resolveVmRsyncEndpoint,
   vmListSummary,
+  vmRsyncArgs,
+  volumeListSummary,
 } from "./vm";
 
 function harness() {
   const sshCalls: string[][] = [];
+  const rsyncCalls: string[][] = [];
+  const callbackResults: unknown[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
   registerVmCommand(program, {
-    withContext: async (_command, _name, callback) =>
-      await callback({
+    withContext: async (_command, _name, callback) => {
+      const result = await callback({
         globals: {},
         hub: {
           compute: {
@@ -33,21 +38,26 @@ function harness() {
             }),
           },
         },
-      }),
+      });
+      callbackResults.push(result);
+      return result;
+    },
     runSsh: (args) => sshCalls.push(args),
+    runRsync: (args) => rsyncCalls.push(args),
   });
-  return { program, sshCalls };
+  return { program, sshCalls, rsyncCalls, callbackResults };
 }
 
 describe("vm ssh", () => {
   it("opens an interactive SSH session when no command is supplied", async () => {
-    const { program, sshCalls } = harness();
+    const { program, sshCalls, callbackResults } = harness();
     await program.parseAsync(["node", "cocalc", "vm", "ssh", "build-vm"]);
     assert.deepEqual(sshCalls[0]?.slice(-1), ["ubuntu@203.0.113.10"]);
+    assert.deepEqual(callbackResults, [undefined]);
   });
 
   it("passes a remote command and option-like arguments through to SSH", async () => {
-    const { program, sshCalls } = harness();
+    const { program, sshCalls, callbackResults } = harness();
     await program.parseAsync([
       "node",
       "cocalc",
@@ -62,6 +72,68 @@ describe("vm ssh", () => {
       "ls",
       "-la",
     ]);
+    assert.deepEqual(callbackResults, [undefined]);
+  });
+});
+
+describe("vm rsync", () => {
+  it("passes ordinary rsync options and resolves a destination VM", async () => {
+    const { program, rsyncCalls, callbackResults } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "rsync",
+      "-az",
+      "./src/",
+      "build-vm:/work/src/",
+    ]);
+    assert.deepEqual(rsyncCalls[0]?.slice(-3), [
+      "-az",
+      "./src/",
+      "ubuntu@203.0.113.10:/work/src/",
+    ]);
+    assert.deepEqual(callbackResults, [undefined]);
+  });
+
+  it("resolves a source VM endpoint", () => {
+    const args = vmRsyncArgs(
+      {
+        id: "vm-id",
+        name: "build-vm",
+        state: "ready",
+        public_ip: "203.0.113.10",
+        ssh_user: "ubuntu",
+      },
+      ["-a", "build-vm:/work/dist/", "./dist/"],
+      {},
+    );
+    assert.equal(args.at(-2), "ubuntu@203.0.113.10:/work/dist/");
+    assert.equal(
+      resolveVmRsyncEndpoint(["build-vm:/work", "."]).vm,
+      "build-vm",
+    );
+  });
+
+  it("rejects remote-to-remote and transport overrides", () => {
+    assert.throws(
+      () => resolveVmRsyncEndpoint(["one:/work", "two:/work"]),
+      /exactly one VM endpoint/,
+    );
+    assert.throws(
+      () =>
+        vmRsyncArgs(
+          {
+            id: "vm-id",
+            name: "build-vm",
+            state: "ready",
+            public_ip: "203.0.113.10",
+          },
+          ["-e", "ssh -A", ".", "build-vm:/work"],
+          {},
+        ),
+      /use --identity/,
+    );
   });
 });
 
@@ -92,6 +164,35 @@ describe("vm list", () => {
           ip: "203.0.113.10",
           expires: "2026-08-04T00:00:00.000Z",
           project: "project-id",
+        },
+      ],
+    );
+  });
+});
+
+describe("vm volume list", () => {
+  it("uses a compact storage summary by default", () => {
+    assert.deepEqual(
+      volumeListSummary([
+        {
+          name: "build-cache",
+          state: "ready",
+          size_gb: 50,
+          zone: "us-central1-a",
+          attachment_state: "detached",
+          attached_vm_id: null,
+          monthly_price_per_gb: "0.100000",
+        },
+      ]),
+      [
+        {
+          name: "build-cache",
+          state: "ready",
+          size_gb: 50,
+          zone: "us-central1-a",
+          attachment: "detached",
+          vm: "",
+          monthly_usd: 5,
         },
       ],
     );

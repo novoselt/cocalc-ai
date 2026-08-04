@@ -15,6 +15,12 @@ import {
   listOwnedComputeVms,
 } from "./db";
 import type { ComputeVmRow } from "./types";
+import type { ComputeVolumeRow } from "./types";
+import {
+  getComputeVolumeById,
+  insertComputeVolume,
+  listOwnedComputeVolumes,
+} from "./volume-db";
 
 const postgresIt = process.env.COCALC_TEST_USE_PGLITE ? it.skip : it;
 
@@ -26,6 +32,7 @@ beforeEach(async () => {
   await getPool().query("DELETE FROM compute_resource_events");
   await getPool().query("DELETE FROM compute_vm_instances");
   await getPool().query("DELETE FROM compute_vms");
+  await getPool().query("DELETE FROM compute_volumes");
 });
 
 function vmInput(
@@ -47,6 +54,7 @@ function vmInput(
     effective_pricing_model: "on_demand",
     boot_disk_gb: 20,
     boot_disk_id: `cocalc-vm-${id.slice(0, 8)}-boot`,
+    attached_volume_id: overrides.attached_volume_id ?? null,
     state: "requested",
     desired_state: "running",
     instance_generation: 1,
@@ -64,6 +72,37 @@ function vmInput(
     billing_state: "staging_admin_unbilled",
     spot_recovery_policy: {},
     spot_recovery_state: {},
+    idempotency_key: overrides.idempotency_key ?? randomUUID(),
+    error: null,
+    metadata: {},
+  };
+}
+
+function volumeInput(
+  overrides: Partial<ComputeVolumeRow> = {},
+): Parameters<typeof insertComputeVolume>[0] {
+  const id = overrides.id ?? randomUUID();
+  return {
+    id,
+    name: overrides.name ?? "test-volume",
+    owner_account_id: overrides.owner_account_id ?? randomUUID(),
+    owning_bay_id: "bay-0",
+    provider: "gcp",
+    region: "us-central1",
+    zone: overrides.zone ?? "us-central1-a",
+    disk_type: "balanced",
+    filesystem: "ext4",
+    size_gb: overrides.size_gb ?? 20,
+    desired_size_gb: overrides.desired_size_gb ?? 20,
+    provider_disk_id: `cocalc-vol-${id.slice(0, 8)}`,
+    state: overrides.state ?? "ready",
+    desired_state: "ready",
+    attached_vm_id: overrides.attached_vm_id ?? null,
+    attachment_generation: 0,
+    attachment_state: overrides.attachment_state ?? "detached",
+    monthly_price_per_gb: "0.100000",
+    authorized_monthly_cost: "2.000000",
+    billing_state: "staging_admin_unbilled",
     idempotency_key: overrides.idempotency_key ?? randomUUID(),
     error: null,
     metadata: {},
@@ -223,5 +262,82 @@ describe("compute VM durable state", () => {
       [vm.id],
     );
     expect(work.rows).toEqual([{ action: "reconcile", state: "queued" }]);
+  });
+});
+
+describe("compute volume durable state", () => {
+  it("deduplicates volume creation and enforces the account limit", async () => {
+    const input = volumeInput();
+    const first = await insertComputeVolume(input, 1);
+    const duplicate = await insertComputeVolume(
+      { ...input, id: randomUUID(), provider_disk_id: "must-not-exist" },
+      1,
+    );
+    expect(duplicate.id).toBe(first.id);
+    await expect(
+      insertComputeVolume(
+        volumeInput({
+          owner_account_id: input.owner_account_id,
+          name: "second-volume",
+        }),
+        1,
+      ),
+    ).rejects.toThrow("volume account limit reached");
+    expect(
+      await listOwnedComputeVolumes({
+        owner_account_id: input.owner_account_id,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("atomically fences a volume to one VM", async () => {
+    const owner = randomUUID();
+    const volume = await insertComputeVolume(
+      volumeInput({ owner_account_id: owner }),
+      2,
+    );
+    const first = await insertComputeVm(
+      vmInput({
+        owner_account_id: owner,
+        name: "first-vm",
+        attached_volume_id: volume.id,
+      }),
+    );
+    await expect(
+      insertComputeVm(
+        vmInput({
+          owner_account_id: owner,
+          name: "second-vm",
+          attached_volume_id: volume.id,
+        }),
+      ),
+    ).rejects.toThrow("already reserved");
+    expect(await getComputeVolumeById(volume.id)).toMatchObject({
+      attached_vm_id: first.id,
+      attachment_state: "reserved",
+      attachment_generation: 1,
+    });
+    expect(await listOwnedComputeVms({ owner_account_id: owner })).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps volume work distinct in the durable queue", async () => {
+    const volume = await insertComputeVolume(volumeInput(), 2);
+    await enqueueComputeWork({
+      resource_kind: "volume",
+      resource_id: volume.id,
+      action: "provision_volume",
+      idempotency_key: "provision-volume",
+    });
+    const [work] = await claimComputeWork({
+      worker_id: "volume-worker",
+      limit: 1,
+    });
+    expect(work).toMatchObject({
+      resource_kind: "volume",
+      resource_id: volume.id,
+      action: "provision_volume",
+    });
   });
 });

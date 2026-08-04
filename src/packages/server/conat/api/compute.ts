@@ -5,7 +5,9 @@
 
 import { randomUUID } from "node:crypto";
 import type {
+  ComputeVolume,
   ComputeVm,
+  CreateComputeVolumeRequest,
   CreateComputeVmRequest,
 } from "@cocalc/conat/hub/api/compute";
 import isAdmin from "@cocalc/server/accounts/is-admin";
@@ -22,6 +24,7 @@ import {
 } from "@cocalc/server/compute/db";
 import { getComputeMachine } from "@cocalc/server/compute/catalog";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
+import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
 import { computeLeaseAuthorization } from "@cocalc/server/compute/pricing";
 import {
@@ -29,8 +32,17 @@ import {
   requireComputeVmCreateAllowed,
   requireComputeVmStartAllowed,
 } from "@cocalc/server/compute/config";
+import {
+  appendComputeVolumeEvent,
+  insertComputeVolume,
+  listOwnedComputeVolumes,
+  resolveOwnedComputeVolume,
+  updateComputeVolume,
+} from "@cocalc/server/compute/volume-db";
 
 const MIN_BOOT_DISK_GB = 10;
+const MIN_VOLUME_GB = 10;
+const BALANCED_DISK_MONTHLY_USD_PER_GB = 0.1;
 
 function requireAccount(accountId?: string) {
   const value = `${accountId ?? ""}`.trim();
@@ -109,6 +121,11 @@ function publicVm(vm: ComputeVmRow): ComputeVm {
   return result;
 }
 
+function publicVolume(volume: ComputeVolumeRow): ComputeVolume {
+  const { idempotency_key: _key, ...result } = volume;
+  return result;
+}
+
 async function resolveOwned(
   accountId: string,
   idOrName: string,
@@ -121,6 +138,65 @@ async function resolveOwned(
   });
   if (!vm) throw new Error(`compute VM '${idOrName}' not found`);
   return vm;
+}
+
+async function resolveOwnedVolume(
+  accountId: string,
+  idOrName: string,
+  includeDeleted = false,
+) {
+  const volume = await resolveOwnedComputeVolume({
+    owner_account_id: accountId,
+    id_or_name: `${idOrName ?? ""}`.trim(),
+    include_deleted: includeDeleted,
+  });
+  if (!volume) throw new Error(`compute volume '${idOrName}' not found`);
+  return volume;
+}
+
+function normalizeVolumeName(value: string) {
+  const name = `${value ?? ""}`.trim();
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(name)) {
+    throw new Error(
+      "volume name must start with a letter and contain at most 32 lowercase letters, digits, or hyphens",
+    );
+  }
+  return name;
+}
+
+function volumeAuthorization(opts: {
+  size_gb: number;
+  authorized_monthly_cost: string;
+  max_volume_gb: number;
+}) {
+  const sizeGb = Number(opts.size_gb);
+  if (
+    !Number.isInteger(sizeGb) ||
+    sizeGb < MIN_VOLUME_GB ||
+    sizeGb > opts.max_volume_gb
+  ) {
+    throw new Error(
+      `size_gb must be an integer from ${MIN_VOLUME_GB} to ${opts.max_volume_gb}`,
+    );
+  }
+  const minimumMonthlyCost = sizeGb * BALANCED_DISK_MONTHLY_USD_PER_GB;
+  const authorizedMonthlyCost = Number(opts.authorized_monthly_cost);
+  if (
+    !Number.isFinite(authorizedMonthlyCost) ||
+    authorizedMonthlyCost < minimumMonthlyCost
+  ) {
+    throw new Error(
+      `authorized_monthly_cost must be at least ${minimumMonthlyCost.toFixed(2)} USD for ${sizeGb} GB`,
+    );
+  }
+  const maximumMonthlyCost =
+    opts.max_volume_gb * BALANCED_DISK_MONTHLY_USD_PER_GB;
+  if (authorizedMonthlyCost > maximumMonthlyCost) {
+    throw new Error(
+      `authorized_monthly_cost must not exceed ${maximumMonthlyCost.toFixed(2)} USD for this canary`,
+    );
+  }
+  return { sizeGb, authorizedMonthlyCost };
 }
 
 export async function createVm(opts: CreateComputeVmRequest) {
@@ -138,6 +214,14 @@ export async function createVm(opts: CreateComputeVmRequest) {
 
   const name = normalizeName(opts.name);
   const zone = normalizeZone(opts.zone);
+  const attachedVolume = opts.volume
+    ? await resolveOwnedVolume(accountId, opts.volume)
+    : undefined;
+  if (attachedVolume && attachedVolume.zone !== zone) {
+    throw new Error(
+      `compute volume '${attachedVolume.name}' is in ${attachedVolume.zone}; create the VM in the same zone`,
+    );
+  }
   const machine = getComputeMachine(opts.machine_type);
   if (machine.cpu > config.max_vcpus) {
     throw new Error(
@@ -206,6 +290,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       effective_pricing_model: pricingModel,
       boot_disk_gb: bootDiskGb,
       boot_disk_id: `${providerInstanceId}-boot`,
+      attached_volume_id: attachedVolume?.id ?? null,
       state: "requested",
       desired_state: "running",
       instance_generation: 1,
@@ -254,6 +339,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       pricing_model: vm.desired_pricing_model,
       expires_at: vm.expires_at,
       authorized_cost: vm.authorized_cost,
+      attached_volume_id: vm.attached_volume_id,
     },
   });
   await enqueueComputeWork({
@@ -262,6 +348,208 @@ export async function createVm(opts: CreateComputeVmRequest) {
     idempotency_key: `provision:${vm.id}:1`,
   });
   return publicVm(vm);
+}
+
+export async function createVolume(opts: CreateComputeVolumeRequest) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  const config = await getComputeVmConfig();
+  requireComputeVmCreateAllowed(config, accountId);
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  const name = normalizeVolumeName(opts.name);
+  const zone = normalizeZone(opts.zone);
+  const { sizeGb, authorizedMonthlyCost } = volumeAuthorization({
+    size_gb: opts.size_gb,
+    authorized_monthly_cost: opts.authorized_monthly_cost,
+    max_volume_gb: config.max_volume_gb,
+  });
+  const id = randomUUID();
+  const volume = await insertComputeVolume(
+    {
+      id,
+      name,
+      owner_account_id: accountId,
+      owning_bay_id: getConfiguredBayId(),
+      provider: "gcp",
+      region: regionFromZone(zone),
+      zone,
+      disk_type: "balanced",
+      filesystem: "ext4",
+      size_gb: sizeGb,
+      desired_size_gb: sizeGb,
+      provider_disk_id: `cocalc-vol-${id.replaceAll("-", "").slice(0, 24)}`,
+      state: "requested",
+      desired_state: "ready",
+      attached_vm_id: null,
+      attachment_generation: 0,
+      attachment_state: "detached",
+      monthly_price_per_gb: BALANCED_DISK_MONTHLY_USD_PER_GB.toFixed(6),
+      authorized_monthly_cost: authorizedMonthlyCost.toFixed(6),
+      billing_state: `${config.environment}_admin_unbilled`,
+      idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+      error: null,
+      metadata: {
+        provider_context: config.staging_legacy_provider
+          ? "project-host-provider-context"
+          : "dedicated-compute-provider-context",
+        price_snapshot_kind: `${config.environment}-static-unbilled`,
+      },
+    },
+    config.max_volumes_per_account,
+  );
+  await appendComputeVolumeEvent({
+    volume,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    action: "create",
+    idempotency_key: opts.idempotency_key,
+    new_state: volume.state,
+    status: "requested",
+    details: {
+      size_gb: volume.size_gb,
+      authorized_monthly_cost: volume.authorized_monthly_cost,
+    },
+  });
+  await enqueueComputeWork({
+    resource_kind: "volume",
+    resource_id: volume.id,
+    action: "provision_volume",
+    idempotency_key: `provision-volume:${volume.id}`,
+  });
+  return publicVolume(volume);
+}
+
+export async function listVolumes(opts: {
+  account_id?: string;
+  include_deleted?: boolean;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  return (
+    await listOwnedComputeVolumes({
+      owner_account_id: accountId,
+      include_deleted: opts.include_deleted,
+    })
+  ).map(publicVolume);
+}
+
+export async function getVolume(opts: {
+  account_id?: string;
+  id_or_name: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  return publicVolume(
+    await resolveOwnedVolume(accountId, opts.id_or_name, true),
+  );
+}
+
+export async function resizeVolume(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  size_gb: number;
+  authorized_monthly_cost: string;
+  idempotency_key: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  const config = await getComputeVmConfig();
+  requireComputeVmCreateAllowed(config, accountId);
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  const volume = await resolveOwnedVolume(accountId, opts.id_or_name);
+  const { sizeGb, authorizedMonthlyCost } = volumeAuthorization({
+    size_gb: opts.size_gb,
+    authorized_monthly_cost: opts.authorized_monthly_cost,
+    max_volume_gb: config.max_volume_gb,
+  });
+  if (sizeGb < volume.size_gb) {
+    throw new Error("compute volumes cannot be shrunk");
+  }
+  const next = (await updateComputeVolume(volume.id, {
+    desired_size_gb: sizeGb,
+    authorized_monthly_cost: authorizedMonthlyCost.toFixed(6),
+    state: sizeGb === volume.size_gb ? volume.state : "resizing",
+    error: null,
+  }))!;
+  await appendComputeVolumeEvent({
+    volume: next,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    action: "resize",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: volume.state,
+    new_state: next.state,
+    status: "requested",
+    details: { old_size_gb: volume.size_gb, desired_size_gb: sizeGb },
+  });
+  if (sizeGb > volume.size_gb) {
+    await enqueueComputeWork({
+      resource_kind: "volume",
+      resource_id: volume.id,
+      action: "resize_volume",
+      idempotency_key: opts.idempotency_key,
+    });
+  }
+  return publicVolume(next);
+}
+
+export async function deleteVolume(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  confirm_name: string;
+  idempotency_key: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireStagingAdmin(accountId);
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  const volume = await resolveOwnedVolume(accountId, opts.id_or_name);
+  if (`${opts.confirm_name ?? ""}` !== volume.name) {
+    throw new Error(`confirm_name must exactly equal '${volume.name}'`);
+  }
+  if (volume.attached_vm_id || volume.attachment_state !== "detached") {
+    throw new Error("cannot delete an attached or uncertain compute volume");
+  }
+  const next = (await updateComputeVolume(volume.id, {
+    desired_state: "deleted",
+    state: "deleting",
+    error: null,
+  }))!;
+  await appendComputeVolumeEvent({
+    volume: next,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    action: "delete",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: volume.state,
+    new_state: "deleting",
+    status: "requested",
+  });
+  await enqueueComputeWork({
+    resource_kind: "volume",
+    resource_id: volume.id,
+    action: "delete_volume",
+    idempotency_key: opts.idempotency_key,
+  });
+  return publicVolume(next);
 }
 
 export async function listVms(opts: {

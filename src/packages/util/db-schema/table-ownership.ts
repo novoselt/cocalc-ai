@@ -407,7 +407,7 @@ export const TABLE_OWNERSHIP = {
       "Recreate from a later browser presence observation or durable worker source state.",
   }),
 
-  ...entries(["compute_vms", "compute_vm_instances"], {
+  ...entries(["compute_vms", "compute_vm_instances", "compute_volumes"], {
     ownership: "account-home",
     authority: "owner_account_id",
     portability: "stable",

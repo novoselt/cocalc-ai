@@ -1165,4 +1165,90 @@ describe("GcpProvider", () => {
       external_ipv6: false,
     });
   });
+
+  it("creates labeled persistent compute volumes idempotently", async () => {
+    diskGetMock.mockRejectedValueOnce({ code: 404 }).mockResolvedValueOnce([
+      {
+        selfLink:
+          "projects/compute-prod/zones/us-central1-a/disks/cocalc-vol-1",
+        sizeGb: "50",
+        users: [],
+      },
+    ]);
+    diskInsertMock.mockResolvedValueOnce([
+      { latestResponse: { name: "disk-op", status: "DONE" } },
+    ]);
+    waitMock.mockResolvedValueOnce([{ status: "DONE" }]);
+    const provider = new GcpProvider();
+    const observed = await provider.ensurePersistentDisk(
+      {
+        name: "cocalc-vol-1",
+        zone: "us-central1-a",
+        size_gb: 50,
+        disk_type: "balanced",
+        labels: { "managed-by": "cocalc-compute" },
+      },
+      {
+        project_id: "compute-prod",
+        client_email: "compute@example.invalid",
+        private_key: "key",
+      },
+    );
+    expect(diskInsertMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        diskResource: expect.objectContaining({
+          name: "cocalc-vol-1",
+          sizeGb: "50",
+          labels: { "managed-by": "cocalc-compute" },
+        }),
+      }),
+    );
+    expect(observed).toMatchObject({ size_gb: 50, users: [] });
+  });
+
+  it("treats a concurrent persistent-disk insert as success", async () => {
+    diskGetMock
+      .mockRejectedValueOnce({ code: 404 })
+      .mockResolvedValueOnce([{ sizeGb: "20", users: [] }]);
+    diskInsertMock.mockRejectedValueOnce({ code: 409 });
+    const provider = new GcpProvider();
+    await expect(
+      provider.ensurePersistentDisk(
+        {
+          name: "cocalc-vol-race",
+          zone: "us-central1-a",
+          size_gb: 20,
+          disk_type: "balanced",
+        },
+        {
+          project_id: "compute-prod",
+          client_email: "compute@example.invalid",
+          private_key: "key",
+        },
+      ),
+    ).resolves.toMatchObject({ name: "cocalc-vol-race", size_gb: 20 });
+  });
+
+  it("refuses to delete an attached persistent compute volume", async () => {
+    diskGetMock.mockResolvedValueOnce([
+      {
+        sizeGb: "20",
+        users: [
+          "projects/compute-prod/zones/us-central1-a/instances/compute-vm",
+        ],
+      },
+    ]);
+    const provider = new GcpProvider();
+    await expect(
+      provider.deletePersistentDisk(
+        { name: "cocalc-vol-1", zone: "us-central1-a" },
+        {
+          project_id: "compute-prod",
+          client_email: "compute@example.invalid",
+          private_key: "key",
+        },
+      ),
+    ).rejects.toThrow("refusing to delete attached disk");
+    expect(diskDeleteMock).not.toHaveBeenCalled();
+  });
 });

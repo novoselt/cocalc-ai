@@ -13,6 +13,7 @@ import { Command } from "commander";
 export type VmCommandDeps = {
   withContext: any;
   runSsh?: (args: string[]) => void;
+  runRsync?: (args: string[]) => void;
 };
 
 function expandHome(path: string) {
@@ -148,6 +149,27 @@ async function waitForState(
   );
 }
 
+async function waitForVolumeState(
+  hub: any,
+  idOrName: string,
+  desired: Set<string>,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let last: any;
+  while (Date.now() < deadline) {
+    last = await hub.compute.getVolume({ id_or_name: idOrName });
+    if (desired.has(last.state)) return last;
+    if (last.state === "failed") {
+      throw new Error(last.error || `compute volume '${idOrName}' failed`);
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000));
+  }
+  throw new Error(
+    `timed out waiting for compute volume '${idOrName}'; last state=${last?.state ?? "unknown"}`,
+  );
+}
+
 function sshArgs(vm: any, opts: { identity?: string }, command?: string[]) {
   if (!vm.public_ip || vm.state !== "ready") {
     throw new Error(
@@ -174,6 +196,65 @@ function defaultRunSsh(args: string[]) {
   }
 }
 
+function defaultRunRsync(args: string[]) {
+  const result = spawnSync("rsync", args, { stdio: "inherit" });
+  if (result.error) throw result.error;
+  if ((result.status ?? 0) !== 0) {
+    throw new Error(`rsync exited with code ${result.status}`);
+  }
+}
+
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function resolveVmRsyncEndpoint(args: string[]) {
+  const candidates = args.flatMap((arg, index) => {
+    if (arg.startsWith("-")) return [];
+    const match = arg.match(/^([a-z][a-z0-9-]{0,31}):(.*)$/);
+    return match ? [{ index, vm: match[1], path: match[2] }] : [];
+  });
+  if (candidates.length !== 1) {
+    throw new Error(
+      "rsync requires exactly one VM endpoint, e.g. vm-name:/work/data",
+    );
+  }
+  return candidates[0];
+}
+
+export function vmRsyncArgs(
+  vm: any,
+  args: string[],
+  opts: { identity?: string },
+) {
+  if (!vm.public_ip || vm.state !== "ready") {
+    throw new Error(
+      `compute VM '${vm.name}' is not SSH-ready (state=${vm.state})`,
+    );
+  }
+  if (args.some((arg) => arg === "-e" || arg.startsWith("--rsh"))) {
+    throw new Error(
+      "use --identity instead of overriding rsync's SSH transport",
+    );
+  }
+  const endpoint = resolveVmRsyncEndpoint(args);
+  if (endpoint.vm !== vm.name && endpoint.vm !== vm.id) {
+    throw new Error(`resolved VM '${vm.name}' does not match '${endpoint.vm}'`);
+  }
+  const ssh = [
+    "ssh",
+    "-o",
+    "ForwardAgent=no",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+  ];
+  if (opts.identity) ssh.push("-i", expandHome(opts.identity));
+  const next = [...args];
+  next[endpoint.index] =
+    `${vm.ssh_user || "ubuntu"}@${vm.public_ip}:${endpoint.path}`;
+  return ["-e", ssh.map(shellQuote).join(" "), ...next];
+}
+
 export function vmListSummary(rows: any[]) {
   return rows.map((row) => ({
     name: row.name,
@@ -187,8 +268,24 @@ export function vmListSummary(rows: any[]) {
   }));
 }
 
+export function volumeListSummary(rows: any[]) {
+  return rows.map((row) => ({
+    name: row.name,
+    state: row.state,
+    size_gb: row.size_gb,
+    zone: row.zone,
+    attachment: row.attachment_state,
+    vm: row.attached_vm_id ?? "",
+    monthly_usd: Number(row.size_gb) * Number(row.monthly_price_per_gb),
+  }));
+}
+
 export function registerVmCommand(program: Command, deps: VmCommandDeps) {
-  const { withContext, runSsh = defaultRunSsh } = deps;
+  const {
+    withContext,
+    runSsh = defaultRunSsh,
+    runRsync = defaultRunRsync,
+  } = deps;
   const vm = program
     .command("vm")
     .description("short-lived account-owned managed compute VMs");
@@ -242,6 +339,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     )
     .option("--ttl <duration>", "hard lease deadline, e.g. 30m or 8h", "30m")
     .option("--boot-disk-gb <gb>", "persistent root disk size", "20")
+    .option("--volume <name>", "existing persistent volume mounted at /work")
     .requiredOption(
       "--authorized-cost <usd>",
       "maximum fixed compute cost authorization",
@@ -260,6 +358,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           allow_on_demand_fallback: opts.allowOnDemandFallback === true,
           ttl_minutes: parseTtlMinutes(opts.ttl),
           boot_disk_gb: Number(opts.bootDiskGb),
+          volume: opts.volume,
           authorized_cost: opts.authorizedCost,
           ssh_public_key: key.key,
           idempotency_key: randomUUID(),
@@ -368,14 +467,145 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             return { id: row.id, name: row.name, command: rendered };
           }
           runSsh(args);
-          return {
-            id: row.id,
-            name: row.name,
-            status: remoteCommand.length ? "completed" : "connected",
-          };
+          return undefined;
         });
       },
     );
+
+  vm.command("rsync <rsync_args...>")
+    .description(
+      "copy files with rsync; exactly one endpoint must be vm-name:/path",
+    )
+    .option("--identity <path>", "SSH private key")
+    .option("--print", "print the rsync command instead of running it", false)
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
+    .action(
+      async (
+        rsyncArgs: string[],
+        opts: { identity?: string; print?: boolean },
+        command: Command,
+      ) => {
+        await withContext(command, "vm rsync", async (ctx) => {
+          const endpoint = resolveVmRsyncEndpoint(rsyncArgs);
+          const row = await ctx.hub.compute.getVm({
+            id_or_name: endpoint.vm,
+          });
+          const args = vmRsyncArgs(row, rsyncArgs, opts);
+          const rendered = `rsync ${args.map(shellQuote).join(" ")}`;
+          if (opts.print || ctx.globals.json || ctx.globals.output === "json") {
+            return { id: row.id, name: row.name, command: rendered };
+          }
+          runRsync(args);
+          return undefined;
+        });
+      },
+    );
+
+  const volume = vm
+    .command("volume")
+    .description("manage persistent account-owned /work volumes");
+
+  volume
+    .command("list")
+    .description("list persistent compute volumes")
+    .option("--include-deleted", "include deleted volume records", false)
+    .option("--long", "show full durable volume records", false)
+    .action(async (opts: any, command: Command) => {
+      await withContext(command, "vm volume list", async (ctx) => {
+        const rows = await ctx.hub.compute.listVolumes({
+          include_deleted: opts.includeDeleted === true,
+        });
+        return opts.long ? rows : volumeListSummary(rows);
+      });
+    });
+
+  volume
+    .command("get <volume>")
+    .description("inspect a persistent compute volume")
+    .action(async (idOrName: string, command: Command) => {
+      await withContext(command, "vm volume get", async (ctx) => {
+        return await ctx.hub.compute.getVolume({ id_or_name: idOrName });
+      });
+    });
+
+  volume
+    .command("create <name>")
+    .description("create a persistent pd-balanced /work volume")
+    .option("--zone <zone>", "GCP zone", "us-central1-a")
+    .option("--size-gb <gb>", "volume size", "50")
+    .requiredOption(
+      "--authorized-monthly-cost <usd>",
+      "maximum recurring storage cost authorization",
+    )
+    .option("--wait", "wait until the volume is ready", false)
+    .action(async (name: string, opts: any, command: Command) => {
+      await withContext(command, "vm volume create", async (ctx) => {
+        const created = await ctx.hub.compute.createVolume({
+          name,
+          zone: opts.zone,
+          size_gb: Number(opts.sizeGb),
+          authorized_monthly_cost: opts.authorizedMonthlyCost,
+          idempotency_key: randomUUID(),
+        });
+        if (!opts.wait) return created;
+        return await waitForVolumeState(
+          ctx.hub,
+          created.id,
+          new Set(["ready"]),
+          5 * 60_000,
+        );
+      });
+    });
+
+  volume
+    .command("resize <volume>")
+    .description("grow a persistent compute volume")
+    .requiredOption("--size-gb <gb>", "new grow-only volume size")
+    .requiredOption(
+      "--authorized-monthly-cost <usd>",
+      "maximum recurring storage cost authorization",
+    )
+    .option("--wait", "wait until provider resize completes", false)
+    .action(async (idOrName: string, opts: any, command: Command) => {
+      await withContext(command, "vm volume resize", async (ctx) => {
+        const resized = await ctx.hub.compute.resizeVolume({
+          id_or_name: idOrName,
+          size_gb: Number(opts.sizeGb),
+          authorized_monthly_cost: opts.authorizedMonthlyCost,
+          idempotency_key: randomUUID(),
+        });
+        if (!opts.wait) return resized;
+        return await waitForVolumeState(
+          ctx.hub,
+          resized.id,
+          new Set(["ready"]),
+          5 * 60_000,
+        );
+      });
+    });
+
+  volume
+    .command("delete <volume>")
+    .description("permanently delete a detached persistent volume")
+    .requiredOption("--confirm <name>", "type the exact volume name")
+    .option("--wait", "wait for provider deletion", false)
+    .action(async (idOrName: string, opts: any, command: Command) => {
+      await withContext(command, "vm volume delete", async (ctx) => {
+        const deleted = await ctx.hub.compute.deleteVolume({
+          id_or_name: idOrName,
+          confirm_name: opts.confirm,
+          idempotency_key: randomUUID(),
+        });
+        if (!opts.wait) return deleted;
+        return await waitForVolumeState(
+          ctx.hub,
+          deleted.id,
+          new Set(["deleted"]),
+          5 * 60_000,
+        );
+      });
+    });
 
   const sshConfig = vm
     .command("ssh-config")

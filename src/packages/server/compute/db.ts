@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import getPool from "@cocalc/database/pool";
-import type { ComputeVmRow, ComputeWorkRow } from "./types";
+import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
 
 const pool = () => getPool();
 
@@ -74,15 +74,16 @@ export async function insertComputeVm(
          id, name, owner_account_id, owning_bay_id, project_id, provider,
          region, zone, architecture, machine_type, desired_pricing_model,
          effective_pricing_model, boot_disk_gb, boot_disk_id, state,
-         desired_state, instance_generation, provider_instance_id, public_ip,
-         ssh_user, ssh_public_key, created_at, updated_at, expires_at,
+         attached_volume_id, desired_state, instance_generation,
+         provider_instance_id, public_ip, ssh_user, ssh_public_key, created_at,
+         updated_at, expires_at,
          allow_on_demand_fallback, authorized_fallback_hours,
          spot_hourly_price, on_demand_hourly_price, authorized_cost,
          accrued_cost, billing_state, spot_recovery_policy,
          spot_recovery_state, idempotency_key, error, metadata
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-         $20,$21,NOW(),NOW(),$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34
+         $20,$21,$22,NOW(),NOW(),$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
        ) RETURNING *`,
       [
         row.id,
@@ -100,6 +101,7 @@ export async function insertComputeVm(
         row.boot_disk_gb,
         row.boot_disk_id,
         row.state,
+        row.attached_volume_id ?? null,
         row.desired_state,
         row.instance_generation,
         row.provider_instance_id,
@@ -121,6 +123,32 @@ export async function insertComputeVm(
         row.metadata,
       ],
     );
+    if (row.attached_volume_id) {
+      const { rows: volumes } = await client.query<ComputeVolumeRow>(
+        `SELECT * FROM compute_volumes
+         WHERE id=$1 AND owner_account_id=$2 AND deleted_at IS NULL
+         FOR UPDATE`,
+        [row.attached_volume_id, row.owner_account_id],
+      );
+      const volume = volumes[0];
+      if (!volume) throw new Error("compute volume not found or access denied");
+      if (volume.zone !== row.zone) {
+        throw new Error("compute volume and VM must be in the same zone");
+      }
+      if (volume.state !== "ready" || volume.desired_state !== "ready") {
+        throw new Error(`compute volume is not ready (state=${volume.state})`);
+      }
+      if (volume.attached_vm_id && volume.attached_vm_id !== row.id) {
+        throw new Error("compute volume is already reserved by another VM");
+      }
+      await client.query(
+        `UPDATE compute_volumes
+         SET attached_vm_id=$2, attachment_state='reserved',
+             attachment_generation=attachment_generation+1, updated_at=NOW()
+         WHERE id=$1`,
+        [volume.id, row.id],
+      );
+    }
     await client.query("COMMIT");
     return rows[0];
   } catch (err) {
@@ -300,6 +328,7 @@ export async function appendComputeEvent(opts: {
 }
 
 export async function enqueueComputeWork(opts: {
+  resource_kind?: "vm" | "volume";
   resource_id: string;
   action: string;
   idempotency_key: string;
@@ -312,7 +341,7 @@ export async function enqueueComputeWork(opts: {
        id, resource_kind, resource_id, action, idempotency_key, payload,
        state, attempt, not_before, created_at, updated_at
      )
-     SELECT $1,'vm',$2,$3,$4,$5,'queued',0,$6,NOW(),NOW()
+     SELECT $1,$7,$2,$3,$4,$5,'queued',0,$6,NOW(),NOW()
      WHERE NOT EXISTS (
        SELECT 1 FROM compute_resource_work
        WHERE resource_id=$2 AND action=$3 AND state IN ('queued','in_progress')
@@ -324,6 +353,7 @@ export async function enqueueComputeWork(opts: {
       opts.idempotency_key,
       opts.payload ?? {},
       opts.not_before ?? null,
+      opts.resource_kind ?? "vm",
     ],
   );
   return rowCount ? id : undefined;

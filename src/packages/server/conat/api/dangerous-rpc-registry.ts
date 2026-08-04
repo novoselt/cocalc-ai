@@ -31,6 +31,18 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "deletes a managed compute VM and its persistent root disk",
   },
+  "compute.createVolume": {
+    decision: "fresh-auth-required",
+    reason: "creates billable persistent managed compute storage",
+  },
+  "compute.resizeVolume": {
+    decision: "fresh-auth-required",
+    reason: "increases recurring managed compute storage cost",
+  },
+  "compute.deleteVolume": {
+    decision: "fresh-auth-required",
+    reason: "irreversibly deletes a persistent managed compute volume",
+  },
   "compute.startVm": {
     decision: "fresh-auth-not-required",
     reason: "starts an owned VM inside its existing TTL and cost envelope",
