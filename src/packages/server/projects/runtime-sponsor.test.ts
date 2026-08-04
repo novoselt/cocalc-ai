@@ -31,6 +31,43 @@ describe("runtime sponsor resolution", () => {
     ).toBe("usage-account");
   });
 
+  it("attributes student course projects to the student", () => {
+    expect(
+      resolveRuntimeSponsorAccountId({
+        course: { type: "student", account_id: "student" },
+        users: {
+          student: { group: "collaborator" },
+          instructor: { group: "owner" },
+        },
+      }),
+    ).toBe("student");
+  });
+
+  it("prefers explicit sponsor fields over student course attribution", () => {
+    expect(
+      resolveRuntimeSponsorAccountId({
+        runtime_sponsor_account_id: "runtime-sponsor",
+        usage_account_id: "usage-account",
+        course: { type: "student", account_id: "student" },
+        users: {
+          "runtime-sponsor": { group: "collaborator" },
+          "usage-account": { group: "collaborator" },
+          student: { group: "collaborator" },
+          instructor: { group: "owner" },
+        },
+      }),
+    ).toBe("runtime-sponsor");
+  });
+
+  it("ignores a course student who is not yet a project collaborator", () => {
+    expect(
+      resolveRuntimeSponsorAccountId({
+        course: { type: "student", account_id: "student" },
+        users: { instructor: { group: "owner" } },
+      }),
+    ).toBe("instructor");
+  });
+
   it("ignores an explicit runtime sponsor that is no longer a collaborator", () => {
     expect(
       resolveRuntimeSponsorAccountId({
