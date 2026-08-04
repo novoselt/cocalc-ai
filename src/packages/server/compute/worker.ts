@@ -448,17 +448,38 @@ async function probeAndReturnToSpot(vm: ComputeVmRow) {
   await start(spot);
 }
 
+export function computePostStopTransition(
+  desiredState: ComputeVmRow["desired_state"],
+) {
+  if (desiredState === "running") {
+    return { state: "starting" as const, action: "start" as const };
+  }
+  if (desiredState === "deleted") {
+    return { state: "deleting" as const, action: "delete" as const };
+  }
+  return { state: "stopped" as const, action: undefined };
+}
+
 async function stop(vm: ComputeVmRow) {
   await updateComputeVm(vm.id, { state: "stopping", error: null });
   await stopProviderComputeVm(vm);
+  const current = await getComputeVmById(vm.id);
+  if (!current) return;
+  const transition = computePostStopTransition(current.desired_state);
   const next = (await updateComputeVm(vm.id, {
-    state: "stopped",
-    desired_state: "stopped",
+    state: transition.state,
     stopped_at: new Date(),
     public_ip: null,
     error: null,
   }))!;
   await updateComputeInstance(next, { stopped: true });
+  if (transition.action) {
+    await enqueueComputeWork({
+      resource_id: vm.id,
+      action: transition.action,
+      idempotency_key: `resume-after-stop:${vm.id}:${current.updated_at.toISOString()}`,
+    });
+  }
 }
 
 async function remove(vm: ComputeVmRow) {

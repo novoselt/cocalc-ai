@@ -6,6 +6,7 @@
 import {
   computeWorkFailureState,
   computeRuntimeMetadata,
+  computePostStopTransition,
   isSpotCapacityError,
   RetryableComputeWorkError,
 } from "./worker";
@@ -55,6 +56,21 @@ describe("compute VM work failure state", () => {
       internal_hostname: "new.internal",
       boot_disk_name: "disk-1",
       machine_type: "e2-standard-2",
+    });
+  });
+
+  it("honors newer durable intent after a provider stop completes", () => {
+    expect(computePostStopTransition("stopped")).toEqual({
+      state: "stopped",
+      action: undefined,
+    });
+    expect(computePostStopTransition("running")).toEqual({
+      state: "starting",
+      action: "start",
+    });
+    expect(computePostStopTransition("deleted")).toEqual({
+      state: "deleting",
+      action: "delete",
     });
   });
 });
