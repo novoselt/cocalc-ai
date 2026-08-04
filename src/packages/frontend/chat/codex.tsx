@@ -18,6 +18,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useTypedRedux,
 } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components/icon";
 import { Tooltip } from "@cocalc/frontend/components/tip";
@@ -30,11 +31,13 @@ import CodexSessionsPanel from "@cocalc/frontend/account/codex-sessions-panel";
 import {
   CODEX_USAGE_LABEL,
   CODEX_USAGE_URL,
+  getChatGptAccountInfo,
   getLiveCodexUsageStatus,
   readCachedCodexUsageStatus,
   writeCachedCodexUsageStatus,
 } from "@cocalc/frontend/account/codex-usage";
 import LiteAISettings from "@cocalc/frontend/account/lite-ai-settings";
+import { UsageWindowMeters } from "@cocalc/frontend/account/usage-window-meters";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
   defaultWorkingDirectoryForChat,
@@ -53,6 +56,7 @@ import {
   resolveCodexSessionMode,
   type CodexReasoningLevel,
   type CodexReasoningId,
+  type CodexPaymentSourcePreference,
   type CodexServiceTier,
   type CodexSessionMode,
 } from "@cocalc/util/ai/codex";
@@ -67,6 +71,7 @@ import { CodexFullAccessNotice } from "./codex-full-access";
 import { getLatestAcpThreadIdForThread } from "./thread-session";
 import {
   getCodexPaymentSourceShortLabel,
+  getCodexPaymentSourceOptions,
   getCodexPaymentSourceTooltip,
 } from "./use-codex-payment-source";
 
@@ -139,6 +144,58 @@ type LiteCodexLocalStatus = {
   checkedAt?: number;
 };
 
+function MembershipUsageMeters({
+  status,
+  compact = false,
+}: {
+  status: NonNullable<
+    NonNullable<CodexPaymentSourceInfo["siteFundedCodex"]>["status"]
+  >["account"];
+  compact?: boolean;
+}) {
+  if (!status) return null;
+  const windows = [
+    {
+      key: "5h",
+      label: "5-hour limit",
+      limit: status.limit5hMicrousd,
+      remaining: status.remaining5hMicrousd,
+      resetAt: status.reset5hAt,
+    },
+    {
+      key: "7d",
+      label: "7-day limit",
+      limit: status.limit7dMicrousd,
+      remaining: status.remaining7dMicrousd,
+      resetAt: status.reset7dAt,
+    },
+  ]
+    .filter(
+      ({ limit, remaining }) =>
+        typeof limit === "number" &&
+        Number.isFinite(limit) &&
+        limit > 0 &&
+        typeof remaining === "number" &&
+        Number.isFinite(remaining),
+    )
+    .map(({ key, label, limit = 0, remaining = 0, resetAt }) => ({
+      key,
+      label,
+      remainingPercent: Math.max(
+        0,
+        Math.min(100, Math.round((remaining / limit) * 100)),
+      ),
+      resetAt: resetAt ? new Date(resetAt) : undefined,
+    }));
+  return (
+    <UsageWindowMeters
+      windows={windows}
+      compact={compact}
+      statusLabel="CoCalc Membership usage"
+    />
+  );
+}
+
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <Text strong style={{ color: COLORS.GRAY_D }}>
     {children}
@@ -158,7 +215,13 @@ const sectionStyle: React.CSSProperties = {
   background: "white",
   padding: 14,
 };
-type PillSegment = "codex" | "expand" | "model" | "mode" | "reasoning";
+type PillSegment =
+  | "codex"
+  | "expand"
+  | "source"
+  | "model"
+  | "mode"
+  | "reasoning";
 
 const pillSegmentBaseStyle: React.CSSProperties = {
   alignItems: "center",
@@ -313,8 +376,9 @@ export function CodexPaymentCredentialsModal({
             onPaymentSourceChanged={refreshPaymentSource}
           />
           <Text type="secondary">
-            CoCalc can show which source Codex will use. To check remaining
-            ChatGPT Codex usage,{" "}
+            Choose the payment source for each chat in Codex settings.
+            Credentials connected here remain available without overriding an
+            explicit choice. To check remaining ChatGPT Codex usage,{" "}
             <a href={CODEX_USAGE_URL} target="_blank" rel="noreferrer">
               {CODEX_USAGE_LABEL}
             </a>
@@ -337,6 +401,7 @@ export function CodexConfigButton({
   refreshPaymentSource,
 }: CodexConfigButtonProps): React.ReactElement {
   const defaultSessionMode = getDefaultCodexSessionMode();
+  const accountId = useTypedRedux("account", "account_id");
   const workspaceWorkingDirectory = useWorkspaceChatWorkingDirectory(chatPath);
   const [open, setOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -352,6 +417,7 @@ export function CodexConfigButton({
   >(undefined);
   const [codexUsageLoading, setCodexUsageLoading] = useState(false);
   const [codexUsageStale, setCodexUsageStale] = useState(false);
+  const [codexUsageRequested, setCodexUsageRequested] = useState(false);
   const [hoveredPillSegment, setHoveredPillSegment] = useState<
     PillSegment | undefined
   >(undefined);
@@ -396,6 +462,7 @@ export function CodexConfigButton({
       reasoning: baseReasoning,
       serviceTier: "standard",
       sessionMode: defaultSessionMode,
+      paymentSource: "auto",
     };
     const saved = threadConfig ?? actions?.getCodexConfig?.(threadId);
     const liveSessionId = getLatestAcpThreadIdForThread({
@@ -447,8 +514,22 @@ export function CodexConfigButton({
     Form.useWatch("reasoning", form) ?? value?.reasoning;
   const currentSessionMode =
     Form.useWatch("sessionMode", form) ?? value?.sessionMode;
+  const selectedPaymentSource =
+    Form.useWatch("paymentSource", form) ?? value?.paymentSource ?? "auto";
+  const activeSessionId = normalizeCodexSessionId(
+    Form.useWatch("sessionId", form) ?? value?.sessionId,
+  );
+  const hasEstablishedSession = activeSessionId != null;
   const selectedServiceTierValue: CodexServiceTier =
     Form.useWatch("serviceTier", form) ?? value?.serviceTier ?? "standard";
+  const siteFundedPolicy =
+    !lite &&
+    paymentSource?.source === "site-api-key" &&
+    paymentSource.siteFundedCodex?.enabled
+      ? paymentSource.siteFundedCodex.policy
+      : undefined;
+  const siteFundedAccountStatus =
+    paymentSource?.siteFundedCodex?.status?.account;
   const allModeOptions = useMemo(() => getModeOptions(), []);
   const availableModeValues = useMemo(
     () => new Set(getCodexNewChatModeOptions().map(({ value }) => value)),
@@ -475,16 +556,73 @@ export function CodexConfigButton({
     ? "Checking…"
     : getCodexPaymentSourceShortLabel(paymentSource?.source);
   const sourceTooltip = getCodexPaymentSourceTooltip(paymentSource);
+  const chatgptAccount = getChatGptAccountInfo(codexUsageStatus);
+  const sourceTooltipDetails =
+    paymentSource?.source === "site-api-key" ? (
+      <Space orientation="vertical" size={0}>
+        <span>{sourceTooltip}</span>
+        {siteFundedAccountStatus ? (
+          <div style={{ marginTop: 4, width: 390 }}>
+            <MembershipUsageMeters status={siteFundedAccountStatus} compact />
+          </div>
+        ) : null}
+      </Space>
+    ) : paymentSource?.source === "subscription" && codexUsageStatus ? (
+      <Space orientation="vertical" size={4}>
+        <span>{sourceTooltip}</span>
+        {chatgptAccount?.email ? (
+          <Text style={{ color: "inherit" }}>{chatgptAccount.email}</Text>
+        ) : null}
+        <div style={{ marginTop: 2, width: 360 }}>
+          <CodexUsageMeters
+            compact
+            status={codexUsageStatus}
+            stale={codexUsageStale}
+            updating={codexUsageLoading}
+          />
+        </div>
+      </Space>
+    ) : (
+      sourceTooltip
+    );
+  const paymentSourceOptions = getCodexPaymentSourceOptions(paymentSource).map(
+    (option) => {
+      if (!hasEstablishedSession) return option;
+      if (
+        option.value === "site-api-key" &&
+        paymentSource?.source !== "site-api-key"
+      ) {
+        return {
+          ...option,
+          disabled: true,
+          description:
+            "Start a new chat to use your CoCalc Membership; its constrained model profile may not fit this existing session.",
+        };
+      }
+      if (option.value === "auto" && selectedPaymentSource !== "auto") {
+        return {
+          ...option,
+          disabled: true,
+          description:
+            "Automatic fallback is disabled after a session starts because it could switch into an incompatible membership-funded profile.",
+        };
+      }
+      return option;
+    },
+  );
 
   useEffect(() => {
-    if (!open || paymentSource?.source !== "subscription") {
+    if (
+      (!open && !codexUsageRequested) ||
+      paymentSource?.source !== "subscription"
+    ) {
       setCodexUsageStatus(undefined);
       setCodexUsageLoading(false);
       setCodexUsageStale(false);
       return;
     }
     let cancelled = false;
-    const cached = readCachedCodexUsageStatus({ projectId });
+    const cached = readCachedCodexUsageStatus({ accountId });
     if (cached) {
       setCodexUsageStatus(cached.status);
       setCodexUsageStale(true);
@@ -498,7 +636,7 @@ export function CodexConfigButton({
         if (cancelled) return;
         setCodexUsageStatus(status);
         setCodexUsageStale(false);
-        writeCachedCodexUsageStatus({ projectId, status });
+        writeCachedCodexUsageStatus({ accountId, status });
       })
       .catch(() => {
         if (cancelled) return;
@@ -513,7 +651,7 @@ export function CodexConfigButton({
     return () => {
       cancelled = true;
     };
-  }, [open, paymentSource?.source, projectId]);
+  }, [accountId, codexUsageRequested, open, paymentSource?.source, projectId]);
 
   const modeLabel =
     modeOptions.find((option) => option.value === currentSessionMode)?.label ??
@@ -530,6 +668,13 @@ export function CodexConfigButton({
       ? "fast"
       : "standard";
   const serviceTierLabel = effectiveServiceTier === "fast" ? "Fast" : undefined;
+  const displayedModel = siteFundedPolicy?.model ?? selectedModelValue;
+  const displayedReasoning = siteFundedPolicy
+    ? (reasoningOptions.find(
+        (option) => option.value === siteFundedPolicy.reasoning,
+      )?.label ?? siteFundedPolicy.reasoning)
+    : reasoningLabel;
+  const displayedServiceTier = siteFundedPolicy ? undefined : serviceTierLabel;
   const paymentNeedsAttention =
     paymentSourceLoading || paymentSource?.source === "none" || !paymentSource;
   const toggleControlsCollapsed = () => {
@@ -589,6 +734,20 @@ export function CodexConfigButton({
     actions?.setCodexConfig?.(threadKey, finalValues);
   };
 
+  const paymentSourcePatch = (
+    next: CodexPaymentSourcePreference,
+  ): Partial<CodexThreadConfig> => {
+    if (hasEstablishedSession && siteFundedPolicy && next !== "site-api-key") {
+      return {
+        paymentSource: next,
+        model: siteFundedPolicy.model,
+        reasoning: siteFundedPolicy.reasoning,
+        serviceTier: siteFundedPolicy.serviceTier,
+      };
+    }
+    return { paymentSource: next };
+  };
+
   const modelMenu: MenuProps = {
     selectedKeys: selectedModelValue ? [selectedModelValue] : [],
     items: models.map((model) => ({
@@ -629,6 +788,26 @@ export function CodexConfigButton({
     },
   };
 
+  const configuredPaymentSources = paymentSourceOptions.filter(
+    ({ value }) => value !== "auto",
+  );
+  const showPaymentSourceSelector =
+    !lite && configuredPaymentSources.length > 1;
+  const paymentSourceMenu: MenuProps = {
+    selectedKeys: [selectedPaymentSource],
+    items: paymentSourceOptions.map((option) => ({
+      key: option.value,
+      label: option.label,
+      disabled: option.disabled,
+      title: option.description,
+    })),
+    onClick: ({ domEvent, key }) => {
+      domEvent.stopPropagation();
+      const next = key as CodexPaymentSourcePreference;
+      applyQuickConfigPatch(paymentSourcePatch(next));
+    },
+  };
+
   const pillSegmentStyle = (segment: PillSegment): React.CSSProperties => ({
     ...pillSegmentBaseStyle,
     background:
@@ -643,7 +822,12 @@ export function CodexConfigButton({
     onClick: (event: React.MouseEvent) => {
       event.stopPropagation();
     },
-    onMouseEnter: () => setHoveredPillSegment(segment),
+    onMouseEnter: () => {
+      setHoveredPillSegment(segment);
+      if (segment === "source" && paymentSource?.source === "subscription") {
+        setCodexUsageRequested(true);
+      }
+    },
     onMouseLeave: () => setHoveredPillSegment(undefined),
   });
 
@@ -751,19 +935,57 @@ export function CodexConfigButton({
               >
                 Codex
               </button>
+              {showPaymentSourceSelector ? (
+                <>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    ·
+                  </Text>
+                  <Tooltip
+                    title={sourceTooltipDetails}
+                    styles={{ root: { maxWidth: 420 } }}
+                  >
+                    <Dropdown menu={paymentSourceMenu} trigger={["click"]}>
+                      <button
+                        type="button"
+                        aria-label={
+                          chatgptAccount?.email
+                            ? `Change Codex payment source. Connected ChatGPT account: ${chatgptAccount.email}`
+                            : "Change Codex payment source"
+                        }
+                        title="Change Codex payment source"
+                        style={pillSegmentStyle("source")}
+                        {...pillSegmentHandlers("source")}
+                      >
+                        {sourceShortLabel}
+                      </button>
+                    </Dropdown>
+                  </Tooltip>
+                </>
+              ) : null}
               <Text type="secondary" style={{ fontSize: 12 }}>
                 ·
               </Text>
-              <Dropdown menu={modelMenu} trigger={["click"]}>
+              {siteFundedPolicy ? (
                 <button
                   type="button"
-                  title="Change Codex model"
+                  title="CoCalc Membership uses a fixed model"
                   style={pillSegmentStyle("model")}
                   {...pillSegmentHandlers("model")}
                 >
-                  {selectedModelValue}
+                  {displayedModel}
                 </button>
-              </Dropdown>
+              ) : (
+                <Dropdown menu={modelMenu} trigger={["click"]}>
+                  <button
+                    type="button"
+                    title="Change Codex model"
+                    style={pillSegmentStyle("model")}
+                    {...pillSegmentHandlers("model")}
+                  >
+                    {displayedModel}
+                  </button>
+                </Dropdown>
+              )}
               {lite ? (
                 <>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -781,30 +1003,41 @@ export function CodexConfigButton({
                   </Dropdown>
                 </>
               ) : null}
-              {reasoningLabel ? (
+              {displayedReasoning ? (
                 <>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     ·
                   </Text>
-                  <Dropdown menu={reasoningMenu} trigger={["click"]}>
+                  {siteFundedPolicy ? (
                     <button
                       type="button"
-                      title="Change Codex thinking level"
+                      title={`CoCalc Membership uses ${siteFundedPolicy.reasoning} reasoning`}
                       style={pillSegmentStyle("reasoning")}
                       {...pillSegmentHandlers("reasoning")}
                     >
-                      {reasoningLabel}
+                      {displayedReasoning}
                     </button>
-                  </Dropdown>
+                  ) : (
+                    <Dropdown menu={reasoningMenu} trigger={["click"]}>
+                      <button
+                        type="button"
+                        title="Change Codex thinking level"
+                        style={pillSegmentStyle("reasoning")}
+                        {...pillSegmentHandlers("reasoning")}
+                      >
+                        {displayedReasoning}
+                      </button>
+                    </Dropdown>
+                  )}
                 </>
               ) : null}
-              {serviceTierLabel ? (
+              {displayedServiceTier ? (
                 <>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     ·
                   </Text>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {serviceTierLabel}
+                    {displayedServiceTier}
                   </Text>
                 </>
               ) : null}
@@ -921,14 +1154,22 @@ export function CodexConfigButton({
               }}
             >
               <Space size={6} wrap style={{ justifyContent: "flex-end" }}>
-                <Tag color="blue">{selectedModelValue ?? "Model"}</Tag>
+                <Tag color="blue">{displayedModel ?? "Model"}</Tag>
                 {lite ? (
                   <Tag color={selectedModeOption?.warning ? "red" : "green"}>
                     {modeLabel}
                   </Tag>
                 ) : null}
-                {reasoningLabel ? <Tag>{reasoningLabel}</Tag> : null}
-                {serviceTierLabel ? <Tag color="orange">Fast</Tag> : null}
+                {displayedReasoning ? <Tag>{displayedReasoning}</Tag> : null}
+                {displayedServiceTier ? (
+                  <Tag
+                    color={
+                      displayedServiceTier === "Fast" ? "orange" : undefined
+                    }
+                  >
+                    {displayedServiceTier}
+                  </Tag>
+                ) : null}
               </Space>
               <Tooltip
                 title={`Current source: ${
@@ -949,6 +1190,51 @@ export function CodexConfigButton({
           </div>
           <Form form={form} layout="vertical">
             <Space orientation="vertical" style={{ width: "100%" }} size={12}>
+              {!lite ? (
+                <div style={sectionStyle}>
+                  <SectionTitle>Payment source</SectionTitle>
+                  <div
+                    style={{
+                      color: COLORS.GRAY_M,
+                      fontSize: 12,
+                      margin: "3px 0 10px",
+                    }}
+                  >
+                    {hasEstablishedSession
+                      ? "You can continue this session with ChatGPT or a personal API key without losing context. Switching an established personal session into membership-funded mode is disabled."
+                      : "Choose how future turns in this thread are funded. This choice is independent of which credentials are connected."}
+                  </div>
+                  <Form.Item name="paymentSource" style={{ marginBottom: 0 }}>
+                    <Select
+                      style={{ width: "100%" }}
+                      options={paymentSourceOptions}
+                      optionRender={(option) =>
+                        renderOptionWithDescription({
+                          title: `${option.data.label}`,
+                          description: option.data.description,
+                        })
+                      }
+                      onChange={(next: CodexPaymentSourcePreference) => {
+                        form.setFieldsValue(paymentSourcePatch(next));
+                      }}
+                    />
+                  </Form.Item>
+                  {selectedPaymentSource === "subscription" &&
+                  paymentSource?.source === "none" ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginTop: 10 }}
+                      message="Reconnect your ChatGPT Plan"
+                      description={
+                        hasEstablishedSession
+                          ? "This session is pinned to ChatGPT. Reconnect it under Payment & Credentials, or start a new Codex chat and choose CoCalc Membership."
+                          : "This thread is configured to use ChatGPT, but that credential is unavailable. Choose CoCalc Membership or reconnect ChatGPT under Payment & Credentials."
+                      }
+                    />
+                  ) : null}
+                </div>
+              ) : null}
               <div style={sectionStyle}>
                 <SectionTitle>Model and session</SectionTitle>
                 <div
@@ -961,52 +1247,79 @@ export function CodexConfigButton({
                   Choose the model, session continuity, and directory Codex uses
                   for future turns.
                 </div>
-                <div style={gridTwoColStyle}>
-                  <Form.Item label="Model" name="model" style={formItemStyle}>
-                    <Select
-                      placeholder="e.g., gpt-5.6-sol"
-                      options={models}
-                      optionRender={(option) =>
-                        renderOptionWithDescription({
-                          title: `${option.data.label}`,
-                          description: option.data.description,
-                        })
-                      }
-                      showSearch
-                      allowClear
-                      onChange={(val) => {
-                        const selected = models.find((m) => m.value === val);
-                        if (selected?.reasoning?.length) {
-                          const def =
-                            selected.reasoning.find((r) => r.default)?.id ??
-                            selected.reasoning[0]?.id;
-                          form.setFieldsValue({ reasoning: def });
+                {siteFundedPolicy ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="CoCalc Membership"
+                    description={
+                      <>
+                        Membership-funded Codex turns use settings selected by
+                        CoCalc.
+                        {!paymentSource?.hasSubscription &&
+                        !paymentSource?.hasProjectApiKey &&
+                        !paymentSource?.hasAccountApiKey
+                          ? " Connect a personal ChatGPT plan or OpenAI API key to choose other settings."
+                          : null}
+                        {siteFundedAccountStatus ? (
+                          <div style={{ marginTop: 10 }}>
+                            <MembershipUsageMeters
+                              status={siteFundedAccountStatus}
+                            />
+                          </div>
+                        ) : null}
+                      </>
+                    }
+                  />
+                ) : (
+                  <div style={gridTwoColStyle}>
+                    <Form.Item label="Model" name="model" style={formItemStyle}>
+                      <Select
+                        placeholder="e.g., gpt-5.6-sol"
+                        options={models}
+                        optionRender={(option) =>
+                          renderOptionWithDescription({
+                            title: `${option.data.label}`,
+                            description: option.data.description,
+                          })
                         }
-                        if (!codexModelSupportsFastMode(val)) {
-                          form.setFieldsValue({ serviceTier: "standard" });
+                        showSearch
+                        allowClear
+                        onChange={(val) => {
+                          const selected = models.find((m) => m.value === val);
+                          if (selected?.reasoning?.length) {
+                            const def =
+                              selected.reasoning.find((r) => r.default)?.id ??
+                              selected.reasoning[0]?.id;
+                            form.setFieldsValue({ reasoning: def });
+                          }
+                          if (!codexModelSupportsFastMode(val)) {
+                            form.setFieldsValue({ serviceTier: "standard" });
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Reasoning level"
+                      name="reasoning"
+                      style={formItemStyle}
+                    >
+                      <Select
+                        placeholder="Select reasoning"
+                        options={reasoningOptions}
+                        optionRender={(option) =>
+                          renderOptionWithDescription({
+                            title: `${option.data.label}${
+                              option.data.default ? " (default)" : ""
+                            }`,
+                            description: option.data.description,
+                          })
                         }
-                      }}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="Reasoning level"
-                    name="reasoning"
-                    style={formItemStyle}
-                  >
-                    <Select
-                      placeholder="Select reasoning"
-                      options={reasoningOptions}
-                      optionRender={(option) =>
-                        renderOptionWithDescription({
-                          title: `${option.data.label}${
-                            option.data.default ? " (default)" : ""
-                          }`,
-                          description: option.data.description,
-                        })
-                      }
-                    />
-                  </Form.Item>
-                </div>
+                      />
+                    </Form.Item>
+                  </div>
+                )}
                 <div style={gridTwoColStyle}>
                   <Form.Item
                     label="Working directory"
@@ -1028,29 +1341,33 @@ export function CodexConfigButton({
                     />
                   </Form.Item>
                 </div>
-                <Form.Item
-                  label="Speed"
-                  name="serviceTier"
-                  tooltip="Fast mode uses more Codex credits. Standard is the default."
-                  style={{ marginBottom: 0 }}
-                >
-                  <Radio.Group>
-                    <Space wrap>
-                      <Radio value="standard">Standard</Radio>
-                      <Radio value="fast" disabled={!fastModeSupported}>
-                        Fast
-                      </Radio>
-                    </Space>
-                  </Radio.Group>
-                </Form.Item>
-                {effectiveServiceTier === "fast" ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginTop: 10 }}
-                    message="Fast mode uses more Codex credits"
-                    description="Use this only when lower latency is worth the higher cost."
-                  />
+                {!siteFundedPolicy ? (
+                  <>
+                    <Form.Item
+                      label="Speed"
+                      name="serviceTier"
+                      tooltip="Fast mode uses more Codex credits. Standard is the default."
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Radio.Group>
+                        <Space wrap>
+                          <Radio value="standard">Standard</Radio>
+                          <Radio value="fast" disabled={!fastModeSupported}>
+                            Fast
+                          </Radio>
+                        </Space>
+                      </Radio.Group>
+                    </Form.Item>
+                    {effectiveServiceTier === "fast" ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        style={{ marginTop: 10 }}
+                        message="Fast mode uses more Codex credits"
+                        description="Use this only when lower latency is worth the higher cost."
+                      />
+                    ) : null}
+                  </>
                 ) : null}
               </div>
               <div style={sectionStyle}>
@@ -1225,6 +1542,7 @@ export function codexThreadConfigKey(
     envPath: config.envPath,
     model: config.model,
     notifyOnTurnFinish: config.notifyOnTurnFinish,
+    paymentSource: config.paymentSource,
     reasoning: config.reasoning,
     serviceTier: config.serviceTier,
     sessionId: config.sessionId,

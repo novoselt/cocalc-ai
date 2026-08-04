@@ -93,7 +93,11 @@ import {
 } from "@cocalc/server/external-credentials/routing";
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
-import { getAIUsageLimits } from "@cocalc/server/ai/usage-status";
+import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
+import { aiUsageUnitsToMicrousd } from "@cocalc/server/ai/usage-units";
+import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
+import { getSiteFundedCodexPoolStatus } from "@cocalc/server/ai/site-funded-codex-reservations";
+import { reconcileSiteFundedCodexCosts } from "@cocalc/server/ai/site-funded-codex-reconciliation";
 import {
   enqueueRootfsPrepullForHost,
   enqueueRootfsPrepullForRunningHosts,
@@ -1345,7 +1349,7 @@ export async function getGlobalConfigPropagationStatus({
   const normalizedScope = `${scope ?? ""}`.trim();
   if (currentBayId !== seedBayId) {
     return await getInterBayBridge()
-      .bayOps(seedBayId, { timeout_ms: 15_000 })
+      .bayOps(seedBayId, { timeout_ms: 30_000 })
       .getGlobalConfigPropagationStatus({
         account_id,
         scope: normalizedScope || undefined,
@@ -6379,9 +6383,11 @@ export async function getOpenAiApiKeyStatus({
 export async function getCodexPaymentSource({
   account_id,
   project_id,
+  preference = "auto",
 }: {
   account_id?: string;
   project_id?: string;
+  preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
 }) {
   if (!account_id) {
     throw Error("must be signed in");
@@ -6401,13 +6407,71 @@ export async function getCodexPaymentSource({
     to_bool(settings.openai_enabled) &&
     !(await isAiLaunchDisabled()) &&
     !!`${settings.openai_api_key ?? ""}`.trim();
-  const siteAiUsageLimits = hasSiteApiKey
-    ? await getAIUsageLimits({ account_id })
+  const siteAiUsageStatus = hasSiteApiKey
+    ? await getAIUsageStatus({ account_id })
+    : undefined;
+  const usage5h = siteAiUsageStatus?.windows.find(
+    ({ window }) => window === "5h",
+  );
+  const usage7d = siteAiUsageStatus?.windows.find(
+    ({ window }) => window === "7d",
+  );
+  const siteAiUsageLimits = siteAiUsageStatus
+    ? {
+        units_5h: usage5h?.limit ?? 0,
+        units_7d: usage7d?.limit ?? 0,
+      }
     : undefined;
   const siteAiUsageLimitPositive =
-    siteAiUsageLimits != null
-      ? siteAiUsageLimits.units_5h > 0 && siteAiUsageLimits.units_7d > 0
+    usage5h?.limit != null && usage7d?.limit != null
+      ? usage5h.limit > 0 && usage7d.limit > 0
       : undefined;
+  let siteFundedCodex:
+    | import("@cocalc/conat/hub/api/system").CodexPaymentSourceInfo["siteFundedCodex"]
+    | undefined;
+  if (hasSiteApiKey) {
+    try {
+      const configuration = await getSiteFundedCodexConfiguration();
+      if (!configuration.enabled) {
+        siteFundedCodex = { enabled: false };
+      } else {
+        const limit5hMicrousd = aiUsageUnitsToMicrousd(usage5h?.limit);
+        const limit7dMicrousd = aiUsageUnitsToMicrousd(usage7d?.limit);
+        const account = {
+          accountId: account_id,
+          committed5hMicrousd: aiUsageUnitsToMicrousd(usage5h?.used),
+          committed7dMicrousd: aiUsageUnitsToMicrousd(usage7d?.used),
+          activeReservedMicrousd: 0,
+          limit5hMicrousd,
+          limit7dMicrousd,
+          remaining5hMicrousd: aiUsageUnitsToMicrousd(usage5h?.remaining),
+          remaining7dMicrousd: aiUsageUnitsToMicrousd(usage7d?.remaining),
+          reset5hAt: usage5h?.reset_at?.toISOString(),
+          reset7dAt: usage7d?.reset_at?.toISOString(),
+        };
+        const seedBayId = getConfiguredClusterSeedBayId();
+        const fundingStatus =
+          seedBayId === getConfiguredBayId()
+            ? {
+                pools: await getSiteFundedCodexPoolStatus(),
+              }
+            : await getInterBayBridge()
+                .bayOps(seedBayId, { timeout_ms: 15_000 })
+                .getSiteFundedCodexStatus({});
+        siteFundedCodex = {
+          enabled: true,
+          policy: configuration.policy,
+          status: { ...fundingStatus, account },
+        };
+      }
+    } catch (err) {
+      logger.warn("failed to read site-funded Codex status", {
+        account_id,
+        err: `${err}`,
+      });
+      siteFundedCodex = { enabled: false };
+    }
+  }
   const [hasSubscription, hasProjectApiKeyStored, hasAccountApiKeyStored] =
     await Promise.all([
       hasExternalCredentialRouted({
@@ -6455,7 +6519,22 @@ export async function getCodexPaymentSource({
     | "site-api-key"
     | "shared-home"
     | "none";
-  if (hasSubscription) {
+  const sourceAvailable = {
+    subscription: hasSubscription,
+    "project-api-key": hasProjectApiKey,
+    "account-api-key": hasAccountApiKey,
+    "site-api-key": hasSiteApiKey,
+    "shared-home": sharedHomeMode !== "disabled",
+  } as const;
+  let unavailableReason: string | undefined;
+  if (preference !== "auto") {
+    if (sourceAvailable[preference]) {
+      source = preference;
+    } else {
+      source = "none";
+      unavailableReason = `The selected Codex payment source (${preference}) is not configured.`;
+    }
+  } else if (hasSubscription) {
     source = "subscription";
   } else if (hasProjectApiKey) {
     source = "project-api-key";
@@ -6477,8 +6556,32 @@ export async function getCodexPaymentSource({
     hasSiteApiKey,
     siteAiUsageLimitPositive,
     siteAiUsageLimits,
+    siteFundedCodex,
     sharedHomeMode,
     project_id,
+    preference,
+    unavailableReason,
+  };
+}
+
+export async function getSiteFundedCodexAdminStatus({
+  account_id,
+}: {
+  account_id?: string;
+}) {
+  if (!account_id || !(await isAdmin(account_id))) {
+    throw new Error("admin access required");
+  }
+  const seedBayId = getConfiguredClusterSeedBayId();
+  if (seedBayId !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .bayOps(seedBayId, { timeout_ms: 30_000 })
+      .getSiteFundedCodexStatus({ reconcile: true });
+  }
+  const pools = await getSiteFundedCodexPoolStatus();
+  return {
+    pools,
+    reconciliation: await reconcileSiteFundedCodexCosts(pools),
   };
 }
 

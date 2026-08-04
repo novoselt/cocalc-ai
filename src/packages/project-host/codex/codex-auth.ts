@@ -4,6 +4,7 @@ import { join } from "node:path";
 import getLogger from "@cocalc/backend/logger";
 import { codexSubscriptionsPath } from "@cocalc/backend/data";
 import { DEFAULT_PROJECT_RUNTIME_HOME } from "@cocalc/util/project-runtime";
+import type { CodexPaymentSourcePreference } from "@cocalc/util/ai/codex";
 import {
   getAccountOpenAiApiKeyFromRegistry,
   getProjectOpenAiApiKeyFromRegistry,
@@ -210,23 +211,32 @@ export async function resolveCodexAuthRuntime({
   projectId,
   accountId,
   forceRefreshSiteKey = false,
+  preference = "auto",
 }: {
   projectId: string;
   accountId?: string;
   forceRefreshSiteKey?: boolean;
+  preference?: CodexPaymentSourcePreference;
 }): Promise<CodexAuthRuntime> {
   const sharedHome = resolveSharedCodexHome();
   const sharedHomeMode = resolveSharedHomeMode();
   const hasSharedHomeAuth =
     sharedHomeMode === "disabled" ? false : await sharedHomeHasAuth(sharedHome);
+  if (preference === "shared-home") {
+    if (!hasSharedHomeAuth) {
+      throw Error("The selected local Codex auth is not configured");
+    }
+    return sharedHomeRuntime({ projectId, accountId, sharedHome });
+  }
   if (
-    sharedHomeMode === "always" ||
-    (sharedHomeMode === "prefer" && hasSharedHomeAuth)
+    preference === "auto" &&
+    (sharedHomeMode === "always" ||
+      (sharedHomeMode === "prefer" && hasSharedHomeAuth))
   ) {
     return sharedHomeRuntime({ projectId, accountId, sharedHome });
   }
 
-  if (accountId) {
+  if (accountId && (preference === "auto" || preference === "subscription")) {
     const codexHome = resolveSubscriptionCodexHome(accountId);
     const authFile = join(codexHome, "auth.json");
     if (await pathExists(authFile)) {
@@ -299,10 +309,14 @@ export async function resolveCodexAuthRuntime({
       return subscriptionRuntime({ projectId, accountId, codexHome });
     }
   }
+  if (preference === "subscription") {
+    throw Error("The selected ChatGPT Plan needs to be connected again");
+  }
 
-  const projectRegistryKey = await getProjectOpenAiApiKeyFromRegistry({
-    projectId,
-  });
+  const projectRegistryKey =
+    preference === "auto" || preference === "project-api-key"
+      ? await getProjectOpenAiApiKeyFromRegistry({ projectId })
+      : undefined;
   if (projectRegistryKey) {
     return {
       source: "project-api-key",
@@ -312,8 +326,29 @@ export async function resolveCodexAuthRuntime({
       env: { OPENAI_API_KEY: projectRegistryKey },
     };
   }
+  if (preference === "project-api-key") {
+    const projectKeys = parseMap(
+      process.env.COCALC_CODEX_AUTH_PROJECT_OPENAI_KEYS_JSON,
+    );
+    const projectKey =
+      projectKeys[projectId] ??
+      process.env.COCALC_CODEX_AUTH_PROJECT_OPENAI_KEY;
+    if (projectKey) {
+      return {
+        source: "project-api-key",
+        contextId: hashText(
+          `project-key:${projectId}:${hashText(projectKey)}`,
+        ).slice(0, 16),
+        env: { OPENAI_API_KEY: projectKey },
+      };
+    }
+    throw Error("The selected project OpenAI API key is not configured");
+  }
 
-  if (accountId) {
+  if (
+    accountId &&
+    (preference === "auto" || preference === "account-api-key")
+  ) {
     const accountRegistryKey = await getAccountOpenAiApiKeyFromRegistry({
       projectId,
       accountId,
@@ -328,6 +363,24 @@ export async function resolveCodexAuthRuntime({
       };
     }
   }
+  if (preference === "account-api-key") {
+    const accountKeys = parseMap(
+      process.env.COCALC_CODEX_AUTH_ACCOUNT_OPENAI_KEYS_JSON,
+    );
+    const accountKey =
+      (accountId ? accountKeys[accountId] : undefined) ??
+      process.env.COCALC_CODEX_AUTH_ACCOUNT_OPENAI_KEY;
+    if (accountKey) {
+      return {
+        source: "account-api-key",
+        contextId: hashText(
+          `account-key:${projectId}:${accountId ?? ""}:${hashText(accountKey)}`,
+        ).slice(0, 16),
+        env: { OPENAI_API_KEY: accountKey },
+      };
+    }
+    throw Error("The selected account OpenAI API key is not configured");
+  }
 
   // Backward compatibility: env-based account/project key injection.
   const projectKeys = parseMap(
@@ -341,11 +394,14 @@ export async function resolveCodexAuthRuntime({
   const accountKey =
     (accountId ? accountKeys[accountId] : undefined) ??
     process.env.COCALC_CODEX_AUTH_ACCOUNT_OPENAI_KEY;
-  const siteKey = await getSiteOpenAiApiKeyFromHub({
-    forceRefresh: forceRefreshSiteKey,
-  });
+  const siteKey =
+    preference === "auto" || preference === "site-api-key"
+      ? await getSiteOpenAiApiKeyFromHub({
+          forceRefresh: forceRefreshSiteKey,
+        })
+      : undefined;
 
-  if (projectKey) {
+  if (preference === "auto" && projectKey) {
     return {
       source: "project-api-key",
       contextId: hashText(
@@ -355,7 +411,7 @@ export async function resolveCodexAuthRuntime({
     };
   }
 
-  if (accountKey) {
+  if (preference === "auto" && accountKey) {
     return {
       source: "account-api-key",
       contextId: hashText(
@@ -374,6 +430,9 @@ export async function resolveCodexAuthRuntime({
       ),
       env: { OPENAI_API_KEY: siteKey },
     };
+  }
+  if (preference === "site-api-key") {
+    throw Error("Included Codex usage is not configured on this site");
   }
 
   if (sharedHomeMode !== "disabled") {

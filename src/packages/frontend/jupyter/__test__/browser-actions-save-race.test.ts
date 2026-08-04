@@ -175,4 +175,31 @@ describe("Jupyter browser disk-save reconciliation", () => {
     expect(actions.setToIpynb).not.toHaveBeenCalled();
     expect(actions.saveIpynb).toHaveBeenCalledTimes(1);
   });
+
+  it("does not treat a failed initial disk import as complete", async () => {
+    const actions = createActions();
+    const importError = new Error("attachment is missing");
+    actions.syncdb = {
+      fs: {
+        jupyterImportIpynb: jest.fn(async () => {
+          throw importError;
+        }),
+      },
+    };
+    actions.saveIpynb = jest.fn(async () => {});
+
+    await expect(
+      actions.watchLoadFromDisk({
+        initial: true,
+        diskRead: {
+          bytes: 100,
+          text: "notebook",
+          ipynb: { cells: [{ cell_type: "markdown", source: ["content"] }] },
+        },
+      }),
+    ).rejects.toBe(importError);
+
+    expect(actions.setToIpynb).not.toHaveBeenCalled();
+    expect(actions.saveIpynb).not.toHaveBeenCalled();
+  });
 });

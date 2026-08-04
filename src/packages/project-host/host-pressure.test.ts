@@ -55,6 +55,31 @@ describe("host pressure controller helpers", () => {
     ).toMatchObject({ zone: "emergency" });
   });
 
+  it("scales available-memory thresholds on small hosts", () => {
+    const total = 8 * 1024 ** 3;
+    expect(
+      classifyHostPressure({
+        memory_total_bytes: total,
+        memory_used_percent: 39,
+        memory_available_bytes: 5.1 * 1024 ** 3,
+      }),
+    ).toMatchObject({ zone: "normal" });
+    expect(
+      classifyHostPressure({
+        memory_total_bytes: total,
+        memory_used_percent: 82,
+        memory_available_bytes: 1.4 * 1024 ** 3,
+      }),
+    ).toMatchObject({ zone: "pressure" });
+    expect(
+      classifyHostPressure({
+        memory_total_bytes: total,
+        memory_used_percent: 91,
+        memory_available_bytes: 0.7 * 1024 ** 3,
+      }),
+    ).toMatchObject({ zone: "emergency" });
+  });
+
   it("classifies resource pressure only when resource mode is enabled", () => {
     const metrics = {
       memory_used_percent: 20,

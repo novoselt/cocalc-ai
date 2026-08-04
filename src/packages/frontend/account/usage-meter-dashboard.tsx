@@ -22,6 +22,10 @@ import type {
 } from "@cocalc/conat/hub/api/purchases";
 import { currency, humanSize } from "@cocalc/util/misc";
 import { formatResetAt } from "./membership-settings-format";
+import {
+  UsageWindowMeters,
+  type UsageWindowMeter,
+} from "./usage-window-meters";
 
 const { Paragraph, Text } = Typography;
 
@@ -228,15 +232,46 @@ function UsageMeterGroupCard({
 }: {
   group: UsageMeterGroup;
 }): ReactElement {
+  const aiMeters = group.meters.filter(({ category }) => category === "ai");
+  const otherMeters = group.meters.filter(({ category }) => category !== "ai");
+  const aiWindows: UsageWindowMeter[] = aiMeters.map((meter) => {
+    const limit = meter.limit;
+    const remaining =
+      meter.remaining ??
+      (finiteNumber(limit) && finiteNumber(meter.used)
+        ? Math.max(0, limit - meter.used)
+        : undefined);
+    const remainingPercent =
+      finiteNumber(limit) && limit > 0 && finiteNumber(remaining)
+        ? Math.max(0, Math.min(100, Math.round((100 * remaining) / limit)))
+        : undefined;
+    const resetAtValue = meter.resets_at ?? meter.reset_at;
+    const resetAt = resetAtValue ? new Date(resetAtValue) : undefined;
+    return {
+      key: meter.id,
+      label:
+        meter.window === "5h"
+          ? "5-hour limit"
+          : meter.window === "7d"
+            ? "7-day limit"
+            : meter.label,
+      remainingPercent,
+      resetAt:
+        resetAt && Number.isFinite(resetAt.getTime()) ? resetAt : undefined,
+    };
+  });
   return (
     <Card
       size="small"
       title={group.title}
       style={{ height: "100%", width: "100%" }}
     >
-      {group.meters.map((meter, index) => (
+      {aiWindows.length > 0 ? <UsageWindowMeters windows={aiWindows} /> : null}
+      {otherMeters.map((meter, index) => (
         <div key={meter.id}>
-          {index > 0 ? <Divider style={{ margin: "14px 0" }} /> : null}
+          {index > 0 || aiWindows.length > 0 ? (
+            <Divider style={{ margin: "14px 0" }} />
+          ) : null}
           <UsageMeterRow meter={meter} />
         </div>
       ))}

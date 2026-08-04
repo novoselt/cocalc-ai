@@ -536,6 +536,17 @@ function getAdminSections({
       component: () => <MembershipTiers />,
     },
     {
+      key: "codex-pools",
+      title: "Codex Pools",
+      description:
+        "Monitor and configure site-funded Codex budgets, policy, and OpenAI reconciliation.",
+      icon: "robot",
+      group: "commercial",
+      component: () => (
+        <SiteSettings close={closeSiteSettings} scope="codex-pools" />
+      ),
+    },
+    {
       key: "membership-analytics",
       title: "Membership Analytics",
       description: "Review membership counts, purchases, and lifecycle events.",

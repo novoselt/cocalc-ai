@@ -14,6 +14,10 @@ import {
   NOTIFICATION_MENTION_LOOKBACK_INTERVAL,
   buildMentionNotificationPayload,
 } from "./notification-events-outbox";
+import {
+  ACCOUNT_NOTIFICATION_REVISION_LOCK,
+  ACCOUNT_NOTIFICATION_REVISION_SEQUENCE,
+} from "./schema/account-notification-revision";
 
 export interface RebuildAccountNotificationIndexResult {
   bay_id: string;
@@ -35,6 +39,11 @@ export interface AccountNotificationIndexRow {
   read_state: Record<string, any>;
   created_at: Date | null;
   updated_at: Date | null;
+}
+
+export interface AccountNotificationSnapshot {
+  rows: AccountNotificationIndexRow[];
+  read_through_revision: string;
 }
 
 export type NotificationInboxState = "all" | "unread" | "saved" | "archived";
@@ -136,14 +145,37 @@ function normalizeOptionalProjectId(
   return normalizeUuid(raw, "project id");
 }
 
-export async function listProjectedNotificationsForAccount(opts: {
+function normalizeRevision(raw: string | undefined): string {
+  const revision = `${raw ?? ""}`.trim();
+  if (!/^[1-9][0-9]*$/.test(revision)) {
+    throw Error(`invalid notification revision '${raw ?? ""}'`);
+  }
+  return revision;
+}
+
+async function lockAccountNotificationRevision(
+  db: Queryable,
+  account_id: string,
+): Promise<void> {
+  await db.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, [
+    ACCOUNT_NOTIFICATION_REVISION_LOCK,
+    account_id,
+  ]);
+}
+
+type ListProjectedNotificationsOptions = {
   account_id: string;
   limit?: number;
   notification_id?: string;
   kind?: string;
   project_id?: string | null;
   state?: NotificationInboxState;
-}): Promise<AccountNotificationIndexRow[]> {
+};
+
+async function listProjectedNotificationsForAccountWithDb(
+  db: Queryable,
+  opts: ListProjectedNotificationsOptions,
+): Promise<AccountNotificationIndexRow[]> {
   const account_id = normalizeAccountId(opts.account_id);
   const limit = normalizeLimit(opts.limit);
   const state = normalizeNotificationInboxState(opts.state);
@@ -183,7 +215,7 @@ export async function listProjectedNotificationsForAccount(opts: {
   }
   i += 1;
   params.push(limit);
-  const { rows } = await getPool().query<AccountNotificationIndexRow>(
+  const { rows } = await db.query(
     `SELECT
        notification_id,
        kind,
@@ -198,7 +230,48 @@ export async function listProjectedNotificationsForAccount(opts: {
      LIMIT $${i}`,
     params,
   );
-  return rows;
+  return rows as AccountNotificationIndexRow[];
+}
+
+export async function listProjectedNotificationsForAccount(
+  opts: ListProjectedNotificationsOptions,
+): Promise<AccountNotificationIndexRow[]> {
+  return await listProjectedNotificationsForAccountWithDb(getPool(), opts);
+}
+
+export async function listProjectedNotificationSnapshotForAccount(
+  opts: ListProjectedNotificationsOptions,
+): Promise<AccountNotificationSnapshot> {
+  const account_id = normalizeAccountId(opts.account_id);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Projection writes take the same per-account transaction lock before
+    // allocating their revision. Waiting here makes the boundary reflect only
+    // rows that can also be observed by the following list.
+    await lockAccountNotificationRevision(client, account_id);
+    const { rows } = await client.query<{ revision: string }>(
+      `SELECT nextval('${ACCOUNT_NOTIFICATION_REVISION_SEQUENCE}')::TEXT AS revision`,
+    );
+    const read_through_revision = rows[0]?.revision;
+    if (read_through_revision == null) {
+      throw Error("failed to allocate notification revision");
+    }
+    const notifications = await listProjectedNotificationsForAccountWithDb(
+      client,
+      { ...opts, account_id },
+    );
+    await client.query("COMMIT");
+    return {
+      rows: notifications,
+      read_through_revision,
+    };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listProjectedNotificationsByIdsForAccount(opts: {
@@ -298,6 +371,42 @@ export async function setProjectedNotificationReadState(opts: {
       read: opts.read,
     },
   });
+}
+
+export async function markProjectedNotificationsReadThrough(opts: {
+  account_id: string;
+  project_id: string | null;
+  read_through_revision: string;
+}): Promise<{ updated_count: number }> {
+  const account_id = normalizeAccountId(opts.account_id);
+  if (opts.project_id === undefined) {
+    throw Error("project_id is required");
+  }
+  const project_id = normalizeOptionalProjectId(opts.project_id);
+  const read_through_revision = normalizeRevision(opts.read_through_revision);
+  const projectCondition =
+    project_id == null ? "project_id IS NULL" : "project_id = $3::UUID";
+  const params =
+    project_id == null
+      ? [account_id, read_through_revision]
+      : [account_id, read_through_revision, project_id];
+  const { rowCount } = await getPool().query(
+    `UPDATE account_notification_index
+        SET read_state = jsonb_set(
+              COALESCE(read_state, '{}'::JSONB),
+              '{read}',
+              'true'::JSONB,
+              TRUE
+            ),
+            updated_at = NOW()
+      WHERE account_id = $1::UUID
+        AND ${projectCondition}
+        AND COALESCE((read_state ->> 'read')::BOOLEAN, FALSE) IS NOT TRUE
+        AND COALESCE((read_state ->> 'archived')::BOOLEAN, FALSE) IS NOT TRUE
+        AND (revision IS NULL OR revision <= $2::BIGINT)`,
+    params,
+  );
+  return { updated_count: rowCount ?? 0 };
 }
 
 export async function setProjectedNotificationSavedState(opts: {
@@ -439,6 +548,10 @@ export async function replaceAccountNotificationIndexRows(opts: {
   rows: MentionNotificationSourceRow[];
 }): Promise<{ deleted_rows: number; inserted_rows: number }> {
   const account_id = normalizeAccountId(opts.account_id);
+  // Serialize the delete and replacement inserts with snapshots. Otherwise a
+  // snapshot can observe rows deleted by this uncommitted transaction, then
+  // receive a watermark older than the replacement rows.
+  await lockAccountNotificationRevision(opts.db, account_id);
   const deleted = await opts.db.query(
     `DELETE FROM account_notification_index
       WHERE account_id = $1`,

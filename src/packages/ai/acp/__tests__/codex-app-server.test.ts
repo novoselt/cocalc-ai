@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { DEFAULT_SITE_FUNDED_CODEX_POLICY } from "@cocalc/util/ai/site-funded-codex";
 const getCodexSiteKeyGovernorMock: jest.Mock<any, []> = jest.fn(() => null);
 const loggerMock = {
   debug: jest.fn(),
@@ -844,6 +845,56 @@ describe("CodexAppServerAgent", () => {
     expect(error?.error).toContain("/opt/cocalc/bin2/codex: not found");
   });
 
+  it("surfaces a command rejection instead of the routine bubblewrap warning", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      if (message.method !== "initialize") return;
+      fake.stderr.write(
+        "ERROR codex_app_server: Codex could not find bubblewrap on PATH. Codex will use the bundled bubblewrap in the meantime.\n",
+      );
+      fake.stderr.write(
+        'ERROR codex_core::tools::router: CreateProcess { message: "command rejected: rm -f style commands are not permitted. Use a safer approach" }\n',
+      );
+      fake.stderr.write(
+        "Error: no container with ID test-container found in database\n",
+      );
+      fake.exitCode = 255;
+      setImmediate(() => fake.emit("exit", 255, null));
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    const streamPayloads: any[] = [];
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "run a command",
+      stream: async (payload) => {
+        if (payload) streamPayloads.push(payload);
+      },
+      config: {
+        workingDirectory: "/tmp/project",
+      } as any,
+    });
+
+    const error = streamPayloads.find((payload) => payload.type === "error");
+    expect(error?.error).toContain(
+      "Codex blocked a command: rm -f style commands are not permitted. Use a safer approach",
+    );
+    expect(error?.error).not.toContain("bubblewrap");
+    expect(error?.error).not.toContain("no container with ID");
+  });
+
   it("summarizes missing API authentication failures", async () => {
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {
@@ -1525,12 +1576,18 @@ describe("CodexAppServerAgent", () => {
             fake.sendResponse(message.id, { ok: true });
             break;
           case "thread/resume":
-            fake.stdout.write(
-              `${JSON.stringify({
-                id: message.id,
-                error: { message: "thread not found" },
-              })}\n`,
-            );
+            if (spawn === 1) {
+              fake.stdout.write(
+                `${JSON.stringify({
+                  id: message.id,
+                  error: { message: "thread not found" },
+                })}\n`,
+              );
+            } else {
+              fake.sendResponse(message.id, {
+                thread: { id: "thr-compact-1" },
+              });
+            }
             break;
           case "thread/start":
             fake.sendResponse(message.id, {
@@ -2524,13 +2581,132 @@ describe("CodexAppServerAgent", () => {
           threadId: "chat-thread-1",
         }),
       }),
-      expect.objectContaining({
-        spawn: 2,
-        params: expect.objectContaining({
-          threadId: "thr-live-1",
-        }),
-      }),
     ]);
+    expect(spawnCount).toBe(1);
+  });
+
+  it("reports and retains app-server background terminals after a turn", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-background" } });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-background" } });
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-background", status: "completed" },
+            });
+          });
+          break;
+        case "thread/backgroundTerminals/list":
+          fake.sendResponse(message.id, {
+            data: [
+              {
+                itemId: "item-build",
+                processId: "42",
+                command: "pnpm build",
+                cwd: "/tmp/project",
+              },
+            ],
+            nextCursor: null,
+          });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+    const agent = new CodexAppServerAgent();
+
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      session_id: "chat-background",
+      prompt: "start a build",
+      stream: async () => {},
+      config: { workingDirectory: "/tmp/project" },
+    });
+
+    expect(agent.getRuntimeStatus()).toEqual({
+      liveRuntimes: 1,
+      activeTurns: 0,
+      backgroundTerminals: 1,
+    });
+    expect(proc.killed).toBe(false);
+    await agent.dispose();
+    expect(proc.killed).toBe(true);
+  });
+
+  it("never replaces an established session when resume fails", async () => {
+    const appServerCalls: string[] = [];
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      appServerCalls.push(message.method);
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/resume":
+          fake.stdout.write(
+            `${JSON.stringify({
+              id: message.id,
+              error: { message: "thread not found" },
+            })}\n`,
+          );
+          break;
+        default:
+          if (typeof message.id === "number") {
+            fake.sendResponse(message.id, {});
+          }
+      }
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    const streamPayloads: any[] = [];
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      session_id: "chat-thread-established",
+      prompt: "continue",
+      stream: async (payload) => {
+        if (payload) streamPayloads.push(payload);
+      },
+      config: {
+        workingDirectory: "/tmp/project",
+        sessionId: "thr-established",
+      } as any,
+    });
+
+    expect(appServerCalls).toContain("thread/resume");
+    expect(appServerCalls).not.toContain("thread/start");
+    expect(
+      streamPayloads.find((payload) => payload.type === "error")?.error,
+    ).toContain("did not start a replacement session");
   });
 
   it("turns completed app-server file changes into diff activity events", async () => {
@@ -3701,6 +3877,11 @@ describe("CodexAppServerAgent", () => {
         case "turn/interrupt":
           interrupted = true;
           fake.sendResponse(message.id, {});
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-interrupt-1", status: "interrupted" },
+            });
+          });
           break;
         default:
           if (typeof message.id === "number") {
@@ -3749,8 +3930,7 @@ describe("CodexAppServerAgent", () => {
     ).toBeUndefined();
   });
 
-  it("waits for the app-server process to exit before resolving interrupt", async () => {
-    let releaseExit: (() => void) | undefined;
+  it("interrupts a turn without killing its retained app-server", async () => {
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {
         case "initialize":
@@ -3773,6 +3953,14 @@ describe("CodexAppServerAgent", () => {
           break;
         case "turn/interrupt":
           fake.sendResponse(message.id, {});
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: {
+                id: "turn-interrupt-wait-1",
+                status: "interrupted",
+              },
+            });
+          });
           break;
         default:
           if (typeof message.id === "number") {
@@ -3780,16 +3968,6 @@ describe("CodexAppServerAgent", () => {
           }
       }
     });
-    proc.kill = ((signal: NodeJS.Signals = "SIGTERM") => {
-      if (proc.exitCode != null) return true;
-      proc.killed = true;
-      proc.exitCode = signal === "SIGKILL" ? 137 : 0;
-      releaseExit = () => {
-        setImmediate(() => proc.emit("exit", proc.exitCode, signal));
-      };
-      return true;
-    }) as any;
-
     setCodexProjectSpawner({
       spawnCodexExec: async () => {
         throw new Error("unexpected codex exec spawn");
@@ -3816,21 +3994,11 @@ describe("CodexAppServerAgent", () => {
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    let interruptResolved = false;
-    const interruptPromise = agent
-      .interrupt("thr-interrupt-wait-1")
-      .then(() => {
-        interruptResolved = true;
-      });
-
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(interruptResolved).toBe(false);
-    expect(typeof releaseExit).toBe("function");
-
-    releaseExit?.();
-    await interruptPromise;
+    await expect(agent.interrupt("thr-interrupt-wait-1")).resolves.toBe(true);
     await expect(pending).resolves.toBeUndefined();
-    expect(interruptResolved).toBe(true);
+    expect(proc.killed).toBe(false);
+    await agent.dispose();
+    expect(proc.killed).toBe(true);
   });
 
   it("steers an active app-server turn without interrupting it", async () => {
@@ -4258,6 +4426,88 @@ describe("CodexAppServerAgent", () => {
     ]);
   });
 
+  it("waits for account token refresh before reading rate limits", async () => {
+    const seen: Array<{ method: string; params: any }> = [];
+    let accountRefreshCompleted = false;
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      seen.push({ method: message.method, params: message.params });
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, {});
+          break;
+        case "initialized":
+          break;
+        case "account/login/start":
+          fake.sendResponse(message.id, {});
+          break;
+        case "account/read":
+          setImmediate(() => {
+            accountRefreshCompleted = true;
+            fake.sendResponse(message.id, {
+              account: {
+                type: "chatgpt",
+                email: "user@example.com",
+                planType: "pro",
+              },
+              requiresOpenaiAuth: false,
+            });
+          });
+          break;
+        case "account/rateLimits/read":
+          if (!accountRefreshCompleted) {
+            fake.sendError(
+              message.id,
+              "codex account authentication required to read rate limits",
+            );
+            break;
+          }
+          fake.sendResponse(message.id, {
+            rateLimits: {
+              limitId: "codex",
+              primary: {
+                usedPercent: 42,
+                windowDurationMins: 300,
+                resetsAt: 1_800_000_000,
+              },
+              planType: "pro",
+            },
+          });
+          break;
+        default:
+          throw new Error(`unexpected method ${message.method}`);
+      }
+    });
+    setCodexProjectSpawner({
+      spawnCodexExec: jest.fn() as any,
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        args: ["app-server"],
+        cmd: "codex",
+        appServerLogin: {
+          type: "chatgptAuthTokens" as const,
+          accessToken: "token",
+          chatgptAccountId: "account-1",
+          chatgptPlanType: "pro",
+        },
+      }),
+    });
+
+    const status = await getCodexAppServerAccountStatus({
+      projectId: "project-1",
+      accountId: "account-1",
+    });
+
+    expect(status.errors).toBeUndefined();
+    expect(status.rateLimits?.rateLimits?.primary?.usedPercent).toBe(42);
+    expect(seen.map(({ method }) => method)).toEqual([
+      "initialize",
+      "initialized",
+      "account/login/start",
+      "account/read",
+      "account/rateLimits/read",
+    ]);
+  });
+
   it("retries rate-limit reads after a stale app-server auth failure", async () => {
     const seen: Array<{ method: string; params: any }> = [];
     let rateLimitReads = 0;
@@ -4336,7 +4586,6 @@ describe("CodexAppServerAgent", () => {
       "account/login/start",
       "account/read",
       "account/rateLimits/read",
-      "account/login/start",
       "account/rateLimits/read",
     ]);
   });
@@ -4460,6 +4709,227 @@ describe("CodexAppServerAgent", () => {
       totalTimeS: expect.any(Number),
       path: "root/demo.chat",
     });
+  });
+
+  it("forces site-funded policy and settles the reservation", async () => {
+    const requests: any[] = [];
+    const finish = jest.fn(async () => {});
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      requests.push(message);
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-funded-1" } });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-funded-1" } });
+          setImmediate(() => {
+            fake.sendNotification("turn/started", {
+              turn: { id: "turn-funded-1", status: "inProgress" },
+            });
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-funded-1", status: "completed" },
+            });
+          });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    const spawnCodexAppServer = jest.fn(async () => ({
+      proc: proc as any,
+      cmd: "fake-codex",
+      args: ["app-server"],
+      cwd: "/tmp/project",
+      authSource: "site-api-key",
+      siteFundedTurn: {
+        reservation: {
+          reservationId: "reservation-1",
+          fundedTurnId: "funded-turn-1",
+          poolId: "site-funded-codex-free" as const,
+          policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+          reservedMicrousd:
+            DEFAULT_SITE_FUNDED_CODEX_POLICY.maxTurnCostMicrousd,
+          poolReservedMicrousd: 400_000,
+          committedMicrousd: 0,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          heartbeatIntervalMs: 10_000,
+          status: "active" as const,
+        },
+        policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+        providerBaseUrl: "http://host.containers.internal:1234/v1",
+        providerToken: "proxy-token",
+        finish,
+      },
+    }));
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer,
+    });
+    const streamPayloads: any[] = [];
+
+    await new CodexAppServerAgent().evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "say hello",
+      stream: async (payload) => streamPayloads.push(payload),
+      config: {
+        workingDirectory: "/tmp/project",
+        model: "gpt-5.6-sol",
+        reasoning: "high",
+        serviceTier: "fast",
+      } as any,
+    });
+
+    expect(spawnCodexAppServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        siteFundedTurn: {
+          fundedTurnId: expect.any(String),
+          idempotencyKey: expect.any(String),
+        },
+      }),
+    );
+    expect(
+      requests.find(({ method }) => method === "thread/start")?.params,
+    ).toMatchObject({
+      model: "gpt-5.6-luna",
+      serviceTier: null,
+    });
+    expect(
+      requests.find(({ method }) => method === "turn/start")?.params,
+    ).toMatchObject({
+      model: "gpt-5.6-luna",
+      effort: "medium",
+      serviceTier: null,
+    });
+    expect(streamPayloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "event",
+          event: expect.objectContaining({
+            type: "config",
+            model: "gpt-5.6-luna",
+            reasoning: "medium",
+            serviceTier: "standard",
+          }),
+        }),
+      ]),
+    );
+    expect(finish).toHaveBeenCalledWith({
+      status: "committed",
+      outcome: "turn completed",
+    });
+  });
+
+  it("reuses a funded app-server with a fresh reservation for each turn", async () => {
+    let turnSequence = 0;
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/resume":
+          fake.sendError(message.id, "thread not found");
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-funded-reuse" } });
+          break;
+        case "turn/start": {
+          const turnId = `turn-funded-${++turnSequence}`;
+          fake.sendResponse(message.id, { turn: { id: turnId } });
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: { id: turnId, status: "completed" },
+            });
+          });
+          break;
+        }
+        case "thread/backgroundTerminals/list":
+          fake.sendResponse(message.id, { data: [], nextCursor: null });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    const firstFinish = jest.fn(async () => {});
+    const secondFinish = jest.fn(async () => {});
+    const close = jest.fn(async () => {});
+    const secondTurn: any = {
+      reservation: {
+        reservationId: "reservation-funded-2",
+        fundedTurnId: "funded-turn-2",
+        poolId: "site-funded-codex-free",
+        policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      },
+      policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      providerBaseUrl: "http://host.containers.internal:1234/v1",
+      providerToken: "stable-proxy-token",
+      finish: secondFinish,
+      beginTurn: jest.fn(),
+      close,
+    };
+    const beginTurn = jest.fn(async () => secondTurn);
+    const firstTurn: any = {
+      reservation: {
+        reservationId: "reservation-funded-1",
+        fundedTurnId: "funded-turn-1",
+        poolId: "site-funded-codex-free",
+        policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      },
+      policy: DEFAULT_SITE_FUNDED_CODEX_POLICY,
+      providerBaseUrl: "http://host.containers.internal:1234/v1",
+      providerToken: "stable-proxy-token",
+      finish: firstFinish,
+      beginTurn,
+      close,
+    };
+    const spawnCodexAppServer = jest.fn(async () => ({
+      proc: proc as any,
+      cmd: "fake-codex",
+      args: ["app-server"],
+      cwd: "/tmp/project",
+      authSource: "site-api-key",
+      siteFundedTurn: firstTurn,
+    }));
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer,
+    });
+    const agent = new CodexAppServerAgent();
+    const request = {
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      session_id: "chat-funded-reuse",
+      stream: async () => {},
+      config: {
+        workingDirectory: "/tmp/project",
+        paymentSource: "site-api-key" as const,
+      },
+    };
+
+    await agent.evaluate({ ...request, prompt: "first" });
+    await agent.evaluate({ ...request, prompt: "second" });
+
+    expect(spawnCodexAppServer).toHaveBeenCalledTimes(1);
+    expect(beginTurn).toHaveBeenCalledTimes(1);
+    expect(firstFinish).toHaveBeenCalledWith({
+      status: "committed",
+      outcome: "turn completed",
+    });
+    expect(secondFinish).toHaveBeenCalledWith({
+      status: "committed",
+      outcome: "turn completed",
+    });
+    expect(proc.killed).toBe(false);
+    await agent.dispose();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(proc.killed).toBe(true);
   });
 
   it("falls back to persisted rollout usage when live usage is missing", async () => {

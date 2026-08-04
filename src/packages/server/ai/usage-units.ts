@@ -6,6 +6,13 @@ import {
 
 export const AI_USAGE_UNITS_PER_DOLLAR = 100;
 
+export function aiUsageUnitsToMicrousd(units: unknown): number {
+  if (typeof units !== "number" || !Number.isFinite(units) || units <= 0) {
+    return 0;
+  }
+  return Math.floor((units * 1_000_000) / AI_USAGE_UNITS_PER_DOLLAR);
+}
+
 export async function computeAIUsageUnits({
   model,
   prompt_tokens,

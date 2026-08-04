@@ -2,6 +2,76 @@ import { useEffect, useMemo, useState } from "@cocalc/frontend/app-framework";
 import { lite } from "@cocalc/frontend/lite";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { CodexPaymentSourceInfo } from "@cocalc/conat/hub/api/system";
+import type { CodexPaymentSourcePreference } from "@cocalc/util/ai/codex";
+
+export type CodexPaymentSourceOption = {
+  value: CodexPaymentSourcePreference;
+  label: string;
+  description: string;
+  disabled?: boolean;
+};
+
+export function getCodexPaymentSourceOptions(
+  paymentSource?: CodexPaymentSourceInfo,
+): CodexPaymentSourceOption[] {
+  if (lite) {
+    return [
+      {
+        value: "auto",
+        label: "Automatic",
+        description: "Use the first configured local Codex credential.",
+      },
+    ];
+  }
+  const includedAvailable =
+    paymentSource?.hasSiteApiKey === true &&
+    paymentSource.siteFundedCodex?.enabled === true &&
+    paymentSource.siteAiUsageLimitPositive !== false;
+  return [
+    {
+      value: "auto",
+      label: "Automatic",
+      description:
+        "Prefer your ChatGPT Plan, then project or account API keys, then your CoCalc Membership.",
+    },
+    {
+      value: "site-api-key",
+      label: "CoCalc Membership",
+      description: includedAvailable
+        ? "Use the Codex allowance provided by your CoCalc membership."
+        : "Membership-funded Codex usage is not currently available for this account.",
+      disabled: !includedAvailable,
+    },
+    ...(paymentSource?.hasSubscription
+      ? [
+          {
+            value: "subscription" as const,
+            label: "ChatGPT Plan",
+            description:
+              "Use the ChatGPT subscription connected to your CoCalc account.",
+          },
+        ]
+      : []),
+    ...(paymentSource?.hasProjectApiKey
+      ? [
+          {
+            value: "project-api-key" as const,
+            label: "Project OpenAI API key",
+            description: "Charge this project's configured OpenAI API key.",
+          },
+        ]
+      : []),
+    ...(paymentSource?.hasAccountApiKey
+      ? [
+          {
+            value: "account-api-key" as const,
+            label: "Account OpenAI API key",
+            description: "Charge your account's configured OpenAI API key.",
+          },
+        ]
+      : []),
+  ];
+}
 
 const CACHE_TTL_MS = 15_000;
 type PaymentSourceCacheEntry = {
@@ -16,24 +86,30 @@ const paymentSourceInflight = new Map<
   Promise<PaymentSourceCacheEntry>
 >();
 
-function cacheKey(projectId?: string): string {
-  return projectId?.trim() || "";
+function cacheKey(
+  projectId?: string,
+  preference: CodexPaymentSourcePreference = "auto",
+): string {
+  return `${projectId?.trim() || ""}:${preference}`;
 }
 
 function getCachedPaymentSource(
   projectId?: string,
+  preference: CodexPaymentSourcePreference = "auto",
 ): PaymentSourceCacheEntry | undefined {
-  return paymentSourceCache.get(cacheKey(projectId));
+  return paymentSourceCache.get(cacheKey(projectId, preference));
 }
 
 async function fetchPaymentSourceCached({
   projectId,
   force = false,
+  preference = "auto",
 }: {
   projectId?: string;
   force?: boolean;
+  preference?: CodexPaymentSourcePreference;
 }): Promise<PaymentSourceCacheEntry> {
-  const key = cacheKey(projectId);
+  const key = cacheKey(projectId, preference);
   const cached = paymentSourceCache.get(key);
   const now = Date.now();
   if (!force && cached && now - cached.fetchedAt <= CACHE_TTL_MS) {
@@ -47,6 +123,7 @@ async function fetchPaymentSourceCached({
       const result =
         await webapp_client.conat_client.hub.system.getCodexPaymentSource({
           project_id: projectId?.trim() || undefined,
+          preference,
         });
       const entry: PaymentSourceCacheEntry = {
         paymentSource: result as CodexPaymentSourceInfo,
@@ -99,7 +176,7 @@ export function getCodexPaymentSourceShortLabel(
     case "account-api-key":
       return "API Key";
     case "site-api-key":
-      return "CoCalc Membership";
+      return "Membership";
     case "shared-home":
       return "Shared Home";
     case "none":
@@ -136,7 +213,7 @@ export function getCodexPaymentSourceLongLabel(
     case "account-api-key":
       return "Account OpenAI API Key";
     case "site-api-key":
-      return "CoCalc Membership (site OpenAI API key)";
+      return "your CoCalc Membership";
     case "shared-home":
       return "Shared ~/.codex";
     case "none":
@@ -170,23 +247,44 @@ export function getCodexPaymentSourceTooltip(
     return "Checking likely payment source for the next Codex turn...";
   }
   const parts = [
-    `Likely source for next turn: ${getCodexPaymentSourceLongLabel(paymentSource.source)}.`,
-    "Precedence: ChatGPT Plan → Project OpenAI API key → Account OpenAI API key → Site OpenAI API key.",
+    `Source for the next turn: ${getCodexPaymentSourceLongLabel(paymentSource.source)}.`,
   ];
-  if (paymentSource.hasSubscription) {
+  if ((paymentSource.preference ?? "auto") === "auto") {
     parts.push(
-      "A ChatGPT subscription is connected; ChatGPT shows the exact plan and remaining Codex usage.",
+      "Automatic order: ChatGPT Plan → Project OpenAI API key → Account OpenAI API key → CoCalc Membership.",
     );
+  }
+  if (paymentSource.unavailableReason) {
+    parts.push(paymentSource.unavailableReason);
+  }
+  if (paymentSource.source === "site-api-key") {
+    if (paymentSource.siteFundedCodex?.enabled) {
+      if (
+        !paymentSource.hasSubscription &&
+        !paymentSource.hasProjectApiKey &&
+        !paymentSource.hasAccountApiKey
+      ) {
+        parts.push(
+          "Connect a personal ChatGPT plan or API key to choose other settings.",
+        );
+      }
+    } else {
+      parts.push(
+        "Membership-funded Codex usage is currently unavailable on this site.",
+      );
+    }
   }
   return parts.join(" ");
 }
 
 export function useCodexPaymentSource({
   projectId,
+  preference = "auto",
   enabled = true,
   pollMs = 60_000,
 }: {
   projectId?: string;
+  preference?: CodexPaymentSourcePreference;
   enabled?: boolean;
   pollMs?: number;
 }) {
@@ -202,7 +300,7 @@ export function useCodexPaymentSource({
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    const cached = getCachedPaymentSource(projectId);
+    const cached = getCachedPaymentSource(projectId, preference);
     if (cached?.paymentSource) {
       setPaymentSource(cached.paymentSource);
       setError(cached.error ?? "");
@@ -219,6 +317,7 @@ export function useCodexPaymentSource({
         const entry = await fetchPaymentSourceCached({
           projectId,
           force: refreshToken > 0,
+          preference,
         });
         if (cancelled) return;
         if (entry.paymentSource) {
@@ -238,7 +337,7 @@ export function useCodexPaymentSource({
     return () => {
       cancelled = true;
     };
-  }, [enabled, projectId, refreshToken]);
+  }, [enabled, preference, projectId, refreshToken]);
 
   useEffect(() => {
     if (!enabled) return;

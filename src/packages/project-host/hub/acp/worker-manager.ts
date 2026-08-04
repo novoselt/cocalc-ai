@@ -339,15 +339,18 @@ function workerDatabaseStateProtectsUnresponsiveWorker(
   if (row == null || row.state === "stopped") return false;
   if (Number(row.pid ?? 0) !== worker.pid) return false;
   if (countRunningAcpTurnLeasesForWorker(worker_id) > 0) return true;
+  const lastHeartbeatAt = Number(row.last_heartbeat_at ?? 0);
+  const heartbeatIsFresh =
+    Number.isFinite(lastHeartbeatAt) &&
+    lastHeartbeatAt > 0 &&
+    now - lastHeartbeatAt <= ACP_WORKER_DB_HEARTBEAT_STALE_MS;
+  if (heartbeatIsFresh && Number(row.background_terminal_processes ?? 0) > 0) {
+    return true;
+  }
   if (hasAcpBacklog()) {
     return !shouldTerminateQueueStalledWorker({ worker, row, now });
   }
-  const lastHeartbeatAt = Number(row.last_heartbeat_at ?? 0);
-  return (
-    Number.isFinite(lastHeartbeatAt) &&
-    lastHeartbeatAt > 0 &&
-    now - lastHeartbeatAt <= ACP_WORKER_DB_HEARTBEAT_STALE_MS
-  );
+  return heartbeatIsFresh;
 }
 
 function hasAcpBacklog(): boolean {
@@ -418,6 +421,15 @@ export function shouldTerminateQueueStalledWorker({
     countRunningAcpTurnLeasesForWorker(worker_id),
   );
   if (runningTurnLeases > 0) return false;
+  const backgroundTerminalProcesses = Math.max(
+    numberOrUndefined(status?.background_terminal_processes) ?? 0,
+    row &&
+      now - Number(row.last_heartbeat_at ?? 0) <=
+        ACP_WORKER_DB_HEARTBEAT_STALE_MS
+      ? (numberOrUndefined(row.background_terminal_processes) ?? 0)
+      : 0,
+  );
+  if (backgroundTerminalProcesses > 0) return false;
   if (workerHasRunningCommandJob(worker_id)) return false;
   const backlogSince = acpBacklogStaleSince(worker_id);
   if (backlogSince == null || now - backlogSince < stallMs) return false;
@@ -465,7 +477,16 @@ export function shouldTerminateOverdueDrainingWorker({
     numberOrUndefined(status?.running_turn_leases) ?? 0,
     worker_id ? countRunningAcpTurnLeasesForWorker(worker_id) : 0,
   );
-  return runningTurnLeases <= 0;
+  if (runningTurnLeases > 0) return false;
+  const backgroundTerminalProcesses = Math.max(
+    numberOrUndefined(status?.background_terminal_processes) ?? 0,
+    row &&
+      now - Number(row.last_heartbeat_at ?? 0) <=
+        ACP_WORKER_DB_HEARTBEAT_STALE_MS
+      ? (numberOrUndefined(row.background_terminal_processes) ?? 0)
+      : 0,
+  );
+  return backgroundTerminalProcesses <= 0;
 }
 
 async function getWorkerStatus(
@@ -938,7 +959,19 @@ async function reconcileProjectHostAcpWorkers({
     if (!drainingPids.includes(worker.pid)) continue;
     if (!workerRollingCapable(worker)) continue;
     if (worker.status?.state === "draining") continue;
-    await requestWorkerDrain(worker);
+    const drainStatus = await requestWorkerDrain(worker);
+    if (drainStatus && drainStatus.state !== "draining") {
+      logger.info("deferring ACP worker replacement while it owns live work", {
+        pid: worker.pid,
+        worker_id: drainStatus.worker_id,
+        last_seen_running_jobs: drainStatus.last_seen_running_jobs,
+        running_turn_leases: drainStatus.running_turn_leases,
+        background_terminal_processes:
+          drainStatus.background_terminal_processes ?? 0,
+      });
+      writeFileSync(ACP_WORKER_PID_FILE, `${worker.pid}\n`);
+      return worker.pid;
+    }
   }
   for (const worker of workers) {
     if (!terminatePids.includes(worker.pid)) continue;
@@ -1175,6 +1208,15 @@ export async function rolloutProjectHostAcpWorker({
     throw new Error(
       `failed requesting drain for ACP worker ${workerIdOf(activeWorker) || activeWorker.pid}`,
     );
+  }
+  if (status.state !== "draining") {
+    return {
+      action: "noop",
+      pid: activeWorker.pid,
+      worker_id: status.worker_id,
+      message:
+        "deferred ACP worker rollout because it owns an active turn or background command",
+    };
   }
   await ensureProjectHostAcpWorkerRunning({
     restartReason,

@@ -16,6 +16,7 @@ const CODEX_TURN_TOAST_PREFIX = "codex-turn.";
 
 const seenCodexTurnToastIds = new Set<string>();
 const openCodexTurnToastIds = new Set<string>();
+const seenCodexTurnStableSourceIds = new Set<string>();
 let codexTurnToastState: DKV<number> | undefined;
 let codexTurnToastStateInit: Promise<void> | undefined;
 let codexTurnToastStateListener:
@@ -60,6 +61,7 @@ function closeCodexTurnToastState(): void {
   codexTurnToastStateListener = undefined;
   seenCodexTurnToastIds.clear();
   openCodexTurnToastIds.clear();
+  seenCodexTurnStableSourceIds.clear();
 }
 
 async function ensureCodexTurnToastState(account_id: string): Promise<void> {
@@ -177,6 +179,44 @@ export function isCodexTurnCompletionNotification(
   );
 }
 
+export function showLocalCodexTurnCompletionToast(opts: {
+  project_id: string;
+  path: string;
+  thread_label?: string;
+  newest_message_date?: string;
+  stable_source_id?: string;
+}): void {
+  if (!documentVisible()) return;
+  const stableSourceId = `${opts.stable_source_id ?? ""}`.trim();
+  if (stableSourceId && seenCodexTurnStableSourceIds.has(stableSourceId)) {
+    return;
+  }
+  if (stableSourceId) seenCodexTurnStableSourceIds.add(stableSourceId);
+  const threadLabel = `${opts.thread_label ?? ""}`.trim() || "this chat";
+  const messageDate = Number(opts.newest_message_date ?? "");
+  const fallbackId = `${opts.project_id}:${opts.path}:${opts.newest_message_date ?? ""}`;
+  getAntdNotificationInstance().info({
+    key: `codex-turn-local:${stableSourceId || fallbackId}`,
+    title: "Codex turn finished",
+    description: `Codex finished working in ${threadLabel}.`,
+    duration: 6,
+    onClick: () => {
+      const fragmentId = Fragment.decode(
+        Number.isFinite(messageDate)
+          ? `chat=${Math.floor(messageDate)}`
+          : undefined,
+      );
+      void redux.getProjectActions(opts.project_id)?.open_file({
+        path: opts.path,
+        foreground: true,
+        foreground_project: true,
+        chat: !!fragmentId,
+        fragmentId,
+      });
+    },
+  });
+}
+
 export async function showCodexTurnCompletionToastBestEffort(opts: {
   account_id: string;
   row: Pick<
@@ -191,13 +231,16 @@ export async function showCodexTurnCompletionToastBestEffort(opts: {
   if (!notificationId) {
     return;
   }
+  const stableSourceId = `${opts.row.summary?.stable_source_id ?? ""}`.trim();
   await ensureCodexTurnToastState(opts.account_id);
   if (
+    (stableSourceId && seenCodexTurnStableSourceIds.has(stableSourceId)) ||
     seenCodexTurnToastIds.has(notificationId) ||
     openCodexTurnToastIds.has(notificationId)
   ) {
     return;
   }
+  if (stableSourceId) seenCodexTurnStableSourceIds.add(stableSourceId);
   openCodexTurnToastIds.add(notificationId);
   try {
     await markCodexTurnToastSeen({

@@ -1294,6 +1294,7 @@ function PurchaseDescription({
               service={service}
               cost={cost}
               subscription_id={description?.subscription_id}
+              membership_package={description?.type === "membership-package"}
               refresh={refresh}
             />
           )}

@@ -42,6 +42,21 @@ steps:
     with:
       prefix: /opt/cocalc-jupyter
       install_bash_kernel: true
+      packages:
+        - ipykernel
+        - ipywidgets
+        - jupyterlab
+        - matplotlib
+        - notebook
+        - numpy
+        - pandas
+        - polars
+        - scipy
+        - scikit-learn
+        - seaborn
+        - sympy
+        - uv
+        - jupyter-console
 
   - name: Install apt-get wrapper that refreshes missing package lists
     run: |
@@ -83,7 +98,7 @@ verify:
   - command -v jupyter-lab
   - command -v uv
   - test -e /usr/libexec/sftp-server
-  - python3 -c 'import bash_kernel, ipykernel, jupyterlab, numpy, pandas, scipy, sklearn, sympy'
+  - python3 -c 'import bash_kernel, ipykernel, jupyterlab, matplotlib, numpy, pandas, polars, scipy, seaborn, sklearn, sympy'
   - test "$(python -c 'import sys; print(sys.prefix)')" = "/opt/cocalc-jupyter"
   - python -m pip --version | grep -q /opt/cocalc-jupyter
   - pip --version | grep -q /opt/cocalc-jupyter
@@ -116,14 +131,28 @@ verify:
   - jupyter kernelspec list | grep -q bash
 
 publish:
-  label: CoCalc Minimal Base
-  slug: cocalc-minimal-base
-  description: Foundational CoCalc environment with shell tools, basic LaTeX, one coherent Python/pip/Jupyter environment, scientific Python packages, uv, SFTP support, Python and bash Jupyter kernels, and an apt-get wrapper that refreshes package lists automatically before installs.
-  family: cocalc-base
-  version: "2026.06"
+  label: CoCalc Basic
+  slug: basic-1-7
+  description: The standard CoCalc environment with shell tools, basic LaTeX, a writable Python/pip/Jupyter environment, NumPy, pandas, Matplotlib, SciPy, seaborn, scikit-learn, Polars, uv, SFTP support, Python and bash Jupyter kernels, and an apt-get wrapper that refreshes package lists automatically before installs.
+  family: ubuntu
+  version: "1.7"
   channel: stable
-  visibility: collaborators
+  supersedes_image_id: 81e9a519-d8f2-4a47-8c60-05b263d1dedf
+  visibility: public
+  content:
+    version: 1
+    title: CoCalc Basic
+    subtitle: Python, Jupyter, LaTeX, and a practical scientific Python stack.
+    highlights:
+      - Writable Python environment
+      - NumPy, pandas, and Polars
+      - Matplotlib and seaborn
+      - SciPy and scikit-learn
+      - JupyterLab
+      - User pip installs
   tags:
+    - preset:standard
+    - preset:teaching
     - cocalc
     - base
     - python

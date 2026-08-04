@@ -296,6 +296,22 @@ export type SiteSettingsExtrasKeys =
   | "email_smtp_password"
   | "openai_section"
   | "openai_api_key"
+  | "site_funded_codex_heading"
+  | "site_funded_codex_enabled"
+  | "site_funded_codex_model"
+  | "site_funded_codex_reasoning"
+  | "site_funded_codex_service_tier"
+  | "site_funded_codex_global_pool_weekly_usd"
+  | "site_funded_codex_free_pool_weekly_usd"
+  | "site_funded_codex_paid_pool_weekly_usd"
+  | "site_funded_codex_max_turn_usd"
+  | "site_funded_codex_max_turn_seconds"
+  | "site_funded_codex_max_input_tokens_per_request"
+  | "site_funded_codex_max_output_tokens_per_request"
+  | "site_funded_codex_max_requests_per_turn"
+  | "site_funded_codex_global_concurrency"
+  | "site_funded_codex_openai_admin_key"
+  | "site_funded_codex_openai_project_id"
   | "google_vertexai_key"
   | "ollama_configuration"
   | "custom_openai_configuration"
@@ -895,6 +911,183 @@ export const EXTRAS: SettingsExtras = {
     tags: ["AI", "OpenAI"],
     group: "AI & Agents",
     subgroup: "OpenAI",
+  },
+  site_funded_codex_heading: {
+    name: "Site-Funded Codex",
+    desc: "Hard financial and policy controls for Codex turns paid for by the site's OpenAI API key.",
+    default: "",
+    type: "header",
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 10,
+  },
+  site_funded_codex_enabled: {
+    name: "Enable Site-Funded Codex",
+    desc: "Allow eligible accounts to use the site OpenAI key through the bounded funded proxy. Disabling this leaves personal ChatGPT and API-key access unchanged.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 20,
+  },
+  site_funded_codex_model: {
+    name: "Funded Codex Model",
+    desc: "Exact model permitted for site-funded turns. Models without a verified funded price fail closed.",
+    default: "gpt-5.6-luna",
+    valid: (value) => value === "gpt-5.6-luna",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 30,
+  },
+  site_funded_codex_reasoning: {
+    name: "Funded Codex Reasoning",
+    desc: "Reasoning level forced at the backend and provider proxy for site-funded turns. Medium is the default; low remains available as a lower-cost operator override.",
+    default: "medium",
+    valid: (value) => value === "low" || value === "medium",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 40,
+  },
+  site_funded_codex_service_tier: {
+    name: "Funded Codex Speed",
+    desc: "Provider service tier forced for site-funded turns.",
+    default: "standard",
+    valid: (value) => value === "standard",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 50,
+  },
+  site_funded_codex_global_pool_weekly_usd: {
+    name: "Combined Weekly Budget (USD)",
+    desc: "Hard weekly ceiling across all free and paid site-funded Codex usage. The free and paid limits below are sub-pool ceilings and cannot exceed this combined budget in aggregate.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 60,
+  },
+  site_funded_codex_free_pool_weekly_usd: {
+    name: "Free Sub-Pool Weekly Limit (USD)",
+    desc: "Weekly ceiling reserved for free-account usage, still bounded by the combined weekly budget.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 70,
+  },
+  site_funded_codex_paid_pool_weekly_usd: {
+    name: "Paid Sub-Pool Weekly Limit (USD)",
+    desc: "Weekly ceiling for paid-member usage, still bounded by the combined weekly budget.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 80,
+  },
+  site_funded_codex_max_turn_usd: {
+    name: "Emergency Maximum Funded Turn Cost (USD)",
+    desc: "Generous emergency ceiling for one turn, not a normal UX limit. The ledger reserves this exposure before admission and releases unused funds when the turn finishes.",
+    default: "0.25",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 200,
+  },
+  site_funded_codex_max_turn_seconds: {
+    name: "Emergency Maximum Turn Duration (seconds)",
+    desc: "Generous emergency guard against abandoned or runaway turns. Normal turns should finish well below it.",
+    default: "3600",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 210,
+  },
+  site_funded_codex_max_input_tokens_per_request: {
+    name: "Funded Codex Context Window (tokens)",
+    desc: "Context window advertised directly to Codex. Codex automatically compacts thread history at 75% of this value, so long-running threads remain usable instead of being rejected by the funding proxy.",
+    default: "128000",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 220,
+  },
+  site_funded_codex_max_output_tokens_per_request: {
+    name: "Emergency Maximum Output Tokens per Request",
+    desc: "Generous provider-output guard. It should not truncate ordinary Codex work.",
+    default: "32000",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 230,
+  },
+  site_funded_codex_max_requests_per_turn: {
+    name: "Emergency Maximum Provider Requests per Turn",
+    desc: "Generous runaway-loop guard. It should not stop normal multi-step Codex work.",
+    default: "256",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 240,
+  },
+  site_funded_codex_global_concurrency: {
+    name: "Global Funded Turn Concurrency",
+    desc: "Maximum active site-funded turns across the global pool, independent of its dollar limit.",
+    default: "50",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 90,
+  },
+  site_funded_codex_openai_admin_key: {
+    name: "OpenAI Organization Admin Key",
+    desc: "Optional organization-level OpenAI admin key used only to compare CoCalc's funded-usage ledger with OpenAI's Costs API. It is not used to run Codex turns and is distinct from the OpenAI API key above.",
+    default: "",
+    password: true,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 110,
+  },
+  site_funded_codex_openai_project_id: {
+    name: "OpenAI Platform Project ID (proj_...)",
+    desc: "Optional OpenAI Platform project that owns the API key used for included Codex turns. Set this together with the organization admin key to compare OpenAI's reported project costs with CoCalc's ledger.",
+    default: "",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 100,
   },
   google_vertexai_key: {
     name: "Google Generative AI API Key",

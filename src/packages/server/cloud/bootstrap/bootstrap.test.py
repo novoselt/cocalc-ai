@@ -2339,7 +2339,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn("cocalc-project-network-startup", script)
+            self.assertIn('counter accept comment "%s-established"', script)
             self.assertIn('counter drop comment "%s-deny"', script)
+            self.assertLess(
+                script.index('counter accept comment "%s-established"'),
+                script.index('counter drop comment "%s-deny"'),
+            )
             self.assertIn(
                 '"maintenance_process_count": len(maintenance_processes.split())',
                 script,

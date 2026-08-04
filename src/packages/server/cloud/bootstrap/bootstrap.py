@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260804-v39"
+HELPER_SCHEMA_VERSION = "20260804-v40"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -4724,6 +4724,12 @@ emit_project_startup_network_rules() {
   printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto udp ct state new limit rate over %s/second burst %s packets counter drop comment "%s-udp"\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
     "$PROJECT_UDP_NEW_RATE" "$PROJECT_UDP_NEW_BURST" "$marker"
+  # Pasta creates its published-port listener sockets before the runtime is
+  # migrated out of this cgroup. Socket cgroup identity is fixed at creation,
+  # so permit replies on established inbound connections from those listeners.
+  # New outbound connections remain blocked by the final deny rule.
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ct state established,related counter accept comment "%s-established"\n' \
+    "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" "$marker"
   # A temporary runtime leaf has no project-specific policy identity. Deny
   # all traffic until verified migration into the final per-project cgroup;
   # retries made by the project daemon resume under its normal/exam policy.
@@ -4783,7 +4789,7 @@ project_cgroup_has_processes() {
 }
 
 verify_project_network_limits() {
-  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count startup_deny_count tcp_count udp_count disabled_dns_count disabled_local_count disabled_established_count disabled_reject_count policy pid found=0 limits
+  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count startup_established_count startup_deny_count tcp_count udp_count disabled_dns_count disabled_local_count disabled_established_count disabled_reject_count policy pid found=0 limits
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   require_project_network_tools
   marker="$(project_network_rule_marker "$project_id")"
@@ -4793,6 +4799,7 @@ verify_project_network_limits() {
   fi
   metadata_ipv4_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv4"' <<< "$rules" || true)"
   metadata_ipv6_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv6"' <<< "$rules" || true)"
+  startup_established_count="$(grep -Fc 'comment "cocalc-project-network-startup-established"' <<< "$rules" || true)"
   startup_deny_count="$(grep -Fc 'comment "cocalc-project-network-startup-deny"' <<< "$rules" || true)"
   tcp_count="$(grep -Fc "comment \\\"${marker}-tcp\\\"" <<< "$rules" || true)"
   udp_count="$(grep -Fc "comment \\\"${marker}-udp\\\"" <<< "$rules" || true)"
@@ -4801,8 +4808,8 @@ verify_project_network_limits() {
   disabled_established_count="$(grep -Fc "comment \\\"${marker}-disabled-established\\\"" <<< "$rules" || true)"
   disabled_reject_count="$(grep -Fc "comment \\\"${marker}-disabled-reject\\\"" <<< "$rules" || true)"
   policy="$(project_network_policy "$project_id")"
-  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ] || [ "$startup_deny_count" -ne 1 ]; then
-    echo "project shared network rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count} startup_deny=${startup_deny_count}" >&2
+  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ] || [ "$startup_established_count" -ne 1 ] || [ "$startup_deny_count" -ne 1 ]; then
+    echo "project shared network rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count} startup_established=${startup_established_count} startup_deny=${startup_deny_count}" >&2
     return 1
   fi
   if [ "$policy" = "disabled" ]; then

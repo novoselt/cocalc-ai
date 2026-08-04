@@ -61,9 +61,12 @@ describe("project-host local software versioning", () => {
 describe("container-runtime software proxy", () => {
   const previousEndpointMode =
     process.env.COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE;
+  const previousContainerRuntimeBaseUrl =
+    process.env.COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL;
 
   beforeAll(() => {
     process.env.COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE = "remote";
+    delete process.env.COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL;
   });
 
   afterAll(() => {
@@ -72,6 +75,13 @@ describe("container-runtime software proxy", () => {
     } else {
       process.env.COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE =
         previousEndpointMode;
+    }
+    if (previousContainerRuntimeBaseUrl == null) {
+      delete process.env
+        .COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL;
+    } else {
+      process.env.COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL =
+        previousContainerRuntimeBaseUrl;
     }
   });
 
@@ -117,5 +127,37 @@ describe("container-runtime software proxy", () => {
     expect(response.headers.get("location")).toBe(
       `https://software.cocalc.ai/software${path.slice("/software".length)}`,
     );
+  });
+
+  it("supports an explicit container-runtime fallback in local mode", async () => {
+    process.env.COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE = "local";
+    process.env.COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL =
+      "https://runtime.example.test/software";
+    try {
+      const path = "/software/container-runtime/latest-linux-amd64.json";
+      const response = await request(path);
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe(
+        `https://runtime.example.test/software${path.slice("/software".length)}`,
+      );
+    } finally {
+      process.env.COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE = "remote";
+      delete process.env
+        .COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL;
+    }
+  });
+
+  it("keeps local mode air-gapped without an explicit fallback", async () => {
+    process.env.COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE = "local";
+    try {
+      const response = await request(
+        "/software/container-runtime/latest-linux-amd64.json",
+      );
+
+      expect(response.status).toBe(404);
+    } finally {
+      process.env.COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE = "remote";
+    }
   });
 });

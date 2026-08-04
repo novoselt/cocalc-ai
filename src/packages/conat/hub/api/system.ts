@@ -127,6 +127,7 @@ export const system = {
   deleteOpenAiApiKey: authFirst,
   getOpenAiApiKeyStatus: authFirst,
   getCodexPaymentSource: authFirst,
+  getSiteFundedCodexAdminStatus: authFirstRequireAccount,
   getCodexUsageStatus: authFirst,
   getFrontendSourceFingerprint: authFirst,
   getRootfsCatalog: authFirst,
@@ -702,8 +703,15 @@ export interface CodexPaymentSourceInfo {
     units_5h: number;
     units_7d: number;
   };
+  siteFundedCodex?: {
+    enabled: boolean;
+    policy?: import("@cocalc/util/ai/site-funded-codex").SiteFundedCodexPolicy;
+    status?: import("@cocalc/util/ai/site-funded-codex").SiteFundedCodexStatus;
+  };
   sharedHomeMode: "disabled" | "fallback" | "prefer" | "always";
   project_id?: string;
+  preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
+  unavailableReason?: string;
 }
 
 export interface CodexUsageStatusInfo {
@@ -2593,7 +2601,14 @@ export interface System {
   getCodexPaymentSource: (opts: {
     account_id?: string;
     project_id?: string;
+    preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
   }) => Promise<CodexPaymentSourceInfo>;
+
+  getSiteFundedCodexAdminStatus: (opts: {
+    account_id?: string;
+  }) => Promise<
+    import("@cocalc/util/ai/site-funded-codex").SiteFundedCodexStatus
+  >;
 
   getCodexUsageStatus: (opts: {
     account_id?: string;

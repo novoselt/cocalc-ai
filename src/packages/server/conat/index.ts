@@ -50,6 +50,7 @@ import { startConatAdmissionSettingsRefresh } from "./admission-settings";
 import { startHostAvailabilityMaintenance } from "@cocalc/server/hosts/availability";
 import { startGlobalConfigMirrorRepairMaintenance } from "@cocalc/server/global-config-mirror-maintenance";
 import { startAiSessionReconciliationMaintenance } from "@cocalc/server/ai/acp-sessions";
+import { startSiteFundedCodexMaintenance } from "@cocalc/server/ai/site-funded-codex-maintenance";
 import startPurchasesMaintenanceLoop from "@cocalc/server/purchases/maintenance";
 import { startLroExpirationMaintenance } from "@cocalc/server/lro/expiration-maintenance";
 import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-retention-maintenance";
@@ -144,6 +145,9 @@ export function startConatApiBackgroundWorkers(): void {
   startSiteLicenseAffiliationReleaseMaintenance();
   startGlobalConfigMirrorRepairMaintenance();
   startAiSessionReconciliationMaintenance();
+  if (isPrimaryBayWorker()) {
+    startSiteFundedCodexMaintenance();
+  }
   if (isPrimaryBayWorker()) {
     startPurchasesMaintenanceLoop();
   } else {

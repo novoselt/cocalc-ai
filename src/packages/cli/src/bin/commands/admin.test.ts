@@ -904,6 +904,149 @@ test("admin entitlement-override schema documents usable override payloads", asy
   );
 });
 
+test("admin membership-assignment get resolves a user", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        getAdminAssignedMembership: async (opts: any) => {
+          capturedArgs = opts;
+          return {
+            account_id: opts.user_account_id,
+            membership_class: "member",
+          };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "membership-assignment",
+    "get",
+    "alice@example.com",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+  });
+});
+
+test("admin membership-assignment set validates and stores a temporary tier", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      db: {
+        userQuery: async () => ({
+          membership_tiers: [
+            { id: "free", disabled: false },
+            { id: "member", label: "Standard", disabled: false },
+          ],
+        }),
+      },
+      system: {
+        setAdminAssignedMembership: async (opts: any) => {
+          capturedArgs = opts;
+        },
+        getAdminAssignedMembership: async (opts: any) => ({
+          account_id: opts.user_account_id,
+          membership_class: "member",
+          expires_at: new Date("2099-09-01T00:00:00.000Z"),
+          notes: "support ticket 20435",
+        }),
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "membership-assignment",
+    "set",
+    "alice@example.com",
+    "--tier",
+    "member",
+    "--expires-at",
+    "2099-09-01T00:00:00Z",
+    "--reason",
+    "support ticket 20435",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    membership_class: "member",
+    expires_at: new Date("2099-09-01T00:00:00.000Z"),
+    notes: "support ticket 20435",
+  });
+});
+
+test("admin membership-assignment set rejects an unknown tier", async () => {
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      db: {
+        userQuery: async () => ({
+          membership_tiers: [{ id: "member", disabled: false }],
+        }),
+      },
+    }) as any,
+  );
+
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "membership-assignment",
+      "set",
+      "alice@example.com",
+      "--tier",
+      "typo",
+      "--expires-at",
+      "never",
+      "--reason",
+      "test",
+    ]),
+    /unknown membership tier 'typo'; enabled tiers: member/,
+  );
+});
+
+test("admin membership-assignment clear uses UUID targets without search", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        clearAdminAssignedMembership: async (opts: any) => {
+          capturedArgs = opts;
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "membership-assignment",
+    "clear",
+    "11111111-1111-4111-8111-111111111111",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    user_account_id: "11111111-1111-4111-8111-111111111111",
+  });
+});
+
 test("admin settings set reads a secret from a file without returning it", async () => {
   const dir = await mkdtemp(join(tmpdir(), "cocalc-admin-settings-"));
   const path = join(dir, "token");

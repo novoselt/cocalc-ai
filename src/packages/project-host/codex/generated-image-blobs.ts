@@ -1,7 +1,7 @@
 import getLogger from "@cocalc/backend/logger";
 import callHub from "@cocalc/conat/hub/call-hub";
 import { setGeneratedImageBlobWriter } from "@cocalc/lite/hub/acp";
-import { getMasterConatClient } from "../master-status";
+import { getMasterConatClient } from "../master-conat-client";
 import { getLocalHostId } from "../sqlite/hosts";
 
 const logger = getLogger("project-host:codex:generated-image-blobs");

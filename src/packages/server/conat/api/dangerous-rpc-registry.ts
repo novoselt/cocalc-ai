@@ -267,6 +267,14 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason: TELEMETRY_ONLY,
   },
+  "hosts.reserveSiteFundedCodexTurn": {
+    decision: "fresh-auth-not-required",
+    reason: "host-authenticated bounded site-funded Codex admission",
+  },
+  "hosts.recordSiteFundedCodexUsageEvent": {
+    decision: "fresh-auth-not-required",
+    reason: TELEMETRY_ONLY,
+  },
   "hosts.recordManagedRootfsReleaseReplica": {
     decision: "fresh-auth-not-required",
     reason: TELEMETRY_ONLY,
@@ -488,6 +496,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason: ORDINARY_AUTHZ,
   },
   "notifications.markRead": {
+    decision: "fresh-auth-not-required",
+    reason: ORDINARY_AUTHZ,
+  },
+  "notifications.markAllRead": {
     decision: "fresh-auth-not-required",
     reason: ORDINARY_AUTHZ,
   },

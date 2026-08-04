@@ -575,6 +575,23 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
 
   ...adHocEntries(
     [
+      "site_ai_account_holds",
+      "site_ai_funding_periods",
+      "site_ai_turn_reservations",
+    ],
+    {
+      ownership: "seed-global",
+      authority: "seed",
+      portability: "stable",
+      source: "server site-funded Codex reservation schema bootstrap",
+      migrate_to_schema: true,
+      notes:
+        "Cluster-wide site-funded Codex budget, hold, and reservation state. All admission and settlement operations route to the seed bay so concurrency and spending limits are enforced globally.",
+    },
+  ),
+
+  ...adHocEntries(
+    [
       "project_active_operations",
       "project_backup_repo_assignments",
       "project_collab_invite_inbox",

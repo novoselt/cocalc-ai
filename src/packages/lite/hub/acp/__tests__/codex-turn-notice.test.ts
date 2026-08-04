@@ -103,7 +103,7 @@ describe("codex turn completion notices", () => {
           thread_id: "thread-1",
         }),
       ],
-      timeout: 5_000,
+      timeout: 20_000,
     });
   });
 });

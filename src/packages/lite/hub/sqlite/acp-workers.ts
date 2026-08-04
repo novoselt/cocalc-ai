@@ -14,6 +14,8 @@ export interface AcpWorkerRow {
   started_at: number;
   last_heartbeat_at: number;
   last_seen_running_jobs: number;
+  live_app_server_runtimes?: number;
+  background_terminal_processes?: number;
   last_queue_progress_at: number;
   exit_requested_at?: number | null;
   stopped_at?: number | null;
@@ -33,6 +35,8 @@ function init(): void {
       started_at INTEGER NOT NULL,
       last_heartbeat_at INTEGER NOT NULL,
       last_seen_running_jobs INTEGER NOT NULL DEFAULT 0,
+      live_app_server_runtimes INTEGER NOT NULL DEFAULT 0,
+      background_terminal_processes INTEGER NOT NULL DEFAULT 0,
       last_queue_progress_at INTEGER NOT NULL DEFAULT 0,
       exit_requested_at INTEGER,
       stopped_at INTEGER,
@@ -47,6 +51,16 @@ function init(): void {
   if (!hasColumn("last_queue_progress_at")) {
     db.exec(
       `ALTER TABLE ${TABLE} ADD COLUMN last_queue_progress_at INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
+  if (!hasColumn("live_app_server_runtimes")) {
+    db.exec(
+      `ALTER TABLE ${TABLE} ADD COLUMN live_app_server_runtimes INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
+  if (!hasColumn("background_terminal_processes")) {
+    db.exec(
+      `ALTER TABLE ${TABLE} ADD COLUMN background_terminal_processes INTEGER NOT NULL DEFAULT 0`,
     );
   }
   db.exec(
@@ -71,8 +85,8 @@ export function upsertAcpWorker(row: AcpWorkerRow): AcpWorkerRow {
     Number(row.last_queue_progress_at) || Number(row.started_at) || Date.now();
   db.prepare(
     `INSERT INTO ${TABLE}
-      (worker_id, host_id, bundle_version, bundle_path, pid, state, started_at, last_heartbeat_at, last_seen_running_jobs, last_queue_progress_at, exit_requested_at, stopped_at, stop_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (worker_id, host_id, bundle_version, bundle_path, pid, state, started_at, last_heartbeat_at, last_seen_running_jobs, live_app_server_runtimes, background_terminal_processes, last_queue_progress_at, exit_requested_at, stopped_at, stop_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(worker_id) DO UPDATE SET
         host_id = excluded.host_id,
         bundle_version = excluded.bundle_version,
@@ -82,6 +96,8 @@ export function upsertAcpWorker(row: AcpWorkerRow): AcpWorkerRow {
         started_at = COALESCE(${TABLE}.started_at, excluded.started_at),
         last_heartbeat_at = excluded.last_heartbeat_at,
         last_seen_running_jobs = excluded.last_seen_running_jobs,
+        live_app_server_runtimes = excluded.live_app_server_runtimes,
+        background_terminal_processes = excluded.background_terminal_processes,
         last_queue_progress_at = excluded.last_queue_progress_at,
         exit_requested_at = excluded.exit_requested_at,
         stopped_at = excluded.stopped_at,
@@ -96,6 +112,8 @@ export function upsertAcpWorker(row: AcpWorkerRow): AcpWorkerRow {
     row.started_at,
     row.last_heartbeat_at,
     row.last_seen_running_jobs,
+    row.live_app_server_runtimes ?? 0,
+    row.background_terminal_processes ?? 0,
     lastQueueProgressAt,
     row.exit_requested_at ?? null,
     row.stopped_at ?? null,
@@ -209,12 +227,16 @@ export function heartbeatAcpWorker({
   pid,
   state,
   last_seen_running_jobs,
+  live_app_server_runtimes,
+  background_terminal_processes,
   last_queue_progress_at,
 }: {
   worker_id: string;
   pid?: number | null;
   state?: AcpWorkerState;
   last_seen_running_jobs: number;
+  live_app_server_runtimes?: number;
+  background_terminal_processes?: number;
   last_queue_progress_at?: number | null;
 }): AcpWorkerRow | undefined {
   ensureInit();
@@ -230,6 +252,8 @@ export function heartbeatAcpWorker({
            END,
            last_heartbeat_at = ?,
            last_seen_running_jobs = ?,
+           live_app_server_runtimes = COALESCE(?, live_app_server_runtimes),
+           background_terminal_processes = COALESCE(?, background_terminal_processes),
            last_queue_progress_at = CASE
              WHEN ? IS NOT NULL AND ? > 0 THEN ?
              ELSE last_queue_progress_at
@@ -243,6 +267,12 @@ export function heartbeatAcpWorker({
       now,
       now,
       Math.max(0, Math.floor(last_seen_running_jobs)),
+      live_app_server_runtimes == null
+        ? null
+        : Math.max(0, Math.floor(live_app_server_runtimes)),
+      background_terminal_processes == null
+        ? null
+        : Math.max(0, Math.floor(background_terminal_processes)),
       last_queue_progress_at ?? null,
       last_queue_progress_at ?? null,
       last_queue_progress_at ?? null,

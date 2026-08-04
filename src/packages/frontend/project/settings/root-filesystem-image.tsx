@@ -104,6 +104,7 @@ import {
 import {
   buildRootfsPublishAgentPrompt,
   buildRootfsPublishAssistCommand,
+  rootfsSupersedesOptions,
   rootfsThemeFromPublishDraft,
   type PublishDraft,
 } from "./rootfs-publish-assist";
@@ -526,13 +527,12 @@ export default function RootFilesystemImage({
   );
   const publishSupersedesOptions = useMemo(
     () =>
-      catalogRootfsImages
-        .filter((entry) => entry.id !== publishSourceEntry?.id)
-        .map((entry) => ({
-          value: entry.id,
-          label: `${entry.label || entry.image}${entry.version ? ` (${entry.version})` : ""}`,
-        })),
-    [publishSourceEntry?.id, catalogRootfsImages],
+      rootfsSupersedesOptions({
+        images: catalogRootfsImages,
+        publishMode,
+        publishSourceEntryId: publishSourceEntry?.id,
+      }),
+    [catalogRootfsImages, publishMode, publishSourceEntry?.id],
   );
   const rootfsConfigCatalogSourceOptions = useMemo(
     () =>

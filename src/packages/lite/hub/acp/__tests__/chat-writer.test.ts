@@ -402,7 +402,7 @@ describe("ChatStreamWriter", () => {
       expect.objectContaining({
         project_id: "p",
         name: "notifications.createCodexTurnNotice",
-        timeout: 5_000,
+        timeout: 20_000,
       }),
     );
     expect(resolved).toBe(false);
@@ -413,7 +413,7 @@ describe("ChatStreamWriter", () => {
     writer.dispose?.(true);
   });
 
-  it("lets a live notify toggle override the submitted preference", async () => {
+  it("keeps a submitted notify preference despite stale live config", async () => {
     const { syncdb } = makeFakeSyncDB();
     syncdb.set({
       event: "chat-thread-config",
@@ -443,7 +443,7 @@ describe("ChatStreamWriter", () => {
       seq: 0,
     } as AcpStreamMessage);
 
-    expect(callHubMock).not.toHaveBeenCalled();
+    expect(callHubMock).toHaveBeenCalledTimes(1);
     writer.dispose?.(true);
   });
 
