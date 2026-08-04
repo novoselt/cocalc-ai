@@ -32,12 +32,17 @@ import { deleteVolume } from "./file-server";
 import { recordProjectHostRpcTraffic } from "./rpc-traffic-audit";
 import { setProjectStateReporter } from "./project-state-reporter";
 import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  getMasterConatClient,
+  setMasterConatClient,
+} from "./master-conat-client";
+
+export { getMasterConatClient, setMasterConatClient };
 
 let statusClient: HostStatusApi | undefined;
 let hostInfo: Pick<HostProjectStatus, "host_id" | "host"> | undefined;
 const logger = getLogger("project-host:master-status");
 let resendTimer: NodeJS.Timeout | undefined;
-let masterClient: Client | undefined;
 const PROJECT_STATE_RETRY_DELAYS_MS = [100, 250, 500, 1_000] as const;
 interface ProjectStateReportQueue {
   pending?: HostProjectStatus["state"];
@@ -139,7 +144,7 @@ export function setMasterStatusClient({
   host?: HostProjectStatus["host"];
 }) {
   statusClient = createHostStatusClient({ client });
-  masterClient = client;
+  setMasterConatClient(client);
   hostInfo = { host_id, host };
   reportPendingStates().catch((err) =>
     logger.debug("reportPendingStates initial send failed", { err }),
@@ -147,14 +152,6 @@ export function setMasterStatusClient({
   if (!resendTimer) {
     resendTimer = setInterval(reportPendingStates, 15_000).unref();
   }
-}
-
-export function getMasterConatClient(): Client | undefined {
-  return masterClient;
-}
-
-export function setMasterConatClient(client: Client | undefined): void {
-  masterClient = client;
 }
 
 export async function reportProjectStateToMaster(
@@ -378,7 +375,7 @@ export function resetMasterStatusForTests(): void {
   }
   statusClient = undefined;
   hostInfo = undefined;
-  masterClient = undefined;
+  setMasterConatClient(undefined);
   for (const queue of projectStateReportQueues.values()) {
     queue.wakeRetry?.();
   }

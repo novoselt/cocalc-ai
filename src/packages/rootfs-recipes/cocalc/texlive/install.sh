@@ -44,4 +44,4 @@ git -C "$checkout" fetch -q --depth 1 origin "$repo_ref"
 git -C "$checkout" checkout -q FETCH_HEAD
 echo ">> using $(git -C "$checkout" rev-parse --short HEAD) from $repo_ref"
 
-exec bash "$checkout/$script"
+bash "$checkout/$script"

@@ -5,7 +5,7 @@ import {
   type CodexSiteFundedTurnRequest,
   type CodexSiteFundedTurnRuntime,
 } from "@cocalc/ai/acp";
-import { getMasterConatClient } from "../master-status";
+import { getMasterConatClient } from "../master-conat-client";
 import { getLocalHostId } from "../sqlite/hosts";
 import { getDatabase, initDatabase } from "@cocalc/lite/hub/sqlite/database";
 import type {

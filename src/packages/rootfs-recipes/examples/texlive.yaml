@@ -32,6 +32,7 @@ steps:
   - name: Install TeX Live
     uses: cocalc/texlive
     with:
+      repo_ref: 53c044b384dd738d3dc917311b20b1df3eb2cec3
       script: install.sh
       mode: install
       year: "2026"
@@ -42,12 +43,14 @@ steps:
   - name: Verify the TeX Live tree
     uses: cocalc/texlive
     with:
+      repo_ref: 53c044b384dd738d3dc917311b20b1df3eb2cec3
       script: verify.sh
     timeout: 1800
 
   - name: Install the R and Python document layer
     uses: cocalc/texlive
     with:
+      repo_ref: 53c044b384dd738d3dc917311b20b1df3eb2cec3
       script: r-python.sh
     timeout: 3600
 
@@ -58,6 +61,7 @@ steps:
   - name: Compile the document test suite
     uses: cocalc/texlive
     with:
+      repo_ref: 53c044b384dd738d3dc917311b20b1df3eb2cec3
       script: tests/run.sh
     timeout: 3600
 

@@ -1,12 +1,3 @@
-jest.mock("p-limit", () => ({
-  __esModule: true,
-  default: () =>
-    Object.assign((fn: () => unknown) => Promise.resolve().then(fn), {
-      activeCount: 0,
-      pendingCount: 0,
-    }),
-}));
-
 import {
   ACP_CLIENT_REFRESH_REQUIRED_CODE,
   ACP_CLIENT_REFRESH_REQUIRED_MESSAGE,
