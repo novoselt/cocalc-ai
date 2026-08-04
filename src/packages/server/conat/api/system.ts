@@ -95,9 +95,8 @@ import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getAIUsageStatus } from "@cocalc/server/ai/usage-status";
 import { aiUsageUnitsToMicrousd } from "@cocalc/server/ai/usage-units";
-import { backfillLocalSiteFundedCodexAccountUsage } from "@cocalc/server/ai/save-response";
 import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
-import { getSiteFundedCodexPoolStatus } from "@cocalc/server/ai/site-funded-codex-ledger";
+import { getSiteFundedCodexPoolStatus } from "@cocalc/server/ai/site-funded-codex-reservations";
 import { reconcileSiteFundedCodexCosts } from "@cocalc/server/ai/site-funded-codex-reconciliation";
 import {
   enqueueRootfsPrepullForHost,
@@ -6408,9 +6407,6 @@ export async function getCodexPaymentSource({
     to_bool(settings.openai_enabled) &&
     !(await isAiLaunchDisabled()) &&
     !!`${settings.openai_api_key ?? ""}`.trim();
-  if (hasSiteApiKey) {
-    await backfillLocalSiteFundedCodexAccountUsage(account_id);
-  }
   const siteAiUsageStatus = hasSiteApiKey
     ? await getAIUsageStatus({ account_id })
     : undefined;

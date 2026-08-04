@@ -10,19 +10,18 @@ import {
   type SiteFundedCodexPolicy,
 } from "@cocalc/util/ai/site-funded-codex";
 import { uuid } from "@cocalc/util/misc";
-import { backfillLocalSiteFundedCodexAccountUsage } from "./save-response";
 import {
-  ensureSiteFundedCodexLedgerTables,
+  ensureSiteFundedCodexReservationTables,
   expireAbandonedSiteFundedCodexReservations,
   finishSiteFundedCodexTurn,
   getSiteFundedCodexPoolStatus,
   recordSiteFundedCodexUsageEvent,
   reserveSiteFundedCodexTurn,
-} from "./site-funded-codex-ledger";
+} from "./site-funded-codex-reservations";
 
 beforeAll(async () => {
   await before({ noConat: true });
-  await ensureSiteFundedCodexLedgerTables();
+  await ensureSiteFundedCodexReservationTables();
 }, 15_000);
 
 afterAll(after);
@@ -63,9 +62,8 @@ function options({
   };
 }
 
-describe("site-funded Codex seed ledger", () => {
+describe("site-funded Codex reservations", () => {
   beforeEach(async () => {
-    await getPool().query("DELETE FROM site_ai_provider_usage_events");
     await getPool().query("DELETE FROM site_ai_turn_reservations");
     await getPool().query("DELETE FROM site_ai_funding_periods");
     await getPool().query("DELETE FROM site_ai_account_holds");
@@ -137,13 +135,18 @@ describe("site-funded Codex seed ledger", () => {
       cachedInputTokens: 6_000,
       outputTokens: 500,
     };
-    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toEqual({
-      costMicrousd: 1_520,
-      inserted: true,
-    });
-    await expect(
-      recordSiteFundedCodexUsageEvent({ ...event, eventId: uuid() }),
-    ).resolves.toEqual({ costMicrousd: 1_520, inserted: false });
+    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toMatchObject(
+      {
+        costMicrousd: 1_520,
+        inserted: true,
+        fundedTurnId: opts.fundedTurnId,
+        accountId: opts.accountId,
+        projectId: opts.projectId,
+      },
+    );
+    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toMatchObject(
+      { costMicrousd: 1_520, inserted: false },
+    );
 
     const finished = await finishSiteFundedCodexTurn({
       reservationId: first.reservation.reservationId,
@@ -167,44 +170,6 @@ describe("site-funded Codex seed ledger", () => {
       committedMicrousd: 1_520,
       activeReservations: 0,
     });
-  });
-
-  it("backfills pre-unification turns into the account ledger once", async () => {
-    const opts = options({ maxTurnCostMicrousd: 50_000 });
-    await getPool().query(
-      `INSERT INTO accounts(account_id, created, email_address)
-       VALUES($1, NOW(), $2)`,
-      [opts.accountId, `${opts.accountId}@example.com`],
-    );
-    const admission = await reserveSiteFundedCodexTurn(opts);
-    if (!admission.allowed) throw new Error("expected reservation");
-    await recordSiteFundedCodexUsageEvent({
-      eventId: uuid(),
-      reservationId: admission.reservation.reservationId,
-      requestSequence: 1,
-      model: "gpt-5.6-luna",
-      inputTokens: 10_000,
-      cachedInputTokens: 6_000,
-      outputTokens: 500,
-    });
-    await finishSiteFundedCodexTurn({
-      reservationId: admission.reservation.reservationId,
-      status: "committed",
-    });
-
-    await expect(
-      backfillLocalSiteFundedCodexAccountUsage(opts.accountId),
-    ).resolves.toBe(1);
-    await expect(
-      backfillLocalSiteFundedCodexAccountUsage(opts.accountId),
-    ).resolves.toBe(0);
-    const { rows } = await getPool().query(
-      `SELECT COUNT(*)::int AS count, MAX(cost_microusd) AS cost_microusd
-       FROM ai_usage_log WHERE funded_turn_id = $1`,
-      [opts.fundedTurnId],
-    );
-    expect(rows[0]).toMatchObject({ count: 1 });
-    expect(Number(rows[0].cost_microusd)).toBe(1_520);
   });
 
   it("enforces account concurrency and canonical remaining allowance", async () => {

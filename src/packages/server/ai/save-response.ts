@@ -5,7 +5,7 @@ import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { AIUsageLogEntry } from "@cocalc/util/db-schema/ai-log";
 import { ensureAccountUsageWindowsForEvent } from "@cocalc/server/membership/usage-windows";
 import { AI_USAGE_UNITS_PER_DOLLAR } from "./usage-units";
-import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import type { SiteFundedCodexUsageEvent } from "@cocalc/util/ai/site-funded-codex";
 
 const log = getLogger("ai:save-response");
 
@@ -27,8 +27,31 @@ export async function ensureExactAIUsageSchema(): Promise<void> {
         "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS funded_turn_id UUID",
       );
       await pool.query(
-        `CREATE UNIQUE INDEX IF NOT EXISTS ai_usage_log_funded_turn_id_unique_idx
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS funded_event_id UUID",
+      );
+      for (const statement of [
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS cached_input_tokens BIGINT",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS cache_write_input_tokens BIGINT",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS output_tokens BIGINT",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS price_version TEXT",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS provider_request_id TEXT",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS provider_tool_fees_microusd BIGINT",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS reasoning_output_tokens BIGINT",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS request_sequence INTEGER",
+        "ALTER TABLE ai_usage_log ADD COLUMN IF NOT EXISTS long_context BOOLEAN",
+      ]) {
+        await pool.query(statement);
+      }
+      await pool.query(
+        "DROP INDEX IF EXISTS ai_usage_log_funded_turn_id_unique_idx",
+      );
+      await pool.query(
+        `CREATE INDEX IF NOT EXISTS ai_usage_log_funded_turn_id_idx
            ON ai_usage_log(funded_turn_id) WHERE funded_turn_id IS NOT NULL`,
+      );
+      await pool.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS ai_usage_log_funded_event_id_unique_idx
+           ON ai_usage_log(funded_event_id) WHERE funded_event_id IS NOT NULL`,
       );
     })().catch((err) => {
       ensuredExactUsageSchema = undefined;
@@ -42,16 +65,26 @@ export async function ensureExactAIUsageSchema(): Promise<void> {
 export async function saveAIResponse({
   account_id,
   analytics_cookie,
+  cached_input_tokens,
+  cache_write_input_tokens,
   cost_microusd,
+  funded_event_id,
   funded_turn_id,
   history,
   input,
   model,
   occurred_at,
   output,
+  output_tokens,
   path,
   project_id,
   prompt_tokens,
+  price_version,
+  provider_request_id,
+  provider_tool_fees_microusd,
+  reasoning_output_tokens,
+  request_sequence,
+  long_context,
   system,
   tag,
   total_time_s,
@@ -72,10 +105,13 @@ export async function saveAIResponse({
       `INSERT INTO ai_usage_log(
          time,input,system,output,history,account_id,analytics_cookie,project_id,
          path,total_tokens,prompt_tokens,total_time_s,expire,model,tag,
-         usage_units,cost_microusd,funded_turn_id
+         usage_units,cost_microusd,funded_turn_id,funded_event_id,
+         cached_input_tokens,cache_write_input_tokens,output_tokens,
+         price_version,provider_request_id,provider_tool_fees_microusd,
+         reasoning_output_tokens,request_sequence,long_context
        ) VALUES(
-         COALESCE($18::timestamptz, NOW()),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
-       ) ON CONFLICT (funded_turn_id) WHERE funded_turn_id IS NOT NULL DO NOTHING`,
+         COALESCE($28::timestamptz, NOW()),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27
+       ) ON CONFLICT (funded_event_id) WHERE funded_event_id IS NOT NULL DO NOTHING`,
       [
         input,
         system,
@@ -102,6 +138,16 @@ export async function saveAIResponse({
                 ),
               )),
         funded_turn_id ?? null,
+        funded_event_id ?? null,
+        cached_input_tokens ?? null,
+        cache_write_input_tokens ?? null,
+        output_tokens ?? null,
+        price_version ?? null,
+        provider_request_id ?? null,
+        provider_tool_fees_microusd ?? null,
+        reasoning_output_tokens ?? null,
+        request_sequence ?? null,
+        long_context ?? null,
         occurred_at ?? null,
       ],
     );
@@ -116,13 +162,19 @@ export async function recordSiteFundedCodexAccountUsage({
   account_id,
   funded_turn_id,
   project_id,
+  event,
   cost_microusd,
+  price_version,
+  long_context,
   occurred_at,
 }: {
   account_id: string;
   funded_turn_id: string;
   project_id: string;
+  event: SiteFundedCodexUsageEvent;
   cost_microusd: number;
+  price_version: string;
+  long_context: boolean;
   occurred_at?: Date | string;
 }): Promise<void> {
   if (!Number.isSafeInteger(cost_microusd) || cost_microusd < 0) {
@@ -131,62 +183,34 @@ export async function recordSiteFundedCodexAccountUsage({
   const saved = await saveAIResponse({
     account_id,
     analytics_cookie: undefined,
+    cached_input_tokens: event.cachedInputTokens ?? 0,
+    cache_write_input_tokens: event.cacheWriteInputTokens ?? 0,
     cost_microusd,
+    funded_event_id: event.eventId,
     funded_turn_id,
     history: [],
-    input: "[site-funded-codex]",
+    input: `[site-funded-codex-request:${event.requestSequence}]`,
+    long_context,
+    model: event.model,
     output: "",
+    output_tokens: event.outputTokens,
     occurred_at,
     project_id,
-    prompt_tokens: 0,
+    price_version,
+    prompt_tokens: event.inputTokens,
+    provider_request_id: event.providerRequestId,
+    provider_tool_fees_microusd: event.providerToolFeesMicrousd ?? 0,
+    reasoning_output_tokens: event.reasoningOutputTokens ?? 0,
+    request_sequence: event.requestSequence,
     system: "",
     tag: "site-funded-codex",
-    total_time_s: 0,
-    total_tokens: 0,
+    total_time_s: Math.max(0, (event.durationMs ?? 0) / 1_000),
+    total_tokens: event.inputTokens + event.outputTokens,
     usage_units: undefined,
   });
   if (!saved) {
     throw new Error("failed to record site-funded Codex account usage");
   }
-}
-
-export async function backfillLocalSiteFundedCodexAccountUsage(
-  account_id: string,
-): Promise<number> {
-  await ensureExactAIUsageSchema();
-  const pool = getPool();
-  const exists = await pool.query<{ relation: string | null }>(
-    "SELECT to_regclass('public.site_ai_turn_reservations')::text AS relation",
-  );
-  if (!exists.rows[0]?.relation) return 0;
-  const { rows } = await pool.query<{
-    funded_turn_id: string;
-    project_id: string;
-    committed_microusd: string | number;
-    completed_at: Date | string;
-  }>(
-    `SELECT r.funded_turn_id, r.project_id, r.committed_microusd,
-            r.completed_at
-       FROM site_ai_turn_reservations r
-       LEFT JOIN ai_usage_log a ON a.funded_turn_id = r.funded_turn_id
-      WHERE r.account_id = $1
-        AND r.committed_microusd > 0
-        AND r.completed_at IS NOT NULL
-        AND COALESCE(NULLIF(BTRIM(r.home_bay_id), ''), $2) = $2
-        AND a.funded_turn_id IS NULL
-      ORDER BY r.completed_at`,
-    [account_id, getConfiguredBayId()],
-  );
-  for (const row of rows) {
-    await recordSiteFundedCodexAccountUsage({
-      account_id,
-      funded_turn_id: row.funded_turn_id,
-      project_id: row.project_id,
-      cost_microusd: Number(row.committed_microusd),
-      occurred_at: row.completed_at,
-    });
-  }
-  return rows.length;
 }
 
 async function getExpiration(account_id: string | undefined) {

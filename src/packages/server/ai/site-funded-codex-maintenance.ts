@@ -6,7 +6,7 @@
 import getLogger from "@cocalc/backend/logger";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
-import { expireAbandonedSiteFundedCodexReservations } from "./site-funded-codex-ledger";
+import { expireAbandonedSiteFundedCodexReservations } from "./site-funded-codex-reservations";
 
 const logger = getLogger("server:ai:site-funded-codex-maintenance");
 const INTERVAL_MS = 60_000;

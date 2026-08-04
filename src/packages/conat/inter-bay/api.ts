@@ -217,6 +217,7 @@ import type {
   SiteFundedCodexPolicy,
   SiteFundedCodexReservation,
   SiteFundedCodexUsageEvent,
+  SiteFundedCodexUsageRecordResult,
 } from "@cocalc/util/ai/site-funded-codex";
 
 export interface BayOwnership {
@@ -937,7 +938,10 @@ export interface AccountLocalRecordSiteFundedCodexUsageRequest {
   account_id: string;
   funded_turn_id: string;
   project_id: string;
+  event: SiteFundedCodexUsageEvent;
   cost_microusd: number;
+  price_version: string;
+  long_context: boolean;
   occurred_at?: Date | string;
 }
 
@@ -4161,7 +4165,7 @@ export interface InterBayBayOpsApi {
   ) => Promise<{ active: boolean }>;
   recordSiteFundedCodexUsage: (
     opts: BayOpsRecordSiteFundedCodexUsageRequest,
-  ) => Promise<{ costMicrousd: number; inserted: boolean }>;
+  ) => Promise<SiteFundedCodexUsageRecordResult>;
   finishSiteFundedCodexTurn: (
     opts: BayOpsFinishSiteFundedCodexTurnRequest,
   ) => Promise<SiteFundedCodexReservation>;

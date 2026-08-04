@@ -9,15 +9,25 @@ export interface AIUsageLogEntry {
   account_id?: string;
   analytics_cookie?: string; // at least one of analytics_cookie or account_id will be set
   cost_microusd?: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  funded_event_id?: string;
   expire?: Date;
   funded_turn_id?: string;
   history?: History;
   input: string;
   model?: LanguageModel;
   output: string;
+  output_tokens?: number;
   path?: string;
+  price_version?: string;
   project_id?: string;
+  provider_request_id?: string;
+  provider_tool_fees_microusd?: number;
   prompt_tokens: number;
+  reasoning_output_tokens?: number;
+  request_sequence?: number;
+  long_context?: boolean;
   system?: string;
   tag?: string; // useful for keeping track of where queries come frome when doing analytics later
   time: Date;
@@ -42,9 +52,54 @@ Table({
       pg_type: "BIGINT",
       desc: "Exact provider cost in millionths of one US dollar.",
     },
+    cached_input_tokens: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Provider-reported cached input tokens.",
+    },
+    cache_write_input_tokens: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Provider-reported cache-write input tokens.",
+    },
+    funded_event_id: {
+      type: "uuid",
+      desc: "Idempotency key for an exact site-funded Codex provider request.",
+    },
     funded_turn_id: {
       type: "uuid",
-      desc: "Idempotency key for a site-funded Codex turn.",
+      desc: "Groups exact provider requests from one site-funded Codex turn.",
+    },
+    output_tokens: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Provider-reported output tokens.",
+    },
+    price_version: {
+      type: "string",
+      desc: "Version of the exact provider price used for this request.",
+    },
+    provider_request_id: {
+      type: "string",
+      desc: "Opaque provider request identifier used for reconciliation.",
+    },
+    provider_tool_fees_microusd: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Provider tool fees in millionths of one US dollar.",
+    },
+    reasoning_output_tokens: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Provider-reported reasoning output tokens.",
+    },
+    request_sequence: {
+      type: "integer",
+      desc: "Sequence number within a site-funded Codex turn.",
+    },
+    long_context: {
+      type: "boolean",
+      desc: "Whether long-context pricing applied to this request.",
     },
     system: {
       title: "System Context",
@@ -126,14 +181,24 @@ Table({
           time: null,
           account_id: null,
           cost_microusd: null,
+          cached_input_tokens: null,
+          cache_write_input_tokens: null,
+          funded_event_id: null,
           input: null,
           system: null,
           output: null,
+          output_tokens: null,
           total_tokens: null,
           usage_units: null,
           prompt_tokens: null,
           total_time_s: null,
           project_id: null,
+          price_version: null,
+          provider_request_id: null,
+          provider_tool_fees_microusd: null,
+          reasoning_output_tokens: null,
+          request_sequence: null,
+          long_context: null,
           path: null,
           history: null,
           expire: null,
@@ -168,18 +233,28 @@ Table({
           time: null,
           account_id: null,
           cost_microusd: null,
+          cached_input_tokens: null,
+          cache_write_input_tokens: null,
           analytics_cookie: null,
           input: null,
           system: null,
           output: null,
+          output_tokens: null,
           total_tokens: null,
           usage_units: null,
           prompt_tokens: null,
           total_time_s: null,
           project_id: null,
+          price_version: null,
+          provider_request_id: null,
+          provider_tool_fees_microusd: null,
+          reasoning_output_tokens: null,
+          request_sequence: null,
+          long_context: null,
           path: null,
           history: null,
           funded_turn_id: null,
+          funded_event_id: null,
           model: null,
           tag: null,
         },

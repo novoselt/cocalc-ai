@@ -144,6 +144,17 @@ export type SiteFundedCodexUsageEvent = SiteFundedCodexRequestUsage & {
   durationMs?: number;
 };
 
+export type SiteFundedCodexUsageRecordResult = {
+  costMicrousd: number;
+  inserted: boolean;
+  priceVersion: string;
+  longContext: boolean;
+  fundedTurnId: string;
+  accountId: string;
+  projectId: string;
+  homeBayId?: string;
+};
+
 export type SiteFundedCodexDenialCode =
   | "disabled"
   | "missing_price"

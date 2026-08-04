@@ -199,19 +199,20 @@ import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import {
   assertSiteFundedCodexReservationHost,
-  finishSiteFundedCodexTurn as finishSiteFundedCodexTurnLedger,
-  getSiteFundedCodexPoolStatus as getSiteFundedCodexPoolStatusLedger,
-  heartbeatSiteFundedCodexTurn as heartbeatSiteFundedCodexTurnLedger,
-  recordSiteFundedCodexUsageEvent as recordSiteFundedCodexUsageEventLedger,
-  reserveSiteFundedCodexTurn as reserveSiteFundedCodexTurnLedger,
+  finishSiteFundedCodexTurn as finishSiteFundedCodexTurnLocal,
+  getSiteFundedCodexPoolStatus as getSiteFundedCodexPoolStatusLocal,
+  heartbeatSiteFundedCodexTurn as heartbeatSiteFundedCodexTurnLocal,
+  recordSiteFundedCodexUsageEvent as recordSiteFundedCodexUsageEventLocal,
+  reserveSiteFundedCodexTurn as reserveSiteFundedCodexTurnLocal,
   type ReserveSiteFundedCodexTurnOptions,
-} from "@cocalc/server/ai/site-funded-codex-ledger";
+} from "@cocalc/server/ai/site-funded-codex-reservations";
 import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
 import type {
   SiteFundedCodexAdmission,
   SiteFundedCodexPoolStatus,
   SiteFundedCodexReservation,
   SiteFundedCodexUsageEvent,
+  SiteFundedCodexUsageRecordResult,
 } from "@cocalc/util/ai/site-funded-codex";
 import { moneyToDbString, type MoneyValue } from "@cocalc/util/money";
 import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
@@ -3259,7 +3260,7 @@ export async function reserveSiteFundedCodexTurn({
   const remoteSeed = remoteSiteFundedCodexSeed();
   return remoteSeed
     ? await remoteSeed.reserveSiteFundedCodexTurn(reservationOptions)
-    : await reserveSiteFundedCodexTurnLedger(reservationOptions);
+    : await reserveSiteFundedCodexTurnLocal(reservationOptions);
 }
 
 export async function heartbeatSiteFundedCodexTurn({
@@ -3282,7 +3283,7 @@ export async function heartbeatSiteFundedCodexTurn({
     hostId: host_id,
   });
   return {
-    active: await heartbeatSiteFundedCodexTurnLedger({
+    active: await heartbeatSiteFundedCodexTurnLocal({
       reservationId: reservation_id,
     }),
   };
@@ -3297,17 +3298,41 @@ export async function recordSiteFundedCodexUsageEvent({
 }): Promise<{ costMicrousd: number; inserted: boolean }> {
   if (!host_id) throw new Error("host_id must be specified");
   const remoteSeed = remoteSiteFundedCodexSeed();
+  let result: SiteFundedCodexUsageRecordResult;
   if (remoteSeed) {
-    return await remoteSeed.recordSiteFundedCodexUsage({
+    result = await remoteSeed.recordSiteFundedCodexUsage({
       hostId: host_id,
       event,
     });
+  } else {
+    await assertSiteFundedCodexReservationHost({
+      reservationId: event.reservationId,
+      hostId: host_id,
+    });
+    result = await recordSiteFundedCodexUsageEventLocal(event);
   }
-  await assertSiteFundedCodexReservationHost({
-    reservationId: event.reservationId,
-    hostId: host_id,
-  });
-  return await recordSiteFundedCodexUsageEventLedger(event);
+  const usage = {
+    account_id: result.accountId,
+    funded_turn_id: result.fundedTurnId,
+    project_id: result.projectId,
+    event,
+    cost_microusd: result.costMicrousd,
+    price_version: result.priceVersion,
+    long_context: result.longContext,
+  };
+  const homeBayId = `${result.homeBayId ?? ""}`.trim() || getConfiguredBayId();
+  if (homeBayId === getConfiguredBayId()) {
+    await recordSiteFundedCodexAccountUsage(usage);
+  } else {
+    await createInterBayAccountLocalClient({
+      client: getInterBayFabricClient(),
+      dest_bay: homeBayId,
+    }).recordSiteFundedCodexUsage(usage);
+  }
+  return {
+    costMicrousd: result.costMicrousd,
+    inserted: result.inserted,
+  };
 }
 
 export async function finishSiteFundedCodexTurn({
@@ -3336,39 +3361,11 @@ export async function finishSiteFundedCodexTurn({
       reservationId: reservation_id,
       hostId: host_id,
     });
-    reservation = await finishSiteFundedCodexTurnLedger({
+    reservation = await finishSiteFundedCodexTurnLocal({
       reservationId: reservation_id,
       status,
       outcome,
     });
-  }
-  if (reservation.committedMicrousd > 0) {
-    const usage = {
-      account_id: reservation.accountId,
-      funded_turn_id: reservation.fundedTurnId,
-      project_id: reservation.projectId,
-      cost_microusd: reservation.committedMicrousd,
-      occurred_at: reservation.completedAt,
-    };
-    const homeBayId =
-      `${reservation.homeBayId ?? ""}`.trim() ||
-      `${
-        (
-          await resolveAccountHomeBay({
-            account_id: reservation.accountId,
-            user_account_id: reservation.accountId,
-          })
-        ).home_bay_id ?? ""
-      }`.trim() ||
-      getConfiguredBayId();
-    if (homeBayId === getConfiguredBayId()) {
-      await recordSiteFundedCodexAccountUsage(usage);
-    } else {
-      await createInterBayAccountLocalClient({
-        client: getInterBayFabricClient(),
-        dest_bay: homeBayId,
-      }).recordSiteFundedCodexUsage(usage);
-    }
   }
   return reservation;
 }
@@ -3383,7 +3380,7 @@ export async function getSiteFundedCodexPoolStatus({
   if (remoteSeed) {
     return (await remoteSeed.getSiteFundedCodexStatus({})).pools;
   }
-  return await getSiteFundedCodexPoolStatusLedger();
+  return await getSiteFundedCodexPoolStatusLocal();
 }
 
 type ListHostsOptions = {
