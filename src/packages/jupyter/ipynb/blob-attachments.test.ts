@@ -270,6 +270,29 @@ describe("portable Jupyter blob attachments", () => {
     expect(saveBlob).not.toHaveBeenCalled();
   });
 
+  it("preserves a missing native attachment reference", async () => {
+    const original = notebook(
+      '<img src="attachment:missing.png" alt="missing">',
+    );
+    const saveBlob = jest.fn();
+
+    const live = await externalizeJupyterAttachments({
+      ipynb: original,
+      loadBlob: jest.fn(),
+      saveBlob,
+    });
+
+    expect(live).toEqual(original);
+    expect(saveBlob).not.toHaveBeenCalled();
+
+    const saved = await embedCoCalcBlobImages({
+      ipynb: live,
+      previousIpynb: original,
+      loadBlob: jest.fn(),
+    });
+    expect(saved).toEqual(original);
+  });
+
   it("rejects excessive attachment references before blob I/O", async () => {
     const source = Array.from(
       { length: MAX_JUPYTER_ATTACHMENT_COUNT + 1 },

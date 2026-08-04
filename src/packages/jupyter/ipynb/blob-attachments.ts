@@ -650,7 +650,10 @@ export async function externalizeJupyterAttachments({
     if (cell?.cell_type !== "markdown") continue;
     const originalMetadata = metadataForCell(cell);
     const newEntries: Record<string, BlobAttachmentEntryMetadata> = {};
-    const resolved = new Map<string, Promise<BlobAttachmentEntryMetadata>>();
+    const resolved = new Map<
+      string,
+      Promise<BlobAttachmentEntryMetadata | undefined>
+    >();
     const consumedAttachments = new Set<string>();
     for (const match of sourceText(cell.source).matchAll(GLOBAL_BLOB_URL)) {
       const parsed = parseBlobUrl(match[0]);
@@ -663,7 +666,7 @@ export async function externalizeJupyterAttachments({
 
     const resolveAttachment = async (
       name: string,
-    ): Promise<BlobAttachmentEntryMetadata> => {
+    ): Promise<BlobAttachmentEntryMetadata | undefined> => {
       let promise = resolved.get(name);
       if (promise != null) return await promise;
       attachmentCount += 1;
@@ -672,12 +675,15 @@ export async function externalizeJupyterAttachments({
           `notebook has too many image attachments (max ${MAX_NOTEBOOK_ATTACHMENT_COUNT})`,
         );
       }
-      consumedAttachments.add(name);
       promise = (async () => {
         const bundle = cell.attachments?.[name];
         if (bundle == null || typeof bundle !== "object") {
-          throw Error(`Jupyter attachment '${name}' is referenced but missing`);
+          // Broken attachment references are valid notebook content in practice.
+          // Preserve the reference so one missing image cannot block the entire
+          // notebook from loading or saving.
+          return;
         }
+        consumedAttachments.add(name);
         const variants: Partial<Record<SafeRasterMime, BlobVariantMetadata>> =
           {};
         for (const [declaredMime, encoded] of Object.entries(bundle)) {
@@ -743,6 +749,7 @@ export async function externalizeJupyterAttachments({
         if (encodedName == null) return original;
         const name = parseAttachmentName(encodedName);
         const entry = await resolveAttachment(name);
+        if (entry == null) return original;
         newEntries[name] = entry;
         const primary = entry.variants[entry.primary_mime];
         if (primary == null) {

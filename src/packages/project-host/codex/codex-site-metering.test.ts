@@ -46,7 +46,7 @@ jest.mock("@cocalc/conat/hub/call-hub", () => ({
   __esModule: true,
   default: (...args: unknown[]) => mockCallHub(...args),
 }));
-jest.mock("../master-status", () => ({
+jest.mock("../master-conat-client", () => ({
   getMasterConatClient: () => ({}),
 }));
 jest.mock("../sqlite/hosts", () => ({

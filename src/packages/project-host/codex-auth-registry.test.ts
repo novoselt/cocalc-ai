@@ -27,7 +27,7 @@ jest.mock("@cocalc/conat/hub/call-hub", () => ({
   default: (...args) => callHubMock(...args),
 }));
 
-jest.mock("./master-status", () => ({
+jest.mock("./master-conat-client", () => ({
   getMasterConatClient: () => getMasterConatClientMock(),
 }));
 

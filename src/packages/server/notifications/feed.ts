@@ -124,9 +124,10 @@ export async function publishProjectedNotificationFeedUpdates(opts: {
   }
   const notification_ids = Array.from(
     new Set(
-      (Array.isArray(opts.notification_ids) ? opts.notification_ids : []).filter(
-        (notification_id) => `${notification_id ?? ""}`.trim() !== "",
-      ),
+      (Array.isArray(opts.notification_ids)
+        ? opts.notification_ids
+        : []
+      ).filter((notification_id) => `${notification_id ?? ""}`.trim() !== ""),
     ),
   );
   const [rows, counts] = await Promise.all([
@@ -172,6 +173,27 @@ export async function publishProjectedNotificationFeedUpdatesBestEffort(opts: {
       account_id: opts.account_id,
       reason: opts.reason,
       notification_ids: opts.notification_ids,
+      err: `${err}`,
+    });
+  }
+}
+
+export async function publishProjectedNotificationFeedCountsBestEffort(opts: {
+  account_id: string;
+  reason: NotificationReason;
+}): Promise<void> {
+  try {
+    await publishNotificationFeedCounts({
+      account_id: opts.account_id,
+      reason: opts.reason,
+      counts: await getProjectedNotificationCounts({
+        account_id: opts.account_id,
+      }),
+    });
+  } catch (err) {
+    logger.warn("failed to publish notification feed counts", {
+      account_id: opts.account_id,
+      reason: opts.reason,
       err: `${err}`,
     });
   }

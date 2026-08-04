@@ -22,7 +22,7 @@ import {
   parseAcpSubject,
   type AcpOperation,
 } from "./subjects";
-import pLimit from "p-limit";
+import { ConcurrencyLimiter } from "./concurrency-limiter";
 
 export {
   acpAutomationSubject,
@@ -60,7 +60,7 @@ const MAX_PENDING = nonNegativeIntegerFromEnv(
   "COCALC_ACP_MAX_PENDING",
   MAX_CONCURRENCY * 4,
 );
-const limiter = pLimit(MAX_CONCURRENCY);
+const limiter = new ConcurrencyLimiter(MAX_CONCURRENCY);
 const inFlightChatTurnKeys = new Map<
   string,
   { startedAt: number; subject: string }
@@ -97,7 +97,7 @@ async function runLimited(
     await rejectOverloaded(label, mesg);
     return;
   }
-  void limiter(async () => {
+  void limiter.run(async () => {
     try {
       await fn();
     } catch (err) {
