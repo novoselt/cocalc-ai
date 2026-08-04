@@ -2123,6 +2123,21 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'BEES_CGROUP_IO_WRITE_BPS="$((16 * 1024 * 1024))"', script
             )
             self.assertIn(
+                '[ "$policy_profile" = "gcp-pd-balanced-btrfs-headroom" ]',
+                script,
+            )
+            self.assertIn(
+                'rows="$(project_io_limit_rows pool standard)"', script
+            )
+            self.assertIn(
+                'apply_io_max "$pool" "pool" "$mode" standard "$rows"',
+                script,
+            )
+            self.assertIn(
+                'verify_io_max "$pool" "pool" standard "$rows"',
+                script,
+            )
+            self.assertIn(
                 'BEES_CGROUP_MEMORY_HIGH_MAX="$((4 * 1024 * 1024 * 1024))"',
                 script,
             )

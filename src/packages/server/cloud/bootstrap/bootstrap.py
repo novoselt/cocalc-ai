@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260804-v38"
+HELPER_SCHEMA_VERSION = "20260804-v39"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -4375,6 +4375,7 @@ bees_memory_limits() {
 
 configure_bees_cgroup() {
   local pool="$1" mountpoint="$2" workers memory_high memory_max
+  local fields mode policy_profile rows
   local device major_hex minor_hex major minor
   local -a io_limits=()
   enable_cgroup_controllers /sys/fs/cgroup
@@ -4394,6 +4395,21 @@ configure_bees_cgroup() {
     printf 'default %s\n' "$BEES_CGROUP_IO_WEIGHT" > "${pool}/io.weight"
   fi
   if [ -w "${pool}/io.max" ]; then
+    fields="$(project_io_policy_fields standard)" ||
+      deny "project-io-policy-invalid" "bees"
+    IFS=$'\t' read -r mode _mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops _rbps _wbps _riops _wiops _weight _io_class _policy_version policy_profile _capacity_source _capacity_mode <<< "$fields"
+    if [ "$mode" = "enforce" ] &&
+      [ "$policy_profile" = "gcp-pd-balanced-btrfs-headroom" ]; then
+      # BEES performs Btrfs metadata transactions. A low io.max can turn it
+      # into a filesystem-wide lock holder even though it is nice/idle and has
+      # I/O weight 1. Use the same finite device-headroom envelope as the
+      # project pool; CPU, weight, and idle scheduling still keep it subordinate.
+      rows="$(project_io_limit_rows pool standard)" ||
+        deny "project-io-device-unavailable" "bees"
+      apply_io_max "$pool" "pool" "$mode" standard "$rows"
+      verify_io_max "$pool" "pool" standard "$rows"
+      return 0
+    fi
     while IFS= read -r device; do
       [ -b "$device" ] || continue
       read -r major_hex minor_hex < <(stat -Lc '%t %T' "$device")
