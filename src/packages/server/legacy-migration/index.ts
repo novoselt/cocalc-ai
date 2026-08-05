@@ -531,7 +531,9 @@ function projectDescription(row: LegacyProjectRow): string {
 }
 
 function legacyBoolean(value: unknown): boolean {
-  return value === true || `${value}`.toLowerCase() === "true";
+  return (
+    value === true || ["true", "t", "1"].includes(`${value}`.toLowerCase())
+  );
 }
 
 type LegacyPublicPathTarget = {
@@ -645,10 +647,17 @@ export async function resolveLegacyPublicPathTarget({
 
 function legacyPublicPathVisibility(
   row: Record<string, any>,
-): "disabled" | "listed" | "unlisted" {
-  if (legacyBoolean(row.disabled)) return "disabled";
+): "listed" | "unlisted" {
   if (legacyBoolean(row.unlisted)) return "unlisted";
   return "listed";
+}
+
+export function shouldReplayLegacyPublicPath(
+  row: Record<string, any>,
+): boolean {
+  return (
+    !legacyBoolean(row.disabled) && !isUnsupportedLegacyProxyPublicPath(row)
+  );
 }
 
 function validLegacyPublicPathSiteLicenseId(
@@ -732,7 +741,7 @@ export async function replayLegacyPublicPathsForProject({
   for (const { legacy_id, payload } of rows) {
     const legacyPublicPathId = clean(payload.id) ?? legacy_id;
     try {
-      if (isUnsupportedLegacyProxyPublicPath(payload)) {
+      if (!shouldReplayLegacyPublicPath(payload)) {
         skipped += 1;
         continue;
       }

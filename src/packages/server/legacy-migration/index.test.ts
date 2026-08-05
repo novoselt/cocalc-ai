@@ -10,6 +10,7 @@ import {
   legacyPublicShareUrl,
   normalizeLegacyProjectImportIds,
   resolveLegacyPublicPathTarget,
+  shouldReplayLegacyPublicPath,
 } from ".";
 import {
   isUnsupportedLegacyProxyPublicPath,
@@ -67,6 +68,12 @@ describe("legacy migration manifest helpers", () => {
 });
 
 describe("legacy public path slug helpers", () => {
+  it("drops historically disabled public paths from replay", () => {
+    expect(shouldReplayLegacyPublicPath({ disabled: true })).toBe(false);
+    expect(shouldReplayLegacyPublicPath({ disabled: "t" })).toBe(false);
+    expect(shouldReplayLegacyPublicPath({ disabled: false })).toBe(true);
+  });
+
   it("rejects unsupported legacy GitHub and gist proxy URLs", () => {
     expect(
       isUnsupportedLegacyProxyPublicPath({ url: "github/search/example" }),
