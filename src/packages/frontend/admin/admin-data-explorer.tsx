@@ -132,12 +132,12 @@ function ValidationSummary({
   return (
     <Space vertical style={{ width: "100%" }}>
       {validation.ok ? (
-        <Alert type="success" showIcon message="SQL passed guardrail checks." />
+        <Alert type="success" showIcon title="SQL passed guardrail checks." />
       ) : (
         <Alert
           type="error"
           showIcon
-          message="SQL did not pass guardrail checks."
+          title="SQL did not pass guardrail checks."
           description={validation.errors.join("\n")}
         />
       )}
@@ -145,7 +145,7 @@ function ValidationSummary({
         <Alert
           type="warning"
           showIcon
-          message="Warnings"
+          title="Warnings"
           description={validation.warnings.join("\n")}
         />
       ) : null}
@@ -683,7 +683,7 @@ export function AdminDataExplorer() {
       <Alert
         type="info"
         showIcon
-        message="Admin Data Explorer is fresh-auth protected and audited."
+        title="Admin Data Explorer is fresh-auth protected and audited."
         description="This first version supports shared admin SQL views through the same restricted SQL RPCs used by cocalc-cli. SQL must be read-only, single-statement, relation allowlisted, and bounded by server-side limits."
       />
       {error ? (

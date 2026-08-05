@@ -144,15 +144,13 @@ export function AdminRole({ account_id, name, is_admin }: Props) {
           style={{ margin: "0" }}
         />
       ) : undefined}
-      {message ? (
-        <Alert type="success" showIcon message={message} />
-      ) : undefined}
+      {message ? <Alert type="success" showIcon title={message} /> : undefined}
       {isAdmin ? (
         <>
           <Alert
             type="info"
             showIcon
-            message="This account is a site admin."
+            title="This account is a site admin."
             description="Admin access is cluster-wide and includes sensitive account, billing, project, and infrastructure controls."
           />
           <Input.TextArea
@@ -177,7 +175,7 @@ export function AdminRole({ account_id, name, is_admin }: Props) {
           <Alert
             type="warning"
             showIcon
-            message="Grant site admin role"
+            title="Grant site admin role"
             description="This is a high-risk, audited action. It requires recent 2FA fresh auth and adds the admin group without removing any existing groups."
           />
           <Input.TextArea

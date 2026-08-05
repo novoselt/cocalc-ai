@@ -301,7 +301,7 @@ export const Environment: React.FC<Props> = ({
               banner
               showIcon
               type="warning"
-              message="You must restart this project for changes to take effect."
+              title="You must restart this project for changes to take effect."
             />
           ) : undefined}
         </Space>

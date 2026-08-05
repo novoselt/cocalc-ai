@@ -184,7 +184,7 @@ export function LegacyMigrationCtaBanner() {
         dismiss(account_id, key);
         setDismissedKey(key);
       }}
-      message={
+      title={
         <div
           style={{
             alignItems: "center",

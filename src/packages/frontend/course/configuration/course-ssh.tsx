@@ -188,7 +188,7 @@ export function CourseSshAccess({
           <Alert
             type="warning"
             showIcon
-            message="This grants full shell access"
+            title="This grants full shell access"
             description="Every collaborator who can use this course project's files can use its deploy key. Only enable this when all course project collaborators should have access to every managed project."
           />
           {enabled ? (
@@ -204,12 +204,12 @@ export function CourseSshAccess({
             <Alert
               type="warning"
               showIcon
-              message="Managed by another course collaborator"
+              title="Managed by another course collaborator"
               description="The account that enabled this deploy key must synchronize or revoke it, since project SSH keys are owned by the account that installs them."
             />
           ) : null}
-          {progress ? <Alert type="info" showIcon message={progress} /> : null}
-          {error ? <Alert type="error" showIcon message={error} /> : null}
+          {progress ? <Alert type="info" showIcon title={progress} /> : null}
+          {error ? <Alert type="error" showIcon title={error} /> : null}
         </Space>
       </Card>
       <FreshAuthModal {...freshAuthModalProps} />

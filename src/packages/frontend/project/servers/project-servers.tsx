@@ -70,7 +70,7 @@ export function ProjectServers() {
         <Alert
           showIcon
           type="info"
-          message="Viewer access is read-only"
+          title="Viewer access is read-only"
           description="Viewers cannot start or open project app servers. Ask an owner or collaborator to upgrade your role if you need runtime access."
         />
       </div>

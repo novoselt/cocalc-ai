@@ -299,23 +299,23 @@ export function VerifyEmailRequiredPanel({
           <Alert
             showIcon
             type="warning"
-            message="No email address is set for this account."
+            title="No email address is set for this account."
           />
         )}
         {sent ? (
           <Alert
             showIcon
             type="success"
-            message={`Verification email sent${email_address ? ` to ${email_address}` : ""}.`}
+            title={`Verification email sent${email_address ? ` to ${email_address}` : ""}.`}
             description="Check your inbox and spam folder, then click the verification link."
           />
         ) : null}
-        {error ? <Alert showIcon type="error" message={error} /> : null}
+        {error ? <Alert showIcon type="error" title={error} /> : null}
         {!emailSendingEnabled && email_address ? (
           <Alert
             showIcon
             type="warning"
-            message="Email delivery is not configured on this site."
+            title="Email delivery is not configured on this site."
             description="Open account settings to review your email address, or contact the site administrator to verify it."
           />
         ) : null}

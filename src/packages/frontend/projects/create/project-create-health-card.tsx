@@ -354,7 +354,7 @@ export function ProjectCreateHealthCard({ open }: { open: boolean }) {
             Refresh
           </Button>
         </div>
-        {message && <Alert type="info" showIcon message={message} />}
+        {message && <Alert type="info" showIcon title={message} />}
         {runtimeFull && visibleRuntimeProjects.length > 0 && (
           <Card size="small" styles={{ body: { padding: "8px 10px" } }}>
             <Space
@@ -409,7 +409,7 @@ export function ProjectCreateHealthCard({ open }: { open: boolean }) {
           <Alert
             type="warning"
             showIcon
-            message="Unable to stop project"
+            title="Unable to stop project"
             description={runtimeActionError}
           />
         )}
@@ -417,7 +417,7 @@ export function ProjectCreateHealthCard({ open }: { open: boolean }) {
           <Alert
             type="warning"
             showIcon
-            message="Unable to load account capacity"
+            title="Unable to load account capacity"
             description={error}
           />
         )}

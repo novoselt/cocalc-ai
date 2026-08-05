@@ -2262,7 +2262,7 @@ export default function RootFilesystemImage({
                             <Alert
                               type="info"
                               showIcon
-                              message="Preflight scan is only for publishing a live project image."
+                              title="Preflight scan is only for publishing a live project image."
                               description="Metadata-only catalog updates do not snapshot the current project filesystem, so there is no live image to scan in this dialog."
                             />
                           ),
@@ -2392,7 +2392,7 @@ export default function RootFilesystemImage({
                             <Alert
                               showIcon
                               type="error"
-                              message={`Invalid slug: ${publishSlugError}`}
+                              title={`Invalid slug: ${publishSlugError}`}
                               style={{ marginTop: 8 }}
                             />
                           ) : normalizedPublishSlug &&
@@ -2503,7 +2503,7 @@ export default function RootFilesystemImage({
                             <Alert
                               type="info"
                               showIcon
-                              message="Save or publish this catalog entry to create a public landing URL."
+                              title="Save or publish this catalog entry to create a public landing URL."
                             />
                           )}
                         </div>
@@ -2879,7 +2879,7 @@ export default function RootFilesystemImage({
             <Alert
               type="info"
               showIcon
-              message="Choose which parts of this image config to import."
+              title="Choose which parts of this image config to import."
               description="Import changes this draft only. Save or publish to update the image catalog metadata."
             />
             <Checkbox

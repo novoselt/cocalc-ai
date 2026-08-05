@@ -900,7 +900,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         showIcon
         type="warning"
         banner
-        message={
+        title={
           hostRecovery.active
             ? hostRecovery.title
             : "Project host is not available"
@@ -970,7 +970,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         closable
         type="info"
         banner
-        message="Reconnecting project tools..."
+        title="Reconnecting project tools..."
         description={
           freeTierPressure ? (
             <>
@@ -1231,7 +1231,7 @@ function ViewerReadOnlyTag({ project_id }: { project_id: string }) {
             <Alert
               showIcon
               type="success"
-              message="Request sent"
+              title="Request sent"
               description="A project owner or authorized collaborator can approve collaborator access."
             />
           )}
@@ -1239,7 +1239,7 @@ function ViewerReadOnlyTag({ project_id }: { project_id: string }) {
             <Alert
               showIcon
               type="error"
-              message="Unable to request collaborator access"
+              title="Unable to request collaborator access"
               description={error}
             />
           )}
@@ -1512,7 +1512,7 @@ function ProjectAccessLandingPage({
             <Alert
               showIcon
               type="success"
-              message={`You were invited as a ${info.pending_invite.invite_role}.`}
+              title={`You were invited as a ${info.pending_invite.invite_role}.`}
               description={
                 <Space wrap style={{ marginTop: 8 }}>
                   <Button type="primary" loading={busy} onClick={acceptInvite}>
@@ -1528,14 +1528,14 @@ function ProjectAccessLandingPage({
             <Alert
               showIcon
               type="info"
-              message="Access request pending"
+              title="Access request pending"
               description={`You requested ${info.pending_request.requested_role} access. A project owner or authorized collaborator can approve it.`}
             />
           ) : info.blocked ? (
             <Alert
               showIcon
               type="warning"
-              message="Access requests are not available"
+              title="Access requests are not available"
               description="This project is not accepting access requests from your account."
             />
           ) : (
@@ -1572,7 +1572,7 @@ function ProjectAccessLandingPage({
             <Alert
               showIcon
               type="error"
-              message="Unable to update project access"
+              title="Unable to update project access"
               description={actionError ?? error}
             />
           )}
@@ -1604,7 +1604,7 @@ function ProjectAccessLandingError({
       <Alert
         showIcon
         type="error"
-        message="Unable to open project"
+        title="Unable to open project"
         description={error}
         action={
           <Button
@@ -1754,7 +1754,7 @@ function HardDeleteProjectStatus({
           <Alert
             showIcon
             type={failed ? "error" : "warning"}
-            message={
+            title={
               failed
                 ? "Deletion failed after it had already been accepted."
                 : "Deletion has already been accepted and cannot be undone."

@@ -138,7 +138,7 @@ export function ArchiveProjectModal({
           <Alert
             type="error"
             showIcon
-            message={
+            title={
               single
                 ? `Unable to archive ${projectLabelLower}`
                 : `Unable to archive selected ${projectsLabelLower}`
@@ -155,7 +155,7 @@ export function ArchiveProjectModal({
           <Alert
             type="warning"
             showIcon
-            message="Public shares are not available when a project is archived."
+            title="Public shares are not available when a project is archived."
             description={
               single
                 ? "This project has public shares. They will not be accessible again until the project is restored."
@@ -167,7 +167,7 @@ export function ArchiveProjectModal({
           <Alert
             type="warning"
             showIcon
-            message={
+            title={
               single
                 ? `Archive is available because you are an administrator`
                 : `${adminOnlyCount} selected ${projectsLabelLower} can be archived because you are an administrator`
@@ -227,7 +227,7 @@ export function ArchiveProjectModal({
           <Alert
             type="info"
             showIcon
-            message={`${skippedCount} selected ${projectsLabelLower} will be skipped`}
+            title={`${skippedCount} selected ${projectsLabelLower} will be skipped`}
             description="Skipped projects are already archived, busy, or you do not have permission to archive them."
           />
         ) : undefined}

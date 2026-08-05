@@ -678,7 +678,7 @@ export function LegacyMigrationRestoreBanner({
         <Alert
           showIcon
           type={applied ? "success" : "warning"}
-          message={
+          title={
             applied
               ? "Final cocalc.com archive has been safely copied"
               : "This restored project may be missing final cocalc.com changes"
@@ -843,7 +843,7 @@ export function LegacyMigrationRestoreBanner({
       <Alert
         showIcon
         type="success"
-        message="Legacy project files restored"
+        title="Legacy project files restored"
         description={
           <Space vertical size={10}>
             <Text>
@@ -931,7 +931,7 @@ export function LegacyMigrationRestoreBanner({
     <Alert
       showIcon
       type={failed ? "error" : "info"}
-      message={
+      title={
         failed
           ? "Legacy project file restore failed"
           : "Restoring legacy project files"

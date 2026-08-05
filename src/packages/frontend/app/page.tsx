@@ -427,7 +427,7 @@ export const Page: React.FC = () => {
       {cookie_warning && <CookieWarning />}
       {local_storage_warning && <LocalStorageWarning />}
       {configurationLoadError && (
-        <Alert banner showIcon type="error" message={configurationLoadError} />
+        <Alert banner showIcon type="error" title={configurationLoadError} />
       )}
       {show_i18n && <I18NBanner />}
       <ImpersonationBanner />

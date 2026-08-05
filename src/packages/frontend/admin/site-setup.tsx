@@ -323,7 +323,7 @@ function StarAboutCard({ info }: { info?: StarServerInfo }) {
         <Alert
           type="info"
           showIcon
-          message="No CoCalc Star release metadata found on this server."
+          title="No CoCalc Star release metadata found on this server."
         />
       ) : (
         <Space vertical size="middle" style={{ width: "100%" }}>
@@ -410,7 +410,7 @@ export function SiteSetupBanner({ onOpenSetup }: { onOpenSetup: () => void }) {
       type="warning"
       showIcon
       style={{ marginBottom: 18 }}
-      message={
+      title={
         isStar
           ? "This CoCalc Star appliance has setup checks remaining."
           : "This Launchpad/Rocket site is not fully set up."

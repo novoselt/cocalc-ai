@@ -1467,7 +1467,7 @@ export function WorkspacesPanel({ project_id, layout = "page" }: Props) {
           <Alert
             type="warning"
             showIcon
-            message="Failed to load workspaces"
+            title="Failed to load workspaces"
             description={workspaces.error}
             action={
               <Button size="small" onClick={workspaces.refresh}>

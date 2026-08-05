@@ -258,7 +258,7 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
         <Alert
           showIcon
           type="warning"
-          message="Students can read and extract every shared secret. Use dedicated, limited provider keys."
+          title="Students can read and extract every shared secret. Use dedicated, limited provider keys."
           description="Nothing is shared when this course opens or during ordinary course reconfiguration. Source secrets, recipients, and each synchronization require explicit actions."
         />
         <Button
@@ -268,12 +268,12 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
         >
           Manage Project Secrets
         </Button>
-        {error ? <Alert showIcon type="error" message={error} /> : undefined}
+        {error ? <Alert showIcon type="error" title={error} /> : undefined}
         {revoked ? (
           <Alert
             showIcon
             type="warning"
-            message="This sharing policy is revoked."
+            title="This sharing policy is revoked."
             description="No further distribution is allowed. Managed copies can still be removed with the cleanup action below."
           />
         ) : undefined}
@@ -449,7 +449,7 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
                     ? "warning"
                     : "info"
             }
-            message={`Secret ${lastRun.mode}: ${lastRun.status}`}
+            title={`Secret ${lastRun.mode}: ${lastRun.status}`}
             description={`Copied/removed ${lastRun.copied_count}; unchanged ${lastRun.unchanged_count}; conflicts ${lastRun.conflict_count}; skipped ${lastRun.skipped_count}; failed ${lastRun.failed_count}.`}
           />
         ) : undefined}

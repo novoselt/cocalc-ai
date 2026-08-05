@@ -108,7 +108,7 @@ export default function ProjectControlStatus({
       banner={banner}
       type="info"
       showIcon={!banner}
-      message={control_status}
+      title={control_status}
       style={style}
     />
   );

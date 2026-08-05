@@ -375,7 +375,7 @@ function VolumeCreateModal({
       <Alert
         showIcon
         type="info"
-        message="Volumes are retained when VMs are deleted. They can grow online but cannot shrink."
+        title="Volumes are retained when VMs are deleted. They can grow online but cannot shrink."
       />
       <Divider />
       <Text strong>Equivalent CLI command</Text>
@@ -449,7 +449,7 @@ function BudgetModal({
       <Alert
         showIcon
         type="warning"
-        message="At the limit, running VMs are deleted. Persistent volumes are retained and continue to count toward future spend."
+        title="At the limit, running VMs are deleted. Persistent volumes are retained and continue to count toward future spend."
       />
       <Paragraph style={{ marginTop: 12 }}>
         CLI: <Text code>cocalc vm budget set --project {project_id}</Text>
@@ -539,7 +539,7 @@ function VmTtlModal({
       <Alert
         showIcon
         type="info"
-        message="The project budget remains the spending limit. Removing this deadline does not disable budget enforcement."
+        title="The project budget remains the spending limit. Removing this deadline does not disable budget enforcement."
       />
       <CopyToClipBoard value={command} {...COPYABLE_PROPS} />
     </Modal>
@@ -1008,7 +1008,7 @@ export function ProjectComputeVms({
           closable
           showIcon
           type="warning"
-          message="Managed compute action failed"
+          title="Managed compute action failed"
           description={error}
           onClose={() => setError(undefined)}
           style={{ marginBottom: 12 }}
@@ -1019,7 +1019,7 @@ export function ProjectComputeVms({
           closable
           showIcon
           type="success"
-          message={notice}
+          title={notice}
           onClose={() => setNotice(undefined)}
           style={{ marginBottom: 12 }}
         />
@@ -1028,7 +1028,7 @@ export function ProjectComputeVms({
         <Alert
           showIcon
           type={Number(budget.remaining_usd) > 0 ? "info" : "warning"}
-          message={`$${Number(budget.spent_usd).toFixed(2)} of $${Number(budget.limit_usd).toFixed(2)} used this ${budget.period}`}
+          title={`$${Number(budget.spent_usd).toFixed(2)} of $${Number(budget.limit_usd).toFixed(2)} used this ${budget.period}`}
           description={`$${Number(budget.remaining_usd).toFixed(2)} remains until ${new Date(budget.period_ends_at).toLocaleString()}. VMs are deleted if the budget is exhausted; persistent volumes are retained.`}
           action={
             <Button size="small" onClick={() => setBudgetModalOpen(true)}>
@@ -1041,7 +1041,7 @@ export function ProjectComputeVms({
         <Alert
           showIcon
           type="info"
-          message="Set a project compute budget before creating resources"
+          title="Set a project compute budget before creating resources"
           description="Choose a recurring weekly or monthly limit. Volumes are retained if VM spending reaches the limit."
           action={
             <Button type="primary" onClick={() => setBudgetModalOpen(true)}>
@@ -1096,7 +1096,7 @@ export function ProjectComputeVms({
       <Alert
         showIcon
         type="info"
-        message={
+        title={
           <span>
             Prefer a terminal?{" "}
             <a href={COCALC_CLI_DOWNLOAD_URL}>Install the CoCalc CLI</a>.

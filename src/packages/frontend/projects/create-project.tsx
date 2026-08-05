@@ -362,7 +362,7 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
         <Alert
           type="warning"
           showIcon
-          message="Advanced OCI / Docker image"
+          title="Advanced OCI / Docker image"
           description={
             <>
               This bypasses the managed catalog. Some raw OCI images will break
@@ -613,11 +613,7 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
             )}
           </Space>
           {runtime.rootfs && summary.warnings.length > 0 && (
-            <Alert
-              type="warning"
-              showIcon
-              message={summary.warnings.join(" ")}
-            />
+            <Alert type="warning" showIcon title={summary.warnings.join(" ")} />
           )}
           <Space orientation="vertical" size="small" style={{ width: "100%" }}>
             <Button
@@ -706,7 +702,7 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
           <Alert
             type="warning"
             showIcon
-            message="Trusted workspace runtime"
+            title="Trusted workspace runtime"
             description="This project runs directly on the Launchpad workspace host without container isolation. Host, image, GPU, backup, snapshot, SSH, and resource-limit controls are unavailable."
           />
         )}

@@ -1215,7 +1215,7 @@ Wait for this host to become available again, then refresh.`}
                 type="info"
                 showIcon
                 style={{ margin: "16px auto", maxWidth: "760px" }}
-                message={`This ${projectLabelLower} is archived.`}
+                title={`This ${projectLabelLower} is archived.`}
                 description={
                   <FormattedMessage
                     id="project.explorer.archived_project.warning"
@@ -1246,7 +1246,7 @@ Wait for this host to become available again, then refresh.`}
                 type="info"
                 showIcon
                 style={{ margin: "16px auto", maxWidth: "760px" }}
-                message={`This ${projectLabelLower} is new.`}
+                title={`This ${projectLabelLower} is new.`}
                 description={
                   <FormattedMessage
                     id="project.explorer.new_project.warning"

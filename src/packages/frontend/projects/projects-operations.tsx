@@ -797,7 +797,7 @@ export function ProjectsOperations({
         <Alert
           type={visible_projects.length === 0 ? "warning" : "info"}
           showIcon
-          message={
+          title={
             <div
               style={{
                 display: "flex",
@@ -976,7 +976,7 @@ function BulkProjectDeleteStatus({
         type="info"
         showIcon
         style={{ marginTop: 8 }}
-        message="Bulk project delete is running"
+        title="Bulk project delete is running"
         description={
           <Space vertical size={4} style={{ width: "100%" }}>
             <Text>
@@ -1023,7 +1023,7 @@ function BulkProjectDeleteStatus({
       closable
       style={{ marginTop: 8 }}
       onClose={() => clearProjectDeleteQueueStatus()}
-      message={
+      title={
         failed > 0 || unprocessed > 0
           ? `Bulk project delete finished with ${failed + unprocessed} issue(s)`
           : "Bulk project delete finished"

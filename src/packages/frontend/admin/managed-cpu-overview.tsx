@@ -493,7 +493,7 @@ function MembershipUsageWindowReset({
         <Alert
           type="warning"
           showIcon
-          message="Global reset for user-visible membership windows"
+          title="Global reset for user-visible membership windows"
           description="This bumps the shared membership usage epoch for all accounts. Historical usage logs remain intact, but affected 5-hour and/or 7-day membership meters immediately start from a fresh window."
         />
         {error ? <ShowError error={error} /> : null}
@@ -660,7 +660,7 @@ export function ManagedCpuAdminOverview() {
       {error ? <ShowError error={error} /> : null}
       {!error && cpuOverview && egressOverview && hasNoCpu && hasNoEgress ? (
         <Alert
-          message={`No managed CPU or egress recorded in the last ${range.label}.`}
+          title={`No managed CPU or egress recorded in the last ${range.label}.`}
           type="info"
           showIcon
         />

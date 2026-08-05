@@ -224,7 +224,7 @@ export function FilesBottom({
             <Alert
               type="warning"
               showIcon
-              message="Terminal cannot start this project"
+              title="Terminal cannot start this project"
               description={formatProjectStartPolicyBlock(
                 terminalManualStartPolicyBlock,
               )}
@@ -234,7 +234,7 @@ export function FilesBottom({
               <Alert
                 type="warning"
                 showIcon
-                message="Terminal cannot start this project automatically"
+                title="Terminal cannot start this project automatically"
                 description={formatProjectStartPolicyBlock(
                   terminalStartPolicyBlock,
                 )}

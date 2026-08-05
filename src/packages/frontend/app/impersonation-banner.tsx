@@ -37,7 +37,7 @@ export function ImpersonationBanner() {
       showIcon
       banner
       style={{ marginBottom: "10px", paddingBlock: "6px" }}
-      message={
+      title={
         <div
           style={{
             display: "flex",

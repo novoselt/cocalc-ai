@@ -261,7 +261,7 @@ function RootfsScanDetails({ scan }: { scan: RootfsScanSummary }) {
               : "info"
         }
         showIcon
-        message="CoCalc interpretation"
+        title="CoCalc interpretation"
         description={
           <Space orientation="vertical" size={4}>
             <span>

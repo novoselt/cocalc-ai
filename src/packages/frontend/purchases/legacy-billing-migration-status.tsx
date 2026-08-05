@@ -192,7 +192,7 @@ export default function LegacyBillingMigrationStatus({
       <Alert
         showIcon
         type="warning"
-        message="Legacy billing migration status is unavailable"
+        title="Legacy billing migration status is unavailable"
         description={error}
       />
     );
@@ -219,7 +219,7 @@ export default function LegacyBillingMigrationStatus({
         <Alert
           showIcon
           type="warning"
-          message="Verify your email address to migrate legacy billing"
+          title="Verify your email address to migrate legacy billing"
           description={
             <span>
               {verificationEmail ? (
@@ -323,7 +323,7 @@ export default function LegacyBillingMigrationStatus({
         <Alert
           showIcon
           type={pending ? "info" : "success"}
-          message={
+          title={
             pending
               ? "Legacy billing data found"
               : "Legacy billing data migrated"
@@ -340,7 +340,7 @@ export default function LegacyBillingMigrationStatus({
           <Alert
             showIcon
             type="success"
-            message={`Free ${grantDays}-day ${continueMembershipLabel} grant`}
+            title={`Free ${grantDays}-day ${continueMembershipLabel} grant`}
             description={
               <Space vertical size="small">
                 <span>
@@ -433,7 +433,7 @@ export default function LegacyBillingMigrationStatus({
                   <Alert
                     showIcon
                     type="warning"
-                    message="Add a payment method before renewal"
+                    title="Add a payment method before renewal"
                     description={
                       <span>
                         Renewal is scheduled after the free month, but CoCalc
@@ -498,7 +498,7 @@ export default function LegacyBillingMigrationStatus({
           <Alert
             showIcon
             type="warning"
-            message="Some active legacy site licenses need manual review"
+            title="Some active legacy site licenses need manual review"
             description={
               <Space vertical size="small">
                 <span>

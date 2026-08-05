@@ -126,7 +126,7 @@ export function HardDeleteProjectModal({
             <Alert
               type="error"
               showIcon
-              message="Unable to delete project"
+              title="Unable to delete project"
               description={error}
             />
           ) : undefined}

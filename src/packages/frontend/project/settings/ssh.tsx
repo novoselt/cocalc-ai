@@ -160,7 +160,7 @@ export function SSHPanel({
               <Alert
                 type="info"
                 showIcon
-                message={
+                title={
                   <>
                     Launchpad SSH is routed through Cloudflare. Install the{" "}
                     <A href={COCALC_CLI_DOWNLOAD_URL}>CoCalc CLI</A> once, then
@@ -225,7 +225,7 @@ export function SSHPanel({
                   <Alert
                     type="warning"
                     showIcon
-                    message="If scp or sftp fails because the project image lacks the SFTP server"
+                    title="If scp or sftp fails because the project image lacks the SFTP server"
                     description={
                       <>
                         Install <Text code>openssh-sftp-server</Text> in the

@@ -184,7 +184,7 @@ export function ProjectSettingsHealthRail({
           <Alert
             type="warning"
             showIcon
-            message="No internet access"
+            title="No internet access"
             description="This project currently has no internet access."
           />
         )}

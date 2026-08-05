@@ -635,7 +635,7 @@ export const HostRuntimeVersionsPanel: React.FC<
           <Alert
             type="error"
             showIcon
-            message="Unable to load configured runtime versions"
+            title="Unable to load configured runtime versions"
             description={configuredError}
           />
         ) : null}
@@ -643,7 +643,7 @@ export const HostRuntimeVersionsPanel: React.FC<
           <Alert
             type="warning"
             showIcon
-            message="Unable to load hub runtime versions"
+            title="Unable to load hub runtime versions"
             description={hubError}
           />
         ) : null}
@@ -651,7 +651,7 @@ export const HostRuntimeVersionsPanel: React.FC<
           <Alert
             type="warning"
             showIcon
-            message="Unable to load cluster runtime defaults"
+            title="Unable to load cluster runtime defaults"
             description={globalDeploymentsError}
           />
         ) : null}

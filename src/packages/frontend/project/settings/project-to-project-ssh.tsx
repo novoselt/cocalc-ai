@@ -95,7 +95,7 @@ export function ProjectToProjectSsh({
           <Alert
             type="warning"
             showIcon
-            message="Source project collaborators receive this access"
+            title="Source project collaborators receive this access"
             description="Anyone who can read files in the source project can use its deploy key. Remove the corresponding project SSH key here to revoke access."
           />
           <SelectProject
@@ -108,12 +108,12 @@ export function ProjectToProjectSsh({
               setCommand("");
             }}
           />
-          {error ? <Alert type="error" showIcon message={error} /> : null}
+          {error ? <Alert type="error" showIcon title={error} /> : null}
           {command ? (
             <Alert
               type="success"
               showIcon
-              message="Project-to-project SSH configured"
+              title="Project-to-project SSH configured"
               description={
                 <>
                   In the source project, run <Text code>{command}</Text>.

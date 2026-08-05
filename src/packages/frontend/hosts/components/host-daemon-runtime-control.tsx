@@ -537,7 +537,7 @@ export function HostDaemonRuntimeControl({
         <Alert
           type="warning"
           showIcon
-          message="Runtime deployment status unavailable"
+          title="Runtime deployment status unavailable"
           description={runtimeDeployments.error}
         />
       )}
@@ -545,7 +545,7 @@ export function HostDaemonRuntimeControl({
         <Alert
           type="warning"
           showIcon
-          message="Host observation warning"
+          title="Host observation warning"
           description={deploymentStatus.observation_error}
         />
       )}
@@ -553,7 +553,7 @@ export function HostDaemonRuntimeControl({
         <Alert
           type="warning"
           showIcon
-          message="Configured source lookup failed"
+          title="Configured source lookup failed"
           description={softwareVersions.configuredError}
         />
       )}
@@ -561,7 +561,7 @@ export function HostDaemonRuntimeControl({
         <Alert
           type="warning"
           showIcon
-          message="Hub source lookup failed"
+          title="Hub source lookup failed"
           description={softwareVersions.hubError}
         />
       )}
@@ -569,7 +569,7 @@ export function HostDaemonRuntimeControl({
         <Alert
           type="warning"
           showIcon
-          message="Project-host is pinned away from the cluster default"
+          title="Project-host is pinned away from the cluster default"
           description={
             <span>
               This host currently overrides the cluster default and stays on{" "}
@@ -597,7 +597,7 @@ export function HostDaemonRuntimeControl({
             projectHostObservation.rollout.phase,
           )}
           showIcon
-          message={`Project-host rollout: ${formatProjectHostRolloutPhase(
+          title={`Project-host rollout: ${formatProjectHostRolloutPhase(
             projectHostObservation.rollout.phase,
           )}`}
           description={
@@ -672,7 +672,7 @@ export function HostDaemonRuntimeControl({
         <Alert
           type="info"
           showIcon
-          message="Project-host rollout in progress"
+          title="Project-host rollout in progress"
           description={
             <span>
               Target{" "}
@@ -1044,7 +1044,7 @@ export function HostDaemonRuntimeControl({
                       <Alert
                         type="info"
                         showIcon
-                        message="Externally managed"
+                        title="Externally managed"
                         description="This component is not running as a local managed daemon on this host."
                       />
                     )}
@@ -1052,7 +1052,7 @@ export function HostDaemonRuntimeControl({
                       <Alert
                         type="warning"
                         showIcon
-                        message="Desired daemon version is not installed"
+                        title="Desired daemon version is not installed"
                         description="Setting a desired version queues reconcile work. Refresh to watch the rollout state."
                       />
                     )}

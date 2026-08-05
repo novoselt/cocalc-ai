@@ -123,7 +123,7 @@ export function HideDeleteBox(props: Readonly<Props>) {
         <Alert
           type="warning"
           showIcon
-          message={introMessage}
+          title={introMessage}
           description={introDescription}
         />
         <DangerActionRow
@@ -296,7 +296,7 @@ export function ProjectLocationBox(props: Readonly<Props>) {
                   <Alert
                     type="warning"
                     showIcon
-                    message="Public shares are not available when a project is archived."
+                    title="Public shares are not available when a project is archived."
                   />
                 ) : null}
               </Space>

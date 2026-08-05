@@ -1247,7 +1247,7 @@ export function AccountEntitlementOverridePanel({
               <Alert
                 type="success"
                 showIcon
-                message={actionSuccess}
+                title={actionSuccess}
                 closable
                 onClose={() => setActionSuccess("")}
               />

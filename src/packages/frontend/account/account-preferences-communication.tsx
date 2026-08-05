@@ -131,7 +131,7 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
           <Alert
             type="warning"
             showIcon
-            message="Verify your email address to receive notification email."
+            title="Verify your email address to receive notification email."
           />
         )}
         <div style={{ maxWidth: "100%", width: "fit-content" }}>

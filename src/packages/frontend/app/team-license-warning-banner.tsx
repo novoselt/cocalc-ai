@@ -56,7 +56,7 @@ export function TeamLicenseWarningBanner() {
       showIcon
       banner
       style={{ marginBottom: "10px", paddingBlock: "6px" }}
-      message={warning.message}
+      title={warning.message}
     />
   );
 }

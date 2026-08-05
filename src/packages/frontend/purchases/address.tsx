@@ -81,7 +81,7 @@ export function StripeAddressElement({
         showIcon
         style={style}
         type="warning"
-        message="Card billing is not configured on this site."
+        title="Card billing is not configured on this site."
         description="Billing details and payment methods can only be managed after an administrator configures Stripe billing."
       />
     );

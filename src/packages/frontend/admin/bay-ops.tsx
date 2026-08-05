@@ -136,7 +136,7 @@ function BackupStoredError({
     <Alert
       type="warning"
       showIcon
-      message={title}
+      title={title}
       description={
         <Space vertical size={0}>
           <Typography.Text type="secondary">
@@ -165,7 +165,7 @@ function BackupHealth({ detail }: { detail: BayOpsDetail }) {
       <Alert
         type="error"
         showIcon
-        message="Failed to load backup health"
+        title="Failed to load backup health"
         description={detail.backups_error}
       />
     );
@@ -270,7 +270,7 @@ function DrainPreflightHealth({ detail }: { detail: BayOpsDetail }) {
       <Alert
         type="warning"
         showIcon
-        message="Failed to load drain preflight"
+        title="Failed to load drain preflight"
         description={detail.drain_preflight_error}
       />
     );
@@ -338,7 +338,7 @@ function DrainPreflightHealth({ detail }: { detail: BayOpsDetail }) {
 function LoadHealth({ detail }: { detail: BayOpsDetail }) {
   const load = detail.load;
   if (detail.load_error) {
-    return <Alert type="warning" showIcon message={detail.load_error} />;
+    return <Alert type="warning" showIcon title={detail.load_error} />;
   }
   if (!load) {
     return (
@@ -472,7 +472,7 @@ function Detail({ bay }: { bay: BayOpsOverviewBay }) {
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Project rehome is an unsafe escape hatch"
+          title="Project rehome is an unsafe escape hatch"
           description="Run project rehome-drain without --write first and inspect side_table_preflight. The --write --unsafe-rehome command can leave non-portable project-owned SQL side tables behind unless the operator has explicitly audited or accepted that data loss."
         />
         {commandList(bay).map((command) => (
@@ -519,7 +519,7 @@ export function BayOpsAdmin() {
       <Alert
         showIcon
         type="info"
-        message="Read-only bay operations overview"
+        title="Read-only bay operations overview"
         description="Use this page to inspect bay ownership distribution, heartbeat freshness, and recent rehome health. Actions are intentionally copy/paste CLI commands for this first slice."
       />
       <Space wrap>

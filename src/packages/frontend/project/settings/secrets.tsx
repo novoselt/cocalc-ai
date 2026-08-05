@@ -488,7 +488,7 @@ export const ProjectSecrets: React.FC<Props> = ({
         banner
         showIcon
         type={copyResult.copied.length > 0 ? "success" : "warning"}
-        message={`Copied: ${copyResult.copied.length}; conflicts: ${copyResult.conflicts.length}; missing: ${copyResult.missing.length}`}
+        title={`Copied: ${copyResult.copied.length}; conflicts: ${copyResult.conflicts.length}; missing: ${copyResult.missing.length}`}
         description={
           hasProblems ? (
             <>
@@ -519,7 +519,7 @@ export const ProjectSecrets: React.FC<Props> = ({
         banner
         showIcon
         type={pending ? "warning" : "success"}
-        message={message}
+        title={message}
         description="Programs that already cached a credential may still need their own reload."
         action={
           pending ? (
@@ -542,7 +542,7 @@ export const ProjectSecrets: React.FC<Props> = ({
         banner
         showIcon
         type={sshKeyResult.setup.ok ? "success" : "warning"}
-        message={
+        title={
           sshKeyResult.setup.ok
             ? "Generated SSH deploy key secret."
             : "Generated SSH deploy key secret, but project file setup needs attention."
@@ -612,7 +612,7 @@ export const ProjectSecrets: React.FC<Props> = ({
               banner
               showIcon
               type="warning"
-              message={`This project already has ${PROJECT_SECRETS_MAX_COUNT} secrets. Delete one before adding another.`}
+              title={`This project already has ${PROJECT_SECRETS_MAX_COUNT} secrets. Delete one before adding another.`}
             />
           ) : undefined}
           <div>
@@ -647,7 +647,7 @@ export const ProjectSecrets: React.FC<Props> = ({
                   banner
                   showIcon
                   type="warning"
-                  message="This looks like an SSH private key and does not end with a newline. Some SSH libraries reject that."
+                  title="This looks like an SSH private key and does not end with a newline. Some SSH libraries reject that."
                   action={
                     <Button size="small" onClick={() => setValue(`${value}\n`)}>
                       Add newline

@@ -244,7 +244,7 @@ export default function CreateSnapshot({
                 type="warning"
                 showIcon
                 style={{ marginBottom: 10 }}
-                message="Manual snapshot limit reached"
+                title="Manual snapshot limit reached"
                 description="Delete a named snapshot or ask the owner to increase the snapshot limit before creating another named snapshot."
               />
             )}

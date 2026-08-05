@@ -309,7 +309,7 @@ export function AbuseAnnotationControls({
           <Alert
             showIcon
             type="info"
-            message="Annotations affect admin review priority only. Raw usage remains visible and user-facing limits are unchanged."
+            title="Annotations affect admin review priority only. Raw usage remains visible and user-facing limits are unchanged."
           />
           <Space wrap>
             <Select

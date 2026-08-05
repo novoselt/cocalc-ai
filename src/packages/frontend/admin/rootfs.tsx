@@ -765,7 +765,7 @@ export function RootfsAdmin() {
             pull the RootFS before scanning.
           </Typography.Paragraph>
           {scanHostError ? (
-            <Alert type="warning" showIcon message={scanHostError} />
+            <Alert type="warning" showIcon title={scanHostError} />
           ) : null}
           {scanHostsLoading ? (
             <Loading />

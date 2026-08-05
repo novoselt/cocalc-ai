@@ -228,7 +228,7 @@ export function ManagedEgressAdminOverview() {
       {error ? <ShowError error={error} /> : null}
       {!loading && !error && overview && overview.total_bytes <= 0 ? (
         <Alert
-          message={`No managed egress recorded in the last ${getRangeSpec(rangeKey).label}.`}
+          title={`No managed egress recorded in the last ${getRangeSpec(rangeKey).label}.`}
           type="info"
           showIcon
         />

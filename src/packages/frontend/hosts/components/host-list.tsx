@@ -1059,7 +1059,7 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
       <Alert
         type="info"
         showIcon
-        message="Some visible hosts are not simply following the fleet default."
+        title="Some visible hosts are not simply following the fleet default."
         description={
           <Space vertical size={6} style={{ width: "100%" }}>
             <Typography.Text type="secondary">

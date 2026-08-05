@@ -171,7 +171,7 @@ export function PublishPanel({
         </Button>
       </Space>
 
-      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {error ? <Alert type="error" showIcon title={error} /> : null}
 
       {loading && shares.length === 0 ? (
         <Loading />

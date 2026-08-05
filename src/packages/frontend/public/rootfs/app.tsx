@@ -327,7 +327,7 @@ function RootfsCreateProject({
       </Button>
       {error ? (
         <Alert
-          message="Project creation failed"
+          title="Project creation failed"
           description={error}
           showIcon
           type="error"
@@ -510,7 +510,7 @@ function RootfsIndexPage({
           </PublicGrid>
         ) : (
           <Alert
-            message="No runtime images are available."
+            title="No runtime images are available."
             showIcon
             type="info"
           />
@@ -546,7 +546,7 @@ function RootfsNotFoundPage({
           </Flex>
         ) : (
           <Alert
-            message="This runtime image is not available."
+            title="This runtime image is not available."
             description="It may be private, hidden, deleted, or not visible to this account."
             showIcon
             type="warning"

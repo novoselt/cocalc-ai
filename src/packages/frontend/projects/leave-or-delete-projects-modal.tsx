@@ -118,7 +118,7 @@ export function LeaveOrDeleteProjectsModal({
           <Alert
             type="error"
             showIcon
-            message="Unable to leave or delete projects"
+            title="Unable to leave or delete projects"
             description={error}
           />
         ) : undefined}
@@ -126,7 +126,7 @@ export function LeaveOrDeleteProjectsModal({
           <Alert
             type="info"
             showIcon
-            message={bulkProgressMessage(progress, projectTitle)}
+            title={bulkProgressMessage(progress, projectTitle)}
             description={
               <Space vertical size={4} style={{ width: "100%" }}>
                 <Progress

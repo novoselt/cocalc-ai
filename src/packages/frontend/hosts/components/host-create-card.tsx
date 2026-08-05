@@ -891,7 +891,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Creating a similar host"
+          title="Creating a similar host"
           description={
             <>
               Based on {sourceHost.name || "host"}{" "}

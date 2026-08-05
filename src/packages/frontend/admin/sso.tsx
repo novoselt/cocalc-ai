@@ -329,7 +329,7 @@ function SamlProviderFields() {
       <Alert
         type="info"
         showIcon
-        message="SAML provider setup"
+        title="SAML provider setup"
         description={
           <>
             Configure the IdP with the metadata/ACS URLs below. Paste IdP
@@ -708,7 +708,7 @@ export function SsoAdmin() {
       <Alert
         type="info"
         showIcon
-        message="SSO providers and domain policies"
+        title="SSO providers and domain policies"
         description={
           <>
             This is the first-class SSO policy layer. Google client ID/secret

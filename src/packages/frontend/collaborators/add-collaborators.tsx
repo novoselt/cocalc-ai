@@ -843,7 +843,7 @@ export const AddCollaborators: React.FC<Props> = ({
           showIcon
           type="warning"
           style={{ marginBottom: 10 }}
-          message="Unable to load collaborator slot usage"
+          title="Unable to load collaborator slot usage"
           description={invite_usage_error}
         />
       );
@@ -857,7 +857,7 @@ export const AddCollaborators: React.FC<Props> = ({
           showIcon
           type="info"
           style={{ marginBottom: 10 }}
-          message="Viewer invites do not use collaborator slots"
+          title="Viewer invites do not use collaborator slots"
           description="Viewers have read-only file access and cannot edit files or use project runtimes."
         />
       );
@@ -870,7 +870,7 @@ export const AddCollaborators: React.FC<Props> = ({
         showIcon
         type={exhausted ? "warning" : "info"}
         style={{ marginBottom: 10 }}
-        message={`${remainingCount} invite ${plural(remainingCount, "slot")} left`}
+        title={`${remainingCount} invite ${plural(remainingCount, "slot")} left`}
         description={
           <span>
             This project is using {current} of {limit} member and pending invite
@@ -1087,7 +1087,7 @@ export const AddCollaborators: React.FC<Props> = ({
               ? "success"
               : "success"
         }
-        message={
+        title={
           state == "invited_manual"
             ? "Invitation link created"
             : state == "invited_errors"

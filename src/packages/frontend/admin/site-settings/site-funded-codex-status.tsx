@@ -64,7 +64,7 @@ export default function SiteFundedCodexStatusCard() {
         <Alert
           type="error"
           showIcon
-          message="Could not load pool status"
+          title="Could not load pool status"
           description={error}
         />
       ) : null}
@@ -72,7 +72,7 @@ export default function SiteFundedCodexStatusCard() {
         <Alert
           type="info"
           showIcon
-          message="No funding period has been created yet"
+          title="No funding period has been created yet"
           description="A pool appears after the first funded turn reservation."
         />
       ) : null}
@@ -125,7 +125,7 @@ export default function SiteFundedCodexStatusCard() {
                   : "info"
             }
             showIcon
-            message={
+            title={
               status.reconciliation.available
                 ? "OpenAI cost reconciliation"
                 : "OpenAI reconciliation is not configured"

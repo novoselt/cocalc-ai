@@ -94,7 +94,7 @@ export function ProjectBackupShardsAdmin() {
         <Alert
           type="error"
           showIcon
-          message="Failed to load backup shards"
+          title="Failed to load backup shards"
           description={error}
         />
       ) : null}

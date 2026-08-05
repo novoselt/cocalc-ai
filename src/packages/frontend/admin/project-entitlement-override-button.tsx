@@ -173,7 +173,7 @@ export function ProjectEntitlementOverrideButton({
             <Alert
               type="error"
               showIcon
-              message={error.message}
+              title={error.message}
               description={
                 error.details ? (
                   <details style={{ fontSize: "12px", marginTop: "6px" }}>
@@ -196,7 +196,7 @@ export function ProjectEntitlementOverrideButton({
           <Alert
             type={current == null ? "info" : "success"}
             showIcon
-            message={
+            title={
               loading ? "Loading current override..." : formatDiskQuota(current)
             }
           />

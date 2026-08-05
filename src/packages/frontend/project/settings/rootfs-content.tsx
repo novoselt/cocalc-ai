@@ -198,7 +198,7 @@ export function RootfsContentManifestBuilder({
           <Alert
             type="info"
             showIcon
-            message="No preview yet."
+            title="No preview yet."
             description="Add a title, description, highlight, or action to create the discovery panel."
           />
         )}
@@ -326,7 +326,7 @@ export function RootfsContentManifestBuilder({
                 <Alert
                   type="warning"
                   showIcon
-                  message="Unable to load configured project apps."
+                  title="Unable to load configured project apps."
                   description={configuredAppsError}
                 />
               ) : null}
@@ -336,7 +336,7 @@ export function RootfsContentManifestBuilder({
                 <Alert
                   type="warning"
                   showIcon
-                  message="No configured project apps found."
+                  title="No configured project apps found."
                   description="Configure and test an app in this project first, then add it to the manifest."
                 />
               ) : null}
@@ -344,7 +344,7 @@ export function RootfsContentManifestBuilder({
                 <Alert
                   type="info"
                   showIcon
-                  message="No actions yet."
+                  title="No actions yet."
                   description="Add a browse, copy, open, external link, or app action to help users find the bundled content."
                 />
               ) : null}
@@ -372,7 +372,7 @@ export function RootfsContentManifestBuilder({
             <Alert
               type="warning"
               showIcon
-              message="Discovery config warnings"
+              title="Discovery config warnings"
               description={
                 <ul style={{ margin: 0, paddingLeft: 18 }}>
                   {validation.warnings.map((warning, index) => (
@@ -501,7 +501,7 @@ function RootfsContentActionEditor({
           <Alert
             type="warning"
             showIcon
-            message="This app spec references HOME."
+            title="This app spec references HOME."
             description={rootfsProjectAppSpecHomeWarning(
               action.app_spec,
               projectHome,
@@ -1097,7 +1097,7 @@ function RootfsContentActionRow({
             ) : null}
             {actionError ? (
               <Alert
-                message={actionError}
+                title={actionError}
                 showIcon
                 style={{ marginTop: 4 }}
                 type="error"

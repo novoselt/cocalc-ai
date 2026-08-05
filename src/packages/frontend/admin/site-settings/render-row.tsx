@@ -308,7 +308,7 @@ function SignupEmailDomainPolicyPreview({ data }: { data: Data }) {
     <Alert
       type={type}
       showIcon
-      message={message}
+      title={message}
       description={description}
       style={{ marginTop: "12px" }}
     />

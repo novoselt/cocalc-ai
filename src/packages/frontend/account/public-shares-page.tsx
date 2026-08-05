@@ -414,7 +414,7 @@ function PublicSharesPage() {
             type="info"
             showIcon
             style={PUBLIC_SHARES_NOTICE_STYLE}
-            message={
+            title={
               selectedShares.length > 0
                 ? `${selectedShares.length.toLocaleString()} publication(s) selected`
                 : "Signed-in users can view available shares."
@@ -485,7 +485,7 @@ function PublicSharesPage() {
           </Space>
 
           {state.error ? (
-            <Alert type="error" showIcon message={state.error} />
+            <Alert type="error" showIcon title={state.error} />
           ) : null}
 
           {state.loading && state.shares.length === 0 ? (
@@ -730,7 +730,7 @@ function PublicSharesPage() {
           <Alert
             type="info"
             showIcon
-            message="Selected shares will offer temporary membership on copy."
+            title="Selected shares will offer temporary membership on copy."
             description="The existing share URLs and publication metadata are kept. Each selected share is validated server-side before it is updated."
           />
           <div>
@@ -751,7 +751,7 @@ function PublicSharesPage() {
             <Alert
               type="warning"
               showIcon
-              message="No managed site-license pools are available for your account."
+              title="No managed site-license pools are available for your account."
             />
           ) : null}
           <Space>

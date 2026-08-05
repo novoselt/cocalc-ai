@@ -154,7 +154,7 @@ export function MembershipAnalyticsAdmin() {
         <Alert
           type="success"
           showIcon
-          message="Purchase backfill finished"
+          title="Purchase backfill finished"
           description={`${backfillResult.inserted} inserted, ${backfillResult.skipped} skipped.`}
         />
       ) : null}
@@ -174,7 +174,7 @@ export function MembershipAnalyticsAdmin() {
             <Alert
               type="warning"
               showIcon
-              message="Partial analytics result"
+              title="Partial analytics result"
               description={failedBays
                 .map((bay) => `${bay.bay_id}: ${bay.error ?? "unavailable"}`)
                 .join("; ")}

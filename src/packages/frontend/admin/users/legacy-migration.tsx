@@ -486,12 +486,11 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
       return (
         <Alert
           type="info"
-          message="Click Load projects to show projects for this legacy account."
+          title="Click Load projects to show projects for this legacy account."
         />
       );
-    if (state.loading)
-      return <Alert type="info" message="Loading projects..." />;
-    if (state.error) return <Alert type="error" message={state.error} />;
+    if (state.loading) return <Alert type="info" title="Loading projects..." />;
+    if (state.error) return <Alert type="error" title={state.error} />;
     const projects = state.projects ?? [];
     return (
       <Space vertical style={{ width: "100%" }}>
@@ -501,7 +500,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
             <Alert
               type="warning"
               showIcon
-              message={`Showing ${projects.length} of ${state.total_count} projects.`}
+              title={`Showing ${projects.length} of ${state.total_count} projects.`}
               description={`The admin view is capped at ${state.limit} projects for this linked legacy account.`}
             />
           )}
@@ -516,7 +515,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
         <Alert
           showIcon
           type="warning"
-          message="Admin-only support tool"
+          title="Admin-only support tool"
           description="Linking a legacy account allows this current account to see and migrate projects associated with that legacy account. Link and unlink actions require a reason and are audited."
         />
         {error && <ErrorDisplay error={error} onClose={() => setError("")} />}
@@ -787,7 +786,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
             <Alert
               showIcon
               type="warning"
-              message="This grants migration access"
+              title="This grants migration access"
               description="The selected current account will be able to see and migrate projects associated with this legacy account."
             />
             <Paragraph>
@@ -825,7 +824,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
             <Alert
               showIcon
               type="warning"
-              message="This removes future migration authorization"
+              title="This removes future migration authorization"
               description="Already imported projects are not deleted. Only support-admin links can be removed here; verified-email links are read-only."
             />
             <Paragraph>

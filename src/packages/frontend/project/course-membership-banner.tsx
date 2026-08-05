@@ -262,7 +262,7 @@ export function CourseMembershipBanner({ project_id }: { project_id: string }) {
             : undefined
         }
         style={{ margin: "12px" }}
-        message={`Course membership required: ${title}`}
+        title={`Course membership required: ${title}`}
         description={
           <Space vertical size="small">
             <span>
@@ -317,7 +317,7 @@ export function CourseMembershipBanner({ project_id }: { project_id: string }) {
           type="info"
           showIcon
           style={{ margin: "12px" }}
-          message="Course membership is available from your site license"
+          title="Course membership is available from your site license"
           description={
             <Space vertical size="small">
               <span>
