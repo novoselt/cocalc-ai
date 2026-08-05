@@ -81,11 +81,25 @@ jobs:
       - name: Build
         run: cd src && pnpm build
 
+      - name: Pack workspace build
+        run: |
+          cd src
+          mapfile -d '' build_dirs < <(
+            find packages \
+              -type d -name node_modules -prune -o \
+              -type d -name dist -print0
+          )
+          if (( ${#build_dirs[@]} == 0 )); then
+            echo "No workspace build directories found."
+            exit 1
+          fi
+          tar --create --file workspace-build.tar "${build_dirs[@]}"
+
       - name: Upload workspace build
         uses: actions/upload-artifact@v4
         with:
           name: workspace-build
-          path: src/packages/**/dist
+          path: src/workspace-build.tar
           if-no-files-found: error
           retention-days: 1
           compression-level: 1
@@ -111,7 +125,7 @@ jobs:
           cache-dependency-path: src/packages/pnpm-lock.yaml
 
       - name: Install workspace dependencies
-        run: pnpm -C src install --frozen-lockfile
+        run: pnpm -C src/packages install --frozen-lockfile
 
       - name: Static checks
         run: pnpm -C src test:checks
@@ -162,13 +176,16 @@ jobs:
           sudo apt-get install -y attr btrfs-progs python3
 
       - name: Install workspace dependencies
-        run: pnpm -C src install --frozen-lockfile
+        run: pnpm -C src/packages install --frozen-lockfile
 
       - name: Download workspace build
         uses: actions/download-artifact@v4
         with:
           name: workspace-build
-          path: src/packages
+          path: src
+
+      - name: Extract workspace build
+        run: tar --extract --file src/workspace-build.tar --directory src
 
       - name: Cache Jest transforms
         uses: actions/cache@v4
