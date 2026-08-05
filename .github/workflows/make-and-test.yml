@@ -87,13 +87,19 @@ jobs:
           mapfile -d '' build_dirs < <(
             find packages \
               -type d -name node_modules -prune -o \
-              -type d -name dist -print0
+              -type d \( -name dist -o -name dist-ts \) -print0
           )
           if (( ${#build_dirs[@]} == 0 )); then
             echo "No workspace build directories found."
             exit 1
           fi
-          tar --create --file workspace-build.tar "${build_dirs[@]}"
+          mapfile -d '' test_tools < <(
+            find packages/backend/node_modules/.bin \
+              -maxdepth 1 -type f ! -name codex -print0
+          )
+          tar --create --file workspace-build.tar \
+            "${build_dirs[@]}" \
+            "${test_tools[@]}"
 
       - name: Upload workspace build
         uses: actions/upload-artifact@v4

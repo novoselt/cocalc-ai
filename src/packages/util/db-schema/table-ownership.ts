@@ -459,6 +459,20 @@ function adHocEntries(
 }
 
 export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
+  ...adHocEntries(["admin_support_mutations"], {
+    ownership: "seed-global",
+    authority: "seed",
+    portability: "stable",
+    secondary_reference_fields: {
+      account_id:
+        "Admin actor reference for auditing, not ownership authority.",
+    },
+    source: "admin support mutation ledger",
+    migrate_to_schema: true,
+    notes:
+      "Cluster-global idempotency and audit state for Zendesk mutations. The seed bay is authoritative so retries resolve against one ledger across all bays.",
+  }),
+
   ...adHocEntries(
     [
       "admin_data_explorer_views",
