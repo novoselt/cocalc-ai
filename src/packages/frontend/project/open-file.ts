@@ -45,6 +45,7 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
+import { parsePathWithOptionalLineSuffix } from "./parse-path-line";
 
 // if true, PRELOAD_BACKGROUND_TABS makes it so all tabs have their file editing
 // preloaded, even background tabs.  This can make the UI much more responsive,
@@ -311,6 +312,13 @@ export async function open_file(
     explicit: false,
     workspaceSelection: undefined,
   });
+  if (opts.line == null && opts.fragmentId?.line == null) {
+    const parsed = parsePathWithOptionalLineSuffix(opts.path);
+    if (parsed.line != null) {
+      opts.path = parsed.path;
+      opts.line = parsed.line;
+    }
+  }
   const projectHome = getProjectHomeDirectory(actions.project_id);
   const hadTrailingSlash = opts.path.endsWith("/");
   opts.path = toAbsoluteOpenPath(opts.path, projectHome);
@@ -340,9 +348,9 @@ export async function open_file(
     );
   }
 
-  if (opts.line != null && !opts.fragmentId) {
+  if (opts.line != null && opts.fragmentId?.line == null) {
     // backward compat
-    opts.fragmentId = { line: `${opts.line}` };
+    opts.fragmentId = { ...(opts.fragmentId ?? {}), line: `${opts.line}` };
   }
 
   const is_kiosk = () =>
