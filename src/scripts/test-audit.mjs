@@ -48,6 +48,11 @@ const PACKAGE_OVERRIDES = {
     // Jest test timing, so run Jest directly.
     args: ["exec", "jest"],
   },
+  "project-host": {
+    // The package test script wraps Jest to skip unsupported macOS runs, so
+    // it is not detected by looking for "jest" in the package script.
+    args: ["exec", "jest", "--config", "jest.config.js"],
+  },
   server: {
     env: {
       NODE_NO_WARNINGS: "1",
@@ -55,7 +60,9 @@ const PACKAGE_OVERRIDES = {
       NODE_OPTIONS: "--experimental-vm-modules",
       TZ: "UTC",
     },
-    args: ["exec", "jest", "--maxWorkers=8"],
+    // Match the package test command. Eight workers can exceed the enforced
+    // project memory limit and produce false SIGKILL failures in CI.
+    args: ["exec", "jest", "--maxWorkers=4"],
   },
 };
 
