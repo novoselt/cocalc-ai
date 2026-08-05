@@ -266,6 +266,184 @@ test("admin support triage forwards deterministic grouping options", async () =>
   });
 });
 
+test("admin support search forwards a bounded Zendesk query", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        search: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-search", tickets: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "search",
+    "--query",
+    "type:ticket status<solved updated>2026-08-01",
+    "--limit",
+    "25",
+    "--reason",
+    "triage current queue",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    query: "type:ticket status<solved updated>2026-08-01",
+    limit: 25,
+    max_bytes: 262144,
+    reason: "triage current queue",
+  });
+});
+
+test("admin support update is dry-run by default", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        planUpdate: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-plan", commit: false };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "update",
+    "20437",
+    "--status",
+    "pending",
+    "--add-tags",
+    "investigating,ssh",
+    "--reason",
+    "approved status update",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20437,
+    status: "pending",
+    add_tags: ["investigating", "ssh"],
+    remove_tags: undefined,
+    expected_updated_at: undefined,
+    reason: "approved status update",
+  });
+});
+
+test("admin support reply commit reads the approved file and supplies idempotency", async () => {
+  let capturedArgs: any;
+  const dir = await mkdtemp(join(tmpdir(), "cocalc-support-reply-"));
+  const replyFile = join(dir, "reply.txt");
+  await writeFile(replyFile, "The issue is now fixed.\n", "utf8");
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        update: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-update", commit: true };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "reply",
+    "20437",
+    "--file",
+    replyFile,
+    "--status",
+    "solved",
+    "--expected-updated-at",
+    "2026-08-05T12:00:00.000Z",
+    "--reason",
+    "approved response",
+    "--commit",
+  ]);
+
+  assert.match(capturedArgs.idempotency_key, /^support-update-[0-9a-f]{40}$/);
+  const { idempotency_key: _idempotencyKey, ...request } = capturedArgs;
+  assert.deepEqual(request, {
+    ticket_id: 20437,
+    public_reply: "The issue is now fixed.",
+    status: "solved",
+    expected_updated_at: "2026-08-05T12:00:00.000Z",
+    reason: "approved response",
+    timeout: 60_000,
+  });
+});
+
+test("admin support merge commit forwards explicit target and source versions", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        merge: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-merge", commit: true };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "merge",
+    "--target",
+    "20431",
+    "--source",
+    "20432",
+    "--target-comment",
+    "Combining duplicate billing requests.",
+    "--target-expected-updated-at",
+    "2026-08-05T12:00:00.000Z",
+    "--source-expected-updated-at",
+    "2026-08-05T12:01:00.000Z",
+    "--idempotency-key",
+    "support-merge-approved-20431-20432",
+    "--reason",
+    "approved duplicate merge",
+    "--commit",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    target_ticket_id: 20431,
+    source_ticket_id: 20432,
+    target_comment: "Combining duplicate billing requests.",
+    source_comment: undefined,
+    target_comment_public: false,
+    source_comment_public: false,
+    target_expected_updated_at: "2026-08-05T12:00:00.000Z",
+    source_expected_updated_at: "2026-08-05T12:01:00.000Z",
+    reason: "approved duplicate merge",
+    idempotency_key: "support-merge-approved-20431-20432",
+    timeout: 120_000,
+  });
+});
+
 test("admin crashes triage forwards fleet filtering options", async () => {
   let capturedArgs: any;
   const program = new Command();
