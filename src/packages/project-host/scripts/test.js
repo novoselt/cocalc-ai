@@ -8,9 +8,13 @@ if (process.platform === "darwin") {
 }
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const result = spawnSync(pnpm, ["exec", "jest", "--config", "jest.config.js"], {
-  stdio: "inherit",
-});
+const result = spawnSync(
+  pnpm,
+  ["exec", "jest", "--config", "jest.config.js", ...process.argv.slice(2)],
+  {
+    stdio: "inherit",
+  },
+);
 
 if (result.error) {
   throw result.error;
