@@ -2290,6 +2290,29 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"',
                 script,
             )
+            reserve_startup_io_body = script.split(
+                "reserve_project_startup_io_capacity() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                'fields="$(project_io_policy_fields standard)"',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'if [ "$mode" != "enforce" ]; then',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'deny "project-io-normal-snapshot-empty"',
+                reserve_startup_io_body,
+            )
+            self.assertLess(
+                reserve_startup_io_body.index(
+                    'if [ "$mode" != "enforce" ]; then'
+                ),
+                reserve_startup_io_body.index(
+                    'deny "project-io-normal-snapshot-empty"'
+                ),
+            )
             self.assertIn(
                 '"pressure_protection_enabled": pressure_protection_enabled == "true"',
                 script,

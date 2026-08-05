@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260804-v40"
+HELPER_SCHEMA_VERSION = "20260805-v41"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -3864,8 +3864,16 @@ verify_project_pool_io_snapshot() {
 }
 
 reserve_project_startup_io_capacity() {
-  local snapshot_tmp
+  local fields mode snapshot_tmp
   acquire_project_io_reservation_lock
+  fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
+  IFS=$'\t' read -r mode _rest <<< "$fields"
+  if [ "$mode" != "enforce" ]; then
+    # Disabled and observational policy intentionally leave pool io.max empty.
+    # There is no normal ceiling to preserve or lifecycle headroom to grant.
+    release_project_io_reservation_lock
+    return 0
+  fi
   if project_io_pressure_protection_enabled; then
     release_project_io_reservation_lock
     return 0
