@@ -155,6 +155,7 @@ describe("PublicDirectoryShareBanner", () => {
     window.localStorage.clear();
     copyToNewProject.mockResolvedValue({
       destination_project_id: "new-project",
+      destination_path: "test2",
       op_id: "op-1",
       scope_id: "new-project",
       scope_type: "project",
@@ -261,7 +262,7 @@ describe("PublicDirectoryShareBanner", () => {
       expect(openProject).toHaveBeenCalledWith({
         project_id: "new-project",
         switch_to: true,
-        target: "files",
+        target: "test2",
       });
     });
     expect(copyToNewProject).toHaveBeenCalledWith({
@@ -328,6 +329,7 @@ describe("PublicDirectoryShareBanner", () => {
   it("shows progress and explains when same-host placement falls back", async () => {
     copyToNewProject.mockResolvedValueOnce({
       destination_project_id: "new-project",
+      destination_path: "test2",
       op_id: "op-1",
       scope_id: "new-project",
       scope_type: "project",
@@ -369,15 +371,16 @@ describe("PublicDirectoryShareBanner", () => {
       reused_project: true,
       placed_on_requested_host: true,
       conflict: {
-        reason: "already_copied",
+        reason: "path_exists",
         message:
           "This published folder was already copied to the compatible project.",
-        destination_path: null,
+        destination_path: "test2",
         can_overwrite: true,
       },
     });
     copyToNewProject.mockResolvedValueOnce({
       destination_project_id: "existing-project",
+      destination_path: "test2",
       op_id: "op-2",
       scope_id: "existing-project",
       scope_type: "project",
@@ -402,7 +405,7 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).toHaveBeenCalledWith({
       project_id: "existing-project",
       switch_to: true,
-      target: "files",
+      target: "test2",
     });
 
     fireEvent.click(screen.getByText("Overwrite"));
@@ -412,6 +415,37 @@ describe("PublicDirectoryShareBanner", () => {
         reuse_existing: true,
         overwrite_existing: true,
         options: { recursive: true },
+      });
+    });
+  });
+
+  it("opens an exact-file copy directly", async () => {
+    copyToNewProject.mockResolvedValueOnce({
+      destination_project_id: "new-project",
+      destination_path: "tutorial.ipynb",
+      op_id: "op-file",
+      scope_id: "new-project",
+      scope_type: "project",
+      site_license_grant: null,
+      created_project: true,
+      reused_project: false,
+      placed_on_requested_host: true,
+    });
+    const fileShare = {
+      ...share(),
+      path: "notebooks/tutorial.ipynb",
+      path_type: "file",
+    } as ResolvedPublicDirectoryShare;
+    render(<PublicDirectoryShareBanner share={fileShare} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(openProject).toHaveBeenCalledWith({
+        project_id: "new-project",
+        switch_to: true,
+        target: "tutorial.ipynb",
       });
     });
   });

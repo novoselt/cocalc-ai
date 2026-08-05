@@ -39,6 +39,7 @@ import { listSiteLicenseOverviews } from "@cocalc/frontend/purchases/api";
 import { User } from "@cocalc/frontend/users/user";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { SiteLicenseOverview } from "@cocalc/conat/hub/api/purchases";
+import { legacyMigrationProjectHref } from "./legacy-migration-link";
 import type { SettingsPageDefinition } from "./settings-page";
 
 const { Text } = Typography;
@@ -208,6 +209,12 @@ function legacyShareDate(
   if (value == null) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isFinite(date.valueOf()) ? date : null;
+}
+
+function legacyShareTimestamp(
+  share: LegacyMigrationPublicShareSummary,
+): number {
+  return legacyShareDate(share)?.valueOf() ?? 0;
 }
 
 function legacyShareStatusTag({
@@ -961,7 +968,11 @@ function PublicSharesPage() {
                           Open restored project
                         </a>
                       ) : (
-                        <a href="/settings/legacy-migration">
+                        <a
+                          href={legacyMigrationProjectHref(
+                            legacyShare.legacy_project_id,
+                          )}
+                        >
                           Select project for restoration
                         </a>
                       )}
@@ -990,6 +1001,9 @@ function PublicSharesPage() {
                 {
                   title: "Last edited",
                   width: 170,
+                  defaultSortOrder: "descend",
+                  sorter: (left, right) =>
+                    legacyShareTimestamp(left) - legacyShareTimestamp(right),
                   render: (_value, legacyShare) => {
                     const date = legacyShareDate(legacyShare);
                     return date ? <TimeAgo date={date} /> : <Text>-</Text>;

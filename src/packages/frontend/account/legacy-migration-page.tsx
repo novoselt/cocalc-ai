@@ -56,6 +56,7 @@ import type {
   LegacyMigrationProjectSummary,
 } from "@cocalc/conat/hub/api/legacy-migration";
 import { firstLegacyMigrationRootfs } from "./legacy-migration-rootfs";
+import { legacyMigrationProjectQuery } from "./legacy-migration-link";
 import type { SettingsPageDefinition } from "./settings-page";
 
 const { Text } = Typography;
@@ -999,7 +1000,11 @@ export function LegacyMigrationPage() {
   const [includeHidden, setIncludeHidden] = useState(false);
   const [includeNotAvailable, setIncludeNotAvailable] = useState(false);
   const [maxDiskGb, setMaxDiskGb] = useState<number | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() =>
+    legacyMigrationProjectQuery(
+      typeof window === "undefined" ? "" : window.location.search,
+    ),
+  );
   const [statusFilter, setStatusFilter] =
     useState<LegacyProjectStatusFilter>("all");
   const [pageSize, setPageSize] = useState(25);

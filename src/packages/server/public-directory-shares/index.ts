@@ -654,6 +654,23 @@ async function copySourceForPublicDirectoryShare({
   };
 }
 
+export function publicDirectoryShareCopyDestinationPath({
+  destinationPath,
+  pathType,
+  sourcePath,
+}: {
+  destinationPath: string;
+  pathType: PublicDirectorySharePathType;
+  sourcePath: string;
+}): string {
+  const normalizedDestination =
+    normalizePublicDirectorySharePath(destinationPath);
+  if (pathType !== "file" || normalizedDestination !== ".") {
+    return normalizedDestination;
+  }
+  return normalizePublicDirectorySharePath(posix.basename(sourcePath));
+}
+
 function rowToSummary(
   row: PublicDirectoryShareRow,
 ): PublicDirectoryShareSummary {
@@ -2381,7 +2398,12 @@ export async function copyToProject({
   if (!entryAllowed({ share, relativePath })) {
     throw Error("path is not part of this public share");
   }
-  const destPath = normalizePublicDirectorySharePath(destination_path ?? ".");
+  const sourcePath = joinProjectSharePath(share.path, relativePath);
+  const destPath = publicDirectoryShareCopyDestinationPath({
+    destinationPath: destination_path ?? ".",
+    pathType: share.path_type,
+    sourcePath,
+  });
   const copySource = await copySourceForPublicDirectoryShare({
     account_id,
     share,
@@ -2441,6 +2463,7 @@ export async function copyToProject({
   triggerCopyLroWorker();
   return {
     destination_project_id,
+    destination_path: destPath,
     op_id: op.op_id,
     scope_type: "project",
     scope_id: destination_project_id,
@@ -2545,7 +2568,7 @@ async function findReusablePublicShareCopyProject({
   return rows[0]?.project_id;
 }
 
-function copySourceDestinationPaths({
+export function copySourceDestinationPaths({
   copySource,
   destinationPath,
 }: {
@@ -2560,6 +2583,13 @@ function copySourceDestinationPaths({
     ? copySource.path
     : [copySource.path];
   const basePath = copySource.base_path;
+  if (!Array.isArray(copySource.path) && basePath == null) {
+    return [
+      destinationPath === "."
+        ? normalizePublicDirectorySharePath(posix.basename(copySource.path))
+        : normalizePublicDirectorySharePath(destinationPath),
+    ];
+  }
   if (basePath != null) {
     const base = basePath === "." ? "" : basePath.replace(/^\/+|\/+$/g, "");
     return srcPaths.map((srcPath) => {
@@ -2605,15 +2635,11 @@ async function pathExistsInProject({
 async function publicShareCopyConflict({
   account_id,
   destination_project_id,
-  share,
-  relativePath,
   destinationPath,
   copySource,
 }: {
   account_id: string;
   destination_project_id: string;
-  share: ResolvedPublicDirectoryShare;
-  relativePath: string;
   destinationPath: string;
   copySource: Awaited<ReturnType<typeof copySourceForPublicDirectoryShare>>;
 }): Promise<
@@ -2625,19 +2651,6 @@ async function publicShareCopyConflict({
     }
   | undefined
 > {
-  const labels = await getProjectLabels({ project_id: destination_project_id });
-  const provenanceKey = publicShareCopyProvenanceLabelKey({
-    share_id: share.id,
-    relativePath,
-  });
-  if (labels[provenanceKey]) {
-    return {
-      reason: "already_copied",
-      message: `This published ${share.path_type === "file" ? "file" : "folder"} was already copied to the compatible project.`,
-      destination_path: null,
-      can_overwrite: true,
-    };
-  }
   for (const destPath of copySourceDestinationPaths({
     copySource,
     destinationPath,
@@ -2682,9 +2695,11 @@ export async function copyToNewProject({
   if (!entryAllowed({ share, relativePath })) {
     throw Error("path is not part of this public share");
   }
-  const destinationPath = normalizePublicDirectorySharePath(
-    share.path_type === "file" ? "." : share.slug,
-  );
+  const destinationPath = publicDirectoryShareCopyDestinationPath({
+    destinationPath: share.path_type === "file" ? "." : share.slug,
+    pathType: share.path_type,
+    sourcePath: joinProjectSharePath(share.path, relativePath),
+  });
   const sourceRuntime = await getPublicShareSourceRuntime(share.project_id);
   let destinationProjectId =
     reuse_existing === true
@@ -2734,8 +2749,6 @@ export async function copyToNewProject({
     const conflict = await publicShareCopyConflict({
       account_id,
       destination_project_id: finalDestinationProjectId,
-      share,
-      relativePath,
       destinationPath,
       copySource,
     });
