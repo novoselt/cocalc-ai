@@ -2400,7 +2400,8 @@ export async function copyToProject({
   }
   const sourcePath = joinProjectSharePath(share.path, relativePath);
   const destPath = publicDirectoryShareCopyDestinationPath({
-    destinationPath: destination_path ?? ".",
+    destinationPath:
+      destination_path ?? (share.path_type === "file" ? "." : share.slug),
     pathType: share.path_type,
     sourcePath,
   });

@@ -9,6 +9,7 @@ import {
   legacyPublicPathTargetFromRetainedRecord,
   legacyPublicShareUrl,
   normalizeLegacyProjectImportIds,
+  resolveLegacyPublicPathTarget,
 } from ".";
 import {
   isUnsupportedLegacyProxyPublicPath,
@@ -110,6 +111,47 @@ describe("legacy public path slug helpers", () => {
     ).toEqual({ path: "course/lesson.ipynb", path_type: "file" });
   });
 
+  it("marks retained paths unavailable when they are absent after restore", async () => {
+    await expect(
+      resolveLegacyPublicPathTarget({
+        row: {
+          original_path: "missing/notebooks",
+          original_path_type: "directory",
+        },
+        fs: {
+          lstat: async () => {
+            throw Object.assign(new Error("no such file or directory"), {
+              code: "ENOENT",
+            });
+          },
+        } as any,
+        restoreComplete: true,
+      }),
+    ).resolves.toEqual({
+      target: { path: "missing/notebooks", path_type: "directory" },
+      availability_status: "unavailable",
+      availability_message:
+        "The published path was not found in the restored project.",
+    });
+  });
+
+  it("keeps retained paths pending until restore inspection is possible", async () => {
+    await expect(
+      resolveLegacyPublicPathTarget({
+        row: {
+          original_path: "notebooks",
+          original_path_type: "directory",
+        },
+        restoreComplete: false,
+      }),
+    ).resolves.toEqual({
+      target: { path: "notebooks", path_type: "directory" },
+      availability_status: "pending",
+      availability_message:
+        "This legacy project has been selected for migration, but its files have not finished restoring yet.",
+    });
+  });
+
   it("does not infer ambiguous older records as directories", () => {
     expect(
       legacyPublicPathTargetFromRetainedRecord({ path: "ambiguous-path" }),
@@ -186,6 +228,20 @@ describe("legacy public path slug helpers", () => {
         {},
       ),
     ).toBe("examples");
+  });
+
+  it("skips malformed retained slugs instead of aborting replay", () => {
+    expect(
+      legacyPublicPathSlugFromRecord(
+        { name: "../private" },
+        { owner_name: "owner", project_name: "project" },
+      ),
+    ).toBeNull();
+    expect(
+      legacyPublicPathSlugFromRecord({
+        url: "https://cocalc.ai/share/owner//bad-share",
+      }),
+    ).toBeNull();
   });
 
   it("preserves explicit legacy URL paths when present", () => {

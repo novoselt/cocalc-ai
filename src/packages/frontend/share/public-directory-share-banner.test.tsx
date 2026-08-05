@@ -78,7 +78,11 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 jest.mock("@cocalc/frontend/projects/select-project", () => ({
-  SelectProject: () => <div>SelectProject</div>,
+  SelectProject: ({ onChange }: any) => (
+    <button onClick={() => onChange("existing-project")} type="button">
+      SelectProject
+    </button>
+  ),
 }));
 
 jest.mock("@cocalc/frontend/components/theme-image-input", () => ({
@@ -284,6 +288,38 @@ describe("PublicDirectoryShareBanner", () => {
     expect(lroWait.mock.invocationCallOrder[0]).toBeLessThan(
       openProject.mock.invocationCallOrder[0],
     );
+  });
+
+  it("copies a folder into its slug when selecting an existing project", async () => {
+    copyToProject.mockResolvedValueOnce({
+      destination_project_id: "existing-project",
+      destination_path: "test2",
+      op_id: "op-existing",
+      scope_id: "existing-project",
+      scope_type: "project",
+      site_license_grant: null,
+    });
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    fireEvent.click(screen.getByText("Copy to existing project"));
+    expect(screen.getByLabelText("Destination path")).toHaveValue("test2");
+    fireEvent.click(screen.getByText("SelectProject"));
+    fireEvent.click(screen.getByText("Copy to project"));
+
+    await waitFor(() => {
+      expect(copyToProject).toHaveBeenCalledWith({
+        slug: "test2",
+        destination_project_id: "existing-project",
+        destination_path: "test2",
+        options: { recursive: true },
+      });
+    });
+    expect(openProject).toHaveBeenCalledWith({
+      project_id: "existing-project",
+      switch_to: true,
+      target: "test2",
+    });
   });
 
   it("does not open the new project before it is readable", async () => {
