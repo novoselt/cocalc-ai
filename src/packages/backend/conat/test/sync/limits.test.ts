@@ -368,23 +368,12 @@ describe("test discard_policy 'new' where writes are rejected rather than old da
     s.publish("y");
     s.publish("w");
     s.publish("foo");
-
-    await wait({
-      until: async () => {
-        await s.config();
-        return rejects.length == 1;
-      },
-    });
+    await s.save();
     expect(s.getAll()).toEqual(["x", "y", "w"]);
     expect(rejects).toEqual(["foo"]);
 
     s.publish("x".repeat(299));
-    await wait({
-      until: async () => {
-        await s.config();
-        return rejects.length == 2;
-      },
-    });
+    await s.save();
     expect(s.getAll()).toEqual(["x", "y", "w"]);
     expect(rejects).toEqual(["foo", "x".repeat(299)]);
   });

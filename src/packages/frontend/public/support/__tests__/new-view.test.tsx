@@ -6,9 +6,13 @@ import api from "@cocalc/frontend/client/api";
 import SupportNew from "../new-view";
 
 jest.mock("@cocalc/frontend/client/api", () => jest.fn());
-jest.mock("../recent-files", () => function RecentFilesMock() {
-  return <div>Recent files picker</div>;
-});
+jest.mock(
+  "../recent-files",
+  () =>
+    function RecentFilesMock() {
+      return <div>Recent files picker</div>;
+    },
+);
 
 const mockedApi = api as jest.Mock;
 
@@ -50,6 +54,10 @@ describe("SupportNew", () => {
     expect(screen.getByText("Relevant files")).not.toBeNull();
     expect(screen.getByText("Recent files picker")).not.toBeNull();
     expect(screen.getByText("Enter a valid email address")).not.toBeNull();
+    expect(
+      screen.getByText(/AI-assisted support tools may review/),
+    ).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Privacy Policy" })).not.toBeNull();
   });
 
   it("prefills the email field for signed-in users", async () => {

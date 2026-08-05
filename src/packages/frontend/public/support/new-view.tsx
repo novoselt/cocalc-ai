@@ -15,6 +15,7 @@ import { is_valid_email_address as isValidEmailAddress } from "@cocalc/util/misc
 import { COLORS } from "@cocalc/util/theme";
 import { joinUrlPath } from "@cocalc/util/url-path";
 import RecentFiles from "./recent-files";
+import SupportSubmissionNotice from "../../support/submission-notice";
 
 type SupportView = "index" | "new" | "tickets";
 type TicketType = "problem" | "question" | "task" | "purchase" | "chat";
@@ -728,6 +729,10 @@ export default function SupportNew({
               description={`Replace the text '${initial.required}' everywhere above with the requested information.`}
             />
           ) : null}
+
+          <SupportSubmissionNotice
+            style={{ margin: "0 auto", maxWidth: 900, textAlign: "center" }}
+          />
 
           <div style={{ textAlign: "center" }}>
             {formLocked ? (

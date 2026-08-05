@@ -6,7 +6,7 @@ The Snapshots button pops up a model that:
 
 */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { InputRef } from "antd";
 import { Alert, Button, Input, Modal, Spin } from "antd";
 import { Icon } from "@cocalc/frontend/components/icon";
@@ -67,6 +67,14 @@ export default function CreateSnapshot({
     }
   }
 
+  const showModal = useCallback((): void => {
+    if (!claimCreateSnapshotModal(modalIdRef.current)) {
+      return;
+    }
+    setName(`manual-${new Date().toISOString()}`);
+    setOpen(true);
+  }, []);
+
   useEffect(() => {
     if (!open) {
       return;
@@ -79,11 +87,11 @@ export default function CreateSnapshot({
 
   useEffect(() => {
     if (!openCreate) return;
-    if (claimCreateSnapshotModal(modalIdRef.current)) {
-      setOpen(true);
+    if (!open) {
+      showModal();
     }
     actions?.setState({ open_create_snapshot: false });
-  }, [actions, openCreate]);
+  }, [actions, open, openCreate, showModal]);
 
   useEffect(() => {
     const handleClose = () => closeModal(true);
@@ -133,9 +141,7 @@ export default function CreateSnapshot({
   }
 
   function openModal(): void {
-    if (claimCreateSnapshotModal(modalIdRef.current)) {
-      setOpen(true);
-    }
+    showModal();
   }
 
   async function createSnapshot() {
@@ -170,7 +176,6 @@ export default function CreateSnapshot({
         <Modal
           afterOpenChange={async (open) => {
             if (!open) return;
-            setName(`manual-${new Date().toISOString()}`);
             inputRef.current?.focus({
               cursor: "all",
             });

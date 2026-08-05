@@ -110,6 +110,10 @@ describe("SupportCreateModal", () => {
     });
 
     render(<SupportCreateModal />);
+    expect(
+      screen.getByText(/AI-assisted support tools may review/),
+    ).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Privacy Policy" })).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add image" }));
     fireEvent.click(screen.getByRole("button", { name: "Add file" }));
     fireEvent.click(

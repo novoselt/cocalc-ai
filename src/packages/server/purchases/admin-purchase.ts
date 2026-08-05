@@ -101,7 +101,7 @@ async function ensureAdminAssignedMembership({
   );
 }
 
-async function maybeCreateFundingCredit({
+export async function maybeCreateFundingCredit({
   account_id,
   admin_account_id,
   amount,
@@ -131,7 +131,7 @@ async function maybeCreateFundingCredit({
   });
 }
 
-async function ensureCreditCoversPurchase({
+export async function ensureCreditCoversPurchase({
   account_id,
   client,
   cost,

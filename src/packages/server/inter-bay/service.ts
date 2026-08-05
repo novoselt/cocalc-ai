@@ -200,6 +200,7 @@ import {
   resolveTeamLicenseQuote,
 } from "@cocalc/server/membership/team-licenses";
 import { purchaseTeamLicenseChange } from "@cocalc/server/purchases/team-license";
+import adminCreateMembershipPackagePurchase from "@cocalc/server/purchases/admin-membership-package";
 import createProject, {
   createProjectWithInternalProjectId,
 } from "@cocalc/server/projects/create";
@@ -1156,6 +1157,18 @@ async function startAccountLocalService(): Promise<void> {
       isSeedSiteLicenseBay()
         ? await adminProvisionSiteLicense({ ...opts, trusted_admin: true })
         : await getSeedSiteLicenseClient().adminProvisionSiteLicense(opts),
+    adminCreateMembershipPackagePurchase: async (opts) =>
+      await adminCreateMembershipPackagePurchase({
+        admin_account_id: opts.actor_account_id,
+        user_account_id: opts.user_account_id,
+        product: opts.product,
+        price: opts.price,
+        source: opts.source,
+        reason: opts.reason,
+        idempotency_key: opts.idempotency_key,
+        pricing_note: opts.pricing_note,
+        trusted_admin: opts.trusted_admin === true,
+      }),
     listSiteLicenseOverviews: async ({
       actor_account_id,
       admin,
