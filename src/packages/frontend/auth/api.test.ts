@@ -5,6 +5,10 @@ describe("frontend/auth/api", () => {
     jest.resetModules();
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it("uses the v2 auth bootstrap endpoint", async () => {
     const fetchMock = jest.fn(async () => ({
       json: async () => ({ signed_in: false }),
@@ -26,14 +30,51 @@ describe("frontend/auth/api", () => {
     const { getAuthBootstrap } = await import("./api");
     await getAuthBootstrap();
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/v2/auth/bootstrap", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({}),
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v2/auth/bootstrap",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("times out an unresponsive authentication request", async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest.fn(
+      async (_url: string, { signal }: { signal: AbortSignal }) =>
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+    (global as any).fetch = fetchMock;
+
+    jest.doMock("@cocalc/frontend/customize/app-base-path", () => ({
+      appBasePath: "",
+    }));
+    jest.doMock("@cocalc/frontend/control-plane-origin", () => ({
+      clearStoredControlPlaneOrigin: jest.fn(),
+      getStoredControlPlaneOrigin: jest.fn(),
+      setStoredControlPlaneOrigin: jest.fn(),
+    }));
+    jest.doMock("@cocalc/frontend/misc/remember-me", () => ({
+      deleteRememberMe: jest.fn(),
+    }));
+
+    const { postAuthApi } = await import("./api");
+    const request = expect(
+      postAuthApi({ endpoint: "auth/bootstrap", body: {}, timeout_ms: 100 }),
+    ).rejects.toThrow(
+      "Authentication request timed out. Check your connection and try again.",
+    );
+
+    await jest.advanceTimersByTimeAsync(100);
+    await request;
   });
 
   it("loads auth bootstrap from the stored control-plane origin", async () => {
@@ -232,7 +273,7 @@ describe("frontend/auth/api", () => {
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://bay-2-lite4b.cocalc.ai/api/v2/auth/sign-in",
-      {
+      expect.objectContaining({
         method: "POST",
         credentials: "include",
         headers: {
@@ -242,7 +283,8 @@ describe("frontend/auth/api", () => {
           email: "user@example.com",
           retry_token: "retry-token",
         }),
-      },
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -273,14 +315,15 @@ describe("frontend/auth/api", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://bay-1-lite4b.cocalc.ai/api/v2/accounts/sign-out",
-      {
+      expect.objectContaining({
         method: "POST",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ all: false }),
-      },
+        signal: expect.any(AbortSignal),
+      }),
     );
     expect(clearStoredControlPlaneOrigin).toHaveBeenCalled();
     expect(deleteRememberMe).toHaveBeenCalledWith("");
