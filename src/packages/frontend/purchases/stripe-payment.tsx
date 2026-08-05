@@ -842,7 +842,7 @@ export function ConfirmButton({
 export function BigSpin({ style, tip = "Loading" }: { style?; tip?: string }) {
   return (
     <div style={{ ...style, textAlign: "center" }}>
-      <Spin tip={tip} size="large">
+      <Spin description={tip} size="large">
         <div
           style={{
             padding: 50,

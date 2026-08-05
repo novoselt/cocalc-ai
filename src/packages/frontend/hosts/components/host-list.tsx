@@ -1248,7 +1248,7 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
               padding: "24px 0",
             }}
           >
-            <Spin tip="Loading project hosts..." />
+            <Spin description="Loading project hosts..." />
           </div>
         </Card>
       </div>

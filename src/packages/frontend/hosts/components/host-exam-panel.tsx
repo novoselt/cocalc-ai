@@ -456,7 +456,7 @@ export function HostExamPanel({
   return (
     <Spin
       spinning={loading}
-      tip={
+      description={
         pendingAction === "prepare" ? (
           <Alert
             type="info"
