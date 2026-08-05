@@ -81,6 +81,14 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason:
       "admin-only bounded and audited host log inspection with server-side caps and redaction",
   },
+  "adminSupport.update": {
+    decision: "fresh-auth-required",
+    reason: "posts comments or changes customer-visible Zendesk ticket state",
+  },
+  "adminSupport.merge": {
+    decision: "fresh-auth-required",
+    reason: "merges Zendesk tickets and can add customer-visible comments",
+  },
   "adminData.deleteView": {
     decision: "fresh-auth-required",
     reason: "Admin Data Explorer shared view deletion",

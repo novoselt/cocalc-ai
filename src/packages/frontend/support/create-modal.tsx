@@ -23,6 +23,7 @@ import RecentFiles from "@cocalc/frontend/public/support/recent-files";
 import { is_valid_email_address as isValidEmailAddress } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import { openSupportTicketsPage } from "./open";
+import SupportSubmissionNotice from "./submission-notice";
 import type { Options as SupportOpenOptions } from "./url";
 
 type TicketType = "problem" | "question" | "task" | "purchase" | "chat";
@@ -587,6 +588,7 @@ export default function SupportCreateModal() {
         </div>
       </div>
       <Divider style={{ margin: 0 }} />
+      <SupportSubmissionNotice />
       <Space style={{ justifyContent: "space-between", width: "100%" }} wrap>
         <Space wrap>
           <Button onClick={() => clearDraft()}>Clear draft</Button>

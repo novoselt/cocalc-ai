@@ -4,17 +4,36 @@
  */
 
 import centralLog from "@cocalc/database/postgres/central-log";
+import getPool from "@cocalc/database/pool";
+import siteURL from "@cocalc/database/settings/site-url";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import getZendeskClient from "@cocalc/server/support/zendesk-client";
+import { requireDangerousSessionAuth } from "./dangerous-session-auth";
 
 import {
   buildTriageGroups,
+  extractSupportImages,
   list,
+  merge,
+  planMerge,
+  planUpdate,
   redactSupportText,
+  search,
   show,
+  update,
 } from "./admin-support";
 
 jest.mock("@cocalc/database/postgres/central-log", () => ({
+  __esModule: true,
+  default: jest.fn(),
+}));
+
+jest.mock("@cocalc/database/pool", () => ({
+  __esModule: true,
+  default: jest.fn(),
+}));
+
+jest.mock("@cocalc/database/settings/site-url", () => ({
   __esModule: true,
   default: jest.fn(),
 }));
@@ -29,11 +48,77 @@ jest.mock("@cocalc/server/support/zendesk-client", () => ({
   default: jest.fn(),
 }));
 
+jest.mock("./dangerous-session-auth", () => ({
+  requireDangerousSessionAuth: jest.fn(),
+}));
+
 const mockCentralLog = jest.mocked(centralLog);
+const mockGetPool = jest.mocked(getPool);
+const mockSiteURL = jest.mocked(siteURL);
 const mockIsAdmin = jest.mocked(isAdmin);
 const mockGetZendeskClient = jest.mocked(getZendeskClient);
+const mockRequireDangerousSessionAuth = jest.mocked(
+  requireDangerousSessionAuth,
+);
+
+const mutationRows = new Map<string, any>();
+
+const poolQuery = jest.fn(async (sql: string, params: any[] = []) => {
+  if (sql.includes("CREATE TABLE IF NOT EXISTS admin_support_mutations")) {
+    return { rows: [] };
+  }
+  if (sql.includes("INSERT INTO admin_support_mutations")) {
+    const [key, operation, accountId, hash, auditId] = params;
+    if (mutationRows.has(key)) return { rows: [] };
+    const row = {
+      idempotency_key: key,
+      operation,
+      account_id: accountId,
+      payload_hash: hash,
+      audit_id: auditId,
+      status: "reserved",
+      updated_at: new Date(),
+    };
+    mutationRows.set(key, row);
+    return { rows: [row] };
+  }
+  if (sql.includes("SELECT * FROM admin_support_mutations")) {
+    const row = mutationRows.get(params[0]);
+    return { rows: row ? [row] : [] };
+  }
+  if (sql.includes("UPDATE admin_support_mutations")) {
+    if (sql.includes("SET audit_id=$2")) {
+      const row = mutationRows.get(params[0]);
+      if (!row || row.status !== "rejected") return { rows: [] };
+      Object.assign(row, {
+        audit_id: params[1],
+        status: "reserved",
+        error: null,
+        updated_at: new Date(),
+      });
+      return { rows: [row] };
+    }
+    const [key, status, zendeskAuditId, zendeskJobId, safeResponse, error] =
+      params;
+    const row = mutationRows.get(key);
+    if (row) {
+      Object.assign(row, {
+        status,
+        zendesk_audit_id: zendeskAuditId ?? row.zendesk_audit_id,
+        zendesk_job_id: zendeskJobId ?? row.zendesk_job_id,
+        safe_response:
+          safeResponse == null ? row.safe_response : JSON.parse(safeResponse),
+        error,
+        updated_at: new Date(),
+      });
+    }
+    return { rows: [] };
+  }
+  throw new Error(`unexpected test SQL: ${sql}`);
+});
 
 const PROJECT_ID = "881e5f4d-fca6-4739-9848-45bfaa8d49d3";
+const IMAGE_UUID = "835c0265-a303-4322-af0c-9cbfe2da05e8";
 
 function ticket(overrides: Record<string, unknown> = {}) {
   const now = new Date();
@@ -49,6 +134,8 @@ function ticket(overrides: Record<string, unknown> = {}) {
     created_at: new Date(now.getTime() - 30 * 60_000).toISOString(),
     updated_at: new Date(now.getTime() - 10 * 60_000).toISOString(),
     requester_id: 44,
+    assignee_id: 55,
+    tags: ["support", "bug"],
     ...overrides,
   } as any;
 }
@@ -58,6 +145,11 @@ describe("admin support API", () => {
     jest.clearAllMocks();
     mockIsAdmin.mockResolvedValue(true);
     mockCentralLog.mockResolvedValue(undefined);
+    mockSiteURL.mockResolvedValue("https://cocalc.ai");
+    mutationRows.clear();
+    poolQuery.mockClear();
+    mockGetPool.mockReturnValue({ query: poolQuery } as any);
+    mockRequireDangerousSessionAuth.mockResolvedValue({} as any);
   });
 
   it("redacts common secrets and private project paths", () => {
@@ -72,6 +164,28 @@ describe("admin support API", () => {
     expect(redacted).not.toContain("private.txt");
     expect(redacted).toContain(PROJECT_ID);
     expect(redacted).toContain("[REDACTED_PATH]");
+  });
+
+  it("extracts only validated images from the configured CoCalc site", () => {
+    const images = extractSupportImages(
+      [
+        `- Image: https://cocalc.ai/blobs/paste%20one.png?uuid=${IMAGE_UUID}`,
+        `![duplicate](https://cocalc.ai/blobs/other.png?uuid=${IMAGE_UUID})`,
+        `https://evil.example/blobs/external.png?uuid=11111111-1111-4111-8111-111111111111`,
+        "https://cocalc.ai/blobs/not-image.txt?uuid=22222222-2222-4222-8222-222222222222",
+        "https://cocalc.ai/blobs/invalid.png?uuid=not-a-uuid",
+        "https://cocalc.ai/blobs/path%2Fescape.png?uuid=33333333-3333-4333-8333-333333333333",
+      ].join("\n"),
+      "https://cocalc.ai",
+    );
+
+    expect(images).toEqual([
+      {
+        filename: "paste one.png",
+        source: "cocalc_blob",
+        url: `https://cocalc.ai/blobs/paste%20one.png?uuid=${IMAGE_UUID}`,
+      },
+    ]);
   });
 
   it("returns bounded redacted recent tickets and records an audit", async () => {
@@ -128,7 +242,7 @@ describe("admin support API", () => {
     });
   });
 
-  it("returns comments without requester identities or attachment URLs", async () => {
+  it("returns CoCalc comment images without requester identities or attachment URLs", async () => {
     const tickets = {
       show: jest.fn(async () => ({ result: ticket(), response: {} })),
       get: jest.fn(async () => ({
@@ -138,7 +252,9 @@ describe("admin support API", () => {
             author_id: 44,
             public: true,
             created_at: new Date().toISOString(),
-            plain_body: "Contact alice@example.com; api_key=super-secret",
+            plain_body:
+              "Contact alice@example.com; api_key=super-secret\n" +
+              `- Image: https://cocalc.ai/blobs/support.png?uuid=${IMAGE_UUID}`,
             body: "ignored",
             attachments: [
               {
@@ -167,6 +283,13 @@ describe("admin support API", () => {
         author: "requester",
         attachment_count: 1,
         attachment_bytes: 120,
+        images: [
+          {
+            filename: "support.png",
+            source: "cocalc_blob",
+            url: `https://cocalc.ai/blobs/support.png?uuid=${IMAGE_UUID}`,
+          },
+        ],
       }),
     ]);
     expect(JSON.stringify(result)).not.toContain("alice@example.com");
@@ -179,6 +302,273 @@ describe("admin support API", () => {
       "comments",
       { sort_order: "desc" },
     ]);
+  });
+
+  it("runs bounded ticket-only Zendesk searches", async () => {
+    const searchGet = jest.fn(async () => ({
+      result: [ticket()],
+      response: {},
+    }));
+    mockGetZendeskClient.mockResolvedValue({
+      search: { get: searchGet },
+    } as any);
+
+    const result = await search({
+      account_id: "admin-account",
+      query: "status<solved updated>2026-08-01",
+      reason: "review unresolved tickets",
+    });
+
+    expect(result.query).toBe("type:ticket status<solved updated>2026-08-01");
+    expect(result.tickets).toHaveLength(1);
+    expect(searchGet).toHaveBeenCalledWith([
+      "search",
+      expect.objectContaining({
+        query: "type:ticket status<solved updated>2026-08-01",
+      }),
+    ]);
+    expect(mockCentralLog).toHaveBeenCalledWith({
+      event: "admin_support_operator",
+      value: expect.objectContaining({
+        mode: "search",
+        query_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }),
+    });
+  });
+
+  it("plans an update without mutating Zendesk", async () => {
+    const current = ticket({ updated_at: "2026-08-05T12:00:00.000Z" });
+    const tickets = {
+      show: jest.fn(async () => ({ result: current, response: {} })),
+      update: jest.fn(),
+    };
+    mockGetZendeskClient.mockResolvedValue({ tickets } as any);
+
+    const result = await planUpdate({
+      account_id: "admin-account",
+      ticket_id: 123,
+      public_reply: "Hello alice@example.com",
+      status: "pending",
+      reason: "response approved in support review",
+    });
+
+    expect(result).toMatchObject({
+      operation: "update",
+      commit: false,
+      expected_updated_at: "2026-08-05T12:00:00.000Z",
+      changes: {
+        comment_kind: "public_reply",
+        status: "pending",
+      },
+    });
+    expect(result.changes.comment_preview).not.toContain("alice@example.com");
+    expect(tickets.update).not.toHaveBeenCalled();
+    expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
+  });
+
+  it("atomically updates a ticket and safely replays the request key", async () => {
+    const before = ticket({
+      updated_at: "2026-08-05T12:00:00.000Z",
+      tags: ["support", "old"],
+    });
+    const after = ticket({
+      updated_at: "2026-08-05T12:01:00.000Z",
+      status: "pending",
+      tags: ["support", "new"],
+    });
+    let showCalls = 0;
+    const tickets = {
+      show: jest.fn(async () => ({
+        result: showCalls++ === 0 ? before : after,
+        response: {},
+      })),
+      update: jest.fn(async () => ({
+        result: after,
+        response: {},
+      })),
+      get: jest.fn(async () => ({
+        result: [
+          {
+            id: 765,
+            author_id: 999,
+            public: true,
+            created_at: "2026-08-05T12:01:00.000Z",
+            plain_body: "The issue is fixed.",
+            body: "The issue is fixed.",
+            attachments: [],
+          },
+        ],
+        response: {},
+      })),
+    };
+    const ticketaudits = {
+      list: jest.fn(async () => [
+        {
+          id: 987,
+          metadata: {
+            custom: {
+              cocalc_idempotency_key: "support-update-stable-key",
+            },
+          },
+        },
+      ]),
+    };
+    mockGetZendeskClient.mockResolvedValue({ tickets, ticketaudits } as any);
+    const request = {
+      account_id: "11111111-1111-4111-8111-111111111111",
+      session_hash: "fresh-session",
+      ticket_id: 123,
+      public_reply: "The issue is fixed.",
+      status: "pending" as const,
+      add_tags: ["new"],
+      remove_tags: ["old"],
+      expected_updated_at: "2026-08-05T12:00:00.000Z",
+      idempotency_key: "support-update-stable-key",
+      reason: "approved response and status change",
+    };
+
+    const first = await update(request);
+    const replay = await update(request);
+
+    expect(mockRequireDangerousSessionAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: request.account_id,
+        session_hash: "fresh-session",
+      }),
+    );
+    expect(tickets.update).toHaveBeenCalledTimes(1);
+    expect(tickets.update).toHaveBeenCalledWith(123, {
+      ticket: expect.objectContaining({
+        safe_update: true,
+        updated_stamp: request.expected_updated_at,
+        status: "pending",
+        tags: ["new", "support"],
+        comment: { body: "The issue is fixed.", public: true },
+        metadata: {
+          custom: expect.objectContaining({
+            cocalc_idempotency_key: request.idempotency_key,
+          }),
+        },
+      }),
+    });
+    expect(first).toMatchObject({
+      idempotent_replay: false,
+      zendesk_audit_id: 987,
+      comment: { id: 765, public: true },
+      ticket: { status: "pending" },
+    });
+    expect(replay).toMatchObject({
+      idempotent_replay: true,
+      zendesk_audit_id: 987,
+    });
+  });
+
+  it("does not retry an update whose remote outcome is indeterminate", async () => {
+    const before = ticket({ updated_at: "2026-08-05T12:00:00.000Z" });
+    const tickets = {
+      show: jest.fn(async () => ({ result: before, response: {} })),
+      update: jest.fn(async () => {
+        throw new Error("connection reset after request was sent");
+      }),
+    };
+    mockGetZendeskClient.mockResolvedValue({ tickets } as any);
+    const request = {
+      account_id: "11111111-1111-4111-8111-111111111111",
+      session_hash: "fresh-session",
+      ticket_id: 123,
+      private_note: "Investigating.",
+      expected_updated_at: "2026-08-05T12:00:00.000Z",
+      idempotency_key: "support-update-indeterminate",
+      reason: "approved internal note",
+    };
+
+    await expect(update(request)).rejects.toThrow(
+      "connection reset after request was sent",
+    );
+    await expect(update(request)).rejects.toThrow("may have reached Zendesk");
+    expect(tickets.update).toHaveBeenCalledTimes(1);
+    expect(mutationRows.get(request.idempotency_key)?.status).toBe(
+      "indeterminate",
+    );
+  });
+
+  it("plans and commits a checked asynchronous merge", async () => {
+    const targetBefore = ticket({
+      id: 200,
+      updated_at: "2026-08-05T13:00:00.000Z",
+    });
+    const sourceBefore = ticket({
+      id: 201,
+      updated_at: "2026-08-05T13:01:00.000Z",
+    });
+    const targetAfter = ticket({
+      id: 200,
+      updated_at: "2026-08-05T13:02:00.000Z",
+    });
+    const sourceAfter = ticket({
+      id: 201,
+      status: "closed",
+      updated_at: "2026-08-05T13:02:00.000Z",
+    });
+    let committed = false;
+    const tickets = {
+      show: jest.fn(async (id: number) => ({
+        result:
+          id === 200
+            ? committed
+              ? targetAfter
+              : targetBefore
+            : committed
+              ? sourceAfter
+              : sourceBefore,
+        response: {},
+      })),
+      merge: jest.fn(async () => {
+        committed = true;
+        return {
+          result: { job_status: { id: "merge-job-1", status: "completed" } },
+          response: {},
+        };
+      }),
+    };
+    mockGetZendeskClient.mockResolvedValue({ tickets } as any);
+
+    const planned = await planMerge({
+      account_id: "admin-account",
+      target_ticket_id: 200,
+      source_ticket_id: 201,
+      target_comment: "Combining duplicate request.",
+      reason: "duplicate tickets from same requester",
+    });
+    expect(planned).toMatchObject({
+      commit: false,
+      target_expected_updated_at: "2026-08-05T13:00:00.000Z",
+      source_expected_updated_at: "2026-08-05T13:01:00.000Z",
+    });
+
+    const result = await merge({
+      account_id: "11111111-1111-4111-8111-111111111111",
+      session_hash: "fresh-session",
+      target_ticket_id: 200,
+      source_ticket_id: 201,
+      target_comment: "Combining duplicate request.",
+      target_expected_updated_at: planned.target_expected_updated_at,
+      source_expected_updated_at: planned.source_expected_updated_at,
+      idempotency_key: "support-merge-stable-key",
+      reason: "duplicate tickets from same requester",
+    });
+
+    expect(tickets.merge).toHaveBeenCalledWith(200, {
+      ids: [201],
+      target_comment: "Combining duplicate request.",
+      target_comment_is_public: false,
+      source_comment_is_public: false,
+    });
+    expect(result).toMatchObject({
+      zendesk_job_id: "merge-job-1",
+      zendesk_job_status: "completed",
+      source_ticket: { status: "closed" },
+    });
   });
 
   it("rejects non-admin callers before reading Zendesk", async () => {
