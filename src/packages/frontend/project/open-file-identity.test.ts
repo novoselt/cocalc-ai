@@ -622,6 +622,46 @@ describe("open_file wait_for_ready", () => {
     jest.restoreAllMocks();
   });
 
+  it("normalizes a :line suffix before creating the file tab", async () => {
+    const path = "/home/user/c.txt";
+    const saveSession = jest.fn();
+    const { open_files, openFilesState, store } = makeOpenFilesHarness();
+
+    jest.spyOn(redux as any, "getStore").mockImplementation((name: string) => {
+      if (name === "page") {
+        return { get: jest.fn().mockReturnValue(false) };
+      }
+      return undefined;
+    });
+    jest
+      .spyOn(redux as any, "getActions")
+      .mockImplementation((name: string) => {
+        if (name === "page") {
+          return { save_session: saveSession };
+        }
+        return {};
+      });
+
+    const actions = {
+      project_id: "project-1",
+      get_store: () => store,
+      open_files,
+    } as any;
+
+    await open_file(actions, {
+      path: `${path}:5`,
+      foreground: false,
+      foreground_project: false,
+      wait_for_ready: false,
+    });
+
+    expect(openFilesState.has(`${path}:5`)).toBe(false);
+    expect(openFilesState.get(path)).toMatchObject({
+      display_path: path,
+      fragmentId: { line: "5" },
+    });
+  });
+
   it("bootstraps the editor component for public share viewer opens", async () => {
     const path = "/home/user/share/a.md";
     const saveSession = jest.fn();

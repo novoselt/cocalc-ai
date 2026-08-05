@@ -24,6 +24,7 @@ import {
   removeOrigin,
 } from "@cocalc/frontend/lib/cocalc-urls";
 import Fragment, { FragmentId } from "@cocalc/frontend/misc/fragment-id";
+import { parsePathWithOptionalLineSuffix } from "@cocalc/frontend/project/parse-path-line";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import {
   containingPath,
@@ -162,26 +163,6 @@ function parseLineFromHashFragment(hash?: string): number | undefined {
   if (!match) return undefined;
   const line = Number(match[1]);
   return Number.isFinite(line) && line > 0 ? line : undefined;
-}
-
-function parsePathWithOptionalLineSuffix(path: string): {
-  path: string;
-  line?: number;
-} {
-  const trimmed = path.trim();
-  // Parse from the last :line(:col) suffix and allow common trailing
-  // punctuation that can be attached in prose/code snippets.
-  const match = trimmed.match(/^(.*):(\d+)(?::\d+)?(?:[)\].,;!?'"`]+)?$/);
-  if (!match) return { path: trimmed };
-  const candidatePath = match[1].trim();
-  if (!candidatePath || candidatePath.endsWith("/")) {
-    return { path: trimmed };
-  }
-  const line = Number(match[2]);
-  if (!Number.isFinite(line) || line <= 0) {
-    return { path: trimmed };
-  }
-  return { path: candidatePath, line };
 }
 
 function decodePathForParsing(raw: string): string {
