@@ -279,6 +279,7 @@ export interface ListPublicDirectoryShareDirectoryResponse {
 
 export interface CopyPublicDirectoryShareToProjectResponse {
   destination_project_id: string;
+  destination_path: string;
   op_id: string;
   scope_type: "project";
   scope_id: string;

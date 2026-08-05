@@ -232,11 +232,11 @@ export function PublicDirectoryShareBanner({
     setCompactBannerPreference(share, next);
   }
 
-  function openDestinationProject(project_id: string) {
+  function openDestinationProject(project_id: string, path?: string | null) {
     projectActions.open_project({
       project_id,
       switch_to: true,
-      target: "files",
+      target: path && path !== "." ? path : "files",
     });
   }
 
@@ -297,7 +297,10 @@ export function PublicDirectoryShareBanner({
           : `${successPrefix} It is not yet available in your project list. Try opening it again in a moment.${grantMessage ? ` ${grantMessage}` : ""}`,
       );
       if (canOpen) {
-        openDestinationProject(result.destination_project_id);
+        openDestinationProject(
+          result.destination_project_id,
+          result.destination_path,
+        );
       }
     } catch (err) {
       setCopyError(normalizeUserFacingError(err).message);
@@ -328,11 +331,10 @@ export function PublicDirectoryShareBanner({
       setCopyMessage(
         `Copy queued as operation ${result.op_id}.${grantMessage ? ` ${grantMessage}` : ""}`,
       );
-      projectActions.open_project({
-        project_id: result.destination_project_id,
-        switch_to: true,
-        target: "files",
-      });
+      openDestinationProject(
+        result.destination_project_id,
+        result.destination_path,
+      );
     } catch (err) {
       setCopyError(normalizeUserFacingError(err).message);
     } finally {
@@ -523,6 +525,7 @@ export function PublicDirectoryShareBanner({
                     onClick={() =>
                       openDestinationProject(
                         copyConflict.destination_project_id,
+                        copyConflict.conflict.destination_path,
                       )
                     }
                   >
