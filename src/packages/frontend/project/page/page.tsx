@@ -296,13 +296,17 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     const shareRelativePath = `${props.publicDirectorySharePath ?? ""}`
       .trim()
       .replace(/^\/+|\/+$/g, "");
-    const targetPath = shareRelativePath
-      ? path_to_file(sharePath, shareRelativePath)
-      : "";
+    const targetPath =
+      share.path_type === "file"
+        ? sharePath
+        : shareRelativePath
+          ? path_to_file(sharePath, shareRelativePath)
+          : "";
     const targetIsFile =
       targetPath != null &&
       targetPath.length > 0 &&
-      !props.publicDirectorySharePathIsDirectory;
+      (share.path_type === "file" ||
+        !props.publicDirectorySharePathIsDirectory);
 
     if (targetIsFile && !openFilesReady) {
       return;
@@ -310,7 +314,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
 
     actions.set_current_path(
       targetIsFile
-        ? path_split(targetPath).head || sharePath
+        ? path_split(targetPath).head || "."
         : targetPath || sharePath,
     );
     actions.set_all_files_unchecked?.();
@@ -341,6 +345,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     actions,
     props.publicDirectoryShare?.id,
     props.publicDirectoryShare?.path,
+    props.publicDirectoryShare?.path_type,
     props.publicDirectoryShare?.slug,
     props.publicDirectorySharePath,
     props.publicDirectorySharePathIsDirectory,

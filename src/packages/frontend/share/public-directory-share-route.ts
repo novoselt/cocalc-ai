@@ -55,6 +55,19 @@ export function shareRouteCandidates(rawPath: string): ShareRouteCandidate[] {
   return candidates;
 }
 
+export function exactFileShareRouteAllowed({
+  sharePath,
+  relativePath,
+}: {
+  sharePath: string;
+  relativePath: string;
+}): boolean {
+  const suffix = relativePath.replace(/^\/+|\/+$/g, "");
+  if (!suffix) return true;
+  const basename = sharePath.split("/").filter(Boolean).at(-1) ?? "";
+  return suffix === basename;
+}
+
 function errorDetails(error: unknown): string {
   if (error == null) {
     return "";

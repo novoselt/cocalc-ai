@@ -30,6 +30,7 @@ describe("public directory share project labels", () => {
       {
         id: "11111111-1111-4111-8111-111111111111",
         path: "docs",
+        path_type: "directory",
         slug: "course/docs",
         title: "Course Docs",
         requires_auth: true,
@@ -72,5 +73,24 @@ describe("public directory share project labels", () => {
       descendants: [],
       ancestors: [{ path: "docs" }, { path: "docs/examples" }],
     });
+  });
+
+  it("does not treat an exact-file publication as an ancestor", () => {
+    const labels = publicDirectoryShareLabelsFromProjectLabels({
+      [publicDirectoryShareProjectLabelKey(
+        "33333333-3333-4333-8333-333333333333",
+      )]: publicDirectoryShareProjectLabelValue({
+        path: "docs/tutorial.ipynb",
+        path_type: "file",
+        slug: "tutorial",
+      }),
+    });
+
+    expect(
+      publicDirectoryShareIndicatorsForPath({
+        labels,
+        path: "docs/tutorial.ipynb/output.txt",
+      }),
+    ).toMatchObject({ direct: [], descendants: [], ancestors: [] });
   });
 });

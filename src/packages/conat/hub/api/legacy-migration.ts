@@ -443,6 +443,27 @@ export interface LegacyMigrationAdminLinkedProjectsResponse {
   limit: number;
 }
 
+export interface LegacyMigrationAdminReplayPublicPathsOptions {
+  account_id?: string;
+  legacy_project_id: string;
+  commit?: boolean;
+  reason: string;
+  support_reference?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}
+
+export interface LegacyMigrationAdminReplayPublicPathsResponse {
+  legacy_project_id: string;
+  project_id: string;
+  restore_status?: LegacyMigrationProjectRestoreStatus | null;
+  public_path_count: number;
+  file_path_count: number;
+  imported: number;
+  skipped: number;
+  committed: boolean;
+}
+
 export interface LegacyMigration {
   listProjects: (
     opts?: LegacyMigrationListProjectsOptions,
@@ -495,6 +516,9 @@ export interface LegacyMigration {
   adminListLinkedLegacyProjects: (
     opts: LegacyMigrationAdminLinkedProjectsOptions,
   ) => Promise<LegacyMigrationAdminLinkedProjectsResponse>;
+  adminReplayPublicPaths: (
+    opts: LegacyMigrationAdminReplayPublicPathsOptions,
+  ) => Promise<LegacyMigrationAdminReplayPublicPathsResponse>;
 }
 
 export const legacyMigration = {
@@ -515,4 +539,5 @@ export const legacyMigration = {
   adminLinkLegacyAccount: authFirstRequireAccount,
   adminUnlinkLegacyAccount: authFirstRequireAccount,
   adminListLinkedLegacyProjects: authFirstRequireAccount,
+  adminReplayPublicPaths: authFirstRequireAccount,
 } as const;
