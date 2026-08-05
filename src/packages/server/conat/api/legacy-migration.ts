@@ -15,6 +15,7 @@ import type {
   LegacyMigrationAdminLinksOptions,
   LegacyMigrationAdminPrepareProjectRemediationOptions,
   LegacyMigrationAdminProjectSearchOptions,
+  LegacyMigrationAdminReplayPublicPathsOptions,
   LegacyMigrationAdminUnlinkLegacyAccountOptions,
   LegacyMigrationApplyFinancialOptions,
   LegacyMigrationConfigureFinancialRenewalOptions,
@@ -254,6 +255,24 @@ export async function adminListLinkedLegacyProjects(
   return isSeedBay()
     ? await localLegacyMigration.adminListLinkedLegacyProjects(opts)
     : await getSeedLegacyMigrationClient().legacyMigrationAdminListLinkedLegacyProjects(
+        opts,
+      );
+}
+
+export async function adminReplayPublicPaths(
+  opts: LegacyMigrationAdminReplayPublicPathsOptions,
+) {
+  await requireAdminAccount(opts?.account_id);
+  if (opts.commit === true) {
+    await requireFreshAdminAccount({
+      account_id: opts?.account_id,
+      browser_id: opts?.browser_id,
+      session_hash: opts?.session_hash,
+    });
+  }
+  return isSeedBay()
+    ? await localLegacyMigration.adminReplayPublicPaths(opts)
+    : await getSeedLegacyMigrationClient().legacyMigrationAdminReplayPublicPaths(
         opts,
       );
 }

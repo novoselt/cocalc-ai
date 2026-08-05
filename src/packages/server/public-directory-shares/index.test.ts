@@ -14,6 +14,7 @@ import {
   normalizePublicDirectoryShareSlug,
   publicDirectoryShareReadPolicyForPath,
   update,
+  upsertMigratedLegacyPublicDirectoryShare,
 } from "./index";
 import getPool, { initEphemeralDatabase } from "@cocalc/database/pool";
 import { getPublicDirectoryShareLimitForAccount } from "@cocalc/server/membership/project-limits";
@@ -130,6 +131,31 @@ describe("public directory share normalization", () => {
     ).toBe(false);
   });
 
+  it("generates exact-file read policies without granting siblings or descendants", () => {
+    const policy = publicDirectoryShareReadPolicyForPath(
+      "notebooks/tutorial.ipynb",
+      "file",
+    );
+    expect(
+      viewerReadPolicyAllowsPath({
+        policy,
+        path: "notebooks/tutorial.ipynb",
+      }),
+    ).toBe(true);
+    expect(
+      viewerReadPolicyAllowsPath({
+        policy,
+        path: "notebooks/private.ipynb",
+      }),
+    ).toBe(false);
+    expect(
+      viewerReadPolicyAllowsPath({
+        policy,
+        path: "notebooks/tutorial.ipynb/output.txt",
+      }),
+    ).toBe(false);
+  });
+
   it("excludes sensitive project paths even from root shares", () => {
     const policy = publicDirectoryShareReadPolicyForPath(".");
     expect(viewerReadPolicyAllowsPath({ policy, path: "README.md" })).toBe(
@@ -190,6 +216,11 @@ describe("public directory temporary viewer grants", () => {
   beforeEach(async () => {
     mockGetProjectFsClient = jest.fn(async () => ({
       getListing: jest.fn(async () => ({ files: {}, truncated: false })),
+      lstat: jest.fn(async () => ({
+        isSymbolicLink: () => false,
+        isDirectory: () => true,
+        isFile: () => false,
+      })),
     }));
     mockGetProjectShareFsClient = jest.fn(async () => ({
       getListing: jest.fn(async () => ({ files: {}, truncated: false })),
@@ -261,10 +292,128 @@ describe("public directory temporary viewer grants", () => {
     });
 
     expect(share.path).toBe("share");
+    expect(share.path_type).toBe("directory");
     expect(mockGetProjectFsClient).toHaveBeenCalledWith({
       account_id: OWNER_ID,
       project_id: PROJECT_ID,
     });
+  });
+
+  it("publishes regular files with an exact read policy", async () => {
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users, last_edited)
+       VALUES ($1, 'Publish project', '{}'::jsonb, NOW())
+       ON CONFLICT (project_id) DO NOTHING`,
+      [PROJECT_ID],
+    );
+    const lstat = jest.fn(async () => ({
+      isSymbolicLink: () => false,
+      isDirectory: () => false,
+      isFile: () => true,
+    }));
+    mockGetProjectFsClient.mockResolvedValue({ lstat });
+
+    const share = await create({
+      account_id: OWNER_ID,
+      project_id: PROJECT_ID,
+      path: "notebooks/tutorial.ipynb",
+      slug: "exact-tutorial",
+    });
+    expect(share.path_type).toBe("file");
+    expect(lstat).toHaveBeenCalledWith("notebooks/tutorial.ipynb");
+
+    const grant = await grantTemporaryViewerAccess({
+      account_id: ACCOUNT_ID,
+      slug: share.slug,
+    });
+    expect(grant.path_type).toBe("file");
+    expect(
+      viewerReadPolicyAllowsPath({
+        policy: grant.read_policy,
+        path: "notebooks/tutorial.ipynb",
+      }),
+    ).toBe(true);
+    expect(
+      viewerReadPolicyAllowsPath({
+        policy: grant.read_policy,
+        path: "notebooks/other.ipynb",
+      }),
+    ).toBe(false);
+    await expect(
+      listDirectory({
+        account_id: ACCOUNT_ID,
+        slug: share.slug,
+      }),
+    ).rejects.toMatchObject({ code: "ENOTDIR" });
+  });
+
+  it("rejects symbolic links instead of following them", async () => {
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users, last_edited)
+       VALUES ($1, 'Publish project', '{}'::jsonb, NOW())
+       ON CONFLICT (project_id) DO NOTHING`,
+      [PROJECT_ID],
+    );
+    mockGetProjectFsClient.mockResolvedValue({
+      lstat: jest.fn(async () => ({
+        isSymbolicLink: () => true,
+        isDirectory: () => false,
+        isFile: () => false,
+      })),
+    });
+
+    await expect(
+      create({
+        account_id: OWNER_ID,
+        project_id: PROJECT_ID,
+        path: "linked-file.ipynb",
+        slug: "linked-file",
+      }),
+    ).rejects.toThrow("symbolic links cannot be published");
+  });
+
+  it("preserves legacy identifier aliases when the canonical slug changes", async () => {
+    await getPool().query(
+      `INSERT INTO projects (project_id, title, users, last_edited)
+       VALUES ($1, 'Publish project', '{}'::jsonb, NOW())
+       ON CONFLICT (project_id) DO NOTHING`,
+      [PROJECT_ID],
+    );
+    const legacyId = "0a48957b67f375b9e3107216504ca0c4efb678fd";
+    const share = await upsertMigratedLegacyPublicDirectoryShare({
+      account_id: OWNER_ID,
+      project_id: PROJECT_ID,
+      path: "admcycles tutorial.ipynb",
+      path_type: "file",
+      slug: "admcycles/tutorial",
+      legacy_public_path_id: legacyId,
+      availability_status: "available",
+      visibility: "unlisted",
+    });
+    await update({
+      account_id: OWNER_ID,
+      id: share.id,
+      slug: "admcycles/tutorial-v2",
+    });
+
+    const { rows } = await getPool().query<{
+      slug: string;
+      alias_kind: string;
+    }>(
+      `SELECT slug, alias_kind
+         FROM public_project_path_slugs
+        WHERE public_project_path_id=$1
+        ORDER BY slug`,
+      [share.id],
+    );
+    expect(rows).toEqual([
+      { slug: legacyId, alias_kind: "legacy-public-path-id" },
+      { slug: "admcycles/tutorial-v2", alias_kind: "canonical" },
+      {
+        slug: `public_paths/${legacyId}`,
+        alias_kind: "legacy-public-path-route",
+      },
+    ]);
   });
 
   it("persists public share theme metadata", async () => {

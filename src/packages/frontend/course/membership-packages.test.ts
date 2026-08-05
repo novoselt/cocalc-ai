@@ -40,6 +40,21 @@ describe("course membership package helpers", () => {
           updated: new Date("2026-05-03T00:00:00Z"),
         },
         {
+          id: "shared-course-package",
+          owner_account_id: "owner",
+          kind: "course",
+          membership_class: "student",
+          seat_count: 10,
+          metadata: {
+            course_project_id: "course-2",
+            course_project_ids: ["course-1", "course-2"],
+          },
+          assignments: [],
+          active_assignment_count: 0,
+          available_seat_count: 10,
+          updated: new Date("2026-05-04T00:00:00Z"),
+        },
+        {
           id: "newer",
           owner_account_id: "owner",
           kind: "course",
@@ -55,7 +70,7 @@ describe("course membership package helpers", () => {
       "course-1",
     );
 
-    expect(selected?.id).toBe("newer");
+    expect(selected?.id).toBe("shared-course-package");
   });
 
   it("finds only active assignments for the requested account", () => {

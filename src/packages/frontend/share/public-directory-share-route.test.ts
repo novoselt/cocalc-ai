@@ -1,5 +1,6 @@
 import {
   classifySharePath,
+  exactFileShareRouteAllowed,
   shareRouteCandidates,
 } from "./public-directory-share-route";
 
@@ -88,6 +89,38 @@ describe("shareRouteCandidates", () => {
       { slug: "test2/files", relativePath: "a.py" },
       { slug: "test2", relativePath: "files/a.py" },
     ]);
+  });
+});
+
+describe("exactFileShareRouteAllowed", () => {
+  it("accepts canonical and historical filename forms", () => {
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "",
+      }),
+    ).toBe(true);
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "admcycles tutorial.ipynb",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects sibling and nested paths", () => {
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "private.ipynb",
+      }),
+    ).toBe(false);
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "admcycles tutorial.ipynb/output.txt",
+      }),
+    ).toBe(false);
   });
 });
 

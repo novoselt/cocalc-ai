@@ -1092,7 +1092,7 @@ export function ActionBox({
         type: "success",
         message:
           existingPublishShare == null
-            ? "Directory published. The unlisted share link was copied to your clipboard."
+            ? "Path published. The unlisted share link was copied to your clipboard."
             : "Publication updated. The unlisted share link was copied to your clipboard.",
       });
     } catch (err) {
@@ -1119,7 +1119,7 @@ export function ActionBox({
       setPublishUrl("");
       alert_message({
         type: "success",
-        message: "Directory unpublished.",
+        message: "Path unpublished.",
       });
     } catch (err) {
       setPublishError(normalizeUserFacingError(err).message);
@@ -1131,7 +1131,11 @@ export function ActionBox({
   function render_publish() {
     const path = checked_files.first();
     if (typeof path !== "string") {
-      return <Alert bsStyle="warning">Select one directory to publish.</Alert>;
+      return (
+        <Alert bsStyle="warning">
+          Select one file or directory to publish.
+        </Alert>
+      );
     }
     if (lite) {
       return null;
@@ -1139,16 +1143,16 @@ export function ActionBox({
     if (!pathIsPublishable(path)) {
       return (
         <Alert bsStyle="warning">
-          Only directories in <code>/home/user</code> can be published.{" "}
-          <code>{SNAPSHOTS}</code> and <code>{BACKUPS}</code> are excluded from
-          public sharing.
+          Only files and directories in <code>/home/user</code> can be
+          published. <code>{SNAPSHOTS}</code> and <code>{BACKUPS}</code> are
+          excluded from public sharing.
         </Alert>
       );
     }
     if (readOnlySource) {
       return (
         <Alert bsStyle="warning">
-          View-only project access cannot publish directories.
+          View-only project access cannot publish files or directories.
         </Alert>
       );
     }
@@ -1204,10 +1208,9 @@ export function ActionBox({
           <Alert bsStyle="info">
             <Space direction="vertical" size={8} style={{ width: "100%" }}>
               <span>
-                Publish <code>{displayPath}</code> as an unlisted shared
+                Publish <code>{displayPath}</code> as an unlisted shared file or
                 directory. Viewers must know the URL and be signed in to CoCalc.
-                Your membership tier limits how many directories you can
-                publish.
+                Your membership tier limits how many paths you can publish.
               </span>
               <AntdButton
                 size="small"
@@ -1409,7 +1412,7 @@ export function ActionBox({
             onClick={() => void savePublication()}
           >
             <Icon name="share-square" />{" "}
-            {existingPublishShare ? "Update publication" : "Publish directory"}
+            {existingPublishShare ? "Update publication" : "Publish path"}
           </AntdButton>
           {existingPublishShare ? (
             <Popconfirm
