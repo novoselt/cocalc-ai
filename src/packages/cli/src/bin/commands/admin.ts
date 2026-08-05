@@ -1195,7 +1195,7 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     .requiredOption("--membership-class <class>", "membership class")
     .requiredOption("--seat-count <n>", "number of package seats")
     .requiredOption("--price <usd>", "custom total price in USD")
-    .requiredOption("--source <source>", "credit or free")
+    .requiredOption("--source <source>", "card, credit, or free")
     .requiredOption("--reason <text>", "operator audit reason")
     .option("--interval <interval>", "month or year")
     .option("--course-project <uuid>", "course project UUID")
@@ -1225,8 +1225,8 @@ Merge comments are private unless their corresponding --*-comment-public flag is
           );
           const price = parseAdminPackagePrice(opts.price);
           const source = `${opts.source ?? ""}`.trim();
-          if (source !== "credit" && source !== "free") {
-            throw new Error("--source must be credit or free");
+          if (source !== "card" && source !== "credit" && source !== "free") {
+            throw new Error("--source must be card, credit, or free");
           }
           const reason = `${opts.reason ?? ""}`.trim();
           if (!reason) throw new Error("--reason must be non-empty");

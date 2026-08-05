@@ -147,7 +147,7 @@ test("admin membership-package purchase commits the reviewed custom price", asyn
     "--price",
     "150",
     "--source",
-    "free",
+    "card",
     "--reason",
     "approved custom camp package",
     "--idempotency-key",
@@ -160,7 +160,7 @@ test("admin membership-package purchase commits the reviewed custom price", asyn
     "22222222-2222-4222-8222-222222222222",
   );
   assert.equal(purchaseArgs.price, 150);
-  assert.equal(purchaseArgs.source, "free");
+  assert.equal(purchaseArgs.source, "card");
   assert.equal(purchaseArgs.idempotency_key, "ticket-20443");
   assert.deepEqual(purchaseArgs.product, {
     type: "membership-package",

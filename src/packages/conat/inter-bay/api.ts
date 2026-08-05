@@ -1408,7 +1408,7 @@ export interface AccountLocalAdminCreateMembershipPackagePurchaseRequest {
   user_account_id: string;
   product: MembershipPackageProduct;
   price: number;
-  source: "credit" | "free";
+  source: "card" | "credit" | "free";
   reason: string;
   idempotency_key: string;
   pricing_note?: string;

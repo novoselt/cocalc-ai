@@ -7,6 +7,7 @@ import type {
   MembershipPackageAssignment,
   MembershipPackageDetails,
 } from "@cocalc/conat/hub/api/purchases";
+import { membershipPackageCoversCourseProject } from "@cocalc/util/membership-package-product";
 
 function toTime(value?: Date | string | null): number {
   if (value == null) {
@@ -41,7 +42,10 @@ export function isCourseMembershipPackageForProject(
 ): boolean {
   return (
     membershipPackage?.kind === "course" &&
-    membershipPackage?.metadata?.course_project_id === course_project_id
+    membershipPackageCoversCourseProject(
+      membershipPackage.metadata,
+      course_project_id,
+    )
   );
 }
 

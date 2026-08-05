@@ -25,11 +25,12 @@ import {
 } from "@cocalc/server/purchases/admin-purchase";
 import createPurchase from "@cocalc/server/purchases/create-purchase";
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
+import createPaymentIntent from "@cocalc/server/purchases/stripe/create-payment-intent";
 import { MAX_COST } from "@cocalc/util/db-schema/purchases";
 import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
 import { moneyRound2Up, moneyToCurrency, toDecimal } from "@cocalc/util/money";
 
-export type AdminMembershipPackageSource = "credit" | "free";
+export type AdminMembershipPackageSource = "card" | "credit" | "free";
 
 export interface AdminMembershipPackagePurchaseOptions {
   admin_account_id: string;
@@ -47,6 +48,8 @@ export interface AdminMembershipPackagePurchaseResult {
   package_id: string;
   purchase_id: number;
   credit_id?: number;
+  payment_intent_id?: string;
+  hosted_invoice_url?: string;
   price: number;
   standard_price: number;
   starts_at: Date;
@@ -114,6 +117,10 @@ async function getExistingPurchase({
       Number(description.admin_funding_credit_id) > 0
         ? Number(description.admin_funding_credit_id)
         : undefined,
+    payment_intent_id:
+      `${description.admin_payment_intent_id ?? ""}`.trim() || undefined,
+    hosted_invoice_url:
+      `${description.admin_hosted_invoice_url ?? ""}`.trim() || undefined,
     price: Number(row.cost),
     standard_price: Number(description.standard_total_price ?? row.cost),
     starts_at: new Date(row.period_start),
@@ -124,6 +131,63 @@ async function getExistingPurchase({
 
 function isUniqueViolation(err: unknown): boolean {
   return (err as { code?: string })?.code === "23505";
+}
+
+async function fundPurchaseFromCard({
+  account_id,
+  admin_account_id,
+  amount,
+  idempotency_key,
+}: {
+  account_id: string;
+  admin_account_id: string;
+  amount: number;
+  idempotency_key: string;
+}): Promise<{
+  credit_id: number;
+  payment_intent_id: string;
+  hosted_invoice_url: string;
+}> {
+  const { payment_intent, hosted_invoice_url } = await createPaymentIntent({
+    account_id,
+    purpose: "admin-membership-package-purchase",
+    description: "Custom CoCalc membership package",
+    lineItems: [
+      {
+        amount,
+        description: "Custom CoCalc membership package",
+      },
+    ],
+    metadata: {
+      admin_account_id,
+      admin_purchase_idempotency_key: idempotency_key,
+    },
+    force: true,
+    requireAddress: true,
+    processImmediately: true,
+    idempotencyKeyPrefix: `admin-membership-package:${admin_account_id}:${idempotency_key}`,
+    allowedPaymentMethodTypes: ["card"],
+  });
+  const { rows } = await getPool("medium").query(
+    `SELECT id, -cost AS amount
+       FROM purchases
+      WHERE account_id=$1
+        AND invoice_id=$2
+        AND service='credit'
+      LIMIT 1`,
+    [account_id, payment_intent],
+  );
+  const credit = rows[0];
+  if (!credit || toDecimal(credit.amount ?? 0).lt(amount)) {
+    throw Error(
+      `The saved card could not be charged automatically. Complete the invoice and retry: ${hosted_invoice_url}`,
+    );
+  }
+  return {
+    credit_id: Number(credit.id),
+    payment_intent_id: payment_intent,
+    hosted_invoice_url,
+  };
 }
 
 export default async function adminCreateMembershipPackagePurchase({
@@ -146,8 +210,8 @@ export default async function adminCreateMembershipPackagePurchase({
   if (product?.type !== "membership-package" || product.package_id) {
     throw Error("product must create a new membership package");
   }
-  if (source !== "credit" && source !== "free") {
-    throw Error("source must be credit or free");
+  if (source !== "card" && source !== "credit" && source !== "free") {
+    throw Error("source must be card, credit, or free");
   }
   const normalizedReason = normalizeRequiredText(reason, "reason", 4000);
   const idempotencyKey = normalizeRequiredText(
@@ -166,6 +230,21 @@ export default async function adminCreateMembershipPackagePurchase({
   }
 
   const invoice_id = invoiceId(admin_account_id, idempotencyKey);
+  const existing = await getExistingPurchase({
+    account_id: user_account_id,
+    invoice_id,
+  });
+  if (existing) return existing;
+
+  const cardFunding =
+    source === "card" && customPrice.gt(0)
+      ? await fundPurchaseFromCard({
+          account_id: user_account_id,
+          admin_account_id,
+          amount: customPrice.toNumber(),
+          idempotency_key: idempotencyKey,
+        })
+      : undefined;
   const client = await getTransactionClient();
   try {
     await assertAccountNotRehoming({
@@ -216,7 +295,7 @@ export default async function adminCreateMembershipPackagePurchase({
     ]
       .filter(Boolean)
       .join("\n\n");
-    let credit_id: number | undefined;
+    let credit_id: number | undefined = cardFunding?.credit_id;
     if (source === "free") {
       credit_id = await maybeCreateFundingCredit({
         account_id: user_account_id,
@@ -277,6 +356,8 @@ export default async function adminCreateMembershipPackagePurchase({
         admin_assigned: true,
         assigned_by: admin_account_id,
         admin_funding_credit_id: credit_id,
+        admin_payment_intent_id: cardFunding?.payment_intent_id,
+        admin_hosted_invoice_url: cardFunding?.hosted_invoice_url,
       } as any,
       invoice_id,
       notes,
@@ -296,6 +377,7 @@ export default async function adminCreateMembershipPackagePurchase({
         package_id,
         purchase_id,
         credit_id: credit_id ?? null,
+        payment_intent_id: cardFunding?.payment_intent_id ?? null,
         source,
         custom_price: customPrice.toNumber(),
         standard_price: quote.total_price,
@@ -315,6 +397,8 @@ export default async function adminCreateMembershipPackagePurchase({
       package_id,
       purchase_id,
       credit_id,
+      payment_intent_id: cardFunding?.payment_intent_id,
+      hosted_invoice_url: cardFunding?.hosted_invoice_url,
       price: customPrice.toNumber(),
       standard_price: quote.total_price,
       starts_at,

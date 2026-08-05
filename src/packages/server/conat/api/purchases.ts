@@ -2089,7 +2089,7 @@ export async function adminCreateMembershipPackagePurchase({
   user_account_id?: string;
   product?: MembershipPackageProduct;
   price?: number;
-  source?: "credit" | "free";
+  source?: "card" | "credit" | "free";
   reason?: string;
   idempotency_key?: string;
   pricing_note?: string;
@@ -2107,8 +2107,8 @@ export async function adminCreateMembershipPackagePurchase({
   const userAccountId = `${user_account_id ?? ""}`.trim();
   if (!userAccountId) throw Error("user_account_id is required");
   if (!product) throw Error("product is required");
-  if (source !== "credit" && source !== "free") {
-    throw Error("source must be credit or free");
+  if (source !== "card" && source !== "credit" && source !== "free") {
+    throw Error("source must be card, credit, or free");
   }
   const homeBay = await resolveTargetAccountHomeBay({
     account_id: actorId,

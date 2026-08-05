@@ -9,6 +9,8 @@ export interface AdminMembershipPackagePurchaseResult {
   package_id: string;
   purchase_id: number;
   credit_id?: number;
+  payment_intent_id?: string;
+  hosted_invoice_url?: string;
   price: number;
   standard_price: number;
   starts_at: Date;
@@ -1600,7 +1602,7 @@ export interface Purchases {
     user_account_id?: string;
     product?: MembershipPackageProduct;
     price?: number;
-    source?: "credit" | "free";
+    source?: "card" | "credit" | "free";
     reason?: string;
     idempotency_key?: string;
     pricing_note?: string;

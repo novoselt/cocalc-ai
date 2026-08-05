@@ -18,3 +18,20 @@ export interface MembershipPackageProduct {
   price_per_seat?: number;
   metadata?: Record<string, unknown>;
 }
+
+export function membershipPackageCoversCourseProject(
+  metadata: Record<string, unknown> | null | undefined,
+  courseProjectId: string,
+): boolean {
+  const projectId = `${courseProjectId ?? ""}`.trim();
+  if (!projectId) return false;
+  if (`${metadata?.course_project_id ?? ""}`.trim() === projectId) {
+    return true;
+  }
+  return (
+    Array.isArray(metadata?.course_project_ids) &&
+    metadata.course_project_ids.some(
+      (candidate) => `${candidate ?? ""}`.trim() === projectId,
+    )
+  );
+}
