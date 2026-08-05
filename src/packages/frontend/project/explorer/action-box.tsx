@@ -1102,7 +1102,7 @@ export function ActionBox({
     }
   }
 
-  async function unpublishDirectory(): Promise<void> {
+  async function unpublishPath(): Promise<void> {
     if (!existingPublishShare) {
       return;
     }
@@ -1224,7 +1224,7 @@ export function ActionBox({
         )}
         {publishShareLoading ? (
           <Alert bsStyle="info">
-            Checking whether this directory is already published...
+            Checking whether this path is already published...
           </Alert>
         ) : null}
         <div>
@@ -1319,7 +1319,7 @@ export function ActionBox({
             checked={publishGrantOnCopy}
             onChange={(e) => setPublishGrantOnCopy(e.target.checked)}
           >
-            Offer temporary membership when viewers copy this directory
+            Offer temporary membership when viewers copy this publication
           </Checkbox>
           {publishGrantOnCopy ? (
             <Space
@@ -1416,7 +1416,7 @@ export function ActionBox({
           </AntdButton>
           {existingPublishShare ? (
             <Popconfirm
-              title="Unpublish this directory?"
+              title="Unpublish this file or directory?"
               description={
                 <span>
                   The share URL will stop working. Already-open viewers may keep
@@ -1426,7 +1426,7 @@ export function ActionBox({
               }
               okText="Unpublish"
               okButtonProps={{ danger: true }}
-              onConfirm={() => void unpublishDirectory()}
+              onConfirm={() => void unpublishPath()}
             >
               <AntdButton danger loading={publishing}>
                 Unpublish

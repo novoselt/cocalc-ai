@@ -7,9 +7,11 @@ import {
   MAX_LEGACY_PROJECT_IMPORTS_PER_REQUEST,
   legacyProjectArchiveUncompressedBytes,
   legacyPublicPathTargetFromRetainedRecord,
+  legacyPublicShareUrl,
   normalizeLegacyProjectImportIds,
 } from ".";
 import {
+  isUnsupportedLegacyProxyPublicPath,
   legacyPublicPathSlugFromRecord,
   normalizeLegacyPublicPathDescription,
 } from "./public-path-slugs";
@@ -64,6 +66,35 @@ describe("legacy migration manifest helpers", () => {
 });
 
 describe("legacy public path slug helpers", () => {
+  it("rejects unsupported legacy GitHub and gist proxy URLs", () => {
+    expect(
+      isUnsupportedLegacyProxyPublicPath({ url: "github/search/example" }),
+    ).toBe(true);
+    expect(
+      isUnsupportedLegacyProxyPublicPath({
+        url: "https://cocalc.com/gist/example/revision/file.ipynb",
+      }),
+    ).toBe(true);
+    expect(
+      isUnsupportedLegacyProxyPublicPath({
+        url: "course/github/example",
+        path: "github/example",
+      }),
+    ).toBe(false);
+    expect(isUnsupportedLegacyProxyPublicPath({ path: "github/example" })).toBe(
+      false,
+    );
+    expect(
+      legacyPublicPathSlugFromRecord({ url: "gist/example/revision" }),
+    ).toBeNull();
+    expect(
+      legacyPublicShareUrl({
+        legacy_public_path_id: "proxy-row",
+        payload: { url: "github/search/example" },
+      }),
+    ).toBeNull();
+  });
+
   it("preserves exact files from current and older retained records", () => {
     expect(
       legacyPublicPathTargetFromRetainedRecord({
@@ -170,6 +201,20 @@ describe("legacy public path slug helpers", () => {
         },
       ),
     ).toBe("Cambridge/S0022112023010078/JFM-Notebooks");
+  });
+
+  it("reconstructs historical public URLs for the migration inventory", () => {
+    expect(
+      legacyPublicShareUrl({
+        legacy_public_path_id: "0a48957b67f375b9e3107216504ca0c4efb678fd",
+        payload: {
+          original_path: "tutorials/JFM Notebooks.ipynb",
+          original_path_type: "file",
+        },
+      }),
+    ).toBe(
+      "https://cocalc.com/share/public_paths/0a48957b67f375b9e3107216504ca0c4efb678fd/files/tutorials/JFM%20Notebooks.ipynb",
+    );
   });
 
   it("normalizes cocalc.ai share URLs to the stored share slug", () => {

@@ -77,6 +77,43 @@ export interface LegacyMigrationListProjectsResponse {
   total_count: number;
 }
 
+export type LegacyMigrationPublicSharePathType =
+  | "directory"
+  | "file"
+  | "unknown";
+
+export interface LegacyMigrationPublicShareSummary {
+  legacy_public_path_id: string;
+  legacy_project_id: string;
+  legacy_account_ids: string[];
+  project_title?: string | null;
+  path: string;
+  path_type: LegacyMigrationPublicSharePathType;
+  title?: string | null;
+  description?: string | null;
+  legacy_url?: string | null;
+  disabled: boolean;
+  created?: Date | string | null;
+  last_edited?: Date | string | null;
+  project_id?: string | null;
+  import_status: LegacyMigrationProjectImportStatus;
+  restore_status?: LegacyMigrationProjectRestoreStatus | null;
+}
+
+export interface LegacyMigrationListPublicSharesOptions {
+  account_id?: string;
+  include_disabled?: boolean;
+  limit?: number;
+  offset?: number;
+  query?: string;
+}
+
+export interface LegacyMigrationListPublicSharesResponse {
+  legacy_account_ids: string[];
+  shares: LegacyMigrationPublicShareSummary[];
+  total_count: number;
+}
+
 export interface LegacyMigrationImportProjectsOptions {
   account_id?: string;
   legacy_project_ids: string[];
@@ -468,6 +505,9 @@ export interface LegacyMigration {
   listProjects: (
     opts?: LegacyMigrationListProjectsOptions,
   ) => Promise<LegacyMigrationListProjectsResponse>;
+  listPublicShares: (
+    opts?: LegacyMigrationListPublicSharesOptions,
+  ) => Promise<LegacyMigrationListPublicSharesResponse>;
   importProjects: (
     opts: LegacyMigrationImportProjectsOptions,
   ) => Promise<LegacyMigrationImportProjectsResponse>;
@@ -523,6 +563,7 @@ export interface LegacyMigration {
 
 export const legacyMigration = {
   listProjects: authFirstRequireAccount,
+  listPublicShares: authFirstRequireAccount,
   importProjects: authFirstRequireAccount,
   retryProjectRestore: authFirstRequireAccount,
   getProjectRemediation: authFirstRequireAccount,

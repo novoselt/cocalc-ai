@@ -24,6 +24,7 @@ import type {
   LegacyMigrationDismissProjectRemediationOptions,
   LegacyMigrationImportProjectsOptions,
   LegacyMigrationListProjectsOptions,
+  LegacyMigrationListPublicSharesOptions,
   LegacyMigrationPrepareProjectRemediationOptions,
   LegacyMigrationProjectRemediationStatusOptions,
   LegacyMigrationRetryProjectRestoreOptions,
@@ -82,6 +83,16 @@ export async function listProjects(opts?: LegacyMigrationListProjectsOptions) {
   return isSeedBay()
     ? await localLegacyMigration.listProjects(opts ?? {})
     : await getSeedLegacyMigrationClient().legacyMigrationListProjects(
+        opts ?? {},
+      );
+}
+
+export async function listPublicShares(
+  opts?: LegacyMigrationListPublicSharesOptions,
+) {
+  return isSeedBay()
+    ? await localLegacyMigration.listPublicShares(opts ?? {})
+    : await getSeedLegacyMigrationClient().legacyMigrationListPublicShares(
         opts ?? {},
       );
 }

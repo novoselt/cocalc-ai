@@ -1481,6 +1481,7 @@ export async function grantTemporaryViewerAccess({
   return {
     project_id: share.project_id,
     share_id: share.id,
+    legacy_public_path_id: share.legacy_public_path_id ?? null,
     path: share.path,
     path_type: share.path_type,
     read_policy: share.read_policy,
