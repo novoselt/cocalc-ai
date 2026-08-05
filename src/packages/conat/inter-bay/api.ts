@@ -79,6 +79,7 @@ import type {
   GrantTemporaryViewerAccessResponse,
   ListPublicDirectoryShareDirectoryOptions,
   ListPublicDirectoryShareDirectoryResponse,
+  ListMyPublicDirectorySharesOptions,
   ListProjectPublicDirectorySharesOptions,
   ListPublicDirectorySharesResponse,
   PublicDirectoryShareSummary,
@@ -122,6 +123,8 @@ import type {
   LegacyMigrationImportProjectsResponse,
   LegacyMigrationListProjectsOptions,
   LegacyMigrationListProjectsResponse,
+  LegacyMigrationListPublicSharesOptions,
+  LegacyMigrationListPublicSharesResponse,
   LegacyMigrationPrepareProjectRemediationOptions,
   LegacyMigrationPrepareProjectRemediationResponse,
   LegacyMigrationProjectRemediationStatusOptions,
@@ -2496,6 +2499,7 @@ export type AccountLocalMethod =
   | "get-membership-portable-state"
   | "replace-membership-portable-state"
   | "legacy-migration-list-projects"
+  | "legacy-migration-list-public-shares"
   | "legacy-migration-import-projects"
   | "legacy-migration-retry-project-restore"
   | "legacy-migration-get-project-remediation"
@@ -2516,6 +2520,7 @@ export type AccountLocalMethod =
   | "legacy-migration-admin-list-linked-legacy-projects"
   | "legacy-migration-admin-replay-public-paths"
   | "public-directory-share-resolve"
+  | "public-directory-share-list-mine"
   | "public-directory-share-list-project"
   | "public-directory-share-create"
   | "public-directory-share-update"
@@ -4024,6 +4029,9 @@ export interface InterBayAccountLocalApi {
   legacyMigrationListProjects: (
     opts?: LegacyMigrationListProjectsOptions,
   ) => Promise<LegacyMigrationListProjectsResponse>;
+  legacyMigrationListPublicShares: (
+    opts?: LegacyMigrationListPublicSharesOptions,
+  ) => Promise<LegacyMigrationListPublicSharesResponse>;
   legacyMigrationImportProjects: (
     opts: LegacyMigrationImportProjectsOptions,
   ) => Promise<LegacyMigrationImportProjectsResponse>;
@@ -4084,6 +4092,9 @@ export interface InterBayAccountLocalApi {
   publicDirectoryShareResolve: (
     opts: ResolvePublicDirectoryShareOptions,
   ) => Promise<ResolvedPublicDirectoryShare>;
+  publicDirectoryShareListMine: (
+    opts: ListMyPublicDirectorySharesOptions,
+  ) => Promise<ListPublicDirectorySharesResponse>;
   publicDirectoryShareListProject: (
     opts: ListProjectPublicDirectorySharesOptions,
   ) => Promise<ListPublicDirectorySharesResponse>;
@@ -6930,6 +6941,15 @@ export function createInterBayAccountLocalClient({
       method: "legacy-migration-list-projects",
     }),
   });
+  const legacyMigrationListPublicSharesClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationListPublicShares">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-list-public-shares",
+    }),
+  });
   const legacyMigrationImportProjectsClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "legacyMigrationImportProjects">
   >({
@@ -7124,6 +7144,15 @@ export function createInterBayAccountLocalClient({
     subject: accountLocalSubject({
       dest_bay,
       method: "public-directory-share-resolve",
+    }),
+  });
+  const publicDirectoryShareListMineClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "publicDirectoryShareListMine">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "public-directory-share-list-mine",
     }),
   });
   const publicDirectoryShareListProjectClient = createServiceClient<
@@ -7464,6 +7493,10 @@ export function createInterBayAccountLocalClient({
       await legacyMigrationListProjectsClient.legacyMigrationListProjects(
         opts ?? {},
       ),
+    legacyMigrationListPublicShares: async (opts) =>
+      await legacyMigrationListPublicSharesClient.legacyMigrationListPublicShares(
+        opts ?? {},
+      ),
     legacyMigrationImportProjects: async (opts) =>
       await legacyMigrationImportProjectsClient.legacyMigrationImportProjects(
         opts,
@@ -7542,6 +7575,10 @@ export function createInterBayAccountLocalClient({
       ),
     publicDirectoryShareResolve: async (opts) =>
       await publicDirectoryShareResolveClient.publicDirectoryShareResolve(opts),
+    publicDirectoryShareListMine: async (opts) =>
+      await publicDirectoryShareListMineClient.publicDirectoryShareListMine(
+        opts,
+      ),
     publicDirectoryShareListProject: async (opts) =>
       await publicDirectoryShareListProjectClient.publicDirectoryShareListProject(
         opts,
@@ -8853,6 +8890,20 @@ export function createInterBayAccountLocalHandler({
       },
     }),
     createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationListPublicShares">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-list-public-shares",
+      }),
+      impl: {
+        legacyMigrationListPublicShares: async (opts) =>
+          await impl.legacyMigrationListPublicShares(opts),
+      },
+    }),
+    createServiceHandler<
       Pick<InterBayAccountLocalApi, "legacyMigrationImportProjects">
     >({
       ...options,
@@ -9145,6 +9196,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         publicDirectoryShareResolve: async (opts) =>
           await impl.publicDirectoryShareResolve(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "publicDirectoryShareListMine">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "public-directory-share-list-mine",
+      }),
+      impl: {
+        publicDirectoryShareListMine: async (opts) =>
+          await impl.publicDirectoryShareListMine(opts),
       },
     }),
     createServiceHandler<

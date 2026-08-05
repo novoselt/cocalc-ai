@@ -34,6 +34,23 @@ export function normalizeLegacyPublicPathDescription(
     .replace(/\\t(?![A-Za-z])/g, "\t");
 }
 
+export function isUnsupportedLegacyProxyPublicPath(
+  row: Record<string, any>,
+): boolean {
+  const url = clean(row.url);
+  if (!url) return false;
+  let path = url;
+  try {
+    if (/^https?:\/\//i.test(path)) {
+      path = new URL(path).pathname;
+    }
+  } catch {
+    // Invalid URLs are handled by the normal public-path validation.
+  }
+  path = path.replace(/^\/+|\/+$/g, "").toLowerCase();
+  return /^(github|gist)(\/|$)/.test(path);
+}
+
 function normalizeSlug(raw: string): string {
   let slug = raw.trim();
   try {
@@ -54,6 +71,7 @@ export function legacyPublicPathSlugFromRecord(
   row: Record<string, any>,
   context: LegacyPublicPathSlugContext = {},
 ): string | null {
+  if (isUnsupportedLegacyProxyPublicPath(row)) return null;
   const url = clean(row.url);
   if (url) {
     return normalizeSlug(url);

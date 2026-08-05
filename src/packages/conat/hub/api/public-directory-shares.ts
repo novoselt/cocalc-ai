@@ -223,6 +223,7 @@ export interface GrantTemporaryViewerAccessOptions {
 export interface GrantTemporaryViewerAccessResponse {
   project_id: string;
   share_id: string;
+  legacy_public_path_id?: string | null;
   path: string;
   path_type: PublicDirectorySharePathType;
   read_policy: ProjectViewerReadPolicy;

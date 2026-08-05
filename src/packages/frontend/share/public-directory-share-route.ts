@@ -64,8 +64,25 @@ export function exactFileShareRouteAllowed({
 }): boolean {
   const suffix = relativePath.replace(/^\/+|\/+$/g, "");
   if (!suffix) return true;
-  const basename = sharePath.split("/").filter(Boolean).at(-1) ?? "";
-  return suffix === basename;
+  const normalizedSharePath = sharePath.replace(/^\/+|\/+$/g, "");
+  const basename = normalizedSharePath.split("/").filter(Boolean).at(-1) ?? "";
+  return suffix === basename || suffix === normalizedSharePath;
+}
+
+export function retainedLegacyShareRelativePath({
+  legacyPublicPathId,
+  relativePath,
+}: {
+  legacyPublicPathId?: string | null;
+  relativePath: string;
+}): string {
+  if (!legacyPublicPathId) return relativePath;
+  const normalized = relativePath.replace(/^\/+|\/+$/g, "");
+  if (normalized === LEGACY_FILES_SEPARATOR) return "";
+  if (normalized.startsWith(`${LEGACY_FILES_SEPARATOR}/`)) {
+    return normalized.slice(LEGACY_FILES_SEPARATOR.length + 1);
+  }
+  return relativePath;
 }
 
 function errorDetails(error: unknown): string {

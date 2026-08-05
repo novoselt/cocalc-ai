@@ -22,6 +22,7 @@ import { projectRuntimeHomeRelativePath } from "@cocalc/util/project-runtime";
 import {
   classifySharePath,
   exactFileShareRouteAllowed,
+  retainedLegacyShareRelativePath,
   shareRouteCandidates,
 } from "./public-directory-share-route";
 
@@ -52,26 +53,29 @@ async function grantShareRoute(rawPath: string): Promise<{
       continue;
     }
 
+    const relativePath = retainedLegacyShareRelativePath({
+      legacyPublicPathId: grant.legacy_public_path_id,
+      relativePath: candidate.relativePath,
+    });
     if (
       grant.path_type === "file" &&
       !exactFileShareRouteAllowed({
         sharePath: grant.path,
-        relativePath: candidate.relativePath,
+        relativePath,
       })
     ) {
       throw Error("This URL is outside the exact file that was published.");
     }
-    const relativePath =
-      grant.path_type === "file" ? "" : candidate.relativePath;
+    const routedRelativePath = grant.path_type === "file" ? "" : relativePath;
     const relativePathIsDirectory =
       grant.path_type === "directory" &&
       (await classifySharePath({
-        relativePath,
+        relativePath: routedRelativePath,
         listDirectory: async () => {
           await webapp_client.conat_client.hub.publicDirectoryShares.listDirectory(
             {
               slug: candidate.slug,
-              path: relativePath,
+              path: routedRelativePath,
             },
           );
         },
@@ -79,7 +83,7 @@ async function grantShareRoute(rawPath: string): Promise<{
     return {
       grant,
       projectId: grant.project_id,
-      relativePath,
+      relativePath: routedRelativePath,
       relativePathIsDirectory,
       slug: candidate.slug,
     };
@@ -157,6 +161,7 @@ function resolvedShareFromGrant({
 }): ResolvedPublicDirectoryShare {
   return {
     id: grant.share_id,
+    legacy_public_path_id: grant.legacy_public_path_id ?? null,
     project_id: grant.project_id,
     path: grant.path,
     path_type: grant.path_type,
@@ -170,7 +175,6 @@ function resolvedShareFromGrant({
     image: grant.image ?? null,
     theme: grant.theme ?? null,
     redirect: null,
-    legacy_public_path_id: null,
     legacy_url: null,
     site_license_id: null,
     site_license_pool_id: null,

@@ -12,8 +12,11 @@ import type {
   CreatePublicDirectoryShareOptions,
   GetTemporaryViewerReadPolicyOptions,
   GrantTemporaryViewerAccessOptions,
+  ListMyPublicDirectorySharesOptions,
   ListPublicDirectoryShareDirectoryOptions,
+  ListPublicDirectorySharesResponse,
   ListProjectPublicDirectorySharesOptions,
+  PublicDirectoryShareSummary,
   ResolvePublicDirectoryShareOptions,
   ResolvedPublicDirectoryShare,
   UpdatePublicDirectoryShareOptions,
@@ -196,6 +199,83 @@ export async function listProject(
   });
 }
 
+function shareUpdatedAt(share: PublicDirectoryShareSummary): number {
+  if (share.updated_at == null) return 0;
+  const value =
+    share.updated_at instanceof Date
+      ? share.updated_at.valueOf()
+      : new Date(share.updated_at).valueOf();
+  return Number.isFinite(value) ? value : 0;
+}
+
+async function listMineOnBay({
+  bay_id,
+  opts,
+  count,
+}: {
+  bay_id: string;
+  opts: ListMyPublicDirectorySharesOptions;
+  count: number;
+}): Promise<ListPublicDirectorySharesResponse> {
+  const shares: PublicDirectoryShareSummary[] = [];
+  let total_count = 0;
+  while (shares.length < count) {
+    const page = await callPublicDirectoryShareBay({
+      bay_id,
+      local: async () =>
+        await publicDirectoryShares.listMine({
+          ...opts,
+          offset: shares.length,
+          limit: Math.min(1000, count - shares.length),
+        }),
+      remote: async (client) =>
+        await client.publicDirectoryShareListMine({
+          ...opts,
+          offset: shares.length,
+          limit: Math.min(1000, count - shares.length),
+        }),
+    });
+    total_count = page.total_count;
+    shares.push(...page.shares);
+    if (page.shares.length === 0 || shares.length >= total_count) break;
+  }
+  return { shares, total_count };
+}
+
+export async function listMine(
+  opts: ListMyPublicDirectorySharesOptions = {},
+): Promise<ListPublicDirectorySharesResponse> {
+  if (!opts.account_id) {
+    throw Error("user must be signed in");
+  }
+  const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
+  const limit = Math.max(1, Math.min(1000, Math.trunc(opts.limit ?? 100)));
+  const count = offset + limit;
+  const pages = await Promise.all(
+    (await publicDirectoryShareSearchBayIds()).map(
+      async (bay_id) => await listMineOnBay({ bay_id, opts, count }),
+    ),
+  );
+  const byId = new Map<string, PublicDirectoryShareSummary>();
+  for (const share of pages.flatMap((page) => page.shares)) {
+    const current = byId.get(share.id);
+    if (current == null || shareUpdatedAt(share) > shareUpdatedAt(current)) {
+      byId.set(share.id, share);
+    }
+  }
+  const shares = [...byId.values()]
+    .sort(
+      (left, right) =>
+        shareUpdatedAt(right) - shareUpdatedAt(left) ||
+        left.slug.localeCompare(right.slug, undefined, { sensitivity: "base" }),
+    )
+    .slice(offset, offset + limit);
+  return {
+    shares,
+    total_count: pages.reduce((sum, page) => sum + page.total_count, 0),
+  };
+}
+
 export async function create(opts: CreatePublicDirectoryShareOptions) {
   const bay_id = await projectPublicDirectoryShareBay(opts.project_id);
   return await callPublicDirectoryShareBay({
@@ -294,5 +374,4 @@ export async function getTemporaryViewerReadPolicy(
 export {
   disableMineByActor,
   list,
-  listMine,
 } from "@cocalc/server/public-directory-shares";

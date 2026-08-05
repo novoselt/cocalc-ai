@@ -28,6 +28,7 @@ import {
 import { get_default_font_size } from "@cocalc/frontend/frame-editors/generic/client";
 import { labels, menu } from "@cocalc/frontend/i18n";
 import { editor } from "@cocalc/frontend/i18n/common";
+import { lite } from "@cocalc/frontend/lite";
 import { open_new_tab as openNewTab } from "@cocalc/frontend/misc/open-browser-tab";
 import { isChatPath } from "@cocalc/frontend/chat/paths";
 import openSupportTab from "@cocalc/frontend/support/open";
@@ -1018,6 +1019,26 @@ addCommands({
     }),
     ...fileAction("move"),
   },
+  ...(lite
+    ? {}
+    : {
+        publish_file: {
+          disabled: ({ readOnly, studentProjectFunctionality }) =>
+            readOnly || studentProjectFunctionality.disableActions,
+          pos: 5,
+          group: "misc-file-actions" as const,
+          icon: "share-square" as const,
+          title: defineMessage({
+            id: "menu.generic.publish_file.tooltip",
+            defaultMessage: "Publish this file with an unlisted share link",
+          }),
+          label: defineMessage({
+            id: "menu.generic.publish_file.label",
+            defaultMessage: "Publish File",
+          }),
+          ...fileAction("publish"),
+        },
+      }),
   download: {
     group: "export",
     label: defineMessage({
