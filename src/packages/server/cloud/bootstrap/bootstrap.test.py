@@ -1151,6 +1151,56 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
             )
             self.assertIn("fingerprint", contract)
 
+    def test_runtime_user_contract_uses_loaded_podman_apparmor_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+            current = Path(tmpdir) / "runtime" / "current"
+            podman = current / "bin" / "podman"
+            conf = current / "etc" / "containers" / "containers.conf"
+            profiles = Path(tmpdir) / "apparmor-profiles"
+            podman.parent.mkdir(parents=True)
+            conf.parent.mkdir(parents=True)
+            podman.write_text("#!/bin/sh\n", encoding="utf-8")
+            podman.chmod(0o755)
+            conf.write_text("[engine]\n", encoding="utf-8")
+            profiles.write_text("podman (enforce)\n", encoding="utf-8")
+            calls = []
+            original_current = os.environ.get("COCALC_CONTAINER_RUNTIME_CURRENT")
+            original_profiles = bootstrap.APPARMOR_PROFILES_PATH
+            original_probe = bootstrap.run_bounded_capture
+            original_which = bootstrap.shutil.which
+            try:
+                os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = str(current)
+                bootstrap.APPARMOR_PROFILES_PATH = profiles
+                bootstrap.shutil.which = lambda name: (
+                    "/usr/bin/aa-exec" if name == "aa-exec" else original_which(name)
+                )
+
+                def fake_probe(args, timeout_s):
+                    calls.append((args, timeout_s))
+                    map_text = "0 2000 1\n1 231072 65536\n65537 327680 4128768\n"
+                    return subprocess.CompletedProcess(args, 0, map_text, "")
+
+                bootstrap.run_bounded_capture = fake_probe
+                contract = bootstrap.read_current_runtime_user_contract(cfg)
+            finally:
+                bootstrap.APPARMOR_PROFILES_PATH = original_profiles
+                bootstrap.run_bounded_capture = original_probe
+                bootstrap.shutil.which = original_which
+                if original_current is None:
+                    os.environ.pop("COCALC_CONTAINER_RUNTIME_CURRENT", None)
+                else:
+                    os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = original_current
+
+            self.assertEqual(len(calls), 2)
+            for args, _timeout_s in calls:
+                self.assertIn(
+                    f"/usr/bin/aa-exec -p podman -- {podman} unshare cat",
+                    args[-1],
+                )
+            self.assertIn("fingerprint", contract)
+
     def test_verify_runtime_user_contract_raises_on_drift(self) -> None:
         cfg = make_cfg(tempfile.mkdtemp())
         original_expected = bootstrap.expected_runtime_user_contract

@@ -26,6 +26,7 @@ import json
 import os
 import pwd
 import re
+import shlex
 import signal
 import shutil
 import ssl
@@ -79,6 +80,7 @@ APT_ACQUIRE_TIMEOUT_S = 60
 APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
 RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
+APPARMOR_PROFILES_PATH = Path("/sys/kernel/security/apparmor/profiles")
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
@@ -1491,6 +1493,19 @@ def run_bounded_capture(
     return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
+def podman_apparmor_exec_prefix() -> list[str]:
+    aa_exec = shutil.which("aa-exec")
+    if not aa_exec:
+        return []
+    try:
+        profiles = APPARMOR_PROFILES_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    if any(line.startswith("podman ") for line in profiles.splitlines()):
+        return [aa_exec, "-p", "podman", "--"]
+    return []
+
+
 def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     contract: dict[str, Any] = {"user": cfg.ssh_user}
     try:
@@ -1538,8 +1553,11 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         prefix = ["sudo", "-u", cfg.ssh_user, "-H", "env", *runtime_env]
     else:
         prefix = ["env", *runtime_env] if runtime_env else []
+    podman_command = shlex.join(
+        [*podman_apparmor_exec_prefix(), podman, "unshare", "cat", "/proc/self/uid_map"]
+    )
     uid_proc = run_bounded_capture(
-        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/uid_map'],
+        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
     if uid_proc.returncode != 0:
@@ -1549,8 +1567,11 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
             f"(exit={uid_proc.returncode}); continuing without userns map facts",
         )
         return contract
+    podman_command = shlex.join(
+        [*podman_apparmor_exec_prefix(), podman, "unshare", "cat", "/proc/self/gid_map"]
+    )
     gid_proc = run_bounded_capture(
-        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/gid_map'],
+        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
     if uid_proc.returncode == 0 and gid_proc.returncode == 0:
