@@ -120,7 +120,7 @@ function availabilityTag(share: PublicDirectoryShareSummary) {
     case "pending":
       return <Tag color="gold">Pending restore</Tag>;
     case "unavailable":
-      return <Tag>Not yet available</Tag>;
+      return <Tag>Unavailable</Tag>;
     default:
       return <Text type="secondary">-</Text>;
   }
@@ -225,7 +225,15 @@ function legacyShareStatusTag({
   legacyShare: LegacyMigrationPublicShareSummary;
 }) {
   if (legacyShare.disabled) return <Tag>Historically disabled</Tag>;
-  if (currentShare != null) return availabilityTag(currentShare);
+  if (currentShare != null) {
+    if (
+      legacyShare.restore_status === "restored" &&
+      currentShare.availability_status === "pending"
+    ) {
+      return <Tag color="gold">Restored; activation pending</Tag>;
+    }
+    return availabilityTag(currentShare);
+  }
   if (legacyShare.import_status === "failed") {
     return <Tag color="red">Project import failed</Tag>;
   }
@@ -236,7 +244,7 @@ function legacyShareStatusTag({
     return <Tag>Project not restored</Tag>;
   }
   if (legacyShare.restore_status === "restored") {
-    return <Tag color="gold">Awaiting publication replay</Tag>;
+    return <Tag color="gold">Restored; activation pending</Tag>;
   }
   if (legacyShare.restore_status === "failed") {
     return <Tag color="red">Project restore failed</Tag>;
@@ -982,21 +990,34 @@ function PublicSharesPage() {
                 {
                   title: "Status",
                   width: 210,
-                  render: (_value, legacyShare) => (
-                    <Space direction="vertical" size={4}>
-                      {legacyShareStatusTag({
-                        legacyShare,
-                        currentShare: currentShareByLegacyId.get(
-                          legacyShare.legacy_public_path_id,
-                        ),
-                      })}
-                      {legacyShare.restore_status ? (
-                        <Text type="secondary">
-                          Restore: {legacyShare.restore_status}
-                        </Text>
-                      ) : null}
-                    </Space>
-                  ),
+                  render: (_value, legacyShare) => {
+                    const currentShare = currentShareByLegacyId.get(
+                      legacyShare.legacy_public_path_id,
+                    );
+                    const activationPending =
+                      legacyShare.restore_status === "restored" &&
+                      (currentShare == null ||
+                        currentShare.availability_status === "pending");
+                    return (
+                      <Space direction="vertical" size={4}>
+                        {legacyShareStatusTag({
+                          legacyShare,
+                          currentShare,
+                        })}
+                        {legacyShare.restore_status ? (
+                          <Text type="secondary">
+                            Restore: {legacyShare.restore_status}
+                          </Text>
+                        ) : null}
+                        {activationPending ? (
+                          <Text type="secondary">
+                            Publication activation is automatic; no action is
+                            required.
+                          </Text>
+                        ) : null}
+                      </Space>
+                    );
+                  },
                 },
                 {
                   title: "Last edited",

@@ -539,6 +539,12 @@ type LegacyPublicPathTarget = {
   path_type: "directory" | "file";
 };
 
+type LegacyPublicPathResolution = {
+  target: LegacyPublicPathTarget;
+  availability_status: "available" | "pending" | "unavailable";
+  availability_message: string | null;
+};
+
 function looksLikeLegacyFilePath(path: string): boolean {
   if (path === ".") return false;
   const tail = path.split("/").filter(Boolean).at(-1) ?? "";
@@ -567,32 +573,73 @@ export function legacyPublicPathTargetFromRetainedRecord(
     : undefined;
 }
 
-async function resolveLegacyPublicPathTarget({
+function isMissingLegacyPublicPathError(err: unknown): boolean {
+  const value = `${(err as any)?.code ?? ""} ${(err as Error)?.message ?? err}`;
+  return /\bENOENT\b|no such file or directory|not found/i.test(value);
+}
+
+export async function resolveLegacyPublicPathTarget({
   row,
   fs,
+  restoreComplete,
 }: {
   row: Record<string, any>;
   fs?: Awaited<ReturnType<typeof getProjectFsClient>>;
-}): Promise<LegacyPublicPathTarget | undefined> {
+  restoreComplete: boolean;
+}): Promise<LegacyPublicPathResolution | undefined> {
   const retained = legacyPublicPathTargetFromRetainedRecord(row);
   const path = normalizePublicDirectorySharePath(
     clean(row.original_path) ?? clean(row.path) ?? ".",
   );
-  if (fs == null) return retained;
+  if (fs == null) {
+    if (!retained) return;
+    return {
+      target: retained,
+      availability_status: "pending",
+      availability_message: restoreComplete
+        ? "This project is restored, but CoCalc could not verify the published path yet."
+        : "This legacy project has been selected for migration, but its files have not finished restoring yet.",
+    };
+  }
   try {
     const stat = await fs.lstat(path);
-    if (stat.isSymbolicLink()) return undefined;
-    if (stat.isFile()) return { path, path_type: "file" };
-    if (stat.isDirectory()) return { path, path_type: "directory" };
-    return undefined;
+    if (stat.isFile()) {
+      return {
+        target: { path, path_type: "file" },
+        availability_status: "available",
+        availability_message: null,
+      };
+    }
+    if (stat.isDirectory()) {
+      return {
+        target: { path, path_type: "directory" },
+        availability_status: "available",
+        availability_message: null,
+      };
+    }
+    if (!retained) return;
+    return {
+      target: retained,
+      availability_status: "unavailable",
+      availability_message: stat.isSymbolicLink()
+        ? "The restored published path is a symbolic link, which cannot be published."
+        : "The restored published path is not a regular file or directory.",
+    };
   } catch (err) {
     logger.warn("unable to classify restored legacy public path", {
       path,
       error: `${err}`,
     });
-    // A file fallback remains exact and cannot widen access. Directory rows
-    // wait for a later successful replay rather than trusting an old hint.
-    return retained?.path_type === "file" ? retained : undefined;
+    if (!retained) return;
+    return {
+      target: retained,
+      availability_status: isMissingLegacyPublicPathError(err)
+        ? "unavailable"
+        : "pending",
+      availability_message: isMissingLegacyPublicPathError(err)
+        ? "The published path was not found in the restored project."
+        : "This project is restored, but CoCalc could not verify the published path yet.",
+    };
   }
 }
 
@@ -666,12 +713,7 @@ export async function replayLegacyPublicPathsForProject({
     [legacy_project_id],
   );
   const restoreStatus = restore.rows[0]?.restore_status;
-  const availability_status =
-    restoreStatus === "restored" ? "available" : "pending";
-  const availability_message =
-    availability_status === "available"
-      ? null
-      : "This legacy project has been selected for migration, but its files have not finished restoring yet.";
+  const restoreComplete = restoreStatus === "restored";
   let fs: Awaited<ReturnType<typeof getProjectFsClient>> | undefined;
   if (restoreStatus === "restored") {
     try {
@@ -688,32 +730,36 @@ export async function replayLegacyPublicPathsForProject({
   let imported = 0;
   let skipped = 0;
   for (const { legacy_id, payload } of rows) {
-    if (isUnsupportedLegacyProxyPublicPath(payload)) {
-      skipped += 1;
-      continue;
-    }
     const legacyPublicPathId = clean(payload.id) ?? legacy_id;
-    const slug = await legacyPublicPathSlugForRecord(payload);
-    if (!legacyPublicPathId || !slug) {
-      skipped += 1;
-      continue;
-    }
-    const target = await resolveLegacyPublicPathTarget({ row: payload, fs });
-    if (target == null) {
-      skipped += 1;
-      continue;
-    }
     try {
+      if (isUnsupportedLegacyProxyPublicPath(payload)) {
+        skipped += 1;
+        continue;
+      }
+      const slug = await legacyPublicPathSlugForRecord(payload);
+      if (!legacyPublicPathId || !slug) {
+        skipped += 1;
+        continue;
+      }
+      const resolution = await resolveLegacyPublicPathTarget({
+        row: payload,
+        fs,
+        restoreComplete,
+      });
+      if (resolution == null) {
+        skipped += 1;
+        continue;
+      }
       await upsertMigratedLegacyPublicDirectoryShare({
         account_id,
         project_id,
-        path: target.path,
-        path_type: target.path_type,
+        path: resolution.target.path,
+        path_type: resolution.target.path_type,
         slug,
         visibility: legacyPublicPathVisibility(payload),
         requires_auth: true,
-        availability_status,
-        availability_message,
+        availability_status: resolution.availability_status,
+        availability_message: resolution.availability_message,
         title: clean(payload.title) ?? clean(payload.name) ?? null,
         description:
           normalizeLegacyPublicPathDescription(payload.description) ?? null,

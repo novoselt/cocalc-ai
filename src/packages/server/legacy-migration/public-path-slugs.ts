@@ -67,6 +67,14 @@ function normalizeSlug(raw: string): string {
   return normalizePublicDirectoryShareSlug(slug);
 }
 
+function tryNormalizeSlug(raw: string): string | null {
+  try {
+    return normalizeSlug(raw);
+  } catch {
+    return null;
+  }
+}
+
 export function legacyPublicPathSlugFromRecord(
   row: Record<string, any>,
   context: LegacyPublicPathSlugContext = {},
@@ -74,14 +82,14 @@ export function legacyPublicPathSlugFromRecord(
   if (isUnsupportedLegacyProxyPublicPath(row)) return null;
   const url = clean(row.url);
   if (url) {
-    return normalizeSlug(url);
+    return tryNormalizeSlug(url);
   }
 
   const ownerName = clean(context.owner_name);
   const projectName = clean(context.project_name) ?? clean(row.project_id);
   const shareName = clean(row.name) ?? clean(row.path) ?? clean(row.slug);
   if (ownerName && projectName && shareName) {
-    return normalizeSlug(`${ownerName}/${projectName}/${shareName}`);
+    return tryNormalizeSlug(`${ownerName}/${projectName}/${shareName}`);
   }
 
   const raw =
@@ -90,7 +98,7 @@ export function legacyPublicPathSlugFromRecord(
     (clean(row.project_id) && clean(row.path)
       ? `${clean(row.project_id)}/${clean(row.path)}`
       : undefined);
-  return raw ? normalizeSlug(raw) : null;
+  return raw ? tryNormalizeSlug(raw) : null;
 }
 
 export async function legacyPublicPathSlugContextForProject(
