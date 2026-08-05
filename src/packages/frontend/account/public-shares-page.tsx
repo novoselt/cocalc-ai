@@ -404,9 +404,9 @@ function PublicSharesPage() {
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <div>
             <Text type="secondary">
-              These are public or unlisted directory shares owned by projects
-              you can administer. Migrated cocalc.com shares appear here after
-              import.
+              These are public or unlisted file and directory shares owned by
+              projects you can administer. Migrated cocalc.com shares appear
+              here after import.
             </Text>
           </div>
 
@@ -604,7 +604,7 @@ function PublicSharesPage() {
                 },
                 {
                   title: (
-                    <Tooltip title="When the public-share metadata was last changed. This is not the last file edit time inside the shared directory.">
+                    <Tooltip title="When the public-share metadata was last changed. This is not the last edit time of the shared content.">
                       <span>Metadata updated</span>
                     </Tooltip>
                   ),
@@ -784,7 +784,7 @@ export const PUBLIC_SHARES_SETTINGS_PAGE = {
   component: PublicSharesPage,
   description: defineMessage({
     id: "account.settings.public-shares.description",
-    defaultMessage: "Manage public directory shares owned by your projects.",
+    defaultMessage: "Manage published files and directories in your projects.",
   }),
   icon: "share-square",
   key: "public-shares",

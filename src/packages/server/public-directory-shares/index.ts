@@ -74,6 +74,7 @@ import type {
   ListPublicDirectorySharesResponse,
   PublicDirectoryShareAvailability,
   PublicDirectoryShareDirectoryEntry,
+  PublicDirectorySharePathType,
   PublicDirectoryShareSummary,
   PublicDirectoryShareTheme,
   PublicDirectoryShareVisibility,
@@ -317,6 +318,13 @@ function normalizeAvailability(
   return "unknown";
 }
 
+function normalizePathType(
+  pathType?: PublicDirectorySharePathType,
+): PublicDirectorySharePathType {
+  if (pathType === "file" || pathType === "directory") return pathType;
+  return "directory";
+}
+
 function defaultTitleForPath(path: string): string {
   if (path === ".") return "Project files";
   return posix.basename(path) || path;
@@ -466,14 +474,17 @@ function isHostPlacementFailure(err: unknown): boolean {
 
 export function publicDirectoryShareReadPolicyForPath(
   path: string,
+  pathType: PublicDirectorySharePathType = "directory",
 ): ProjectViewerReadPolicy {
   const include =
-    path === "."
-      ? [{ action: "include" as const, path: "." }]
-      : [
-          { action: "include" as const, path },
-          { action: "include" as const, path: `${path}/**` },
-        ];
+    pathType === "file"
+      ? [{ action: "include" as const, path }]
+      : path === "."
+        ? [{ action: "include" as const, path: "." }]
+        : [
+            { action: "include" as const, path },
+            { action: "include" as const, path: `${path}/**` },
+          ];
   return {
     rules: [
       ...include,
@@ -491,8 +502,14 @@ export function publicDirectoryShareReadPolicyForPath(
   };
 }
 
-function assertPublicDirectorySharePathAllowed(path: string): void {
-  const readPolicy = publicDirectoryShareReadPolicyForPath(path);
+function assertPublicDirectorySharePathAllowed(
+  path: string,
+  pathType: PublicDirectorySharePathType,
+): void {
+  if (pathType === "file" && path === ".") {
+    throw Error("a file share must name an exact file");
+  }
+  const readPolicy = publicDirectoryShareReadPolicyForPath(path, pathType);
   if (!viewerReadPolicyAllowsPath({ policy: readPolicy, path })) {
     throw Error("path is excluded from public sharing");
   }
@@ -645,6 +662,7 @@ function rowToSummary(
     id: row.id,
     project_id: row.project_id,
     path: row.path,
+    path_type: row.path_type ?? "directory",
     slug: row.slug,
     visibility: row.visibility,
     requires_auth: row.requires_auth,
@@ -736,6 +754,7 @@ export async function ensurePublicDirectorySharesSchema(): Promise<void> {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         project_id UUID NOT NULL,
         path TEXT NOT NULL,
+        path_type VARCHAR(16) NOT NULL DEFAULT 'directory',
         slug TEXT NOT NULL,
         visibility VARCHAR(16) NOT NULL DEFAULT 'unlisted',
         requires_auth BOOLEAN NOT NULL DEFAULT TRUE,
@@ -762,6 +781,18 @@ export async function ensurePublicDirectorySharesSchema(): Promise<void> {
         last_edited TIMESTAMP,
         disabled BOOLEAN NOT NULL DEFAULT FALSE
       )
+    `);
+    await pool.query(`
+      ALTER TABLE public_project_paths
+        ADD COLUMN IF NOT EXISTS path_type VARCHAR(16) NOT NULL DEFAULT 'directory'
+    `);
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE public_project_paths
+          ADD CONSTRAINT public_project_paths_path_type_check
+          CHECK (path_type IN ('directory', 'file'));
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
     `);
     await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS public_project_paths_slug_unique
@@ -805,12 +836,17 @@ export async function ensurePublicDirectorySharesSchema(): Promise<void> {
       CREATE TABLE IF NOT EXISTS public_project_path_slugs (
         slug_lower TEXT PRIMARY KEY,
         slug TEXT NOT NULL,
+        alias_kind VARCHAR(32) NOT NULL DEFAULT 'canonical',
         owning_bay_id TEXT NOT NULL,
         public_project_path_id UUID NOT NULL,
         project_id UUID NOT NULL,
         disabled BOOLEAN NOT NULL DEFAULT FALSE,
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
       )
+    `);
+    await pool.query(`
+      ALTER TABLE public_project_path_slugs
+        ADD COLUMN IF NOT EXISTS alias_kind VARCHAR(32) NOT NULL DEFAULT 'canonical'
     `);
     await pool.query(`
       CREATE INDEX IF NOT EXISTS public_project_path_slugs_project_id_idx
@@ -1302,14 +1338,9 @@ async function resolveRow({
   let owningBayId = row.owning_bay_id ?? null;
   let projectTitle = row.project_title ?? null;
   let hostId = row.host_id ?? null;
-  if (availabilityStatus !== "available") {
-    const ownership = await resolveProjectBayAcrossCluster(row.project_id);
-    if (ownership?.bay_id) {
-      availabilityStatus = "available";
-      availabilityMessage = null;
-      owningBayId = ownership.bay_id;
-    }
-  }
+  // Availability records whether the backing archive has actually been
+  // restored. Merely finding the replacement project in a bay is not proof
+  // that a pending legacy restore has populated its filesystem.
   if (
     (!owningBayId || !hostId || !projectTitle) &&
     availabilityStatus === "available"
@@ -1347,7 +1378,10 @@ async function resolveRow({
       availability_status: availabilityStatus,
       availability_message: availabilityMessage,
       available: availabilityStatus === "available",
-      read_policy: publicDirectoryShareReadPolicyForPath(summary.path),
+      read_policy: publicDirectoryShareReadPolicyForPath(
+        summary.path,
+        summary.path_type,
+      ),
       project_title: projectTitle,
       host_id: hostId,
       host_connection:
@@ -1414,7 +1448,7 @@ export async function grantTemporaryViewerAccess({
   const { share } = await resolveRow({ account_id, slug });
   if (!share.available) {
     throw Error(
-      share.availability_message || "This shared directory is not available.",
+      share.availability_message || "This public share is not available.",
     );
   }
   const expiresAt = temporaryViewerGrantExpiresAt();
@@ -1448,6 +1482,7 @@ export async function grantTemporaryViewerAccess({
     project_id: share.project_id,
     share_id: share.id,
     path: share.path,
+    path_type: share.path_type,
     read_policy: share.read_policy,
     expires_at: expiresAt,
     project_url: projectViewerUrl(share),
@@ -1550,23 +1585,18 @@ export async function authorizeRead({
     }
   }
   const summary = rowToSummary(row);
-  let availabilityStatus = summary.availability_status;
-  if (availabilityStatus !== "available") {
-    const ownership = await resolveProjectBayAcrossCluster(row.project_id);
-    if (ownership?.bay_id) {
-      availabilityStatus = "available";
-    }
-  }
-  if (availabilityStatus !== "available") {
+  if (summary.availability_status !== "available") {
     throw Error(
-      summary.availability_message ||
-        "This shared directory is not available yet.",
+      summary.availability_message || "This public share is not available yet.",
     );
   }
   return {
     project_id: summary.project_id,
     share_id: summary.id,
-    read_policy: publicDirectoryShareReadPolicyForPath(summary.path),
+    read_policy: publicDirectoryShareReadPolicyForPath(
+      summary.path,
+      summary.path_type,
+    ),
   };
 }
 
@@ -1753,8 +1783,17 @@ export async function upsertMigratedLegacyPublicDirectoryShare(
   // imported. Do not apply the owner UI limit or live filesystem existence
   // check here; the old public path may point at content that is still being
   // restored.
+  let id = opts.id;
+  if (!id && opts.legacy_public_path_id) {
+    const existing = await getPool().query<{ id: string }>(
+      `SELECT id FROM public_project_paths WHERE legacy_public_path_id=$1 LIMIT 1`,
+      [opts.legacy_public_path_id],
+    );
+    id = existing.rows[0]?.id;
+  }
   return await savePublicDirectoryShare({
     ...opts,
+    id,
     requires_auth: true,
     availability_status: opts.availability_status ?? "available",
   });
@@ -1792,6 +1831,7 @@ export async function repairMigratedLegacyPublicDirectoryShareSlug({
     id: current.id,
     project_id: current.project_id,
     path: current.path,
+    path_type: current.path_type,
     slug: normalizedSlug,
     visibility: current.visibility,
     requires_auth: current.requires_auth,
@@ -1876,11 +1916,19 @@ async function savePublicDirectoryShare(
   }
   const slug = normalizePublicDirectoryShareSlug(opts.slug);
   const path = normalizePublicDirectorySharePath(opts.path);
-  assertPublicDirectorySharePathAllowed(path);
   const visibility = normalizeVisibility(opts.visibility);
   const availabilityStatus = normalizeAvailability(opts.availability_status);
   const disabled = opts.disabled === true || visibility === "disabled";
   const id = opts.id && isValidUUID(opts.id) ? opts.id : undefined;
+  let existingPathType: PublicDirectorySharePathType | undefined;
+  if (id && opts.path_type == null) {
+    const existing = await getPool().query<{
+      path_type: PublicDirectorySharePathType;
+    }>(`SELECT path_type FROM public_project_paths WHERE id=$1 LIMIT 1`, [id]);
+    existingPathType = existing.rows[0]?.path_type;
+  }
+  const pathType = normalizePathType(opts.path_type ?? existingPathType);
+  assertPublicDirectorySharePathAllowed(path, pathType);
   const title = normalizeOptionalPublicShareText({
     field: "title",
     maxLength: MAX_PUBLIC_DIRECTORY_SHARE_TITLE_LENGTH,
@@ -1899,6 +1947,19 @@ async function savePublicDirectoryShare(
     theme: opts.theme,
   });
   const bayId = getConfiguredBayId();
+  const slugOwner = await getPool().query<{ public_project_path_id: string }>(
+    `SELECT public_project_path_id
+       FROM public_project_path_slugs
+      WHERE slug_lower=lower($1)
+      LIMIT 1`,
+    [slug],
+  );
+  if (
+    slugOwner.rows[0] != null &&
+    slugOwner.rows[0].public_project_path_id !== id
+  ) {
+    throw slugTakenError(slug);
+  }
   const params = [
     id,
     opts.project_id,
@@ -1925,6 +1986,7 @@ async function savePublicDirectoryShare(
     opts.account_id ?? null,
     opts.last_edited ?? null,
     disabled,
+    pathType,
   ];
   let rows: PublicDirectoryShareRow[];
   try {
@@ -1937,16 +1999,17 @@ async function savePublicDirectoryShare(
         site_license_membership_tier_id, site_license_duration_days,
         site_license_grant_on_copy, site_license_copy_requires_grant, metadata,
         legacy_public_path_id, legacy_url, created_by, updated_by, last_edited,
-        disabled
+        disabled, path_type
       )
       VALUES (
         COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9,
         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21,
-        $22, $23, $23, $24, $25
+        $22, $23, $23, $24, $25, $26
       )
       ON CONFLICT (id) DO UPDATE SET
         project_id=EXCLUDED.project_id,
         path=EXCLUDED.path,
+        path_type=EXCLUDED.path_type,
         slug=EXCLUDED.slug,
         visibility=EXCLUDED.visibility,
         requires_auth=EXCLUDED.requires_auth,
@@ -1984,27 +2047,35 @@ async function savePublicDirectoryShare(
   await getPool().query(
     `
       DELETE FROM public_project_path_slugs
-      WHERE public_project_path_id=$1 AND slug_lower <> lower($2)
+      WHERE public_project_path_id=$1
+        AND alias_kind='canonical'
+        AND slug_lower <> lower($2)
     `,
     [row.id, slug],
   );
-  await getPool().query(
+  const canonicalAlias = await getPool().query(
     `
       INSERT INTO public_project_path_slugs (
-        slug_lower, slug, owning_bay_id, public_project_path_id, project_id,
-        disabled, updated_at
+        slug_lower, slug, alias_kind, owning_bay_id, public_project_path_id,
+        project_id, disabled, updated_at
       )
-      VALUES (lower($1), $1, $2, $3, $4, $5, NOW())
+      VALUES (lower($1), $1, 'canonical', $2, $3, $4, $5, NOW())
       ON CONFLICT (slug_lower) DO UPDATE SET
         slug=EXCLUDED.slug,
+        alias_kind='canonical',
         owning_bay_id=EXCLUDED.owning_bay_id,
         public_project_path_id=EXCLUDED.public_project_path_id,
         project_id=EXCLUDED.project_id,
         disabled=EXCLUDED.disabled,
         updated_at=NOW()
+      WHERE public_project_path_slugs.public_project_path_id=EXCLUDED.public_project_path_id
+      RETURNING slug
     `,
     [slug, bayId, row.id, row.project_id, row.disabled],
   );
+  if (canonicalAlias.rowCount === 0) {
+    throw slugTakenError(slug);
+  }
   if (row.disabled || row.visibility === "disabled") {
     await revokeTemporaryViewerGrantsForShare({
       public_project_path_id: row.id,
@@ -2016,11 +2087,69 @@ async function savePublicDirectoryShare(
       revoked_by: opts.account_id ?? null,
     });
   }
+  const summary = rowToSummary(row);
+  if (summary.legacy_public_path_id) {
+    await savePublicDirectoryShareAlias({
+      share: summary,
+      slug: summary.legacy_public_path_id,
+      aliasKind: "legacy-public-path-id",
+    });
+    await savePublicDirectoryShareAlias({
+      share: summary,
+      slug: `public_paths/${summary.legacy_public_path_id}`,
+      aliasKind: "legacy-public-path-route",
+    });
+  }
   await syncPublicDirectoryShareProjectLabels({
     project_id: row.project_id,
     account_id: opts.account_id ?? null,
   });
-  return rowToSummary(row);
+  return summary;
+}
+
+async function savePublicDirectoryShareAlias({
+  share,
+  slug,
+  aliasKind,
+}: {
+  share: PublicDirectoryShareSummary;
+  slug: string;
+  aliasKind: "legacy-public-path-id" | "legacy-public-path-route";
+}): Promise<void> {
+  const normalizedSlug = normalizePublicDirectoryShareSlug(slug);
+  const result = await getPool().query(
+    `
+      INSERT INTO public_project_path_slugs (
+        slug_lower, slug, alias_kind, owning_bay_id, public_project_path_id,
+        project_id, disabled, updated_at
+      )
+      VALUES (lower($1), $1, $2, $3, $4, $5, $6, NOW())
+      ON CONFLICT (slug_lower) DO UPDATE SET
+        slug=EXCLUDED.slug,
+        alias_kind=CASE
+          WHEN public_project_path_slugs.alias_kind='canonical' THEN 'canonical'
+          ELSE EXCLUDED.alias_kind
+        END,
+        owning_bay_id=EXCLUDED.owning_bay_id,
+        public_project_path_id=EXCLUDED.public_project_path_id,
+        project_id=EXCLUDED.project_id,
+        disabled=EXCLUDED.disabled,
+        updated_at=NOW()
+      WHERE public_project_path_slugs.public_project_path_id=EXCLUDED.public_project_path_id
+      RETURNING slug
+    `,
+    [
+      normalizedSlug,
+      aliasKind,
+      getConfiguredBayId(),
+      share.id,
+      share.project_id,
+      share.disabled,
+    ],
+  );
+  if (result.rowCount === 0) {
+    throw slugTakenError(normalizedSlug);
+  }
 }
 
 export async function update(
@@ -2083,6 +2212,7 @@ export async function update(
     id: current.id,
     project_id: current.project_id,
     path: current.path,
+    path_type: current.path_type,
     slug: opts.slug ?? current.slug,
     visibility,
     requires_auth: current.requires_auth,
@@ -2137,23 +2267,33 @@ export async function create(
   await assertCanCreatePublicDirectoryShare(opts.account_id);
   const slug = normalizePublicDirectoryShareSlug(opts.slug);
   const path = normalizePublicDirectorySharePath(opts.path);
-  assertPublicDirectorySharePathAllowed(path);
   const fs = await getProjectFsClient({
     account_id: opts.account_id,
     project_id: opts.project_id,
   });
+  let pathType: PublicDirectorySharePathType;
   try {
-    await fs.getListing(path);
+    const stat = await fs.lstat(path);
+    if (stat.isSymbolicLink()) {
+      throw Error("symbolic links cannot be published");
+    }
+    if (stat.isDirectory()) {
+      pathType = "directory";
+    } else if (stat.isFile()) {
+      pathType = "file";
+    } else {
+      throw Error("shared path must be a regular file or directory");
+    }
   } catch (err) {
-    throw Error(
-      `shared path must be an existing directory (${(err as Error).message})`,
-    );
+    throw Error(`shared path is not publishable (${(err as Error).message})`);
   }
+  assertPublicDirectorySharePathAllowed(path, pathType);
   const siteLicenseGrant = await validateSiteLicenseGrantConfig(opts);
   return await savePublicDirectoryShare({
     account_id: opts.account_id,
     project_id: opts.project_id,
     path,
+    path_type: pathType,
     slug,
     visibility: "unlisted",
     requires_auth: true,
@@ -2201,7 +2341,7 @@ export async function copyToProject({
   if (!share.available) {
     throw Error(
       share.availability_message ||
-        "This shared directory is not available for copying yet.",
+        "This public share is not available for copying yet.",
     );
   }
   await assertCollab({
@@ -2238,7 +2378,7 @@ export async function copyToProject({
   }
   const relativePath = normalizePublicDirectorySharePath(path ?? ".");
   if (!entryAllowed({ share, relativePath })) {
-    throw Error("path is not part of this shared directory");
+    throw Error("path is not part of this public share");
   }
   const destPath = normalizePublicDirectorySharePath(destination_path ?? ".");
   const copySource = await copySourceForPublicDirectoryShare({
@@ -2492,8 +2632,7 @@ async function publicShareCopyConflict({
   if (labels[provenanceKey]) {
     return {
       reason: "already_copied",
-      message:
-        "This published folder was already copied to the compatible project.",
+      message: `This published ${share.path_type === "file" ? "file" : "folder"} was already copied to the compatible project.`,
       destination_path: null,
       can_overwrite: true,
     };
@@ -2535,14 +2674,16 @@ export async function copyToNewProject({
   if (!share.available) {
     throw Error(
       share.availability_message ||
-        "This shared directory is not available for copying yet.",
+        "This public share is not available for copying yet.",
     );
   }
   const relativePath = normalizePublicDirectorySharePath(path ?? ".");
   if (!entryAllowed({ share, relativePath })) {
-    throw Error("path is not part of this shared directory");
+    throw Error("path is not part of this public share");
   }
-  const destinationPath = normalizePublicDirectorySharePath(share.slug);
+  const destinationPath = normalizePublicDirectorySharePath(
+    share.path_type === "file" ? "." : share.slug,
+  );
   const sourceRuntime = await getPublicShareSourceRuntime(share.project_id);
   let destinationProjectId =
     reuse_existing === true
@@ -2555,7 +2696,7 @@ export async function copyToNewProject({
   const createOpts = {
     account_id,
     title: title?.trim() || defaultCopiedProjectTitle(share),
-    description: `Copied from published folder ${share.slug}.`,
+    description: `Copied from published ${share.path_type === "file" ? "file" : "folder"} ${share.slug}.`,
     rootfs_image: sourceRuntime.rootfs_image ?? undefined,
     rootfs_image_id: sourceRuntime.rootfs_image_id ?? undefined,
     host_id: sourceRuntime.host_id ?? undefined,
@@ -2651,13 +2792,17 @@ export async function listDirectory({
   const share = await resolve({ account_id, slug });
   if (!share.available) {
     throw Error(
-      share.availability_message ||
-        "This shared directory is not available yet.",
+      share.availability_message || "This public share is not available yet.",
     );
+  }
+  if (share.path_type === "file") {
+    throw Object.assign(new Error("shared path is not a directory"), {
+      code: "ENOTDIR",
+    });
   }
   const relativePath = normalizePublicDirectorySharePath(path ?? ".");
   if (!entryAllowed({ share, relativePath })) {
-    throw Error("path is not part of this shared directory");
+    throw Error("path is not part of this public share");
   }
   const fs = await getProjectShareFsClient({
     account_id,

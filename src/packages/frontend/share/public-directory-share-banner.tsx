@@ -46,6 +46,9 @@ function shareTitle(share: ResolvedPublicDirectoryShare): string {
 }
 
 function shareScopeDescription(share: ResolvedPublicDirectoryShare): string {
+  if (share.path_type === "file") {
+    return "This is a published, read-only file.";
+  }
   return share.path === "."
     ? "This is a published, read-only project."
     : "This is a published, read-only folder.";
@@ -446,7 +449,7 @@ export function PublicDirectoryShareBanner({
         />
       )}
       <Modal
-        title="Copy published folder"
+        title={`Copy published ${share.path_type === "file" ? "file" : "folder"}`}
         open={open}
         onCancel={() => setOpen(false)}
         footer={
@@ -490,7 +493,9 @@ export function PublicDirectoryShareBanner({
           {description ? <ShareDescription value={description} /> : null}
           {copyMode === "new" ? (
             <Text>
-              Copy this published folder to your own project so you can edit it.
+              Copy this published{" "}
+              {share.path_type === "file" ? "file" : "folder"} to your own
+              project so you can edit it.
             </Text>
           ) : null}
           {share.site_license_grant_on_copy ? (

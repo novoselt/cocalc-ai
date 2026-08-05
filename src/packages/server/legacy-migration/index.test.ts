@@ -6,6 +6,7 @@
 import {
   MAX_LEGACY_PROJECT_IMPORTS_PER_REQUEST,
   legacyProjectArchiveUncompressedBytes,
+  legacyPublicPathTargetFromRetainedRecord,
   normalizeLegacyProjectImportIds,
 } from ".";
 import {
@@ -63,6 +64,27 @@ describe("legacy migration manifest helpers", () => {
 });
 
 describe("legacy public path slug helpers", () => {
+  it("preserves exact files from current and older retained records", () => {
+    expect(
+      legacyPublicPathTargetFromRetainedRecord({
+        path: ".",
+        original_path: "admcycles tutorial.ipynb",
+        original_path_type: "file",
+      }),
+    ).toEqual({ path: "admcycles tutorial.ipynb", path_type: "file" });
+    expect(
+      legacyPublicPathTargetFromRetainedRecord({
+        path: "course/lesson.ipynb",
+      }),
+    ).toEqual({ path: "course/lesson.ipynb", path_type: "file" });
+  });
+
+  it("does not infer ambiguous older records as directories", () => {
+    expect(
+      legacyPublicPathTargetFromRetainedRecord({ path: "ambiguous-path" }),
+    ).toBeUndefined();
+  });
+
   it("normalizes escaped legacy public path description newlines", () => {
     expect(
       normalizeLegacyPublicPathDescription(

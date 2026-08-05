@@ -21,6 +21,7 @@ import { tab_to_path } from "@cocalc/util/misc";
 import { projectRuntimeHomeRelativePath } from "@cocalc/util/project-runtime";
 import {
   classifySharePath,
+  exactFileShareRouteAllowed,
   shareRouteCandidates,
 } from "./public-directory-share-route";
 
@@ -51,14 +52,26 @@ async function grantShareRoute(rawPath: string): Promise<{
       continue;
     }
 
-    const relativePathIsDirectory =
-      (await classifySharePath({
+    if (
+      grant.path_type === "file" &&
+      !exactFileShareRouteAllowed({
+        sharePath: grant.path,
         relativePath: candidate.relativePath,
+      })
+    ) {
+      throw Error("This URL is outside the exact file that was published.");
+    }
+    const relativePath =
+      grant.path_type === "file" ? "" : candidate.relativePath;
+    const relativePathIsDirectory =
+      grant.path_type === "directory" &&
+      (await classifySharePath({
+        relativePath,
         listDirectory: async () => {
           await webapp_client.conat_client.hub.publicDirectoryShares.listDirectory(
             {
               slug: candidate.slug,
-              path: candidate.relativePath,
+              path: relativePath,
             },
           );
         },
@@ -66,7 +79,7 @@ async function grantShareRoute(rawPath: string): Promise<{
     return {
       grant,
       projectId: grant.project_id,
-      relativePath: candidate.relativePath,
+      relativePath,
       relativePathIsDirectory,
       slug: candidate.slug,
     };
@@ -146,6 +159,7 @@ function resolvedShareFromGrant({
     id: grant.share_id,
     project_id: grant.project_id,
     path: grant.path,
+    path_type: grant.path_type,
     slug,
     visibility: "unlisted",
     requires_auth: true,
@@ -350,7 +364,7 @@ export function PublicDirectorySharePage({ slug }: { slug?: string }) {
       <Result
         status="warning"
         title="Missing share path"
-        subTitle="Open a complete shared directory link."
+        subTitle="Open a complete published-content link."
       />
     );
   }
@@ -365,8 +379,8 @@ export function PublicDirectorySharePage({ slug }: { slug?: string }) {
         <Card>
           <Result
             icon={<Icon name="users" />}
-            title="Sign in to view this published folder"
-            subTitle="Published folders are visible to signed-in CoCalc users who know the URL."
+            title="Sign in to view this published content"
+            subTitle="Published files and folders are visible to signed-in CoCalc users who know the URL."
             extra={
               <Space>
                 <Button type="primary" href={authHref("sign-in")}>
