@@ -29,6 +29,7 @@ function makeRedux(): AppRedux {
 class FastOpenHarness extends TextEditorActions {
   private state: Map<string, any>;
   private projectActions: any;
+  readonly lineNavigationCalls: Array<{ line: number }> = [];
 
   constructor() {
     super(NAME, makeRedux());
@@ -48,6 +49,16 @@ class FastOpenHarness extends TextEditorActions {
       this.state = this.state.merge(obj);
       this.store = this.state as any;
     };
+    (this as any).applyProgrammaticLineNavigation = jest.fn(
+      async (
+        navigation: { line: number },
+        options?: { onApplied?: () => void },
+      ) => {
+        this.lineNavigationCalls.push(navigation);
+        options?.onApplied?.();
+        return true;
+      },
+    );
   }
 
   override _get_project_actions() {
@@ -95,6 +106,10 @@ class FastOpenHarness extends TextEditorActions {
 
   completeOptimistic(): void {
     (this as any).completeOptimisticFastOpen();
+  }
+
+  async requestLine(line: number): Promise<void> {
+    await this.programmatically_goto_line(line);
   }
 
   getState(key: string): any {
@@ -219,6 +234,44 @@ describe("fast-open optimistic state machine", () => {
     jest.advanceTimersByTime(5000);
     await flushPromises();
     expect(actions.getState("status")).toBe("");
+  });
+
+  it("jumps as soon as the disk preview loads without repeating an equal handoff", async () => {
+    const actions = new FastOpenHarness();
+    actions.setFastOpenEnabled(true);
+    actions.setReadFileResult("same");
+    actions.setSyncString({
+      get_state: jest.fn().mockReturnValue("loading"),
+      to_str: jest.fn().mockReturnValue("same"),
+    } as any);
+
+    await actions.requestLine(7);
+    expect(actions.lineNavigationCalls).toEqual([]);
+
+    await actions.startOptimistic();
+    expect(actions.lineNavigationCalls).toEqual([{ line: 7 }]);
+
+    actions.completeOptimistic();
+    await flushPromises();
+    expect(actions.lineNavigationCalls).toEqual([{ line: 7 }]);
+  });
+
+  it("repeats preview line navigation when live content differs", async () => {
+    const actions = new FastOpenHarness();
+    actions.setFastOpenEnabled(true);
+    actions.setReadFileResult("disk");
+    actions.setSyncString({
+      get_state: jest.fn().mockReturnValue("loading"),
+      to_str: jest.fn().mockReturnValue("live"),
+    } as any);
+
+    await actions.startOptimistic();
+    await actions.requestLine(12);
+    expect(actions.lineNavigationCalls).toEqual([{ line: 12 }]);
+
+    actions.completeOptimistic();
+    await flushPromises();
+    expect(actions.lineNavigationCalls).toEqual([{ line: 12 }, { line: 12 }]);
   });
 
   it("initializes when syncstring is already ready before the ready listener runs", async () => {
