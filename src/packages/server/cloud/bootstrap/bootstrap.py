@@ -80,7 +80,7 @@ APT_ACQUIRE_TIMEOUT_S = 60
 APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
 RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
-APPARMOR_PROFILES_PATH = Path("/sys/kernel/security/apparmor/profiles")
+APPARMOR_PROFILE_PROBE_TIMEOUT_S = 2
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
@@ -1498,10 +1498,16 @@ def podman_apparmor_exec_prefix() -> list[str]:
     if not aa_exec:
         return []
     try:
-        profiles = APPARMOR_PROFILES_PATH.read_text(encoding="utf-8")
-    except OSError:
+        probe = subprocess.run(
+            [aa_exec, "-p", "podman", "--", "true"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=APPARMOR_PROFILE_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return []
-    if any(line.startswith("podman ") for line in profiles.splitlines()):
+    if probe.returncode == 0:
         return [aa_exec, "-p", "podman", "--"]
     return []
 
@@ -1553,8 +1559,9 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         prefix = ["sudo", "-u", cfg.ssh_user, "-H", "env", *runtime_env]
     else:
         prefix = ["env", *runtime_env] if runtime_env else []
+    apparmor_prefix = podman_apparmor_exec_prefix()
     podman_command = shlex.join(
-        [*podman_apparmor_exec_prefix(), podman, "unshare", "cat", "/proc/self/uid_map"]
+        [*apparmor_prefix, podman, "unshare", "cat", "/proc/self/uid_map"]
     )
     uid_proc = run_bounded_capture(
         prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
@@ -1568,7 +1575,7 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         )
         return contract
     podman_command = shlex.join(
-        [*podman_apparmor_exec_prefix(), podman, "unshare", "cat", "/proc/self/gid_map"]
+        [*apparmor_prefix, podman, "unshare", "cat", "/proc/self/gid_map"]
     )
     gid_proc = run_bounded_capture(
         prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
