@@ -4022,7 +4022,15 @@ export async function listPublicShares({
          OR COALESCE(projects.title, '') ILIKE '%' || $5::TEXT || '%'
          OR projects.legacy_project_id ILIKE '%' || $5::TEXT || '%'
        )
-     ORDER BY lower(COALESCE(projects.title, '')),
+     ORDER BY NULLIF(
+                COALESCE(
+                  raw.payload->>'last_edited',
+                  raw.payload->>'last_saved',
+                  raw.payload->>'created'
+                ),
+                ''
+              ) DESC NULLS LAST,
+              lower(COALESCE(projects.title, '')),
               lower(COALESCE(raw.payload->>'path', raw.payload->>'original_path', '')),
               raw.legacy_id
      LIMIT $3
