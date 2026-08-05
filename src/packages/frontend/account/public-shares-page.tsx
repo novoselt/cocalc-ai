@@ -224,7 +224,6 @@ function legacyShareStatusTag({
   currentShare?: PublicDirectoryShareSummary;
   legacyShare: LegacyMigrationPublicShareSummary;
 }) {
-  if (legacyShare.disabled) return <Tag>Historically disabled</Tag>;
   if (currentShare != null) {
     if (
       legacyShare.restore_status === "restored" &&
@@ -375,7 +374,6 @@ function PublicSharesPage() {
     try {
       const result =
         await webapp_client.conat_client.hub.legacyMigration.listPublicShares({
-          include_disabled: true,
           limit: pageSize,
           offset: (page - 1) * pageSize,
           query,

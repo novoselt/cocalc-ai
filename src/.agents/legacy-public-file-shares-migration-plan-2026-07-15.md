@@ -252,7 +252,7 @@ On every replay:
 - retain the canonical slug and descriptive metadata;
 - set an explicit availability status;
 - re-enable rows previously disabled only because file sharing was unsupported;
-- leave user-disabled or historically disabled rows disabled.
+- omit historically disabled rows from replay and user-facing inventory.
 
 The replay must be safe under retries, concurrent project restoration, and
 partial failures.
@@ -321,7 +321,8 @@ historical URLs pass.
 ### Migration tests
 
 - replay old rows whose `path` was rewritten to a parent directory;
-- preserve historically disabled records;
+- retain historically disabled raw records for audit, but do not list or replay
+  them;
 - re-enable only migration-disabled file rows;
 - handle missing and unrestored projects;
 - handle missing files without losing the alias;
