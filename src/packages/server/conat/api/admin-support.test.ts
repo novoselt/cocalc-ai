@@ -5,12 +5,14 @@
 
 import centralLog from "@cocalc/database/postgres/central-log";
 import getPool from "@cocalc/database/pool";
+import siteURL from "@cocalc/database/settings/site-url";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import getZendeskClient from "@cocalc/server/support/zendesk-client";
 import { requireDangerousSessionAuth } from "./dangerous-session-auth";
 
 import {
   buildTriageGroups,
+  extractSupportImages,
   list,
   merge,
   planMerge,
@@ -31,6 +33,11 @@ jest.mock("@cocalc/database/pool", () => ({
   default: jest.fn(),
 }));
 
+jest.mock("@cocalc/database/settings/site-url", () => ({
+  __esModule: true,
+  default: jest.fn(),
+}));
+
 jest.mock("@cocalc/server/accounts/is-admin", () => ({
   __esModule: true,
   default: jest.fn(),
@@ -47,6 +54,7 @@ jest.mock("./dangerous-session-auth", () => ({
 
 const mockCentralLog = jest.mocked(centralLog);
 const mockGetPool = jest.mocked(getPool);
+const mockSiteURL = jest.mocked(siteURL);
 const mockIsAdmin = jest.mocked(isAdmin);
 const mockGetZendeskClient = jest.mocked(getZendeskClient);
 const mockRequireDangerousSessionAuth = jest.mocked(
@@ -110,6 +118,7 @@ const poolQuery = jest.fn(async (sql: string, params: any[] = []) => {
 });
 
 const PROJECT_ID = "881e5f4d-fca6-4739-9848-45bfaa8d49d3";
+const IMAGE_UUID = "835c0265-a303-4322-af0c-9cbfe2da05e8";
 
 function ticket(overrides: Record<string, unknown> = {}) {
   const now = new Date();
@@ -136,6 +145,7 @@ describe("admin support API", () => {
     jest.clearAllMocks();
     mockIsAdmin.mockResolvedValue(true);
     mockCentralLog.mockResolvedValue(undefined);
+    mockSiteURL.mockResolvedValue("https://cocalc.ai");
     mutationRows.clear();
     poolQuery.mockClear();
     mockGetPool.mockReturnValue({ query: poolQuery } as any);
@@ -154,6 +164,28 @@ describe("admin support API", () => {
     expect(redacted).not.toContain("private.txt");
     expect(redacted).toContain(PROJECT_ID);
     expect(redacted).toContain("[REDACTED_PATH]");
+  });
+
+  it("extracts only validated images from the configured CoCalc site", () => {
+    const images = extractSupportImages(
+      [
+        `- Image: https://cocalc.ai/blobs/paste%20one.png?uuid=${IMAGE_UUID}`,
+        `![duplicate](https://cocalc.ai/blobs/other.png?uuid=${IMAGE_UUID})`,
+        `https://evil.example/blobs/external.png?uuid=11111111-1111-4111-8111-111111111111`,
+        "https://cocalc.ai/blobs/not-image.txt?uuid=22222222-2222-4222-8222-222222222222",
+        "https://cocalc.ai/blobs/invalid.png?uuid=not-a-uuid",
+        "https://cocalc.ai/blobs/path%2Fescape.png?uuid=33333333-3333-4333-8333-333333333333",
+      ].join("\n"),
+      "https://cocalc.ai",
+    );
+
+    expect(images).toEqual([
+      {
+        filename: "paste one.png",
+        source: "cocalc_blob",
+        url: `https://cocalc.ai/blobs/paste%20one.png?uuid=${IMAGE_UUID}`,
+      },
+    ]);
   });
 
   it("returns bounded redacted recent tickets and records an audit", async () => {
@@ -210,7 +242,7 @@ describe("admin support API", () => {
     });
   });
 
-  it("returns comments without requester identities or attachment URLs", async () => {
+  it("returns CoCalc comment images without requester identities or attachment URLs", async () => {
     const tickets = {
       show: jest.fn(async () => ({ result: ticket(), response: {} })),
       get: jest.fn(async () => ({
@@ -220,7 +252,9 @@ describe("admin support API", () => {
             author_id: 44,
             public: true,
             created_at: new Date().toISOString(),
-            plain_body: "Contact alice@example.com; api_key=super-secret",
+            plain_body:
+              "Contact alice@example.com; api_key=super-secret\n" +
+              `- Image: https://cocalc.ai/blobs/support.png?uuid=${IMAGE_UUID}`,
             body: "ignored",
             attachments: [
               {
@@ -249,6 +283,13 @@ describe("admin support API", () => {
         author: "requester",
         attachment_count: 1,
         attachment_bytes: 120,
+        images: [
+          {
+            filename: "support.png",
+            source: "cocalc_blob",
+            url: `https://cocalc.ai/blobs/support.png?uuid=${IMAGE_UUID}`,
+          },
+        ],
       }),
     ]);
     expect(JSON.stringify(result)).not.toContain("alice@example.com");

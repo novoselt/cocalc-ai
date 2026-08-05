@@ -13,6 +13,7 @@ import type {
 import getLogger from "@cocalc/backend/logger";
 import type {
   AdminSupportCategory,
+  AdminSupportImageReference,
   AdminSupportListRequest,
   AdminSupportListResponse,
   AdminSupportMergePlanRequest,
@@ -45,6 +46,7 @@ import {
   ADMIN_SUPPORT_TICKET_STATUSES,
 } from "@cocalc/conat/hub/api/admin-support";
 import getPool from "@cocalc/database/pool";
+import siteURL from "@cocalc/database/settings/site-url";
 import centralLog from "@cocalc/database/postgres/central-log";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import getZendeskClient from "@cocalc/server/support/zendesk-client";
@@ -73,6 +75,7 @@ const MAX_SEARCH_QUERY_CHARS = 2_000;
 const MAX_TAGS_PER_MUTATION = 100;
 const MAX_TAG_CHARS = 100;
 const MAX_IDEMPOTENCY_KEY_CHARS = 200;
+const MAX_IMAGES_PER_COMMENT = 20;
 const ZENDESK_TIMEOUT_MS = 20_000;
 const ZENDESK_MERGE_TIMEOUT_MS = 60_000;
 const MUTATION_TABLE = "admin_support_mutations";
@@ -528,6 +531,92 @@ function sanitizeUrl(raw: string): string {
   }
 }
 
+const SAFE_SUPPORT_IMAGE_EXTENSIONS = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".webp",
+]);
+
+function supportImageExtension(filename: string): string {
+  const match = filename.toLowerCase().match(/(\.[a-z0-9]+)$/);
+  return match?.[1] ?? "";
+}
+
+function stripTrailingUrlPunctuation(value: string): string {
+  return value.replace(/[.,;:!?)\]}]+$/, "");
+}
+
+export function extractSupportImages(
+  value: unknown,
+  configuredSiteUrl: string,
+): AdminSupportImageReference[] {
+  let base: URL;
+  try {
+    base = new URL(configuredSiteUrl);
+  } catch {
+    return [];
+  }
+  base.username = "";
+  base.password = "";
+  base.hash = "";
+  base.search = "";
+  const basePath = base.pathname.replace(/\/+$/, "");
+  const blobPrefix = `${basePath}/blobs/`.replace(/^\/\//, "/");
+  const images = new Map<string, AdminSupportImageReference>();
+  const text = `${value ?? ""}`;
+  const candidates =
+    text.match(/(?:https?:\/\/[^\s<>"']+|\/blobs\/[^\s<>"']+)/gi) ?? [];
+  for (const raw of candidates) {
+    if (images.size >= MAX_IMAGES_PER_COMMENT) break;
+    const candidate = stripTrailingUrlPunctuation(raw);
+    let url: URL;
+    try {
+      url = new URL(candidate, base);
+    } catch {
+      continue;
+    }
+    if (url.origin !== base.origin || !url.pathname.startsWith(blobPrefix)) {
+      continue;
+    }
+    const encodedFilename = url.pathname.slice(blobPrefix.length);
+    if (!encodedFilename || encodedFilename.includes("/")) continue;
+    let filename: string;
+    try {
+      filename = decodeURIComponent(encodedFilename);
+    } catch {
+      continue;
+    }
+    if (
+      !filename ||
+      filename.length > 255 ||
+      /[\u0000-\u001f\u007f/\\]/.test(filename) ||
+      !SAFE_SUPPORT_IMAGE_EXTENSIONS.has(supportImageExtension(filename))
+    ) {
+      continue;
+    }
+    const uuid = url.searchParams.get("uuid") ?? "";
+    if (!isValidUUID(uuid)) continue;
+    const safeUrl = new URL(
+      `${blobPrefix}${encodeURIComponent(filename)}`,
+      base.origin,
+    );
+    safeUrl.searchParams.set("uuid", uuid);
+    if (!images.has(uuid)) {
+      images.set(uuid, {
+        filename,
+        source: "cocalc_blob",
+        url: safeUrl.toString(),
+      });
+    }
+  }
+  return [...images.values()];
+}
+
 export function redactSupportText(value: unknown, maxChars: number): string {
   let text = `${value ?? ""}`;
   text = text.replace(/https?:\/\/[^\s<>"']+/gi, sanitizeUrl);
@@ -682,10 +771,12 @@ function summarizeTicket(ticket: Ticket): AdminSupportTicketSummary {
 function normalizeTicketComment(
   comment: TicketComment,
   requesterId: number,
+  configuredSiteUrl: string,
 ): AdminSupportTicketComment {
   const attachments = Array.isArray(comment.attachments)
     ? comment.attachments
     : [];
+  const body = comment.plain_body || comment.body;
   return {
     id: Number(comment.id),
     author:
@@ -694,10 +785,8 @@ function normalizeTicketComment(
         : "staff_or_system",
     public: !!comment.public,
     created_at: safeDate(comment.created_at),
-    body: redactSupportText(
-      comment.plain_body || comment.body,
-      MAX_COMMENT_CHARS,
-    ),
+    body: redactSupportText(body, MAX_COMMENT_CHARS),
+    images: extractSupportImages(body, configuredSiteUrl),
     attachment_count: attachments.length,
     attachment_bytes: attachments.reduce(
       (sum, attachment) => sum + (Number(attachment?.size) || 0),
@@ -1158,10 +1247,14 @@ export async function show(
     }),
   );
   try {
-    const { ticket, comments: rawComments } = await withZendeskReadSlot(
-      () => loadTicket(ticketId),
-      "Zendesk ticket and comments read",
-    );
+    const [{ ticket, comments: rawComments }, configuredSiteUrl] =
+      await Promise.all([
+        withZendeskReadSlot(
+          () => loadTicket(ticketId),
+          "Zendesk ticket and comments read",
+        ),
+        siteURL(),
+      ]);
     const summary = summarizeTicket(ticket);
     const ticketDetail = {
       ...summary,
@@ -1169,6 +1262,7 @@ export async function show(
         ticket.description,
         Math.min(MAX_DESCRIPTION_CHARS, Math.floor(maxBytes / 2)),
       ),
+      images: extractSupportImages(ticket.description, configuredSiteUrl),
     };
     const comments = rawComments
       .sort(
@@ -1176,7 +1270,9 @@ export async function show(
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
       )
       .slice(-maxComments)
-      .map((comment) => normalizeTicketComment(comment, ticket.requester_id));
+      .map((comment) =>
+        normalizeTicketComment(comment, ticket.requester_id, configuredSiteUrl),
+      );
     const envelope = {
       server_time: new Date().toISOString(),
       ticket: ticketDetail,

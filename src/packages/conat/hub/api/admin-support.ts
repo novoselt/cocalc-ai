@@ -78,12 +78,19 @@ export interface AdminSupportTicketSummary {
   signals: AdminSupportTicketSignals;
 }
 
+export interface AdminSupportImageReference {
+  filename: string;
+  source: "cocalc_blob";
+  url: string;
+}
+
 export interface AdminSupportTicketComment {
   id: number;
   author: "requester" | "staff_or_system";
   public: boolean;
   created_at: string;
   body: string;
+  images: AdminSupportImageReference[];
   attachment_count: number;
   attachment_bytes: number;
 }
@@ -118,7 +125,10 @@ export interface AdminSupportShowRequest {
 export interface AdminSupportShowResponse {
   audit_id: string;
   server_time: string;
-  ticket: AdminSupportTicketSummary & { description: string };
+  ticket: AdminSupportTicketSummary & {
+    description: string;
+    images: AdminSupportImageReference[];
+  };
   comments: AdminSupportTicketComment[];
   result_bytes: number;
   truncated: boolean;

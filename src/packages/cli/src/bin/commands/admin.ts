@@ -1609,7 +1609,9 @@ Merge comments are private unless their corresponding --*-comment-public flag is
 
   adminSupport
     .command("show <ticket-id>")
-    .description("show one redacted ticket conversation")
+    .description(
+      "show one redacted ticket conversation with validated CoCalc image references",
+    )
     .option("--max-comments <n>", "maximum recent comments", "50")
     .option("--max-bytes <n>", "maximum response bytes", "262144")
     .requiredOption("--reason <reason>", "human-readable audit reason")
