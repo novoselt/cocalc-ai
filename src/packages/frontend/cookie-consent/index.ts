@@ -62,6 +62,7 @@ export function showConsentModal(): void {
 }
 
 const FORCE_CONSENT_OVERLAY_ID = "cocalc-cookie-consent-force-overlay";
+const FORCE_CONSENT_VISIBILITY_DELAY_MS = 500;
 let forceConsentCount = 0;
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -95,6 +96,31 @@ function removeForceConsentOverlay(): void {
   document.getElementById(FORCE_CONSENT_OVERLAY_ID)?.remove();
 }
 
+function isConsentModalVisible(): boolean {
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return false;
+  }
+  const modal = document.querySelector<HTMLElement>("#cc-main .cm");
+  if (modal == null || !modal.isConnected) return false;
+
+  let element: HTMLElement | null = modal;
+  while (element != null) {
+    const style = window.getComputedStyle(element);
+    if (
+      element.hidden ||
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse" ||
+      style.opacity === "0"
+    ) {
+      return false;
+    }
+    if (element.id === "cc-main") break;
+    element = element.parentElement;
+  }
+  return element?.id === "cc-main";
+}
+
 export function enableForceConsent(): () => void {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return () => {};
@@ -105,9 +131,14 @@ export function enableForceConsent(): () => void {
   forceConsentCount += 1;
 
   let removed = false;
+  let visibilityTimer: number | undefined;
   function remove() {
     if (removed) return;
     removed = true;
+    if (visibilityTimer != null) {
+      window.clearTimeout(visibilityTimer);
+      visibilityTimer = undefined;
+    }
     forceConsentCount = Math.max(0, forceConsentCount - 1);
     if (forceConsentCount === 0) {
       html.classList.remove("disable--interaction");
@@ -127,6 +158,14 @@ export function enableForceConsent(): () => void {
     html.classList.add("disable--interaction");
     ensureForceConsentOverlay();
     showConsentModal();
+    visibilityTimer = window.setTimeout(() => {
+      visibilityTimer = undefined;
+      if (!isConsentModalVisible()) {
+        // Privacy extensions may hide the consent UI without removing it.
+        // Never leave CoCalc's independent interaction blocker behind.
+        remove();
+      }
+    }, FORCE_CONSENT_VISIBILITY_DELAY_MS);
   }
 
   window.addEventListener("cc:onConsent", remove);
