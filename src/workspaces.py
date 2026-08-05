@@ -178,6 +178,7 @@ def all_packages() -> List[str]:
         'packages/conat',
         'packages/backend',
         'packages/api-client',
+        'packages/apps/notebook',
         'packages/apps/tasks',
         'packages/jupyter',
         'packages/comm',
@@ -203,12 +204,17 @@ def all_packages() -> List[str]:
         'packages/hub',
         'packages/test'
     ]
-    for x in os.listdir('packages'):
-        path = os.path.join("packages", x)
+    for root, dirs, files in os.walk('packages'):
+        dirs[:] = [
+            name for name in dirs
+            if name not in {'build', 'dist', 'node_modules'}
+        ]
+        path = os.path.normpath(root)
+        if path == 'packages' or 'package.json' not in files:
+            continue
         if path in RETIRED_WORKSPACES:
             continue
-        if path not in v and os.path.isdir(path) and os.path.exists(
-                os.path.join(path, 'package.json')):
+        if path not in v:
             v.append(path)
     return v
 

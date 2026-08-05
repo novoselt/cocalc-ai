@@ -8,7 +8,7 @@ import {
   readdirSync,
   rmSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
@@ -181,24 +181,31 @@ function positiveInt(value, label) {
   return n;
 }
 
-function packageJson(name) {
-  return JSON.parse(
-    readFileSync(join(PACKAGES_DIR, name, "package.json"), "utf8"),
-  );
+function discoverPackagePaths(dir = PACKAGES_DIR) {
+  const paths = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (["build", "dist", "node_modules"].includes(entry.name)) continue;
+    const path = join(dir, entry.name);
+    if (existsSync(join(path, "package.json"))) {
+      paths.push(path);
+    }
+    paths.push(...discoverPackagePaths(path));
+  }
+  return paths;
 }
 
 function discoverPackages() {
   const packages = [];
-  for (const name of readdirSync(PACKAGES_DIR).sort()) {
-    const packageJsonPath = join(PACKAGES_DIR, name, "package.json");
-    if (!existsSync(packageJsonPath)) continue;
-    const pkg = packageJson(name);
+  for (const path of discoverPackagePaths().sort()) {
+    const name = basename(path);
+    const pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf8"));
     const testScript = pkg.scripts?.test ?? "";
     if (!/\bjest\b/.test(testScript) && !PACKAGE_OVERRIDES[name]) continue;
     packages.push({
       name,
       testScript,
-      path: join(PACKAGES_DIR, name),
+      path,
     });
   }
   return packages;
