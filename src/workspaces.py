@@ -462,6 +462,8 @@ def write_github_summary(success: List[str], flaky: List[str],
 
 def test(args) -> None:
     CUR = os.path.abspath('.')
+    jest_cache_root = os.environ.get("COCALC_JEST_CACHE_DIR",
+                                     os.path.join(CUR, ".cache", "jest"))
     flaky = []
     fails = []
     success = []
@@ -514,6 +516,10 @@ def test(args) -> None:
             package_data = json.load(package_file)
         package_scripts = package_data.get("scripts", {})
         jest_backed = is_jest_backed_package(package_data, path)
+        jest_cache_path = os.path.join(
+            jest_cache_root,
+            path.strip("/").replace("/", "-"),
+        )
 
         def f(attempt: int, retry_paths: List[str]):
             print("\n" * 3)
@@ -540,8 +546,11 @@ def test(args) -> None:
             report_path = os.path.join(tmpdir,
                                        f"jest-results-{attempt}.json")
             if jest_backed:
-                test_cmd += (
-                    f" --json --outputFile {shlex.quote(report_path)}")
+                os.makedirs(jest_cache_path, exist_ok=True)
+                test_cmd += (f" --cacheDirectory "
+                             f"{shlex.quote(jest_cache_path)}"
+                             f" --json --outputFile "
+                             f"{shlex.quote(report_path)}")
             cmd(test_cmd, package_path)
             success.append(path)
             return report_path

@@ -170,6 +170,14 @@ jobs:
           name: workspace-build
           path: src/packages
 
+      - name: Cache Jest transforms
+        uses: actions/cache@v4
+        with:
+          path: src/.cache/jest
+          key: jest-${{ runner.os }}-node24-${{ hashFiles('src/packages/pnpm-lock.yaml', 'src/packages/**/jest.config.*', 'src/packages/**/tsconfig.test.json') }}-${{ matrix.lane }}-${{ github.sha }}
+          restore-keys: |
+            jest-${{ runner.os }}-node24-${{ hashFiles('src/packages/pnpm-lock.yaml', 'src/packages/**/jest.config.*', 'src/packages/**/tsconfig.test.json') }}-${{ matrix.lane }}-
+
       - name: Cache pip
         if: matrix.lane == 'rest'
         uses: actions/cache@v4
