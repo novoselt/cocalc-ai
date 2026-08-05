@@ -133,6 +133,71 @@ This script is currently an operator workflow, not a stable public installer
 interface. It assumes SSH access to the bay VM and direct bay-local Postgres
 access through the systemd layout.
 
+## Control-Plane Backups
+
+The legacy full backup job is not the production target. It combines a full
+PostgreSQL dump, SQLite snapshotting, compression, and Rustic upload on the bay
+VM, so one long low-priority job can still contend with the serving control
+plane. The replacement deliberately separates the two data stores:
+
+- PostgreSQL uses pgBackRest directly to the R2-compatible object store, with
+  continuous WAL archiving, a weekly full backup, and daily differential
+  backups.
+- Conat persistence SQLite files use SQLite's online backup API only when the
+  DB/WAL/SHM signature changes. Rustic snapshots the persistent uncompressed
+  mirror so unchanged pages and files deduplicate.
+- GCP disk snapshots remain a separate infrastructure recovery layer.
+
+Both application-level backup paths are disabled by default. Do not enable the
+legacy full scheduler at the same time.
+
+### pgBackRest Binary
+
+Build pgBackRest on a disposable build host, not on a production bay:
+
+```sh
+./src/scripts/bay-systemd/build-pgbackrest.sh \
+  --install-deps \
+  --output /tmp/pgbackrest
+```
+
+The builder pins pgBackRest 2.59.0, verifies the official release checksum,
+and runs the upstream PostgreSQL backup/restore smoke test. Copy the resulting
+single executable and its checksum to each bay as
+`/usr/local/bin/pgbackrest`; `bay-bootstrap-host.sh` installs its runtime
+libraries but intentionally does not install compiler dependencies.
+
+### Activation Order
+
+1. Configure the dedicated R2 credentials and independent pgBackRest/SQLite
+   repository passwords in `/etc/cocalc/bay-secrets.env`.
+2. Install the verified pgBackRest binary and Rustic.
+3. Set `COCALC_BAY_PGBACKREST_ENABLED=1`, restart Postgres once, and immediately
+   run `systemctl start cocalc-bay-pgbackrest-setup.service`. This creates the
+   stanza and verifies that a WAL segment reaches R2.
+4. Run and inspect one full backup manually:
+   `systemctl start cocalc-bay-pgbackrest-backup@full.service` and
+   `cat $COCALC_BAY_PGBACKREST_STATUS_FILE`.
+5. Enable the full, differential, and status timers only after a restore test
+   succeeds from a disposable VM.
+6. Set `COCALC_BAY_SQLITE_BACKUP_ENABLED=1`, run one SQLite backup manually,
+   restore its Rustic snapshot to a disposable directory, then enable the
+   SQLite backup and prune timers.
+
+The backup units have explicit CPU, memory, and I/O limits. The PostgreSQL
+status probe records the latest backup age, retained backup bytes, archive
+ranges, `pg_stat_archiver`, and pending/error spool state in
+`pgbackrest-status.json`. The SQLite status records exactly which databases
+were refreshed and Rustic's actual `data_added` result. R2 bucket metrics are
+still the authoritative source for total stored bytes, WAL growth, requests,
+and cost; pgBackRest's retained-backup byte count intentionally excludes the
+WAL repository.
+
+Run a disposable full restore and point-in-time recovery at least weekly. A
+backup is not considered healthy solely because upload commands succeeded.
+The restore drill must start PostgreSQL, verify application-level probes, and
+record the newest replayed transaction and recovery target.
+
 ## GCP Bootstrap Service Account
 
 Run this in a trusted admin `gcloud` shell to create or update the project

@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+# shellcheck source=pgbackrest-lib.sh
+source "${SCRIPT_DIR}/pgbackrest-lib.sh"
+
+pgbackrest_set_defaults
+ensure_dirs
+
+if [[ "${COCALC_BAY_PGBACKREST_ENABLED:-0}" != "1" ]]; then
+  printf '{"enabled":false,"level":"disabled"}\n'
+  exit 0
+fi
+
+pgbackrest_export_secrets
+stanza="$(pgbackrest_stanza)"
+info_file="$(mktemp)"
+archiver_file="$(mktemp)"
+status_tmp="${COCALC_BAY_PGBACKREST_STATUS_FILE}.tmp.$$"
+trap 'rm -f "$info_file" "$archiver_file" "$status_tmp"' EXIT
+
+"$COCALC_BAY_PGBACKREST_BIN" \
+  "--config=$COCALC_BAY_PGBACKREST_CONFIG" \
+  "--stanza=$stanza" \
+  --output=json info > "$info_file"
+
+socket_dir="${COCALC_BAY_POSTGRES_SOCKET_DIR:-${COCALC_BAY_RUN_DIR}/postgres}"
+db_name="${COCALC_BAY_POSTGRES_DB:-${PGDATABASE:-postgres}}"
+db_user="${COCALC_BAY_POSTGRES_USER:-${PGUSER:-}}"
+psql \
+  -h "$socket_dir" \
+  -p "$COCALC_BAY_POSTGRES_PORT" \
+  -d "$db_name" \
+  -U "$db_user" \
+  -Atqc "SELECT row_to_json(a) FROM (SELECT archived_count, failed_count, last_archived_wal, last_archived_time, last_failed_wal, last_failed_time, stats_reset FROM pg_stat_archiver) a" \
+  > "$archiver_file"
+
+python3 - \
+  "$info_file" \
+  "$archiver_file" \
+  "$COCALC_BAY_PGBACKREST_SPOOL_PATH/archive/$stanza" \
+  "$COCALC_BAY_PGBACKREST_MAX_BACKUP_AGE_S" \
+  "$COCALC_BAY_PGBACKREST_MAX_SPOOL_AGE_S" \
+  "$status_tmp" <<'PY'
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+
+info_path, archiver_path, spool_path, backup_age_limit, spool_age_limit, output_path = sys.argv[1:]
+backup_age_limit = int(backup_age_limit)
+spool_age_limit = int(spool_age_limit)
+now = time.time()
+
+with open(info_path, encoding="utf8") as src:
+    info_list = json.load(src)
+with open(archiver_path, encoding="utf8") as src:
+    archiver_text = src.read().strip()
+archiver = json.loads(archiver_text) if archiver_text else None
+
+stanza = info_list[0] if info_list else {}
+backups = [item for item in stanza.get("backup", []) if not item.get("error")]
+latest = max(backups, key=lambda item: item.get("timestamp", {}).get("stop", 0), default=None)
+latest_stop = latest.get("timestamp", {}).get("stop") if latest else None
+backup_age = max(0, int(now - latest_stop)) if latest_stop else None
+
+pending_files = 0
+pending_bytes = 0
+oldest_pending = None
+error_files = []
+if os.path.isdir(spool_path):
+    for root, _, names in os.walk(spool_path):
+        for name in names:
+            path = os.path.join(root, name)
+            try:
+                stat = os.stat(path)
+            except FileNotFoundError:
+                continue
+            if name.endswith(".error"):
+                error_files.append(os.path.relpath(path, spool_path))
+            if name.endswith(".ok") or name.endswith(".error"):
+                continue
+            pending_files += 1
+            pending_bytes += stat.st_size
+            oldest_pending = stat.st_mtime if oldest_pending is None else min(oldest_pending, stat.st_mtime)
+pending_age = max(0, int(now - oldest_pending)) if oldest_pending is not None else 0
+
+reasons = []
+level = "ok"
+if latest is None:
+    level = "critical"
+    reasons.append("no successful backup")
+elif backup_age is not None and backup_age >= backup_age_limit:
+    level = "critical"
+    reasons.append(f"latest backup is {backup_age}s old")
+if error_files:
+    level = "critical"
+    reasons.append(f"archive spool has {len(error_files)} error file(s)")
+if pending_age >= spool_age_limit:
+    level = "critical"
+    reasons.append(f"oldest pending WAL is {pending_age}s old")
+
+repository_delta = sum(
+    item.get("info", {}).get("repository", {}).get("delta", 0) or 0
+    for item in backups
+)
+result = {
+    "enabled": True,
+    "level": level,
+    "reasons": reasons,
+    "generated_at": datetime.now(timezone.utc).isoformat(),
+    "stanza": stanza.get("name"),
+    "repository_status": stanza.get("repo", [{}])[0].get("status"),
+    "backup": {
+        "count": len(backups),
+        "latest_label": latest.get("label") if latest else None,
+        "latest_type": latest.get("type") if latest else None,
+        "latest_stop_epoch": latest_stop,
+        "latest_age_seconds": backup_age,
+        "repository_delta_bytes_retained_backups": repository_delta,
+    },
+    "archive": {
+        "ranges": stanza.get("archive", []),
+        "postgres": archiver,
+        "spool_pending_files": pending_files,
+        "spool_pending_bytes": pending_bytes,
+        "spool_oldest_pending_age_seconds": pending_age,
+        "spool_error_files": error_files[:20],
+    },
+}
+with open(output_path, "w", encoding="utf8") as out:
+    json.dump(result, out, sort_keys=True)
+    out.write("\n")
+os.chmod(output_path, 0o600)
+print(json.dumps(result, sort_keys=True))
+PY
+
+mkdir -p "$(dirname "$COCALC_BAY_PGBACKREST_STATUS_FILE")"
+mv -f "$status_tmp" "$COCALC_BAY_PGBACKREST_STATUS_FILE"
+trap - EXIT
+rm -f "$info_file" "$archiver_file"

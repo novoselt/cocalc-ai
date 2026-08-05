@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily CoCalc Bay pgBackRest differential backup
+
+[Timer]
+OnCalendar=Mon..Sat *-*-* 08:20:00 UTC
+RandomizedDelaySec=30min
+AccuracySec=5min
+Persistent=true
+Unit=cocalc-bay-pgbackrest-backup@diff.service
+
+[Install]
+WantedBy=timers.target
