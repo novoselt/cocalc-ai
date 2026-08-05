@@ -767,7 +767,7 @@ export function NewProjectCreator({ default_value, open, onClose }: Props) {
       }
       onCancel={cancel_editing}
       footer={null}
-      maskClosable={!saving}
+      mask={{ closable: !saving }}
       styles={{
         body: {
           background: COLORS.GRAY_LLL,

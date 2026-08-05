@@ -113,7 +113,7 @@ export function AdminRole({ account_id, name, is_admin }: Props) {
           void (granting ? grantAdminRole() : revokeAdminRole());
         }}
         onCancel={() => setConfirmAction(undefined)}
-        maskClosable={!running}
+        mask={{ closable: !running }}
         closable={!running}
       >
         <p>
