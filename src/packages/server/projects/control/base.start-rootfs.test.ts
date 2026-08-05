@@ -385,6 +385,61 @@ describe("BaseProject.start RootFS sealing", () => {
     );
   });
 
+  it("uses the student course account for runtime quota", async () => {
+    const INSTRUCTOR_ID = "33333333-3333-4333-8333-333333333333";
+    const STUDENT_ID = "44444444-4444-4444-8444-444444444444";
+    queryTableMock = jest.fn(async (opts: any) => {
+      if (opts?.select?.includes("runtime_sponsor_account_id")) {
+        return {
+          users: {
+            [INSTRUCTOR_ID]: { group: "owner" },
+            [STUDENT_ID]: { group: "collaborator" },
+          },
+          last_active: null,
+          last_started_by: INSTRUCTOR_ID,
+          runtime_sponsor_account_id: null,
+          usage_account_id: null,
+          course: { type: "student", account_id: STUDENT_ID },
+          host_id: HOST_ID,
+        };
+      }
+      throw new Error(`unexpected query table call: ${JSON.stringify(opts)}`);
+    });
+
+    const projectDefaults =
+      await import("@cocalc/server/membership/project-defaults");
+    jest
+      .mocked(projectDefaults.getMembershipProjectDefaultsForAccount)
+      .mockImplementation(async (account_id?: string) => {
+        if (account_id === STUDENT_ID) {
+          return { memory: 4000, disk_quota: 2000 };
+        }
+        if (account_id === INSTRUCTOR_ID) {
+          return { memory: 16000, disk_quota: 10000 };
+        }
+        return {};
+      });
+    const quotaModule = await import("@cocalc/util/upgrades/quota");
+    jest.mocked(quotaModule.quota).mockImplementation((settings: any) => ({
+      memory_limit: settings?.memory ?? 0,
+      disk_quota: settings?.disk_quota ?? 0,
+    }));
+
+    const { BaseProject } = await import("./base");
+    const project = new BaseProject(PROJECT_ID);
+
+    await project.computeQuota(INSTRUCTOR_ID);
+
+    const quotaUpdate = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("SET run_quota_revision ="),
+    );
+    expect(quotaUpdate).toBeDefined();
+    expect(JSON.parse(quotaUpdate![1][1])).toMatchObject({
+      memory_limit: 4000,
+      disk_quota: 10000,
+    });
+  });
+
   it("recomputes stored run_quota for stopped projects without restarting", async () => {
     const OWNER_ID = "33333333-3333-4333-8333-333333333333";
     queryTableMock = jest.fn(async (opts: any) => {
