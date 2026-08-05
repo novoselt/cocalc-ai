@@ -15,6 +15,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
   return {
     withContext: async (_command: unknown, _label: string, fn: any) => {
       const ctx = {
+        accountId: "11111111-1111-4111-8111-111111111111",
         hub: {
           system: {},
           messages: {},
@@ -23,6 +24,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
           adminHost: {},
           adminSupport: {},
           adminCrashes: {},
+          purchases: {},
         },
       };
       Object.assign(ctx.hub.system, overrides.system ?? {});
@@ -32,6 +34,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
       Object.assign(ctx.hub.adminHost, overrides.adminHost ?? {});
       Object.assign(ctx.hub.adminSupport, overrides.adminSupport ?? {});
       Object.assign(ctx.hub.adminCrashes, overrides.adminCrashes ?? {});
+      Object.assign(ctx.hub.purchases, overrides.purchases ?? {});
       return await fn(ctx);
     },
     resolveAccountByIdentifier: async (_ctx: unknown, identifier: string) => ({
@@ -46,6 +49,131 @@ function adminDeps(overrides: Record<string, any> = {}) {
       ),
   };
 }
+
+test("admin membership-package purchase previews before committing", async () => {
+  let quoteArgs: any;
+  let purchaseCalls = 0;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      purchases: {
+        getMembershipPackageQuote: async (opts: any) => {
+          quoteArgs = opts;
+          return {
+            total_price: 900,
+            starts_at: "2026-08-10T00:00:00.000Z",
+            expires_at: "2026-08-22T00:00:00.000Z",
+          };
+        },
+        adminCreateMembershipPackagePurchase: async () => {
+          purchaseCalls += 1;
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "purchase",
+    "membership-package",
+    "alice@example.com",
+    "--kind",
+    "course",
+    "--membership-class",
+    "student",
+    "--seat-count",
+    "100",
+    "--price",
+    "150",
+    "--source",
+    "credit",
+    "--reason",
+    "approved ticket 20443 offer",
+    "--course-project",
+    "44444444-4444-4444-8444-444444444444",
+    "--starts-at",
+    "2026-08-10T00:00:00Z",
+    "--expires-at",
+    "2026-08-22T00:00:00Z",
+  ]);
+
+  assert.equal(purchaseCalls, 0);
+  assert.equal(quoteArgs.account_id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(quoteArgs.seat_count, 100);
+  assert.equal(
+    quoteArgs.course_project_id,
+    "44444444-4444-4444-8444-444444444444",
+  );
+});
+
+test("admin membership-package purchase commits the reviewed custom price", async () => {
+  let purchaseArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      purchases: {
+        getMembershipPackageQuote: async () => ({
+          total_price: 900,
+          starts_at: "2026-08-10T00:00:00.000Z",
+          expires_at: "2026-08-22T00:00:00.000Z",
+        }),
+        adminCreateMembershipPackagePurchase: async (opts: any) => {
+          purchaseArgs = opts;
+          return { package_id: "package-1", purchase_id: 42 };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "purchase",
+    "membership-package",
+    "alice@example.com",
+    "--kind",
+    "team",
+    "--membership-class",
+    "standard",
+    "--seat-count",
+    "100",
+    "--interval",
+    "month",
+    "--price",
+    "150",
+    "--source",
+    "free",
+    "--reason",
+    "approved custom camp package",
+    "--idempotency-key",
+    "ticket-20443",
+    "--commit",
+  ]);
+
+  assert.equal(
+    purchaseArgs.user_account_id,
+    "22222222-2222-4222-8222-222222222222",
+  );
+  assert.equal(purchaseArgs.price, 150);
+  assert.equal(purchaseArgs.source, "free");
+  assert.equal(purchaseArgs.idempotency_key, "ticket-20443");
+  assert.deepEqual(purchaseArgs.product, {
+    type: "membership-package",
+    kind: "team",
+    membership_class: "standard",
+    seat_count: 100,
+    interval: "month",
+    course_project_id: undefined,
+    starts_at: undefined,
+    expires_at: undefined,
+    metadata: undefined,
+  });
+});
 
 test("admin db query forwards audited read-only SQL options", async () => {
   let capturedArgs: any;

@@ -110,6 +110,57 @@ const MEMBERSHIP_TIER_FIELDS = {
   updated: null,
 } as const;
 
+function parseAdminPackagePositiveInteger(
+  value: string | undefined,
+  flagName: string,
+): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flagName} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseAdminPackagePrice(value: string | undefined): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("--price must be a finite nonnegative number");
+  }
+  return parsed;
+}
+
+function parseAdminPackageMetadata(
+  value: string | undefined,
+): Record<string, unknown> | undefined {
+  const raw = `${value ?? ""}`.trim();
+  if (!raw) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`invalid --metadata-json: ${err}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("--metadata-json must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseAdminPackageKind(value: string | undefined) {
+  if (value === "course" || value === "team" || value === "site") {
+    return value;
+  }
+  throw new Error("--kind must be course, team, or site");
+}
+
+function parseAdminPackageDate(value: string | undefined, flagName: string) {
+  const date = new Date(`${value ?? ""}`.trim());
+  if (!Number.isFinite(date.valueOf())) {
+    throw new Error(`${flagName} must be an ISO date`);
+  }
+  return date.toISOString();
+}
+
 function parseAdminDataQueryKind(
   value: string | undefined,
 ): AdminDataQueryKind | undefined {
@@ -1027,6 +1078,9 @@ export function registerAdminCommand(
   const adminMembershipAssignment = admin
     .command("membership-assignment")
     .description("admin-assigned membership operations");
+  const adminPurchase = admin
+    .command("purchase")
+    .description("audited admin-assisted purchase operations");
   const adminMasterKey = admin
     .command("master-key")
     .description("local site master key lifecycle operations");
@@ -1131,6 +1185,139 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     }
     return membershipClass;
   }
+
+  adminPurchase
+    .command("membership-package <user>")
+    .description(
+      "preview or create a custom-price membership package for an account",
+    )
+    .requiredOption("--kind <kind>", "package kind: course, team, or site")
+    .requiredOption("--membership-class <class>", "membership class")
+    .requiredOption("--seat-count <n>", "number of package seats")
+    .requiredOption("--price <usd>", "custom total price in USD")
+    .requiredOption("--source <source>", "credit or free")
+    .requiredOption("--reason <text>", "operator audit reason")
+    .option("--interval <interval>", "month or year")
+    .option("--course-project <uuid>", "course project UUID")
+    .option("--starts-at <iso>", "explicit package start time")
+    .option("--expires-at <iso>", "explicit package expiry time")
+    .option("--metadata-json <json>", "package metadata JSON object")
+    .option("--pricing-note <text>", "internal custom-pricing explanation")
+    .option(
+      "--idempotency-key <key>",
+      "stable retry key; derived from the reviewed request by default",
+    )
+    .option("--commit", "create the package and purchase", false)
+    .action(async (user: string, opts: any, command: Command) => {
+      await withContext(
+        command,
+        "admin purchase membership-package",
+        async (ctx) => {
+          const user_account_id = await resolveTargetAccountId(ctx, user);
+          const kind = parseAdminPackageKind(opts.kind);
+          const membership_class = `${opts.membershipClass ?? ""}`.trim();
+          if (!membership_class) {
+            throw new Error("--membership-class must be non-empty");
+          }
+          const seat_count = parseAdminPackagePositiveInteger(
+            opts.seatCount,
+            "--seat-count",
+          );
+          const price = parseAdminPackagePrice(opts.price);
+          const source = `${opts.source ?? ""}`.trim();
+          if (source !== "credit" && source !== "free") {
+            throw new Error("--source must be credit or free");
+          }
+          const reason = `${opts.reason ?? ""}`.trim();
+          if (!reason) throw new Error("--reason must be non-empty");
+          const interval = `${opts.interval ?? ""}`.trim() || undefined;
+          if (interval && interval !== "month" && interval !== "year") {
+            throw new Error("--interval must be month or year");
+          }
+          const course_project_id =
+            `${opts.courseProject ?? ""}`.trim() || undefined;
+          if (course_project_id && !isValidUUID(course_project_id)) {
+            throw new Error("--course-project must be a project UUID");
+          }
+          if (kind === "course" && !course_project_id) {
+            throw new Error("--course-project is required for course packages");
+          }
+          const starts_at = opts.startsAt
+            ? parseAdminPackageDate(opts.startsAt, "--starts-at")
+            : undefined;
+          const expires_at = opts.expiresAt
+            ? parseAdminPackageDate(opts.expiresAt, "--expires-at")
+            : undefined;
+          const metadata = parseAdminPackageMetadata(opts.metadataJson);
+          const product = {
+            type: "membership-package" as const,
+            kind,
+            membership_class,
+            seat_count,
+            interval: interval as "month" | "year" | undefined,
+            course_project_id,
+            starts_at,
+            expires_at,
+            metadata,
+          };
+          const quote = await ctx.hub.purchases.getMembershipPackageQuote({
+            account_id: ctx.accountId,
+            kind,
+            membership_class,
+            seat_count,
+            interval,
+            course_project_id,
+            starts_at,
+            expires_at,
+            metadata: metadata ?? null,
+          });
+          const idempotency_key =
+            `${opts.idempotencyKey ?? ""}`.trim() ||
+            createHash("sha256")
+              .update(
+                JSON.stringify({
+                  user_account_id,
+                  product,
+                  price,
+                  source,
+                  reason,
+                  pricing_note: `${opts.pricingNote ?? ""}`.trim() || null,
+                }),
+              )
+              .digest("hex")
+              .slice(0, 32);
+          const preview = {
+            dry_run: !opts.commit,
+            user_account_id,
+            product,
+            source,
+            custom_price: price,
+            standard_price: quote.total_price,
+            discount: quote.total_price - price,
+            starts_at: starts_at ?? quote.starts_at,
+            expires_at: expires_at ?? quote.expires_at,
+            idempotency_key,
+            reason,
+          };
+          if (!opts.commit) return preview;
+          return {
+            ...preview,
+            dry_run: false,
+            result:
+              await ctx.hub.purchases.adminCreateMembershipPackagePurchase({
+                account_id: ctx.accountId,
+                user_account_id,
+                product,
+                price,
+                source,
+                reason,
+                idempotency_key,
+                pricing_note: `${opts.pricingNote ?? ""}`.trim() || undefined,
+              }),
+          };
+        },
+      );
+    });
 
   function adminSupportListOptions(command: Command): Command {
     return command
