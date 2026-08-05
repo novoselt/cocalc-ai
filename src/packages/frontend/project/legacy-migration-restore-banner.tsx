@@ -684,7 +684,7 @@ export function LegacyMigrationRestoreBanner({
               : "This restored project may be missing final cocalc.com changes"
           }
           description={
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Space vertical size={10} style={{ width: "100%" }}>
               <Text>
                 This project was restored before we refreshed its final
                 cocalc.com archive. Your current project has been preserved. The
@@ -789,7 +789,7 @@ export function LegacyMigrationRestoreBanner({
             </Space>
           }
         >
-          <Space direction="vertical">
+          <Space vertical>
             <Text>
               “Just this session” hides this banner until you reload the
               project. “Dismiss forever” records that choice for this project.
@@ -845,7 +845,7 @@ export function LegacyMigrationRestoreBanner({
         type="success"
         message="Legacy project files restored"
         description={
-          <Space direction="vertical" size={10}>
+          <Space vertical size={10}>
             <Text>
               The imported files are now available. Reopen the project to reset
               the file browser state and show the restored directory listing.
@@ -937,7 +937,7 @@ export function LegacyMigrationRestoreBanner({
           : "Restoring legacy project files"
       }
       description={
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        <Space vertical size={8} style={{ width: "100%" }}>
           <Text>
             This project was created from a legacy archive. Files may be
             incomplete until the restore finishes. You can leave this page and

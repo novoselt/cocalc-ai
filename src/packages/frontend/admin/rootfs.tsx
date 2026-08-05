@@ -419,7 +419,7 @@ function scanHostCandidateLabel(candidate: RootfsScanHostCandidate) {
     host.status,
   ].filter(Boolean);
   return (
-    <Space direction="vertical" size={0}>
+    <Space vertical size={0}>
       <Space wrap>
         <Typography.Text strong>{hostDisplayName(host)}</Typography.Text>
         <Typography.Text type="secondary" copyable={{ text: host.id }}>
@@ -758,7 +758,7 @@ export function RootfsAdmin() {
           loading: scanEntry ? actionLoading(scanEntry, "scan") : false,
         }}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary">
             Choose an online project host to run the scan. Hosts that already
             have this RootFS cached are listed first; otherwise the host will
@@ -775,11 +775,7 @@ export function RootfsAdmin() {
               onChange={(event) => setScanHostId(event.target.value)}
               style={{ width: "100%" }}
             >
-              <Space
-                direction="vertical"
-                size="middle"
-                style={{ width: "100%" }}
-              >
+              <Space vertical size="middle" style={{ width: "100%" }}>
                 {scanHosts.map((candidate) => (
                   <Radio key={candidate.host.id} value={candidate.host.id}>
                     {scanHostCandidateLabel(candidate)}

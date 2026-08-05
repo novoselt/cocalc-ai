@@ -253,7 +253,7 @@ function TopCpuAccounts({
     );
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       {[...accounts]
         .sort(
           (a, b) =>
@@ -297,7 +297,7 @@ function TopCpuProjects({
     );
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       {[...projects]
         .sort(
           (a, b) =>
@@ -351,7 +351,7 @@ function TopEgressAccounts({
     );
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       {accounts.map((account) => (
         <div key={account.account_id}>
           <Space wrap>
@@ -388,7 +388,7 @@ function TopEgressProjects({
     );
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       {projects.map((project) => (
         <div key={`${project.account_id}:${project.project_id ?? "none"}`}>
           <Space wrap>
@@ -424,7 +424,7 @@ function RecentCpuEvents({ events }: { events: ManagedCpuEventSummary[] }) {
     );
   }
   return (
-    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+    <Space vertical size={8} style={{ width: "100%" }}>
       {events.map((event, i) => (
         <div
           key={`${event.account_id ?? "none"}:${event.project_id ?? "none"}:${event.sample_ended_at}:${i}`}
@@ -489,7 +489,7 @@ function MembershipUsageWindowReset({
   return (
     <PanelBox title="Reset membership usage windows">
       <FreshAuthModal {...freshAuthModalProps} />
-      <Space direction="vertical" size="small" style={{ width: "100%" }}>
+      <Space vertical size="small" style={{ width: "100%" }}>
         <Alert
           type="warning"
           showIcon
@@ -605,7 +605,7 @@ export function ManagedCpuAdminOverview() {
 
   const hasOverview = cpuOverview != null && egressOverview != null;
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Paragraph style={{ marginBottom: 0 }}>
         Operator view of CPU-heavy accounts and projects, with managed egress
         shown in the same window as an additional abuse signal. CPU is measured

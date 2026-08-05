@@ -101,11 +101,7 @@ export default function AutoBalance({ style }: Props) {
   };
 
   return (
-    <Space
-      direction="vertical"
-      size="small"
-      style={{ width: "100%", ...style }}
-    >
+    <Space vertical size="small" style={{ width: "100%", ...style }}>
       <Space align="center" wrap>
         <Popconfirm
           title={`${targetEnabled ? "Enable" : "Disable"} automatic deposits?`}

@@ -40,7 +40,7 @@ export function ManagedEgressBlockedScreen({
   return (
     <div style={CONTAINER_STYLE}>
       <Card style={CARD_STYLE}>
-        <Space direction="vertical" size="large" style={{ width: "100%" }}>
+        <Space vertical size="large" style={{ width: "100%" }}>
           <div>
             <Text strong style={{ color: COLORS.ORANGE_WARN }}>
               Network access temporarily blocked

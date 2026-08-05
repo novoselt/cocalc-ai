@@ -124,7 +124,7 @@ export function MembershipAnalyticsAdmin() {
   }, [load]);
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Space wrap>
         <Text strong>Range</Text>
         <RangePicker
@@ -160,7 +160,7 @@ export function MembershipAnalyticsAdmin() {
       ) : null}
 
       {overview ? (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Space wrap>
             <Text strong>Bays</Text>
             {overview.bays.map((bay) => (

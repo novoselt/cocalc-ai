@@ -408,7 +408,7 @@ export function EnvironmentFeatureGroups({
           No matching features to show.
         </Typography.Text>
       ) : showAll ? (
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space vertical size={12} style={{ width: "100%" }}>
           {groups.map(([category, rows]) => (
             <div key={category}>
               <Typography.Text

@@ -163,7 +163,7 @@ export function useProjectSettingsSections({
         ? "Control the active project process and review host diagnostics."
         : "Control the active project process and review runtime diagnostics.",
       children: (
-        <Space direction="vertical" size={sectionGap} style={{ width: "100%" }}>
+        <Space vertical size={sectionGap} style={{ width: "100%" }}>
           <WorkspaceRuntimeAdminWarning />
           <ProjectControl
             project={project}
@@ -250,11 +250,7 @@ export function useProjectSettingsSections({
         className: "cc-project-flyout-settings-panel",
         extra: showDatastore ? recoveryExtra : undefined,
         children: (
-          <Space
-            direction="vertical"
-            size={sectionGap}
-            style={{ width: "100%" }}
-          >
+          <Space vertical size={sectionGap} style={{ width: "100%" }}>
             <RecoveryPanel
               project_id={project_id}
               project={project}
@@ -306,7 +302,7 @@ export function useProjectSettingsSections({
       description:
         "Course-managed restrictions and inherited settings for this project.",
       children: (
-        <Space direction="vertical" size={sectionGap} style={{ width: "100%" }}>
+        <Space vertical size={sectionGap} style={{ width: "100%" }}>
           <p>This project is linked to a course.</p>
           <Suspense fallback={null}>
             <CourseRuntimeSponsorSummary project_id={project_id} />

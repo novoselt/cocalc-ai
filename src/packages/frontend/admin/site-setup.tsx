@@ -232,7 +232,7 @@ function SetupHero({ status }: { status?: SiteSetupStatus }) {
   const isStar = status?.profile === "star";
   return (
     <Card style={heroStyle}>
-      <Space direction="vertical" size="middle">
+      <Space vertical size="middle">
         <Title level={2} style={{ color: "white", margin: 0 }}>
           {isStar
             ? "Get this single-VM CoCalc appliance usable with almost no configuration."
@@ -294,7 +294,7 @@ function InfoLine({ label, value }: { label: string; value?: ReactNode }) {
   if (!value) return null;
   return (
     <Col xs={24} md={12}>
-      <Space direction="vertical" size={0}>
+      <Space vertical size={0}>
         <Text type="secondary">{label}</Text>
         <Text>{value}</Text>
       </Space>
@@ -326,7 +326,7 @@ function StarAboutCard({ info }: { info?: StarServerInfo }) {
           message="No CoCalc Star release metadata found on this server."
         />
       ) : (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Row gutter={[16, 12]}>
             <InfoLine label="Product" value={info.product} />
             <InfoLine
@@ -416,7 +416,7 @@ export function SiteSetupBanner({ onOpenSetup }: { onOpenSetup: () => void }) {
           : "This Launchpad/Rocket site is not fully set up."
       }
       description={
-        <Space direction="vertical" style={{ width: "100%" }}>
+        <Space vertical style={{ width: "100%" }}>
           <Text>
             {nextStep
               ? `Next required action: ${nextStep.title}. ${nextStep.summary}`
@@ -475,7 +475,7 @@ export function SiteSetupAdmin({
   const isStar = status?.profile === "star";
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
+    <Space vertical size="large" style={{ width: "100%" }}>
       <SetupHero status={status} />
       {error ? <ErrorDisplay error={error} /> : null}
       {status ? (
@@ -493,7 +493,7 @@ export function SiteSetupAdmin({
               Refresh setup status
             </Button>
           </Space>
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Space vertical size="middle" style={{ width: "100%" }}>
             {hardGateSteps.map((step, i) => (
               <StepCard
                 index={i + 1}
@@ -508,11 +508,7 @@ export function SiteSetupAdmin({
               <Title level={4} style={{ marginBottom: 0 }}>
                 Optional Steps
               </Title>
-              <Space
-                direction="vertical"
-                size="middle"
-                style={{ width: "100%" }}
-              >
+              <Space vertical size="middle" style={{ width: "100%" }}>
                 {optionalSteps.map((step, i) => (
                   <StepCard
                     index={hardGateSteps.length + i + 1}

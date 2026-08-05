@@ -130,7 +130,7 @@ function ValidationSummary({
 }) {
   if (validation == null) return null;
   return (
-    <Space direction="vertical" style={{ width: "100%" }}>
+    <Space vertical style={{ width: "100%" }}>
       {validation.ok ? (
         <Alert type="success" showIcon message="SQL passed guardrail checks." />
       ) : (
@@ -289,12 +289,12 @@ function Catalog({
   deleteView: (view: AdminDataViewSummary) => void;
 }) {
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Card size="small" title="Shared Views">
         {views.length === 0 ? (
           <Text type="secondary">No shared views are defined yet.</Text>
         ) : (
-          <Space direction="vertical" style={{ width: "100%" }}>
+          <Space vertical style={{ width: "100%" }}>
             {views.map((view) => (
               <Card
                 key={view.id}
@@ -334,7 +334,7 @@ function Catalog({
                   </Space>
                 }
               >
-                <Space direction="vertical" size={4}>
+                <Space vertical size={4}>
                   <Text code>{view.slug}</Text>
                   {view.description ? (
                     <Text type="secondary">{view.description}</Text>
@@ -356,10 +356,10 @@ function Catalog({
         {datasets.length === 0 ? (
           <Text type="secondary">No datasets are registered yet.</Text>
         ) : (
-          <Space direction="vertical" style={{ width: "100%" }}>
+          <Space vertical style={{ width: "100%" }}>
             {datasets.map((dataset) => (
               <Card key={dataset.id} size="small" title={dataset.title}>
-                <Space direction="vertical" size={4}>
+                <Space vertical size={4}>
                   <Text code>{dataset.id}</Text>
                   <Text type="secondary">{dataset.description}</Text>
                   <Space wrap size={[0, 4]}>
@@ -679,7 +679,7 @@ export function AdminDataExplorer() {
   const constraints = ADMIN_DATA_EXPLORER_SQL_CONSTRAINTS;
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Alert
         type="info"
         showIcon
@@ -691,7 +691,7 @@ export function AdminDataExplorer() {
       ) : null}
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={16}>
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Space vertical size="middle" style={{ width: "100%" }}>
             <Card
               title="Restricted SQL"
               extra={
@@ -740,7 +740,7 @@ export function AdminDataExplorer() {
           </Space>
         </Col>
         <Col xs={24} xl={8}>
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Space vertical size="middle" style={{ width: "100%" }}>
             <Card
               title="Save Current SQL View"
               extra={
@@ -797,7 +797,7 @@ export function AdminDataExplorer() {
                 </Space>
               }
             >
-              <Space direction="vertical" style={{ width: "100%" }}>
+              <Space vertical style={{ width: "100%" }}>
                 <Text type="secondary">
                   Upload accepts the same JSON produced by the CLI or Export
                   button. Paste import is also available for quick operator and
@@ -831,7 +831,7 @@ export function AdminDataExplorer() {
               </Space>
             </Card>
             <Card title="SQL Guardrails">
-              <Space direction="vertical" style={{ width: "100%" }}>
+              <Space vertical style={{ width: "100%" }}>
                 <Paragraph type="secondary">
                   Defaults: limit {constraints.default_limit}, timeout{" "}
                   {constraints.default_timeout_ms}ms, response cap{" "}
@@ -859,7 +859,7 @@ export function AdminDataExplorer() {
                 </Space>
                 <Text strong>Column allowlists</Text>
                 <div style={{ maxHeight: 220, overflow: "auto" }}>
-                  <Space direction="vertical" size={6}>
+                  <Space vertical size={6}>
                     {Object.entries(constraints.allowed_columns).map(
                       ([relation, columns]) => (
                         <div key={relation}>

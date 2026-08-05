@@ -246,7 +246,7 @@ export function RuntimeSponsorControls({ project, project_id }: Props) {
 
   return (
     <section>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         <SponsorRow
           icon={<Icon name="user" style={{ color: COLORS.BS_BLUE_TEXT }} />}
           title="Sponsor"
@@ -503,7 +503,7 @@ export function CourseRuntimeSponsorSummary({
   project_id: string;
 }) {
   return (
-    <Space direction="vertical" style={{ width: "100%" }} size={10}>
+    <Space vertical style={{ width: "100%" }} size={10}>
       <Alert
         type="info"
         showIcon

@@ -140,7 +140,7 @@ export default function AddStudents({ name, students, close }: Props) {
         borderColor: COLORS.GRAY_L0,
       }}
     >
-      <Space direction="vertical" size={18} style={{ width: "100%" }}>
+      <Space vertical size={18} style={{ width: "100%" }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
             <Icon name="users" /> Add Students to Your Course
@@ -186,7 +186,7 @@ export default function AddStudents({ name, students, close }: Props) {
           >
             <Flex gap={24} align="stretch" wrap="wrap">
               <div style={{ flex: "1 1 360px", minWidth: 280 }}>
-                <Space direction="vertical" size={12}>
+                <Space vertical size={12}>
                   <div>
                     <Text strong>
                       <Icon name="lock" /> Privacy-safe invite flow
@@ -196,7 +196,7 @@ export default function AddStudents({ name, students, close }: Props) {
                       or expose student accounts.
                     </Paragraph>
                   </div>
-                  <Space direction="vertical" size={10}>
+                  <Space vertical size={10}>
                     <StepTag n={1} text="Paste roster emails" />
                     <StepTag n={2} text="Prepare private projects" />
                     <StepTag n={3} text="Create invite links" />

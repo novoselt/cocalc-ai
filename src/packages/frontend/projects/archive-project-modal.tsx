@@ -133,7 +133,7 @@ export function ArchiveProjectModal({
         </Button>,
       ]}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {error ? (
           <Alert
             type="error"
@@ -248,7 +248,7 @@ function ProjectList({
       <div style={{ color: COLORS.GRAY_D, fontWeight: 600, marginBottom: 8 }}>
         Selected projects
       </div>
-      <Space direction="vertical" size={4} style={{ width: "100%" }}>
+      <Space vertical size={4} style={{ width: "100%" }}>
         {shown.map((project) => (
           <div key={project.project_id} style={PROJECT_ROW_STYLE}>
             <Icon name="project-outlined" style={{ color: COLORS.GRAY_M }} />

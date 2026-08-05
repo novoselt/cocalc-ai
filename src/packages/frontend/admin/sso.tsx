@@ -306,7 +306,7 @@ function SsoUrlHelp({ providerID }: { providerID: unknown }) {
     );
   }
   return (
-    <Space direction="vertical" size={2}>
+    <Space vertical size={2}>
       <Typography.Text>
         SP metadata URL:{" "}
         <Typography.Text code copyable={{ text: metadataUrl }}>
@@ -325,7 +325,7 @@ function SsoUrlHelp({ providerID }: { providerID: unknown }) {
 
 function SamlProviderFields() {
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Alert
         type="info"
         showIcon
@@ -704,7 +704,7 @@ export function SsoAdmin() {
   }
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
+    <Space vertical size="large" style={{ width: "100%" }}>
       <Alert
         type="info"
         showIcon

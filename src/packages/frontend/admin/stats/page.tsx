@@ -106,7 +106,7 @@ function Scope({
     host_id ? `host ${host_id}` : undefined,
   ].filter((value): value is string => value != null);
   return values.length ? (
-    <Space direction="vertical" size={0}>
+    <Space vertical size={0}>
       {values.map((value) => (
         <Text key={value} code copyable={{ text: value.split(" ")[1] }}>
           {value}
@@ -595,7 +595,7 @@ export const UsageStatistics: React.FC = () => {
   const activeWindowLabel = windowLabel(windowMinutes).toLowerCase();
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Card
         title="Operations Monitor"
         extra={

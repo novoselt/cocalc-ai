@@ -230,7 +230,7 @@ export function FilesBottom({
               )}
             />
           ) : terminalStartPolicyBlock ? (
-            <Space direction="vertical" size="small">
+            <Space vertical size="small">
               <Alert
                 type="warning"
                 showIcon
@@ -250,7 +250,7 @@ export function FilesBottom({
           ) : requestedTerminalStart ? (
             "Starting the project so the terminal can connect..."
           ) : (
-            <Space direction="vertical" size="small">
+            <Space vertical size="small">
               <div>Project is stopped. Start it to use this terminal.</div>
               <Button
                 size="small"

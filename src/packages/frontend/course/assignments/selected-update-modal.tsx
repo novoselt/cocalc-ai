@@ -214,7 +214,7 @@ export function SendSelectedAssignmentFilesModal({
           targetRoot || "/"
         }${targetLabel ? ` (${targetLabel})` : ""}`}
       />
-      <Space direction="vertical" style={{ width: "100%" }} size="middle">
+      <Space vertical style={{ width: "100%" }} size="middle">
         <Input.Search
           allowClear
           placeholder="Search assignment files..."
@@ -263,7 +263,7 @@ export function SendSelectedAssignmentFilesModal({
             </div>
           )}
         </div>
-        <Space direction="vertical">
+        <Space vertical>
           {explicitTargetCount == null ? (
             <Checkbox
               checked={includeNotAssigned}

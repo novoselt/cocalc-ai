@@ -169,7 +169,7 @@ export class Ban extends Component<Props, State> {
         onCancel={() => this.setState({ banModalOpen: false })}
         onOk={() => this.do_request()}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Alert
             type="warning"
             showIcon
@@ -245,7 +245,7 @@ export class Ban extends Component<Props, State> {
         onCancel={() => this.setState({ quarantineModalOpen: false })}
         onOk={() => this.quarantine()}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Alert
             type="error"
             showIcon

@@ -399,9 +399,9 @@ function PublicSharesPage() {
   }, [bulkLicenseOpen]);
 
   return (
-    <Space direction="vertical" size="large" style={{ width: "100%" }}>
+    <Space vertical size="large" style={{ width: "100%" }}>
       <Card>
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
             <Text type="secondary">
               These are public or unlisted directory shares owned by projects
@@ -523,7 +523,7 @@ function PublicSharesPage() {
                     const href = shareHref(share.slug);
                     return (
                       <Space
-                        direction="vertical"
+                        vertical
                         size={0}
                         style={{ maxWidth: SHARE_COLUMN_WIDTH, width: "100%" }}
                       >
@@ -585,7 +585,7 @@ function PublicSharesPage() {
                   sorter: (a, b) =>
                     compareText(shareStatusSortText(a), shareStatusSortText(b)),
                   render: (_value, share) => (
-                    <Space direction="vertical" size={4}>
+                    <Space vertical size={4}>
                       {availabilityTag(share)}
                       {exceptionalVisibilityTag(share)}
                       {share.site_license_grant_on_copy ? (
@@ -616,7 +616,7 @@ function PublicSharesPage() {
                   render: (_value, share) => {
                     const date = shareMetadataUpdatedDate(share);
                     return date ? (
-                      <Space direction="vertical" size={0}>
+                      <Space vertical size={0}>
                         <TimeAgo date={date} />
                         <Text type="secondary">
                           {date.toLocaleDateString()}
@@ -635,7 +635,7 @@ function PublicSharesPage() {
                   render: (_value, share) => {
                     const updatedBy = share.updated_by ?? share.created_by;
                     return (
-                      <Space direction="vertical" size={0}>
+                      <Space vertical size={0}>
                         {updatedBy ? (
                           <User
                             account_id={updatedBy}
@@ -672,7 +672,7 @@ function PublicSharesPage() {
                         "state",
                       ]) == "archived";
                     return (
-                      <Space direction="vertical" size={2}>
+                      <Space vertical size={2}>
                         <a
                           href={projectPathHref(share)}
                           onClick={(event) => {
@@ -726,7 +726,7 @@ function PublicSharesPage() {
         onOk={() => void applyBulkSiteLicense()}
         onCancel={() => setBulkLicenseOpen(false)}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Alert
             type="info"
             showIcon

@@ -84,7 +84,7 @@ export function ProjectToProjectSsh({
         }
         width={720}
       >
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space vertical size={12} style={{ width: "100%" }}>
           <Paragraph>
             Select the source project that should be able to SSH to this
             project. CoCalc creates or reuses a dedicated key in the source,

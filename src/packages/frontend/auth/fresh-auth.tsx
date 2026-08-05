@@ -436,7 +436,7 @@ export function FreshAuthModal({
             code.trim().length === 0),
       }}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {error ? <Alert type="error" showIcon message={error} /> : undefined}
         {status?.mode === "impersonation_actor" ? (
           <Alert
@@ -531,11 +531,7 @@ export function FreshAuthModal({
           <>
             <div>
               <div style={{ marginBottom: "8px" }}>Second factor</div>
-              <Space
-                direction="vertical"
-                size="small"
-                style={{ width: "100%" }}
-              >
+              <Space vertical size="small" style={{ width: "100%" }}>
                 {(status?.methods ?? []).includes("passkey") &&
                 (status?.methods ?? []).some(
                   (method) => method !== "passkey",

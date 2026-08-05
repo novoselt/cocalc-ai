@@ -428,7 +428,7 @@ export const ProjectSecrets: React.FC<Props> = ({
       );
     }
     return (
-      <Space direction="vertical" style={{ width: "100%" }} size={8}>
+      <Space vertical style={{ width: "100%" }} size={8}>
         {sortedSecrets.map((secret) => (
           <div
             key={secret.name}
@@ -548,7 +548,7 @@ export const ProjectSecrets: React.FC<Props> = ({
             : "Generated SSH deploy key secret, but project file setup needs attention."
         }
         description={
-          <Space direction="vertical" style={{ width: "100%" }}>
+          <Space vertical style={{ width: "100%" }}>
             <Typography.Text>
               Private key secret:{" "}
               <Typography.Text code>
@@ -594,7 +594,7 @@ export const ProjectSecrets: React.FC<Props> = ({
   function renderBody(): React.JSX.Element {
     return (
       <div style={{ padding: "10px" }}>
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+        <Space vertical style={{ width: "100%" }} size="middle">
           {isFlyout || isModal ? (
             <Typography.Text strong>{title}</Typography.Text>
           ) : undefined}
@@ -627,7 +627,7 @@ export const ProjectSecrets: React.FC<Props> = ({
           {renderRows()}
           <div>
             <Typography.Text strong>Set or Replace a Secret</Typography.Text>
-            <Space direction="vertical" style={{ width: "100%", marginTop: 8 }}>
+            <Space vertical style={{ width: "100%", marginTop: 8 }}>
               <Input
                 disabled={saving}
                 placeholder="SECRET_NAME"
@@ -668,7 +668,7 @@ export const ProjectSecrets: React.FC<Props> = ({
           </div>
           <div>
             <Typography.Text strong>Generate SSH Deploy Key</Typography.Text>
-            <Space direction="vertical" style={{ width: "100%", marginTop: 8 }}>
+            <Space vertical style={{ width: "100%", marginTop: 8 }}>
               <Typography.Text type="secondary">
                 Creates a new ed25519 keypair, stores the private key as{" "}
                 <Typography.Text code>
@@ -695,7 +695,7 @@ export const ProjectSecrets: React.FC<Props> = ({
                   sortedSecrets.length >= PROJECT_SECRETS_MAX_COUNT
                 }
                 title={
-                  <Space direction="vertical" style={{ maxWidth: 440 }}>
+                  <Space vertical style={{ maxWidth: 440 }}>
                     <Typography.Text strong>
                       Generate an SSH keypair?
                     </Typography.Text>
@@ -744,7 +744,7 @@ export const ProjectSecrets: React.FC<Props> = ({
             <Typography.Text strong>
               Copy Secrets from Another Project
             </Typography.Text>
-            <Space direction="vertical" style={{ width: "100%", marginTop: 8 }}>
+            <Space vertical style={{ width: "100%", marginTop: 8 }}>
               <SelectProject
                 exclude={[project_id]}
                 value={sourceProjectId || undefined}

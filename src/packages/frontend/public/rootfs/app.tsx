@@ -449,7 +449,7 @@ function RootfsLandingPage({
       ) : null}
       {publisher?.name || license?.name ? (
         <PublicSection title="Details">
-          <Space direction="vertical" size="small">
+          <Space vertical size="small">
             {publisher?.name ? (
               <Text>
                 Publisher:{" "}

@@ -369,7 +369,7 @@ export function ProjectsOperations({
       width: 760,
       okText: "Upgrade",
       content: (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Text>
             Upgrade {plan.length} selected project image
             {plan.length === 1 ? "" : "s"} to the latest available version in
@@ -978,7 +978,7 @@ function BulkProjectDeleteStatus({
         style={{ marginTop: 8 }}
         message="Bulk project delete is running"
         description={
-          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+          <Space vertical size={4} style={{ width: "100%" }}>
             <Text>
               {progress
                 ? `${completed} of ${progress.total} processed${
@@ -1029,7 +1029,7 @@ function BulkProjectDeleteStatus({
           : "Bulk project delete finished"
       }
       description={
-        <Space direction="vertical" size={4}>
+        <Space vertical size={4}>
           <Text>
             {succeeded} of {total} project(s) succeeded
             {failed > 0 ? `; ${failed} failed` : ""}

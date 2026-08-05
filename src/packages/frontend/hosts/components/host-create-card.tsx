@@ -809,7 +809,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
             padding: 10,
           }}
         >
-          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+          <Space vertical size={4} style={{ width: "100%" }}>
             <Space size={6} wrap>
               <Tag color="blue">{providerLabel}</Tag>
               <Tag color={watchedPricingModel === "spot" ? "green" : "default"}>

@@ -254,7 +254,7 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
         </>
       }
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Alert
           showIcon
           type="warning"
@@ -285,7 +285,7 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
           <Typography.Text strong>Secrets eligible for sharing</Typography.Text>
           <div style={{ marginTop: 8 }}>
             {shareable.length ? (
-              <Space direction="vertical">
+              <Space vertical>
                 {shareable.map((secret) => (
                   <Checkbox
                     key={secret.name}
@@ -472,7 +472,7 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
           title="Secret Recipients"
           width={860}
         >
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Space vertical size="middle" style={{ width: "100%" }}>
             <Space wrap>
               <Button
                 disabled={
@@ -504,7 +504,7 @@ export function SharedSecrets({ actions, name, project_id, settings }: Props) {
                 paddingRight: 8,
               }}
             >
-              <Space direction="vertical" size={6} style={{ display: "flex" }}>
+              <Space vertical size={6} style={{ display: "flex" }}>
                 {preview.length ? (
                   preview.map((item) => {
                     const row = rosterByProject.get(item.target_project_id);

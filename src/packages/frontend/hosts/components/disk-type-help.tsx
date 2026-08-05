@@ -10,7 +10,7 @@ type DiskTypeHelpProps = {
 function diskHelpContent(provider?: HostProvider): React.ReactNode {
   if (provider === "nebius") {
     return (
-      <Space direction="vertical" size={8} style={{ maxWidth: 360 }}>
+      <Space vertical size={8} style={{ maxWidth: 360 }}>
         <Typography.Text>
           Nebius persistent disks are network-attached, so they are durable and
           survive VM restarts, but they are slower than local ephemeral storage.
@@ -30,7 +30,7 @@ function diskHelpContent(provider?: HostProvider): React.ReactNode {
   }
 
   return (
-    <Space direction="vertical" size={8} style={{ maxWidth: 360 }}>
+    <Space vertical size={8} style={{ maxWidth: 360 }}>
       <Typography.Text>
         GCP Persistent Disks are durable network block devices. They are
         replicated by Google and survive VM restarts, but they are slower than

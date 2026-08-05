@@ -214,7 +214,7 @@ export const Environment: React.FC<Props> = ({
   function renderBody() {
     return (
       <div style={{ padding: "10px" }}>
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+        <Space vertical style={{ width: "100%" }} size="middle">
           {isFlyout || isModal ? (
             <Typography.Text strong>{title}</Typography.Text>
           ) : undefined}
@@ -241,7 +241,7 @@ export const Environment: React.FC<Props> = ({
                 No custom environment variables are configured.
               </Typography.Text>
             ) : (
-              <Space direction="vertical" style={{ width: "100%" }} size={8}>
+              <Space vertical style={{ width: "100%" }} size={8}>
                 {rows.map((row) => (
                   <div
                     key={row.id}

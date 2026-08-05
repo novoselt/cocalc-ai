@@ -51,7 +51,7 @@ export default function Balance({ style, refresh, cost, defaultAdd }: Props) {
   } else {
     if (!add) {
       body = (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Space align="center" wrap>
             <Text>
               Current balance:{" "}

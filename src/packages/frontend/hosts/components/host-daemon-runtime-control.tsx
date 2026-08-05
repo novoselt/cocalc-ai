@@ -436,7 +436,7 @@ function MoreActions({ children }: { children: React.ReactNode }) {
       trigger="click"
       placement="bottomRight"
       content={
-        <Space direction="vertical" size={6} style={{ minWidth: 240 }}>
+        <Space vertical size={6} style={{ minWidth: 240 }}>
           {children}
         </Space>
       }
@@ -500,7 +500,7 @@ export function HostDaemonRuntimeControl({
   const canControl = !!canUpgrade && !host.deleted;
 
   return (
-    <Space direction="vertical" size="small" style={{ width: "100%" }}>
+    <Space vertical size="small" style={{ width: "100%" }}>
       <Space
         wrap
         align="center"
@@ -812,7 +812,7 @@ export function HostDaemonRuntimeControl({
             size="small"
             styles={{ body: { padding: compact ? 10 : 12 } }}
           >
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <Space vertical size={8} style={{ width: "100%" }}>
               <Space
                 wrap
                 align="center"
@@ -955,11 +955,7 @@ export function HostDaemonRuntimeControl({
               {rowExpanded && (
                 <>
                   <Divider style={{ margin: "2px 0" }} />
-                  <Space
-                    direction="vertical"
-                    size={6}
-                    style={{ width: "100%" }}
-                  >
+                  <Space vertical size={6} style={{ width: "100%" }}>
                     <Typography.Text type="secondary">
                       upgrade policy{" "}
                       <code>

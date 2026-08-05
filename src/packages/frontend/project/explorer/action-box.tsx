@@ -1176,10 +1176,10 @@ export function ActionBox({
         slug: "projects/publish-files",
       });
     return (
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {existingPublishShare ? (
           <Alert bsStyle="success">
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <Space vertical size={8} style={{ width: "100%" }}>
               <span>
                 <code>{displayPath}</code> is already published at{" "}
                 <a
@@ -1202,7 +1202,7 @@ export function ActionBox({
           </Alert>
         ) : (
           <Alert bsStyle="info">
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <Space vertical size={8} style={{ width: "100%" }}>
               <span>
                 Publish <code>{displayPath}</code> as an unlisted shared
                 directory. Viewers must know the URL and be signed in to CoCalc.
@@ -1320,7 +1320,7 @@ export function ActionBox({
           </Checkbox>
           {publishGrantOnCopy ? (
             <Space
-              direction="vertical"
+              vertical
               size="small"
               style={{ width: "100%", marginTop: 8 }}
             >

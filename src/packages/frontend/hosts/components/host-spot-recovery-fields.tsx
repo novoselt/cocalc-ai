@@ -111,7 +111,7 @@ export const HostSpotRecoveryFields: React.FC<HostSpotRecoveryFieldsProps> = ({
         destroyOnHidden={false}
         width={900}
       >
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Space vertical size={16} style={{ width: "100%" }}>
           <Alert
             showIcon
             type="info"

@@ -133,7 +133,7 @@ export function AdminRole({ account_id, name, is_admin }: Props) {
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <div>
         <b>Site Admin Role:</b>
       </div>

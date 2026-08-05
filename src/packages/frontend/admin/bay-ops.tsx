@@ -102,7 +102,7 @@ function ProjectionStatus({
 }) {
   const hasBacklog = status.unpublished_events > 0;
   return (
-    <Space direction="vertical" size={0}>
+    <Space vertical size={0}>
       <Typography.Text strong>{name}</Typography.Text>
       <Space wrap size={[4, 4]}>
         <Tag color={hasBacklog ? "orange" : "green"}>
@@ -138,7 +138,7 @@ function BackupStoredError({
       showIcon
       message={title}
       description={
-        <Space direction="vertical" size={0}>
+        <Space vertical size={0}>
           <Typography.Text type="secondary">
             This is persisted bay backup state, not a failure to load this admin
             panel.
@@ -178,7 +178,7 @@ function BackupHealth({ detail }: { detail: BayOpsDetail }) {
   const backup = backups.bay_backup;
   const readiness = backups.restore_readiness;
   return (
-    <Space direction="vertical" size={8}>
+    <Space vertical size={8}>
       <Space wrap>
         <Tag color={backup.enabled ? "green" : "orange"}>
           backups {backup.enabled ? "enabled" : "disabled"}
@@ -288,7 +288,7 @@ function DrainPreflightHealth({ detail }: { detail: BayOpsDetail }) {
   const important = importantFindings.slice(0, 8);
   const command = `cocalc bay drain-preflight ${preflight.source_bay_id}`;
   return (
-    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+    <Space vertical size={8} style={{ width: "100%" }}>
       <Space wrap>
         <Tag color={preflight.ok ? "green" : "red"}>
           {preflight.ok ? "drain allowed" : "drain blocked"}
@@ -302,7 +302,7 @@ function DrainPreflightHealth({ detail }: { detail: BayOpsDetail }) {
         <Tag>tables {count(preflight.summary.tables)}</Tag>
       </Space>
       {important.length ? (
-        <Space direction="vertical" size={4} style={{ width: "100%" }}>
+        <Space vertical size={4} style={{ width: "100%" }}>
           {important.map((finding) => (
             <Typography.Text key={finding.table}>
               <Tag color={findingColor(finding)}>{finding.severity}</Tag>
@@ -346,7 +346,7 @@ function LoadHealth({ detail }: { detail: BayOpsDetail }) {
     );
   }
   return (
-    <Space direction="vertical" size="middle">
+    <Space vertical size="middle">
       <Space wrap>
         <Tag>accounts {count(load.browser_control.active_accounts)}</Tag>
         <Tag>browsers {count(load.browser_control.active_browsers)}</Tag>
@@ -374,7 +374,7 @@ function LoadHealth({ detail }: { detail: BayOpsDetail }) {
         />
       </Space>
       {load.parallel_ops.hotspots.length ? (
-        <Space direction="vertical" size={0}>
+        <Space vertical size={0}>
           <Typography.Text strong>Parallel-op hotspots</Typography.Text>
           {load.parallel_ops.hotspots.map((hotspot) => (
             <Typography.Text key={hotspot.worker_kind} type="secondary">
@@ -424,7 +424,7 @@ function BayHealth({ bay }: { bay: BayOpsOverviewBay }) {
       {error ? <ErrorDisplay error={error} /> : null}
       {loading && !detail ? <Loading /> : null}
       {detail ? (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Typography.Text type="secondary">
             Health snapshot from <TimeAgo date={detail.checked_at} />
             {detail.routed ? " via inter-bay RPC" : ""}

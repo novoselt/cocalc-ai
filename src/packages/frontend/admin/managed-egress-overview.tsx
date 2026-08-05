@@ -87,7 +87,7 @@ function TopAccounts({
     );
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       {accounts.map((account) => (
         <div key={account.account_id}>
           <Space wrap>
@@ -116,7 +116,7 @@ function TopProjects({
     );
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       {projects.map((project) => (
         <div key={`${project.account_id}:${project.project_id ?? "none"}`}>
           <Space wrap>
@@ -183,7 +183,7 @@ export function ManagedEgressAdminOverview() {
   );
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Paragraph style={{ marginBottom: 0 }}>
         Operator view of managed network egress across all accounts. Use this to
         spot the current biggest cost drivers, then drill into account, project,

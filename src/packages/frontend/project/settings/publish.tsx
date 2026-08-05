@@ -121,13 +121,13 @@ export function PublishPanel({
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space vertical size={16} style={{ width: "100%" }}>
       <Space align="center" style={{ justifyContent: "space-between" }}>
         <Text strong>Publish read-only project content</Text>
         <Popover
           title="About public project shares"
           content={
-            <Space direction="vertical" size={10} style={{ maxWidth: 340 }}>
+            <Space vertical size={10} style={{ maxWidth: 340 }}>
               <Paragraph style={{ marginBottom: 0 }}>
                 Published directories are unlisted and visible to signed-in
                 CoCalc users who know the URL. Publishing the entire project
@@ -193,7 +193,7 @@ export function PublishPanel({
               const url = shareUrl(share.slug);
               const editPath = share.path === "." ? "/home/user" : share.path;
               return (
-                <Space direction="vertical" size={6} style={{ width: "100%" }}>
+                <Space vertical size={6} style={{ width: "100%" }}>
                   <div>
                     <Text strong>{pathLabel(share.path)}</Text>{" "}
                     <Text code>

@@ -119,7 +119,7 @@ export function HideDeleteBox(props: Readonly<Props>) {
     });
 
     return (
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Space vertical size={12} style={{ width: "100%" }}>
         <Alert
           type="warning"
           showIcon
@@ -287,7 +287,7 @@ export function ProjectLocationBox(props: Readonly<Props>) {
             icon="file-archive"
             title="Archive Project"
             description={
-              <Space direction="vertical" size={4}>
+              <Space vertical size={4}>
                 <span>
                   Remove the active copy from its host. Starting later restores
                   from backup, which is slower, and snapshots are removed.

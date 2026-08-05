@@ -106,7 +106,7 @@ function AccountIdentity({
   >;
 }) {
   return (
-    <Space direction="vertical" size={0}>
+    <Space vertical size={0}>
       <Space wrap>
         <Text code>{account.legacy_account_id}</Text>
         <CopyToClipBoard value={account.legacy_account_id} />
@@ -169,7 +169,7 @@ function ProjectsTable({
           title: "Project",
           key: "project",
           render: (_, project) => (
-            <Space direction="vertical" size={0}>
+            <Space vertical size={0}>
               <Text strong>{project.title}</Text>
               <Space wrap>
                 <Text code>{project.legacy_project_id}</Text>
@@ -182,7 +182,7 @@ function ProjectsTable({
           title: "Owner",
           key: "owner",
           render: (_, project) => (
-            <Space direction="vertical" size={0}>
+            <Space vertical size={0}>
               {project.owner_legacy_account_id ? (
                 <Text code>{shortId(project.owner_legacy_account_id)}</Text>
               ) : (
@@ -494,7 +494,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
     if (state.error) return <Alert type="error" message={state.error} />;
     const projects = state.projects ?? [];
     return (
-      <Space direction="vertical" style={{ width: "100%" }}>
+      <Space vertical style={{ width: "100%" }}>
         {state.total_count != null &&
           state.limit != null &&
           state.total_count > projects.length && (
@@ -512,7 +512,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
 
   return (
     <Card title="Legacy Migration Support">
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Alert
           showIcon
           type="warning"
@@ -598,7 +598,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
               key: "accounts",
               label: "Account search",
               children: (
-                <Space direction="vertical" style={{ width: "100%" }}>
+                <Space vertical style={{ width: "100%" }}>
                   <Input.Search
                     value={accountQuery}
                     onChange={(e) => setAccountQuery(e.target.value)}
@@ -639,7 +639,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
               key: "projects",
               label: "Project search",
               children: (
-                <Space direction="vertical" style={{ width: "100%" }}>
+                <Space vertical style={{ width: "100%" }}>
                   <Input.Search
                     value={projectQuery}
                     onChange={(e) => setProjectQuery(e.target.value)}
@@ -658,7 +658,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
                         title: "Project",
                         key: "project",
                         render: (_, project) => (
-                          <Space direction="vertical" size={0}>
+                          <Space vertical size={0}>
                             <Text strong>{project.title}</Text>
                             <Space wrap>
                               <Text code>{project.legacy_project_id}</Text>
@@ -673,12 +673,12 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
                         title: "Candidates",
                         key: "candidates",
                         render: (_, project) => (
-                          <Space direction="vertical" size={4}>
+                          <Space vertical size={4}>
                             {projectCandidateAccounts(project).map(
                               (candidate) => (
                                 <Space
                                   key={candidate.legacy_account_id}
-                                  direction="vertical"
+                                  vertical
                                   size={0}
                                 >
                                   <Space wrap>
@@ -783,7 +783,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
         onCancel={closeLink}
       >
         {linkTarget && (
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Space vertical size="middle" style={{ width: "100%" }}>
             <Alert
               showIcon
               type="warning"
@@ -821,7 +821,7 @@ export function LegacyMigrationAdmin({ account_id }: { account_id: string }) {
         onCancel={() => setUnlinkTarget(null)}
       >
         {unlinkTarget && (
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Space vertical size="middle" style={{ width: "100%" }}>
             <Alert
               showIcon
               type="warning"

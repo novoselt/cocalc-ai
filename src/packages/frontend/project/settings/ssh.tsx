@@ -156,7 +156,7 @@ export function SSHPanel({
         )}
         {useCliSsh ? (
           <>
-            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Space vertical size={12} style={{ width: "100%" }}>
               <Alert
                 type="info"
                 showIcon
@@ -199,7 +199,7 @@ export function SSHPanel({
                   <Text strong>Need scp or sftp help?</Text>
                 </summary>
                 <Space
-                  direction="vertical"
+                  vertical
                   size={12}
                   style={{ marginTop: 12, width: "100%" }}
                 >
@@ -259,7 +259,7 @@ export function SSHPanel({
               }
               width={760}
             >
-              <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              <Space vertical size={12} style={{ width: "100%" }}>
                 <Paragraph style={{ marginBottom: 0 }}>
                   Run these commands in your terminal. First sign the CoCalc CLI
                   into this site using your browser, then configure SSH for this{" "}

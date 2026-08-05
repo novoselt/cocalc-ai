@@ -316,7 +316,7 @@ function HostAccessDocsAnchor() {
           width: 112,
         }}
       />
-      <Space direction="vertical" size={2} style={{ flex: "1 1 260px" }}>
+      <Space vertical size={2} style={{ flex: "1 1 260px" }}>
         <Typography.Text type="secondary">
           Host access controls who can place projects here and what RAM projects
           may use.
@@ -997,7 +997,7 @@ function RuntimeVersionDisplay({
   const badges = runtimeVersionBadges({ rollbackTarget, version, section });
   const detailLine = [builtAt, source, message].filter(Boolean).join(" · ");
   return (
-    <Space direction="vertical" size={2} style={{ width: "100%", minWidth: 0 }}>
+    <Space vertical size={2} style={{ width: "100%", minWidth: 0 }}>
       <Space wrap size={[6, 4]}>
         <Typography.Text code>{version}</Typography.Text>
         {badges}
@@ -1036,11 +1036,11 @@ function RuntimeVersionList({
   section?: "protected" | "prune";
 }) {
   return (
-    <Space direction="vertical" size={4} style={{ width: "100%" }}>
+    <Space vertical size={4} style={{ width: "100%" }}>
       <Typography.Text>{title}</Typography.Text>
       {versions?.length ? (
         <Card size="small" styles={{ body: { padding: 10 } }}>
-          <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Space vertical size={8} style={{ width: "100%" }}>
             {versions.map((version) => (
               <RuntimeVersionDisplay
                 key={`${title}:${artifact}:${version}`}
@@ -1783,7 +1783,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
   });
   const softwareHelp = (
     <div style={{ maxWidth: 480 }}>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         <Typography.Text>
           This section compares the versions currently reported by the host with
           the newest versions available from the configured software source and
@@ -4502,7 +4502,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                                 />
                                 {rollbackTarget && (
                                   <Space
-                                    direction="vertical"
+                                    vertical
                                     size={4}
                                     style={{ width: "100%" }}
                                   >
@@ -5032,7 +5032,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                               />
                               {rollbackTarget && (
                                 <Space
-                                  direction="vertical"
+                                  vertical
                                   size={4}
                                   style={{ width: "100%" }}
                                 >

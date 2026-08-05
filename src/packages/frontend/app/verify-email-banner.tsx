@@ -274,7 +274,7 @@ export function VerifyEmailRequiredPanel({
         ...style,
       }}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Title level={compact ? 4 : 2} style={{ marginBottom: 0 }}>
           <Icon name="mail" />{" "}
           {title ??

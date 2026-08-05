@@ -1588,7 +1588,7 @@ export function MembershipTiers() {
                   </Col>
                   <Col {...fieldCol}>
                     <Form.Item label="Yearly price">
-                      <Space direction="vertical" style={{ width: "100%" }}>
+                      <Space vertical style={{ width: "100%" }}>
                         <Form.Item name="price_yearly" noStyle>
                           <InputNumber
                             min={0}
@@ -2706,7 +2706,7 @@ export function MembershipTiers() {
                           </tbody>
                         </table>
                       </div>
-                      <Space direction="vertical" style={{ width: "100%" }}>
+                      <Space vertical style={{ width: "100%" }}>
                         {economicsBar({
                           label:
                             expectedProfitLossUsd >= 0
@@ -2957,7 +2957,7 @@ export function MembershipTiers() {
                               </Col>
                             </Row>
                             <Space
-                              direction="vertical"
+                              vertical
                               style={{ width: "100%", marginTop: "16px" }}
                             >
                               {analysis.messages.map((message, index) => (
@@ -3758,7 +3758,7 @@ export function MembershipTiers() {
       ? overview.bays.length - failedBays.length
       : 0;
     return (
-      <Space direction="vertical" style={{ width: "100%" }}>
+      <Space vertical style={{ width: "100%" }}>
         {render_buttons()}
         {failedBays.length > 0 && (
           <Alert

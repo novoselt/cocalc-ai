@@ -121,7 +121,7 @@ export function HardDeleteProjectModal({
           </Button>,
         ]}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           {error ? (
             <Alert
               type="error"
@@ -245,7 +245,7 @@ export function InfoSection({
         )}
         {title}
       </div>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         {children}
       </Space>
     </div>

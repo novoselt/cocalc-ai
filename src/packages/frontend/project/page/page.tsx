@@ -1221,7 +1221,7 @@ function ViewerReadOnlyTag({ project_id }: { project_id: string }) {
           </Button>,
         ]}
       >
-        <Space direction="vertical" style={{ width: "100%" }}>
+        <Space vertical style={{ width: "100%" }}>
           <Paragraph>
             You can browse and open allowed project files, but cannot edit
             files, start the runtime, use terminals, run agents, or change
@@ -1262,7 +1262,7 @@ function ProjectAccessSignInRequired() {
       }}
     >
       <Card style={{ maxWidth: 520, width: "100%" }}>
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Title level={3} style={{ margin: 0 }}>
             Sign in to request project access
           </Title>
@@ -1465,7 +1465,7 @@ function ProjectAccessLandingPage({
       }}
     >
       <Card style={{ width: "100%", maxWidth: 680 }}>
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
             <Title level={3} style={{ marginTop: 0, marginBottom: 4 }}>
               Project access
@@ -1539,7 +1539,7 @@ function ProjectAccessLandingPage({
               description="This project is not accepting access requests from your account."
             />
           ) : (
-            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Space vertical size="middle" style={{ width: "100%" }}>
               <Paragraph style={{ marginBottom: 0 }}>
                 Request access from the project owner or an authorized
                 collaborator.
@@ -1718,7 +1718,7 @@ function HardDeleteProjectStatus({
           boxShadow: "0 12px 32px rgba(15, 23, 42, 0.14)",
         }}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Space align="start" size="middle">
             <span
               style={{
@@ -1760,7 +1760,7 @@ function HardDeleteProjectStatus({
                 : "Deletion has already been accepted and cannot be undone."
             }
             description={
-              <Space direction="vertical" size={4}>
+              <Space vertical size={4}>
                 {op_id ? (
                   <span>
                     Operation id: <code>{op_id}</code>

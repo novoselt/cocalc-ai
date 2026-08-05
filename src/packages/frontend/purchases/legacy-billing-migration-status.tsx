@@ -319,7 +319,7 @@ export default function LegacyBillingMigrationStatus({
         </Space>
       }
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Alert
           showIcon
           type={pending ? "info" : "success"}
@@ -342,7 +342,7 @@ export default function LegacyBillingMigrationStatus({
             type="success"
             message={`Free ${grantDays}-day ${continueMembershipLabel} grant`}
             description={
-              <Space direction="vertical" size="small">
+              <Space vertical size="small">
                 <span>
                   You can use the free membership until the grant ends. Choose
                   what should happen after that; you can change this any time
@@ -457,19 +457,19 @@ export default function LegacyBillingMigrationStatus({
           />
         ) : null}
         <Space wrap size="large">
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Pending credit</Text>
             <Text strong>{formatMoney(preview.pending_credit_amount)}</Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Remaining paid value</Text>
             <Text>{formatMoney(pendingEntitlementCredit)}</Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Migrated credit</Text>
             <Text>{formatMoney(preview.applied_credit_amount)}</Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Membership grant</Text>
             <Text>
               {suggestedMembership ? (
@@ -487,7 +487,7 @@ export default function LegacyBillingMigrationStatus({
               )}
             </Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Stripe customer</Text>
             <Text copyable={!!preview.stripe_customer_id}>
               {preview.stripe_customer_id ?? "None found"}
@@ -500,7 +500,7 @@ export default function LegacyBillingMigrationStatus({
             type="warning"
             message="Some active legacy site licenses need manual review"
             description={
-              <Space direction="vertical" size="small">
+              <Space vertical size="small">
                 <span>
                   {unvaluedSiteLicenseCount} active legacy site license
                   {unvaluedSiteLicenseCount === 1 ? "" : "s"} did not include

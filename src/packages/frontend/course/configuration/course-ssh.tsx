@@ -170,7 +170,7 @@ export function CourseSshAccess({
           </>
         }
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Checkbox
             checked={enabled}
             disabled={busy || ownedByAnotherAccount}

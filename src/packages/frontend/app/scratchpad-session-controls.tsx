@@ -77,7 +77,7 @@ export function ScratchpadSessionControls({
   }, []);
 
   const reminder = (
-    <Space direction="vertical" size={4} style={{ maxWidth: 320 }}>
+    <Space vertical size={4} style={{ maxWidth: 320 }}>
       <Typography.Text strong>Temporary scratchpad</Typography.Text>
       <Typography.Text>
         This project and all of its files will be permanently erased{" "}

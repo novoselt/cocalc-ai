@@ -205,7 +205,7 @@ function HostIdentityCell({
   onDetails: (host: Host, tab?: string) => void;
 }) {
   return (
-    <Space size={2} direction="vertical" style={{ minWidth: 130 }}>
+    <Space size={2} vertical style={{ minWidth: 130 }}>
       <Button
         type="link"
         onClick={() => onDetails(host)}
@@ -1061,7 +1061,7 @@ export const HostList: React.FC<{ vm: HostListViewModel }> = ({ vm }) => {
         showIcon
         message="Some visible hosts are not simply following the fleet default."
         description={
-          <Space direction="vertical" size={6} style={{ width: "100%" }}>
+          <Space vertical size={6} style={{ width: "100%" }}>
             <Typography.Text type="secondary">
               Host overrides pin a host to an explicit desired runtime version,
               so it may not follow later fleet-default changes until you remove

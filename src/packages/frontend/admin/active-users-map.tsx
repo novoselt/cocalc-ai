@@ -322,7 +322,7 @@ export function ActiveUsersMapAdmin() {
   ].filter(Boolean);
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space vertical size={16} style={{ width: "100%" }}>
       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
         Accounts across registered bays whose <code>last_active</code> changed
         during the selected window. Locations are approximate, short-lived

@@ -327,7 +327,7 @@ function showRestoreIssueDetails(project: LegacyMigrationProjectSummary): void {
     title,
     width: 720,
     content: (
-      <Space direction="vertical" size={10} style={{ width: "100%" }}>
+      <Space vertical size={10} style={{ width: "100%" }}>
         {missingCount > 0 ? (
           <>
             <Text>
@@ -623,7 +623,7 @@ function LegacyProjectImportModal({
       }}
       destroyOnHidden
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {project ? (
           <Alert
             showIcon
@@ -644,7 +644,7 @@ function LegacyProjectImportModal({
             message={`Image catalog load issue: ${rootfsError}`}
           />
         ) : null}
-        <Space direction="vertical" size={6} style={{ width: "100%" }}>
+        <Space vertical size={6} style={{ width: "100%" }}>
           <Text strong>Image required</Text>
           <Select
             showSearch
@@ -853,7 +853,7 @@ function LegacyProjectBulkImportModal({
       }}
       destroyOnHidden
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Alert
           showIcon
           type="info"
@@ -870,7 +870,7 @@ function LegacyProjectBulkImportModal({
             message={`Image catalog load issue: ${rootfsError}`}
           />
         ) : null}
-        <Space direction="vertical" size={6} style={{ width: "100%" }}>
+        <Space vertical size={6} style={{ width: "100%" }}>
           <Text strong>Image required</Text>
           <Select
             showSearch
@@ -1226,7 +1226,7 @@ export function LegacyMigrationPage() {
         const missingCount = restoreMissingArchiveFileCount(project);
         const progressText = restoreProgressText(project.restore_progress);
         return (
-          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+          <Space vertical size={4} style={{ width: "100%" }}>
             <Text
               strong
               ellipsis={{ tooltip: project.title }}
@@ -1325,7 +1325,7 @@ export function LegacyMigrationPage() {
       width: 125,
       responsive: ["xl"],
       render: (value: number | null | undefined) => (
-        <Space direction="vertical" size={0}>
+        <Space vertical size={0}>
           <Text>{formatDiskMb(value)}</Text>
           <Text type="secondary" style={{ fontSize: 12 }}>
             last known
@@ -1344,7 +1344,7 @@ export function LegacyMigrationPage() {
       width: 135,
       responsive: ["xl"],
       render: (value: number | null | undefined) => (
-        <Space direction="vertical" size={0}>
+        <Space vertical size={0}>
           <Text>{formatBytes(value)}</Text>
           <Text type="secondary" style={{ fontSize: 12 }}>
             compressed tar.zst
@@ -1401,7 +1401,7 @@ export function LegacyMigrationPage() {
   );
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       {showEmailVerificationRequired ? (
         <Alert
           showIcon
@@ -1411,10 +1411,10 @@ export function LegacyMigrationPage() {
         />
       ) : null}
       <Card size="small">
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Space align="start" style={{ width: "100%" }}>
             <Icon name="exchange" style={{ fontSize: 22, marginTop: 2 }} />
-            <Space direction="vertical" size={2} style={{ flex: 1 }}>
+            <Space vertical size={2} style={{ flex: 1 }}>
               <Text strong style={{ fontSize: 18 }}>
                 Legacy Projects
               </Text>
@@ -1434,7 +1434,7 @@ export function LegacyMigrationPage() {
                 .
               </Text>
             </Space>
-            <Space direction="vertical" size={4}>
+            <Space vertical size={4}>
               <Space>
                 <Switch
                   checked={showLegacyProjectsButton}
@@ -1453,7 +1453,7 @@ export function LegacyMigrationPage() {
             type="warning"
             message="Important limitations"
             description={
-              <Space direction="vertical" size={4}>
+              <Space vertical size={4}>
                 <span>
                   Legacy TimeTravel and edit history from cocalc.com are not
                   available in restored CoCalc.ai projects. Restores contain the
@@ -1551,7 +1551,7 @@ export function LegacyMigrationPage() {
           </Space>
         }
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Input.Search
             allowClear
             enterButton="Search"
@@ -1597,7 +1597,7 @@ export function LegacyMigrationPage() {
             />
           ) : (
             <>
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space vertical size={8} style={{ width: "100%" }}>
                 <Text type="secondary">
                   Matched {state.legacyAccountIds.length} legacy cocalc.com
                   account record
@@ -1647,7 +1647,7 @@ export function LegacyMigrationPage() {
                     .filter((result) => result.status === "failed")
                     .length.toLocaleString()} failed`}
                   description={
-                    <Space direction="vertical" size={2}>
+                    <Space vertical size={2}>
                       {bulkResults.slice(0, 20).map((result) => (
                         <Text
                           key={result.legacy_project_id}

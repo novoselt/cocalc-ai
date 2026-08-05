@@ -140,7 +140,7 @@ export function ProjectSettingsPageShell({
           />
         )}
         <main>
-          <Space direction="vertical" size={18} style={{ width: "100%" }}>
+          <Space vertical size={18} style={{ width: "100%" }}>
             {children}
           </Space>
         </main>

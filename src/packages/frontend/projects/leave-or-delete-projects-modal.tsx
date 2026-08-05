@@ -113,7 +113,7 @@ export function LeaveOrDeleteProjectsModal({
         </Button>,
       ]}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {error ? (
           <Alert
             type="error"
@@ -128,7 +128,7 @@ export function LeaveOrDeleteProjectsModal({
             showIcon
             message={bulkProgressMessage(progress, projectTitle)}
             description={
-              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+              <Space vertical size={4} style={{ width: "100%" }}>
                 <Progress
                   percent={Math.round(
                     (100 * progress.completed) / Math.max(1, progress.total),

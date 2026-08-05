@@ -393,7 +393,7 @@ function PurchaseCourseSeatsModal({
           setActionError(value);
         }}
       />
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
           Purchase seats for this course, then assign them to student accounts
           from the Students tab. Mid-term seat increases use the same per-seat
