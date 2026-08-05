@@ -83,6 +83,7 @@ import {
   getMembershipPackage,
   listClaimableMembershipPackagesForAccount,
   listMembershipPackageDetailsForOwner,
+  resolveSiteLicensePoolEmailEligibility,
   resolveMembershipPackageQuote as resolveMembershipPackageQuote0,
   revokeMembershipPackageSeat as revokeMembershipPackageSeat0,
   updateMembershipPackage as updateMembershipPackage0,
@@ -1876,11 +1877,8 @@ export async function searchSiteLicensePoolAccounts({
       query_kind: request.kind,
     };
   }
-  const allowedDomains = Array.isArray(pool.metadata?.allowed_domains)
-    ? pool.metadata.allowed_domains.map((domain) =>
-        `${domain ?? ""}`.trim().toLowerCase(),
-      )
-    : [];
+  const { effective_domains: allowedDomains } =
+    await resolveSiteLicensePoolEmailEligibility({ package_id: packageId });
   const actorHomeBay = await resolveTargetAccountHomeBay({
     account_id: actorId,
     user_account_id: actorId,

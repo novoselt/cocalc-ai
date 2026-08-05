@@ -153,6 +153,108 @@ describe("site license seat pools", () => {
     ).resolves.toEqual(["student@example.edu"]);
   });
 
+  it("combines license and pool domains without copying shared domains", async () => {
+    const admin_account_id = uuid();
+    const owner_account_id = uuid();
+    const existing_account_id = uuid();
+    const old_domain_account_id = uuid();
+    const pool_domain_account_id = uuid();
+    const new_domain_account_id = uuid();
+    const licenseDomain = `shared-${uuid().slice(0, 8)}.edu`;
+    const poolDomain = `research-${uuid().slice(0, 8)}.edu`;
+    const replacementDomain = `replacement-${uuid().slice(0, 8)}.edu`;
+    for (const accountId of [
+      admin_account_id,
+      owner_account_id,
+      existing_account_id,
+      old_domain_account_id,
+      pool_domain_account_id,
+      new_domain_account_id,
+    ]) {
+      await createTestAccount(accountId);
+    }
+    await markAdmin(admin_account_id);
+    await markVerifiedEmail(existing_account_id, `existing@${licenseDomain}`);
+    await markVerifiedEmail(
+      old_domain_account_id,
+      `old-domain@${licenseDomain}`,
+    );
+    await markVerifiedEmail(pool_domain_account_id, `researcher@${poolDomain}`);
+    await markVerifiedEmail(
+      new_domain_account_id,
+      `new-domain@${replacementDomain}`,
+    );
+
+    const overview = await provisionSiteLicenseForTest({
+      actor_account_id: admin_account_id,
+      owner_account_id,
+      name: "Dynamic Domains Campus",
+      organization_name: "Example University",
+      allowed_domains: [licenseDomain],
+      pools: [
+        {
+          pool_name: "Researchers",
+          membership_class: researcherTier,
+          seat_count: 10,
+          requires_approval: false,
+          verification_policy: "email-domain",
+          exclusive_group: "research",
+          allowed_domains: [poolDomain],
+        },
+      ],
+    });
+    const researchPool = overview.pools[0]!;
+    expect(researchPool.metadata?.allowed_domains).toEqual([poolDomain]);
+    for (const accountId of [
+      existing_account_id,
+      old_domain_account_id,
+      pool_domain_account_id,
+    ]) {
+      await expect(
+        listClaimableMembershipPackagesForAccount({ account_id: accountId }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ package_id: researchPool.id }),
+        ]),
+      );
+    }
+
+    await claimMembershipPackageSeat({
+      package_id: researchPool.id,
+      account_id: existing_account_id,
+    });
+    await updateSiteLicense({
+      actor_account_id: admin_account_id,
+      site_license_id: overview.site_license.id,
+      allowed_domains: [replacementDomain],
+    });
+
+    await expect(
+      listClaimableMembershipPackagesForAccount({
+        account_id: old_domain_account_id,
+      }),
+    ).resolves.not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ package_id: researchPool.id }),
+      ]),
+    );
+    for (const accountId of [pool_domain_account_id, new_domain_account_id]) {
+      await expect(
+        listClaimableMembershipPackagesForAccount({ account_id: accountId }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ package_id: researchPool.id }),
+        ]),
+      );
+    }
+    await expect(
+      resolveMembershipForAccount(existing_account_id),
+    ).resolves.toMatchObject({
+      class: researcherTier,
+      source: "grant",
+    });
+  });
+
   it("rejects site-license pools that reference missing membership tiers", async () => {
     const admin_account_id = uuid();
     const owner_account_id = uuid();
@@ -1660,7 +1762,7 @@ describe("site license seat pools", () => {
       owner_account_id,
       name: "Exclusive Group Campus",
       organization_name: "Example University",
-      allowed_domains: [teachingDomain, researchDomain],
+      allowed_domains: [],
       pools: [
         {
           pool_name: "Students",
@@ -2738,5 +2840,69 @@ describe("site license seat pools", () => {
         action: "approve",
       }),
     ).rejects.toThrow("no seats available in membership package");
+  });
+
+  it("cancels approval when the current verified email is no longer eligible", async () => {
+    const admin_account_id = uuid();
+    const owner_account_id = uuid();
+    const requester_account_id = uuid();
+    const domain = `approval-${uuid().slice(0, 8)}.edu`;
+    await createTestAccount(admin_account_id);
+    await createTestAccount(owner_account_id);
+    await createTestAccount(requester_account_id);
+    await markAdmin(admin_account_id);
+    await markVerifiedEmail(requester_account_id, `requester@${domain}`);
+
+    const overview = await provisionSiteLicenseForTest({
+      actor_account_id: admin_account_id,
+      owner_account_id,
+      name: "Approval Domain Campus",
+      organization_name: "Example University",
+      allowed_domains: [domain],
+      pools: [
+        {
+          pool_name: "Instructors",
+          membership_class: instructorTier,
+          seat_count: 5,
+          requires_approval: true,
+          verification_policy: "manager-approval",
+          exclusive_group: "teaching",
+        },
+      ],
+    });
+    const instructorPool = overview.pools[0]!;
+    const request = await requestSiteLicensePool({
+      account_id: requester_account_id,
+      package_id: instructorPool.id,
+    });
+
+    await getPool().query(
+      `UPDATE accounts
+       SET email_address=$2,
+           email_address_verified=$3::jsonb
+       WHERE account_id=$1`,
+      [
+        requester_account_id,
+        `unverified@${domain}`,
+        { [`requester@${domain}`]: new Date().toISOString() },
+      ],
+    );
+    const reviewed = await reviewSiteLicensePoolRequest({
+      actor_account_id: owner_account_id,
+      request_id: request.id,
+      action: "approve",
+    });
+
+    expect(reviewed).toMatchObject({
+      state: "canceled",
+      review_note:
+        "Canceled because the account's current verified email is no longer eligible for this pool.",
+    });
+    await expect(
+      listMembershipPackageAssignments({
+        package_id: instructorPool.id,
+        include_revoked: false,
+      }),
+    ).resolves.toEqual([]);
   });
 });
