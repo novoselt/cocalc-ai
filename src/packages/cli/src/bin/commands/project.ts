@@ -19,6 +19,7 @@ import { registerProjectStorageCommands } from "./project/storage";
 import { registerProjectTerminalCommands } from "./project/terminal";
 import { registerProjectEnvSecretCommands } from "./project/env-secrets";
 import { registerProjectPublishCommands } from "./project/publish";
+import { registerProjectRootfsCommands } from "./project/rootfs";
 
 export type ProjectCommandDeps = {
   withContext: any;
@@ -149,6 +150,7 @@ export function registerProjectCommand(
   registerProjectFileCommands(project, deps);
   registerProjectStorageCommands(project, deps);
   registerProjectPublishCommands(project, deps);
+  registerProjectRootfsCommands(project, deps);
   registerProjectEnvSecretCommands(project, deps);
   registerProjectLifecycleCommands(project, deps);
   registerProjectAppCommands(project, deps);
