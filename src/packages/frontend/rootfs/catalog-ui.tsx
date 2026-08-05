@@ -208,12 +208,12 @@ export function latestRootfsUpgradeEntry({
   const latestExplicit = reachableExplicit.sort((a, b) =>
     compareRootfsVersionEntries(b, a),
   )[0];
-  if (!current.family || !current.version) return latestExplicit;
+  const currentSeriesKey = rootfsSeriesKey(current);
+  if (!currentSeriesKey) return latestExplicit;
   const related = entries
     .filter(
       (entry) =>
-        entry.family === current.family &&
-        (!current.channel || entry.channel === current.channel) &&
+        rootfsSeriesKey(entry) === currentSeriesKey &&
         !!entry.version &&
         VERSION_COLLATOR.compare(entry.version, current.version!) > 0,
     )
