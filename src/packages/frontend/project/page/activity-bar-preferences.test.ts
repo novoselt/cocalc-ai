@@ -156,6 +156,7 @@ describe("activity-bar preferences", () => {
       "new",
       "search",
       "docs",
+      "vms",
       "workspaces",
       "rootfs",
       "active",

@@ -53,6 +53,11 @@ import {
   resolveSharedCodexHome,
 } from "./codex-auth";
 import { syncSubscriptionAuthToRegistryIfChanged } from "./codex-auth-registry";
+import { beginSiteFundedCodexTurn } from "./codex-site-metering";
+import type {
+  CodexSiteFundedTurnRequest,
+  CodexSiteFundedTurnRuntime,
+} from "@cocalc/ai/acp";
 
 const logger = getLogger("project-host:codex-project");
 // Reusing long-lived Codex rootfs containers has proven flaky on some hosts:
@@ -213,20 +218,37 @@ function getCodexProviderWebsocketConnectTimeoutMs(): number {
 
 function getManagedOpenAiProviderArgs(
   authRuntime: CodexAuthRuntime,
+  fundedProvider?: {
+    baseUrl: string;
+    contextWindowTokens: number;
+    autoCompactTokenLimit: number;
+  },
 ): string[] | undefined {
   const streamIdleTimeoutMs = getCodexProviderStreamIdleTimeoutMs();
   const websocketConnectTimeoutMs = getCodexProviderWebsocketConnectTimeoutMs();
   if (
+    fundedProvider != null ||
     authRuntime.source === "project-api-key" ||
     authRuntime.source === "account-api-key" ||
     authRuntime.source === "site-api-key"
   ) {
-    return [
+    const args = [
       "--config",
-      `model_providers.${API_KEY_PROVIDER_ID}={name="OpenAI",base_url="${OPENAI_PROVIDER_BASE_URL}",env_key="OPENAI_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=true,stream_idle_timeout_ms=${streamIdleTimeoutMs},websocket_connect_timeout_ms=${websocketConnectTimeoutMs}}`,
+      `model_providers.${API_KEY_PROVIDER_ID}={name="OpenAI",base_url="${fundedProvider?.baseUrl ?? OPENAI_PROVIDER_BASE_URL}",env_key="OPENAI_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=${fundedProvider ? "false" : "true"},stream_idle_timeout_ms=${streamIdleTimeoutMs},websocket_connect_timeout_ms=${websocketConnectTimeoutMs}}`,
       "--config",
       `model_provider="${API_KEY_PROVIDER_ID}"`,
     ];
+    if (fundedProvider) {
+      args.push(
+        "--config",
+        `model_context_window=${fundedProvider.contextWindowTokens}`,
+        "--config",
+        `model_auto_compact_token_limit=${fundedProvider.autoCompactTokenLimit}`,
+        "--config",
+        'model_auto_compact_token_limit_scope="total"',
+      );
+    }
+    return args;
   }
   return;
 }
@@ -1180,6 +1202,7 @@ export type SpawnCodexInProjectContainerOptions = {
   authRuntime?: CodexAuthRuntime;
   touchReason?: string | false;
   forceRefreshSiteKey?: boolean;
+  paymentSource?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
 };
 
 export type SpawnCodexInProjectContainerResult = {
@@ -1202,6 +1225,7 @@ export async function spawnCodexInProjectContainer({
   authRuntime: explicitAuthRuntime,
   touchReason = "codex",
   forceRefreshSiteKey = false,
+  paymentSource = "auto",
 }: SpawnCodexInProjectContainerOptions): Promise<SpawnCodexInProjectContainerResult> {
   const authRuntime =
     explicitAuthRuntime ??
@@ -1209,6 +1233,7 @@ export async function spawnCodexInProjectContainer({
       projectId,
       accountId,
       forceRefreshSiteKey,
+      preference: paymentSource,
     }));
   let codexArgs = args;
   const providerArgs = getManagedOpenAiProviderArgs(authRuntime);
@@ -1334,12 +1359,15 @@ type SpawnCodexAppServerInProjectRuntimeOptions = {
   env?: NodeJS.ProcessEnv;
   forceRefreshSiteKey?: boolean;
   touchReason?: string | false;
+  siteFundedTurn?: CodexSiteFundedTurnRequest;
+  paymentSource?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
 };
 
 type SpawnCodexAppServerInProjectRuntimeResult = {
   proc: ReturnType<typeof spawn>;
   cmd: string;
   args: string[];
+  logArgs: string;
   cwd?: string;
   authRuntime: CodexAuthRuntime;
   home: string;
@@ -1347,6 +1375,7 @@ type SpawnCodexAppServerInProjectRuntimeResult = {
   appServerLogin?: CodexAppServerLoginHint;
   handleAppServerRequest?: CodexAppServerRequestHandler;
   runtimeEnv?: Record<string, string>;
+  siteFundedTurn?: CodexSiteFundedTurnRuntime;
 };
 
 async function spawnCodexAppServerInProjectRuntime({
@@ -1356,14 +1385,16 @@ async function spawnCodexAppServerInProjectRuntime({
   env: extraEnv,
   forceRefreshSiteKey = false,
   touchReason = "codex",
+  siteFundedTurn: siteFundedTurnRequest,
+  paymentSource = "auto",
 }: SpawnCodexAppServerInProjectRuntimeOptions): Promise<SpawnCodexAppServerInProjectRuntimeResult> {
   const authRuntime = await resolveCodexAuthRuntime({
     projectId,
     accountId,
     forceRefreshSiteKey,
+    preference: paymentSource,
   });
   logResolvedCodexAuthRuntime(projectId, accountId, authRuntime);
-  const appServerLogin = await resolveAppServerLoginHint(authRuntime);
   const handleAppServerRequest = createAppServerRequestHandler({
     projectId,
     accountId,
@@ -1372,6 +1403,30 @@ async function spawnCodexAppServerInProjectRuntime({
   await ensureProjectContainerRunning({ projectId, accountId });
   const { home, scratch } = await localPath({ project_id: projectId });
   await scrubBrokenProjectCodexAuthArtifacts(home, authRuntime);
+  const initialExecEnv = toStringEnv(extraEnv);
+  const cliBearer = await resolveProjectCliBearer({
+    projectId,
+    accountId,
+    currentEnv: initialExecEnv,
+  });
+  let siteFundedTurn: CodexSiteFundedTurnRuntime | undefined;
+  if (authRuntime.source === "site-api-key" && siteFundedTurnRequest) {
+    if (!accountId)
+      throw new Error("accountId is required for site-funded Codex");
+    const apiKey = authRuntime.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error("site OpenAI API key is unavailable");
+    siteFundedTurn = await beginSiteFundedCodexTurn({
+      accountId,
+      projectId,
+      fundedTurnId: siteFundedTurnRequest.fundedTurnId,
+      idempotencyKey: siteFundedTurnRequest.idempotencyKey,
+      path: siteFundedTurnRequest.path,
+      apiKey,
+    });
+  }
+  const appServerLogin = siteFundedTurn
+    ? undefined
+    : await resolveAppServerLoginHint(authRuntime);
   const name = projectContainerName(projectId);
 
   const execArgs: string[] = [
@@ -1388,12 +1443,10 @@ async function spawnCodexAppServerInProjectRuntime({
     "-e",
     `LOGNAME=${DEFAULT_PROJECT_RUNTIME_USER}`,
   ];
-  const execEnv = toStringEnv(extraEnv);
-  const cliBearer = await resolveProjectCliBearer({
-    projectId,
-    accountId,
-    currentEnv: execEnv,
-  });
+  const execEnv = initialExecEnv;
+  if (siteFundedTurn) {
+    execEnv.OPENAI_API_KEY = siteFundedTurn.providerToken;
+  }
   if (cliBearer) {
     execEnv.COCALC_BEARER_TOKEN = cliBearer;
     execEnv.COCALC_AGENT_TOKEN = cliBearer;
@@ -1412,6 +1465,11 @@ async function spawnCodexAppServerInProjectRuntime({
     ...(appServerLogin?.type === "apiKey" ? {} : authRuntime.env),
     ...execEnv,
   };
+  if (siteFundedTurn) {
+    // The proxy credential is only needed by the Codex process itself. Do not
+    // also expose it to commands that Codex starts inside the turn.
+    delete runtimeEnv.OPENAI_API_KEY;
+  }
   applyProjectRuntimeCliEnv(execEnv, accountId);
   execEnv.COCALC_API_URL = resolveProjectRuntimeApiUrl(execEnv.COCALC_API_URL);
   applyProjectRuntimeCliEnv(execEnv, accountId);
@@ -1424,8 +1482,13 @@ async function spawnCodexAppServerInProjectRuntime({
     execArgs.push("-e", `${key}=${execEnv[key]}`);
   }
   const codexArgs: string[] = [];
-  const providerArgs =
-    appServerLogin?.type === "apiKey"
+  const providerArgs = siteFundedTurn
+    ? getManagedOpenAiProviderArgs(authRuntime, {
+        baseUrl: siteFundedTurn.providerBaseUrl,
+        contextWindowTokens: siteFundedTurn.policy.contextWindowTokens,
+        autoCompactTokenLimit: siteFundedTurn.policy.autoCompactTokenLimit,
+      })
+    : appServerLogin?.type === "apiKey"
       ? undefined
       : getManagedOpenAiProviderArgs(authRuntime);
   if (providerArgs) {
@@ -1503,6 +1566,7 @@ async function spawnCodexAppServerInProjectRuntime({
     proc,
     cmd: "podman",
     args: execArgs,
+    logArgs: redactPodmanArgs(execArgs),
     cwd,
     authRuntime,
     home,
@@ -1510,6 +1574,7 @@ async function spawnCodexAppServerInProjectRuntime({
     appServerLogin,
     handleAppServerRequest,
     runtimeEnv,
+    siteFundedTurn,
   };
 }
 
@@ -1559,6 +1624,8 @@ export function initCodexProjectRunner(): void {
       cwd,
       env: extraEnv,
       touchReason,
+      siteFundedTurn,
+      paymentSource,
     }) {
       const spawned = await spawnCodexAppServerInProjectRuntime({
         projectId,
@@ -1566,11 +1633,14 @@ export function initCodexProjectRunner(): void {
         cwd,
         env: extraEnv,
         touchReason: touchReason ?? "codex",
+        siteFundedTurn,
+        paymentSource,
       });
       return {
         proc: spawned.proc,
         cmd: spawned.cmd,
         args: spawned.args,
+        logArgs: spawned.logArgs,
         cwd: spawned.cwd,
         authSource: spawned.authRuntime.source,
         containerPathMap: {
@@ -1580,6 +1650,7 @@ export function initCodexProjectRunner(): void {
         appServerLogin: spawned.appServerLogin,
         handleAppServerRequest: spawned.handleAppServerRequest,
         runtimeEnv: spawned.runtimeEnv,
+        siteFundedTurn: spawned.siteFundedTurn,
       };
     },
   });

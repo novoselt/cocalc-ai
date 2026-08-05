@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260801-v25"
+HELPER_SCHEMA_VERSION = "20260804-v40"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -122,8 +122,9 @@ MIB = 1024 * 1024
 POLICY_VERSION = 1
 CAPACITY_VERSION = 1
 DYNAMIC_CAPACITY_MODE = "gcp-pd-balanced"
+GCP_BALANCED_BTRFS_HEADROOM_PERCENT = 90
 CLASSES = ("standard", "member", "premium")
-SCOPES = ("pool", "maintenance", "startup", *CLASSES)
+SCOPES = ("pool", "lifecycle-pool", "maintenance", "startup", *CLASSES)
 METRICS = ("rbps", "wbps", "riops", "wiops")
 
 DEFAULTS = {
@@ -465,28 +466,21 @@ def discover_devices(
     return sorted(devices.values(), key=lambda row: row["major_minor"])
 
 
-def dynamic_pool_limits(devices: list[dict[str, Any]]) -> dict[str, int]:
-    if any(
-        row["provider"] != "gcp" or row["disk_type"] != "balanced"
-        for row in devices
-    ):
+def balanced_device_capacity(device: dict[str, Any]) -> dict[str, int]:
+    if device["provider"] != "gcp" or device["disk_type"] != "balanced":
         raise ValueError(
             "gcp-pd-balanced capacity requires GCP balanced disks only"
         )
-    total_bytes = sum(row["size_bytes"] for row in devices)
-    count = len(devices)
-    physical_iops = min(15000, 3000 + (6 * total_bytes) // GIB)
+    size_bytes = device["size_bytes"]
+    physical_iops = min(15000, 3000 + (6 * size_bytes) // GIB)
     size_throughput = (
-        140 * MIB + (28 * total_bytes * MIB) // (100 * GIB)
+        140 * MIB + (28 * size_bytes * MIB) // (100 * GIB)
     )
-    physical_read_bps = min(240 * MIB, size_throughput)
-    # 200 MiB/s is below the smallest documented pd-balanced write cap.
-    physical_write_bps = min(200 * MIB, size_throughput)
     return {
-        "rbps": max(1, (physical_read_bps * 50) // (100 * count)),
-        "wbps": max(1, (physical_write_bps * 25) // (100 * count)),
-        "riops": max(1, (physical_iops * 50) // (100 * count)),
-        "wiops": max(1, (physical_iops * 25) // (100 * count)),
+        "physical_read_bps": min(240 * MIB, size_throughput),
+        # 200 MiB/s is below the smallest documented pd-balanced write cap.
+        "physical_write_bps": min(200 * MIB, size_throughput),
+        "physical_iops": physical_iops,
     }
 
 
@@ -497,10 +491,10 @@ def effective_limits(
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     if scope not in SCOPES:
         raise ValueError(
-            "scope must be pool, maintenance, startup, standard, member, or premium"
+            "scope must be pool, lifecycle-pool, maintenance, startup, standard, member, or premium"
         )
     if policy["capacity_mode"] == "static":
-        if scope == "pool":
+        if scope in ("pool", "lifecycle-pool"):
             limits = policy["pool"]
         elif scope == "maintenance":
             limits = {
@@ -514,36 +508,104 @@ def effective_limits(
             {**row, "limits": {key: limits[key] for key in METRICS}}
             for row in devices
         ], None
-    pool = dynamic_pool_limits(devices)
-    factor = {
-        "pool": 100,
-        "maintenance": 10,
-        "startup": 100,
-        "standard": 25,
-        "member": 50,
-        "premium": 75,
+    factors = {
+        "pool": {key: 100 for key in METRICS},
+        # While a lifecycle operation is active, ordinary projects yield a
+        # part of their write budget. The startup sibling can use 50% of
+        # physical write capacity, while the ordinary pool temporarily drops
+        # from 25% to 15% and retains its full read budget. Staging showed that
+        # 20% left too little margin for Podman metadata work under sustained
+        # buffered writes.
+        "lifecycle-pool": {
+            "rbps": 100,
+            "wbps": 60,
+            "riops": 100,
+            "wiops": 60,
+        },
+        "maintenance": {key: 10 for key in METRICS},
+        # Ordinary projects reserve 25% of write capacity. Give lifecycle
+        # work 50%, leaving 25% uncommitted while a start is active.
+        "startup": {"rbps": 100, "wbps": 200, "riops": 100, "wiops": 200},
+        "standard": {key: 25 for key in METRICS},
+        "member": {key: 50 for key in METRICS},
+        "premium": {key: 75 for key in METRICS},
     }[scope]
-    rows = [
-        {
-            **row,
-            "limits": {
-                key: max(1, (pool[key] * factor) // 100)
-                for key in METRICS
-            },
-        }
-        for row in devices
-    ]
+    # Each Persistent Disk has its own size-derived limits; combining capacities
+    # before applying the formula loses the baseline capacity of every extra disk.
+    capacities = [balanced_device_capacity(row) for row in devices]
+    rows = []
+    for row, capacity in zip(devices, capacities):
+        btrfs_project_data = (
+            "btrfs" in row.get("filesystems", []) and scope != "maintenance"
+        )
+        if btrfs_project_data:
+            # Low nested io.max ceilings turn Btrfs metadata transactions into
+            # throttled filesystem-wide lock holders. Give project and lifecycle
+            # work nearly the physical device envelope instead; io.weight and
+            # direct offender eviction provide fairness under real contention.
+            pool = {
+                "rbps": max(
+                    1,
+                    (
+                        capacity["physical_read_bps"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+                "wbps": max(
+                    1,
+                    (
+                        capacity["physical_write_bps"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+                "riops": max(
+                    1,
+                    (
+                        capacity["physical_iops"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+                "wiops": max(
+                    1,
+                    (
+                        capacity["physical_iops"]
+                        * GCP_BALANCED_BTRFS_HEADROOM_PERCENT
+                    )
+                    // 100,
+                ),
+            }
+            scope_factors = {key: 100 for key in METRICS}
+        else:
+            pool = {
+                "rbps": max(1, (capacity["physical_read_bps"] * 50) // 100),
+                "wbps": max(1, (capacity["physical_write_bps"] * 25) // 100),
+                "riops": max(1, (capacity["physical_iops"] * 50) // 100),
+                "wiops": max(1, (capacity["physical_iops"] * 25) // 100),
+            }
+            scope_factors = factors
+        rows.append(
+            {
+                **row,
+                "limits": {
+                    key: max(1, (pool[key] * scope_factors[key]) // 100)
+                    for key in METRICS
+                },
+            }
+        )
     total_bytes = sum(row["size_bytes"] for row in devices)
-    physical_iops = min(15000, 3000 + (6 * total_bytes) // GIB)
-    size_throughput = (
-        140 * MIB + (28 * total_bytes * MIB) // (100 * GIB)
-    )
     return rows, {
         "total_bytes": total_bytes,
         "device_count": len(devices),
-        "physical_read_bps": min(240 * MIB, size_throughput),
-        "physical_write_bps": min(200 * MIB, size_throughput),
-        "physical_iops": physical_iops,
+        "physical_read_bps": sum(
+            row["physical_read_bps"] for row in capacities
+        ),
+        "physical_write_bps": sum(
+            row["physical_write_bps"] for row in capacities
+        ),
+        "physical_iops": sum(row["physical_iops"] for row in capacities),
     }
 
 
@@ -852,12 +914,12 @@ def build_project_io_policy(capacity: dict[str, Any]) -> dict[str, Any]:
         "mode": "enforce" if supports_dynamic_capacity else "disabled",
         "mountpoint": "/mnt/cocalc",
         "profile": (
-            "gcp-pd-balanced-dynamic"
+            "gcp-pd-balanced-btrfs-headroom"
             if supports_dynamic_capacity
             else "unconfigured"
         ),
         "capacitySource": (
-            "gcp-pd-balanced-size-formula-2026-07-24"
+            "gcp-pd-balanced-btrfs-headroom-2026-08-04"
             if supports_dynamic_capacity
             else "unconfigured"
         ),
@@ -2374,9 +2436,11 @@ def ensure_runtime_user_manager(cfg: BootstrapConfig) -> None:
     ensure_owned_runtime_dir(run_dir, uid, gid)
     env = read_env_assignments(cfg.env_file)
     configured_runtime = (
-        env.get("COCALC_PODMAN_RUNTIME_DIR") or env.get("XDG_RUNTIME_DIR") or ""
+        env.get("COCALC_PODMAN_RUNTIME_DIR")
+        or env.get("XDG_RUNTIME_DIR")
+        or default_podman_runtime_dir(uid)
     ).strip()
-    if configured_runtime and Path(configured_runtime).is_absolute():
+    if Path(configured_runtime).is_absolute():
         ensure_owned_runtime_dir(Path(configured_runtime), uid, gid)
 
 
@@ -3350,6 +3414,42 @@ if __name__ == "__main__":
 '''
 
 
+LEGACY_MANAGED_PROJECT_IO_OVERRIDE = {
+    "version": 1,
+    "mode": "enforce",
+    "mountpoint": "/mnt/cocalc",
+    "profile": "prod-gcp-pd-balanced-dynamic-v1",
+    "capacitySource": "gcp-pd-balanced-size-formula-2026-07-24",
+    "capacity": {"mode": "gcp-pd-balanced"},
+    "adaptive": {
+        "enabled": False,
+        "sampleMs": 5000,
+        "enterSamples": 6,
+        "recoverSamples": 24,
+    },
+    "ioCost": {"mode": "disabled"},
+}
+
+
+def retire_legacy_managed_project_io_override(override_path: Path) -> None:
+    if not override_path.exists():
+        return
+    try:
+        override = json.loads(override_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+    if override != LEGACY_MANAGED_PROJECT_IO_OVERRIDE:
+        return
+    retired_path = override_path.with_name(
+        f"{override_path.name}.retired-gcp-pd-balanced-size-formula-2026-07-24"
+    )
+    if retired_path.exists():
+        retired_path.unlink()
+    override_path.replace(retired_path)
+    os.chown(retired_path, 0, 0)
+    retired_path.chmod(0o600)
+
+
 def write_project_io_configuration(
     cfg: BootstrapConfig,
     *,
@@ -3357,6 +3457,7 @@ def write_project_io_configuration(
     override_path: Path = Path("/etc/cocalc/project-io-policy.override.json"),
     capacity_path: Path = Path("/etc/cocalc/project-io-capacity.json"),
 ) -> None:
+    retire_legacy_managed_project_io_override(override_path)
     text_write_atomic(
         policy_path,
         json.dumps(cfg.project_io_policy, indent=2, sort_keys=True) + "\n",
@@ -3417,8 +3518,14 @@ PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"
 PROJECT_STARTUP_CGROUP_CPU_MAX="200000 100000"
 PROJECT_STARTUP_CGROUP_CPU_WEIGHT="10000"
 PROJECT_STARTUP_CGROUP_IO_WEIGHT="10000"
-PROJECT_STARTUP_CGROUP_MEMORY_HIGH="$((4 * 1024 * 1024 * 1024))"
-PROJECT_STARTUP_CGROUP_MEMORY_MAX="$((8 * 1024 * 1024 * 1024))"
+# Memory charged while a process is in a child cgroup stays charged to this
+# hierarchy after the process moves and the child is removed. An aggregate
+# limit therefore grows with every project start and eventually throttles
+# Podman while it holds global runtime locks. Bound each startup leaf instead.
+PROJECT_STARTUP_CGROUP_MEMORY_HIGH="max"
+PROJECT_STARTUP_CGROUP_MEMORY_MAX="max"
+PROJECT_STARTUP_CREATE_CGROUP_MEMORY_HIGH="$((4 * 1024 * 1024 * 1024))"
+PROJECT_STARTUP_CREATE_CGROUP_MEMORY_MAX="$((8 * 1024 * 1024 * 1024))"
 PROJECT_STARTUP_CGROUP_PIDS_MAX="4096"
 PROJECT_POOL_CGROUP_DEFAULT="__PROJECT_POOL_CGROUP__"
 PROJECT_IO_POLICY_DEFAULT="/etc/cocalc/project-io-policy.json"
@@ -3449,6 +3556,9 @@ PROJECT_NETWORK_NFT="/usr/sbin/nft"
 PROJECT_NETWORK_TABLE="cocalc_project_network"
 PROJECT_NETWORK_CHAIN="output"
 PROJECT_CGROUP_LOCK_WAIT_SECONDS="5"
+PROJECT_IO_RESERVATION_LOCK="/run/lock/cocalc-project-io-reservation.lock"
+PROJECT_IO_NORMAL_LIMITS_SNAPSHOT="/run/cocalc-project-pool-normal-io.max"
+PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"
 PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
 PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"
 PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"
@@ -3482,6 +3592,25 @@ acquire_project_cgroup_shared_lock() {
 release_project_lock() {
   flock -u 9 || true
   exec 9>&-
+}
+
+acquire_project_io_reservation_lock() {
+  exec 8>"$PROJECT_IO_RESERVATION_LOCK"
+  if ! flock -x -w "$PROJECT_CGROUP_LOCK_WAIT_SECONDS" 8; then
+    deny "project-io-reservation-lock-timeout" "$PROJECT_CGROUP_LOCK_WAIT_SECONDS"
+  fi
+}
+
+acquire_project_io_reservation_shared_lock() {
+  exec 8>"$PROJECT_IO_RESERVATION_LOCK"
+  if ! flock -s -w "$PROJECT_CGROUP_LOCK_WAIT_SECONDS" 8; then
+    deny "project-io-reservation-lock-timeout" "$PROJECT_CGROUP_LOCK_WAIT_SECONDS"
+  fi
+}
+
+release_project_io_reservation_lock() {
+  flock -u 8 || true
+  exec 8>&-
 }
 
 is_project_uuid() {
@@ -3620,7 +3749,7 @@ clear_stale_io_max() {
 
 apply_io_max() {
   local cgroup="$1" scope="$2" mode="$3" io_class="${4:-standard}"
-  local rows devices device rbps wbps riops wiops line snapshot
+  local rows="${5:-}" devices device rbps wbps riops wiops line snapshot
   if [ ! -w "$cgroup/io.max" ]; then
     [ "$mode" = "enforce" ] && deny "project-io-max-unavailable" "$cgroup"
     return 0
@@ -3636,8 +3765,10 @@ apply_io_max() {
     done <<< "$snapshot"
     return 0
   fi
-  if ! rows="$(project_io_limit_rows "$scope" "$io_class")"; then
-    deny "project-io-device-unavailable" "$scope"
+  if [ -z "$rows" ]; then
+    if ! rows="$(project_io_limit_rows "$scope" "$io_class")"; then
+      deny "project-io-device-unavailable" "$scope"
+    fi
   fi
   devices="$(cut -f1 <<< "$rows")"
   [ -n "$devices" ] || {
@@ -3653,10 +3784,12 @@ apply_io_max() {
 
 verify_io_max() {
   local cgroup="$1" scope="$2" io_class="${3:-standard}"
-  local rows device rbps wbps riops wiops line
+  local rows="${4:-}" device rbps wbps riops wiops line
   [ -r "$cgroup/io.max" ] || deny "project-io-max-unavailable" "$cgroup"
-  rows="$(project_io_limit_rows "$scope" "$io_class")" ||
-    deny "project-io-device-unavailable" "$scope"
+  if [ -z "$rows" ]; then
+    rows="$(project_io_limit_rows "$scope" "$io_class")" ||
+      deny "project-io-device-unavailable" "$scope"
+  fi
   [ -n "$rows" ] || deny "project-io-device-unavailable" "$scope"
   while IFS=$'\t' read -r device rbps wbps riops wiops _rest; do
     [ -n "$device" ] || continue
@@ -3667,14 +3800,145 @@ verify_io_max() {
   done <<< "$rows"
 }
 
+project_startup_runtime_active_count() {
+  local cgroup count=0
+  for cgroup in "${PROJECT_STARTUP_CGROUP_DEFAULT}"/project-*; do
+    [ -d "$cgroup" ] || continue
+    if grep -q '^populated 1$' "$cgroup/cgroup.events" 2>/dev/null ||
+      [ -n "$(cat "$cgroup/cgroup.procs" 2>/dev/null || true)" ]; then
+      count="$((count + 1))"
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+current_project_pool_io_scope() {
+  if project_io_pressure_protection_enabled ||
+    [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
+    printf 'lifecycle-pool\n'
+  else
+    printf 'pool\n'
+  fi
+}
+
+project_io_pressure_protection_enabled() {
+  [ "$(cat "$PROJECT_IO_PRESSURE_MODE_STATE" 2>/dev/null || true)" = "protect" ]
+}
+
 apply_project_pool_io_policy() {
-  local fields mode
+  local scope="${1:-}" fields mode rows=""
+  [ -n "$scope" ] || scope="$(current_project_pool_io_scope)"
   fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
   IFS=$'\t' read -r mode _rest <<< "$fields"
-  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool" "$mode"
   if [ "$mode" = "enforce" ]; then
-    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+    rows="$(project_io_limit_rows "$scope")" ||
+      deny "project-io-device-unavailable" "$scope"
   fi
+  apply_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope" "$mode" standard "$rows"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$scope" standard "$rows"
+  fi
+}
+
+apply_project_pool_io_snapshot() {
+  local snapshot="$1" line
+  [ -s "$snapshot" ] || deny "project-io-normal-snapshot-missing" "$snapshot"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$line" > "${PROJECT_POOL_CGROUP_DEFAULT}/io.max"
+  done < "$snapshot"
+}
+
+verify_project_pool_io_snapshot() {
+  local snapshot="$1" device expected line
+  [ -s "$snapshot" ] || deny "project-io-normal-snapshot-missing" "$snapshot"
+  while read -r device expected; do
+    [ -n "$device" ] || continue
+    line="$(awk -v device="$device" '$1 == device {print; exit}' "${PROJECT_POOL_CGROUP_DEFAULT}/io.max")"
+    for expected in $expected; do
+      grep -qw "$expected" <<< "$line" ||
+        deny "project-io-normal-snapshot-mismatch" \
+          "device=${device},expected=${expected},actual=${line:-missing}"
+    done
+  done < "$snapshot"
+}
+
+reserve_project_startup_io_capacity() {
+  local snapshot_tmp
+  acquire_project_io_reservation_lock
+  if project_io_pressure_protection_enabled; then
+    release_project_io_reservation_lock
+    return 0
+  fi
+  if [ -s "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT" ]; then
+    release_project_io_reservation_lock
+    return 0
+  fi
+  snapshot_tmp="${PROJECT_IO_NORMAL_LIMITS_SNAPSHOT}.$$"
+  umask 077
+  cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" > "$snapshot_tmp"
+  [ -s "$snapshot_tmp" ] || deny "project-io-normal-snapshot-empty" "$snapshot_tmp"
+  mv -f "$snapshot_tmp" "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+  apply_project_pool_io_policy "lifecycle-pool"
+  release_project_io_reservation_lock
+}
+
+release_project_startup_io_capacity() {
+  acquire_project_io_reservation_lock
+  if [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
+    release_project_io_reservation_lock
+    return 0
+  fi
+  if project_io_pressure_protection_enabled; then
+    rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+    release_project_io_reservation_lock
+    return 0
+  fi
+  if [ -s "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT" ]; then
+    apply_project_pool_io_snapshot "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+    verify_project_pool_io_snapshot "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+    rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+  else
+    # Recover safely after an interrupted helper upgrade or manual cgroup edit.
+    apply_project_pool_io_policy "pool"
+  fi
+  release_project_io_reservation_lock
+}
+
+set_project_pool_pressure_mode() {
+  local mode="$1" state_tmp
+  acquire_project_io_reservation_lock
+  case "$mode" in
+    protect)
+      state_tmp="${PROJECT_IO_PRESSURE_MODE_STATE}.$$"
+      umask 077
+      printf 'protect\n' > "$state_tmp"
+      mv -f "$state_tmp" "$PROJECT_IO_PRESSURE_MODE_STATE"
+      apply_project_pool_io_policy "lifecycle-pool"
+      ;;
+    normal)
+      rm -f "$PROJECT_IO_PRESSURE_MODE_STATE"
+      if [ "$(project_startup_runtime_active_count)" -gt 0 ]; then
+        apply_project_pool_io_policy "lifecycle-pool"
+      else
+        apply_project_pool_io_policy "pool"
+        rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+      fi
+      ;;
+    *) deny "project-io-pressure-mode-invalid" "$mode" ;;
+  esac
+  release_project_io_reservation_lock
+}
+
+reconcile_project_pool_io_reservation() {
+  local scope
+  acquire_project_io_reservation_lock
+  scope="$(current_project_pool_io_scope)"
+  apply_project_pool_io_policy "$scope"
+  if [ "$scope" = "pool" ]; then
+    rm -f "$PROJECT_IO_NORMAL_LIMITS_SNAPSHOT"
+  fi
+  release_project_io_reservation_lock
 }
 
 configure_maintenance_cgroup() {
@@ -3813,9 +4077,9 @@ configure_project_startup_cgroup() {
   [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/io.weight" ] &&
     printf 'default %s\n' "$PROJECT_STARTUP_CGROUP_IO_WEIGHT" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/io.weight"
   [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high" ] &&
-    printf '%s\n' "$PROJECT_STARTUP_CGROUP_MEMORY_HIGH" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high"
+    printf '%s\n' "$PROJECT_STARTUP_CREATE_CGROUP_MEMORY_HIGH" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high"
   [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max" ] &&
-    printf '%s\n' "$PROJECT_STARTUP_CGROUP_MEMORY_MAX" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max"
+    printf '%s\n' "$PROJECT_STARTUP_CREATE_CGROUP_MEMORY_MAX" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max"
   [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.swap.max" ] &&
     printf '0\n' > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.swap.max"
   [ -w "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/pids.max" ] &&
@@ -3846,8 +4110,8 @@ project_startup_cgroup_ready() {
   [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.max" 2>/dev/null || true)" = "max 100000" ] || return 1
   [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/cpu.weight" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_CPU_WEIGHT" ] || return 1
   [ "$(awk '$1 == "default" {print $2}' "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/io.weight" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_IO_WEIGHT" ] || return 1
-  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_MEMORY_HIGH" ] || return 1
-  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_MEMORY_MAX" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high" 2>/dev/null || true)" = "$PROJECT_STARTUP_CREATE_CGROUP_MEMORY_HIGH" ] || return 1
+  [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CREATE_CGROUP_MEMORY_MAX" ] || return 1
   [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.swap.max" 2>/dev/null || true)" = "0" ] || return 1
   [ "$(cat "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)" = "$PROJECT_STARTUP_CGROUP_PIDS_MAX" ] || return 1
   return 0
@@ -3939,7 +4203,7 @@ configure_project_pool_hierarchy() {
     deny "project-pool-internal-processes-remain" "$remaining"
   fi
   enable_cgroup_controllers "$PROJECT_POOL_CGROUP_DEFAULT"
-  apply_project_pool_io_policy
+  reconcile_project_pool_io_reservation
   # The startup cgroup is a root-level sibling so container creation can use
   # capacity reserved from ordinary projects without executing project code.
   configure_project_startup_cgroup
@@ -4047,13 +4311,20 @@ configure_project_startup_runtime_leaf() {
   local memory_swap_max="$5" pids_max="$6" cpu_quota="$7"
   local cpu_period="$8" startup_cpu_weight="$9"
   local startup_io_weight="${10}" io_class="${11:-standard}"
+  local fields mode
   configure_project_cgroup \
     "$cgroup" "$memory_max" "$memory_high" "$memory_low" \
     "$memory_swap_max" "$pids_max" "$cpu_quota" "$cpu_period" \
     "$startup_cpu_weight" "$startup_io_weight" "$io_class"
-  # Enforced policy normally replaces the caller's requested weight. During
-  # startup the leaf is also bounded by the two-CPU/tight-I/O parent, so give
-  # it first service within that reserve without weakening any hard cap.
+  fields="$(project_io_policy_fields "$io_class")" ||
+    deny "project-io-policy-invalid" "$io_class"
+  IFS=$'\t' read -r mode _rest <<< "$fields"
+  apply_io_max "$cgroup" "startup" "$mode" "$io_class"
+  if [ "$mode" = "enforce" ]; then
+    verify_io_max "$cgroup" "startup" "$io_class"
+  fi
+  # Enforced policy normally replaces the caller's requested weight. Give a
+  # starting runtime first service inside the bounded startup parent.
   printf '%s\n' "$startup_cpu_weight" > "$cgroup/cpu.weight"
   if [ -w "$cgroup/io.weight" ]; then
     printf 'default %s\n' "$startup_io_weight" > "$cgroup/io.weight"
@@ -4141,6 +4412,7 @@ bees_memory_limits() {
 
 configure_bees_cgroup() {
   local pool="$1" mountpoint="$2" workers memory_high memory_max
+  local fields mode policy_profile rows
   local device major_hex minor_hex major minor
   local -a io_limits=()
   enable_cgroup_controllers /sys/fs/cgroup
@@ -4160,6 +4432,21 @@ configure_bees_cgroup() {
     printf 'default %s\n' "$BEES_CGROUP_IO_WEIGHT" > "${pool}/io.weight"
   fi
   if [ -w "${pool}/io.max" ]; then
+    fields="$(project_io_policy_fields standard)" ||
+      deny "project-io-policy-invalid" "bees"
+    IFS=$'\t' read -r mode _mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops _rbps _wbps _riops _wiops _weight _io_class _policy_version policy_profile _capacity_source _capacity_mode <<< "$fields"
+    if [ "$mode" = "enforce" ] &&
+      [ "$policy_profile" = "gcp-pd-balanced-btrfs-headroom" ]; then
+      # BEES performs Btrfs metadata transactions. A low io.max can turn it
+      # into a filesystem-wide lock holder even though it is nice/idle and has
+      # I/O weight 1. Use the same finite device-headroom envelope as the
+      # project pool; CPU, weight, and idle scheduling still keep it subordinate.
+      rows="$(project_io_limit_rows pool standard)" ||
+        deny "project-io-device-unavailable" "bees"
+      apply_io_max "$pool" "pool" "$mode" standard "$rows"
+      verify_io_max "$pool" "pool" standard "$rows"
+      return 0
+    fi
     while IFS= read -r device; do
       [ -b "$device" ] || continue
       read -r major_hex minor_hex < <(stat -Lc '%t %T' "$device")
@@ -4437,6 +4724,12 @@ emit_project_startup_network_rules() {
   printf 'add rule inet %s %s socket cgroupv2 level %s "%s" meta l4proto udp ct state new limit rate over %s/second burst %s packets counter drop comment "%s-udp"\n' \
     "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" \
     "$PROJECT_UDP_NEW_RATE" "$PROJECT_UDP_NEW_BURST" "$marker"
+  # Pasta creates its published-port listener sockets before the runtime is
+  # migrated out of this cgroup. Socket cgroup identity is fixed at creation,
+  # so permit replies on established inbound connections from those listeners.
+  # New outbound connections remain blocked by the final deny rule.
+  printf 'add rule inet %s %s socket cgroupv2 level %s "%s" ct state established,related counter accept comment "%s-established"\n' \
+    "$PROJECT_NETWORK_TABLE" "$PROJECT_NETWORK_CHAIN" "$level" "$path" "$marker"
   # A temporary runtime leaf has no project-specific policy identity. Deny
   # all traffic until verified migration into the final per-project cgroup;
   # retries made by the project daemon resume under its normal/exam policy.
@@ -4496,7 +4789,7 @@ project_cgroup_has_processes() {
 }
 
 verify_project_network_limits() {
-  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count startup_deny_count tcp_count udp_count disabled_dns_count disabled_local_count disabled_established_count disabled_reject_count policy pid found=0 limits
+  local project_id="$1" marker rules metadata_ipv4_count metadata_ipv6_count startup_established_count startup_deny_count tcp_count udp_count disabled_dns_count disabled_local_count disabled_established_count disabled_reject_count policy pid found=0 limits
   is_project_uuid "$project_id" || deny "project-id-invalid" "$project_id"
   require_project_network_tools
   marker="$(project_network_rule_marker "$project_id")"
@@ -4506,6 +4799,7 @@ verify_project_network_limits() {
   fi
   metadata_ipv4_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv4"' <<< "$rules" || true)"
   metadata_ipv6_count="$(grep -Fc 'comment "cocalc-project-network-metadata-ipv6"' <<< "$rules" || true)"
+  startup_established_count="$(grep -Fc 'comment "cocalc-project-network-startup-established"' <<< "$rules" || true)"
   startup_deny_count="$(grep -Fc 'comment "cocalc-project-network-startup-deny"' <<< "$rules" || true)"
   tcp_count="$(grep -Fc "comment \\\"${marker}-tcp\\\"" <<< "$rules" || true)"
   udp_count="$(grep -Fc "comment \\\"${marker}-udp\\\"" <<< "$rules" || true)"
@@ -4514,8 +4808,8 @@ verify_project_network_limits() {
   disabled_established_count="$(grep -Fc "comment \\\"${marker}-disabled-established\\\"" <<< "$rules" || true)"
   disabled_reject_count="$(grep -Fc "comment \\\"${marker}-disabled-reject\\\"" <<< "$rules" || true)"
   policy="$(project_network_policy "$project_id")"
-  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ] || [ "$startup_deny_count" -ne 1 ]; then
-    echo "project shared network rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count} startup_deny=${startup_deny_count}" >&2
+  if [ "$metadata_ipv4_count" -ne 1 ] || [ "$metadata_ipv6_count" -ne 1 ] || [ "$startup_established_count" -ne 1 ] || [ "$startup_deny_count" -ne 1 ]; then
+    echo "project shared network rules are missing or duplicated: metadata_ipv4=${metadata_ipv4_count} metadata_ipv6=${metadata_ipv6_count} startup_established=${startup_established_count} startup_deny=${startup_deny_count}" >&2
     return 1
   fi
   if [ "$policy" = "disabled" ]; then
@@ -5150,6 +5444,10 @@ case "$cmd" in
     printf '%s\n' "$launcher_pid" > "$startup_pool/cgroup.procs"
     printf '%s\n' "$PROJECT_PROCESS_OOM_SCORE_ADJ" > "/proc/${launcher_pid}/oom_score_adj"
     verify_project_pid_in_startup_runtime "$project_id" "$launcher_pid"
+    # The launcher cannot exec Podman until this helper returns. Mark it as
+    # active first so concurrent finalization cannot release the reservation
+    # between the active-start check and applying the reduced pool ceiling.
+    reserve_project_startup_io_capacity
     release_project_lock
     # This also repairs the startup deny rule before the launcher can exec.
     ensure_project_network_rule "$project_id"
@@ -5267,6 +5565,7 @@ case "$cmd" in
       startup_pool="$(project_startup_runtime_cgroup "$project_id")"
       if [ -d "$startup_pool" ]; then
         move_project_startup_runtime_to_pool "$project_id" "$pool"
+        release_project_startup_io_capacity
       elif ! project_pid_is_in_pool "$project_id" "$init_pid" ||
         ! project_pid_is_in_pool "$project_id" "$conmon_pid"; then
         attach_pid_tree_to_project_pool_storage "$conmon_pid" "$pool" || true
@@ -5338,7 +5637,10 @@ case "$cmd" in
     fields="$(project_io_policy_fields "$2")" || deny "project-io-policy-invalid" "$2"
     IFS=$'\t' read -r io_mode io_mountpoint _pool_rbps _pool_wbps _pool_riops _pool_wiops rbps wbps riops wiops _weight io_class _policy_version _policy_profile _capacity_source _capacity_mode <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      acquire_project_io_reservation_shared_lock
+      pool_scope="$(current_project_pool_io_scope)"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$pool_scope"
+      release_project_io_reservation_lock
       verify_io_max "$(project_cgroup "$1")" "$io_class" "$io_class"
     fi
     ;;
@@ -5350,7 +5652,10 @@ case "$cmd" in
     fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
     IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _leaf_rbps _leaf_wbps _leaf_riops _leaf_wiops _weight _class policy_version policy_profile capacity_source capacity_mode <<< "$fields"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      acquire_project_io_reservation_shared_lock
+      pool_scope="$(current_project_pool_io_scope)"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$pool_scope"
+      release_project_io_reservation_lock
       verify_io_max "$MAINTENANCE_CGROUP_DEFAULT" "maintenance"
     fi
     ;;
@@ -5362,9 +5667,15 @@ case "$cmd" in
     fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "status"
     IFS=$'\t' read -r io_mode io_mountpoint pool_rbps pool_wbps pool_riops pool_wiops _rest <<< "$fields"
     policy_status="$(project_io_policy_status)" || deny "project-io-policy-invalid" "status"
+    acquire_project_io_reservation_shared_lock
+    pool_scope="$(current_project_pool_io_scope)"
+    startup_runtime_active_count="$(project_startup_runtime_active_count)"
+    pressure_protection_enabled="false"
+    project_io_pressure_protection_enabled && pressure_protection_enabled="true"
     if [ "$io_mode" = "enforce" ]; then
-      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "pool"
+      verify_io_max "$PROJECT_POOL_CGROUP_DEFAULT" "$pool_scope"
     fi
+    release_project_io_reservation_lock
     pool_io_max="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.max" 2>/dev/null || true)"
     pool_pressure="$(cat "${PROJECT_POOL_CGROUP_DEFAULT}/io.pressure" 2>/dev/null || true)"
     legacy_processes="$(cat "$(project_legacy_cgroup)/cgroup.procs" 2>/dev/null || true)"
@@ -5377,7 +5688,7 @@ case "$cmd" in
     maintenance_memory_high="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.high" 2>/dev/null || true)"
     maintenance_memory_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/memory.max" 2>/dev/null || true)"
     maintenance_pids_max="$(cat "${MAINTENANCE_CGROUP_DEFAULT}/pids.max" 2>/dev/null || true)"
-    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$maintenance_io_max" "$maintenance_io_weight" "$maintenance_pressure" "$maintenance_processes" "$maintenance_cpu_max" "$maintenance_memory_high" "$maintenance_memory_max" "$maintenance_pids_max" <<'PY'
+    /usr/bin/python3 - "$policy_status" "$pool_io_max" "$pool_io_weight" "$pool_pressure" "$legacy_processes" "$maintenance_io_max" "$maintenance_io_weight" "$maintenance_pressure" "$maintenance_processes" "$maintenance_cpu_max" "$maintenance_memory_high" "$maintenance_memory_max" "$maintenance_pids_max" "$pool_scope" "$startup_runtime_active_count" "$pressure_protection_enabled" <<'PY'
 import json
 import sys
 
@@ -5395,6 +5706,9 @@ import sys
     maintenance_memory_high,
     maintenance_memory_max,
     maintenance_pids_max,
+    pool_scope,
+    startup_runtime_active_count,
+    pressure_protection_enabled,
 ) = sys.argv[1:]
 result = json.loads(status_json)
 discovery_error = result.pop("discovery_error", None)
@@ -5434,6 +5748,9 @@ result.update({
     "pool_cgroup": "/sys/fs/cgroup/cocalc-project-pool",
     "pool_io_max": io_max.strip(),
     "pool_io_weight": io_weight.strip(),
+    "pool_limit_scope": pool_scope,
+    "startup_runtime_active_count": int(startup_runtime_active_count),
+    "pressure_protection_enabled": pressure_protection_enabled == "true",
     "legacy_process_count": len(legacy.split()),
     "maintenance_cgroup": "/sys/fs/cgroup/cocalc-maintenance",
     "maintenance_io_max": maintenance_io_max.strip(),
@@ -5455,6 +5772,13 @@ PY
       exit 2
     fi
     reconcile_project_io_policy
+    ;;
+  set-project-pool-pressure-mode)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage set-project-pool-pressure-mode <normal|protect>" >&2
+      exit 2
+    fi
+    set_project_pool_pressure_mode "$1"
     ;;
   verify-project-network-limits)
     if [ "$#" -ne 1 ] || ! is_project_uuid "$1"; then
@@ -5529,6 +5853,7 @@ PY
       if [ -d "$startup_pool" ]; then
         deny "project-startup-runtime-cleanup-failed" "$1"
       fi
+      release_project_startup_io_capacity
     fi
     if [ -d "$pool" ]; then
       if [ -w "$pool/cgroup.kill" ]; then
@@ -6867,15 +7192,90 @@ def ensure_btrfs_data(cfg: BootstrapConfig) -> None:
     repair_host_data_ownership(cfg)
 
 
+def project_host_runtime_is_active() -> bool:
+    markers = (b"project-host:app", b"cocalc-project-podman", b"/conmon")
+    proc = Path("/proc")
+    try:
+        entries = proc.iterdir()
+    except OSError:
+        return True
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes()
+        except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+            continue
+        if any(marker in cmdline for marker in markers):
+            return True
+    return False
+
+
+def configured_podman_runroot(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None
+    match = re.search(r'^\s*runroot\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def configure_podman(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring podman storage")
+    runtime_run_root = Path("/run/cocalc")
+    container_run_root = runtime_run_root / "containers"
+    rootless_run_root = container_run_root / "rootless"
+    root_run = container_run_root / "root"
+    rootless_run = rootless_run_root / cfg.ssh_user
+    user_config_root = Path(runtime_home(cfg)) / ".config"
+    user_config = user_config_root / "containers"
+    user_storage_conf = user_config / "storage.conf"
+    current_rootless_run = configured_podman_runroot(user_storage_conf)
+    migration_pending = Path(
+        "/mnt/cocalc/data/containers/runroot-migration-pending"
+    )
+    if (
+        current_rootless_run
+        and current_rootless_run != str(rootless_run)
+        and project_host_runtime_is_active()
+    ):
+        migration_pending.parent.mkdir(parents=True, exist_ok=True)
+        migration_pending.write_text(
+            f"current={current_rootless_run}\ndesired={rootless_run}\n",
+            encoding="utf-8",
+        )
+        log_line(
+            cfg,
+            "bootstrap: deferring Podman runroot migration until the next safe host boot",
+        )
+        return
+
     Path("/mnt/cocalc/data/containers/root/storage").mkdir(parents=True, exist_ok=True)
-    Path("/mnt/cocalc/data/containers/root/run").mkdir(parents=True, exist_ok=True)
+    runtime_run_root.mkdir(parents=True, exist_ok=True)
+    container_run_root.mkdir(parents=True, exist_ok=True)
+    rootless_run_root.mkdir(parents=True, exist_ok=True)
+    root_run.mkdir(parents=True, exist_ok=True)
+    run_best_effort(
+        cfg,
+        [
+            "chmod",
+            "0711",
+            str(runtime_run_root),
+            str(container_run_root),
+            str(rootless_run_root),
+        ],
+        "make Podman runroot parents traversable",
+    )
+    run_best_effort(
+        cfg,
+        ["chmod", "0700", str(root_run)],
+        "restrict root Podman runroot",
+    )
     Path("/etc/containers").mkdir(parents=True, exist_ok=True)
     Path("/etc/containers/storage.conf").write_text(
         '[storage]\n'
         'driver = "overlay"\n'
-        'runroot = "/mnt/cocalc/data/containers/root/run"\n'
+        f'runroot = "{root_run}"\n'
         'graphroot = "/mnt/cocalc/data/containers/root/storage"\n',
         encoding="utf-8",
     )
@@ -6886,11 +7286,8 @@ def configure_podman(cfg: BootstrapConfig) -> None:
     )
     if cfg.ssh_user != "root":
         desired_uid, desired_gid = resolve_runtime_user_identity(cfg)
-        user_config_root = Path(runtime_home(cfg)) / ".config"
-        user_config = user_config_root / "containers"
         rootless_root = Path(f"/mnt/cocalc/data/containers/rootless/{cfg.ssh_user}")
         rootless_storage = rootless_root / "storage"
-        rootless_run = rootless_root / "run"
         user_config_root.mkdir(parents=True, exist_ok=True)
         run_best_effort(
             cfg,
@@ -6916,9 +7313,22 @@ def configure_podman(cfg: BootstrapConfig) -> None:
                 f"{cfg.ssh_user}:{cfg.ssh_user}",
                 str(rootless_root),
                 str(rootless_storage),
+            ],
+            "chown rootless podman persistent paths",
+        )
+        run_best_effort(
+            cfg,
+            [
+                "chown",
+                f"{cfg.ssh_user}:{cfg.ssh_user}",
                 str(rootless_run),
             ],
-            "chown rootless podman path roots",
+            "chown rootless podman runroot",
+        )
+        run_best_effort(
+            cfg,
+            ["chmod", "0700", str(rootless_run)],
+            "restrict rootless Podman runroot",
         )
         (user_config / "storage.conf").write_text(
             '[storage]\n'
@@ -6950,6 +7360,7 @@ def configure_podman(cfg: BootstrapConfig) -> None:
             ],
             "chown containers.conf",
         )
+    migration_pending.unlink(missing_ok=True)
 
 
 def write_env(cfg: BootstrapConfig, image_size_gb: int) -> None:
@@ -7965,10 +8376,17 @@ container_runtime_current() {
 run_podman_as_runtime() {
   local timeout_value="$1" runtime_dir="$2" cgroup_manager="$3"
   local container_runtime podman_bin
-  local -a timeout_args=()
+  local -a timeout_args=() podman_prefix=()
   shift 3
   if [ "${timeout_value}" != "0" ]; then
     timeout_args=(/usr/bin/timeout "${timeout_value}")
+  fi
+  # Ubuntu's unprivileged-userns restriction grants Podman access through the
+  # distro AppArmor profile. Our versioned Podman binary lives under /opt, so
+  # explicitly enter that profile when it is available.
+  if command -v aa-exec >/dev/null 2>&1 && \
+     grep -q '^podman ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    podman_prefix=(aa-exec -p podman --)
   fi
   container_runtime="$(container_runtime_current)"
   if [ -n "${container_runtime}" ]; then
@@ -7979,14 +8397,14 @@ run_podman_as_runtime() {
       CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
       CONTAINERS_CONF_OVERRIDE="${container_runtime}/etc/containers/containers.conf" \
       PATH="${container_runtime}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-      "${podman_bin}" "$@"
+      "${podman_prefix[@]}" "${podman_bin}" "$@"
     return
   fi
   "${timeout_args[@]}" sudo -n -u "${RUNTIME_USER}" -H env \
     XDG_RUNTIME_DIR="${runtime_dir}" \
     COCALC_PODMAN_RUNTIME_DIR="${runtime_dir}" \
     CONTAINERS_CGROUP_MANAGER="${cgroup_manager}" \
-    podman "$@"
+    "${podman_prefix[@]}" podman "$@"
 }
 
 ensure_owned_runtime_dir() {
@@ -7996,6 +8414,20 @@ ensure_owned_runtime_dir() {
   install -d -o "${uid}" -g "${gid}" -m 0700 "${path}"
   chown "${uid}:${gid}" "${path}"
   chmod 0700 "${path}"
+}
+
+ensure_podman_runroot() {
+  local uid gid runroot
+  uid="$(runtime_uid)"
+  gid="$(runtime_gid)"
+  install -d -o root -g root -m 0711 \
+    /run/cocalc \
+    /run/cocalc/containers \
+    /run/cocalc/containers/rootless
+  runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"
+  install -d -o "${uid}" -g "${gid}" -m 0700 "${runroot}"
+  chown "${uid}:${gid}" "${runroot}"
+  chmod 0700 "${runroot}"
 }
 
 repair_runtime_environment() {
@@ -8013,6 +8445,7 @@ repair_runtime_environment() {
   fi
   ensure_owned_runtime_dir "${run_dir}"
   ensure_owned_runtime_dir "${run_dir}/containers"
+  ensure_podman_runroot
   runtime_dir="$(podman_runtime_dir)"
   if [ -n "${runtime_dir}" ]; then
     ensure_owned_runtime_dir "${runtime_dir}"
@@ -8060,18 +8493,170 @@ remove_safe_runtime_dir() {
 }
 
 cleanup_podman_runtime_state() {
-  local runtime_dir runroot
+  local runtime_dir runroot legacy_runroot
   if project_host_app_running; then
     echo "project-host app is running; refusing to clean Podman runtime state" >&2
     return 1
   fi
   runtime_dir="$(podman_runtime_dir)"
   remove_safe_runtime_dir "${runtime_dir}"
-  runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"
   if [ -e "${runroot}" ]; then
     rm -rf --one-file-system "${runroot}"
   fi
+  legacy_runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  if [ -e "${legacy_runroot}" ]; then
+    rm -rf --one-file-system "${legacy_runroot}"
+  fi
   repair_runtime_environment
+}
+
+project_runtime_processes_active() {
+  local proc comm
+  for proc in /proc/[0-9]*; do
+    comm="$(cat "${proc}/comm" 2>/dev/null || true)"
+    case "${comm}" in
+      conmon|crun|podman|podman-init|project-host:ap*|project-host:ho*)
+        echo "project runtime process active: pid=${proc##*/} comm=${comm}" >&2
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+migrate_podman_database_runroot() {
+  local db_path="$1" desired_runroot="$2" legacy_runroot="$3"
+  if [ ! -f "${db_path}" ]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to migrate the Podman database runroot" >&2
+    return 1
+  fi
+  (
+    cd /tmp
+    sudo -n -u "${RUNTIME_USER}" -H python3 - \
+      "${db_path}" "${desired_runroot}" "${legacy_runroot}" <<'PY'
+import sqlite3
+import sys
+
+db_path, desired_runroot, legacy_runroot = sys.argv[1:]
+conn = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True, timeout=30)
+try:
+    conn.execute("PRAGMA busy_timeout = 30000")
+    if conn.execute("PRAGMA quick_check").fetchone() != ("ok",):
+        raise RuntimeError("Podman database quick_check failed")
+    conn.execute("BEGIN IMMEDIATE")
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(DBConfig)").fetchall()
+    }
+    if "ID" not in columns or "RunRoot" not in columns:
+        raise RuntimeError("Podman DBConfig schema does not contain ID and RunRoot")
+    rows = conn.execute("SELECT ID, RunRoot FROM DBConfig").fetchall()
+    if len(rows) != 1 or rows[0][0] != 1:
+        raise RuntimeError(f"unexpected Podman DBConfig rows: {rows!r}")
+    current_runroot = rows[0][1]
+    if current_runroot == desired_runroot:
+        conn.commit()
+    elif current_runroot == legacy_runroot:
+        cursor = conn.execute(
+            "UPDATE DBConfig SET RunRoot = ? WHERE ID = 1 AND RunRoot = ?",
+            (desired_runroot, legacy_runroot),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Podman DBConfig runroot update did not affect one row")
+        conn.commit()
+        print(
+            f"migrated Podman database runroot from {legacy_runroot} "
+            f"to {desired_runroot}"
+        )
+    else:
+        raise RuntimeError(
+            f"refusing unexpected Podman database runroot {current_runroot!r}"
+        )
+finally:
+    conn.close()
+PY
+  )
+}
+
+require_podman_boot_preparation_not_failed() {
+  if command -v systemctl >/dev/null 2>&1 && \
+     systemctl is-failed --quiet cocalc-project-host-prepare.service; then
+    echo "Podman boot preparation failed; refusing to start project-host" >&2
+    return 1
+  fi
+}
+
+prepare_podman_boot() {
+  local home config_dir storage_conf desired_runroot legacy_runroot current_runroot
+  local runtime_dir cgroup_manager tmp graphroot db_path reported_runroot
+  if ! mountpoint -q /mnt/cocalc; then
+    echo "/mnt/cocalc is not mounted; refusing Podman boot preparation" >&2
+    return 1
+  fi
+  if project_runtime_processes_active; then
+    echo "project runtime processes are active; refusing Podman boot preparation" >&2
+    return 1
+  fi
+  home="$(getent passwd "${RUNTIME_USER}" | cut -d: -f6)"
+  if [ -z "${home}" ]; then
+    echo "unable to resolve home directory for ${RUNTIME_USER}" >&2
+    return 1
+  fi
+  config_dir="${home}/.config/containers"
+  storage_conf="${config_dir}/storage.conf"
+  desired_runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"
+  legacy_runroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/run"
+  graphroot="/mnt/cocalc/data/containers/rootless/${RUNTIME_USER}/storage"
+  db_path="${graphroot}/db.sql"
+  current_runroot="$(sed -n 's/^[[:space:]]*runroot[[:space:]]*=[[:space:]]*"\\([^"]*\\)".*/\\1/p' "${storage_conf}" 2>/dev/null | head -n1)"
+  case "${current_runroot}" in
+    ""|"${desired_runroot}"|"${legacy_runroot}")
+      ;;
+    *)
+      echo "refusing unexpected Podman runroot migration from ${current_runroot}" >&2
+      return 1
+      ;;
+  esac
+
+  runtime_dir="$(podman_runtime_dir)"
+  remove_safe_runtime_dir "${runtime_dir}"
+  rm -rf --one-file-system "${desired_runroot}"
+  rm -rf --one-file-system "${legacy_runroot}"
+  repair_runtime_environment
+
+  install -d -o "${RUNTIME_USER}" -g "${RUNTIME_USER}" -m 0700 "${config_dir}"
+  tmp="$(mktemp "${config_dir}/storage.conf.tmp.XXXXXX")"
+  cat > "${tmp}" <<EOF
+[storage]
+driver = "overlay"
+runroot = "${desired_runroot}"
+graphroot = "${graphroot}"
+EOF
+  chown "${RUNTIME_USER}:${RUNTIME_USER}" "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${storage_conf}"
+  rm -f /mnt/cocalc/data/containers/runroot-migration-pending
+
+  migrate_podman_database_runroot \
+    "${db_path}" "${desired_runroot}" "${legacy_runroot}"
+
+  cgroup_manager="$(read_env_value CONTAINERS_CGROUP_MANAGER)"
+  if [ -z "${cgroup_manager}" ]; then
+    cgroup_manager="cgroupfs"
+  fi
+  run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate
+  reported_runroot="$(
+    run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" \
+      info --format '{{.Store.RunRoot}}'
+  )"
+  if [ "${reported_runroot}" != "${desired_runroot}" ]; then
+    echo "Podman runroot validation failed: expected=${desired_runroot} reported=${reported_runroot}" >&2
+    return 1
+  fi
+  podman_ps_once "${runtime_dir}" "${cgroup_manager}"
 }
 
 preflight_podman_runtime() {
@@ -8583,13 +9168,14 @@ doctor() {
 }
 
 case "${cmd}" in
-  start|ensure|restart|stop|protect)
+  start|ensure|restart|stop|protect|prepare-podman-boot)
     acquire_daemon_control_lock
     ;;
 esac
 
 case "${cmd}" in
   start|ensure)
+    require_podman_boot_preparation_not_failed
     repair_runtime_environment
     preflight_podman_runtime
     reconcile_app_core_dumps
@@ -8598,6 +9184,7 @@ case "${cmd}" in
     attach_running_project_processes || true
     ;;
   restart)
+    require_podman_boot_preparation_not_failed
     repair_runtime_environment
     preflight_podman_runtime
     reconcile_app_core_dumps
@@ -8623,6 +9210,9 @@ case "${cmd}" in
   apply-sysctls)
     apply_project_host_sysctls
     reconcile_app_core_dumps
+    ;;
+  prepare-podman-boot)
+    prepare_podman_boot
     ;;
   noop)
     exit 0
@@ -8650,7 +9240,7 @@ case "${cmd}" in
     doctor
     ;;
   *)
-    echo "usage: ${0} {start|stop|restart|ensure|status|doctor|protect|capture-forensics|apply-sysctls|noop}" >&2
+    echo "usage: ${0} {start|stop|restart|ensure|status|doctor|protect|capture-forensics|apply-sysctls|prepare-podman-boot|noop}" >&2
     exit 2
     ;;
 esac
@@ -8831,6 +9421,7 @@ exec python3 "{bootstrap_py}" --bootstrap-dir "{bootstrap_dir}" --only tools_bun
 def configure_autostart(cfg: BootstrapConfig) -> None:
     log_line(cfg, "bootstrap: configuring project-host autostart")
     runtime_root = project_host_runtime_root(cfg)
+    rootctl = project_host_rootctl_path(cfg)
     watchdog_log = "/mnt/cocalc/data/logs/project-host-watchdog.log"
     watchdog_lock = "/mnt/cocalc/data/tmp/project-host-watchdog.lock"
     watchdog_command = (
@@ -8866,10 +9457,30 @@ Unit=cocalc-project-host-watchdog.service
 [Install]
 WantedBy=timers.target
 """
+    prepare_service = f"""[Unit]
+Description=Prepare CoCalc Podman runtime after boot
+After=mnt-cocalc.mount
+Before=cocalc-project-host-start.service
+Before=google-startup-scripts.service
+RequiresMountsFor=/mnt/cocalc
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/
+ExecStart={rootctl} prepare-podman-boot
+TimeoutStartSec=180
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
     boot_service = f"""[Unit]
 Description=Start CoCalc project-host after boot
-After=network-online.target
+After=network-online.target cocalc-project-host-prepare.service
 Wants=network-online.target
+Requires=cocalc-project-host-prepare.service
 ConditionPathIsMountPoint=/mnt/cocalc
 
 [Service]
@@ -8911,6 +9522,9 @@ WantedBy=multi-user.target
     Path("/etc/systemd/system/cocalc-project-host-watchdog.timer").write_text(
         watchdog_timer, encoding="utf-8"
     )
+    Path("/etc/systemd/system/cocalc-project-host-prepare.service").write_text(
+        prepare_service, encoding="utf-8"
+    )
     Path("/etc/systemd/system/cocalc-project-host-start.service").write_text(
         boot_service, encoding="utf-8"
     )
@@ -8919,9 +9533,15 @@ WantedBy=multi-user.target
     )
     os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-watchdog.timer", 0o644)
+    os.chmod("/etc/systemd/system/cocalc-project-host-prepare.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-start.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-shutdown.service", 0o644)
     run_best_effort(cfg, ["systemctl", "daemon-reload"], "reload systemd")
+    run_best_effort(
+        cfg,
+        ["systemctl", "enable", "cocalc-project-host-prepare.service"],
+        "enable Podman boot preparation service",
+    )
     run_best_effort(
         cfg,
         ["systemctl", "enable", "cocalc-project-host-start.service"],
@@ -9537,6 +10157,8 @@ def run_reconcile_helpers(cfg: BootstrapConfig) -> int:
         write_helpers(cfg)
         configure_runtime_sudoers(cfg)
         verify_runtime_sudoers(cfg)
+        configure_autostart(cfg)
+        reconcile_bees_runtime_policy(cfg)
         reconcile_project_network_limits(cfg)
         reconcile_project_io_policy(cfg)
         reconcile_host_service_cgroup(cfg)

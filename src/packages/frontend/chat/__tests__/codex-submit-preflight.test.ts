@@ -40,6 +40,13 @@ describe("Codex submit preflight", () => {
       isCodexPaymentSourceNeedsUserConfiguration({
         source: "site-api-key",
         siteAiUsageLimitPositive: false,
+        siteFundedCodex: { enabled: true },
+      } as any),
+    ).toBe(true);
+    expect(
+      isCodexPaymentSourceNeedsUserConfiguration({
+        source: "site-api-key",
+        siteAiUsageLimitPositive: false,
       } as any),
     ).toBe(true);
     expect(

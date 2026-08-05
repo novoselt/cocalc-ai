@@ -53,6 +53,11 @@ Table({
       type: "map",
       desc: "Projected read/archive state for the notification row.",
     },
+    revision: {
+      type: "integer",
+      pg_type: "BIGINT",
+      desc: "Monotonic home-bay revision of the projected notification content.",
+    },
     created_at: {
       type: "timestamp",
       desc: "When this notification entered the account projection.",

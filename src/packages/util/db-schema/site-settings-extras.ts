@@ -296,6 +296,22 @@ export type SiteSettingsExtrasKeys =
   | "email_smtp_password"
   | "openai_section"
   | "openai_api_key"
+  | "site_funded_codex_heading"
+  | "site_funded_codex_enabled"
+  | "site_funded_codex_model"
+  | "site_funded_codex_reasoning"
+  | "site_funded_codex_service_tier"
+  | "site_funded_codex_global_pool_weekly_usd"
+  | "site_funded_codex_free_pool_weekly_usd"
+  | "site_funded_codex_paid_pool_weekly_usd"
+  | "site_funded_codex_max_turn_usd"
+  | "site_funded_codex_max_turn_seconds"
+  | "site_funded_codex_max_input_tokens_per_request"
+  | "site_funded_codex_max_output_tokens_per_request"
+  | "site_funded_codex_max_requests_per_turn"
+  | "site_funded_codex_global_concurrency"
+  | "site_funded_codex_openai_admin_key"
+  | "site_funded_codex_openai_project_id"
   | "google_vertexai_key"
   | "ollama_configuration"
   | "custom_openai_configuration"
@@ -323,6 +339,21 @@ export type SiteSettingsExtrasKeys =
   | "prometheus_metrics_allowlist"
   | "pay_as_you_go_section"
   | "pay_as_you_go_min_payment"
+  | "compute_vm_mode"
+  | "compute_vm_emergency_stop"
+  | "compute_vm_admin_allowlist"
+  | "compute_vm_gcp_service_account_json"
+  | "compute_vm_gcp_subnetwork"
+  | "compute_vm_gcp_network_tag"
+  | "compute_vm_max_active_per_account"
+  | "compute_vm_max_active_total"
+  | "compute_vm_max_vcpus"
+  | "compute_vm_max_ttl_minutes"
+  | "compute_vm_max_boot_disk_gb"
+  | "compute_vm_max_authorized_cost_usd"
+  | "compute_vm_max_project_budget_usd"
+  | "compute_vm_max_volumes_per_account"
+  | "compute_vm_max_volume_gb"
   | "lambda_cloud_api_key"
   | "project_hosts_lambda_prefix"
   | "nebius_region_config_json"
@@ -881,6 +912,183 @@ export const EXTRAS: SettingsExtras = {
     group: "AI & Agents",
     subgroup: "OpenAI",
   },
+  site_funded_codex_heading: {
+    name: "Site-Funded Codex",
+    desc: "Hard financial and policy controls for Codex turns paid for by the site's OpenAI API key.",
+    default: "",
+    type: "header",
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 10,
+  },
+  site_funded_codex_enabled: {
+    name: "Enable Site-Funded Codex",
+    desc: "Allow eligible accounts to use the site OpenAI key through the bounded funded proxy. Disabling this leaves personal ChatGPT and API-key access unchanged.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 20,
+  },
+  site_funded_codex_model: {
+    name: "Funded Codex Model",
+    desc: "Exact model permitted for site-funded turns. Models without a verified funded price fail closed.",
+    default: "gpt-5.6-luna",
+    valid: (value) => value === "gpt-5.6-luna",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 30,
+  },
+  site_funded_codex_reasoning: {
+    name: "Funded Codex Reasoning",
+    desc: "Reasoning level forced at the backend and provider proxy for site-funded turns. Medium is the default; low remains available as a lower-cost operator override.",
+    default: "medium",
+    valid: (value) => value === "low" || value === "medium",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 40,
+  },
+  site_funded_codex_service_tier: {
+    name: "Funded Codex Speed",
+    desc: "Provider service tier forced for site-funded turns.",
+    default: "standard",
+    valid: (value) => value === "standard",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 50,
+  },
+  site_funded_codex_global_pool_weekly_usd: {
+    name: "Combined Weekly Budget (USD)",
+    desc: "Hard weekly ceiling across all free and paid site-funded Codex usage. The free and paid limits below are sub-pool ceilings and cannot exceed this combined budget in aggregate.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 60,
+  },
+  site_funded_codex_free_pool_weekly_usd: {
+    name: "Free Sub-Pool Weekly Limit (USD)",
+    desc: "Weekly ceiling reserved for free-account usage, still bounded by the combined weekly budget.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 70,
+  },
+  site_funded_codex_paid_pool_weekly_usd: {
+    name: "Paid Sub-Pool Weekly Limit (USD)",
+    desc: "Weekly ceiling for paid-member usage, still bounded by the combined weekly budget.",
+    default: "100",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 80,
+  },
+  site_funded_codex_max_turn_usd: {
+    name: "Emergency Maximum Funded Turn Cost (USD)",
+    desc: "Generous emergency ceiling for one turn, not a normal UX limit. The ledger reserves this exposure before admission and releases unused funds when the turn finishes.",
+    default: "0.25",
+    valid: onlyPosFloat,
+    to_val: toFloat,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 200,
+  },
+  site_funded_codex_max_turn_seconds: {
+    name: "Emergency Maximum Turn Duration (seconds)",
+    desc: "Generous emergency guard against abandoned or runaway turns. Normal turns should finish well below it.",
+    default: "3600",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 210,
+  },
+  site_funded_codex_max_input_tokens_per_request: {
+    name: "Funded Codex Context Window (tokens)",
+    desc: "Context window advertised directly to Codex. Codex automatically compacts thread history at 75% of this value, so long-running threads remain usable instead of being rejected by the funding proxy.",
+    default: "128000",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 220,
+  },
+  site_funded_codex_max_output_tokens_per_request: {
+    name: "Emergency Maximum Output Tokens per Request",
+    desc: "Generous provider-output guard. It should not truncate ordinary Codex work.",
+    default: "32000",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 230,
+  },
+  site_funded_codex_max_requests_per_turn: {
+    name: "Emergency Maximum Provider Requests per Turn",
+    desc: "Generous runaway-loop guard. It should not stop normal multi-step Codex work.",
+    default: "256",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    advanced: true,
+    order: 240,
+  },
+  site_funded_codex_global_concurrency: {
+    name: "Global Funded Turn Concurrency",
+    desc: "Maximum active site-funded turns across the global pool, independent of its dollar limit.",
+    default: "50",
+    valid: only_pos_int,
+    to_val: to_int,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 90,
+  },
+  site_funded_codex_openai_admin_key: {
+    name: "OpenAI Organization Admin Key",
+    desc: "Optional organization-level OpenAI admin key used only to compare CoCalc's funded-usage ledger with OpenAI's Costs API. It is not used to run Codex turns and is distinct from the OpenAI API key above.",
+    default: "",
+    password: true,
+    tags: ["AI", "OpenAI", "Commercialization", "Security"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 110,
+  },
+  site_funded_codex_openai_project_id: {
+    name: "OpenAI Platform Project ID (proj_...)",
+    desc: "Optional OpenAI Platform project that owns the API key used for included Codex turns. Use a dedicated project and API key, and configure that project with an enforced hard spend limit rather than only a notification threshold. Set this ID together with the organization admin key to compare OpenAI's reported project costs with CoCalc's ledger.",
+    default: "",
+    to_val: to_trimmed_str,
+    tags: ["AI", "OpenAI", "Commercialization"],
+    group: "AI & Agents",
+    subgroup: "Site-Funded Codex",
+    order: 100,
+  },
   google_vertexai_key: {
     name: "Google Generative AI API Key",
     desc: "Create an [API Key](https://aistudio.google.com/app/apikey) in [Google's AI Studio](https://aistudio.google.com/) and paste it here.",
@@ -1413,6 +1621,176 @@ export const EXTRAS: SettingsExtras = {
     tags: ["Pay as you Go"],
     group: "Payments & Billing",
     subgroup: "Pay as you Go",
+  },
+  compute_vm_mode: {
+    name: "Managed Compute VMs: Mode",
+    desc: "Controls the account-owned VM control plane. `disabled` and `reconcile_only` reject create/start while preserving stop, delete, and hard-TTL cleanup. `admin_canary` permits only allowlisted administrators. `enabled` is reserved for a future billed customer release.",
+    default: "auto",
+    to_val: to_trimmed_str,
+    valid: (value) =>
+      [
+        "auto",
+        "disabled",
+        "reconcile_only",
+        "admin_canary",
+        "enabled",
+      ].includes(`${value ?? ""}`.trim().toLowerCase()),
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Admission",
+  },
+  compute_vm_emergency_stop: {
+    name: "Managed Compute VMs: Emergency Stop",
+    desc: "Immediately reject VM create/start and durably request every active managed VM to stop. Deletion and hard-TTL cleanup remain enabled.",
+    default: "no",
+    to_val: to_bool,
+    valid: only_booleans,
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Admission",
+  },
+  compute_vm_admin_allowlist: {
+    name: "Managed Compute VMs: Administrator Allowlist",
+    desc: "Comma- or whitespace-separated account UUIDs permitted while mode is `admin_canary`. Staging `auto` mode permits administrators for development; production `auto` mode is disabled.",
+    default: "",
+    to_val: to_trimmed_str,
+    multiline: 3,
+    valid: () => true,
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Admission",
+  },
+  compute_vm_gcp_service_account_json: {
+    name: "Managed Compute VMs: GCP Service Account JSON",
+    desc: "Dedicated credentials for the isolated hostile-guest compute project. Production VM operations fail closed when this is absent and never fall back to project-host credentials.",
+    default: "",
+    multiline: 5,
+    password: true,
+    to_val: to_trimmed_str,
+    valid: (value) => {
+      const text = `${value ?? ""}`.trim();
+      if (!text) return true;
+      try {
+        const parsed = JSON.parse(text);
+        return !!parsed?.project_id && !!parsed?.client_email;
+      } catch {
+        return false;
+      }
+    },
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "GCP Isolation",
+  },
+  compute_vm_gcp_subnetwork: {
+    name: "Managed Compute VMs: GCP Subnetwork",
+    desc: "Full subnetwork URI in the dedicated compute project. Production creation fails closed unless this is configured.",
+    default: "",
+    to_val: to_trimmed_str,
+    valid: () => true,
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "GCP Isolation",
+  },
+  compute_vm_gcp_network_tag: {
+    name: "Managed Compute VMs: GCP Network Tag",
+    desc: "Network tag whose dedicated firewall policy permits SSH and denies east-west access.",
+    default: "cocalc-compute-vm",
+    to_val: to_trimmed_str,
+    valid: (value) =>
+      /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/.test(`${value ?? ""}`),
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "GCP Isolation",
+  },
+  compute_vm_max_active_per_account: {
+    name: "Managed Compute VMs: Maximum Active Per Account",
+    desc: "Maximum undeleted VM leases owned by one account.",
+    default: "1",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_active_total: {
+    name: "Managed Compute VMs: Maximum Active Site-wide",
+    desc: "Maximum undeleted VM leases across this bay during the canary.",
+    default: "4",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_vcpus: {
+    name: "Managed Compute VMs: Maximum vCPUs Per VM",
+    desc: "Largest machine allowed by the canary admission policy.",
+    default: "16",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_ttl_minutes: {
+    name: "Managed Compute VMs: Maximum TTL Minutes",
+    desc: "Hard upper bound for a VM lease. The guest cannot extend this deadline.",
+    default: "1440",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_boot_disk_gb: {
+    name: "Managed Compute VMs: Maximum Boot Disk GB",
+    desc: "Largest persistent root disk allowed for a VM lease.",
+    default: "200",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_authorized_cost_usd: {
+    name: "Managed Compute VMs: Maximum Authorized Cost USD",
+    desc: "Maximum fixed compute authorization accepted for one admin-canary lease.",
+    default: "25",
+    to_val: toFloat,
+    valid: onlyPosFloat,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_project_budget_usd: {
+    name: "Managed Compute VMs: Maximum Project Budget USD",
+    desc: "Maximum recurring weekly or monthly managed-compute budget an account may authorize for one project.",
+    default: "1000",
+    to_val: toFloat,
+    valid: onlyPosFloat,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_volumes_per_account: {
+    name: "Managed Compute VMs: Maximum Volumes Per Account",
+    desc: "Maximum undeleted persistent /work volumes owned by one canary account.",
+    default: "2",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_volume_gb: {
+    name: "Managed Compute VMs: Maximum Volume GB",
+    desc: "Largest persistent /work volume allowed by the canary.",
+    default: "500",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
   },
   subscription_maintenance: {
     name: "Subscription Maintenance Parameters",

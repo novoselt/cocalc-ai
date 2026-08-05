@@ -15,6 +15,14 @@ export interface CodexModelInfo {
 export type CodexReasoningId = CodexReasoningLevel["id"];
 export type CodexServiceTier = "standard" | "fast";
 
+export type CodexPaymentSourcePreference =
+  | "auto"
+  | "subscription"
+  | "project-api-key"
+  | "account-api-key"
+  | "site-api-key"
+  | "shared-home";
+
 export interface CodexServiceTierInfo {
   id: CodexServiceTier;
   label: string;
@@ -38,6 +46,7 @@ export interface CodexSessionConfig {
   sessionMode?: CodexSessionMode;
   env?: Record<string, string>;
   codexPathOverride?: string;
+  paymentSource?: CodexPaymentSourcePreference;
 }
 
 export function normalizeCodexSessionId(

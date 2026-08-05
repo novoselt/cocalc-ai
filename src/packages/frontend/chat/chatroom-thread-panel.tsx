@@ -4,6 +4,7 @@
  */
 
 import {
+  Alert,
   Button,
   Input,
   message as antdMessage,
@@ -39,6 +40,7 @@ import {
   resolveCodexSessionMode,
   type CodexReasoningLevel,
   type CodexReasoningId,
+  type CodexPaymentSourcePreference,
   type CodexServiceTier,
   type CodexSessionMode,
 } from "@cocalc/util/ai/codex";
@@ -84,6 +86,7 @@ import {
 import { resolveAgentSessionIdForThread } from "./thread-session";
 import { useCodexLiveActivityStatus } from "./use-codex-log";
 import { CodexFullAccessNotice } from "./codex-full-access";
+import { getCodexPaymentSourceOptions } from "./use-codex-payment-source";
 import {
   automationConfigMissingReason,
   AutomationConfigFields,
@@ -264,6 +267,7 @@ export function getDefaultNewThreadSetup(): NewThreadSetup {
       sessionMode: defaults.sessionMode,
       reasoning: defaults.reasoning,
       serviceTier: defaults.serviceTier,
+      paymentSource: "auto",
     },
     automationConfig: getDefaultAutomationConfig({ enabled: false }),
   };
@@ -1240,6 +1244,13 @@ export function ChatRoomThreadPanel({
         normalizeSessionMode(newThreadSetup.codexConfig) ?? defaultSessionMode,
     };
     const codexFastModeSupported = codexModelSupportsFastMode(codexModel);
+    const paymentSourceOptions =
+      getCodexPaymentSourceOptions(codexPaymentSource);
+    const siteFundedPolicy =
+      codexPaymentSource?.source === "site-api-key" &&
+      codexPaymentSource.siteFundedCodex?.enabled
+        ? codexPaymentSource.siteFundedCodex.policy
+        : undefined;
     const stagedCodexMatchesDefault = codexNewChatDefaultsEqual(
       stagedCodexDefaults,
       defaultNewChatCodexDefaults,
@@ -1488,6 +1499,40 @@ export function ChatRoomThreadPanel({
           </div>
           {newThreadSetup.agentMode === "codex" && (
             <>
+              {!lite ? (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ marginBottom: 4, color: COLORS.GRAY_D }}>
+                    Payment source
+                  </div>
+                  <Select
+                    value={newThreadSetup.codexConfig.paymentSource ?? "auto"}
+                    style={{ width: "100%" }}
+                    options={paymentSourceOptions}
+                    optionRender={(option) =>
+                      renderOptionWithDescription({
+                        title: `${option.data.label}`,
+                        description: option.data.description,
+                      })
+                    }
+                    onChange={(value: CodexPaymentSourcePreference) =>
+                      update({
+                        codexConfig: {
+                          ...newThreadSetup.codexConfig,
+                          paymentSource: value,
+                        },
+                      })
+                    }
+                  />
+                  {siteFundedPolicy ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginTop: 8 }}
+                      message={`Your CoCalc Membership uses ${siteFundedPolicy.model} with ${siteFundedPolicy.reasoning} reasoning.`}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
               <div
                 style={{
                   display: "grid",
@@ -1502,6 +1547,7 @@ export function ChatRoomThreadPanel({
                   </div>
                   <Select
                     value={codexModel}
+                    disabled={siteFundedPolicy != null}
                     style={{ width: "100%" }}
                     options={codexModelOptions}
                     optionRender={(option) =>
@@ -1538,6 +1584,7 @@ export function ChatRoomThreadPanel({
                   </div>
                   <Select
                     allowClear
+                    disabled={siteFundedPolicy != null}
                     value={newThreadSetup.codexConfig.reasoning}
                     style={{ width: "100%" }}
                     options={codexReasoningOptions}
@@ -1565,6 +1612,7 @@ export function ChatRoomThreadPanel({
                   </div>
                   <Select
                     value={stagedCodexDefaults.serviceTier}
+                    disabled={siteFundedPolicy != null}
                     style={{ width: "100%" }}
                     options={[
                       { value: "standard", label: "Standard" },

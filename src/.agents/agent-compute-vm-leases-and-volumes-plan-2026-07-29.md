@@ -7,6 +7,12 @@ Last revised: 2026-08-01
 Status: proposed implementation plan; this document does not change runtime or
 production behavior.
 
+> **Superseded:** The implementation scope was replaced on 2026-08-01 by
+> [Project Compute VM MVP Implementation Plan](./project-compute-vm-mvp-implementation-plan-2026-08-01.md).
+> This document is retained as design history and as a reference for deferred
+> Codex orchestration, egress metering, and remote-job ideas. New implementation
+> work should follow the replacement plan.
+
 ## Executive Decision
 
 Build a deliberately small GCP-only compute product for AI agents:

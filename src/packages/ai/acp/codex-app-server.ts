@@ -29,6 +29,8 @@ import {
   type CodexAppServerLoginHint,
   type CodexProjectContainerPathMap,
   type CodexAppServerRequestHandler,
+  type CodexSiteFundedTurnRequest,
+  type CodexSiteFundedTurnRuntime,
 } from "./codex-project";
 import { getCodexSiteKeyGovernor } from "./codex-site-key-governor";
 import {
@@ -60,6 +62,14 @@ const TURN_NOTIFICATION_IDLE_TIMEOUT_MS = Math.max(
 const SESSION_TRUNCATE_CHECK_INTERVAL_MS = Math.max(
   60_000,
   Number(process.env.COCALC_CODEX_SESSION_TRUNCATE_INTERVAL_MS ?? 15 * 60_000),
+);
+const APP_SERVER_IDLE_EXIT_MS = Math.max(
+  0,
+  Number(process.env.COCALC_CODEX_APP_SERVER_IDLE_EXIT_MS ?? 10 * 60_000),
+);
+const BACKGROUND_TERMINAL_POLL_MS = Math.max(
+  5_000,
+  Number(process.env.COCALC_CODEX_BACKGROUND_TERMINAL_POLL_MS ?? 30_000),
 );
 
 const ANSI_ESCAPE_RE = /\u001b\[[0-9;]*m/g;
@@ -319,12 +329,14 @@ type SpawnedCodexAppServer = {
   proc: ReturnType<typeof spawn>;
   cmd: string;
   args: string[];
+  logArgs?: string;
   cwd?: string;
   authSource?: string;
   containerPathMap?: CodexProjectContainerPathMap;
   appServerLogin?: CodexAppServerLoginHint;
   handleAppServerRequest?: CodexAppServerRequestHandler;
   runtimeEnv?: Record<string, string>;
+  siteFundedTurn?: CodexSiteFundedTurnRuntime;
 };
 
 function authSourceForSpawned(
@@ -374,7 +386,24 @@ type RunningTurn = {
   stop: () => Promise<void>;
   interrupted: boolean;
   turnId?: string;
-  exited: Promise<void>;
+};
+
+type CodexAppServerRuntime = {
+  key: string;
+  aliases: Set<string>;
+  projectId: string;
+  accountId: string;
+  cwd: string;
+  paymentSource: CodexSessionConfig["paymentSource"];
+  spawned: SpawnedCodexAppServer;
+  client: AppServerClient;
+  fundedTurn?: CodexSiteFundedTurnRuntime;
+  threadId?: string;
+  active: boolean;
+  backgroundTerminalCount: number;
+  idleTimer?: NodeJS.Timeout;
+  backgroundPollTimer?: NodeJS.Timeout;
+  disposed: boolean;
 };
 
 type RetryableAppServerFailureKind =
@@ -460,10 +489,17 @@ class AppServerClient {
       this.exited = true;
       this.exitDetail = signal ? `signal:${signal}` : `${code ?? "?"}`;
       const stderrTail = this.getStderrTail();
+      const userFacingStderrTail = getUserFacingStderrTail(stderrTail);
       const stderrDetail =
-        stderrTail.length > 0 ? `; stderr tail: ${stderrTail.join("\n")}` : "";
+        userFacingStderrTail.length > 0
+          ? `; stderr: ${userFacingStderrTail.join("\n")}`
+          : "";
+      const blockedCommandError = userFacingStderrTail.find((line) =>
+        line.startsWith("Codex blocked a command:"),
+      );
       const err = new Error(
-        `codex app-server exited unexpectedly: ${this.exitDetail}${stderrDetail}`,
+        blockedCommandError ??
+          `codex app-server exited unexpectedly: ${this.exitDetail}${stderrDetail}`,
       ) as Error & { stderrTail?: string[] };
       err.stderrTail = stderrTail;
       for (const [, pending] of this.pendingRequests) {
@@ -661,6 +697,29 @@ function normalizeErrorMessages(errors: string[]): string[] {
     normalized.push(value);
   }
   return normalized;
+}
+
+function isRoutineBundledBubblewrapWarning(line: string): boolean {
+  const normalized = stripAnsi(line).toLowerCase();
+  return (
+    normalized.includes("codex could not find bubblewrap on path") &&
+    normalized.includes("will use the bundled bubblewrap")
+  );
+}
+
+function getUserFacingStderrTail(lines: string[]): string[] {
+  const filtered = normalizeErrorMessages(lines).filter(
+    (line) => !isRoutineBundledBubblewrapWarning(line),
+  );
+  const rejected = filtered
+    .join("\n")
+    .match(/\brejected:\s*([^"\n]+)/i)?.[1]
+    ?.trim();
+  if (rejected) {
+    const message = rejected.replace(/[\s)}]+$/, "");
+    return [`Codex blocked a command: ${message}`];
+  }
+  return filtered;
 }
 
 function formatAppServerError(errors: string[]): string {
@@ -1566,14 +1625,21 @@ export async function getCodexAppServerAccountStatus(opts: {
     await client.initialize(timeoutMs);
     const appServerLogin = spawned.appServerLogin ?? opts.appServerLogin;
     await loginAppServerIfNeeded(client, appServerLogin, timeoutMs);
-    const [accountResult, rateLimitsResult] = await Promise.allSettled([
+    // account/read may refresh an expired ChatGPT access token. Wait for that
+    // refresh before asking for rate limits, or the two requests can race and
+    // make a successful reconnect fail its immediate verification probe.
+    const [accountResult] = await Promise.allSettled([
       client.request("account/read", { refreshToken: true }, timeoutMs),
+    ]);
+    const [rateLimitsResult] = await Promise.allSettled([
       client.request("account/rateLimits/read", {}, timeoutMs),
     ]);
     let rateLimits = settledValue(rateLimitsResult);
     if (isRateLimitsAuthError(rateLimits.error) && appServerLogin) {
       try {
-        await loginAppServerIfNeeded(client, appServerLogin, timeoutMs);
+        // account/read has already had a chance to refresh the app-server's
+        // token. Do not log in again with the originally captured token here:
+        // that can replace the refreshed token with the stale one.
         rateLimits = {
           value: await client.request("account/rateLimits/read", {}, timeoutMs),
         };
@@ -1624,8 +1690,276 @@ export class CodexAppServerAgent implements AcpAgent {
 
   private readonly sessions = new Map<string, SessionStoreEntry>();
   private readonly running = new Map<string, RunningTurn>();
+  private readonly runtimes = new Set<CodexAppServerRuntime>();
+  private readonly runtimesByAlias = new Map<string, CodexAppServerRuntime>();
   private readonly lastSessionTruncateAt = new Map<string, number>();
   private readonly truncatingSessions = new Set<string>();
+
+  private registerRuntimeAlias(
+    runtime: CodexAppServerRuntime,
+    alias: string | undefined,
+  ): void {
+    const normalized = normalizeCodexSessionId(alias);
+    if (!normalized) return;
+    runtime.aliases.add(normalized);
+    this.runtimesByAlias.set(normalized, runtime);
+  }
+
+  private clearRuntimeTimers(runtime: CodexAppServerRuntime): void {
+    if (runtime.idleTimer) {
+      clearTimeout(runtime.idleTimer);
+      runtime.idleTimer = undefined;
+    }
+    if (runtime.backgroundPollTimer) {
+      clearTimeout(runtime.backgroundPollTimer);
+      runtime.backgroundPollTimer = undefined;
+    }
+  }
+
+  private removeRuntime(runtime: CodexAppServerRuntime): void {
+    this.clearRuntimeTimers(runtime);
+    this.runtimes.delete(runtime);
+    for (const alias of runtime.aliases) {
+      if (this.runtimesByAlias.get(alias) === runtime) {
+        this.runtimesByAlias.delete(alias);
+      }
+    }
+  }
+
+  private async disposeRuntime(
+    runtime: CodexAppServerRuntime,
+    reason: string,
+  ): Promise<void> {
+    if (runtime.disposed) return;
+    runtime.disposed = true;
+    this.removeRuntime(runtime);
+    logger.debug("codex app-server: disposing retained runtime", {
+      threadId: runtime.threadId,
+      projectId: runtime.projectId,
+      accountId: runtime.accountId,
+      backgroundTerminals: runtime.backgroundTerminalCount,
+      reason,
+    });
+    if (runtime.spawned.siteFundedTurn) {
+      try {
+        await runtime.spawned.siteFundedTurn.close();
+      } catch (err) {
+        logger.warn("codex app-server: failed closing funded runtime", {
+          threadId: runtime.threadId,
+          err: `${err}`,
+        });
+      }
+    }
+    if (runtime.spawned.proc.exitCode == null && !runtime.spawned.proc.killed) {
+      runtime.spawned.proc.kill("SIGKILL");
+    }
+  }
+
+  private async listBackgroundTerminals(
+    runtime: CodexAppServerRuntime,
+  ): Promise<number> {
+    const threadId = runtime.threadId;
+    if (!threadId || runtime.disposed) return 0;
+    let cursor: string | null | undefined;
+    let count = 0;
+    do {
+      const result = await runtime.client.request(
+        "thread/backgroundTerminals/list",
+        {
+          threadId,
+          cursor,
+          limit: 100,
+        },
+      );
+      count += Array.isArray(result?.data) ? result.data.length : 0;
+      cursor = result?.nextCursor ?? null;
+    } while (cursor);
+    runtime.backgroundTerminalCount = count;
+    return count;
+  }
+
+  private scheduleRuntimeIdleExit(runtime: CodexAppServerRuntime): void {
+    if (runtime.disposed || runtime.active || runtime.backgroundTerminalCount) {
+      return;
+    }
+    if (runtime.idleTimer) clearTimeout(runtime.idleTimer);
+    runtime.idleTimer = setTimeout(() => {
+      runtime.idleTimer = undefined;
+      if (
+        runtime.disposed ||
+        runtime.active ||
+        runtime.backgroundTerminalCount
+      ) {
+        return;
+      }
+      void this.disposeRuntime(runtime, "idle timeout");
+    }, APP_SERVER_IDLE_EXIT_MS);
+    runtime.idleTimer.unref?.();
+  }
+
+  private scheduleBackgroundTerminalPoll(runtime: CodexAppServerRuntime): void {
+    if (runtime.disposed || runtime.backgroundPollTimer) return;
+    runtime.backgroundPollTimer = setTimeout(() => {
+      runtime.backgroundPollTimer = undefined;
+      if (runtime.disposed) return;
+      void this.refreshRuntimeLifecycle(runtime);
+    }, BACKGROUND_TERMINAL_POLL_MS);
+    runtime.backgroundPollTimer.unref?.();
+  }
+
+  private async refreshRuntimeLifecycle(
+    runtime: CodexAppServerRuntime,
+  ): Promise<void> {
+    if (runtime.disposed || runtime.active) return;
+    try {
+      const count = await this.listBackgroundTerminals(runtime);
+      if (count > 0) {
+        if (runtime.idleTimer) {
+          clearTimeout(runtime.idleTimer);
+          runtime.idleTimer = undefined;
+        }
+        this.scheduleBackgroundTerminalPoll(runtime);
+        return;
+      }
+    } catch (err) {
+      logger.warn("codex app-server: failed listing background terminals", {
+        threadId: runtime.threadId,
+        err: `${err}`,
+      });
+      // A failed liveness query must not destroy a process that might own work.
+      this.scheduleBackgroundTerminalPoll(runtime);
+      return;
+    }
+    this.scheduleRuntimeIdleExit(runtime);
+  }
+
+  private runtimeMatchesRequest(
+    runtime: CodexAppServerRuntime,
+    request: AcpEvaluateRequest,
+    cwd: string,
+  ): boolean {
+    return (
+      runtime.projectId === (request.chat?.project_id ?? request.project_id) &&
+      runtime.accountId === request.account_id &&
+      runtime.cwd === cwd &&
+      (runtime.paymentSource ?? "auto") ===
+        (request.config?.paymentSource ?? "auto")
+    );
+  }
+
+  private async acquireRuntime({
+    request,
+    session,
+    cwd,
+    runtimeEnv,
+  }: {
+    request: AcpEvaluateRequest;
+    session: SessionStoreEntry;
+    cwd: string;
+    runtimeEnv: Record<string, string>;
+  }): Promise<{ runtime: CodexAppServerRuntime; created: boolean }> {
+    let runtime = this.runtimesByAlias.get(session.sessionId);
+    if (runtime && !this.runtimeMatchesRequest(runtime, request, cwd)) {
+      let backgroundTerminalCount = runtime.backgroundTerminalCount;
+      try {
+        backgroundTerminalCount = await this.listBackgroundTerminals(runtime);
+      } catch {
+        // Preserve the runtime when we cannot prove it owns no processes.
+        backgroundTerminalCount = Math.max(1, backgroundTerminalCount);
+      }
+      if (backgroundTerminalCount > 0) {
+        throw new Error(
+          "This Codex thread still has background commands running. Wait for them to finish or stop them before changing its payment source or runtime.",
+        );
+      }
+      await this.disposeRuntime(runtime, "runtime configuration changed");
+      runtime = undefined;
+    }
+    if (runtime) {
+      if (runtime.active) {
+        throw new Error("This Codex thread already has an active turn.");
+      }
+      this.clearRuntimeTimers(runtime);
+      runtime.active = true;
+      if (runtime.spawned.siteFundedTurn) {
+        try {
+          runtime.fundedTurn = await runtime.spawned.siteFundedTurn.beginTurn({
+            fundedTurnId: randomUUID(),
+            idempotencyKey: randomUUID(),
+            path: request.chat?.path,
+          });
+        } catch (err) {
+          runtime.active = false;
+          void this.refreshRuntimeLifecycle(runtime);
+          throw err;
+        }
+      }
+      return { runtime, created: false };
+    }
+
+    const spawned = await this.spawnAppServer({
+      projectId: request.chat?.project_id ?? request.project_id,
+      accountId: request.account_id,
+      cwd,
+      env: runtimeEnv,
+      siteFundedTurn: {
+        fundedTurnId: randomUUID(),
+        idempotencyKey: randomUUID(),
+        path: request.chat?.path,
+      },
+      paymentSource: request.config?.paymentSource,
+    });
+    const client = new AppServerClient(
+      spawned.proc,
+      spawned.handleAppServerRequest,
+    );
+    try {
+      await client.initialize();
+      await loginAppServerIfNeeded(client, spawned.appServerLogin);
+    } catch (err) {
+      if (spawned.siteFundedTurn) {
+        try {
+          await spawned.siteFundedTurn.finish({
+            status: "failed",
+            outcome: "app-server initialization failed",
+          });
+        } catch (finishErr) {
+          logger.warn(
+            "codex app-server: failed releasing initialization reservation",
+            {
+              reservationId: spawned.siteFundedTurn.reservation.reservationId,
+              err: `${finishErr}`,
+            },
+          );
+        }
+      }
+      if (spawned.proc.exitCode == null && !spawned.proc.killed) {
+        spawned.proc.kill("SIGKILL");
+      }
+      throw err;
+    }
+    runtime = {
+      key: session.sessionId,
+      aliases: new Set(),
+      projectId: request.chat?.project_id ?? request.project_id,
+      accountId: request.account_id,
+      cwd,
+      paymentSource: request.config?.paymentSource,
+      spawned,
+      client,
+      fundedTurn: spawned.siteFundedTurn,
+      active: true,
+      backgroundTerminalCount: 0,
+      disposed: false,
+    };
+    this.runtimes.add(runtime);
+    this.registerRuntimeAlias(runtime, session.sessionId);
+    spawned.proc.once("exit", () => {
+      runtime!.disposed = true;
+      this.removeRuntime(runtime!);
+    });
+    return { runtime, created: true };
+  }
 
   async evaluate(request: AcpEvaluateRequest): Promise<void> {
     let maxRetries = 0;
@@ -1683,7 +2017,12 @@ export class CodexAppServerAgent implements AcpAgent {
     request: AcpEvaluateRequest,
   ): Promise<"completed" | "interrupted"> {
     const { prompt, stream, session_id, config } = request;
-    const session = this.resolveSession(session_id, config);
+    const requestedSessionKey = normalizeCodexSessionId(session_id);
+    const persistedSessionId = normalizeCodexSessionId(config?.sessionId);
+    const hasEstablishedSession =
+      persistedSessionId != null ||
+      (requestedSessionKey != null && this.sessions.has(requestedSessionKey));
+    let session = this.resolveSession(session_id, config);
     const runtimeEnv = Object.fromEntries(
       Object.entries({
         ...(this.opts.env ?? {}),
@@ -1691,22 +2030,31 @@ export class CodexAppServerAgent implements AcpAgent {
       }).filter(([, value]) => typeof value === "string"),
     ) as Record<string, string>;
     const cwd = this.resolveCwd(config);
-    const spawned = await this.spawnAppServer({
-      projectId: request.chat?.project_id ?? request.project_id,
-      accountId: request.account_id,
+    const { runtime } = await this.acquireRuntime({
+      request,
+      session,
       cwd,
-      env: runtimeEnv,
+      runtimeEnv,
     });
+    const { spawned, client } = runtime;
+    const fundedTurn = runtime.fundedTurn;
+    const effectiveConfig: CodexSessionConfig | undefined = fundedTurn
+      ? {
+          ...config,
+          model: fundedTurn.policy.model,
+          reasoning: fundedTurn.policy.reasoning,
+          serviceTier: fundedTurn.policy.serviceTier,
+        }
+      : config;
+    if (effectiveConfig !== config) {
+      session = this.resolveSession(session_id, effectiveConfig);
+    }
     const turnEnv = Object.fromEntries(
       Object.entries({
         ...runtimeEnv,
         ...(spawned.runtimeEnv ?? {}),
       }).filter(([, value]) => typeof value === "string" && !!`${value}`),
     ) as Record<string, string>;
-    const client = new AppServerClient(
-      spawned.proc,
-      spawned.handleAppServerRequest,
-    );
     if (shouldClearActiveGoalBeforeTurn(request)) {
       clearPersistedCodexGoalsBeforeTurn({ spawned, cwd });
     }
@@ -1732,6 +2080,7 @@ export class CodexAppServerAgent implements AcpAgent {
     const siteKeyGovernor = getCodexSiteKeyGovernor();
     const siteKeyEnforced =
       spawned.authSource === "site-api-key" &&
+      !fundedTurn &&
       !!siteKeyGovernor &&
       !!request.account_id &&
       !!(request.chat?.project_id ?? request.project_id);
@@ -1740,25 +2089,9 @@ export class CodexAppServerAgent implements AcpAgent {
     let quotaCheckInFlight = false;
     let quotaStopReason: string | undefined;
     const attemptStartedAt = Date.now();
-
-    let resolveExited: (() => void) | undefined;
-    const exited = new Promise<void>((resolve) => {
-      let settled = false;
-      resolveExited = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-    });
-    spawned.proc.once("exit", () => resolveExited?.());
-    spawned.proc.once("close", () => resolveExited?.());
-    spawned.proc.once("error", () => resolveExited?.());
-
-    const stop = async () => {
-      if (spawned.proc.exitCode == null && !spawned.proc.killed) {
-        spawned.proc.kill("SIGKILL");
-      }
-    };
+    let fundedFinishStatus: "committed" | "interrupted" | "failed" = "failed";
+    let fundedFinishOutcome = "turn failed";
+    let runtimeHealthy = false;
 
     const setRunningKey = (nextThreadId: string) => {
       if (!nextThreadId || currentThreadId === nextThreadId) {
@@ -1803,7 +2136,7 @@ export class CodexAppServerAgent implements AcpAgent {
         const verdict = await siteKeyGovernor.checkAllowed({
           accountId: request.account_id,
           projectId,
-          model: this.effectiveModel(config),
+          model: this.effectiveModel(effectiveConfig),
           phase,
         });
         if (!verdict.allowed) {
@@ -1841,16 +2174,11 @@ export class CodexAppServerAgent implements AcpAgent {
               });
             }
           }
-          await stop();
-          await exited;
         },
         interrupted: false,
-        exited,
       };
       this.running.set(currentThreadId, runningEntry);
 
-      await client.initialize();
-      await loginAppServerIfNeeded(client, spawned.appServerLogin);
       await checkQuota("start");
       if (quotaStopReason) {
         throw new Error(formatAppServerError(errors));
@@ -1858,27 +2186,30 @@ export class CodexAppServerAgent implements AcpAgent {
       await stream({ type: "status", state: "queued" });
 
       let threadResult: any;
-      const requestedSessionKey =
-        normalizeCodexSessionId(config?.sessionId) ??
+      const requestedThreadKey =
+        normalizeCodexSessionId(effectiveConfig?.sessionId) ??
         normalizeCodexSessionId(session_id);
-      const resumeId = requestedSessionKey ? session.sessionId : undefined;
-      const model = this.effectiveModel(config);
-      const serviceTier = this.resolveAppServerServiceTier(config, model);
+      const resumeId = requestedThreadKey ? session.sessionId : undefined;
+      const model = this.effectiveModel(effectiveConfig);
+      const serviceTier = this.resolveAppServerServiceTier(
+        effectiveConfig,
+        model,
+      );
       const authSource = authSourceForSpawned(spawned);
       const threadParams = {
         cwd,
         model,
         serviceTier,
         approvalPolicy: "never",
-        sandbox: toSandboxMode(spawned, config),
+        sandbox: toSandboxMode(spawned, effectiveConfig),
       };
-      const sessionMode = resolveCodexSessionMode(config);
+      const sessionMode = resolveCodexSessionMode(effectiveConfig);
       await stream({
         type: "event",
         event: {
           type: "config",
           model,
-          reasoning: config?.reasoning,
+          reasoning: effectiveConfig?.reasoning,
           serviceTier: serviceTier ? "fast" : "standard",
           appServerServiceTier: serviceTier,
           sessionMode,
@@ -1890,26 +2221,47 @@ export class CodexAppServerAgent implements AcpAgent {
       logger.debug("codex app-server: resolved service tier", {
         threadId: resumeId,
         model: threadParams.model,
-        requestedServiceTier: config?.serviceTier ?? "standard",
+        requestedServiceTier: effectiveConfig?.serviceTier ?? "standard",
         appServerServiceTier: serviceTier,
       });
-      if (resumeId) {
-        await this.tryEnsureSessionConfig(spawned, resumeId, cwd, config);
+      if (runtime.threadId && runtime.threadId === resumeId) {
+        threadResult = { thread: { id: runtime.threadId } };
+      } else if (resumeId) {
+        await this.tryEnsureSessionConfig(
+          spawned,
+          resumeId,
+          cwd,
+          effectiveConfig,
+        );
         try {
           threadResult = await client.request("thread/resume", {
             threadId: resumeId,
             ...threadParams,
           });
         } catch (err) {
-          logger.info(
-            "codex app-server: resume failed; starting fresh thread",
-            {
-              threadId: resumeId,
-              cwd,
-              err: `${err}`,
-            },
-          );
-          threadResult = await client.request("thread/start", threadParams);
+          if (!hasEstablishedSession) {
+            logger.info(
+              "codex app-server: initial thread alias was not a Codex session; starting the first session",
+              {
+                threadId: resumeId,
+                cwd,
+                err: `${err}`,
+              },
+            );
+            threadResult = await client.request("thread/start", threadParams);
+          } else {
+            logger.warn(
+              "codex app-server: refusing to replace failed session",
+              {
+                threadId: resumeId,
+                cwd,
+                err: `${err}`,
+              },
+            );
+            throw new Error(
+              `Unable to resume Codex session ${resumeId}. CoCalc did not start a replacement session because that would discard its accumulated context. ${err}`,
+            );
+          }
         }
       } else {
         threadResult = await client.request("thread/start", threadParams);
@@ -1920,10 +2272,13 @@ export class CodexAppServerAgent implements AcpAgent {
         throw new Error(`app-server did not return a thread id`);
       }
       setRunningKey(actualThreadId);
+      runtime.threadId = actualThreadId;
+      this.registerRuntimeAlias(runtime, actualThreadId);
+      this.registerRuntimeAlias(runtime, requestedThreadKey);
       const sessionEntry = { sessionId: actualThreadId, cwd };
       this.sessions.set(actualThreadId, sessionEntry);
-      if (requestedSessionKey && requestedSessionKey !== actualThreadId) {
-        this.sessions.set(requestedSessionKey, sessionEntry);
+      if (requestedThreadKey && requestedThreadKey !== actualThreadId) {
+        this.sessions.set(requestedThreadKey, sessionEntry);
       }
 
       await stream({
@@ -1936,10 +2291,10 @@ export class CodexAppServerAgent implements AcpAgent {
         threadId: actualThreadId,
         cwd,
         approvalPolicy: "never",
-        sandboxPolicy: toTurnSandboxPolicy(spawned, config),
+        sandboxPolicy: toTurnSandboxPolicy(spawned, effectiveConfig),
         model,
         serviceTier,
-        effort: toReasoningEffort(config),
+        effort: toReasoningEffort(effectiveConfig),
         env: Object.keys(turnEnv).length > 0 ? turnEnv : undefined,
         input: buildTurnInput({
           local_images: request.local_images,
@@ -2424,7 +2779,7 @@ export class CodexAppServerAgent implements AcpAgent {
           await siteKeyGovernor.reportUsage({
             accountId: request.account_id,
             projectId: request.chat?.project_id ?? request.project_id,
-            model: this.effectiveModel(config),
+            model: this.effectiveModel(effectiveConfig),
             usage: {
               input_tokens: latestUsage.input_tokens ?? 0,
               cached_input_tokens: latestUsage.cached_input_tokens,
@@ -2441,7 +2796,7 @@ export class CodexAppServerAgent implements AcpAgent {
           logger.warn("codex app-server: failed to report site-key usage", {
             accountId: request.account_id,
             projectId: request.chat?.project_id ?? request.project_id,
-            model: this.effectiveModel(config),
+            model: this.effectiveModel(effectiveConfig),
             err: `${err}`,
           });
         }
@@ -2453,11 +2808,14 @@ export class CodexAppServerAgent implements AcpAgent {
         usage: latestUsage ?? undefined,
         threadId: actualThreadId,
       });
+      runtimeHealthy = true;
       void this.maybeTruncateSessionHistory({
         sessionId: actualThreadId,
         spawned,
         cwd,
       });
+      fundedFinishStatus = "committed";
+      fundedFinishOutcome = "turn completed";
     } catch (err) {
       if (quotaPollTimer) {
         clearInterval(quotaPollTimer);
@@ -2466,6 +2824,9 @@ export class CodexAppServerAgent implements AcpAgent {
         clearTimeout(maxTurnTimer);
       }
       if (runningEntry?.interrupted && !quotaStopReason) {
+        runtimeHealthy = true;
+        fundedFinishStatus = "interrupted";
+        fundedFinishOutcome = "turn interrupted";
         logger.info("codex app-server evaluate interrupted", {
           threadId: currentThreadId,
           turnId,
@@ -2475,6 +2836,7 @@ export class CodexAppServerAgent implements AcpAgent {
       }
       const stderrTail = client.getStderrTail();
       const primaryError = (err as Error)?.message ?? `${err}`;
+      fundedFinishOutcome = primaryError.slice(0, 500);
       const userFacingPrimaryError =
         formatCodexAuthError(normalizeErrorMessages([primaryError])) ??
         primaryError;
@@ -2489,7 +2851,7 @@ export class CodexAppServerAgent implements AcpAgent {
         turnId,
         cwd,
         cmd: spawned.cmd,
-        args: argsJoin(spawned.args),
+        args: spawned.logArgs ?? argsJoin(spawned.args),
         authSource: spawned.authSource,
         err: `${err}`,
         normalizedErrors: normalizeErrorMessages(errors),
@@ -2541,8 +2903,26 @@ export class CodexAppServerAgent implements AcpAgent {
       throw new Error(userFacingPrimaryError);
     } finally {
       this.running.delete(currentThreadId);
-      if (spawned.proc.exitCode == null && !spawned.proc.killed) {
-        spawned.proc.kill("SIGKILL");
+      if (fundedTurn) {
+        try {
+          await fundedTurn.finish({
+            status: fundedFinishStatus,
+            outcome: fundedFinishOutcome,
+          });
+        } catch (err) {
+          logger.warn("codex app-server: funded turn settlement failed", {
+            reservationId: fundedTurn.reservation.reservationId,
+            status: fundedFinishStatus,
+            err: `${err}`,
+          });
+        }
+      }
+      runtime.active = false;
+      runtime.fundedTurn = undefined;
+      if (!runtimeHealthy) {
+        await this.disposeRuntime(runtime, "turn failed");
+      } else {
+        await this.refreshRuntimeLifecycle(runtime);
       }
     }
     return "completed";
@@ -2558,6 +2938,24 @@ export class CodexAppServerAgent implements AcpAgent {
 
   hasRunningTurn(threadId: string): boolean {
     return this.running.has(threadId);
+  }
+
+  getRuntimeStatus(): {
+    liveRuntimes: number;
+    activeTurns: number;
+    backgroundTerminals: number;
+  } {
+    let activeTurns = 0;
+    let backgroundTerminals = 0;
+    for (const runtime of this.runtimes) {
+      if (runtime.active) activeTurns += 1;
+      backgroundTerminals += runtime.backgroundTerminalCount;
+    }
+    return {
+      liveRuntimes: this.runtimes.size,
+      activeTurns,
+      backgroundTerminals,
+    };
   }
 
   async steer(
@@ -2626,6 +3024,11 @@ export class CodexAppServerAgent implements AcpAgent {
       await running.stop();
     }
     this.running.clear();
+    await Promise.all(
+      [...this.runtimes].map((runtime) =>
+        this.disposeRuntime(runtime, "ACP agent disposed"),
+      ),
+    );
   }
 
   private resolveSession(
@@ -2758,11 +3161,15 @@ export class CodexAppServerAgent implements AcpAgent {
     accountId,
     cwd,
     env,
+    siteFundedTurn,
+    paymentSource,
   }: {
     projectId: string;
     accountId?: string;
     cwd: string;
     env?: NodeJS.ProcessEnv;
+    siteFundedTurn?: CodexSiteFundedTurnRequest;
+    paymentSource?: CodexSessionConfig["paymentSource"];
   }): Promise<SpawnedCodexAppServer> {
     const projectSpawner = getCodexProjectSpawner();
     if (projectSpawner && projectId && projectSpawner.spawnCodexAppServer) {
@@ -2771,10 +3178,12 @@ export class CodexAppServerAgent implements AcpAgent {
         accountId,
         cwd,
         env,
+        siteFundedTurn,
+        paymentSource,
       });
       logger.debug("codex app-server: spawning via project container", {
         cmd: spawned.cmd,
-        args: argsJoin(spawned.args),
+        args: spawned.logArgs ?? argsJoin(spawned.args),
         cwd: spawned.cwd ?? cwd,
         authSource: spawned.authSource,
       });

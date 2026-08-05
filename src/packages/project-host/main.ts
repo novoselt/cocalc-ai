@@ -1638,6 +1638,7 @@ export async function main(
       force,
       pressure_zone,
       reason,
+      shared_compute_priority,
     }) => {
       if (!hubApi.projects?.stop) {
         throw new Error("local project stop API unavailable");
@@ -1647,11 +1648,13 @@ export async function main(
         force: !!force,
         pressure_zone,
         reason,
+        shared_compute_priority,
       });
       await hubApi.projects.stop({
         project_id,
         force,
-        runtime_exit_reason: "host_pressure",
+        runtime_exit_reason:
+          shared_compute_priority <= 0 ? "host_pressure_free" : "host_pressure",
       });
     },
   });

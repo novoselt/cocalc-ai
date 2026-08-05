@@ -611,6 +611,21 @@ function requireReason(value: string | undefined): string {
   return reason;
 }
 
+function parseMembershipAssignmentExpiration(value: string): Date | null {
+  const parsed = parseExpiresAtOption(value);
+  if (parsed === undefined) {
+    throw new Error("--expires-at is required");
+  }
+  if (parsed === null) {
+    return null;
+  }
+  const expiresAt = new Date(parsed);
+  if (expiresAt.getTime() <= Date.now()) {
+    throw new Error("--expires-at must be in the future, or never");
+  }
+  return expiresAt;
+}
+
 function formatCurrencyValue(value: unknown): string {
   if (value == null || value === "") return "";
   const amount = Number(value);
@@ -1003,6 +1018,9 @@ export function registerAdminCommand(
     .command("entitlement-override")
     .description("admin account entitlement override operations")
     .addHelpText("after", ENTITLEMENT_OVERRIDE_HELP);
+  const adminMembershipAssignment = admin
+    .command("membership-assignment")
+    .description("admin-assigned membership operations");
   const adminMasterKey = admin
     .command("master-key")
     .description("local site master key lifecycle operations");
@@ -1050,6 +1068,46 @@ export function registerAdminCommand(
       throw new Error(`unable to resolve account for '${identifier}'`);
     }
     return userAccountId;
+  }
+
+  async function requireAssignableMembershipTier(
+    ctx: any,
+    tier: string,
+  ): Promise<string> {
+    const membershipClass = `${tier ?? ""}`.trim();
+    if (!membershipClass) {
+      throw new Error("--tier must be non-empty");
+    }
+    const result = (await ctx.hub.db.userQuery({
+      query: {
+        membership_tiers: {
+          id: "*",
+          label: null,
+          disabled: null,
+        },
+      },
+      options: [],
+    })) as { membership_tiers?: MembershipTierRow[] };
+    const tiers = result.membership_tiers ?? [];
+    const selected = tiers.find(
+      (candidate) => candidate.id === membershipClass,
+    );
+    if (!selected) {
+      const available = tiers
+        .filter((candidate) => candidate.id && !candidate.disabled)
+        .map((candidate) => candidate.id)
+        .sort()
+        .join(", ");
+      throw new Error(
+        `unknown membership tier '${membershipClass}'${
+          available ? `; enabled tiers: ${available}` : ""
+        }`,
+      );
+    }
+    if (selected.disabled) {
+      throw new Error(`membership tier '${membershipClass}' is disabled`);
+    }
+    return membershipClass;
   }
 
   function adminSupportListOptions(command: Command): Command {
@@ -3062,6 +3120,91 @@ Run "cocalc admin entitlement-override schema" for the accepted JSON payload.
         );
       },
     );
+
+  adminMembershipAssignment
+    .command("get <user>")
+    .description("get the admin-assigned membership for a user")
+    .action(async (user: string, command: Command) => {
+      await withContext(
+        command,
+        "admin membership-assignment get",
+        async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          const assignment = await ctx.hub.system.getAdminAssignedMembership({
+            user_account_id: userAccountId,
+          });
+          return {
+            account_id: userAccountId,
+            assignment: assignment ?? null,
+          };
+        },
+      );
+    });
+
+  adminMembershipAssignment
+    .command("set <user>")
+    .description("set or replace the admin-assigned membership for a user")
+    .requiredOption("--tier <id>", "membership tier id, e.g. member")
+    .requiredOption(
+      "--expires-at <iso>",
+      "expiration as ISO-8601, or never for a permanent assignment",
+    )
+    .requiredOption("--reason <reason>", "reason stored with the assignment")
+    .action(
+      async (
+        user: string,
+        opts: { tier: string; expiresAt: string; reason: string },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "admin membership-assignment set",
+          async (ctx) => {
+            const userAccountId = await resolveTargetAccountId(ctx, user);
+            const membershipClass = await requireAssignableMembershipTier(
+              ctx,
+              opts.tier,
+            );
+            const expiresAt = parseMembershipAssignmentExpiration(
+              opts.expiresAt,
+            );
+            await ctx.hub.system.setAdminAssignedMembership({
+              user_account_id: userAccountId,
+              membership_class: membershipClass,
+              expires_at: expiresAt,
+              notes: requireReason(opts.reason),
+            });
+            const assignment = await ctx.hub.system.getAdminAssignedMembership({
+              user_account_id: userAccountId,
+            });
+            return {
+              account_id: userAccountId,
+              assignment: assignment ?? null,
+            };
+          },
+        );
+      },
+    );
+
+  adminMembershipAssignment
+    .command("clear <user>")
+    .description("clear the admin-assigned membership for a user")
+    .action(async (user: string, command: Command) => {
+      await withContext(
+        command,
+        "admin membership-assignment clear",
+        async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          await ctx.hub.system.clearAdminAssignedMembership({
+            user_account_id: userAccountId,
+          });
+          return {
+            account_id: userAccountId,
+            cleared: true,
+          };
+        },
+      );
+    });
 
   adminMessage
     .command("send-system-notice")

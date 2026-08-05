@@ -152,7 +152,7 @@ describe("GCP bootstrap helpers", () => {
       }),
     ).toMatchObject({
       mode: "enforce",
-      profile: "gcp-pd-balanced-dynamic",
+      profile: "gcp-pd-balanced-btrfs-headroom",
       capacity: { mode: "gcp-pd-balanced" },
       pool: { rbps: 67108864, wbps: 33554432, riops: 2000, wiops: 1000 },
     });

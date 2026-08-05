@@ -5,6 +5,8 @@
 
 import {
   clearBtrfsOperationCachesForTest,
+  configureBtrfsBackgroundMutationGuard,
+  getBtrfsMutationContext,
   getBtrfsMutationLockStatus,
   withBtrfsMutationContext,
   withBtrfsMutationLock,
@@ -167,6 +169,7 @@ describe("btrfs mutation lock", () => {
           mount: "/mnt/test",
           operation: "snapshot-delete",
           run: async () => {
+            expect(getBtrfsMutationContext().mutation_lock_held).toBe(true);
             expect(getBtrfsMutationLockStatus()).toEqual([
               expect.objectContaining({
                 operation_id: "operation-1",
@@ -180,5 +183,63 @@ describe("btrfs mutation lock", () => {
         });
       },
     );
+  });
+
+  it("rechecks scheduled mutations at the lock boundary", async () => {
+    configureBtrfsBackgroundMutationGuard(() => "lifecycle_active");
+    await expect(
+      withBtrfsMutationLock({
+        mount: "/mnt/test",
+        operation: "scheduled-snapshot",
+        context: { priority: "scheduled" },
+        run: async () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      name: "BtrfsMutationDeferredError",
+      reason: "lifecycle_active",
+    });
+    await expect(
+      withBtrfsMutationLock({
+        mount: "/mnt/test",
+        operation: "project-start",
+        context: { priority: "lifecycle" },
+        run: async () => "ok",
+      }),
+    ).resolves.toBe("ok");
+  });
+
+  it("defers scheduled work if lifecycle arrives while it waits", async () => {
+    let blocked = false;
+    let releaseHolder!: () => void;
+    let holderStarted!: () => void;
+    const started = new Promise<void>((resolve) => (holderStarted = resolve));
+    configureBtrfsBackgroundMutationGuard(() =>
+      blocked ? "lifecycle_active" : undefined,
+    );
+    const holder = withBtrfsMutationLock({
+      mount: "/mnt/test",
+      operation: "holder",
+      run: async () => {
+        holderStarted();
+        await new Promise<void>((resolve) => (releaseHolder = resolve));
+      },
+    });
+    await started;
+    const run = jest.fn(async () => undefined);
+    const scheduled = withBtrfsMutationLock({
+      mount: "/mnt/test",
+      operation: "scheduled",
+      context: { priority: "scheduled" },
+      run,
+    });
+    blocked = true;
+    releaseHolder();
+    await holder;
+    await expect(scheduled).rejects.toMatchObject({
+      name: "BtrfsMutationDeferredError",
+      reason: "lifecycle_active",
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(getBtrfsMutationLockStatus()).toEqual([]);
   });
 });

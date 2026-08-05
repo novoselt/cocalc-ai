@@ -51,8 +51,8 @@ def make_cfg(tmpdir: str) -> bootstrap.BootstrapConfig:
             "version": 1,
             "mode": "enforce",
             "mountpoint": "/mnt/cocalc",
-            "profile": "gcp-pd-balanced-dynamic",
-            "capacitySource": "gcp-pd-balanced-size-formula-2026-07-24",
+            "profile": "gcp-pd-balanced-btrfs-headroom",
+            "capacitySource": "gcp-pd-balanced-btrfs-headroom-2026-08-04",
             "capacity": {"mode": "gcp-pd-balanced"},
             "pool": {
                 "rbps": 67108864,
@@ -212,6 +212,9 @@ class ProjectIoConfigurationTest(unittest.TestCase):
         )
         self.assertEqual(policy["mode"], "enforce")
         self.assertEqual(policy["capacity"]["mode"], "gcp-pd-balanced")
+        self.assertEqual(
+            policy["profile"], "gcp-pd-balanced-btrfs-headroom"
+        )
         self.assertEqual(policy["leafClasses"]["premium"]["wiops"], 750)
 
     def test_fails_safe_for_unsupported_capacity_metadata(self) -> None:
@@ -254,6 +257,38 @@ class ProjectIoConfigurationTest(unittest.TestCase):
             )
             self.assertEqual(override_path.read_text(), override_text)
             self.assertEqual(override_path.stat().st_mode & 0o777, 0o600)
+
+    def test_archives_legacy_managed_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            policy_path = Path(tmpdir) / "policy.json"
+            override_path = Path(tmpdir) / "override.json"
+            capacity_path = Path(tmpdir) / "capacity.json"
+            override_path.write_text(
+                json.dumps(bootstrap.LEGACY_MANAGED_PROJECT_IO_OVERRIDE),
+                encoding="utf-8",
+            )
+            original_chown = bootstrap.os.chown
+            try:
+                bootstrap.os.chown = lambda *_args, **_kwargs: None
+                bootstrap.write_project_io_configuration(
+                    cfg,
+                    policy_path=policy_path,
+                    override_path=override_path,
+                    capacity_path=capacity_path,
+                )
+            finally:
+                bootstrap.os.chown = original_chown
+
+            retired_path = override_path.with_name(
+                f"{override_path.name}.retired-gcp-pd-balanced-size-formula-2026-07-24"
+            )
+            self.assertFalse(override_path.exists())
+            self.assertEqual(
+                json.loads(retired_path.read_text()),
+                bootstrap.LEGACY_MANAGED_PROJECT_IO_OVERRIDE,
+            )
+            self.assertEqual(retired_path.stat().st_mode & 0o777, 0o600)
 
 
 class BootstrapSharedScratchTest(unittest.TestCase):
@@ -1008,6 +1043,40 @@ class BootstrapStateFilesTest(unittest.TestCase):
 
 
 class BootstrapRuntimeUserContractTest(unittest.TestCase):
+    def test_runtime_manager_prepares_default_podman_runtime_dir(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        cfg = replace(cfg, ssh_user="runtime-user")
+        prepared = []
+        original_getpwnam = bootstrap.pwd.getpwnam
+        original_which = bootstrap.shutil.which
+        original_read_env = bootstrap.read_env_assignments
+        original_ensure_dir = bootstrap.ensure_owned_runtime_dir
+        try:
+            bootstrap.pwd.getpwnam = lambda _user: type(
+                "Pwd", (), {"pw_uid": 2000, "pw_gid": 2000}
+            )()
+            bootstrap.shutil.which = lambda _name: None
+            bootstrap.read_env_assignments = lambda _path: {}
+            bootstrap.ensure_owned_runtime_dir = (
+                lambda path, uid, gid: prepared.append((str(path), uid, gid))
+            )
+
+            bootstrap.ensure_runtime_user_manager(cfg)
+        finally:
+            bootstrap.pwd.getpwnam = original_getpwnam
+            bootstrap.shutil.which = original_which
+            bootstrap.read_env_assignments = original_read_env
+            bootstrap.ensure_owned_runtime_dir = original_ensure_dir
+
+        self.assertEqual(
+            prepared,
+            [
+                ("/run/user/2000", 2000, 2000),
+                ("/run/user/2000", 2000, 2000),
+                ("/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000", 2000, 2000),
+            ],
+        )
+
     def test_bounded_capture_kills_hung_process_group(self) -> None:
         started = time.monotonic()
         result = bootstrap.run_bounded_capture(
@@ -1111,6 +1180,45 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
 
 
 class BootstrapRootlessPodmanResetTest(unittest.TestCase):
+    def test_configure_podman_defers_live_runroot_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            home = Path(tmpdir) / "home"
+            storage_conf = home / ".config" / "containers" / "storage.conf"
+            storage_conf.parent.mkdir(parents=True)
+            storage_conf.write_text(
+                '[storage]\nrunroot = "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run"\n',
+                encoding="utf-8",
+            )
+            writes = []
+            original_runtime_home = bootstrap.runtime_home
+            original_runtime_active = bootstrap.project_host_runtime_is_active
+            original_mkdir = Path.mkdir
+            original_write_text = Path.write_text
+            try:
+                bootstrap.runtime_home = lambda _cfg: str(home)
+                bootstrap.project_host_runtime_is_active = lambda: True
+                Path.mkdir = lambda self, parents=False, exist_ok=False: None  # type: ignore[method-assign]
+                Path.write_text = lambda self, text, encoding="utf-8": writes.append(  # type: ignore[method-assign]
+                    (str(self), text)
+                )
+                bootstrap.configure_podman(cfg)
+            finally:
+                bootstrap.runtime_home = original_runtime_home
+                bootstrap.project_host_runtime_is_active = original_runtime_active
+                Path.mkdir = original_mkdir  # type: ignore[method-assign]
+                Path.write_text = original_write_text  # type: ignore[method-assign]
+
+            self.assertEqual(1, len(writes))
+            self.assertEqual(
+                "/mnt/cocalc/data/containers/runroot-migration-pending",
+                writes[0][0],
+            )
+            self.assertIn(
+                "desired=/run/cocalc/containers/rootless/missing-runtime-user",
+                writes[0][1],
+            )
+
     def test_configure_podman_does_not_clear_rootless_state_on_subuid_ownership(
         self,
     ) -> None:
@@ -1171,14 +1279,61 @@ class BootstrapRootlessPodmanResetTest(unittest.TestCase):
             )
             self.assertIn(
                 (
+                    str(
+                        Path(tmpdir)
+                        / "home"
+                        / ".config"
+                        / "containers"
+                        / "storage.conf"
+                    ),
+                    '[storage]\ndriver = "overlay"\nrunroot = "/run/cocalc/containers/rootless/missing-runtime-user"\ngraphroot = "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage"\n',
+                ),
+                writes,
+            )
+            self.assertIn(
+                (
                     [
                         "chown",
                         "missing-runtime-user:missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run",
                     ],
-                    "chown rootless podman path roots",
+                    "chown rootless podman persistent paths",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "chown",
+                        "missing-runtime-user:missing-runtime-user",
+                        "/run/cocalc/containers/rootless/missing-runtime-user",
+                    ],
+                    "chown rootless podman runroot",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "chmod",
+                        "0711",
+                        "/run/cocalc",
+                        "/run/cocalc/containers",
+                        "/run/cocalc/containers/rootless",
+                    ],
+                    "make Podman runroot parents traversable",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "chmod",
+                        "0700",
+                        "/run/cocalc/containers/rootless/missing-runtime-user",
+                    ],
+                    "restrict rootless Podman runroot",
                 ),
                 recorded,
             )
@@ -1636,9 +1791,19 @@ class BootstrapOwnershipScopeTest(unittest.TestCase):
                         "missing-runtime-user:missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user",
                         "/mnt/cocalc/data/containers/rootless/missing-runtime-user/storage",
-                        "/mnt/cocalc/data/containers/rootless/missing-runtime-user/run",
                     ],
-                    "chown rootless podman path roots",
+                    "chown rootless podman persistent paths",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "chown",
+                        "missing-runtime-user:missing-runtime-user",
+                        "/run/cocalc/containers/rootless/missing-runtime-user",
+                    ],
+                    "chown rootless podman runroot",
                 ),
                 recorded,
             )
@@ -1690,50 +1855,116 @@ class ProjectIoPolicyHelperTest(unittest.TestCase):
             {
                 "total_bytes": 650 * 1024**3,
                 "device_count": 2,
-                "physical_read_bps": 240 * 1024**2,
-                "physical_write_bps": 200 * 1024**2,
-                "physical_iops": 6900,
+                "physical_read_bps": 422 * 1024**2,
+                "physical_write_bps": 382 * 1024**2,
+                "physical_iops": 9900,
             },
         )
-        for row in calculated["rows"]:
-            self.assertEqual(
-                row["limits"],
-                {
-                    "rbps": 60 * 1024**2,
-                    "wbps": 25 * 1024**2,
-                    "riops": 1725,
-                    "wiops": 862,
-                },
-            )
+        self.assertEqual(
+            calculated["rows"][0]["limits"],
+            {
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
+            },
+        )
+        self.assertEqual(
+            calculated["rows"][1]["limits"],
+            {
+                "rbps": 120 * 1024**2,
+                "wbps": 50 * 1024**2,
+                "riops": 3000,
+                "wiops": 1500,
+            },
+        )
 
         premium = self.run_calculation(devices, "premium")
         self.assertEqual(premium.returncode, 0, premium.stderr)
-        for row in json.loads(premium.stdout)["rows"]:
-            self.assertEqual(row["limits"]["rbps"], 45 * 1024**2)
-            self.assertEqual(row["limits"]["wbps"], 19_660_800)
-            self.assertEqual(row["limits"]["riops"], 1293)
-            self.assertEqual(row["limits"]["wiops"], 646)
+        premium_rows = json.loads(premium.stdout)["rows"]
+        self.assertEqual(
+            premium_rows[0]["limits"],
+            {
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
+            },
+        )
+        self.assertEqual(
+            premium_rows[1]["limits"],
+            {
+                "rbps": 90 * 1024**2,
+                "wbps": 39_321_600,
+                "riops": 2250,
+                "wiops": 1125,
+            },
+        )
 
         maintenance = self.run_calculation(devices, "maintenance")
         self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
-        for row in json.loads(maintenance.stdout)["rows"]:
-            self.assertEqual(row["limits"]["rbps"], 6 * 1024**2)
-            self.assertEqual(row["limits"]["wbps"], 2_621_440)
-            self.assertEqual(row["limits"]["riops"], 172)
-            self.assertEqual(row["limits"]["wiops"], 86)
+        maintenance_rows = json.loads(maintenance.stdout)["rows"]
+        self.assertEqual(
+            maintenance_rows[0]["limits"],
+            {
+                "rbps": 9_542_041,
+                "wbps": 4_771_020,
+                "riops": 195,
+                "wiops": 97,
+            },
+        )
+        self.assertEqual(
+            maintenance_rows[1]["limits"],
+            {
+                "rbps": 12 * 1024**2,
+                "wbps": 5 * 1024**2,
+                "riops": 300,
+                "wiops": 150,
+            },
+        )
 
         startup = self.run_calculation(devices, "startup")
         self.assertEqual(startup.returncode, 0, startup.stderr)
-        for row in json.loads(startup.stdout)["rows"]:
-            self.assertEqual(
-                row["limits"],
-                {
-                    "rbps": 60 * 1024**2,
-                    "wbps": 25 * 1024**2,
-                    "riops": 1725,
-                    "wiops": 862,
-                },
-            )
+        self.assertEqual(
+            json.loads(startup.stdout)["rows"][0]["limits"],
+            {
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
+            },
+        )
+        self.assertEqual(
+            json.loads(startup.stdout)["rows"][1]["limits"],
+            {
+                "rbps": 120 * 1024**2,
+                "wbps": 100 * 1024**2,
+                "riops": 3000,
+                "wiops": 3000,
+            },
+        )
+
+        lifecycle_pool = self.run_calculation(devices, "lifecycle-pool")
+        self.assertEqual(lifecycle_pool.returncode, 0, lifecycle_pool.stderr)
+        lifecycle_rows = json.loads(lifecycle_pool.stdout)["rows"]
+        self.assertEqual(
+            lifecycle_rows[0]["limits"],
+            {
+                "rbps": 171_756_748,
+                "wbps": 171_756_748,
+                "riops": 3510,
+                "wiops": 3510,
+            },
+        )
+        self.assertEqual(
+            lifecycle_rows[1]["limits"],
+            {
+                "rbps": 120 * 1024**2,
+                "wbps": 30 * 1024**2,
+                "riops": 3000,
+                "wiops": 900,
+            },
+        )
 
     def test_dynamic_capacity_rejects_unmodeled_storage(self) -> None:
         result = self.run_calculation(
@@ -1924,6 +2155,21 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'BEES_CGROUP_IO_WRITE_BPS="$((16 * 1024 * 1024))"', script
             )
             self.assertIn(
+                '[ "$policy_profile" = "gcp-pd-balanced-btrfs-headroom" ]',
+                script,
+            )
+            self.assertIn(
+                'rows="$(project_io_limit_rows pool standard)"', script
+            )
+            self.assertIn(
+                'apply_io_max "$pool" "pool" "$mode" standard "$rows"',
+                script,
+            )
+            self.assertIn(
+                'verify_io_max "$pool" "pool" standard "$rows"',
+                script,
+            )
+            self.assertIn(
                 'BEES_CGROUP_MEMORY_HIGH_MAX="$((4 * 1024 * 1024 * 1024))"',
                 script,
             )
@@ -2005,8 +2251,71 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"',
                 script,
             )
+            self.assertIn('PROJECT_STARTUP_CGROUP_MEMORY_HIGH="max"', script)
+            self.assertIn('PROJECT_STARTUP_CGROUP_MEMORY_MAX="max"', script)
+            self.assertIn(
+                'PROJECT_STARTUP_CREATE_CGROUP_MEMORY_HIGH="$((4 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            self.assertIn(
+                'PROJECT_STARTUP_CREATE_CGROUP_MEMORY_MAX="$((8 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            startup_cgroup_body = script.split(
+                "configure_project_startup_cgroup() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                '"$PROJECT_STARTUP_CGROUP_MEMORY_HIGH" > "${PROJECT_STARTUP_CGROUP_DEFAULT}/memory.high"',
+                startup_cgroup_body,
+            )
+            self.assertIn(
+                '"$PROJECT_STARTUP_CREATE_CGROUP_MEMORY_HIGH" > "${PROJECT_STARTUP_CREATE_CGROUP_DEFAULT}/memory.high"',
+                startup_cgroup_body,
+            )
             self.assertIn("project-startup-runtime-cgroup-verification-failed", script)
             self.assertIn("move_project_startup_runtime_to_pool", script)
+            self.assertIn("project_startup_runtime_active_count", script)
+            self.assertIn("reserve_project_startup_io_capacity", script)
+            self.assertIn("release_project_startup_io_capacity", script)
+            self.assertIn("reconcile_project_pool_io_reservation", script)
+            self.assertIn("apply_project_pool_io_snapshot", script)
+            self.assertIn("verify_project_pool_io_snapshot", script)
+            self.assertIn("set_project_pool_pressure_mode", script)
+            self.assertIn("set-project-pool-pressure-mode)", script)
+            self.assertIn(
+                'PROJECT_IO_NORMAL_LIMITS_SNAPSHOT="/run/cocalc-project-pool-normal-io.max"',
+                script,
+            )
+            self.assertIn(
+                'PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"',
+                script,
+            )
+            self.assertIn(
+                '"pressure_protection_enabled": pressure_protection_enabled == "true"',
+                script,
+            )
+            self.assertIn('"pool_limit_scope": pool_scope', script)
+            self.assertIn(
+                '"startup_runtime_active_count": int(startup_runtime_active_count)',
+                script,
+            )
+            prepare_runtime_body = script.split(
+                "  prepare-project-startup-runtime-cgroup)", 1
+            )[1].split("\n    ;;", 1)[0]
+            self.assertLess(
+                prepare_runtime_body.index(
+                    'verify_project_pid_in_startup_runtime "$project_id" "$launcher_pid"'
+                ),
+                prepare_runtime_body.index("reserve_project_startup_io_capacity"),
+            )
+            self.assertLess(
+                prepare_runtime_body.index("reserve_project_startup_io_capacity"),
+                prepare_runtime_body.rindex("release_project_lock"),
+            )
+            self.assertLess(
+                finish_startup_body.index("move_project_startup_runtime_to_pool"),
+                finish_startup_body.index("release_project_startup_io_capacity"),
+            )
             self.assertIn("attach_maintenance_worker", script)
             self.assertIn("btrfs|btrfs-maintenance)", script)
             self.assertIn(
@@ -2030,7 +2339,12 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn("cocalc-project-network-startup", script)
+            self.assertIn('counter accept comment "%s-established"', script)
             self.assertIn('counter drop comment "%s-deny"', script)
+            self.assertLess(
+                script.index('counter accept comment "%s-established"'),
+                script.index('counter drop comment "%s-deny"'),
+            )
             self.assertIn(
                 '"maintenance_process_count": len(maintenance_processes.split())',
                 script,
@@ -2226,6 +2540,17 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn(
                 "configure_project_startup_runtime_leaf",
                 startup_prepare_body,
+            )
+            startup_leaf_body = script.split(
+                "configure_project_startup_runtime_leaf() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                'apply_io_max "$cgroup" "startup" "$mode" "$io_class"',
+                startup_leaf_body,
+            )
+            self.assertIn(
+                'verify_io_max "$cgroup" "startup" "$io_class"',
+                startup_leaf_body,
             )
             self.assertIn(
                 'ensure_project_network_rule "$project_id"',
@@ -2541,7 +2866,48 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'flock -x -w "${DAEMON_CONTROL_LOCK_WAIT_SECONDS}" 8',
                 rootctl_text,
             )
-            self.assertIn("start|ensure|restart|stop|protect)", rootctl_text)
+            self.assertIn(
+                "start|ensure|restart|stop|protect|prepare-podman-boot)",
+                rootctl_text,
+            )
+            self.assertIn("prepare_podman_boot()", rootctl_text)
+            self.assertIn(
+                "project runtime processes are active; refusing Podman boot preparation",
+                rootctl_text,
+            )
+            self.assertIn(
+                "Podman boot preparation failed; refusing to start project-host",
+                rootctl_text,
+            )
+            self.assertIn(
+                "require_podman_boot_preparation_not_failed",
+                rootctl_text,
+            )
+            self.assertIn(
+                'runroot = "${desired_runroot}"',
+                rootctl_text,
+            )
+            self.assertIn(
+                "migrate_podman_database_runroot()",
+                rootctl_text,
+            )
+            self.assertIn(
+                '"UPDATE DBConfig SET RunRoot = ? WHERE ID = 1 AND RunRoot = ?"',
+                rootctl_text,
+            )
+            self.assertIn(
+                'if [ "${reported_runroot}" != "${desired_runroot}" ]',
+                rootctl_text,
+            )
+            self.assertIn(
+                'run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate',
+                rootctl_text,
+            )
+            self.assertIn(
+                "info --format '{{.Store.RunRoot}}'",
+                rootctl_text,
+            )
+            self.assertIn("prepare-podman-boot)", rootctl_text)
             self.assertIn(
                 'COCALC_PROJECT_HOST_OOM_SCORE_ADJ:--900',
                 rootctl_text,
@@ -2617,6 +2983,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
+                "ensure_podman_runroot()",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "install -d -o root -g root -m 0711",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'runroot="/run/cocalc/containers/rootless/${RUNTIME_USER}"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "  ensure_podman_runroot\n",
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 'systemctl start "${service}"',
                 rootctl.read_text(encoding="utf-8"),
             )
@@ -2665,6 +3047,10 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             )
             self.assertIn(
                 'podman_bin="${container_runtime}/bin/podman"',
+                rootctl.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "podman_prefix=(aa-exec -p podman --)",
                 rootctl.read_text(encoding="utf-8"),
             )
             self.assertIn(
@@ -3093,6 +3479,32 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 written,
             )
             self.assertIn(
+                "/etc/systemd/system/cocalc-project-host-prepare.service",
+                written,
+            )
+            self.assertIn(
+                f"ExecStart={bootstrap.project_host_rootctl_path(cfg)} prepare-podman-boot",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-prepare.service"
+                ],
+            )
+            self.assertIn(
+                "Before=cocalc-project-host-start.service",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-prepare.service"
+                ],
+            )
+            self.assertIn(
+                "Before=google-startup-scripts.service",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-prepare.service"
+                ],
+            )
+            self.assertIn(
+                "Requires=cocalc-project-host-prepare.service",
+                written["/etc/systemd/system/cocalc-project-host-start.service"],
+            )
+            self.assertIn(
                 f"ExecStart={runtime_root}/bin/start-project-host",
                 written["/etc/systemd/system/cocalc-project-host-start.service"],
             )
@@ -3124,6 +3536,13 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 (
                     ["systemctl", "daemon-reload"],
                     "reload systemd",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    ["systemctl", "enable", "cocalc-project-host-prepare.service"],
+                    "enable Podman boot preparation service",
                 ),
                 recorded,
             )
@@ -3788,6 +4207,8 @@ class BootstrapModesTest(unittest.TestCase):
                 "write_helpers",
                 "configure_runtime_sudoers",
                 "verify_runtime_sudoers",
+                "configure_autostart",
+                "reconcile_bees_runtime_policy",
                 "reconcile_project_network_limits",
                 "reconcile_project_io_policy",
                 "reconcile_host_service_cgroup",
@@ -3836,6 +4257,8 @@ class BootstrapModesTest(unittest.TestCase):
                     "write_helpers",
                     "configure_runtime_sudoers",
                     "verify_runtime_sudoers",
+                    "configure_autostart",
+                    "reconcile_bees_runtime_policy",
                     "reconcile_project_network_limits",
                     "reconcile_project_io_policy",
                     "reconcile_host_service_cgroup",

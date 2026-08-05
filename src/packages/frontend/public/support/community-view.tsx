@@ -29,10 +29,15 @@ const COMMUNITY_LINKS = [
     href: "https://www.linkedin.com/company/sagemath-inc./",
   },
   {
-    title: "Twitter/X",
+    title: "X",
     description:
       "Follow public announcements and updates, or tag the team publicly.",
-    href: "https://twitter.com/cocalc_com",
+    href: "https://x.com/cocalc_ai",
+  },
+  {
+    title: "Bluesky",
+    description: "Follow CoCalc announcements and updates on Bluesky.",
+    href: "https://bsky.app/profile/cocalc.bsky.social",
   },
 ] as const;
 
@@ -54,7 +59,7 @@ export default function CommunityView({
         )}
         .
       </Paragraph>
-      <PublicGrid columns={3}>
+      <PublicGrid columns={4}>
         {COMMUNITY_LINKS.map((item) => (
           <PublicCard
             href={item.href}

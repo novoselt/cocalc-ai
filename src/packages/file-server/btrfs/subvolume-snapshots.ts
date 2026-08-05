@@ -129,9 +129,11 @@ export class SubvolumeSnapshots {
     {
       limit,
       quotaMode = "sync",
+      existingSnapshotNames,
     }: {
       limit?: number;
       quotaMode?: "sync" | "async" | "skip";
+      existingSnapshotNames?: string[];
     } = {},
   ) => {
     name ??= new Date().toISOString();
@@ -140,7 +142,7 @@ export class SubvolumeSnapshots {
     await this.makeSnapshotsDir();
 
     if (limit != null) {
-      const existing = (await this.readdir()).filter(
+      const existing = (existingSnapshotNames ?? (await this.readdir())).filter(
         // lock files are named ".<snap>.lock" — exclude those from the limit
         // (NOTE: we do NOT allow any real snapshot to start with '.' -- see above)
         (x) => !x.endsWith(".lock"),
@@ -428,8 +430,8 @@ export class SubvolumeSnapshots {
   };
 
   // has newly written changes since last snapshot
-  hasUnsavedChanges = async (): Promise<boolean> => {
-    const s = await this.readdir();
+  hasUnsavedChanges = async (snapshotNames?: string[]): Promise<boolean> => {
+    const s = snapshotNames ?? (await this.readdir());
     if (s.length == 0) {
       // more than just the SNAPSHOTS directory?
       const v = await this.subvolume.fs.readdir("");

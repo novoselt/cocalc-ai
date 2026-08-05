@@ -64,6 +64,7 @@ const projectVolumeQuotaIsApplied = jest.fn();
 const getProjectVolumeQuota = jest.fn();
 const invalidateProjectVolumeQuota = jest.fn();
 const currentProjectVolumeLifecycleGeneration = jest.fn(() => 0);
+const getRecordedProjectVolumeIdentity = jest.fn();
 
 jest.mock("@cocalc/lite/hub/api", () => ({ hubApi: { projects: {} as any } }));
 jest.mock("@cocalc/backend/data", () => ({
@@ -221,7 +222,8 @@ jest.mock("../sqlite/volume-quotas", () => ({
     projectVolumeQuotaIsApplied(...args),
 }));
 jest.mock("../sqlite/project-volumes", () => ({
-  getRecordedProjectVolumeIdentity: jest.fn(() => "volume-identity"),
+  getRecordedProjectVolumeIdentity: (...args: any[]) =>
+    getRecordedProjectVolumeIdentity(...args),
 }));
 jest.mock("../sqlite/volume-quota-overrides", () => ({
   effectiveProjectVolumeQuotaBytes: ({
@@ -339,6 +341,8 @@ describe("project host start ACP rehydrate ordering", () => {
     invalidateProjectVolumeQuota.mockReset();
     currentProjectVolumeLifecycleGeneration.mockReset();
     currentProjectVolumeLifecycleGeneration.mockReturnValue(0);
+    getRecordedProjectVolumeIdentity.mockReset();
+    getRecordedProjectVolumeIdentity.mockReturnValue("volume-identity");
     projectPortOffsetFromSshPort.mockReset();
     projectPortOffsetFromHttpPort.mockReset();
     projectPortOffsetFromSshPort.mockImplementation((port?: number | null) => {
@@ -408,6 +412,106 @@ describe("project host start ACP rehydrate ordering", () => {
         last_started_ms: expect.any(Number),
       }),
     );
+  });
+
+  it("creates a missing home volume before starting a newly placed project", async () => {
+    const volume = {
+      path: `/mnt/cocalc/project-${project_id}`,
+      quota: {
+        get: jest.fn(async () => ({ used: 0, size: 0 })),
+      },
+    };
+    getVolume.mockRejectedValueOnce(
+      new Error(`project volume does not exist: ${volume.path}`),
+    );
+    ensureVolume.mockResolvedValueOnce(volume);
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({ project_id });
+
+    expect(ensureVolume).toHaveBeenCalledWith(project_id);
+    expect(volume.quota.get).toHaveBeenCalledTimes(1);
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replace an invalid project volume during start", async () => {
+    const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+    process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
+    try {
+      getProject.mockReturnValue({
+        image: DEFAULT_PROJECT_IMAGE,
+        run_quota: { disk_quota: 65_000 },
+      });
+      getVolume.mockRejectedValueOnce(
+        new Error(
+          `project volume is not a btrfs subvolume: /mnt/cocalc/project-${project_id}`,
+        ),
+      );
+      const runnerApi = {
+        start: jest.fn(),
+        stop: jest.fn(),
+      } as any;
+
+      const { wireProjectsApi } = await import("./projects");
+      wireProjectsApi(runnerApi);
+
+      await expect(hubApi.projects.start({ project_id })).rejects.toThrow(
+        "project volume is not a btrfs subvolume",
+      );
+      expect(ensureVolume).not.toHaveBeenCalled();
+      expect(runnerApi.start).not.toHaveBeenCalled();
+    } finally {
+      if (previousMode == null) {
+        delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+      } else {
+        process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
+      }
+    }
+  });
+
+  it("materializes an unprovisioned project before reading its quota", async () => {
+    const order: string[] = [];
+    getRecordedProjectVolumeIdentity.mockReturnValue(undefined);
+    ensureVolume.mockImplementationOnce(async () => {
+      order.push("ensure-volume");
+    });
+    getVolume.mockImplementationOnce(async () => {
+      order.push("read-quota");
+      return {
+        path: `/mnt/cocalc/project-${project_id}`,
+        quota: { get: jest.fn(async () => ({ size: 0, used: 0 })) },
+      };
+    });
+    const runnerApi = {
+      start: jest.fn(async () => ({
+        state: "running",
+        http_port: 1234,
+        ssh_port: 2222,
+      })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      run_quota: { disk_quota: 10_000 },
+    });
+
+    expect(ensureVolume).toHaveBeenCalledWith(project_id);
+    expect(order).toEqual(["ensure-volume", "read-quota"]);
+    expect(runnerApi.start).toHaveBeenCalledTimes(1);
   });
 
   it("returns an existing runtime without restarting it for idempotent start", async () => {
@@ -600,7 +704,10 @@ describe("project host start ACP rehydrate ordering", () => {
         set: jest.fn(async () => undefined),
       },
     });
-    resetScratchVolume.mockReturnValueOnce(scratchReset);
+    resetScratchVolume.mockImplementationOnce((_project_id, opts) => {
+      opts?.onTiming?.("delete", 123);
+      return scratchReset;
+    });
     projectVolumeQuotaIsApplied.mockImplementation(
       (row) => row?.volume_kind === "home" || scratchPrepared,
     );
@@ -637,9 +744,13 @@ describe("project host start ACP rehydrate ordering", () => {
       const stopPromise = hubApi.projects.stop({ project_id });
       await flushMicrotasks();
       expect(resetScratchVolume).toHaveBeenCalledTimes(1);
-      expect(resetScratchVolume).toHaveBeenCalledWith(project_id, {
-        expected_lifecycle_generation: 0,
-      });
+      expect(resetScratchVolume).toHaveBeenCalledWith(
+        project_id,
+        expect.objectContaining({
+          expected_lifecycle_generation: 0,
+          onTiming: expect.any(Function),
+        }),
+      );
       await expect(stopPromise).resolves.toBeUndefined();
 
       const startPromise = hubApi.projects.start({ project_id });
@@ -653,7 +764,7 @@ describe("project host start ACP rehydrate ordering", () => {
           set: jest.fn(async () => undefined),
         },
       });
-      await startPromise;
+      const startResult = await startPromise;
 
       expect(invalidateProjectVolumeQuota).toHaveBeenCalledWith({
         project_id,
@@ -661,6 +772,11 @@ describe("project host start ACP rehydrate ordering", () => {
         reason: "project stopped; scratch reset pending",
       });
       expect(resetScratchVolume).toHaveBeenCalledTimes(1);
+      expect(startResult.phase_timings_ms).toEqual(
+        expect.objectContaining({
+          "check_quota.post_stop.scratch_reset.delete": 123,
+        }),
+      );
       expect(runnerApi.start).toHaveBeenCalledWith({
         project_id,
         config: expect.objectContaining({
@@ -1279,7 +1395,10 @@ describe("project host start ACP rehydrate ordering", () => {
 
       await hubApi.projects.start({ project_id });
 
-      expect(resetScratchVolume).toHaveBeenCalledWith(project_id);
+      expect(resetScratchVolume).toHaveBeenCalledWith(
+        project_id,
+        expect.objectContaining({ onTiming: expect.any(Function) }),
+      );
       expect(reconcileManagedProjectVolumeQuota).toHaveBeenCalledWith({
         project_id,
         volume_kind: "scratch",

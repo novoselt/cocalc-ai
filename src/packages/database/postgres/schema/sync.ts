@@ -12,6 +12,10 @@ import {
 } from "./drop-deprecated-tables";
 import { primaryKeys } from "./table";
 import { isEqual } from "lodash";
+import {
+  accountNotificationRevisionSchemaNeedsSync,
+  ensureAccountNotificationRevisionSchema,
+} from "./account-notification-revision";
 
 const log = getLogger("db:schema:sync");
 
@@ -471,6 +475,9 @@ export async function syncSchema(
       //dbg("sync existing table", table);
       await syncTableSchema(db, schema);
     }
+    if (dbSchema.account_notification_index != null) {
+      await ensureAccountNotificationRevisionSchema(db);
+    }
     dbg("backfilling account display names");
     await backfillAccountDisplayNames(db);
   } catch (err) {
@@ -530,6 +537,13 @@ export async function schemaNeedsSync(
         dbg("detected primary key changes needed", schema.name, primaryKeyDiff);
         return true;
       }
+    }
+    if (
+      dbSchema.account_notification_index != null &&
+      (await accountNotificationRevisionSchemaNeedsSync(db))
+    ) {
+      dbg("detected missing account notification revision default");
+      return true;
     }
     dbg("schema matches");
     return false;

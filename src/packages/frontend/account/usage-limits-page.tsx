@@ -32,7 +32,6 @@ import type {
 import { humanSize } from "@cocalc/util/misc";
 import { useMembershipSettingsData } from "./membership-settings-data";
 import {
-  extractLimit,
   formatResetAt,
   getProgressPercent,
   getProjectDefaultsItems,
@@ -424,7 +423,6 @@ function UsageLimitsSettingsContent(): ReactElement | null {
 
   const entitlements = normalizeRecord(membership.entitlements);
   const projectDefaults = normalizeRecord(entitlements.project_defaults);
-  const aiLimits = normalizeRecord(entitlements.ai_limits);
   const usageLimits = normalizeRecord(
     membership.effective_limits ?? entitlements.usage_limits,
   );
@@ -439,26 +437,6 @@ function UsageLimitsSettingsContent(): ReactElement | null {
   const representedMeterIds = new Set(
     overview?.meters.map(({ id }) => id) ?? [],
   );
-  const aiLimitItems: InfoItem[] = [
-    {
-      id: "ai-5h",
-      key: "ai_units_5h",
-      label: "AI 5-hour window",
-      value: extractLimit(aiLimits, ["units_5h", "limit_5h"]),
-    },
-    {
-      id: "ai-7d",
-      key: "ai_units_7d",
-      label: "AI 7-day window",
-      value: extractLimit(aiLimits, ["units_7d", "limit_7d"]),
-    },
-  ]
-    .filter(({ id, value }) => value != null && !representedMeterIds.has(id))
-    .map(({ key, label, value }) => ({
-      key,
-      label,
-      value: `${value?.toLocaleString()} units`,
-    }));
   const supplementalLimitItems = usageLimitItems.filter(({ key }) => {
     const meterId = METER_ID_BY_LIMIT_KEY[key];
     return meterId == null || !representedMeterIds.has(meterId);
@@ -496,13 +474,13 @@ function UsageLimitsSettingsContent(): ReactElement | null {
         items: runtimeEnvironmentItems,
       }),
     },
-    ...([...additionalLimitItems, ...aiLimitItems].length > 0
+    ...(additionalLimitItems.length > 0
       ? [
           {
             key: "additional-limits",
             title: "Additional limits",
             content: renderInfoItems({
-              items: [...additionalLimitItems, ...aiLimitItems],
+              items: additionalLimitItems,
             }),
           },
         ]

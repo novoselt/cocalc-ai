@@ -276,6 +276,7 @@ export async function main(): Promise<void> {
     });
   } finally {
     stopEventLoopStallMonitor();
+    await disposeAcpAgents();
     setMasterConatClient(undefined);
     try {
       masterClient?.close();

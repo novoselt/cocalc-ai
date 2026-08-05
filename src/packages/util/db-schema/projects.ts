@@ -786,7 +786,10 @@ export interface ProjectState {
   time?: Date;
   started_at?: Date;
   runtime_generation?: number;
-  runtime_exit_reason?: "container_missing" | "host_pressure";
+  runtime_exit_reason?:
+    | "container_missing"
+    | "host_pressure"
+    | "host_pressure_free";
   http_port?: number;
   ssh_port?: number;
   project_bundle_version?: string;

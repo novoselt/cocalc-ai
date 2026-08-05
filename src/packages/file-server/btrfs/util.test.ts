@@ -1,5 +1,6 @@
 import { executeCode } from "@cocalc/backend/execute-code";
 import { withBtrfsMutationContext } from "./mutation-context";
+import { withBtrfsMutationLock } from "./operation-cache";
 import { btrfs } from "./util";
 
 jest.mock("@cocalc/backend/execute-code", () => ({
@@ -57,6 +58,36 @@ describe("btrfs privileged command routing", () => {
           "/mnt/source",
           "/mnt/dest",
         ],
+      }),
+    );
+  });
+
+  it("promotes only the lock-held scheduled transaction", async () => {
+    await withBtrfsMutationContext({ priority: "scheduled" }, async () => {
+      await btrfs({ args: ["subvolume", "show", "/mnt/source"] });
+      await withBtrfsMutationLock({
+        mount: "/mnt/test",
+        operation: "snapshot-create",
+        run: async () => {
+          await btrfs({
+            args: ["subvolume", "snapshot", "-r", "/mnt/source", "/mnt/dest"],
+          });
+        },
+      });
+    });
+
+    expect(mockedExecuteCode.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        args: expect.arrayContaining([
+          "btrfs-maintenance",
+          "subvolume",
+          "show",
+        ]),
+      }),
+    );
+    expect(mockedExecuteCode.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        args: expect.arrayContaining(["btrfs", "subvolume", "snapshot"]),
       }),
     );
   });

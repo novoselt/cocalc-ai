@@ -19,6 +19,8 @@ export interface AcpDaemonStatus {
   last_seen_running_jobs: number;
   last_queue_progress_at: number;
   running_turn_leases: number;
+  live_app_server_runtimes?: number;
+  background_terminal_processes?: number;
   exit_requested_at?: number | null;
   stop_reason?: string | null;
 }

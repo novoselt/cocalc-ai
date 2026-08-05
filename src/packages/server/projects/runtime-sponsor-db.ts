@@ -28,6 +28,7 @@ export async function loadProjectRuntimeSponsor(
   const { rows } = await getPool().query<{
     runtime_sponsor_account_id?: string | null;
     usage_account_id?: string | null;
+    course?: { type?: string; account_id?: string } | null;
     allow_collaborator_starts_using_sponsor?: boolean | null;
     autostart_enabled?: boolean | null;
     users?: Record<string, { group?: string }> | null;
@@ -35,7 +36,7 @@ export async function loadProjectRuntimeSponsor(
     host_id?: string | null;
   }>(
     `
-      SELECT runtime_sponsor_account_id, usage_account_id,
+      SELECT runtime_sponsor_account_id, usage_account_id, course,
              allow_collaborator_starts_using_sponsor, autostart_enabled, users,
              owning_bay_id, host_id
         FROM projects

@@ -1,8 +1,9 @@
 # Project Warm-Start P95 Under Three Seconds: Staging Results
 
-Date: 2026-08-01
+Date: 2026-08-01; representative I/O requalification updated 2026-08-02
 
-Status: staging qualification passed; no production deployment was performed
+Status: staging qualification and representative I/O requalification passed;
+no production deployment was performed
 
 Related strategy:
 
@@ -26,6 +27,76 @@ reserved for host and lifecycle work, leaving 12 cores in the project pool.
 Project I/O containment and storage admission enforcement were enabled. This
 is not a claim that arbitrary overload can meet the SLO without admission,
 throttling, or reserved capacity.
+
+## Representative I/O Requalification
+
+The later I/O-capacity and storage-admission changes were requalified on a
+second staging host with production-representative hardware:
+
+- Host: `io-europe-balanced`
+- Host ID: `e10bf532-a259-4e0e-a66c-c11687aa6f9d`
+- Machine: GCP `t2d-standard-16`, spot
+- Data storage: 325 GB balanced persistent disk, Btrfs
+- Scratch storage: 100 GB balanced persistent disk, ext4
+- Project-host artifact:
+  `20260802T213900Z-0776cf83-p95-adaptive-io-0776cf83`
+- Bootstrap artifact:
+  `20260802T220517Z-031b82af-p95-pressure-write15-031b82af`
+
+The test used eight one-core CPU workloads, four 256 MiB bounded buffered
+writers with repeated `fdatasync`, and four warm benchmark projects. During
+qualification the host remained near 77% CPU, full-I/O pressure was 18.6%,
+storage admission was in `emergency`, and uncontained full-I/O pressure was
+zero.
+
+All values below are browser-observed milliseconds and use nearest-rank
+percentiles.
+
+| Scenario                          | Samples | Failures | Over 3s |  P50 |  P90 |  P95 |  P99 |  Max |
+| --------------------------------- | ------: | -------: | ------: | ---: | ---: | ---: | ---: | ---: |
+| Idle                              |     100 |        0 |       1 | 2029 | 2119 | 2180 | 2236 | 3218 |
+| Contained random I/O              |     102 |        0 |       3 | 2074 | 2236 | 2611 | 4489 | 5646 |
+| Post-I/O recovery                 |     100 |        0 |       0 | 2205 | 2346 | 2434 | 2511 | 2759 |
+| CPU                               |     100 |        0 |       1 | 2126 | 2273 | 2353 | 2528 | 3563 |
+| CPU + buffered I/O, normal 25%    |     100 |        0 |       7 | 2388 | 2802 | 3038 | 3914 | 3988 |
+| CPU + buffered I/O, protected 20% |     100 |        0 |       4 | 2521 | 2814 | 2905 | 3209 | 3303 |
+| CPU + buffered I/O, adaptive 15%  |     100 |        0 |       5 | 2406 | 2847 | 2983 | 3254 | 3537 |
+
+The contained-random-I/O maximum was an explained first-touch sparse-file and
+CoW allocation event; the subsequent steady-state starts were approximately
+2.0 to 2.1 seconds. It was not a quota scan, lifecycle queue wait, or start
+failure.
+
+The normal 25% project-pool write ceiling missed the goal. A first attempt to
+reduce the ordinary pool only while a start was active also failed: queued
+buffered writeback had already accumulated before the foreground request.
+Sustained protection is therefore selected from the host pressure state, not
+from the presence of a lifecycle request.
+
+The initial adaptive 20% implementation became mathematically unable to pass
+after six of its first 55 clean samples crossed three seconds. Reducing the
+pressure-time ordinary write ceiling to 15% passed an independent 40-start
+discriminator at P95 2.917 seconds and the 100-start qualification at P95
+2.983 seconds. A bounded 10% experiment did not improve the distribution: its
+40-start P95 was 2.954 seconds and its maximum was 3.634 seconds. The residual
+tail was dominated by Podman create/start rather than ordinary write
+throughput, so 15% is retained as the better QoS tradeoff.
+
+On load removal, the controller moved `emergency -> recovery -> normal`, held
+the 15% ceiling through the settle interval, and then restored the exact 25%
+normal limits automatically. A 20-start post-recovery smoke test produced P50
+2.200 seconds, P95 2.274 seconds, max 2.671 seconds, and zero failures.
+
+Four concurrent starts also succeeded. Their CLI wall times were 2.989 to
+3.531 seconds. After all four completed, the helper reported zero active
+startup runtimes, restored the normal pool limits, and removed its reservation
+snapshot. This validates the reference-counted overlapping-start path; CLI
+wall time is not substituted for the browser SLO measurement.
+
+The adaptive qualification passed the browser target, but its margin is only
+17 ms and its runner P95 is 2.153 seconds. Production rollout should therefore
+retain the normal phased gates and monitor the tail rather than treating the
+three-second objective as permanently solved under every workload.
 
 ## Exact Environment
 
@@ -157,6 +228,23 @@ commits after the pre-existing branch base are:
 
 The deployed artifact ends at `fd9ff3459a`; the final commit only adds the
 staging-only load driver and does not change runtime behavior.
+
+The August 2 representative-I/O follow-up adds:
+
+1. `3780272987` - clean every tagged staging load process
+2. `1d030c3e73` - accept direct browser start transitions in the benchmark
+3. `4db5b0feb7` - reserve project-pool write headroom during starts
+4. `cada67bc54` - restore startup I/O reservation from a validated snapshot
+5. `0776cf836e` - retain startup headroom while host I/O pressure persists
+6. `031b82af80` - select the qualified 15% pressure-time write ceiling
+
+The first reservation implementation rediscovered and verified every block
+device while finalizing each start, adding about 380 ms to the critical path.
+The snapshot implementation reduced finalization to about 200 ms, but also
+proved that request-time reservation was too late to drain writeback already
+queued by running projects. The final pressure-driven controller applies the
+protective ceiling before a start arrives and uses the existing recovery
+hysteresis to decide when normal throughput is safe again.
 
 ## Important Diagnostic And Fix
 

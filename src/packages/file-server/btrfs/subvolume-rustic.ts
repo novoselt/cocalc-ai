@@ -495,6 +495,7 @@ export class SubvolumeRustic {
       tags,
       progress,
       index,
+      existingSnapshotNames: _existingSnapshotNames,
     }: {
       timeout?: number;
       limit?: number;
@@ -505,6 +506,7 @@ export class SubvolumeRustic {
         enabled?: boolean;
         upload?: "rustic" | "local-only";
       };
+      existingSnapshotNames?: string[];
     } = {},
   ) => {
     return await this.backup({ limit, timeout, tags, progress, index });
@@ -515,7 +517,7 @@ export class SubvolumeRustic {
   };
 
   // TODO -- for now just always assume we do...
-  hasUnsavedChanges = async () => {
+  hasUnsavedChanges = async (_snapshotNames?: string[]) => {
     return true;
   };
 

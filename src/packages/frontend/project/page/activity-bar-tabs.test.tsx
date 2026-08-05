@@ -22,6 +22,7 @@ let mockLite = true;
 let mockPageState: Record<string, any> = {};
 let mockProjectAccessRole: "owner" | "collaborator" | "viewer" = "collaborator";
 let mockAgentAIEnabled = true;
+let mockComputeVmEnabled = false;
 let mockRootfsImages: any[] = [];
 let mockActiveProjectTab = "files";
 
@@ -111,6 +112,9 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
     }
     if (store === "account" && key === "account_id") {
       return "account-1";
+    }
+    if (store === "customize" && key === "compute_vm_enabled") {
+      return mockComputeVmEnabled;
     }
     return undefined;
   },
@@ -224,6 +228,7 @@ jest.mock("./file-tab", () => {
     docs: { label: "Docs", icon: "book" },
     users: { label: "Users", icon: "users" },
     settings: { label: "Settings", icon: "wrench", noLite: true },
+    vms: { label: "VMs", icon: "server", noLite: true },
     active: {
       label: "Tabs",
       icon: "database",
@@ -275,6 +280,7 @@ describe("VerticalFixedTabs overflow actions", () => {
     mockPageState = {};
     mockProjectAccessRole = "collaborator";
     mockAgentAIEnabled = true;
+    mockComputeVmEnabled = false;
     mockRootfsImages = [];
     mockActiveProjectTab = "files";
     window.localStorage.clear();
@@ -282,6 +288,19 @@ describe("VerticalFixedTabs overflow actions", () => {
       observe() {}
       disconnect() {}
     };
+  });
+
+  it("only exposes VMs when compute VMs are enabled for the site", () => {
+    mockLite = false;
+    const { rerender } = render(
+      <VerticalFixedTabs setHomePageButtonWidth={() => {}} />,
+    );
+    expect(screen.queryByTestId("rail-vms")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("menu-overflow:vms")).not.toBeInTheDocument();
+
+    mockComputeVmEnabled = true;
+    rerender(<VerticalFixedTabs setHomePageButtonWidth={() => {}} />);
+    expect(screen.getByTestId("rail-vms")).toBeInTheDocument();
   });
 
   it("opens a full page from More on shift-click", () => {

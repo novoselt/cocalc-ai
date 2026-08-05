@@ -322,6 +322,8 @@ describe("GcpProvider", () => {
     const spec = buildSpec({
       metadata: {
         bootstrap_url: "https://example.com/bootstrap.sh",
+        subnetwork_uri:
+          "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
       },
     });
     const runtime = await provider.createHost(spec, {
@@ -337,6 +339,9 @@ describe("GcpProvider", () => {
       insertArgs.instanceResource.networkInterfaces[0].accessConfigs[0]
         .networkTier,
     ).toBe("STANDARD");
+    expect(insertArgs.instanceResource.networkInterfaces[0].subnetwork).toBe(
+      "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
+    );
     expect(disks[0].boot).toBe(true);
     expect(disks[0].initializeParams.diskSizeGb).toBe("10");
     expect(disks[1].boot).toBe(false);
@@ -474,6 +479,68 @@ describe("GcpProvider", () => {
       preemptible: true,
       provisioningModel: "SPOT",
       instanceTerminationAction: "STOP",
+    });
+  });
+
+  it("creates a hostile-guest VM with a persistent boot-only disk", async () => {
+    insertMock.mockResolvedValueOnce([
+      { latestResponse: { name: "op-compute", status: "DONE" } },
+    ]);
+    diskGetMock.mockRejectedValueOnce({ code: 404 });
+    getMock.mockResolvedValueOnce([
+      {
+        name: "ph-test",
+        disks: [
+          {
+            boot: true,
+            deviceName: "ph-test-boot",
+            source: "projects/proj-1/zones/us-west1-a/disks/ph-test-boot",
+          },
+        ],
+        networkInterfaces: [],
+      },
+    ]);
+
+    const provider = new GcpProvider();
+    const runtime = await provider.createHost(
+      buildSpec({
+        metadata: {
+          storage_mode: "boot-only",
+          persistent_boot_disk: true,
+          boot_disk_name: "ph-test-boot",
+          disable_service_account: true,
+          block_project_ssh_keys: true,
+          ssh_public_key: "ssh-ed25519 AAAATEST owner",
+          labels: { "managed-by": "cocalc-compute" },
+        },
+      }),
+      {
+        project_id: "proj-1",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+
+    const resource = insertMock.mock.calls[0][0].instanceResource;
+    expect(resource.disks).toHaveLength(1);
+    expect(resource.disks[0]).toMatchObject({
+      autoDelete: false,
+      boot: true,
+      deviceName: "ph-test-boot",
+      initializeParams: { diskName: "ph-test-boot" },
+    });
+    expect(resource.serviceAccounts).toEqual([]);
+    expect(resource.canIpForward).toBe(false);
+    expect(resource.deletionProtection).toBe(false);
+    expect(resource.labels).toEqual({ "managed-by": "cocalc-compute" });
+    expect(resource.metadata.items).toEqual(
+      expect.arrayContaining([
+        { key: "block-project-ssh-keys", value: "TRUE" },
+      ]),
+    );
+    expect(runtime.metadata).toMatchObject({
+      persistent_boot_disk: true,
+      boot_disk_name: "ph-test-boot",
     });
   });
 
@@ -919,6 +986,10 @@ describe("GcpProvider", () => {
       buildSpec({
         zone: "us-west1-a",
         pricing_model: "spot",
+        metadata: {
+          subnetwork_uri:
+            "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
+        },
       }),
       {
         project_id: "proj-1",
@@ -934,6 +1005,8 @@ describe("GcpProvider", () => {
         instanceResource: expect.objectContaining({
           networkInterfaces: [
             expect.objectContaining({
+              subnetwork:
+                "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
               accessConfigs: [
                 expect.objectContaining({
                   networkTier: "STANDARD",
@@ -1043,5 +1116,139 @@ describe("GcpProvider", () => {
       insertArgs.instanceResource.disks[0].initializeParams.sourceImage,
     ).toBe("projects/custom/global/images/custom-image");
     expect(insertArgs.instanceResource.machineType).toContain("us-east1-b");
+  });
+
+  it("reports observed hostile-guest security settings", async () => {
+    getMock.mockResolvedValueOnce([
+      {
+        name: "compute-vm",
+        canIpForward: false,
+        deletionProtection: false,
+        serviceAccounts: [],
+        tags: { items: ["cocalc-compute-vm"] },
+        metadata: {
+          items: [{ key: "block-project-ssh-keys", value: "TRUE" }],
+        },
+        networkInterfaces: [
+          {
+            subnetwork:
+              "projects/compute-prod/regions/us-central1/subnetworks/hostile-guests",
+            accessConfigs: [{ natIP: "203.0.113.10", networkTier: "STANDARD" }],
+            ipv6AccessConfigs: [],
+          },
+        ],
+      },
+    ]);
+    const provider = new GcpProvider();
+    const observed = await provider.getInstance(
+      {
+        provider: "gcp",
+        instance_id: "compute-vm",
+        zone: "us-central1-a",
+        ssh_user: "ubuntu",
+      },
+      {
+        project_id: "compute-prod",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+    expect(observed?.metadata?.gcp_security).toEqual({
+      service_account_count: 0,
+      can_ip_forward: false,
+      deletion_protection: false,
+      block_project_ssh_keys: true,
+      tags: ["cocalc-compute-vm"],
+      subnetwork:
+        "projects/compute-prod/regions/us-central1/subnetworks/hostile-guests",
+      network_tier: "STANDARD",
+      external_ipv6: false,
+    });
+  });
+
+  it("creates labeled persistent compute volumes idempotently", async () => {
+    diskGetMock.mockRejectedValueOnce({ code: 404 }).mockResolvedValueOnce([
+      {
+        selfLink:
+          "projects/compute-prod/zones/us-central1-a/disks/cocalc-vol-1",
+        sizeGb: "50",
+        users: [],
+      },
+    ]);
+    diskInsertMock.mockResolvedValueOnce([
+      { latestResponse: { name: "disk-op", status: "DONE" } },
+    ]);
+    waitMock.mockResolvedValueOnce([{ status: "DONE" }]);
+    const provider = new GcpProvider();
+    const observed = await provider.ensurePersistentDisk(
+      {
+        name: "cocalc-vol-1",
+        zone: "us-central1-a",
+        size_gb: 50,
+        disk_type: "balanced",
+        labels: { "managed-by": "cocalc-compute" },
+      },
+      {
+        project_id: "compute-prod",
+        client_email: "compute@example.invalid",
+        private_key: "key",
+      },
+    );
+    expect(diskInsertMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        diskResource: expect.objectContaining({
+          name: "cocalc-vol-1",
+          sizeGb: "50",
+          labels: { "managed-by": "cocalc-compute" },
+        }),
+      }),
+    );
+    expect(observed).toMatchObject({ size_gb: 50, users: [] });
+  });
+
+  it("treats a concurrent persistent-disk insert as success", async () => {
+    diskGetMock
+      .mockRejectedValueOnce({ code: 404 })
+      .mockResolvedValueOnce([{ sizeGb: "20", users: [] }]);
+    diskInsertMock.mockRejectedValueOnce({ code: 409 });
+    const provider = new GcpProvider();
+    await expect(
+      provider.ensurePersistentDisk(
+        {
+          name: "cocalc-vol-race",
+          zone: "us-central1-a",
+          size_gb: 20,
+          disk_type: "balanced",
+        },
+        {
+          project_id: "compute-prod",
+          client_email: "compute@example.invalid",
+          private_key: "key",
+        },
+      ),
+    ).resolves.toMatchObject({ name: "cocalc-vol-race", size_gb: 20 });
+  });
+
+  it("refuses to delete an attached persistent compute volume", async () => {
+    diskGetMock.mockResolvedValueOnce([
+      {
+        sizeGb: "20",
+        users: [
+          "projects/compute-prod/zones/us-central1-a/instances/compute-vm",
+        ],
+      },
+    ]);
+    const provider = new GcpProvider();
+    await expect(
+      provider.deletePersistentDisk(
+        { name: "cocalc-vol-1", zone: "us-central1-a" },
+        {
+          project_id: "compute-prod",
+          client_email: "compute@example.invalid",
+          private_key: "key",
+        },
+      ),
+    ).rejects.toThrow("refusing to delete attached disk");
+    expect(diskDeleteMock).not.toHaveBeenCalled();
   });
 });

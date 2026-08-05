@@ -22,6 +22,7 @@ import { startRootfsPublishLroWorker } from "@cocalc/server/projects/rootfs-publ
 import { startRestoreLroWorker } from "@cocalc/server/projects/restore-worker";
 import { startHostLroWorker } from "@cocalc/server/hosts/start-worker";
 import { startHostRuntimeFleetRolloutWorker } from "@cocalc/server/hosts/runtime-fleet-rollout-worker";
+import { startComputeVmWorker } from "@cocalc/server/compute/worker";
 import { startLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
 import { startLegacyMigrationArtifactRefreshMaintenance } from "@cocalc/server/legacy-migration/artifact-refresh-maintenance";
 import { getProjectRuntimeMode } from "@cocalc/server/launchpad/project-runtime";
@@ -49,6 +50,7 @@ import { startConatAdmissionSettingsRefresh } from "./admission-settings";
 import { startHostAvailabilityMaintenance } from "@cocalc/server/hosts/availability";
 import { startGlobalConfigMirrorRepairMaintenance } from "@cocalc/server/global-config-mirror-maintenance";
 import { startAiSessionReconciliationMaintenance } from "@cocalc/server/ai/acp-sessions";
+import { startSiteFundedCodexMaintenance } from "@cocalc/server/ai/site-funded-codex-maintenance";
 import startPurchasesMaintenanceLoop from "@cocalc/server/purchases/maintenance";
 import { startLroExpirationMaintenance } from "@cocalc/server/lro/expiration-maintenance";
 import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-retention-maintenance";
@@ -120,6 +122,7 @@ export function startConatApiBackgroundWorkers(): void {
   }
   startHostLroWorker();
   if (isPrimaryBayWorker()) {
+    startComputeVmWorker();
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();
     startHostRuntimeFleetRolloutWorker();
@@ -143,14 +146,23 @@ export function startConatApiBackgroundWorkers(): void {
   startGlobalConfigMirrorRepairMaintenance();
   startAiSessionReconciliationMaintenance();
   if (isPrimaryBayWorker()) {
+    startSiteFundedCodexMaintenance();
+  }
+  if (isPrimaryBayWorker()) {
     startPurchasesMaintenanceLoop();
   } else {
     logger.info("purchase maintenance loop skipped on non-primary bay worker", {
       worker_id: process.env.COCALC_BAY_WORKER_ID,
     });
   }
-  startBayBackupMaintenance();
-  startBayWalArchiveMaintenance();
+  if (isPrimaryBayWorker()) {
+    startBayBackupMaintenance();
+    startBayWalArchiveMaintenance();
+  } else {
+    logger.info("bay backup maintenance skipped on non-primary bay worker", {
+      worker_id: process.env.COCALC_BAY_WORKER_ID,
+    });
+  }
 }
 
 export async function initConatApi({

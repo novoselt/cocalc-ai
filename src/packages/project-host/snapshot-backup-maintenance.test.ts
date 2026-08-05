@@ -3,6 +3,7 @@ const getMasterConatClientMock = jest.fn();
 const runScheduledSnapshotMaintenanceMock = jest.fn();
 const runScheduledBackupMaintenanceMock = jest.fn();
 const admitStorageOperationMock = jest.fn();
+const getStorageAdmissionStatusMock = jest.fn();
 const releaseStorageOperationMock = jest.fn();
 
 jest.mock("@cocalc/backend/logger", () => ({
@@ -39,6 +40,8 @@ jest.mock("./file-server", () => ({
 jest.mock("./storage-admission", () => ({
   __esModule: true,
   admitStorageOperation: (...args: any[]) => admitStorageOperationMock(...args),
+  getStorageAdmissionStatus: (...args: any[]) =>
+    getStorageAdmissionStatusMock(...args),
 }));
 
 jest.mock("@cocalc/file-server/btrfs/operation-cache", () => ({
@@ -57,6 +60,7 @@ describe("snapshot-backup-maintenance", () => {
     process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_MAX_MEMORY_AVAILABLE_BYTES =
       "0";
     getMasterConatClientMock.mockReturnValue({ id: "master-client" });
+    getStorageAdmissionStatusMock.mockReturnValue(undefined);
     listProjectMaintenanceSchedulesMock.mockResolvedValue([
       {
         project_id: "proj-1",
@@ -86,6 +90,21 @@ describe("snapshot-backup-maintenance", () => {
         release: releaseStorageOperationMock,
       }),
     );
+  });
+
+  it("defers the whole sweep once while admission enforces pressure", async () => {
+    getStorageAdmissionStatusMock.mockReturnValue({
+      mode: "enforce",
+      lifecycle_active: 0,
+      pressure_state: "emergency",
+    });
+    const { runProjectSnapshotBackupMaintenanceSweepOnce } =
+      await import("./snapshot-backup-maintenance");
+
+    await runProjectSnapshotBackupMaintenanceSweepOnce({ hostId: "host-1" });
+
+    expect(listProjectMaintenanceSchedulesMock).not.toHaveBeenCalled();
+    expect(admitStorageOperationMock).not.toHaveBeenCalled();
   });
 
   afterEach(() => {

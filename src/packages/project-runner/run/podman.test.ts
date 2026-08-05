@@ -974,12 +974,12 @@ describe("project-runner podman orphan fallback", () => {
       },
     });
 
-    expect(localPath).toHaveBeenNthCalledWith(2, {
+    expect(localPath).toHaveBeenCalledTimes(1);
+    expect(localPath).toHaveBeenCalledWith({
       project_id: project1,
       disk: 1024,
       scratch: undefined,
-      ensure: true,
-      resetScratch: false,
+      ensure: false,
       applyQuota: false,
     });
   });

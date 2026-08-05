@@ -144,6 +144,14 @@ function localPostgresArchiveEnabled(): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
+function requireSeparateBackupFilesystem(): boolean {
+  const raw =
+    `${process.env.COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM ?? ""}`
+      .trim()
+      .toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 function writeEnvFile({
   socketDir,
   user,
@@ -230,6 +238,49 @@ function postgresConfQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+export function buildLocalPostgresArchiveScript({
+  backupRoot,
+  walArchiveDir,
+  requireSeparateFilesystem,
+}: {
+  backupRoot: string;
+  walArchiveDir: string;
+  requireSeparateFilesystem: boolean;
+}): string {
+  const mountGuard = requireSeparateFilesystem
+    ? [
+        `BACKUP_ROOT=${shellQuote(backupRoot)}`,
+        'if [ ! -d "$BACKUP_ROOT" ]; then',
+        '  echo "backup root is unavailable: $BACKUP_ROOT" >&2',
+        "  exit 1",
+        "fi",
+        'ROOT_DEVICE="$(stat -c %d "$BACKUP_ROOT")"',
+        'PARENT_DEVICE="$(stat -c %d "$(dirname "$BACKUP_ROOT")")"',
+        'if [ "$ROOT_DEVICE" = "$PARENT_DEVICE" ]; then',
+        '  echo "backup root is not a separate filesystem: $BACKUP_ROOT" >&2',
+        "  exit 1",
+        "fi",
+      ]
+    : [];
+  return [
+    "#!/bin/sh",
+    "set -eu",
+    ...mountGuard,
+    `DEST_DIR=${shellQuote(walArchiveDir)}`,
+    'SRC_PATH="$1"',
+    'SEGMENT="$2"',
+    'DEST_PATH="$DEST_DIR/$SEGMENT"',
+    'TMP_PATH="$DEST_PATH.tmp.$$"',
+    'mkdir -p "$DEST_DIR"',
+    'if [ -f "$DEST_PATH" ]; then',
+    "  exit 0",
+    "fi",
+    'cp "$SRC_PATH" "$TMP_PATH"',
+    'mv "$TMP_PATH" "$DEST_PATH"',
+    "",
+  ].join("\n");
+}
+
 function ensureConfig(dataDir: string, socketDir: string): void {
   const hba = join(dataDir, "pg_hba.conf");
   if (existsSync(hba)) {
@@ -253,26 +304,20 @@ function ensureConfig(dataDir: string, socketDir: string): void {
     const bayId = resolveBayId();
     const walRoot = join(backupRoot, "bay-backups", bayId, "wal");
     const walArchiveDir = join(walRoot, "archive");
-    const archiveScript = join(walRoot, "pg-archive-wal.sh");
-    ensureDir(walArchiveDir, 0o700);
+    const strictBackupFilesystem = requireSeparateBackupFilesystem();
+    const archiveScript = strictBackupFilesystem
+      ? join(dataDir, "cocalc-pg-archive-wal.sh")
+      : join(walRoot, "pg-archive-wal.sh");
+    if (!strictBackupFilesystem) {
+      ensureDir(walArchiveDir, 0o700);
+    }
     writeFileSync(
       archiveScript,
-      [
-        "#!/bin/sh",
-        "set -eu",
-        `DEST_DIR=${shellQuote(walArchiveDir)}`,
-        'SRC_PATH="$1"',
-        'SEGMENT="$2"',
-        'DEST_PATH="$DEST_DIR/$SEGMENT"',
-        'TMP_PATH="$DEST_PATH.tmp.$$"',
-        'mkdir -p "$DEST_DIR"',
-        'if [ -f "$DEST_PATH" ]; then',
-        "  exit 0",
-        "fi",
-        'cp "$SRC_PATH" "$TMP_PATH"',
-        'mv "$TMP_PATH" "$DEST_PATH"',
-        "",
-      ].join("\n"),
+      buildLocalPostgresArchiveScript({
+        backupRoot,
+        walArchiveDir,
+        requireSeparateFilesystem: strictBackupFilesystem,
+      }),
       { mode: 0o700 },
     );
     chmodSync(archiveScript, 0o700);

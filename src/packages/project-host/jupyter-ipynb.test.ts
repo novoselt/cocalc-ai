@@ -65,6 +65,37 @@ describe("project-host Jupyter ipynb conversion", () => {
     expect(ipynb.cells[0].attachments).toBeUndefined();
   });
 
+  it("imports and saves a notebook when an attachment reference has no payload", async () => {
+    const ipynb = portableNotebook();
+    ipynb.cells[0].source = '<img src="attachment:missing.png" alt="missing">';
+    delete (ipynb.cells[0] as any).attachments;
+
+    const result: any = await importJupyterIpynb({
+      project_id,
+      ipynb,
+    });
+
+    expect(result.ipynb).toEqual(ipynb);
+    expect(mockSaveBlob).not.toHaveBeenCalled();
+
+    const writeFile = jest.fn(async () => {});
+    await expect(
+      saveJupyterIpynb({
+        project_id,
+        path: "missing-attachment.ipynb",
+        ipynb: result.ipynb,
+        fs: {
+          stat: jest.fn(async () => {
+            throw Object.assign(new Error("not found"), { code: "ENOENT" });
+          }),
+          readFile: jest.fn(),
+          writeFile,
+        } as any,
+      }),
+    ).resolves.toBeDefined();
+    expect(JSON.parse(writeFile.mock.calls[0][1])).toEqual(ipynb);
+  });
+
   it("writes a portable notebook without a project runtime", async () => {
     const writeFile = jest.fn(async () => {});
     const fs = {

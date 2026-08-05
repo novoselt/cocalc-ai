@@ -120,6 +120,10 @@ describe("project-routing", () => {
       kind: "tab",
       tab: "rootfs",
     });
+    expect(parseProjectTarget("vms", { decodeDirectoryPath })).toEqual({
+      kind: "tab",
+      tab: "vms",
+    });
     expect(
       parseProjectTarget("apps/jupyter/lab", { decodeDirectoryPath }),
     ).toEqual({

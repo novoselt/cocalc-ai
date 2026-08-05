@@ -564,6 +564,22 @@ export class GcpProvider implements CloudProvider {
       spec.metadata?.boot_disk_gb ??
       spec.metadata?.bootDiskGb ??
       (spec.gpu ? 20 : 10);
+    const persistentBootDisk = spec.metadata?.persistent_boot_disk === true;
+    const bootDiskName = spec.metadata?.boot_disk_name ?? `${spec.name}-boot`;
+    let bootDiskSource: string | undefined;
+    if (persistentBootDisk) {
+      const diskClient = new DisksClient(credentials);
+      try {
+        const [disk] = await diskClient.get({
+          project: credentials.projectId,
+          zone,
+          disk: bootDiskName,
+        });
+        bootDiskSource = disk?.selfLink ?? undefined;
+      } catch (err) {
+        if (!isNotFoundError(err)) throw err;
+      }
+    }
 
     const storageMode = spec.metadata?.storage_mode;
     type Disk = {
@@ -582,13 +598,19 @@ export class GcpProvider implements CloudProvider {
     };
     const disks: Disk[] = [
       {
-        autoDelete: true,
+        autoDelete: !persistentBootDisk,
         boot: true,
-        initializeParams: {
-          diskSizeGb: `${bootDiskGb}`,
-          diskType,
-          sourceImage,
-        },
+        deviceName: persistentBootDisk ? bootDiskName : undefined,
+        ...(bootDiskSource
+          ? { source: bootDiskSource }
+          : {
+              initializeParams: {
+                diskName: persistentBootDisk ? bootDiskName : undefined,
+                diskSizeGb: `${bootDiskGb}`,
+                diskType,
+                sourceImage,
+              },
+            }),
       },
     ];
     const dataDiskName = spec.metadata?.data_disk_name ?? `${spec.name}-data`;
@@ -607,7 +629,7 @@ export class GcpProvider implements CloudProvider {
           diskType: `projects/${credentials.projectId}/zones/${zone}/diskTypes/local-ssd`,
         },
       });
-    } else {
+    } else if (storageMode !== "boot-only") {
       const diskClient = new DisksClient(credentials);
       try {
         const [disk] = await diskClient.get({
@@ -672,6 +694,9 @@ export class GcpProvider implements CloudProvider {
       });
     }
 
+    const subnetwork =
+      `${spec.metadata?.subnetwork_uri ?? ""}`.trim() ||
+      `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`;
     const networkInterfaces = [
       {
         accessConfigs: [
@@ -681,11 +706,14 @@ export class GcpProvider implements CloudProvider {
           },
         ],
         stackType: "IPV4_ONLY",
-        subnetwork: `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`,
+        subnetwork,
       },
     ];
 
     const metadataItems: { key: string; value: string }[] = [];
+    if (spec.metadata?.block_project_ssh_keys === true) {
+      metadataItems.push({ key: "block-project-ssh-keys", value: "TRUE" });
+    }
     const startupScript = startupScriptFor(spec);
     if (startupScript) {
       metadataItems.push({ key: "startup-script", value: startupScript });
@@ -725,6 +753,11 @@ export class GcpProvider implements CloudProvider {
       guestAccelerators,
       tags: spec.tags ? { items: spec.tags } : undefined,
       scheduling,
+      labels: spec.metadata?.labels,
+      canIpForward: false,
+      deletionProtection: false,
+      serviceAccounts:
+        spec.metadata?.disable_service_account === true ? [] : undefined,
     };
 
     const runtimeFromInstance = (instance: any): HostRuntime => {
@@ -749,6 +782,13 @@ export class GcpProvider implements CloudProvider {
           gpu_count: spec.gpu?.count ?? 0,
           disk_type: diskType,
           boot_disk_gb: bootDiskGb,
+          boot_disk_name: persistentBootDisk ? bootDiskName : undefined,
+          boot_disk_uri:
+            bootDiskSource ??
+            attachedDiskSource(
+              (instance?.disks ?? []).find((disk) => disk.boot),
+            ),
+          persistent_boot_disk: persistentBootDisk,
           data_disk_gb: spec.disk_gb,
           data_disk_name: dataDiskName,
           data_disk_uri: dataDiskSource ?? dataDiskUriFromInstance(instance),
@@ -1395,6 +1435,9 @@ export class GcpProvider implements CloudProvider {
       spec.metadata?.boot_disk_gb ??
       spec.metadata?.bootDiskGb ??
       (spec.gpu ? 20 : 10);
+    const subnetwork =
+      `${spec.metadata?.subnetwork_uri ?? ""}`.trim() ||
+      `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`;
     const networkInterfaces = [
       {
         accessConfigs: [
@@ -1404,7 +1447,7 @@ export class GcpProvider implements CloudProvider {
           },
         ],
         stackType: "IPV4_ONLY",
-        subnetwork: `projects/${credentials.projectId}/regions/${spec.region}/subnetworks/default`,
+        subnetwork,
       },
     ];
     const guestAccelerators = spec.gpu
@@ -1437,6 +1480,17 @@ export class GcpProvider implements CloudProvider {
           guestAccelerators,
           tags: spec.tags ? { items: spec.tags } : undefined,
           scheduling: spotScheduling(),
+          labels: spec.metadata?.labels,
+          metadata:
+            spec.metadata?.block_project_ssh_keys === true
+              ? {
+                  items: [{ key: "block-project-ssh-keys", value: "TRUE" }],
+                }
+              : undefined,
+          canIpForward: false,
+          deletionProtection: false,
+          serviceAccounts:
+            spec.metadata?.disable_service_account === true ? [] : undefined,
         },
       });
       await waitUntilOperationComplete({
@@ -1665,6 +1719,174 @@ export class GcpProvider implements CloudProvider {
         return;
       }
       throw err;
+    }
+  }
+
+  async deletePersistentBootDisk(
+    runtime: HostRuntime,
+    creds: any,
+  ): Promise<void> {
+    const credentials = parseCredentials(creds ?? {});
+    if (!runtime.zone) {
+      throw new Error("gcp.deletePersistentBootDisk requires zone");
+    }
+    const diskName = `${runtime.metadata?.boot_disk_name ?? ""}`.trim();
+    if (!diskName) {
+      throw new Error("gcp.deletePersistentBootDisk requires boot_disk_name");
+    }
+    const diskClient = new DisksClient(credentials);
+    try {
+      const [response] = await diskClient.delete({
+        project: credentials.projectId,
+        zone: runtime.zone,
+        disk: diskName,
+      });
+      await waitUntilOperationComplete({
+        response,
+        zone: runtime.zone,
+        credentials,
+      });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+    }
+  }
+
+  async ensurePersistentDisk(
+    opts: {
+      name: string;
+      zone: string;
+      size_gb: number;
+      disk_type: "balanced";
+      labels?: Record<string, string>;
+    },
+    creds: any,
+  ): Promise<{ name: string; uri: string; size_gb: number; users: string[] }> {
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    let disk: any;
+    try {
+      [disk] = await client.get({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+      try {
+        const [response] = await client.insert({
+          project: credentials.projectId,
+          zone: opts.zone,
+          diskResource: {
+            name: opts.name,
+            sizeGb: `${Math.floor(opts.size_gb)}`,
+            type: `projects/${credentials.projectId}/zones/${opts.zone}/diskTypes/pd-balanced`,
+            labels: opts.labels,
+          },
+        } as any);
+        await waitUntilOperationComplete({
+          response,
+          zone: opts.zone,
+          credentials,
+        });
+      } catch (insertErr) {
+        // A VM provision and the independent volume reconciler may both prove
+        // the same durable disk concurrently. Provider identity makes the
+        // resulting AlreadyExists response an idempotent success.
+        if (!isAlreadyExistsError(insertErr)) throw insertErr;
+      }
+      [disk] = await client.get({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+    }
+    return {
+      name: opts.name,
+      uri:
+        disk?.selfLink ??
+        `projects/${credentials.projectId}/zones/${opts.zone}/disks/${opts.name}`,
+      size_gb: Number(disk?.sizeGb ?? opts.size_gb),
+      users: Array.isArray(disk?.users)
+        ? disk.users.map((user) => `${user}`)
+        : [],
+    };
+  }
+
+  async inspectPersistentDisk(
+    opts: { name: string; zone: string },
+    creds: any,
+  ): Promise<
+    { name: string; uri: string; size_gb: number; users: string[] } | undefined
+  > {
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    try {
+      const [disk] = await client.get({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+      return {
+        name: opts.name,
+        uri:
+          disk?.selfLink ??
+          `projects/${credentials.projectId}/zones/${opts.zone}/disks/${opts.name}`,
+        size_gb: Number(disk?.sizeGb ?? 0),
+        users: Array.isArray(disk?.users)
+          ? disk.users.map((user) => `${user}`)
+          : [],
+      };
+    } catch (err) {
+      if (isNotFoundError(err)) return undefined;
+      throw err;
+    }
+  }
+
+  async resizePersistentDisk(
+    opts: { name: string; zone: string; size_gb: number },
+    creds: any,
+  ): Promise<void> {
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    const [response] = await client.resize({
+      project: credentials.projectId,
+      zone: opts.zone,
+      disk: opts.name,
+      disksResizeRequestResource: { sizeGb: Math.floor(opts.size_gb) },
+    });
+    await waitUntilOperationComplete({
+      response,
+      zone: opts.zone,
+      credentials,
+    });
+  }
+
+  async deletePersistentDisk(
+    opts: { name: string; zone: string },
+    creds: any,
+  ): Promise<void> {
+    const observed = await this.inspectPersistentDisk(opts, creds);
+    if (!observed) return;
+    if (observed.users.length) {
+      throw new Error(
+        `gcp: refusing to delete attached disk '${opts.name}' (${observed.users.join(", ")})`,
+      );
+    }
+    const credentials = parseCredentials(creds ?? {});
+    const client = new DisksClient(credentials);
+    try {
+      const [response] = await client.delete({
+        project: credentials.projectId,
+        zone: opts.zone,
+        disk: opts.name,
+      });
+      await waitUntilOperationComplete({
+        response,
+        zone: opts.zone,
+        credentials,
+      });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
     }
   }
 
@@ -1960,6 +2182,11 @@ export class GcpProvider implements CloudProvider {
     const public_ip =
       instance?.networkInterfaces?.[0]?.accessConfigs?.[0]?.natIP ?? undefined;
     const private_ip = instance?.networkInterfaces?.[0]?.networkIP ?? undefined;
+    const networkInterface = instance?.networkInterfaces?.[0];
+    const metadataItems = instance?.metadata?.items ?? [];
+    const blockProjectSshKeys = metadataItems.find(
+      (item) => item.key === "block-project-ssh-keys",
+    )?.value;
     return {
       instance_id: runtime.instance_id,
       name: instance.name ?? runtime.instance_id,
@@ -1972,6 +2199,21 @@ export class GcpProvider implements CloudProvider {
         instanceName: instance.name ?? runtime.instance_id,
         projectId: credentials.projectId,
       }),
+      metadata: {
+        gcp_security: {
+          service_account_count: instance?.serviceAccounts?.length ?? 0,
+          can_ip_forward: instance?.canIpForward === true,
+          deletion_protection: instance?.deletionProtection === true,
+          block_project_ssh_keys:
+            `${blockProjectSshKeys ?? ""}`.toUpperCase() === "TRUE",
+          tags: instance?.tags?.items ?? [],
+          subnetwork: networkInterface?.subnetwork,
+          network_tier: networkInterface?.accessConfigs?.[0]?.networkTier,
+          external_ipv6:
+            (networkInterface?.ipv6AccessConfigs?.length ?? 0) > 0 ||
+            !!networkInterface?.ipv6Address,
+        },
+      },
     };
   }
 }

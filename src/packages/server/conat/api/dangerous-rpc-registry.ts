@@ -23,6 +23,42 @@ const TELEMETRY_ONLY =
 // public hub API exports with destructive/admin-looking names and fails until
 // new RPCs are added here with a fresh-auth decision.
 export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
+  "compute.createVm": {
+    decision: "fresh-auth-required",
+    reason: "creates billable managed compute infrastructure",
+  },
+  "compute.deleteVm": {
+    decision: "fresh-auth-required",
+    reason: "deletes a managed compute VM and its persistent root disk",
+  },
+  "compute.setVmTtl": {
+    decision: "fresh-auth-required",
+    reason: "changes or removes a managed compute VM spending deadline",
+  },
+  "compute.setProjectBudget": {
+    decision: "fresh-auth-required",
+    reason: "changes the recurring managed compute spending ceiling",
+  },
+  "compute.createVolume": {
+    decision: "fresh-auth-required",
+    reason: "creates billable persistent managed compute storage",
+  },
+  "compute.resizeVolume": {
+    decision: "fresh-auth-required",
+    reason: "increases recurring managed compute storage cost",
+  },
+  "compute.deleteVolume": {
+    decision: "fresh-auth-required",
+    reason: "irreversibly deletes a persistent managed compute volume",
+  },
+  "compute.startVm": {
+    decision: "fresh-auth-not-required",
+    reason: "starts an owned VM inside its existing TTL and cost envelope",
+  },
+  "compute.stopVm": {
+    decision: "fresh-auth-not-required",
+    reason: "stops an owned managed compute VM",
+  },
   "adminDb.diagnostic": {
     decision: "fresh-auth-not-required",
     reason:
@@ -228,6 +264,14 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason: TELEMETRY_ONLY,
   },
   "hosts.recordCodexSiteUsage": {
+    decision: "fresh-auth-not-required",
+    reason: TELEMETRY_ONLY,
+  },
+  "hosts.reserveSiteFundedCodexTurn": {
+    decision: "fresh-auth-not-required",
+    reason: "host-authenticated bounded site-funded Codex admission",
+  },
+  "hosts.recordSiteFundedCodexUsageEvent": {
     decision: "fresh-auth-not-required",
     reason: TELEMETRY_ONLY,
   },
@@ -452,6 +496,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason: ORDINARY_AUTHZ,
   },
   "notifications.markRead": {
+    decision: "fresh-auth-not-required",
+    reason: ORDINARY_AUTHZ,
+  },
+  "notifications.markAllRead": {
     decision: "fresh-auth-not-required",
     reason: ORDINARY_AUTHZ,
   },

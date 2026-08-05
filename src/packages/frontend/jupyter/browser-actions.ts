@@ -4007,9 +4007,16 @@ export class JupyterActions extends JupyterActions0 {
       // run through the project-host converter instead of applying patches.
       this.isIpynbDeleted = false;
       this.runDebug("watch.load.full.done", { patchSeq });
-    } catch {
+    } catch (err) {
       this.isIpynbDeleted = true;
       this.runDebug("watch.load.full.failed", { patchSeq });
+      if (initial) {
+        // Initial hydration is the authority handoff from the ipynb file to
+        // Patchflow. Do not report a failed import as complete: watchIpynb
+        // must keep retrying instead of enabling the empty-cell fallback,
+        // which could otherwise save an empty notebook over the disk file.
+        throw err;
+      }
     }
   };
 

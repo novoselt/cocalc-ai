@@ -1,4 +1,30 @@
 import type { ChildProcess } from "node:child_process";
+import type {
+  SiteFundedCodexPolicy,
+  SiteFundedCodexReservation,
+} from "@cocalc/util/ai/site-funded-codex";
+import type { CodexPaymentSourcePreference } from "@cocalc/util/ai/codex";
+
+export type CodexSiteFundedTurnRequest = {
+  fundedTurnId: string;
+  idempotencyKey: string;
+  path?: string;
+};
+
+export type CodexSiteFundedTurnRuntime = {
+  reservation: SiteFundedCodexReservation;
+  policy: SiteFundedCodexPolicy;
+  providerBaseUrl: string;
+  providerToken: string;
+  finish: (opts: {
+    status: "committed" | "interrupted" | "failed" | "released";
+    outcome?: string;
+  }) => Promise<void>;
+  beginTurn: (
+    request: CodexSiteFundedTurnRequest,
+  ) => Promise<CodexSiteFundedTurnRuntime>;
+  close: () => Promise<void>;
+};
 
 export type CodexProjectSpawnOptions = {
   projectId: string;
@@ -51,16 +77,20 @@ export type CodexProjectSpawner = {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     touchReason?: string | false;
+    siteFundedTurn?: CodexSiteFundedTurnRequest;
+    paymentSource?: CodexPaymentSourcePreference;
   }) => Promise<{
     proc: ChildProcess;
     cmd: string;
     args: string[];
+    logArgs?: string;
     cwd?: string;
     authSource?: string;
     containerPathMap?: CodexProjectContainerPathMap;
     appServerLogin?: CodexAppServerLoginHint;
     handleAppServerRequest?: CodexAppServerRequestHandler;
     runtimeEnv?: Record<string, string>;
+    siteFundedTurn?: CodexSiteFundedTurnRuntime;
   }>;
 };
 

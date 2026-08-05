@@ -406,6 +406,42 @@ export const TABLE_OWNERSHIP = {
     rebuild:
       "Recreate from a later browser presence observation or durable worker source state.",
   }),
+
+  ...entries(
+    [
+      "compute_vms",
+      "compute_vm_instances",
+      "compute_volumes",
+      "compute_project_budgets",
+      "compute_usage_charges",
+    ],
+    {
+      ownership: "account-home",
+      authority: "owner_account_id",
+      portability: "stable",
+      secondary_reference_fields: {
+        project_id: "Project attachment controls discovery but not authority.",
+      },
+      notes:
+        "Account-owned managed compute state. Project attachment controls discovery but does not transfer ownership.",
+    },
+  ),
+
+  ...entries(["compute_resource_work"], {
+    ownership: "ephemeral",
+    authority: "local",
+    portability: "rebuildable",
+    notes:
+      "Account-home-bay provider work. Desired resource state remains the durable source of truth.",
+    rebuild: "Reconcile desired compute resource state against the provider.",
+  }),
+
+  ...entries(["compute_resource_events"], {
+    ownership: "audit-local",
+    authority: "local",
+    portability: "stable",
+    notes: "Append-only managed compute lifecycle and authorization audit.",
+  }),
 } satisfies Record<string, TableOwnershipEntry>;
 
 export interface AdHocPostgresTableOwnershipEntry extends TableOwnershipEntry {
@@ -536,6 +572,23 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     notes:
       "Global usage-window epoch/reset state. This defines cluster-wide reset semantics and should be seed-authoritative.",
   }),
+
+  ...adHocEntries(
+    [
+      "site_ai_account_holds",
+      "site_ai_funding_periods",
+      "site_ai_turn_reservations",
+    ],
+    {
+      ownership: "seed-global",
+      authority: "seed",
+      portability: "stable",
+      source: "server site-funded Codex reservation schema bootstrap",
+      migrate_to_schema: true,
+      notes:
+        "Cluster-wide site-funded Codex budget, hold, and reservation state. All admission and settlement operations route to the seed bay so concurrency and spending limits are enforced globally.",
+    },
+  ),
 
   ...adHocEntries(
     [

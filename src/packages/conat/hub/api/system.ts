@@ -127,6 +127,7 @@ export const system = {
   deleteOpenAiApiKey: authFirst,
   getOpenAiApiKeyStatus: authFirst,
   getCodexPaymentSource: authFirst,
+  getSiteFundedCodexAdminStatus: authFirstRequireAccount,
   getCodexUsageStatus: authFirst,
   getFrontendSourceFingerprint: authFirst,
   getRootfsCatalog: authFirst,
@@ -702,8 +703,15 @@ export interface CodexPaymentSourceInfo {
     units_5h: number;
     units_7d: number;
   };
+  siteFundedCodex?: {
+    enabled: boolean;
+    policy?: import("@cocalc/util/ai/site-funded-codex").SiteFundedCodexPolicy;
+    status?: import("@cocalc/util/ai/site-funded-codex").SiteFundedCodexStatus;
+  };
   sharedHomeMode: "disabled" | "fallback" | "prefer" | "always";
   project_id?: string;
+  preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
+  unavailableReason?: string;
 }
 
 export interface CodexUsageStatusInfo {
@@ -1446,6 +1454,20 @@ export interface BayBackupArtifactInfo {
   content_type: string;
 }
 
+export interface BayBackupFilesystemStatus {
+  require_separate_filesystem: boolean;
+  valid: boolean;
+  error: string | null;
+  device: string | null;
+  parent_device: string | null;
+  total_bytes: number | null;
+  available_bytes: number | null;
+  minimum_free_bytes: number;
+  estimated_workspace_bytes: number;
+  required_available_bytes: number;
+  admission_allowed: boolean;
+}
+
 export interface BayBackupStatus {
   enabled: boolean;
   backup_root: string | null;
@@ -1454,6 +1476,9 @@ export interface BayBackupStatus {
   manifests_dir: string | null;
   staging_dir: string | null;
   wal_archive_dir: string | null;
+  filesystem: BayBackupFilesystemStatus;
+  automatic_scheduler_worker_id: string;
+  current_worker_is_scheduler: boolean;
   r2_configured: boolean;
   current_storage_backend: "local" | "r2" | "rustic";
   bucket_name: string | null;
@@ -1487,6 +1512,7 @@ export interface BayBackupStatus {
   full_snapshot_scheduler_enabled: boolean;
   full_snapshot_interval_ms: number | null;
   full_snapshot_retry_interval_ms: number;
+  full_snapshot_retry_max_ms: number;
   full_snapshot_retention_count: number;
   restore_workspace_retention_days: number;
   local_wal_retention_count: number;
@@ -1498,6 +1524,7 @@ export interface BayBackupStatus {
   maintenance_last_success_at: string | null;
   maintenance_last_error_at: string | null;
   maintenance_last_error: string | null;
+  maintenance_consecutive_failures: number;
   last_pruned_at: string | null;
   last_pruned_wal_count: number;
   last_pruned_remote_wal_count: number;
@@ -2574,7 +2601,14 @@ export interface System {
   getCodexPaymentSource: (opts: {
     account_id?: string;
     project_id?: string;
+    preference?: import("@cocalc/util/ai/codex").CodexPaymentSourcePreference;
   }) => Promise<CodexPaymentSourceInfo>;
+
+  getSiteFundedCodexAdminStatus: (opts: {
+    account_id?: string;
+  }) => Promise<
+    import("@cocalc/util/ai/site-funded-codex").SiteFundedCodexStatus
+  >;
 
   getCodexUsageStatus: (opts: {
     account_id?: string;

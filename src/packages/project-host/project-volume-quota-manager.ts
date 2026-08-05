@@ -146,6 +146,11 @@ export class ProjectVolumeQuotaManager {
           project_id,
           volume_kind,
           reason: `temporary quota override active at ${effective_bytes} bytes`,
+          retry_at: Math.min(
+            ...overrides.map(({ expires_at }) =>
+              expires_at == null ? Date.now() + 5 * 60_000 : expires_at,
+            ),
+          ),
         });
       } else {
         markProjectVolumeQuotaApplied({

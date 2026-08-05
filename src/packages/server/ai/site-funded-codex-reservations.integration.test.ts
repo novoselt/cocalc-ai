@@ -1,0 +1,310 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026, SageMath, Inc.
+ *  License: MS-RSL – see https://github.com/sagemathinc/cocalc-ai/blob/master/LICENSE.md
+ */
+
+import getPool from "@cocalc/database/pool";
+import { after, before } from "@cocalc/server/test";
+import {
+  DEFAULT_SITE_FUNDED_CODEX_POLICY,
+  siteFundedCodexFinalRequestHeadroomMicrousd,
+  type SiteFundedCodexPolicy,
+} from "@cocalc/util/ai/site-funded-codex";
+import { uuid } from "@cocalc/util/misc";
+import {
+  ensureSiteFundedCodexReservationTables,
+  expireAbandonedSiteFundedCodexReservations,
+  finishSiteFundedCodexTurn,
+  getSiteFundedCodexPoolStatus,
+  recordSiteFundedCodexUsageEvent,
+  reserveSiteFundedCodexTurn,
+} from "./site-funded-codex-reservations";
+
+beforeAll(async () => {
+  await before({ noConat: true });
+  await ensureSiteFundedCodexReservationTables();
+}, 15_000);
+
+afterAll(after);
+
+function options({
+  accountId = uuid(),
+  poolId = "site-funded-codex-free",
+  poolLimitMicrousd = 100_000,
+  globalPoolLimitMicrousd = poolLimitMicrousd,
+  maxTurnCostMicrousd = 60_000,
+}: {
+  accountId?: string;
+  poolId?: "site-funded-codex-free" | "site-funded-codex-paid";
+  poolLimitMicrousd?: number;
+  globalPoolLimitMicrousd?: number;
+  maxTurnCostMicrousd?: number;
+} = {}) {
+  const fundedTurnId = uuid();
+  const policy: SiteFundedCodexPolicy = {
+    ...DEFAULT_SITE_FUNDED_CODEX_POLICY,
+    maxTurnCostMicrousd,
+    contextWindowTokens: 10_000,
+    autoCompactTokenLimit: 7_500,
+    maxOutputTokensPerRequest: 1_000,
+  };
+  return {
+    fundedTurnId,
+    idempotencyKey: fundedTurnId,
+    poolId,
+    poolLimitMicrousd,
+    globalPoolLimitMicrousd,
+    globalConcurrency: 100,
+    accountId,
+    projectId: uuid(),
+    hostId: uuid(),
+    membershipTier: "free",
+    policy,
+  };
+}
+
+function poolReservation(opts: ReturnType<typeof options>): number {
+  return (
+    opts.policy.maxTurnCostMicrousd +
+    siteFundedCodexFinalRequestHeadroomMicrousd(opts.policy)
+  );
+}
+
+describe("site-funded Codex reservations", () => {
+  beforeEach(async () => {
+    await getPool().query("DELETE FROM site_ai_turn_reservations");
+    await getPool().query("DELETE FROM site_ai_funding_periods");
+    await getPool().query("DELETE FROM site_ai_account_holds");
+  });
+
+  it("atomically refuses reservations beyond the global pool", async () => {
+    const expectedReservation = poolReservation(options());
+    const attempts = await Promise.all(
+      [uuid(), uuid(), uuid()].map((accountId) =>
+        reserveSiteFundedCodexTurn(options({ accountId })),
+      ),
+    );
+    expect(attempts.filter(({ allowed }) => allowed)).toHaveLength(1);
+    expect(
+      attempts
+        .filter(({ allowed }) => !allowed)
+        .map((entry: any) => entry.code),
+    ).toEqual(["global_pool", "global_pool"]);
+    const status = await getSiteFundedCodexPoolStatus();
+    expect(status[0]).toMatchObject({
+      poolId: "site-funded-codex-global",
+      limitMicrousd: 100_000,
+      reservedMicrousd: expectedReservation,
+      committedMicrousd: 0,
+      activeReservations: 1,
+    });
+  });
+
+  it("shares one hard parent budget across free and paid sub-pools", async () => {
+    const expectedReservation = poolReservation(options());
+    const [free, paid] = await Promise.all([
+      reserveSiteFundedCodexTurn(
+        options({
+          poolId: "site-funded-codex-free",
+          poolLimitMicrousd: 200_000,
+          globalPoolLimitMicrousd: 100_000,
+        }),
+      ),
+      reserveSiteFundedCodexTurn(
+        options({
+          poolId: "site-funded-codex-paid",
+          poolLimitMicrousd: 200_000,
+          globalPoolLimitMicrousd: 100_000,
+        }),
+      ),
+    ]);
+    expect([free, paid].filter(({ allowed }) => allowed)).toHaveLength(1);
+    expect([free, paid].filter(({ allowed }) => !allowed)[0]).toMatchObject({
+      code: "global_pool",
+    });
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      poolId: "site-funded-codex-global",
+      reservedMicrousd: expectedReservation,
+    });
+  });
+
+  it("makes reservation and usage retries idempotent", async () => {
+    const opts = options({ maxTurnCostMicrousd: 50_000 });
+    const first = await reserveSiteFundedCodexTurn(opts);
+    const second = await reserveSiteFundedCodexTurn(opts);
+    expect(first.allowed).toBe(true);
+    expect(second).toEqual(first);
+    if (!first.allowed) throw new Error("expected reservation");
+
+    const event = {
+      eventId: uuid(),
+      reservationId: first.reservation.reservationId,
+      requestSequence: 1,
+      model: "gpt-5.6-luna",
+      inputTokens: 10_000,
+      cachedInputTokens: 6_000,
+      outputTokens: 500,
+    };
+    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toMatchObject(
+      {
+        costMicrousd: 1_520,
+        inserted: true,
+        fundedTurnId: opts.fundedTurnId,
+        accountId: opts.accountId,
+        projectId: opts.projectId,
+      },
+    );
+    await expect(recordSiteFundedCodexUsageEvent(event)).resolves.toMatchObject(
+      { costMicrousd: 1_520, inserted: false },
+    );
+    await expect(
+      recordSiteFundedCodexUsageEvent({ ...event, eventId: uuid() }),
+    ).resolves.toMatchObject({ costMicrousd: 1_520, inserted: false });
+
+    const finished = await finishSiteFundedCodexTurn({
+      reservationId: first.reservation.reservationId,
+      status: "committed",
+      outcome: "completed",
+    });
+    expect(finished).toMatchObject({
+      status: "committed",
+      reservedMicrousd: 50_000,
+      poolReservedMicrousd: poolReservation(opts),
+      committedMicrousd: 1_520,
+    });
+    await expect(
+      finishSiteFundedCodexTurn({
+        reservationId: first.reservation.reservationId,
+        status: "committed",
+      }),
+    ).resolves.toEqual(finished);
+    await expect(
+      recordSiteFundedCodexUsageEvent({
+        ...event,
+        eventId: uuid(),
+        requestSequence: 3,
+      }),
+    ).rejects.toThrow("reservation is not active (committed)");
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      reservedMicrousd: 0,
+      committedMicrousd: 1_520,
+      activeReservations: 0,
+    });
+  });
+
+  it("records real provider liability when usage exceeds its reservation", async () => {
+    const opts = options({
+      maxTurnCostMicrousd: 1_000,
+      poolLimitMicrousd: 10_000_000,
+      globalPoolLimitMicrousd: 10_000_000,
+    });
+    const admission = await reserveSiteFundedCodexTurn(opts);
+    if (!admission.allowed) throw new Error("expected reservation");
+    const usage = await recordSiteFundedCodexUsageEvent({
+      eventId: uuid(),
+      reservationId: admission.reservation.reservationId,
+      requestSequence: 1,
+      model: "gpt-5.6-luna",
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+    });
+    expect(usage.costMicrousd).toBeGreaterThan(
+      admission.reservation.poolReservedMicrousd,
+    );
+    await finishSiteFundedCodexTurn({
+      reservationId: admission.reservation.reservationId,
+      status: "committed",
+    });
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      reservedMicrousd: 0,
+      committedMicrousd: usage.costMicrousd,
+    });
+  });
+
+  it("enforces account concurrency and canonical remaining allowance", async () => {
+    const accountId = uuid();
+    const first = await reserveSiteFundedCodexTurn(
+      options({ accountId, maxTurnCostMicrousd: 10_000 }),
+    );
+    expect(first.allowed).toBe(true);
+    const concurrent = await reserveSiteFundedCodexTurn(
+      options({ accountId, maxTurnCostMicrousd: 10_000 }),
+    );
+    expect(concurrent).toMatchObject({
+      allowed: false,
+      code: "account_concurrency",
+    });
+    if (!first.allowed) throw new Error("expected reservation");
+    await recordSiteFundedCodexUsageEvent({
+      eventId: uuid(),
+      reservationId: first.reservation.reservationId,
+      requestSequence: 1,
+      model: "gpt-5.6-luna",
+      inputTokens: 10_000,
+      outputTokens: 0,
+    });
+    await finishSiteFundedCodexTurn({
+      reservationId: first.reservation.reservationId,
+      status: "committed",
+    });
+    const limited = await reserveSiteFundedCodexTurn({
+      ...options({ accountId, maxTurnCostMicrousd: 10_000 }),
+      accountRemaining5hMicrousd: 3_000,
+    });
+    expect(limited).toMatchObject({
+      allowed: true,
+      reservation: {
+        reservedMicrousd: 3_000,
+        policy: { maxTurnCostMicrousd: 3_000 },
+      },
+    });
+    if (!limited.allowed) throw new Error("expected a partial reservation");
+    await finishSiteFundedCodexTurn({
+      reservationId: limited.reservation.reservationId,
+      status: "released",
+    });
+    const exhausted = await reserveSiteFundedCodexTurn({
+      ...options({ accountId, maxTurnCostMicrousd: 10_000 }),
+      accountRemaining5hMicrousd: 0,
+    });
+    expect(exhausted).toMatchObject({
+      allowed: false,
+      code: "account_limit_5h",
+    });
+  });
+
+  it("commits recorded usage when an active reservation expires", async () => {
+    const admission = await reserveSiteFundedCodexTurn(
+      options({ maxTurnCostMicrousd: 50_000 }),
+    );
+    if (!admission.allowed) throw new Error("expected reservation");
+    await recordSiteFundedCodexUsageEvent({
+      eventId: uuid(),
+      reservationId: admission.reservation.reservationId,
+      requestSequence: 1,
+      model: "gpt-5.6-luna",
+      inputTokens: 10_000,
+      cachedInputTokens: 6_000,
+      outputTokens: 500,
+    });
+    await getPool().query(
+      `UPDATE site_ai_turn_reservations SET expires_at = NOW() - INTERVAL '1 second'
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+
+    await expect(expireAbandonedSiteFundedCodexReservations()).resolves.toBe(1);
+    expect((await getSiteFundedCodexPoolStatus())[0]).toMatchObject({
+      reservedMicrousd: 0,
+      committedMicrousd: 1_520,
+      activeReservations: 0,
+    });
+    const { rows } = await getPool().query(
+      `SELECT status, committed_microusd FROM site_ai_turn_reservations
+       WHERE reservation_id = $1`,
+      [admission.reservation.reservationId],
+    );
+    expect(rows[0]?.status).toBe("expired");
+    expect(Number(rows[0]?.committed_microusd)).toBe(1_520);
+  });
+});

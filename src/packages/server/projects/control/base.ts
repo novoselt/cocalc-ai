@@ -574,6 +574,7 @@ export class BaseProject extends EventEmitter {
         last_started_by,
         runtime_sponsor_account_id,
         usage_account_id,
+        course,
         host_id,
       } = await query({
         db: db(),
@@ -583,6 +584,7 @@ export class BaseProject extends EventEmitter {
           "last_started_by",
           "runtime_sponsor_account_id",
           "usage_account_id",
+          "course",
           "host_id",
         ],
         table: "projects",
@@ -594,6 +596,7 @@ export class BaseProject extends EventEmitter {
         resolveRuntimeSponsorAccountId({
           runtime_sponsor_account_id,
           usage_account_id,
+          course,
           users,
         }) ??
         pickAccountForQuota({

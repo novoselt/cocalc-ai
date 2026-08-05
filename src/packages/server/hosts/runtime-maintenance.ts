@@ -1950,8 +1950,10 @@ async function scheduleAutoReboot(
         `provider=${cloudProvider(row)}`,
         `attempt=${nextAttempts.length}/${AUTO_REBOOT_MAX_ATTEMPTS} within ${Math.round(AUTO_REBOOT_WINDOW_MS / 3_600_000)}h`,
         `work_id=${workId ?? "already queued"}`,
+        `runtime_failure_kind=${row.metadata?.runtime_health?.failure_kind ?? "unknown"}`,
         `synthetic_failure_kind=${row.metadata?.runtime_health?.synthetic_probe?.failure_kind ?? "unknown"}`,
         `runtime_error=${row.metadata?.runtime_health?.error ?? "unknown"}`,
+        `runtime_diagnostics=${row.metadata?.runtime_health?.diagnostics_path ?? "unavailable"}`,
       ].join("\n"),
       dedupMinutes: 10,
     });
@@ -2016,7 +2018,9 @@ async function markRecoveryExhausted(
     body: [
       `${hostName(row)} remains degraded after ${attempts.length} automatic hard reboots.`,
       `host_id=${row.id}`,
+      `runtime_failure_kind=${row.metadata?.runtime_health?.failure_kind ?? "unknown"}`,
       `runtime_error=${row.metadata?.runtime_health?.error ?? "unknown"}`,
+      `runtime_diagnostics=${row.metadata?.runtime_health?.diagnostics_path ?? "unavailable"}`,
       "The host remains quarantined and requires operator investigation.",
     ].join("\n"),
     dedupMinutes: 60,

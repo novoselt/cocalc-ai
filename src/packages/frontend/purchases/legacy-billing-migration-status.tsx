@@ -13,6 +13,7 @@ import openSupportTab from "@cocalc/frontend/support/open";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { LegacyMigrationFinancialPreviewResponse } from "@cocalc/conat/hub/api/legacy-migration";
 import { legacyBillingMigrationReviewRequested } from "./legacy-billing-migration-review";
+import { activeLegacyMembershipGrantClass } from "./legacy-billing-migration-state";
 import { getPaymentMethods } from "./api";
 
 const { Text } = Typography;
@@ -156,7 +157,7 @@ export default function LegacyBillingMigrationStatus({
   async function configureRenewal(
     membership_class: "basic" | "member" | "pro" | null,
   ) {
-    if (!preview?.applied_membership_class) return;
+    if (!activeLegacyMembershipGrantClass(preview)) return;
     setRenewalSaving(membership_class ?? "cancel");
     setError("");
     try {
@@ -253,7 +254,7 @@ export default function LegacyBillingMigrationStatus({
 
   const pending =
     preview.pending_credit_amount > 0 || preview.active_subscription_count > 0;
-  const continueMembership = preview.applied_membership_class;
+  const continueMembership = activeLegacyMembershipGrantClass(preview);
   const suggestedMembership = preview.suggested_membership_class;
   const suggestedMembershipLabel = membershipLabel(suggestedMembership);
   const continueMembershipLabel = membershipLabel(continueMembership);

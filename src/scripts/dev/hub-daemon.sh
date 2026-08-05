@@ -52,6 +52,33 @@ port_hex() {
   printf '%04X\n' "$port"
 }
 
+port_is_listening() {
+  local port="${1:-}"
+  local bind_host="${2:-${HUB_BIND_HOST:-localhost}}"
+  local url_host="$bind_host"
+  if [ -z "$port" ]; then
+    return 1
+  fi
+  if [ "$url_host" = "0.0.0.0" ] || [ -z "$url_host" ]; then
+    url_host="127.0.0.1"
+  elif [ "$url_host" = "::" ]; then
+    url_host="::1"
+  fi
+  if [[ "$url_host" == *:* && "$url_host" != \[*\] ]]; then
+    url_host="[$url_host]"
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl --silent --output /dev/null --connect-timeout 1 --max-time 1 \
+      "http://$url_host:$port/" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 1 bash -c "</dev/tcp/${bind_host}/${port}" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
 pid_listens_on_port_via_proc() {
   local pid="${1:-}"
   local port="${2:-}"
@@ -140,19 +167,108 @@ find_hub_pids_on_config_port() {
 
 find_hub_pid_on_port() {
   local port="${1:-}"
-  local hub_pids port_pids pid
+  local hub_pids port_pids pid count
   if [ -z "$port" ]; then
     return 0
   fi
   hub_pids="$(find_hub_pids | sort -u)"
-  port_pids="$(find_pids_listening_on_port "$port" || true)"
-  if [ -z "$hub_pids" ] || [ -z "$port_pids" ]; then
+  if [ -z "$hub_pids" ]; then
     return 0
+  fi
+
+  # Prefer direct socket ownership when the host exposes it. Some container
+  # runtimes hide other processes' /proc/*/fd entries and omit ss/lsof, so
+  # check only the small set of matching hub processes before falling back.
+  port_pids=""
+  if command -v ss >/dev/null 2>&1 || command -v lsof >/dev/null 2>&1; then
+    port_pids="$(find_pids_listening_on_port "$port" || true)"
+  else
+    for pid in $hub_pids; do
+      if pid_listens_on_port_via_proc "$pid" "$port"; then
+        port_pids="$(printf "%s\n%s\n" "$port_pids" "$pid" | awk 'NF' | sort -u)"
+      fi
+    done
   fi
   for pid in $port_pids; do
     if printf "%s\n" "$hub_pids" | grep -qx "$pid"; then
       echo "$pid"
     fi
+  done
+  if [ -n "$port_pids" ]; then
+    return 0
+  fi
+
+  # With exactly one hub from this checkout, a responsive configured port is
+  # enough to recover a missing/stale pid file even without socket metadata.
+  count="$(printf "%s\n" "$hub_pids" | awk 'NF { n += 1 } END { print n + 0 }')"
+  if [ "$count" = "1" ] && port_is_listening "$port"; then
+    printf "%s\n" "$hub_pids"
+  fi
+}
+
+pid_matches_hub_launcher() {
+  local pid="${1:-}"
+  local args
+  if [ -z "$pid" ] || ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 1
+  fi
+  args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+  [[ "$args" == *"packages/hub/bin/start.sh"* ]]
+}
+
+find_hub_pid_for_launcher() {
+  local launcher_pid="${1:-}"
+  local pgid
+  if [ -z "$launcher_pid" ]; then
+    return 0
+  fi
+  pgid="$(ps -o pgid= -p "$launcher_pid" 2>/dev/null | tr -d ' ' || true)"
+  if [ -z "$pgid" ]; then
+    return 0
+  fi
+  ps -eo pid=,pgid=,args= \
+    | awk -v pgid="$pgid" -v hub_root="$SRC_DIR/packages/hub" '
+        $2 == pgid && index($0, hub_root) > 0 && $0 ~ /run\/hub\.js/ {
+          print $1
+        }
+      ' \
+    | tail -n 1
+}
+
+pid_is_live_hub() {
+  local pid="${1:-}"
+  local port="${2:-}"
+  if [ -z "$pid" ] || [ -z "$port" ] || ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! pid_matches_hub_launcher "$pid" \
+    && ! find_hub_pids | grep -qx "$pid"; then
+    return 1
+  fi
+  port_is_listening "$port"
+}
+
+signal_managed_pid() {
+  local signal="${1:-TERM}"
+  local pid="${2:-}"
+  local pgid
+  if [ -z "$pid" ] || ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  if [ -n "$pgid" ] && [ "$pgid" = "$pid" ]; then
+    kill -"$signal" -- "-$pgid" >/dev/null 2>&1 || true
+  else
+    kill -"$signal" "$pid" >/dev/null 2>&1 || true
+  fi
+}
+
+signal_managed_pids() {
+  local signal="${1:-TERM}"
+  local pids="${2:-}"
+  local pid
+  for pid in $pids; do
+    signal_managed_pid "$signal" "$pid"
   done
 }
 
@@ -189,7 +305,10 @@ find_latest_in_log() {
 detect_hub_postgres_socket_dir() {
   local pid pg_host
   pid="$(current_hub_pid || true)"
-  pg_host="$(get_env_from_pid "$pid" "PGHOST" || true)"
+  pg_host=""
+  if ! pid_matches_hub_launcher "$pid"; then
+    pg_host="$(get_env_from_pid "$pid" "PGHOST" || true)"
+  fi
   if [ -n "$pg_host" ]; then
     echo "$pg_host"
     return 0
@@ -200,12 +319,18 @@ detect_hub_postgres_socket_dir() {
 detect_hub_postgres_data_dir() {
   local pid data_dir
   pid="$(current_hub_pid || true)"
-  data_dir="$(get_env_from_pid "$pid" "DATA" || true)"
+  data_dir=""
+  if ! pid_matches_hub_launcher "$pid"; then
+    data_dir="$(get_env_from_pid "$pid" "DATA" || true)"
+  fi
   if [ -n "$data_dir" ]; then
     echo "$data_dir/postgres"
     return 0
   fi
-  data_dir="$(get_env_from_pid "$pid" "COCALC_DATA_DIR" || true)"
+  data_dir=""
+  if ! pid_matches_hub_launcher "$pid"; then
+    data_dir="$(get_env_from_pid "$pid" "COCALC_DATA_DIR" || true)"
+  fi
   if [ -n "$data_dir" ]; then
     if [ -d "$data_dir/postgres" ]; then
       echo "$data_dir/postgres"
@@ -328,6 +453,7 @@ load_config() {
   HUB_START_TIMEOUT="${HUB_START_TIMEOUT:-180}"
   HUB_HOST_IP="${HUB_HOST_IP:-}"
   HUB_SOFTWARE_BASE_URL_FORCE="${HUB_SOFTWARE_BASE_URL_FORCE:-}"
+  HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL="${HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL-https://software.cocalc.ai/software}"
   HUB_NODE_BIN="${HUB_NODE_BIN:-}"
   HUB_SELF_HOST_PAIR_URL="${HUB_SELF_HOST_PAIR_URL:-}"
   HUB_CLOUDFLARED_PID_FILE="${HUB_CLOUDFLARED_PID_FILE:-$STATE_DIR/cloudflared.pid}"
@@ -474,6 +600,16 @@ cluster_bay_running() {
   local port pid_file discovered pid
   port="$(cluster_bay_value "$idx" PORT)"
   pid_file="$(cluster_bay_pid_file "$idx")"
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if pid_is_live_hub "$pid" "$port"; then
+    if pid_matches_hub_launcher "$pid"; then
+      discovered="$(find_hub_pid_for_launcher "$pid" || true)"
+      if [ -n "$discovered" ]; then
+        echo "$discovered" >"$pid_file"
+      fi
+    fi
+    return 0
+  fi
   discovered="$(find_hub_pid_on_port "$port" | tail -n 1 || true)"
   if [ -n "$discovered" ]; then
     echo "$discovered" >"$pid_file"
@@ -631,6 +767,11 @@ start_cluster_bay() {
       unset COCALC_PROJECT_HOST_SOFTWARE_BASE_URL_FORCE
     fi
     export COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE="$(software_endpoint_mode)"
+    if [ -n "$HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL" ]; then
+      export COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL="$HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL"
+    else
+      unset COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL
+    fi
     if [ -n "$self_host_pair_url" ]; then
       export COCALC_SELF_HOST_PAIR_URL="$self_host_pair_url"
     else
@@ -677,8 +818,22 @@ start_cluster_bay() {
     echo $! >"$pid_file"
   )
 
-  local i running_pid
+  local i running_pid launcher_pid
+  launcher_pid="$(cat "$pid_file" 2>/dev/null || true)"
   for i in $(seq 1 "$HUB_START_TIMEOUT"); do
+    if pid_is_live_hub "$launcher_pid" "$port"; then
+      running_pid="$(find_hub_pid_for_launcher "$launcher_pid" || true)"
+      echo "${running_pid:-$launcher_pid}" >"$pid_file"
+      echo "$bay_id started (pid $(cat "$pid_file"))"
+      echo "$bay_id stdout: $stdout_log"
+      return 0
+    fi
+    if [ -n "$launcher_pid" ] && ! kill -0 "$launcher_pid" >/dev/null 2>&1; then
+      echo "$bay_id exited before becoming ready; see $stdout_log" >&2
+      tail -n 40 "$stdout_log" >&2 || true
+      rm -f "$pid_file"
+      return 1
+    fi
     running_pid="$(find_hub_pid_on_port "$port" | tail -n 1 || true)"
     if [ -n "$running_pid" ]; then
       echo "$running_pid" >"$pid_file"
@@ -704,9 +859,9 @@ stop_cluster_bay() {
     return 0
   fi
   pid="$(cat "$pid_file" 2>/dev/null || true)"
-  pids="$(printf "%s\n%s\n" "$pid" "$(find_pids_listening_on_port "$port")" | awk 'NF' | sort -u)"
+  pids="$(printf "%s\n%s\n" "$pid" "$(find_hub_pid_on_port "$port")" | awk 'NF' | sort -u)"
   if [ -n "$pids" ]; then
-    echo "$pids" | xargs -r kill >/dev/null 2>&1 || true
+    signal_managed_pids TERM "$pids"
   fi
   local i
   for i in $(seq 1 30); do
@@ -717,9 +872,9 @@ stop_cluster_bay() {
     fi
     sleep 1
   done
-  pids="$(printf "%s\n%s\n" "$pid" "$(find_pids_listening_on_port "$port")" | awk 'NF' | sort -u)"
+  pids="$(printf "%s\n%s\n" "$pid" "$(find_hub_pid_on_port "$port")" | awk 'NF' | sort -u)"
   if [ -n "$pids" ]; then
-    echo "$pids" | xargs -r kill -9 >/dev/null 2>&1 || true
+    signal_managed_pids KILL "$pids"
   fi
   rm -f "$pid_file"
   echo "$bay_id killed"
@@ -871,6 +1026,16 @@ is_running() {
   if [ -z "$pid" ]; then
     return 1
   fi
+  if pid_is_live_hub "$pid" "$HUB_PORT"; then
+    if pid_matches_hub_launcher "$pid"; then
+      local child_pid
+      child_pid="$(find_hub_pid_for_launcher "$pid" || true)"
+      if [ -n "$child_pid" ]; then
+        echo "$child_pid" >"$PID_FILE"
+      fi
+    fi
+    return 0
+  fi
   local port_match
   port_match="$(find_hub_pids_on_config_port | grep -x "$pid" || true)"
   if kill -0 "$pid" >/dev/null 2>&1 && [ -n "$port_match" ]; then
@@ -923,6 +1088,11 @@ start_daemon() {
       export PORT="$HUB_PORT"
       export COCALC_PROJECT_HOST_SOFTWARE_PACKAGES_ROOT="$HUB_SOFTWARE_PACKAGES_ROOT"
       export COCALC_PROJECT_HOST_SOFTWARE_ENDPOINT_MODE="$(software_endpoint_mode)"
+      if [ -n "$HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL" ]; then
+        export COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL="$HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL"
+      else
+        unset COCALC_PROJECT_HOST_CONTAINER_RUNTIME_SOFTWARE_BASE_URL
+      fi
       export COCALC_CONAT_MAX_CONNECTIONS_PER_USER
       export COCALC_CONAT_MAX_CONNECTIONS_PER_HUB_USER
       export COCALC_CONAT_MAX_CONNECTIONS
@@ -980,8 +1150,22 @@ start_daemon() {
     )
 
     local running_pid=""
+    local launcher_pid
+    launcher_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
     local i
     for i in $(seq 1 "$HUB_START_TIMEOUT"); do
+      if pid_is_live_hub "$launcher_pid" "$HUB_PORT"; then
+        running_pid="$(find_hub_pid_for_launcher "$launcher_pid" || true)"
+        running_pid="${running_pid:-$launcher_pid}"
+        echo "$running_pid" >"$PID_FILE"
+        break
+      fi
+      if [ -n "$launcher_pid" ] && ! kill -0 "$launcher_pid" >/dev/null 2>&1; then
+        echo "hub daemon exited before becoming ready; see $HUB_STDOUT_LOG" >&2
+        tail -n 40 "$HUB_STDOUT_LOG" >&2 || true
+        rm -f "$PID_FILE"
+        return 1
+      fi
       running_pid="$(find_primary_hub_pid || true)"
       if [ -n "$running_pid" ]; then
         echo "$running_pid" >"$PID_FILE"
@@ -1064,7 +1248,7 @@ stop_daemon() {
     pid="$(cat "$PID_FILE" 2>/dev/null || true)"
     pids="$(printf "%s\n%s\n" "$pid" "$(find_hub_pids_on_config_port)" | awk 'NF' | sort -u)"
     if [ -n "$pids" ]; then
-      echo "$pids" | xargs -r kill >/dev/null 2>&1 || true
+      signal_managed_pids TERM "$pids"
     fi
 
     local i
@@ -1081,7 +1265,7 @@ stop_daemon() {
     if [ "$stopped" != "1" ]; then
       pids="$(printf "%s\n%s\n" "$pid" "$(find_hub_pids_on_config_port)" | awk 'NF' | sort -u)"
       if [ -n "$pids" ]; then
-        echo "$pids" | xargs -r kill -9 >/dev/null 2>&1 || true
+        signal_managed_pids KILL "$pids"
       fi
       rm -f "$PID_FILE"
       echo "hub daemon killed"
@@ -1187,6 +1371,7 @@ HUB_AUTO_BUILD_LOCAL_SOFTWARE=$HUB_AUTO_BUILD_LOCAL_SOFTWARE
 HUB_START_TIMEOUT=$HUB_START_TIMEOUT
 HUB_HOST_IP=$HUB_HOST_IP
 HUB_SOFTWARE_BASE_URL_FORCE=$HUB_SOFTWARE_BASE_URL_FORCE
+HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL=$HUB_CONTAINER_RUNTIME_SOFTWARE_BASE_URL
 HUB_NODE_BIN=$HUB_NODE_BIN
 HUB_SELF_HOST_PAIR_URL=$HUB_SELF_HOST_PAIR_URL
 HUB_CLOUDFLARED_PID_FILE=$HUB_CLOUDFLARED_PID_FILE
