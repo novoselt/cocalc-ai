@@ -138,7 +138,7 @@ export function init(redux) {
       await waitForAccountTableConnectedForSignIn(table);
     }
     actions.set_user_type("signed_in");
-    void loadAuthBootstrap({ account_id: mesg?.account_id, force: true });
+    void loadAuthBootstrap({ account_id: mesg?.account_id });
   });
 
   webapp_client.on("signed_out", () => {

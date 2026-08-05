@@ -58,8 +58,12 @@ jest.mock("@cocalc/frontend/logger", () => ({
 
 import { init } from "./init";
 
-function createRedux() {
-  const state: Record<string, any> = {};
+function createRedux({
+  emitStoreChangeOnSignIn = false,
+}: { emitStoreChangeOnSignIn?: boolean } = {}) {
+  const state: Record<string, any> = emitStoreChangeOnSignIn
+    ? { account_id: "account-1" }
+    : {};
   const store = Object.assign(new EventEmitter(), {
     get: jest.fn((key: string) => state[key]),
   });
@@ -68,7 +72,13 @@ function createRedux() {
     setState: jest.fn((patch: Record<string, any>) =>
       Object.assign(state, patch),
     ),
-    set_user_type: jest.fn(),
+    set_user_type: jest.fn((userType: string) => {
+      if (!emitStoreChangeOnSignIn) {
+        return;
+      }
+      state.is_logged_in = userType === "signed_in";
+      store.emit("change");
+    }),
   };
   const redux = {
     createStore: jest.fn(() => store),
@@ -99,6 +109,25 @@ describe("account initialization", () => {
     await signedIn({ account_id: "account-1" });
 
     expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
+    expect(mockGetControlPlaneAuthBootstrap).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads routing metadata only once when signed-in state changes", async () => {
+    mockGetControlPlaneAuthBootstrap.mockResolvedValue({
+      signed_in: true,
+      home_bay_id: "bay-1",
+      impersonation: null,
+    });
+    const { redux } = createRedux({ emitStoreChangeOnSignIn: true });
+    init(redux);
+    const signedIn = mockWebappClient.listeners("signed_in")[0] as (message: {
+      account_id: string;
+    }) => Promise<void>;
+
+    await signedIn({ account_id: "account-1" });
+    await Promise.resolve();
+    await Promise.resolve();
+
     expect(mockGetControlPlaneAuthBootstrap).toHaveBeenCalledTimes(1);
   });
 
