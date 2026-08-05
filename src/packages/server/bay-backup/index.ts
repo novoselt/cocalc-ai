@@ -3470,7 +3470,10 @@ async function retryLatestLocalBackupToRustic({
 export async function syncBayWalArchive({
   bay_id,
   forceSwitch = false,
-  retryLocalSnapshot = true,
+  // A local-only full snapshot can require hundreds of GB of temporary I/O to
+  // materialize for Rustic. WAL maintenance must never trigger that work as a
+  // side effect; callers that intentionally retry a full upload opt in.
+  retryLocalSnapshot = false,
 }: {
   bay_id?: string;
   forceSwitch?: boolean;
