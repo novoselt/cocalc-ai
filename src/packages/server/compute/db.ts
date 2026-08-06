@@ -205,6 +205,35 @@ export async function listOwnedComputeVms(opts: {
   return rows;
 }
 
+export async function listComputeVmsForBillingEnforcement() {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+      WHERE deleted_at IS NULL
+        AND desired_state <> 'deleted'
+      ORDER BY owner_account_id, created_at`,
+  );
+  return rows;
+}
+
+export async function listComputeVmsForInventory() {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+      WHERE deleted_at IS NULL
+      ORDER BY created_at`,
+  );
+  return rows;
+}
+
+export async function listComputeVmsForEgressMetering() {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+      WHERE deleted_at IS NULL
+         OR COALESCE((metadata#>>'{billing,egress,finalized}')::boolean, FALSE) IS NOT TRUE
+      ORDER BY created_at`,
+  );
+  return rows;
+}
+
 export async function updateComputeVm(
   id: string,
   updates: Partial<ComputeVmRow>,
@@ -221,6 +250,8 @@ export async function updateComputeVm(
     "metadata",
     "spot_recovery_state",
     "expires_at",
+    "billing_state",
+    "billing_updated_at",
   ]);
   const entries = Object.entries(updates).filter(([key]) => allowed.has(key));
   if (!entries.length) return await getComputeVmById(id);

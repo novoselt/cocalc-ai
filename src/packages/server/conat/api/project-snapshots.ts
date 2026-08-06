@@ -113,12 +113,14 @@ export async function deleteSnapshot({
   session_hash,
   project_id,
   name,
+  timeout,
 }: {
   account_id?: string;
   browser_id?: string | null;
   session_hash?: string | null;
   project_id: string;
   name: string;
+  timeout?: number;
 }) {
   await requireDangerousProjectMutationAuth({
     account_id,
@@ -131,7 +133,7 @@ export async function deleteSnapshot({
     action: "delete snapshots",
   });
   await (
-    await projectClient(project_id, account_id)
+    await projectClient(project_id, account_id, timeout)
   ).deleteSnapshot({
     project_id,
     name,

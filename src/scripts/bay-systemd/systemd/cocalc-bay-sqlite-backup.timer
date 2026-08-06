@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly changed-only CoCalc Bay SQLite backup
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+AccuracySec=1min
+Unit=cocalc-bay-sqlite-backup.service
+
+[Install]
+WantedBy=timers.target

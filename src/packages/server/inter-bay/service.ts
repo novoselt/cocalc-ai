@@ -273,6 +273,7 @@ import {
 import { getDedicatedHostPolicySnapshotLocal } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionLocal,
+  recordDedicatedHostMeteredUsageLocal,
   reconcileDedicatedHostPurchaseSessionLocal,
 } from "@cocalc/server/project-host/spend";
 import {
@@ -1006,6 +1007,9 @@ async function startAccountLocalService(): Promise<void> {
     },
     closeDedicatedHostPurchaseSession: async (opts) => {
       await closeDedicatedHostPurchaseSessionLocal(opts);
+    },
+    recordDedicatedHostMeteredUsage: async (opts) => {
+      return await recordDedicatedHostMeteredUsageLocal(opts);
     },
     reserveProjectRuntimeSlot: async (opts) =>
       await reserveProjectRuntimeSlotLocal(opts),

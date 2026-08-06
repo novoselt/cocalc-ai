@@ -16,6 +16,8 @@ SageMath, Inc. answer, quickly and reproducibly:
 - Which product changes improve retention and growth?
 - Are changes caused by acquisition mix, seasonality, product quality, or an
   experiment?
+- What does it cost to serve each product and user population, and where is the
+  next discrete capacity cost?
 
 The first user-visible requirement is that `/admin/retention` becomes fast and
 stays fast as CoCalc accumulates years of history and orders of magnitude more
@@ -447,6 +449,210 @@ supported segment.
 Stores deployment, marketing, outage, pricing, signup-flow, and experiment
 annotations. Graphs should display these so changes are interpreted in context.
 
+## Unit Economics and Capacity Extension
+
+Growth analytics and infrastructure economics share population definitions and
+calendar periods, but they must not share an opaque fact table. Cost accounting
+is a separate workstream with its own source confidence, allocation versions,
+and serving tables. It must not delay the minimum fast replacement for
+`/admin/retention`.
+
+### Questions This Must Answer
+
+- What is the actual provider cost of shared infrastructure by day, service,
+  bay, region, and product?
+- What are average cost per eligible MAU, engaged MAU, activated account,
+  revenue-bearing seat, and direct subscription account?
+- Which costs are directly attributable, usage-variable, continuously fixed, or
+  fixed until the next regional capacity step?
+- How much CPU, memory, disk, egress, AI, and other metered capacity is unused,
+  and which resource will force the next purchase?
+- What is the incremental cost of growth before the next capacity step, and
+  what will the next step add per month?
+- What are contribution margin and gross margin by product after refunds,
+  provider cost, payment fees, and explicitly included support costs?
+
+Never publish one unlabeled "cost per user" value. At minimum, show both a
+fully allocated average and a marginal/headroom view, with the denominator and
+included cost classes visible.
+
+### Cost Classes
+
+Every cost row must be assigned one of these bounded classes:
+
+- `direct_metered`: attributable to one customer's VM, host, volume, AI usage,
+  or another pay-as-you-go resource;
+- `shared_variable`: varies approximately with usage, such as egress or API
+  calls;
+- `shared_fixed`: continuously required control-plane or storage cost;
+- `regional_step`: a regional host or service that is fixed until another
+  capacity unit is required;
+- `internal`: staff, testing, staging, development, or research infrastructure;
+- `unallocated`: known cost whose economic owner or allocation rule is not yet
+  defensible.
+
+Do not silently spread `unallocated` cost across customers. The unallocated
+fraction is a data-quality metric.
+
+Metered revenue and provider cost remain separate facts. For example, pricing a
+resource at provider cost plus a 30% markup produces a 23.1% gross margin on
+revenue before payment fees, support, refunds, taxes, and bad debt. Both markup
+and margin should be displayed with explicit formulas.
+
+### Cost Sources
+
+Use two parallel sources:
+
+1. provider billing exports or invoices provide authoritative, lagged net cost,
+   including committed-use treatment, credits, discounts, and adjustments;
+2. the live resource catalog and inventory provide an immediate estimate and
+   capacity forecast.
+
+Reconcile estimates to actual billing after provider data arrives. Preserve
+both values and source timestamps rather than rewriting estimates invisibly.
+Currency conversion, if needed, uses a recorded daily rate and never the
+current rate for historical data.
+
+### `economics_provider_cost_daily`
+
+One row per UTC day and provider billing resource or defensible aggregate.
+Fields include:
+
+- provider, billing account, service, SKU, resource id, and resource class;
+- bay, host, region, and funding mode where attributable;
+- list cost, estimated effective cost, authoritative net cost, credits, and
+  currency;
+- usage quantity and unit;
+- cost source (`catalog_estimate`, `billing_export`, or `invoice`), source
+  timestamp, and reconciliation state;
+- cost class, economic-principal class, and allocation eligibility;
+- importer and schema versions.
+
+Provider identifiers and customer economic-principal identifiers remain
+backend-only. Admin serving APIs expose aggregates unless an audited operator
+workflow explicitly requests detail.
+
+### `economics_resource_usage_daily`
+
+Compact daily resource facts keyed by resource scope and resource type. Record
+only quantities needed for allocation and capacity planning:
+
+- attributed CPU seconds and project runtime seconds;
+- disk byte-hours and snapshot/backup byte-hours;
+- ingress and egress bytes;
+- AI/provider usage and direct provider cost where already metered;
+- host provisioned CPU, memory, and disk;
+- p50, p95, and peak host utilization, pressure, running projects, and admission
+  denials;
+- product, membership, site-license, funding-mode, region, and economic-
+  principal snapshots.
+
+The economic principal is the entity funding service: direct subscription
+account, institutional/site-license contract, customer-funded metered resource,
+free shared service, or internal use. It is not necessarily the person who
+performed an action in a collaborative project.
+
+Do not query raw CPU events or host telemetry interactively. Materialize these
+facts incrementally and retain daily aggregates. Account-level detail follows
+the same account-home and privacy rules as growth facts.
+
+### `economics_capacity_daily`
+
+One row per host or regional capacity pool and day, containing provisioned and
+used CPU, memory, disk, I/O, project slots, and relevant pressure metrics. Store
+the limiting resource, configured threshold, estimated headroom, estimated date
+or load at exhaustion, candidate next capacity unit, and its monthly cost.
+
+This table supports the economically important distinction between:
+
+- near-zero incremental infrastructure cost while safe headroom exists;
+- degradation risk as a resource approaches a threshold; and
+- the discrete monthly cost of adding the next host or disk increment.
+
+### `economics_revenue_daily`
+
+Recognize recurring membership and site-license revenue over the covered
+period rather than only on purchase dates. Record metered revenue, credits,
+refunds, taxes, payment fees, and bad debt separately. Keep product and economic-
+principal classes bounded and versioned so annual plans and institutional
+contracts can be compared fairly with monthly infrastructure cost.
+
+### `economics_allocation_daily`
+
+Stores reproducible allocated results, never the only copy of source costs.
+Each result identifies:
+
+- cost date and source cost class;
+- product, segment, region, and economic-principal class;
+- direct, allocated, and unallocated cost;
+- allocation basis and quantity;
+- allocation-rule version;
+- source coverage and finality.
+
+Recommended initial allocation rules are:
+
+1. assign metered resources and provider APIs directly where a funding entity
+   is authoritative;
+2. allocate shared disk and backup cost by disk byte-hours;
+3. allocate shared compute cost by attributed CPU seconds, while reporting the
+   continuously running regional floor separately;
+4. allocate control-plane cost by eligible engaged-account days;
+5. leave unsupported or ambiguous costs unallocated.
+
+Allocation rules are management views, not accounting truth. Changing a rule
+creates a new version and preserves prior results for comparison.
+
+### Economics Serving Metrics
+
+Precompute bounded day/week/month series for:
+
+- actual and estimated infrastructure cost by class and product;
+- cost per eligible MAU, engaged MAU, activated user, paid equivalent seat, and
+  direct subscription account;
+- contribution margin by product and acquisition cohort;
+- average versus marginal cost per active user;
+- metered-resource markup and gross margin;
+- regional utilization, headroom, capacity-cliff cost, and time to threshold;
+- cost concentration percentiles without exposing individual customer data;
+- estimated-versus-actual reconciliation error and unallocated-cost fraction.
+
+Expose these on a dedicated `/admin/economics` page and link to it from the
+growth dashboard. `/admin/retention` may show only a small headline economics
+summary so cost collection cannot compromise its latency SLO.
+
+### Observed Baseline and Missing Data, 2026-08-05
+
+This is an operational snapshot, not a durable budget:
+
+- 13 shared regional `t2d-standard-16` spot hosts provide 208 vCPUs;
+- their catalog-estimated compute and persistent-disk cost is approximately
+  $1,905/month, of which about $632/month is disk;
+- two additional site-funded project hosts add approximately $376/month, for a
+  known project-host floor near $2,280/month;
+- the shared hosts averaged about 14.2% host CPU over the sampled 24 hours,
+  while their data devices were about 71.4% full in aggregate and several were
+  above 80%; storage and regional placement are therefore at least as important
+  as fleet-wide average CPU;
+- current account activity is approximately 1,281 DAU, 4,484 WAU, and 10,793
+  MAU, making the 13-host shared pool about $0.18 per MAU-month before control
+  plane, database, backups, egress, Cloudflare, email, observability, support,
+  payment, and other company costs;
+- dividing that pool only by the 177 direct subscribed accounts yields about
+  $10.76/month, but this is not cost per paid user because institutional
+  contracts, site-license seats, free users, and internal use are not yet
+  represented by a common economic-principal model;
+- even a one-day aggregate scan of `account_cpu_usage_events` exceeded a
+  25-second production statement timeout, confirming that daily resource facts
+  are required rather than more request-time SQL;
+- no queryable provider billing ledger, daily resource-cost fact, cost-allocation
+  version, revenue accrual fact, or compact fleet-capacity series currently
+  exists in the admin data system.
+
+The current defensible statement is therefore a lower bound: known site-funded
+project-host infrastructure is approximately $0.21 per MAU-month. A fully
+loaded cloud-infrastructure or company cost per user cannot yet be stated
+honestly from available data.
+
 ## Event Collection
 
 ### Event Envelope
@@ -833,6 +1039,36 @@ fallback to the current raw-event SQL.
 4. Annotate historical coverage boundaries and known incidents.
 5. Remove request-time raw analytics queries.
 
+### Parallel Workstream: Unit Economics and Capacity
+
+This work may begin after the Phase 1 worker framework is proven, but it does
+not block the Phase 3 retention cutover.
+
+1. Enable read-only provider billing exports with invoice-level reconciliation;
+   do not depend on an operator's interactive cloud login.
+2. Inventory every production, staging, development, and customer-funded cloud
+   resource and classify it as direct metered, shared variable, shared fixed,
+   regional step, internal, or unallocated.
+3. Add provider-cost, resource-usage, capacity, revenue-accrual, and allocation
+   daily tables with importer and allocation versions.
+4. Materialize host CPU, memory, disk, I/O, pressure, project concurrency, and
+   denial summaries from telemetry without scanning raw events in admin
+   requests.
+5. Add account/project disk byte-hour attribution and verify CPU attribution
+   against independent host-level totals.
+6. Map subscriptions, annual plans, site-license contracts, customer-funded
+   resources, free service, and internal use to bounded economic-principal
+   classes.
+7. Reconcile catalog estimates to provider billing and expose missing,
+   duplicated, stale, and unallocated cost.
+8. Implement versioned allocation rules and an `/admin/economics` serving API
+   that reads only bounded daily/monthly aggregates.
+9. Add alerts for provider-cost import failure, reconciliation drift, unexpected
+   unit-cost changes, regional capacity thresholds, and approaching capacity
+   cliffs.
+10. Establish a monthly pricing and efficiency review using actual cost,
+    headroom, product contribution margin, and retained-user outcomes.
+
 ### Phase 5: Experiments and Data-Driven Growth Loop
 
 1. Add stable experiment assignment and exposure recording.
@@ -970,6 +1206,12 @@ This project is successful when:
   losses;
 - active growth separates acquisition from retention, resurrection, and churn;
 - experiments can be tied to activation and retention outcomes;
+- average and marginal infrastructure cost use explicit denominators and cost
+  classes, with provider actuals reconciled to estimates;
+- regional capacity cliffs and their expected monthly cost are visible before
+  service quality degrades;
+- contribution margin can be compared by product and acquisition cohort without
+  treating a pricing markup as gross margin;
 - data freshness and coverage are visible and alerted;
 - restarts, duplicate events, late events, and multiple hubs converge without
   manual repair;
@@ -997,3 +1239,6 @@ Recommended defaults for approval:
    despite the current deployment being mostly one bay.
 10. Treat dashboard performance and worker convergence as release blockers, not
     follow-up optimization work.
+11. Keep source cost, revenue, allocation, and capacity facts separate; show
+    cost inclusion, denominator, source confidence, and allocation version on
+    every unit-economics metric.

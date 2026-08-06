@@ -537,7 +537,7 @@ export function buildEntitlementOverrideSchemaDoc() {
         label: "Dedicated-host funding mode",
         values: ["account-prepaid", "account-postpaid", "site-funded"],
         description:
-          "Advanced/internal account-specific default/policy for dedicated-host funding mode.",
+          "Advanced/internal account-specific dedicated-host funding policy. Setting account-postpaid explicitly authorizes administrator-managed collection without requiring Stripe automatic billing; postpaid spend windows still apply.",
       },
     ],
     examples: {

@@ -39,6 +39,7 @@ import { enableDbAccountRowFeedPublishing } from "@cocalc/server/account/account
 import { enableDbCollaboratorAccountFeedPublishing } from "@cocalc/server/account/collaborator-feed";
 import { enableDbProjectAccountFeedPublishing } from "@cocalc/server/account/project-feed";
 import {
+  startBayBackupHealthMaintenance,
   startBayBackupMaintenance,
   startBayWalArchiveMaintenance,
 } from "@cocalc/server/bay-backup";
@@ -156,6 +157,7 @@ export function startConatApiBackgroundWorkers(): void {
     });
   }
   if (isPrimaryBayWorker()) {
+    startBayBackupHealthMaintenance();
     startBayBackupMaintenance();
     startBayWalArchiveMaintenance();
   } else {

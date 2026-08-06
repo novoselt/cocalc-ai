@@ -26,6 +26,7 @@ import json
 import os
 import pwd
 import re
+import shlex
 import signal
 import shutil
 import ssl
@@ -41,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260804-v40"
+HELPER_SCHEMA_VERSION = "20260805-v41"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -79,6 +80,7 @@ APT_ACQUIRE_TIMEOUT_S = 60
 APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
 RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
+APPARMOR_PROFILE_PROBE_TIMEOUT_S = 2
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
@@ -1491,6 +1493,25 @@ def run_bounded_capture(
     return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
+def podman_apparmor_exec_prefix() -> list[str]:
+    aa_exec = shutil.which("aa-exec")
+    if not aa_exec:
+        return []
+    try:
+        probe = subprocess.run(
+            [aa_exec, "-p", "podman", "--", "true"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=APPARMOR_PROFILE_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if probe.returncode == 0:
+        return [aa_exec, "-p", "podman", "--"]
+    return []
+
+
 def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     contract: dict[str, Any] = {"user": cfg.ssh_user}
     try:
@@ -1538,8 +1559,12 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         prefix = ["sudo", "-u", cfg.ssh_user, "-H", "env", *runtime_env]
     else:
         prefix = ["env", *runtime_env] if runtime_env else []
+    apparmor_prefix = podman_apparmor_exec_prefix()
+    podman_command = shlex.join(
+        [*apparmor_prefix, podman, "unshare", "cat", "/proc/self/uid_map"]
+    )
     uid_proc = run_bounded_capture(
-        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/uid_map'],
+        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
     if uid_proc.returncode != 0:
@@ -1549,8 +1574,11 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
             f"(exit={uid_proc.returncode}); continuing without userns map facts",
         )
         return contract
+    podman_command = shlex.join(
+        [*apparmor_prefix, podman, "unshare", "cat", "/proc/self/gid_map"]
+    )
     gid_proc = run_bounded_capture(
-        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman} unshare cat /proc/self/gid_map'],
+        prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
     if uid_proc.returncode == 0 and gid_proc.returncode == 0:
@@ -3864,8 +3892,16 @@ verify_project_pool_io_snapshot() {
 }
 
 reserve_project_startup_io_capacity() {
-  local snapshot_tmp
+  local fields mode snapshot_tmp
   acquire_project_io_reservation_lock
+  fields="$(project_io_policy_fields standard)" || deny "project-io-policy-invalid" "pool"
+  IFS=$'\t' read -r mode _rest <<< "$fields"
+  if [ "$mode" != "enforce" ]; then
+    # Disabled and observational policy intentionally leave pool io.max empty.
+    # There is no normal ceiling to preserve or lifecycle headroom to grant.
+    release_project_io_reservation_lock
+    return 0
+  fi
   if project_io_pressure_protection_enabled; then
     release_project_io_reservation_lock
     return 0

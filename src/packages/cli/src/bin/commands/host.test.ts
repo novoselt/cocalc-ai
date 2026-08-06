@@ -990,6 +990,41 @@ test("host machine-type updates a resolved host through the validated API", asyn
   assert.equal(capture.data.machine_type, "t2d-standard-16");
 });
 
+test("host funding-mode updates a resolved stopped host", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const deps = makeDeps(capture, {
+    resolveHost: async () => ({
+      id: "host-id",
+      name: "customer-host",
+      status: "off",
+    }),
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "funding-mode",
+    "customer-host",
+    "account-postpaid",
+  ]);
+
+  assert.deepEqual(capture.hostMachineUpdates?.[0], {
+    id: "host-id",
+    funding_mode: "account-postpaid",
+  });
+  assert.equal(capture.data.host_id, "host-id");
+});
+
 test("host scratch delete requires confirmation and sends delete flag", async () => {
   const capture: Capture = {
     upgrades: [],

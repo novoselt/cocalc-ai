@@ -1,0 +1,26 @@
+[Unit]
+Description=Changed-only CoCalc Bay SQLite backup
+After=network-online.target cocalc-bay-conat-persist.service
+
+[Service]
+Type=oneshot
+User=cocalc-bay
+WorkingDirectory=/opt/cocalc/bay/current
+EnvironmentFile=/etc/cocalc/bay.env
+EnvironmentFile=-/etc/cocalc/bay-workers.env
+EnvironmentFile=-/etc/cocalc/bay-overlay.env
+EnvironmentFile=-/etc/cocalc/bay-topology.env
+EnvironmentFile=-/etc/cocalc/bay-secrets.env
+EnvironmentFile=-/etc/cocalc/bay-local.env
+ExecStart=/opt/cocalc/bay/current/bin/bay-sqlite-backup-run
+TimeoutStartSec=2h
+Nice=15
+CPUWeight=5
+CPUQuota=100%
+MemoryHigh=1G
+MemoryMax=1536M
+IOWeight=5
+IOReadBandwidthMax=/mnt/cocalc 15M
+IOWriteBandwidthMax=/mnt/cocalc 15M
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

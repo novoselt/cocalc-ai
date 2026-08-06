@@ -17,6 +17,8 @@ interface WizardProps {
   onApplyJson: (json: string) => void;
   currentJson?: string;
   domainName?: string;
+  computeVm?: boolean;
+  onApplySettings?: (settings: Record<string, string>) => void;
 }
 
 const START_MARKER = "=== COCALC GCP CONFIG START ===";
@@ -65,6 +67,7 @@ function normalizeServiceAccountJson(input: string): any | null {
   const raw = extractJsonBlock(input);
   if (!raw) return null;
   let candidate =
+    raw.compute_vm_gcp_service_account_json ??
     raw.google_cloud_service_account_json ??
     raw.service_account_json ??
     raw.service_account ??
@@ -86,9 +89,17 @@ export default function GcpServiceAccountWizard({
   onApplyJson,
   currentJson,
   domainName,
+  computeVm = false,
+  onApplySettings,
 }: WizardProps) {
+  const defaultServiceAccountName = computeVm
+    ? "cocalc-compute-vm"
+    : "cocalc-host";
   const [projectId, setProjectId] = useState("");
-  const [serviceAccountName, setServiceAccountName] = useState("cocalc-host");
+  const [serviceAccountName, setServiceAccountName] = useState(
+    defaultServiceAccountName,
+  );
+  const [region, setRegion] = useState("us-central1");
   const [gcloudReady, setGcloudReady] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
   const [jsonNotice, setJsonNotice] = useState("");
@@ -104,7 +115,8 @@ export default function GcpServiceAccountWizard({
   useEffect(() => {
     if (!open) {
       setProjectId("");
-      setServiceAccountName("cocalc-host");
+      setServiceAccountName(defaultServiceAccountName);
+      setRegion("us-central1");
       setGcloudReady(false);
       setJsonInput("");
       setJsonNotice("");
@@ -122,10 +134,11 @@ export default function GcpServiceAccountWizard({
       const name = `${parsed.client_email}`.split("@")[0];
       if (name) setServiceAccountName(name);
     }
-  }, [open, currentJson]);
+  }, [open, currentJson, defaultServiceAccountName]);
 
   const trimmedProject = projectId.trim();
-  const trimmedServiceAccount = serviceAccountName.trim() || "cocalc-host";
+  const trimmedServiceAccount =
+    serviceAccountName.trim() || defaultServiceAccountName;
   const serviceAccountEmail = trimmedProject
     ? `${trimmedServiceAccount}@${trimmedProject}.iam.gserviceaccount.com`
     : "";
@@ -137,13 +150,13 @@ export default function GcpServiceAccountWizard({
       const withScheme = /^https?:\/\//.test(trimmedDomain)
         ? trimmedDomain
         : `https://${trimmedDomain}`;
-      return `${withScheme.replace(/\/+$/, "")}${basePath}/project-host/gcp-setup.sh`;
+      return `${withScheme.replace(/\/+$/, "")}${basePath}/project-host/${computeVm ? "compute-vm-setup.sh" : "gcp-setup.sh"}`;
     }
     if (typeof window !== "undefined") {
-      return `${window.location.origin}${basePath}/project-host/gcp-setup.sh`;
+      return `${window.location.origin}${basePath}/project-host/${computeVm ? "compute-vm-setup.sh" : "gcp-setup.sh"}`;
     }
-    return `http://localhost:9001${basePath}/project-host/gcp-setup.sh`;
-  }, [domainName]);
+    return `http://localhost:9001${basePath}/project-host/${computeVm ? "compute-vm-setup.sh" : "gcp-setup.sh"}`;
+  }, [computeVm, domainName]);
 
   const scriptCommand = useMemo(() => {
     if (!scriptUrl) {
@@ -160,13 +173,15 @@ export default function GcpServiceAccountWizard({
     if (!trimmedProject) {
       return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}bash`;
     }
-    return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}PROJECT_ID=\"${trimmedProject}\" SA_NAME=\"${trimmedServiceAccount}\" bash`;
+    return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}PROJECT_ID=\"${trimmedProject}\" SA_NAME=\"${trimmedServiceAccount}\"${computeVm ? ` REGION=\"${region.trim() || "us-central1"}\"` : ""} bash`;
   }, [
     scriptUrl,
     trimmedProject,
     trimmedServiceAccount,
     challenge,
     useDirectUpload,
+    computeVm,
+    region,
   ]);
 
   const scriptMarkdown = useMemo(
@@ -273,6 +288,13 @@ export default function GcpServiceAccountWizard({
   function applyJson() {
     if (!jsonValid) return;
     onApplyJson(JSON.stringify(parsedJson, null, 2));
+    if (computeVm) {
+      const subnetwork =
+        `${extractJsonBlock(jsonInput)?.compute_vm_gcp_subnetwork ?? ""}`.trim();
+      if (subnetwork) {
+        onApplySettings?.({ compute_vm_gcp_subnetwork: subnetwork });
+      }
+    }
     setJsonNotice("Service account JSON applied to the form.");
     onClose();
   }
@@ -280,6 +302,13 @@ export default function GcpServiceAccountWizard({
   async function applyUploadedJson() {
     if (!uploadedJsonValid) return;
     onApplyJson(JSON.stringify(uploadedJson, null, 2));
+    if (computeVm) {
+      const subnetwork =
+        `${challenge?.payload?.compute_vm_gcp_subnetwork ?? ""}`.trim();
+      if (subnetwork) {
+        onApplySettings?.({ compute_vm_gcp_subnetwork: subnetwork });
+      }
+    }
     if (challenge?.id) {
       try {
         await webapp_client.conat_client.hub.system.clearProviderSetupChallenge(
@@ -300,7 +329,7 @@ export default function GcpServiceAccountWizard({
       onCancel={onClose}
       onOk={onClose}
       okText="Close"
-      title="Google Cloud Service Account JSON Wizard (gcloud)"
+      title={`${computeVm ? "Managed Compute VM" : "Google Cloud"} Service Account Wizard (gcloud)`}
       width={920}
     >
       <Space orientation="vertical" size={16} style={{ width: "100%" }}>
@@ -352,6 +381,14 @@ export default function GcpServiceAccountWizard({
                 value={serviceAccountName}
                 onChange={(e) => setServiceAccountName(e.target.value)}
               />
+              {computeVm ? (
+                <Input
+                  style={{ marginTop: "8px" }}
+                  placeholder="GCP region"
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                />
+              ) : null}
             </div>
             <div>
               <strong>

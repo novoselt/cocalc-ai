@@ -829,6 +829,17 @@ function dedicatedHostDiskLabel({
 function dedicatedHostDescriptionLines(value: unknown): string[] | undefined {
   const description = value as DedicatedHostPurchase | undefined;
   if (
+    description?.type === "dedicated-host" &&
+    description.resource_kind === "compute-egress"
+  ) {
+    const title = `${description.host_name ?? ""}`.trim() || "VM public egress";
+    const gb = Number(description.usage_bytes ?? 0) / 1_000_000_000;
+    return [
+      title,
+      `${gb.toFixed(gb >= 10 ? 1 : 3)} GB public Internet egress · $${Number(description.unit_cost_usd_per_gb ?? 0.1).toFixed(2)}/GB`,
+    ];
+  }
+  if (
     description?.type !== "dedicated-host" ||
     !description.billing_state ||
     !description.pricing_snapshot
@@ -1666,9 +1677,7 @@ function Active({ record }) {
   } else if (record.period_start && record.cost_so_far != null) {
     // it's a metered pay as you go purchase
     return (
-      <Tooltip
-        title={`This is an active metered purchase. Active purchases are finalized within a day.`}
-      >
+      <Tooltip title="This is an active metered purchase. It is finalized when its billing period or resource ends.">
         <Tag color="green" style={{ margin: 0 }}>
           Active
         </Tag>

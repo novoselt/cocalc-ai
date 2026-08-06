@@ -172,6 +172,11 @@ pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/pack
 copy_native_pkg "bufferutil" "$OUT/runtime/cloudflared"
 copy_native_pkg "utf-8-validate" "$OUT/runtime/cloudflared"
 
+echo "- Bundle changed-only SQLite mirror helper with @vercel/ncc"
+pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/packages/rocket/bin/bay-sqlite-mirror.js" \
+  -o "$OUT/runtime/sqlite-mirror" \
+  --license licenses.txt
+
 echo "- Copy bay systemd scaffold"
 mkdir -p "$OUT/scripts"
 cp -a "$ROOT/scripts/bay-systemd" "$OUT/scripts/"
@@ -214,6 +219,7 @@ const manifest = {
     hub: "runtime/control-plane/bundle/index.js",
     migrateSchema: "runtime/migrate-schema/index.js",
     cloudflared: "runtime/cloudflared/index.js",
+    sqliteMirror: "runtime/sqlite-mirror/index.js",
     apiV2Root: "runtime/control-plane/http-api-dist/pages/api/v2",
     apiV2Routes: "runtime/control-plane/api-v2-routes/index.js",
   },
@@ -229,6 +235,7 @@ validate_file "$OUT/runtime/control-plane/bundle/index.js"
 validate_file "$OUT/runtime/control-plane/api-v2-routes/index.js"
 validate_file "$OUT/runtime/migrate-schema/index.js"
 validate_file "$OUT/runtime/cloudflared/index.js"
+validate_file "$OUT/runtime/sqlite-mirror/index.js"
 validate_file "$OUT/runtime/control-plane/http-api-dist/pages/api/v2/index.js"
 validate_file "$OUT/runtime/control-plane/static/public.html"
 validate_file "$OUT/runtime/control-plane/public/cocalc-content.css"

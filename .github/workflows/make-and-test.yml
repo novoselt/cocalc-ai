@@ -21,14 +21,46 @@ on:
         default: false
 
 jobs:
-  test:
+  plan:
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_tests: ${{ steps.plan.outputs.has_tests }}
+      mode: ${{ steps.plan.outputs.mode }}
+      depcheck_packages: ${{ steps.plan.outputs.depcheck_packages }}
 
-    strategy:
-      matrix:
-        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
-        node-version:
-          - "24"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Plan test lanes
+        id: plan
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cd src
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            node scripts/ci-test-plan.mjs --base="$PR_BASE_SHA" --github-output --pretty
+          else
+            node scripts/ci-test-plan.mjs --full --github-output --pretty
+          fi
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.has_tests == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
 
     steps:
       - uses: actions/checkout@v4
@@ -39,10 +71,108 @@ jobs:
           version: 11.5.2
           run_install: false
 
-      - name: Node.js ${{ matrix.node-version }}
+      - name: Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: src/packages/pnpm-lock.yaml
+
+      - name: Build
+        run: cd src && pnpm build
+
+      - name: Pack workspace build
+        run: |
+          cd src
+          mapfile -d '' build_dirs < <(
+            find packages \
+              -type d -name node_modules -prune -o \
+              -type d \( -name dist -o -name dist-ts \) -print0
+          )
+          if (( ${#build_dirs[@]} == 0 )); then
+            echo "No workspace build directories found."
+            exit 1
+          fi
+          mapfile -d '' test_tools < <(
+            find packages/backend/node_modules/.bin \
+              -maxdepth 1 -type f ! -name codex -print0
+          )
+          tar --create --file workspace-build.tar \
+            "${build_dirs[@]}" \
+            "${test_tools[@]}"
+
+      - name: Upload workspace build
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-build
+          path: src/workspace-build.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
+
+  checks:
+    needs: plan
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: src/packages/pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        run: pnpm -C src/packages install --frozen-lockfile
+
+      - name: Static checks
+        run: pnpm -C src test:checks
+
+      - name: Dependency checks
+        env:
+          DEPCHECK_PACKAGES: ${{ needs.plan.outputs.depcheck_packages }}
+          TEST_MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          cd src
+          if [[ "$TEST_MODE" == "full" ]]; then
+            pnpm depcheck
+          elif [[ -n "$DEPCHECK_PACKAGES" ]]; then
+            ./workspaces.py pnpm --packages="$DEPCHECK_PACKAGES" --parallel run depcheck
+          else
+            echo "No directly changed package requires depcheck."
+          fi
+
+  test:
+    needs: [plan, build]
+    if: needs.plan.outputs.has_tests == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
           cache: pnpm
           cache-dependency-path: src/packages/pnpm-lock.yaml
 
@@ -51,7 +181,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y attr btrfs-progs python3
 
+      - name: Install workspace dependencies
+        run: pnpm -C src/packages install --frozen-lockfile
+
+      - name: Download workspace build
+        uses: actions/download-artifact@v4
+        with:
+          name: workspace-build
+          path: src
+
+      - name: Extract workspace build
+        run: tar --extract --file src/workspace-build.tar --directory src
+
+      - name: Cache Jest transforms
+        uses: actions/cache@v4
+        with:
+          path: src/.cache/jest
+          key: jest-${{ runner.os }}-node24-${{ hashFiles('src/packages/pnpm-lock.yaml', 'src/packages/**/jest.config.*', 'src/packages/**/tsconfig.test.json') }}-${{ matrix.lane }}-${{ github.sha }}
+          restore-keys: |
+            jest-${{ runner.os }}-node24-${{ hashFiles('src/packages/pnpm-lock.yaml', 'src/packages/**/jest.config.*', 'src/packages/**/tsconfig.test.json') }}-${{ matrix.lane }}-
+
       - name: Cache pip
+        if: matrix.lane == 'rest'
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
@@ -60,6 +211,7 @@ jobs:
             pip-${{ runner.os }}-py3-
 
       - name: Set up Python venv and Jupyter kernel
+        if: matrix.lane == 'rest'
         run: |
           python3 -m pip install --upgrade pip virtualenv
           python3 -m virtualenv venv
@@ -67,14 +219,16 @@ jobs:
           pip install ipykernel requests yapf
           python -m ipykernel install --prefix=./jupyter-local --name python3-local --display-name "Python 3 (Local)"
 
-      - name: build
-        run: cd src && pnpm build
-
       #- name: check bundle guards
       #  run: cd src/packages/static && pnpm run check-bundle-guards
 
-      - name: test
-        timeout-minutes: 15
+      - name: Test ${{ matrix.lane }} packages
         env:
           COCALC_RUNTIME_STORAGE_ALLOW_DIRECT: "yes"
-        run: source venv/bin/activate && cd src && pnpm test
+          TEST_PACKAGES: ${{ matrix.packages }}
+        run: |
+          if [[ "${{ matrix.lane }}" == "rest" ]]; then
+            source venv/bin/activate
+          fi
+          cd src
+          ./workspaces.py test --packages="$TEST_PACKAGES"

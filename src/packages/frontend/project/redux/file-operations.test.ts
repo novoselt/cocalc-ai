@@ -149,6 +149,23 @@ describe("project redux file operations", () => {
     expect(deleted).toEqual(["/tmp/keep.txt"]);
   });
 
+  it("allows a snapshot deletion up to 60 seconds", async () => {
+    await deleteFiles({
+      paths: [".snapshots/manual-1"],
+      projectId: "project-1",
+      fs: () => ({ rm: jest.fn() }) as any,
+      setActivity: jest.fn(),
+      log: jest.fn(),
+    });
+
+    expect(mockDeleteSnapshot).toHaveBeenCalledWith({
+      browser_id: "browser-1",
+      project_id: "project-1",
+      name: "manual-1",
+      timeout: 60 * 1000,
+    });
+  });
+
   it("prunes ordinary paths from snapshots before deleting live files", async () => {
     const rm = jest.fn().mockResolvedValue(undefined);
     const setActivity = jest.fn();

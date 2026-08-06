@@ -119,24 +119,3 @@ export interface ComputeVolumeRow {
   error?: string | null;
   metadata: Record<string, any>;
 }
-
-export type ComputeBudgetPeriod = "week" | "month";
-
-export interface ComputeProjectBudgetRow {
-  id: string;
-  owner_account_id: string;
-  owning_bay_id: string;
-  project_id: string;
-  period: ComputeBudgetPeriod;
-  limit_usd: string;
-  enabled: boolean;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface ComputeProjectBudgetSummary extends ComputeProjectBudgetRow {
-  period_started_at: Date;
-  period_ends_at: Date;
-  spent_usd: string;
-  remaining_usd: string;
-}

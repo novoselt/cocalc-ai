@@ -1178,6 +1178,10 @@ test("admin entitlement-override schema documents usable override payloads", asy
     JSON.stringify(schema),
     /usage_limits\.credit_spend_limit_7d_usd/,
   );
+  assert.match(
+    JSON.stringify(schema),
+    /authorizes administrator-managed collection/,
+  );
   assert.equal(
     (schema as any).numeric_rule.modes.minimum,
     "Use the override value only when it is higher than the membership value.",

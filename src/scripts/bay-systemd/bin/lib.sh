@@ -28,7 +28,34 @@ load_bay_env
 : "${COCALC_BAY_STATE_DIR:=${COCALC_BAY_ROOT}/state}"
 : "${COCALC_BAY_RUN_DIR:=${COCALC_BAY_ROOT}/run}"
 : "${COCALC_BAY_LOG_DIR:=${COCALC_BAY_ROOT}/logs}"
-: "${COCALC_BAY_BACKUP_DIR:=${COCALC_BAY_ROOT}/backups}"
+: "${COCALC_BACKUP_ROOT:=${COCALC_BAY_BACKUP_DIR:-${COCALC_BAY_ROOT}/backups}}"
+if [[ "$COCALC_BACKUP_ROOT" != "/" ]]; then
+  COCALC_BACKUP_ROOT="${COCALC_BACKUP_ROOT%/}"
+fi
+# COCALC_BACKUP_ROOT is the canonical operator setting used by the legacy bay
+# backup path. Keep the newer name as an alias so both implementations always
+# target the same filesystem during migration.
+COCALC_BAY_BACKUP_DIR="$COCALC_BACKUP_ROOT"
+: "${COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM:=0}"
+
+BACKUP_PATH_ALIGNMENT_ERROR=""
+align_backup_child_path() {
+  local name="$1"
+  local relative="$2"
+  local current="${!name:-}"
+  local legacy_root="${COCALC_BAY_ROOT}/backups"
+  if [[ -z "$current" || "$current" == "$legacy_root" || "$current" == "$legacy_root/"* ]]; then
+    printf -v "$name" '%s/%s' "${COCALC_BACKUP_ROOT%/}" "$relative"
+    export "$name"
+    return
+  fi
+  if [[ "$current" != "$COCALC_BACKUP_ROOT" && "$current" != "$COCALC_BACKUP_ROOT/"* ]]; then
+    BACKUP_PATH_ALIGNMENT_ERROR="${name}=${current} is outside COCALC_BACKUP_ROOT=${COCALC_BACKUP_ROOT}"
+  fi
+}
+
+align_backup_child_path COCALC_BAY_PGBACKREST_SPOOL_PATH pgbackrest/spool
+align_backup_child_path COCALC_BAY_SQLITE_MIRROR_DIR sqlite-mirror/sync
 : "${COCALC_BAY_POSTGRES_HOST:=127.0.0.1}"
 : "${COCALC_BAY_POSTGRES_PORT:=5432}"
 : "${COCALC_BAY_PERSIST_HOST:=127.0.0.1}"
@@ -90,6 +117,34 @@ require_var() {
   if [[ -z "${!name:-}" ]]; then
     bay_log "missing required environment variable: $name"
     exit 1
+  fi
+}
+
+assert_backup_storage_ready() {
+  local root="$COCALC_BAY_BACKUP_DIR"
+  if [[ -n "$BACKUP_PATH_ALIGNMENT_ERROR" ]]; then
+    bay_log "backup path alignment failed: $BACKUP_PATH_ALIGNMENT_ERROR"
+    return 1
+  fi
+  if [[ ! -d "$root" ]]; then
+    if [[ "$COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM" == "1" ]]; then
+      bay_log "backup root is not a mounted directory: $root"
+      return 1
+    fi
+    mkdir -p "$root"
+  fi
+  if [[ ! -w "$root" ]]; then
+    bay_log "backup root is not writable: $root"
+    return 1
+  fi
+  if [[ "$COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM" == "1" ]]; then
+    local root_device parent_device
+    root_device="$(stat -c '%d' "$root")"
+    parent_device="$(stat -c '%d' "$(dirname "$root")")"
+    if [[ "$root_device" == "$parent_device" ]]; then
+      bay_log "backup root is not a separate filesystem: $root"
+      return 1
+    fi
   fi
 }
 

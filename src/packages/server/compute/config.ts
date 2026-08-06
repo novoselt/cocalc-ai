@@ -28,10 +28,10 @@ export interface ComputeVmConfig {
   max_vcpus: number;
   max_ttl_minutes: number;
   max_boot_disk_gb: number;
-  max_authorized_cost_usd: number;
-  max_project_budget_usd: number;
   max_volumes_per_account: number;
   max_volume_gb: number;
+  unfunded_volume_delete_days: number;
+  unfunded_volume_max_exposure_usd: number;
 }
 
 type Settings = Record<string, any>;
@@ -150,19 +150,19 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
       settings.compute_vm_max_boot_disk_gb,
       200,
     ),
-    max_authorized_cost_usd: positiveNumber(
-      settings.compute_vm_max_authorized_cost_usd,
-      25,
-    ),
-    max_project_budget_usd: positiveNumber(
-      settings.compute_vm_max_project_budget_usd,
-      1000,
-    ),
     max_volumes_per_account: positiveInteger(
       settings.compute_vm_max_volumes_per_account,
       2,
     ),
     max_volume_gb: positiveInteger(settings.compute_vm_max_volume_gb, 500),
+    unfunded_volume_delete_days: positiveNumber(
+      settings.compute_vm_unfunded_volume_delete_days,
+      30,
+    ),
+    unfunded_volume_max_exposure_usd: positiveNumber(
+      settings.compute_vm_unfunded_volume_max_exposure_usd,
+      100,
+    ),
   };
 }
 
@@ -170,7 +170,7 @@ export function computeVmUiEnabled(settings: Settings): boolean {
   try {
     const environment = environmentFromSettings(settings);
     const { mode } = parseMode(settings.compute_vm_mode, environment);
-    return mode === "admin_canary";
+    return mode === "admin_canary" || mode === "enabled";
   } catch {
     return false;
   }
@@ -190,17 +190,18 @@ export function requireComputeVmCreateAllowed(
       { code: 503 },
     );
   }
-  if (config.mode !== "admin_canary") {
+  if (config.mode !== "admin_canary" && config.mode !== "enabled") {
     throw Object.assign(
       new Error(
         config.mode === "disabled" || config.mode === "reconcile_only"
           ? "managed compute VM creation is disabled"
-          : "managed compute VM customer admission is not enabled yet",
+          : "managed compute VM creation is unavailable",
       ),
       { code: 503 },
     );
   }
   if (
+    config.mode === "admin_canary" &&
     !config.staging_legacy_provider &&
     !config.admin_allowlist.has(accountId.toLowerCase())
   ) {

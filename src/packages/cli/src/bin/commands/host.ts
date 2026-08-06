@@ -1821,6 +1821,37 @@ export function registerHostCommand(
     );
 
   host
+    .command("funding-mode <host> <funding-mode>")
+    .description(
+      "change host funding (only live site-funded corrections may run without stopping)",
+    )
+    .action(
+      async (hostIdentifier: string, fundingMode: string, command: Command) => {
+        await withContext(command, "host funding-mode", async (ctx) => {
+          const h = await resolveHost(ctx, hostIdentifier, {
+            admin_view: true,
+          });
+          const requestedFundingMode = `${fundingMode}`.trim().toLowerCase();
+          if (!HOST_CREATE_FUNDING_MODES.has(requestedFundingMode)) {
+            throw new Error(
+              `funding mode must be one of: ${Array.from(HOST_CREATE_FUNDING_MODES).join(", ")}`,
+            );
+          }
+          const updated = await ctx.hub.hosts.updateHostMachine({
+            id: h.id,
+            funding_mode: requestedFundingMode,
+          });
+          return {
+            host_id: updated.id,
+            name: updated.name ?? h.name ?? null,
+            status: updated.status ?? null,
+            funding_mode: updated.billing?.funding_mode ?? null,
+          };
+        });
+      },
+    );
+
+  host
     .command("cloud-refresh <host>")
     .description("force cloud-provider reconciliation for one host")
     .option(

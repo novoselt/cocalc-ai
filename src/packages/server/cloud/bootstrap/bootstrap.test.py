@@ -1151,6 +1151,71 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
             )
             self.assertIn("fingerprint", contract)
 
+    def test_runtime_user_contract_uses_loaded_podman_apparmor_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+            current = Path(tmpdir) / "runtime" / "current"
+            podman = current / "bin" / "podman"
+            conf = current / "etc" / "containers" / "containers.conf"
+            podman.parent.mkdir(parents=True)
+            conf.parent.mkdir(parents=True)
+            podman.write_text("#!/bin/sh\n", encoding="utf-8")
+            podman.chmod(0o755)
+            conf.write_text("[engine]\n", encoding="utf-8")
+            calls = []
+            original_current = os.environ.get("COCALC_CONTAINER_RUNTIME_CURRENT")
+            original_probe = bootstrap.run_bounded_capture
+            original_run = bootstrap.subprocess.run
+            original_which = bootstrap.shutil.which
+            try:
+                os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = str(current)
+                bootstrap.shutil.which = lambda name: (
+                    "/usr/bin/aa-exec" if name == "aa-exec" else original_which(name)
+                )
+                bootstrap.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+                    args[0], 0
+                )
+
+                def fake_probe(args, timeout_s):
+                    calls.append((args, timeout_s))
+                    map_text = "0 2000 1\n1 231072 65536\n65537 327680 4128768\n"
+                    return subprocess.CompletedProcess(args, 0, map_text, "")
+
+                bootstrap.run_bounded_capture = fake_probe
+                contract = bootstrap.read_current_runtime_user_contract(cfg)
+            finally:
+                bootstrap.run_bounded_capture = original_probe
+                bootstrap.subprocess.run = original_run
+                bootstrap.shutil.which = original_which
+                if original_current is None:
+                    os.environ.pop("COCALC_CONTAINER_RUNTIME_CURRENT", None)
+                else:
+                    os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = original_current
+
+            self.assertEqual(len(calls), 2)
+            for args, _timeout_s in calls:
+                self.assertIn(
+                    f"/usr/bin/aa-exec -p podman -- {podman} unshare cat",
+                    args[-1],
+                )
+            self.assertIn("fingerprint", contract)
+
+    def test_runtime_user_contract_skips_missing_podman_apparmor_profile(self) -> None:
+        original_run = bootstrap.subprocess.run
+        original_which = bootstrap.shutil.which
+        try:
+            bootstrap.shutil.which = lambda name: (
+                "/usr/bin/aa-exec" if name == "aa-exec" else original_which(name)
+            )
+            bootstrap.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+                args[0], 1
+            )
+            self.assertEqual(bootstrap.podman_apparmor_exec_prefix(), [])
+        finally:
+            bootstrap.subprocess.run = original_run
+            bootstrap.shutil.which = original_which
+
     def test_verify_runtime_user_contract_raises_on_drift(self) -> None:
         cfg = make_cfg(tempfile.mkdtemp())
         original_expected = bootstrap.expected_runtime_user_contract
@@ -2289,6 +2354,77 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn(
                 'PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"',
                 script,
+            )
+            reserve_startup_io_body = script.split(
+                "reserve_project_startup_io_capacity() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                'fields="$(project_io_policy_fields standard)"',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'if [ "$mode" != "enforce" ]; then',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'deny "project-io-normal-snapshot-empty"',
+                reserve_startup_io_body,
+            )
+            self.assertLess(
+                reserve_startup_io_body.index(
+                    'if [ "$mode" != "enforce" ]; then'
+                ),
+                reserve_startup_io_body.index(
+                    'deny "project-io-normal-snapshot-empty"'
+                ),
+            )
+            reserve_startup_io_function = (
+                "reserve_project_startup_io_capacity() {"
+                + reserve_startup_io_body
+                + "\n}\n"
+            )
+            pool_dir = Path(tmpdir) / "project-pool"
+            pool_dir.mkdir()
+            (pool_dir / "io.max").write_text("", encoding="utf-8")
+            snapshot_path = Path(tmpdir) / "normal-io.max"
+            released_path = Path(tmpdir) / "released"
+            reservation_harness = f"""
+set -euo pipefail
+PROJECT_POOL_CGROUP_DEFAULT={json.dumps(str(pool_dir))}
+PROJECT_IO_NORMAL_LIMITS_SNAPSHOT={json.dumps(str(snapshot_path))}
+project_io_policy_fields() {{ printf '%s\\t\\n' "$POLICY_MODE"; }}
+acquire_project_io_reservation_lock() {{ :; }}
+release_project_io_reservation_lock() {{ : > {json.dumps(str(released_path))}; }}
+project_io_pressure_protection_enabled() {{ return 1; }}
+apply_project_pool_io_policy() {{ :; }}
+deny() {{ printf 'SECURITY_DENY code=%s detail=%s\\n' "$1" "$2" >&2; exit 2; }}
+{reserve_startup_io_function}
+reserve_project_startup_io_capacity
+"""
+            disabled_result = subprocess.run(
+                ["bash"],
+                input=reservation_harness,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "POLICY_MODE": "disabled"},
+            )
+            self.assertEqual(
+                disabled_result.returncode, 0, disabled_result.stderr
+            )
+            self.assertTrue(released_path.exists())
+            self.assertFalse(snapshot_path.exists())
+            released_path.unlink()
+            enforced_result = subprocess.run(
+                ["bash"],
+                input=reservation_harness,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "POLICY_MODE": "enforce"},
+            )
+            self.assertEqual(enforced_result.returncode, 2)
+            self.assertIn(
+                "SECURITY_DENY code=project-io-normal-snapshot-empty",
+                enforced_result.stderr,
             )
             self.assertIn(
                 '"pressure_protection_enabled": pressure_protection_enabled == "true"',

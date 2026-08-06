@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly CoCalc Bay SQLite backup prune
+
+[Timer]
+OnCalendar=Sun *-*-* 11:20:00 UTC
+RandomizedDelaySec=30min
+AccuracySec=5min
+Persistent=true
+Unit=cocalc-bay-sqlite-prune.service
+
+[Install]
+WantedBy=timers.target

@@ -350,10 +350,10 @@ export type SiteSettingsExtrasKeys =
   | "compute_vm_max_vcpus"
   | "compute_vm_max_ttl_minutes"
   | "compute_vm_max_boot_disk_gb"
-  | "compute_vm_max_authorized_cost_usd"
-  | "compute_vm_max_project_budget_usd"
   | "compute_vm_max_volumes_per_account"
   | "compute_vm_max_volume_gb"
+  | "compute_vm_unfunded_volume_delete_days"
+  | "compute_vm_unfunded_volume_max_exposure_usd"
   | "lambda_cloud_api_key"
   | "project_hosts_lambda_prefix"
   | "nebius_region_config_json"
@@ -1624,7 +1624,7 @@ export const EXTRAS: SettingsExtras = {
   },
   compute_vm_mode: {
     name: "Managed Compute VMs: Mode",
-    desc: "Controls the account-owned VM control plane. `disabled` and `reconcile_only` reject create/start while preserving stop, delete, and hard-TTL cleanup. `admin_canary` permits only allowlisted administrators. `enabled` is reserved for a future billed customer release.",
+    desc: "Controls the account-owned VM control plane. `disabled` and `reconcile_only` reject create/start while preserving stop, delete, and hard-TTL cleanup. `admin_canary` permits only allowlisted administrators. `enabled` admits memberships authorized for prepaid or postpaid dedicated-host spending.",
     default: "auto",
     to_val: to_trimmed_str,
     valid: (value) =>
@@ -1666,6 +1666,10 @@ export const EXTRAS: SettingsExtras = {
     default: "",
     multiline: 5,
     password: true,
+    wizard: {
+      name: "compute-vm-gcp-service-account-json",
+      label: "Setup isolated GCP project...",
+    },
     to_val: to_trimmed_str,
     valid: (value) => {
       const text = `${value ?? ""}`.trim();
@@ -1752,26 +1756,6 @@ export const EXTRAS: SettingsExtras = {
     group: "Compute / Managed VMs",
     subgroup: "Limits",
   },
-  compute_vm_max_authorized_cost_usd: {
-    name: "Managed Compute VMs: Maximum Authorized Cost USD",
-    desc: "Maximum fixed compute authorization accepted for one admin-canary lease.",
-    default: "25",
-    to_val: toFloat,
-    valid: onlyPosFloat,
-    tags: ["Cloud"],
-    group: "Compute / Managed VMs",
-    subgroup: "Limits",
-  },
-  compute_vm_max_project_budget_usd: {
-    name: "Managed Compute VMs: Maximum Project Budget USD",
-    desc: "Maximum recurring weekly or monthly managed-compute budget an account may authorize for one project.",
-    default: "1000",
-    to_val: toFloat,
-    valid: onlyPosFloat,
-    tags: ["Cloud"],
-    group: "Compute / Managed VMs",
-    subgroup: "Limits",
-  },
   compute_vm_max_volumes_per_account: {
     name: "Managed Compute VMs: Maximum Volumes Per Account",
     desc: "Maximum undeleted persistent /work volumes owned by one canary account.",
@@ -1779,6 +1763,26 @@ export const EXTRAS: SettingsExtras = {
     to_val: to_int,
     valid: only_pos_int,
     tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_unfunded_volume_delete_days: {
+    name: "Managed Compute VMs: Unfunded Volume Deletion Days",
+    desc: "Delete detached /work volumes that remain unfunded for this many days. Admin alerts begin immediately.",
+    default: "30",
+    to_val: toFloat,
+    valid: onlyPosFloat,
+    tags: ["Cloud", "Pay as you Go", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_unfunded_volume_max_exposure_usd: {
+    name: "Managed Compute VMs: Unfunded Volume Maximum Exposure USD",
+    desc: "Delete a detached unfunded /work volume early when its estimated retained-storage exposure reaches this amount.",
+    default: "100",
+    to_val: toFloat,
+    valid: onlyPosFloat,
+    tags: ["Cloud", "Pay as you Go", "Security"],
     group: "Compute / Managed VMs",
     subgroup: "Limits",
   },

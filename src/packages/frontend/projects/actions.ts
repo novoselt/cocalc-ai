@@ -1302,6 +1302,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
                 title: null,
                 description: null,
                 theme: null,
+                labels: null,
                 users_summary: null,
                 state_summary: null,
                 last_edited: null,
