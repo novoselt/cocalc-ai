@@ -262,7 +262,7 @@ export function HostAvailabilityPanel({
               : "error"
           }
           showIcon
-          message={
+          title={
             currentEvent?.planned
               ? "Host is intentionally unavailable"
               : availability.summary.current_state === "unobserved"

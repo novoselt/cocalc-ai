@@ -46,9 +46,14 @@ import {
   applyExamSessionBootstrap,
   type ExamSessionBootstrap,
 } from "./customize/exam-bootstrap";
+import { fetchCustomize } from "./customize/fetch-customize";
+import { getLogger } from "@cocalc/frontend/logger";
 
 // update every 2 minutes.
 const UPDATE_INTERVAL = 2 * 60000;
+const log = getLogger("customize");
+const CONFIGURATION_LOAD_ERROR =
+  "CoCalc could not load the site configuration and is retrying automatically. Reload the page if this continues.";
 
 // Normalize the persisted legacy kucalc setting into the product-facing
 // platform mode used by frontend code.
@@ -75,6 +80,7 @@ defaults.is_commercial = defaults.commercial;
 defaults.stripe_enabled = false;
 defaults.platform_mode = defaults.kucalc;
 defaults._is_configured = false; // will be true after set via call to server
+defaults.configuration_load_error = undefined;
 defaults.ssh_remote_target = "";
 defaults.ssh_remote_url = "";
 defaults.signup_email_domain_public_policy = { mode: "allow_all" };
@@ -167,6 +173,7 @@ export interface CustomizeState {
   cloudflare_latitude?: string;
   cloudflare_longitude?: string;
   _is_configured: boolean;
+  configuration_load_error?: string;
   project_hosts_nebius_enabled?: boolean;
   project_hosts_self_host_alpha_enabled?: boolean;
   launcher_default_quick_create?: List<string>;
@@ -240,22 +247,27 @@ async function loadCustomizeState() {
     // running in node.js
     return;
   }
-  let customize;
   await retry_until_success({
     f: async () => {
       const url = join(appBasePath, "customize");
       try {
-        customize = await (await fetch(url)).json();
+        const customize = await fetchCustomize({ url });
+        applyCustomizeState(customize);
+        actions.setState({ configuration_load_error: undefined });
       } catch (err) {
-        const msg = `fetch /customize failed -- retrying - ${err}`;
-        console.warn(msg);
-        throw new Error(msg);
+        log.warn("failed to load site configuration; retrying", err);
+        actions.setState({
+          configuration_load_error: CONFIGURATION_LOAD_ERROR,
+        });
+        throw err;
       }
     },
     start_delay: 2000,
     max_delay: 30000,
   });
+}
 
+function applyCustomizeState(customize: Record<string, any>): void {
   const {
     configuration,
     registration,

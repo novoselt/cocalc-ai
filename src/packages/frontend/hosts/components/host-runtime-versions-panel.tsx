@@ -506,7 +506,7 @@ export const HostRuntimeVersionsPanel: React.FC<
           const actionKey = `${runtimeArtifact}:${row.version}`;
           if (isCurrentDefault) {
             return (
-              <Space size={4} direction="vertical">
+              <Space size={4} vertical>
                 <Tag color="green">Cluster default</Tag>
                 <Typography.Text type="secondary">
                   since <TimeAgo date={current.updated_at} />
@@ -573,7 +573,7 @@ export const HostRuntimeVersionsPanel: React.FC<
             <Popconfirm
               title="Align all running hosts to this project-host build?"
               description={
-                <Space direction="vertical" size={4}>
+                <Space vertical size={4}>
                   <Typography.Text>
                     This is the disruptive full-stack action. It queues:
                   </Typography.Text>
@@ -630,12 +630,12 @@ export const HostRuntimeVersionsPanel: React.FC<
         </Button>
       }
     >
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         {configuredError ? (
           <Alert
             type="error"
             showIcon
-            message="Unable to load configured runtime versions"
+            title="Unable to load configured runtime versions"
             description={configuredError}
           />
         ) : null}
@@ -643,7 +643,7 @@ export const HostRuntimeVersionsPanel: React.FC<
           <Alert
             type="warning"
             showIcon
-            message="Unable to load hub runtime versions"
+            title="Unable to load hub runtime versions"
             description={hubError}
           />
         ) : null}
@@ -651,11 +651,11 @@ export const HostRuntimeVersionsPanel: React.FC<
           <Alert
             type="warning"
             showIcon
-            message="Unable to load cluster runtime defaults"
+            title="Unable to load cluster runtime defaults"
             description={globalDeploymentsError}
           />
         ) : null}
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        <Space vertical size={8} style={{ width: "100%" }}>
           {CLUSTER_DEFAULT_ARTIFACTS.map((artifact) => {
             const candidates = clusterDefaultCandidates.get(artifact) ?? [];
             const currentDefault = globalDefaultMap.get(

@@ -61,7 +61,7 @@ export function CookieConsentSettings(): React.JSX.Element | null {
           <Alert
             type="warning"
             showIcon
-            message="You have not yet acknowledged the cookie banner."
+            title="You have not yet acknowledged the cookie banner."
           />
         ) : (
           COOKIE_CATEGORIES.map((category) => (

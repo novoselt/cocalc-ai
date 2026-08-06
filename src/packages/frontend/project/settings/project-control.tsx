@@ -298,11 +298,7 @@ export const ProjectControl: React.FC<ReactProps> = (props: ReactProps) => {
 
   function renderBody() {
     return (
-      <Space
-        direction="vertical"
-        size={isFlyout ? 10 : 14}
-        style={{ width: "100%" }}
-      >
+      <Space vertical size={isFlyout ? 10 : 14} style={{ width: "100%" }}>
         {render_lifecycle_actions()}
         {runtime.resource_limits && (
           <RuntimeSponsorControls project={project} project_id={project_id} />

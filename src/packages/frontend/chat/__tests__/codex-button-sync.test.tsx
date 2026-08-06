@@ -17,9 +17,9 @@ jest.mock("antd", () => {
   Radio.Group = ({ children }: any) => <div>{children}</div>;
   return {
     __esModule: true,
-    Alert: ({ children, description, message }: any) => (
+    Alert: ({ children, description, title }: any) => (
       <div>
-        {message}
+        {title}
         {description}
         {children}
       </div>

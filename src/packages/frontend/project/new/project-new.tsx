@@ -26,7 +26,7 @@ export function ProjectNew({
         showIcon
         type="info"
         style={{ margin: "24px" }}
-        message="Viewer access is read-only"
+        title="Viewer access is read-only"
         description="Viewers can browse and open allowed files, but cannot create new files or folders in this project."
       />
     );

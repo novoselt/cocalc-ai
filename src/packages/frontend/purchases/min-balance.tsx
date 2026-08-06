@@ -18,7 +18,7 @@ export default function MinBalance({ minBalance, style }: Props) {
       <Alert
         showIcon
         type="info"
-        message="Deprecated"
+        title="Deprecated"
         description="Minimum balance is no longer used to extend negative-balance credit. Purchases now stop at zero balance."
       />
     </Card>

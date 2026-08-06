@@ -2526,13 +2526,15 @@ export class ChatActions extends Actions<ChatState> {
   };
 
   undo = () => {
-    if (!canUseSyncDocHistory(this.syncdb)) return;
-    this.syncdb.undo();
+    const syncdb = this.syncdb;
+    if (syncdb == null || !canUseSyncDocHistory(syncdb)) return;
+    syncdb.undo();
   };
 
   redo = () => {
-    if (!canUseSyncDocHistory(this.syncdb)) return;
-    this.syncdb.redo();
+    const syncdb = this.syncdb;
+    if (syncdb == null || !canUseSyncDocHistory(syncdb)) return;
+    syncdb.redo();
   };
 
   /**

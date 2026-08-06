@@ -446,7 +446,7 @@ export const HostSharedScratchFields: React.FC<
             <Alert
               type="warning"
               showIcon
-              message="Not backed up by CoCalc"
+              title="Not backed up by CoCalc"
               description={
                 <>
                   Data in <code>/scratch</code> is shared by projects on this

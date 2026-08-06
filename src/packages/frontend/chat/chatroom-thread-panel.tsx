@@ -1528,7 +1528,7 @@ export function ChatRoomThreadPanel({
                       type="info"
                       showIcon
                       style={{ marginTop: 8 }}
-                      message={`Your CoCalc Membership uses ${siteFundedPolicy.model} with ${siteFundedPolicy.reasoning} reasoning.`}
+                      title={`Your CoCalc Membership uses ${siteFundedPolicy.model} with ${siteFundedPolicy.reasoning} reasoning.`}
                     />
                   ) : null}
                 </div>

@@ -401,7 +401,7 @@ export function AdminMembership({ account_id }: { account_id: string }) {
           )}
           <Collapse defaultActiveKey={defaultOpenSections}>
             <Collapse.Panel header="Current membership" key="current">
-              <Space direction="vertical" style={{ width: "100%" }}>
+              <Space vertical style={{ width: "100%" }}>
                 <Descriptions size="small" column={1}>
                   <Descriptions.Item label="Resolved tier">
                     <Space>
@@ -493,11 +493,7 @@ export function AdminMembership({ account_id }: { account_id: string }) {
               </Space>
             </Collapse.Panel>
             <Collapse.Panel header="Admin assignment" key="assignment">
-              <Space
-                direction="vertical"
-                style={{ width: "100%" }}
-                size="middle"
-              >
+              <Space vertical style={{ width: "100%" }} size="middle">
                 <div>
                   <Space align="center">
                     <Text type="secondary">
@@ -590,11 +586,7 @@ export function AdminMembership({ account_id }: { account_id: string }) {
               />
             </Collapse.Panel>
             <Collapse.Panel header="Usage summary and diagnostics" key="usage">
-              <Space
-                direction="vertical"
-                size="middle"
-                style={{ width: "100%" }}
-              >
+              <Space vertical size="middle" style={{ width: "100%" }}>
                 {usageAlerts.map((alert) => (
                   <Alert
                     key={alert.key}

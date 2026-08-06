@@ -308,7 +308,7 @@ function StripePaymentInner({
               showIcon
               style={{ margin: "15px auto", maxWidth: "600px" }}
               type="warning"
-              message="Stripe payments are not configured on this site."
+              title="Stripe payments are not configured on this site."
               description="This purchase can only be completed here if account credit covers the full amount."
             />
           )}
@@ -842,7 +842,7 @@ export function ConfirmButton({
 export function BigSpin({ style, tip = "Loading" }: { style?; tip?: string }) {
   return (
     <div style={{ ...style, textAlign: "center" }}>
-      <Spin tip={tip} size="large">
+      <Spin description={tip} size="large">
         <div
           style={{
             padding: 50,
@@ -977,7 +977,7 @@ export function BillingSetupModal({
         <Alert
           showIcon
           type="warning"
-          message="Card billing is not configured on this site."
+          title="Card billing is not configured on this site."
           description="Billing details and payment methods can only be managed after an administrator configures Stripe billing."
         />
       ) : checkingAddress ? (
@@ -989,7 +989,7 @@ export function BillingSetupModal({
           <Alert
             showIcon
             type="info"
-            message="Enter your billing name and address first."
+            title="Enter your billing name and address first."
             description="CoCalc uses this for receipts, invoices, and tax calculation."
           />
           <StripeAddressElement onFinished={finishAddress} showCancel={false} />
@@ -1068,7 +1068,7 @@ function CollectPaymentMethodInner({
         showIcon
         style={style}
         type="warning"
-        message="Card billing is not configured on this site."
+        title="Card billing is not configured on this site."
         description="Payment methods can only be added after an administrator configures Stripe billing."
       />
     );

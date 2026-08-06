@@ -262,9 +262,9 @@ export function CourseMembershipBanner({ project_id }: { project_id: string }) {
             : undefined
         }
         style={{ margin: "12px" }}
-        message={`Course membership required: ${title}`}
+        title={`Course membership required: ${title}`}
         description={
-          <Space direction="vertical" size="small">
+          <Space vertical size="small">
             <span>
               {paymentAccess.status === "grace" ? (
                 <>
@@ -317,9 +317,9 @@ export function CourseMembershipBanner({ project_id }: { project_id: string }) {
           type="info"
           showIcon
           style={{ margin: "12px" }}
-          message="Course membership is available from your site license"
+          title="Course membership is available from your site license"
           description={
-            <Space direction="vertical" size="small">
+            <Space vertical size="small">
               <span>
                 Your verified email{" "}
                 <Text strong>{access.matched_email_address}</Text> can claim{" "}
@@ -596,7 +596,7 @@ function StudentCoursePurchaseModal({
           description="This project does not include enough course metadata to create a direct student membership purchase."
         />
       ) : (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
             This is a one-time purchase for {courseTitle}. If you already have
             an equal or higher active membership, this course is covered without
@@ -674,7 +674,7 @@ function StudentCoursePurchaseModal({
               showIcon
               title="Thank you - your course membership is active"
               description={
-                <Space direction="vertical" size="small">
+                <Space vertical size="small">
                   <Text>
                     Your payment is complete, and this course is now covered by
                     your {getRequiredMembershipLabel(access)} membership.

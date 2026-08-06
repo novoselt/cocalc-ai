@@ -305,11 +305,11 @@ export function AbuseAnnotationControls({
         width={760}
       >
         <ShowError error={error} setError={setError} />
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Alert
             showIcon
             type="info"
-            message="Annotations affect admin review priority only. Raw usage remains visible and user-facing limits are unchanged."
+            title="Annotations affect admin review priority only. Raw usage remains visible and user-facing limits are unchanged."
           />
           <Space wrap>
             <Select
@@ -347,11 +347,7 @@ export function AbuseAnnotationControls({
           />
           <div>
             <Text strong>History</Text>
-            <Space
-              direction="vertical"
-              size={8}
-              style={{ marginTop: 8, width: "100%" }}
-            >
+            <Space vertical size={8} style={{ marginTop: 8, width: "100%" }}>
               {history.length === 0 ? (
                 <Text type="secondary">
                   {loading ? "Loading..." : "No annotations yet."}

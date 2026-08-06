@@ -133,12 +133,12 @@ export function ArchiveProjectModal({
         </Button>,
       ]}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {error ? (
           <Alert
             type="error"
             showIcon
-            message={
+            title={
               single
                 ? `Unable to archive ${projectLabelLower}`
                 : `Unable to archive selected ${projectsLabelLower}`
@@ -155,7 +155,7 @@ export function ArchiveProjectModal({
           <Alert
             type="warning"
             showIcon
-            message="Public shares are not available when a project is archived."
+            title="Public shares are not available when a project is archived."
             description={
               single
                 ? "This project has public shares. They will not be accessible again until the project is restored."
@@ -167,7 +167,7 @@ export function ArchiveProjectModal({
           <Alert
             type="warning"
             showIcon
-            message={
+            title={
               single
                 ? `Archive is available because you are an administrator`
                 : `${adminOnlyCount} selected ${projectsLabelLower} can be archived because you are an administrator`
@@ -227,7 +227,7 @@ export function ArchiveProjectModal({
           <Alert
             type="info"
             showIcon
-            message={`${skippedCount} selected ${projectsLabelLower} will be skipped`}
+            title={`${skippedCount} selected ${projectsLabelLower} will be skipped`}
             description="Skipped projects are already archived, busy, or you do not have permission to archive them."
           />
         ) : undefined}
@@ -248,7 +248,7 @@ function ProjectList({
       <div style={{ color: COLORS.GRAY_D, fontWeight: 600, marginBottom: 8 }}>
         Selected projects
       </div>
-      <Space direction="vertical" size={4} style={{ width: "100%" }}>
+      <Space vertical size={4} style={{ width: "100%" }}>
         {shown.map((project) => (
           <div key={project.project_id} style={PROJECT_ROW_STYLE}>
             <Icon name="project-outlined" style={{ color: COLORS.GRAY_M }} />

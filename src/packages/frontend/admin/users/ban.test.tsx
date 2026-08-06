@@ -11,9 +11,9 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
 }));
 
 jest.mock("antd", () => ({
-  Alert: ({ message, description }: any) => (
+  Alert: ({ title, description }: any) => (
     <div>
-      {message}
+      {title}
       {description}
     </div>
   ),

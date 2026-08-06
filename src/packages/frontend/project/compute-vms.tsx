@@ -369,7 +369,7 @@ function VolumeCreateModal({
       <Alert
         showIcon
         type="info"
-        message="Volumes are retained when VMs are deleted. They can grow online but cannot shrink."
+        title="Volumes are retained when VMs are deleted. They can grow online but cannot shrink."
       />
       <Divider />
       <Text strong>Equivalent CLI command</Text>
@@ -941,7 +941,7 @@ export function ProjectComputeVms({
           closable
           showIcon
           type="warning"
-          message="Managed compute action failed"
+          title="Managed compute action failed"
           description={error}
           onClose={() => setError(undefined)}
           style={{ marginBottom: 12 }}
@@ -952,7 +952,7 @@ export function ProjectComputeVms({
           closable
           showIcon
           type="success"
-          message={notice}
+          title={notice}
           onClose={() => setNotice(undefined)}
           style={{ marginBottom: 12 }}
         />
@@ -1009,7 +1009,7 @@ export function ProjectComputeVms({
       <Alert
         showIcon
         type="info"
-        message={
+        title={
           <span>
             Prefer a terminal?{" "}
             <a href={COCALC_CLI_DOWNLOAD_URL}>Install the CoCalc CLI</a>.

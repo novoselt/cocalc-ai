@@ -279,7 +279,7 @@ export default function StudentPay({
           }
         />
       ) : (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
             <div style={{ marginBottom: "6px", fontWeight: 600 }}>
               Required student course membership
@@ -298,7 +298,7 @@ export default function StudentPay({
             />
           </div>
           {selectedTier && (
-            <Space direction="vertical" size="small" style={{ width: "100%" }}>
+            <Space vertical size="small" style={{ width: "100%" }}>
               <Text type="secondary">
                 {currency(Number(selectedTier.course_price ?? 0))} for{" "}
                 {Number(selectedTier.course_duration_days ?? 0)} days per
@@ -341,7 +341,7 @@ export default function StudentPay({
               onChange={(e) => setPayChoice(e.target.value)}
               style={{ width: "100%" }}
             >
-              <Space direction="vertical" style={{ width: "100%" }}>
+              <Space vertical style={{ width: "100%" }}>
                 <Radio value="student" disabled={!selectedTier}>
                   {intl.formatMessage({
                     id: "course.student-pay.radio.students-pay",

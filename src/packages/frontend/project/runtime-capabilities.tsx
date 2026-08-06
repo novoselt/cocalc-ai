@@ -55,7 +55,7 @@ export function WorkspaceRuntimeAdminWarning(): React.JSX.Element | null {
     <Alert
       type="warning"
       showIcon
-      message="Trusted workspace runtime"
+      title="Trusted workspace runtime"
       description="Projects run directly as processes under the Launchpad service account. Use this only for trusted development: there is no container boundary, host placement, RootFS isolation, backup or snapshot service, SSH endpoint, GPU assignment, or enforced resource limit."
     />
   );

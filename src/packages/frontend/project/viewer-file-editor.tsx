@@ -104,7 +104,7 @@ export default function ViewerFileEditor({
         showIcon
         type="error"
         style={{ margin: "16px" }}
-        message="Unable to open read-only file"
+        title="Unable to open read-only file"
         description={`${error}`}
       />
     );

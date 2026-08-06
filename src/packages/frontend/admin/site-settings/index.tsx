@@ -749,7 +749,7 @@ export default function SiteSettings({
             showIcon
             style={{ marginTop: "8px" }}
             type="error"
-            message="Could not load site settings propagation status"
+            title="Could not load site settings propagation status"
             description={settingsPropagationError}
           />
         ) : settingsPropagationStatus == null ? null : (
@@ -757,7 +757,7 @@ export default function SiteSettings({
             showIcon
             style={{ marginTop: "8px" }}
             type={unhealthy.length ? "warning" : "success"}
-            message={
+            title={
               unhealthy.length
                 ? "Some bays do not have the latest site settings"
                 : "All registered bays have the latest site settings"
@@ -882,7 +882,7 @@ export default function SiteSettings({
             showIcon
             style={{ marginTop: "8px" }}
             type={failed?.length ? "error" : "success"}
-            message={
+            title={
               failed?.length
                 ? "Some bays failed to sync"
                 : "Site settings synced"
@@ -906,7 +906,7 @@ export default function SiteSettings({
             showIcon
             style={{ marginTop: "8px" }}
             type="error"
-            message="Site settings sync failed"
+            title="Site settings sync failed"
             description={settingsSyncError}
           />
         )}
@@ -945,7 +945,7 @@ export default function SiteSettings({
             showIcon
             style={{ marginTop: "8px" }}
             type={emailTestResult.success ? "success" : "error"}
-            message={formatEmailTestRoute(emailTestResult)}
+            title={formatEmailTestRoute(emailTestResult)}
             description={
               <div>
                 {emailTestResult.to && (
@@ -989,7 +989,7 @@ export default function SiteSettings({
             showIcon
             style={{ marginTop: "8px" }}
             type="error"
-            message="Test email failed"
+            title="Test email failed"
             description={emailTestError}
           />
         )}
@@ -1060,7 +1060,7 @@ export default function SiteSettings({
                 showIcon
                 style={{ marginTop: "8px" }}
                 type={cloudflareApplyResult.running ? "success" : "warning"}
-                message={cloudflareApplyResult.message}
+                title={cloudflareApplyResult.message}
               />
             )}
             {cloudflareApplyError && (
@@ -1068,7 +1068,7 @@ export default function SiteSettings({
                 showIcon
                 style={{ marginTop: "8px" }}
                 type="error"
-                message="Could not apply Cloudflare tunnel settings"
+                title="Could not apply Cloudflare tunnel settings"
                 description={cloudflareApplyError}
               />
             )}
@@ -1332,7 +1332,7 @@ export default function SiteSettings({
                         showIcon
                         type="info"
                         style={{ margin: "8px 0 12px 0" }}
-                        message="Signup incident runbook"
+                        title="Signup incident runbook"
                         description={
                           <span>
                             These switches limit post-signup capabilities. If
@@ -1429,7 +1429,7 @@ export default function SiteSettings({
             showIcon
             type="info"
             style={{ marginBottom: 20 }}
-            message="Site-funded Codex is disabled"
+            title="Site-funded Codex is disabled"
             description="Configure the OpenAI API key and pool controls below, then enable site-funded Codex when you are ready to admit turns. Use a dedicated OpenAI Platform project and API key with an enforced hard spend limit, not only a notification threshold. Personal ChatGPT subscriptions and API keys are unaffected."
           />
         ) : null}

@@ -666,7 +666,7 @@ function EmailVerificationRequiredStartFailure({
       <Alert
         type="warning"
         showIcon
-        message="Email verification required"
+        title="Email verification required"
         description={
           <div>
             <div>
@@ -994,7 +994,7 @@ function RuntimeSponsorDenialDescription({
         type="info"
         showIcon={false}
         style={{ marginBottom: "12px" }}
-        message={
+        title={
           <div>
             <b>{slotMessage}</b>
           </div>

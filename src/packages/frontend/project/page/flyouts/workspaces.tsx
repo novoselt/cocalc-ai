@@ -1419,11 +1419,7 @@ export function WorkspacesPanel({ project_id, layout = "page" }: Props) {
   const body = (
     <div style={{ paddingRight: isFlyout ? 4 : 0 }}>
       <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-        <Space
-          wrap
-          size={[6, 6]}
-          style={{ paddingLeft: isFlyout ? 8 : 4 }}
-        >
+        <Space wrap size={[6, 6]} style={{ paddingLeft: isFlyout ? 8 : 4 }}>
           <Popover
             trigger="click"
             content={
@@ -1465,13 +1461,13 @@ export function WorkspacesPanel({ project_id, layout = "page" }: Props) {
         </Space>
         {workspaces.loading ? (
           <div style={{ padding: "24px 0", textAlign: "center" }}>
-            <Spin tip="Loading workspaces..." />
+            <Spin description="Loading workspaces..." />
           </div>
         ) : workspaces.error ? (
           <Alert
             type="warning"
             showIcon
-            message="Failed to load workspaces"
+            title="Failed to load workspaces"
             description={workspaces.error}
             action={
               <Button size="small" onClick={workspaces.refresh}>
