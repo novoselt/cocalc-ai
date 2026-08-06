@@ -235,6 +235,11 @@ test("startup script supports pgBackRest PITR and independent SQLite restore", (
   expect(workerSource).not.toContain('["shutdown", "-h", "now"]');
   expect(workerSource).toContain("PGBACKREST_REPO1_S3_TOKEN");
   expect(workerSource).toContain("sync_dir = SNAPSHOT");
+  expect(workerSource).toContain("input_text=None, log=True");
+  expect(workerSource).toContain("log=False");
+  expect(workerSource).toContain(
+    "SQLite quick_check progress {quick_passed}/{len(db_files)}",
+  );
   const compiled = spawnSync(
     "python3",
     ["-c", "import sys; compile(sys.stdin.read(), '<worker>', 'exec')"],

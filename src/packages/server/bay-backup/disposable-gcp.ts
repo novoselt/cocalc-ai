@@ -262,8 +262,9 @@ def report(status, *, error=None, postgres=None, conat=None, disk=None):
         serial.write("\n" + marker + "\n")
         serial.flush()
 
-def run(args, *, timeout=1800, env=None, capture=False, input_text=None):
-    print("restore-drill:", " ".join(str(arg) for arg in args[:4]), flush=True)
+def run(args, *, timeout=1800, env=None, capture=False, input_text=None, log=True):
+    if log:
+        print("restore-drill:", " ".join(str(arg) for arg in args[:4]), flush=True)
     return subprocess.run(
         [str(arg) for arg in args],
         check=True,
@@ -411,10 +412,16 @@ try:
             ["sqlite3", "-readonly", str(path), "PRAGMA quick_check;"],
             timeout=120,
             capture=True,
+            log=False,
         ).stdout.strip()
         if checked != "ok":
             raise RuntimeError(f"Conat SQLite quick_check failed for {path.name}: {bounded(checked, 500)}")
         quick_passed += 1
+        if quick_passed % 1000 == 0 or quick_passed == len(db_files):
+            print(
+                f"restore-drill: SQLite quick_check progress {quick_passed}/{len(db_files)}",
+                flush=True,
+            )
     catalogs = sorted(sync_dir.rglob("catalog.sqlite")) if sync_dir else []
     catalog_status = None
     if catalogs:
