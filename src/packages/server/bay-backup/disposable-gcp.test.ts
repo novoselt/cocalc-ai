@@ -204,6 +204,7 @@ test("startup script supports pgBackRest PITR and independent SQLite restore", (
     repository_type: "pgbackrest",
     backup_set_id: "backup-1",
     snapshot_id: "sqlite-snapshot-1",
+    target_time: "2026-07-19 12:00:00.000+00",
   });
   expect(workerSource).toContain('STAGE = "build-pgbackrest"');
   expect(workerSource).toContain('"--type=time"');
@@ -234,6 +235,15 @@ test("startup script supports pgBackRest PITR and independent SQLite restore", (
   );
   expect(compiled.stderr).toBe("");
   expect(compiled.status).toBe(0);
+});
+
+test("startup script rejects an invalid PITR target", () => {
+  expect(() =>
+    buildDisposableRestoreStartupScript({
+      ...pgBackRestConfig(),
+      target_time: "not-a-timestamp",
+    }),
+  ).toThrow("invalid disposable PITR target 'not-a-timestamp'");
 });
 
 test("GCP worker attempts cleanup when instance insertion fails ambiguously", async () => {

@@ -712,7 +712,22 @@ finally:
 export function buildDisposableRestoreStartupScript(
   config: DisposableRestoreWorkerConfig,
 ): string {
-  const encodedConfig = Buffer.from(JSON.stringify(config)).toString("base64");
+  const workerConfig = { ...config };
+  if (workerConfig.restore_mode === "pitr" && workerConfig.target_time) {
+    const target = new Date(workerConfig.target_time);
+    if (Number.isNaN(target.getTime())) {
+      throw new Error(
+        `invalid disposable PITR target '${workerConfig.target_time}'`,
+      );
+    }
+    workerConfig.target_time = target
+      .toISOString()
+      .replace("T", " ")
+      .replace("Z", "+00");
+  }
+  const encodedConfig = Buffer.from(JSON.stringify(workerConfig)).toString(
+    "base64",
+  );
   const encodedWorker = Buffer.from(pythonWorkerSource()).toString("base64");
   return `#!/bin/bash
 set -euo pipefail
