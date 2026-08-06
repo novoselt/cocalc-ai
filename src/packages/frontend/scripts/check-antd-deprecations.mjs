@@ -202,9 +202,15 @@ function hasPropInOpeningTag(content, startIndex, prop) {
       i += 1;
       continue;
     }
+    if (depth === 0 && content.startsWith(prop, i)) {
+      const before = content[i - 1];
+      const after = content.slice(i + prop.length);
+      if (!/[\w$]/.test(before ?? "") && /^\s*=/.test(after)) {
+        return true;
+      }
+    }
     if (ch === ">" && depth === 0) {
-      const tag = content.slice(startIndex, i);
-      return new RegExp(`\\b${escapeRegExp(prop)}\\s*=`).test(tag);
+      return false;
     }
     i += 1;
   }

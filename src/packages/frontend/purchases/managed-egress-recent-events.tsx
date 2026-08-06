@@ -106,7 +106,7 @@ export function ManagedEgressRecentEventsButton({
         onCancel={() => setOpen(false)}
         footer={null}
         width={760}
-        bodyStyle={{ maxHeight: 420, overflowY: "auto" }}
+        styles={{ body: { maxHeight: 420, overflowY: "auto" } }}
       >
         {eventCount === 0 ? (
           <Empty description="No recent egress events." />

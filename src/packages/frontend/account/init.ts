@@ -62,6 +62,7 @@ export function init(redux) {
   let authBootstrapLoadingFor: string | undefined = undefined;
   let authBootstrapLoadedFor: string | undefined = undefined;
   let authBootstrapRequestRevision = 0;
+  let authSessionRevision = 0;
 
   async function loadAuthBootstrap(opts?: {
     account_id?: string;
@@ -123,6 +124,7 @@ export function init(redux) {
 
   // Login status
   webapp_client.on("signed_in", async (mesg) => {
+    const sessionRevision = ++authSessionRevision;
     const actions = redux.getActions("account");
     actions.setState({ managed_egress_blocked_error: undefined });
     if (mesg?.api_key) {
@@ -132,21 +134,32 @@ export function init(redux) {
       }, 2000);
     }
     const examMode = await waitForExamModeConfiguration();
+    if (sessionRevision !== authSessionRevision) {
+      return;
+    }
     const table = redux.getTable("account")?._table;
     if (!examMode && table?.get_state?.() !== "connected") {
       // not fully signed in until the account table is connected, so that we know
       // email address, etc. If we don't set this, the UI briefly shows the
       // pre-sign-in state.
       await waitForAccountTableConnectedForSignIn(table);
+      if (sessionRevision !== authSessionRevision) {
+        return;
+      }
     }
     if (
-      await loadAuthBootstrap({ account_id: mesg?.account_id, force: true })
+      (await loadAuthBootstrap({
+        account_id: mesg?.account_id,
+        force: true,
+      })) &&
+      sessionRevision === authSessionRevision
     ) {
       actions.set_user_type("signed_in");
     }
   });
 
   webapp_client.on("signed_out", () => {
+    authSessionRevision++;
     authBootstrapRequestRevision++;
     authBootstrapLoadingFor = undefined;
     authBootstrapLoadedFor = undefined;
@@ -161,6 +174,7 @@ export function init(redux) {
   });
 
   webapp_client.on("remember_me_failed", ({ error } = {}) => {
+    authSessionRevision++;
     authBootstrapRequestRevision++;
     authBootstrapLoadingFor = undefined;
     authBootstrapLoadedFor = undefined;

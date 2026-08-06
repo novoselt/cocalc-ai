@@ -206,4 +206,33 @@ describe("account initialization", () => {
     expect(mockAlertMessage).not.toHaveBeenCalled();
     expect(actions.set_user_type).not.toHaveBeenCalledWith("signed_in");
   });
+
+  it("ignores sign-in invalidated before routing bootstrap starts", async () => {
+    let resolveExamMode: (value: boolean) => void = () => undefined;
+    mockWaitForExamModeConfiguration.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveExamMode = resolve;
+      }),
+    );
+    mockGetControlPlaneAuthBootstrap.mockResolvedValue({
+      signed_in: true,
+      home_bay_id: "bay-1",
+      impersonation: null,
+    });
+    const { actions, redux } = createRedux();
+    init(redux);
+    const signedIn = mockWebappClient.listeners("signed_in")[0] as (message: {
+      account_id: string;
+    }) => Promise<void>;
+    const signedOut = mockWebappClient.listeners("signed_out")[0] as () => void;
+
+    const signInPromise = signedIn({ account_id: "account-1" });
+    await Promise.resolve();
+    signedOut();
+    resolveExamMode(false);
+    await signInPromise;
+
+    expect(mockGetControlPlaneAuthBootstrap).not.toHaveBeenCalled();
+    expect(actions.set_user_type).not.toHaveBeenCalledWith("signed_in");
+  });
 });
