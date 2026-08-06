@@ -4,8 +4,9 @@
  */
 
 import { Alert, Button, Input, Modal, Space, Tag, Typography } from "antd";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type {
   CopyPublicDirectoryShareToNewProjectConflictResponse,
   CopyPublicDirectoryShareToNewProjectResponse,
@@ -17,7 +18,7 @@ import { Icon } from "@cocalc/frontend/components";
 import { blobImageUrl } from "@cocalc/frontend/components/theme-image-input";
 import { normalizeUserFacingError } from "@cocalc/frontend/components/user-facing-error";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown-public";
-import { applyLroEvents, isTerminal } from "@cocalc/frontend/lro/utils";
+import { isTerminal } from "@cocalc/frontend/lro/utils";
 import type { CopyLroState } from "@cocalc/frontend/project/copy-ops";
 import { CopyOpRow } from "@cocalc/frontend/project/explorer/copy-ops";
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
@@ -204,6 +205,10 @@ async function waitForProjectReadable(project_id: string): Promise<boolean> {
   return false;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function PublicDirectoryShareBanner({
   share,
 }: {
@@ -218,6 +223,7 @@ export function PublicDirectoryShareBanner({
   );
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState("");
+  const [copyTrackingError, setCopyTrackingError] = useState("");
   const [copyMessage, setCopyMessage] = useState("");
   const [copyOp, setCopyOp] = useState<CopyLroState | null>(null);
   const [copyConflict, setCopyConflict] = useState<CopyConflict | null>(null);
@@ -234,11 +240,18 @@ export function PublicDirectoryShareBanner({
   const themeAccent = share.theme?.accent_color?.trim();
   const themeIcon = share.theme?.icon?.trim() || "folder-open";
 
+  useEffect(() => {
+    return () => {
+      copyRunRef.current += 1;
+    };
+  }, []);
+
   function openCopyModal() {
     copyRunRef.current += 1;
     setCopyMode("new");
     setDestinationPath(defaultCopyDestinationPath(share));
     setCopyError("");
+    setCopyTrackingError("");
     setCopyMessage("");
     setCopyOp(null);
     setCopyConflict(null);
@@ -280,6 +293,7 @@ export function PublicDirectoryShareBanner({
     copyRunRef.current = runId;
     setCopying(true);
     setCopyError("");
+    setCopyTrackingError("");
     setCopyMessage("");
     setCopyConflict(null);
     setCopyOp(null);
@@ -332,41 +346,10 @@ export function PublicDirectoryShareBanner({
     result: CopyPublicDirectoryShareToNewProjectResponse,
     runId: number,
   ) {
-    const updateProgress: Parameters<
-      typeof webapp_client.conat_client.lroWait
-    >[0]["onProgress"] = (event) => {
-      if (copyRunRef.current !== runId) return;
-      setCopyOp((current) => {
-        if (!current || current.op_id !== result.op_id) return current;
-        return {
-          ...current,
-          ...applyLroEvents({
-            events: [event],
-            summary: current.summary,
-            last_progress: current.last_progress,
-            last_event: current.last_event,
-            progress_events: current.progress_events,
-          }),
-        };
-      });
-    };
     try {
-      const summary = await webapp_client.conat_client.lroWait({
-        op_id: result.op_id,
-        scope_type: result.scope_type,
-        scope_id: result.scope_id,
-        onProgress: updateProgress,
-        onSummary: (summary) => {
-          if (copyRunRef.current !== runId) return;
-          setCopyOp((current) =>
-            current?.op_id === result.op_id ? { ...current, summary } : current,
-          );
-        },
-      });
+      const summary = await pollCopyLro(result.op_id, runId);
+      if (!summary) return;
       if (copyRunRef.current !== runId) return;
-      setCopyOp((current) =>
-        current?.op_id === result.op_id ? { ...current, summary } : current,
-      );
       if (summary.status !== "succeeded") {
         throw new Error(summary.error ?? `Copy ${summary.status}`);
       }
@@ -396,10 +379,38 @@ export function PublicDirectoryShareBanner({
     }
   }
 
+  async function pollCopyLro(
+    op_id: string,
+    runId: number,
+  ): Promise<LroSummary | undefined> {
+    while (copyRunRef.current === runId) {
+      try {
+        const summary = await webapp_client.conat_client.hub.lro.get({ op_id });
+        if (copyRunRef.current !== runId) return;
+        if (summary) {
+          setCopyTrackingError("");
+          setCopyOp((current) =>
+            current?.op_id === op_id ? { ...current, summary } : current,
+          );
+          if (isTerminal(summary.status)) {
+            return summary;
+          }
+        }
+      } catch (err) {
+        if (copyRunRef.current !== runId) return;
+        setCopyTrackingError(
+          `Unable to refresh copy status; retrying. ${normalizeUserFacingError(err).message}`,
+        );
+      }
+      await delay(1_000);
+    }
+  }
+
   async function copyToProject() {
     if (!destinationProjectId.trim()) return;
     setCopying(true);
     setCopyError("");
+    setCopyTrackingError("");
     setCopyMessage("");
     setCopyOp(null);
     setPlacementMessage("");
@@ -610,6 +621,9 @@ export function PublicDirectoryShareBanner({
               <Text strong>Copy progress</Text>
               <CopyOpRow op={copyOp} />
             </div>
+          ) : null}
+          {copyTrackingError ? (
+            <Alert type="warning" showIcon title={copyTrackingError} />
           ) : null}
           {placementMessage ? (
             <Alert type="warning" showIcon title={placementMessage} />
