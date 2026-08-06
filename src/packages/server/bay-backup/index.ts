@@ -5561,6 +5561,21 @@ async function resolveDisposableRestoreGcpZone(): Promise<string> {
   const configured =
     `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_ZONE ?? ""}`.trim();
   if (configured) return configured;
+  try {
+    const response = await fetch(
+      "http://metadata.google.internal/computeMetadata/v1/instance/zone",
+      {
+        headers: { "Metadata-Flavor": "Google" },
+        signal: AbortSignal.timeout(1_500),
+      },
+    );
+    if (response.ok) {
+      const zone = `${await response.text()}`.trim().split("/").pop() ?? "";
+      if (/^[a-z][a-z0-9-]+-[a-z]$/.test(zone)) return zone;
+    }
+  } catch {
+    // Non-GCP development bays fall back to the latest visible GCP host.
+  }
   const { rows } = await getPool().query<{ zone: string | null }>(
     `SELECT metadata #>> '{machine,zone}' AS zone
        FROM project_hosts
@@ -5790,7 +5805,7 @@ async function runPgBackRestDisposableGcpRestoreTest({
     Number.parseInt(
       `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_TIMEOUT_MS ?? ""}`,
       10,
-    ) || 3 * 60 * 60_000,
+    ) || 4 * 60 * 60_000,
   );
   const temporaryR2 = await createTemporaryR2ReadCredentials({
     account_id: r2.account_id,
@@ -5829,7 +5844,10 @@ async function runPgBackRestDisposableGcpRestoreTest({
       service_account_json: serviceAccountJson,
       zone,
       machine_type: machineType,
-      boot_disk_gb: sizing.boot_disk_gb,
+      // Balanced PD performance scales with disk size. Production WAL replay
+      // is random-I/O heavy, so a space-only disk can make a valid drill time
+      // out even though the ephemeral capacity is inexpensive.
+      boot_disk_gb: Math.max(500, sizing.boot_disk_gb),
       timeout_ms: timeoutMs,
       config: {
         ...identity,

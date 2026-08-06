@@ -225,6 +225,12 @@ test("startup script supports pgBackRest PITR and independent SQLite restore", (
   expect(workerSource).toContain(
     '"PostgreSQL container exited before readiness: "',
   );
+  expect(workerSource).toContain(
+    '["podman", "logs", "--tail", "80", container]',
+  );
+  expect(workerSource).toContain(
+    '"restore-drill: PostgreSQL recovery still in progress "',
+  );
   expect(workerSource).toContain("deadline = STARTED + worker_timeout - 300");
   expect(workerSource).not.toContain('["shutdown", "-h", "now"]');
   expect(workerSource).toContain("PGBACKREST_REPO1_S3_TOKEN");

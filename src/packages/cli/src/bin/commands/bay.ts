@@ -5,9 +5,9 @@ export type BayCommandDeps = {
 };
 
 const BAY_BACKUP_TIMEOUT_MS = 10 * 60 * 1000;
-// The disposable worker has its own three-hour budget. Leave enough RPC time
+// The disposable worker has its own four-hour budget. Leave enough RPC time
 // for result collection, credential revocation, and provider cleanup.
-const BAY_RESTORE_TEST_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+const BAY_RESTORE_TEST_TIMEOUT_MS = 5 * 60 * 60 * 1000;
 
 export function registerBayCommand(
   program: Command,

@@ -307,7 +307,7 @@ def psql(container, sql):
     return completed.stdout.strip()
 
 def postgres_diagnostics(container):
-    logs = run(["podman", "logs", container], timeout=60, capture=True)
+    logs = run(["podman", "logs", "--tail", "80", container], timeout=60, capture=True)
     noisy = (
         "FATAL:  the database system is starting up",
         "FATAL:  the database system is in recovery mode",
@@ -626,6 +626,7 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
 
     counts = None
     postgres_ready = False
+    next_recovery_diagnostic = time.time() + 300
     if CONFIG["restore_mode"] == "snapshot":
         deadline = time.time() + 600
     else:
@@ -667,6 +668,14 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
                     "PostgreSQL container exited before readiness: " +
                     last_error + " logs=" + postgres_diagnostics(container)
                 )
+            if time.time() >= next_recovery_diagnostic:
+                print(
+                    "restore-drill: PostgreSQL recovery still in progress " +
+                    "elapsed_seconds=" + str(int(time.time() - STARTED)),
+                    flush=True,
+                )
+                print(postgres_diagnostics(container), flush=True)
+                next_recovery_diagnostic = time.time() + 300
         time.sleep(2)
     if CONFIG["restore_mode"] == "pitr" and counts != (1, 0):
         raise RuntimeError("PITR verification timed out: " + last_error + " logs=" + postgres_diagnostics(container))
