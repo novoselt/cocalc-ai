@@ -31,6 +31,7 @@ import {
   ConfigurationAspect,
 } from "@cocalc/frontend/project_configuration";
 import {
+  type CourseInfo,
   ExecOptsBlocking,
   isExecOptsBlocking,
   type ExecOpts,
@@ -661,6 +662,7 @@ export class ProjectClient {
   create = async (opts: {
     title: string;
     description: string;
+    course?: CourseInfo;
     rootfs_image?: string;
     rootfs_image_id?: string;
     start?: boolean;

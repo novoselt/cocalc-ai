@@ -11,7 +11,6 @@ import { delay, map as awaitMap } from "awaiting";
 import { redux } from "@cocalc/frontend/app-framework";
 import { markdown_to_html } from "@cocalc/frontend/markdown";
 import { setProjectRootfsImage } from "@cocalc/frontend/rootfs/manifest";
-import { Datastore, EnvVars } from "@cocalc/frontend/projects/actions";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type {
   ProjectCollabInviteRow,
@@ -19,7 +18,10 @@ import type {
 } from "@cocalc/conat/hub/api/projects";
 import type { ProjectEmailInviteDeliveryResult } from "@cocalc/frontend/client/project-collaborators";
 import { RESEND_INVITE_INTERVAL_DAYS } from "@cocalc/util/consts/invites";
-import { normalizeStudentProjectFunctionality } from "@cocalc/util/db-schema/projects";
+import {
+  normalizeStudentProjectFunctionality,
+  type CourseInfo,
+} from "@cocalc/util/db-schema/projects";
 import { days_ago } from "@cocalc/util/misc";
 import { SITE_NAME } from "@cocalc/util/theme";
 import {
@@ -152,6 +154,108 @@ export class StudentProjectsActions {
     };
   };
 
+  private get_student_project_course_info = ({
+    student,
+    courseRootfs,
+    courseHostId,
+  }: {
+    student: StudentRecord;
+    courseRootfs?: { image: string; image_id?: string };
+    courseHostId?: string;
+  }): CourseInfo => {
+    const store = this.get_store();
+    const course: CourseInfo = {
+      project_id: store.get("course_project_id"),
+      path: store.get("course_filename"),
+      datastore: store.get_datastore(),
+      type: "student",
+      student_pay: !!store.getIn(["settings", "student_pay"]),
+      institute_pay: !!store.getIn(["settings", "institute_pay"]),
+      site_license_pay: !!store.getIn(["settings", "site_license_pay"]),
+      student_project_functionality: normalizeStudentProjectFunctionality(
+        store.getIn(["settings", "student_project_functionality"])?.toJS(),
+      ),
+    };
+    const requiredMembershipClass = `${
+      store.getIn(["settings", "required_membership_class"]) ?? ""
+    }`.trim();
+    if (requiredMembershipClass) {
+      course.required_membership_class = requiredMembershipClass;
+    }
+    const membershipRequiredAt = `${
+      store.getIn(["settings", "student_membership_required_at"]) ?? ""
+    }`.trim();
+    if (membershipRequiredAt) {
+      course.student_membership_required_at = membershipRequiredAt;
+    }
+    const graceDays = Number(
+      store.getIn(["settings", "student_membership_grace_days"]) ?? 14,
+    );
+    if (Number.isFinite(graceDays)) {
+      course.student_membership_grace_days = graceDays;
+    }
+    const courseEndsAt = `${
+      store.getIn(["settings", "course_ends_at"]) ?? ""
+    }`.trim();
+    if (courseEndsAt) {
+      course.course_ends_at = courseEndsAt;
+    }
+    const studentAccountId = student.get("account_id");
+    if (studentAccountId != null) {
+      course.account_id = studentAccountId;
+    }
+    const studentEmailAddress = student.get("email_address");
+    if (studentEmailAddress != null) {
+      course.email_address = studentEmailAddress;
+    }
+    const envvars = store.get_envvars();
+    if (typeof envvars?.inherit === "boolean") {
+      course.envvars = envvars;
+    }
+    if (courseHostId?.trim()) {
+      course.host_id = courseHostId.trim();
+    }
+    if (courseRootfs?.image?.trim()) {
+      course.rootfs_image = courseRootfs.image.trim();
+    }
+    if (courseRootfs?.image_id?.trim()) {
+      course.rootfs_image_id = courseRootfs.image_id.trim();
+    }
+    return course;
+  };
+
+  private set_student_project_course_info = async ({
+    student_id,
+    student_project_id,
+    courseRootfs,
+    courseHostId,
+  }: {
+    student_id: string;
+    student_project_id: string;
+    courseRootfs?: { image: string; image_id?: string };
+    courseHostId?: string;
+  }): Promise<void> => {
+    const student = this.get_store().get_student(student_id);
+    if (student == null) {
+      throw new Error(`student ${student_id} not found`);
+    }
+    const resolvedRootfs =
+      courseRootfs ?? (await this.get_student_project_rootfs());
+    const resolvedHostId =
+      courseHostId ?? this.get_store().get_student_project_host_id();
+    const course = this.get_student_project_course_info({
+      student,
+      courseRootfs: resolvedRootfs,
+      courseHostId: resolvedHostId,
+    });
+    const { project_id: course_project_id, ...courseSettings } = course;
+    await redux.getActions("projects").set_project_course_info({
+      project_id: student_project_id,
+      course_project_id,
+      ...courseSettings,
+    });
+  };
+
   // Create and configure a single student project.
   create_student_project = async (
     student_id: string,
@@ -182,10 +286,16 @@ export class StudentProjectsActions {
     let project_id: string;
     const courseRootfs = await this.get_student_project_rootfs();
     const courseHostId = store.get_student_project_host_id();
+    const course = this.get_student_project_course_info({
+      student,
+      courseRootfs,
+      courseHostId,
+    });
     try {
       project_id = await redux.getActions("projects").create_project({
         title: store.get("settings").get("title"),
         description: store.get("settings").get("description"),
+        course,
         host_id: courseHostId,
         rootfs_image: courseRootfs?.image,
         rootfs_image_id: courseRootfs?.image_id,
@@ -587,15 +697,8 @@ export class StudentProjectsActions {
   set_all_student_project_course_info = async (): Promise<void> => {
     const store = this.get_store();
     if (store == null) return;
-    const datastore: Datastore = store.get_datastore();
-    const envvars: EnvVars = store.get_envvars();
     const courseRootfs = await this.get_student_project_rootfs();
     const courseHostId = store.get_student_project_host_id();
-    const student_project_functionality = normalizeStudentProjectFunctionality(
-      store.getIn(["settings", "student_project_functionality"])?.toJS(),
-    );
-
-    const actions = redux.getActions("projects");
     const id = this.course_actions.set_activity({
       desc: "Updating project course info...",
     });
@@ -603,34 +706,11 @@ export class StudentProjectsActions {
       for (const student of store.get_students().valueSeq().toArray()) {
         const student_project_id = student.get("project_id");
         if (student_project_id == null) continue;
-        // account_id: might not be known when student first added, or if student
-        // hasn't joined cocalc yet, so there is no account_id for them.
-        const student_account_id = student.get("account_id");
-        const student_email_address = student.get("email_address"); // will be known if account_id isn't known.
-        await actions.set_project_course_info({
-          project_id: student_project_id,
-          course_project_id: store.get("course_project_id"),
-          path: store.get("course_filename"),
-          student_pay: !!store.getIn(["settings", "student_pay"]),
-          institute_pay: !!store.getIn(["settings", "institute_pay"]),
-          site_license_pay: !!store.getIn(["settings", "site_license_pay"]),
-          required_membership_class:
-            store.getIn(["settings", "required_membership_class"]) ?? "",
-          student_membership_required_at:
-            store.getIn(["settings", "student_membership_required_at"]) ?? "",
-          student_membership_grace_days: Number(
-            store.getIn(["settings", "student_membership_grace_days"]) ?? 14,
-          ),
-          course_ends_at: store.getIn(["settings", "course_ends_at"]) ?? "",
-          account_id: student_account_id,
-          email_address: student_email_address,
-          datastore,
-          type: "student",
-          student_project_functionality,
-          envvars,
-          host_id: courseHostId,
-          rootfs_image: courseRootfs?.image,
-          rootfs_image_id: courseRootfs?.image_id,
+        await this.set_student_project_course_info({
+          student_id: student.get("student_id"),
+          student_project_id,
+          courseRootfs,
+          courseHostId,
         });
       }
     } finally {
@@ -662,6 +742,10 @@ export class StudentProjectsActions {
       await this.create_student_project(student_id);
     } else {
       await Promise.all([
+        this.set_student_project_course_info({
+          student_id,
+          student_project_id,
+        }),
         this.configure_project_users({
           student_project_id,
           student_id,
