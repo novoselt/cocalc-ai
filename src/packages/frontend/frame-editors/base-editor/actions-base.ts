@@ -137,6 +137,7 @@ import { normalizeUserFacingError } from "@cocalc/frontend/components/user-facin
 import { get_buffer, set_buffer } from "@cocalc/frontend/copy-paste-buffer";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import { filenameMode } from "@cocalc/frontend/file-associations";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 import { ensureSideChatActions } from "@cocalc/frontend/chat/unread";
 import { chat } from "@cocalc/frontend/frame-editors/generic/chat";
 import { syncdocDiagnosticLog } from "@cocalc/frontend/syncdoc-diagnostics";
@@ -2719,6 +2720,7 @@ export class BaseEditorActions<
   // per-session sync-aware undo -- only work when editing text in
   // a codemirror editor!
   undo(id: string): void {
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     const cm = this._get_cm(id);
     if (cm == null) {
       return;
@@ -2734,6 +2736,7 @@ export class BaseEditorActions<
   // per-session sync-aware redo -- only work when editing text in
   // a codemirror editor!
   redo(id: string): void {
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     const cm = this._get_cm(id);
     if (cm == null) {
       return;

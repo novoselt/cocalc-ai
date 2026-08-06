@@ -16,6 +16,7 @@ import {
 } from "@cocalc/frontend/frame-editors/ai/model-names";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { ImmerDB } from "@cocalc/sync/editor/immer-db";
@@ -2525,11 +2526,13 @@ export class ChatActions extends Actions<ChatState> {
   };
 
   undo = () => {
-    this.syncdb?.undo();
+    if (!canUseSyncDocHistory(this.syncdb)) return;
+    this.syncdb.undo();
   };
 
   redo = () => {
-    this.syncdb?.redo();
+    if (!canUseSyncDocHistory(this.syncdb)) return;
+    this.syncdb.redo();
   };
 
   /**

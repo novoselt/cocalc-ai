@@ -15,6 +15,7 @@ import { FrameTree } from "../frame-tree/types";
 import { fromJS, Map as iMap, Set as iSet } from "immutable";
 import { useEditorRedux } from "@cocalc/frontend/app-framework";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 
 interface CRMEditorState extends CodeEditorState {
   // The selection is a map from view id to set of primary keys.
@@ -37,13 +38,13 @@ export class Actions extends CodeEditorActions<CRMEditorState> {
   }
 
   undo(_id?: string): void {
-    if (this._syncstring == null) return;
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     this._syncstring.undo();
     this._syncstring.commit();
   }
 
   redo(_id?: string): void {
-    if (this._syncstring == null) return;
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     this._syncstring.redo();
     this._syncstring.commit();
   }

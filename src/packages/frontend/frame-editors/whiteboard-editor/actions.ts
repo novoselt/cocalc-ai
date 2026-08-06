@@ -68,6 +68,7 @@ import {
 import parseTableOfContents from "./table-of-contents";
 import { delay } from "awaiting";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 import debug from "debug";
 import { moveCell } from "@cocalc/jupyter/util/cell-utils";
 import {
@@ -692,13 +693,13 @@ export class Actions<T extends State = State> extends BaseActions<T | State> {
   }
 
   undo(_id?: string): void {
-    if (this._syncstring == null) return;
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     this._syncstring.undo();
     this._syncstring.commit();
   }
 
   redo(_id?: string): void {
-    if (this._syncstring == null) return;
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     this._syncstring.redo();
     this._syncstring.commit();
   }
