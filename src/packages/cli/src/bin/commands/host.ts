@@ -1822,7 +1822,9 @@ export function registerHostCommand(
 
   host
     .command("funding-mode <host> <funding-mode>")
-    .description("change the funding mode of a stopped billable host")
+    .description(
+      "change host funding (only live site-funded corrections may run without stopping)",
+    )
     .action(
       async (hostIdentifier: string, fundingMode: string, command: Command) => {
         await withContext(command, "host funding-mode", async (ctx) => {
