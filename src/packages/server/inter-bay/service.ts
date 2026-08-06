@@ -1669,6 +1669,8 @@ async function startAccountLocalService(): Promise<void> {
       await legacyMigration.adminListLinkedLegacyProjects(opts),
     legacyMigrationAdminReplayPublicPaths: async (opts) =>
       await legacyMigration.adminReplayPublicPaths(opts),
+    legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
+      await legacyMigration.adminReplayRestoredPublicPaths(opts),
     publicDirectoryShareResolve: async (opts) =>
       await publicDirectoryShares.resolve(opts),
     publicDirectoryShareListMine: async (opts) =>

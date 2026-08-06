@@ -9,6 +9,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ResolvedPublicDirectoryShare } from "@cocalc/conat/hub/api/public-directory-shares";
 import {
@@ -19,8 +20,17 @@ import {
 const copyToNewProject = jest.fn();
 const copyToProject = jest.fn();
 const getProjectRegion = jest.fn();
-const lroWait = jest.fn();
+const getLro = jest.fn();
 const openProject = jest.fn();
+
+jest.mock("@cocalc/frontend/project/explorer/copy-ops", () => ({
+  CopyOpRow: ({ op }: any) => (
+    <div>
+      Copy operation:{" "}
+      {op.summary?.status ?? op.last_progress?.message ?? "queued"}
+    </div>
+  ),
+}));
 
 jest.mock("antd", () => {
   const Button = ({ children, disabled, loading, onClick, type }: any) => (
@@ -77,6 +87,10 @@ jest.mock("@cocalc/frontend/components", () => ({
   Icon: ({ name }: any) => <span data-testid={`icon-${name}`} />,
 }));
 
+jest.mock("@cocalc/frontend/project/home-directory", () => ({
+  getProjectHomeDirectory: () => "/home/user",
+}));
+
 jest.mock("@cocalc/frontend/projects/select-project", () => ({
   SelectProject: ({ onChange }: any) => (
     <button onClick={() => onChange("existing-project")} type="button">
@@ -105,6 +119,9 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       hub: {
+        lro: {
+          get: (...args: any[]) => getLro(...args),
+        },
         projects: {
           getProjectRegion: (...args: any[]) => getProjectRegion(...args),
         },
@@ -113,7 +130,6 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           copyToProject: (...args: any[]) => copyToProject(...args),
         },
       },
-      lroWait: (...args: any[]) => lroWait(...args),
     },
   },
 }));
@@ -167,8 +183,9 @@ describe("PublicDirectoryShareBanner", () => {
       created_project: true,
       reused_project: false,
       placed_on_requested_host: true,
+      requested_host_id: "source-host",
     });
-    lroWait.mockResolvedValue({ status: "succeeded" });
+    getLro.mockResolvedValue({ status: "succeeded" });
     getProjectRegion.mockResolvedValue("wnam");
   });
 
@@ -266,7 +283,7 @@ describe("PublicDirectoryShareBanner", () => {
       expect(openProject).toHaveBeenCalledWith({
         project_id: "new-project",
         switch_to: true,
-        target: "test2",
+        target: "files/home/user/test2/",
       });
     });
     expect(copyToNewProject).toHaveBeenCalledWith({
@@ -275,17 +292,11 @@ describe("PublicDirectoryShareBanner", () => {
       overwrite_existing: false,
       options: { recursive: true },
     });
-    expect(lroWait).toHaveBeenCalledWith(
-      expect.objectContaining({
-        op_id: "op-1",
-        scope_id: "new-project",
-        scope_type: "project",
-      }),
-    );
+    expect(getLro).toHaveBeenCalledWith({ op_id: "op-1" });
     expect(getProjectRegion).toHaveBeenCalledWith({
       project_id: "new-project",
     });
-    expect(lroWait.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(getLro.mock.invocationCallOrder[0]).toBeLessThan(
       openProject.mock.invocationCallOrder[0],
     );
   });
@@ -318,7 +329,7 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).toHaveBeenCalledWith({
       project_id: "existing-project",
       switch_to: true,
-      target: "test2",
+      target: "files/home/user/test2/",
     });
   });
 
@@ -331,7 +342,7 @@ describe("PublicDirectoryShareBanner", () => {
     clickModalCopyButton();
 
     await waitFor(() => {
-      expect(lroWait).toHaveBeenCalled();
+      expect(getLro).toHaveBeenCalled();
     });
     await act(async () => {
       await jest.runAllTimersAsync();
@@ -347,7 +358,7 @@ describe("PublicDirectoryShareBanner", () => {
   });
 
   it("does not open the new project when the queued copy fails", async () => {
-    lroWait.mockResolvedValueOnce({
+    getLro.mockResolvedValueOnce({
       status: "failed",
       error: "copy failed",
     });
@@ -360,6 +371,51 @@ describe("PublicDirectoryShareBanner", () => {
       expect(screen.getByText("copy failed")).toBeTruthy();
     });
     expect(openProject).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a transient LRO refresh failure while retrying", async () => {
+    getLro.mockRejectedValue(
+      new Error("unable to track durable copy operation"),
+    );
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Unable to refresh copy status; retrying. unable to track durable copy operation",
+        ),
+      ).toBeTruthy();
+    });
+    expect(openProject).not.toHaveBeenCalled();
+  });
+
+  it("shows the destination and operation while a default copy is running", async () => {
+    getLro.mockResolvedValue({ status: "queued" });
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(screen.getByText("Destination: new project")).toBeTruthy();
+    });
+    expect(screen.getByText("Copy operation: queued")).toBeTruthy();
+    expect(screen.getByText("new-project")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText("test2")).toBeTruthy();
+    expect(screen.getByText("op-1")).toBeTruthy();
+    expect(
+      screen.getByText("Placed on the source host for a same-host copy."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Open destination project"));
+    expect(openProject).toHaveBeenCalledWith({
+      project_id: "new-project",
+      switch_to: true,
+      target: "files",
+    });
   });
 
   it("shows progress and explains when same-host placement falls back", async () => {
@@ -376,16 +432,7 @@ describe("PublicDirectoryShareBanner", () => {
       requested_host_id: "source-host",
       host_placement_message: "host source-host is unavailable",
     });
-    lroWait.mockImplementationOnce(async ({ onProgress }) => {
-      onProgress?.({
-        type: "progress",
-        ts: Date.now(),
-        phase: "copy",
-        message: "copying files",
-        progress: 37,
-      });
-      return { status: "succeeded" };
-    });
+    getLro.mockResolvedValue({ status: "succeeded" });
     render(<PublicDirectoryShareBanner share={share()} />);
 
     fireEvent.click(screen.getByText("Copy"));
@@ -441,7 +488,7 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).toHaveBeenCalledWith({
       project_id: "existing-project",
       switch_to: true,
-      target: "test2",
+      target: "files/home/user/test2/",
     });
 
     fireEvent.click(screen.getByText("Overwrite"));
@@ -481,7 +528,7 @@ describe("PublicDirectoryShareBanner", () => {
       expect(openProject).toHaveBeenCalledWith({
         project_id: "new-project",
         switch_to: true,
-        target: "tutorial.ipynb",
+        target: "files/home/user/tutorial.ipynb",
       });
     });
   });

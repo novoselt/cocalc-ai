@@ -1,4 +1,27 @@
-import { transformArgs } from "./index";
+import { initHubApi, transformArgs } from "./index";
+
+describe("hub API response handling", () => {
+  it("returns failed LRO summaries instead of throwing their operation error", async () => {
+    const summary = {
+      op_id: "op-1",
+      scope_type: "project",
+      scope_id: "project-1",
+      status: "failed",
+      error: "copy failed",
+    };
+    const api = initHubApi(async () => summary);
+
+    await expect(api.lro.get({ op_id: "op-1" })).resolves.toBe(summary);
+  });
+
+  it("still throws legacy RPC error envelopes for lro.get", async () => {
+    const api = initHubApi(async () => ({ error: "not authorized" }));
+
+    await expect(api.lro.get({ op_id: "op-1" })).rejects.toThrow(
+      "not authorized",
+    );
+  });
+});
 
 describe("hub API argument transforms", () => {
   it("injects CLI auth_session_hash as session_hash for fresh-auth RPCs", async () => {

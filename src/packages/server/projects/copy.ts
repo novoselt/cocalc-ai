@@ -339,7 +339,12 @@ export async function assertCopySourceAllowedByReadPolicy({
     if (!options?.recursive) {
       return;
     }
-    const stat = await fs.stat(srcPath);
+    // A normal copy preserves symlinks, so policy validation must not follow
+    // dangling links. Dereferencing copies do traverse the target and must
+    // validate its descendants.
+    const stat = options?.dereference
+      ? await fs.stat(srcPath)
+      : await fs.lstat(srcPath);
     if (!stat.isDirectory()) {
       return;
     }
