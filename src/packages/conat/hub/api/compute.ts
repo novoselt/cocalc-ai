@@ -4,6 +4,7 @@
  */
 
 import { authFirstRequireAccount } from "./util";
+import type { HostCatalog } from "./hosts";
 
 export type ComputeVmPricingModel = "spot" | "on_demand";
 export type ComputeVmDesiredState = "running" | "stopped" | "deleted";
@@ -114,14 +115,7 @@ export interface CreateComputeVolumeRequest {
 }
 
 export interface ComputeCatalog {
-  machines: Array<{
-    machine_type: string;
-    architecture: "x86_64" | "arm64";
-    cpu: number;
-    ram_gb: number;
-    spot_hourly_usd: number;
-    on_demand_hourly_usd: number;
-  }>;
+  host_catalog: HostCatalog;
   defaults: {
     zone: string;
     machine_type: string;
@@ -129,6 +123,7 @@ export interface ComputeCatalog {
     boot_disk_gb: number;
   };
   limits: {
+    max_active_per_project: number;
     max_ttl_minutes: number;
     max_boot_disk_gb: number;
     max_volume_gb: number;

@@ -283,7 +283,7 @@ export function vmListSummary(rows: any[]) {
     name: row.name,
     state: row.state,
     machine: row.machine_type,
-    pricing: row.effective_pricing_model,
+    pricing: row.effective_pricing_model === "spot" ? "Spot" : "Standard",
     zone: row.zone,
     ip: row.public_ip ?? "",
     expires: row.expires_at ?? "never",
@@ -356,8 +356,8 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     )
     .option("--spot", "use interruptible Spot capacity", false)
     .option(
-      "--allow-on-demand-fallback",
-      "authorize 24-hour project-host-compatible fallback",
+      "--allow-standard-fallback",
+      "authorize 24-hour Standard fallback when Spot is unavailable",
       false,
     )
     .option("--ttl <duration>", "optional deletion deadline, e.g. 30m or 8h")
@@ -378,7 +378,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           zone: opts.zone,
           machine_type: opts.machine,
           pricing_model: opts.spot ? "spot" : "on_demand",
-          allow_on_demand_fallback: opts.allowOnDemandFallback === true,
+          allow_on_demand_fallback: opts.allowStandardFallback === true,
           ttl_minutes: opts.ttl ? parseTtlMinutes(opts.ttl) : null,
           boot_disk_gb: Number(opts.bootDiskGb),
           volume: opts.volume,

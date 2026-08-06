@@ -471,7 +471,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
       (option) => option.value === provider.selectedProvider,
     )?.label ?? provider.selectedProvider;
   const selectedMode =
-    watchedPricingModel === "spot" ? "Spot / interruptible" : "On-demand";
+    watchedPricingModel === "spot" ? "Spot / interruptible" : "Standard";
   const selectedDiskLabel =
     selectedDiskGb != null ? `${selectedDiskGb.toLocaleString()} GB` : "Disk";
   const selectedMachineOption = React.useMemo(

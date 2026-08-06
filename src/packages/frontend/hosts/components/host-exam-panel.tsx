@@ -475,7 +475,7 @@ export function HostExamPanel({
           message="Ephemeral exam scratchpads"
           description={
             <>
-              Students get anonymous local projects on this on-demand host.
+              Students get anonymous local projects on this Standard host.
               Outbound project networking is disabled. Existing private-host
               billing applies.
               <br />

@@ -56,7 +56,7 @@ export function vmCreateCli(opts: {
   args.push(`--boot-disk-gb=${values.boot_disk_gb ?? 20}`);
   if (values.pricing_model === "spot") args.push("--spot");
   if (values.allow_on_demand_fallback) {
-    args.push("--allow-on-demand-fallback");
+    args.push("--allow-standard-fallback");
   }
   if (values.volume) args.push("--volume", shellQuote(values.volume));
   args.push("--wait", shellQuote(values.name || "vm-name"));

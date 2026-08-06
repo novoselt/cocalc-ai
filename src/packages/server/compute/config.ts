@@ -23,9 +23,8 @@ export interface ComputeVmConfig {
   gcp_subnetwork?: string;
   gcp_network_tag: string;
   staging_legacy_provider: boolean;
-  max_active_per_account: number;
+  max_active_per_project: number;
   max_active_total: number;
-  max_vcpus: number;
   max_ttl_minutes: number;
   max_boot_disk_gb: number;
   max_volumes_per_account: number;
@@ -136,12 +135,14 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
       `${settings.compute_vm_gcp_network_tag ?? ""}`.trim() ||
       "cocalc-compute-vm",
     staging_legacy_provider,
-    max_active_per_account: positiveInteger(
-      settings.compute_vm_max_active_per_account,
-      1,
+    max_active_per_project: positiveInteger(
+      settings.compute_vm_max_active_per_project,
+      10,
     ),
-    max_active_total: positiveInteger(settings.compute_vm_max_active_total, 4),
-    max_vcpus: positiveInteger(settings.compute_vm_max_vcpus, 16),
+    max_active_total: positiveInteger(
+      settings.compute_vm_max_active_total,
+      1_000,
+    ),
     max_ttl_minutes: positiveInteger(
       settings.compute_vm_max_ttl_minutes,
       24 * 60,
@@ -154,7 +155,7 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
       settings.compute_vm_max_volumes_per_account,
       2,
     ),
-    max_volume_gb: positiveInteger(settings.compute_vm_max_volume_gb, 500),
+    max_volume_gb: positiveInteger(settings.compute_vm_max_volume_gb, 10_000),
     unfunded_volume_delete_days: positiveNumber(
       settings.compute_vm_unfunded_volume_delete_days,
       30,

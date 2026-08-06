@@ -72,7 +72,7 @@ function modeNote(opts: {
   spot?: ProviderPriceEstimate;
 }): string | undefined {
   if (opts.mode === "standard" && isSpotStandardFallbackHost(opts.host)) {
-    return "on-demand recovery";
+    return "standard recovery";
   }
   if (opts.mode === "spot") {
     return percentSavings(opts.standard, opts.spot);

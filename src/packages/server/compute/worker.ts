@@ -894,7 +894,7 @@ async function start(vm: ComputeVmRow) {
 
 async function switchToOnDemand(vm: ComputeVmRow) {
   if (!vm.allow_on_demand_fallback) {
-    throw new Error("on-demand fallback is not authorized");
+    throw new Error("Standard fallback is not authorized");
   }
   const holdUntil =
     vm.spot_recovery_state?.standard_hold_until ??

@@ -41,6 +41,16 @@ import {
   COCALC_CLI_INSTALL_COMMAND,
 } from "@cocalc/util/consts/ui";
 import { uuid } from "@cocalc/util/misc";
+import { HostOptionsSelect } from "../hosts/components/host-options-select";
+import { useHostPricingSettings } from "../hosts/hooks/use-host-pricing-settings";
+import {
+  getGcpMachineTypeOptions,
+  getGcpRegionOptions,
+  getGcpZoneOptions,
+  getProviderPriceEstimate,
+  type HostFieldOption,
+  type ProviderSelection,
+} from "../hosts/providers/registry";
 import {
   vmCreateCli,
   volumeCreateCli,
@@ -57,6 +67,7 @@ const COPYABLE_PROPS = {
 } as const;
 
 interface VmDraft extends VmCreateCliValues {
+  region: string;
   ssh_public_key: string;
 }
 
@@ -87,6 +98,21 @@ function hourlyPrice(vm: ComputeVm): string {
       ? vm.spot_hourly_price
       : vm.on_demand_hourly_price;
   return `$${Number(price).toFixed(3)}/h`;
+}
+
+function pricingLabel(value: string): string {
+  return value === "spot" ? "Spot" : "Standard";
+}
+
+function regionFromZone(zone?: string): string {
+  return `${zone ?? ""}`.replace(/-[a-z]$/, "");
+}
+
+function compatibleOptions(options: HostFieldOption[]): HostFieldOption[] {
+  return options.filter((option) => {
+    const meta = (option.meta ?? {}) as { compatible?: boolean };
+    return !option.disabled && meta.compatible !== false;
+  });
 }
 
 function sshKeyOptions(sshKeys: any) {
@@ -133,6 +159,7 @@ function VmCreateModal({
 }) {
   const [form] = Form.useForm<VmDraft>();
   const [draft, setDraft] = useState<Partial<VmDraft>>(initial);
+  const pricingSettings = useHostPricingSettings();
 
   useEffect(() => {
     if (!open) return;
@@ -145,6 +172,47 @@ function VmCreateModal({
     (volume) =>
       volume.state === "ready" && volume.attachment_state === "detached",
   );
+  const selectedVolume = volumes.find((volume) => volume.name === draft.volume);
+  const selection: ProviderSelection = {
+    region: draft.region || regionFromZone(draft.zone),
+    zone: draft.zone,
+    machine_type: draft.machine_type,
+    pricing_model: draft.pricing_model,
+    storage_mode: "persistent",
+    disk_type: "balanced",
+    disk_gb: draft.boot_disk_gb,
+    price_display: "hourly",
+    pricing_settings: pricingSettings,
+  };
+  const regionOptions = compatibleOptions(
+    getGcpRegionOptions(catalog.host_catalog, selection),
+  );
+  const zoneOptions = compatibleOptions(
+    getGcpZoneOptions(catalog.host_catalog, selection),
+  );
+  const machineOptions = compatibleOptions(
+    getGcpMachineTypeOptions(catalog.host_catalog, selection),
+  );
+  const price = getProviderPriceEstimate(
+    "gcp",
+    catalog.host_catalog,
+    selection,
+    pricingSettings,
+  );
+  const standardFallbackPrice =
+    draft.pricing_model === "spot" && draft.allow_on_demand_fallback
+      ? getProviderPriceEstimate(
+          "gcp",
+          catalog.host_catalog,
+          { ...selection, pricing_model: "on_demand" },
+          pricingSettings,
+        )
+      : undefined;
+
+  const patchDraft = (patch: Partial<VmDraft>) => {
+    form.setFieldsValue(patch);
+    setDraft((current) => ({ ...current, ...patch }));
+  };
 
   return (
     <Modal
@@ -178,13 +246,48 @@ function VmCreateModal({
           >
             <Input autoFocus />
           </Form.Item>
+        </Flex>
+        <Flex gap={12} wrap>
+          <Form.Item
+            name="region"
+            label="Region"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 280px" }}
+          >
+            {regionOptions.length ? (
+              <HostOptionsSelect
+                options={regionOptions}
+                disabled={selectedVolume != null}
+                onChange={(region) => {
+                  const nextSelection = {
+                    ...selection,
+                    region,
+                    zone: undefined,
+                  };
+                  const nextZone = compatibleOptions(
+                    getGcpZoneOptions(catalog.host_catalog, nextSelection),
+                  )[0]?.value;
+                  patchDraft({ region, zone: nextZone });
+                }}
+              />
+            ) : (
+              <Input disabled={selectedVolume != null} />
+            )}
+          </Form.Item>
           <Form.Item
             name="zone"
             label="Zone"
             rules={[{ required: true }]}
-            style={{ flex: "1 1 220px" }}
+            style={{ flex: "1 1 280px" }}
           >
-            <Input />
+            {zoneOptions.length ? (
+              <HostOptionsSelect
+                options={zoneOptions}
+                disabled={selectedVolume != null}
+              />
+            ) : (
+              <Input disabled={selectedVolume != null} />
+            )}
           </Form.Item>
         </Flex>
         <Flex gap={12} wrap>
@@ -194,11 +297,10 @@ function VmCreateModal({
             rules={[{ required: true }]}
             style={{ flex: "1 1 260px" }}
           >
-            <Select
-              options={catalog.machines.map((machine) => ({
-                value: machine.machine_type,
-                label: `${machine.machine_type} · ${machine.cpu} vCPU · ${machine.ram_gb} GB`,
-              }))}
+            <HostOptionsSelect
+              options={machineOptions}
+              disabled={machineOptions.length === 0}
+              placeholder="Select a machine available in this zone"
             />
           </Form.Item>
           <Form.Item
@@ -229,16 +331,27 @@ function VmCreateModal({
           </Form.Item>
         </Flex>
         <Form.Item name="pricing_model" label="Capacity">
-          <Radio.Group optionType="button" buttonStyle="solid">
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            onChange={(event) => {
+              const pricing_model = event.target.value;
+              patchDraft({
+                pricing_model,
+                allow_on_demand_fallback: pricing_model === "spot",
+              });
+            }}
+          >
             <Radio.Button value="spot">Spot · lower cost</Radio.Button>
-            <Radio.Button value="on_demand">On demand</Radio.Button>
+            <Radio.Button value="on_demand">Standard</Radio.Button>
           </Radio.Group>
         </Form.Item>
         {draft.pricing_model === "spot" && (
           <Form.Item name="allow_on_demand_fallback" valuePropName="checked">
             <Checkbox>
-              Fall back temporarily to on-demand capacity when Spot is
-              unavailable
+              Automatically restart interrupted Spot VMs. If Spot remains
+              unavailable, use Standard capacity for up to 24 hours and keep
+              retrying Spot.
             </Checkbox>
           </Form.Item>
         )}
@@ -256,7 +369,15 @@ function VmCreateModal({
             }))}
             onChange={(name) => {
               const volume = volumes.find((entry) => entry.name === name);
-              if (volume) form.setFieldValue("zone", volume.zone);
+              if (volume) {
+                patchDraft({
+                  volume: name,
+                  region: volume.region,
+                  zone: volume.zone,
+                });
+              } else {
+                patchDraft({ volume: undefined });
+              }
             }}
           />
         </Form.Item>
@@ -268,8 +389,8 @@ function VmCreateModal({
           ]}
           extra={
             sshKeys.length
-              ? "Uses one of your account SSH keys."
-              : "Add an account SSH key, or paste a public key here."
+              ? "Uses one of your account SSH keys. You can add another key later with the CoCalc CLI."
+              : "Add an account SSH key or paste one here. You can add another key later with the CoCalc CLI."
           }
         >
           {sshKeys.length ? (
@@ -279,6 +400,20 @@ function VmCreateModal({
           )}
         </Form.Item>
       </Form>
+      <Alert
+        showIcon
+        type="info"
+        message={
+          price
+            ? `Estimated price: ${price.hourly_label} (${price.monthly_label})`
+            : "Price estimate unavailable for this selection"
+        }
+        description={`${
+          standardFallbackPrice
+            ? `Standard fallback: ${standardFallbackPrice.hourly_label} (${standardFallbackPrice.monthly_label}). `
+            : ""
+        }Includes the VM, balanced persistent boot disk, public IPv4 address, and the site surcharge. Public Internet egress is billed separately at $0.10/GB.`}
+      />
       <Divider />
       <Text strong>Equivalent CLI command</Text>
       <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
@@ -315,7 +450,42 @@ function VolumeCreateModal({
     size_gb: 50,
   };
   const [draft, setDraft] = useState<Partial<VolumeDraft>>(initial);
+  const pricingSettings = useHostPricingSettings();
   const api = globalThis.location?.origin ?? "https://cocalc.ai";
+  const region = regionFromZone(draft.zone ?? initial.zone);
+  const placementSelection: ProviderSelection = {
+    region,
+    zone: draft.zone,
+  };
+  const pricingSelection: ProviderSelection = {
+    ...placementSelection,
+    machine_type: "e2-standard-2",
+    pricing_model: "on_demand",
+    storage_mode: "persistent",
+    disk_type: "balanced",
+    disk_gb: draft.size_gb,
+    pricing_settings: pricingSettings,
+  };
+  const regionOptions = compatibleOptions(
+    getGcpRegionOptions(catalog.host_catalog, placementSelection),
+  );
+  const zoneOptions = compatibleOptions(
+    getGcpZoneOptions(catalog.host_catalog, placementSelection),
+  );
+  const volumeEstimate = getProviderPriceEstimate(
+    "gcp",
+    catalog.host_catalog,
+    pricingSelection,
+    pricingSettings,
+  );
+  const diskEstimate = volumeEstimate?.line_items.find(
+    (item) => item.key === "disk",
+  );
+
+  const patchDraft = (patch: Partial<VolumeDraft>) => {
+    form.setFieldsValue(patch);
+    setDraft((current) => ({ ...current, ...patch }));
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -348,13 +518,40 @@ function VolumeCreateModal({
           >
             <Input autoFocus />
           </Form.Item>
+        </Flex>
+        <Flex gap={12} wrap>
+          <Form.Item label="Region" style={{ flex: "1 1 220px" }}>
+            {regionOptions.length ? (
+              <HostOptionsSelect
+                value={region}
+                options={regionOptions}
+                onChange={(nextRegion) => {
+                  const nextSelection = {
+                    ...placementSelection,
+                    region: nextRegion,
+                    zone: undefined,
+                  };
+                  const zone = compatibleOptions(
+                    getGcpZoneOptions(catalog.host_catalog, nextSelection),
+                  )[0]?.value;
+                  patchDraft({ zone });
+                }}
+              />
+            ) : (
+              <Input value={region} disabled />
+            )}
+          </Form.Item>
           <Form.Item
             name="zone"
             label="Zone"
             rules={[{ required: true }]}
-            style={{ flex: "1 1 180px" }}
+            style={{ flex: "1 1 220px" }}
           >
-            <Input />
+            {zoneOptions.length ? (
+              <HostOptionsSelect options={zoneOptions} />
+            ) : (
+              <Input />
+            )}
           </Form.Item>
           <Form.Item
             name="size_gb"
@@ -369,7 +566,12 @@ function VolumeCreateModal({
       <Alert
         showIcon
         type="info"
-        message="Volumes are retained when VMs are deleted. They can grow online but cannot shrink."
+        message={
+          diskEstimate
+            ? `Balanced persistent SSD: ${diskEstimate.monthly_label} (${(diskEstimate.usd_per_month / Number(draft.size_gb ?? 1)).toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 3, maximumFractionDigits: 3 })}/GB/month)`
+            : "Balanced persistent SSD pricing is unavailable for this region"
+        }
+        description="Volumes are retained when VMs are deleted. They can grow online but cannot shrink. The estimate includes the site surcharge."
       />
       <Divider />
       <Text strong>Equivalent CLI command</Text>
@@ -521,16 +723,20 @@ export function ProjectComputeVms({
     return () => clearInterval(timer);
   }, [isVisible, project_id]);
 
-  const defaultVm = (): VmDraft => ({
-    name: "compute-vm",
-    zone: catalog?.defaults.zone ?? "us-central1-a",
-    machine_type: catalog?.defaults.machine_type ?? "e2-standard-2",
-    pricing_model: "spot",
-    allow_on_demand_fallback: false,
-    ttl_minutes: catalog?.defaults.ttl_minutes ?? null,
-    boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
-    ssh_public_key: sshKeys[0]?.value ?? "",
-  });
+  const defaultVm = (): VmDraft => {
+    const zone = catalog?.defaults.zone ?? "us-central1-a";
+    return {
+      name: "compute-vm",
+      region: regionFromZone(zone),
+      zone,
+      machine_type: catalog?.defaults.machine_type ?? "e2-standard-2",
+      pricing_model: "on_demand",
+      allow_on_demand_fallback: false,
+      ttl_minutes: catalog?.defaults.ttl_minutes ?? null,
+      boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
+      ssh_public_key: sshKeys[0]?.value ?? "",
+    };
+  };
 
   const openSimilar = (vm: ComputeVm) => {
     const ttlMinutes = vm.expires_at
@@ -545,6 +751,7 @@ export function ProjectComputeVms({
       : null;
     setVmInitial({
       name: similarName(vm.name, rows),
+      region: vm.region,
       zone: vm.zone,
       machine_type: vm.machine_type,
       pricing_model: vm.desired_pricing_model,
@@ -734,7 +941,7 @@ export function ProjectComputeVms({
       title: "Pricing",
       render: (_, vm) => (
         <span>
-          {vm.effective_pricing_model} · {hourlyPrice(vm)}
+          {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
         </span>
       ),
     },

@@ -1204,7 +1204,7 @@ export function AccountEntitlementOverridePanel({
                     />
                     <SelectOverrideEditor
                       label="Exam scratchpad hosts"
-                      description="Allows or blocks configuring ephemeral exam scratchpads on private on-demand hosts owned or managed by this account."
+                      description="Allows or blocks configuring ephemeral exam scratchpads on private Standard hosts owned or managed by this account."
                       current={
                         details?.selected.entitlements.features?.exam_mode
                       }

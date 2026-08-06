@@ -345,9 +345,8 @@ export type SiteSettingsExtrasKeys =
   | "compute_vm_gcp_service_account_json"
   | "compute_vm_gcp_subnetwork"
   | "compute_vm_gcp_network_tag"
-  | "compute_vm_max_active_per_account"
+  | "compute_vm_max_active_per_project"
   | "compute_vm_max_active_total"
-  | "compute_vm_max_vcpus"
   | "compute_vm_max_ttl_minutes"
   | "compute_vm_max_boot_disk_gb"
   | "compute_vm_max_volumes_per_account"
@@ -1706,10 +1705,10 @@ export const EXTRAS: SettingsExtras = {
     group: "Compute / Managed VMs",
     subgroup: "GCP Isolation",
   },
-  compute_vm_max_active_per_account: {
-    name: "Managed Compute VMs: Maximum Active Per Account",
-    desc: "Maximum undeleted VM leases owned by one account.",
-    default: "1",
+  compute_vm_max_active_per_project: {
+    name: "Managed Compute VMs: Maximum Active Per Project",
+    desc: "Maximum undeleted VM leases associated with one project.",
+    default: "10",
     to_val: to_int,
     valid: only_pos_int,
     tags: ["Cloud"],
@@ -1718,18 +1717,8 @@ export const EXTRAS: SettingsExtras = {
   },
   compute_vm_max_active_total: {
     name: "Managed Compute VMs: Maximum Active Site-wide",
-    desc: "Maximum undeleted VM leases across this bay during the canary.",
-    default: "4",
-    to_val: to_int,
-    valid: only_pos_int,
-    tags: ["Cloud"],
-    group: "Compute / Managed VMs",
-    subgroup: "Limits",
-  },
-  compute_vm_max_vcpus: {
-    name: "Managed Compute VMs: Maximum vCPUs Per VM",
-    desc: "Largest machine allowed by the canary admission policy.",
-    default: "16",
+    desc: "Emergency site-wide ceiling for undeleted VM leases across this bay.",
+    default: "1000",
     to_val: to_int,
     valid: only_pos_int,
     tags: ["Cloud"],
@@ -1788,8 +1777,8 @@ export const EXTRAS: SettingsExtras = {
   },
   compute_vm_max_volume_gb: {
     name: "Managed Compute VMs: Maximum Volume GB",
-    desc: "Largest persistent /work volume allowed by the canary.",
-    default: "500",
+    desc: "Largest persistent /work volume allowed. Volumes are retained and billed independently from VMs.",
+    default: "10000",
     to_val: to_int,
     valid: only_pos_int,
     tags: ["Cloud"],
