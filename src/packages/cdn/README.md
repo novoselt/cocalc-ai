@@ -4,6 +4,7 @@ These packages
 
 - katex
 - codemirror
+- PDF.js packed CMaps
 
 ## Why?
 
@@ -24,6 +25,10 @@ used by the frontend build.
 Run `pnpm run build`. The build script copies the relevant package files into
 `dist`, creates versioned symlinks such as `codemirror-<version>`, copies the
 custom CoCalc CodeMirror themes, and writes `dist/index.js`.
+
+Only the PDF.js `cmaps` directory is copied. The frontend bundles the PDF.js
+runtime itself, while the self-hosted CMaps are fetched on demand for PDFs
+that need non-Latin character mappings.
 
 ## Notes
 
