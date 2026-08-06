@@ -44,6 +44,28 @@ function config(): DisposableRestoreWorkerConfig {
   };
 }
 
+function pgBackRestConfig(): DisposableRestoreWorkerConfig {
+  return {
+    ...config(),
+    repository_type: "pgbackrest",
+    snapshot_id: "sqlite-snapshot-1",
+    rustic_repo_root: "rustic/bay-sqlite/bay-1",
+    pgbackrest_repo_path: "/pgbackrest/bay-1",
+    pgbackrest_cipher_pass: "pgbackrest-password",
+    pgbackrest_stanza: "cocalc-bay-1",
+    pgbackrest_version: "2.59.0",
+    pgbackrest_source_sha256:
+      "faaf8faa14a6392279654ee216a493fcd07b0c513af4b55fe34faec062cb8875",
+    wal_object_prefix: undefined,
+  };
+}
+
+function decodedStartupBlocks(script: string): string[] {
+  return Array.from(script.matchAll(/printf '%s' '([^']+)' \| base64 -d/g)).map(
+    (match) => Buffer.from(match[1], "base64").toString("utf8"),
+  );
+}
+
 function passedWorker(): DisposableRestoreWorkerResult {
   return {
     version: 1,
@@ -164,6 +186,47 @@ test("startup script supports checkpoint-only snapshot recovery", () => {
   expect(workerSource).toContain(
     "suppressed {suppressed} repeated readiness failures",
   );
+  const compiled = spawnSync(
+    "python3",
+    ["-c", "import sys; compile(sys.stdin.read(), '<worker>', 'exec')"],
+    { input: workerSource, encoding: "utf8" },
+  );
+  expect(compiled.stderr).toBe("");
+  expect(compiled.status).toBe(0);
+});
+
+test("startup script supports pgBackRest PITR and independent SQLite restore", () => {
+  const script = buildDisposableRestoreStartupScript(pgBackRestConfig());
+  expect(script).not.toContain("pgbackrest-password");
+  expect(script).not.toContain("temporary-secret");
+  const [encodedConfig, workerSource] = decodedStartupBlocks(script);
+  expect(JSON.parse(encodedConfig)).toMatchObject({
+    repository_type: "pgbackrest",
+    backup_set_id: "backup-1",
+    snapshot_id: "sqlite-snapshot-1",
+  });
+  expect(workerSource).toContain('STAGE = "build-pgbackrest"');
+  expect(workerSource).toContain('"--type=time"');
+  expect(workerSource).toContain('"--target-action=promote"');
+  expect(workerSource).toContain('if REPOSITORY_TYPE != "pgbackrest"');
+  expect(workerSource).toContain(
+    'for stale in ("recovery.signal", "standby.signal")',
+  );
+  expect(workerSource).toContain(
+    'auto_conf_text.replace(str(pgdata), "/var/lib/postgresql/data")',
+  );
+  expect(workerSource).toContain('"-c", "port=5432"');
+  expect(workerSource).toContain('"-p", "5432"');
+  expect(workerSource).toContain('"--security-opt=apparmor=unconfined"');
+  expect(workerSource).toContain(
+    "--no-install-recommends ca-certificates libbz2-1.0",
+  );
+  expect(workerSource).toContain(
+    '"PostgreSQL container exited before readiness: "',
+  );
+  expect(workerSource).not.toContain('["shutdown", "-h", "now"]');
+  expect(workerSource).toContain("PGBACKREST_REPO1_S3_TOKEN");
+  expect(workerSource).toContain("sync_dir = SNAPSHOT");
   const compiled = spawnSync(
     "python3",
     ["-c", "import sys; compile(sys.stdin.read(), '<worker>', 'exec')"],

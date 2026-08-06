@@ -9,6 +9,8 @@ if [[ "${COCALC_BAY_SQLITE_BACKUP_ENABLED:-0}" != "1" ]]; then
   exit 0
 fi
 
+assert_backup_storage_ready
+
 : "${COCALC_BAY_SQLITE_SOURCE_DIR:=${COCALC_SYNC:-${COCALC_BAY_ROOT}/sync}}"
 : "${COCALC_BAY_SQLITE_MIRROR_DIR:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/sync}"
 : "${COCALC_BAY_SQLITE_MIRROR_CATALOG:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/catalog.json}"
@@ -139,6 +141,10 @@ with open(mirror_path, encoding="utf8") as src:
     mirror = json.load(src)
 with open(rustic_path, encoding="utf8") as src:
     rustic = json.load(src)
+snapshot_id = rustic.get("snapshot_id") or rustic.get("id")
+if not snapshot_id:
+    raise SystemExit("Rustic backup output did not include a snapshot id")
+rustic["snapshot_id"] = snapshot_id
 result = {
     "level": "ok",
     "generated_at": datetime.now(timezone.utc).isoformat(),

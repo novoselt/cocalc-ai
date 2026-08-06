@@ -28,6 +28,9 @@ common=(
 )
 
 case "$action" in
+  stanza-create)
+    exec "${common[@]}" stanza-create
+    ;;
   setup)
     "${common[@]}" stanza-create
     exec "${common[@]}" check
@@ -39,7 +42,7 @@ case "$action" in
     exec "${common[@]}" "$action"
     ;;
   *)
-    bay_log "usage: bay-pgbackrest-run setup|full|diff|incr|check|expire|info|verify"
+    bay_log "usage: bay-pgbackrest-run stanza-create|setup|full|diff|incr|check|expire|info|verify"
     exit 2
     ;;
 esac

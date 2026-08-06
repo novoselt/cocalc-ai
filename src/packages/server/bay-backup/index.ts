@@ -84,6 +84,7 @@ import { which } from "@cocalc/backend/which";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
 import dbPassword from "@cocalc/database/pool/password";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
+import adminAlert from "@cocalc/server/messages/admin-alert";
 import type {
   BayBackupArtifactInfo,
   BayBackupFilesystemStatus,
@@ -310,6 +311,7 @@ let walMaintenanceRunning = false;
 let backupMaintenanceTimer: NodeJS.Timeout | undefined;
 let backupMaintenanceRunning = false;
 let backupMaintenanceConsecutiveFailures = 0;
+let backupHealthTimer: NodeJS.Timeout | undefined;
 
 const DEFAULT_WAL_ARCHIVE_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_WAL_ARCHIVE_MAX_UPLOAD_SEGMENTS = 32;
@@ -326,6 +328,9 @@ const DEFAULT_BAY_BACKUP_NICE_LEVEL = 10;
 const DEFAULT_BAY_BACKUP_IONICE_CLASS = 2;
 const DEFAULT_BAY_BACKUP_IONICE_LEVEL = 7;
 const GIB = 1024 * 1024 * 1024;
+const PGBACKREST_VERSION = "2.59.0";
+const PGBACKREST_SOURCE_SHA256 =
+  "faaf8faa14a6392279654ee216a493fcd07b0c513af4b55fe34faec062cb8875";
 const DEFAULT_BAY_BACKUP_MIN_FREE_BYTES = 64 * GIB;
 const DEFAULT_BAY_BACKUP_WORKSPACE_FLOOR_BYTES = 64 * GIB;
 const DEFAULT_BAY_BACKUP_WORKSPACE_MULTIPLIER = 4;
@@ -333,6 +338,7 @@ const DEFAULT_BAY_BACKUP_STALE_STAGE_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_BAY_BACKUP_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
 const WAL_SEGMENT_SIZE = 16n * 1024n * 1024n;
 const XLOG_SEGMENTS_PER_XLOG_ID = (1n << 32n) / WAL_SEGMENT_SIZE;
+const NEW_BACKUP_HEALTH_INTERVAL_MS = 5 * 60_000;
 
 class BayBackupAlreadyRunningError extends Error {
   constructor(bay_id: string) {
@@ -811,6 +817,117 @@ async function writeJson(path: string, value: unknown): Promise<void> {
       await rm(tempPath, { force: true }).catch(() => undefined);
     }
   }
+}
+
+async function backupStatusIssue({
+  label,
+  path,
+  timestamp_field,
+  maximum_age_ms,
+}: {
+  label: string;
+  path: string;
+  timestamp_field: string;
+  maximum_age_ms: number;
+}): Promise<string | undefined> {
+  const value = await readJsonIfExists<Record<string, any>>(path);
+  if (!value) return `${label}: status file is missing (${path})`;
+  if (value.level !== "ok") {
+    const reasons = Array.isArray(value.reasons)
+      ? value.reasons.join("; ")
+      : `${value.error ?? value.level ?? "unknown failure"}`;
+    return `${label}: ${reasons}`;
+  }
+  const timestamp = Date.parse(`${value[timestamp_field] ?? ""}`);
+  if (!Number.isFinite(timestamp)) {
+    return `${label}: status timestamp '${timestamp_field}' is missing or invalid`;
+  }
+  const age = Date.now() - timestamp;
+  if (age > maximum_age_ms) {
+    return `${label}: status is ${Math.floor(age / 60_000)} minutes old`;
+  }
+  return;
+}
+
+export async function runBayBackupHealthCheck({
+  send_alert = true,
+}: {
+  send_alert?: boolean;
+} = {}): Promise<string[]> {
+  const pgEnabled =
+    `${process.env.COCALC_BAY_PGBACKREST_ENABLED ?? ""}` === "1";
+  const sqliteEnabled =
+    `${process.env.COCALC_BAY_SQLITE_BACKUP_ENABLED ?? ""}` === "1";
+  if (!pgEnabled && !sqliteEnabled) return [];
+  const stateDir =
+    `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state");
+  const checks: Promise<string | undefined>[] = [];
+  if (pgEnabled) {
+    checks.push(
+      backupStatusIssue({
+        label: "pgBackRest",
+        path:
+          `${process.env.COCALC_BAY_PGBACKREST_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-status.json"),
+        timestamp_field: "generated_at",
+        maximum_age_ms: 15 * 60_000,
+      }),
+    );
+  }
+  if (sqliteEnabled) {
+    checks.push(
+      backupStatusIssue({
+        label: "SQLite",
+        path:
+          `${process.env.COCALC_BAY_SQLITE_BACKUP_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "sqlite-backup-status.json"),
+        timestamp_field: "generated_at",
+        maximum_age_ms: 2 * 60 * 60_000,
+      }),
+    );
+  }
+  if (pgEnabled && sqliteEnabled) {
+    checks.push(
+      backupStatusIssue({
+        label: "disposable PITR restore drill",
+        path:
+          `${process.env.COCALC_BAY_PGBACKREST_RESTORE_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-restore-test-status.json"),
+        timestamp_field: "tested_at",
+        maximum_age_ms: 8 * 24 * 60 * 60_000,
+      }),
+    );
+  }
+  const issues = (await Promise.all(checks)).filter(
+    (issue): issue is string => issue != null,
+  );
+  if (send_alert && issues.length) {
+    await adminAlert({
+      subject: "Bay backup health requires attention",
+      body: [
+        `${getSingleBayInfo().bay_id} has unhealthy application-level backup state.`,
+        "",
+        ...issues.map((issue) => `- ${issue}`),
+        "",
+        "This check is observational only and performs no automatic restart or backup operation.",
+      ].join("\n"),
+      dedupMinutes: 30,
+      dedupBySubject: true,
+    });
+  }
+  return issues;
+}
+
+export function startBayBackupHealthMaintenance(): void {
+  if (backupHealthTimer) return;
+  const run = () => {
+    void runBayBackupHealthCheck().catch((err) =>
+      logger.warn("bay backup health check failed", { err }),
+    );
+  };
+  backupHealthTimer = setInterval(run, NEW_BACKUP_HEALTH_INTERVAL_MS);
+  backupHealthTimer.unref?.();
+  setTimeout(run, 60_000).unref?.();
 }
 
 function defaultState({
@@ -5246,10 +5363,12 @@ async function preparePitrRestoreSentinel({
   bay_id,
   backup_set_id,
   remote_only,
+  archive_backend = "legacy",
 }: {
   bay_id: string;
   backup_set_id: string;
   remote_only: boolean;
+  archive_backend?: "legacy" | "pgbackrest";
 }): Promise<PitrRestoreSentinel> {
   const run_id = randomUUID();
   const note = `${bay_id}:${backup_set_id}:${remote_only ? "remote-only" : "local"}`;
@@ -5285,14 +5404,25 @@ async function preparePitrRestoreSentinel({
     `INSERT INTO ${RESTORE_TEST_PITR_TABLE} (run_id, phase, note) VALUES ($1, 'post', $2)`,
     [run_id, note],
   );
-  const walSync = await syncBayWalArchive({
-    bay_id,
-    forceSwitch: true,
-  });
-  if (`${walSync.state.last_error ?? ""}`.startsWith("wal archive:")) {
-    throw new Error(
-      `failed to archive PITR validation WAL: ${walSync.state.last_error}`,
-    );
+  if (archive_backend === "pgbackrest") {
+    await getPool().query("SELECT pg_switch_wal()");
+    const currentLink =
+      `${process.env.COCALC_BAY_CURRENT_LINK ?? ""}`.trim() ||
+      "/opt/cocalc/bay/current";
+    await execFile(join(currentLink, "bin", "bay-pgbackrest-run"), ["check"], {
+      timeout: 10 * 60_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } else {
+    const walSync = await syncBayWalArchive({
+      bay_id,
+      forceSwitch: true,
+    });
+    if (`${walSync.state.last_error ?? ""}`.startsWith("wal archive:")) {
+      throw new Error(
+        `failed to archive PITR validation WAL: ${walSync.state.last_error}`,
+      );
+    }
   }
   return { run_id, target_time };
 }
@@ -5530,6 +5660,281 @@ function assertDisposableWorkerPassed(
     throw new Error(
       "disposable restore worker did not validate every Conat SQLite database",
     );
+  }
+}
+
+function requiredBackupEnv(name: string): string {
+  const value = `${process.env[name] ?? ""}`.trim();
+  if (!value) {
+    throw new Error(`missing required backup environment variable: ${name}`);
+  }
+  return value;
+}
+
+async function latestPgBackRestBackup(requestedLabel?: string): Promise<{
+  label: string;
+  repository_bytes: number;
+}> {
+  const binary =
+    `${process.env.COCALC_BAY_PGBACKREST_BIN ?? ""}`.trim() ||
+    "/usr/local/bin/pgbackrest";
+  const config = requiredBackupEnv("COCALC_BAY_PGBACKREST_CONFIG");
+  const stanza = `cocalc-${getSingleBayInfo().bay_id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+  const env = {
+    ...process.env,
+    PGBACKREST_REPO1_S3_KEY: requiredBackupEnv(
+      "COCALC_BAY_PGBACKREST_S3_ACCESS_KEY",
+    ),
+    PGBACKREST_REPO1_S3_KEY_SECRET: requiredBackupEnv(
+      "COCALC_BAY_PGBACKREST_S3_SECRET_KEY",
+    ),
+    PGBACKREST_REPO1_CIPHER_PASS: requiredBackupEnv(
+      "COCALC_BAY_PGBACKREST_CIPHER_PASS",
+    ),
+  };
+  const { stdout } = await execFile(
+    binary,
+    [`--config=${config}`, `--stanza=${stanza}`, "--output=json", "info"],
+    { env, timeout: 5 * 60_000, maxBuffer: 10 * 1024 * 1024 },
+  );
+  const info = JSON.parse(stdout) as any[];
+  const backups = (info[0]?.backup ?? []).filter(
+    (backup: any) => !backup?.error && `${backup?.label ?? ""}`.trim(),
+  );
+  const latest = requestedLabel
+    ? backups.find((backup: any) => `${backup.label}` === requestedLabel)
+    : backups.sort(
+        (left: any, right: any) =>
+          Number(right?.timestamp?.stop ?? 0) -
+          Number(left?.timestamp?.stop ?? 0),
+      )[0];
+  if (!latest) {
+    throw new Error(
+      requestedLabel
+        ? `pgBackRest backup '${requestedLabel}' was not found`
+        : "pgBackRest has no successful backup to restore-test",
+    );
+  }
+  return {
+    label: `${latest.label}`,
+    repository_bytes: Number(latest?.info?.repository?.size ?? 0) || 0,
+  };
+}
+
+async function latestSqliteRusticSnapshot(): Promise<string> {
+  const statusPath =
+    `${process.env.COCALC_BAY_SQLITE_BACKUP_STATUS_FILE ?? ""}`.trim() ||
+    join(
+      `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state"),
+      "sqlite-backup-status.json",
+    );
+  const status = await readJsonIfExists<any>(statusPath);
+  const snapshotId = `${status?.rustic?.snapshot_id ?? ""}`.trim();
+  if (!snapshotId || status?.level !== "ok") {
+    throw new Error(
+      `no successful changed-only SQLite snapshot is recorded in ${statusPath}`,
+    );
+  }
+  return snapshotId;
+}
+
+async function runPgBackRestDisposableGcpRestoreTest({
+  resolvedBayId,
+  started_at,
+  backup_label,
+}: {
+  resolvedBayId: string;
+  started_at: string;
+  backup_label?: string;
+}): Promise<BayRestoreTestRunResult> {
+  if (`${process.env.COCALC_BAY_SQLITE_BACKUP_ENABLED ?? ""}` !== "1") {
+    throw new Error(
+      "pgBackRest disposable restore tests require changed-only SQLite backups",
+    );
+  }
+  const [postgresBackup, sqliteSnapshotId, sizingInfo, zone, r2, settings] =
+    await Promise.all([
+      latestPgBackRestBackup(backup_label),
+      latestSqliteRusticSnapshot(),
+      disposableRestorePostgresSizing(),
+      resolveDisposableRestoreGcpZone(),
+      resolveR2Target(resolvedBayId),
+      getServerSettings(),
+    ]);
+  if (!r2.account_id || !r2.api_token) {
+    throw new Error(
+      "pgBackRest disposable restore tests require the Cloudflare account and API token",
+    );
+  }
+  const serviceAccountJson =
+    `${settings.google_cloud_service_account_json ?? ""}`.trim();
+  if (!serviceAccountJson) {
+    throw new Error(
+      "pgBackRest disposable restore tests require google_cloud_service_account_json",
+    );
+  }
+  const bucket = requiredBackupEnv("COCALC_BAY_PGBACKREST_S3_BUCKET");
+  const endpoint = requiredBackupEnv("COCALC_BAY_PGBACKREST_S3_ENDPOINT");
+  const parentAccessKey = requiredBackupEnv(
+    "COCALC_BAY_PGBACKREST_S3_ACCESS_KEY",
+  );
+  const pgbackrestRepoPath =
+    `${process.env.COCALC_BAY_PGBACKREST_REPO_PATH ?? ""}`.trim() ||
+    `/pgbackrest/${resolvedBayId}`;
+  const sqliteRepoRoot =
+    `${process.env.COCALC_BAY_SQLITE_RUSTIC_ROOT ?? ""}`.trim() ||
+    `rustic/bay-sqlite/${resolvedBayId}`;
+  const stanza = `cocalc-${resolvedBayId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+  const timeoutMs = Math.max(
+    30 * 60_000,
+    Number.parseInt(
+      `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_TIMEOUT_MS ?? ""}`,
+      10,
+    ) || 3 * 60 * 60_000,
+  );
+  const temporaryR2 = await createTemporaryR2ReadCredentials({
+    account_id: r2.account_id,
+    api_token: r2.api_token,
+    bucket,
+    parent_access_key_id: parentAccessKey,
+    prefixes: [pgbackrestRepoPath, sqliteRepoRoot],
+    ttl_seconds: Math.min(
+      7 * 24 * 60 * 60,
+      Math.ceil(timeoutMs / 1000) + 30 * 60,
+    ),
+  });
+  const pitrRun = await preparePitrRestoreSentinel({
+    bay_id: resolvedBayId,
+    backup_set_id: postgresBackup.label,
+    remote_only: true,
+    archive_backend: "pgbackrest",
+  });
+  const sizing = disposableRestoreDiskSizing({
+    database_bytes: sizingInfo.database_bytes,
+    artifact_bytes: postgresBackup.repository_bytes,
+  });
+  const identity = newDisposableRestoreWorkerIdentity();
+  const machineType =
+    `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_MACHINE_TYPE ?? ""}`.trim() ||
+    "n2-standard-4";
+  const statusPath =
+    `${process.env.COCALC_BAY_PGBACKREST_RESTORE_STATUS_FILE ?? ""}`.trim() ||
+    join(
+      `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state"),
+      "pgbackrest-restore-test-status.json",
+    );
+  let workerRun: DisposableGcpRestoreResult | null = null;
+  try {
+    workerRun = await runDisposableGcpRestoreWorker({
+      service_account_json: serviceAccountJson,
+      zone,
+      machine_type: machineType,
+      boot_disk_gb: sizing.boot_disk_gb,
+      timeout_ms: timeoutMs,
+      config: {
+        ...identity,
+        bay_id: resolvedBayId,
+        backup_set_id: postgresBackup.label,
+        repository_type: "pgbackrest",
+        snapshot_id: sqliteSnapshotId,
+        restore_mode: "pitr",
+        target_time: pitrRun.target_time,
+        pitr_run_id: pitrRun.run_id,
+        postgres_major: sizingInfo.postgres_major,
+        postgres_user: pguser,
+        postgres_database: pgdatabase,
+        r2_endpoint: endpoint,
+        r2_bucket: bucket,
+        r2_access_key_id: temporaryR2.access_key_id,
+        r2_secret_access_key: temporaryR2.secret_access_key,
+        r2_session_token: temporaryR2.session_token,
+        rustic_repo_root: sqliteRepoRoot,
+        rustic_repo_password: requiredBackupEnv(
+          "COCALC_BAY_SQLITE_RUSTIC_PASSWORD",
+        ),
+        pgbackrest_repo_path: pgbackrestRepoPath,
+        pgbackrest_cipher_pass: requiredBackupEnv(
+          "COCALC_BAY_PGBACKREST_CIPHER_PASS",
+        ),
+        pgbackrest_stanza: stanza,
+        pgbackrest_version: PGBACKREST_VERSION,
+        pgbackrest_source_sha256: PGBACKREST_SOURCE_SHA256,
+        require_conat: true,
+        minimum_free_bytes: sizing.minimum_free_bytes,
+      },
+    });
+    assertDisposableWorkerPassed(workerRun.worker, "pitr");
+    const finished_at = new Date().toISOString();
+    const conat = workerRun.worker.conat!;
+    await writeJson(statusPath, {
+      level: "ok",
+      tested_at: finished_at,
+      backup_label: postgresBackup.label,
+      sqlite_snapshot_id: sqliteSnapshotId,
+      pitr_target_time: pitrRun.target_time,
+      pitr_run_id: pitrRun.run_id,
+      worker: workerRun,
+    });
+    return {
+      ...getSingleBayInfo(),
+      started_at,
+      finished_at,
+      remote_only: true,
+      target_time: pitrRun.target_time,
+      backup_set_id: postgresBackup.label,
+      target_dir: `gcp://${workerRun.project_id}/${workerRun.zone}/${workerRun.instance_name}`,
+      data_dir: null,
+      sync_dir: null,
+      secrets_dir: null,
+      backup_manifest_path: null,
+      restore_manifest_path: null,
+      source_storage_backend: "r2",
+      source_snapshot_id: postgresBackup.label,
+      rustic_repo_selector: sqliteRepoRoot,
+      wal_archive_dir: null,
+      wal_storage_backend: "r2",
+      wal_segment_count: 0,
+      recovery_ready: true,
+      pitr_verified: true,
+      pitr_run_id: pitrRun.run_id,
+      kept_on_disk: false,
+      verified_queries: [
+        "pitr_pre_count=1",
+        "pitr_post_count=0",
+        ...workerRun.worker.postgres!.tables_verified.map(
+          (table) => `${table}_table=${table}`,
+        ),
+        `conat_sqlite_quick_check=${conat.quick_check_passed}/${conat.database_count}`,
+      ],
+      notes: [
+        `Restored pgBackRest backup ${postgresBackup.label} exclusively from R2.`,
+        `Recovered to ${pitrRun.target_time} and proved the post-target transaction was absent.`,
+        `Restored and checked SQLite snapshot ${sqliteSnapshotId}.`,
+        `Deleted disposable worker ${workerRun.instance_name} and its auto-delete boot disk.`,
+      ],
+      execution_mode: "disposable-gcp",
+      worker_instance_name: workerRun.instance_name,
+      worker_project_id: workerRun.project_id,
+      worker_zone: workerRun.zone,
+      worker_machine_type: workerRun.machine_type,
+      worker_boot_disk_gb: workerRun.boot_disk_gb,
+      worker_cleanup: workerRun.cleanup,
+      conat_database_count: conat.database_count,
+      conat_database_bytes: conat.database_bytes,
+      conat_quick_check_passed: conat.quick_check_passed,
+    };
+  } catch (err) {
+    await writeJson(statusPath, {
+      level: "critical",
+      tested_at: new Date().toISOString(),
+      backup_label: postgresBackup.label,
+      sqlite_snapshot_id: sqliteSnapshotId,
+      pitr_target_time: pitrRun.target_time,
+      pitr_run_id: pitrRun.run_id,
+      error: String(err).slice(0, 2_000),
+      worker: workerRun,
+    });
+    throw err;
   }
 }
 
@@ -5778,6 +6183,21 @@ export async function runBayRestoreTest({
     throw new Error(`bay '${resolvedBayId}' not found`);
   }
   const started_at = new Date().toISOString();
+  if (
+    disposable_gcp &&
+    `${process.env.COCALC_BAY_PGBACKREST_ENABLED ?? ""}` === "1"
+  ) {
+    if (target_dir?.trim() || keep) {
+      throw new Error(
+        "--target-dir and --keep are only supported for bay-local restore tests",
+      );
+    }
+    return await runPgBackRestDisposableGcpRestoreTest({
+      resolvedBayId,
+      started_at,
+      backup_label: backup_set_id?.trim() || undefined,
+    });
+  }
   const paths = getBayBackupPaths(resolvedBayId);
   const r2 = await resolveR2Target(resolvedBayId);
   const rusticRepo = await buildBayRusticRepoConfig({ r2 });

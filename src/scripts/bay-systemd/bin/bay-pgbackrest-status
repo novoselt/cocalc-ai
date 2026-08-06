@@ -7,13 +7,14 @@ source "${SCRIPT_DIR}/lib.sh"
 source "${SCRIPT_DIR}/pgbackrest-lib.sh"
 
 pgbackrest_set_defaults
-ensure_dirs
 
 if [[ "${COCALC_BAY_PGBACKREST_ENABLED:-0}" != "1" ]]; then
   printf '{"enabled":false,"level":"disabled"}\n'
   exit 0
 fi
 
+assert_backup_storage_ready
+ensure_dirs
 pgbackrest_export_secrets
 stanza="$(pgbackrest_stanza)"
 info_file="$(mktemp)"
@@ -41,8 +42,10 @@ python3 - \
   "$info_file" \
   "$archiver_file" \
   "$COCALC_BAY_PGBACKREST_SPOOL_PATH/archive/$stanza" \
+  "$COCALC_BAY_POSTGRES_DATA_DIR/pg_wal" \
   "$COCALC_BAY_PGBACKREST_MAX_BACKUP_AGE_S" \
   "$COCALC_BAY_PGBACKREST_MAX_SPOOL_AGE_S" \
+  "$COCALC_BAY_PGBACKREST_MAX_WAL_BACKLOG_BYTES" \
   "$status_tmp" <<'PY'
 import json
 import os
@@ -50,9 +53,10 @@ import sys
 import time
 from datetime import datetime, timezone
 
-info_path, archiver_path, spool_path, backup_age_limit, spool_age_limit, output_path = sys.argv[1:]
+info_path, archiver_path, spool_path, pg_wal_path, backup_age_limit, spool_age_limit, wal_backlog_limit, output_path = sys.argv[1:]
 backup_age_limit = int(backup_age_limit)
 spool_age_limit = int(spool_age_limit)
+wal_backlog_limit = int(wal_backlog_limit)
 now = time.time()
 
 with open(info_path, encoding="utf8") as src:
@@ -88,6 +92,28 @@ if os.path.isdir(spool_path):
             oldest_pending = stat.st_mtime if oldest_pending is None else min(oldest_pending, stat.st_mtime)
 pending_age = max(0, int(now - oldest_pending)) if oldest_pending is not None else 0
 
+wal_ready_files = 0
+wal_ready_bytes = 0
+oldest_wal_ready = None
+archive_status_path = os.path.join(pg_wal_path, "archive_status")
+if os.path.isdir(archive_status_path):
+    for name in os.listdir(archive_status_path):
+        if not name.endswith(".ready"):
+            continue
+        status_file = os.path.join(archive_status_path, name)
+        segment_file = os.path.join(pg_wal_path, name[:-6])
+        try:
+            status_stat = os.stat(status_file)
+        except FileNotFoundError:
+            continue
+        wal_ready_files += 1
+        oldest_wal_ready = status_stat.st_mtime if oldest_wal_ready is None else min(oldest_wal_ready, status_stat.st_mtime)
+        try:
+            wal_ready_bytes += os.stat(segment_file).st_size
+        except FileNotFoundError:
+            pass
+wal_ready_age = max(0, int(now - oldest_wal_ready)) if oldest_wal_ready is not None else 0
+
 reasons = []
 level = "ok"
 if latest is None:
@@ -102,6 +128,12 @@ if error_files:
 if pending_age >= spool_age_limit:
     level = "critical"
     reasons.append(f"oldest pending WAL is {pending_age}s old")
+if wal_ready_age >= spool_age_limit:
+    level = "critical"
+    reasons.append(f"oldest unarchived PostgreSQL WAL is {wal_ready_age}s old")
+if wal_ready_bytes >= wal_backlog_limit:
+    level = "critical"
+    reasons.append(f"unarchived PostgreSQL WAL is {wal_ready_bytes} bytes")
 
 repository_delta = sum(
     item.get("info", {}).get("repository", {}).get("delta", 0) or 0
@@ -129,6 +161,9 @@ result = {
         "spool_pending_bytes": pending_bytes,
         "spool_oldest_pending_age_seconds": pending_age,
         "spool_error_files": error_files[:20],
+        "postgres_ready_files": wal_ready_files,
+        "postgres_ready_bytes": wal_ready_bytes,
+        "postgres_oldest_ready_age_seconds": wal_ready_age,
     },
 }
 with open(output_path, "w", encoding="utf8") as out:
