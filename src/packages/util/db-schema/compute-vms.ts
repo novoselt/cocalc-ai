@@ -78,7 +78,7 @@ Table({
     ready_at: { type: "timestamp", desc: "Current generation readiness." },
     expires_at: {
       type: "timestamp",
-      desc: "Optional guest-independent deletion deadline; null uses only the project budget.",
+      desc: "Optional guest-independent deletion deadline; membership spending limits still apply when null.",
     },
     stopped_at: { type: "timestamp", desc: "Most recent stop time." },
     deleted_at: { type: "timestamp", desc: "Logical deletion completion." },

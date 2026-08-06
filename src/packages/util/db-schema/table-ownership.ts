@@ -412,8 +412,7 @@ export const TABLE_OWNERSHIP = {
       "compute_vms",
       "compute_vm_instances",
       "compute_volumes",
-      "compute_project_budgets",
-      "compute_usage_charges",
+      "compute_egress_meter_intervals",
     ],
     {
       ownership: "account-home",

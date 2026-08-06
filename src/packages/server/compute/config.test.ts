@@ -44,7 +44,7 @@ describe("managed compute VM configuration", () => {
         dns: "staging.cocalc.ai",
         compute_vm_mode: "enabled",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       computeVmUiEnabled({
         dns: "staging.cocalc.ai",

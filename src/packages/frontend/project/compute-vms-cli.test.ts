@@ -27,7 +27,7 @@ describe("managed compute CLI equivalents", () => {
     );
   });
 
-  it("omits TTL when the project budget is the only guardrail", () => {
+  it("omits an optional TTL", () => {
     expect(
       vmCreateCli({
         api: "https://staging.cocalc.ai",

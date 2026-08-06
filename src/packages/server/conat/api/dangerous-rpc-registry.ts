@@ -35,10 +35,6 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "changes or removes a managed compute VM spending deadline",
   },
-  "compute.setProjectBudget": {
-    decision: "fresh-auth-required",
-    reason: "changes the recurring managed compute spending ceiling",
-  },
   "compute.createVolume": {
     decision: "fresh-auth-required",
     reason: "creates billable persistent managed compute storage",

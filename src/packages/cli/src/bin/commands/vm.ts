@@ -360,15 +360,12 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "authorize 24-hour project-host-compatible fallback",
       false,
     )
-    .option(
-      "--ttl <duration>",
-      "optional deletion deadline, e.g. 30m or 8h; otherwise the project budget is the guardrail",
-    )
+    .option("--ttl <duration>", "optional deletion deadline, e.g. 30m or 8h")
     .option("--boot-disk-gb <gb>", "persistent root disk size", "20")
     .option("--volume <name>", "existing persistent volume mounted at /work")
     .option(
-      "--authorized-cost <usd>",
-      "legacy per-lease authorization (not needed with a project budget)",
+      "--funding-mode <mode>",
+      "account-prepaid or account-postpaid; auto-detected when omitted",
     )
     .option("--ssh-public-key <path>", "OpenSSH public key file")
     .option("--wait", "wait until SSH-ready", false)
@@ -385,7 +382,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           ttl_minutes: opts.ttl ? parseTtlMinutes(opts.ttl) : null,
           boot_disk_gb: Number(opts.bootDiskGb),
           volume: opts.volume,
-          authorized_cost: opts.authorizedCost,
+          funding_mode: opts.fundingMode,
           ssh_public_key: key.key,
           idempotency_key: randomUUID(),
         });
@@ -422,7 +419,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("show, set, extend, or clear a VM deletion deadline")
     .option("--set <duration>", "set a deadline from now, e.g. 8h")
     .option("--extend <duration>", "extend the current deadline, e.g. 2h")
-    .option("--clear", "remove the deadline and rely on the project budget")
+    .option("--clear", "remove the optional deletion deadline")
     .action(async (idOrName: string, opts: any, command: Command) => {
       await withContext(command, "vm ttl", async (ctx) => {
         const selected = [
@@ -568,48 +565,6 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       },
     );
 
-  const budget = vm
-    .command("budget")
-    .description("manage a recurring compute budget for a project");
-
-  budget
-    .command("get")
-    .description("show current-period compute spend and remaining budget")
-    .requiredOption("--project <project_id>", "attached CoCalc project")
-    .action(async (opts: { project: string }, command: Command) => {
-      await withContext(command, "vm budget get", async (ctx) => {
-        return (
-          (await ctx.hub.compute.getProjectBudget({
-            project_id: opts.project,
-          })) ?? { project_id: opts.project, status: "not_configured" }
-        );
-      });
-    });
-
-  budget
-    .command("set")
-    .description("set a recurring UTC weekly or monthly compute budget")
-    .requiredOption("--project <project_id>", "attached CoCalc project")
-    .requiredOption("--limit <usd>", "maximum spend per period in USD")
-    .option("--period <period>", "week or month", "month")
-    .action(
-      async (
-        opts: { project: string; limit: string; period: string },
-        command: Command,
-      ) => {
-        await withContext(command, "vm budget set", async (ctx) => {
-          if (opts.period !== "week" && opts.period !== "month") {
-            throw new Error("--period must be week or month");
-          }
-          return await ctx.hub.compute.setProjectBudget({
-            project_id: opts.project,
-            limit_usd: opts.limit,
-            period: opts.period,
-          });
-        });
-      },
-    );
-
   const volume = vm
     .command("volume")
     .description("manage persistent account-owned /work volumes");
@@ -640,12 +595,12 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
   volume
     .command("create <name>")
     .description("create a persistent pd-balanced /work volume")
-    .option("--project <project_id>", "project budget and discovery scope")
+    .requiredOption("--project <project_id>", "attached CoCalc project")
     .option("--zone <zone>", "GCP zone", "us-central1-a")
     .option("--size-gb <gb>", "volume size", "50")
     .option(
-      "--authorized-monthly-cost <usd>",
-      "legacy per-volume authorization (not needed with a project budget)",
+      "--funding-mode <mode>",
+      "account-prepaid or account-postpaid; auto-detected when omitted",
     )
     .option("--wait", "wait until the volume is ready", false)
     .action(async (name: string, opts: any, command: Command) => {
@@ -655,7 +610,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           name,
           zone: opts.zone,
           size_gb: Number(opts.sizeGb),
-          authorized_monthly_cost: opts.authorizedMonthlyCost,
+          funding_mode: opts.fundingMode,
           idempotency_key: randomUUID(),
         });
         if (!opts.wait) return created;
@@ -673,8 +628,8 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("grow a persistent compute volume")
     .requiredOption("--size-gb <gb>", "new grow-only volume size")
     .option(
-      "--authorized-monthly-cost <usd>",
-      "legacy per-volume authorization (not needed with a project budget)",
+      "--funding-mode <mode>",
+      "account-prepaid or account-postpaid; auto-detected when omitted",
     )
     .option("--wait", "wait until provider resize completes", false)
     .action(async (idOrName: string, opts: any, command: Command) => {
@@ -682,7 +637,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         const resized = await ctx.hub.compute.resizeVolume({
           id_or_name: idOrName,
           size_gb: Number(opts.sizeGb),
-          authorized_monthly_cost: opts.authorizedMonthlyCost,
+          funding_mode: opts.fundingMode,
           idempotency_key: randomUUID(),
         });
         if (!opts.wait) return resized;

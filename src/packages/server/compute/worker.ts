@@ -6,6 +6,8 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import getLogger from "@cocalc/backend/logger";
+import adminAlert from "@cocalc/server/messages/admin-alert";
+import { nextCalendarMonthStartAfter } from "@cocalc/server/purchases/billing-period";
 import type { HostRuntime, RemoteInstance } from "@cocalc/cloud";
 import {
   computeSpotRetryDelayMs,
@@ -25,6 +27,9 @@ import {
   finishComputeWork,
   getComputeVmById,
   insertComputeInstance,
+  listComputeVmsForBillingEnforcement,
+  listComputeVmsForEgressMetering,
+  listComputeVmsForInventory,
   updateComputeInstance,
   updateComputeVm,
 } from "./db";
@@ -36,6 +41,8 @@ import {
   ensureProviderComputeVolume,
   inspectProviderComputeVm,
   inspectProviderComputeVolume,
+  getProviderComputePublicEgressBytes,
+  listProviderComputeInventory,
   probeProviderComputeSpot,
   resizeProviderComputeVolume,
   setProviderComputePricing,
@@ -44,15 +51,519 @@ import {
 } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
 import {
+  closeDedicatedHostPurchaseSessionForAccount,
+  recordDedicatedHostMeteredUsageForAccount,
+  reconcileDedicatedHostPurchaseSessionForAccount,
+} from "@cocalc/server/project-host/spend";
+import {
+  applyDedicatedHostFundingModeOverride,
+  getDedicatedHostPolicySnapshotForAccount,
+  selectDedicatedHostFundingLane,
+} from "@cocalc/server/project-host/admission";
+import {
+  DEDICATED_HOST_BILLING_DISK_GRACE_HOURS,
+  evaluateDedicatedHostBillingEnforcement,
+} from "@cocalc/server/project-host/spend-enforcement";
+import {
   appendComputeVolumeEvent,
   detachComputeVolumeFromVm,
   enqueueComputeVolumeReconciliation,
   getComputeVolumeById,
+  listComputeVolumesForInventory,
   updateComputeVolume,
 } from "./volume-db";
-import { accrueComputeUsage, enforceComputeProjectBudgets } from "./budget-db";
 
 const logger = getLogger("server:compute:worker");
+const COMPUTE_PUBLIC_EGRESS_USD_PER_GB = 0.1;
+const COMPUTE_EGRESS_FINALIZATION_DELAY_MS = 5 * 60_000;
+
+function fundingLane(resource: ComputeVmRow | ComputeVolumeRow) {
+  switch (resource.metadata?.billing?.funding_mode) {
+    case "account-prepaid":
+      return "prepaid" as const;
+    case "account-postpaid":
+      return "credit" as const;
+    default:
+      throw new Error(
+        `compute resource '${resource.id}' has no billable funding lane`,
+      );
+  }
+}
+
+async function reconcileVmBilling(
+  vm: ComputeVmRow,
+  billingState: "running" | "stopped",
+  startedAt = new Date(),
+) {
+  const billing = vm.metadata?.billing;
+  const rate =
+    billingState === "stopped"
+      ? billing?.stopped_rate
+      : billing?.running_rates?.[vm.effective_pricing_model];
+  if (!rate?.hourly_cost_usd || !rate?.pricing_snapshot) {
+    throw new Error(
+      `compute VM '${vm.id}' has no ${billingState} pricing snapshot`,
+    );
+  }
+  await reconcileDedicatedHostPurchaseSessionForAccount({
+    account_id: vm.owner_account_id,
+    host_id: vm.id,
+    host_name: `VM: ${vm.name}`,
+    host_bay_id: vm.owning_bay_id,
+    provider: vm.provider,
+    region: vm.region,
+    billing_state: billingState,
+    machine_type: billingState === "running" ? vm.machine_type : null,
+    pricing_model:
+      billingState === "running" ? vm.effective_pricing_model : null,
+    funding_lane: fundingLane(vm),
+    hourly_cost_usd: rate.hourly_cost_usd,
+    pricing_snapshot: rate.pricing_snapshot,
+    started_at: startedAt,
+  });
+  await updateComputeVm(vm.id, {
+    billing_state: billingState,
+    billing_updated_at: new Date(),
+  });
+}
+
+async function closeVmBilling(vm: ComputeVmRow) {
+  await closeDedicatedHostPurchaseSessionForAccount({
+    account_id: vm.owner_account_id,
+    host_id: vm.id,
+  });
+  await updateComputeVm(vm.id, {
+    billing_state: "closed",
+    billing_updated_at: new Date(),
+  });
+}
+
+async function reconcileVolumeBilling(volume: ComputeVolumeRow) {
+  const rate = volume.metadata?.billing?.rate;
+  if (!rate?.hourly_cost_usd || !rate?.pricing_snapshot) {
+    throw new Error(`compute volume '${volume.id}' has no pricing snapshot`);
+  }
+  await reconcileDedicatedHostPurchaseSessionForAccount({
+    account_id: volume.owner_account_id,
+    host_id: volume.id,
+    host_name: `VM volume: ${volume.name}`,
+    host_bay_id: volume.owning_bay_id,
+    provider: volume.provider,
+    region: volume.region,
+    billing_state: "stopped",
+    machine_type: null,
+    pricing_model: null,
+    funding_lane: fundingLane(volume),
+    hourly_cost_usd: rate.hourly_cost_usd,
+    pricing_snapshot: rate.pricing_snapshot,
+    started_at: volume.ready_at ?? new Date(),
+  });
+  await updateComputeVolume(volume.id, {
+    billing_state: "storage",
+    billing_updated_at: new Date(),
+  });
+}
+
+async function closeVolumeBilling(volume: ComputeVolumeRow) {
+  await closeDedicatedHostPurchaseSessionForAccount({
+    account_id: volume.owner_account_id,
+    host_id: volume.id,
+  });
+  await updateComputeVolume(volume.id, {
+    billing_state: "closed",
+    billing_updated_at: new Date(),
+  });
+}
+
+function vmHourlyRate(vm: ComputeVmRow): string {
+  const billing = vm.metadata?.billing;
+  const rate =
+    vm.state === "stopped" || vm.desired_state === "stopped"
+      ? billing?.stopped_rate
+      : billing?.running_rates?.[vm.effective_pricing_model];
+  if (!rate?.hourly_cost_usd) {
+    throw new Error(`compute VM '${vm.id}' has no enforceable rate`);
+  }
+  return rate.hourly_cost_usd;
+}
+
+async function enforceComputeVmFunding() {
+  const rows = await listComputeVmsForBillingEnforcement();
+  const snapshots = new Map<
+    string,
+    Awaited<ReturnType<typeof getDedicatedHostPolicySnapshotForAccount>>
+  >();
+  for (const vm of rows) {
+    const fundingMode = vm.metadata?.billing?.funding_mode;
+    if (
+      fundingMode !== "account-prepaid" &&
+      fundingMode !== "account-postpaid"
+    ) {
+      logger.error("compute VM has invalid funding mode", { vm_id: vm.id });
+      continue;
+    }
+    const snapshotKey = `${vm.owner_account_id}:${fundingMode}`;
+    let snapshot = snapshots.get(snapshotKey);
+    if (!snapshot) {
+      snapshot = await getDedicatedHostPolicySnapshotForAccount({
+        account_id: vm.owner_account_id,
+        funding_mode_override: fundingMode,
+      });
+      snapshots.set(snapshotKey, snapshot);
+    }
+    const effectiveSnapshot = applyDedicatedHostFundingModeOverride(
+      snapshot,
+      fundingMode,
+    );
+    const lane = fundingLane(vm);
+    const decision = evaluateDedicatedHostBillingEnforcement({
+      snapshot: effectiveSnapshot,
+      funding_lane: lane,
+      hourly_cost_usd: vmHourlyRate(vm),
+      lane_allowed: selectDedicatedHostFundingLane(effectiveSnapshot) === lane,
+    });
+    const previous = vm.metadata?.billing?.enforcement;
+    const now = new Date();
+    if (decision.action === "none") {
+      if (previous?.state && previous.state !== "ok") {
+        await updateComputeVm(vm.id, {
+          metadata: {
+            ...vm.metadata,
+            billing: {
+              ...vm.metadata.billing,
+              enforcement: { state: "ok", recovered_at: now.toISOString() },
+            },
+          },
+        });
+      }
+      continue;
+    }
+    if (decision.action === "mark_at_risk") {
+      await updateComputeVm(vm.id, {
+        metadata: {
+          ...vm.metadata,
+          billing: {
+            ...vm.metadata.billing,
+            enforcement: {
+              ...decision,
+              first_detected_at:
+                previous?.first_detected_at ?? now.toISOString(),
+            },
+          },
+        },
+      });
+      continue;
+    }
+    const deprovisionAfter =
+      previous?.deprovision_after ??
+      new Date(
+        now.getTime() + DEDICATED_HOST_BILLING_DISK_GRACE_HOURS * 60 * 60_000,
+      ).toISOString();
+    if (
+      vm.state === "stopped" &&
+      new Date(deprovisionAfter).getTime() <= now.getTime()
+    ) {
+      await updateComputeVm(vm.id, {
+        desired_state: "deleted",
+        state: "deleting",
+        metadata: {
+          ...vm.metadata,
+          billing: {
+            ...vm.metadata.billing,
+            enforcement: {
+              ...decision,
+              state: "deprovision_pending",
+              deprovision_after: deprovisionAfter,
+            },
+          },
+        },
+      });
+      await enqueueComputeWork({
+        resource_id: vm.id,
+        action: "delete",
+        idempotency_key: `billing-delete:${vm.id}:${deprovisionAfter}`,
+      });
+      continue;
+    }
+    await updateComputeVm(vm.id, {
+      desired_state: "stopped",
+      state: vm.state === "stopped" ? "stopped" : "stopping",
+      metadata: {
+        ...vm.metadata,
+        billing: {
+          ...vm.metadata.billing,
+          enforcement: {
+            ...decision,
+            state: "stopped_billing_blocked",
+            first_detected_at: previous?.first_detected_at ?? now.toISOString(),
+            stopped_at:
+              vm.state === "stopped"
+                ? (previous?.stopped_at ?? now.toISOString())
+                : previous?.stopped_at,
+            deprovision_after: deprovisionAfter,
+          },
+        },
+      },
+    });
+    if (vm.state !== "stopped" && vm.state !== "stopping") {
+      await enqueueComputeWork({
+        resource_id: vm.id,
+        action: "stop",
+        idempotency_key: `billing-stop:${vm.id}:${deprovisionAfter}`,
+      });
+    }
+  }
+}
+
+async function enforceComputeVolumeFunding() {
+  const [volumes, config] = await Promise.all([
+    listComputeVolumesForInventory(),
+    getComputeVmConfig(),
+  ]);
+  const snapshots = new Map<
+    string,
+    Awaited<ReturnType<typeof getDedicatedHostPolicySnapshotForAccount>>
+  >();
+  for (const volume of volumes) {
+    const fundingMode = volume.metadata?.billing?.funding_mode;
+    if (
+      fundingMode !== "account-prepaid" &&
+      fundingMode !== "account-postpaid"
+    ) {
+      logger.error("compute volume has invalid funding mode", {
+        volume_id: volume.id,
+      });
+      continue;
+    }
+    const snapshotKey = `${volume.owner_account_id}:${fundingMode}`;
+    let snapshot = snapshots.get(snapshotKey);
+    if (!snapshot) {
+      snapshot = await getDedicatedHostPolicySnapshotForAccount({
+        account_id: volume.owner_account_id,
+        funding_mode_override: fundingMode,
+      });
+      snapshots.set(snapshotKey, snapshot);
+    }
+    const effectiveSnapshot = applyDedicatedHostFundingModeOverride(
+      snapshot,
+      fundingMode,
+    );
+    const lane = fundingLane(volume);
+    const laneAllowed =
+      selectDedicatedHostFundingLane(effectiveSnapshot) === lane;
+    const previous = volume.metadata?.billing?.enforcement;
+    if (laneAllowed) {
+      if (previous?.state === "unfunded") {
+        await updateComputeVolume(volume.id, {
+          metadata: {
+            ...volume.metadata,
+            billing: {
+              ...volume.metadata.billing,
+              enforcement: {
+                state: "ok",
+                recovered_at: new Date().toISOString(),
+              },
+            },
+          },
+        });
+      }
+      continue;
+    }
+    const now = new Date();
+    const firstDetected = new Date(
+      previous?.first_detected_at ?? now.toISOString(),
+    );
+    const deleteAfter = new Date(
+      previous?.delete_after ??
+        firstDetected.getTime() +
+          config.unfunded_volume_delete_days * 24 * 60 * 60_000,
+    );
+    const hourlyCost = Number(
+      volume.metadata?.billing?.rate?.hourly_cost_usd ?? 0,
+    );
+    const exposureUsd =
+      (hourlyCost * Math.max(0, now.getTime() - firstDetected.getTime())) /
+      3_600_000;
+    const shouldDelete =
+      now >= deleteAfter ||
+      exposureUsd >= config.unfunded_volume_max_exposure_usd;
+    const enforcement = {
+      state: "unfunded",
+      first_detected_at: firstDetected.toISOString(),
+      delete_after: deleteAfter.toISOString(),
+      estimated_exposure_usd: exposureUsd.toFixed(6),
+    };
+    await updateComputeVolume(volume.id, {
+      metadata: {
+        ...volume.metadata,
+        billing: { ...volume.metadata.billing, enforcement },
+      },
+    });
+    void adminAlert({
+      subject: `Managed compute volume is unfunded: ${volume.name}`,
+      body: `Volume ${volume.id} (${volume.size_gb} GB, account ${volume.owner_account_id}, project ${volume.project_id}) is unfunded. Estimated storage is $${(hourlyCost * 730).toFixed(2)}/month; current unfunded exposure is $${exposureUsd.toFixed(2)}. Automatic deletion is scheduled by ${deleteAfter.toISOString()} or at $${config.unfunded_volume_max_exposure_usd.toFixed(2)} exposure. Attachment state: ${volume.attachment_state}.`,
+      dedupMinutes: 4 * 60,
+      dedupBySubject: true,
+    });
+    if (
+      shouldDelete &&
+      !volume.attached_vm_id &&
+      volume.attachment_state === "detached"
+    ) {
+      await updateComputeVolume(volume.id, {
+        desired_state: "deleted",
+        state: "deleting",
+      });
+      await enqueueComputeWork({
+        resource_kind: "volume",
+        resource_id: volume.id,
+        action: "delete_volume",
+        idempotency_key: `billing-delete-volume:${volume.id}:${deleteAfter.toISOString()}`,
+      });
+    }
+  }
+}
+
+async function meterComputeVmPublicEgress() {
+  const watermark = new Date(Date.now() - COMPUTE_EGRESS_FINALIZATION_DELAY_MS);
+  const rows = await listComputeVmsForEgressMetering();
+  for (const vm of rows) {
+    const rawStart =
+      vm.metadata?.billing?.egress?.metered_through_at ?? vm.created_at;
+    const start = new Date(rawStart);
+    const resourceEnd =
+      vm.deleted_at && vm.deleted_at < watermark ? vm.deleted_at : watermark;
+    const periodEnd = nextCalendarMonthStartAfter(start);
+    const end = resourceEnd < periodEnd ? resourceEnd : periodEnd;
+    const finalize =
+      !!vm.deleted_at &&
+      vm.deleted_at <= watermark &&
+      end.valueOf() === vm.deleted_at.valueOf();
+    if (
+      !Number.isFinite(start.getTime()) ||
+      start > end ||
+      (start.valueOf() === end.valueOf() &&
+        (!finalize || vm.metadata?.billing?.egress?.finalized))
+    ) {
+      continue;
+    }
+    try {
+      const bytes =
+        end > start
+          ? await getProviderComputePublicEgressBytes({ vm, start, end })
+          : 0;
+      const costUsd =
+        (bytes / 1_000_000_000) * COMPUTE_PUBLIC_EGRESS_USD_PER_GB;
+      const metered = await recordDedicatedHostMeteredUsageForAccount({
+        account_id: vm.owner_account_id,
+        resource_id: vm.id,
+        resource_name: `VM egress: ${vm.name}`,
+        resource_bay_id: vm.owning_bay_id,
+        project_id: vm.project_id,
+        provider: vm.provider,
+        region: vm.region,
+        funding_lane: fundingLane(vm),
+        bytes,
+        cost_usd: costUsd.toFixed(9),
+        unit_cost_usd_per_gb: COMPUTE_PUBLIC_EGRESS_USD_PER_GB.toFixed(2),
+        interval_start: start,
+        interval_end: end,
+        finalize,
+      });
+      const current = await getComputeVmById(vm.id);
+      if (!current) continue;
+      const previous = current.metadata?.billing?.egress ?? {};
+      await updateComputeVm(vm.id, {
+        metadata: {
+          ...current.metadata,
+          billing: {
+            ...current.metadata.billing,
+            egress: {
+              ...previous,
+              metered_through_at: metered.metered_through_at,
+              total_bytes: metered.total_bytes,
+              total_cost_usd: metered.total_cost_usd,
+              unit_cost_usd_per_gb: COMPUTE_PUBLIC_EGRESS_USD_PER_GB,
+              finalized: metered.finalized,
+            },
+          },
+        },
+      });
+    } catch (err) {
+      logger.error("failed to meter compute VM public egress", {
+        vm_id: vm.id,
+        start,
+        end,
+        err,
+      });
+    }
+  }
+}
+
+async function reconcileComputeProviderInventory() {
+  const [providerInventory, vms, volumes] = await Promise.all([
+    listProviderComputeInventory(),
+    listComputeVmsForInventory(),
+    listComputeVolumesForInventory(),
+  ]);
+  const providerInstances = new Set(
+    providerInventory.instances.map(({ instance_id }) => instance_id),
+  );
+  const providerDisks = new Set(
+    providerInventory.disks.map(({ name }) => name),
+  );
+  const expectedInstances = new Set(
+    vms.map(({ provider_instance_id }) => provider_instance_id),
+  );
+  const expectedDisks = new Set([
+    ...vms.map(({ boot_disk_id }) => boot_disk_id),
+    ...volumes.map(({ provider_disk_id }) => provider_disk_id),
+  ]);
+  for (const vm of vms) {
+    if (!providerInstances.has(vm.provider_instance_id) && vm.ready_at) {
+      await enqueueComputeWork({
+        resource_id: vm.id,
+        action: "reconcile",
+        idempotency_key: `inventory-reconcile:${vm.id}:${Date.now()}`,
+      });
+    }
+  }
+  for (const volume of volumes) {
+    if (
+      providerInventory.disks_observed &&
+      !providerDisks.has(volume.provider_disk_id) &&
+      volume.ready_at
+    ) {
+      await enqueueComputeWork({
+        resource_kind: "volume",
+        resource_id: volume.id,
+        action: "reconcile_volume",
+        idempotency_key: `inventory-reconcile-volume:${volume.id}:${Date.now()}`,
+      });
+    }
+  }
+  const orphanInstances = [...providerInstances].filter(
+    (name) => !expectedInstances.has(name),
+  );
+  const orphanDisks = providerInventory.disks_observed
+    ? [...providerDisks].filter((name) => !expectedDisks.has(name))
+    : [];
+  if (orphanInstances.length || orphanDisks.length) {
+    logger.error("managed compute provider inventory has orphan resources", {
+      orphan_instances: orphanInstances,
+      orphan_disks: orphanDisks,
+    });
+  }
+  logger.info("managed compute provider inventory reconciled", {
+    database_instances: expectedInstances.size,
+    provider_instances: providerInstances.size,
+    database_disks: expectedDisks.size,
+    provider_disks: providerDisks.size,
+    provider_disks_observed: providerInventory.disks_observed,
+    orphan_instances: orphanInstances.length,
+    orphan_disks: orphanDisks.length,
+  });
+}
 
 export class RetryableComputeWorkError extends Error {
   constructor(
@@ -204,6 +715,7 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
     new_state: "ready",
     status: "success",
   });
+  await reconcileVmBilling(next!, "running");
 }
 
 async function provision(vm: ComputeVmRow) {
@@ -303,6 +815,7 @@ async function provision(vm: ComputeVmRow) {
     public_ip: runtime.public_ip ?? null,
     metadata,
   }))!;
+  await reconcileVmBilling(starting, "running");
   if (volume) {
     const observedVolume = await waitForVolumeAttachment(volume, provisioning);
     await updateComputeVolume(volume.id, {
@@ -473,6 +986,7 @@ async function stop(vm: ComputeVmRow) {
     error: null,
   }))!;
   await updateComputeInstance(next, { stopped: true });
+  await reconcileVmBilling(next, "stopped");
   if (transition.action) {
     await enqueueComputeWork({
       resource_id: vm.id,
@@ -523,6 +1037,7 @@ async function remove(vm: ComputeVmRow) {
     error: null,
   }))!;
   await updateComputeInstance(next, { deleted: true });
+  await closeVmBilling(next);
 }
 
 async function provisionVolume(volume: ComputeVolumeRow) {
@@ -552,6 +1067,7 @@ async function provisionVolume(volume: ComputeVolumeRow) {
     new_state: "ready",
     status: "success",
   });
+  await reconcileVolumeBilling(next);
 }
 
 async function resizeVolume(volume: ComputeVolumeRow) {
@@ -581,6 +1097,7 @@ async function resizeVolume(volume: ComputeVolumeRow) {
     status: "success",
     details: { size_gb: volume.desired_size_gb },
   });
+  await reconcileVolumeBilling(next);
 }
 
 async function deleteVolume(volume: ComputeVolumeRow) {
@@ -604,6 +1121,7 @@ async function deleteVolume(volume: ComputeVolumeRow) {
     new_state: "deleted",
     status: "success",
   });
+  await closeVolumeBilling(next);
 }
 
 async function reconcileVolume(volume: ComputeVolumeRow) {
@@ -782,6 +1300,8 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
   let running = false;
   let stopped = false;
   let lastReconcile = 0;
+  let lastEgressMeter = 0;
+  let lastProviderInventory = 0;
   const tick = async () => {
     if (running || stopped) return;
     running = true;
@@ -789,9 +1309,25 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
       await enqueueExpiredComputeVms();
       if (Date.now() - lastReconcile >= 15_000) {
         lastReconcile = Date.now();
-        await accrueComputeUsage();
-        await enforceComputeProjectBudgets();
         const config = await getComputeVmConfig();
+        if (Date.now() - lastEgressMeter >= 5 * 60_000) {
+          lastEgressMeter = Date.now();
+          try {
+            await meterComputeVmPublicEgress();
+          } catch (err) {
+            logger.warn("managed compute egress metering pass failed", { err });
+          }
+        }
+        if (Date.now() - lastProviderInventory >= 15 * 60_000) {
+          lastProviderInventory = Date.now();
+          try {
+            await reconcileComputeProviderInventory();
+          } catch (err) {
+            logger.warn("managed compute inventory pass failed", { err });
+          }
+        }
+        await enforceComputeVmFunding();
+        await enforceComputeVolumeFunding();
         if (config.emergency_stop) {
           await enqueueComputeEmergencyStops();
         }

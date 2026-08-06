@@ -89,6 +89,24 @@ function resolveGcpSetupPath(): string | undefined {
   return undefined;
 }
 
+function resolveComputeVmSetupPath(): string | undefined {
+  const candidates: Array<string | undefined> = [
+    process.env.COCALC_COMPUTE_VM_GCP_SETUP_SH,
+    process.env.COCALC_BUNDLE_DIR
+      ? join(
+          process.env.COCALC_BUNDLE_DIR,
+          "bundle",
+          "gcp",
+          "compute-vm-setup.sh",
+        )
+      : undefined,
+    join(process.cwd(), "packages/server/cloud/gcp/compute-vm-setup.sh"),
+    join(process.cwd(), "src/packages/server/cloud/gcp/compute-vm-setup.sh"),
+    join(__dirname, "../../../../server/cloud/gcp/compute-vm-setup.sh"),
+  ];
+  return candidates.find((candidate) => candidate && existsSync(candidate));
+}
+
 async function loadHostRow(hostId: string): Promise<any> {
   const { rows } = await pool().query(
     `SELECT * FROM project_hosts WHERE id=$1 AND deleted IS NULL`,
@@ -174,6 +192,20 @@ export default function init(router: Router) {
     } catch (err) {
       logger.warn("gcp-setup.sh fetch failed", err);
       res.status(500).send("gcp-setup.sh fetch failed");
+    }
+  });
+
+  router.get("/project-host/compute-vm-setup.sh", async (_req, res) => {
+    try {
+      const path = resolveComputeVmSetupPath();
+      if (!path) {
+        res.status(500).send("compute-vm-setup.sh not found");
+        return;
+      }
+      res.type("text/x-sh").send(readFileSync(path, "utf8"));
+    } catch (err) {
+      logger.warn("compute-vm-setup.sh fetch failed", err);
+      res.status(500).send("compute-vm-setup.sh fetch failed");
     }
   });
 

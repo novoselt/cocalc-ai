@@ -4,13 +4,169 @@
  */
 
 import { GcpProvider, type HostRuntime, type HostSpec } from "@cocalc/cloud";
+import { GoogleAuth } from "google-auth-library";
+import {
+  DisksClient,
+  FirewallsClient,
+  SubnetworksClient,
+} from "@google-cloud/compute";
 import { getProviderContext } from "@cocalc/server/cloud/provider-context";
-import { getComputeMachine } from "./catalog";
+import {
+  gcpCpuCountForMachineType,
+  gcpMemoryGiBForMachineType,
+} from "@cocalc/util/project-host-pricing";
 import { getComputeVmConfig, type ComputeVmConfig } from "./config";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 import { assertComputeVmSecurity } from "./security";
 
 const provider = new GcpProvider();
+let networkSecurityCheck: { key: string; checked_at: number } | undefined;
+const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "172.16.0.0/12",
+  "192.0.0.0/24",
+  "192.0.2.0/24",
+  "192.88.99.0/24",
+  "192.168.0.0/16",
+  "198.18.0.0/15",
+  "198.51.100.0/24",
+  "199.36.153.4/30",
+  "199.36.153.8/30",
+  "203.0.113.0/24",
+  "224.0.0.0/4",
+  "240.0.0.0/4",
+];
+
+function includesRanges(rule: any, expected: string[]): boolean {
+  const actual = new Set((rule.destinationRanges ?? []).map(String));
+  return expected.every((range) => actual.has(range));
+}
+
+function allowsProtocol(rule: any, protocol: string, port?: string): boolean {
+  return (rule.allowed ?? []).some((entry: any) => {
+    if (`${entry.IPProtocol ?? ""}` !== protocol) return false;
+    return port == null || (entry.ports ?? []).map(String).includes(port);
+  });
+}
+
+function deniesAll(rule: any): boolean {
+  return (rule.denied ?? []).some(
+    (entry: any) => `${entry.IPProtocol ?? ""}` === "all",
+  );
+}
+
+async function assertProviderComputeNetworkSecurity(config: ComputeVmConfig) {
+  if (config.environment !== "production") return;
+  if (
+    !config.gcp_service_account_json ||
+    !config.gcp_project_id ||
+    !config.gcp_subnetwork
+  ) {
+    throw new Error("managed compute production network is not configured");
+  }
+  const key = `${config.gcp_project_id}:${config.gcp_subnetwork}:${config.gcp_network_tag}`;
+  if (
+    networkSecurityCheck?.key === key &&
+    Date.now() - networkSecurityCheck.checked_at < 5 * 60_000
+  ) {
+    return;
+  }
+  const subnetMatch = config.gcp_subnetwork.match(
+    /^projects\/[^/]+\/regions\/([^/]+)\/subnetworks\/(.+)$/,
+  );
+  if (!subnetMatch)
+    throw new Error("managed compute subnetwork URI is invalid");
+  const [, subnetRegion, subnetName] = subnetMatch;
+  const subnetClient = new SubnetworksClient({
+    credentials: JSON.parse(config.gcp_service_account_json),
+  });
+  const [subnet] = await subnetClient.get({
+    project: config.gcp_project_id,
+    region: subnetRegion,
+    subnetwork: subnetName,
+  });
+  if (
+    !subnet.network ||
+    (subnet.enableFlowLogs !== true &&
+      (subnet as any).logConfig?.enable !== true)
+  ) {
+    throw new Error(
+      "managed compute subnetwork must have VPC Flow Logs enabled",
+    );
+  }
+  const client = new FirewallsClient({
+    credentials: JSON.parse(config.gcp_service_account_json),
+  });
+  const rules = new Map<string, any>();
+  for await (const rule of client.listAsync({
+    project: config.gcp_project_id,
+  })) {
+    if (rule.name) rules.set(rule.name, rule);
+  }
+  const required = [
+    "cocalc-compute-ssh",
+    "cocalc-compute-metadata",
+    "cocalc-compute-deny-private",
+    "cocalc-compute-public-egress",
+  ];
+  for (const name of required) {
+    const rule = rules.get(name);
+    if (!rule || rule.disabled === true) {
+      throw new Error(
+        `managed compute firewall rule '${name}' is missing or disabled`,
+      );
+    }
+    if (!(rule.targetTags ?? []).includes(config.gcp_network_tag)) {
+      throw new Error(
+        `managed compute firewall rule '${name}' has the wrong target tag`,
+      );
+    }
+    if (`${rule.network ?? ""}` !== `${subnet.network}`) {
+      throw new Error(
+        `managed compute firewall rule '${name}' is on the wrong network`,
+      );
+    }
+  }
+  const deny = rules.get("cocalc-compute-deny-private");
+  const metadata = rules.get("cocalc-compute-metadata");
+  const publicEgress = rules.get("cocalc-compute-public-egress");
+  if (
+    deny.direction !== "EGRESS" ||
+    !deniesAll(deny) ||
+    !includesRanges(deny, REQUIRED_NON_PUBLIC_IPV4_RANGES)
+  ) {
+    throw new Error("managed compute private-egress deny rule is invalid");
+  }
+  if (
+    metadata.direction !== "EGRESS" ||
+    !allowsProtocol(metadata, "all") ||
+    !includesRanges(metadata, ["169.254.169.254/32"])
+  ) {
+    throw new Error("managed compute metadata egress rule is invalid");
+  }
+  if (
+    publicEgress.direction !== "EGRESS" ||
+    !allowsProtocol(publicEgress, "all") ||
+    !includesRanges(publicEgress, ["0.0.0.0/0"])
+  ) {
+    throw new Error("managed compute public-egress rule is invalid");
+  }
+  if (
+    Number(metadata.priority) >= Number(deny.priority) ||
+    Number(deny.priority) >= Number(publicEgress.priority)
+  ) {
+    throw new Error("managed compute egress firewall priorities are invalid");
+  }
+  const ssh = rules.get("cocalc-compute-ssh");
+  if (ssh.direction !== "INGRESS" || !allowsProtocol(ssh, "tcp", "22")) {
+    throw new Error("managed compute SSH ingress rule is invalid");
+  }
+  networkSecurityCheck = { key, checked_at: Date.now() };
+}
 
 function specFor(
   vm: ComputeVmRow,
@@ -18,27 +174,38 @@ function specFor(
   pricingModel = vm.effective_pricing_model,
   volume?: ComputeVolumeRow,
 ): HostSpec {
-  const machine = getComputeMachine(vm.machine_type);
+  const cpu =
+    Number(vm.metadata?.machine?.cpu) ||
+    gcpCpuCountForMachineType(vm.machine_type);
+  const ramGb =
+    Number(vm.metadata?.machine?.ram_gb) ||
+    gcpMemoryGiBForMachineType(vm.machine_type);
+  if (!cpu || !ramGb) {
+    throw new Error(`missing machine dimensions for '${vm.machine_type}'`);
+  }
   return {
     name: vm.provider_instance_id,
     region: vm.region,
     zone: vm.zone,
     pricing_model: pricingModel,
-    cpu: machine.cpu,
-    ram_gb: machine.ram_gb,
+    cpu,
+    ram_gb: ramGb,
     disk_gb: 0,
     disk_type: "balanced",
     shared_disk_gb: volume?.size_gb,
     shared_disk_type: volume ? "balanced" : undefined,
     tags: [config.gcp_network_tag],
     metadata: {
-      machine_type: machine.machine_type,
+      machine_type: vm.machine_type,
       storage_mode: "boot-only",
       boot_disk_gb: vm.boot_disk_gb,
       boot_disk_name: vm.boot_disk_id,
       persistent_boot_disk: true,
       source_image_project: "ubuntu-os-cloud",
-      source_image_family: machine.image_family,
+      source_image_family:
+        vm.architecture === "arm64"
+          ? "ubuntu-2404-lts-arm64"
+          : "ubuntu-2404-lts-amd64",
       ssh_user: vm.ssh_user,
       ssh_public_key: vm.ssh_public_key,
       block_project_ssh_keys: true,
@@ -166,11 +333,105 @@ async function context() {
   );
 }
 
+export async function getProviderComputePublicEgressBytes(opts: {
+  vm: ComputeVmRow;
+  start: Date;
+  end: Date;
+}): Promise<number> {
+  const config = await getComputeVmConfig();
+  const instanceId =
+    `${opts.vm.metadata?.runtime?.gcp_instance_id ?? ""}`.trim();
+  if (!instanceId) {
+    throw new Error(
+      `compute VM '${opts.vm.id}' has no GCP numeric instance id`,
+    );
+  }
+  if (!config.gcp_service_account_json || !config.gcp_project_id) {
+    throw new Error(
+      "managed compute egress metering credentials are not configured",
+    );
+  }
+  const auth = new GoogleAuth({
+    credentials: JSON.parse(config.gcp_service_account_json),
+    scopes: ["https://www.googleapis.com/auth/monitoring.read"],
+  });
+  const client = await auth.getClient();
+  const token = await client.getAccessToken();
+  const headers = { Authorization: `Bearer ${token.token ?? token}` };
+  let pageToken = "";
+  let bytes = 0;
+  do {
+    const url = new URL(
+      `https://monitoring.googleapis.com/v3/projects/${config.gcp_project_id}/timeSeries`,
+    );
+    url.searchParams.set(
+      "filter",
+      [
+        'metric.type="networking.googleapis.com/vm_flow/egress_bytes_count"',
+        `resource.labels.instance_id="${instanceId}"`,
+        'metric.labels.remote_location_type="EXTERNAL"',
+      ].join(" AND "),
+    );
+    url.searchParams.set("interval.startTime", opts.start.toISOString());
+    url.searchParams.set("interval.endTime", opts.end.toISOString());
+    url.searchParams.set("view", "FULL");
+    url.searchParams.set("pageSize", "1000");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(
+        `failed to query managed compute public egress: HTTP ${response.status} ${await response.text()}`,
+      );
+    }
+    const payload: any = await response.json();
+    for (const series of payload.timeSeries ?? []) {
+      for (const point of series.points ?? []) {
+        const value = Number(
+          point?.value?.int64Value ?? point?.value?.doubleValue ?? 0,
+        );
+        if (Number.isFinite(value) && value > 0) bytes += value;
+      }
+    }
+    pageToken = `${payload.nextPageToken ?? ""}`;
+  } while (pageToken);
+  return Math.floor(bytes);
+}
+
+export async function listProviderComputeInventory() {
+  const { config, creds } = await context();
+  const instances = await provider.listInstances(creds, {
+    namePrefix: "cocalc-vm-",
+  });
+  const disks: Array<{ name: string; zone?: string }> = [];
+  let disks_observed = false;
+  if (config.gcp_service_account_json && config.gcp_project_id) {
+    const client = new DisksClient({
+      credentials: JSON.parse(config.gcp_service_account_json),
+    });
+    for await (const [zonePath, scoped] of client.aggregatedListAsync({
+      project: config.gcp_project_id,
+    })) {
+      const zone = `${zonePath ?? ""}`.split("/").pop();
+      for (const disk of scoped.disks ?? []) {
+        if (
+          disk.name?.startsWith("cocalc-vm-") ||
+          disk.name?.startsWith("cocalc-vol-")
+        ) {
+          disks.push({ name: disk.name, zone });
+        }
+      }
+    }
+    disks_observed = true;
+  }
+  return { instances, disks, disks_observed };
+}
+
 export async function createProviderComputeVm(
   vm: ComputeVmRow,
   volume?: ComputeVolumeRow,
 ) {
   const { config, creds } = await context();
+  await assertProviderComputeNetworkSecurity(config);
   return await provider.createHost(
     specFor(vm, config, undefined, volume),
     creds,
