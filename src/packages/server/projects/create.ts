@@ -8,7 +8,10 @@ import { isValidUUID } from "@cocalc/util/misc";
 import { v4 } from "uuid";
 import getLogger from "@cocalc/backend/logger";
 import { getProject } from "@cocalc/server/projects/control";
-import { type CreateProjectOptions } from "@cocalc/util/db-schema/projects";
+import {
+  type CourseInfo,
+  type CreateProjectOptions,
+} from "@cocalc/util/db-schema/projects";
 import { delay } from "awaiting";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import { getProjectFileServerClient } from "@cocalc/server/conat/file-server-client";
@@ -47,6 +50,7 @@ import { mirrorStartLroProgress } from "@cocalc/server/projects/start-lro-progre
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { assertBayAcceptsProjectOwnership } from "@cocalc/server/bay-registry";
 import { assertLocalProjectCollaborator } from "@cocalc/server/conat/project-local-access";
+import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
@@ -67,6 +71,7 @@ import {
   assertProjectRuntimeCapability,
   isWorkspaceProjectRuntime,
 } from "@cocalc/server/launchpad/project-runtime";
+import { normalizeCoursePath } from "@cocalc/util/course-path";
 
 const log = getLogger("server:projects:create");
 // Project placement must react quickly to dead hosts; do not use UI heartbeat
@@ -79,6 +84,55 @@ const STAR_DEFAULT_ROOTFS_IMAGE_ID = "official-cocalc-star-rootfs";
 // default RPC timeout, and timing out too early causes the hub to retry the
 // same project_id while the first create is still running.
 const PROJECT_CREATE_HOST_CONTROL_TIMEOUT_MS = 5 * 60 * 1000;
+const COURSE_PROJECT_TYPES = new Set(["student", "shared", "nbgrader"]);
+
+type ProjectUsers = Record<string, { group: "owner" | "collaborator" }>;
+
+async function resolveInitialCourseConfiguration({
+  account_id,
+  course,
+}: {
+  account_id?: string;
+  course?: CourseInfo;
+}): Promise<{ course: CourseInfo | null; users: ProjectUsers | null }> {
+  if (course == null) {
+    return {
+      course: null,
+      users: account_id == null ? null : { [account_id]: { group: "owner" } },
+    };
+  }
+  if (!account_id) {
+    throw new Error("course project creation requires a signed-in account");
+  }
+  if (
+    typeof course !== "object" ||
+    !COURSE_PROJECT_TYPES.has(`${course.type}`) ||
+    !isValidUUID(course.project_id)
+  ) {
+    throw new Error("invalid course association");
+  }
+  const normalizedCourse: CourseInfo = {
+    ...course,
+    path: normalizeCoursePath(course.path),
+  };
+  const courseProject = await assertProjectCollaboratorAccessAllowRemote({
+    account_id,
+    project_id: normalizedCourse.project_id,
+  });
+  const users: ProjectUsers = {};
+  for (const [managerAccountId, info] of Object.entries(
+    courseProject.users ?? {},
+  )) {
+    if (
+      isValidUUID(managerAccountId) &&
+      (info?.group === "owner" || info?.group === "collaborator")
+    ) {
+      users[managerAccountId] = { group: "collaborator" };
+    }
+  }
+  users[account_id] = { group: "owner" };
+  return { course: normalizedCourse, users };
+}
 
 function isStarSetupProfile(): boolean {
   return `${process.env.COCALC_SETUP_PROFILE ?? ""}`.trim() === "star";
@@ -242,6 +296,10 @@ async function createProjectImpl(
     // recent cached over-cap measurement, still honor it here.
     await assertCanIncreaseAccountStorage({ account_id, cache_only: true });
   }
+  const initialCourseConfiguration = await resolveInitialCourseConfiguration({
+    account_id,
+    course: opts.course,
+  });
   let project_id;
   if (opts.project_id) {
     if (
@@ -528,14 +586,13 @@ async function createProjectImpl(
     throw Error("project region must match host region");
   }
   await assertBayAcceptsProjectOwnership(projectOwningBayId);
-  const users =
-    account_id == null ? null : { [account_id]: { group: "owner" } };
+  const { course, users } = initialCourseConfiguration;
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query(
-      "INSERT INTO projects (project_id, title, description, users, created, last_edited, rootfs_image, rootfs_image_id, ephemeral, host_id, region, owning_bay_id) VALUES($1, $2, $3, $4, NOW(), NOW(), $5, $6, $7::BIGINT, $8, $9, $10)",
+      "INSERT INTO projects (project_id, title, description, users, created, last_edited, rootfs_image, rootfs_image_id, ephemeral, host_id, region, owning_bay_id, course) VALUES($1, $2, $3, $4, NOW(), NOW(), $5, $6, $7::BIGINT, $8, $9, $10, $11)",
       [
         project_id,
         title ?? "No Title",
@@ -547,6 +604,7 @@ async function createProjectImpl(
         host_id ?? null,
         projectRegion,
         projectOwningBayId,
+        course,
       ],
     );
     await appendProjectOutboxEventForProject({

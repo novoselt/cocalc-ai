@@ -5,6 +5,7 @@ let cloneMock: jest.Mock;
 let hostCreateProjectMock: jest.Mock;
 let getProjectFileServerClientMock: jest.Mock;
 let assertLocalProjectCollaboratorMock: jest.Mock;
+let assertProjectCollaboratorAccessAllowRemoteMock: jest.Mock;
 let resolveMembershipForAccountMock: jest.Mock;
 let computePlacementPermissionMock: jest.Mock;
 let getUserHostTierMock: jest.Mock;
@@ -28,6 +29,8 @@ let insertedProjectId: string | undefined;
 let mockWorkspaceProjectRuntime = false;
 
 const ACCOUNT_ID = "6e22d250-68d4-46fb-9851-80fbeaa2d6b6";
+const COURSE_PROJECT_ID = "18a627d6-a92e-4dde-a71d-8c1d522f7f79";
+const COURSE_MANAGER_ACCOUNT_ID = "bdd948ab-8b7c-46d1-8094-35e9c73f84e5";
 const SOURCE_PROJECT_ID = "9a79d9ef-d6a5-4ae1-a215-f594e864637c";
 const HOST_ID = "39d74365-65fe-4f13-8efc-ad6b6e58f3ee";
 const STAR_ROOTFS_IMAGE =
@@ -111,6 +114,12 @@ jest.mock("@cocalc/server/conat/project-local-access", () => ({
   __esModule: true,
   assertLocalProjectCollaborator: (...args: any[]) =>
     assertLocalProjectCollaboratorMock(...args),
+}));
+
+jest.mock("@cocalc/server/conat/project-remote-access", () => ({
+  __esModule: true,
+  assertProjectCollaboratorAccessAllowRemote: (...args: any[]) =>
+    assertProjectCollaboratorAccessAllowRemoteMock(...args),
 }));
 
 jest.mock("@cocalc/server/conat/file-server-client", () => ({
@@ -239,6 +248,15 @@ describe("projects.createProject clone routing", () => {
       clone: (...args: any[]) => cloneMock(...args),
     }));
     assertLocalProjectCollaboratorMock = jest.fn(async () => undefined);
+    assertProjectCollaboratorAccessAllowRemoteMock = jest.fn(async () => ({
+      project_id: COURSE_PROJECT_ID,
+      owning_bay_id: "bay-0",
+      users: {
+        [ACCOUNT_ID]: { group: "collaborator" },
+        [COURSE_MANAGER_ACCOUNT_ID]: { group: "owner" },
+        "e4af072b-7ad9-42cf-9768-4f164543a8de": { group: "viewer" },
+      },
+    }));
     resolveMembershipForAccountMock = jest.fn(async () => ({
       entitlements: {},
     }));
@@ -441,6 +459,85 @@ describe("projects.createProject clone routing", () => {
         start: false,
       },
     });
+  });
+
+  it("atomically initializes course metadata and manager access", async () => {
+    const createProject = (await import("./create")).default;
+
+    const project_id = await createProject({
+      title: "Course student project",
+      description: "desc",
+      account_id: ACCOUNT_ID,
+      host_id: HOST_ID,
+      course: {
+        type: "student",
+        project_id: COURSE_PROJECT_ID,
+        path: "/home/user/classes/math.course",
+        datastore: false,
+        account_id: "f54f208f-cf5e-4191-b425-f3352c58de06",
+      },
+    });
+
+    expect(project_id).toBe(insertedProjectId);
+    expect(assertProjectCollaboratorAccessAllowRemoteMock).toHaveBeenCalledWith(
+      {
+        account_id: ACCOUNT_ID,
+        project_id: COURSE_PROJECT_ID,
+      },
+    );
+    const insertCall = queryMock.mock.calls.find(([sql]) =>
+      sql.startsWith("INSERT INTO projects "),
+    );
+    expect(insertCall).toBeDefined();
+    expect(JSON.parse(insertCall[1][3])).toEqual({
+      [ACCOUNT_ID]: { group: "owner" },
+      [COURSE_MANAGER_ACCOUNT_ID]: { group: "collaborator" },
+    });
+    expect(insertCall[1][10]).toEqual({
+      type: "student",
+      project_id: COURSE_PROJECT_ID,
+      path: "classes/math.course",
+      datastore: false,
+      account_id: "f54f208f-cf5e-4191-b425-f3352c58de06",
+    });
+    expect(hostControlCreateProjectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          project_id,
+          users: {
+            [ACCOUNT_ID]: { group: "owner" },
+            [COURSE_MANAGER_ACCOUNT_ID]: { group: "collaborator" },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("rejects course initialization when the caller cannot manage the course", async () => {
+    assertProjectCollaboratorAccessAllowRemoteMock = jest.fn(async () => {
+      throw new Error("project collaborator access required");
+    });
+    const createProject = (await import("./create")).default;
+
+    await expect(
+      createProject({
+        title: "Unauthorized course project",
+        description: "desc",
+        account_id: ACCOUNT_ID,
+        host_id: HOST_ID,
+        course: {
+          type: "student",
+          project_id: COURSE_PROJECT_ID,
+          path: "math.course",
+          datastore: false,
+        },
+      }),
+    ).rejects.toThrow("project collaborator access required");
+    expect(
+      queryMock.mock.calls.some(([sql]) =>
+        sql.startsWith("INSERT INTO projects "),
+      ),
+    ).toBe(false);
   });
 
   it("uses the routed project file server client for src_project_id clones", async () => {

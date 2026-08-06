@@ -939,6 +939,10 @@ export interface CreateProjectOptions {
   account_id?: string;
   title?: string;
   description?: string;
+  // Authenticated course initialization.  The create server verifies that the
+  // caller manages course.project_id and atomically grants the other course
+  // managers access to the new project.
+  course?: CourseInfo;
   // Optional explicit host placement; if omitted the master will assign.
   host_id?: string;
   // Resource limits/settings to apply when the project runs (mirrors projects.run_quota in Postgres).
