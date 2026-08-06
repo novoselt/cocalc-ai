@@ -2,8 +2,8 @@
 
 import {
   canShowCellDragHandle,
-  refreshLazyHydrationVersion,
   restoreNotebookScroll,
+  updateLazyCellHeights,
 } from "./cell-list";
 
 function makeScroller({
@@ -84,15 +84,24 @@ describe("canShowCellDragHandle", () => {
   });
 });
 
-describe("refreshLazyHydrationVersion", () => {
-  it("schedules measured-height refreshes as transition updates", () => {
-    const setVersion = jest.fn();
-    const runTransition = jest.fn((update: () => void) => update());
+describe("updateLazyCellHeights", () => {
+  it("updates measured hydrated cell heights only when they change", () => {
+    const container = document.createElement("div");
+    const cell = document.createElement("div");
+    cell.setAttribute("data-jupyter-lazy-cell-id", "cell-1");
+    cell.setAttribute("data-jupyter-lazy-cell-hydrated", "1");
+    cell.getBoundingClientRect = jest
+      .fn()
+      .mockReturnValueOnce({ height: 120 })
+      .mockReturnValueOnce({ height: 120 })
+      .mockReturnValueOnce({ height: 140 });
+    container.appendChild(cell);
+    const heights: Record<string, number> = {};
 
-    refreshLazyHydrationVersion(setVersion, runTransition);
-
-    expect(runTransition).toHaveBeenCalledTimes(1);
-    expect(setVersion).toHaveBeenCalledTimes(1);
-    expect(setVersion.mock.calls[0][0](7)).toBe(8);
+    expect(updateLazyCellHeights(container, heights)).toBe(true);
+    expect(heights).toEqual({ "cell-1": 120 });
+    expect(updateLazyCellHeights(container, heights)).toBe(false);
+    expect(updateLazyCellHeights(container, heights)).toBe(true);
+    expect(heights).toEqual({ "cell-1": 140 });
   });
 });

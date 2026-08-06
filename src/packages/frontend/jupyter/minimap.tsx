@@ -216,7 +216,7 @@ interface UseNotebookMinimapArgs {
   cellListDivRef: MutableRefObject<any>;
   cellListWidth?: number;
   cellListHeight?: number;
-  lazyHydrationVersion: number;
+  lazyLayoutVersion: number;
   lazyHeightsRef: MutableRefObject<Record<string, number>>;
   placeholderMinHeight: number;
   hydrateVisibleCells: () => void;
@@ -353,7 +353,7 @@ export function useNotebookMinimap({
   cellListDivRef,
   cellListWidth,
   cellListHeight,
-  lazyHydrationVersion,
+  lazyLayoutVersion,
   lazyHeightsRef,
   placeholderMinHeight,
   hydrateVisibleCells,
@@ -602,7 +602,7 @@ export function useNotebookMinimap({
     cells,
     curId,
     lazyHeightsRef,
-    lazyHydrationVersion,
+    lazyLayoutVersion,
     minimapWidth,
     minimapOptIn,
     placeholderMinHeight,
