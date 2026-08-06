@@ -66,29 +66,29 @@ export function init(redux) {
   async function loadAuthBootstrap(opts?: {
     account_id?: string;
     force?: boolean;
-  }) {
+  }): Promise<boolean> {
     const account_id =
       `${opts?.account_id ?? store.get("account_id") ?? ""}`.trim();
     if (!account_id) {
-      return;
+      return false;
     }
     if (await waitForExamModeConfiguration()) {
       authBootstrapLoadedFor = account_id;
-      return;
+      return true;
     }
     if (
       !opts?.force &&
       (authBootstrapLoadingFor === account_id ||
         authBootstrapLoadedFor === account_id)
     ) {
-      return;
+      return true;
     }
     authBootstrapLoadingFor = account_id;
     const requestRevision = ++authBootstrapRequestRevision;
     try {
       const bootstrap = await getControlPlaneAuthBootstrap();
       if (requestRevision !== authBootstrapRequestRevision) {
-        return;
+        return false;
       }
       actions.setState({
         home_bay_id: bootstrap.home_bay_id,
@@ -98,9 +98,10 @@ export function init(redux) {
         impersonation: bootstrap.impersonation ?? null,
       });
       authBootstrapLoadedFor = account_id;
+      return true;
     } catch (err) {
       if (requestRevision !== authBootstrapRequestRevision) {
-        return;
+        return false;
       }
       authBootstrapLoadedFor = account_id;
       log.warn("failed to load account routing information", err);
@@ -109,6 +110,7 @@ export function init(redux) {
         message: AUTH_BOOTSTRAP_WARNING,
         timeout: 20,
       });
+      return true;
     } finally {
       if (
         requestRevision === authBootstrapRequestRevision &&
@@ -137,8 +139,11 @@ export function init(redux) {
       // pre-sign-in state.
       await waitForAccountTableConnectedForSignIn(table);
     }
-    actions.set_user_type("signed_in");
-    void loadAuthBootstrap({ account_id: mesg?.account_id });
+    if (
+      await loadAuthBootstrap({ account_id: mesg?.account_id, force: true })
+    ) {
+      actions.set_user_type("signed_in");
+    }
   });
 
   webapp_client.on("signed_out", () => {

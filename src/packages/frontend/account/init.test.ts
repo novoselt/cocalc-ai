@@ -98,18 +98,40 @@ describe("account initialization", () => {
     mockWaitForExamModeConfiguration.mockClear();
   });
 
-  it("does not block signed-in state on control-plane bootstrap", async () => {
-    mockGetControlPlaneAuthBootstrap.mockReturnValue(new Promise(() => {}));
+  it("loads routing metadata before exposing signed-in state", async () => {
+    let resolveBootstrap: (value: any) => void = () => undefined;
+    mockGetControlPlaneAuthBootstrap.mockReturnValue(
+      new Promise((resolve) => {
+        resolveBootstrap = resolve;
+      }),
+    );
     const { actions, redux } = createRedux();
     init(redux);
     const signedIn = mockWebappClient.listeners("signed_in")[0] as (message: {
       account_id: string;
     }) => Promise<void>;
 
-    await signedIn({ account_id: "account-1" });
+    const signInPromise = signedIn({ account_id: "account-1" });
+    await Promise.resolve();
+    await Promise.resolve();
 
-    expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
     expect(mockGetControlPlaneAuthBootstrap).toHaveBeenCalledTimes(1);
+    expect(actions.set_user_type).not.toHaveBeenCalledWith("signed_in");
+
+    resolveBootstrap({
+      signed_in: true,
+      home_bay_id: "bay-1",
+      impersonation: null,
+    });
+    await signInPromise;
+
+    expect(actions.setState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        home_bay_id: "bay-1",
+        impersonation: null,
+      }),
+    );
+    expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
   });
 
   it("loads routing metadata only once when signed-in state changes", async () => {
@@ -135,7 +157,7 @@ describe("account initialization", () => {
     mockGetControlPlaneAuthBootstrap.mockRejectedValue(
       new Error("bootstrap unavailable"),
     );
-    const { redux } = createRedux();
+    const { actions, redux } = createRedux();
     init(redux);
     const signedIn = mockWebappClient.listeners("signed_in")[0] as (message: {
       account_id: string;
@@ -156,6 +178,7 @@ describe("account initialization", () => {
         ),
       }),
     );
+    expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
   });
 
   it("ignores a bootstrap failure after sign-out", async () => {
@@ -165,19 +188,22 @@ describe("account initialization", () => {
         rejectBootstrap = reject;
       }),
     );
-    const { redux } = createRedux();
+    const { actions, redux } = createRedux();
     init(redux);
     const signedIn = mockWebappClient.listeners("signed_in")[0] as (message: {
       account_id: string;
     }) => Promise<void>;
     const signedOut = mockWebappClient.listeners("signed_out")[0] as () => void;
 
-    await signedIn({ account_id: "account-1" });
+    const signInPromise = signedIn({ account_id: "account-1" });
+    await Promise.resolve();
+    await Promise.resolve();
     signedOut();
     rejectBootstrap(new Error("bootstrap unavailable"));
-    await Promise.resolve();
+    await signInPromise;
 
     expect(mockLogWarn).not.toHaveBeenCalled();
     expect(mockAlertMessage).not.toHaveBeenCalled();
+    expect(actions.set_user_type).not.toHaveBeenCalledWith("signed_in");
   });
 });
