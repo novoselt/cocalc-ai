@@ -675,14 +675,15 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
                     "PostgreSQL container exited before readiness: " +
                     last_error + " logs=" + postgres_diagnostics(container)
                 )
-            if time.time() >= next_recovery_diagnostic:
-                print(
-                    "restore-drill: PostgreSQL recovery still in progress " +
-                    "elapsed_seconds=" + str(int(time.time() - STARTED)),
-                    flush=True,
-                )
-                print(postgres_diagnostics(container), flush=True)
-                next_recovery_diagnostic = time.time() + 300
+        if time.time() >= next_recovery_diagnostic:
+            print(
+                "restore-drill: PostgreSQL recovery still in progress " +
+                "elapsed_seconds=" + str(int(time.time() - STARTED)) +
+                " sentinel_counts=" + str(counts),
+                flush=True,
+            )
+            print(postgres_diagnostics(container), flush=True)
+            next_recovery_diagnostic = time.time() + 300
         time.sleep(2)
     if CONFIG["restore_mode"] == "pitr" and counts != (1, 0):
         raise RuntimeError("PITR verification timed out: " + last_error + " logs=" + postgres_diagnostics(container))
