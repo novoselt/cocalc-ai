@@ -1707,6 +1707,7 @@ export class ChatStreamWriter {
   private readonly timeTravelOps = new Set<Promise<void>>();
   private timeTravelDisposePromise?: Promise<void>;
   private leaseFinalized = false;
+  private leaseHeartbeatTimer?: NodeJS.Timeout;
   private lastActivityAt = Date.now();
   private terminalStorageTimeoutMs = ACP_TERMINAL_STORAGE_TIMEOUT_MS;
   private patchflowVersionBaseline?: number;
@@ -1910,6 +1911,11 @@ export class ChatStreamWriter {
         pid: process.pid,
         session_id: this.sessionKey ?? undefined,
       });
+      this.leaseHeartbeatTimer = setInterval(
+        () => this.heartbeatLease(),
+        LEASE_HEARTBEAT_INTERVAL,
+      );
+      this.leaseHeartbeatTimer.unref?.();
       this.upsertSessionRegistry("running", {
         started_at: Date.now(),
         last_heartbeat_at: Date.now(),
@@ -1952,6 +1958,10 @@ export class ChatStreamWriter {
   ): void {
     if (this.leaseFinalized) return;
     this.leaseFinalized = true;
+    if (this.leaseHeartbeatTimer != null) {
+      clearInterval(this.leaseHeartbeatTimer);
+      this.leaseHeartbeatTimer = undefined;
+    }
     try {
       this.heartbeatLease.flush();
     } catch {
@@ -3325,6 +3335,10 @@ export class ChatStreamWriter {
     // on that side effect. A writer can reach dispose after terminal handling
     // and still have a trailing throttle timer pending.
     this.heartbeatLease.cancel();
+    if (this.leaseHeartbeatTimer != null) {
+      clearInterval(this.leaseHeartbeatTimer);
+      this.leaseHeartbeatTimer = undefined;
+    }
 
     if (!this.leaseFinalized) {
       const reason = this.finished
