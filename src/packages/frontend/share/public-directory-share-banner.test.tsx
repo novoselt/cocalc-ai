@@ -77,6 +77,10 @@ jest.mock("@cocalc/frontend/components", () => ({
   Icon: ({ name }: any) => <span data-testid={`icon-${name}`} />,
 }));
 
+jest.mock("@cocalc/frontend/project/home-directory", () => ({
+  getProjectHomeDirectory: () => "/home/user",
+}));
+
 jest.mock("@cocalc/frontend/projects/select-project", () => ({
   SelectProject: ({ onChange }: any) => (
     <button onClick={() => onChange("existing-project")} type="button">
@@ -266,7 +270,7 @@ describe("PublicDirectoryShareBanner", () => {
       expect(openProject).toHaveBeenCalledWith({
         project_id: "new-project",
         switch_to: true,
-        target: "test2",
+        target: "files/home/user/test2/",
       });
     });
     expect(copyToNewProject).toHaveBeenCalledWith({
@@ -318,7 +322,7 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).toHaveBeenCalledWith({
       project_id: "existing-project",
       switch_to: true,
-      target: "test2",
+      target: "files/home/user/test2/",
     });
   });
 
@@ -441,7 +445,7 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).toHaveBeenCalledWith({
       project_id: "existing-project",
       switch_to: true,
-      target: "test2",
+      target: "files/home/user/test2/",
     });
 
     fireEvent.click(screen.getByText("Overwrite"));
@@ -481,7 +485,7 @@ describe("PublicDirectoryShareBanner", () => {
       expect(openProject).toHaveBeenCalledWith({
         project_id: "new-project",
         switch_to: true,
-        target: "tutorial.ipynb",
+        target: "files/home/user/tutorial.ipynb",
       });
     });
   });
