@@ -20,9 +20,17 @@ import {
 const copyToNewProject = jest.fn();
 const copyToProject = jest.fn();
 const getProjectRegion = jest.fn();
-const getLro = jest.fn();
 const lroWait = jest.fn();
 const openProject = jest.fn();
+
+jest.mock("@cocalc/frontend/project/explorer/copy-ops", () => ({
+  CopyOpRow: ({ op }: any) => (
+    <div>
+      Copy operation:{" "}
+      {op.summary?.status ?? op.last_progress?.message ?? "queued"}
+    </div>
+  ),
+}));
 
 jest.mock("antd", () => {
   const Button = ({ children, disabled, loading, onClick, type }: any) => (
@@ -111,9 +119,6 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       hub: {
-        lro: {
-          get: (...args: any[]) => getLro(...args),
-        },
         projects: {
           getProjectRegion: (...args: any[]) => getProjectRegion(...args),
         },
@@ -179,7 +184,6 @@ describe("PublicDirectoryShareBanner", () => {
       requested_host_id: "source-host",
     });
     lroWait.mockResolvedValue({ status: "succeeded" });
-    getLro.mockResolvedValue(undefined);
     getProjectRegion.mockResolvedValue("wnam");
   });
 
@@ -373,23 +377,20 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).not.toHaveBeenCalled();
   });
 
-  it("recovers a missed terminal failure from the durable LRO row", async () => {
+  it("surfaces an LRO tracking failure without a fixed timeout loop", async () => {
     lroWait.mockRejectedValueOnce(
-      new Error("timeout waiting for lro completion"),
+      new Error("unable to track durable copy operation"),
     );
-    getLro.mockResolvedValueOnce({
-      status: "failed",
-      error: "dangling symlink copy failed",
-    });
     render(<PublicDirectoryShareBanner share={share()} />);
 
     fireEvent.click(screen.getByText("Copy"));
     clickModalCopyButton();
 
     await waitFor(() => {
-      expect(screen.getByText("dangling symlink copy failed")).toBeTruthy();
+      expect(
+        screen.getByText("unable to track durable copy operation"),
+      ).toBeTruthy();
     });
-    expect(getLro).toHaveBeenCalledWith({ op_id: "op-1" });
     expect(openProject).not.toHaveBeenCalled();
   });
 
@@ -403,6 +404,7 @@ describe("PublicDirectoryShareBanner", () => {
     await waitFor(() => {
       expect(screen.getByText("Destination: new project")).toBeTruthy();
     });
+    expect(screen.getByText("Copy operation: queued")).toBeTruthy();
     expect(screen.getByText("new-project")).toBeTruthy();
     expect(within(screen.getByRole("dialog")).getByText("test2")).toBeTruthy();
     expect(screen.getByText("op-1")).toBeTruthy();
