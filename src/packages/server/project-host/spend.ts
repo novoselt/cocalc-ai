@@ -34,6 +34,7 @@ import {
   ensureAccountUsageWindowsForEvent,
   getActiveAccountUsageWindows,
 } from "@cocalc/server/membership/usage-windows";
+import { isTrustedAdminPostpaid } from "./funding-policy";
 import {
   applyDedicatedHostSurchargeToBreakdown,
   estimateGcpCatalogRateBreakdown,
@@ -269,7 +270,10 @@ export function isDedicatedHostLaneCurrentlyAllowed({
   if (snapshot.funding_mode !== "account-postpaid") {
     return false;
   }
-  if (!snapshot.has_payment_method || !snapshot.has_usage_subscription) {
+  if (
+    !isTrustedAdminPostpaid(snapshot) &&
+    (!snapshot.has_payment_method || !snapshot.has_usage_subscription)
+  ) {
     return false;
   }
   if (

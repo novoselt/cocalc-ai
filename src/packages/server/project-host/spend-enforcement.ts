@@ -9,6 +9,7 @@ import {
   toDecimal,
   type MoneyValue,
 } from "@cocalc/util/money";
+import { isTrustedAdminPostpaid } from "./funding-policy";
 import type { DedicatedHostFundingLane } from "./spend";
 
 export const DEDICATED_HOST_BILLING_WARNING_RUNWAY_HOURS = 2;
@@ -140,13 +141,14 @@ function creditReason(
   snapshot: AccountLocalDedicatedHostPolicySnapshot,
   limitingWindow?: string,
 ): { code: string; reason: string } {
-  if (!snapshot.has_payment_method) {
+  const trustedPostpaid = isTrustedAdminPostpaid(snapshot);
+  if (!trustedPostpaid && !snapshot.has_payment_method) {
     return {
       code: "payment_method_required",
       reason: "payment method is required for dedicated-host billing",
     };
   }
-  if (!snapshot.has_usage_subscription) {
+  if (!trustedPostpaid && !snapshot.has_usage_subscription) {
     return {
       code: "automatic_billing_required",
       reason: "automatic billing is required for dedicated-host billing",
@@ -187,10 +189,13 @@ function reasonForLane({
 
 function recoveryActionsForLane(
   funding_lane: DedicatedHostFundingLane,
+  snapshot: AccountLocalDedicatedHostPolicySnapshot,
 ): DedicatedHostBillingRecoveryAction[] {
   return funding_lane === "prepaid"
     ? ["add_funds", "support_limit_increase"]
-    : ["fix_payment", "support_limit_increase"];
+    : isTrustedAdminPostpaid(snapshot)
+      ? ["support_limit_increase"]
+      : ["fix_payment", "support_limit_increase"];
 }
 
 export function evaluateDedicatedHostBillingEnforcement({
@@ -268,7 +273,7 @@ export function evaluateDedicatedHostBillingEnforcement({
     funding_lane,
     limitingWindow: limiting?.window,
   });
-  const recovery_actions = recoveryActionsForLane(funding_lane);
+  const recovery_actions = recoveryActionsForLane(funding_lane, snapshot);
 
   if (!lane_allowed || (limiting && limiting.hours <= drain_runway_hours)) {
     return {
