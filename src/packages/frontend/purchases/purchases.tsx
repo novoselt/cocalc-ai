@@ -11,6 +11,7 @@ import {
   Spin,
   Table,
   Tag,
+  Typography,
 } from "antd";
 import {
   CSSProperties,
@@ -67,6 +68,7 @@ import * as api from "./api";
 import EmailStatement from "./email-statement";
 import Export, { type PrintColumn } from "./export";
 import DynamicallyUpdatingCost from "./pay-as-you-go/dynamically-updating-cost";
+import { formatHourlyRate } from "./pay-as-you-go/format-hourly-rate";
 import Refresh from "./refresh";
 import ServiceTag from "./service";
 import { LineItemsTable, moneyToString } from "./line-items";
@@ -949,7 +951,7 @@ function formatAmountForPrint(record: PurchaseItem) {
   const { cost } = record;
   if (cost == null) {
     if (record.period_start && record.cost_per_hour) {
-      return `${currency(toDecimal(record.cost_per_hour).toNumber(), 2)}/h`;
+      return formatHourlyRate(toDecimal(record.cost_per_hour).neg());
     }
     if (record.period_start && record.cost_so_far != null) {
       return currency(toDecimal(record.cost_so_far).neg().toNumber(), 2);
@@ -1188,12 +1190,7 @@ export function DetailedPurchaseTable({
             dataIndex: "period_start",
             key: "period",
             minWidth: 110,
-            render: (_, record) => (
-              <>
-                <Active record={record} />
-                <Period record={record} />
-              </>
-            ),
+            render: (_, record) => <Period record={record} />,
             sorter: (a, b) =>
               new Date(a.period_start ?? 0).getTime() -
               new Date(b.period_start ?? 0).getTime(),
@@ -1513,10 +1510,16 @@ function Amount({ record }) {
     if (record.period_start && record.cost_per_hour) {
       // it's a pay-as-you-go purchase with a fixed rate
       return (
-        <DynamicallyUpdatingCost
-          costPerHour={record.cost_per_hour}
-          start={new Date(record.period_start).valueOf()}
-        />
+        <Space vertical size={0} align="end">
+          <DynamicallyUpdatingCost
+            costPerHour={record.cost_per_hour}
+            start={new Date(record.period_start).valueOf()}
+            showTooltip={false}
+          />
+          <Typography.Text type="secondary">
+            {formatHourlyRate(toDecimal(record.cost_per_hour).neg())}
+          </Typography.Text>
+        </Space>
       );
     } else if (record.period_start && record.cost_so_far != null) {
       const amountValue = toDecimal(record.cost_so_far).neg();
@@ -1653,11 +1656,7 @@ function Active({ record }) {
   if (record.period_start && record.cost_per_hour != null) {
     // it's a pay-as-you-go purchase with a fixed rate
     return (
-      <Tooltip
-        title={`This is an active purchase at a rate of ${currency(
-          record.cost_per_hour,
-        )}/hour. Active purchases are finalized within a day.`}
-      >
+      <Tooltip title="This purchase is ongoing. Its amount updates at the displayed hourly rate.">
         <Tag color="green" style={{ margin: 0 }}>
           Active
         </Tag>
@@ -1666,9 +1665,7 @@ function Active({ record }) {
   } else if (record.period_start && record.cost_so_far != null) {
     // it's a metered pay as you go purchase
     return (
-      <Tooltip
-        title={`This is an active metered purchase. Active purchases are finalized within a day.`}
-      >
+      <Tooltip title="This purchase is ongoing. Its amount updates as usage is reported.">
         <Tag color="green" style={{ margin: 0 }}>
           Active
         </Tag>
@@ -1693,6 +1690,7 @@ function Period({ record }) {
           <TimeAgo date={record.period_start} />
           <span>to</span>
           {record.period_end ? <TimeAgo date={record.period_end} /> : "now"}
+          <Active record={record} />
         </Space>
         {duration}
       </div>

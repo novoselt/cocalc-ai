@@ -20,6 +20,7 @@ interface Props {
   start?: number; // start time in ms since epoch
   alwaysNonnegative?: boolean; // for display to use in side panel, etc., this is less confusing.
   extraTip?;
+  showTooltip?: boolean;
 }
 
 export default function DynamicallyUpdatingCost(props: Props) {
@@ -36,6 +37,7 @@ function DynamicallyUpdating({
   alwaysNonnegative,
   extraTip,
   rate,
+  showTooltip = true,
 }: Props & { rate?: boolean }) {
   const [currentTime, setCurrentTime] = useState(
     webapp_client.server_time().valueOf(),
@@ -72,7 +74,7 @@ function DynamicallyUpdating({
       </span>
     );
   }
-  return (
+  return showTooltip ? (
     <Tooltip
       title={
         <Tip
@@ -85,6 +87,8 @@ function DynamicallyUpdating({
     >
       {body}
     </Tooltip>
+  ) : (
+    body
   );
 }
 
