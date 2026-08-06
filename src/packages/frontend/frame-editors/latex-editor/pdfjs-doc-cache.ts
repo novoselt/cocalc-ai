@@ -24,6 +24,7 @@ import LRU from "lru-cache";
 import { versions } from "@cocalc/cdn";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
+import { joinUrlPath } from "@cocalc/util/url-path";
 
 /*
 PDF.js is bundled by the frontend. Its packed CMaps are copied separately by
@@ -66,7 +67,7 @@ export function pdfjsCMapUrl(basePath = appBasePath): string {
   if (typeof version !== "string" || version.length === 0) {
     throw new Error("@cocalc/cdn does not provide PDF.js CMap assets");
   }
-  return `${basePath}/cdn/pdfjs-dist-${version}/cmaps/`;
+  return `${joinUrlPath(basePath || "/", "cdn", `pdfjs-dist-${version}`, "cmaps")}/`;
 }
 
 export const getDocument = reuseInFlight(async function (url: string) {
