@@ -8,6 +8,18 @@ pgbackrest_set_defaults() {
   : "${COCALC_BAY_PGBACKREST_STATUS_FILE:=${COCALC_BAY_STATE_DIR}/pgbackrest-status.json}"
   : "${COCALC_BAY_PGBACKREST_MAX_BACKUP_AGE_S:=129600}"
   : "${COCALC_BAY_PGBACKREST_MAX_SPOOL_AGE_S:=600}"
+  : "${COCALC_BAY_PGBACKREST_MAX_WAL_BACKLOG_BYTES:=8589934592}"
+}
+
+pgbackrest_runtime_preflight() {
+  if [[ ! -x "$COCALC_BAY_PGBACKREST_BIN" ]]; then
+    bay_log "pgBackRest binary is not executable: $COCALC_BAY_PGBACKREST_BIN"
+    return 1
+  fi
+  if ! "$COCALC_BAY_PGBACKREST_BIN" version >/dev/null 2>&1; then
+    bay_log "pgBackRest binary cannot run; verify its runtime libraries: $COCALC_BAY_PGBACKREST_BIN"
+    return 1
+  fi
 }
 
 pgbackrest_export_secrets() {

@@ -2154,4 +2154,42 @@ describe("bay-backup runner", () => {
       }),
     ).toBe(6 * 60 * 60 * 1000);
   });
+
+  it("checks pgBackRest, SQLite, and disposable PITR status freshness", async () => {
+    const stateDir = join(backupRoot, "new-backup-state");
+    mkdirSync(stateDir, { recursive: true });
+    process.env.COCALC_BAY_STATE_DIR = stateDir;
+    process.env.COCALC_BAY_PGBACKREST_ENABLED = "1";
+    process.env.COCALC_BAY_SQLITE_BACKUP_ENABLED = "1";
+    const now = new Date().toISOString();
+    writeFileSync(
+      join(stateDir, "pgbackrest-status.json"),
+      JSON.stringify({ level: "ok", generated_at: now }),
+    );
+    writeFileSync(
+      join(stateDir, "sqlite-backup-status.json"),
+      JSON.stringify({ level: "ok", generated_at: now }),
+    );
+    writeFileSync(
+      join(stateDir, "pgbackrest-restore-test-status.json"),
+      JSON.stringify({ level: "ok", tested_at: now }),
+    );
+
+    const { runBayBackupHealthCheck } = await import("./index");
+    await expect(
+      runBayBackupHealthCheck({ send_alert: false }),
+    ).resolves.toEqual([]);
+
+    writeFileSync(
+      join(stateDir, "pgbackrest-status.json"),
+      JSON.stringify({
+        level: "critical",
+        generated_at: now,
+        reasons: ["unarchived WAL is growing"],
+      }),
+    );
+    await expect(
+      runBayBackupHealthCheck({ send_alert: false }),
+    ).resolves.toEqual(["pgBackRest: unarchived WAL is growing"]);
+  });
 });

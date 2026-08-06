@@ -19,7 +19,7 @@ export COCALC_BAY_LOG_DIR="${TMP_ROOT}/log"
 export COCALC_BAY_BACKUP_DIR="${TMP_ROOT}/backup"
 export COCALC_BAY_SQLITE_BACKUP_ENABLED=1
 export COCALC_BAY_SQLITE_SOURCE_DIR="${TMP_ROOT}/source"
-export COCALC_BAY_SQLITE_MIRROR_DIR="${TMP_ROOT}/mirror"
+export COCALC_BAY_SQLITE_MIRROR_DIR="${TMP_ROOT}/backup/sqlite-mirror/sync"
 export COCALC_BAY_SQLITE_MIRROR_CATALOG="${TMP_ROOT}/catalog.json"
 export COCALC_BAY_SQLITE_BACKUP_STATUS_FILE="${TMP_ROOT}/status.json"
 export COCALC_BAY_SQLITE_RUSTIC_PROFILE="${TMP_ROOT}/rustic.toml"
@@ -42,7 +42,7 @@ if [[ " $* " == *" repoinfo "* ]]; then
   exit 1
 fi
 if [[ " $* " == *" backup "* ]]; then
-  printf '%s\n' '{"type":"summary","snapshot_id":"snapshot-1","data_added":123}'
+  printf '%s\n' '{"type":"summary","id":"snapshot-1","data_added":123}'
 fi
 EOF
 chmod 0755 "${TMP_ROOT}/bin/node" "${TMP_ROOT}/bin/rustic"
@@ -60,6 +60,7 @@ with open(sys.argv[1], encoding="utf8") as src:
 assert status["level"] == "ok", status
 assert status["mirror"]["sqlite_backups"] == 1, status
 assert status["rustic"]["snapshot_id"] == "snapshot-1", status
+assert status["rustic"]["id"] == "snapshot-1", status
 PY
 grep -qx 'endpoint = "https://example.r2.cloudflarestorage.com"' "$COCALC_BAY_SQLITE_RUSTIC_PROFILE"
 grep -q 'test-access' "$COCALC_BAY_SQLITE_RUSTIC_PROFILE"

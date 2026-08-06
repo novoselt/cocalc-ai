@@ -151,9 +151,23 @@ plane. The replacement deliberately separates the two data stores:
 Both application-level backup paths are disabled by default. Do not enable the
 legacy full scheduler at the same time.
 
+`COCALC_BACKUP_ROOT` is the canonical local backup path. The shell runtime
+forces `COCALC_BAY_BACKUP_DIR` to the same value so the legacy and replacement
+implementations cannot silently use different disks. pgBackRest spool data and
+SQLite mirror data are automatically rebased from old defaults to this root;
+conflicting payload paths fail closed. Configuration/profile files may remain
+on the bay filesystem. In production set
+`COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM=1`; backup commands then fail
+before creating any path if the dedicated mount is absent, not writable, or on
+the same filesystem as its parent. This check affects backup commands only and
+does not block normal bay services from booting.
+
 ### pgBackRest Binary
 
-Build pgBackRest on a disposable build host, not on a production bay:
+Build pgBackRest on a disposable build host, not on a production bay. The
+resulting executable is dynamically linked against the runtime libraries that
+`bay-bootstrap-host.sh` installs; configuration and PostgreSQL startup fail
+closed if the copied executable cannot run:
 
 ```sh
 ./src/scripts/bay-systemd/build-pgbackrest.sh \
@@ -172,17 +186,25 @@ libraries but intentionally does not install compiler dependencies.
 1. Configure the dedicated R2 credentials and independent pgBackRest/SQLite
    repository passwords in `/etc/cocalc/bay-secrets.env`.
 2. Install the verified pgBackRest binary and Rustic.
-3. Set `COCALC_BAY_PGBACKREST_ENABLED=1`, restart Postgres once, and immediately
-   run `systemctl start cocalc-bay-pgbackrest-setup.service`. This creates the
-   stanza and verifies that a WAL segment reaches R2.
+3. Set `COCALC_BAY_PGBACKREST_ENABLED=1` and run
+   `bay-pgbackrest-run stanza-create` while PostgreSQL is still serving. Restart
+   PostgreSQL once, then immediately run
+   `systemctl start cocalc-bay-pgbackrest-setup.service`. This idempotently
+   confirms the stanza and verifies that a WAL segment reaches R2.
 4. Run and inspect one full backup manually:
    `systemctl start cocalc-bay-pgbackrest-backup@full.service` and
    `cat $COCALC_BAY_PGBACKREST_STATUS_FILE`.
-5. Enable the full, differential, and status timers only after a restore test
-   succeeds from a disposable VM.
-6. Set `COCALC_BAY_SQLITE_BACKUP_ENABLED=1`, run one SQLite backup manually,
-   restore its Rustic snapshot to a disposable directory, then enable the
-   SQLite backup and prune timers.
+5. Set `COCALC_BAY_SQLITE_BACKUP_ENABLED=1` and run one SQLite backup manually.
+   Keep its recurring backup and prune timers disabled.
+6. Run `cocalc bay restore-test <bay-id> --disposable-gcp`. When pgBackRest is
+   enabled, this command creates a pre/post transaction boundary, verifies its
+   WAL reached the repository, restores the selected pgBackRest backup to the
+   boundary, proves the post-boundary row is absent, restores the independent
+   SQLite Rustic snapshot, and checks every database. The worker uses
+   prefix-scoped temporary read-only R2 credentials and always deletes its VM
+   and boot disk.
+7. Enable the full, differential, status, SQLite backup, and SQLite prune timers
+   only after that disposable PITR test succeeds.
 
 The backup units have explicit CPU, memory, and I/O limits. The PostgreSQL
 status probe records the latest backup age, retained backup bytes, archive
@@ -197,6 +219,70 @@ Run a disposable full restore and point-in-time recovery at least weekly. A
 backup is not considered healthy solely because upload commands succeeded.
 The restore drill must start PostgreSQL, verify application-level probes, and
 record the newest replayed transaction and recovery target.
+
+### Production Migration From Legacy Bay Snapshots
+
+Deploying the release is inert: the pgBackRest and changed-only SQLite flags
+default to zero and none of their timers are enabled by the release installer.
+It does not restart PostgreSQL. The existing dedicated backup disk is reused
+through `COCALC_BACKUP_ROOT`; the new payloads live below `pgbackrest/` and
+`sqlite-mirror/`, and activation does not remove legacy artifacts.
+
+Before the maintenance window, leave all replacement flags and timers disabled
+and verify the release with:
+
+```sh
+findmnt -T /mnt/cocalc-backups
+df -h /mnt/cocalc-backups
+/opt/cocalc/bay/current/bin/bay-backup-storage-check
+systemctl is-enabled cocalc-bay-pgbackrest-full.timer \
+  cocalc-bay-pgbackrest-diff.timer \
+  cocalc-bay-pgbackrest-status.timer \
+  cocalc-bay-sqlite-backup.timer \
+  cocalc-bay-sqlite-prune.timer
+```
+
+The timer check should report `disabled` for every replacement timer. Activation
+is a separate operator operation:
+
+1. Set `COCALC_BAY_BACKUP_INTERVAL_MS=0` before restarting the primary hub so
+   the legacy in-process scheduler cannot start another full snapshot. Retain
+   its latest local and R2 snapshots unchanged for rollback.
+2. Set both `COCALC_BACKUP_ROOT` and `COCALC_BAY_BACKUP_DIR` to the dedicated
+   backup mount and set
+   `COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM=1`. Run
+   `bay-backup-storage-check`, `findmnt -T "$COCALC_BACKUP_ROOT"`, and
+   `df -h "$COCALC_BACKUP_ROOT"` before enabling either replacement path.
+3. Install the checksum-verified pgBackRest binary and repository credentials
+   while pgBackRest remains disabled.
+4. Set `COCALC_BAY_SQLITE_BACKUP_ENABLED=1` and run
+   `systemctl start cocalc-bay-sqlite-backup.service` manually under
+   observation. This first pass snapshots every database; later passes only
+   refresh changed databases. Inspect `sqlite-backup-status.json`, but keep the
+   recurring backup and prune timers disabled.
+5. Before the maintenance interruption, enable pgBackRest and create the stanza
+   with `bay-pgbackrest-run stanza-create`. Restart PostgreSQL once to activate
+   `archive_mode`, immediately run the setup/check service, force a WAL switch,
+   and confirm the status reports no archive backlog.
+6. Run one constrained full backup and the disposable GCP PITR/SQLite restore
+   drill before enabling any recurring backup or prune timer.
+7. Enable the status, SQLite, differential, full, and prune timers one at a
+   time. Confirm each unit and status file before proceeding:
+
+```sh
+systemctl enable --now cocalc-bay-pgbackrest-status.timer
+systemctl enable --now cocalc-bay-sqlite-backup.timer
+systemctl enable --now cocalc-bay-pgbackrest-diff.timer
+systemctl enable --now cocalc-bay-pgbackrest-full.timer
+systemctl enable --now cocalc-bay-sqlite-prune.timer
+```
+
+Rollback first disables all five replacement timers, then sets both replacement
+enable flags to zero. If PostgreSQL has already been restarted with archiving
+enabled, restart only `cocalc-bay-postgres.service` once more after disabling
+pgBackRest. Restore the legacy interval only if an operator intentionally wants
+to resume the old scheduler. Do not delete either new repository or any legacy
+snapshot during rollback.
 
 ## GCP Bootstrap Service Account
 

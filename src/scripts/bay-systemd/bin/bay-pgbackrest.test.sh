@@ -27,6 +27,16 @@ export COCALC_BAY_PGBACKREST_S3_ACCESS_KEY="access-key"
 export COCALC_BAY_PGBACKREST_S3_SECRET_KEY="secret-key"
 export COCALC_BAY_PGBACKREST_CIPHER_PASS="cipher-pass"
 
+fake_pgbackrest="${TMP_ROOT}/fake-pgbackrest"
+cat > "$fake_pgbackrest" <<'EOF'
+#!/usr/bin/env bash
+if [[ " $* " == *" info "* ]]; then
+  printf '%s\n' '[{"name":"cocalc-test-bay","archive":[{"id":"16-1","min":"0001","max":"0002"}],"backup":[{"label":"full-1","type":"full","error":false,"timestamp":{"stop":1785967000},"info":{"repository":{"delta":1234}}}],"repo":[{"status":{"code":0,"message":"ok"}}]}]'
+fi
+EOF
+chmod 0755 "$fake_pgbackrest"
+export COCALC_BAY_PGBACKREST_BIN="$fake_pgbackrest"
+
 bash "${SCRIPT_DIR}/bay-pgbackrest-configure"
 config="$COCALC_BAY_PGBACKREST_CONFIG"
 [[ "$(stat -c '%a' "$config")" == "600" ]]
@@ -51,14 +61,6 @@ grep -qx 'archive_mode=on' "$COCALC_TEST_POSTGRES_ARGS"
 grep -qx 'archive_timeout=60s' "$COCALC_TEST_POSTGRES_ARGS"
 grep -q 'bay-pgbackrest-archive-push %p' "$COCALC_TEST_POSTGRES_ARGS"
 
-fake_pgbackrest="${TMP_ROOT}/fake-pgbackrest"
-cat > "$fake_pgbackrest" <<'EOF'
-#!/usr/bin/env bash
-if [[ " $* " == *" info "* ]]; then
-  printf '%s\n' '[{"name":"cocalc-test-bay","archive":[{"id":"16-1","min":"0001","max":"0002"}],"backup":[{"label":"full-1","type":"full","error":false,"timestamp":{"stop":1785967000},"info":{"repository":{"delta":1234}}}],"repo":[{"status":{"code":0,"message":"ok"}}]}]'
-fi
-EOF
-chmod 0755 "$fake_pgbackrest"
 fake_bin="${TMP_ROOT}/bin"
 mkdir -p "$fake_bin"
 cat > "${fake_bin}/psql" <<'EOF'
@@ -67,9 +69,12 @@ printf '%s\n' '{"archived_count":4,"failed_count":0,"last_archived_wal":"0002","
 EOF
 chmod 0755 "${fake_bin}/psql"
 export PATH="${fake_bin}:${PATH}"
-export COCALC_BAY_PGBACKREST_BIN="$fake_pgbackrest"
 export COCALC_BAY_PGBACKREST_STATUS_FILE="${TMP_ROOT}/pgbackrest-status.json"
 export COCALC_BAY_PGBACKREST_MAX_BACKUP_AGE_S=999999999
+segment=000000010000000000000003
+mkdir -p "${COCALC_BAY_POSTGRES_DATA_DIR}/pg_wal/archive_status"
+truncate -s 16777216 "${COCALC_BAY_POSTGRES_DATA_DIR}/pg_wal/${segment}"
+touch "${COCALC_BAY_POSTGRES_DATA_DIR}/pg_wal/archive_status/${segment}.ready"
 bash "${SCRIPT_DIR}/bay-pgbackrest-status" >/dev/null
 python3 - "$COCALC_BAY_PGBACKREST_STATUS_FILE" <<'PY'
 import json
@@ -81,6 +86,8 @@ assert status["level"] == "ok", status
 assert status["backup"]["latest_label"] == "full-1", status
 assert status["backup"]["repository_delta_bytes_retained_backups"] == 1234, status
 assert status["archive"]["postgres"]["archived_count"] == 4, status
+assert status["archive"]["postgres_ready_files"] == 1, status
+assert status["archive"]["postgres_ready_bytes"] == 16777216, status
 PY
 
 echo "bay pgBackRest configuration tests passed"

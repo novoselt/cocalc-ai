@@ -3,10 +3,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "${SCRIPT_DIR}/lib.sh"
+# shellcheck source=pgbackrest-lib.sh
+source "${SCRIPT_DIR}/pgbackrest-lib.sh"
 
 if [[ "${COCALC_BAY_PGBACKREST_ENABLED:-0}" != "1" ]]; then
   exit 0
 fi
+
+assert_backup_storage_ready
+
+# This runs before bay-postgres-run enables archive_mode. Fail closed if the
+# copied build artifact is absent or has unresolved dynamic libraries.
+: "${COCALC_BAY_PGBACKREST_BIN:=/usr/local/bin/pgbackrest}"
+pgbackrest_runtime_preflight
 
 : "${COCALC_BAY_PGBACKREST_CONFIG:=${COCALC_BAY_BACKUP_DIR}/pgbackrest/pgbackrest.conf}"
 : "${COCALC_BAY_PGBACKREST_SPOOL_PATH:=${COCALC_BAY_BACKUP_DIR}/pgbackrest/spool}"
