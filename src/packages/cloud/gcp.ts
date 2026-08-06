@@ -2200,6 +2200,7 @@ export class GcpProvider implements CloudProvider {
         projectId: credentials.projectId,
       }),
       metadata: {
+        gcp_instance_id: instance.id?.toString(),
         gcp_security: {
           service_account_count: instance?.serviceAccounts?.length ?? 0,
           can_ip_forward: instance?.canIpForward === true,

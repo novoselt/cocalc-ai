@@ -141,6 +141,16 @@ export interface DedicatedHostPurchase {
   funding_lane: "prepaid" | "credit";
   hourly_cost_usd: MoneyValue;
   pricing_snapshot?: DedicatedHostPricingSnapshot;
+  resource_kind?:
+    | "project-host"
+    | "compute-vm"
+    | "compute-volume"
+    | "compute-egress";
+  project_id?: string | null;
+  usage_bytes?: number;
+  unit_cost_usd_per_gb?: MoneyValue;
+  usage_interval_start?: string;
+  usage_interval_end?: string;
 }
 
 export interface DedicatedHostPricingComponent {

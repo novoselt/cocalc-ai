@@ -5,12 +5,13 @@
 
 import { randomUUID } from "node:crypto";
 import type {
+  ComputeCatalog,
   ComputeVolume,
   ComputeVm,
   CreateComputeVolumeRequest,
   CreateComputeVmRequest,
 } from "@cocalc/conat/hub/api/compute";
-import isAdmin from "@cocalc/server/accounts/is-admin";
+import type { HostCatalogMachineType } from "@cocalc/conat/hub/api/hosts";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { requireDangerousSessionAuth } from "./dangerous-session-auth";
 import { resolveProjectReferenceAllowRemote } from "@cocalc/server/conat/project-remote-access";
@@ -22,14 +23,9 @@ import {
   resolveOwnedComputeVm,
   updateComputeVm,
 } from "@cocalc/server/compute/db";
-import {
-  COMPUTE_MACHINE_CATALOG,
-  getComputeMachine,
-} from "@cocalc/server/compute/catalog";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
-import { computeLeaseAuthorization } from "@cocalc/server/compute/pricing";
 import {
   getComputeVmConfig,
   requireComputeVmCreateAllowed,
@@ -42,29 +38,18 @@ import {
   resolveOwnedComputeVolume,
   updateComputeVolume,
 } from "@cocalc/server/compute/volume-db";
-import {
-  getComputeProjectBudgetSummary,
-  setComputeProjectBudget,
-} from "@cocalc/server/compute/budget-db";
-import type { ComputeBudgetPeriod } from "@cocalc/server/compute/types";
+import { assertDedicatedHostAdmissionForAccount } from "@cocalc/server/project-host/admission";
+import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
+import { getCatalog as getHostCatalog } from "./hosts";
 
 const MIN_BOOT_DISK_GB = 10;
 const MIN_VOLUME_GB = 10;
-const BALANCED_DISK_MONTHLY_USD_PER_GB = 0.1;
+const HOURS_PER_MONTH = 730;
 
 function requireAccount(accountId?: string) {
   const value = `${accountId ?? ""}`.trim();
   if (!value) throw new Error("must be signed in");
   return value;
-}
-
-async function requireStagingAdmin(accountId: string) {
-  if (!(await isAdmin(accountId))) {
-    throw Object.assign(
-      new Error("managed compute VM CLI is currently staging-admin-only"),
-      { code: 403 },
-    );
-  }
 }
 
 async function requireProjectMembership(accountId: string, projectId: string) {
@@ -176,13 +161,81 @@ function normalizeVolumeName(value: string) {
   return name;
 }
 
-function volumeAuthorization(opts: {
-  size_gb: number;
-  authorized_monthly_cost?: string;
-  max_volume_gb: number;
-  budget_remaining_usd?: number;
-  budget_period?: ComputeBudgetPeriod;
+function normalizeFundingMode(
+  value: unknown,
+): "account-prepaid" | "account-postpaid" {
+  if (value === "account-prepaid" || value === "account-postpaid") {
+    return value;
+  }
+  throw new Error("funding_mode must be account-prepaid or account-postpaid");
+}
+
+async function requireComputeFunding(opts: {
+  account_id: string;
+  action: "create" | "start" | "resize";
+  funding_mode: unknown;
 }) {
+  const candidates =
+    opts.funding_mode == null
+      ? (["account-prepaid", "account-postpaid"] as const)
+      : ([normalizeFundingMode(opts.funding_mode)] as const);
+  let lastError: unknown;
+  for (const fundingMode of candidates) {
+    try {
+      await assertDedicatedHostAdmissionForAccount({
+        account_id: opts.account_id,
+        action: opts.action,
+        machine_cloud: "gcp",
+        funding_mode_override: fundingMode,
+      });
+      return fundingMode;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+function machineArchitecture(machineType: string): "arm64" | "x86_64" {
+  return machineType.split("-")[0]?.endsWith("a") ? "arm64" : "x86_64";
+}
+
+function machineEntries(
+  catalog: Awaited<ReturnType<typeof getHostCatalog>>,
+  zone: string,
+) {
+  const payload = catalog.entries.find(
+    ({ kind, scope }) => kind === "machine_types" && scope === `zone/${zone}`,
+  )?.payload;
+  return Array.isArray(payload) ? (payload as HostCatalogMachineType[]) : [];
+}
+
+async function getComputeMachine(opts: {
+  account_id: string;
+  zone: string;
+  machine_type: string;
+}) {
+  const catalog = await getHostCatalog({
+    account_id: opts.account_id,
+    provider: "gcp",
+  });
+  const machine = machineEntries(catalog, opts.zone).find(
+    ({ name, deprecated }) => name === opts.machine_type && !deprecated,
+  );
+  if (!machine?.name || !machine.guestCpus || !machine.memoryMb) {
+    throw new Error(
+      `machine '${opts.machine_type}' is not available in ${opts.zone}`,
+    );
+  }
+  return {
+    machine_type: machine.name,
+    architecture: machineArchitecture(machine.name),
+    cpu: machine.guestCpus,
+    ram_gb: machine.memoryMb / 1024,
+  };
+}
+
+function volumeAuthorization(opts: { size_gb: number; max_volume_gb: number }) {
   const sizeGb = Number(opts.size_gb);
   if (
     !Number.isInteger(sizeGb) ||
@@ -193,67 +246,39 @@ function volumeAuthorization(opts: {
       `size_gb must be an integer from ${MIN_VOLUME_GB} to ${opts.max_volume_gb}`,
     );
   }
-  const minimumMonthlyCost = sizeGb * BALANCED_DISK_MONTHLY_USD_PER_GB;
-  const budgetPeriodCost =
-    opts.budget_period === "week"
-      ? (minimumMonthlyCost * 12) / 52
-      : minimumMonthlyCost;
-  if (
-    opts.authorized_monthly_cost == null &&
-    opts.budget_remaining_usd == null
-  ) {
-    throw new Error(
-      "set a project compute budget or provide authorized_monthly_cost",
-    );
-  }
-  if (
-    opts.budget_remaining_usd != null &&
-    opts.budget_remaining_usd < budgetPeriodCost
-  ) {
-    throw new Error(
-      `project compute budget has ${opts.budget_remaining_usd.toFixed(2)} USD remaining, but this volume requires about ${budgetPeriodCost.toFixed(2)} USD per ${opts.budget_period}`,
-    );
-  }
-  const authorizedMonthlyCost =
-    opts.authorized_monthly_cost == null
-      ? minimumMonthlyCost
-      : Number(opts.authorized_monthly_cost);
-  if (
-    !Number.isFinite(authorizedMonthlyCost) ||
-    authorizedMonthlyCost < minimumMonthlyCost
-  ) {
-    throw new Error(
-      `authorized_monthly_cost must be at least ${minimumMonthlyCost.toFixed(2)} USD for ${sizeGb} GB`,
-    );
-  }
-  const maximumMonthlyCost =
-    opts.max_volume_gb * BALANCED_DISK_MONTHLY_USD_PER_GB;
-  if (authorizedMonthlyCost > maximumMonthlyCost) {
-    throw new Error(
-      `authorized_monthly_cost must not exceed ${maximumMonthlyCost.toFixed(2)} USD for this canary`,
-    );
-  }
-  return { sizeGb, authorizedMonthlyCost };
+  return sizeGb;
 }
 
-async function budgetForAdmission(accountId: string, projectId: string) {
-  const budget = await getComputeProjectBudgetSummary({
-    owner_account_id: accountId,
-    project_id: projectId,
-  });
-  return budget?.enabled ? budget : undefined;
-}
-
-export async function getCatalog(opts: { account_id?: string }) {
+export async function getCatalog(opts: {
+  account_id?: string;
+}): Promise<ComputeCatalog> {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   const config = await getComputeVmConfig();
+  const zone = "us-central1-a";
+  const catalog = await getHostCatalog({
+    account_id: accountId,
+    provider: "gcp",
+  });
   return {
-    machines: Object.values(COMPUTE_MACHINE_CATALOG).filter(
-      ({ cpu }) => cpu <= config.max_vcpus,
-    ),
+    machines: machineEntries(catalog, zone)
+      .filter(
+        ({ name, guestCpus, memoryMb, deprecated }) =>
+          !!name &&
+          !!guestCpus &&
+          !!memoryMb &&
+          !deprecated &&
+          guestCpus <= config.max_vcpus,
+      )
+      .map(({ name, guestCpus, memoryMb }) => ({
+        machine_type: name!,
+        architecture: machineArchitecture(name!),
+        cpu: guestCpus!,
+        ram_gb: memoryMb! / 1024,
+        spot_hourly_usd: 0,
+        on_demand_hourly_usd: 0,
+      })),
     defaults: {
-      zone: "us-central1-a",
+      zone,
       machine_type: "e2-standard-2",
       ttl_minutes: null,
       boot_disk_gb: 20,
@@ -266,73 +291,8 @@ export async function getCatalog(opts: { account_id?: string }) {
   };
 }
 
-export async function getProjectBudget(opts: {
-  account_id?: string;
-  project_id: string;
-}) {
-  const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
-  await requireProjectMembership(accountId, opts.project_id);
-  return (
-    (await getComputeProjectBudgetSummary({
-      owner_account_id: accountId,
-      project_id: opts.project_id,
-    })) ?? null
-  );
-}
-
-export async function setProjectBudget(opts: {
-  account_id?: string;
-  browser_id?: string;
-  session_hash?: string;
-  project_id: string;
-  period: ComputeBudgetPeriod;
-  limit_usd: string;
-  enabled?: boolean;
-}) {
-  const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
-  const config = await getComputeVmConfig();
-  requireComputeVmCreateAllowed(config, accountId);
-  await requireDangerousSessionAuth({
-    account_id: accountId,
-    browser_id: opts.browser_id,
-    session_hash: opts.session_hash,
-    require_second_factor: "if_enabled",
-  });
-  await requireProjectMembership(accountId, opts.project_id);
-  if (opts.period !== "week" && opts.period !== "month") {
-    throw new Error("compute budget period must be week or month");
-  }
-  const limitUsd = Number(opts.limit_usd);
-  if (
-    !Number.isFinite(limitUsd) ||
-    limitUsd <= 0 ||
-    limitUsd > config.max_project_budget_usd
-  ) {
-    throw new Error(
-      `compute budget must be greater than zero and at most ${config.max_project_budget_usd.toFixed(2)} USD`,
-    );
-  }
-  const budget = await setComputeProjectBudget({
-    owner_account_id: accountId,
-    owning_bay_id: getConfiguredBayId(),
-    project_id: opts.project_id,
-    period: opts.period,
-    limit_usd: limitUsd,
-    enabled: opts.enabled,
-  });
-  const summary = await getComputeProjectBudgetSummary({
-    owner_account_id: budget.owner_account_id,
-    project_id: budget.project_id,
-  });
-  if (!summary) throw new Error("compute project budget was not persisted");
-  return summary;
-}
-
 export async function createVm(opts: CreateComputeVmRequest) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
   await requireDangerousSessionAuth({
@@ -342,6 +302,11 @@ export async function createVm(opts: CreateComputeVmRequest) {
     require_second_factor: "if_enabled",
   });
   await requireProjectMembership(accountId, opts.project_id);
+  const fundingMode = await requireComputeFunding({
+    account_id: accountId,
+    action: "create",
+    funding_mode: opts.funding_mode,
+  });
 
   const name = normalizeName(opts.name);
   const zone = normalizeZone(opts.zone);
@@ -358,7 +323,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
     attachedVolume.project_id !== opts.project_id
   ) {
     throw new Error(
-      `compute volume '${attachedVolume.name}' belongs to a different project budget`,
+      `compute volume '${attachedVolume.name}' belongs to a different project`,
     );
   }
   if (attachedVolume && !attachedVolume.project_id) {
@@ -366,7 +331,11 @@ export async function createVm(opts: CreateComputeVmRequest) {
       project_id: opts.project_id,
     }))!;
   }
-  const machine = getComputeMachine(opts.machine_type);
+  const machine = await getComputeMachine({
+    account_id: accountId,
+    zone,
+    machine_type: opts.machine_type,
+  });
   if (machine.cpu > config.max_vcpus) {
     throw new Error(
       `machine_type exceeds the ${config.max_vcpus} vCPU managed compute VM limit`,
@@ -398,50 +367,38 @@ export async function createVm(opts: CreateComputeVmRequest) {
       `boot_disk_gb must be an integer from ${MIN_BOOT_DISK_GB} to ${config.max_boot_disk_gb}`,
     );
   }
-  const budget = await budgetForAdmission(accountId, opts.project_id);
-  if (!budget && ttlMinutes == null) {
+  const rateInput = {
+    provider: "gcp",
+    region: regionFromZone(zone),
+    zone,
+    machine_type: machine.machine_type,
+    disk_gb: bootDiskGb,
+    disk_type: "balanced",
+  } as const;
+  const [spotRate, onDemandRate, stoppedRate] = await Promise.all([
+    estimateDedicatedHostRate({
+      ...rateInput,
+      pricing_model: "spot",
+      billing_state: "running",
+    }),
+    estimateDedicatedHostRate({
+      ...rateInput,
+      pricing_model: "on_demand",
+      billing_state: "running",
+    }),
+    estimateDedicatedHostRate({
+      ...rateInput,
+      pricing_model: pricingModel,
+      billing_state: "stopped",
+    }),
+  ]);
+  if (!spotRate || !onDemandRate || !stoppedRate) {
     throw new Error(
-      "a VM without a TTL requires an enabled project compute budget",
+      `pricing is unavailable for ${machine.machine_type} in ${regionFromZone(zone)}`,
     );
   }
-  if (budget && Number(budget.remaining_usd) <= 0) {
-    throw new Error("project compute budget is exhausted");
-  }
-  const leaseAuthorization =
-    ttlMinutes == null
-      ? undefined
-      : computeLeaseAuthorization({
-          pricingModel,
-          allowOnDemandFallback: opts.allow_on_demand_fallback === true,
-          ttlMinutes,
-          spotHourlyUsd: machine.spot_hourly_usd,
-          onDemandHourlyUsd: machine.on_demand_hourly_usd,
-        });
   const authorizedFallbackHours =
-    leaseAuthorization?.authorizedFallbackHours ??
-    (pricingModel === "spot" && opts.allow_on_demand_fallback === true
-      ? 24
-      : 0);
-  const minimumAuthorizedCost = leaseAuthorization?.maximumCostUsd ?? 0;
-  const authorizedCost =
-    budget != null
-      ? Number(budget.remaining_usd)
-      : opts.authorized_cost == null
-        ? Number.NaN
-        : Number(opts.authorized_cost);
-  if (
-    !Number.isFinite(authorizedCost) ||
-    (!budget && authorizedCost < minimumAuthorizedCost)
-  ) {
-    throw new Error(
-      `set a project compute budget or provide authorized_cost of at least ${minimumAuthorizedCost.toFixed(4)} USD for this staging lease`,
-    );
-  }
-  if (!budget && authorizedCost > config.max_authorized_cost_usd) {
-    throw new Error(
-      `authorized_cost must not exceed ${config.max_authorized_cost_usd.toFixed(2)} USD for this canary`,
-    );
-  }
+    pricingModel === "spot" && opts.allow_on_demand_fallback === true ? 24 : 0;
   const id = randomUUID();
   const providerInstanceId = `cocalc-vm-${id.replaceAll("-", "").slice(0, 24)}`;
   const vm = await insertComputeVm(
@@ -472,11 +429,11 @@ export async function createVm(opts: CreateComputeVmRequest) {
         ttlMinutes == null ? null : new Date(Date.now() + ttlMinutes * 60_000),
       allow_on_demand_fallback: opts.allow_on_demand_fallback === true,
       authorized_fallback_hours: authorizedFallbackHours,
-      spot_hourly_price: machine.spot_hourly_usd.toFixed(6),
-      on_demand_hourly_price: machine.on_demand_hourly_usd.toFixed(6),
-      authorized_cost: authorizedCost.toFixed(6),
+      spot_hourly_price: `${spotRate.hourly_cost_usd}`,
+      on_demand_hourly_price: `${onDemandRate.hourly_cost_usd}`,
+      authorized_cost: "0.000000",
       accrued_cost: "0.000000",
-      billing_state: `${config.environment}_admin_unbilled`,
+      billing_state: "pending",
       spot_recovery_policy: {
         ...DEFAULT_SPOT_RECOVERY_POLICY,
         standard_fallback_enabled: opts.allow_on_demand_fallback === true,
@@ -485,12 +442,20 @@ export async function createVm(opts: CreateComputeVmRequest) {
       idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
       error: null,
       metadata: {
+        machine: { cpu: machine.cpu, ram_gb: machine.ram_gb },
         provider_context: config.staging_legacy_provider
           ? "project-host-provider-context"
           : "dedicated-compute-provider-context",
-        price_snapshot_kind: `${config.environment}-static-unbilled`,
+        price_snapshot_kind: "dedicated-host-catalog",
         max_ttl_minutes: config.max_ttl_minutes,
-        authorization_kind: budget ? "project_budget" : "legacy_lease",
+        billing: {
+          funding_mode: fundingMode,
+          running_rates: {
+            spot: spotRate,
+            on_demand: onDemandRate,
+          },
+          stopped_rate: stoppedRate,
+        },
       },
     },
     {
@@ -510,7 +475,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       machine_type: vm.machine_type,
       pricing_model: vm.desired_pricing_model,
       expires_at: vm.expires_at,
-      authorized_cost: vm.authorized_cost,
+      funding_mode: fundingMode,
       attached_volume_id: vm.attached_volume_id,
     },
   });
@@ -524,7 +489,6 @@ export async function createVm(opts: CreateComputeVmRequest) {
 
 export async function createVolume(opts: CreateComputeVolumeRequest) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
   await requireDangerousSessionAuth({
@@ -533,21 +497,34 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
     session_hash: opts.session_hash,
     require_second_factor: "if_enabled",
   });
-  if (opts.project_id) {
-    await requireProjectMembership(accountId, opts.project_id);
-  }
+  await requireProjectMembership(accountId, opts.project_id);
+  const fundingMode = await requireComputeFunding({
+    account_id: accountId,
+    action: "create",
+    funding_mode: opts.funding_mode,
+  });
   const name = normalizeVolumeName(opts.name);
   const zone = normalizeZone(opts.zone);
-  const budget = opts.project_id
-    ? await budgetForAdmission(accountId, opts.project_id)
-    : undefined;
-  const { sizeGb, authorizedMonthlyCost } = volumeAuthorization({
+  const sizeGb = volumeAuthorization({
     size_gb: opts.size_gb,
-    authorized_monthly_cost: opts.authorized_monthly_cost,
     max_volume_gb: config.max_volume_gb,
-    budget_remaining_usd: budget ? Number(budget.remaining_usd) : undefined,
-    budget_period: budget?.period,
   });
+  const volumeRate = await estimateDedicatedHostRate({
+    provider: "gcp",
+    region: regionFromZone(zone),
+    zone,
+    machine_type: "e2-standard-2",
+    pricing_model: "on_demand",
+    disk_gb: sizeGb,
+    disk_type: "balanced",
+    billing_state: "stopped",
+  });
+  if (!volumeRate) {
+    throw new Error(
+      `storage pricing is unavailable in ${regionFromZone(zone)}`,
+    );
+  }
+  const monthlyCost = Number(volumeRate.hourly_cost_usd) * HOURS_PER_MONTH;
   const id = randomUUID();
   const volume = await insertComputeVolume(
     {
@@ -555,7 +532,7 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
       name,
       owner_account_id: accountId,
       owning_bay_id: getConfiguredBayId(),
-      project_id: opts.project_id ?? null,
+      project_id: opts.project_id,
       provider: "gcp",
       region: regionFromZone(zone),
       zone,
@@ -569,16 +546,17 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
       attached_vm_id: null,
       attachment_generation: 0,
       attachment_state: "detached",
-      monthly_price_per_gb: BALANCED_DISK_MONTHLY_USD_PER_GB.toFixed(6),
-      authorized_monthly_cost: authorizedMonthlyCost.toFixed(6),
-      billing_state: `${config.environment}_admin_unbilled`,
+      monthly_price_per_gb: (monthlyCost / sizeGb).toFixed(6),
+      authorized_monthly_cost: monthlyCost.toFixed(6),
+      billing_state: "pending",
       idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
       error: null,
       metadata: {
         provider_context: config.staging_legacy_provider
           ? "project-host-provider-context"
           : "dedicated-compute-provider-context",
-        price_snapshot_kind: `${config.environment}-static-unbilled`,
+        price_snapshot_kind: "dedicated-host-catalog",
+        billing: { funding_mode: fundingMode, rate: volumeRate },
       },
     },
     config.max_volumes_per_account,
@@ -593,7 +571,7 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
     status: "requested",
     details: {
       size_gb: volume.size_gb,
-      authorized_monthly_cost: volume.authorized_monthly_cost,
+      funding_mode: fundingMode,
     },
   });
   await enqueueComputeWork({
@@ -611,7 +589,6 @@ export async function listVolumes(opts: {
   include_deleted?: boolean;
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   return (
     await listOwnedComputeVolumes({
       owner_account_id: accountId,
@@ -626,7 +603,6 @@ export async function getVolume(opts: {
   id_or_name: string;
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   return publicVolume(
     await resolveOwnedVolume(accountId, opts.id_or_name, true),
   );
@@ -638,11 +614,10 @@ export async function resizeVolume(opts: {
   session_hash?: string;
   id_or_name: string;
   size_gb: number;
-  authorized_monthly_cost?: string;
+  funding_mode?: "account-prepaid" | "account-postpaid";
   idempotency_key: string;
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
   await requireDangerousSessionAuth({
@@ -652,24 +627,41 @@ export async function resizeVolume(opts: {
     require_second_factor: "if_enabled",
   });
   const volume = await resolveOwnedVolume(accountId, opts.id_or_name);
-  const budget = volume.project_id
-    ? await budgetForAdmission(accountId, volume.project_id)
-    : undefined;
-  const { sizeGb, authorizedMonthlyCost } = volumeAuthorization({
+  const fundingMode = await requireComputeFunding({
+    account_id: accountId,
+    action: "resize",
+    funding_mode: opts.funding_mode,
+  });
+  const sizeGb = volumeAuthorization({
     size_gb: opts.size_gb,
-    authorized_monthly_cost: opts.authorized_monthly_cost,
     max_volume_gb: config.max_volume_gb,
-    budget_remaining_usd: budget ? Number(budget.remaining_usd) : undefined,
-    budget_period: budget?.period,
   });
   if (sizeGb < volume.size_gb) {
     throw new Error("compute volumes cannot be shrunk");
   }
+  const volumeRate = await estimateDedicatedHostRate({
+    provider: "gcp",
+    region: volume.region,
+    zone: volume.zone,
+    machine_type: "e2-standard-2",
+    pricing_model: "on_demand",
+    disk_gb: sizeGb,
+    disk_type: "balanced",
+    billing_state: "stopped",
+  });
+  if (!volumeRate)
+    throw new Error(`storage pricing is unavailable in ${volume.region}`);
+  const monthlyCost = Number(volumeRate.hourly_cost_usd) * HOURS_PER_MONTH;
   const next = (await updateComputeVolume(volume.id, {
     desired_size_gb: sizeGb,
-    authorized_monthly_cost: authorizedMonthlyCost.toFixed(6),
+    monthly_price_per_gb: (monthlyCost / sizeGb).toFixed(6),
+    authorized_monthly_cost: monthlyCost.toFixed(6),
     state: sizeGb === volume.size_gb ? volume.state : "resizing",
     error: null,
+    metadata: {
+      ...volume.metadata,
+      billing: { funding_mode: fundingMode, rate: volumeRate },
+    },
   }))!;
   await appendComputeVolumeEvent({
     volume: next,
@@ -702,7 +694,6 @@ export async function deleteVolume(opts: {
   idempotency_key: string;
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   await requireDangerousSessionAuth({
     account_id: accountId,
     browser_id: opts.browser_id,
@@ -746,7 +737,6 @@ export async function listVms(opts: {
   include_deleted?: boolean;
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   const rows = await listOwnedComputeVms({
     owner_account_id: accountId,
     project_id: opts.project_id,
@@ -757,7 +747,6 @@ export async function listVms(opts: {
 
 export async function getVm(opts: { account_id?: string; id_or_name: string }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   return publicVm(await resolveOwned(accountId, opts.id_or_name, true));
 }
 
@@ -768,11 +757,17 @@ async function requestState(opts: {
   desired_state: "running" | "stopped";
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   if (opts.desired_state === "running") {
     requireComputeVmStartAllowed(await getComputeVmConfig(), accountId);
   }
   const vm = await resolveOwned(accountId, opts.id_or_name);
+  if (opts.desired_state === "running") {
+    await requireComputeFunding({
+      account_id: accountId,
+      action: "start",
+      funding_mode: vm.metadata?.billing?.funding_mode,
+    });
+  }
   if (vm.expires_at && vm.expires_at.valueOf() <= Date.now()) {
     throw new Error("compute VM lease has expired");
   }
@@ -826,7 +821,6 @@ export async function setVmTtl(opts: {
   idempotency_key: string;
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   await requireDangerousSessionAuth({
     account_id: accountId,
     browser_id: opts.browser_id,
@@ -880,12 +874,11 @@ export async function setVmTtl(opts: {
     vm.expires_at == null ||
     expiresAt.valueOf() > vm.expires_at.valueOf();
   if (increasesExposure) {
-    const budget = await budgetForAdmission(accountId, vm.project_id);
-    if (!budget || Number(budget.remaining_usd) <= 0) {
-      throw new Error(
-        "extending or clearing a VM TTL requires an enabled project compute budget with remaining funds",
-      );
-    }
+    await requireComputeFunding({
+      account_id: accountId,
+      action: "start",
+      funding_mode: vm.metadata?.billing?.funding_mode,
+    });
   }
 
   const next = (await updateComputeVm(vm.id, { expires_at: expiresAt }))!;
@@ -915,7 +908,6 @@ export async function deleteVm(opts: {
   idempotency_key: string;
 }) {
   const accountId = requireAccount(opts.account_id);
-  await requireStagingAdmin(accountId);
   await requireDangerousSessionAuth({
     account_id: accountId,
     browser_id: opts.browser_id,

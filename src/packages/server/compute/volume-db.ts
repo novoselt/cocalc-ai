@@ -152,6 +152,15 @@ export async function listOwnedComputeVolumes(opts: {
   return rows;
 }
 
+export async function listComputeVolumesForInventory() {
+  const { rows } = await pool().query<ComputeVolumeRow>(
+    `SELECT * FROM compute_volumes
+      WHERE deleted_at IS NULL
+      ORDER BY created_at`,
+  );
+  return rows;
+}
+
 export async function updateComputeVolume(
   id: string,
   updates: Partial<ComputeVolumeRow>,
@@ -168,8 +177,10 @@ export async function updateComputeVolume(
     "resized_at",
     "detached_at",
     "deleted_at",
+    "monthly_price_per_gb",
     "authorized_monthly_cost",
     "billing_state",
+    "billing_updated_at",
     "error",
     "metadata",
   ]);

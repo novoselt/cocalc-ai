@@ -1073,6 +1073,31 @@ export interface AccountLocalCloseDedicatedHostPurchaseSessionRequest {
   ended_at?: Date | string | number | null;
 }
 
+export interface AccountLocalRecordDedicatedHostMeteredUsageRequest {
+  account_id: string;
+  resource_id: string;
+  resource_name?: string | null;
+  resource_bay_id?: string | null;
+  project_id?: string | null;
+  provider: string;
+  region?: string | null;
+  funding_lane: "prepaid" | "credit";
+  bytes: number;
+  cost_usd: MoneyValue;
+  unit_cost_usd_per_gb: MoneyValue;
+  interval_start: Date | string | number;
+  interval_end: Date | string | number;
+  finalize?: boolean;
+}
+
+export interface AccountLocalRecordDedicatedHostMeteredUsageResult {
+  accepted: boolean;
+  finalized: boolean;
+  metered_through_at: string;
+  total_bytes: number;
+  total_cost_usd: MoneyValue;
+}
+
 export type ProjectRuntimeSlotState =
   | "starting"
   | "running"
@@ -2434,6 +2459,7 @@ export type AccountLocalMethod =
   | "set-password-from-reset"
   | "assert-product-access-trust"
   | "reconcile-dedicated-host-purchase-session"
+  | "record-dedicated-host-metered-usage"
   | "close-dedicated-host-purchase-session"
   | "reserve-project-runtime-slot"
   | "heartbeat-project-runtime-slot"
@@ -3834,6 +3860,9 @@ export interface InterBayAccountLocalApi {
   closeDedicatedHostPurchaseSession: (
     opts: AccountLocalCloseDedicatedHostPurchaseSessionRequest,
   ) => Promise<void>;
+  recordDedicatedHostMeteredUsage: (
+    opts: AccountLocalRecordDedicatedHostMeteredUsageRequest,
+  ) => Promise<AccountLocalRecordDedicatedHostMeteredUsageResult>;
   reserveProjectRuntimeSlot: (
     opts: AccountLocalReserveProjectRuntimeSlotRequest,
   ) => Promise<AccountLocalReserveProjectRuntimeSlotResult>;
@@ -6344,6 +6373,15 @@ export function createInterBayAccountLocalClient({
       method: "close-dedicated-host-purchase-session",
     }),
   });
+  const recordDedicatedHostMeteredUsageClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "recordDedicatedHostMeteredUsage">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "record-dedicated-host-metered-usage",
+    }),
+  });
   const reserveProjectRuntimeSlotClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "reserveProjectRuntimeSlot">
   >({
@@ -7326,6 +7364,10 @@ export function createInterBayAccountLocalClient({
       await closeDedicatedHostPurchaseSessionClient.closeDedicatedHostPurchaseSession(
         opts,
       ),
+    recordDedicatedHostMeteredUsage: async (opts) =>
+      await recordDedicatedHostMeteredUsageClient.recordDedicatedHostMeteredUsage(
+        opts,
+      ),
     reserveProjectRuntimeSlot: async (opts) =>
       await reserveProjectRuntimeSlotClient.reserveProjectRuntimeSlot(opts),
     heartbeatProjectRuntimeSlot: async (opts) =>
@@ -7991,6 +8033,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         closeDedicatedHostPurchaseSession: async (opts) =>
           await impl.closeDedicatedHostPurchaseSession(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "recordDedicatedHostMeteredUsage">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "record-dedicated-host-metered-usage",
+      }),
+      impl: {
+        recordDedicatedHostMeteredUsage: async (opts) =>
+          await impl.recordDedicatedHostMeteredUsage(opts),
       },
     }),
     createServiceHandler<

@@ -1494,6 +1494,17 @@ export default function SiteSettings({
               currentJson={data?.google_cloud_service_account_json}
               domainName={data?.dns}
             />
+            <GcpServiceAccountWizard
+              open={activeWizard === "compute-vm-gcp-service-account-json"}
+              onClose={closeWizard}
+              computeVm
+              onApplyJson={(json) =>
+                onJsonEntryChange("compute_vm_gcp_service_account_json", json)
+              }
+              onApplySettings={applyWizardSettings}
+              currentJson={data?.compute_vm_gcp_service_account_json}
+              domainName={data?.dns}
+            />
             <NebiusCliWizard
               open={activeWizard === "nebius-cli"}
               onClose={closeWizard}

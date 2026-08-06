@@ -26,7 +26,6 @@ import { useEffect, useState } from "react";
 
 import type {
   ComputeCatalog,
-  ComputeProjectBudget,
   ComputeVolume,
   ComputeVm,
 } from "@cocalc/conat/hub/api/compute";
@@ -62,11 +61,6 @@ interface VmDraft extends VmCreateCliValues {
 }
 
 type VolumeDraft = VolumeCreateCliValues;
-
-interface BudgetDraft {
-  limit_usd: number;
-  period: "week" | "month";
-}
 
 interface TtlDraft {
   action: "set" | "extend" | "clear";
@@ -218,7 +212,7 @@ function VmCreateModal({
           <Form.Item
             name="ttl_minutes"
             label="Optional deletion deadline"
-            extra="Leave blank to rely only on the project budget."
+            extra="Leave blank to run until you stop it or membership funding is unavailable."
             style={{ flex: "1 1 160px" }}
           >
             <Select
@@ -387,77 +381,6 @@ function VolumeCreateModal({
   );
 }
 
-function BudgetModal({
-  open,
-  project_id,
-  budget,
-  saving,
-  onCancel,
-  onSave,
-}: {
-  open: boolean;
-  project_id: string;
-  budget?: ComputeProjectBudget | null;
-  saving: boolean;
-  onCancel: () => void;
-  onSave: (values: BudgetDraft) => Promise<void>;
-}) {
-  const [form] = Form.useForm<BudgetDraft>();
-  const initial: BudgetDraft = {
-    limit_usd: Number(budget?.limit_usd ?? 100),
-    period: budget?.period ?? "month",
-  };
-
-  useEffect(() => {
-    if (open) form.setFieldsValue(initial);
-  }, [budget?.limit_usd, budget?.period, form, open]);
-
-  return (
-    <Modal
-      open={open}
-      title="Project compute budget"
-      okText="Save budget"
-      confirmLoading={saving}
-      onCancel={onCancel}
-      onOk={() => void form.validateFields().then(onSave)}
-    >
-      <Form<BudgetDraft> form={form} layout="vertical" initialValues={initial}>
-        <Flex gap={12}>
-          <Form.Item
-            name="limit_usd"
-            label="Spend limit (USD)"
-            rules={[{ required: true }]}
-            style={{ flex: 1 }}
-          >
-            <InputNumber min={1} precision={2} prefix="$" />
-          </Form.Item>
-          <Form.Item
-            name="period"
-            label="Resets"
-            rules={[{ required: true }]}
-            style={{ flex: 1 }}
-          >
-            <Select
-              options={[
-                { value: "week", label: "Every UTC week" },
-                { value: "month", label: "Every UTC month" },
-              ]}
-            />
-          </Form.Item>
-        </Flex>
-      </Form>
-      <Alert
-        showIcon
-        type="warning"
-        message="At the limit, running VMs are deleted. Persistent volumes are retained and continue to count toward future spend."
-      />
-      <Paragraph style={{ marginTop: 12 }}>
-        CLI: <Text code>cocalc vm budget set --project {project_id}</Text>
-      </Paragraph>
-    </Modal>
-  );
-}
-
 function VmTtlModal({
   vm,
   saving,
@@ -514,7 +437,7 @@ function VmTtlModal({
               ...(vm?.expires_at
                 ? [{ value: "extend", label: "Extend current deadline" }]
                 : []),
-              { value: "clear", label: "Remove deadline (budget only)" },
+              { value: "clear", label: "Remove deadline" },
             ]}
           />
         </Form.Item>
@@ -539,7 +462,7 @@ function VmTtlModal({
       <Alert
         showIcon
         type="info"
-        message="The project budget remains the spending limit. Removing this deadline does not disable budget enforcement."
+        message="Membership spending limits remain enforced when no deletion deadline is set."
       />
       <CopyToClipBoard value={command} {...COPYABLE_PROPS} />
     </Modal>
@@ -559,7 +482,6 @@ export function ProjectComputeVms({
   const sshKeys = sshKeyOptions(accountSshKeys);
   const [rows, setRows] = useState<ComputeVm[]>([]);
   const [volumes, setVolumes] = useState<ComputeVolume[]>([]);
-  const [budget, setBudget] = useState<ComputeProjectBudget | null>();
   const [catalog, setCatalog] = useState<ComputeCatalog>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -567,7 +489,6 @@ export function ProjectComputeVms({
   const [notice, setNotice] = useState<string>();
   const [vmModalOpen, setVmModalOpen] = useState(false);
   const [volumeModalOpen, setVolumeModalOpen] = useState(false);
-  const [budgetModalOpen, setBudgetModalOpen] = useState(false);
   const [ttlVm, setTtlVm] = useState<ComputeVm>();
   const [vmInitial, setVmInitial] = useState<VmDraft>();
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction({
@@ -577,18 +498,13 @@ export function ProjectComputeVms({
   const load = async () => {
     setLoading(true);
     try {
-      const [vms, projectVolumes, projectBudget, computeCatalog] =
-        await Promise.all([
-          webapp_client.conat_client.hub.compute.listVms({ project_id }),
-          webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
-          webapp_client.conat_client.hub.compute.getProjectBudget({
-            project_id,
-          }),
-          webapp_client.conat_client.hub.compute.getCatalog({}),
-        ]);
+      const [vms, projectVolumes, computeCatalog] = await Promise.all([
+        webapp_client.conat_client.hub.compute.listVms({ project_id }),
+        webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
+        webapp_client.conat_client.hub.compute.getCatalog({}),
+      ]);
       setRows(vms);
       setVolumes(projectVolumes);
-      setBudget(projectBudget);
       setCatalog(computeCatalog);
       setError(undefined);
     } catch (err) {
@@ -692,6 +608,21 @@ export function ProjectComputeVms({
     }
   };
 
+  const setVmRunning = async (vm: ComputeVm, running: boolean) => {
+    setError(undefined);
+    try {
+      const action = running ? "startVm" : "stopVm";
+      await webapp_client.conat_client.hub.compute[action]({
+        id_or_name: vm.id,
+        idempotency_key: uuid(),
+      });
+      setNotice(`VM '${vm.name}' is ${running ? "starting" : "stopping"}.`);
+      await load();
+    } catch (err) {
+      setError(`${err}`);
+    }
+  };
+
   const saveVmTtl = async (values: TtlDraft) => {
     if (!ttlVm) return;
     setSaving(true);
@@ -764,31 +695,6 @@ export function ProjectComputeVms({
     }
   };
 
-  const saveBudget = async (values: BudgetDraft) => {
-    setSaving(true);
-    setError(undefined);
-    try {
-      const completed = await runFreshAuthAction(async () => {
-        const next =
-          await webapp_client.conat_client.hub.compute.setProjectBudget({
-            project_id,
-            limit_usd: values.limit_usd.toFixed(2),
-            period: values.period,
-            browser_id: webapp_client.browser_id,
-          });
-        setBudget(next);
-      });
-      if (!completed) return;
-      setBudgetModalOpen(false);
-      setNotice("Project compute budget saved.");
-      await load();
-    } catch (err) {
-      setError(`${err}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const vmColumns: ColumnsType<ComputeVm> = [
     {
       title: "Name",
@@ -834,6 +740,19 @@ export function ProjectComputeVms({
     },
     { title: "Zone", dataIndex: "zone" },
     {
+      title: "Public egress",
+      render: (_, vm) => {
+        const egress = vm.metadata?.billing?.egress;
+        const gb = Number(egress?.total_bytes ?? 0) / 1_000_000_000;
+        const cost = Number(egress?.total_cost_usd ?? 0);
+        return (
+          <span title="Cumulative metered public egress since this VM was created">
+            {gb.toFixed(gb >= 10 ? 1 : 3)} GB · ${cost.toFixed(2)}
+          </span>
+        );
+      },
+    },
+    {
       title: "Network",
       render: (_, vm) => (
         <div>
@@ -862,7 +781,7 @@ export function ProjectComputeVms({
             {expiresIn(expiresAt)}
           </Text>
         ) : (
-          <Text type="secondary">Budget only</Text>
+          <Text type="secondary">No deadline</Text>
         ),
     },
     {
@@ -876,27 +795,41 @@ export function ProjectComputeVms({
     {
       title: "Actions",
       fixed: "right",
-      render: (_, vm) => (
-        <Space size={4}>
-          <Button size="small" onClick={() => setTtlVm(vm)}>
-            Deadline
-          </Button>
-          <Button size="small" onClick={() => openSimilar(vm)}>
-            Create similar
-          </Button>
-          <Popconfirm
-            title={`Delete ${vm.name}?`}
-            description="The persistent boot disk is deleted. An attached /work volume is retained."
-            okText="Delete VM"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => deleteVm(vm)}
-          >
-            <Button size="small" danger disabled={vm.state === "deleting"}>
-              Delete
+      render: (_, vm) => {
+        const transitioning = ["starting", "stopping", "deleting"].includes(
+          vm.state,
+        );
+        const running =
+          vm.desired_state === "running" && vm.state !== "stopped";
+        return (
+          <Space size={4}>
+            <Button
+              size="small"
+              disabled={transitioning}
+              onClick={() => void setVmRunning(vm, !running)}
+            >
+              {running ? "Stop" : "Start"}
             </Button>
-          </Popconfirm>
-        </Space>
-      ),
+            <Button size="small" onClick={() => setTtlVm(vm)}>
+              Deadline
+            </Button>
+            <Button size="small" onClick={() => openSimilar(vm)}>
+              Create similar
+            </Button>
+            <Popconfirm
+              title={`Delete ${vm.name}?`}
+              description="The persistent boot disk is deleted. An attached /work volume is retained."
+              okText="Delete VM"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => deleteVm(vm)}
+            >
+              <Button size="small" danger disabled={vm.state === "deleting"}>
+                Delete
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -986,7 +919,7 @@ export function ProjectComputeVms({
           <Button
             type="primary"
             icon={<Icon name="plus" />}
-            disabled={!catalog || budget == null}
+            disabled={!catalog}
             onClick={() => {
               setVmInitial(defaultVm());
               setVmModalOpen(true);
@@ -1024,33 +957,13 @@ export function ProjectComputeVms({
           style={{ marginBottom: 12 }}
         />
       )}
-      {budget ? (
-        <Alert
-          showIcon
-          type={Number(budget.remaining_usd) > 0 ? "info" : "warning"}
-          message={`$${Number(budget.spent_usd).toFixed(2)} of $${Number(budget.limit_usd).toFixed(2)} used this ${budget.period}`}
-          description={`$${Number(budget.remaining_usd).toFixed(2)} remains until ${new Date(budget.period_ends_at).toLocaleString()}. VMs are deleted if the budget is exhausted; persistent volumes are retained.`}
-          action={
-            <Button size="small" onClick={() => setBudgetModalOpen(true)}>
-              Edit budget
-            </Button>
-          }
-          style={{ marginBottom: 12 }}
-        />
-      ) : budget === null ? (
-        <Alert
-          showIcon
-          type="info"
-          message="Set a project compute budget before creating resources"
-          description="Choose a recurring weekly or monthly limit. Volumes are retained if VM spending reaches the limit."
-          action={
-            <Button type="primary" onClick={() => setBudgetModalOpen(true)}>
-              Set budget
-            </Button>
-          }
-          style={{ marginBottom: 12 }}
-        />
-      ) : null}
+      <Alert
+        showIcon
+        type="info"
+        message="VMs use your membership's dedicated-host spending limits."
+        description="Compute, boot disks, and retained /work volumes appear in Purchases. Public Internet egress costs $0.10/GB and appears as one accumulating purchase per VM per calendar month, not a new line item for every meter sample. Usage can take about five minutes to appear. Running VMs stop when funding is unavailable."
+        style={{ marginBottom: 12 }}
+      />
       <Table<ComputeVm>
         columns={vmColumns}
         dataSource={rows}
@@ -1060,7 +973,7 @@ export function ProjectComputeVms({
         }}
         pagination={false}
         rowKey="id"
-        scroll={{ x: 1050 }}
+        scroll={{ x: 1200 }}
         size="small"
       />
 
@@ -1075,7 +988,7 @@ export function ProjectComputeVms({
         </div>
         <Button
           icon={<Icon name="plus" />}
-          disabled={!catalog || budget == null}
+          disabled={!catalog}
           onClick={() => setVolumeModalOpen(true)}
         >
           Create volume
@@ -1134,14 +1047,6 @@ export function ProjectComputeVms({
           onCreate={createVolume}
         />
       )}
-      <BudgetModal
-        open={budgetModalOpen}
-        project_id={project_id}
-        budget={budget}
-        saving={saving}
-        onCancel={() => setBudgetModalOpen(false)}
-        onSave={saveBudget}
-      />
       <VmTtlModal
         vm={ttlVm}
         saving={saving}

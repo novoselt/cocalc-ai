@@ -64,7 +64,7 @@ export interface CreateComputeVmRequest {
   ttl_minutes?: number | null;
   boot_disk_gb?: number;
   volume?: string;
-  authorized_cost?: string;
+  funding_mode?: "account-prepaid" | "account-postpaid";
   ssh_public_key: string;
   idempotency_key: string;
 }
@@ -105,30 +105,12 @@ export interface CreateComputeVolumeRequest {
   account_id?: string;
   browser_id?: string;
   session_hash?: string;
-  project_id?: string;
+  project_id: string;
   name: string;
   zone: string;
   size_gb: number;
-  authorized_monthly_cost?: string;
+  funding_mode?: "account-prepaid" | "account-postpaid";
   idempotency_key: string;
-}
-
-export type ComputeBudgetPeriod = "week" | "month";
-
-export interface ComputeProjectBudget {
-  id: string;
-  owner_account_id: string;
-  owning_bay_id: string;
-  project_id: string;
-  period: ComputeBudgetPeriod;
-  limit_usd: string;
-  enabled: boolean;
-  created_at: string | Date;
-  updated_at: string | Date;
-  period_started_at: string | Date;
-  period_ends_at: string | Date;
-  spent_usd: string;
-  remaining_usd: string;
 }
 
 export interface ComputeCatalog {
@@ -167,8 +149,6 @@ export const compute = {
   getVolume: authFirstRequireAccount,
   resizeVolume: authFirstRequireAccount,
   deleteVolume: authFirstRequireAccount,
-  getProjectBudget: authFirstRequireAccount,
-  setProjectBudget: authFirstRequireAccount,
 };
 
 export interface ComputeApi {
@@ -225,22 +205,9 @@ export interface ComputeApi {
     session_hash?: string;
     id_or_name: string;
     size_gb: number;
-    authorized_monthly_cost?: string;
+    funding_mode?: "account-prepaid" | "account-postpaid";
     idempotency_key: string;
   }) => Promise<ComputeVolume>;
-  getProjectBudget: (opts: {
-    account_id?: string;
-    project_id: string;
-  }) => Promise<ComputeProjectBudget | null>;
-  setProjectBudget: (opts: {
-    account_id?: string;
-    browser_id?: string;
-    session_hash?: string;
-    project_id: string;
-    period: ComputeBudgetPeriod;
-    limit_usd: string;
-    enabled?: boolean;
-  }) => Promise<ComputeProjectBudget>;
   deleteVolume: (opts: {
     account_id?: string;
     browser_id?: string;

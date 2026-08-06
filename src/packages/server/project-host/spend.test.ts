@@ -16,6 +16,7 @@ import {
   getDedicatedHostPostpaidUnbilledExposureLocal,
   getDedicatedHostWindowUsageLocal,
   getDedicatedHostWindowUsageForHostLocal,
+  recordDedicatedHostMeteredUsageLocal,
   reconcileDedicatedHostPurchaseSessionLocal,
 } from "./spend";
 import { ensureAccountUsageWindowsForEvent } from "@cocalc/server/membership/usage-windows";
@@ -49,6 +50,177 @@ function pricingSnapshot(
 }
 
 describe("dedicated host spend accounting", () => {
+  it("accumulates idempotent VM egress intervals into one purchase", async () => {
+    const account_id = uuid();
+    const resource_id = uuid();
+    const project_id = uuid();
+    await getPool().query(
+      "INSERT INTO accounts (account_id, email_address) VALUES ($1, $2)",
+      [account_id, `${account_id}@example.com`],
+    );
+    const firstStart = dayjs().subtract(10, "minute").toDate();
+    const firstEnd = dayjs().subtract(5, "minute").toDate();
+    const secondEnd = new Date(firstEnd.valueOf() + 5 * 60_000);
+    const base = {
+      account_id,
+      resource_id,
+      resource_name: "VM egress: research-vm",
+      resource_bay_id: "bay-0",
+      project_id,
+      provider: "gcp",
+      region: "us-central1",
+      funding_lane: "prepaid" as const,
+      unit_cost_usd_per_gb: "0.10",
+    };
+
+    const first = await recordDedicatedHostMeteredUsageLocal({
+      ...base,
+      bytes: 1_000_000_000,
+      cost_usd: "0.10",
+      interval_start: firstStart,
+      interval_end: firstEnd,
+    });
+    expect(first).toMatchObject({
+      accepted: true,
+      finalized: false,
+      total_bytes: 1_000_000_000,
+      total_cost_usd: "0.1000000000",
+    });
+
+    const retry = await recordDedicatedHostMeteredUsageLocal({
+      ...base,
+      bytes: 1_000_000_000,
+      cost_usd: "0.10",
+      interval_start: firstStart,
+      interval_end: firstEnd,
+    });
+    expect(retry).toMatchObject({
+      accepted: false,
+      total_bytes: 1_000_000_000,
+    });
+
+    const overlap = await recordDedicatedHostMeteredUsageLocal({
+      ...base,
+      bytes: 3_000_000_000,
+      cost_usd: "0.30",
+      interval_start: firstStart,
+      interval_end: secondEnd,
+    });
+    expect(overlap).toMatchObject({
+      accepted: false,
+      metered_through_at: firstEnd.toISOString(),
+      total_bytes: 1_000_000_000,
+    });
+
+    const second = await recordDedicatedHostMeteredUsageLocal({
+      ...base,
+      bytes: 2_000_000_000,
+      cost_usd: "0.20",
+      interval_start: firstEnd,
+      interval_end: secondEnd,
+    });
+    expect(second).toMatchObject({
+      accepted: true,
+      total_bytes: 3_000_000_000,
+      total_cost_usd: "0.3000000000",
+    });
+
+    const finalized = await recordDedicatedHostMeteredUsageLocal({
+      ...base,
+      bytes: 0,
+      cost_usd: "0",
+      interval_start: secondEnd,
+      interval_end: secondEnd,
+      finalize: true,
+    });
+    expect(finalized).toMatchObject({
+      accepted: false,
+      finalized: true,
+      total_bytes: 3_000_000_000,
+    });
+
+    const { rows: purchases } = await getPool().query(
+      `SELECT cost, cost_so_far, period_end, description
+         FROM purchases
+        WHERE account_id=$1 AND tag LIKE $2`,
+      [account_id, `dedicated-host-metered:${resource_id}:%`],
+    );
+    expect(purchases).toHaveLength(1);
+    expect(purchases[0]).toMatchObject({
+      cost: "0.3000000000",
+      cost_so_far: null,
+    });
+    expect(purchases[0].period_end.toISOString()).toBe(secondEnd.toISOString());
+    expect(purchases[0].description).toMatchObject({
+      resource_kind: "compute-egress",
+      usage_bytes: 3_000_000_000,
+    });
+
+    const usage = await getDedicatedHostWindowUsageLocal(account_id);
+    expect(toDecimal(usage.prepaid_5h_usd).toNumber()).toBeCloseTo(0.3, 8);
+    expect(toDecimal(usage.prepaid_7d_usd).toNumber()).toBeCloseTo(0.3, 8);
+  });
+
+  it("rotates one VM egress purchase per calendar billing month", async () => {
+    const account_id = uuid();
+    const resource_id = uuid();
+    await getPool().query(
+      "INSERT INTO accounts (account_id, email_address) VALUES ($1, $2)",
+      [account_id, `${account_id}@example.com`],
+    );
+    const firstStart = new Date("2026-05-31T23:55:00.000Z");
+    const boundary = new Date("2026-06-01T00:00:00.000Z");
+    const secondEnd = new Date("2026-06-01T00:05:00.000Z");
+    const base = {
+      account_id,
+      resource_id,
+      resource_name: "VM egress: month-boundary",
+      resource_bay_id: "bay-0",
+      provider: "gcp",
+      region: "us-central1",
+      funding_lane: "credit" as const,
+      unit_cost_usd_per_gb: "0.10",
+    };
+    await recordDedicatedHostMeteredUsageLocal({
+      ...base,
+      bytes: 1_000_000_000,
+      cost_usd: "0.10",
+      interval_start: firstStart,
+      interval_end: boundary,
+    });
+    const second = await recordDedicatedHostMeteredUsageLocal({
+      ...base,
+      bytes: 2_000_000_000,
+      cost_usd: "0.20",
+      interval_start: boundary,
+      interval_end: secondEnd,
+    });
+    expect(second).toMatchObject({
+      total_bytes: 3_000_000_000,
+      total_cost_usd: "0.3000000000",
+    });
+
+    const { rows } = await getPool().query(
+      `SELECT tag, cost, cost_so_far, period_end
+         FROM purchases
+        WHERE account_id=$1 AND tag LIKE $2
+        ORDER BY id`,
+      [account_id, `dedicated-host-metered:${resource_id}:%`],
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      tag: `dedicated-host-metered:${resource_id}:2026-05`,
+      cost: "0.1000000000",
+      cost_so_far: null,
+    });
+    expect(rows[0].period_end.toISOString()).toBe(boundary.toISOString());
+    expect(rows[1]).toMatchObject({
+      tag: `dedicated-host-metered:${resource_id}:2026-06`,
+      cost: null,
+      cost_so_far: "0.2000000000",
+    });
+  });
+
   it("derives stopped disk pricing from a running immutable snapshot", () => {
     const rate = dedicatedHostRateFromPricingSnapshot({
       billing_state: "stopped",
