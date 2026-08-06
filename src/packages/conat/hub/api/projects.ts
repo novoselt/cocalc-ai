@@ -2019,6 +2019,7 @@ export interface Projects {
     session_hash?: string | null;
     project_id: string;
     name: string;
+    timeout?: number;
   }) => Promise<void>;
 
   pruneSnapshotPath: (opts: {

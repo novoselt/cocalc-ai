@@ -22,6 +22,7 @@ import * as misc from "@cocalc/util/misc";
 type SetActivity = (opts: any) => Promise<void> | void;
 type LogProjectEvent = (event: any) => string | undefined;
 const SNAPSHOT_PRUNE_TIMEOUT_MS = 10 * 60 * 1000;
+const SNAPSHOT_DELETE_TIMEOUT_MS = 60 * 1000;
 
 type FileOperationContext = {
   projectId: string;
@@ -346,6 +347,7 @@ export async function deleteFiles({
           browser_id: webapp_client.browser_id,
           project_id: projectId,
           name,
+          timeout: SNAPSHOT_DELETE_TIMEOUT_MS,
         });
       }
     }
