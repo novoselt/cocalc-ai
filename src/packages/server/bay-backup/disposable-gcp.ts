@@ -51,6 +51,7 @@ export interface DisposableRestoreWorkerConfig {
   pgbackrest_source_sha256?: string;
   require_conat: boolean;
   minimum_free_bytes: number;
+  worker_timeout_seconds?: number;
 }
 
 export interface DisposableRestoreWorkerResult {
@@ -625,8 +626,14 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
 
     counts = None
     postgres_ready = False
-    startup_timeout = 600 if CONFIG["restore_mode"] == "snapshot" else 300
-    deadline = time.time() + startup_timeout
+    if CONFIG["restore_mode"] == "snapshot":
+        deadline = time.time() + 600
+    else:
+        # WAL replay time depends on the age of the latest full backup. Give
+        # PITR the remainder of the worker's overall budget while reserving
+        # enough time to report the result and let the controller delete the VM.
+        worker_timeout = max(900, int(CONFIG.get("worker_timeout_seconds", 7200)))
+        deadline = STARTED + worker_timeout - 300
     last_error = "PostgreSQL unavailable"
     while time.time() < deadline:
         try:
@@ -846,7 +853,10 @@ export async function runDisposableGcpRestoreWorker({
   const clients = providedClients ?? defaultClients(auth);
   const instance_name = `cocalc-restore-${config.run_id.replace(/-/g, "").slice(0, 20)}`;
   const region = zone.replace(/-[a-z]$/, "");
-  const startupScript = buildDisposableRestoreStartupScript(config);
+  const startupScript = buildDisposableRestoreStartupScript({
+    ...config,
+    worker_timeout_seconds: Math.ceil(timeout_ms / 1000),
+  });
   const timeoutSeconds = Math.max(900, Math.ceil(timeout_ms / 1000) + 600);
   let created = false;
   let cleanup: DisposableGcpRestoreResult["cleanup"] = "already-deleted";

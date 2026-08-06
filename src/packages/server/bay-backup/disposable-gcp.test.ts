@@ -225,6 +225,7 @@ test("startup script supports pgBackRest PITR and independent SQLite restore", (
   expect(workerSource).toContain(
     '"PostgreSQL container exited before readiness: "',
   );
+  expect(workerSource).toContain("deadline = STARTED + worker_timeout - 300");
   expect(workerSource).not.toContain('["shutdown", "-h", "now"]');
   expect(workerSource).toContain("PGBACKREST_REPO1_S3_TOKEN");
   expect(workerSource).toContain("sync_dir = SNAPSHOT");
@@ -314,6 +315,12 @@ test("GCP worker parses a bounded result and always deletes the VM", async () =>
       }),
     }),
   );
+  const startupScript =
+    insert.mock.calls[0][0].instanceResource.metadata.items.find(
+      (item: { key: string }) => item.key === "startup-script",
+    ).value;
+  const [encodedConfig] = decodedStartupBlocks(startupScript);
+  expect(JSON.parse(encodedConfig).worker_timeout_seconds).toBe(7200);
   expect(deleteInstance).toHaveBeenCalledTimes(1);
 });
 
