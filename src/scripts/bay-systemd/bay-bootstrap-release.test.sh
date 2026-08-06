@@ -86,4 +86,38 @@ if [[ "$(cat "${TARGET_CDN}/codemirror-0.9/content.txt")" != "historic" ]]; then
   exit 1
 fi
 
+VALIDATION_RELEASE="${TMP_ROOT}/validation-release"
+TARGET_RELEASE="$VALIDATION_RELEASE"
+OVERLAY_MODE="rocket-bundle"
+HUB_BUNDLE_PATH="${TMP_ROOT}/hub.tar.xz"
+STATIC_BUNDLE_PATH=""
+for required_file in \
+  scripts/bay-systemd/install-scaffold.sh \
+  scripts/bay-systemd/env/bay-rocket-bundle-overlay.env.example \
+  runtime/project-host/index.js \
+  runtime/control-plane/bundle/index.js \
+  runtime/control-plane/http-api-dist/pages/api/v2/index.js \
+  runtime/migrate-schema/index.js \
+  runtime/control-plane/static/public.html \
+  runtime/control-plane/public/cocalc-content.css \
+  runtime/control-plane/webapp/favicon.ico \
+  runtime/control-plane/bundle/gcp/gcp-setup.sh \
+  runtime/control-plane/bundle/nebius/nebius-setup.sh; do
+  mkdir -p "${VALIDATION_RELEASE}/$(dirname "$required_file")"
+  touch "${VALIDATION_RELEASE}/${required_file}"
+done
+chmod +x "${VALIDATION_RELEASE}/scripts/bay-systemd/install-scaffold.sh"
+
+# Hub-only releases must remain deployable over static releases that predate
+# the bundled CDN. Static and full releases still fail closed without it.
+validate_release
+HUB_BUNDLE_PATH=""
+if (validate_release >/dev/null 2>&1); then
+  echo "non-hub release unexpectedly passed without CDN assets" >&2
+  exit 1
+fi
+mkdir -p "${VALIDATION_RELEASE}/runtime/control-plane/cdn/pdfjs-dist/cmaps"
+touch "${VALIDATION_RELEASE}/runtime/control-plane/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap"
+validate_release
+
 echo "bay release pruning and CDN retention tests passed"

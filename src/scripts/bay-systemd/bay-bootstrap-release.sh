@@ -513,7 +513,13 @@ validate_release() {
       echo "release is missing public frontend assets" >&2
       exit 1
     fi
-    if [[ ! -f "${TARGET_RELEASE}/runtime/control-plane/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap" ]]; then
+    # A hub-only release inherits the currently deployed static tree. Older
+    # static releases predate the bundled CDN, so do not make a hub rollout
+    # depend on first upgrading an unrelated component.
+    if [[
+      -z "$HUB_BUNDLE_PATH" &&
+        ! -f "${TARGET_RELEASE}/runtime/control-plane/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap"
+    ]]; then
       echo "release is missing CDN frontend assets" >&2
       exit 1
     fi
