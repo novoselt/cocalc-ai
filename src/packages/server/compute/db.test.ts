@@ -127,22 +127,42 @@ describe("compute VM durable state", () => {
     ).toHaveLength(1);
   });
 
-  it("enforces account admission limits", async () => {
+  it("enforces project admission limits without limiting the owner", async () => {
     const owner = randomUUID();
-    await insertComputeVm(vmInput({ owner_account_id: owner }), {
-      max_active_per_account: 1,
-      max_active_total: 10,
-    });
-    await expect(
-      insertComputeVm(vmInput({ owner_account_id: owner, name: "second-vm" }), {
-        max_active_per_account: 1,
+    const project = randomUUID();
+    await insertComputeVm(
+      vmInput({ owner_account_id: owner, project_id: project }),
+      {
+        max_active_per_project: 1,
         max_active_total: 10,
-      }),
-    ).rejects.toThrow("account limit reached");
+      },
+    );
+    await expect(
+      insertComputeVm(
+        vmInput({
+          owner_account_id: owner,
+          project_id: project,
+          name: "second-vm",
+        }),
+        {
+          max_active_per_project: 1,
+          max_active_total: 10,
+        },
+      ),
+    ).rejects.toThrow("project limit reached");
+    await expect(
+      insertComputeVm(
+        vmInput({ owner_account_id: owner, name: "other-project" }),
+        {
+          max_active_per_project: 1,
+          max_active_total: 10,
+        },
+      ),
+    ).resolves.toMatchObject({ owner_account_id: owner });
   });
 
   postgresIt("serializes concurrent site-wide admission", async () => {
-    const limits = { max_active_per_account: 10, max_active_total: 1 };
+    const limits = { max_active_per_project: 10, max_active_total: 1 };
     const results = await Promise.allSettled([
       insertComputeVm(vmInput({ name: "first-vm" }), limits),
       insertComputeVm(vmInput({ name: "second-vm" }), limits),

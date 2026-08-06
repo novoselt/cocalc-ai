@@ -41,7 +41,10 @@ import {
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
-import { setUnreadIncomingInviteCount } from "./invite-count";
+import {
+  beginUnreadIncomingInviteCountRefresh,
+  setUnreadIncomingInviteCount,
+} from "./invite-count";
 import {
   notifyCollabInvitesChanged,
   onCollabInvitesChanged,
@@ -200,21 +203,27 @@ export function useInviteInboxState({
   const [incoming, set_incoming] = useState<ProjectCollabInviteRow[]>([]);
   const [outgoing, set_outgoing] = useState<ProjectCollabInviteRow[]>([]);
   const [blocks, set_blocks] = useState<ProjectCollabInviteBlockRow[]>([]);
+  const loadRevision = React.useRef(0);
 
   const load = useCallback(async () => {
+    const revision = ++loadRevision.current;
+    const updatesGlobalIncomingCount = project_id == null && includeIncoming;
     if (!account_id) {
       set_loading(false);
       set_error("");
       set_incoming([]);
       set_outgoing([]);
       set_blocks([]);
-      if (project_id == null && includeIncoming) {
-        setUnreadIncomingInviteCount(0);
+      if (updatesGlobalIncomingCount) {
+        setUnreadIncomingInviteCount(undefined, 0);
       }
       return;
     }
     set_loading(true);
     set_error("");
+    const countRefresh = updatesGlobalIncomingCount
+      ? beginUnreadIncomingInviteCountRefresh(account_id)
+      : undefined;
     try {
       const [incomingRows, outgoingRows, blockRows] = await Promise.all([
         includeIncoming
@@ -240,17 +249,32 @@ export function useInviteInboxState({
             })
           : Promise.resolve([]),
       ]);
+      if (revision !== loadRevision.current) {
+        return;
+      }
       const nextIncoming = incomingRows ?? [];
       set_incoming(nextIncoming);
       set_outgoing(outgoingRows ?? []);
       set_blocks(blockRows ?? []);
-      if (project_id == null && includeIncoming) {
-        setUnreadIncomingInviteCount(nextIncoming.length);
+      if (updatesGlobalIncomingCount) {
+        setUnreadIncomingInviteCount(
+          account_id,
+          nextIncoming.length,
+          countRefresh,
+        );
       }
     } catch (err) {
+      if (revision !== loadRevision.current) {
+        return;
+      }
       set_error(`${err}`);
+      if (updatesGlobalIncomingCount) {
+        setUnreadIncomingInviteCount(account_id, 0, countRefresh);
+      }
     } finally {
-      set_loading(false);
+      if (revision === loadRevision.current) {
+        set_loading(false);
+      }
     }
   }, [
     account_id,
@@ -263,6 +287,9 @@ export function useInviteInboxState({
 
   useEffect(() => {
     void load();
+    return () => {
+      loadRevision.current += 1;
+    };
   }, [load]);
 
   useEffect(() => {

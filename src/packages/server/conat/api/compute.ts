@@ -40,6 +40,7 @@ import {
 } from "@cocalc/server/compute/volume-db";
 import { assertDedicatedHostAdmissionForAccount } from "@cocalc/server/project-host/admission";
 import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
+import { isSupportedCatalogGcpMachineType } from "@cocalc/util/project-host-pricing";
 import { getCatalog as getHostCatalog } from "./hosts";
 
 const MIN_BOOT_DISK_GB = 10;
@@ -260,23 +261,7 @@ export async function getCatalog(opts: {
     provider: "gcp",
   });
   return {
-    machines: machineEntries(catalog, zone)
-      .filter(
-        ({ name, guestCpus, memoryMb, deprecated }) =>
-          !!name &&
-          !!guestCpus &&
-          !!memoryMb &&
-          !deprecated &&
-          guestCpus <= config.max_vcpus,
-      )
-      .map(({ name, guestCpus, memoryMb }) => ({
-        machine_type: name!,
-        architecture: machineArchitecture(name!),
-        cpu: guestCpus!,
-        ram_gb: memoryMb! / 1024,
-        spot_hourly_usd: 0,
-        on_demand_hourly_usd: 0,
-      })),
+    host_catalog: catalog,
     defaults: {
       zone,
       machine_type: "e2-standard-2",
@@ -284,6 +269,7 @@ export async function getCatalog(opts: {
       boot_disk_gb: 20,
     },
     limits: {
+      max_active_per_project: config.max_active_per_project,
       max_ttl_minutes: config.max_ttl_minutes,
       max_boot_disk_gb: config.max_boot_disk_gb,
       max_volume_gb: config.max_volume_gb,
@@ -336,9 +322,13 @@ export async function createVm(opts: CreateComputeVmRequest) {
     zone,
     machine_type: opts.machine_type,
   });
-  if (machine.cpu > config.max_vcpus) {
+  if (
+    !isSupportedCatalogGcpMachineType(machine.machine_type) ||
+    machine.machine_type.startsWith("g2-") ||
+    machine.ram_gb < 8
+  ) {
     throw new Error(
-      `machine_type exceeds the ${config.max_vcpus} vCPU managed compute VM limit`,
+      `machine_type '${machine.machine_type}' is not supported for managed compute VMs`,
     );
   }
   const pricingModel = opts.pricing_model;
@@ -397,8 +387,9 @@ export async function createVm(opts: CreateComputeVmRequest) {
       `pricing is unavailable for ${machine.machine_type} in ${regionFromZone(zone)}`,
     );
   }
-  const authorizedFallbackHours =
-    pricingModel === "spot" && opts.allow_on_demand_fallback === true ? 24 : 0;
+  const allowOnDemandFallback =
+    pricingModel === "spot" && opts.allow_on_demand_fallback === true;
+  const authorizedFallbackHours = allowOnDemandFallback ? 24 : 0;
   const id = randomUUID();
   const providerInstanceId = `cocalc-vm-${id.replaceAll("-", "").slice(0, 24)}`;
   const vm = await insertComputeVm(
@@ -427,7 +418,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       ssh_public_key: normalizeSshPublicKey(opts.ssh_public_key),
       expires_at:
         ttlMinutes == null ? null : new Date(Date.now() + ttlMinutes * 60_000),
-      allow_on_demand_fallback: opts.allow_on_demand_fallback === true,
+      allow_on_demand_fallback: allowOnDemandFallback,
       authorized_fallback_hours: authorizedFallbackHours,
       spot_hourly_price: `${spotRate.hourly_cost_usd}`,
       on_demand_hourly_price: `${onDemandRate.hourly_cost_usd}`,
@@ -436,7 +427,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       billing_state: "pending",
       spot_recovery_policy: {
         ...DEFAULT_SPOT_RECOVERY_POLICY,
-        standard_fallback_enabled: opts.allow_on_demand_fallback === true,
+        standard_fallback_enabled: allowOnDemandFallback,
       },
       spot_recovery_state: { phase: "idle" },
       idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
@@ -459,7 +450,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       },
     },
     {
-      max_active_per_account: config.max_active_per_account,
+      max_active_per_project: config.max_active_per_project,
       max_active_total: config.max_active_total,
     },
   );

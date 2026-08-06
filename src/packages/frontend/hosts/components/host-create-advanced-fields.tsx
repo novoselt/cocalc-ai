@@ -172,7 +172,7 @@ export const HostCreateAdvancedFields: React.FC<
             >
               <Select
                 options={[
-                  { value: "on_demand", label: "On-demand" },
+                  { value: "on_demand", label: "Standard" },
                   {
                     value: "spot",
                     label: "Spot / interruptible",

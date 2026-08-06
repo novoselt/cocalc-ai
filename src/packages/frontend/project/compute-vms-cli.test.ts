@@ -23,7 +23,7 @@ describe("managed compute CLI equivalents", () => {
         },
       }),
     ).toBe(
-      "cocalc --api https://staging.cocalc.ai vm create --project project-id --zone us-central1-a --machine t2d-standard-16 --ttl=8h --boot-disk-gb=40 --spot --allow-on-demand-fallback --volume build-cache --wait build-vm",
+      "cocalc --api https://staging.cocalc.ai vm create --project project-id --zone us-central1-a --machine t2d-standard-16 --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --volume build-cache --wait build-vm",
     );
   });
 

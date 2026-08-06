@@ -198,7 +198,7 @@ describe("vm list", () => {
           name: "build-vm",
           state: "ready",
           machine: "e2-standard-2",
-          pricing: "spot",
+          pricing: "Spot",
           zone: "us-central1-a",
           ip: "203.0.113.10",
           expires: "2026-08-04T00:00:00.000Z",

@@ -15,7 +15,7 @@ export async function insertComputeVm(
     "created_at" | "updated_at" | "ready_at" | "stopped_at" | "deleted_at"
   >,
   limits?: {
-    max_active_per_account: number;
+    max_active_per_project: number;
     max_active_total: number;
   },
 ): Promise<ComputeVmRow> {
@@ -35,23 +35,23 @@ export async function insertComputeVm(
     }
     if (limits) {
       // Serialize admission so concurrent creates cannot independently pass
-      // the same account or site-wide capacity check.
+      // the same project or site-wide capacity check.
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('compute-vm-admission', 0))",
       );
-      const { rows: ownerRows } = await client.query<{ count: string }>(
+      const { rows: projectRows } = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM compute_vms
-         WHERE owner_account_id=$1 AND deleted_at IS NULL`,
-        [row.owner_account_id],
+         WHERE project_id=$1 AND deleted_at IS NULL`,
+        [row.project_id],
       );
       const { rows: totalRows } = await client.query<{ count: string }>(
         "SELECT COUNT(*)::text AS count FROM compute_vms WHERE deleted_at IS NULL",
       );
-      const ownerCount = Number(ownerRows[0]?.count ?? 0);
+      const projectCount = Number(projectRows[0]?.count ?? 0);
       const totalCount = Number(totalRows[0]?.count ?? 0);
-      if (ownerCount >= limits.max_active_per_account) {
+      if (projectCount >= limits.max_active_per_project) {
         throw new Error(
-          `managed compute VM account limit reached (${ownerCount}/${limits.max_active_per_account})`,
+          `managed compute VM project limit reached (${projectCount}/${limits.max_active_per_project})`,
         );
       }
       if (totalCount >= limits.max_active_total) {

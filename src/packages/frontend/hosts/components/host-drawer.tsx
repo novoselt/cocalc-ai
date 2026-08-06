@@ -1471,7 +1471,7 @@ const HOST_LOG_ACTIONS: Record<
     status: "standard",
     statusColor: "red",
     description:
-      "Spot was not usable, so CoCalc started the host as a standard on-demand VM to keep it available.",
+      "Spot was not usable, so CoCalc started the host with Standard capacity to keep it available.",
   }),
   spot_restore_retry_scheduled: () => ({
     title: "Scheduled another spot start attempt",
