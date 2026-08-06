@@ -6991,9 +6991,15 @@ export async function updateHostMachine({
   });
   const cloudChanged =
     requestedCloudRaw !== undefined && requestedCloud !== machineCloud;
+  const isLiveSiteFundedCorrection =
+    currentFundingMode === "site-funded" &&
+    (requestedFundingMode === "account-prepaid" ||
+      requestedFundingMode === "account-postpaid") &&
+    HOST_RUNNING_STATUSES.has(String(row.status ?? ""));
   if (
     requestedFundingMode !== undefined &&
     requestedFundingMode !== currentFundingMode &&
+    !isLiveSiteFundedCorrection &&
     !(
       isDeprovisioned ||
       row.status === "off" ||
@@ -7945,7 +7951,10 @@ export async function updateHostMachine({
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
         pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === activeBillableSession.funding_mode &&
+          metadata.billing?.funding_lane === activeBillableSession.funding_lane
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else if (activeBillableSession?.funding_mode === "account-postpaid") {
       nextMetadata.billing = {
@@ -7954,13 +7963,18 @@ export async function updateHostMachine({
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
         pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === activeBillableSession.funding_mode &&
+          metadata.billing?.funding_lane === activeBillableSession.funding_lane
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else if (activeBillableSession?.funding_mode === "site-funded") {
       nextMetadata.billing = {
         funding_mode: "site-funded",
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === "site-funded"
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else {
       nextMetadata.billing = { funding_mode: nextBillingFundingMode };

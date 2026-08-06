@@ -2306,7 +2306,7 @@ describe("hosts browser fresh auth gating", () => {
     });
   });
 
-  it("uses the customer owner when an admin changes host funding", async () => {
+  it("changes a running customer host from site-funded without a restart", async () => {
     isAdminMock = jest.fn(async (account_id: string) => {
       return account_id === ACCOUNT_ID;
     });
@@ -2330,7 +2330,7 @@ describe("hosts browser fresh auth gating", () => {
               id: HOST_ID,
               name: "customer-host",
               region: "us-central1",
-              status: "off",
+              status: "running",
               metadata:
                 savedMetadata ??
                 ({
@@ -2376,14 +2376,28 @@ describe("hosts browser fresh auth gating", () => {
       funding_mode: "account-postpaid",
     });
 
-    expect(savedMetadata.billing).toEqual({
-      funding_mode: "account-postpaid",
-    });
+    expect(savedMetadata.billing).toEqual(
+      expect.objectContaining({
+        funding_mode: "account-postpaid",
+        funding_lane: "credit",
+        started_at: expect.any(String),
+      }),
+    );
     expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(
       CUSTOMER_ACCOUNT_ID,
     );
     expect(resolveMembershipForAccountMock).not.toHaveBeenCalledWith(
       ACCOUNT_ID,
+    );
+    expect(
+      reconcileDedicatedHostPurchaseSessionForAccountMock,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: CUSTOMER_ACCOUNT_ID,
+        host_id: HOST_ID,
+        funding_lane: "credit",
+        billing_state: "running",
+      }),
     );
   });
 
