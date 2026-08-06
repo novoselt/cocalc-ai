@@ -9,7 +9,6 @@ import {
   Card,
   Col,
   Drawer,
-  Empty,
   List,
   Row,
   Segmented,
@@ -22,14 +21,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
-  ActiveUserMapCountry,
   ActiveUserMapOverview,
   ActiveUserMapUser,
   ActiveUserMapWindowMinutes,
 } from "@cocalc/conat/hub/api/system";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
-import { COLORS } from "@cocalc/util/theme";
-import { Icon, TimeAgo, Tooltip } from "@cocalc/frontend/components";
+import { Icon, TimeAgo } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
 import {
   user_search,
@@ -37,7 +34,10 @@ import {
 } from "@cocalc/frontend/frame-editors/generic/client";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { UserResult } from "./users/user";
-import { projectActiveUserMapPosition } from "./active-users-map-geometry";
+import {
+  activeUsersMapCountryName,
+  ActiveUsersMapPlot,
+} from "./active-users-map-plot";
 
 const { Paragraph, Text } = Typography;
 const REFRESH_MS = 60_000;
@@ -82,14 +82,6 @@ const WINDOW_OPTIONS: Array<{
   { label: "1 day", value: 1440 },
 ];
 
-function countryName(code: string): string {
-  try {
-    return new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code;
-  } catch {
-    return code;
-  }
-}
-
 function userName(user: ActiveUserMapUser): string {
   return displayNameFromAccount(user) || user.email_address || user.account_id;
 }
@@ -98,97 +90,6 @@ function locationLabel(user: ActiveUserMapUser): string {
   return [user.city, user.region_code ?? user.region]
     .filter(Boolean)
     .join(", ");
-}
-
-function bubbleSize(count: number): number {
-  return Math.min(52, Math.max(18, 14 + Math.sqrt(count) * 8));
-}
-
-function ActiveUsersMapPlot({
-  countries,
-  selectedCountryCode,
-  onSelect,
-}: {
-  countries: ActiveUserMapCountry[];
-  selectedCountryCode?: string;
-  onSelect: (countryCode: string) => void;
-}) {
-  if (countries.length === 0) {
-    return (
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No active users have a current mapped location."
-      />
-    );
-  }
-  return (
-    <div
-      role="group"
-      aria-label="World map of active users"
-      style={{
-        aspectRatio: "2 / 1",
-        background: COLORS.BLUE_LLL,
-        borderRadius: 8,
-        maxHeight: 520,
-        minHeight: 260,
-        overflow: "hidden",
-        position: "relative",
-        width: "100%",
-      }}
-    >
-      <img
-        alt=""
-        aria-hidden="true"
-        src="/public/admin/active-users-world-map-f5ed5ec4.webp"
-        style={{
-          height: "100%",
-          inset: 0,
-          objectFit: "fill",
-          position: "absolute",
-          width: "100%",
-        }}
-      />
-      {countries.map((country) => {
-        const size = bubbleSize(country.count);
-        const name = countryName(country.country_code);
-        const selected = selectedCountryCode === country.country_code;
-        const label = `${name}: ${country.count} active user${country.count === 1 ? "" : "s"}`;
-        const position = projectActiveUserMapPosition(country);
-        return (
-          <Tooltip key={country.country_code} title={label}>
-            <button
-              aria-label={label}
-              aria-pressed={selected}
-              onClick={() => onSelect(country.country_code)}
-              style={{
-                alignItems: "center",
-                background: selected ? COLORS.BLUE_D : COLORS.BLUE_L,
-                border: `2px solid ${COLORS.BLUE_D}`,
-                borderRadius: "50%",
-                boxShadow: selected ? `0 0 0 4px ${COLORS.BLUE_L}` : undefined,
-                color: selected ? COLORS.GRAY_LLL : COLORS.BLUE_D,
-                cursor: "pointer",
-                display: "flex",
-                fontSize: Math.min(14, Math.max(10, size / 3)),
-                fontWeight: 700,
-                height: size,
-                justifyContent: "center",
-                left: `${position.left}%`,
-                padding: 0,
-                position: "absolute",
-                top: `${position.top}%`,
-                transform: "translate(-50%, -50%)",
-                width: size,
-              }}
-              type="button"
-            >
-              {country.count}
-            </button>
-          </Tooltip>
-        );
-      })}
-    </div>
-  );
 }
 
 function UserList({
@@ -304,7 +205,7 @@ export function ActiveUsersMapAdmin() {
     selectedGroup === "unknown"
       ? "Location unavailable"
       : selectedCountry
-        ? `${countryName(selectedCountry.country_code)} (${selectedCountry.count})`
+        ? `${activeUsersMapCountryName(selectedCountry.country_code)} (${selectedCountry.count})`
         : "Active users";
   const failedBays = overview?.bays.filter(({ ok }) => !ok) ?? [];
   const disabledBays =
