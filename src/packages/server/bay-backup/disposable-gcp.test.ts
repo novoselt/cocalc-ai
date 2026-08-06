@@ -242,6 +242,10 @@ test("startup script supports pgBackRest PITR and independent SQLite restore", (
   expect(workerSource).toContain(
     'sql_quote(CONFIG["pitr_run_id"]), log=False)',
   );
+  expect(workerSource).toContain('"pg_is_in_recovery()::text "');
+  expect(workerSource).toContain(
+    'if counts == (1, 0) and recovery_text == "false"',
+  );
   expect(workerSource).toContain(
     "SQLite quick_check progress {quick_passed}/{len(db_files)}",
   );

@@ -648,12 +648,16 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
             if CONFIG["restore_mode"] == "pitr":
                 value = psql(container,
                     "SELECT count(*) FILTER (WHERE phase='pre')::text || ',' || "
-                    "count(*) FILTER (WHERE phase='post')::text "
+                    "count(*) FILTER (WHERE phase='post')::text || ',' || "
+                    "pg_is_in_recovery()::text "
                     "FROM public.bay_restore_test_pitr_events WHERE run_id = " +
                     sql_quote(CONFIG["pitr_run_id"]), log=False)
-                pre, post = [int(part) for part in value.split(",")]
+                pre_text, post_text, recovery_text = value.split(",")
+                pre, post = int(pre_text), int(post_text)
+                if recovery_text not in ("true", "false"):
+                    raise RuntimeError("invalid pg_is_in_recovery result: " + recovery_text)
                 counts = (pre, post)
-                if counts == (1, 0):
+                if counts == (1, 0) and recovery_text == "false":
                     postgres_ready = True
                     break
                 if counts == (1, 1):
