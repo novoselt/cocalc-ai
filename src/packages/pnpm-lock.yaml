@@ -278,6 +278,9 @@ importers:
       katex:
         specifier: ^0.16.21
         version: 0.16.25
+      pdfjs-dist:
+        specifier: ^4.6.82
+        version: 4.10.38
 
   chat:
     dependencies:

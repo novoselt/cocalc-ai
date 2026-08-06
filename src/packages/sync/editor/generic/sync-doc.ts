@@ -3439,10 +3439,15 @@ export class SyncDoc extends EventEmitter {
       myPatches[env.time] = { time: env.time } as any;
       this.snapshotIfNecessary();
     } catch (err) {
+      // Keep the draft, but do not claim that it was committed. In
+      // particular, save_to_disk must never write this unrecorded state and
+      // let sync-fs import it back as a filesystem-authored revision.
+      this.last = current;
       console.warn("patchflow commit failed", err?.message ?? err);
       console.warn(err?.stack ?? "");
       this.dbg("commitWithPatchflow")(`commit failed -- ${err}`);
       this.notifyPatchflowWriteFailure(err);
+      return false;
     }
     const latest = this.patchflowSession.versions().slice(-1)[0];
     if (latest != null) {
@@ -3600,7 +3605,19 @@ export class SyncDoc extends EventEmitter {
       // properly.
       return;
     }
-    this.commit();
+    // Persist the live draft to Patchflow before writing its serialized form
+    // to disk. Otherwise a failed history commit followed by a disk write is
+    // observed by sync-fs as a destructive edit made by "The Filesystem".
+    await this.save();
+    if (
+      this.doc == null ||
+      this.last == null ||
+      !this.documentsEqual(this.doc, this.last)
+    ) {
+      throw new Error(
+        `Refusing to save ${this.path} to disk because its collaborative history is not up to date`,
+      );
+    }
     await this.writeFile();
     this.update_has_unsaved_changes();
   });

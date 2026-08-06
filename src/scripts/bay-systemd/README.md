@@ -402,9 +402,10 @@ The operational wrapper can build and deploy that artifact directly:
 ```
 
 This stages a normal hardlinked release from the current VM release, overlays
-the new frontend/static assets, flips `/opt/cocalc/bay/current`, checks bay
+the new frontend and CDN assets, flips `/opt/cocalc/bay/current`, checks bay
 health, and skips hub restarts, Postgres, migrations, router/persist, and
-project-host rollout. Pass `--restart-hub-workers` only when deliberately
+project-host rollout. Versioned CDN directories from prior releases are kept
+for already-open clients. Pass `--restart-hub-workers` only when deliberately
 testing the fallback path.
 
 Then copy the generated tarball to the VM and stage a new versioned release

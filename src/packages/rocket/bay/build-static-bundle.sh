@@ -4,7 +4,8 @@
 #
 # This artifact is meant for fast dogfood frontend deploys. The remote
 # bootstrap path creates a new versioned bay release from the current release,
-# replaces only these static asset directories, and flips the current symlink.
+# replaces only the frontend and CDN asset directories, and flips the current
+# symlink.
 #
 # Usage:
 #   ./build-static-bundle.sh [output-directory] [tarball-path]
@@ -123,6 +124,9 @@ cd "$ROOT"
 echo "- Clean static frontend outputs"
 rm -rf packages/static/dist
 
+echo "- Build CDN assets"
+pnpm --filter @cocalc/cdn run build
+
 echo "- Build static frontend assets"
 pnpm static
 
@@ -135,6 +139,11 @@ echo "- Copy public assets"
 mkdir -p "$OUT/runtime/control-plane/public"
 rsync -a --delete packages/assets/public/ \
   "$OUT/runtime/control-plane/public/"
+
+echo "- Copy CDN assets"
+mkdir -p "$OUT/runtime/control-plane/cdn"
+rsync -a --delete packages/cdn/dist/ \
+  "$OUT/runtime/control-plane/cdn/"
 
 copy_webapp_assets "$OUT"
 
@@ -160,7 +169,7 @@ function run(command, args) {
 
 const manifest = {
   kind: "cocalc-bay-static",
-  version: 1,
+  version: 2,
   created: new Date().toISOString(),
   git: {
     commit: run("git", ["rev-parse", "HEAD"]),
@@ -170,6 +179,7 @@ const manifest = {
   paths: {
     static: "runtime/control-plane/static",
     public: "runtime/control-plane/public",
+    cdn: "runtime/control-plane/cdn",
     webapp: "runtime/control-plane/webapp",
     gcpSetup: "runtime/control-plane/bundle/gcp/gcp-setup.sh",
     nebiusSetup: "runtime/control-plane/bundle/nebius/nebius-setup.sh",
@@ -182,6 +192,10 @@ NODE
 echo "- Validate static bundle"
 validate_file "$OUT/runtime/control-plane/static/public.html"
 validate_file "$OUT/runtime/control-plane/public/cocalc-content.css"
+validate_file "$OUT/runtime/control-plane/cdn/index.js"
+PDFJS_VERSION="$(node -e 'console.log(require(process.argv[1]).versions["pdfjs-dist"])' \
+  "$OUT/runtime/control-plane/cdn/index.js")"
+validate_file "$OUT/runtime/control-plane/cdn/pdfjs-dist-${PDFJS_VERSION}/cmaps/UniJIS-UTF16-H.bcmap"
 validate_file "$OUT/runtime/control-plane/webapp/favicon.ico"
 validate_file "$OUT/runtime/control-plane/bundle/gcp/gcp-setup.sh"
 validate_file "$OUT/runtime/control-plane/bundle/nebius/nebius-setup.sh"

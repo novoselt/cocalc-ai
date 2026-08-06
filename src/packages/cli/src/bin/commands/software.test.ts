@@ -4160,6 +4160,7 @@ test("software smoke static runs HTTP checks against the profile API", async () 
     "https://staging.cocalc.ai/static/app.html",
     "https://staging.cocalc.ai/auth/email/continue/00000000-0000-4000-8000-000000000000",
     "https://staging.cocalc.ai/webapp/favicon.ico",
+    "https://staging.cocalc.ai/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap",
   ]);
 });
 

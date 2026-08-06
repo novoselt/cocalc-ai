@@ -89,6 +89,7 @@ export interface State extends CodeEditorState {
 
 export class Actions<T extends State = State> extends BaseActions<T | State> {
   private keyHandler?: (event) => void;
+  private initialPageCreationScheduled = false;
   readonly mainFrameType: MainFrameType = "whiteboard";
   // fixedElements are on every page automatically.
   // They should have {data:{selectable:false},...}
@@ -261,11 +262,47 @@ export class Actions<T extends State = State> extends BaseActions<T | State> {
       }
 
       if (pages.size == 0 && pages0 == null) {
-        setTimeout(() => this.createPage(), 0);
+        this.scheduleInitialPageCreation();
       }
     };
 
     this._syncstring.on("change", handleChange);
+    this._syncstring.on("connected", () => {
+      const pages = this.store.get("pages");
+      if (pages == null || pages.size === 0) {
+        this.scheduleInitialPageCreation();
+      }
+    });
+  }
+
+  private scheduleInitialPageCreation(): void {
+    if (this.initialPageCreationScheduled) return;
+    this.initialPageCreationScheduled = true;
+    setTimeout(() => {
+      this.initialPageCreationScheduled = false;
+      if (
+        this.isClosed() ||
+        this._syncstring?.get_state() !== "ready" ||
+        this._syncstring.is_read_only() ||
+        this._syncstring.is_live_connected?.() === false
+      ) {
+        return;
+      }
+      // The first change event can transiently look empty while the live
+      // document is still arriving. Never let that stale event replace a
+      // document that became nonempty before this deferred callback ran.
+      if (this._syncstring.get().size !== 0) return;
+      // Starter content belongs only in a genuinely new document. An empty
+      // view of a document with history can be a partial open or reconnect.
+      try {
+        if (this._syncstring.versions().length !== 0) return;
+      } catch {
+        return;
+      }
+      const pages = this.store.get("pages");
+      if (pages != null && pages.size !== 0) return;
+      this.createPage();
+    }, 0);
   }
 
   // This mutates the cursors by putting the id in them.

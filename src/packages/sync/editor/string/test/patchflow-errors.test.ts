@@ -41,15 +41,15 @@ describe("patchflow commit failures", () => {
     });
     await once(syncstring, "ready");
 
-    const session = (syncstring as any).patchflowSession;
-    session.commit = () => {
+    const patchflowStore = (syncstring as any).patchflowStore;
+    patchflowStore.append = () => {
       throw new Error("db write failed");
     };
 
     syncstring.from_str("a");
-    expect(syncstring.commit()).toBe(true);
+    expect(syncstring.commit()).toBe(false);
     syncstring.from_str("ab");
-    expect(syncstring.commit()).toBe(true);
+    expect(syncstring.commit()).toBe(false);
 
     expect(client.alerts).toHaveLength(1);
     expect(client.alerts[0]).toMatchObject({
@@ -58,6 +58,55 @@ describe("patchflow commit failures", () => {
     });
     expect(client.alerts[0].message).toContain(path);
     expect(client.alerts[0].message).toContain("db write failed");
+  });
+
+  it("never writes an uncommitted draft to disk", async () => {
+    jest.spyOn(console, "warn").mockImplementation(() => {});
+    client = new AlertingClient(init_queries, client_id);
+    const writeFileDelta = jest.fn(async () => {});
+    syncstring = new SyncString({
+      project_id,
+      path,
+      client,
+      fs: { ...fs, writeFileDelta },
+      noAutosave: true,
+    });
+    await once(syncstring, "ready");
+
+    const patchflowStore = (syncstring as any).patchflowStore;
+    patchflowStore.append = () => {
+      throw new Error("db write failed");
+    };
+    syncstring.from_str("must remain a draft");
+
+    await expect(syncstring.save_to_disk()).rejects.toThrow(
+      "collaborative history is not up to date",
+    );
+    expect(writeFileDelta).not.toHaveBeenCalled();
+    expect(syncstring.to_str()).toBe("must remain a draft");
+  });
+
+  it("persists a draft to Patchflow before writing it to disk", async () => {
+    client = new AlertingClient(init_queries, client_id);
+    const writeFileDelta = jest.fn(async () => {});
+    syncstring = new SyncString({
+      project_id,
+      path,
+      client,
+      fs: { ...fs, writeFileDelta },
+      noAutosave: true,
+    });
+    await once(syncstring, "ready");
+    syncstring.from_str("safely committed");
+
+    await syncstring.save_to_disk();
+
+    expect(writeFileDelta).toHaveBeenCalledWith(
+      path,
+      "safely committed",
+      expect.objectContaining({ saveLast: true }),
+    );
+    expect(syncstring.has_uncommitted_changes()).toBe(false);
   });
 
   it("retries cleanly after a transient patchflow init failure", async () => {

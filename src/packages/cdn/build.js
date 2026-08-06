@@ -22,8 +22,9 @@ const root = __dirname;
 const dist = join(root, "dist");
 
 const PACKAGES = {
-  codemirror: "",
-  katex: "dist",
+  codemirror: { source: "" },
+  katex: { source: "dist" },
+  "pdfjs-dist": { source: "cmaps", target: "cmaps" },
 };
 
 function packageRoot(name) {
@@ -40,11 +41,14 @@ mkdirSync(dist, { recursive: true });
 
 const versions = {};
 
-for (const [name, subdir] of Object.entries(PACKAGES)) {
+for (const [name, subdirs] of Object.entries(PACKAGES)) {
   const root = packageRoot(name);
   const version = packageVersion(root);
-  const source = subdir ? join(root, subdir) : root;
-  const target = join(dist, name);
+  const source = subdirs.source ? join(root, subdirs.source) : root;
+  const target = subdirs.target
+    ? join(dist, name, subdirs.target)
+    : join(dist, name);
+  mkdirSync(dirname(target), { recursive: true });
   cpSync(source, target, { recursive: true, dereference: true });
   symlinkSync(name, join(dist, `${name}-${version}`), "dir");
   versions[name] = version;
