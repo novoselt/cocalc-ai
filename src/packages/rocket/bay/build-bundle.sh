@@ -136,6 +136,9 @@ pnpm --filter @cocalc/project-host run build:bundle
 echo "- Clean static frontend outputs"
 rm -rf packages/static/dist
 
+echo "- Build CDN assets"
+pnpm --filter @cocalc/cdn run build
+
 echo "- Build static frontend assets"
 pnpm static
 
@@ -232,6 +235,10 @@ validate_file "$OUT/runtime/cloudflared/index.js"
 validate_file "$OUT/runtime/control-plane/http-api-dist/pages/api/v2/index.js"
 validate_file "$OUT/runtime/control-plane/static/public.html"
 validate_file "$OUT/runtime/control-plane/public/cocalc-content.css"
+validate_file "$OUT/runtime/control-plane/cdn/index.js"
+PDFJS_VERSION="$(node -e 'console.log(require(process.argv[1]).versions["pdfjs-dist"])' \
+  "$OUT/runtime/control-plane/cdn/index.js")"
+validate_file "$OUT/runtime/control-plane/cdn/pdfjs-dist-${PDFJS_VERSION}/cmaps/UniJIS-UTF16-H.bcmap"
 validate_file "$OUT/runtime/control-plane/webapp/favicon.ico"
 validate_file "$OUT/runtime/control-plane/bundle/gcp/gcp-setup.sh"
 validate_file "$OUT/runtime/control-plane/bundle/nebius/nebius-setup.sh"

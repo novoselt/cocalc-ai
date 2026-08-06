@@ -47,4 +47,43 @@ for release in 050-stale 200-static 300-static; do
   fi
 done
 
-echo "bay release pruning test passed"
+PREVIOUS_RELEASE="${TMP_ROOT}/previous-release"
+TARGET_RELEASE="${TMP_ROOT}/target-release"
+PREVIOUS_CDN="${PREVIOUS_RELEASE}/runtime/control-plane/cdn"
+TARGET_CDN="${TARGET_RELEASE}/runtime/control-plane/cdn"
+mkdir -p \
+  "${PREVIOUS_CDN}/codemirror" \
+  "${PREVIOUS_CDN}/codemirror-0.9" \
+  "${TARGET_CDN}/codemirror"
+printf '%s\n' old >"${PREVIOUS_CDN}/codemirror/content.txt"
+printf '%s\n' historic >"${PREVIOUS_CDN}/codemirror-0.9/content.txt"
+printf '%s\n' new >"${TARGET_CDN}/codemirror/content.txt"
+ln -s codemirror "${PREVIOUS_CDN}/codemirror-1.0"
+ln -s codemirror "${TARGET_CDN}/codemirror-2.0"
+cat >"${PREVIOUS_CDN}/index.js" <<'EOF'
+exports.versions = { codemirror: "1.0" };
+EOF
+cat >"${TARGET_CDN}/index.js" <<'EOF'
+exports.versions = { codemirror: "2.0" };
+EOF
+
+preserve_previous_cdn_assets "$PREVIOUS_RELEASE"
+
+if [[ "$(cat "${TARGET_CDN}/codemirror-2.0/content.txt")" != "new" ]]; then
+  echo "current CDN version was overwritten" >&2
+  exit 1
+fi
+if [[ "$(cat "${TARGET_CDN}/codemirror-1.0/content.txt")" != "old" ]]; then
+  echo "previous CDN version was not retained" >&2
+  exit 1
+fi
+if [[ -L "${TARGET_CDN}/codemirror-1.0" ]]; then
+  echo "previous CDN version must be retained as a real directory" >&2
+  exit 1
+fi
+if [[ "$(cat "${TARGET_CDN}/codemirror-0.9/content.txt")" != "historic" ]]; then
+  echo "historic CDN version was not retained" >&2
+  exit 1
+fi
+
+echo "bay release pruning and CDN retention tests passed"
