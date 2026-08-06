@@ -59,6 +59,10 @@ with open(sys.argv[1], encoding="utf8") as src:
     status = json.load(src)
 assert status["level"] == "ok", status
 assert status["mirror"]["sqlite_backups"] == 1, status
+assert status["mirror"]["changed_files_count"] == 1, status
+assert status["mirror"]["deleted_files_count"] == 0, status
+assert "changed_files" not in status["mirror"], status
+assert "deleted_files" not in status["mirror"], status
 assert status["rustic"]["snapshot_id"] == "snapshot-1", status
 assert status["rustic"]["id"] == "snapshot-1", status
 PY

@@ -16,7 +16,7 @@ assert_backup_storage_ready
 : "${COCALC_BAY_SQLITE_MIRROR_CATALOG:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/catalog.json}"
 : "${COCALC_BAY_SQLITE_MIRROR_ENTRY:=${COCALC_BAY_CURRENT_LINK}/runtime/sqlite-mirror/index.js}"
 : "${COCALC_BAY_SQLITE_MIRROR_CONCURRENCY:=2}"
-: "${COCALC_BAY_SQLITE_RUSTIC_BIN:=${COCALC_BIN_PATH:-/opt/cocalc/bin2}/rustic}"
+: "${COCALC_BAY_SQLITE_RUSTIC_BIN:=/usr/local/bin/rustic}"
 : "${COCALC_BAY_SQLITE_RUSTIC_PROFILE:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/rustic.toml}"
 : "${COCALC_BAY_SQLITE_RUSTIC_ROOT:=rustic/bay-sqlite/${COCALC_BAY_ID}}"
 : "${COCALC_BAY_SQLITE_BACKUP_STATUS_FILE:=${COCALC_BAY_STATE_DIR}/sqlite-backup-status.json}"
@@ -141,6 +141,10 @@ with open(mirror_path, encoding="utf8") as src:
     mirror = json.load(src)
 with open(rustic_path, encoding="utf8") as src:
     rustic = json.load(src)
+changed_files = mirror.pop("changed_files", [])
+deleted_files = mirror.pop("deleted_files", [])
+mirror["changed_files_count"] = len(changed_files)
+mirror["deleted_files_count"] = len(deleted_files)
 snapshot_id = rustic.get("snapshot_id") or rustic.get("id")
 if not snapshot_id:
     raise SystemExit("Rustic backup output did not include a snapshot id")

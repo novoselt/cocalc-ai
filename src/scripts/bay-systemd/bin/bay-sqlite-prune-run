@@ -11,7 +11,7 @@ fi
 
 assert_backup_storage_ready
 
-: "${COCALC_BAY_SQLITE_RUSTIC_BIN:=${COCALC_BIN_PATH:-/opt/cocalc/bin2}/rustic}"
+: "${COCALC_BAY_SQLITE_RUSTIC_BIN:=/usr/local/bin/rustic}"
 : "${COCALC_BAY_SQLITE_RUSTIC_PROFILE:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/rustic.toml}"
 : "${COCALC_BAY_SQLITE_BACKUP_LOCK:=${COCALC_BAY_RUN_DIR}/sqlite-backup.lock}"
 
