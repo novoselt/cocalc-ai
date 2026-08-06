@@ -31,6 +31,7 @@ import type * as CodeMirror from "codemirror";
 import { toggle_checkbox } from "@cocalc/frontend/editors/task-editor/desc-rendering";
 import { parseTableOfContents } from "@cocalc/frontend/markdown";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import {
   Actions as CodeEditorActions,
@@ -113,6 +114,7 @@ export class Actions extends CodeEditorActions<MarkdownEditorState> {
       super.undo(id);
       return;
     }
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     const value = this._syncstring.undo().to_str();
     this._syncstring.set(value);
     this._syncstring.commit();
@@ -126,6 +128,7 @@ export class Actions extends CodeEditorActions<MarkdownEditorState> {
       super.redo(id);
       return;
     }
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     if (!this._syncstring.in_undo_mode()) {
       return;
     }

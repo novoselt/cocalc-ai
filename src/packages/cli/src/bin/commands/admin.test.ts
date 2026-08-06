@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -356,6 +356,81 @@ test("admin support show forwards ticket conversation limits", async () => {
   });
 });
 
+test("admin support conventions exposes the shared status workflow", async () => {
+  let output: any;
+  const deps = adminDeps();
+  deps.withContext = async (_command: unknown, _label: string, fn: any) => {
+    output = await fn({ hub: {} });
+    return output;
+  };
+  const program = new Command();
+  registerAdminCommand(program, deps as any);
+
+  await program.parseAsync(["node", "test", "admin", "support", "conventions"]);
+
+  assert.equal(
+    output.statuses.new,
+    "We have not reviewed or acted on the ticket.",
+  );
+  assert.match(output.statuses.open, /actively investigating/);
+  assert.match(output.statuses.pending, /waiting for the requester/);
+  assert.match(output.statuses.solved, /complete and verified/);
+});
+
+test("admin support image verifies and writes a Zendesk attachment", async () => {
+  const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const dir = await mkdtemp(join(tmpdir(), "cocalc-support-image-"));
+  const output = join(dir, "screenshot.png");
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        getImage: async (opts: any) => {
+          capturedArgs = opts;
+          return {
+            audit_id: "audit-support-image",
+            ticket_id: 20463,
+            comment_id: 10,
+            attachment_id: 987,
+            filename: "ticket-20463-attachment-987.png",
+            content_type: "image/png",
+            size: image.length,
+            sha256:
+              "0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543",
+            data_base64: image.toString("base64"),
+          };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "image",
+    "20463",
+    "987",
+    "--output",
+    output,
+    "--max-bytes",
+    "4096",
+    "--reason",
+    "inspect screenshot on ticket 20463",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20463,
+    attachment_id: 987,
+    max_bytes: 4096,
+    reason: "inspect screenshot on ticket 20463",
+  });
+  assert.deepEqual(await readFile(output), image);
+});
+
 test("admin support triage forwards deterministic grouping options", async () => {
   let capturedArgs: any;
   const program = new Command();
@@ -569,6 +644,79 @@ test("admin support merge commit forwards explicit target and source versions", 
     reason: "approved duplicate merge",
     idempotency_key: "support-merge-approved-20431-20432",
     timeout: 120_000,
+  });
+});
+
+test("admin support spam is dry-run by default", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        planSpam: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-spam-plan", commit: false };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "spam",
+    "20455",
+    "--reason",
+    "review obvious unsolicited junk",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20455,
+    expected_updated_at: undefined,
+    reason: "review obvious unsolicited junk",
+  });
+});
+
+test("admin support spam commit forwards the reviewed ticket version", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        spam: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-spam", commit: true };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "spam",
+    "20455",
+    "--expected-updated-at",
+    "2026-08-06T12:00:00.000Z",
+    "--idempotency-key",
+    "support-spam-approved-20455",
+    "--reason",
+    "approved obvious unsolicited junk",
+    "--commit",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20455,
+    expected_updated_at: "2026-08-06T12:00:00.000Z",
+    reason: "approved obvious unsolicited junk",
+    timeout: 60_000,
+    idempotency_key: "support-spam-approved-20455",
   });
 });
 

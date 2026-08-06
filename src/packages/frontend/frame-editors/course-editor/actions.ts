@@ -13,6 +13,7 @@ import {
   CodeEditorState,
 } from "../base-editor/actions-base";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 
 export interface CourseEditorState extends CodeEditorState {
   modal?: string;
@@ -97,19 +98,25 @@ export class CourseEditorActions extends Actions<CourseEditorState> {
   }
 
   exit_undo_mode(): void {
-    this.course_actions.syncdb.exit_undo_mode();
+    const syncdb = this.course_actions?.syncdb;
+    if (!canUseSyncDocHistory(syncdb)) return;
+    syncdb.exit_undo_mode();
   }
 
   // per-session sync-aware undo
   undo(_id: string): void {
-    this.course_actions.syncdb.undo();
-    this.course_actions.syncdb.commit();
+    const syncdb = this.course_actions?.syncdb;
+    if (!canUseSyncDocHistory(syncdb)) return;
+    syncdb.undo();
+    syncdb.commit();
   }
 
   // per-session sync-aware redo
   redo(_id: string): void {
-    this.course_actions.syncdb.redo();
-    this.course_actions.syncdb.commit();
+    const syncdb = this.course_actions?.syncdb;
+    if (!canUseSyncDocHistory(syncdb)) return;
+    syncdb.redo();
+    syncdb.commit();
   }
 
   help = (): void => {

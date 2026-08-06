@@ -20,6 +20,7 @@ import type {
 } from "@cocalc/conat/hub/api/admin-data-explorer";
 import type { AdminDbDiagnostic } from "@cocalc/conat/hub/api/admin-db";
 import {
+  ADMIN_SUPPORT_CONVENTIONS,
   ADMIN_SUPPORT_MUTABLE_TICKET_STATUSES,
   ADMIN_SUPPORT_TICKET_PRIORITIES,
   ADMIN_SUPPORT_TICKET_STATUSES,
@@ -1109,7 +1110,7 @@ export function registerAdminCommand(
       "after",
       `
 Human-in-the-loop workflow:
-  1. Run update, reply, note, or merge without --commit and review the plan.
+  1. Run update, reply, note, merge, or spam without --commit and review the plan.
   2. Re-run with the returned updated_at value(s) and --commit.
   3. Mutations require fresh admin authentication and reject stale tickets.
 
@@ -1423,7 +1424,7 @@ Merge comments are private unless their corresponding --*-comment-public flag is
   }
 
   function supportIdempotencyKey(
-    operation: "update" | "merge",
+    operation: "update" | "merge" | "spam",
     request: Record<string, unknown>,
     explicit: string | undefined,
   ): string {
@@ -1795,9 +1796,18 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     });
 
   adminSupport
+    .command("conventions")
+    .description("show the human-in-the-loop Zendesk support conventions")
+    .action(async (_opts, command: Command) => {
+      await withContext(command, "admin support conventions", async () => {
+        return ADMIN_SUPPORT_CONVENTIONS;
+      });
+    });
+
+  adminSupport
     .command("show <ticket-id>")
     .description(
-      "show one redacted ticket conversation with validated CoCalc image references",
+      "show one redacted ticket conversation with validated image references",
     )
     .option("--max-comments <n>", "maximum recent comments", "50")
     .option("--max-bytes <n>", "maximum response bytes", "262144")
@@ -1834,6 +1844,60 @@ Merge comments are private unless their corresponding --*-comment-public flag is
             }),
             reason: opts.reason,
           });
+        });
+      },
+    );
+
+  adminSupport
+    .command("image <ticket-id> <attachment-id>")
+    .description(
+      "download one validated Zendesk image attachment without exposing its URL",
+    )
+    .option("--output <path>", "output file; defaults to a safe generated name")
+    .option("--max-bytes <n>", "maximum downloaded image bytes", "8388608")
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(
+      async (
+        ticketId: string,
+        attachmentId: string,
+        opts: {
+          output?: string;
+          maxBytes?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin support image", async (ctx) => {
+          const result = await ctx.hub.adminSupport.getImage({
+            ticket_id: parsePositiveIntegerOption({
+              name: "ticket-id",
+              value: ticketId,
+              fallback: 0,
+              max: Number.MAX_SAFE_INTEGER,
+            }),
+            attachment_id: parsePositiveIntegerOption({
+              name: "attachment-id",
+              value: attachmentId,
+              fallback: 0,
+              max: Number.MAX_SAFE_INTEGER,
+            }),
+            max_bytes: parsePositiveIntegerOption({
+              name: "--max-bytes",
+              value: opts.maxBytes,
+              fallback: 8 * 1024 * 1024,
+              max: 20 * 1024 * 1024,
+            }),
+            reason: opts.reason,
+          });
+          const data = Buffer.from(result.data_base64, "base64");
+          const digest = createHash("sha256").update(data).digest("hex");
+          if (data.length !== result.size || digest !== result.sha256) {
+            throw new Error("downloaded support image failed integrity checks");
+          }
+          const output = opts.output?.trim() || result.filename;
+          await writeFile(output, data);
+          const { data_base64: _dataBase64, ...metadata } = result;
+          return { ...metadata, output };
         });
       },
     );
@@ -2038,6 +2102,56 @@ Merge comments are private unless their corresponding --*-comment-public flag is
           timeout: 120_000,
           idempotency_key: supportIdempotencyKey(
             "merge",
+            request,
+            opts.idempotencyKey,
+          ),
+        });
+      });
+    });
+
+  adminSupport
+    .command("spam <ticket-id>")
+    .description(
+      "plan or mark a Zendesk ticket as spam and suspend its requester",
+    )
+    .option(
+      "--expected-updated-at <timestamp>",
+      "exact updated_at reviewed during dry-run; required with --commit",
+    )
+    .option("--idempotency-key <key>", "stable logical request key")
+    .option(
+      "--commit",
+      "mark as spam; otherwise only show a dry-run warning",
+      false,
+    )
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(async (ticketId: string, opts: any, command: Command) => {
+      await withContext(command, "admin support spam", async (ctx) => {
+        const id = parsePositiveIntegerOption({
+          name: "ticket-id",
+          value: ticketId,
+          fallback: 0,
+          max: Number.MAX_SAFE_INTEGER,
+        });
+        const request = {
+          ticket_id: id,
+          expected_updated_at: opts.expectedUpdatedAt,
+          reason: opts.reason,
+        };
+        if (!opts.commit) {
+          return await ctx.hub.adminSupport.planSpam(request);
+        }
+        if (!opts.expectedUpdatedAt?.trim()) {
+          throw new Error(
+            "--expected-updated-at is required with --commit; use the value returned by the dry-run",
+          );
+        }
+        return await ctx.hub.adminSupport.spam({
+          ...request,
+          expected_updated_at: opts.expectedUpdatedAt,
+          timeout: 60_000,
+          idempotency_key: supportIdempotencyKey(
+            "spam",
             request,
             opts.idempotencyKey,
           ),

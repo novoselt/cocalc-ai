@@ -10,14 +10,7 @@ import useResizeObserver from "use-resize-observer";
 import { delay } from "awaiting";
 import * as immutable from "immutable";
 import { debounce } from "lodash";
-import {
-  startTransition,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { React, useIsMountedRef } from "@cocalc/frontend/app-framework";
 import { Loading } from "@cocalc/frontend/components";
 import {
@@ -65,13 +58,37 @@ function getSectionTitle(
 const LAZY_RENDER_INITIAL_CELLS = 24;
 const LAZY_RENDER_PLACEHOLDER_MIN_HEIGHT = 96;
 
-export function refreshLazyHydrationVersion(
-  setVersion: (update: (version: number) => number) => void,
-  runTransition: (update: () => void) => void = startTransition,
-): void {
-  runTransition(() => {
-    setVersion((version) => version + 1);
-  });
+export function updateLazyCellHeights(
+  container: ParentNode,
+  heights: Record<string, number>,
+): boolean {
+  let changed = false;
+  container
+    .querySelectorAll<HTMLElement>(
+      '[data-jupyter-lazy-cell-hydrated="1"][data-jupyter-lazy-cell-id]',
+    )
+    .forEach((node) => {
+      const id = node.getAttribute("data-jupyter-lazy-cell-id");
+      const height = node.getBoundingClientRect().height;
+      if (id == null || height <= 0) return;
+      const previous = heights[id] ?? 0;
+      if (Math.abs(previous - height) <= 1) return;
+      heights[id] = height;
+      changed = true;
+    });
+  return changed;
+}
+
+function scheduleFrame(callback: () => void): () => void {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function"
+  ) {
+    const frame = window.requestAnimationFrame(callback);
+    return () => window.cancelAnimationFrame(frame);
+  }
+  const timer = setTimeout(callback, 0);
+  return () => clearTimeout(timer);
 }
 
 // the extra bottom cell at the very end
@@ -295,24 +312,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
   const lazyHydratedIdsRef = useRef<Set<string>>(new Set());
   const lazyHeightsRef = useRef<Record<string, number>>({});
   const [lazyHydrationVersion, setLazyHydrationVersion] = useState<number>(0);
-  const lazyHeightRefreshScheduledRef = useRef<boolean>(false);
-
-  const scheduleLazyHeightRefresh = useCallback(() => {
-    if (lazyHeightRefreshScheduledRef.current) return;
-    lazyHeightRefreshScheduledRef.current = true;
-    const run = () => {
-      lazyHeightRefreshScheduledRef.current = false;
-      refreshLazyHydrationVersion(setLazyHydrationVersion);
-    };
-    if (
-      typeof window !== "undefined" &&
-      typeof window.requestAnimationFrame === "function"
-    ) {
-      window.requestAnimationFrame(() => run());
-      return;
-    }
-    setTimeout(run, 0);
-  }, []);
+  const [lazyHeightVersion, setLazyHeightVersion] = useState<number>(0);
 
   useEffect(() => {
     if (!lazyRenderEnabled) return;
@@ -356,6 +356,28 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
   }, [saveScroll]);
 
   const cellListResize = useResizeObserver({ ref: cellListDivRef });
+
+  useEffect(() => {
+    if (!lazyRenderEnabled) return;
+    const container = cellListDivRef.current;
+    if (container == null) return;
+    return scheduleFrame(() => {
+      if (updateLazyCellHeights(container, lazyHeightsRef.current)) {
+        setLazyHeightVersion((version) => version + 1);
+      }
+    });
+  }, [
+    lazyRenderEnabled,
+    lazyHydrationVersion,
+    cell_list,
+    cells,
+    cm_options,
+    font_size,
+    is_visible,
+    more_output,
+    cellViewMode,
+    cellListResize.width,
+  ]);
 
   const fileContext = useFileContext();
 
@@ -859,21 +881,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     const hydrated = lazyHydratedIdsRef.current.has(id);
     if (hydrated) {
       return (
-        <div
-          data-jupyter-lazy-cell-id={id}
-          data-jupyter-lazy-cell-hydrated="1"
-          ref={(node) => {
-            if (node == null) return;
-            const h = node.getBoundingClientRect().height;
-            if (h > 0) {
-              const prev = lazyHeightsRef.current[id] ?? 0;
-              if (Math.abs(prev - h) > 1) {
-                lazyHeightsRef.current[id] = h;
-                scheduleLazyHeightRefresh();
-              }
-            }
-          }}
-        >
+        <div data-jupyter-lazy-cell-id={id} data-jupyter-lazy-cell-hydrated="1">
           {renderCell({
             id,
             isScrolling: false,
@@ -973,7 +981,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     cellListDivRef,
     cellListWidth: cellListResize.width,
     cellListHeight: cellListResize.height,
-    lazyHydrationVersion,
+    lazyLayoutVersion: lazyHydrationVersion + lazyHeightVersion,
     lazyHeightsRef,
     placeholderMinHeight: LAZY_RENDER_PLACEHOLDER_MIN_HEIGHT,
     hydrateVisibleCells,

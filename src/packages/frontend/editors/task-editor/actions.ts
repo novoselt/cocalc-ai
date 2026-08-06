@@ -10,6 +10,7 @@ Task Actions
 import { fromJS, Map } from "immutable";
 import type { TasksSession } from "@cocalc/app-tasks";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 import { throttle } from "lodash";
 import {
   close,
@@ -515,17 +516,13 @@ export class TaskActions extends Actions<TaskState> {
   }
 
   public undo(): void {
-    if (this.syncdb == null) {
-      return;
-    }
+    if (!canUseSyncDocHistory(this.syncdb)) return;
     this.syncdb.undo();
     this.commit();
   }
 
   public redo(): void {
-    if (this.syncdb == null) {
-      return;
-    }
+    if (!canUseSyncDocHistory(this.syncdb)) return;
     this.syncdb.redo();
     this.commit();
   }

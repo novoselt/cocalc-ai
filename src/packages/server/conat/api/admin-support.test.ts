@@ -13,13 +13,16 @@ import { requireDangerousSessionAuth } from "./dangerous-session-auth";
 import {
   buildTriageGroups,
   extractSupportImages,
+  getImage,
   list,
   merge,
   planMerge,
+  planSpam,
   planUpdate,
   redactSupportText,
   search,
   show,
+  spam,
   update,
 } from "./admin-support";
 
@@ -242,7 +245,7 @@ describe("admin support API", () => {
     });
   });
 
-  it("returns CoCalc comment images without requester identities or attachment URLs", async () => {
+  it("returns safe image references without requester identities or attachment URLs", async () => {
     const tickets = {
       show: jest.fn(async () => ({ result: ticket(), response: {} })),
       get: jest.fn(async () => ({
@@ -263,6 +266,17 @@ describe("admin support API", () => {
                   "https://example.zendesk.com/attachments/private-token",
                 file_name: "alice-private.txt",
               },
+              {
+                id: 987,
+                size: 4,
+                content_type: "image/png",
+                content_url:
+                  "https://example.zendesk.com/attachments/private-image-token",
+                file_name: "alice-private.png",
+                inline: true,
+                deleted: false,
+                malware_scan_result: "malware_not_found",
+              },
             ],
           },
         ],
@@ -281,13 +295,21 @@ describe("admin support API", () => {
       expect.objectContaining({
         id: 1,
         author: "requester",
-        attachment_count: 1,
-        attachment_bytes: 120,
+        attachment_count: 2,
+        attachment_bytes: 124,
         images: [
           {
             filename: "support.png",
             source: "cocalc_blob",
             url: `https://cocalc.ai/blobs/support.png?uuid=${IMAGE_UUID}`,
+          },
+          {
+            filename: "zendesk-attachment-987.png",
+            source: "zendesk_attachment",
+            attachment_id: 987,
+            content_type: "image/png",
+            size: 4,
+            inline: true,
           },
         ],
       }),
@@ -296,12 +318,113 @@ describe("admin support API", () => {
     expect(JSON.stringify(result)).not.toContain("super-secret");
     expect(JSON.stringify(result)).not.toContain("private-token");
     expect(JSON.stringify(result)).not.toContain("alice-private.txt");
+    expect(JSON.stringify(result)).not.toContain("alice-private.png");
     expect(tickets.get).toHaveBeenCalledWith([
       "tickets",
       123,
       "comments",
       { sort_order: "desc" },
     ]);
+  });
+
+  it("downloads a ticket image without forwarding Zendesk credentials to the CDN", async () => {
+    const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const attachment = {
+      id: 987,
+      size: image.length,
+      content_type: "image/png",
+      content_url:
+        "https://example.zendesk.com/attachments/private-image-token",
+      file_name: "private-name.png",
+      inline: true,
+      deleted: false,
+      malware_scan_result: "malware_not_found",
+    };
+    const tickets = {
+      show: jest.fn(async () => ({ result: ticket(), response: {} })),
+      get: jest.fn(async () => ({
+        result: [
+          {
+            id: 1,
+            author_id: 44,
+            public: true,
+            created_at: new Date().toISOString(),
+            plain_body: "Screenshot attached.",
+            attachments: [attachment],
+          },
+        ],
+        response: {},
+      })),
+    };
+    const attachments = {
+      show: jest.fn(async () => ({ result: attachment, response: {} })),
+    };
+    mockGetZendeskClient.mockResolvedValue({
+      config: {
+        subdomain: "example",
+        username: "agent@example.com",
+        token: "zendesk-secret",
+      },
+      tickets,
+      attachments,
+    } as any);
+    const originalFetch = global.fetch;
+    const fetchMock = jest
+      .fn()
+      .mockImplementationOnce(async (_url: URL, init: RequestInit) => {
+        expect(init.headers).toMatchObject({
+          Authorization: expect.stringMatching(/^Basic /),
+        });
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: "https://example.zdusercontent.com/image.png",
+          },
+        });
+      })
+      .mockImplementationOnce(async (_url: URL, init: RequestInit) => {
+        expect(init.headers).not.toHaveProperty("Authorization");
+        return new Response(image, {
+          status: 200,
+          headers: {
+            "content-type": "image/png",
+            "content-length": `${image.length}`,
+          },
+        });
+      });
+    global.fetch = fetchMock as typeof fetch;
+
+    try {
+      const result = await getImage({
+        account_id: "admin-account",
+        ticket_id: 123,
+        attachment_id: 987,
+        reason: "inspect screenshot attached to ticket 123",
+      });
+
+      expect(result).toMatchObject({
+        ticket_id: 123,
+        comment_id: 1,
+        attachment_id: 987,
+        filename: "ticket-123-attachment-987.png",
+        content_type: "image/png",
+        size: image.length,
+        data_base64: image.toString("base64"),
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(result)).not.toContain("zendesk-secret");
+      expect(mockCentralLog).toHaveBeenCalledWith({
+        event: "admin_support_operator",
+        value: expect.objectContaining({
+          mode: "get_image",
+          ticket_id: 123,
+          result_bytes: image.length,
+        }),
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 
   it("runs bounded ticket-only Zendesk searches", async () => {
@@ -569,6 +692,64 @@ describe("admin support API", () => {
       zendesk_job_status: "completed",
       source_ticket: { status: "closed" },
     });
+  });
+
+  it("plans and idempotently marks a checked ticket as spam", async () => {
+    const before = ticket({
+      id: 300,
+      status: "new",
+      updated_at: "2026-08-06T10:00:00.000Z",
+    });
+    const tickets = {
+      show: jest.fn(async () => ({ result: before, response: {} })),
+      put: jest.fn(async () => ({ result: null, response: {} })),
+    };
+    mockGetZendeskClient.mockResolvedValue({ tickets } as any);
+
+    const planned = await planSpam({
+      account_id: "admin-account",
+      ticket_id: 300,
+      reason: "review obvious unsolicited gambling advertisement",
+    });
+    expect(planned).toMatchObject({
+      operation: "spam",
+      commit: false,
+      expected_updated_at: "2026-08-06T10:00:00.000Z",
+      warning: expect.stringContaining("suspend"),
+    });
+    expect(tickets.put).not.toHaveBeenCalled();
+
+    const request = {
+      account_id: "11111111-1111-4111-8111-111111111111",
+      session_hash: "fresh-session",
+      ticket_id: 300,
+      expected_updated_at: planned.expected_updated_at,
+      idempotency_key: "support-spam-ticket-300",
+      reason: "approved obvious unsolicited gambling advertisement",
+    };
+    const result = await spam(request);
+    const replay = await spam(request);
+
+    expect(mockRequireDangerousSessionAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: request.account_id,
+        session_hash: "fresh-session",
+      }),
+    );
+    expect(tickets.put).toHaveBeenCalledTimes(1);
+    expect(tickets.put).toHaveBeenCalledWith(
+      ["tickets", 300, "mark_as_spam"],
+      {},
+    );
+    expect(result).toMatchObject({
+      operation: "spam",
+      commit: true,
+      idempotent_replay: false,
+      ticket_id: 300,
+      requester_suspended: true,
+      zendesk_job_status: "completed",
+    });
+    expect(replay).toMatchObject({ idempotent_replay: true });
   });
 
   it("rejects non-admin callers before reading Zendesk", async () => {
