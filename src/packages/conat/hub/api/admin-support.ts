@@ -80,8 +80,12 @@ export interface AdminSupportTicketSummary {
 
 export interface AdminSupportImageReference {
   filename: string;
-  source: "cocalc_blob";
-  url: string;
+  source: "cocalc_blob" | "zendesk_attachment";
+  url?: string;
+  attachment_id?: number;
+  content_type?: string;
+  size?: number;
+  inline?: boolean;
 }
 
 export interface AdminSupportTicketComment {
@@ -133,6 +137,25 @@ export interface AdminSupportShowResponse {
   result_bytes: number;
   truncated: boolean;
   redaction: "best_effort";
+}
+
+export interface AdminSupportGetImageRequest {
+  ticket_id: number;
+  attachment_id: number;
+  max_bytes?: number;
+  reason: string;
+}
+
+export interface AdminSupportGetImageResponse {
+  audit_id: string;
+  ticket_id: number;
+  comment_id: number;
+  attachment_id: number;
+  filename: string;
+  content_type: string;
+  size: number;
+  sha256: string;
+  data_base64: string;
 }
 
 export interface AdminSupportTriageRequest extends AdminSupportListRequest {}
@@ -287,15 +310,84 @@ export interface AdminSupportMergeResponse {
   source_ticket: AdminSupportTicketSummary;
 }
 
+export interface AdminSupportSpamPlanRequest {
+  ticket_id: number;
+  expected_updated_at?: string;
+  reason: string;
+}
+
+export interface AdminSupportSpamPlanResponse {
+  audit_id: string;
+  operation: "spam";
+  commit: false;
+  payload_hash: string;
+  expected_updated_at: string;
+  ticket_before: AdminSupportTicketSummary;
+  warning: string;
+}
+
+export interface AdminSupportSpamRequest extends AdminSupportSpamPlanRequest {
+  expected_updated_at: string;
+  idempotency_key: string;
+  timeout?: number;
+}
+
+export interface AdminSupportSpamResponse {
+  audit_id: string;
+  operation: "spam";
+  commit: true;
+  payload_hash: string;
+  idempotency_key: string;
+  idempotent_replay: boolean;
+  ticket_id: number;
+  requester_suspended: true;
+  zendesk_job_id?: string;
+  zendesk_job_status: string;
+}
+
+export const ADMIN_SUPPORT_CONVENTIONS = {
+  version: 1,
+  statuses: {
+    new: "We have not reviewed or acted on the ticket.",
+    open: "CoCalc is actively investigating or still owes work, including after an interim reply.",
+    pending:
+      "CoCalc is waiting for the requester to answer a question or complete an action.",
+    hold: "Work is blocked on a specific internal or external dependency.",
+    solved:
+      "The promised work is complete and verified; no further action is expected.",
+    closed:
+      "Zendesk's terminal state. Do not use it as a normal operator transition.",
+  },
+  workflow: [
+    "Triage and investigate using read-only, audited commands.",
+    "Draft the exact public reply or private note and proposed ticket changes.",
+    "Obtain explicit human approval before any reply, status change, merge, or spam action.",
+    "Re-read the ticket and use expected_updated_at immediately before committing.",
+    "Verify the resulting comment, status, audit, or asynchronous job after mutation.",
+  ],
+  handling: [
+    "Inspect relevant screenshots and attachments before drawing conclusions from an incomplete description.",
+    "Use open, not pending, when CoCalc still owns the next action.",
+    "Use pending only when the requester must respond or act.",
+    "Do not mark solved merely because a fix was committed; complete and verify the promised operational action first.",
+    "Merge duplicates only after explicit approval, keeping the more complete or canonical ticket as the target.",
+    "Mark spam only for clear unsolicited junk. Zendesk spam handling deletes the ticket and suspends the requester.",
+    "Limit account and project inspection to data relevant to the support request, use a ticket-specific audit reason, and never expose secrets or unnecessary personal data in replies.",
+  ],
+} as const;
+
 export const adminSupport = {
   list: authFirstRequireAccount,
   show: authFirstRequireAccount,
   triage: authFirstRequireAccount,
   search: authFirstRequireAccount,
+  getImage: authFirstRequireAccount,
   planUpdate: authFirstRequireAccount,
   update: authFirstRequireAccount,
   planMerge: authFirstRequireAccount,
   merge: authFirstRequireAccount,
+  planSpam: authFirstRequireAccount,
+  spam: authFirstRequireAccount,
 };
 
 export interface AdminSupportApi {
@@ -307,6 +399,9 @@ export interface AdminSupportApi {
   search: (
     opts: AdminSupportSearchRequest,
   ) => Promise<AdminSupportSearchResponse>;
+  getImage: (
+    opts: AdminSupportGetImageRequest,
+  ) => Promise<AdminSupportGetImageResponse>;
   planUpdate: (
     opts: AdminSupportUpdatePlanRequest,
   ) => Promise<AdminSupportUpdatePlanResponse>;
@@ -317,4 +412,8 @@ export interface AdminSupportApi {
     opts: AdminSupportMergePlanRequest,
   ) => Promise<AdminSupportMergePlanResponse>;
   merge: (opts: AdminSupportMergeRequest) => Promise<AdminSupportMergeResponse>;
+  planSpam: (
+    opts: AdminSupportSpamPlanRequest,
+  ) => Promise<AdminSupportSpamPlanResponse>;
+  spam: (opts: AdminSupportSpamRequest) => Promise<AdminSupportSpamResponse>;
 }

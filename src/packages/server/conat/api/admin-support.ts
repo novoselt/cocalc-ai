@@ -5,6 +5,7 @@
 
 import { createHash } from "crypto";
 import type {
+  Attachment,
   CreateOrUpdateTicket,
   Ticket,
   TicketComment,
@@ -13,6 +14,8 @@ import type {
 import getLogger from "@cocalc/backend/logger";
 import type {
   AdminSupportCategory,
+  AdminSupportGetImageRequest,
+  AdminSupportGetImageResponse,
   AdminSupportImageReference,
   AdminSupportListRequest,
   AdminSupportListResponse,
@@ -26,6 +29,10 @@ import type {
   AdminSupportSearchResponse,
   AdminSupportShowRequest,
   AdminSupportShowResponse,
+  AdminSupportSpamPlanRequest,
+  AdminSupportSpamPlanResponse,
+  AdminSupportSpamRequest,
+  AdminSupportSpamResponse,
   AdminSupportTicketPriority,
   AdminSupportTicketComment,
   AdminSupportTicketSignals,
@@ -76,6 +83,8 @@ const MAX_TAGS_PER_MUTATION = 100;
 const MAX_TAG_CHARS = 100;
 const MAX_IDEMPOTENCY_KEY_CHARS = 200;
 const MAX_IMAGES_PER_COMMENT = 20;
+const DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const ZENDESK_TIMEOUT_MS = 20_000;
 const ZENDESK_MERGE_TIMEOUT_MS = 60_000;
 const MUTATION_TABLE = "admin_support_mutations";
@@ -104,6 +113,8 @@ type ZendeskMergeJob = {
   message?: string;
   results?: unknown;
 };
+
+type SupportMutationOperation = "update" | "merge" | "spam";
 
 let activeZendeskReads = 0;
 const MAX_ACTIVE_ZENDESK_READS = 2;
@@ -171,7 +182,7 @@ function normalizedIdempotencyKey(value: unknown): string {
   return key;
 }
 
-function sha256(value: string): string {
+function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -318,7 +329,7 @@ async function ensureMutationSchema(): Promise<void> {
   mutationSchemaReady ??= getPool().query(`
     CREATE TABLE IF NOT EXISTS ${MUTATION_TABLE} (
       idempotency_key TEXT PRIMARY KEY,
-      operation TEXT NOT NULL CHECK (operation IN ('update', 'merge')),
+      operation TEXT NOT NULL CHECK (operation IN ('update', 'merge', 'spam')),
       account_id UUID NOT NULL,
       payload_hash TEXT NOT NULL,
       audit_id UUID NOT NULL,
@@ -336,13 +347,29 @@ async function ensureMutationSchema(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS admin_support_mutations_created_idx
       ON ${MUTATION_TABLE} (created_at DESC);
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = '${MUTATION_TABLE}'::regclass
+          AND conname = 'admin_support_mutations_operation_check'
+          AND pg_get_constraintdef(oid) LIKE '%spam%'
+      ) THEN
+        ALTER TABLE ${MUTATION_TABLE}
+          DROP CONSTRAINT IF EXISTS admin_support_mutations_operation_check;
+        ALTER TABLE ${MUTATION_TABLE}
+          ADD CONSTRAINT admin_support_mutations_operation_check
+          CHECK (operation IN ('update', 'merge', 'spam'));
+      END IF;
+    END $$;
   `) as unknown as Promise<void>;
   await mutationSchemaReady;
 }
 
 type MutationLedgerRow = {
   idempotency_key: string;
-  operation: "update" | "merge";
+  operation: SupportMutationOperation;
   account_id: string;
   payload_hash: string;
   audit_id: string;
@@ -367,7 +394,7 @@ async function reserveMutation({
   sourceTicketId,
 }: {
   idempotencyKey: string;
-  operation: "update" | "merge";
+  operation: SupportMutationOperation;
   accountId: string;
   hash: string;
   auditId: string;
@@ -542,6 +569,17 @@ const SAFE_SUPPORT_IMAGE_EXTENSIONS = new Set([
   ".webp",
 ]);
 
+const SUPPORT_IMAGE_MIME_EXTENSIONS = new Map([
+  ["image/avif", ".avif"],
+  ["image/bmp", ".bmp"],
+  ["image/gif", ".gif"],
+  ["image/jpeg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/webp", ".webp"],
+  ["image/x-icon", ".ico"],
+  ["image/vnd.microsoft.icon", ".ico"],
+]);
+
 function supportImageExtension(filename: string): string {
   const match = filename.toLowerCase().match(/(\.[a-z0-9]+)$/);
   return match?.[1] ?? "";
@@ -615,6 +653,47 @@ export function extractSupportImages(
     }
   }
   return [...images.values()];
+}
+
+function normalizedImageContentType(value: unknown): string | undefined {
+  const contentType = `${value ?? ""}`.split(";", 1)[0].trim().toLowerCase();
+  return SUPPORT_IMAGE_MIME_EXTENSIONS.has(contentType)
+    ? contentType
+    : undefined;
+}
+
+function zendeskAttachmentImageReference(
+  attachment: Attachment,
+): AdminSupportImageReference | undefined {
+  const attachmentId = Number(attachment?.id);
+  const contentType = normalizedImageContentType(attachment?.content_type);
+  if (
+    !Number.isSafeInteger(attachmentId) ||
+    attachmentId <= 0 ||
+    !contentType ||
+    attachment?.deleted === true ||
+    attachment?.malware_scan_result === "malware_found"
+  ) {
+    return undefined;
+  }
+  const size = Math.max(0, Math.floor(Number(attachment?.size) || 0));
+  return {
+    filename: `zendesk-attachment-${attachmentId}${SUPPORT_IMAGE_MIME_EXTENSIONS.get(contentType)}`,
+    source: "zendesk_attachment",
+    attachment_id: attachmentId,
+    content_type: contentType,
+    size,
+    inline: attachment?.inline === true,
+  };
+}
+
+function zendeskAttachmentImages(
+  attachments: Attachment[],
+): AdminSupportImageReference[] {
+  return attachments
+    .map(zendeskAttachmentImageReference)
+    .filter((image): image is AdminSupportImageReference => image != null)
+    .slice(0, MAX_IMAGES_PER_COMMENT);
 }
 
 export function redactSupportText(value: unknown, maxChars: number): string {
@@ -777,6 +856,10 @@ function normalizeTicketComment(
     ? comment.attachments
     : [];
   const body = comment.plain_body || comment.body;
+  const images = [
+    ...extractSupportImages(body, configuredSiteUrl),
+    ...zendeskAttachmentImages(attachments),
+  ].slice(0, MAX_IMAGES_PER_COMMENT);
   return {
     id: Number(comment.id),
     author:
@@ -786,7 +869,7 @@ function normalizeTicketComment(
     public: !!comment.public,
     created_at: safeDate(comment.created_at),
     body: redactSupportText(body, MAX_COMMENT_CHARS),
-    images: extractSupportImages(body, configuredSiteUrl),
+    images,
     attachment_count: attachments.length,
     attachment_bytes: attachments.reduce(
       (sum, attachment) => sum + (Number(attachment?.size) || 0),
@@ -975,12 +1058,15 @@ async function recordAudit({
   mode:
     | "list"
     | "show"
+    | "get_image"
     | "triage"
     | "search"
     | "plan_update"
     | "update"
     | "plan_merge"
-    | "merge";
+    | "merge"
+    | "plan_spam"
+    | "spam";
   reason: string;
   ticketId?: number;
   sinceMinutes?: number;
@@ -1310,6 +1396,215 @@ export async function show(
       auditId,
       accountId,
       mode: "show",
+      reason,
+      ticketId,
+      durationMs: Date.now() - started,
+      error,
+    });
+    throw error;
+  }
+}
+
+function allowedZendeskAttachmentHost(
+  hostname: string,
+  subdomain: string,
+): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === `${subdomain.toLowerCase()}.zendesk.com` ||
+    normalized.endsWith(".zdusercontent.com")
+  );
+}
+
+async function fetchZendeskAttachmentImage({
+  client,
+  attachment,
+  maxBytes,
+}: {
+  client: Awaited<ReturnType<typeof getZendeskClient>>;
+  attachment: Attachment;
+  maxBytes: number;
+}): Promise<{ data: Buffer; contentType: string }> {
+  const configuredType = normalizedImageContentType(attachment.content_type);
+  if (!configuredType) {
+    throw new Error("Zendesk attachment is not a supported image type");
+  }
+  if (attachment.deleted === true) {
+    throw new Error("Zendesk attachment was deleted");
+  }
+  if (attachment.malware_scan_result === "malware_found") {
+    throw new Error("Zendesk rejected the attachment as malware");
+  }
+  const declaredSize = Math.max(0, Math.floor(Number(attachment.size) || 0));
+  if (declaredSize > maxBytes) {
+    throw new Error(
+      `Zendesk image is ${declaredSize} bytes; maximum is ${maxBytes}`,
+    );
+  }
+  const rawUrl =
+    `${attachment.mapped_content_url || attachment.content_url || ""}`.trim();
+  if (!rawUrl) throw new Error("Zendesk attachment has no content URL");
+
+  const subdomain = `${client.config.subdomain ?? ""}`.trim();
+  const username = `${client.config.username ?? ""}`;
+  const token = `${client.config.token ?? ""}`;
+  if (!subdomain || !username || !token) {
+    throw new Error("Zendesk attachment authentication is not configured");
+  }
+  let current = new URL(rawUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ZENDESK_TIMEOUT_MS);
+  timer.unref?.();
+  try {
+    for (let redirects = 0; redirects <= 4; redirects += 1) {
+      if (
+        current.protocol !== "https:" ||
+        !allowedZendeskAttachmentHost(current.hostname, subdomain)
+      ) {
+        throw new Error("Zendesk attachment URL uses an untrusted host");
+      }
+      const headers: Record<string, string> = { Accept: configuredType };
+      if (current.hostname === `${subdomain.toLowerCase()}.zendesk.com`) {
+        headers.Authorization = `Basic ${Buffer.from(`${username}/token:${token}`).toString("base64")}`;
+      }
+      const response = await fetch(current, {
+        headers,
+        redirect: "manual",
+        signal: controller.signal,
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location || redirects === 4) {
+          throw new Error("Zendesk attachment redirect was invalid");
+        }
+        current = new URL(location, current);
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(
+          `Zendesk attachment download failed with HTTP ${response.status}`,
+        );
+      }
+      const responseLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(responseLength) && responseLength > maxBytes) {
+        throw new Error(
+          `Zendesk image is ${responseLength} bytes; maximum is ${maxBytes}`,
+        );
+      }
+      const responseType = normalizedImageContentType(
+        response.headers.get("content-type"),
+      );
+      const contentType = responseType ?? configuredType;
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Zendesk attachment response had no body");
+      const chunks: Buffer[] = [];
+      let size = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = Buffer.from(value);
+        size += chunk.length;
+        if (size > maxBytes) {
+          await reader.cancel();
+          throw new Error(`Zendesk image exceeds the ${maxBytes}-byte maximum`);
+        }
+        chunks.push(chunk);
+      }
+      if (size === 0) throw new Error("Zendesk attachment image was empty");
+      return { data: Buffer.concat(chunks, size), contentType };
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  throw new Error("Zendesk attachment download did not complete");
+}
+
+export async function getImage(
+  opts: AdminSupportGetImageRequest & AuthOpts,
+): Promise<AdminSupportGetImageResponse> {
+  const started = Date.now();
+  const auditId = uuid();
+  const accountId = await requireAdmin(opts);
+  const reason = requiredReason(opts.reason);
+  const ticketId = positiveTicketId(opts.ticket_id);
+  const attachmentId = positiveTicketId(opts.attachment_id, "attachment_id");
+  const maxBytes = positiveInt({
+    value: opts.max_bytes,
+    fallback: DEFAULT_MAX_IMAGE_BYTES,
+    max: MAX_MAX_IMAGE_BYTES,
+  });
+  try {
+    const client = await getZendeskClient();
+    const { comments } = await withZendeskReadSlot(
+      () => loadTicket(ticketId),
+      "Zendesk image attachment lookup",
+    );
+    let commentId: number | undefined;
+    let attachment: Attachment | undefined;
+    for (const comment of comments) {
+      const match = (comment.attachments ?? []).find(
+        (candidate) => Number(candidate.id) === attachmentId,
+      );
+      if (match) {
+        commentId = Number(comment.id);
+        attachment = match;
+        break;
+      }
+    }
+    if (!attachment || !commentId) {
+      throw new Error(
+        `image attachment ${attachmentId} is not part of ticket ${ticketId}`,
+      );
+    }
+    if (!zendeskAttachmentImageReference(attachment)) {
+      throw new Error("Zendesk attachment is not a safe supported image");
+    }
+    const detail = (await withTimeout(
+      client.attachments.show(attachmentId),
+      "Zendesk attachment metadata read",
+    )) as any;
+    const detailedAttachment = (detail?.result ??
+      detail?.response?.attachment ??
+      attachment) as Attachment;
+    if (
+      Number(detailedAttachment?.id) !== attachmentId ||
+      !zendeskAttachmentImageReference(detailedAttachment)
+    ) {
+      throw new Error("Zendesk attachment metadata did not match the image");
+    }
+    const { data, contentType } = await fetchZendeskAttachmentImage({
+      client,
+      attachment: detailedAttachment,
+      maxBytes,
+    });
+    const filename = `ticket-${ticketId}-attachment-${attachmentId}${SUPPORT_IMAGE_MIME_EXTENSIONS.get(contentType)}`;
+    const result: AdminSupportGetImageResponse = {
+      audit_id: auditId,
+      ticket_id: ticketId,
+      comment_id: commentId,
+      attachment_id: attachmentId,
+      filename,
+      content_type: contentType,
+      size: data.length,
+      sha256: sha256(data),
+      data_base64: data.toString("base64"),
+    };
+    await recordAudit({
+      auditId,
+      accountId,
+      mode: "get_image",
+      reason,
+      ticketId,
+      resultCount: 1,
+      resultBytes: data.length,
+      durationMs: Date.now() - started,
+    });
+    return result;
+  } catch (error) {
+    await recordAudit({
+      auditId,
+      accountId,
+      mode: "get_image",
       reason,
       ticketId,
       durationMs: Date.now() - started,
@@ -2052,7 +2347,7 @@ export async function planMerge(
   }
 }
 
-function mergeJobFromResponse(value: unknown): ZendeskMergeJob {
+function zendeskJobFromResponse(value: unknown): ZendeskMergeJob {
   const candidate = value as any;
   return (
     candidate?.result?.job_status ??
@@ -2063,9 +2358,10 @@ function mergeJobFromResponse(value: unknown): ZendeskMergeJob {
   );
 }
 
-async function waitForMergeJob(
+async function waitForZendeskJob(
   client: Awaited<ReturnType<typeof getZendeskClient>>,
   initial: ZendeskMergeJob,
+  operation: string,
 ): Promise<ZendeskMergeJob> {
   const id = `${initial.id ?? ""}`.trim();
   if (!id || ["completed", "failed", "killed"].includes(`${initial.status}`)) {
@@ -2076,13 +2372,13 @@ async function waitForMergeJob(
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     const response = await client.jobstatuses.show(id);
-    current = mergeJobFromResponse(response);
+    current = zendeskJobFromResponse(response);
     if (["completed", "failed", "killed"].includes(`${current.status}`)) {
       return current;
     }
   }
   throw new Error(
-    `Zendesk merge job ${id} did not finish within ${ZENDESK_MERGE_TIMEOUT_MS}ms`,
+    `Zendesk ${operation} job ${id} did not finish within ${ZENDESK_MERGE_TIMEOUT_MS}ms`,
   );
 }
 
@@ -2173,7 +2469,7 @@ export async function merge(
       }),
       "Zendesk ticket merge",
     );
-    const initialJob = mergeJobFromResponse(mergeResponse);
+    const initialJob = zendeskJobFromResponse(mergeResponse);
     zendeskJobId = `${initialJob.id ?? ""}`.trim() || undefined;
     if (zendeskJobId) {
       await setMutationStatus({
@@ -2182,7 +2478,7 @@ export async function merge(
         zendeskJobId,
       });
     }
-    const job = await waitForMergeJob(client, initialJob);
+    const job = await waitForZendeskJob(client, initialJob, "merge");
     const jobStatus = `${job.status ?? "completed"}`;
     if (jobStatus !== "completed") {
       throw new Error(
@@ -2252,6 +2548,226 @@ export async function merge(
       payloadHash: plan?.hash ?? requestHash,
       idempotencyKey,
       priorUpdatedAt: [targetExpectedUpdatedAt, sourceExpectedUpdatedAt],
+      zendeskJobId,
+      resultStatus: remoteStarted ? "error_after_remote_start" : "rejected",
+      durationMs: Date.now() - started,
+      error,
+    });
+    throw error;
+  }
+}
+
+const SPAM_WARNING =
+  "Zendesk will delete this ticket and suspend its requester. Use only for clear unsolicited junk.";
+
+function spamPayloadHash({
+  ticketId,
+  expectedUpdatedAt,
+}: {
+  ticketId: number;
+  expectedUpdatedAt: string;
+}): string {
+  return payloadHash({
+    operation: "spam",
+    ticket_id: ticketId,
+    expected_updated_at: expectedUpdatedAt,
+  });
+}
+
+async function buildSpamPlan(opts: AdminSupportSpamPlanRequest): Promise<{
+  ticket: Ticket;
+  ticketId: number;
+  expectedUpdatedAt: string;
+  hash: string;
+}> {
+  const ticketId = positiveTicketId(opts.ticket_id);
+  const expected = normalizedExpectedUpdatedAt(opts.expected_updated_at);
+  const ticket = await withZendeskReadSlot(
+    () => loadTicketOnly(ticketId),
+    "Zendesk spam preflight",
+  );
+  requireTicketVersion(ticket, expected);
+  const expectedUpdatedAt = expected ?? safeDate(ticket.updated_at);
+  return {
+    ticket,
+    ticketId,
+    expectedUpdatedAt,
+    hash: spamPayloadHash({ ticketId, expectedUpdatedAt }),
+  };
+}
+
+export async function planSpam(
+  opts: AdminSupportSpamPlanRequest & AuthOpts,
+): Promise<AdminSupportSpamPlanResponse> {
+  const started = Date.now();
+  const auditId = uuid();
+  const accountId = await requireAdmin(opts);
+  const reason = requiredReason(opts.reason);
+  try {
+    const plan = await buildSpamPlan(opts);
+    const result: AdminSupportSpamPlanResponse = {
+      audit_id: auditId,
+      operation: "spam",
+      commit: false,
+      payload_hash: plan.hash,
+      expected_updated_at: plan.expectedUpdatedAt,
+      ticket_before: summarizeTicket(plan.ticket),
+      warning: SPAM_WARNING,
+    };
+    await recordAudit({
+      auditId,
+      accountId,
+      mode: "plan_spam",
+      reason,
+      ticketId: plan.ticketId,
+      payloadHash: plan.hash,
+      priorUpdatedAt: plan.expectedUpdatedAt,
+      resultStatus: "dry_run",
+      durationMs: Date.now() - started,
+    });
+    return result;
+  } catch (error) {
+    await recordAudit({
+      auditId,
+      accountId,
+      mode: "plan_spam",
+      reason,
+      ticketId: Number(opts.ticket_id) || undefined,
+      durationMs: Date.now() - started,
+      error,
+    });
+    throw error;
+  }
+}
+
+export async function spam(
+  opts: AdminSupportSpamRequest & AuthOpts,
+): Promise<AdminSupportSpamResponse> {
+  const started = Date.now();
+  const auditId = uuid();
+  const accountId = await requireFreshAdmin(opts);
+  const reason = requiredReason(opts.reason);
+  const ticketId = positiveTicketId(opts.ticket_id);
+  const expectedUpdatedAt = normalizedExpectedUpdatedAt(
+    opts.expected_updated_at,
+    { required: true },
+  )!;
+  const idempotencyKey = normalizedIdempotencyKey(opts.idempotency_key);
+  const requestHash = spamPayloadHash({ ticketId, expectedUpdatedAt });
+  let plan: Awaited<ReturnType<typeof buildSpamPlan>> | undefined;
+  let remoteStarted = false;
+  let reservationCreated = false;
+  let zendeskJobId: string | undefined;
+  try {
+    const reservation = await reserveMutation({
+      idempotencyKey,
+      operation: "spam",
+      accountId,
+      hash: requestHash,
+      auditId,
+      ticketId,
+    });
+    reservationCreated = reservation.created;
+    if (!reservation.created) {
+      const replay = replayOrRejectMutation<AdminSupportSpamResponse>(
+        reservation.row,
+      );
+      if (replay) {
+        await recordAudit({
+          auditId,
+          accountId,
+          mode: "spam",
+          reason,
+          ticketId,
+          payloadHash: requestHash,
+          idempotencyKey,
+          priorUpdatedAt: expectedUpdatedAt,
+          resultStatus: "idempotent_replay",
+          durationMs: Date.now() - started,
+        });
+        return replay;
+      }
+    }
+    plan = await buildSpamPlan({
+      ...opts,
+      expected_updated_at: expectedUpdatedAt,
+    });
+    await setMutationStatus({ idempotencyKey, status: "remote_started" });
+    remoteStarted = true;
+    const client = await getZendeskClient();
+    const response = await withTimeout(
+      client.tickets.put(["tickets", ticketId, "mark_as_spam"], {}),
+      "Zendesk mark ticket as spam",
+    );
+    const initialJob = zendeskJobFromResponse(response);
+    zendeskJobId = `${initialJob.id ?? ""}`.trim() || undefined;
+    if (zendeskJobId) {
+      await setMutationStatus({
+        idempotencyKey,
+        status: "remote_started",
+        zendeskJobId,
+      });
+    }
+    const job = await waitForZendeskJob(client, initialJob, "spam");
+    const jobStatus = `${job.status ?? "completed"}`;
+    if (jobStatus !== "completed") {
+      throw new Error(
+        `Zendesk spam job ${zendeskJobId ?? "(unknown)"} ${jobStatus}: ${job.message ?? "no details"}`,
+      );
+    }
+    const result: AdminSupportSpamResponse = {
+      audit_id: auditId,
+      operation: "spam",
+      commit: true,
+      payload_hash: plan.hash,
+      idempotency_key: idempotencyKey,
+      idempotent_replay: false,
+      ticket_id: ticketId,
+      requester_suspended: true,
+      ...(zendeskJobId ? { zendesk_job_id: zendeskJobId } : {}),
+      zendesk_job_status: jobStatus,
+    };
+    await setMutationStatus({
+      idempotencyKey,
+      status: "succeeded",
+      zendeskJobId,
+      safeResponse: result,
+    });
+    await recordAudit({
+      auditId,
+      accountId,
+      mode: "spam",
+      reason,
+      ticketId,
+      payloadHash: plan.hash,
+      idempotencyKey,
+      priorUpdatedAt: expectedUpdatedAt,
+      zendeskJobId,
+      resultStatus: jobStatus,
+      durationMs: Date.now() - started,
+    });
+    return result;
+  } catch (error) {
+    if (reservationCreated) {
+      await setMutationStatus({
+        idempotencyKey,
+        status:
+          remoteStarted && !zendeskDefinitelyRejected(error)
+            ? "indeterminate"
+            : "rejected",
+        zendeskJobId,
+        error,
+      });
+    }
+    await recordAudit({
+      auditId,
+      accountId,
+      mode: "spam",
+      reason,
+      ticketId,
+      payloadHash: plan?.hash ?? requestHash,
+      idempotencyKey,
+      priorUpdatedAt: expectedUpdatedAt,
       zendeskJobId,
       resultStatus: remoteStarted ? "error_after_remote_start" : "rejected",
       durationMs: Date.now() - started,

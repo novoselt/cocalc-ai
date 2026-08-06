@@ -44,7 +44,7 @@ const RISKY_EXPORT_PATTERN =
   /^export\s+(?:async\s+)?function\s+(\w+)|^export\s+const\s+(\w+)\s*=\s*(?:reuseInFlight\()?/gm;
 
 const DANGEROUS_RPC_NAME_PATTERN =
-  /^(?:add|admin|apply|approve|archive|assign|backup|begin|bootstrap|cancel|claim|clear|cleanup|create|delete|diagnostic|disable|dismiss|drain|exec|finalize|force|gc|generate|hard|import|increase|issue|leave|logs|mark|merge|move|open|prepare|prune|publish|pull|purchase|purge|query|reconcile|record|release|remove|repair|request|reserve|resize|restart|restore|rehome|review|revoke|rollout|rotate|run|save|scan|send|set|start|stop|sync|terminate|update|upgrade|upsert)/i;
+  /^(?:add|admin|apply|approve|archive|assign|backup|begin|bootstrap|cancel|claim|clear|cleanup|create|delete|diagnostic|disable|dismiss|drain|exec|finalize|force|gc|generate|hard|import|increase|issue|leave|logs|mark|merge|move|open|prepare|prune|publish|pull|purchase|purge|query|reconcile|record|release|remove|repair|request|reserve|resize|restart|restore|rehome|review|revoke|rollout|rotate|run|save|scan|send|set|spam|start|stop|sync|terminate|update|upgrade|upsert)/i;
 
 function exportedNames(source: string): string[] {
   const names: string[] = [];

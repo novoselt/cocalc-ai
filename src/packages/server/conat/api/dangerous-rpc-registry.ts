@@ -85,6 +85,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "merges Zendesk tickets and can add customer-visible comments",
   },
+  "adminSupport.spam": {
+    decision: "fresh-auth-required",
+    reason: "deletes a Zendesk ticket as spam and suspends its requester",
+  },
   "adminData.deleteView": {
     decision: "fresh-auth-required",
     reason: "Admin Data Explorer shared view deletion",
