@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Input,
   InputNumber,
   Modal,
   Popconfirm,
@@ -22,6 +23,7 @@ import type { ReactElement } from "react";
 import { defineMessage } from "react-intl";
 
 import type { PublicDirectoryShareSummary } from "@cocalc/conat/hub/api/public-directory-shares";
+import type { LegacyMigrationPublicShareSummary } from "@cocalc/conat/hub/api/legacy-migration";
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
 import {
   FreshAuthModal,
@@ -37,6 +39,7 @@ import { listSiteLicenseOverviews } from "@cocalc/frontend/purchases/api";
 import { User } from "@cocalc/frontend/users/user";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { SiteLicenseOverview } from "@cocalc/conat/hub/api/purchases";
+import { legacyMigrationProjectHref } from "./legacy-migration-link";
 import type { SettingsPageDefinition } from "./settings-page";
 
 const { Text } = Typography;
@@ -65,6 +68,17 @@ type PublicSharesState = {
   error: string;
   loading: boolean;
   shares: PublicDirectoryShareSummary[];
+  totalCount: number;
+};
+
+type LegacyPublicSharesState = {
+  error: string;
+  hasInventory: boolean;
+  loading: boolean;
+  page: number;
+  pageSize: number;
+  query: string;
+  shares: LegacyMigrationPublicShareSummary[];
   totalCount: number;
 };
 
@@ -106,7 +120,7 @@ function availabilityTag(share: PublicDirectoryShareSummary) {
     case "pending":
       return <Tag color="gold">Pending restore</Tag>;
     case "unavailable":
-      return <Tag>Not yet available</Tag>;
+      return <Tag>Unavailable</Tag>;
     default:
       return <Text type="secondary">-</Text>;
   }
@@ -133,7 +147,8 @@ function projectPathHref(share: PublicDirectoryShareSummary): string {
       : share.path.split("/").filter((part) => part.length > 0)),
   ];
   const encodedPath = parts.map(encodeURIComponent).join("/");
-  return `/projects/${share.project_id}/files/${encodedPath}/`;
+  const suffix = share.path_type == "directory" ? "/" : "";
+  return `/projects/${share.project_id}/files/${encodedPath}${suffix}`;
 }
 
 function projectPathTarget(share: PublicDirectoryShareSummary): string {
@@ -187,8 +202,61 @@ function shareMetadataUpdatedTimestamp(
   return shareMetadataUpdatedDate(share)?.valueOf() ?? 0;
 }
 
+function legacyShareDate(
+  share: LegacyMigrationPublicShareSummary,
+): Date | null {
+  const value = share.last_edited ?? share.created ?? null;
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.valueOf()) ? date : null;
+}
+
+function legacyShareTimestamp(
+  share: LegacyMigrationPublicShareSummary,
+): number {
+  return legacyShareDate(share)?.valueOf() ?? 0;
+}
+
+function legacyShareStatusTag({
+  currentShare,
+  legacyShare,
+}: {
+  currentShare?: PublicDirectoryShareSummary;
+  legacyShare: LegacyMigrationPublicShareSummary;
+}) {
+  if (currentShare != null) {
+    if (
+      legacyShare.restore_status === "restored" &&
+      currentShare.availability_status === "pending"
+    ) {
+      return <Tag color="gold">Restored; activation pending</Tag>;
+    }
+    return availabilityTag(currentShare);
+  }
+  if (legacyShare.import_status === "failed") {
+    return <Tag color="red">Project import failed</Tag>;
+  }
+  if (legacyShare.import_status === "creating") {
+    return <Tag color="gold">Preparing project</Tag>;
+  }
+  if (legacyShare.import_status === "not-imported") {
+    return <Tag>Project not restored</Tag>;
+  }
+  if (legacyShare.restore_status === "restored") {
+    return <Tag color="gold">Restored; activation pending</Tag>;
+  }
+  if (legacyShare.restore_status === "failed") {
+    return <Tag color="red">Project restore failed</Tag>;
+  }
+  return <Tag color="gold">Project restore pending</Tag>;
+}
+
 function PublicSharesPage() {
   const projectMap = useTypedRedux("projects", "project_map");
+  const legacyMigrationEnabled = !!useTypedRedux(
+    "customize",
+    "legacy_migration_enabled",
+  );
   const [state, setState] = useState<PublicSharesState>({
     error: "",
     loading: false,
@@ -196,6 +264,16 @@ function PublicSharesPage() {
     totalCount: 0,
   });
   const [selectedShareIds, setSelectedShareIds] = useState<string[]>([]);
+  const [legacyState, setLegacyState] = useState<LegacyPublicSharesState>({
+    error: "",
+    hasInventory: false,
+    loading: false,
+    page: 1,
+    pageSize: 25,
+    query: "",
+    shares: [],
+    totalCount: 0,
+  });
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkLicenseOpen, setBulkLicenseOpen] = useState(false);
   const [bulkSiteLicenseOverviews, setBulkSiteLicenseOverviews] = useState<
@@ -221,6 +299,15 @@ function PublicSharesPage() {
     () => selectedShares.filter((share) => share.disabled),
     [selectedShares],
   );
+  const currentShareByLegacyId = useMemo(() => {
+    const result = new Map<string, PublicDirectoryShareSummary>();
+    for (const share of state.shares) {
+      if (share.legacy_public_path_id) {
+        result.set(share.legacy_public_path_id, share);
+      }
+    }
+    return result;
+  }, [state.shares]);
   const siteLicensePoolOptions = useMemo<SiteLicensePoolOption[]>(
     () =>
       bulkSiteLicenseOverviews.flatMap((overview) =>
@@ -263,6 +350,62 @@ function PublicSharesPage() {
         loading: false,
       }));
     }
+  }
+
+  async function loadLegacyShares(
+    page = legacyState.page,
+    pageSize = legacyState.pageSize,
+    query = legacyState.query,
+  ) {
+    if (!legacyMigrationEnabled) {
+      setLegacyState({
+        error: "",
+        hasInventory: false,
+        loading: false,
+        page: 1,
+        pageSize,
+        query,
+        shares: [],
+        totalCount: 0,
+      });
+      return;
+    }
+    setLegacyState((prev) => ({ ...prev, error: "", loading: true }));
+    try {
+      const result =
+        await webapp_client.conat_client.hub.legacyMigration.listPublicShares({
+          limit: pageSize,
+          offset: (page - 1) * pageSize,
+          query,
+        });
+      setLegacyState((prev) => ({
+        error: "",
+        hasInventory: prev.hasInventory || result.total_count > 0,
+        loading: false,
+        page,
+        pageSize,
+        query,
+        shares: result.shares,
+        totalCount: result.total_count,
+      }));
+    } catch (err) {
+      setLegacyState((prev) => ({
+        ...prev,
+        error: normalizeUserFacingError(err).message,
+        loading: false,
+      }));
+    }
+  }
+
+  async function loadAllShares() {
+    await Promise.all([
+      loadShares(),
+      loadLegacyShares(
+        legacyState.page,
+        legacyState.pageSize,
+        legacyState.query,
+      ),
+    ]);
   }
 
   async function updateSelectedShares({
@@ -353,8 +496,8 @@ function PublicSharesPage() {
   }
 
   useEffect(() => {
-    void loadShares();
-  }, []);
+    void Promise.all([loadShares(), loadLegacyShares(1, 25, "")]);
+  }, [legacyMigrationEnabled]);
 
   useEffect(() => {
     const currentShareIds = new Set(state.shares.map((share) => share.id));
@@ -405,8 +548,10 @@ function PublicSharesPage() {
           <div>
             <Text type="secondary">
               These are public or unlisted file and directory shares owned by
-              projects you can administer. Migrated cocalc.com shares appear
-              here after import.
+              projects you can administer. A retained cocalc.com publication
+              becomes active here after its corresponding project is restored;
+              the historical inventory below also shows publications whose
+              projects have not been restored.
             </Text>
           </div>
 
@@ -475,7 +620,10 @@ function PublicSharesPage() {
           />
 
           <Space wrap>
-            <Button onClick={() => void loadShares()} loading={state.loading}>
+            <Button
+              onClick={() => void loadAllShares()}
+              loading={state.loading || legacyState.loading}
+            >
               Refresh
             </Button>
             <Text type="secondary">
@@ -712,6 +860,179 @@ function PublicSharesPage() {
           )}
         </Space>
       </Card>
+      {legacyState.hasInventory || legacyState.error ? (
+        <Card title="Legacy cocalc.com publications">
+          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Alert
+              type="info"
+              showIcon
+              message="Legacy published files and folders require project restoration"
+              description={
+                <span>
+                  A publication from cocalc.com becomes available here only
+                  after a collaborator explicitly restores its corresponding
+                  project. Restore projects from{" "}
+                  <a href="/settings/legacy-migration">
+                    Legacy migration settings
+                  </a>
+                  . Restoring a project replays its retained publication
+                  metadata; CoCalc does not restore projects merely because
+                  somebody visits an old shared URL.
+                </span>
+              }
+            />
+            {legacyState.error ? (
+              <Alert type="error" showIcon message={legacyState.error} />
+            ) : null}
+            <Text type="secondary">
+              {legacyState.totalCount.toLocaleString()} retained legacy
+              publication(s) match. Search by path, title, project, or legacy
+              identifier.
+            </Text>
+            <Input.Search
+              allowClear
+              defaultValue={legacyState.query}
+              placeholder="Search legacy publications"
+              onSearch={(query) =>
+                void loadLegacyShares(1, legacyState.pageSize, query.trim())
+              }
+              style={{ maxWidth: 520 }}
+            />
+            <Table<LegacyMigrationPublicShareSummary>
+              rowKey="legacy_public_path_id"
+              dataSource={legacyState.shares}
+              loading={legacyState.loading}
+              pagination={{
+                current: legacyState.page,
+                pageSize: legacyState.pageSize,
+                total: legacyState.totalCount,
+                showSizeChanger: true,
+                onChange: (page, pageSize) =>
+                  void loadLegacyShares(page, pageSize, legacyState.query),
+              }}
+              scroll={{ x: 1050 }}
+              tableLayout="fixed"
+              columns={[
+                {
+                  title: "Published path",
+                  width: 360,
+                  render: (_value, legacyShare) => {
+                    const currentShare = currentShareByLegacyId.get(
+                      legacyShare.legacy_public_path_id,
+                    );
+                    const label =
+                      legacyShare.title || projectPathLabel(legacyShare.path);
+                    return (
+                      <Space direction="vertical" size={2}>
+                        {currentShare ? (
+                          <a
+                            href={shareHref(currentShare.slug)}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={WRAPPING_CELL_TEXT_STYLE}
+                          >
+                            {label}
+                          </a>
+                        ) : legacyShare.legacy_url ? (
+                          <a
+                            href={legacyShare.legacy_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={WRAPPING_CELL_TEXT_STYLE}
+                          >
+                            {label}
+                          </a>
+                        ) : (
+                          <Text style={WRAPPING_CELL_TEXT_STYLE}>{label}</Text>
+                        )}
+                        <Text code style={WRAPPING_CELL_TEXT_STYLE}>
+                          {projectPathLabel(legacyShare.path)}
+                        </Text>
+                        <Space size={4} wrap>
+                          <Tag>{legacyShare.path_type}</Tag>
+                          <Text type="secondary" copyable>
+                            {legacyShare.legacy_public_path_id}
+                          </Text>
+                        </Space>
+                      </Space>
+                    );
+                  },
+                },
+                {
+                  title: "Legacy project",
+                  width: 310,
+                  render: (_value, legacyShare) => (
+                    <Space direction="vertical" size={2}>
+                      <Text strong>
+                        {legacyShare.project_title || "Untitled project"}
+                      </Text>
+                      <Text code style={WRAPPING_CELL_TEXT_STYLE}>
+                        {legacyShare.legacy_project_id}
+                      </Text>
+                      {legacyShare.project_id ? (
+                        <a href={`/projects/${legacyShare.project_id}/files/`}>
+                          Open restored project
+                        </a>
+                      ) : (
+                        <a
+                          href={legacyMigrationProjectHref(
+                            legacyShare.legacy_project_id,
+                          )}
+                        >
+                          Select project for restoration
+                        </a>
+                      )}
+                    </Space>
+                  ),
+                },
+                {
+                  title: "Status",
+                  width: 210,
+                  render: (_value, legacyShare) => {
+                    const currentShare = currentShareByLegacyId.get(
+                      legacyShare.legacy_public_path_id,
+                    );
+                    const activationPending =
+                      legacyShare.restore_status === "restored" &&
+                      (currentShare == null ||
+                        currentShare.availability_status === "pending");
+                    return (
+                      <Space direction="vertical" size={4}>
+                        {legacyShareStatusTag({
+                          legacyShare,
+                          currentShare,
+                        })}
+                        {legacyShare.restore_status ? (
+                          <Text type="secondary">
+                            Restore: {legacyShare.restore_status}
+                          </Text>
+                        ) : null}
+                        {activationPending ? (
+                          <Text type="secondary">
+                            Publication activation is automatic; no action is
+                            required.
+                          </Text>
+                        ) : null}
+                      </Space>
+                    );
+                  },
+                },
+                {
+                  title: "Last edited",
+                  width: 170,
+                  defaultSortOrder: "descend",
+                  sorter: (left, right) =>
+                    legacyShareTimestamp(left) - legacyShareTimestamp(right),
+                  render: (_value, legacyShare) => {
+                    const date = legacyShareDate(legacyShare);
+                    return date ? <TimeAgo date={date} /> : <Text>-</Text>;
+                  },
+                },
+              ]}
+            />
+          </Space>
+        </Card>
+      ) : null}
       <Modal
         title={`Set copy license for ${selectedShares.length.toLocaleString()} selected publication(s)`}
         open={bulkLicenseOpen}
@@ -794,6 +1115,6 @@ export const PUBLIC_SHARES_SETTINGS_PAGE = {
   }),
   title: defineMessage({
     id: "account.settings.public-shares.title",
-    defaultMessage: "Public Directory Shares",
+    defaultMessage: "Public Shares",
   }),
 } satisfies SettingsPageDefinition;

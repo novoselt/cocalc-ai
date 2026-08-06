@@ -20,6 +20,7 @@ export const ACTION_BUTTONS_FILE = [
   "duplicate",
   "move",
   "copy",
+  ...(lite ? [] : (["publish"] as const)),
 ] as const;
 
 export const ACTION_BUTTONS_MULTI = [

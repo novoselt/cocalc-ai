@@ -14,7 +14,10 @@ import {
   normalizePublicDirectorySharePath,
   normalizePublicDirectoryShareSlug,
 } from "@cocalc/server/public-directory-shares";
-import { normalizeLegacyPublicPathDescription } from "@cocalc/server/legacy-migration/public-path-slugs";
+import {
+  isUnsupportedLegacyProxyPublicPath,
+  normalizeLegacyPublicPathDescription,
+} from "@cocalc/server/legacy-migration/public-path-slugs";
 import { is_valid_uuid_string as isValidUUID } from "@cocalc/util/misc";
 import { OTHER_SETTINGS_LEGACY_MIGRATION_PROJECTS_BUTTON } from "@cocalc/util/legacy-migration";
 
@@ -60,6 +63,7 @@ type PublicPathImportCounters = {
   skippedInvalid: number;
   skippedMissingProject: number;
   skippedMissingRequired: number;
+  skippedProxy: number;
 };
 
 const DEFAULT_BATCH_SIZE = 2000;
@@ -80,6 +84,7 @@ const publicPathCounters: PublicPathImportCounters = {
   skippedInvalid: 0,
   skippedMissingProject: 0,
   skippedMissingRequired: 0,
+  skippedProxy: 0,
 };
 const seenPublicPathSlugs = new Map<string, string>();
 
@@ -101,6 +106,7 @@ function publicPathCounterDelta(
       publicPathCounters.skippedMissingProject - before.skippedMissingProject,
     skippedMissingRequired:
       publicPathCounters.skippedMissingRequired - before.skippedMissingRequired,
+    skippedProxy: publicPathCounters.skippedProxy - before.skippedProxy,
   };
 }
 
@@ -843,6 +849,11 @@ async function ensureRawRecordsSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_updated_idx
         ON legacy_migration_raw_records(updated)
     `);
+    await pool().query(`
+      CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_public_paths_project_id_idx
+        ON legacy_migration_raw_records ((payload->>'project_id'), updated DESC)
+        WHERE source='public_paths'
+    `);
   })();
   await rawRecordsSchemaReady;
 }
@@ -868,7 +879,11 @@ async function upsertRawRecords(
       legacy_id: rawRecordId(row),
       payload: row,
     }))
-    .filter((row) => row.legacy_id != null);
+    .filter(
+      (row) =>
+        row.legacy_id != null &&
+        (source !== "public_paths" || !row.payload.__skip_public_path),
+    );
   if (payload.length === 0) return;
   await pool().query(
     `
@@ -1010,6 +1025,11 @@ function normalizeRow(target: ImportTarget, row: Record<string, any>): void {
     if (!row.id || !row.project_id || !isValidUUID(row.project_id)) {
       row.__skip_public_path = true;
       publicPathCounters.skippedMissingRequired += 1;
+      return;
+    }
+    if (isUnsupportedLegacyProxyPublicPath(row)) {
+      row.__skip_public_path = true;
+      publicPathCounters.skippedProxy += 1;
       return;
     }
     try {
@@ -1161,7 +1181,7 @@ async function main(): Promise<void> {
     if (stats.publicPathDetails) {
       const details = stats.publicPathDetails;
       console.log(
-        `public_paths details: ${details.filePathsAsDirectories} file path(s) imported as containing directories; ${details.duplicateSlugs} duplicate slug(s) suffixed; ${details.invalidSiteLicenseIds} invalid site_license_id value(s) preserved in metadata; ${details.skippedInvalid} invalid row(s) skipped; ${details.skippedMissingProject} row(s) skipped because the project has not been migrated; ${details.skippedMissingRequired} row(s) skipped due to missing required fields`,
+        `public_paths details: ${details.filePathsAsDirectories} file path(s) imported as containing directories; ${details.duplicateSlugs} duplicate slug(s) suffixed; ${details.invalidSiteLicenseIds} invalid site_license_id value(s) preserved in metadata; ${details.skippedInvalid} invalid row(s) skipped; ${details.skippedMissingProject} row(s) skipped because the project has not been migrated; ${details.skippedMissingRequired} row(s) skipped due to missing required fields; ${details.skippedProxy} unsupported proxy row(s) skipped`,
       );
     }
   }

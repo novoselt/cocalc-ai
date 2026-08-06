@@ -7,9 +7,13 @@ import {
   MAX_LEGACY_PROJECT_IMPORTS_PER_REQUEST,
   legacyProjectArchiveUncompressedBytes,
   legacyPublicPathTargetFromRetainedRecord,
+  legacyPublicShareUrl,
   normalizeLegacyProjectImportIds,
+  resolveLegacyPublicPathTarget,
+  shouldReplayLegacyPublicPath,
 } from ".";
 import {
+  isUnsupportedLegacyProxyPublicPath,
   legacyPublicPathSlugFromRecord,
   normalizeLegacyPublicPathDescription,
 } from "./public-path-slugs";
@@ -64,6 +68,41 @@ describe("legacy migration manifest helpers", () => {
 });
 
 describe("legacy public path slug helpers", () => {
+  it("drops historically disabled public paths from replay", () => {
+    expect(shouldReplayLegacyPublicPath({ disabled: true })).toBe(false);
+    expect(shouldReplayLegacyPublicPath({ disabled: "t" })).toBe(false);
+    expect(shouldReplayLegacyPublicPath({ disabled: false })).toBe(true);
+  });
+
+  it("rejects unsupported legacy GitHub and gist proxy URLs", () => {
+    expect(
+      isUnsupportedLegacyProxyPublicPath({ url: "github/search/example" }),
+    ).toBe(true);
+    expect(
+      isUnsupportedLegacyProxyPublicPath({
+        url: "https://cocalc.com/gist/example/revision/file.ipynb",
+      }),
+    ).toBe(true);
+    expect(
+      isUnsupportedLegacyProxyPublicPath({
+        url: "course/github/example",
+        path: "github/example",
+      }),
+    ).toBe(false);
+    expect(isUnsupportedLegacyProxyPublicPath({ path: "github/example" })).toBe(
+      false,
+    );
+    expect(
+      legacyPublicPathSlugFromRecord({ url: "gist/example/revision" }),
+    ).toBeNull();
+    expect(
+      legacyPublicShareUrl({
+        legacy_public_path_id: "proxy-row",
+        payload: { url: "github/search/example" },
+      }),
+    ).toBeNull();
+  });
+
   it("preserves exact files from current and older retained records", () => {
     expect(
       legacyPublicPathTargetFromRetainedRecord({
@@ -77,6 +116,47 @@ describe("legacy public path slug helpers", () => {
         path: "course/lesson.ipynb",
       }),
     ).toEqual({ path: "course/lesson.ipynb", path_type: "file" });
+  });
+
+  it("marks retained paths unavailable when they are absent after restore", async () => {
+    await expect(
+      resolveLegacyPublicPathTarget({
+        row: {
+          original_path: "missing/notebooks",
+          original_path_type: "directory",
+        },
+        fs: {
+          lstat: async () => {
+            throw Object.assign(new Error("no such file or directory"), {
+              code: "ENOENT",
+            });
+          },
+        } as any,
+        restoreComplete: true,
+      }),
+    ).resolves.toEqual({
+      target: { path: "missing/notebooks", path_type: "directory" },
+      availability_status: "unavailable",
+      availability_message:
+        "The published path was not found in the restored project.",
+    });
+  });
+
+  it("keeps retained paths pending until restore inspection is possible", async () => {
+    await expect(
+      resolveLegacyPublicPathTarget({
+        row: {
+          original_path: "notebooks",
+          original_path_type: "directory",
+        },
+        restoreComplete: false,
+      }),
+    ).resolves.toEqual({
+      target: { path: "notebooks", path_type: "directory" },
+      availability_status: "pending",
+      availability_message:
+        "This legacy project has been selected for migration, but its files have not finished restoring yet.",
+    });
   });
 
   it("does not infer ambiguous older records as directories", () => {
@@ -157,6 +237,20 @@ describe("legacy public path slug helpers", () => {
     ).toBe("examples");
   });
 
+  it("skips malformed retained slugs instead of aborting replay", () => {
+    expect(
+      legacyPublicPathSlugFromRecord(
+        { name: "../private" },
+        { owner_name: "owner", project_name: "project" },
+      ),
+    ).toBeNull();
+    expect(
+      legacyPublicPathSlugFromRecord({
+        url: "https://cocalc.ai/share/owner//bad-share",
+      }),
+    ).toBeNull();
+  });
+
   it("preserves explicit legacy URL paths when present", () => {
     expect(
       legacyPublicPathSlugFromRecord(
@@ -170,6 +264,20 @@ describe("legacy public path slug helpers", () => {
         },
       ),
     ).toBe("Cambridge/S0022112023010078/JFM-Notebooks");
+  });
+
+  it("reconstructs historical public URLs for the migration inventory", () => {
+    expect(
+      legacyPublicShareUrl({
+        legacy_public_path_id: "0a48957b67f375b9e3107216504ca0c4efb678fd",
+        payload: {
+          original_path: "tutorials/JFM Notebooks.ipynb",
+          original_path_type: "file",
+        },
+      }),
+    ).toBe(
+      "https://cocalc.com/share/public_paths/0a48957b67f375b9e3107216504ca0c4efb678fd/files/tutorials/JFM%20Notebooks.ipynb",
+    );
   });
 
   it("normalizes cocalc.ai share URLs to the stored share slug", () => {

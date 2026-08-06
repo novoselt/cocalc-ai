@@ -54,6 +54,15 @@ function shareScopeDescription(share: ResolvedPublicDirectoryShare): string {
     : "This is a published, read-only folder.";
 }
 
+function defaultCopyDestinationPath(
+  share: ResolvedPublicDirectoryShare,
+): string {
+  if (share.path_type !== "file") {
+    return share.slug;
+  }
+  return share.path.split("/").filter(Boolean).pop() || share.slug;
+}
+
 function sharePublisherLine(share: ResolvedPublicDirectoryShare): string {
   const parts: string[] = [];
   const projectTitle = share.project_title?.trim();
@@ -200,7 +209,9 @@ export function PublicDirectoryShareBanner({
   const [open, setOpen] = useState(false);
   const [copyMode, setCopyMode] = useState<"new" | "existing">("new");
   const [destinationProjectId, setDestinationProjectId] = useState("");
-  const [destinationPath, setDestinationPath] = useState(".");
+  const [destinationPath, setDestinationPath] = useState(() =>
+    defaultCopyDestinationPath(share),
+  );
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState("");
   const [copyMessage, setCopyMessage] = useState("");
@@ -219,6 +230,7 @@ export function PublicDirectoryShareBanner({
 
   function openCopyModal() {
     setCopyMode("new");
+    setDestinationPath(defaultCopyDestinationPath(share));
     setCopyError("");
     setCopyMessage("");
     setCopyProgress("");
@@ -232,11 +244,11 @@ export function PublicDirectoryShareBanner({
     setCompactBannerPreference(share, next);
   }
 
-  function openDestinationProject(project_id: string) {
+  function openDestinationProject(project_id: string, path?: string | null) {
     projectActions.open_project({
       project_id,
       switch_to: true,
-      target: "files",
+      target: path && path !== "." ? path : "files",
     });
   }
 
@@ -297,7 +309,10 @@ export function PublicDirectoryShareBanner({
           : `${successPrefix} It is not yet available in your project list. Try opening it again in a moment.${grantMessage ? ` ${grantMessage}` : ""}`,
       );
       if (canOpen) {
-        openDestinationProject(result.destination_project_id);
+        openDestinationProject(
+          result.destination_project_id,
+          result.destination_path,
+        );
       }
     } catch (err) {
       setCopyError(normalizeUserFacingError(err).message);
@@ -328,11 +343,10 @@ export function PublicDirectoryShareBanner({
       setCopyMessage(
         `Copy queued as operation ${result.op_id}.${grantMessage ? ` ${grantMessage}` : ""}`,
       );
-      projectActions.open_project({
-        project_id: result.destination_project_id,
-        switch_to: true,
-        target: "files",
-      });
+      openDestinationProject(
+        result.destination_project_id,
+        result.destination_path,
+      );
     } catch (err) {
       setCopyError(normalizeUserFacingError(err).message);
     } finally {
@@ -523,6 +537,7 @@ export function PublicDirectoryShareBanner({
                     onClick={() =>
                       openDestinationProject(
                         copyConflict.destination_project_id,
+                        copyConflict.conflict.destination_path,
                       )
                     }
                   >

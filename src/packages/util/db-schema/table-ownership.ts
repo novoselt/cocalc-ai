@@ -283,6 +283,7 @@ export const TABLE_OWNERSHIP = {
       "legacy_migration_project_import_accounts",
       "legacy_migration_project_imports",
       "legacy_migration_projects",
+      "legacy_migration_public_share_replay_events",
       "lti",
       "membership_claim_identities",
       "membership_claim_scopes",
@@ -476,6 +477,7 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
   ...adHocEntries(
     [
       "admin_data_explorer_views",
+      "admin_support_mutations",
       "cluster_account_api_key_directory",
       "cluster_account_directory",
       "cluster_bay_registry",

@@ -4,6 +4,7 @@
  */
 
 import {
+  copySourceDestinationPaths,
   create,
   disableMineByActor,
   ensurePublicDirectorySharesSchema,
@@ -12,6 +13,7 @@ import {
   listDirectory,
   normalizePublicDirectorySharePath,
   normalizePublicDirectoryShareSlug,
+  publicDirectoryShareCopyDestinationPath,
   publicDirectoryShareReadPolicyForPath,
   update,
   upsertMigratedLegacyPublicDirectoryShare,
@@ -47,6 +49,54 @@ const ASSIGNMENT_ID = "55555555-5555-4555-8555-555555555555";
 const PACKAGE_ID = "66666666-6666-4666-8666-666666666666";
 
 describe("public directory share normalization", () => {
+  it("copies an exact file to its basename instead of the project root", () => {
+    expect(
+      publicDirectoryShareCopyDestinationPath({
+        destinationPath: ".",
+        pathType: "file",
+        sourcePath: "notebooks/tutorial.ipynb",
+      }),
+    ).toBe("tutorial.ipynb");
+    expect(
+      publicDirectoryShareCopyDestinationPath({
+        destinationPath: "renamed.ipynb",
+        pathType: "file",
+        sourcePath: "notebooks/tutorial.ipynb",
+      }),
+    ).toBe("renamed.ipynb");
+    expect(
+      publicDirectoryShareCopyDestinationPath({
+        destinationPath: ".",
+        pathType: "directory",
+        sourcePath: "notebooks",
+      }),
+    ).toBe(".");
+  });
+
+  it("detects the paths produced by scalar and root-content copies", () => {
+    expect(
+      copySourceDestinationPaths({
+        copySource: { path: "notebooks/tutorial.ipynb" },
+        destinationPath: "tutorial.ipynb",
+      }),
+    ).toEqual(["tutorial.ipynb"]);
+    expect(
+      copySourceDestinationPaths({
+        copySource: { path: "course-materials" },
+        destinationPath: "share-slug",
+      }),
+    ).toEqual(["share-slug"]);
+    expect(
+      copySourceDestinationPaths({
+        copySource: {
+          path: ["one.ipynb", "notes/two.ipynb"],
+          base_path: ".",
+        },
+        destinationPath: "share-slug",
+      }),
+    ).toEqual(["share-slug/one.ipynb", "share-slug/notes/two.ipynb"]);
+  });
+
   it("normalizes slugs", () => {
     expect(normalizePublicDirectoryShareSlug("/Cambridge/Book/Code/")).toBe(
       "Cambridge/Book/Code",

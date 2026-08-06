@@ -10,6 +10,7 @@ const mockPublicDirectoryShares = {
   copyToProject: jest.fn(),
   getTemporaryViewerReadPolicy: jest.fn(),
   grantTemporaryViewerAccess: jest.fn(),
+  listMine: jest.fn(),
   listProject: jest.fn(),
   listDirectory: jest.fn(),
   resolve: jest.fn(),
@@ -70,6 +71,7 @@ jest.mock("@cocalc/server/public-directory-shares", () => ({
     mockPublicDirectoryShares.getTemporaryViewerReadPolicy(...args),
   grantTemporaryViewerAccess: (...args: any[]) =>
     mockPublicDirectoryShares.grantTemporaryViewerAccess(...args),
+  listMine: (...args: any[]) => mockPublicDirectoryShares.listMine(...args),
   listProject: (...args: any[]) =>
     mockPublicDirectoryShares.listProject(...args),
   listDirectory: (...args: any[]) =>
@@ -89,6 +91,7 @@ function remoteClient() {
     publicDirectoryShareCopyToProject: jest.fn(),
     publicDirectoryShareGetTemporaryViewerReadPolicy: jest.fn(),
     publicDirectoryShareGrantTemporaryViewerAccess: jest.fn(),
+    publicDirectoryShareListMine: jest.fn(),
     publicDirectoryShareListProject: jest.fn(),
     publicDirectoryShareListDirectory: jest.fn(),
     publicDirectoryShareResolve: jest.fn(),
@@ -238,6 +241,54 @@ describe("public directory share conat API routing", () => {
       project_id: "project-id",
       path: "x",
       slug: "x3",
+    });
+  });
+
+  it("merges account shares from every registered bay", async () => {
+    mockPublicDirectoryShares.listMine.mockResolvedValue({
+      shares: [
+        {
+          id: "share-local",
+          slug: "local",
+          updated_at: "2026-08-04T00:00:00Z",
+        },
+      ],
+      total_count: 1,
+    });
+    mockRemoteClients["bay-1"].publicDirectoryShareListMine.mockResolvedValue({
+      shares: [
+        {
+          id: "share-remote",
+          slug: "remote",
+          updated_at: "2026-08-05T00:00:00Z",
+        },
+      ],
+      total_count: 1,
+    });
+
+    await expect(
+      publicDirectoryShares.listMine({
+        account_id: "account-id",
+        include_disabled: true,
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({
+      shares: [{ id: "share-remote" }, { id: "share-local" }],
+      total_count: 2,
+    });
+    expect(mockPublicDirectoryShares.listMine).toHaveBeenCalledWith({
+      account_id: "account-id",
+      include_disabled: true,
+      limit: 10,
+      offset: 0,
+    });
+    expect(
+      mockRemoteClients["bay-1"].publicDirectoryShareListMine,
+    ).toHaveBeenCalledWith({
+      account_id: "account-id",
+      include_disabled: true,
+      limit: 10,
+      offset: 0,
     });
   });
 
