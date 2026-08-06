@@ -45,6 +45,7 @@ import {
   runConnectorInstallOverSsh,
 } from "@cocalc/server/self-host/ssh-target";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
+import isAdmin from "@cocalc/server/accounts/is-admin";
 import { getServerProvider } from "@cocalc/server/cloud/providers";
 import {
   machineHasGpu,
@@ -223,6 +224,14 @@ async function resolveBillableHostSessionConfig({
     funding_mode_override,
   );
   if (snapshot.funding_mode === "site-funded") {
+    // Keep this final lifecycle check even though public API wrappers preflight
+    // it: internal and future callers must not bypass the ownership invariant.
+    if (!(await isAdmin(account_id))) {
+      throw Object.assign(
+        new Error("site-funded dedicated hosts are limited to admins"),
+        { code: "site_funded_requires_admin" },
+      );
+    }
     return { funding_mode: "site-funded" };
   }
   const funding_lane = selectDedicatedHostFundingLane(snapshot);
