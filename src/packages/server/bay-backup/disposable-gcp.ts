@@ -51,6 +51,7 @@ export interface DisposableRestoreWorkerConfig {
   pgbackrest_source_sha256?: string;
   require_conat: boolean;
   minimum_free_bytes: number;
+  worker_timeout_seconds?: number;
 }
 
 export interface DisposableRestoreWorkerResult {
@@ -261,8 +262,9 @@ def report(status, *, error=None, postgres=None, conat=None, disk=None):
         serial.write("\n" + marker + "\n")
         serial.flush()
 
-def run(args, *, timeout=1800, env=None, capture=False, input_text=None):
-    print("restore-drill:", " ".join(str(arg) for arg in args[:4]), flush=True)
+def run(args, *, timeout=1800, env=None, capture=False, input_text=None, log=True):
+    if log:
+        print("restore-drill:", " ".join(str(arg) for arg in args[:4]), flush=True)
     return subprocess.run(
         [str(arg) for arg in args],
         check=True,
@@ -296,17 +298,17 @@ def pgbackrest_env():
     })
     return env
 
-def psql(container, sql):
+def psql(container, sql, *, log=True):
     completed = run([
         "podman", "exec", container, "psql", "-h", "/tmp",
         "-p", "5432",
         "-U", CONFIG["postgres_user"], "-d", CONFIG["postgres_database"],
         "-tAc", sql,
-    ], timeout=60, capture=True)
+    ], timeout=60, capture=True, log=log)
     return completed.stdout.strip()
 
 def postgres_diagnostics(container):
-    logs = run(["podman", "logs", container], timeout=60, capture=True)
+    logs = run(["podman", "logs", "--tail", "80", container], timeout=60, capture=True)
     noisy = (
         "FATAL:  the database system is starting up",
         "FATAL:  the database system is in recovery mode",
@@ -410,10 +412,16 @@ try:
             ["sqlite3", "-readonly", str(path), "PRAGMA quick_check;"],
             timeout=120,
             capture=True,
+            log=False,
         ).stdout.strip()
         if checked != "ok":
             raise RuntimeError(f"Conat SQLite quick_check failed for {path.name}: {bounded(checked, 500)}")
         quick_passed += 1
+        if quick_passed % 1000 == 0 or quick_passed == len(db_files):
+            print(
+                f"restore-drill: SQLite quick_check progress {quick_passed}/{len(db_files)}",
+                flush=True,
+            )
     catalogs = sorted(sync_dir.rglob("catalog.sqlite")) if sync_dir else []
     catalog_status = None
     if catalogs:
@@ -625,25 +633,36 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
 
     counts = None
     postgres_ready = False
-    startup_timeout = 600 if CONFIG["restore_mode"] == "snapshot" else 300
-    deadline = time.time() + startup_timeout
+    next_recovery_diagnostic = time.time() + 300
+    if CONFIG["restore_mode"] == "snapshot":
+        deadline = time.time() + 600
+    else:
+        # WAL replay time depends on the age of the latest full backup. Give
+        # PITR the remainder of the worker's overall budget while reserving
+        # enough time to report the result and let the controller delete the VM.
+        worker_timeout = max(900, int(CONFIG.get("worker_timeout_seconds", 7200)))
+        deadline = STARTED + worker_timeout - 300
     last_error = "PostgreSQL unavailable"
     while time.time() < deadline:
         try:
             if CONFIG["restore_mode"] == "pitr":
                 value = psql(container,
                     "SELECT count(*) FILTER (WHERE phase='pre')::text || ',' || "
-                    "count(*) FILTER (WHERE phase='post')::text "
+                    "count(*) FILTER (WHERE phase='post')::text || ',' || "
+                    "pg_is_in_recovery()::text "
                     "FROM public.bay_restore_test_pitr_events WHERE run_id = " +
-                    sql_quote(CONFIG["pitr_run_id"]))
-                pre, post = [int(part) for part in value.split(",")]
+                    sql_quote(CONFIG["pitr_run_id"]), log=False)
+                pre_text, post_text, recovery_text = value.split(",")
+                pre, post = int(pre_text), int(post_text)
+                if recovery_text not in ("true", "false"):
+                    raise RuntimeError("invalid pg_is_in_recovery result: " + recovery_text)
                 counts = (pre, post)
-                if counts == (1, 0):
+                if counts == (1, 0) and recovery_text == "false":
                     postgres_ready = True
                     break
                 if counts == (1, 1):
                     raise RuntimeError("PITR crossed the requested target transaction")
-            elif psql(container, "SELECT 1") == "1":
+            elif psql(container, "SELECT 1", log=False) == "1":
                 postgres_ready = True
                 break
         except Exception as err:
@@ -660,6 +679,15 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
                     "PostgreSQL container exited before readiness: " +
                     last_error + " logs=" + postgres_diagnostics(container)
                 )
+        if time.time() >= next_recovery_diagnostic:
+            print(
+                "restore-drill: PostgreSQL recovery still in progress " +
+                "elapsed_seconds=" + str(int(time.time() - STARTED)) +
+                " sentinel_counts=" + str(counts),
+                flush=True,
+            )
+            print(postgres_diagnostics(container), flush=True)
+            next_recovery_diagnostic = time.time() + 300
         time.sleep(2)
     if CONFIG["restore_mode"] == "pitr" and counts != (1, 0):
         raise RuntimeError("PITR verification timed out: " + last_error + " logs=" + postgres_diagnostics(container))
@@ -712,7 +740,22 @@ finally:
 export function buildDisposableRestoreStartupScript(
   config: DisposableRestoreWorkerConfig,
 ): string {
-  const encodedConfig = Buffer.from(JSON.stringify(config)).toString("base64");
+  const workerConfig = { ...config };
+  if (workerConfig.restore_mode === "pitr" && workerConfig.target_time) {
+    const target = new Date(workerConfig.target_time);
+    if (Number.isNaN(target.getTime())) {
+      throw new Error(
+        `invalid disposable PITR target '${workerConfig.target_time}'`,
+      );
+    }
+    workerConfig.target_time = target
+      .toISOString()
+      .replace("T", " ")
+      .replace("Z", "+00");
+  }
+  const encodedConfig = Buffer.from(JSON.stringify(workerConfig)).toString(
+    "base64",
+  );
   const encodedWorker = Buffer.from(pythonWorkerSource()).toString("base64");
   return `#!/bin/bash
 set -euo pipefail
@@ -831,7 +874,10 @@ export async function runDisposableGcpRestoreWorker({
   const clients = providedClients ?? defaultClients(auth);
   const instance_name = `cocalc-restore-${config.run_id.replace(/-/g, "").slice(0, 20)}`;
   const region = zone.replace(/-[a-z]$/, "");
-  const startupScript = buildDisposableRestoreStartupScript(config);
+  const startupScript = buildDisposableRestoreStartupScript({
+    ...config,
+    worker_timeout_seconds: Math.ceil(timeout_ms / 1000),
+  });
   const timeoutSeconds = Math.max(900, Math.ceil(timeout_ms / 1000) + 600);
   let created = false;
   let cleanup: DisposableGcpRestoreResult["cleanup"] = "already-deleted";

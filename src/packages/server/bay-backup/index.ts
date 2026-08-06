@@ -161,6 +161,21 @@ type PitrRestoreSentinel = {
   target_time: string;
 };
 
+type PgBackRestApplicationStatus = {
+  backup?: {
+    latest_label?: string;
+  };
+};
+
+type PgBackRestRestoreStatus = {
+  level?: string;
+  tested_at?: string;
+  backup_label?: string;
+  pitr_target_time?: string;
+  error?: string;
+  worker?: DisposableGcpRestoreResult | null;
+};
+
 type StoredBayBackupState = {
   bay_id: string;
   current_storage_backend: StorageBackend;
@@ -4241,6 +4256,100 @@ function mapRestoreReadiness({
   };
 }
 
+function mapPgBackRestRestoreReadiness({
+  legacy,
+  postgresStatus,
+  restoreStatus,
+}: {
+  legacy: BayRestoreReadinessStatus;
+  postgresStatus?: PgBackRestApplicationStatus;
+  restoreStatus?: PgBackRestRestoreStatus;
+}): BayRestoreReadinessStatus {
+  const latestBackupLabel =
+    `${postgresStatus?.backup?.latest_label ?? ""}`.trim();
+  if (!latestBackupLabel) return legacy;
+
+  const testedAt = `${restoreStatus?.tested_at ?? ""}`.trim() || null;
+  const testedAtMs = testedAt == null ? Number.NaN : Date.parse(testedAt);
+  const testIsCurrent =
+    Number.isFinite(testedAtMs) &&
+    Date.now() - testedAtMs <= 8 * 24 * 60 * 60_000;
+  const testStatus: "not-run" | "stale" | "passed" | "failed" =
+    restoreStatus == null
+      ? "not-run"
+      : restoreStatus.level !== "ok"
+        ? "failed"
+        : testIsCurrent
+          ? "passed"
+          : "stale";
+  const testedBackupLabel =
+    `${restoreStatus?.backup_label ?? ""}`.trim() || null;
+  const workerRun = restoreStatus?.worker ?? null;
+  const worker = workerRun?.worker ?? null;
+  const targetDir = workerRun
+    ? `gcp://${workerRun.project_id}/${workerRun.zone}/${workerRun.instance_name}`
+    : null;
+  const evidence: BayRestoreTestEvidence | null = workerRun
+    ? {
+        execution_mode: "disposable-gcp",
+        duration_ms: worker?.duration_ms ?? null,
+        worker_status: worker?.status ?? null,
+        worker_stage: worker?.stage ?? null,
+        worker_error:
+          worker?.error ?? (`${restoreStatus?.error ?? ""}`.trim() || null),
+        worker_instance_name: workerRun.instance_name,
+        worker_project_id: workerRun.project_id,
+        worker_zone: workerRun.zone,
+        worker_machine_type: workerRun.machine_type,
+        worker_boot_disk_gb: workerRun.boot_disk_gb,
+        worker_cleanup: workerRun.cleanup,
+        conat_database_count: worker?.conat?.database_count ?? null,
+        conat_database_bytes: worker?.conat?.database_bytes ?? null,
+        conat_quick_check_passed: worker?.conat?.quick_check_passed ?? null,
+      }
+    : null;
+  const summary =
+    testStatus === "passed"
+      ? `pgBackRest backup ${latestBackupLabel} is current; disposable PITR backup ${testedBackupLabel ?? "unknown"} passed at ${testedAt}.`
+      : testStatus === "failed"
+        ? `The latest disposable pgBackRest PITR restore drill failed at ${testedAt ?? "unknown time"}.`
+        : testStatus === "stale"
+          ? `The latest disposable pgBackRest PITR restore drill is stale (${testedAt ?? "unknown time"}).`
+          : `pgBackRest backup ${latestBackupLabel} has not passed a disposable PITR restore drill.`;
+
+  return {
+    latest_backup_set_id: latestBackupLabel,
+    // A pgBackRest physical backup has the same recovery semantics as the
+    // legacy pg_basebackup representation used by this API.
+    latest_backup_format: "pg_basebackup",
+    latest_backup_restore_test_status: testStatus,
+    latest_backup_restore_tested: testStatus === "passed",
+    latest_backup_restore_tested_at:
+      testStatus === "passed" || testStatus === "failed" ? testedAt : null,
+    latest_backup_pitr_test_status: testStatus,
+    latest_backup_pitr_tested: testStatus === "passed",
+    latest_backup_pitr_tested_at:
+      testStatus === "passed" || testStatus === "failed" ? testedAt : null,
+    gold_star: testStatus === "passed",
+    last_restore_test_backup_set_id: testedBackupLabel,
+    last_restore_test_status:
+      testStatus === "passed" || testStatus === "failed" ? testStatus : null,
+    last_restore_tested_at: testedAt,
+    last_restore_test_target_dir: targetDir,
+    last_restore_test_recovery_ready: testStatus === "passed",
+    last_pitr_test_backup_set_id: testedBackupLabel,
+    last_pitr_test_status:
+      testStatus === "passed" || testStatus === "failed" ? testStatus : null,
+    last_pitr_tested_at: testedAt,
+    last_pitr_test_target_time:
+      `${restoreStatus?.pitr_target_time ?? ""}`.trim() || null,
+    last_pitr_test_target_dir: targetDir,
+    last_pitr_test_remote_only: restoreStatus == null ? null : true,
+    last_restore_test_evidence: evidence,
+    summary,
+  };
+}
+
 export async function getBayBackupStatus({
   bay_id,
 }: {
@@ -4324,6 +4433,26 @@ export async function getBayBackupStatus({
     remote_object_keys: remoteWalObjectKeys,
   });
   const filesystem = await inspectBackupFilesystem({ paths, state });
+  let restoreReadiness = mapRestoreReadiness({ state });
+  if (`${process.env.COCALC_BAY_PGBACKREST_ENABLED ?? ""}` === "1") {
+    const stateDir =
+      `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state");
+    const [postgresStatus, restoreStatus] = await Promise.all([
+      readJsonIfExists<PgBackRestApplicationStatus>(
+        `${process.env.COCALC_BAY_PGBACKREST_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-status.json"),
+      ),
+      readJsonIfExists<PgBackRestRestoreStatus>(
+        `${process.env.COCALC_BAY_PGBACKREST_RESTORE_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-restore-test-status.json"),
+      ),
+    ]);
+    restoreReadiness = mapPgBackRestRestoreReadiness({
+      legacy: restoreReadiness,
+      postgresStatus,
+      restoreStatus,
+    });
+  }
   return {
     postgres,
     bay_backup: mapStateToStatus({
@@ -4332,7 +4461,7 @@ export async function getBayBackupStatus({
       wal,
       filesystem,
     }),
-    restore_readiness: mapRestoreReadiness({ state }),
+    restore_readiness: restoreReadiness,
   };
 }
 
@@ -5561,6 +5690,21 @@ async function resolveDisposableRestoreGcpZone(): Promise<string> {
   const configured =
     `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_ZONE ?? ""}`.trim();
   if (configured) return configured;
+  try {
+    const response = await fetch(
+      "http://metadata.google.internal/computeMetadata/v1/instance/zone",
+      {
+        headers: { "Metadata-Flavor": "Google" },
+        signal: AbortSignal.timeout(1_500),
+      },
+    );
+    if (response.ok) {
+      const zone = `${await response.text()}`.trim().split("/").pop() ?? "";
+      if (/^[a-z][a-z0-9-]+-[a-z]$/.test(zone)) return zone;
+    }
+  } catch {
+    // Non-GCP development bays fall back to the latest visible GCP host.
+  }
   const { rows } = await getPool().query<{ zone: string | null }>(
     `SELECT metadata #>> '{machine,zone}' AS zone
        FROM project_hosts
@@ -5790,7 +5934,7 @@ async function runPgBackRestDisposableGcpRestoreTest({
     Number.parseInt(
       `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_TIMEOUT_MS ?? ""}`,
       10,
-    ) || 3 * 60 * 60_000,
+    ) || 4 * 60 * 60_000,
   );
   const temporaryR2 = await createTemporaryR2ReadCredentials({
     account_id: r2.account_id,
@@ -5829,7 +5973,10 @@ async function runPgBackRestDisposableGcpRestoreTest({
       service_account_json: serviceAccountJson,
       zone,
       machine_type: machineType,
-      boot_disk_gb: sizing.boot_disk_gb,
+      // Balanced PD performance scales with disk size. Production WAL replay
+      // is random-I/O heavy, so a space-only disk can make a valid drill time
+      // out even though the ephemeral capacity is inexpensive.
+      boot_disk_gb: Math.max(500, sizing.boot_disk_gb),
       timeout_ms: timeoutMs,
       config: {
         ...identity,

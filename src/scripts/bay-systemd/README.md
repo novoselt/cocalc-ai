@@ -266,10 +266,19 @@ is a separate operator operation:
    and confirm the status reports no archive backlog.
 6. Run one constrained full backup and the disposable GCP PITR/SQLite restore
    drill before enabling any recurring backup or prune timer.
-7. Enable the status, SQLite, differential, full, and prune timers one at a
-   time. Confirm each unit and status file before proceeding:
+7. Before the first activation, seed the persistent calendar-timer stamps to
+   the current time. The migration has already produced and restore-tested a
+   manual full backup, so replaying calendar events from before activation is
+   both unnecessary and potentially disruptive. Then enable the status,
+   SQLite, differential, full, and prune timers one at a time. Confirm each
+   unit and status file before proceeding:
 
 ```sh
+install -d -m 755 /var/lib/systemd/timers
+touch \
+  /var/lib/systemd/timers/stamp-cocalc-bay-pgbackrest-diff.timer \
+  /var/lib/systemd/timers/stamp-cocalc-bay-pgbackrest-full.timer \
+  /var/lib/systemd/timers/stamp-cocalc-bay-sqlite-prune.timer
 systemctl enable --now cocalc-bay-pgbackrest-status.timer
 systemctl enable --now cocalc-bay-sqlite-backup.timer
 systemctl enable --now cocalc-bay-pgbackrest-diff.timer

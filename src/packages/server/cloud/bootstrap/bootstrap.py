@@ -81,6 +81,7 @@ APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
 RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
 APPARMOR_PROFILE_PROBE_TIMEOUT_S = 2
+PODMAN_STALE_BOOT_ERROR = "current system boot ID differs from cached boot ID"
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
@@ -1512,6 +1513,50 @@ def podman_apparmor_exec_prefix() -> list[str]:
     return []
 
 
+def podman_probe_error(proc: subprocess.CompletedProcess[str]) -> str:
+    return " ".join(f"{proc.stderr or ''}\n{proc.stdout or ''}".split())[:1000]
+
+
+def podman_has_stale_boot_state(proc: subprocess.CompletedProcess[str]) -> bool:
+    return PODMAN_STALE_BOOT_ERROR.lower() in podman_probe_error(proc).lower()
+
+
+def repair_stale_podman_boot_state(
+    cfg: BootstrapConfig, *, uid: int, gid: int, runtime_dir: str
+) -> None:
+    if project_host_runtime_is_active():
+        raise RuntimeError(
+            "refusing to clear stale Podman boot state while project runtimes are active"
+        )
+    expected_runtime_dir = Path(default_podman_runtime_dir(uid))
+    if Path(runtime_dir) != expected_runtime_dir:
+        raise RuntimeError(
+            "refusing to clear stale Podman boot state outside the managed runtime "
+            f"directory (configured={runtime_dir!r}, expected={str(expected_runtime_dir)!r})"
+        )
+    rootless_run = Path("/run/cocalc/containers/rootless") / cfg.ssh_user
+    runtime_tmp = expected_runtime_dir / "libpod" / "tmp"
+    for path in (
+        rootless_run,
+        expected_runtime_dir,
+        expected_runtime_dir / "libpod",
+        runtime_tmp,
+    ):
+        if path.is_symlink():
+            raise RuntimeError(
+                f"refusing to clear stale Podman boot state through symlink {path}"
+            )
+    for path in (rootless_run, runtime_tmp):
+        if path.exists():
+            shutil.rmtree(path)
+    ensure_owned_runtime_dir(rootless_run, uid, gid)
+    ensure_owned_runtime_dir(expected_runtime_dir, uid, gid)
+    log_line(
+        cfg,
+        "bootstrap: cleared stale rootless Podman boot-scoped state after host reboot",
+    )
+
+
 def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     contract: dict[str, Any] = {"user": cfg.ssh_user}
     try:
@@ -1536,6 +1581,7 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
     managed_podman = runtime_current / "bin" / "podman"
     managed_conf = runtime_current / "etc" / "containers" / "containers.conf"
     runtime_env: list[str] = []
+    runtime_dir = default_podman_runtime_dir(pw.pw_uid)
     if managed_podman.is_file() and os.access(managed_podman, os.X_OK):
         podman = str(managed_podman)
         env_assignments = read_env_assignments(cfg.env_file)
@@ -1567,7 +1613,25 @@ def read_current_runtime_user_contract(cfg: BootstrapConfig) -> dict[str, Any]:
         prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
         RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
     )
+    if uid_proc.returncode != 0 and podman_has_stale_boot_state(uid_proc):
+        try:
+            repair_stale_podman_boot_state(
+                cfg,
+                uid=pw.pw_uid,
+                gid=pw.pw_gid,
+                runtime_dir=runtime_dir,
+            )
+            uid_proc = run_bounded_capture(
+                prefix + ["bash", "-lc", f'cd "$HOME" && exec {podman_command}'],
+                RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S,
+            )
+        except Exception as exc:
+            contract["probe_error"] = (
+                f"{podman_probe_error(uid_proc)}; automatic stale-boot repair failed: {exc}"
+            )[:2000]
+            return contract
     if uid_proc.returncode != 0:
+        contract["probe_error"] = podman_probe_error(uid_proc)
         log_line(
             cfg,
             "bootstrap: unable to inspect runtime uid map "
@@ -2410,9 +2474,14 @@ def verify_runtime_user_contract(cfg: BootstrapConfig) -> None:
                 f"{key} expected={desired.get(key)!r} installed={installed.get(key)!r}"
             )
     if mismatches:
+        probe_error = installed.get("probe_error")
+        probe_detail = (
+            f"; podman probe failed: {probe_error}" if probe_error else ""
+        )
         raise RuntimeError(
             "runtime userns contract mismatch; reprovision the host or reset "
-            f"the {cfg.ssh_user} rootless Podman state ({'; '.join(mismatches)})"
+            f"the {cfg.ssh_user} rootless Podman state "
+            f"({'; '.join(mismatches)}{probe_detail})"
         )
 
 
