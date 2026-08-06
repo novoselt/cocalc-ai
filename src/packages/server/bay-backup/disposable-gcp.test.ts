@@ -237,6 +237,10 @@ test("startup script supports pgBackRest PITR and independent SQLite restore", (
   expect(workerSource).toContain("sync_dir = SNAPSHOT");
   expect(workerSource).toContain("input_text=None, log=True");
   expect(workerSource).toContain("log=False");
+  expect(workerSource).toContain("def psql(container, sql, *, log=True)");
+  expect(workerSource).toContain(
+    'sql_quote(CONFIG["pitr_run_id"]), log=False)',
+  );
   expect(workerSource).toContain(
     "SQLite quick_check progress {quick_passed}/{len(db_files)}",
   );

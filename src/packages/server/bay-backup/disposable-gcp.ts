@@ -298,13 +298,13 @@ def pgbackrest_env():
     })
     return env
 
-def psql(container, sql):
+def psql(container, sql, *, log=True):
     completed = run([
         "podman", "exec", container, "psql", "-h", "/tmp",
         "-p", "5432",
         "-U", CONFIG["postgres_user"], "-d", CONFIG["postgres_database"],
         "-tAc", sql,
-    ], timeout=60, capture=True)
+    ], timeout=60, capture=True, log=log)
     return completed.stdout.strip()
 
 def postgres_diagnostics(container):
@@ -650,7 +650,7 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
                     "SELECT count(*) FILTER (WHERE phase='pre')::text || ',' || "
                     "count(*) FILTER (WHERE phase='post')::text "
                     "FROM public.bay_restore_test_pitr_events WHERE run_id = " +
-                    sql_quote(CONFIG["pitr_run_id"]))
+                    sql_quote(CONFIG["pitr_run_id"]), log=False)
                 pre, post = [int(part) for part in value.split(",")]
                 counts = (pre, post)
                 if counts == (1, 0):
@@ -658,7 +658,7 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
                     break
                 if counts == (1, 1):
                     raise RuntimeError("PITR crossed the requested target transaction")
-            elif psql(container, "SELECT 1") == "1":
+            elif psql(container, "SELECT 1", log=False) == "1":
                 postgres_ready = True
                 break
         except Exception as err:
