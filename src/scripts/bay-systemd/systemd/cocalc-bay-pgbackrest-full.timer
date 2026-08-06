@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly CoCalc Bay pgBackRest full backup
+
+[Timer]
+OnCalendar=Sun *-*-* 08:20:00 UTC
+RandomizedDelaySec=30min
+AccuracySec=5min
+Persistent=true
+Unit=cocalc-bay-pgbackrest-backup@full.service
+
+[Install]
+WantedBy=timers.target

@@ -769,7 +769,16 @@ describe("bay-backup runner", () => {
       unwrappedExecCommands().filter((cmd) => cmd === "pg_dumpall"),
     ).toHaveLength(1);
 
-    const retried = await syncBayWalArchive();
+    const rusticCommandsBeforeWalSync = unwrappedExecCommands().filter(
+      (cmd) => cmd === "rustic",
+    ).length;
+    const walOnly = await syncBayWalArchive();
+    expect(walOnly.state.latest_storage_backend).toBe("local");
+    expect(
+      unwrappedExecCommands().filter((cmd) => cmd === "rustic"),
+    ).toHaveLength(rusticCommandsBeforeWalSync);
+
+    const retried = await syncBayWalArchive({ retryLocalSnapshot: true });
     expect(retried.state.latest_storage_backend).toBe("rustic");
     expect(retried.state.latest_remote_snapshot_id).toBe("snap-1");
     expect(

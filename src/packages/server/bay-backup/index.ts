@@ -118,6 +118,7 @@ import {
   type DisposableGcpRestoreResult,
   type DisposableRestoreWorkerResult,
 } from "./disposable-gcp";
+import { refreshSqliteMirror } from "./sqlite-mirror";
 
 const logger = getLogger("server:bay-backup");
 const execFile = promisify(execFile0);
@@ -634,6 +635,7 @@ function getBayBackupPaths(bay_id: string) {
   const backup_root = getBackupRoot();
   const bay_root = join(backup_root, "bay-backups", bay_id);
   const wal_dir = join(bay_root, "wal");
+  const sync_mirror_root = join(bay_root, "sync-mirror");
   return {
     backup_root,
     bay_root,
@@ -643,6 +645,8 @@ function getBayBackupPaths(bay_id: string) {
     staging_dir: join(bay_root, "staging"),
     wal_dir,
     wal_archive_dir: join(wal_dir, "archive"),
+    sync_mirror_dir: join(sync_mirror_root, "sync"),
+    sync_mirror_catalog: join(sync_mirror_root, "catalog.json"),
     readme_file: join(bay_root, "README.md"),
     events_log_file: join(bay_root, "events.log"),
     state_file: join(bay_root, "state.json"),
@@ -1732,10 +1736,6 @@ async function restoreBayRusticPath({
   });
 }
 
-function sqliteShellQuote(arg: string): string {
-  return `'${arg.replace(/'/g, "''")}'`;
-}
-
 async function tarGzDirectory({
   sourceDir,
   archivePath,
@@ -1751,68 +1751,6 @@ async function tarGzDirectory({
       maxBuffer: 10 * 1024 * 1024,
     },
   );
-}
-
-async function backupSqliteDatabase({
-  sourcePath,
-  destinationPath,
-}: {
-  sourcePath: string;
-  destinationPath: string;
-}): Promise<void> {
-  await ensureDir(dirname(destinationPath));
-  await execFile(
-    "sqlite3",
-    [
-      sourcePath,
-      ".timeout 5000",
-      `.backup ${sqliteShellQuote(destinationPath)}`,
-    ],
-    {
-      maxBuffer: 10 * 1024 * 1024,
-    },
-  );
-}
-
-async function snapshotSyncTree({
-  sourceDir,
-  destinationDir,
-}: {
-  sourceDir: string;
-  destinationDir: string;
-}): Promise<void> {
-  await ensureDir(destinationDir);
-  const entries = await readdir(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = join(sourceDir, entry.name);
-    const destinationPath = join(destinationDir, entry.name);
-    if (entry.isDirectory()) {
-      // If the sync tree ever grows large, keep a persistent staged snapshot
-      // and refresh only sqlite files whose .db/.db-wal/.db-shm inputs changed
-      // since the previous backup instead of rebuilding the whole tree here.
-      await snapshotSyncTree({
-        sourceDir: sourcePath,
-        destinationDir: destinationPath,
-      });
-      continue;
-    }
-    if (entry.isFile()) {
-      if (entry.name.endsWith(".db")) {
-        await backupSqliteDatabase({
-          sourcePath,
-          destinationPath,
-        });
-        continue;
-      }
-      if (entry.name.endsWith(".db-wal") || entry.name.endsWith(".db-shm")) {
-        continue;
-      }
-      await ensureDir(dirname(destinationPath));
-      await copyFile(sourcePath, destinationPath);
-      const info = await stat(sourcePath);
-      await chmod(destinationPath, info.mode);
-    }
-  }
 }
 
 async function treeContainsSqliteDatabase(sourceDir: string): Promise<boolean> {
@@ -1900,28 +1838,27 @@ async function copySecretsTree({
 
 async function stageControlPlaneArtifacts({
   stagingDir,
+  syncMirrorDir,
+  syncMirrorCatalog,
 }: {
   stagingDir: string;
+  syncMirrorDir: string;
+  syncMirrorCatalog: string;
 }): Promise<ControlPlaneArtifact[]> {
   const artifacts: ControlPlaneArtifact[] = [];
 
   if (await exists(syncFiles.local)) {
-    const syncSnapshotDir = join(stagingDir, "sync");
-    await snapshotSyncTree({
+    const mirror = await refreshSqliteMirror({
       sourceDir: syncFiles.local,
-      destinationDir: syncSnapshotDir,
+      mirrorDir: syncMirrorDir,
+      catalogPath: syncMirrorCatalog,
     });
+    logger.info("refreshed changed-only bay SQLite mirror", mirror);
     const syncArchivePath = join(stagingDir, "sync.tar.gz");
-    // This gzip/tar packaging is simple and works well for the current
-    // local-cache plus direct-object-storage layout. If the rustic repo becomes
-    // the long-term canonical remote backend, we should reconsider this and
-    // likely snapshot the uncompressed tree instead so rustic can deduplicate
-    // unchanged sqlite pages and other repeated content across bay backups.
     await tarGzDirectory({
-      sourceDir: syncSnapshotDir,
+      sourceDir: syncMirrorDir,
       archivePath: syncArchivePath,
     });
-    await rm(syncSnapshotDir, { recursive: true, force: true });
     artifacts.push({
       name: "sync.tar.gz",
       local_path: syncArchivePath,
@@ -3470,7 +3407,10 @@ async function retryLatestLocalBackupToRustic({
 export async function syncBayWalArchive({
   bay_id,
   forceSwitch = false,
-  retryLocalSnapshot = true,
+  // A local-only full snapshot can require hundreds of GB of temporary I/O to
+  // materialize for Rustic. WAL maintenance must never trigger that work as a
+  // side effect; callers that intentionally retry a full upload opt in.
+  retryLocalSnapshot = false,
 }: {
   bay_id?: string;
   forceSwitch?: boolean;
@@ -4402,6 +4342,8 @@ export async function runBayBackup({
           });
           await stageControlPlaneArtifacts({
             stagingDir: staging_dir,
+            syncMirrorDir: paths.sync_mirror_dir,
+            syncMirrorCatalog: paths.sync_mirror_catalog,
           });
           archive_dir = join(paths.archives_dir, backup_set_id);
           await rename(staging_dir, archive_dir);

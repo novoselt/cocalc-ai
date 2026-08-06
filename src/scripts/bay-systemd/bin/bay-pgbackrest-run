@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+# shellcheck source=pgbackrest-lib.sh
+source "${SCRIPT_DIR}/pgbackrest-lib.sh"
+
+if [[ "${COCALC_BAY_PGBACKREST_ENABLED:-0}" != "1" ]]; then
+  bay_log "pgBackRest is disabled"
+  exit 0
+fi
+
+action="${1:-}"
+pgbackrest_set_defaults
+pgbackrest_export_secrets
+"${SCRIPT_DIR}/bay-pgbackrest-configure"
+if [[ ! -x "$COCALC_BAY_PGBACKREST_BIN" ]]; then
+  bay_log "pgBackRest binary is not executable: ${COCALC_BAY_PGBACKREST_BIN}"
+  exit 1
+fi
+stanza="$(pgbackrest_stanza)"
+common=(
+  "$COCALC_BAY_PGBACKREST_BIN"
+  "--config=$COCALC_BAY_PGBACKREST_CONFIG"
+  "--stanza=$stanza"
+  "--log-level-console=info"
+)
+
+case "$action" in
+  setup)
+    "${common[@]}" stanza-create
+    exec "${common[@]}" check
+    ;;
+  full|diff|incr)
+    exec "${common[@]}" "--type=$action" backup
+    ;;
+  check|expire|info|verify)
+    exec "${common[@]}" "$action"
+    ;;
+  *)
+    bay_log "usage: bay-pgbackrest-run setup|full|diff|incr|check|expire|info|verify"
+    exit 2
+    ;;
+esac

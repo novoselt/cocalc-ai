@@ -15,6 +15,7 @@ let selectDedicatedHostFundingLaneMock: jest.Mock;
 let estimateDedicatedHostRateMock: jest.Mock;
 let reconcileDedicatedHostPurchaseSessionForAccountMock: jest.Mock;
 let requireFreshAuthForSessionHashMock: jest.Mock;
+let isAdminMock: jest.Mock;
 
 const ACCOUNT_ID = "81e787c4-8705-46c5-86df-9d07bc424a01";
 
@@ -165,7 +166,7 @@ jest.mock("@cocalc/server/cloud/host-gpu", () => ({
 
 jest.mock("@cocalc/server/accounts/is-admin", () => ({
   __esModule: true,
-  default: jest.fn(async () => false),
+  default: (...args: any[]) => isAdminMock(...args),
 }));
 
 jest.mock("@cocalc/server/accounts/is-banned", () => ({
@@ -227,6 +228,7 @@ describe("hosts.createHost", () => {
       async () => undefined,
     );
     requireFreshAuthForSessionHashMock = jest.fn(async () => undefined);
+    isAdminMock = jest.fn(async () => false);
     queryMock = jest.fn(async (sql: string, params: any[]) => {
       const accountResult = maybeHandleAccountDirectoryQuery(sql, params);
       if (accountResult != null) {
@@ -410,7 +412,8 @@ describe("hosts.createHost", () => {
     expect(estimateDedicatedHostRateMock).not.toHaveBeenCalled();
   });
 
-  it("creates site-funded cloud hosts without opening an account-funded purchase session", async () => {
+  it("creates site-funded cloud hosts for admins without opening an account-funded purchase session", async () => {
+    isAdminMock = jest.fn(async () => true);
     getDedicatedHostPolicySnapshotForAccountMock = jest.fn(async () => ({
       account_id: ACCOUNT_ID,
       can_create_hosts: true,
@@ -488,7 +491,38 @@ describe("hosts.createHost", () => {
     ).not.toHaveBeenCalled();
   });
 
+  it("rejects an implicit site-funded policy for non-admin owners", async () => {
+    getDedicatedHostPolicySnapshotForAccountMock = jest.fn(async () => ({
+      account_id: ACCOUNT_ID,
+      can_create_hosts: true,
+      funding_mode: "site-funded",
+      effective_limits: {},
+      dedicated_host_window_usage: {},
+    }));
+
+    const { createHost } = await import("./hosts");
+    await expect(
+      createHost({
+        account_id: ACCOUNT_ID,
+        session_hash: "session-hash",
+        name: "fresh-gcp",
+        region: "us-west1",
+        size: "e2-standard-2",
+        pricing_model: "spot",
+        machine: { cloud: "gcp" },
+      }),
+    ).rejects.toMatchObject({ code: "site_funded_requires_admin" });
+    expect(queryMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO project_hosts"),
+      expect.anything(),
+    );
+    expect(
+      reconcileDedicatedHostPurchaseSessionForAccountMock,
+    ).not.toHaveBeenCalled();
+  });
+
   it("rejects site-funded cloud hosts when pricing is unavailable", async () => {
+    isAdminMock = jest.fn(async () => true);
     getDedicatedHostPolicySnapshotForAccountMock = jest.fn(async () => ({
       account_id: ACCOUNT_ID,
       can_create_hosts: true,
@@ -860,9 +894,11 @@ describe("hosts.startHostInternal", () => {
     reconcileDedicatedHostPurchaseSessionForAccountMock = jest.fn(
       async () => undefined,
     );
+    isAdminMock = jest.fn(async () => false);
   });
 
   it("honors an existing host-level site-funded override during start", async () => {
+    isAdminMock = jest.fn(async () => true);
     let selectCount = 0;
     queryMock = jest.fn(async (sql: string, params: any[]) => {
       if (

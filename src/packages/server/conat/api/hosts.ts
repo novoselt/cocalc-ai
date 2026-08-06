@@ -873,6 +873,32 @@ async function loadOwnedHost(id: string, account_id?: string): Promise<any> {
   return row;
 }
 
+async function loadHostForMachineUpdate(
+  id: string,
+  account_id?: string,
+): Promise<any> {
+  const actor = requireAccount(account_id);
+  const { rows } = await pool().query(
+    `SELECT * FROM project_hosts WHERE id=$1 AND deleted IS NULL`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) {
+    throw new Error("host not found");
+  }
+  const owner = `${row.metadata?.owner ?? ""}`.trim();
+  if (owner !== actor && !(await isAdmin(actor))) {
+    throw new Error("not authorized");
+  }
+  return row;
+}
+
+function hostBillingOwnerAccountId(row: any, fallback: string): string {
+  // Permission and fresh-auth checks follow the actor, but every billing
+  // decision must follow the persisted host owner, including for admin calls.
+  return `${row?.metadata?.owner ?? ""}`.trim() || fallback;
+}
+
 async function loadHostForDestructiveAction(
   id: string,
   account_id?: string,
@@ -1367,6 +1393,21 @@ async function assertRequestedHostFundingModeAllowed({
   funding_mode?: DedicatedHostFundingMode;
 }): Promise<void> {
   if (funding_mode == null) {
+    if (!isBillableDedicatedHostCloud(machine_cloud)) {
+      return;
+    }
+    const snapshot = await getDedicatedHostPolicySnapshotForAccount({
+      account_id,
+    });
+    if (
+      snapshot.funding_mode === "site-funded" &&
+      !(await isAdmin(account_id))
+    ) {
+      throw Object.assign(
+        new Error("site-funded dedicated hosts are limited to admins"),
+        { code: "site_funded_requires_admin" },
+      );
+    }
     return;
   }
   if (!isBillableDedicatedHostCloud(machine_cloud)) {
@@ -6123,6 +6164,7 @@ export async function startHost({
   session_hash?: string;
   id: string;
 }): Promise<HostLroResponse> {
+  const actor = requireAccount(account_id);
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
     const auth = await maybeRequireFreshAuthForInteractiveHostAction({
@@ -6140,7 +6182,13 @@ export async function startHost({
         id,
       });
   }
-  const row = await loadHostForStartStop(id, account_id);
+  const row = await loadHostForStartStop(id, actor);
+  const billingOwner = hostBillingOwnerAccountId(row, actor);
+  await assertRequestedHostFundingModeAllowed({
+    account_id: billingOwner,
+    machine_cloud: row.metadata?.machine?.cloud,
+    funding_mode: currentHostFundingMode(row.metadata),
+  });
   assertHostBillingEnforcementAllowsStart(row.metadata);
   const auth = await maybeRequireFreshAuthForInteractiveHostAction({
     account_id,
@@ -6152,7 +6200,7 @@ export async function startHost({
   });
   await assertNoPendingDestructiveHostOp(row.id);
   await assertDedicatedHostAdmissionForAccount({
-    account_id: requireAccount(account_id),
+    account_id: billingOwner,
     action: "start",
     machine_cloud: row.metadata?.machine?.cloud,
     has_active_second_factor_override: auth.allow_second_factor_override,
@@ -6883,13 +6931,14 @@ export async function updateHostMachine({
   spot_recovery_policy?: HostSpotRecoveryPolicy;
   timeout?: number;
 }): Promise<Host> {
-  const owner = requireAccount(account_id);
-  const row = await loadOwnedHost(id, owner);
+  const actor = requireAccount(account_id);
+  const row = await loadHostForMachineUpdate(id, actor);
+  const billingOwner = hostBillingOwnerAccountId(row, actor);
   const metadata = row.metadata ?? {};
   const machine: HostMachine = metadata.machine ?? {};
   const machineCloud = normalizeProviderId(machine.cloud);
   const auth = await maybeRequireFreshAuthForInteractiveHostAction({
-    account_id: owner,
+    account_id: actor,
     browser_id,
     session_hash,
     required: hostActionRequiresInteractiveFreshAuth(machineCloud),
@@ -6922,18 +6971,18 @@ export async function updateHostMachine({
   });
   if (
     (requestedCloud === "self-host" || machineCloud === "self-host") &&
-    !(await isAdmin(owner))
+    !(await isAdmin(actor))
   ) {
     throw new Error("self-hosted hosts are limited to admins");
   }
   const currentFundingMode = currentHostFundingMode(metadata);
   await assertRequestedHostFundingModeAllowed({
-    account_id: owner,
+    account_id: billingOwner,
     machine_cloud: effectiveFundingCloud,
     funding_mode: requestedFundingMode,
   });
   await assertDedicatedHostAdmissionForAccount({
-    account_id: owner,
+    account_id: billingOwner,
     action: "resize",
     machine_cloud: effectiveFundingCloud,
     has_active_second_factor_override: auth.allow_second_factor_override,
@@ -6942,9 +6991,15 @@ export async function updateHostMachine({
   });
   const cloudChanged =
     requestedCloudRaw !== undefined && requestedCloud !== machineCloud;
+  const isLiveSiteFundedCorrection =
+    currentFundingMode === "site-funded" &&
+    (requestedFundingMode === "account-prepaid" ||
+      requestedFundingMode === "account-postpaid") &&
+    HOST_RUNNING_STATUSES.has(String(row.status ?? ""));
   if (
     requestedFundingMode !== undefined &&
     requestedFundingMode !== currentFundingMode &&
+    !isLiveSiteFundedCorrection &&
     !(
       isDeprovisioned ||
       row.status === "off" ||
@@ -7542,7 +7597,7 @@ export async function updateHostMachine({
     }
     const snapshot = applyDedicatedHostFundingModeOverride(
       await getDedicatedHostPolicySnapshotForAccount({
-        account_id: owner,
+        account_id: billingOwner,
         funding_mode_override: nextBillingFundingMode,
       }),
       nextBillingFundingMode,
@@ -7553,7 +7608,7 @@ export async function updateHostMachine({
       const fundingLane = selectDedicatedHostFundingLane(snapshot);
       if (!fundingLane) {
         throw new Error(
-          `dedicated-host funding is not currently available for account ${owner}`,
+          `dedicated-host funding is not currently available for account ${billingOwner}`,
         );
       }
       const enforcement = evaluateDedicatedHostBillingEnforcement({
@@ -7896,7 +7951,10 @@ export async function updateHostMachine({
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
         pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === activeBillableSession.funding_mode &&
+          metadata.billing?.funding_lane === activeBillableSession.funding_lane
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else if (activeBillableSession?.funding_mode === "account-postpaid") {
       nextMetadata.billing = {
@@ -7905,13 +7963,18 @@ export async function updateHostMachine({
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
         pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === activeBillableSession.funding_mode &&
+          metadata.billing?.funding_lane === activeBillableSession.funding_lane
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else if (activeBillableSession?.funding_mode === "site-funded") {
       nextMetadata.billing = {
         funding_mode: "site-funded",
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === "site-funded"
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else {
       nextMetadata.billing = { funding_mode: nextBillingFundingMode };
@@ -7934,7 +7997,7 @@ export async function updateHostMachine({
     nextMachineCloud
   ) {
     await reconcileDedicatedHostPurchaseSessionForAccount({
-      account_id: owner,
+      account_id: billingOwner,
       host_id: row.id,
       host_name: row.name ?? undefined,
       host_bay_id: getConfiguredBayId(),

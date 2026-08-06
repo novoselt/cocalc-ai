@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+
+if [[ "${COCALC_BAY_PGBACKREST_ENABLED:-0}" != "1" ]]; then
+  exit 0
+fi
+
+: "${COCALC_BAY_PGBACKREST_CONFIG:=${COCALC_BAY_BACKUP_DIR}/pgbackrest/pgbackrest.conf}"
+: "${COCALC_BAY_PGBACKREST_SPOOL_PATH:=${COCALC_BAY_BACKUP_DIR}/pgbackrest/spool}"
+: "${COCALC_BAY_PGBACKREST_LOCK_PATH:=${COCALC_BAY_RUN_DIR}/pgbackrest}"
+: "${COCALC_BAY_PGBACKREST_LOG_PATH:=${COCALC_BAY_LOG_DIR}/pgbackrest}"
+: "${COCALC_BAY_PGBACKREST_REPO_PATH:=/pgbackrest/${COCALC_BAY_ID}}"
+: "${COCALC_BAY_PGBACKREST_PROCESS_MAX:=1}"
+: "${COCALC_BAY_PGBACKREST_RETENTION_FULL:=2}"
+: "${COCALC_BAY_PGBACKREST_RETENTION_DIFF:=14}"
+
+required=(
+  COCALC_BAY_POSTGRES_DATA_DIR
+  COCALC_BAY_POSTGRES_SOCKET_DIR
+  COCALC_BAY_PGBACKREST_S3_BUCKET
+  COCALC_BAY_PGBACKREST_S3_ENDPOINT
+)
+for name in "${required[@]}"; do
+  require_var "$name"
+  if [[ "${!name}" == *$'\n'* || "${!name}" == *$'\r'* ]]; then
+    bay_log "invalid newline in ${name}"
+    exit 1
+  fi
+done
+
+stanza="cocalc-${COCALC_BAY_ID//[^A-Za-z0-9_-]/-}"
+endpoint="${COCALC_BAY_PGBACKREST_S3_ENDPOINT#https://}"
+endpoint="${endpoint#http://}"
+endpoint="${endpoint%/}"
+config_dir="$(dirname "$COCALC_BAY_PGBACKREST_CONFIG")"
+config_tmp="${COCALC_BAY_PGBACKREST_CONFIG}.tmp.$$"
+
+umask 077
+mkdir -p \
+  "$config_dir" \
+  "$COCALC_BAY_PGBACKREST_SPOOL_PATH" \
+  "$COCALC_BAY_PGBACKREST_LOCK_PATH" \
+  "$COCALC_BAY_PGBACKREST_LOG_PATH"
+trap 'rm -f "$config_tmp"' EXIT
+cat > "$config_tmp" <<EOF
+[global]
+repo1-type=s3
+repo1-path=${COCALC_BAY_PGBACKREST_REPO_PATH}
+repo1-s3-bucket=${COCALC_BAY_PGBACKREST_S3_BUCKET}
+repo1-s3-endpoint=${endpoint}
+repo1-s3-region=auto
+repo1-s3-uri-style=path
+repo1-cipher-type=aes-256-cbc
+repo1-retention-full=${COCALC_BAY_PGBACKREST_RETENTION_FULL}
+repo1-retention-diff=${COCALC_BAY_PGBACKREST_RETENTION_DIFF}
+repo1-retention-archive-type=full
+repo1-bundle=y
+repo1-block=y
+compress-type=zst
+compress-level=3
+process-max=${COCALC_BAY_PGBACKREST_PROCESS_MAX}
+archive-async=y
+archive-timeout=300
+start-fast=n
+spool-path=${COCALC_BAY_PGBACKREST_SPOOL_PATH}
+lock-path=${COCALC_BAY_PGBACKREST_LOCK_PATH}
+log-path=${COCALC_BAY_PGBACKREST_LOG_PATH}
+
+[${stanza}]
+pg1-path=${COCALC_BAY_POSTGRES_DATA_DIR}
+pg1-port=${COCALC_BAY_POSTGRES_PORT}
+pg1-socket-path=${COCALC_BAY_POSTGRES_SOCKET_DIR}
+EOF
+chmod 0600 "$config_tmp"
+mv -f "$config_tmp" "$COCALC_BAY_PGBACKREST_CONFIG"
+trap - EXIT
