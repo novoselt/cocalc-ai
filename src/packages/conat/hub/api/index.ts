@@ -126,6 +126,20 @@ export function initHubApi(callHubApi): HubApi {
           timeout: args[0]?.timeout,
           project_id: extractProjectId(args),
         });
+        // A failed LRO legitimately returns its operation failure in the
+        // top-level `error` field.  Do not confuse that successful API result
+        // with the legacy `{ error }` RPC failure envelope.
+        if (
+          group === "lro" &&
+          functionName === "get" &&
+          resp != null &&
+          typeof resp === "object" &&
+          typeof resp.op_id === "string" &&
+          typeof resp.scope_type === "string" &&
+          typeof resp.status === "string"
+        ) {
+          return resp;
+        }
         return handleErrorMessage(resp);
       };
     }
