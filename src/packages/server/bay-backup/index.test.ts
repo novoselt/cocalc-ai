@@ -614,6 +614,70 @@ describe("bay-backup runner", () => {
     );
   });
 
+  it("uses current pgBackRest application PITR status as restore readiness", async () => {
+    const stateDir = join(backupRoot, "application-state");
+    mkdirSync(stateDir, { recursive: true });
+    process.env.COCALC_BAY_STATE_DIR = stateDir;
+    process.env.COCALC_BAY_PGBACKREST_ENABLED = "1";
+    const testedAt = new Date().toISOString();
+    writeFileSync(
+      join(stateDir, "pgbackrest-status.json"),
+      JSON.stringify({
+        level: "ok",
+        generated_at: testedAt,
+        backup: { latest_label: "20260806-061818F" },
+      }),
+    );
+    writeFileSync(
+      join(stateDir, "pgbackrest-restore-test-status.json"),
+      JSON.stringify({
+        level: "ok",
+        tested_at: testedAt,
+        backup_label: "20260806-061818F",
+        pitr_target_time: "2026-08-06T19:40:41.306Z",
+        worker: {
+          instance_name: "cocalc-restore-test",
+          project_id: "projecthosts",
+          zone: "us-south1-a",
+          machine_type: "n2-standard-4",
+          boot_disk_gb: 500,
+          cleanup: "deleted",
+          worker: {
+            status: "passed",
+            stage: "complete",
+            duration_ms: 3_450_386,
+            conat: {
+              database_count: 78_077,
+              database_bytes: 3_841_990_656,
+              quick_check_passed: 78_077,
+            },
+          },
+        },
+      }),
+    );
+
+    const { getBayBackupStatus } = await import("./index");
+    const status = await getBayBackupStatus();
+
+    expect(status.restore_readiness.latest_backup_set_id).toBe(
+      "20260806-061818F",
+    );
+    expect(status.restore_readiness.latest_backup_restore_test_status).toBe(
+      "passed",
+    );
+    expect(status.restore_readiness.latest_backup_pitr_test_status).toBe(
+      "passed",
+    );
+    expect(status.restore_readiness.gold_star).toBe(true);
+    expect(
+      status.restore_readiness.last_restore_test_evidence
+        ?.conat_quick_check_passed,
+    ).toBe(78_077);
+    expect(status.restore_readiness.summary).toContain(
+      "disposable PITR backup 20260806-061818F passed",
+    );
+  });
+
   it("does not start a full backup when another process owns the bay backup lock", async () => {
     const pool = makeMockPool(async () => ({ rows: [] }), {
       lockAvailable: false,
