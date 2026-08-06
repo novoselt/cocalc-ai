@@ -1107,6 +1107,109 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], bootstrap.RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S)
         self.assertNotIn("uid_map", contract)
+        self.assertEqual(contract["probe_error"], "timed out")
+
+    def test_runtime_user_contract_repairs_stale_boot_state_and_retries(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+        calls = []
+        repairs = []
+        original_which = bootstrap.shutil.which
+        original_probe = bootstrap.run_bounded_capture
+        original_repair = bootstrap.repair_stale_podman_boot_state
+        try:
+            bootstrap.shutil.which = lambda _name: "/usr/bin/podman"
+
+            def fake_probe(args, timeout_s):
+                calls.append((args, timeout_s))
+                if len(calls) == 1:
+                    return subprocess.CompletedProcess(
+                        args,
+                        125,
+                        "",
+                        "current system boot ID differs from cached boot ID; "
+                        "an unhandled reboot has occurred",
+                    )
+                map_text = "0 2000 1\n1 231072 65536\n65537 327680 4128768\n"
+                return subprocess.CompletedProcess(args, 0, map_text, "")
+
+            bootstrap.run_bounded_capture = fake_probe
+            bootstrap.repair_stale_podman_boot_state = lambda _cfg, **kwargs: repairs.append(
+                kwargs
+            )
+            contract = bootstrap.read_current_runtime_user_contract(cfg)
+        finally:
+            bootstrap.shutil.which = original_which
+            bootstrap.run_bounded_capture = original_probe
+            bootstrap.repair_stale_podman_boot_state = original_repair
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(repairs[0]["uid"], os.getuid())
+        self.assertIn("fingerprint", contract)
+        self.assertNotIn("probe_error", contract)
+
+    def test_stale_boot_repair_refuses_live_project_runtimes(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        original_active = bootstrap.project_host_runtime_is_active
+        try:
+            bootstrap.project_host_runtime_is_active = lambda: True
+            with self.assertRaisesRegex(RuntimeError, "project runtimes are active"):
+                bootstrap.repair_stale_podman_boot_state(
+                    cfg,
+                    uid=2000,
+                    gid=2000,
+                    runtime_dir=bootstrap.default_podman_runtime_dir(2000),
+                )
+        finally:
+            bootstrap.project_host_runtime_is_active = original_active
+
+    def test_stale_boot_repair_only_removes_boot_scoped_paths(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        cfg = replace(cfg, ssh_user="cocalc-host")
+        removed = []
+        owned = []
+        original_active = bootstrap.project_host_runtime_is_active
+        original_exists = Path.exists
+        original_is_symlink = Path.is_symlink
+        original_rmtree = bootstrap.shutil.rmtree
+        original_ensure_owned = bootstrap.ensure_owned_runtime_dir
+        try:
+            bootstrap.project_host_runtime_is_active = lambda: False
+            Path.exists = lambda _self: True  # type: ignore[method-assign]
+            Path.is_symlink = lambda _self: False  # type: ignore[method-assign]
+            bootstrap.shutil.rmtree = lambda path: removed.append(str(path))
+            bootstrap.ensure_owned_runtime_dir = (
+                lambda path, uid, gid: owned.append((str(path), uid, gid))
+            )
+            bootstrap.repair_stale_podman_boot_state(
+                cfg,
+                uid=2000,
+                gid=2000,
+                runtime_dir=bootstrap.default_podman_runtime_dir(2000),
+            )
+        finally:
+            bootstrap.project_host_runtime_is_active = original_active
+            Path.exists = original_exists  # type: ignore[method-assign]
+            Path.is_symlink = original_is_symlink  # type: ignore[method-assign]
+            bootstrap.shutil.rmtree = original_rmtree
+            bootstrap.ensure_owned_runtime_dir = original_ensure_owned
+
+        self.assertEqual(
+            removed,
+            [
+                "/run/cocalc/containers/rootless/cocalc-host",
+                "/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000/libpod/tmp",
+            ],
+        )
+        self.assertEqual(
+            owned,
+            [
+                ("/run/cocalc/containers/rootless/cocalc-host", 2000, 2000),
+                ("/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000", 2000, 2000),
+            ],
+        )
+        self.assertFalse(any("/containers/rootless/" in path for path in removed[1:]))
 
     def test_runtime_user_contract_uses_managed_podman(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1236,8 +1339,12 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
                 "uid_map": ["0 1002 1", "1 231072 65536", "65537 327680 4128768"],
                 "gid_map": ["0 1003 1", "1 231072 65536", "65537 327680 4128768"],
                 "fingerprint": "different",
+                "probe_error": "current system boot ID differs from cached boot ID",
             }
-            with self.assertRaisesRegex(RuntimeError, "runtime userns contract mismatch"):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "podman probe failed: current system boot ID differs",
+            ):
                 bootstrap.verify_runtime_user_contract(cfg)
         finally:
             bootstrap.expected_runtime_user_contract = original_expected
