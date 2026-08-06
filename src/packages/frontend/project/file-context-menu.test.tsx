@@ -54,7 +54,7 @@ describe("buildFileActionItems", () => {
     expect(menuKeys(true)).toContain("publish");
   });
 
-  it("does not include publish for file context menus", () => {
-    expect(menuKeys(false)).not.toContain("publish");
+  it("includes publish for file context menus", () => {
+    expect(menuKeys(false)).toContain("publish");
   });
 });
