@@ -68,6 +68,9 @@ function mockFs({
     stat: jest.fn(async (path: string) => ({
       isDirectory: () => dirs.has(path),
     })),
+    lstat: jest.fn(async (path: string) => ({
+      isDirectory: () => dirs.has(path),
+    })),
     readdir: jest.fn(async (path: string) =>
       (children[path] ?? []).map((name) => ({ name })),
     ),
@@ -99,7 +102,8 @@ describe("copy viewer read policy enforcement", () => {
         options: { recursive: true },
       }),
     ).resolves.toBeUndefined();
-    expect(fs.stat).toHaveBeenCalledWith("public");
+    expect(fs.lstat).toHaveBeenCalledWith("public");
+    expect(fs.stat).not.toHaveBeenCalled();
     expect(fs.readdir).not.toHaveBeenCalled();
   });
 
@@ -157,6 +161,40 @@ describe("copy viewer read policy enforcement", () => {
         options: { recursive: true, dereference: true },
       }),
     ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
+  it("preserves a dangling symlink during a non-dereferencing recursive copy", async () => {
+    const { assertCopySourceAllowedByReadPolicy } = await import("./copy");
+    const fs = mockFs({
+      canonical: {
+        public: "/home/user/public",
+        "public/dangling-link": "/home/user/public/dangling-link",
+      },
+      dirs: new Set(["public"]),
+      children: {
+        public: ["dangling-link"],
+      },
+    });
+    fs.stat.mockRejectedValue(
+      Object.assign(new Error("no such file or directory"), { code: "ENOENT" }),
+    );
+
+    await expect(
+      assertCopySourceAllowedByReadPolicy({
+        fs,
+        read_policy: {
+          rules: [
+            { action: "include", path: "public/**" },
+            { action: "exclude", path: "public/private/**" },
+          ],
+        },
+        src_paths: ["public"],
+        options: { recursive: true },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fs.lstat).toHaveBeenCalledWith("public/dangling-link");
+    expect(fs.stat).not.toHaveBeenCalled();
   });
 
   it("rejects non-home canonical paths", async () => {

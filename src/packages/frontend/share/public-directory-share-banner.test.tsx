@@ -9,6 +9,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ResolvedPublicDirectoryShare } from "@cocalc/conat/hub/api/public-directory-shares";
 import {
@@ -19,6 +20,7 @@ import {
 const copyToNewProject = jest.fn();
 const copyToProject = jest.fn();
 const getProjectRegion = jest.fn();
+const getLro = jest.fn();
 const lroWait = jest.fn();
 const openProject = jest.fn();
 
@@ -109,6 +111,9 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       hub: {
+        lro: {
+          get: (...args: any[]) => getLro(...args),
+        },
         projects: {
           getProjectRegion: (...args: any[]) => getProjectRegion(...args),
         },
@@ -171,8 +176,10 @@ describe("PublicDirectoryShareBanner", () => {
       created_project: true,
       reused_project: false,
       placed_on_requested_host: true,
+      requested_host_id: "source-host",
     });
     lroWait.mockResolvedValue({ status: "succeeded" });
+    getLro.mockResolvedValue(undefined);
     getProjectRegion.mockResolvedValue("wnam");
   });
 
@@ -364,6 +371,51 @@ describe("PublicDirectoryShareBanner", () => {
       expect(screen.getByText("copy failed")).toBeTruthy();
     });
     expect(openProject).not.toHaveBeenCalled();
+  });
+
+  it("recovers a missed terminal failure from the durable LRO row", async () => {
+    lroWait.mockRejectedValueOnce(
+      new Error("timeout waiting for lro completion"),
+    );
+    getLro.mockResolvedValueOnce({
+      status: "failed",
+      error: "dangling symlink copy failed",
+    });
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(screen.getByText("dangling symlink copy failed")).toBeTruthy();
+    });
+    expect(getLro).toHaveBeenCalledWith({ op_id: "op-1" });
+    expect(openProject).not.toHaveBeenCalled();
+  });
+
+  it("shows the destination and operation while a default copy is running", async () => {
+    lroWait.mockReturnValueOnce(new Promise(() => {}));
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(screen.getByText("Destination: new project")).toBeTruthy();
+    });
+    expect(screen.getByText("new-project")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText("test2")).toBeTruthy();
+    expect(screen.getByText("op-1")).toBeTruthy();
+    expect(
+      screen.getByText("Placed on the source host for a same-host copy."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Open destination project"));
+    expect(openProject).toHaveBeenCalledWith({
+      project_id: "new-project",
+      switch_to: true,
+      target: "files",
+    });
   });
 
   it("shows progress and explains when same-host placement falls back", async () => {
