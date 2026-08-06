@@ -501,6 +501,35 @@ export interface LegacyMigrationAdminReplayPublicPathsResponse {
   committed: boolean;
 }
 
+export interface LegacyMigrationAdminReplayRestoredPublicPathsOptions {
+  account_id?: string;
+  after_legacy_project_id?: string;
+  limit?: number;
+  commit?: boolean;
+  reason: string;
+  support_reference?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}
+
+export interface LegacyMigrationAdminReplayRestoredPublicPathsProject {
+  legacy_project_id: string;
+  project_id: string;
+  public_path_count: number;
+  missing_share_count: number;
+  pending_share_count: number;
+  imported: number;
+  skipped: number;
+  error?: string;
+}
+
+export interface LegacyMigrationAdminReplayRestoredPublicPathsResponse {
+  projects: LegacyMigrationAdminReplayRestoredPublicPathsProject[];
+  committed: boolean;
+  has_more: boolean;
+  next_after_legacy_project_id?: string;
+}
+
 export interface LegacyMigration {
   listProjects: (
     opts?: LegacyMigrationListProjectsOptions,
@@ -559,6 +588,9 @@ export interface LegacyMigration {
   adminReplayPublicPaths: (
     opts: LegacyMigrationAdminReplayPublicPathsOptions,
   ) => Promise<LegacyMigrationAdminReplayPublicPathsResponse>;
+  adminReplayRestoredPublicPaths: (
+    opts: LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  ) => Promise<LegacyMigrationAdminReplayRestoredPublicPathsResponse>;
 }
 
 export const legacyMigration = {
@@ -581,4 +613,5 @@ export const legacyMigration = {
   adminUnlinkLegacyAccount: authFirstRequireAccount,
   adminListLinkedLegacyProjects: authFirstRequireAccount,
   adminReplayPublicPaths: authFirstRequireAccount,
+  adminReplayRestoredPublicPaths: authFirstRequireAccount,
 } as const;

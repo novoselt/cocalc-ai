@@ -229,7 +229,7 @@ function legacyShareStatusTag({
       legacyShare.restore_status === "restored" &&
       currentShare.availability_status === "pending"
     ) {
-      return <Tag color="gold">Restored; activation pending</Tag>;
+      return <Tag color="gold">Restored; verification pending</Tag>;
     }
     return availabilityTag(currentShare);
   }
@@ -243,7 +243,7 @@ function legacyShareStatusTag({
     return <Tag>Project not restored</Tag>;
   }
   if (legacyShare.restore_status === "restored") {
-    return <Tag color="gold">Restored; activation pending</Tag>;
+    return <Tag color="gold">Restored; publication replay pending</Tag>;
   }
   if (legacyShare.restore_status === "failed") {
     return <Tag color="red">Project restore failed</Tag>;
@@ -992,10 +992,12 @@ function PublicSharesPage() {
                     const currentShare = currentShareByLegacyId.get(
                       legacyShare.legacy_public_path_id,
                     );
-                    const activationPending =
+                    const replayPending =
                       legacyShare.restore_status === "restored" &&
-                      (currentShare == null ||
-                        currentShare.availability_status === "pending");
+                      currentShare == null;
+                    const verificationPending =
+                      legacyShare.restore_status === "restored" &&
+                      currentShare?.availability_status === "pending";
                     return (
                       <Space direction="vertical" size={4}>
                         {legacyShareStatusTag({
@@ -1007,10 +1009,16 @@ function PublicSharesPage() {
                             Restore: {legacyShare.restore_status}
                           </Text>
                         ) : null}
-                        {activationPending ? (
+                        {replayPending ? (
                           <Text type="secondary">
-                            Publication activation is automatic; no action is
-                            required.
+                            Project files are restored, but this publication has
+                            not yet been recreated.
+                          </Text>
+                        ) : null}
+                        {verificationPending ? (
+                          <Text type="secondary">
+                            Project files are restored, but CoCalc has not yet
+                            verified this published path.
                           </Text>
                         ) : null}
                       </Space>

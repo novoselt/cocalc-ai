@@ -39,6 +39,7 @@ import {
   syncProjectUsersOnHost,
 } from "@cocalc/server/project-host/control";
 import {
+  ensurePublicDirectorySharesSchema,
   normalizePublicDirectorySharePath,
   upsertMigratedLegacyPublicDirectoryShare,
 } from "@cocalc/server/public-directory-shares";
@@ -77,6 +78,8 @@ import type {
   LegacyMigrationAdminProjectSearchOptions,
   LegacyMigrationAdminReplayPublicPathsOptions,
   LegacyMigrationAdminReplayPublicPathsResponse,
+  LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  LegacyMigrationAdminReplayRestoredPublicPathsResponse,
   LegacyMigrationAdminProjectSearchResponse,
   LegacyMigrationAdminProjectAccountCandidate,
   LegacyMigrationAdminProjectSummary,
@@ -953,6 +956,144 @@ export async function adminReplayPublicPaths({
     imported: replay.imported,
     skipped: replay.skipped,
     committed: true,
+  };
+}
+
+const MAX_PUBLIC_SHARE_REPLAY_BATCH = 50;
+
+function publicShareReplayBatchLimit(limit?: number): number {
+  if (!Number.isFinite(limit)) return 25;
+  return Math.max(
+    1,
+    Math.min(MAX_PUBLIC_SHARE_REPLAY_BATCH, Math.floor(limit!)),
+  );
+}
+
+export async function adminReplayRestoredPublicPaths({
+  account_id,
+  after_legacy_project_id,
+  commit,
+  limit,
+  reason,
+  support_reference,
+}: LegacyMigrationAdminReplayRestoredPublicPathsOptions): Promise<LegacyMigrationAdminReplayRestoredPublicPathsResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationRawRecordsSchema();
+  await ensureLegacyMigrationProjectImportSchema();
+  await ensurePublicDirectorySharesSchema();
+  const actorAccountId = requireActorAccountId(account_id);
+  const auditReason = requireAuditReason(reason);
+  const after = `${after_legacy_project_id ?? ""}`.trim();
+  if (after && !isValidUUID(after)) {
+    throw Error("invalid after_legacy_project_id");
+  }
+  const batchLimit = publicShareReplayBatchLimit(limit);
+  const { rows } = await getPool().query<{
+    legacy_project_id: string;
+    project_id: string;
+    public_path_count: number | string;
+    missing_share_count: number | string;
+    pending_share_count: number | string;
+  }>(
+    `
+      WITH active_paths AS (
+        SELECT DISTINCT COALESCE(NULLIF(raw.payload->>'id', ''), raw.legacy_id)
+                 AS legacy_public_path_id,
+               raw.payload->>'project_id' AS legacy_project_id
+          FROM legacy_migration_raw_records raw
+         WHERE raw.source='public_paths'
+           AND lower(COALESCE(raw.payload->>'disabled', 'false'))
+                 NOT IN ('true', 't', '1')
+           AND lower(regexp_replace(
+                 COALESCE(raw.payload->>'url', ''),
+                 '^(https?://[^/]+/|/+)',
+                 ''
+               )) !~ '^(github|gist)(/|$)'
+      ), candidates AS (
+        SELECT imports.legacy_project_id,
+               imports.project_id,
+               COUNT(*)::INTEGER AS public_path_count,
+               COUNT(*) FILTER (WHERE current.id IS NULL)::INTEGER
+                 AS missing_share_count,
+               COUNT(*) FILTER (
+                 WHERE current.availability_status='pending'
+                   AND COALESCE(current.disabled, false)=false
+               )::INTEGER AS pending_share_count
+          FROM legacy_migration_project_imports imports
+          JOIN projects project
+            ON project.project_id=imports.project_id
+           AND COALESCE(project.deleted, false)=false
+          JOIN legacy_migration_projects legacy_project
+            ON legacy_project.legacy_project_id=imports.legacy_project_id
+           AND lower(COALESCE(legacy_project.title, ''))
+                 NOT LIKE 'github-proxy%'
+          JOIN active_paths active
+            ON active.legacy_project_id=imports.legacy_project_id
+          LEFT JOIN public_project_paths current
+            ON current.legacy_public_path_id=active.legacy_public_path_id
+         WHERE imports.restore_status='restored'
+         GROUP BY imports.legacy_project_id, imports.project_id
+        HAVING COUNT(*) FILTER (
+                 WHERE current.id IS NULL
+                    OR (
+                      current.availability_status='pending'
+                      AND COALESCE(current.disabled, false)=false
+                    )
+               ) > 0
+      )
+      SELECT legacy_project_id, project_id, public_path_count,
+             missing_share_count, pending_share_count
+        FROM candidates
+       WHERE ($1::TEXT='' OR legacy_project_id::TEXT>$1::TEXT)
+       ORDER BY legacy_project_id
+       LIMIT $2
+    `,
+    [after, batchLimit + 1],
+  );
+  const hasMore = rows.length > batchLimit;
+  const candidates = rows.slice(0, batchLimit);
+  const projects: LegacyMigrationAdminReplayRestoredPublicPathsResponse["projects"] =
+    [];
+  for (const candidate of candidates) {
+    const summary = {
+      legacy_project_id: candidate.legacy_project_id,
+      project_id: candidate.project_id,
+      public_path_count: Number(candidate.public_path_count),
+      missing_share_count: Number(candidate.missing_share_count),
+      pending_share_count: Number(candidate.pending_share_count),
+      imported: 0,
+      skipped: 0,
+    };
+    if (commit !== true) {
+      projects.push(summary);
+      continue;
+    }
+    try {
+      const replay = await adminReplayPublicPaths({
+        account_id: actorAccountId,
+        legacy_project_id: candidate.legacy_project_id,
+        commit: true,
+        reason: auditReason,
+        support_reference,
+      });
+      projects.push({
+        ...summary,
+        imported: replay.imported,
+        skipped: replay.skipped,
+      });
+    } catch (err) {
+      projects.push({
+        ...summary,
+        error: `${err}`.slice(0, 4000),
+      });
+    }
+  }
+  return {
+    projects,
+    committed: commit === true,
+    has_more: hasMore,
+    next_after_legacy_project_id:
+      candidates[candidates.length - 1]?.legacy_project_id,
   };
 }
 

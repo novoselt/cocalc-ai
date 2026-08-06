@@ -169,8 +169,8 @@ export const PUBLISH_FILES_BODY = String.raw`
 ## What file publishing is for
 
 Publish project files when you want to share read-only content from a project
-through an unlisted URL. A published share points at one folder, or at the
-whole project HOME directory.
+through an unlisted URL. A published share can point at one exact file, one
+folder, or the whole project HOME directory.
 
 Use file publishing for examples, notebooks, reports, course material,
 workshop folders, chat logs, and other project content that should be viewable
@@ -180,17 +180,23 @@ This is different from [RootFS publishing](/docs/projects/publish-rootfs).
 RootFS publishing shares a reusable software environment. File publishing
 shares read-only files under \`/home/user\`.
 
-## Publish a folder
+## Publish a file or folder
 
 Open the project and use one of these entry points:
 
-1. In the file explorer, right-click a folder and choose **Publish**.
-2. Select a folder, then use the file action to publish it.
+1. Right-click a file or folder in the full-page or flyout file listing and
+   choose **Publish**, or select it and use **Actions -> Publish**.
+2. While editing or viewing an individual file, open the **File** menu and
+   choose **Publish File**.
 3. Open **Settings** and use the **Publish** section to create or manage
    shares.
 
 The file explorer shows a **Published** tag for paths that are already shared.
 Click that tag to open the publish configuration for that path.
+
+An exact-file share exposes only that file. It does not allow viewers to list
+the containing folder or read sibling files. A folder share exposes that folder
+and its descendants, but nothing above or beside it.
 
 ## Publish the whole project
 
@@ -247,6 +253,10 @@ new project and copy the selected content there. Copying uses the same
 path-restricted policy as viewing. Whole-project copies exclude private and
 internal paths.
 
+Copying an exact-file share preserves its filename. Copying a folder share
+creates a folder named after the share slug, copies the shared contents into
+it, and opens the destination project inside that new folder.
+
 When the source and destination projects can be placed on the same host, copies
 are usually fast. Cross-host or cross-bay copies can take longer, and CoCalc
 shows progress while the copy is running.
@@ -266,6 +276,12 @@ content, disable the share immediately and rotate any exposed credentials.
 
 Public shares are not available while the source project is archived. Restore
 or restart the project before expecting published links to work again.
+
+Legacy publications retained from cocalc.com appear under **Account Settings
+-> Public Shares** for accounts linked through legacy migration. They become
+available only after a collaborator explicitly restores the corresponding
+project. Historically disabled publications and unsupported legacy proxy URLs
+are not migrated.
 
 ## Manage all shares
 

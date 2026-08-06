@@ -105,6 +105,8 @@ import type {
   LegacyMigrationAdminProjectSearchResponse,
   LegacyMigrationAdminReplayPublicPathsOptions,
   LegacyMigrationAdminReplayPublicPathsResponse,
+  LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  LegacyMigrationAdminReplayRestoredPublicPathsResponse,
   LegacyMigrationAdminUnlinkLegacyAccountOptions,
   LegacyMigrationAdminUnlinkLegacyAccountResponse,
   LegacyMigrationConfigureFinancialRenewalHomeBayOptions,
@@ -2519,6 +2521,7 @@ export type AccountLocalMethod =
   | "legacy-migration-admin-unlink-legacy-account"
   | "legacy-migration-admin-list-linked-legacy-projects"
   | "legacy-migration-admin-replay-public-paths"
+  | "legacy-migration-admin-replay-restored-public-paths"
   | "public-directory-share-resolve"
   | "public-directory-share-list-mine"
   | "public-directory-share-list-project"
@@ -4089,6 +4092,9 @@ export interface InterBayAccountLocalApi {
   legacyMigrationAdminReplayPublicPaths: (
     opts: LegacyMigrationAdminReplayPublicPathsOptions,
   ) => Promise<LegacyMigrationAdminReplayPublicPathsResponse>;
+  legacyMigrationAdminReplayRestoredPublicPaths: (
+    opts: LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  ) => Promise<LegacyMigrationAdminReplayRestoredPublicPathsResponse>;
   publicDirectoryShareResolve: (
     opts: ResolvePublicDirectoryShareOptions,
   ) => Promise<ResolvedPublicDirectoryShare>;
@@ -7137,6 +7143,19 @@ export function createInterBayAccountLocalClient({
       method: "legacy-migration-admin-replay-public-paths",
     }),
   });
+  const legacyMigrationAdminReplayRestoredPublicPathsClient =
+    createServiceClient<
+      Pick<
+        InterBayAccountLocalApi,
+        "legacyMigrationAdminReplayRestoredPublicPaths"
+      >
+    >({
+      ...serviceClientOptions({ client, timeout }),
+      subject: accountLocalSubject({
+        dest_bay,
+        method: "legacy-migration-admin-replay-restored-public-paths",
+      }),
+    });
   const publicDirectoryShareResolveClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "publicDirectoryShareResolve">
   >({
@@ -7571,6 +7590,10 @@ export function createInterBayAccountLocalClient({
       ),
     legacyMigrationAdminReplayPublicPaths: async (opts) =>
       await legacyMigrationAdminReplayPublicPathsClient.legacyMigrationAdminReplayPublicPaths(
+        opts,
+      ),
+    legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
+      await legacyMigrationAdminReplayRestoredPublicPathsClient.legacyMigrationAdminReplayRestoredPublicPaths(
         opts,
       ),
     publicDirectoryShareResolve: async (opts) =>
@@ -9182,6 +9205,23 @@ export function createInterBayAccountLocalHandler({
       impl: {
         legacyMigrationAdminReplayPublicPaths: async (opts) =>
           await impl.legacyMigrationAdminReplayPublicPaths(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<
+        InterBayAccountLocalApi,
+        "legacyMigrationAdminReplayRestoredPublicPaths"
+      >
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-replay-restored-public-paths",
+      }),
+      impl: {
+        legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
+          await impl.legacyMigrationAdminReplayRestoredPublicPaths(opts),
       },
     }),
     createServiceHandler<

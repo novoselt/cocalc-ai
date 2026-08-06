@@ -6,7 +6,7 @@
 import { Alert, Button, Input, Modal, Space, Tag, Typography } from "antd";
 import { useState } from "react";
 
-import type { LroEvent } from "@cocalc/conat/hub/api/lro";
+import type { LroEvent, LroSummary } from "@cocalc/conat/hub/api/lro";
 import type {
   CopyPublicDirectoryShareToNewProjectConflictResponse,
   CopyPublicDirectoryShareToNewProjectResult,
@@ -24,9 +24,25 @@ import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS, DOMAIN_URL } from "@cocalc/util/theme";
 
 const { Text } = Typography;
+const COPY_LRO_WAIT_WINDOW_MS = 30_000;
+const TERMINAL_LRO_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "canceled",
+  "expired",
+]);
 
 type CopyConflict = CopyPublicDirectoryShareToNewProjectConflictResponse & {
   destination_project_id: string;
+};
+
+type CopyTarget = {
+  project_id: string;
+  destination_path?: string | null;
+  op_id?: string;
+  reused_project: boolean;
+  requested_host_id?: string | null;
+  placed_on_requested_host: boolean;
 };
 
 function isCopyConflict(
@@ -202,6 +218,39 @@ async function waitForProjectReadable(project_id: string): Promise<boolean> {
   return false;
 }
 
+async function waitForCopyCompletion({
+  op_id,
+  scope_type,
+  scope_id,
+  onProgress,
+}: {
+  op_id: string;
+  scope_type: "project";
+  scope_id: string;
+  onProgress: (event: Extract<LroEvent, { type: "progress" }>) => void;
+}): Promise<LroSummary> {
+  while (true) {
+    try {
+      return await webapp_client.conat_client.lroWait({
+        op_id,
+        scope_type,
+        scope_id,
+        timeout_ms: COPY_LRO_WAIT_WINDOW_MS,
+        onProgress,
+      });
+    } catch (waitError) {
+      try {
+        const summary = await webapp_client.conat_client.hub.lro.get({ op_id });
+        if (summary && TERMINAL_LRO_STATUSES.has(summary.status)) {
+          return summary;
+        }
+      } catch {
+        throw waitError;
+      }
+    }
+  }
+}
+
 export function PublicDirectoryShareBanner({
   share,
 }: {
@@ -219,6 +268,7 @@ export function PublicDirectoryShareBanner({
   const [copyMessage, setCopyMessage] = useState("");
   const [copyProgress, setCopyProgress] = useState("");
   const [copyConflict, setCopyConflict] = useState<CopyConflict | null>(null);
+  const [copyTarget, setCopyTarget] = useState<CopyTarget | null>(null);
   const [placementMessage, setPlacementMessage] = useState("");
   const [compact, setCompact] = useState(() => initialCompactBanner(share));
   const title = shareTitle(share);
@@ -237,6 +287,7 @@ export function PublicDirectoryShareBanner({
     setCopyMessage("");
     setCopyProgress("");
     setCopyConflict(null);
+    setCopyTarget(null);
     setPlacementMessage("");
     setOpen(true);
   }
@@ -279,6 +330,15 @@ export function PublicDirectoryShareBanner({
             options: { recursive: true },
           },
         );
+      setCopyTarget({
+        project_id: result.destination_project_id,
+        destination_path:
+          "destination_path" in result ? result.destination_path : null,
+        op_id: "op_id" in result ? result.op_id : undefined,
+        reused_project: result.reused_project === true,
+        requested_host_id: result.requested_host_id,
+        placed_on_requested_host: result.placed_on_requested_host,
+      });
       if (isCopyConflict(result)) {
         setCopyConflict(result);
         return;
@@ -293,8 +353,12 @@ export function PublicDirectoryShareBanner({
             : "The source host was not available for the new project, so CoCalc placed it on another host. Cross-host copy can take longer.",
         );
       }
-      setCopyProgress("Copying files...");
-      const summary = await webapp_client.conat_client.lroWait({
+      setCopyProgress(
+        result.reused_project
+          ? "Copying files to the existing destination project..."
+          : "Copying files to the new destination project...",
+      );
+      const summary = await waitForCopyCompletion({
         op_id: result.op_id,
         scope_type: result.scope_type,
         scope_id: result.scope_id,
@@ -535,6 +599,55 @@ export function PublicDirectoryShareBanner({
           ) : null}
           {placementMessage ? (
             <Alert type="warning" showIcon title={placementMessage} />
+          ) : null}
+          {copyTarget ? (
+            <Alert
+              type="info"
+              showIcon
+              title={
+                copyTarget.reused_project
+                  ? "Destination: existing compatible project"
+                  : "Destination: new project"
+              }
+              description={
+                <Space direction="vertical" size={2}>
+                  <Text>
+                    Project:{" "}
+                    <Text code copyable>
+                      {copyTarget.project_id}
+                    </Text>
+                  </Text>
+                  {copyTarget.destination_path ? (
+                    <Text>
+                      Path: <Text code>{copyTarget.destination_path}</Text>
+                    </Text>
+                  ) : null}
+                  {copyTarget.op_id ? (
+                    <Text>
+                      Operation:{" "}
+                      <Text code copyable>
+                        {copyTarget.op_id}
+                      </Text>
+                    </Text>
+                  ) : null}
+                  {copyTarget.requested_host_id ? (
+                    <Text type="secondary">
+                      {copyTarget.placed_on_requested_host
+                        ? "Placed on the source host for a same-host copy."
+                        : "Placed on a different host; this copy may require a transfer."}
+                    </Text>
+                  ) : null}
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      openDestinationProject(copyTarget.project_id)
+                    }
+                  >
+                    Open destination project
+                  </Button>
+                </Space>
+              }
+            />
           ) : null}
           {copyConflict ? (
             <Alert
