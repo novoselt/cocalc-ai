@@ -17,6 +17,8 @@ import { Icon } from "@cocalc/frontend/components";
 import { blobImageUrl } from "@cocalc/frontend/components/theme-image-input";
 import { normalizeUserFacingError } from "@cocalc/frontend/components/user-facing-error";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown-public";
+import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
+import { toUrlPath } from "@cocalc/frontend/project/redux/path-routing";
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS, DOMAIN_URL } from "@cocalc/util/theme";
@@ -245,10 +247,18 @@ export function PublicDirectoryShareBanner({
   }
 
   function openDestinationProject(project_id: string, path?: string | null) {
+    const target =
+      path && path !== "."
+        ? toUrlPath({
+            path,
+            isDirectory: share.path_type !== "file",
+            homeDirectory: getProjectHomeDirectory(project_id),
+          })
+        : "files";
     projectActions.open_project({
       project_id,
       switch_to: true,
-      target: path && path !== "." ? path : "files",
+      target,
     });
   }
 
