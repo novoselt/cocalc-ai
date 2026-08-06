@@ -20,7 +20,7 @@ import {
 const copyToNewProject = jest.fn();
 const copyToProject = jest.fn();
 const getProjectRegion = jest.fn();
-const lroWait = jest.fn();
+const getLro = jest.fn();
 const openProject = jest.fn();
 
 jest.mock("@cocalc/frontend/project/explorer/copy-ops", () => ({
@@ -119,6 +119,9 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       hub: {
+        lro: {
+          get: (...args: any[]) => getLro(...args),
+        },
         projects: {
           getProjectRegion: (...args: any[]) => getProjectRegion(...args),
         },
@@ -127,7 +130,6 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           copyToProject: (...args: any[]) => copyToProject(...args),
         },
       },
-      lroWait: (...args: any[]) => lroWait(...args),
     },
   },
 }));
@@ -183,7 +185,7 @@ describe("PublicDirectoryShareBanner", () => {
       placed_on_requested_host: true,
       requested_host_id: "source-host",
     });
-    lroWait.mockResolvedValue({ status: "succeeded" });
+    getLro.mockResolvedValue({ status: "succeeded" });
     getProjectRegion.mockResolvedValue("wnam");
   });
 
@@ -290,17 +292,11 @@ describe("PublicDirectoryShareBanner", () => {
       overwrite_existing: false,
       options: { recursive: true },
     });
-    expect(lroWait).toHaveBeenCalledWith(
-      expect.objectContaining({
-        op_id: "op-1",
-        scope_id: "new-project",
-        scope_type: "project",
-      }),
-    );
+    expect(getLro).toHaveBeenCalledWith({ op_id: "op-1" });
     expect(getProjectRegion).toHaveBeenCalledWith({
       project_id: "new-project",
     });
-    expect(lroWait.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(getLro.mock.invocationCallOrder[0]).toBeLessThan(
       openProject.mock.invocationCallOrder[0],
     );
   });
@@ -346,7 +342,7 @@ describe("PublicDirectoryShareBanner", () => {
     clickModalCopyButton();
 
     await waitFor(() => {
-      expect(lroWait).toHaveBeenCalled();
+      expect(getLro).toHaveBeenCalled();
     });
     await act(async () => {
       await jest.runAllTimersAsync();
@@ -362,7 +358,7 @@ describe("PublicDirectoryShareBanner", () => {
   });
 
   it("does not open the new project when the queued copy fails", async () => {
-    lroWait.mockResolvedValueOnce({
+    getLro.mockResolvedValueOnce({
       status: "failed",
       error: "copy failed",
     });
@@ -377,8 +373,8 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).not.toHaveBeenCalled();
   });
 
-  it("surfaces an LRO tracking failure without a fixed timeout loop", async () => {
-    lroWait.mockRejectedValueOnce(
+  it("surfaces a transient LRO refresh failure while retrying", async () => {
+    getLro.mockRejectedValue(
       new Error("unable to track durable copy operation"),
     );
     render(<PublicDirectoryShareBanner share={share()} />);
@@ -388,14 +384,16 @@ describe("PublicDirectoryShareBanner", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("unable to track durable copy operation"),
+        screen.getByText(
+          "Unable to refresh copy status; retrying. unable to track durable copy operation",
+        ),
       ).toBeTruthy();
     });
     expect(openProject).not.toHaveBeenCalled();
   });
 
   it("shows the destination and operation while a default copy is running", async () => {
-    lroWait.mockReturnValueOnce(new Promise(() => {}));
+    getLro.mockResolvedValue({ status: "queued" });
     render(<PublicDirectoryShareBanner share={share()} />);
 
     fireEvent.click(screen.getByText("Copy"));
@@ -434,16 +432,7 @@ describe("PublicDirectoryShareBanner", () => {
       requested_host_id: "source-host",
       host_placement_message: "host source-host is unavailable",
     });
-    lroWait.mockImplementationOnce(async ({ onProgress }) => {
-      onProgress?.({
-        type: "progress",
-        ts: Date.now(),
-        phase: "copy",
-        message: "copying files",
-        progress: 37,
-      });
-      return { status: "succeeded" };
-    });
+    getLro.mockResolvedValue({ status: "succeeded" });
     render(<PublicDirectoryShareBanner share={share()} />);
 
     fireEvent.click(screen.getByText("Copy"));
