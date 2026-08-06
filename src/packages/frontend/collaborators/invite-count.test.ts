@@ -1,4 +1,5 @@
 import {
+  beginUnreadIncomingInviteCountRefresh,
   getUnreadIncomingInviteCount,
   setUnreadIncomingInviteCount,
   subscribeUnreadIncomingInviteCount,
@@ -6,7 +7,7 @@ import {
 
 describe("invite unread count", () => {
   afterEach(() => {
-    setUnreadIncomingInviteCount(0);
+    setUnreadIncomingInviteCount(undefined, 0);
   });
 
   it("normalizes and publishes unread invite counts", () => {
@@ -15,13 +16,31 @@ describe("invite unread count", () => {
       seen.push(count);
     });
     try {
-      setUnreadIncomingInviteCount(3.9);
-      expect(getUnreadIncomingInviteCount()).toBe(3);
-      setUnreadIncomingInviteCount(-10);
-      expect(getUnreadIncomingInviteCount()).toBe(0);
+      setUnreadIncomingInviteCount("account-1", 3.9);
+      expect(getUnreadIncomingInviteCount("account-1")).toBe(3);
+      setUnreadIncomingInviteCount("account-1", -10);
+      expect(getUnreadIncomingInviteCount("account-1")).toBe(0);
     } finally {
       unsubscribe();
     }
     expect(seen).toEqual([3, 0]);
+  });
+
+  it("does not expose one account's invite count to another account", () => {
+    setUnreadIncomingInviteCount("account-1", 2);
+
+    expect(getUnreadIncomingInviteCount("account-1")).toBe(2);
+    expect(getUnreadIncomingInviteCount("account-2")).toBe(0);
+    expect(getUnreadIncomingInviteCount()).toBe(0);
+  });
+
+  it("ignores a stale refresh result", () => {
+    const first = beginUnreadIncomingInviteCountRefresh("account-1");
+    const second = beginUnreadIncomingInviteCountRefresh("account-1");
+
+    setUnreadIncomingInviteCount("account-1", 2, second);
+    setUnreadIncomingInviteCount("account-1", 5, first);
+
+    expect(getUnreadIncomingInviteCount("account-1")).toBe(2);
   });
 });

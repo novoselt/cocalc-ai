@@ -9,7 +9,6 @@ import { CSS } from "@cocalc/frontend/app-framework";
 import {
   IncomingInvitesNotificationSection,
   type InviteInboxState,
-  useInviteInboxState,
 } from "@cocalc/frontend/collaborators";
 import { MentionsMap, NotificationFilter } from "./mentions/types";
 import { NewsMap, isNewsFilter } from "./news/types";
@@ -24,7 +23,7 @@ interface Props {
   filter: NotificationFilter;
   style: CSS;
   user_map;
-  inviteState?: InviteInboxState;
+  inviteState: InviteInboxState;
 }
 
 export const NotificationList: React.FC<Props> = ({
@@ -35,14 +34,9 @@ export const NotificationList: React.FC<Props> = ({
   filter,
   style,
   user_map,
-  inviteState: inviteStateProp,
+  inviteState,
 }: Props) => {
   let body, className;
-  const fallbackInviteState = useInviteInboxState({
-    includeOutgoing: false,
-    includeBlocks: false,
-  });
-  const inviteState = inviteStateProp ?? fallbackInviteState;
   if (isNewsFilter(filter)) {
     body = <NewsPanel news={news} filter={filter} />;
     className = "smc-notificationlist";
