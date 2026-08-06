@@ -486,7 +486,7 @@ export function PublicDirectoryShareBanner({
           </div>
         }
       >
-        <Space direction="vertical" style={{ width: "100%" }}>
+        <Space vertical style={{ width: "100%" }}>
           {description ? <ShareDescription value={description} /> : null}
           {copyMode === "new" ? (
             <Text>

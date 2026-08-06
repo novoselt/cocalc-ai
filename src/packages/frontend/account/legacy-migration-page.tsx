@@ -327,7 +327,7 @@ function showRestoreIssueDetails(project: LegacyMigrationProjectSummary): void {
     title,
     width: 720,
     content: (
-      <Space direction="vertical" size={10} style={{ width: "100%" }}>
+      <Space vertical size={10} style={{ width: "100%" }}>
         {missingCount > 0 ? (
           <>
             <Text>
@@ -623,12 +623,12 @@ function LegacyProjectImportModal({
       }}
       destroyOnHidden
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {project ? (
           <Alert
             showIcon
             type={archiveAvailable(project) ? "info" : "error"}
-            message={project.title}
+            title={project.title}
             description={
               archiveAvailable(project)
                 ? `This will create a CoCalc project, open it immediately, and restore files from the legacy archive in the background. Last known disk use: ${formatDiskMb(project.disk_mb)}. Archived size: ${formatBytes(project.artifact_bytes)}.`
@@ -636,15 +636,15 @@ function LegacyProjectImportModal({
             }
           />
         ) : null}
-        {error ? <Alert showIcon type="error" message={error} /> : null}
+        {error ? <Alert showIcon type="error" title={error} /> : null}
         {rootfsError ? (
           <Alert
             showIcon
             type="warning"
-            message={`Image catalog load issue: ${rootfsError}`}
+            title={`Image catalog load issue: ${rootfsError}`}
           />
         ) : null}
-        <Space direction="vertical" size={6} style={{ width: "100%" }}>
+        <Space vertical size={6} style={{ width: "100%" }}>
           <Text strong>Image required</Text>
           <Select
             showSearch
@@ -691,7 +691,7 @@ function LegacyProjectImportModal({
             <Alert
               showIcon
               type="warning"
-              message={
+              title={
                 rootfsLoading
                   ? "Loading image choices..."
                   : "Choose an image to enable Import and Open."
@@ -853,24 +853,24 @@ function LegacyProjectBulkImportModal({
       }}
       destroyOnHidden
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Alert
           showIcon
           type="info"
-          message={`Restore ${projects.length.toLocaleString()} selected legacy project${
+          title={`Restore ${projects.length.toLocaleString()} selected legacy project${
             projects.length === 1 ? "" : "s"
           }`}
           description={`CoCalc will create these projects using the same image and host, then restore their files in the background. Restore at most ${MAX_LEGACY_PROJECT_IMPORTS_PER_REQUEST} projects per batch. Last known disk use: ${formatDiskMb(lastKnownDiskMb)}. Archived size: ${formatBytes(archivedBytes)}.`}
         />
-        {error ? <Alert showIcon type="error" message={error} /> : null}
+        {error ? <Alert showIcon type="error" title={error} /> : null}
         {rootfsError ? (
           <Alert
             showIcon
             type="warning"
-            message={`Image catalog load issue: ${rootfsError}`}
+            title={`Image catalog load issue: ${rootfsError}`}
           />
         ) : null}
-        <Space direction="vertical" size={6} style={{ width: "100%" }}>
+        <Space vertical size={6} style={{ width: "100%" }}>
           <Text strong>Image required</Text>
           <Select
             showSearch
@@ -917,7 +917,7 @@ function LegacyProjectBulkImportModal({
             <Alert
               showIcon
               type="warning"
-              message={
+              title={
                 rootfsLoading
                   ? "Loading image choices..."
                   : "Choose an image to enable Restore selected."
@@ -1226,7 +1226,7 @@ export function LegacyMigrationPage() {
         const missingCount = restoreMissingArchiveFileCount(project);
         const progressText = restoreProgressText(project.restore_progress);
         return (
-          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+          <Space vertical size={4} style={{ width: "100%" }}>
             <Text
               strong
               ellipsis={{ tooltip: project.title }}
@@ -1325,7 +1325,7 @@ export function LegacyMigrationPage() {
       width: 125,
       responsive: ["xl"],
       render: (value: number | null | undefined) => (
-        <Space direction="vertical" size={0}>
+        <Space vertical size={0}>
           <Text>{formatDiskMb(value)}</Text>
           <Text type="secondary" style={{ fontSize: 12 }}>
             last known
@@ -1344,7 +1344,7 @@ export function LegacyMigrationPage() {
       width: 135,
       responsive: ["xl"],
       render: (value: number | null | undefined) => (
-        <Space direction="vertical" size={0}>
+        <Space vertical size={0}>
           <Text>{formatBytes(value)}</Text>
           <Text type="secondary" style={{ fontSize: 12 }}>
             compressed tar.zst
@@ -1363,7 +1363,7 @@ export function LegacyMigrationPage() {
       <Alert
         showIcon
         type="info"
-        message="Legacy cocalc.com migration is not enabled on this site."
+        title="Legacy cocalc.com migration is not enabled on this site."
         description="An administrator must enable legacy migration in site settings before this page can import archived cocalc.com projects."
       />
     );
@@ -1401,20 +1401,20 @@ export function LegacyMigrationPage() {
   );
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       {showEmailVerificationRequired ? (
         <Alert
           showIcon
           type="warning"
-          message="Verify your email address to find legacy projects"
+          title="Verify your email address to find legacy projects"
           description={emailVerificationPrompt}
         />
       ) : null}
       <Card size="small">
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Space align="start" style={{ width: "100%" }}>
             <Icon name="exchange" style={{ fontSize: 22, marginTop: 2 }} />
-            <Space direction="vertical" size={2} style={{ flex: 1 }}>
+            <Space vertical size={2} style={{ flex: 1 }}>
               <Text strong style={{ fontSize: 18 }}>
                 Legacy Projects
               </Text>
@@ -1434,7 +1434,7 @@ export function LegacyMigrationPage() {
                 .
               </Text>
             </Space>
-            <Space direction="vertical" size={4}>
+            <Space vertical size={4}>
               <Space>
                 <Switch
                   checked={showLegacyProjectsButton}
@@ -1446,14 +1446,14 @@ export function LegacyMigrationPage() {
             </Space>
           </Space>
           {legacyMigrationPageMessage ? (
-            <Alert showIcon type="info" message={legacyMigrationPageMessage} />
+            <Alert showIcon type="info" title={legacyMigrationPageMessage} />
           ) : null}
           <Alert
             showIcon
             type="warning"
-            message="Important limitations"
+            title="Important limitations"
             description={
-              <Space direction="vertical" size={4}>
+              <Space vertical size={4}>
                 <span>
                   Legacy TimeTravel and edit history from cocalc.com are not
                   available in restored CoCalc.ai projects. Restores contain the
@@ -1486,9 +1486,7 @@ export function LegacyMigrationPage() {
         </Space>
       </Card>
 
-      {state.error ? (
-        <Alert showIcon type="error" message={state.error} />
-      ) : null}
+      {state.error ? <Alert showIcon type="error" title={state.error} /> : null}
 
       <Card
         title={
@@ -1551,7 +1549,7 @@ export function LegacyMigrationPage() {
           </Space>
         }
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Input.Search
             allowClear
             enterButton="Search"
@@ -1570,14 +1568,14 @@ export function LegacyMigrationPage() {
             <Alert
               showIcon
               type="warning"
-              message="Email verification required"
+              title="Email verification required"
               description={emailVerificationPrompt}
             />
           ) : state.legacyAccountIds.length === 0 ? (
             <Alert
               showIcon
               type="info"
-              message="No linked cocalc.com account found"
+              title="No linked cocalc.com account found"
               description={
                 <span>
                   Use the same verified email address as your old cocalc.com
@@ -1597,7 +1595,7 @@ export function LegacyMigrationPage() {
             />
           ) : (
             <>
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space vertical size={8} style={{ width: "100%" }}>
                 <Text type="secondary">
                   Matched {state.legacyAccountIds.length} legacy cocalc.com
                   account record
@@ -1641,13 +1639,13 @@ export function LegacyMigrationPage() {
                       ? "warning"
                       : "success"
                   }
-                  message={`Bulk restore results: ${bulkResults
+                  title={`Bulk restore results: ${bulkResults
                     .filter((result) => result.status !== "failed")
                     .length.toLocaleString()} queued, ${bulkResults
                     .filter((result) => result.status === "failed")
                     .length.toLocaleString()} failed`}
                   description={
-                    <Space direction="vertical" size={2}>
+                    <Space vertical size={2}>
                       {bulkResults.slice(0, 20).map((result) => (
                         <Text
                           key={result.legacy_project_id}
@@ -1673,7 +1671,7 @@ export function LegacyMigrationPage() {
                 <Alert
                   showIcon
                   type="warning"
-                  message={`Restore at most ${MAX_LEGACY_PROJECT_IMPORTS_PER_REQUEST} projects per batch`}
+                  title={`Restore at most ${MAX_LEGACY_PROJECT_IMPORTS_PER_REQUEST} projects per batch`}
                   description="Restore the selected batch first, then select the next batch of legacy projects."
                 />
               ) : null}

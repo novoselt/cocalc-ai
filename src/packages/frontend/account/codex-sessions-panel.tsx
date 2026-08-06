@@ -373,7 +373,7 @@ export default function CodexSessionsPanel() {
         const title = titleForSession(session);
         const subtitle = session.path || session.project_id;
         return (
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text
               strong
               title={title}

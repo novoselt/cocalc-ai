@@ -149,7 +149,7 @@ export default function AIError({ traceback, input }: Props) {
           </Button>,
         ]}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
             The selected agent session will receive this notebook error, the
             traceback, and the cell input. The agent will use the live notebook

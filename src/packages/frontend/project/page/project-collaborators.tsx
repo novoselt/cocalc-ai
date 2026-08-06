@@ -82,7 +82,7 @@ export function ProjectCollaboratorsContent({
       <Alert
         type="warning"
         showIcon
-        message="Collaborator configuration is disabled."
+        title="Collaborator configuration is disabled."
         description="Current collaborators are shown for visibility, but adding, removing, and changing collaborators is disabled for this project."
       />
     ) : null;
@@ -235,7 +235,7 @@ function CollaboratorManagementPolicy({
           <Alert
             type="error"
             showIcon
-            message="Unable to update collaborator management"
+            title="Unable to update collaborator management"
             description={error}
             style={{ marginTop: 10 }}
           />
@@ -249,7 +249,7 @@ function CollaboratorManagementPolicy({
       <Alert
         type="info"
         showIcon
-        message={
+        title={
           ownerOnly
             ? "Only the project owner can manage collaborators on this project."
             : "Only project owners and collaborators can manage collaborators on this project."
@@ -349,7 +349,7 @@ function AccessRequestsPanel({
           <Alert
             type="error"
             showIcon
-            message="Unable to load project access requests"
+            title="Unable to load project access requests"
             description={error}
           />
         )}

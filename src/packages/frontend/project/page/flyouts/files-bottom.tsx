@@ -224,17 +224,17 @@ export function FilesBottom({
             <Alert
               type="warning"
               showIcon
-              message="Terminal cannot start this project"
+              title="Terminal cannot start this project"
               description={formatProjectStartPolicyBlock(
                 terminalManualStartPolicyBlock,
               )}
             />
           ) : terminalStartPolicyBlock ? (
-            <Space direction="vertical" size="small">
+            <Space vertical size="small">
               <Alert
                 type="warning"
                 showIcon
-                message="Terminal cannot start this project automatically"
+                title="Terminal cannot start this project automatically"
                 description={formatProjectStartPolicyBlock(
                   terminalStartPolicyBlock,
                 )}
@@ -250,7 +250,7 @@ export function FilesBottom({
           ) : requestedTerminalStart ? (
             "Starting the project so the terminal can connect..."
           ) : (
-            <Space direction="vertical" size="small">
+            <Space vertical size="small">
               <div>Project is stopped. Start it to use this terminal.</div>
               <Button
                 size="small"

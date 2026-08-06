@@ -10,7 +10,7 @@ export function CodexFullAccessNotice() {
     <Alert
       type="info"
       showIcon
-      message="Codex has full access to this project"
+      title="Codex has full access to this project"
       description={
         <>
           Codex can read and modify files, run commands, install software, and

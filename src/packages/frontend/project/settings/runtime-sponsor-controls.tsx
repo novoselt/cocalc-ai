@@ -246,7 +246,7 @@ export function RuntimeSponsorControls({ project, project_id }: Props) {
 
   return (
     <section>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         <SponsorRow
           icon={<Icon name="user" style={{ color: COLORS.BS_BLUE_TEXT }} />}
           title="Sponsor"
@@ -327,7 +327,7 @@ export function RuntimeSponsorControls({ project, project_id }: Props) {
           style={{ marginTop: 10 }}
           type="info"
           showIcon
-          message="Only project owners, the runtime sponsor, and administrators can change this setting."
+          title="Only project owners, the runtime sponsor, and administrators can change this setting."
         />
       )}
       {canEdit && (!canEditAutostart || !canEditStorageHistory) && (
@@ -335,7 +335,7 @@ export function RuntimeSponsorControls({ project, project_id }: Props) {
           style={{ marginTop: 10 }}
           type="info"
           showIcon
-          message="Only project owners and administrators can change automatic start and storage-history settings."
+          title="Only project owners and administrators can change automatic start and storage-history settings."
         />
       )}
       {error && (
@@ -343,7 +343,7 @@ export function RuntimeSponsorControls({ project, project_id }: Props) {
           style={{ marginTop: 10 }}
           type="error"
           showIcon
-          message="Unable to save runtime start policy"
+          title="Unable to save runtime start policy"
           description={error}
         />
       )}
@@ -391,7 +391,7 @@ export function RuntimeSponsorUsageSummary({
       <Alert
         type="warning"
         showIcon
-        message="Unable to load runtime sponsor usage"
+        title="Unable to load runtime sponsor usage"
         description={error}
       />
     );
@@ -437,7 +437,7 @@ export function RuntimeSponsorUsageSummary({
       <Alert
         type={full ? "warning" : "info"}
         showIcon
-        message={
+        title={
           <span>
             Runtime sponsor usage:{" "}
             <Text strong>
@@ -503,11 +503,11 @@ export function CourseRuntimeSponsorSummary({
   project_id: string;
 }) {
   return (
-    <Space direction="vertical" style={{ width: "100%" }} size={10}>
+    <Space vertical style={{ width: "100%" }} size={10}>
       <Alert
         type="info"
         showIcon
-        message="Course runtime sponsorship"
+        title="Course runtime sponsorship"
         description="Course projects run on the runtime sponsor's membership. For teaching, this makes it explicit when student or shared projects consume instructor, team, or student running-project slots."
       />
       <RuntimeSponsorUsageSummary project_id={project_id} />

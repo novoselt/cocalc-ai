@@ -30,6 +30,7 @@ import type {
   Hosts,
 } from "@cocalc/conat/hub/api/hosts";
 import type {
+  AdminMembershipPackagePurchaseResult,
   ClaimableMembershipPackage,
   AccountEntitlementOverride,
   AccountUsageOverview,
@@ -63,6 +64,7 @@ import type {
 } from "@cocalc/conat/hub/api/purchases";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
+import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
 import type {
   AuthorizePublicDirectoryShareReadOptions,
   AuthorizePublicDirectoryShareReadResponse,
@@ -1399,6 +1401,18 @@ export interface AccountLocalAdminProvisionSiteLicenseRequest {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface AccountLocalAdminCreateMembershipPackagePurchaseRequest {
+  actor_account_id: string;
+  user_account_id: string;
+  product: MembershipPackageProduct;
+  price: number;
+  source: "credit" | "free";
+  reason: string;
+  idempotency_key: string;
+  pricing_note?: string;
+  trusted_admin?: boolean;
+}
+
 export interface AccountLocalUpdateMembershipPackageRequest {
   package_id: string;
   actor_account_id: string;
@@ -2444,6 +2458,7 @@ export type AccountLocalMethod =
   | "claim-membership-package-seat"
   | "claim-membership-package-seat-for-account"
   | "admin-provision-site-license"
+  | "admin-create-membership-package-purchase"
   | "update-site-license"
   | "add-site-license-pool"
   | "create-site-license-external-claim-pool"
@@ -3883,6 +3898,9 @@ export interface InterBayAccountLocalApi {
   adminProvisionSiteLicense: (
     opts: AccountLocalAdminProvisionSiteLicenseRequest,
   ) => Promise<SiteLicenseOverview>;
+  adminCreateMembershipPackagePurchase: (
+    opts: AccountLocalAdminCreateMembershipPackagePurchaseRequest,
+  ) => Promise<AdminMembershipPackagePurchaseResult>;
   listSiteLicenseOverviews: (
     opts: AccountLocalListSiteLicenseOverviewsRequest,
   ) => Promise<SiteLicenseOverview[]>;
@@ -6528,6 +6546,15 @@ export function createInterBayAccountLocalClient({
       method: "admin-provision-site-license",
     }),
   });
+  const adminCreateMembershipPackagePurchaseClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "adminCreateMembershipPackagePurchase">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "admin-create-membership-package-purchase",
+    }),
+  });
   const listSiteLicenseOverviewsClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "listSiteLicenseOverviews">
   >({
@@ -7300,6 +7327,10 @@ export function createInterBayAccountLocalClient({
       await purchaseTeamLicenseChangeClient.purchaseTeamLicenseChange(opts),
     adminProvisionSiteLicense: async (opts) =>
       await adminProvisionSiteLicenseClient.adminProvisionSiteLicense(opts),
+    adminCreateMembershipPackagePurchase: async (opts) =>
+      await adminCreateMembershipPackagePurchaseClient.adminCreateMembershipPackagePurchase(
+        opts,
+      ),
     listSiteLicenseOverviews: async (opts) =>
       await listSiteLicenseOverviewsClient.listSiteLicenseOverviews(opts),
     revokeSiteLicensePoolSeat: async (opts) =>
@@ -8223,6 +8254,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         adminProvisionSiteLicense: async (opts) =>
           await impl.adminProvisionSiteLicense(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "adminCreateMembershipPackagePurchase">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "admin-create-membership-package-purchase",
+      }),
+      impl: {
+        adminCreateMembershipPackagePurchase: async (opts) =>
+          await impl.adminCreateMembershipPackagePurchase(opts),
       },
     }),
     createServiceHandler<

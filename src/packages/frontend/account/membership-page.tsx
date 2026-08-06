@@ -243,7 +243,7 @@ function MembershipSettingsContent() {
             <Alert
               type="info"
               showIcon
-              message="Support override active"
+              title="Support override active"
               description={
                 <>
                   {details.admin_override.effects?.length ? (

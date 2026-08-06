@@ -94,7 +94,7 @@ export function RecoveryPanel({
 
   return (
     <Space
-      direction="vertical"
+      vertical
       size={mode === "flyout" ? 10 : 14}
       style={{ width: "100%" }}
     >

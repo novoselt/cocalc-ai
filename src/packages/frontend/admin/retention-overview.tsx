@@ -418,7 +418,7 @@ export function RetentionAdminOverview() {
       (mode === "active" && activeOverview == null));
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space vertical size={16} style={{ width: "100%" }}>
       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
         Cohort mode shows accounts created each day or week and whether they
         came back later. Active mode shows how many distinct users were active
@@ -493,7 +493,7 @@ export function RetentionAdminOverview() {
       <Alert
         type="info"
         showIcon
-        message={mode === "cohort" ? "How to read this" : "Active-user count"}
+        title={mode === "cohort" ? "How to read this" : "Active-user count"}
         description={
           mode === "cohort"
             ? "Each cell shows exact activity for that period. The small 'later' number is the percent active in that period or any later displayed period, so it forms a non-increasing retention curve across the row. Current and future periods are marked incomplete. Managed CPU is useful as a compute-retention proxy, but can be inflated by long-running idle projects."
@@ -503,7 +503,7 @@ export function RetentionAdminOverview() {
       {error ? <ShowError error={error} /> : null}
       {loadedEmpty ? <Spin /> : null}
       {mode === "cohort" && overview != null ? (
-        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+        <Space vertical size={10} style={{ width: "100%" }}>
           <Space wrap>
             <Tag>{overview.unit === "week" ? "Weekly" : "Daily"}</Tag>
             <Tag>{overview.activity_signal}</Tag>
@@ -517,7 +517,7 @@ export function RetentionAdminOverview() {
         </Space>
       ) : null}
       {mode === "active" && activeOverview != null ? (
-        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+        <Space vertical size={10} style={{ width: "100%" }}>
           <Space wrap>
             <Tag>{activeOverview.bucket} buckets</Tag>
             <Tag>{activeOverview.activity_signal}</Tag>

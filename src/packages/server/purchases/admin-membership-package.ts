@@ -1,0 +1,337 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL – see LICENSE.md for details
+ */
+
+import getPool, {
+  getTransactionClient,
+  type PoolClient,
+} from "@cocalc/database/pool";
+import { recordAccountAdminAuditEvent } from "@cocalc/server/accounts/admin-audit";
+import isValidAccount from "@cocalc/server/accounts/is-valid-account";
+import userIsInGroup from "@cocalc/server/accounts/is-in-group";
+import {
+  assertAccountNotRehoming,
+  assertAccountWriteOnHomeBay,
+} from "@cocalc/server/accounts/rehome-fence";
+import {
+  createMembershipPackage,
+  resolveMembershipPackageQuote,
+  setMembershipPackagePurchaseId,
+} from "@cocalc/server/membership/packages";
+import {
+  ensureCreditCoversPurchase,
+  maybeCreateFundingCredit,
+} from "@cocalc/server/purchases/admin-purchase";
+import createPurchase from "@cocalc/server/purchases/create-purchase";
+import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
+import { MAX_COST } from "@cocalc/util/db-schema/purchases";
+import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
+import { moneyRound2Up, moneyToCurrency, toDecimal } from "@cocalc/util/money";
+
+export type AdminMembershipPackageSource = "credit" | "free";
+
+export interface AdminMembershipPackagePurchaseOptions {
+  admin_account_id: string;
+  user_account_id: string;
+  product: MembershipPackageProduct;
+  price: number;
+  source: AdminMembershipPackageSource;
+  reason: string;
+  idempotency_key: string;
+  pricing_note?: string;
+  trusted_admin?: boolean;
+}
+
+export interface AdminMembershipPackagePurchaseResult {
+  package_id: string;
+  purchase_id: number;
+  credit_id?: number;
+  price: number;
+  standard_price: number;
+  starts_at: Date;
+  expires_at: Date;
+  existing: boolean;
+}
+
+function normalizeRequiredText(
+  value: string | undefined,
+  name: string,
+  maxLength: number,
+): string {
+  const normalized = `${value ?? ""}`.trim();
+  if (!normalized) {
+    throw Error(`${name} is required`);
+  }
+  if (normalized.length > maxLength) {
+    throw Error(`${name} must be at most ${maxLength} characters`);
+  }
+  return normalized;
+}
+
+function normalizeDate(value: Date | string | undefined, name: string): Date {
+  const date = value instanceof Date ? value : new Date(`${value ?? ""}`);
+  if (!Number.isFinite(date.valueOf())) {
+    throw Error(`${name} must be a valid date`);
+  }
+  return date;
+}
+
+function invoiceId(adminAccountId: string, idempotencyKey: string): string {
+  return `admin-membership-package:${adminAccountId}:${idempotencyKey}`;
+}
+
+async function getExistingPurchase({
+  account_id,
+  invoice_id,
+  client,
+}: {
+  account_id: string;
+  invoice_id: string;
+  client?: PoolClient;
+}): Promise<AdminMembershipPackagePurchaseResult | undefined> {
+  const { rows } = await (client ?? getPool("medium")).query(
+    `SELECT id, cost, description, period_start, period_end
+       FROM purchases
+      WHERE account_id=$1 AND invoice_id=$2 AND service='membership'
+      LIMIT 1`,
+    [account_id, invoice_id],
+  );
+  const row = rows[0];
+  const description = row?.description;
+  if (!row) return undefined;
+  if (
+    description?.type !== "membership-package" ||
+    !`${description?.package_id ?? ""}`.trim()
+  ) {
+    throw Error("idempotency key belongs to an incompatible purchase");
+  }
+  return {
+    package_id: `${description.package_id}`,
+    purchase_id: Number(row.id),
+    credit_id:
+      Number.isInteger(Number(description.admin_funding_credit_id)) &&
+      Number(description.admin_funding_credit_id) > 0
+        ? Number(description.admin_funding_credit_id)
+        : undefined,
+    price: Number(row.cost),
+    standard_price: Number(description.standard_total_price ?? row.cost),
+    starts_at: new Date(row.period_start),
+    expires_at: new Date(row.period_end),
+    existing: true,
+  };
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (err as { code?: string })?.code === "23505";
+}
+
+export default async function adminCreateMembershipPackagePurchase({
+  admin_account_id,
+  user_account_id,
+  product,
+  price,
+  source,
+  reason,
+  idempotency_key,
+  pricing_note,
+  trusted_admin = false,
+}: AdminMembershipPackagePurchaseOptions): Promise<AdminMembershipPackagePurchaseResult> {
+  if (!trusted_admin && !(await userIsInGroup(admin_account_id, "admin"))) {
+    throw Error("must be an admin");
+  }
+  if (!(await isValidAccount(user_account_id))) {
+    throw Error("target account is not valid");
+  }
+  if (product?.type !== "membership-package" || product.package_id) {
+    throw Error("product must create a new membership package");
+  }
+  if (source !== "credit" && source !== "free") {
+    throw Error("source must be credit or free");
+  }
+  const normalizedReason = normalizeRequiredText(reason, "reason", 4000);
+  const idempotencyKey = normalizeRequiredText(
+    idempotency_key,
+    "idempotency_key",
+    120,
+  );
+  const customPrice = moneyRound2Up(toDecimal(price));
+  if (!Number.isFinite(customPrice.toNumber()) || customPrice.lt(0)) {
+    throw Error("price must be a finite nonnegative number");
+  }
+  if (customPrice.gt(MAX_COST)) {
+    throw Error(
+      `price exceeds the maximum allowed cost of ${moneyToCurrency(MAX_COST)}`,
+    );
+  }
+
+  const invoice_id = invoiceId(admin_account_id, idempotencyKey);
+  const client = await getTransactionClient();
+  try {
+    await assertAccountNotRehoming({
+      db: client,
+      account_id: user_account_id,
+      action: "create admin membership package purchase",
+    });
+    await assertAccountWriteOnHomeBay({
+      db: client,
+      account_id: user_account_id,
+      action: "create admin membership package purchase",
+    });
+    const existing = await getExistingPurchase({
+      account_id: user_account_id,
+      invoice_id,
+      client,
+    });
+    if (existing) {
+      await client.query("COMMIT");
+      return existing;
+    }
+
+    const quote = await resolveMembershipPackageQuote(product, client);
+    const starts_at = product.starts_at
+      ? normalizeDate(product.starts_at, "starts_at")
+      : quote.starts_at;
+    const expires_at = product.expires_at
+      ? normalizeDate(product.expires_at, "expires_at")
+      : quote.expires_at;
+    if (!(starts_at instanceof Date) || !Number.isFinite(starts_at.valueOf())) {
+      throw Error("starts_at is required");
+    }
+    if (
+      !(expires_at instanceof Date) ||
+      !Number.isFinite(expires_at.valueOf())
+    ) {
+      throw Error("expires_at is required");
+    }
+    if (expires_at <= starts_at) {
+      throw Error("expires_at must be after starts_at");
+    }
+
+    const notes = [
+      `Admin-assisted membership package created by account \`${admin_account_id}\`.`,
+      `Source of funds: **${source}**.`,
+      pricing_note?.trim() ? `Pricing note: ${pricing_note.trim()}` : "",
+      `Reason: ${normalizedReason}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    let credit_id: number | undefined;
+    if (source === "free") {
+      credit_id = await maybeCreateFundingCredit({
+        account_id: user_account_id,
+        admin_account_id,
+        amount: customPrice.toNumber(),
+        client,
+        notes,
+      });
+    } else if (customPrice.gt(0)) {
+      await ensureCreditCoversPurchase({
+        account_id: user_account_id,
+        client,
+        cost: customPrice.toNumber(),
+        service: "membership",
+      });
+    }
+
+    const metadata = {
+      ...(quote.metadata ?? {}),
+      ...(product.metadata ?? {}),
+      admin_custom_price: customPrice.toNumber(),
+      standard_total_price: quote.total_price,
+    };
+    const package_id = await createMembershipPackage(
+      {
+        owner_account_id: user_account_id,
+        kind: quote.kind,
+        membership_class: quote.membership_class,
+        seat_count: quote.seat_count,
+        starts_at,
+        expires_at,
+        metadata,
+      },
+      client,
+    );
+    const purchase_id = await createPurchase({
+      account_id: user_account_id,
+      client,
+      cost: customPrice.toNumber(),
+      unrounded_cost: customPrice.toNumber(),
+      description: {
+        type: "membership-package",
+        package_id,
+        kind: quote.kind,
+        membership_class: quote.membership_class,
+        seat_count: quote.seat_count,
+        seat_price:
+          quote.seat_count > 0
+            ? customPrice.div(quote.seat_count).toNumber()
+            : 0,
+        total_price: customPrice.toNumber(),
+        standard_seat_price: quote.seat_price,
+        standard_total_price: quote.total_price,
+        starts_at,
+        expires_at,
+        interval: quote.interval,
+        metadata,
+        admin_assigned: true,
+        assigned_by: admin_account_id,
+        admin_funding_credit_id: credit_id,
+      } as any,
+      invoice_id,
+      notes,
+      period_start: starts_at,
+      period_end: expires_at,
+      service: "membership",
+      tag: "admin-membership-package",
+    });
+    await setMembershipPackagePurchaseId({ package_id, purchase_id }, client);
+    await recordAccountAdminAuditEvent({
+      account_id: user_account_id,
+      action: "membership-package-purchase",
+      actor_account_id: admin_account_id,
+      client,
+      reason: normalizedReason,
+      metadata: {
+        package_id,
+        purchase_id,
+        credit_id: credit_id ?? null,
+        source,
+        custom_price: customPrice.toNumber(),
+        standard_price: quote.total_price,
+        kind: quote.kind,
+        membership_class: quote.membership_class,
+        seat_count: quote.seat_count,
+        starts_at: starts_at.toISOString(),
+        expires_at: expires_at.toISOString(),
+        idempotency_key: idempotencyKey,
+      },
+    });
+    await client.query("COMMIT");
+    await refreshAccountBalanceAndPublishBestEffort({
+      account_id: user_account_id,
+    });
+    return {
+      package_id,
+      purchase_id,
+      credit_id,
+      price: customPrice.toNumber(),
+      standard_price: quote.total_price,
+      starts_at,
+      expires_at,
+      existing: false,
+    };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    if (isUniqueViolation(err)) {
+      const existing = await getExistingPurchase({
+        account_id: user_account_id,
+        invoice_id,
+      });
+      if (existing) return existing;
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}

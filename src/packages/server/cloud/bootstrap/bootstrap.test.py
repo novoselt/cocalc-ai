@@ -2290,6 +2290,77 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 'PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"',
                 script,
             )
+            reserve_startup_io_body = script.split(
+                "reserve_project_startup_io_capacity() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                'fields="$(project_io_policy_fields standard)"',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'if [ "$mode" != "enforce" ]; then',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'deny "project-io-normal-snapshot-empty"',
+                reserve_startup_io_body,
+            )
+            self.assertLess(
+                reserve_startup_io_body.index(
+                    'if [ "$mode" != "enforce" ]; then'
+                ),
+                reserve_startup_io_body.index(
+                    'deny "project-io-normal-snapshot-empty"'
+                ),
+            )
+            reserve_startup_io_function = (
+                "reserve_project_startup_io_capacity() {"
+                + reserve_startup_io_body
+                + "\n}\n"
+            )
+            pool_dir = Path(tmpdir) / "project-pool"
+            pool_dir.mkdir()
+            (pool_dir / "io.max").write_text("", encoding="utf-8")
+            snapshot_path = Path(tmpdir) / "normal-io.max"
+            released_path = Path(tmpdir) / "released"
+            reservation_harness = f"""
+set -euo pipefail
+PROJECT_POOL_CGROUP_DEFAULT={json.dumps(str(pool_dir))}
+PROJECT_IO_NORMAL_LIMITS_SNAPSHOT={json.dumps(str(snapshot_path))}
+project_io_policy_fields() {{ printf '%s\\t\\n' "$POLICY_MODE"; }}
+acquire_project_io_reservation_lock() {{ :; }}
+release_project_io_reservation_lock() {{ : > {json.dumps(str(released_path))}; }}
+project_io_pressure_protection_enabled() {{ return 1; }}
+apply_project_pool_io_policy() {{ :; }}
+deny() {{ printf 'SECURITY_DENY code=%s detail=%s\\n' "$1" "$2" >&2; exit 2; }}
+{reserve_startup_io_function}
+reserve_project_startup_io_capacity
+"""
+            disabled_result = subprocess.run(
+                ["bash"],
+                input=reservation_harness,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "POLICY_MODE": "disabled"},
+            )
+            self.assertEqual(
+                disabled_result.returncode, 0, disabled_result.stderr
+            )
+            self.assertTrue(released_path.exists())
+            self.assertFalse(snapshot_path.exists())
+            released_path.unlink()
+            enforced_result = subprocess.run(
+                ["bash"],
+                input=reservation_harness,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "POLICY_MODE": "enforce"},
+            )
+            self.assertEqual(enforced_result.returncode, 2)
+            self.assertIn(
+                "SECURITY_DENY code=project-io-normal-snapshot-empty",
+                enforced_result.stderr,
+            )
             self.assertIn(
                 '"pressure_protection_enabled": pressure_protection_enabled == "true"',
                 script,

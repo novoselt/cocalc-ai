@@ -169,11 +169,11 @@ export class Ban extends Component<Props, State> {
         onCancel={() => this.setState({ banModalOpen: false })}
         onOk={() => this.do_request()}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Alert
             type="warning"
             showIcon
-            message="This is an immediate abuse-control action."
+            title="This is an immediate abuse-control action."
             description={
               <>
                 The user will no longer be able to sign in. Existing remember-me
@@ -245,11 +245,11 @@ export class Ban extends Component<Props, State> {
         onCancel={() => this.setState({ quarantineModalOpen: false })}
         onOk={() => this.quarantine()}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Alert
             type="error"
             showIcon
-            message="This contains billing and paid resources without deleting account data."
+            title="This contains billing and paid resources without deleting account data."
             description={
               <>
                 Use this when abuse, fraud, or a suspect payment instrument
@@ -302,7 +302,7 @@ export class Ban extends Component<Props, State> {
         type={result.errors.length ? "warning" : "success"}
         showIcon
         style={{ marginBottom: "12px" }}
-        message="Billing/resource quarantine completed"
+        title="Billing/resource quarantine completed"
         description={
           <>
             Canceled {result.local_subscriptions_canceled} local subscriptions,

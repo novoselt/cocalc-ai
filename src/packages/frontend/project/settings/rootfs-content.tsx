@@ -167,7 +167,7 @@ export function RootfsContentManifestBuilder({
   }
 
   return (
-    <Space direction="vertical" size={14} style={{ width: "100%" }}>
+    <Space vertical size={14} style={{ width: "100%" }}>
       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
         The discovery config adds browse, copy-to-HOME, open, external link, and
         one-click project app launch actions to the image component so users can
@@ -198,7 +198,7 @@ export function RootfsContentManifestBuilder({
           <Alert
             type="info"
             showIcon
-            message="No preview yet."
+            title="No preview yet."
             description="Add a title, description, highlight, or action to create the discovery panel."
           />
         )}
@@ -209,7 +209,7 @@ export function RootfsContentManifestBuilder({
         title="Edit discovery config"
         subtitle="This saves to the image catalog entry metadata. It is not written into the immutable image filesystem."
       >
-        <Space direction="vertical" size={14} style={{ width: "100%" }}>
+        <Space vertical size={14} style={{ width: "100%" }}>
           <div
             style={{
               display: "grid",
@@ -250,7 +250,7 @@ export function RootfsContentManifestBuilder({
             }}
           >
             <RootfsContentField label="Publisher">
-              <Space direction="vertical" size={6} style={{ width: "100%" }}>
+              <Space vertical size={6} style={{ width: "100%" }}>
                 <Input
                   value={draft.publisher_name}
                   onChange={(e) => setField("publisher_name", e.target.value)}
@@ -264,7 +264,7 @@ export function RootfsContentManifestBuilder({
               </Space>
             </RootfsContentField>
             <RootfsContentField label="License">
-              <Space direction="vertical" size={6} style={{ width: "100%" }}>
+              <Space vertical size={6} style={{ width: "100%" }}>
                 <Input
                   value={draft.license_name}
                   onChange={(e) => setField("license_name", e.target.value)}
@@ -321,12 +321,12 @@ export function RootfsContentManifestBuilder({
               </Space>
             }
           >
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Space vertical size={10} style={{ width: "100%" }}>
               {configuredAppsError ? (
                 <Alert
                   type="warning"
                   showIcon
-                  message="Unable to load configured project apps."
+                  title="Unable to load configured project apps."
                   description={configuredAppsError}
                 />
               ) : null}
@@ -336,7 +336,7 @@ export function RootfsContentManifestBuilder({
                 <Alert
                   type="warning"
                   showIcon
-                  message="No configured project apps found."
+                  title="No configured project apps found."
                   description="Configure and test an app in this project first, then add it to the manifest."
                 />
               ) : null}
@@ -344,7 +344,7 @@ export function RootfsContentManifestBuilder({
                 <Alert
                   type="info"
                   showIcon
-                  message="No actions yet."
+                  title="No actions yet."
                   description="Add a browse, copy, open, external link, or app action to help users find the bundled content."
                 />
               ) : null}
@@ -372,7 +372,7 @@ export function RootfsContentManifestBuilder({
             <Alert
               type="warning"
               showIcon
-              message="Discovery config warnings"
+              title="Discovery config warnings"
               description={
                 <ul style={{ margin: 0, paddingLeft: 18 }}>
                   {validation.warnings.map((warning, index) => (
@@ -501,7 +501,7 @@ function RootfsContentActionEditor({
           <Alert
             type="warning"
             showIcon
-            message="This app spec references HOME."
+            title="This app spec references HOME."
             description={rootfsProjectAppSpecHomeWarning(
               action.app_spec,
               projectHome,
@@ -532,7 +532,7 @@ function RootfsContentActionEditor({
         padding: 12,
       }}
     >
-      <Space direction="vertical" size={10} style={{ width: "100%" }}>
+      <Space vertical size={10} style={{ width: "100%" }}>
         <Space
           wrap
           align="center"
@@ -929,7 +929,7 @@ export function renderRootfsContentPanel({
 
   return (
     <RuntimePanel icon="folder-open" title={title} subtitle={subtitle}>
-      <Space direction="vertical" size={10} style={{ width: "100%" }}>
+      <Space vertical size={10} style={{ width: "100%" }}>
         {description ? (
           <Paragraph style={{ marginBottom: 0 }}>{description}</Paragraph>
         ) : null}
@@ -947,7 +947,7 @@ export function renderRootfsContentPanel({
           </Space>
         ) : null}
         {actions.length ? (
-          <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Space vertical size={8} style={{ width: "100%" }}>
             {actions.map((action, index) => (
               <RootfsContentActionRow
                 key={`${action.kind}:${action.label}:${index}`}
@@ -1088,7 +1088,7 @@ function RootfsContentActionRow({
           </Space>
         }
         description={
-          <Space direction="vertical" size={2} style={{ width: "100%" }}>
+          <Space vertical size={2} style={{ width: "100%" }}>
             {description ? <span>{description}</span> : null}
             {rootfsContentActionPathLabel(action) ? (
               <code style={{ overflowWrap: "anywhere" }}>
@@ -1097,7 +1097,7 @@ function RootfsContentActionRow({
             ) : null}
             {actionError ? (
               <Alert
-                message={actionError}
+                title={actionError}
                 showIcon
                 style={{ marginTop: 4 }}
                 type="error"
@@ -1171,7 +1171,7 @@ function RootfsContentActionRow({
             loading: copying,
           }}
         >
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Space vertical size={12} style={{ width: "100%" }}>
             <Paragraph type="secondary" style={{ marginBottom: 0 }}>
               Choose or type the destination path under HOME. The copy will not
               overwrite existing content.

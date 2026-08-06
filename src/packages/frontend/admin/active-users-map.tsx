@@ -322,7 +322,7 @@ export function ActiveUsersMapAdmin() {
   ].filter(Boolean);
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space vertical size={16} style={{ width: "100%" }}>
       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
         Accounts across registered bays whose <code>last_active</code> changed
         during the selected window. Locations are approximate, short-lived
@@ -358,7 +358,7 @@ export function ActiveUsersMapAdmin() {
         <Alert
           showIcon
           type="warning"
-          message="The active-users map is incomplete"
+          title="The active-users map is incomplete"
           description={incompleteMapReasons.join(" ")}
         />
       ) : null}
@@ -366,7 +366,7 @@ export function ActiveUsersMapAdmin() {
         <Alert
           showIcon
           type="info"
-          message="Active users map is disabled"
+          title="Active users map is disabled"
           description="Enable Active Users Map in Admin → Site Settings after verifying Cloudflare visitor-location headers."
         />
       ) : null}

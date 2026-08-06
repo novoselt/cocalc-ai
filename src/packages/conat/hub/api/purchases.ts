@@ -1,8 +1,20 @@
 import { authFirst } from "./util";
 import type { MoneyValue } from "@cocalc/util/money";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
+import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
 export type MembershipClass = string;
 export type MembershipPackageKind = "course" | "team" | "site";
+
+export interface AdminMembershipPackagePurchaseResult {
+  package_id: string;
+  purchase_id: number;
+  credit_id?: number;
+  price: number;
+  standard_price: number;
+  starts_at: Date;
+  expires_at: Date;
+  existing: boolean;
+}
 
 export type MembershipEgressPolicy =
   | "metered-shared-hosts"
@@ -1581,6 +1593,18 @@ export interface Purchases {
     expires_at?: Date | string | null;
     metadata?: Record<string, unknown> | null;
   }) => Promise<SiteLicenseOverview>;
+  adminCreateMembershipPackagePurchase: (opts?: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string | null;
+    user_account_id?: string;
+    product?: MembershipPackageProduct;
+    price?: number;
+    source?: "credit" | "free";
+    reason?: string;
+    idempotency_key?: string;
+    pricing_note?: string;
+  }) => Promise<AdminMembershipPackagePurchaseResult>;
   listSiteLicenseOverviews: (opts?: {
     account_id?: string;
     admin?: boolean;
@@ -1814,6 +1838,7 @@ export const purchases = {
   getClaimableMembershipPackages: authFirst,
   claimMembershipPackageSeat: authFirst,
   adminProvisionSiteLicense: authFirst,
+  adminCreateMembershipPackagePurchase: authFirst,
   listSiteLicenseOverviews: authFirst,
   getSiteLicenseOverview: authFirst,
   updateSiteLicense: authFirst,

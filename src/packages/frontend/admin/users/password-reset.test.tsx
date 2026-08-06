@@ -11,7 +11,7 @@ const mockRunFreshAuthAction = jest.fn(async (action: () => Promise<void>) => {
 });
 
 jest.mock("antd", () => ({
-  Alert: ({ message }: any) => <div>{message}</div>,
+  Alert: ({ title }: any) => <div>{title}</div>,
   Button: ({ children, icon, onClick, disabled }: any) => (
     <button type="button" disabled={disabled} onClick={onClick}>
       {icon}

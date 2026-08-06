@@ -12,7 +12,7 @@ TEST:
  - This should always work:  "mypy workspaces.py"
 """
 
-import argparse, json, os, platform, shutil, subprocess, sys, tempfile, time
+import argparse, json, os, platform, shlex, shutil, subprocess, sys, tempfile, time
 
 from typing import Any, Optional, Callable, List
 
@@ -62,6 +62,24 @@ def restore_package_test_tmpdir(tmpdir: str,
         else:
             os.environ[key] = value
     shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def is_jest_backed_package(package_json: dict[str, Any], path: str) -> bool:
+    scripts = package_json.get("scripts", {})
+    return path.endswith("packages/project-host") or any(
+        "jest" in command for command in scripts.values())
+
+
+def failed_jest_test_paths(report_path: str) -> List[str]:
+    try:
+        with open(report_path) as report_file:
+            report = json.load(report_file)
+    except (OSError, ValueError, TypeError):
+        return []
+    return [
+        result["name"] for result in report.get("testResults", [])
+        if result.get("status") == "failed" and result.get("name")
+    ]
 
 
 def newest_file(path: str) -> str:
@@ -160,6 +178,7 @@ def all_packages() -> List[str]:
         'packages/conat',
         'packages/backend',
         'packages/api-client',
+        'packages/apps/notebook',
         'packages/apps/tasks',
         'packages/jupyter',
         'packages/comm',
@@ -185,12 +204,17 @@ def all_packages() -> List[str]:
         'packages/hub',
         'packages/test'
     ]
-    for x in os.listdir('packages'):
-        path = os.path.join("packages", x)
+    for root, dirs, files in os.walk('packages'):
+        dirs[:] = [
+            name for name in dirs
+            if name not in {'build', 'dist', 'node_modules'}
+        ]
+        path = os.path.normpath(root)
+        if path == 'packages' or 'package.json' not in files:
+            continue
         if path in RETIRED_WORKSPACES:
             continue
-        if path not in v and os.path.isdir(path) and os.path.exists(
-                os.path.join(path, 'package.json')):
+        if path not in v:
             v.append(path)
     return v
 
@@ -438,6 +462,8 @@ def write_github_summary(success: List[str], flaky: List[str],
 
 def test(args) -> None:
     CUR = os.path.abspath('.')
+    jest_cache_root = os.environ.get("COCALC_JEST_CACHE_DIR",
+                                     os.path.join(CUR, ".cache", "jest"))
     flaky = []
     fails = []
     success = []
@@ -486,9 +512,16 @@ def test(args) -> None:
         package_path = os.path.join(CUR, path)
         if package_path.endswith('packages/'):
             continue
-        package_json = open(os.path.join(package_path, 'package.json')).read()
+        with open(os.path.join(package_path, 'package.json')) as package_file:
+            package_data = json.load(package_file)
+        package_scripts = package_data.get("scripts", {})
+        jest_backed = is_jest_backed_package(package_data, path)
+        jest_cache_path = os.path.join(
+            jest_cache_root,
+            path.strip("/").replace("/", "-"),
+        )
 
-        def f():
+        def f(attempt: int, retry_paths: List[str]):
             print("\n" * 3)
             print("*" * 40)
             print(f"TESTING {n}/{len(v)}: {path}")
@@ -496,9 +529,9 @@ def test(args) -> None:
             print("*" * 40)
             sys.stdout.flush(
             )  # Ensure output appears before subprocess starts
-            if args.test_github_ci and 'test-github-ci' in package_json:
+            if args.test_github_ci and 'test-github-ci' in package_scripts:
                 test_cmd = "pnpm run test-github-ci"
-            elif 'test:all' in package_json:
+            elif 'test:all' in package_scripts:
                 test_cmd = "pnpm run --if-present test:all"
             else:
                 test_cmd = "pnpm run --if-present test"
@@ -506,33 +539,55 @@ def test(args) -> None:
                 test_cmd += " --reporters=default --reporters=jest-junit"
             if args.max_workers:
                 test_cmd += f' --maxWorkers={args.max_workers} '
-            scrubbed = scrub_live_cocalc_test_env()
-            tmpdir, old_tmp_env = set_package_test_tmpdir(path)
-            try:
-                cmd(test_cmd, package_path)
-            finally:
-                restore_package_test_tmpdir(tmpdir, old_tmp_env)
-                restore_scrubbed_env(scrubbed)
+            if retry_paths:
+                quoted_paths = " ".join(shlex.quote(path)
+                                        for path in retry_paths)
+                test_cmd += f" --runTestsByPath {quoted_paths}"
+            report_path = os.path.join(tmpdir,
+                                       f"jest-results-{attempt}.json")
+            if jest_backed:
+                os.makedirs(jest_cache_path, exist_ok=True)
+                test_cmd += (f" --cacheDirectory "
+                             f"{shlex.quote(jest_cache_path)}"
+                             f" --json --outputFile "
+                             f"{shlex.quote(report_path)}")
+            cmd(test_cmd, package_path)
             success.append(path)
+            return report_path
 
         worked = False
-        for i in range(args.retries + 1):
-            try:
-                f()
-                worked = True
-                break
-            except KeyboardInterrupt:
-                print("SIGINT -- ending test suite")
-                status()
-                return
-            except Exception as err:
-                print(err)
-                flaky.append(path)
-                print(f"ERROR testing {path}")
-                if args.retries - i >= 1:
-                    print(
-                        f"Trying {path} again at most {args.retries - i} more times"
-                    )
+        retry_paths: List[str] = []
+        scrubbed = scrub_live_cocalc_test_env()
+        tmpdir, old_tmp_env = set_package_test_tmpdir(path)
+        try:
+            for i in range(args.retries + 1):
+                report_path = os.path.join(tmpdir,
+                                           f"jest-results-{i}.json")
+                try:
+                    f(i, retry_paths)
+                    worked = True
+                    break
+                except KeyboardInterrupt:
+                    print("SIGINT -- ending test suite")
+                    status()
+                    return
+                except Exception as err:
+                    print(err)
+                    if path not in flaky:
+                        flaky.append(path)
+                    retry_paths = (failed_jest_test_paths(report_path)
+                                   if jest_backed else [])
+                    print(f"ERROR testing {path}")
+                    if retry_paths:
+                        print("Retrying only failed Jest suites: " +
+                              ", ".join(retry_paths))
+                    if args.retries - i >= 1:
+                        print(
+                            f"Trying {path} again at most {args.retries - i} more times"
+                        )
+        finally:
+            restore_package_test_tmpdir(tmpdir, old_tmp_env)
+            restore_scrubbed_env(scrubbed)
         if not worked:
             fails.append(path)
 

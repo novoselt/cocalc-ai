@@ -124,7 +124,7 @@ export function MembershipAnalyticsAdmin() {
   }, [load]);
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Space wrap>
         <Text strong>Range</Text>
         <RangePicker
@@ -154,13 +154,13 @@ export function MembershipAnalyticsAdmin() {
         <Alert
           type="success"
           showIcon
-          message="Purchase backfill finished"
+          title="Purchase backfill finished"
           description={`${backfillResult.inserted} inserted, ${backfillResult.skipped} skipped.`}
         />
       ) : null}
 
       {overview ? (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Space wrap>
             <Text strong>Bays</Text>
             {overview.bays.map((bay) => (
@@ -174,7 +174,7 @@ export function MembershipAnalyticsAdmin() {
             <Alert
               type="warning"
               showIcon
-              message="Partial analytics result"
+              title="Partial analytics result"
               description={failedBays
                 .map((bay) => `${bay.bay_id}: ${bay.error ?? "unavailable"}`)
                 .join("; ")}

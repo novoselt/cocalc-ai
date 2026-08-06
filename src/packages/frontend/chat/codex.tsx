@@ -1225,7 +1225,7 @@ export function CodexConfigButton({
                       type="warning"
                       showIcon
                       style={{ marginTop: 10 }}
-                      message="Reconnect your ChatGPT Plan"
+                      title="Reconnect your ChatGPT Plan"
                       description={
                         hasEstablishedSession
                           ? "This session is pinned to ChatGPT. Reconnect it under Payment & Credentials, or start a new Codex chat and choose CoCalc Membership."
@@ -1252,7 +1252,7 @@ export function CodexConfigButton({
                     type="info"
                     showIcon
                     style={{ marginBottom: 12 }}
-                    message="CoCalc Membership"
+                    title="CoCalc Membership"
                     description={
                       <>
                         Membership-funded Codex turns use settings selected by
@@ -1363,7 +1363,7 @@ export function CodexConfigButton({
                         type="warning"
                         showIcon
                         style={{ marginTop: 10 }}
-                        message="Fast mode uses more Codex credits"
+                        title="Fast mode uses more Codex credits"
                         description="Use this only when lower latency is worth the higher cost."
                       />
                     ) : null}

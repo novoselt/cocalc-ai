@@ -50,6 +50,8 @@ export type AuthBootstrapResponse = {
   } | null;
 };
 
+export const AUTH_API_TIMEOUT_MS = 30_000;
+
 export function isWrongBayAuthResponse(
   value: unknown,
 ): value is WrongBayAuthResponse {
@@ -85,28 +87,44 @@ export async function postAuthApi<T = any>({
   endpoint,
   body,
   origin,
+  timeout_ms = AUTH_API_TIMEOUT_MS,
 }: {
   endpoint: string;
   body: object;
   origin?: string;
+  timeout_ms?: number;
 }): Promise<T> {
-  const response = await fetch(apiUrl(endpoint, origin), {
-    method: "POST",
-    credentials: origin ? "include" : "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const json = await response.json();
-  if (json?.error) {
-    const err: any = new Error(`${json.error}`);
-    if (json?.code != null) {
-      err.code = json.code;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeout_ms);
+  try {
+    const response = await fetch(apiUrl(endpoint, origin), {
+      method: "POST",
+      credentials: origin ? "include" : "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const json = await response.json();
+    if (json?.error) {
+      const err: any = new Error(`${json.error}`);
+      if (json?.code != null) {
+        err.code = json.code;
+      }
+      throw err;
+    }
+    return json;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        "Authentication request timed out. Check your connection and try again.",
+      );
     }
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-  return json;
 }
 
 export async function startGoogleFreshAuth({

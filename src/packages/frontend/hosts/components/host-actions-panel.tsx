@@ -240,7 +240,7 @@ export function HostActionsPanel({
             onClick: onRestart,
           };
   const lifecycleActions = (
-    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+    <Space vertical size={2} style={{ width: "100%" }}>
       <SectionTitle>Lifecycle</SectionTitle>
       <Button
         block
@@ -299,7 +299,7 @@ export function HostActionsPanel({
     </Space>
   );
   const operationActions = (
-    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+    <Space vertical size={2} style={{ width: "100%" }}>
       <SectionTitle>Operations</SectionTitle>
       {onDetails ? (
         <Button
@@ -352,7 +352,7 @@ export function HostActionsPanel({
     </Space>
   );
   const maintenanceActions = canManageLifecycle ? (
-    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+    <Space vertical size={2} style={{ width: "100%" }}>
       <SectionTitle>Maintenance</SectionTitle>
       <Popconfirm
         title="Backup all projects on this host?"
@@ -414,7 +414,7 @@ export function HostActionsPanel({
     </Space>
   ) : null;
   const dangerActions = canManageLifecycle ? (
-    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+    <Space vertical size={2} style={{ width: "100%" }}>
       <SectionTitle>Danger</SectionTitle>
       {deleteWithoutDeprovision ? (
         <Popconfirm
@@ -462,7 +462,7 @@ export function HostActionsPanel({
   ) : null;
   const moreActions = (
     <div style={{ width: 220 }}>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         {lifecycleActions}
         {operationActions}
         {maintenanceActions}
@@ -473,7 +473,7 @@ export function HostActionsPanel({
   const primaryMinWidth = mode === "card" ? 118 : 94;
   return (
     <Space
-      direction="vertical"
+      vertical
       size={6}
       style={{ maxWidth: mode === "card" ? undefined : 230, width: "100%" }}
     >

@@ -263,7 +263,7 @@ export const HostSpotRecoveryDiagram: React.FC<
   ];
 
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       <Space wrap size={[8, 8]}>
         <Tag style={statusTagStyle(COLORS.BLUE_D)}>
           Retry {retryWindow} min / {retryBackoff}s base
@@ -522,7 +522,7 @@ export const HostSpotRecoveryDiagram: React.FC<
         </svg>
       </div>
 
-      <Space direction="vertical" size={2}>
+      <Space vertical size={2}>
         <Typography.Text type="secondary">
           CoCalc retries the interrupted spot VM first. If that does not recover
           within the configured window, it can switch the same host to standard

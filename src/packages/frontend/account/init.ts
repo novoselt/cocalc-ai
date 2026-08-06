@@ -24,6 +24,12 @@ import { parseManagedEgressBlockedError } from "@cocalc/frontend/purchases/manag
 import { getControlPlaneAuthBootstrap } from "@cocalc/frontend/auth/api";
 import { waitForAccountTableConnectedForSignIn } from "./wait-for-account-table-connected";
 import { waitForExamModeConfiguration } from "@cocalc/frontend/customize/exam-mode";
+import { alert_message } from "@cocalc/frontend/alerts";
+import { getLogger } from "@cocalc/frontend/logger";
+
+const log = getLogger("account:bootstrap");
+const AUTH_BOOTSTRAP_WARNING =
+  "CoCalc signed you in, but could not load account routing information. Some account or project actions may be unavailable. Reload the page, and contact support if this continues.";
 
 export function init(redux) {
   // Register account store
@@ -55,30 +61,35 @@ export function init(redux) {
 
   let authBootstrapLoadingFor: string | undefined = undefined;
   let authBootstrapLoadedFor: string | undefined = undefined;
+  let authBootstrapRequestRevision = 0;
 
   async function loadAuthBootstrap(opts?: {
     account_id?: string;
     force?: boolean;
-  }) {
+  }): Promise<boolean> {
     const account_id =
       `${opts?.account_id ?? store.get("account_id") ?? ""}`.trim();
     if (!account_id) {
-      return;
+      return false;
     }
     if (await waitForExamModeConfiguration()) {
       authBootstrapLoadedFor = account_id;
-      return;
+      return true;
     }
     if (
       !opts?.force &&
       (authBootstrapLoadingFor === account_id ||
         authBootstrapLoadedFor === account_id)
     ) {
-      return;
+      return true;
     }
     authBootstrapLoadingFor = account_id;
+    const requestRevision = ++authBootstrapRequestRevision;
     try {
       const bootstrap = await getControlPlaneAuthBootstrap();
+      if (requestRevision !== authBootstrapRequestRevision) {
+        return false;
+      }
       actions.setState({
         home_bay_id: bootstrap.home_bay_id,
         home_bay_source: bootstrap.home_bay_id
@@ -87,10 +98,24 @@ export function init(redux) {
         impersonation: bootstrap.impersonation ?? null,
       });
       authBootstrapLoadedFor = account_id;
-    } catch {
+      return true;
+    } catch (err) {
+      if (requestRevision !== authBootstrapRequestRevision) {
+        return false;
+      }
       authBootstrapLoadedFor = account_id;
+      log.warn("failed to load account routing information", err);
+      alert_message({
+        type: "warning",
+        message: AUTH_BOOTSTRAP_WARNING,
+        timeout: 20,
+      });
+      return true;
     } finally {
-      if (authBootstrapLoadingFor === account_id) {
+      if (
+        requestRevision === authBootstrapRequestRevision &&
+        authBootstrapLoadingFor === account_id
+      ) {
         authBootstrapLoadingFor = undefined;
       }
     }
@@ -114,11 +139,15 @@ export function init(redux) {
       // pre-sign-in state.
       await waitForAccountTableConnectedForSignIn(table);
     }
-    await loadAuthBootstrap({ account_id: mesg?.account_id, force: true });
-    actions.set_user_type("signed_in");
+    if (
+      await loadAuthBootstrap({ account_id: mesg?.account_id, force: true })
+    ) {
+      actions.set_user_type("signed_in");
+    }
   });
 
   webapp_client.on("signed_out", () => {
+    authBootstrapRequestRevision++;
     authBootstrapLoadingFor = undefined;
     authBootstrapLoadedFor = undefined;
     const actions = redux.getActions("account");
@@ -132,6 +161,7 @@ export function init(redux) {
   });
 
   webapp_client.on("remember_me_failed", ({ error } = {}) => {
+    authBootstrapRequestRevision++;
     authBootstrapLoadingFor = undefined;
     authBootstrapLoadedFor = undefined;
     const actions = redux.getActions("account");

@@ -904,7 +904,7 @@ function NumericFieldGroup({
   form: FormInstance;
 }) {
   return (
-    <Space direction="vertical" size="small" style={{ width: "100%" }}>
+    <Space vertical size="small" style={{ width: "100%" }}>
       <OverrideGridHeader />
       {fields.map((field) => (
         <NumericRuleEditor
@@ -1046,7 +1046,7 @@ export function AccountEntitlementOverridePanel({
         {loading ? (
           <Spin />
         ) : (
-          <Space direction="vertical" style={{ width: "100%" }} size="middle">
+          <Space vertical style={{ width: "100%" }} size="middle">
             {error && (
               <ErrorDisplay error={error} onClose={() => setError("")} />
             )}
@@ -1128,11 +1128,7 @@ export function AccountEntitlementOverridePanel({
                   />
                 </Collapse.Panel>
                 <Collapse.Panel header="Storage and egress" key="egress">
-                  <Space
-                    direction="vertical"
-                    size="small"
-                    style={{ width: "100%" }}
-                  >
+                  <Space vertical size="small" style={{ width: "100%" }}>
                     <OverrideGridHeader />
                     {NUMERIC_FIELDS.filter((field) =>
                       STORAGE_EGRESS_FIELD_IDS.has(field.id),
@@ -1183,11 +1179,7 @@ export function AccountEntitlementOverridePanel({
                   />
                 </Collapse.Panel>
                 <Collapse.Panel header="Dedicated hosts" key="hosts">
-                  <Space
-                    direction="vertical"
-                    size="small"
-                    style={{ width: "100%" }}
-                  >
+                  <Space vertical size="small" style={{ width: "100%" }}>
                     <OverrideGridHeader />
                     <SelectOverrideEditor
                       label="Dedicated host creation"
@@ -1255,7 +1247,7 @@ export function AccountEntitlementOverridePanel({
               <Alert
                 type="success"
                 showIcon
-                message={actionSuccess}
+                title={actionSuccess}
                 closable
                 onClose={() => setActionSuccess("")}
               />
