@@ -71,7 +71,7 @@ Table({
     ssh_user: { type: "string", desc: "SSH login user." },
     ssh_public_key: {
       type: "string",
-      desc: "Public key installed for owner access; never a private key.",
+      desc: "Optional initial public key installed for owner access; additional authorized keys are stored in metadata and no private key is retained.",
     },
     created_at: { type: "timestamp", desc: "Lease creation time." },
     updated_at: { type: "timestamp", desc: "Last control-plane update." },

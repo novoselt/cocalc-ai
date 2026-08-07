@@ -71,16 +71,57 @@ export function isMfaRequiredAuthResponse(
   );
 }
 
+function normalizeAuthOrigin(origin?: string): string {
+  const value = String(origin ?? "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (!value) return "";
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(
+      `Authentication origin must be an absolute HTTP(S) URL, not '${value}'.`,
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `Authentication origin must use HTTP(S), not '${url.protocol}'.`,
+    );
+  }
+  return value;
+}
+
 function apiUrl(endpoint: string, origin?: string): string {
   const path = `/${joinUrlPath(appBasePath, "api", "v2", endpoint).replace(/^\/+/, "")}`;
-  const normalizedOrigin = `${origin ?? ""}`.replace(/\/+$/, "");
+  const normalizedOrigin = normalizeAuthOrigin(origin);
   return normalizedOrigin ? `${normalizedOrigin}${path}` : path;
 }
 
 function authUrl(endpoint: string, origin?: string): string {
   const path = `/${joinUrlPath(appBasePath, "auth", endpoint).replace(/^\/+/, "")}`;
-  const normalizedOrigin = `${origin ?? ""}`.replace(/\/+$/, "");
+  const normalizedOrigin = normalizeAuthOrigin(origin);
   return normalizedOrigin ? `${normalizedOrigin}${path}` : path;
+}
+
+async function parseAuthResponse<T>(
+  response: Response,
+  url: string,
+): Promise<T> {
+  // Some reverse-proxy routing failures return the application HTML shell.
+  // Preserve the endpoint and HTTP status instead of exposing JSON.parse noise.
+  if (typeof response.text !== "function") {
+    return await response.json();
+  }
+  const body = await response.text();
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    const contentType = response.headers?.get?.("content-type") ?? "unknown";
+    throw new Error(
+      `Authentication endpoint ${url} returned HTTP ${response.status} ${response.statusText || ""} with ${contentType}, not JSON. Refresh the page and try again.`,
+    );
+  }
 }
 
 export async function postAuthApi<T = any>({
@@ -97,7 +138,8 @@ export async function postAuthApi<T = any>({
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeout_ms);
   try {
-    const response = await fetch(apiUrl(endpoint, origin), {
+    const url = apiUrl(endpoint, origin);
+    const response = await fetch(url, {
       method: "POST",
       credentials: origin ? "include" : "same-origin",
       headers: {
@@ -106,7 +148,7 @@ export async function postAuthApi<T = any>({
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    const json = await response.json();
+    const json = await parseAuthResponse<any>(response, url);
     if (json?.error) {
       const err: any = new Error(`${json.error}`);
       if (json?.code != null) {
@@ -134,18 +176,16 @@ export async function startGoogleFreshAuth({
   duration: FreshAuthDuration;
   origin?: string;
 }): Promise<{ url: string }> {
-  const response = await fetch(
-    `${authUrl("google/fresh-auth/start", origin)}?duration=${encodeURIComponent(duration)}`,
-    {
-      method: "POST",
-      credentials: origin ? "include" : "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ duration }),
+  const url = `${authUrl("google/fresh-auth/start", origin)}?duration=${encodeURIComponent(duration)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    credentials: origin ? "include" : "same-origin",
+    headers: {
+      "Content-Type": "application/json",
     },
-  );
-  const json = await response.json();
+    body: JSON.stringify({ duration }),
+  });
+  const json = await parseAuthResponse<any>(response, url);
   if (json?.error) {
     throw new Error(`${json.error}`);
   }

@@ -147,8 +147,14 @@ export function getHourlyRateUsd(sku: BillingSku): number | undefined {
   return undefined;
 }
 
-function getSkuRegion(sku: BillingSku): string | undefined {
-  return sku.serviceRegions?.find(Boolean);
+function getSkuRegions(sku: BillingSku): string[] {
+  return [
+    ...new Set(
+      (sku.serviceRegions ?? [])
+        .map((region) => `${region ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function familyRateEntry(
@@ -238,9 +244,9 @@ export function normalizeGcpBillingSkus(skus: BillingSku[]): GcpCatalogPrices {
     if (!description) continue;
     const usageType = `${sku.category?.usageType ?? ""}`;
     if (usageType !== "OnDemand" && usageType !== "Preemptible") continue;
-    const region = getSkuRegion(sku);
+    const regions = getSkuRegions(sku);
     const price = getHourlyRateUsd(sku);
-    if (!region || !isPositiveRate(price)) continue;
+    if (!regions.length || !isPositiveRate(price)) continue;
     if (!catalog.effective_time && sku.pricingInfo?.[0]?.effectiveTime) {
       catalog.effective_time = sku.pricingInfo[0].effectiveTime;
     }
@@ -248,21 +254,25 @@ export function normalizeGcpBillingSkus(skus: BillingSku[]): GcpCatalogPrices {
     for (const family of GCP_FAMILY_PATTERNS) {
       if (family.cpu.test(description)) {
         const entry = familyRateEntry(catalog, family.family);
-        setRegionalRate(
-          usageType === "Preemptible" ? entry.spot_cpu : entry.cpu,
-          region,
-          price,
-        );
+        for (const region of regions) {
+          setRegionalRate(
+            usageType === "Preemptible" ? entry.spot_cpu : entry.cpu,
+            region,
+            price,
+          );
+        }
         matched = true;
         break;
       }
       if (family.ram.test(description)) {
         const entry = familyRateEntry(catalog, family.family);
-        setRegionalRate(
-          usageType === "Preemptible" ? entry.spot_ram : entry.ram,
-          region,
-          price,
-        );
+        for (const region of regions) {
+          setRegionalRate(
+            usageType === "Preemptible" ? entry.spot_ram : entry.ram,
+            region,
+            price,
+          );
+        }
         matched = true;
         break;
       }
@@ -271,11 +281,13 @@ export function normalizeGcpBillingSkus(skus: BillingSku[]): GcpCatalogPrices {
     for (const gpu of GCP_GPU_PATTERNS) {
       if (!gpu.pattern.test(description)) continue;
       const entry = gpuRateEntry(catalog, gpu.key);
-      setRegionalRate(
-        usageType === "Preemptible" ? entry.spot : entry.on_demand,
-        region,
-        price,
-      );
+      for (const region of regions) {
+        setRegionalRate(
+          usageType === "Preemptible" ? entry.spot : entry.on_demand,
+          region,
+          price,
+        );
+      }
       matched = true;
       break;
     }
@@ -284,7 +296,9 @@ export function normalizeGcpBillingSkus(skus: BillingSku[]): GcpCatalogPrices {
     for (const disk of GCP_DISK_PATTERNS) {
       if (!disk.pattern.test(description)) continue;
       const entry = catalog.disks[disk.key] ?? {};
-      setRegionalRate(entry, region, price);
+      for (const region of regions) {
+        setRegionalRate(entry, region, price);
+      }
       catalog.disks[disk.key] = entry;
       break;
     }

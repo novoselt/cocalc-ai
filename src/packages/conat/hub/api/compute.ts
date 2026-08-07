@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { authFirstRequireAccount } from "./util";
+import { authFirstRequireAccount, authFirstRequireProject } from "./util";
 import type { HostCatalog } from "./hosts";
 
 export type ComputeVmPricingModel = "spot" | "on_demand";
@@ -66,7 +66,7 @@ export interface CreateComputeVmRequest {
   boot_disk_gb?: number;
   volume?: string;
   funding_mode?: "account-prepaid" | "account-postpaid";
-  ssh_public_key: string;
+  ssh_public_key?: string;
   idempotency_key: string;
 }
 
@@ -135,6 +135,8 @@ export const compute = {
   createVm: authFirstRequireAccount,
   listVms: authFirstRequireAccount,
   getVm: authFirstRequireAccount,
+  authorizeSshKey: authFirstRequireAccount,
+  authorizeProjectSshKey: authFirstRequireProject,
   startVm: authFirstRequireAccount,
   stopVm: authFirstRequireAccount,
   deleteVm: authFirstRequireAccount,
@@ -157,6 +159,20 @@ export interface ComputeApi {
   getVm: (opts: {
     account_id?: string;
     id_or_name: string;
+  }) => Promise<ComputeVm>;
+  authorizeSshKey: (opts: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVm>;
+  authorizeProjectSshKey: (opts: {
+    project_id?: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
   }) => Promise<ComputeVm>;
   startVm: (opts: {
     account_id?: string;

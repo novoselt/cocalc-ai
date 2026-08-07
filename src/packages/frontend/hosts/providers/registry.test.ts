@@ -4,8 +4,10 @@ import {
   getGcpGpuTypeOptions,
   getHostDisplayedPrice,
   getHostPriceEstimate,
+  getGcpPersistentDiskPriceEstimate,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
+  getGcpRegionOptions,
   getGcpZoneOptions,
   getNebiusRegionOptions,
   getProviderEnablement,
@@ -231,6 +233,74 @@ describe("buildCreateHostPayload", () => {
       spot_restore_retry_window_minutes: 5,
       standard_fallback_enabled: false,
     });
+  });
+});
+
+describe("GCP region options", () => {
+  it("omits regions where the selected configuration has no price", () => {
+    const machine = {
+      name: "e2-standard-2",
+      guestCpus: 2,
+      memoryMb: 8192,
+    };
+    const catalog = testCatalog([
+      {
+        kind: "regions",
+        scope: "global",
+        payload: [
+          { name: "us-west1", zones: ["us-west1-a"] },
+          { name: "us-east1", zones: ["us-east1-b"] },
+        ],
+      },
+      {
+        kind: "zones",
+        scope: "global",
+        payload: [
+          { name: "us-west1-a", region: "us-west1" },
+          { name: "us-east1-b", region: "us-east1" },
+        ],
+      },
+      {
+        kind: "machine_types",
+        scope: "zone/us-west1-a",
+        payload: [machine],
+      },
+      {
+        kind: "machine_types",
+        scope: "zone/us-east1-b",
+        payload: [machine],
+      },
+      {
+        kind: "prices",
+        scope: "global",
+        payload: {
+          fetched_at: "2026-08-06T00:00:00.000Z",
+          service_id: "compute",
+          families: {
+            e2: {
+              cpu: { "us-west1": 0.02 },
+              ram: { "us-west1": 0.003 },
+              spot_cpu: {},
+              spot_ram: {},
+            },
+          },
+          gpus: {},
+          disks: {
+            "pd-balanced": { "us-west1": 0.0001 },
+          },
+        },
+      },
+    ]);
+
+    const options = getGcpRegionOptions(catalog, {
+      machine_type: machine.name,
+      pricing_model: "on_demand",
+      storage_mode: "persistent",
+      disk_type: "balanced",
+      disk_gb: 20,
+    });
+
+    expect(options.map(({ value }) => value)).toEqual(["us-west1"]);
   });
 });
 
@@ -794,6 +864,39 @@ describe("catalog-backed pricing labels", () => {
     expect(
       estimate?.line_items.reduce((sum, item) => sum + item.usd_per_hour, 0),
     ).toBeCloseTo(0.4452, 9);
+  });
+
+  it("prices a GCP persistent disk without machine pricing", () => {
+    const catalog = testCatalog([
+      {
+        kind: "prices",
+        scope: "global",
+        payload: {
+          fetched_at: "2026-08-07T00:00:00.000Z",
+          service_id: "compute",
+          families: {},
+          gpus: {},
+          disks: {
+            "pd-balanced": { "us-west1": 0.0001 },
+          },
+        },
+      },
+    ]);
+
+    const estimate = getGcpPersistentDiskPriceEstimate(
+      catalog,
+      {
+        zone: "us-west1-a",
+        storage_mode: "persistent",
+        disk_type: "balanced",
+        disk_gb: 50,
+      },
+      { project_hosts_gcp_surcharge_percent: 30 },
+    );
+
+    expect(estimate?.usd_per_hour).toBeCloseTo(0.0065, 9);
+    expect(estimate?.line_items.map(({ key }) => key)).toEqual(["disk"]);
+    expect(estimate?.notes).toEqual(["Includes a 30% site surcharge."]);
   });
 
   it("uses a self-hosted provider charge note for site-funded hosts", () => {

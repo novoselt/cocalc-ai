@@ -16,15 +16,18 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { requireDangerousSessionAuth } from "./dangerous-session-auth";
 import { resolveProjectReferenceAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import {
+  addComputeVmSshPublicKey,
   appendComputeEvent,
   enqueueComputeWork,
   insertComputeVm,
   listOwnedComputeVms,
+  resolveProjectComputeVm,
   resolveOwnedComputeVm,
   updateComputeVm,
 } from "@cocalc/server/compute/db";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
+import { ensureProviderComputeSshAccess } from "@cocalc/server/compute/provider";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
 import {
   getComputeVmConfig,
@@ -89,6 +92,7 @@ function regionFromZone(zone: string) {
 
 function normalizeSshPublicKey(value: string) {
   const key = `${value ?? ""}`.trim();
+  if (!key) return "";
   if (!/^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp\d+)\s+\S+/.test(key)) {
     throw new Error("ssh_public_key must be an OpenSSH public key");
   }
@@ -391,6 +395,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
     pricingModel === "spot" && opts.allow_on_demand_fallback === true;
   const authorizedFallbackHours = allowOnDemandFallback ? 24 : 0;
   const id = randomUUID();
+  const sshPublicKey = normalizeSshPublicKey(opts.ssh_public_key ?? "");
   const providerInstanceId = `cocalc-vm-${id.replaceAll("-", "").slice(0, 24)}`;
   const vm = await insertComputeVm(
     {
@@ -415,7 +420,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       provider_instance_id: providerInstanceId,
       public_ip: null,
       ssh_user: "ubuntu",
-      ssh_public_key: normalizeSshPublicKey(opts.ssh_public_key),
+      ssh_public_key: sshPublicKey,
       expires_at:
         ttlMinutes == null ? null : new Date(Date.now() + ttlMinutes * 60_000),
       allow_on_demand_fallback: allowOnDemandFallback,
@@ -434,6 +439,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       error: null,
       metadata: {
         machine: { cpu: machine.cpu, ram_gb: machine.ram_gb },
+        ssh_public_keys: sshPublicKey ? [sshPublicKey] : [],
         provider_context: config.staging_legacy_provider
           ? "project-host-provider-context"
           : "dedicated-compute-provider-context",
@@ -739,6 +745,116 @@ export async function listVms(opts: {
 export async function getVm(opts: { account_id?: string; id_or_name: string }) {
   const accountId = requireAccount(opts.account_id);
   return publicVm(await resolveOwned(accountId, opts.id_or_name, true));
+}
+
+export async function authorizeSshKey(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  ssh_public_key: string;
+  idempotency_key: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  const key = normalizeSshPublicKey(opts.ssh_public_key);
+  if (!key) throw new Error("ssh_public_key is required");
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  return await authorizeSshKeyForVm({
+    vm,
+    key,
+    idempotency_key: opts.idempotency_key,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    beforeAdd: async () => {
+      await requireDangerousSessionAuth({
+        account_id: accountId,
+        browser_id: opts.browser_id,
+        session_hash: opts.session_hash,
+        require_second_factor: "if_enabled",
+      });
+    },
+  });
+}
+
+async function authorizeSshKeyForVm(opts: {
+  vm: ComputeVmRow;
+  key: string;
+  idempotency_key: string;
+  actor_account_id?: string;
+  actor_kind: "human" | "project";
+  beforeAdd?: () => Promise<void>;
+}) {
+  const { vm, key } = opts;
+  if (vm.state !== "ready" || !vm.public_ip) {
+    throw new Error(
+      `compute VM '${vm.name}' is not SSH-ready (state=${vm.state})`,
+    );
+  }
+  const existingKeys = Array.from(
+    new Set(
+      [
+        vm.ssh_public_key,
+        ...(Array.isArray(vm.metadata?.ssh_public_keys)
+          ? vm.metadata.ssh_public_keys
+          : []),
+      ]
+        .map((value) => `${value ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  );
+  let next = vm;
+  let added = false;
+  if (!existingKeys.includes(key)) {
+    await opts.beforeAdd?.();
+    const result = await addComputeVmSshPublicKey({
+      id: vm.id,
+      owner_account_id: vm.owner_account_id,
+      ssh_public_key: key,
+    });
+    next = result.vm;
+    added = result.added;
+  }
+  await ensureProviderComputeSshAccess(next);
+  if (added) {
+    const authorizedKeyCount = Array.isArray(next.metadata?.ssh_public_keys)
+      ? next.metadata.ssh_public_keys.length
+      : 1;
+    await appendComputeEvent({
+      vm: next,
+      actor_account_id: opts.actor_account_id,
+      actor_kind: opts.actor_kind,
+      action: "authorize_ssh_key",
+      idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+      old_state: vm.state,
+      new_state: next.state,
+      status: "completed",
+      details: { authorized_key_count: authorizedKeyCount },
+    });
+  }
+  return publicVm(next);
+}
+
+export async function authorizeProjectSshKey(opts: {
+  project_id?: string;
+  id_or_name: string;
+  ssh_public_key: string;
+  idempotency_key: string;
+}) {
+  const projectId = `${opts.project_id ?? ""}`.trim();
+  if (!projectId) throw new Error("must be a project");
+  const key = normalizeSshPublicKey(opts.ssh_public_key);
+  if (!key) throw new Error("ssh_public_key is required");
+  const vm = await resolveProjectComputeVm({
+    project_id: projectId,
+    id_or_name: `${opts.id_or_name ?? ""}`.trim(),
+  });
+  if (!vm) throw new Error(`compute VM '${opts.id_or_name}' not found`);
+  return await authorizeSshKeyForVm({
+    vm,
+    key,
+    idempotency_key: opts.idempotency_key,
+    actor_kind: "project",
+  });
 }
 
 async function requestState(opts: {

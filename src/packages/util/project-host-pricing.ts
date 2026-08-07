@@ -334,6 +334,29 @@ export function estimateGcpCatalogRateUsdPerHour(
   return estimateGcpCatalogRateBreakdown(catalog, input)?.total_usd_per_hour;
 }
 
+export function estimateGcpCatalogPersistentDiskRateBreakdown(
+  catalog: GcpCatalogPrices | undefined,
+  input: Pick<
+    GcpCatalogRateEstimateInput,
+    "region" | "zone" | "disk_type" | "disk_gb" | "storage_mode"
+  >,
+): HostPriceBreakdown | undefined {
+  const region =
+    `${input.region ?? ""}`.trim() || gcpRegionFromZone(input.zone) || "";
+  const diskType = gcpDiskCatalogKeyFromSelection(input);
+  const diskGb = positiveDiskGb(input.disk_gb);
+  if (!catalog || !region || !diskType || diskGb <= 0) return undefined;
+  const diskRate = readRate(catalog.disks?.[diskType], region);
+  if (!isFinitePositiveNumber(diskRate)) return undefined;
+  const item: HostPriceBreakdownItem = {
+    key: "disk",
+    label: "Persistent disk",
+    usd_per_hour: diskRate * diskGb,
+    billing_states: ["running", "stopped"],
+  };
+  return { items: [item], total_usd_per_hour: item.usd_per_hour };
+}
+
 export function estimateGcpCatalogRateBreakdown(
   catalog: GcpCatalogPrices | undefined,
   input: GcpCatalogRateEstimateInput,
@@ -398,14 +421,12 @@ export function estimateGcpCatalogRateBreakdown(
   const diskType = gcpDiskCatalogKeyFromSelection(input);
   const diskGb = positiveDiskGb(input.disk_gb);
   if (diskType && diskGb > 0) {
-    const diskRate = readRate(catalog.disks?.[diskType], region);
-    if (!isFinitePositiveNumber(diskRate)) return undefined;
-    items.push({
-      key: "disk",
-      label: "Persistent disk",
-      usd_per_hour: diskRate * diskGb,
-      billing_states: ["running", "stopped"],
-    });
+    const diskBreakdown = estimateGcpCatalogPersistentDiskRateBreakdown(
+      catalog,
+      input,
+    );
+    if (!diskBreakdown) return undefined;
+    items.push(...diskBreakdown.items);
   }
   const sharedDiskGb = positiveDiskGb(input.shared_disk_gb);
   const sharedDiskType = gcpDiskCatalogKeyFromSelection({
