@@ -466,6 +466,12 @@ export function getEffectiveSiteLicensePoolDomains({
   ]);
 }
 
+export function getSiteLicensePoolDomains(
+  metadata?: Record<string, unknown> | null,
+): string[] {
+  return normalizeSitePackageDomains(getPackageDomains(metadata));
+}
+
 function sitePackageDomainsOverlap(left: string, right: string): boolean {
   return (
     left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`)
@@ -808,9 +814,7 @@ async function resolveSiteLicensePoolEmailEligibilityForPackage({
   const license_domains = normalizeSitePackageDomains(
     terms.allowed_domains ?? [],
   );
-  const pool_domains = normalizeSitePackageDomains(
-    getPackageDomains(pkg.metadata),
-  );
+  const pool_domains = getSiteLicensePoolDomains(pkg.metadata);
   const effective_domains = getEffectiveSiteLicensePoolDomains({
     license_domains,
     pool_domains,

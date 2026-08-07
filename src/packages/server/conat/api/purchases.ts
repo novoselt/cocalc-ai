@@ -80,10 +80,11 @@ import {
 import {
   assignMembershipPackageSeat as assignMembershipPackageSeat0,
   claimMembershipPackageSeat as claimMembershipPackageSeat0,
+  getEffectiveSiteLicensePoolDomains,
   getMembershipPackage,
+  getSiteLicensePoolDomains,
   listClaimableMembershipPackagesForAccount,
   listMembershipPackageDetailsForOwner,
-  resolveSiteLicensePoolEmailEligibility,
   resolveMembershipPackageQuote as resolveMembershipPackageQuote0,
   revokeMembershipPackageSeat as revokeMembershipPackageSeat0,
   updateMembershipPackage as updateMembershipPackage0,
@@ -1877,8 +1878,10 @@ export async function searchSiteLicensePoolAccounts({
       query_kind: request.kind,
     };
   }
-  const { effective_domains: allowedDomains } =
-    await resolveSiteLicensePoolEmailEligibility({ package_id: packageId });
+  const allowedDomains = getEffectiveSiteLicensePoolDomains({
+    license_domains: overview.site_license.allowed_domains,
+    pool_domains: getSiteLicensePoolDomains(pool.metadata),
+  });
   const actorHomeBay = await resolveTargetAccountHomeBay({
     account_id: actorId,
     user_account_id: actorId,

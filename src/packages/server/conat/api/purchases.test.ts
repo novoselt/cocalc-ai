@@ -32,7 +32,6 @@ const getMembershipPackageMock = jest.fn();
 const listMembershipPackageDetailsForOwnerMock = jest.fn();
 const updateMembershipPackageMock = jest.fn();
 const resolveMembershipPackageQuoteMock = jest.fn();
-const resolveSiteLicensePoolEmailEligibilityMock = jest.fn();
 const assignMembershipPackageSeatMock = jest.fn();
 const revokeMembershipPackageSeatMock = jest.fn();
 const listClaimableMembershipPackagesForAccountMock = jest.fn();
@@ -203,6 +202,14 @@ jest.mock("@cocalc/server/membership/resolve", () => ({
 }));
 
 jest.mock("@cocalc/server/membership/packages", () => ({
+  getEffectiveSiteLicensePoolDomains: (...args: any[]) =>
+    jest
+      .requireActual("@cocalc/server/membership/packages")
+      .getEffectiveSiteLicensePoolDomains(...args),
+  getSiteLicensePoolDomains: (...args: any[]) =>
+    jest
+      .requireActual("@cocalc/server/membership/packages")
+      .getSiteLicensePoolDomains(...args),
   getMembershipPackage: (...args: any[]) => getMembershipPackageMock(...args),
   listMembershipPackageDetailsForOwner: (...args: any[]) =>
     listMembershipPackageDetailsForOwnerMock(...args),
@@ -210,8 +217,6 @@ jest.mock("@cocalc/server/membership/packages", () => ({
     updateMembershipPackageMock(...args),
   resolveMembershipPackageQuote: (...args: any[]) =>
     resolveMembershipPackageQuoteMock(...args),
-  resolveSiteLicensePoolEmailEligibility: (...args: any[]) =>
-    resolveSiteLicensePoolEmailEligibilityMock(...args),
   assignMembershipPackageSeat: (...args: any[]) =>
     assignMembershipPackageSeatMock(...args),
   revokeMembershipPackageSeat: (...args: any[]) =>
@@ -466,7 +471,6 @@ beforeEach(() => {
   searchRelatedClusterAccountsMock.mockReset();
   getNonAdminUserSearchRequestMock.mockReset();
   searchClusterAccountsMock.mockReset();
-  resolveSiteLicensePoolEmailEligibilityMock.mockReset();
   getBrowserAuthSessionHashMock.mockReturnValue(undefined);
   requireFreshAuthForSessionHashMock.mockResolvedValue(undefined);
   assertAccountTrustedForProductAccessMock.mockResolvedValue(undefined);
@@ -533,9 +537,6 @@ beforeEach(() => {
   searchRelatedClusterAccountsMock.mockResolvedValue([]);
   interBaySearchRelatedAccountsMock.mockResolvedValue([]);
   searchClusterAccountsMock.mockResolvedValue([]);
-  resolveSiteLicensePoolEmailEligibilityMock.mockResolvedValue({
-    effective_domains: [],
-  });
 });
 
 const AUTO_BALANCE_CONFIG = {
@@ -1295,8 +1296,9 @@ describe("purchases membership packages", () => {
     expect(result.site_license.id).toBe("license-remote-1");
   });
 
-  it("merges collaborator and verified-domain results for site-license managers", async () => {
-    getSiteLicenseOverviewMock.mockResolvedValue({
+  it("uses seed overview domains when managers search site-license accounts", async () => {
+    getConfiguredClusterSeedBayIdMock.mockReturnValue("bay-2");
+    interBayGetSiteLicenseOverviewMock.mockResolvedValue({
       site_license: {
         id: "license-1",
         allowed_domains: ["campus.example.edu"],
@@ -1310,9 +1312,6 @@ describe("purchases membership packages", () => {
       managers: [],
       pending_requests: [],
       viewer_role: "manager",
-    });
-    resolveSiteLicensePoolEmailEligibilityMock.mockResolvedValue({
-      effective_domains: ["campus.example.edu", "department.example.edu"],
     });
     searchRelatedClusterAccountsMock.mockResolvedValue([
       {
@@ -1352,9 +1351,11 @@ describe("purchases membership packages", () => {
       limit: 20,
       verified_email_domains: ["campus.example.edu", "department.example.edu"],
     });
-    expect(resolveSiteLicensePoolEmailEligibilityMock).toHaveBeenCalledWith({
-      package_id: "pool-1",
+    expect(interBayGetSiteLicenseOverviewMock).toHaveBeenCalledWith({
+      account_id: "manager-1",
+      site_license_id: "license-1",
     });
+    expect(getSiteLicenseOverviewMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       accounts: [
         {
