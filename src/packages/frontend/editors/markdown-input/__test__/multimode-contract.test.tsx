@@ -237,6 +237,26 @@ describe("MultiMarkdownInput wrapper contract", () => {
     });
   });
 
+  it("can disable modifier-enter mode switching", () => {
+    const onChange = jest.fn();
+    render(
+      <MultiMarkdownInput
+        value="hello"
+        onChange={onChange}
+        defaultMode="markdown"
+        disableModeSwitchShortcuts
+      />,
+    );
+
+    act(() => {
+      latestMarkdownProps.onAltEnter("changed", { line: 0, ch: 3 });
+    });
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("markdown-input")).not.toBeNull();
+    expect(screen.queryByTestId("editable-markdown")).toBeNull();
+  });
+
   it("switches from rich text to markdown and restores the mapped cursor position", () => {
     const onChange = jest.fn();
     const setSelection = jest.fn();

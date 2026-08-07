@@ -297,17 +297,6 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     frameActions.current?.set_cell_list_div(node);
   }, []);
 
-  // Toggle native scrollbar visibility reactively when cellViewMode changes
-  useEffect(() => {
-    const node = cellListDivRef.current;
-    if (!node) return;
-    if (cellViewMode === "minimal") {
-      node.classList.add("minimap-hide-scrollbar");
-    } else {
-      node.classList.remove("minimap-hide-scrollbar");
-    }
-  }, [cellViewMode]);
-
   const lazyRenderEnabled = true;
   const lazyHydratedIdsRef = useRef<Set<string>>(new Set());
   const lazyHeightsRef = useRef<Record<string, number>>({});
@@ -988,6 +977,18 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     saveScrollDebounce,
   });
 
+  // The minimal view uses the same persisted minimap preference as the
+  // standard notebook view. Keep its native scrollbar when the map is hidden.
+  useEffect(() => {
+    const node = cellListDivRef.current;
+    if (!node) return;
+    if (cellViewMode === "minimal" && minimap.enabled) {
+      node.classList.add("minimap-hide-scrollbar");
+    } else {
+      node.classList.remove("minimap-hide-scrollbar");
+    }
+  }, [cellViewMode, minimap.enabled]);
+
   const v: (React.JSX.Element | null)[] = [];
   let index: number = 0;
   let isFirst = true;
@@ -1032,7 +1033,9 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
         <div
           key="cells"
           className={`smc-vfill${
-            cellViewMode === "minimal" ? " minimap-hide-scrollbar" : ""
+            cellViewMode === "minimal" && minimap.enabled
+              ? " minimap-hide-scrollbar"
+              : ""
           }`}
           style={{
             fontSize: `${font_size}px`,
@@ -1069,7 +1072,8 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
           )}
       </div>
       {cellViewMode === "minimal"
-        ? frameHeight != null && (
+        ? minimap.enabled &&
+          frameHeight != null && (
             <MinimalMinimap
               cellList={cell_list}
               cells={cells}

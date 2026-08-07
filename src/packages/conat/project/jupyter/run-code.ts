@@ -843,12 +843,17 @@ export class JupyterClient {
       path: this.path,
       cells: cells1,
     });
-    void request.then((resp) => {
-      const data = resp?.data;
-      if (data != null && typeof data === "object") {
-        onAck?.(data as JupyterRunAck);
-      }
-    });
+    void request.then(
+      (resp) => {
+        const data = resp?.data;
+        if (data != null && typeof data === "object") {
+          onAck?.(data as JupyterRunAck);
+        }
+      },
+      () => {
+        // The request error is handled below by the awaited request or iterator.
+      },
+    );
     if (waitForAck) {
       return request.then(() => iter);
     }

@@ -4,6 +4,7 @@ import { EventEmitter } from "events";
 
 const registerReconnectResource = jest.fn();
 const projectConat = jest.fn();
+const mockJupyterClient = jest.fn();
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
@@ -12,6 +13,10 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
       projectConat,
     },
   },
+}));
+
+jest.mock("@cocalc/conat/project/jupyter/run-code", () => ({
+  jupyterClient: mockJupyterClient,
 }));
 
 jest.mock("../widgets/manager", () => ({
@@ -28,6 +33,7 @@ describe("JupyterActions reconnect coordination", () => {
       close: jest.fn(),
     });
     projectConat.mockReset();
+    mockJupyterClient.mockReset();
   });
 
   it("registers a reconnect resource that waits for live syncdb recovery", async () => {
@@ -89,6 +95,50 @@ describe("JupyterActions reconnect coordination", () => {
     expect(clearRunQueue).toHaveBeenCalled();
     expect(clear_all_cell_run_state).toHaveBeenCalled();
     expect(target.runningNow).toBe(false);
+  });
+
+  it("shares a connecting Jupyter client between concurrent startup callers", async () => {
+    let finishReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      finishReady = resolve;
+    });
+    const socket = new EventEmitter() as EventEmitter & {
+      state: string;
+      waitUntilReady: jest.Mock;
+    };
+    socket.state = "connecting";
+    socket.waitUntilReady = jest.fn(() => ready);
+    const close = jest.fn();
+    const client = { socket, close };
+    mockJupyterClient.mockReturnValue(client);
+    projectConat.mockResolvedValue({ id: "project-conat-client" });
+
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(() => undefined),
+      removeActions: jest.fn(),
+    } as any);
+    actions.project_id = "project-1";
+    actions.syncdbPath = ".notebook.ipynb.sage-jupyter2";
+    actions._state = "ready";
+    actions.waitUntilProjectIsRunning = jest.fn(async () => {});
+
+    const first = actions.getJupyterClient();
+    const second = actions.getJupyterClient();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(projectConat).toHaveBeenCalledTimes(1);
+    expect(mockJupyterClient).toHaveBeenCalledTimes(1);
+    expect(socket.waitUntilReady).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+
+    socket.state = "ready";
+    finishReady();
+
+    await expect(first).resolves.toBe(client);
+    await expect(second).resolves.toBe(client);
+    expect(close).not.toHaveBeenCalled();
+
+    await actions.close();
   });
 
   it("does not flush live-run replay after the actions close", async () => {

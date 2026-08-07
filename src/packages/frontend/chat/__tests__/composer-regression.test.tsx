@@ -149,9 +149,10 @@ describe("ChatInput send lifecycle regressions", () => {
     expect(lastMarkdownInputProps.redoMode).toBe("local");
     expect(lastMarkdownInputProps.hideHelp).toBe(true);
     expect(lastMarkdownInputProps.modeSwitchPlacement).toBe("toolbar");
+    expect(lastMarkdownInputProps.disableModeSwitchShortcuts).toBe(true);
     expect(lastMarkdownInputProps.hideModeSwitch).toBe(true);
     expect(lastMarkdownInputProps.clampAutoGrowToHost).toBe(true);
-    expect(lastMarkdownInputProps.onCtrlEnter).toBeUndefined();
+    expect(lastMarkdownInputProps.onCtrlEnter).toEqual(expect.any(Function));
     expect(lastMarkdownInputProps.onFontSizeChange).toBeUndefined();
 
     act(() => {
@@ -163,27 +164,26 @@ describe("ChatInput send lifecycle regressions", () => {
       lastMarkdownInputProps.onModeChange("markdown");
     });
     expect(lastMarkdownInputProps.modeSwitchRightContent).toBeTruthy();
-    const trigger =
-      lastMarkdownInputProps.modeSwitchRightContent.props.children;
+    const markdownHelpPopover =
+      lastMarkdownInputProps.modeSwitchRightContent.props.children[0];
+    const trigger = markdownHelpPopover.props.children;
     expect(trigger.props["aria-label"]).toBe("Markdown help");
     expect(trigger.props.children.props.name).toBe("info-circle");
   });
 
-  it("routes ctrl-enter through the immediate callback when provided", () => {
+  it("does not submit on ctrl-enter", () => {
     const syncdb = {
       set: jest.fn(),
       commit: jest.fn(),
       set_cursor_locs: jest.fn(),
     } as any;
     const onSend = jest.fn();
-    const onCtrlEnter = jest.fn();
 
     render(
       <ChatInput
         input="steer this"
         onChange={() => undefined}
         on_send={onSend}
-        on_ctrl_enter={onCtrlEnter}
         syncdb={syncdb}
         date={0}
       />,
@@ -193,7 +193,6 @@ describe("ChatInput send lifecycle regressions", () => {
       lastMarkdownInputProps.onCtrlEnter("steer this");
     });
 
-    expect(onCtrlEnter).toHaveBeenCalledWith("steer this");
     expect(onSend).not.toHaveBeenCalled();
   });
 
