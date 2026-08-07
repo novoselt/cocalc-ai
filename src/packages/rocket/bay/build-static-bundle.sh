@@ -99,6 +99,11 @@ copy_provider_setup_scripts() {
     cp "packages/server/cloud/gcp/gcp-setup.sh" \
       "$dest"/runtime/control-plane/bundle/gcp/
   fi
+  if [[ -f "packages/server/cloud/gcp/compute-vm-setup.sh" ]]; then
+    mkdir -p "$dest"/runtime/control-plane/bundle/gcp
+    cp "packages/server/cloud/gcp/compute-vm-setup.sh" \
+      "$dest"/runtime/control-plane/bundle/gcp/
+  fi
   if [[ -f "packages/server/cloud/nebius/nebius-setup.sh" ]]; then
     mkdir -p "$dest"/runtime/control-plane/bundle/nebius
     cp "packages/server/cloud/nebius/nebius-setup.sh" \
@@ -182,6 +187,7 @@ const manifest = {
     cdn: "runtime/control-plane/cdn",
     webapp: "runtime/control-plane/webapp",
     gcpSetup: "runtime/control-plane/bundle/gcp/gcp-setup.sh",
+    computeVmSetup: "runtime/control-plane/bundle/gcp/compute-vm-setup.sh",
     nebiusSetup: "runtime/control-plane/bundle/nebius/nebius-setup.sh",
   },
 };
@@ -198,6 +204,7 @@ PDFJS_VERSION="$(node -e 'console.log(require(process.argv[1]).versions["pdfjs-d
 validate_file "$OUT/runtime/control-plane/cdn/pdfjs-dist-${PDFJS_VERSION}/cmaps/UniJIS-UTF16-H.bcmap"
 validate_file "$OUT/runtime/control-plane/webapp/favicon.ico"
 validate_file "$OUT/runtime/control-plane/bundle/gcp/gcp-setup.sh"
+validate_file "$OUT/runtime/control-plane/bundle/gcp/compute-vm-setup.sh"
 validate_file "$OUT/runtime/control-plane/bundle/nebius/nebius-setup.sh"
 validate_file "$OUT/bay-static-manifest.json"
 

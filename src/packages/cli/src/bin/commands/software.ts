@@ -1668,6 +1668,7 @@ async function smokeHttpChecks({
       "/auth/email/continue/00000000-0000-4000-8000-000000000000",
     ],
     ["webapp favicon", "/webapp/favicon.ico"],
+    ["managed compute VM setup", "/project-host/compute-vm-setup.sh"],
     ["PDF.js Japanese CMap", "/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap"],
   ] as const) {
     checks.push(

@@ -171,6 +171,10 @@ copy_provider_setup_scripts() {
     mkdir -p "$dest"/bundle/gcp
     cp "packages/server/cloud/gcp/gcp-setup.sh" "$dest"/bundle/gcp/
   fi
+  if [[ -f "packages/server/cloud/gcp/compute-vm-setup.sh" ]]; then
+    mkdir -p "$dest"/bundle/gcp
+    cp "packages/server/cloud/gcp/compute-vm-setup.sh" "$dest"/bundle/gcp/
+  fi
   if [[ -f "packages/server/cloud/nebius/nebius-setup.sh" ]]; then
     mkdir -p "$dest"/bundle/nebius
     cp "packages/server/cloud/nebius/nebius-setup.sh" "$dest"/bundle/nebius/
