@@ -8,11 +8,13 @@ import {
   Button,
   Checkbox,
   Divider,
+  Dropdown,
   Flex,
   Form,
   Input,
   InputNumber,
   Modal,
+  Popover,
   Popconfirm,
   Radio,
   Switch,
@@ -50,6 +52,7 @@ import {
 import { useHostPricingSettings } from "../hosts/hooks/use-host-pricing-settings";
 import {
   getGcpMachineTypeOptions,
+  getGcpPersistentDiskPriceEstimate,
   getGcpRegionOptions,
   getGcpZoneOptions,
   getProviderPriceEstimate,
@@ -91,16 +94,6 @@ interface VolumeResizeDraft {
 
 function shortProjectId(projectId: string): string {
   return projectId.slice(0, 8);
-}
-
-function expiresIn(value: string | Date): string {
-  const milliseconds = new Date(value).valueOf() - Date.now();
-  if (milliseconds <= 0) return "expired";
-  const minutes = Math.ceil(milliseconds / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.ceil(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.ceil(hours / 24)}d`;
 }
 
 function hourlyPrice(vm: ComputeVm): string {
@@ -270,14 +263,11 @@ function VmCreateModal({
         )
       : undefined;
   const newVolumePrice = draft.create_volume
-    ? getProviderPriceEstimate(
-        "gcp",
+    ? getGcpPersistentDiskPriceEstimate(
         catalog.host_catalog,
         {
           region: draft.region || regionFromZone(draft.zone),
           zone: draft.zone,
-          machine_type: "e2-standard-2",
-          pricing_model: "on_demand",
           storage_mode: "persistent",
           disk_type: "balanced",
           disk_gb: draft.new_volume_size_gb,
@@ -331,7 +321,9 @@ function VmCreateModal({
         form={form}
         layout="vertical"
         initialValues={initial}
-        onValuesChange={(_, values) => setDraft(values)}
+        onValuesChange={(changedValues) =>
+          setDraft((current) => ({ ...current, ...changedValues }))
+        }
       >
         <Flex gap={12} wrap>
           <Form.Item
@@ -700,23 +692,20 @@ function VolumeCreateModal({
     region,
     zone: draft.zone,
   };
-  const pricingSelection: ProviderSelection = {
+  const pricingSelection = {
     ...placementSelection,
-    machine_type: "e2-standard-2",
-    pricing_model: "on_demand",
     storage_mode: "persistent",
     disk_type: "balanced",
     disk_gb: draft.size_gb,
     pricing_settings: pricingSettings,
-  };
+  } as const;
   const regionOptions = compatibleOptions(
     getGcpRegionOptions(catalog.host_catalog, placementSelection),
   );
   const zoneOptions = compatibleOptions(
     getGcpZoneOptions(catalog.host_catalog, placementSelection),
   );
-  const volumeEstimate = getProviderPriceEstimate(
-    "gcp",
+  const volumeEstimate = getGcpPersistentDiskPriceEstimate(
     catalog.host_catalog,
     pricingSelection,
     pricingSettings,
@@ -1450,25 +1439,38 @@ export function ProjectComputeVms({
 
   const vmColumns: ColumnsType<ComputeVm> = [
     {
-      title: "Name",
+      title: "VM",
       dataIndex: "name",
       fixed: "left",
+      width: 190,
       render: (name: string, vm) => (
-        <div>
+        <Space direction="vertical" size={0}>
           <Text strong>{name}</Text>
-          <br />
           <Text copyable={{ text: vm.id }} type="secondary">
-            {vm.id.slice(0, 8)}
+            ID {vm.id.slice(0, 8)}
           </Text>
-        </div>
+        </Space>
       ),
     },
     {
-      title: "State",
+      title: "Status",
       dataIndex: "state",
+      width: 170,
       render: (state: string, vm) => (
-        <div>
-          <Tag color={state === "ready" ? "green" : undefined}>{state}</Tag>
+        <Space direction="vertical" size={1}>
+          <Space size={4}>
+            <Tag
+              color={state === "ready" ? "green" : undefined}
+              style={{ marginInlineEnd: 0 }}
+            >
+              {state}
+            </Tag>
+            {vm.expires_at && (
+              <Text type="secondary" style={{ whiteSpace: "nowrap" }}>
+                Deletes <TimeAgo date={new Date(vm.expires_at)} />
+              </Text>
+            )}
+          </Space>
           {state === "recovering" && (
             <Text type="secondary" style={{ whiteSpace: "nowrap" }}>
               Spot unavailable; retrying
@@ -1479,87 +1481,95 @@ export function ProjectComputeVms({
               Provider error
             </Text>
           )}
-        </div>
+          {!vm.expires_at && <Text type="secondary">No deletion deadline</Text>}
+        </Space>
       ),
     },
-    { title: "Machine", dataIndex: "machine_type" },
     {
-      title: "Pricing",
+      title: "Configuration",
+      width: 250,
       render: (_, vm) => (
-        <span>
-          {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
-        </span>
+        <Space size={5} wrap>
+          <Text strong>{vm.machine_type}</Text>
+          <Text type="secondary">·</Text>
+          <Text type="secondary">{vm.zone}</Text>
+        </Space>
       ),
     },
-    { title: "Zone", dataIndex: "zone" },
     {
-      title: "Public egress",
+      title: "Cost & usage",
+      width: 190,
       render: (_, vm) => {
         const egress = vm.metadata?.billing?.egress;
         const gb = Number(egress?.total_bytes ?? 0) / 1_000_000_000;
         const cost = Number(egress?.total_cost_usd ?? 0);
         return (
-          <span title="Cumulative metered public egress since this VM was created">
-            {gb.toFixed(gb >= 10 ? 1 : 3)} GB · ${cost.toFixed(2)}
-          </span>
+          <Space direction="vertical" size={0}>
+            <Text>
+              {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
+            </Text>
+            <Text
+              type="secondary"
+              title="Cumulative metered public egress since this VM was created"
+            >
+              Egress {gb.toFixed(gb >= 10 ? 1 : 3)} GB · ${cost.toFixed(2)}
+            </Text>
+          </Space>
         );
       },
     },
     {
-      title: "Network",
-      render: (_, vm) => (
-        <div>
-          {vm.public_ip ? (
-            <Text copyable={{ text: vm.public_ip }}>{vm.public_ip}</Text>
-          ) : (
-            <Text type="secondary">No public IP</Text>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: "Expires",
-      dataIndex: "expires_at",
-      render: (expiresAt?: string | Date | null) =>
-        expiresAt ? (
-          <Text title={new Date(expiresAt).toLocaleString()}>
-            {expiresIn(expiresAt)}
-          </Text>
-        ) : (
-          <Text type="secondary">No deadline</Text>
-        ),
-    },
-    {
-      title: "Connect",
-      render: (_, vm) => (
-        <Space direction="vertical" size={2}>
-          <Text code copyable={{ text: `cocalc vm ssh ${vm.name}` }}>
-            cocalc vm ssh {vm.name}
-          </Text>
-          {vm.public_ip && (
-            <Text
-              code
-              copyable={{
-                text: `ssh ${vm.ssh_user || "ubuntu"}@${vm.public_ip}`,
-              }}
-            >
-              ssh {vm.ssh_user || "ubuntu"}@{vm.public_ip}
-            </Text>
-          )}
-        </Space>
-      ),
-    },
-    {
       title: "Actions",
-      width: 300,
+      width: 215,
       render: (_, vm) => {
         const transitioning = ["starting", "stopping", "deleting"].includes(
           vm.state,
         );
         const running =
           vm.desired_state === "running" && vm.state !== "stopped";
+        const cliCommand = `cocalc vm ssh ${vm.name}`;
+        const directCommand = vm.public_ip
+          ? `ssh ${vm.ssh_user || "ubuntu"}@${vm.public_ip}`
+          : undefined;
         return (
-          <Flex gap={4} wrap>
+          <Space.Compact>
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              title={`Connect to ${vm.name}`}
+              content={
+                <Space
+                  direction="vertical"
+                  size={10}
+                  style={{ maxWidth: 430, width: 390 }}
+                >
+                  <div>
+                    <Text type="secondary">CoCalc CLI</Text>
+                    <br />
+                    <Text code copyable={{ text: cliCommand }}>
+                      {cliCommand}
+                    </Text>
+                  </div>
+                  {directCommand ? (
+                    <div>
+                      <Text type="secondary">Direct SSH</Text>
+                      <br />
+                      <Text code copyable={{ text: directCommand }}>
+                        {directCommand}
+                      </Text>
+                    </div>
+                  ) : (
+                    <Text type="secondary">
+                      A public address will appear when the VM is ready.
+                    </Text>
+                  )}
+                </Space>
+              }
+            >
+              <Button size="small" type="primary">
+                Connect
+              </Button>
+            </Popover>
             <Button
               size="small"
               disabled={transitioning}
@@ -1567,34 +1577,46 @@ export function ProjectComputeVms({
             >
               {running ? "Stop" : "Start"}
             </Button>
-            <Button size="small" onClick={() => setTtlVm(vm)}>
-              {vm.expires_at ? (
-                <>
-                  Deletes{" "}
-                  <TimeAgo
-                    date={new Date(vm.expires_at)}
-                    click_to_toggle={false}
-                  />
-                </>
-              ) : (
-                "Runs indefinitely"
-              )}
-            </Button>
-            <Button size="small" onClick={() => openSimilar(vm)}>
-              Create similar
-            </Button>
-            <Popconfirm
-              title={`Delete ${vm.name}?`}
-              description="The persistent boot disk is deleted. An attached /work volume is retained."
-              okText="Delete VM"
-              okButtonProps={{ danger: true }}
-              onConfirm={() => deleteVm(vm)}
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: [
+                  {
+                    key: "deadline",
+                    label: vm.expires_at
+                      ? "Change deletion deadline"
+                      : "Set deletion deadline",
+                  },
+                  { key: "similar", label: "Create similar" },
+                  { type: "divider" },
+                  {
+                    key: "delete",
+                    danger: true,
+                    disabled: vm.state === "deleting",
+                    label: "Delete VM",
+                  },
+                ],
+                onClick: ({ key }) => {
+                  if (key === "deadline") {
+                    setTtlVm(vm);
+                  } else if (key === "similar") {
+                    openSimilar(vm);
+                  } else if (key === "delete") {
+                    Modal.confirm({
+                      title: `Delete ${vm.name}?`,
+                      content:
+                        "The persistent boot disk is deleted. An attached /work volume is retained.",
+                      okText: "Delete VM",
+                      okButtonProps: { danger: true },
+                      onOk: () => deleteVm(vm),
+                    });
+                  }
+                },
+              }}
             >
-              <Button size="small" danger disabled={vm.state === "deleting"}>
-                Delete
-              </Button>
-            </Popconfirm>
-          </Flex>
+              <Button size="small">Manage</Button>
+            </Dropdown>
+          </Space.Compact>
         );
       },
     },

@@ -216,6 +216,51 @@ test("hubCallByName forwards auth_session_hash from the remote user", async () =
   ]);
 });
 
+test("hubCallByName routes project-scoped auth through the project subject", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+
+  await hubCallByName({
+    ctx: {
+      timeoutMs: 15_000,
+      rpcTimeoutMs: 15_000,
+      accountId: "00000000-1000-4000-8000-000000000001",
+      remote: {
+        client: {} as any,
+        user: {
+          project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+        },
+      },
+    },
+    name: "compute.authorizeProjectSshKey",
+    args: [
+      {
+        project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+        id_or_name: "compute-vm",
+      },
+    ],
+    callHub: async (opts) => {
+      calls.push(opts);
+      return { ok: true };
+    },
+  });
+
+  assert.deepEqual(calls, [
+    {
+      client: {},
+      project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+      auth_session_hash: null,
+      name: "compute.authorizeProjectSshKey",
+      args: [
+        {
+          project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+          id_or_name: "compute-vm",
+        },
+      ],
+      timeout: 15_000,
+    },
+  ]);
+});
+
 test("hubCallByName lets explicit timeouts exceed the default rpc timeout", async () => {
   const calls: Array<Record<string, unknown>> = [];
 

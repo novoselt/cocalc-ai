@@ -4,6 +4,7 @@ import {
   getGcpGpuTypeOptions,
   getHostDisplayedPrice,
   getHostPriceEstimate,
+  getGcpPersistentDiskPriceEstimate,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
   getGcpRegionOptions,
@@ -863,6 +864,39 @@ describe("catalog-backed pricing labels", () => {
     expect(
       estimate?.line_items.reduce((sum, item) => sum + item.usd_per_hour, 0),
     ).toBeCloseTo(0.4452, 9);
+  });
+
+  it("prices a GCP persistent disk without machine pricing", () => {
+    const catalog = testCatalog([
+      {
+        kind: "prices",
+        scope: "global",
+        payload: {
+          fetched_at: "2026-08-07T00:00:00.000Z",
+          service_id: "compute",
+          families: {},
+          gpus: {},
+          disks: {
+            "pd-balanced": { "us-west1": 0.0001 },
+          },
+        },
+      },
+    ]);
+
+    const estimate = getGcpPersistentDiskPriceEstimate(
+      catalog,
+      {
+        zone: "us-west1-a",
+        storage_mode: "persistent",
+        disk_type: "balanced",
+        disk_gb: 50,
+      },
+      { project_hosts_gcp_surcharge_percent: 30 },
+    );
+
+    expect(estimate?.usd_per_hour).toBeCloseTo(0.0065, 9);
+    expect(estimate?.line_items.map(({ key }) => key)).toEqual(["disk"]);
+    expect(estimate?.notes).toEqual(["Includes a 30% site surcharge."]);
   });
 
   it("uses a self-hosted provider charge note for site-funded hosts", () => {
