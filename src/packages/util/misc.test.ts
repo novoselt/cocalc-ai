@@ -78,6 +78,20 @@ describe("contains_url", () => {
     expect(cu("abc bar.com xyz")).toBe(true);
     expect(cu("abc www.buy.me xyz")).toBe(true);
   });
+
+  test("does not treat email addresses as URLs", () => {
+    expect(cu("Contact a+4@example.edu about the course")).toBe(false);
+  });
+});
+
+describe("sanitize_urls", () => {
+  test("redacts websites while preserving email addresses and punctuation", () => {
+    expect(
+      misc.sanitize_urls(
+        "Contact a+4@example.edu or visit https://spam.example/path.",
+      ),
+    ).toBe("Contact a+4@example.edu or visit [link removed].");
+  });
 });
 
 describe("date object some time ago", () => {

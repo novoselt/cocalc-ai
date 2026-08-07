@@ -7,6 +7,7 @@
 
 import { fromJS } from "immutable";
 import { callback2 } from "@cocalc/util/async-utils";
+import { defaultCourseTitle } from "@cocalc/util/course-path";
 
 // SMC libraries
 import * as misc from "@cocalc/util/misc";
@@ -59,10 +60,9 @@ export function create_sync_db(
   });
 
   syncdb.once("ready", async () => {
-    const i = store.get("course_filename").lastIndexOf(".");
     const t = {
       settings: {
-        title: store.get("course_filename").slice(0, i),
+        title: defaultCourseTitle(store.get("course_filename")),
         description: "No description",
         allow_collabs: true,
       },

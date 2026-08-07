@@ -245,7 +245,7 @@ They do not rewrite assignments or make files cryptographically immutable.
 - **Disable JupyterLab notebook server** hides the JupyterLab launcher.
 - **Disable VS Code IDE Server** hides the VS Code server launcher.
 - **Disable Pluto Julia notebook server** hides the Pluto launcher.
-- **Disable R IDE Server** hides the R IDE launcher.
+- **Disable RStudio** hides the RStudio launcher.
 
 The server-launcher options matter because external IDEs and notebook servers
 can have their own file browsers, download tools, terminals, or editing
@@ -257,7 +257,10 @@ interfaces outside the main CoCalc course UI.
   main project UI and flyouts.
 - **Disable adding or removing collaborators** removes the collaborators UI for
   student projects. Students should not be able to use the standard project UI
-  to add other people or remove course staff.
+  to add other people or remove course staff. Reconfiguring the course also
+  removes collaborators who are neither the assigned student nor an instructor
+  or TA from the course project. Project owners are retained as a safety
+  boundary.
 
 The course still manages student-project collaborators during reconfiguration:
 students, instructors, and TAs are kept in sync based on the course roster and

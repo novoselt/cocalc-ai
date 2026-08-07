@@ -154,7 +154,12 @@ function planCourseManagedProjectReconciliation(
     users[account_id] = { ...users[account_id], hide: true };
     usersChanged = true;
   }
-  if (!request.allow_collabs) {
+  const removeUnexpectedCollaborators =
+    !request.allow_collabs ||
+    (type === "student" &&
+      request.course.student_project_functionality?.disableCollaborators ===
+        true);
+  if (removeUnexpectedCollaborators) {
     for (const [existingAccountId, info] of Object.entries(users)) {
       if (
         info?.group !== "owner" &&
