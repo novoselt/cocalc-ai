@@ -1481,6 +1481,74 @@ describe("project collaborators local bay access", () => {
     expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(courseOwnerId);
   });
 
+  it("uses the course usage owner invite message limit for acting TAs", async () => {
+    const courseOwnerId = "55555555-5555-4555-8555-555555555555";
+    resolveMembershipForAccountMock = jest.fn(async (accountId: string) => ({
+      class: accountId === courseOwnerId ? "instructor" : "free",
+      source: accountId === courseOwnerId ? "site-license" : "free",
+      entitlements: {},
+      effective_limits: {
+        invite_email_recipients_per_batch: 10,
+        invite_email_pending_per_project: 100,
+        invite_email_pending_per_course: 100,
+        invite_email_hourly_count: 100,
+        invite_email_daily_count: 100,
+        invite_email_custom_message_max_chars:
+          accountId === courseOwnerId ? 500 : 300,
+        course_max_students_and_pending_invites: 1000,
+      },
+    }));
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("AS actor_group")) {
+        return {
+          rows: [
+            { actor_group: "collaborator", manage_users_owner_only: false },
+          ],
+        };
+      }
+      if (sql.includes("course ->> 'type' = 'student'")) {
+        return { rows: [{ students: 145, pending_invites: 0 }] };
+      }
+      if (sql.includes("FROM projects AS p")) {
+        return {
+          rows: [
+            {
+              usage_account_id: null,
+              course: null,
+              owner_account_id: courseOwnerId,
+            },
+          ],
+        };
+      }
+      if (sql.includes("COUNT(*)::int AS count")) {
+        return { rows: [{ count: 0 }] };
+      }
+      return { rows: [] };
+    });
+
+    const { inviteCollaboratorWithoutAccount } =
+      await import("./collaborators");
+    await expect(
+      inviteCollaboratorWithoutAccount({
+        account_id: ACCOUNT_ID,
+        opts: {
+          project_id: PROJECT_ID,
+          title: "Test Course",
+          link2proj: "",
+          to: "student@example.com",
+          email: "<p>Hello</p>",
+          message: "x".repeat(526),
+          invite_scope: "course_student",
+          invite_context: {
+            course_project_id: "44444444-4444-4444-8444-444444444444",
+          },
+        },
+      }),
+    ).rejects.toThrow("invite message is too long (526/500)");
+    expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(ACCOUNT_ID);
+    expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(courseOwnerId);
+  });
+
   it("requires course context for course email invites", async () => {
     resolveMembershipForAccountMock = jest.fn(async () => ({
       class: "instructor",

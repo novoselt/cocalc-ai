@@ -92,6 +92,7 @@ import {
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
 import { getEffectiveMembershipUsageLimits } from "@cocalc/server/membership/effective-limits";
 import { claimCourseMembershipPackageSeatsForAcceptedInvite } from "@cocalc/server/membership/packages";
+import { getProjectUsageAccountId } from "@cocalc/server/membership/project-usage";
 import { getSecretSettingsKey } from "@cocalc/database/settings/secret-settings";
 import {
   decryptSecretSettingValue,
@@ -3098,6 +3099,28 @@ async function normalizeInviteMessageForAccount({
   return trimmed;
 }
 
+async function getInviteMessagePolicyAccountId({
+  account_id,
+  context,
+  scope,
+}: {
+  account_id: string;
+  context?: Record<string, unknown>;
+  scope?: string;
+}): Promise<string> {
+  if (scope !== COURSE_EMAIL_INVITE_SCOPE) {
+    return account_id;
+  }
+  const courseProjectId =
+    typeof context?.course_project_id === "string"
+      ? context.course_project_id.trim()
+      : "";
+  if (!courseProjectId) {
+    return account_id;
+  }
+  return (await getProjectUsageAccountId(courseProjectId)) ?? account_id;
+}
+
 async function normalizeAccessRequestMessageForAccount({
   account_id,
   message,
@@ -3303,8 +3326,13 @@ async function createEmailProjectInvite({
 }> {
   await ensureProjectCollabInviteEmailTokenSchema();
   const normalizedEmail = normalizeInviteEmail(email_address);
-  const normalizedMessage = await normalizeInviteMessageForAccount({
+  const messagePolicyAccountId = await getInviteMessagePolicyAccountId({
     account_id,
+    context,
+    scope,
+  });
+  const normalizedMessage = await normalizeInviteMessageForAccount({
+    account_id: messagePolicyAccountId,
     message,
   });
   const email_hash = await hashInviteEmail(normalizedEmail);
