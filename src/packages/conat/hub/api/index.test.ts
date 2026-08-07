@@ -149,6 +149,34 @@ describe("hub API argument transforms", () => {
     ).rejects.toThrow("user must be signed in");
   });
 
+  it("binds project VM SSH forwarding to the authenticated host", async () => {
+    const args = await transformArgs({
+      name: "compute.authorizeProjectSshKeyFromHost",
+      args: [
+        {
+          host_id: "spoofed-host",
+          project_id: "project-1",
+          id_or_name: "compute-vm",
+          ssh_public_key: "ssh-ed25519 AAAATEST project",
+          idempotency_key: "authorize-1",
+        },
+      ],
+      host_id: "host-1",
+    });
+    expect(args[0]).toMatchObject({
+      host_id: "host-1",
+      project_id: "project-1",
+    });
+
+    await expect(
+      transformArgs({
+        name: "compute.authorizeProjectSshKeyFromHost",
+        args: [{ project_id: "project-1" }],
+        project_id: "project-1",
+      }),
+    ).rejects.toThrow("must be a host");
+  });
+
   it("restricts managed metering RPCs to project or host principals", async () => {
     const rpcNames = [
       "system.recordManagedProjectEgress",

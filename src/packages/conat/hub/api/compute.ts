@@ -3,7 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { authFirstRequireAccount, authFirstRequireProject } from "./util";
+import {
+  authFirstRequireAccount,
+  authFirstRequireHost,
+  authFirstRequireProject,
+} from "./util";
 import type { HostCatalog } from "./hosts";
 
 export type ComputeVmPricingModel = "spot" | "on_demand";
@@ -137,6 +141,7 @@ export const compute = {
   getVm: authFirstRequireAccount,
   authorizeSshKey: authFirstRequireAccount,
   authorizeProjectSshKey: authFirstRequireProject,
+  authorizeProjectSshKeyFromHost: authFirstRequireHost,
   startVm: authFirstRequireAccount,
   stopVm: authFirstRequireAccount,
   deleteVm: authFirstRequireAccount,
@@ -170,6 +175,13 @@ export interface ComputeApi {
   }) => Promise<ComputeVm>;
   authorizeProjectSshKey: (opts: {
     project_id?: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVm>;
+  authorizeProjectSshKeyFromHost: (opts: {
+    host_id?: string;
+    project_id: string;
     id_or_name: string;
     ssh_public_key: string;
     idempotency_key: string;
