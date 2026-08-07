@@ -3431,6 +3431,7 @@ type ListHostsOptions = {
   catalog?: boolean;
   show_all?: boolean;
   trusted_admin_view?: boolean;
+  route_health?: boolean;
 };
 
 function sanitizeMachineForPlacement(
@@ -3539,12 +3540,16 @@ export async function listHostsLocal({
   catalog,
   show_all,
   trusted_admin_view,
+  route_health,
 }: ListHostsOptions): Promise<Host[]> {
   const owner = requireAccount(account_id);
   const isTrustedAdminView =
     !!admin_view && (trusted_admin_view || (await isAdmin(owner)));
   if (admin_view && !trusted_admin_view && !(await isAdmin(owner))) {
     throw new Error("not authorized");
+  }
+  if (route_health && !isTrustedAdminView) {
+    throw new Error("route health host listing requires admin view");
   }
   const filters: string[] = [];
   const params: any[] = [owner];
@@ -3580,6 +3585,18 @@ export async function listHostsLocal({
       ORDER BY updated DESC NULLS LAST, created DESC NULLS LAST`,
     params,
   );
+  if (route_health) {
+    // Release smoke only needs stable routing identifiers. Avoid the expensive
+    // backup, metrics, runtime, owner-directory, and spend-window enrichments.
+    return rows.map((row) =>
+      parseRow(row, {
+        scope: "shared",
+        access_role: "admin",
+        can_place: false,
+        can_start: false,
+      }),
+    );
+  }
   const backupStatus = await loadHostBackupStatus(rows.map((row) => row.id));
 
   const membership = await loadMembership(owner);

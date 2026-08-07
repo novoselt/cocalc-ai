@@ -4187,7 +4187,8 @@ test("software smoke hub also runs Rocket host route health", async () => {
   ]);
 
   assert.equal(runs.length, 1);
-  assert.deepEqual(runs[0].args.slice(-13), [
+  assert.equal(runs[0].options?.timeoutMs, 30_000);
+  assert.deepEqual(runs[0].args.slice(-14), [
     "--profile",
     "prod",
     "rocket",
@@ -4197,10 +4198,54 @@ test("software smoke hub also runs Rocket host route health", async () => {
     "https://cocalc.ai",
     "--host-limit",
     "1",
+    "--site-funded-only",
     "--request-timeout-ms",
-    "15000",
+    "10000",
     "--rpc-timeout",
-    "15s",
+    "10s",
+  ]);
+});
+
+test("software smoke hub accepts an explicit route-health canary", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-smoke-hub-canary-"));
+  const runs: CapturedRun[] = [];
+  const program = createProgram(
+    makeDeps({
+      localStore: join(dir, "store"),
+      runs,
+      fetch: async () => ({ ok: true, status: 200 }) as Response,
+    }),
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "smoke",
+    "hub",
+    "prod",
+    "--host",
+    "00000000-0000-4000-8000-000000000123",
+  ]);
+
+  assert.equal(runs[0].args.includes("--site-funded-only"), false);
+  assert.deepEqual(runs[0].args.slice(-15), [
+    "--profile",
+    "prod",
+    "rocket",
+    "health",
+    "host-routes",
+    "--api",
+    "https://cocalc.ai",
+    "--host-limit",
+    "1",
+    "--host-id",
+    "00000000-0000-4000-8000-000000000123",
+    "--request-timeout-ms",
+    "10000",
+    "--rpc-timeout",
+    "10s",
   ]);
 });
 

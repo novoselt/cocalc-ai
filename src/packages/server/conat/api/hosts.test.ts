@@ -6424,6 +6424,40 @@ describe("hosts.listHosts bootstrap normalization", () => {
     });
   });
 
+  it("uses a lightweight admin-only listing for route health", async () => {
+    const { listHostsLocal } = await import("./hosts");
+    const hosts = await listHostsLocal({
+      account_id: ACCOUNT_ID,
+      admin_view: true,
+      route_health: true,
+    });
+
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).toEqual(
+      expect.objectContaining({
+        id: HOST_ID,
+        status: "running",
+        access_role: "admin",
+        can_place: false,
+        can_start: false,
+      }),
+    );
+    expect(hosts[0].backup_status).toBeUndefined();
+    expect(hosts[0].metrics_history).toBeUndefined();
+    expect(loadProjectHostMetricsHistoryMock).not.toHaveBeenCalled();
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects route health listing outside admin view", async () => {
+    const { listHostsLocal } = await import("./hosts");
+    await expect(
+      listHostsLocal({
+        account_id: ACCOUNT_ID,
+        route_health: true,
+      }),
+    ).rejects.toThrow("route health host listing requires admin view");
+  });
+
   it("includes visible hosts from remote bays", async () => {
     process.env.COCALC_CLUSTER_BAY_IDS = "bay-0,bay-1";
     process.env.COCALC_BAY_ID = "bay-0";

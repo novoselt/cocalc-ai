@@ -1518,7 +1518,7 @@ function parseLimit(raw: string | undefined): number {
 }
 
 function parseTimeoutMs(raw: string | undefined, option = "--timeout"): number {
-  const value = raw == null || raw.trim() === "" ? 15_000 : Number(raw);
+  const value = raw == null || raw.trim() === "" ? 30_000 : Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${option} must be a positive number of milliseconds`);
   }
@@ -4952,6 +4952,12 @@ Supported deploy/smoke components:
         }
         if (component === "hub" || component === "bay") {
           const cli = currentCliInvocation();
+          const routeProbeTimeoutMs = Math.min(timeoutMs, 10_000);
+          const routeHealthHostId = `${
+            opts.host ??
+            (deps.env ?? process.env).COCALC_ROCKET_HEALTH_HOST_ID ??
+            ""
+          }`.trim();
           checks.push(
             await runTimedSmokeCheck(
               "host route health",
@@ -4969,10 +4975,13 @@ Supported deploy/smoke components:
                     target.api!,
                     "--host-limit",
                     "1",
+                    ...(routeHealthHostId
+                      ? ["--host-id", routeHealthHostId]
+                      : ["--site-funded-only"]),
                     "--request-timeout-ms",
-                    `${timeoutMs}`,
+                    `${routeProbeTimeoutMs}`,
                     "--rpc-timeout",
-                    smokeRpcTimeout(timeoutMs),
+                    smokeRpcTimeout(routeProbeTimeoutMs),
                   ],
                   {
                     stdio: "inherit",

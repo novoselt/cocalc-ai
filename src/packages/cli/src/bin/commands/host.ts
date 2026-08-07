@@ -1556,11 +1556,13 @@ export function registerHostCommand(
   async function resolveHostForInformationalLookup(
     ctx: any,
     hostIdentifier: string,
+    opts?: { routeHealth?: boolean },
   ) {
     try {
       const hosts = await listHosts(ctx, {
         include_deleted: true,
         admin_view: true,
+        route_health: opts?.routeHealth === true,
       });
       const match = isValidUUID(hostIdentifier)
         ? hosts.find((host: any) => host.id === hostIdentifier)
@@ -1587,6 +1589,10 @@ export function registerHostCommand(
     .option("--include-deleted", "include deleted hosts")
     .option("--catalog", "include catalog-visible hosts")
     .option("--admin-view", "admin view")
+    .option(
+      "--route-health",
+      "admin-only lightweight listing for route health checks",
+    )
     .option("--limit <n>", "max rows", "500")
     .action(
       async (
@@ -1594,6 +1600,7 @@ export function registerHostCommand(
           includeDeleted?: boolean;
           catalog?: boolean;
           adminView?: boolean;
+          routeHealth?: boolean;
           limit?: string;
         },
         command: Command,
@@ -1603,6 +1610,7 @@ export function registerHostCommand(
             include_deleted: !!opts.includeDeleted,
             catalog: !!opts.catalog,
             admin_view: !!opts.adminView,
+            route_health: !!opts.routeHealth,
           });
           const limitNum = Math.max(
             1,
@@ -1698,9 +1706,17 @@ export function registerHostCommand(
   host
     .command("get <host>")
     .description("get one host by id or name")
-    .action(async (hostIdentifier: string, command: Command) => {
+    .option(
+      "--route-health",
+      "use admin-only lightweight host lookup for a route health probe",
+    )
+    .action(async (hostIdentifier: string, ...args: unknown[]) => {
+      const command = args.at(-1) as Command;
+      const opts = command.opts() as { routeHealth?: boolean };
       await withContext(command, "host get", async (ctx) => {
-        const h = await resolveHostForInformationalLookup(ctx, hostIdentifier);
+        const h = await resolveHostForInformationalLookup(ctx, hostIdentifier, {
+          routeHealth: opts.routeHealth === true,
+        });
         let runtime_status: HostGetRuntimeSummary | undefined;
         if (shouldLoadRuntimeStatusForHostGet(h)) {
           try {
