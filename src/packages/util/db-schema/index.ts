@@ -16,6 +16,7 @@ export { retentionModels } from "./retention";
 export * from "./table-ownership";
 
 // The tables
+import "./active-user-map-history";
 import "./account-collaborator-index";
 import "./account-ban-audit-log";
 import "./account-admin-audit-log";

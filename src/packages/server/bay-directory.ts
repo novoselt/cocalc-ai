@@ -19,7 +19,10 @@ import {
   getConfiguredBayLabel,
   getConfiguredBayRegion,
 } from "@cocalc/server/bay-config";
-import { listClusterBayInfos } from "@cocalc/server/bay-registry";
+import {
+  listAuthoritativeClusterBayInfos,
+  listClusterBayInfos,
+} from "@cocalc/server/bay-registry";
 import {
   getConfiguredClusterRole,
   isMultiBayCluster,
@@ -105,6 +108,13 @@ export async function listConfiguredBays(): Promise<BayInfo[]> {
     }
   }
   return [getSingleBayInfo()];
+}
+
+export async function listConfiguredBaysAuthoritative(): Promise<BayInfo[]> {
+  if (!isMultiBayCluster()) {
+    return [getSingleBayInfo()];
+  }
+  return await listAuthoritativeClusterBayInfos();
 }
 
 async function getAccountRow(account_id: string): Promise<{
