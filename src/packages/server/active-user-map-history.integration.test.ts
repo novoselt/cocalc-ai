@@ -120,7 +120,7 @@ describe("active user map history database integration", () => {
     }
   });
 
-  it("stores country-only snapshots and removes data older than 24 months", async () => {
+  it("retains snapshots by default and supports explicit pruning", async () => {
     const client = await getPool().connect();
     const old = new Date("2038-05-31T12:15:00.000Z");
     const recent = new Date("2038-06-02T12:15:00.000Z");
@@ -150,8 +150,24 @@ describe("active user map history database integration", () => {
       }
 
       await expect(pruneActiveUserMapHistory({ client, now })).resolves.toEqual(
-        { countries: 1, snapshots: 1 },
+        { countries: 0, snapshots: 0 },
       );
+      await expect(
+        client.query(
+          `SELECT COUNT(*)::int AS count
+             FROM active_user_map_history_snapshots
+            WHERE snapshot_hour = ANY($1::timestamptz[])`,
+          [hours],
+        ),
+      ).resolves.toMatchObject({ rows: [{ count: 2 }] });
+
+      await expect(
+        pruneActiveUserMapHistory({
+          client,
+          now,
+          retentionMonths: 24,
+        }),
+      ).resolves.toEqual({ countries: 1, snapshots: 1 });
       const snapshots = await client.query(
         `SELECT snapshot_hour, total_active, mapped_active,
                 unknown_location, usage_metrics_not_enabled, bay_count

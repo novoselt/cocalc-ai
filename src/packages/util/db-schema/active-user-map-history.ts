@@ -7,7 +7,8 @@ import { Table } from "./types";
 
 // Restricted internal regional-adoption analytics. These tables contain only
 // hourly country-level aggregates, never account identifiers or precise
-// locations. Data is retained for 24 months for year-over-year comparisons.
+// locations. Data is retained indefinitely by default; maintenance supports an
+// explicit finite retention window if policy changes later.
 Table({
   name: "active_user_map_history_snapshots",
   rules: {

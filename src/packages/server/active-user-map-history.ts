@@ -19,7 +19,9 @@ import { COOKIE_CONSENT_REVISION } from "@cocalc/util/cookie-consent";
 const logger = getLogger("server:active-user-map-history");
 
 export const ACTIVE_USER_MAP_HISTORY_WINDOWS = [60, 1440] as const;
-export const ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS = 24;
+// Country-level aggregates are small and retain long-term analytical value.
+// Set this to a positive number to enable automatic pruning.
+export const ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS: number | null = null;
 
 const MAX_ACTIVITY_MINUTES = 1440;
 const MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -260,21 +262,29 @@ export async function storeActiveUserMapHistorySnapshots({
 export async function pruneActiveUserMapHistory({
   client,
   now = new Date(),
+  retentionMonths = ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS,
 }: {
   client: PoolClient;
   now?: Date;
+  retentionMonths?: number | null;
 }): Promise<{ countries: number; snapshots: number }> {
+  if (retentionMonths == null) {
+    return { countries: 0, snapshots: 0 };
+  }
+  if (!Number.isInteger(retentionMonths) || retentionMonths <= 0) {
+    throw Error("retentionMonths must be a positive integer or null");
+  }
   const countryResult = await client.query(
     `DELETE FROM active_user_map_history_countries
       WHERE snapshot_hour <
-        $1::timestamptz - INTERVAL '${ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS} months'`,
-    [now],
+        $1::timestamptz - ($2::int * INTERVAL '1 month')`,
+    [now, retentionMonths],
   );
   const snapshotResult = await client.query(
     `DELETE FROM active_user_map_history_snapshots
       WHERE snapshot_hour <
-        $1::timestamptz - INTERVAL '${ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS} months'`,
-    [now],
+        $1::timestamptz - ($2::int * INTERVAL '1 month')`,
+    [now, retentionMonths],
   );
   return {
     countries: countryResult.rowCount ?? 0,
