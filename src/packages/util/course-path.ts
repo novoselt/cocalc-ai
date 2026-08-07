@@ -33,3 +33,8 @@ export function normalizeCoursePath(path: string): string {
   }
   return normalized;
 }
+
+export function defaultCourseTitle(path: string): string {
+  const normalized = normalizeCoursePath(path);
+  return normalized.slice(0, -".course".length);
+}

@@ -64,6 +64,7 @@ export interface ComputeVmRow {
 
 export interface ComputeWorkRow {
   id: string;
+  queue_order: string;
   resource_kind: "vm" | "volume";
   resource_id: string;
   action: string;

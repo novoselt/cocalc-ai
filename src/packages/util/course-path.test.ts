@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { normalizeCoursePath } from "./course-path";
+import { defaultCourseTitle, normalizeCoursePath } from "./course-path";
 
 describe("normalizeCoursePath", () => {
   it("normalizes relative course paths", () => {
@@ -32,5 +32,16 @@ describe("normalizeCoursePath", () => {
     ".course/child",
   ])("rejects %s", (path) => {
     expect(() => normalizeCoursePath(path)).toThrow("invalid course path");
+  });
+});
+
+describe("defaultCourseTitle", () => {
+  it("uses the project-relative course path without its extension", () => {
+    expect(defaultCourseTitle("/home/user/2026-08-07-112524.course")).toBe(
+      "2026-08-07-112524",
+    );
+    expect(defaultCourseTitle("/home/user/classes/math.course")).toBe(
+      "classes/math",
+    );
   });
 });

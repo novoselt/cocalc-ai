@@ -184,9 +184,7 @@ export function ReconfigureAllProjects({
             content={
               <FormattedMessage
                 id="course.actions-panel.reconfigure-all-projects.info"
-                defaultMessage={`Ensure all projects have the correct students and TA's,
-                titles and descriptions set, etc.
-                This will also resend any outstanding email invitations.`}
+                defaultMessage={`Create missing student projects and reconcile every managed project with the current course settings. This includes course association and restrictions, assigned students and course-manager access, titles, descriptions, inherited environment variables, shared and nbgrader project access, and removal of unexpected collaborators when collaborator management is disabled. Outstanding email invitations are sent again. Projects that already match are skipped.`}
               />
             }
           />

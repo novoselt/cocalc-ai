@@ -243,6 +243,29 @@ describe("course managed project reconciliation", () => {
     expect(inviteCollaboratorMock).not.toHaveBeenCalled();
   });
 
+  it("removes unexpected collaborators when collaborator management is disabled", async () => {
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+    await reconcileCourseManagedProjectLocal(
+      request({
+        allow_collabs: true,
+        course: {
+          type: "student",
+          project_id: COURSE,
+          path: "classes/main.course",
+          datastore: false,
+          student_project_functionality: { disableCollaborators: true },
+        },
+      }),
+    );
+    const update = queryMock.mock.calls.find(([sql]) =>
+      sql.includes("UPDATE projects"),
+    );
+    const users = JSON.parse(update[1][1]);
+    expect(users[EXTRA]).toBeUndefined();
+    expect(users[OWNER]).toEqual({ group: "owner" });
+  });
+
   it("identifies exact matches without entering the mutation path", async () => {
     const { courseManagedProjectNeedsReconcile } =
       await import("./reconcile-managed-project");

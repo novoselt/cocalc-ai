@@ -101,7 +101,7 @@ const OPTIONS: Option[] = [
     name: "disableRServer",
     title: defineMessage({
       id: "course.customize-student-project-functionality.disableRServer.title",
-      defaultMessage: "{R_IDE}",
+      defaultMessage: "Disable {R_IDE}",
     }),
     description: defineMessage({
       id: "course.customize-student-project-functionality.disableRServer.description",
@@ -141,7 +141,7 @@ const OPTIONS: Option[] = [
     description: defineMessage({
       id: "course.customize-student-project-functionality.disableCollaborators.description",
       defaultMessage:
-        "Removes the user interface for adding or removing collaborators from student projects.",
+        "Removes the user interface for adding or removing collaborators from student projects. Reconfiguring the course also removes collaborators who are not the assigned student or a course manager.",
     }),
   },
   //   {
