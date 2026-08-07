@@ -75,6 +75,20 @@ run() {
   "$@"
 }
 
+find_node() {
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+  local configured_node="$NVM_DIR/versions/node/v$NODE_VERSION/bin/node"
+  if [[ -x "$configured_node" ]]; then
+    printf '%s\n' "$configured_node"
+    return 0
+  fi
+  echo "node runtime not found (checked PATH and $configured_node)" >&2
+  return 1
+}
+
 make_target_release_accessible() {
   run chown "${BAY_USER}:${BAY_GROUP}" "$TARGET_RELEASE"
   run chmod 0755 "$TARGET_RELEASE"
@@ -455,8 +469,9 @@ preserve_previous_cdn_assets() {
     return
   fi
 
-  local package_names
-  package_names="$(node - "${previous_cdn}/index.js" "${target_cdn}/index.js" <<'NODE'
+  local node_bin package_names
+  node_bin="$(find_node)"
+  package_names="$("$node_bin" - "${previous_cdn}/index.js" "${target_cdn}/index.js" <<'NODE'
 const [previous, target] = process.argv.slice(2);
 const names = new Set([
   ...Object.keys(require(previous).versions ?? {}),

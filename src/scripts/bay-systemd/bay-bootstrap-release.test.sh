@@ -8,6 +8,16 @@ source "${SCRIPT_DIR}/bay-bootstrap-release.sh"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
+ORIGINAL_NODE="$(command -v node)"
+NODE_VERSION="test"
+NVM_DIR="${TMP_ROOT}/nvm"
+mkdir -p "${NVM_DIR}/versions/node/v${NODE_VERSION}/bin"
+ln -s "$ORIGINAL_NODE" "${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/node"
+if [[ "$(PATH=/nonexistent find_node)" != "${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/node" ]]; then
+  echo "configured Node runtime was not resolved when node was absent from PATH" >&2
+  exit 1
+fi
+
 INSTALL_BASE="${TMP_ROOT}/bay"
 RELEASES_DIR="${INSTALL_BASE}/releases"
 CURRENT_LINK="${INSTALL_BASE}/current"
