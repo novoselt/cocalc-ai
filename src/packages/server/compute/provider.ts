@@ -208,6 +208,7 @@ function specFor(
           : "ubuntu-2404-lts-amd64",
       ssh_user: vm.ssh_user,
       ssh_public_key: vm.ssh_public_key,
+      ssh_public_keys: vm.metadata?.ssh_public_keys,
       block_project_ssh_keys: true,
       disable_service_account: true,
       subnetwork_uri: config.gcp_subnetwork,
@@ -308,6 +309,7 @@ function runtimeFor(vm: ComputeVmRow): HostRuntime {
       persistent_boot_disk: true,
       machine_type: vm.machine_type,
       ssh_public_key: vm.ssh_public_key,
+      ssh_public_keys: vm.metadata?.ssh_public_keys,
       ssh_user: vm.ssh_user,
     },
   };
@@ -441,6 +443,14 @@ export async function createProviderComputeVm(
 export async function startProviderComputeVm(vm: ComputeVmRow) {
   const { creds } = await context();
   await provider.startHost(runtimeFor(vm), creds);
+}
+
+export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
+  const { creds } = await context();
+  if (!provider.ensureSshAccess) {
+    throw new Error("managed compute provider cannot update SSH access");
+  }
+  await provider.ensureSshAccess(runtimeFor(vm), creds);
 }
 
 export async function stopProviderComputeVm(vm: ComputeVmRow) {

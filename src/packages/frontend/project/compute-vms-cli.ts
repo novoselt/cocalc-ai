@@ -12,6 +12,7 @@ export interface VmCreateCliValues {
   ttl_minutes?: number | null;
   boot_disk_gb: number;
   volume?: string;
+  ssh_public_key?: string;
 }
 
 export interface VolumeCreateCliValues {
@@ -59,6 +60,14 @@ export function vmCreateCli(opts: {
     args.push("--allow-standard-fallback");
   }
   if (values.volume) args.push("--volume", shellQuote(values.volume));
+  if (values.ssh_public_key?.trim()) {
+    args.push(
+      "--ssh-public-key-value",
+      shellQuote(values.ssh_public_key.trim()),
+    );
+  } else {
+    args.push("--no-ssh-key");
+  }
   args.push("--wait", shellQuote(values.name || "vm-name"));
   return args.join(" ");
 }

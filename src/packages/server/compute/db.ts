@@ -8,6 +8,8 @@ import getPool from "@cocalc/database/pool";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
 
 const pool = () => getPool();
+const MAX_COMPUTE_VM_SSH_KEYS = 32;
+const MAX_COMPUTE_VM_SSH_KEY_METADATA_BYTES = 128 * 1024;
 
 export async function insertComputeVm(
   row: Omit<
@@ -263,6 +265,73 @@ export async function updateComputeVm(
     [id, ...values],
   );
   return rows[0];
+}
+
+export async function addComputeVmSshPublicKey({
+  id,
+  owner_account_id,
+  ssh_public_key,
+}: {
+  id: string;
+  owner_account_id: string;
+  ssh_public_key: string;
+}): Promise<{ vm: ComputeVmRow; added: boolean }> {
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<ComputeVmRow>(
+      "SELECT * FROM compute_vms " +
+        "WHERE id=$1 AND owner_account_id=$2 AND deleted_at IS NULL " +
+        "FOR UPDATE",
+      [id, owner_account_id],
+    );
+    const vm = rows[0];
+    if (!vm) {
+      throw new Error("compute VM not found or access denied");
+    }
+    const sshPublicKeys = Array.from(
+      new Set(
+        [
+          vm.ssh_public_key,
+          ...(Array.isArray(vm.metadata?.ssh_public_keys)
+            ? vm.metadata.ssh_public_keys
+            : []),
+        ]
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    if (sshPublicKeys.includes(ssh_public_key)) {
+      await client.query("COMMIT");
+      return { vm, added: false };
+    }
+    if (sshPublicKeys.length >= MAX_COMPUTE_VM_SSH_KEYS) {
+      throw new Error(
+        "compute VM SSH key limit reached (" + MAX_COMPUTE_VM_SSH_KEYS + ")",
+      );
+    }
+    const metadataBytes =
+      sshPublicKeys.reduce((total, key) => total + Buffer.byteLength(key), 0) +
+      Buffer.byteLength(ssh_public_key);
+    if (metadataBytes > MAX_COMPUTE_VM_SSH_KEY_METADATA_BYTES) {
+      throw new Error("compute VM SSH public key metadata is too large");
+    }
+    sshPublicKeys.push(ssh_public_key);
+    const metadata = { ...vm.metadata, ssh_public_keys: sshPublicKeys };
+    const updated = await client.query<ComputeVmRow>(
+      "UPDATE compute_vms " +
+        "SET metadata=$2::jsonb, updated_at=NOW() " +
+        "WHERE id=$1 RETURNING *",
+      [id, JSON.stringify(metadata)],
+    );
+    await client.query("COMMIT");
+    return { vm: updated.rows[0]!, added: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function insertComputeInstance(vm: ComputeVmRow) {

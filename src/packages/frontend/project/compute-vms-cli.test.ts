@@ -20,10 +20,11 @@ describe("managed compute CLI equivalents", () => {
           ttl_minutes: 480,
           boot_disk_gb: 40,
           volume: "build-cache",
+          ssh_public_key: "ssh-ed25519 AAAATEST user@example.com",
         },
       }),
     ).toBe(
-      "cocalc --api https://staging.cocalc.ai vm create --project project-id --zone us-central1-a --machine t2d-standard-16 --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --volume build-cache --wait build-vm",
+      "cocalc --api https://staging.cocalc.ai vm create --project project-id --zone us-central1-a --machine t2d-standard-16 --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --volume build-cache --ssh-public-key-value 'ssh-ed25519 AAAATEST user@example.com' --wait build-vm",
     );
   });
 
@@ -35,6 +36,16 @@ describe("managed compute CLI equivalents", () => {
         values: { name: "open-ended", ttl_minutes: null },
       }),
     ).not.toContain("--ttl");
+  });
+
+  it("makes a deliberately keyless browser configuration explicit", () => {
+    expect(
+      vmCreateCli({
+        api: "https://staging.cocalc.ai",
+        project_id: "project-id",
+        values: { name: "keyless", ssh_public_key: "" },
+      }),
+    ).toContain("--no-ssh-key");
   });
 
   it("shows the project-scoped persistent volume command", () => {

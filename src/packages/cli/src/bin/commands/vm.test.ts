@@ -23,6 +23,8 @@ function harness() {
   const rsyncCalls: string[][] = [];
   const callbackResults: unknown[] = [];
   const ttlCalls: any[] = [];
+  const createCalls: any[] = [];
+  const sshAuthorizationCalls: any[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -39,6 +41,20 @@ function harness() {
               public_ip: "203.0.113.10",
               ssh_user: "ubuntu",
             }),
+            authorizeSshKey: async (opts: any) => {
+              sshAuthorizationCalls.push(opts);
+              return {
+                id: "vm-id",
+                name: "build-vm",
+                state: "ready",
+                public_ip: "203.0.113.10",
+                ssh_user: "ubuntu",
+              };
+            },
+            createVm: async (opts: any) => {
+              createCalls.push(opts);
+              return { id: "vm-id", name: opts.name, state: "requested" };
+            },
             setVmTtl: async (opts: any) => {
               ttlCalls.push(opts);
               return { id: "vm-id", name: "build-vm", ...opts };
@@ -51,9 +67,57 @@ function harness() {
     },
     runSsh: (args) => sshCalls.push(args),
     runRsync: (args) => rsyncCalls.push(args),
+    resolvePublicKey: (path) => ({
+      path: path ?? "/home/test/.ssh/id_ed25519.pub",
+      key: "ssh-ed25519 AAAATEST test@example.com",
+    }),
   });
-  return { program, sshCalls, rsyncCalls, callbackResults, ttlCalls };
+  return {
+    program,
+    sshCalls,
+    rsyncCalls,
+    callbackResults,
+    ttlCalls,
+    createCalls,
+    sshAuthorizationCalls,
+  };
 }
+
+describe("vm create", () => {
+  it("can deliberately create without an initial SSH key", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "keyless",
+      "--project",
+      "project-id",
+      "--no-ssh-key",
+    ]);
+    assert.equal(createCalls[0]?.ssh_public_key, "");
+  });
+
+  it("accepts the literal public key shown by the web UI", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "inline-key",
+      "--project",
+      "project-id",
+      "--ssh-public-key-value",
+      "ssh-ed25519 AAAAUSER user@example.com",
+    ]);
+    assert.equal(
+      createCalls[0]?.ssh_public_key,
+      "ssh-ed25519 AAAAUSER user@example.com",
+    );
+  });
+});
 
 describe("vm ttl", () => {
   it("parses human durations and extends an existing deadline", async () => {
@@ -89,9 +153,14 @@ describe("vm ttl", () => {
 
 describe("vm ssh", () => {
   it("opens an interactive SSH session when no command is supplied", async () => {
-    const { program, sshCalls, callbackResults } = harness();
+    const { program, sshCalls, callbackResults, sshAuthorizationCalls } =
+      harness();
     await program.parseAsync(["node", "cocalc", "vm", "ssh", "build-vm"]);
     assert.deepEqual(sshCalls[0]?.slice(-1), ["ubuntu@203.0.113.10"]);
+    assert.equal(
+      sshAuthorizationCalls[0]?.ssh_public_key,
+      "ssh-ed25519 AAAATEST test@example.com",
+    );
     assert.deepEqual(callbackResults, [undefined]);
   });
 

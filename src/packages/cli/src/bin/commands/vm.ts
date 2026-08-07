@@ -14,6 +14,7 @@ export type VmCommandDeps = {
   withContext: any;
   runSsh?: (args: string[]) => void;
   runRsync?: (args: string[]) => void;
+  resolvePublicKey?: (path?: string) => { path?: string; key: string };
 };
 
 function expandHome(path: string) {
@@ -308,7 +309,23 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     withContext,
     runSsh = defaultRunSsh,
     runRsync = defaultRunRsync,
+    resolvePublicKey = readPublicKey,
   } = deps;
+  const authorizeSsh = async (
+    ctx: any,
+    idOrName: string,
+    opts: { identity?: string; sshPublicKey?: string },
+  ) => {
+    const publicKeyPath =
+      opts.sshPublicKey ??
+      (opts.identity ? `${expandHome(opts.identity)}.pub` : undefined);
+    const key = resolvePublicKey(publicKeyPath);
+    return await ctx.hub.compute.authorizeSshKey({
+      id_or_name: idOrName,
+      ssh_public_key: key.key,
+      idempotency_key: randomUUID(),
+    });
+  };
   const vm = program
     .command("vm")
     .description("account-owned managed compute VMs");
@@ -368,10 +385,30 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "account-prepaid or account-postpaid; auto-detected when omitted",
     )
     .option("--ssh-public-key <path>", "OpenSSH public key file")
+    .option("--ssh-public-key-value <key>", "literal OpenSSH public key")
+    .option(
+      "--no-ssh-key",
+      "create without an initial key; cocalc vm ssh can authorize one later",
+    )
     .option("--wait", "wait until SSH-ready", false)
     .action(async (name: string, opts: any, command: Command) => {
       await withContext(command, "vm create", async (ctx) => {
-        const key = readPublicKey(opts.sshPublicKey);
+        const keySources = [
+          opts.sshPublicKey ? "path" : "",
+          opts.sshPublicKeyValue ? "value" : "",
+          opts.sshKey === false ? "none" : "",
+        ].filter(Boolean);
+        if (keySources.length > 1) {
+          throw new Error(
+            "use only one of --ssh-public-key, --ssh-public-key-value, or --no-ssh-key",
+          );
+        }
+        const key =
+          opts.sshKey === false
+            ? { key: "", path: undefined }
+            : opts.sshPublicKeyValue
+              ? { key: `${opts.sshPublicKeyValue}`.trim(), path: undefined }
+              : resolvePublicKey(opts.sshPublicKey);
         const created = await ctx.hub.compute.createVm({
           project_id: opts.project,
           name,
@@ -386,7 +423,12 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           ssh_public_key: key.key,
           idempotency_key: randomUUID(),
         });
-        if (!opts.wait) return { ...created, ssh_public_key_path: key.path };
+        if (!opts.wait) {
+          return {
+            ...created,
+            ...(key.path ? { ssh_public_key_path: key.path } : {}),
+          };
+        }
         return {
           ...(await waitForState(
             ctx.hub,
@@ -394,7 +436,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             new Set(["ready"]),
             5 * 60_000,
           )),
-          ssh_public_key_path: key.path,
+          ...(key.path ? { ssh_public_key_path: key.path } : {}),
         };
       });
     });
@@ -510,6 +552,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "connect directly to a compute VM, or run a remote command after the VM name",
     )
     .option("--identity <path>", "SSH private key")
+    .option("--ssh-public-key <path>", "public key matching the SSH identity")
     .option("--print", "print the SSH command instead of running it", false)
     .allowUnknownOption(true)
     .allowExcessArguments(true)
@@ -517,11 +560,11 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       async (
         idOrName: string,
         remoteCommand: string[],
-        opts: { identity?: string; print?: boolean },
+        opts: { identity?: string; sshPublicKey?: string; print?: boolean },
         command: Command,
       ) => {
         await withContext(command, "vm ssh", async (ctx) => {
-          const row = await ctx.hub.compute.getVm({ id_or_name: idOrName });
+          const row = await authorizeSsh(ctx, idOrName, opts);
           const args = sshArgs(row, opts, remoteCommand);
           const rendered = `ssh ${args.map((arg) => JSON.stringify(arg)).join(" ")}`;
           if (opts.print || ctx.globals.json || ctx.globals.output === "json") {
@@ -540,20 +583,19 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "copy files with rsync; exactly one endpoint must be vm-name:/path",
     )
     .option("--identity <path>", "SSH private key")
+    .option("--ssh-public-key <path>", "public key matching the SSH identity")
     .option("--print", "print the rsync command instead of running it", false)
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .action(
       async (
         rsyncArgs: string[],
-        opts: { identity?: string; print?: boolean },
+        opts: { identity?: string; sshPublicKey?: string; print?: boolean },
         command: Command,
       ) => {
         await withContext(command, "vm rsync", async (ctx) => {
           const endpoint = resolveVmRsyncEndpoint(rsyncArgs);
-          const row = await ctx.hub.compute.getVm({
-            id_or_name: endpoint.vm,
-          });
+          const row = await authorizeSsh(ctx, endpoint.vm, opts);
           const args = vmRsyncArgs(row, rsyncArgs, opts);
           const rendered = `rsync ${args.map(shellQuote).join(" ")}`;
           if (opts.print || ctx.globals.json || ctx.globals.output === "json") {
@@ -681,10 +723,11 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("add or update a managed ~/.ssh/config entry")
     .option("--alias <alias>", "SSH Host alias (defaults to the VM name)")
     .option("--identity <path>", "SSH private key")
+    .option("--ssh-public-key <path>", "public key matching the SSH identity")
     .option("--config <path>", "SSH config path (default: ~/.ssh/config)")
     .action(async (idOrName: string, opts: any, command: Command) => {
       await withContext(command, "vm ssh-config add", async (ctx) => {
-        const row = await ctx.hub.compute.getVm({ id_or_name: idOrName });
+        const row = await authorizeSsh(ctx, idOrName, opts);
         if (!row.public_ip || row.state !== "ready") {
           throw new Error(
             `compute VM '${row.name}' is not SSH-ready (state=${row.state})`,

@@ -15,6 +15,7 @@ import {
   Modal,
   Popconfirm,
   Radio,
+  Switch,
   Select,
   Space,
   Table,
@@ -41,7 +42,10 @@ import {
   COCALC_CLI_INSTALL_COMMAND,
 } from "@cocalc/util/consts/ui";
 import { uuid } from "@cocalc/util/misc";
-import { HostOptionsSelect } from "../hosts/components/host-options-select";
+import {
+  HostOptionsSelect,
+  sortMachineTypeOptions,
+} from "../hosts/components/host-options-select";
 import { useHostPricingSettings } from "../hosts/hooks/use-host-pricing-settings";
 import {
   getGcpMachineTypeOptions,
@@ -57,6 +61,7 @@ import {
   type VmCreateCliValues,
   type VolumeCreateCliValues,
 } from "./compute-vms-cli";
+import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-service";
 
 const { Paragraph, Text, Title } = Typography;
 const COPYABLE_PROPS = {
@@ -68,7 +73,7 @@ const COPYABLE_PROPS = {
 
 interface VmDraft extends VmCreateCliValues {
   region: string;
-  ssh_public_key: string;
+  use_project_ssh_key: boolean;
 }
 
 type VolumeDraft = VolumeCreateCliValues;
@@ -115,6 +120,15 @@ function compatibleOptions(options: HostFieldOption[]): HostFieldOption[] {
   });
 }
 
+function formatMaximumSpend(usd: number): string {
+  return usd.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function sshKeyOptions(sshKeys: any) {
   const raw = sshKeys?.toJS?.() ?? sshKeys ?? {};
   return Object.entries(raw)
@@ -142,8 +156,10 @@ function VmCreateModal({
   catalog,
   volumes,
   initial,
+  projectSshPublicKey,
   sshKeys,
   saving,
+  onGenerateProjectSshKey,
   onCancel,
   onCreate,
 }: {
@@ -152,19 +168,25 @@ function VmCreateModal({
   catalog: ComputeCatalog;
   volumes: ComputeVolume[];
   initial: VmDraft;
+  projectSshPublicKey: string | null;
   sshKeys: Array<{ label: string; value: string }>;
   saving: boolean;
+  onGenerateProjectSshKey: () => Promise<string | undefined>;
   onCancel: () => void;
   onCreate: (values: VmDraft) => Promise<void>;
 }) {
   const [form] = Form.useForm<VmDraft>();
   const [draft, setDraft] = useState<Partial<VmDraft>>(initial);
+  const [sortMachinesByPrice, setSortMachinesByPrice] = useState(false);
+  const [sshKeyError, setSshKeyError] = useState<string>();
   const pricingSettings = useHostPricingSettings();
 
   useEffect(() => {
     if (!open) return;
     form.setFieldsValue(initial);
     setDraft(initial);
+    setSortMachinesByPrice(false);
+    setSshKeyError(undefined);
   }, [form, initial, open]);
 
   const api = globalThis.location?.origin ?? "https://cocalc.ai";
@@ -190,9 +212,13 @@ function VmCreateModal({
   const zoneOptions = compatibleOptions(
     getGcpZoneOptions(catalog.host_catalog, selection),
   );
-  const machineOptions = compatibleOptions(
-    getGcpMachineTypeOptions(catalog.host_catalog, selection),
-  );
+  const machineOptions =
+    sortMachineTypeOptions(
+      compatibleOptions(
+        getGcpMachineTypeOptions(catalog.host_catalog, selection),
+      ),
+      sortMachinesByPrice ? "price" : "type",
+    ) ?? [];
   const price = getProviderPriceEstimate(
     "gcp",
     catalog.host_catalog,
@@ -208,11 +234,23 @@ function VmCreateModal({
           pricingSettings,
         )
       : undefined;
+  const maximumSpend =
+    draft.ttl_minutes && (standardFallbackPrice ?? price)
+      ? ((standardFallbackPrice ?? price)!.usd_per_hour * draft.ttl_minutes) /
+        60
+      : undefined;
 
   const patchDraft = (patch: Partial<VmDraft>) => {
     form.setFieldsValue(patch);
     setDraft((current) => ({ ...current, ...patch }));
   };
+
+  const withResolvedSshKey = (values: VmDraft): VmDraft => ({
+    ...values,
+    ssh_public_key: values.use_project_ssh_key
+      ? (projectSshPublicKey ?? "")
+      : values.ssh_public_key,
+  });
 
   return (
     <Modal
@@ -221,7 +259,11 @@ function VmCreateModal({
       okText="Create VM"
       confirmLoading={saving}
       onCancel={onCancel}
-      onOk={() => void form.validateFields().then(onCreate)}
+      onOk={() =>
+        void form
+          .validateFields()
+          .then((values) => onCreate(withResolvedSshKey(values)))
+      }
       width={720}
     >
       <Form<VmDraft>
@@ -293,7 +335,21 @@ function VmCreateModal({
         <Flex gap={12} wrap>
           <Form.Item
             name="machine_type"
-            label="Machine"
+            label={
+              <Flex align="center" justify="space-between" gap={12}>
+                <span>Machine</span>
+                <Space size={6}>
+                  <Text type="secondary" style={{ fontWeight: 400 }}>
+                    Sort by price
+                  </Text>
+                  <Switch
+                    size="small"
+                    checked={sortMachinesByPrice}
+                    onChange={setSortMachinesByPrice}
+                  />
+                </Space>
+              </Flex>
+            }
             rules={[{ required: true }]}
             style={{ flex: "1 1 260px" }}
           >
@@ -365,38 +421,86 @@ function VmCreateModal({
             placeholder="No persistent /work volume"
             options={availableVolumes.map((volume) => ({
               value: volume.name,
-              label: `${volume.name} · ${volume.size_gb} GB · ${volume.zone}`,
+              label: `${volume.name} · ${volume.size_gb} GB · ${volume.zone}${
+                volume.zone === draft.zone ? "" : " · unavailable in this zone"
+              }`,
+              disabled: volume.zone !== draft.zone,
             }))}
             onChange={(name) => {
-              const volume = volumes.find((entry) => entry.name === name);
-              if (volume) {
-                patchDraft({
-                  volume: name,
-                  region: volume.region,
-                  zone: volume.zone,
-                });
-              } else {
-                patchDraft({ volume: undefined });
-              }
+              patchDraft({ volume: name || undefined });
             }}
           />
         </Form.Item>
+        {projectSshPublicKey ? (
+          <Form.Item name="use_project_ssh_key" valuePropName="checked">
+            <Checkbox>
+              Add this project&apos;s SSH key from{" "}
+              <Text code>.ssh/id_ed25519.pub</Text>
+            </Checkbox>
+          </Form.Item>
+        ) : (
+          <Alert
+            showIcon
+            type="info"
+            title="This project does not have an SSH keypair yet."
+            description="Create an encrypted project SSH keypair, then use its public key for this VM. The project does not need to restart."
+            action={
+              <Button
+                size="small"
+                loading={saving}
+                onClick={() => {
+                  setSshKeyError(undefined);
+                  void onGenerateProjectSshKey()
+                    .then((publicKey) => {
+                      if (publicKey) {
+                        patchDraft({ use_project_ssh_key: true });
+                      }
+                    })
+                    .catch((err) => setSshKeyError(String(err)));
+                }}
+              >
+                Create project SSH keypair
+              </Button>
+            }
+            style={{ marginBottom: 16 }}
+          />
+        )}
+        {sshKeyError && (
+          <Alert
+            showIcon
+            type="warning"
+            title="Unable to create project SSH keypair"
+            description={sshKeyError}
+            style={{ marginBottom: 16 }}
+          />
+        )}
         <Form.Item
           name="ssh_public_key"
-          label="SSH public key"
-          rules={[
-            { required: true, message: "Select or paste an SSH public key." },
-          ]}
+          label={
+            projectSshPublicKey
+              ? "Other SSH public key (optional)"
+              : "SSH public key (optional)"
+          }
           extra={
-            sshKeys.length
-              ? "Uses one of your account SSH keys. You can add another key later with the CoCalc CLI."
-              : "Add an account SSH key or paste one here. You can add another key later with the CoCalc CLI."
+            draft.use_project_ssh_key
+              ? "Uncheck the project key above to select a different initial key."
+              : sshKeys.length
+                ? "Select an account key, or leave blank. The CoCalc CLI can authorize your local key later when you run cocalc vm ssh."
+                : "Leave blank to authorize your local key later with cocalc vm ssh, or paste a public key now."
           }
         >
           {sshKeys.length ? (
-            <Select options={sshKeys} />
+            <Select
+              allowClear
+              disabled={draft.use_project_ssh_key}
+              options={sshKeys}
+              placeholder="No initial key"
+            />
           ) : (
-            <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} />
+            <Input.TextArea
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              disabled={draft.use_project_ssh_key}
+            />
           )}
         </Form.Item>
       </Form>
@@ -408,20 +512,37 @@ function VmCreateModal({
             ? `Estimated price: ${price.hourly_label} (${price.monthly_label})`
             : "Price estimate unavailable for this selection"
         }
-        description={`${
-          standardFallbackPrice
-            ? `Standard fallback: ${standardFallbackPrice.hourly_label} (${standardFallbackPrice.monthly_label}). `
-            : ""
-        }Includes the VM, balanced persistent boot disk, public IPv4 address, and the site surcharge. Public Internet egress is billed separately at $0.10/GB.`}
+        description={
+          <Space direction="vertical" size={2}>
+            <span>
+              {standardFallbackPrice
+                ? `Standard fallback: ${standardFallbackPrice.hourly_label} (${standardFallbackPrice.monthly_label}). `
+                : ""}
+              Includes the VM, balanced persistent boot disk, public IPv4
+              address, and the site surcharge. Public Internet egress is billed
+              separately at $0.10/GB.
+            </span>
+            {maximumSpend != null && (
+              <Text strong>
+                Maximum spend through the deletion deadline:{" "}
+                {formatMaximumSpend(maximumSpend)} + $0.10/GB public egress.
+              </Text>
+            )}
+          </Space>
+        }
       />
       <Divider />
       <Text strong>Equivalent CLI command</Text>
       <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-        The CLI uses your local SSH key; all VM resource settings below match
-        this form exactly.
+        The command reproduces the form exactly, including an initial SSH key or
+        an explicitly keyless VM.
       </Paragraph>
       <CopyToClipBoard
-        value={vmCreateCli({ api, project_id, values: draft })}
+        value={vmCreateCli({
+          api,
+          project_id,
+          values: withResolvedSshKey(draft as VmDraft),
+        })}
         {...COPYABLE_PROPS}
       />
     </Modal>
@@ -693,9 +814,11 @@ export function ProjectComputeVms({
   const [volumeModalOpen, setVolumeModalOpen] = useState(false);
   const [ttlVm, setTtlVm] = useState<ComputeVm>();
   const [vmInitial, setVmInitial] = useState<VmDraft>();
-  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction({
-    origin: "project managed compute",
-  });
+  const [projectSshPublicKey, setProjectSshPublicKey] = useState<string | null>(
+    null,
+  );
+  const [projectSshKeyLoading, setProjectSshKeyLoading] = useState(true);
+  const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const load = async () => {
     setLoading(true);
@@ -723,6 +846,31 @@ export function ProjectComputeVms({
     return () => clearInterval(timer);
   }, [isVisible, project_id]);
 
+  useEffect(() => {
+    if (!isVisible) return;
+    let cancelled = false;
+    setProjectSshKeyLoading(true);
+    void readProjectDeployPublicKey(project_id)
+      .then((publicKey) => {
+        if (!cancelled) {
+          setProjectSshPublicKey(publicKey?.trim() || null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectSshPublicKey(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProjectSshKeyLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isVisible, project_id]);
+
   const defaultVm = (): VmDraft => {
     const zone = catalog?.defaults.zone ?? "us-central1-a";
     return {
@@ -734,6 +882,7 @@ export function ProjectComputeVms({
       allow_on_demand_fallback: false,
       ttl_minutes: catalog?.defaults.ttl_minutes ?? null,
       boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
+      use_project_ssh_key: projectSshPublicKey != null,
       ssh_public_key: sshKeys[0]?.value ?? "",
     };
   };
@@ -761,9 +910,37 @@ export function ProjectComputeVms({
           ? null
           : Math.min(ttlMinutes, catalog?.limits.max_ttl_minutes ?? ttlMinutes),
       boot_disk_gb: vm.boot_disk_gb,
+      use_project_ssh_key: projectSshPublicKey != null,
       ssh_public_key: sshKeys[0]?.value ?? "",
     });
     setVmModalOpen(true);
+  };
+
+  const generateProjectSshKey = async (): Promise<string | undefined> => {
+    setSaving(true);
+    setError(undefined);
+    try {
+      let publicKey: string | undefined;
+      const completed = await runFreshAuthAction(async () => {
+        const result =
+          await webapp_client.conat_client.hub.projects.generateProjectSshKeySecret(
+            {
+              browser_id: webapp_client.browser_id,
+              project_id,
+            },
+          );
+        publicKey = result.public_key.trim();
+      });
+      if (!completed || !publicKey) return;
+      setProjectSshPublicKey(publicKey);
+      setNotice("Project SSH keypair created and selected for this VM.");
+      return publicKey;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSaving(false);
+    }
   };
 
   const createVm = async (values: VmDraft) => {
@@ -1126,7 +1303,8 @@ export function ProjectComputeVms({
           <Button
             type="primary"
             icon={<Icon name="plus" />}
-            disabled={!catalog}
+            disabled={!catalog || projectSshKeyLoading}
+            loading={projectSshKeyLoading}
             onClick={() => {
               setVmInitial(defaultVm());
               setVmModalOpen(true);
@@ -1238,8 +1416,10 @@ export function ProjectComputeVms({
           catalog={catalog}
           volumes={volumes}
           initial={vmInitial}
+          projectSshPublicKey={projectSshPublicKey}
           sshKeys={sshKeys}
           saving={saving}
+          onGenerateProjectSshKey={generateProjectSshKey}
           onCancel={() => setVmModalOpen(false)}
           onCreate={createVm}
         />
