@@ -1215,6 +1215,7 @@ export async function stopAndEraseExamRunLocal({
 }): Promise<HostExamRun> {
   const run = await requireRunForMutation({ host_id: host.id, run_id });
   if (run.status === "stopped") return run;
+  assertExamHostRunningForCleanup(host);
   await getPool().query(
     `
       UPDATE ${RUN_TABLE}
@@ -1245,17 +1246,23 @@ export async function eraseActiveExamRunBeforeHostStopLocal({
 }): Promise<boolean> {
   const run = await loadCurrentRun(host.id);
   if (!run || run.status === "stopped") return false;
-  if (host.status !== "running") {
-    throw new Error(
-      "the exam host must be running so its temporary projects can be erased before stopping",
-    );
-  }
   await stopAndEraseExamRunLocal({
     host,
     run_id: run.run_id,
     poweroff: false,
   });
   return true;
+}
+
+function assertExamHostRunningForCleanup(host: ExamHostRow): void {
+  if (host.status === "running") return;
+  const status = `${host.status ?? "unknown"}`;
+  throw Object.assign(
+    new Error(
+      `the exam host must be running so its temporary projects can be erased before stopping (current status: ${status}); start the host and end the exam before stopping or deprovisioning it`,
+    ),
+    { code: "exam_host_cleanup_requires_running" },
+  );
 }
 
 export async function reconcileExamDnsOnce(): Promise<void> {
@@ -1329,21 +1336,6 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
           `,
           [row.run_id],
         );
-        if (stopHostAtDeadline) {
-          await db.query(
-            `
-              UPDATE project_hosts
-              SET metadata=jsonb_set(
-                COALESCE(metadata, '{}'::JSONB),
-                '{desired_state}',
-                '"stopped"'::JSONB,
-                true
-              )
-              WHERE id=$1
-            `,
-            [row.host_id],
-          );
-        }
         await db.query("COMMIT");
       } catch (err) {
         await db.query("ROLLBACK");
@@ -1426,6 +1418,7 @@ export const __test__ = {
   isHostOnDemand,
   normalizeConfig,
   publicIp,
+  assertExamHostRunningForCleanup,
   shouldReconcileRunWithRuntime,
   tokenForRunRecord,
   validateDeadline,

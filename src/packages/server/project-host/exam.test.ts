@@ -35,6 +35,23 @@ describe("project-host exam configuration", () => {
     ).toBe(true);
   });
 
+  it("requires the host runtime before destructive exam cleanup", () => {
+    expect(() =>
+      __test__.assertExamHostRunningForCleanup({
+        id: "00000000-1000-4000-8000-000000000001",
+        status: "deprovisioned",
+      }),
+    ).toThrow(
+      "start the host and end the exam before stopping or deprovisioning it",
+    );
+    expect(() =>
+      __test__.assertExamHostRunningForCleanup({
+        id: "00000000-1000-4000-8000-000000000001",
+        status: "running",
+      }),
+    ).not.toThrow();
+  });
+
   it("requires a reconciled public IPv4 address for exam DNS", () => {
     expect(
       __test__.publicIp({

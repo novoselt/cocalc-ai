@@ -2933,9 +2933,57 @@ describe("hosts browser fresh auth gating", () => {
       allow_actor_impersonation: true,
       session_hash: "session-hash",
     });
+    expect(eraseActiveExamRunBeforeHostStopLocalMock).toHaveBeenCalledWith({
+      host: expect.objectContaining({ id: HOST_ID }),
+    });
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "host-delete" }),
     );
+  });
+
+  it("does not deprovision a host when active exam cleanup fails", async () => {
+    getBrowserAuthSessionHashMock = jest.fn(() => "session-hash");
+    eraseActiveExamRunBeforeHostStopLocalMock = jest.fn(async () => {
+      throw Object.assign(new Error("exam cleanup failed"), {
+        code: "exam_cleanup_failed",
+      });
+    });
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return {
+          rows: [
+            {
+              id: HOST_ID,
+              name: "exam-host",
+              status: "running",
+              metadata: {
+                owner: ACCOUNT_ID,
+                runtime: { instance_id: "exam-instance" },
+                machine: {
+                  cloud: "gcp",
+                  machine_type: "e2-standard-4",
+                },
+              },
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { deleteHost } = await import("./hosts");
+    await expect(
+      deleteHost({
+        account_id: ACCOUNT_ID,
+        browser_id: "browser-1",
+        id: HOST_ID,
+      }),
+    ).rejects.toMatchObject({ code: "exam_cleanup_failed" });
+
+    expect(eraseActiveExamRunBeforeHostStopLocalMock).toHaveBeenCalledWith({
+      host: expect.objectContaining({ id: HOST_ID, status: "running" }),
+    });
+    expect(createLroMock).not.toHaveBeenCalled();
   });
 
   it("allows admins to delete validation hosts owned by another account", async () => {
