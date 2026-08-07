@@ -375,6 +375,9 @@ test("admin support conventions exposes the shared status workflow", async () =>
   assert.match(output.statuses.open, /actively investigating/);
   assert.match(output.statuses.pending, /waiting for the requester/);
   assert.match(output.statuses.solved, /complete and verified/);
+  assert.equal(output.version, 2);
+  assert.match(output.workflow.join("\n"), /multiline comments/);
+  assert.match(output.workflow.join("\n"), /--public-reply-file/);
 });
 
 test("admin support image verifies and writes a Zendesk attachment", async () => {
@@ -544,6 +547,28 @@ test("admin support update is dry-run by default", async () => {
     expected_updated_at: undefined,
     reason: "approved status update",
   });
+});
+
+test("admin support update rejects literal newline escapes in inline comments", async () => {
+  const program = new Command();
+  registerAdminCommand(program, adminDeps() as any);
+
+  await assert.rejects(
+    () =>
+      program.parseAsync([
+        "node",
+        "test",
+        "admin",
+        "support",
+        "update",
+        "20437",
+        "--public-reply",
+        "Hello\\n\\nThis should be multiline.",
+        "--reason",
+        "approved response",
+      ]),
+    /--public-reply contains a literal \\n escape; use --public-reply-file/,
+  );
 });
 
 test("admin support reply commit reads the approved file and supplies idempotency", async () => {

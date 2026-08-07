@@ -27,6 +27,7 @@ import Modals from "@cocalc/frontend/course/modals";
 import { PayBanner } from "@cocalc/frontend/course/pay-banner";
 import {
   AssignmentsMap,
+  type CourseReconfigureProgress,
   CourseSettingsRecord,
   CourseStore,
   HandoutsMap,
@@ -64,6 +65,7 @@ export interface PanelProps {
   redux: AppRedux;
   actions: CourseActions;
   configuring_projects?: boolean;
+  configuring_projects_progress?: CourseReconfigureProgress;
   reinviting_students?: boolean;
   frameActions: CourseEditorActions;
 }
@@ -83,6 +85,14 @@ function CoursePanelWrapper(props: FrameProps) {
     name,
     "configuring_projects",
   );
+  const configuringProjectsProgressValue: any = useRedux(
+    name,
+    "configuring_projects_progress",
+  );
+  const configuring_projects_progress: CourseReconfigureProgress | undefined =
+    typeof configuringProjectsProgressValue?.toJS === "function"
+      ? configuringProjectsProgressValue.toJS()
+      : configuringProjectsProgressValue;
   const reinviting_students: boolean | undefined = useRedux(
     name,
     "reinviting_students",
@@ -115,6 +125,7 @@ function CoursePanelWrapper(props: FrameProps) {
       assignments,
       handouts,
       configuring_projects,
+      configuring_projects_progress,
       reinviting_students,
       settings,
       redux,
@@ -222,6 +233,7 @@ function CoursePanelWrapper(props: FrameProps) {
         project_id={project_id}
         path={path}
         configuring_projects={configuring_projects}
+        configuring_projects_progress={configuring_projects_progress}
         reinviting_students={reinviting_students}
         settings={settings}
         redux={redux}

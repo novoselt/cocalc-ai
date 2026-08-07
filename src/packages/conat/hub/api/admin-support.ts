@@ -346,7 +346,7 @@ export interface AdminSupportSpamResponse {
 }
 
 export const ADMIN_SUPPORT_CONVENTIONS = {
-  version: 1,
+  version: 2,
   statuses: {
     new: "We have not reviewed or acted on the ticket.",
     open: "CoCalc is actively investigating or still owes work, including after an interim reply.",
@@ -362,6 +362,7 @@ export const ADMIN_SUPPORT_CONVENTIONS = {
     "Triage and investigate using read-only, audited commands.",
     "Draft the exact public reply or private note and proposed ticket changes.",
     "Obtain explicit human approval before any reply, status change, merge, or spam action.",
+    "For multiline comments, write the approved text to a file and use --file, --public-reply-file, --private-note-file, --target-comment-file, or --source-comment-file. Do not pass JSON-escaped \\n sequences as inline text.",
     "Re-read the ticket and use expected_updated_at immediately before committing.",
     "Verify the resulting comment, status, audit, or asynchronous job after mutation.",
   ],

@@ -16,6 +16,7 @@ import { initHostStatusService } from "./host-status";
 import { startBackupLroWorker } from "@cocalc/server/projects/backup-worker";
 import { startCopyLroWorker } from "@cocalc/server/projects/copy-worker";
 import { startCourseCollectLroWorker } from "@cocalc/server/projects/course-collect-worker";
+import { startCourseReconfigureLroWorker } from "@cocalc/server/projects/course-reconfigure-worker";
 import { startProjectHardDeleteWorker } from "@cocalc/server/projects/hard-delete-worker";
 import { startMoveLroWorker } from "@cocalc/server/projects/move-worker";
 import { startRootfsPublishLroWorker } from "@cocalc/server/projects/rootfs-publish-worker";
@@ -104,6 +105,7 @@ export function startConatApiBackgroundWorkers(): void {
   startBackupLroWorker();
   startCopyLroWorker();
   startCourseCollectLroWorker();
+  startCourseReconfigureLroWorker();
   startProjectHardDeleteWorker();
   startMoveLroWorker();
   startBackgroundAutoGrowMaintenance();

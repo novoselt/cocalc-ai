@@ -158,6 +158,9 @@ import type {
   ProjectAccessRequestStatus,
   ProjectBackupSchedule,
   CourseManagerAccessResult,
+  CourseReconfigureManagedProjectType,
+  CourseReconfigureRequest,
+  CourseReconfigureResult,
   CourseStudentInviteAccountRepairInput,
   CourseStudentInviteAccountRepairRow,
   ProjectCollabInviteAction,
@@ -2199,6 +2202,63 @@ export interface ProjectEnsureCourseManagerAccessRequest {
   manager_account_ids: string[];
 }
 
+export interface ProjectReconcileCourseManagedProjectRequest {
+  account_id: string;
+  course_project_id: string;
+  course_path: string;
+  manager_account_ids: string[];
+  project_id: string;
+  type: CourseReconfigureManagedProjectType;
+  course: NonNullable<ProjectCourseInfo>;
+  title?: string;
+  description?: string;
+  env?: ProjectEnv;
+  allow_collabs: boolean;
+  desired_account_ids: string[];
+  student_id?: string;
+  student_email_address?: string;
+  send_email_invite?: boolean;
+  invite?: {
+    subject: string;
+    message: string;
+    email_html: string;
+    reply_to?: string;
+    reply_to_name?: string;
+    base_url?: string;
+  };
+}
+
+export interface ProjectReconcileCourseManagedProjectResult {
+  project_id: string;
+  email_invited_at?: string;
+}
+
+export interface ProjectCourseManagedProjectStatesRequest {
+  project_ids: string[];
+}
+
+export interface ProjectCourseManagedProjectState {
+  project_id: string;
+  users: Record<
+    string,
+    {
+      group?: "owner" | "collaborator" | "viewer";
+      hide?: boolean;
+      [key: string]: unknown;
+    }
+  > | null;
+  course: Record<string, unknown> | null;
+  title: string | null;
+  description: string | null;
+  env: ProjectEnv | null;
+}
+
+export interface ProjectCourseReconfigureOperationRequest {
+  account_id: string;
+  course_project_id: string;
+  op_id: string;
+}
+
 export interface ProjectRemoveCollaboratorRequest {
   account_id: string;
   opts: {
@@ -2600,6 +2660,11 @@ export type ProjectCollabInviteMethod =
   | "list"
   | "repair-accepted-course-student-invite-accounts"
   | "ensure-course-manager-access"
+  | "reconcile-course-managed-project"
+  | "get-course-managed-project-states"
+  | "reconfigure-course-projects"
+  | "get-course-reconfigure-operation"
+  | "cancel-course-reconfigure-operation"
   | "access-landing-info"
   | "request-access"
   | "list-access-requests"
@@ -4268,6 +4333,21 @@ export interface InterBayProjectCollabInviteApi {
   ensureCourseManagerAccess: (
     opts: ProjectEnsureCourseManagerAccessRequest,
   ) => Promise<CourseManagerAccessResult[]>;
+  reconcileCourseManagedProject: (
+    opts: ProjectReconcileCourseManagedProjectRequest,
+  ) => Promise<ProjectReconcileCourseManagedProjectResult>;
+  getCourseManagedProjectStates: (
+    opts: ProjectCourseManagedProjectStatesRequest,
+  ) => Promise<ProjectCourseManagedProjectState[]>;
+  reconfigureCourseProjects: (
+    opts: CourseReconfigureRequest & { account_id: string },
+  ) => Promise<CourseReconfigureResult>;
+  getCourseReconfigureOperation: (
+    opts: ProjectCourseReconfigureOperationRequest,
+  ) => Promise<LroSummary | undefined>;
+  cancelCourseReconfigureOperation: (
+    opts: ProjectCourseReconfigureOperationRequest,
+  ) => Promise<void>;
   getProjectAccessLandingInfo: (
     opts: ProjectAccessLandingInfoRequest,
   ) => Promise<ProjectAccessLandingInfo>;
@@ -10304,6 +10384,51 @@ export function createInterBayProjectCollabInviteClient({
       method: "ensure-course-manager-access",
     }),
   });
+  const reconcileCourseManagedProjectClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "reconcileCourseManagedProject">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "reconcile-course-managed-project",
+    }),
+  });
+  const getCourseManagedProjectStatesClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "get-course-managed-project-states",
+    }),
+  });
+  const reconfigureCourseProjectsClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "reconfigureCourseProjects">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "reconfigure-course-projects",
+    }),
+  });
+  const getCourseReconfigureOperationClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "getCourseReconfigureOperation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "get-course-reconfigure-operation",
+    }),
+  });
+  const cancelCourseReconfigureOperationClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "cancelCourseReconfigureOperation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "cancel-course-reconfigure-operation",
+    }),
+  });
   const accessLandingInfoClient = createServiceClient<
     Pick<InterBayProjectCollabInviteApi, "getProjectAccessLandingInfo">
   >({
@@ -10443,6 +10568,24 @@ export function createInterBayProjectCollabInviteClient({
       ),
     ensureCourseManagerAccess: async (opts) =>
       await ensureCourseManagerAccessClient.ensureCourseManagerAccess(opts),
+    reconcileCourseManagedProject: async (opts) =>
+      await reconcileCourseManagedProjectClient.reconcileCourseManagedProject(
+        opts,
+      ),
+    getCourseManagedProjectStates: async (opts) =>
+      await getCourseManagedProjectStatesClient.getCourseManagedProjectStates(
+        opts,
+      ),
+    reconfigureCourseProjects: async (opts) =>
+      await reconfigureCourseProjectsClient.reconfigureCourseProjects(opts),
+    getCourseReconfigureOperation: async (opts) =>
+      await getCourseReconfigureOperationClient.getCourseReconfigureOperation(
+        opts,
+      ),
+    cancelCourseReconfigureOperation: async (opts) =>
+      await cancelCourseReconfigureOperationClient.cancelCourseReconfigureOperation(
+        opts,
+      ),
     removeCollaborator: async (opts) =>
       await removeCollaboratorClient.removeCollaborator(opts),
     setProjectUserRole: async (opts) =>
@@ -10686,6 +10829,76 @@ export function createInterBayProjectCollabInviteHandlers({
       impl: {
         ensureCourseManagerAccess: async (opts) =>
           await impl.ensureCourseManagerAccess(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "reconcileCourseManagedProject">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "reconcile-course-managed-project",
+      }),
+      impl: {
+        reconcileCourseManagedProject: async (opts) =>
+          await impl.reconcileCourseManagedProject(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "get-course-managed-project-states",
+      }),
+      impl: {
+        getCourseManagedProjectStates: async (opts) =>
+          await impl.getCourseManagedProjectStates(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "reconfigureCourseProjects">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "reconfigure-course-projects",
+      }),
+      impl: {
+        reconfigureCourseProjects: async (opts) =>
+          await impl.reconfigureCourseProjects(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "getCourseReconfigureOperation">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "get-course-reconfigure-operation",
+      }),
+      impl: {
+        getCourseReconfigureOperation: async (opts) =>
+          await impl.getCourseReconfigureOperation(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "cancelCourseReconfigureOperation">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "cancel-course-reconfigure-operation",
+      }),
+      impl: {
+        cancelCourseReconfigureOperation: async (opts) =>
+          await impl.cancelCourseReconfigureOperation(opts),
       },
     }),
     createServiceHandler<

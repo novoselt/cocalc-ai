@@ -2905,12 +2905,7 @@ export class ConatClient extends EventEmitter {
           console.warn(`failed to start browser session automation: ${err}`),
         );
         const cookie = Cookies.get(ACCOUNT_ID_COOKIE);
-        if (
-          !lite &&
-          !isExamMode() &&
-          cookie &&
-          cookie != account_id
-        ) {
+        if (!lite && !isExamMode() && cookie && cookie != account_id) {
           // make sure account_id cookie is set to the actual account we're
           // signed in as, then refresh since some things are going to be
           // broken otherwise. To test this use dev tools and just change the account_id
@@ -3745,14 +3740,17 @@ export class ConatClient extends EventEmitter {
     scope_id?: string;
     timeout_ms?: number;
     poll_ms?: number;
+    getSummary?: () => Promise<LroSummary | null | undefined>;
     onProgress?: (event: Extract<LroEvent, { type: "progress" }>) => void;
     onSummary?: (summary: LroSummary) => void;
   }) => {
     return waitForLroCompletion({
       client: this.conat(),
-      getSummary: opts.op_id
-        ? async () => await this.hub.lro.get({ op_id: opts.op_id! })
-        : undefined,
+      getSummary:
+        opts.getSummary ??
+        (opts.op_id
+          ? async () => await this.hub.lro.get({ op_id: opts.op_id! })
+          : undefined),
       ...opts,
     });
   };

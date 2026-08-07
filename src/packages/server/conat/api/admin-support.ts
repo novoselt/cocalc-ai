@@ -194,6 +194,12 @@ function normalizedComment(value: unknown): string | undefined {
   if (value == null) return undefined;
   const text = `${value}`.replace(/\r\n/g, "\n").trim();
   if (!text) return undefined;
+  const literalNewlineEscapes = text.match(/(?:\\r\\n|\\n)/g)?.length ?? 0;
+  if (!text.includes("\n") && literalNewlineEscapes >= 2) {
+    throw new Error(
+      "support comment contains multiple literal \\n escapes; send actual line breaks, preferably using a comment file",
+    );
+  }
   if (text.length > MAX_MUTATION_COMMENT_CHARS) {
     throw new Error(
       `support comment must be at most ${MAX_MUTATION_COMMENT_CHARS} chars`,
