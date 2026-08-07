@@ -107,9 +107,10 @@ export const PROJECT_HOST_EXAMS_BODY = String.raw`
 ## A computational scratchpad for exams
 
 Exam Mode adds a temporary browser-based computational scratchpad service to a
-private, on-demand project host. Each browser session receives a clean anonymous CoCalc
+private project host. Each browser session receives a clean anonymous CoCalc
 project with the exact RootFS and CPU, memory, and disk limits selected by the
-instructor.
+instructor. Standard/on-demand capacity is strongly recommended for live exams;
+Spot capacity is allowed for testing and non-critical scratchpads.
 
 This is useful when an in-person exam permits computation but requires a clean,
 predictable environment. Students can use Jupyter notebooks, files, installed
@@ -141,14 +142,15 @@ exam host through the single student origin.
 
 ## Before the first rehearsal
 
-1. Create a private managed GCP project host using **on-demand** pricing, not
-   spot pricing. An exam must not depend on spot capacity surviving.
+1. Create a private managed GCP project host. Use **Standard/on-demand** pricing
+   for a live exam. Spot is allowed for rehearsals and non-critical scratchpads,
+   but the cloud provider can interrupt or restart it at any time.
 2. Size the host for the expected number of simultaneous candidates. Because
    the host runs for a short window, deliberately overprovisioning it is often
    the simplest way to obtain predictable performance.
-3. Start the host well before the exam and cache the exact RootFS that candidates
-   will use. The RootFS must appear in the host's cached-image inventory with a
-   digest before it can be selected for a run.
+3. Start the host well before the exam and select the exact RootFS that
+   candidates will use. Preparation downloads it to the host when needed and
+   pins its immutable digest for the run.
 4. Ensure the project-host owner has enough account credit for the complete
    exam window. Existing billing and spending enforcement still apply.
 5. Confirm that the instructor's account has the exam-mode entitlement.
@@ -238,7 +240,7 @@ the reusable project host online. Destructive early cleanup always requires
 ## Step 2: prepare and test a run
 
 1. Start the host and wait until it reports **running** and online.
-2. In the **Exams** tab, select a cached RootFS.
+2. In the **Exams** tab, select a RootFS from the managed catalog.
 3. Choose **Delete all exam projects at**. Allow enough time for the rehearsal
    as well as the candidate session.
 4. Leave **Also shut down the project host to save resources** selected unless
@@ -247,12 +249,13 @@ the reusable project host online. Destructive early cleanup always requires
 6. Wait for the run to reach **ready**. Do not open admission unless every
    readiness check is green.
 
-Preparation usually takes about one minute. It freezes the image digest and
-resource policy, creates a real smoke-test project, starts a Jupyter kernel,
-checks the disabled-network policy and local cleanup machinery, and then erases
-the smoke-test project. A successful preparation leaves the run **ready** with
-admission closed; students can enter a token only after you select **Open
-admission**.
+Preparation downloads the image when it is not already cached, freezes its
+digest and the resource policy, creates a real smoke-test project, starts a
+Jupyter kernel, checks the disabled-network policy and local cleanup machinery,
+and then erases the smoke-test project. A cached image usually takes about one
+minute; a first download may take several minutes. A successful preparation
+leaves the run **ready** with admission closed; students can enter a token only
+after you select **Open admission**.
 
 The panel displays a stable student URL, a copyable admission link, and the raw
 shared token as a manual fallback. The admission link prefills the token and
@@ -360,9 +363,9 @@ refresh, notebook execution, autosave, and reconnect all work.
 
 At least one day before the exam:
 
-- confirm the on-demand host size and account credit
+- confirm the host size, Standard/on-demand pricing, and account credit
 - start the host and confirm bootstrap and public-route health
-- cache and rehearse the exact RootFS
+- select and rehearse the exact RootFS
 - test the institution's lockdown browser from the exam room network
 - run representative notebook concurrency
 - complete a full timed stop-and-erase rehearsal

@@ -99,7 +99,6 @@ export default function GcpServiceAccountWizard({
   const [serviceAccountName, setServiceAccountName] = useState(
     defaultServiceAccountName,
   );
-  const [region, setRegion] = useState("us-central1");
   const [gcloudReady, setGcloudReady] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
   const [jsonNotice, setJsonNotice] = useState("");
@@ -116,7 +115,6 @@ export default function GcpServiceAccountWizard({
     if (!open) {
       setProjectId("");
       setServiceAccountName(defaultServiceAccountName);
-      setRegion("us-central1");
       setGcloudReady(false);
       setJsonInput("");
       setJsonNotice("");
@@ -173,7 +171,7 @@ export default function GcpServiceAccountWizard({
     if (!trimmedProject) {
       return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}bash`;
     }
-    return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}PROJECT_ID=\"${trimmedProject}\" SA_NAME=\"${trimmedServiceAccount}\"${computeVm ? ` REGION=\"${region.trim() || "us-central1"}\"` : ""} bash`;
+    return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}PROJECT_ID=\"${trimmedProject}\" SA_NAME=\"${trimmedServiceAccount}\" bash`;
   }, [
     scriptUrl,
     trimmedProject,
@@ -181,7 +179,6 @@ export default function GcpServiceAccountWizard({
     challenge,
     useDirectUpload,
     computeVm,
-    region,
   ]);
 
   const scriptMarkdown = useMemo(
@@ -289,10 +286,10 @@ export default function GcpServiceAccountWizard({
     if (!jsonValid) return;
     onApplyJson(JSON.stringify(parsedJson, null, 2));
     if (computeVm) {
-      const subnetwork =
-        `${extractJsonBlock(jsonInput)?.compute_vm_gcp_subnetwork ?? ""}`.trim();
-      if (subnetwork) {
-        onApplySettings?.({ compute_vm_gcp_subnetwork: subnetwork });
+      const network =
+        `${extractJsonBlock(jsonInput)?.compute_vm_gcp_network ?? ""}`.trim();
+      if (network) {
+        onApplySettings?.({ compute_vm_gcp_network: network });
       }
     }
     setJsonNotice("Service account JSON applied to the form.");
@@ -303,10 +300,10 @@ export default function GcpServiceAccountWizard({
     if (!uploadedJsonValid) return;
     onApplyJson(JSON.stringify(uploadedJson, null, 2));
     if (computeVm) {
-      const subnetwork =
-        `${challenge?.payload?.compute_vm_gcp_subnetwork ?? ""}`.trim();
-      if (subnetwork) {
-        onApplySettings?.({ compute_vm_gcp_subnetwork: subnetwork });
+      const network =
+        `${challenge?.payload?.compute_vm_gcp_network ?? ""}`.trim();
+      if (network) {
+        onApplySettings?.({ compute_vm_gcp_network: network });
       }
     }
     if (challenge?.id) {
@@ -382,12 +379,10 @@ export default function GcpServiceAccountWizard({
                 onChange={(e) => setServiceAccountName(e.target.value)}
               />
               {computeVm ? (
-                <Input
-                  style={{ marginTop: "8px" }}
-                  placeholder="GCP region"
-                  value={region}
-                  onChange={(e) => setRegion(e.target.value)}
-                />
+                <div style={{ marginTop: "8px", color: "#666" }}>
+                  The script creates one flow-log-enabled subnet in every active
+                  GCP region on a single custom VPC.
+                </div>
               ) : null}
             </div>
             <div>

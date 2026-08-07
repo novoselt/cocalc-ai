@@ -1795,6 +1795,7 @@ export interface Hosts {
     include_deleted?: boolean;
     catalog?: boolean;
     show_all?: boolean;
+    route_health?: boolean;
   }) => Promise<Host[]>;
   listHostAccess: (opts: {
     account_id?: string;

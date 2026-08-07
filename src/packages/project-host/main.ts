@@ -1601,7 +1601,10 @@ export async function main(
     waitForInterest: false,
     timeout: PROJECT_RUNNER_RPC_TIMEOUT_MS,
   });
-  wireProjectsApi(runnerApi);
+  const { startStoppedVolumePreparationMaintenance } =
+    wireProjectsApi(runnerApi);
+  const stopStoppedVolumePreparationMaintenance =
+    startStoppedVolumePreparationMaintenance();
   startExamWatchdog();
   const stopRawNetworkEgressLoop = startManagedRawNetworkEgressLoop({
     runnerApi,
@@ -1755,6 +1758,7 @@ export async function main(
     stopStorageAdmissionController?.();
     stopRawNetworkEgressLoop?.();
     stopCpuUsageLoop?.();
+    stopStoppedVolumePreparationMaintenance();
     stopEventLoopStallMonitor?.();
     stopGcpPreemptionWatcher();
     stopConatRevocationKickLoop?.();

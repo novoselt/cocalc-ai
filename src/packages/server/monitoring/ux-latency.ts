@@ -14,6 +14,7 @@ import { ADMIN_UX_LATENCY_ALERTS_ENABLED_KEY } from "@cocalc/util/admin-alerts";
 import { isProjectDiskQuotaError } from "@cocalc/util/project-start-errors";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type {
+  LaunchHealthLevel,
   UxLatencyEventInput,
   UxLatencyMetricSummary,
   UxLatencyRecentEvent,
@@ -56,6 +57,30 @@ export const DEFAULT_UX_LATENCY_SLA_THRESHOLDS: UxLatencySlaThresholds = {
   file_open_visible_p95_ms: 10_000,
   file_open_sync_ready_p95_ms: 5000,
 };
+
+export function classifyLatencyP95Health({
+  p95,
+  sample_count,
+  min_samples = 1,
+  warning_ms,
+  critical_ms,
+}: {
+  p95: number | null;
+  sample_count?: number;
+  min_samples?: number;
+  warning_ms: number;
+  critical_ms: number;
+}): LaunchHealthLevel {
+  if (
+    p95 == null ||
+    (sample_count != null && sample_count < Math.max(1, min_samples))
+  ) {
+    return "unknown";
+  }
+  if (p95 >= critical_ms) return "critical";
+  if (p95 >= warning_ms) return "warning";
+  return "healthy";
+}
 
 let schemaReady: Promise<void> | undefined;
 let alertMaintenanceStarted = false;

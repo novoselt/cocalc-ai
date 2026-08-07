@@ -290,6 +290,7 @@ import {
 import { getParallelOpsWorkerRegistration } from "@cocalc/server/lro/worker-registry";
 import { getProjectHostDefaultParallelLimit } from "@cocalc/server/lro/project-host-defaults";
 import {
+  classifyLatencyP95Health,
   getUxLatencySlaThresholdsFromSettings,
   getUxLatencySummary as getUxLatencySummary0,
   recordUxLatencyEvent as recordUxLatencyEvent0,
@@ -1833,6 +1834,22 @@ function uxLatencyP95({
   return row?.p95_ms ?? null;
 }
 
+function uxLatencyMetric({
+  summary,
+  metric,
+  segment,
+}: {
+  summary?: UxLatencySummary;
+  metric: string;
+  segment?: string;
+}) {
+  const rows = segment ? summary?.segments : summary?.metrics;
+  return rows?.find(
+    (entry) =>
+      entry.metric === metric && (segment == null || entry.segment === segment),
+  );
+}
+
 function launchHealthKillSwitches(
   settings: Record<string, any> | undefined,
 ): LaunchHealthKillSwitches {
@@ -1860,21 +1877,6 @@ function launchHealthKillSwitches(
       .filter(([, enabled]) => enabled)
       .map(([key]) => key),
   };
-}
-
-function classifyLatencyP95({
-  p95,
-  warningMs,
-  criticalMs,
-}: {
-  p95: number | null;
-  warningMs: number;
-  criticalMs: number;
-}): LaunchHealthLevel {
-  if (p95 == null) return "unknown";
-  if (p95 >= criticalMs) return "critical";
-  if (p95 >= warningMs) return "warning";
-  return "healthy";
 }
 
 let launchSmokeSchemaReady: Promise<void> | undefined;
@@ -2082,9 +2084,25 @@ export async function getLaunchHealth({
     metric: "project_exec_ready",
     segment: "warm",
   });
-  const lifecycleP95 = uxLatencyP95({
+  const lifecycleMetric = uxLatencyMetric({
     summary: latency,
     metric: "project_start_running",
+    segment: "warm_provisioned",
+  });
+  const lifecycleP95 = lifecycleMetric?.p95_ms ?? null;
+  const admissionMetric = uxLatencyMetric({
+    summary: latency,
+    metric: "project_start_admission",
+    segment: "warm_provisioned",
+  });
+  const backendLifecycleMetric = uxLatencyMetric({
+    summary: latency,
+    metric: "project_start_backend_lifecycle",
+    segment: "warm_provisioned",
+  });
+  const frontendConvergenceMetric = uxLatencyMetric({
+    summary: latency,
+    metric: "project_start_frontend_convergence",
     segment: "warm_provisioned",
   });
   const fileVisibleP95 = uxLatencyP95({
@@ -2118,35 +2136,37 @@ export async function getLaunchHealth({
           ? "warning"
           : "warning";
   const latencyLevel = worstLaunchHealthLevel([
-    classifyLatencyP95({
+    classifyLatencyP95Health({
       p95: lifecycleP95,
-      warningMs: sla.project_start_warm_p95_ms,
-      criticalMs: sla.project_start_warm_p95_ms * 2,
+      sample_count: lifecycleMetric?.count,
+      min_samples: 10,
+      warning_ms: sla.project_start_warm_p95_ms,
+      critical_ms: sla.project_start_warm_p95_ms * 2,
     }),
-    classifyLatencyP95({
+    classifyLatencyP95Health({
       p95: terminalP95,
-      warningMs: sla.project_terminal_ready_p95_ms,
-      criticalMs: sla.project_terminal_ready_p95_ms * 2,
+      warning_ms: sla.project_terminal_ready_p95_ms,
+      critical_ms: sla.project_terminal_ready_p95_ms * 2,
     }),
-    classifyLatencyP95({
+    classifyLatencyP95Health({
       p95: jupyterP95,
-      warningMs: sla.project_jupyter_ready_p95_ms,
-      criticalMs: sla.project_jupyter_ready_p95_ms * 2,
+      warning_ms: sla.project_jupyter_ready_p95_ms,
+      critical_ms: sla.project_jupyter_ready_p95_ms * 2,
     }),
-    classifyLatencyP95({
+    classifyLatencyP95Health({
       p95: execP95,
-      warningMs: sla.project_exec_ready_p95_ms,
-      criticalMs: sla.project_exec_ready_p95_ms * 2,
+      warning_ms: sla.project_exec_ready_p95_ms,
+      critical_ms: sla.project_exec_ready_p95_ms * 2,
     }),
-    classifyLatencyP95({
+    classifyLatencyP95Health({
       p95: fileVisibleP95,
-      warningMs: sla.file_open_visible_p95_ms,
-      criticalMs: sla.file_open_visible_p95_ms * 2,
+      warning_ms: sla.file_open_visible_p95_ms,
+      critical_ms: sla.file_open_visible_p95_ms * 2,
     }),
-    classifyLatencyP95({
+    classifyLatencyP95Health({
       p95: fileSyncReadyP95,
-      warningMs: sla.file_open_sync_ready_p95_ms,
-      criticalMs: sla.file_open_sync_ready_p95_ms * 2,
+      warning_ms: sla.file_open_sync_ready_p95_ms,
+      critical_ms: sla.file_open_sync_ready_p95_ms * 2,
     }),
   ]);
 
@@ -2310,7 +2330,7 @@ export async function getLaunchHealth({
       label: "Browser-observed latency",
       level: latencyResult.status === "rejected" ? "critical" : latencyLevel,
       summary: latency
-        ? `P95 over ${latency.window_minutes}m: lifecycle=${formatDurationMs(lifecycleP95)} (SLA ${formatDurationMs(sla.project_start_warm_p95_ms)}), terminal=${formatDurationMs(terminalP95)} (SLA ${formatDurationMs(sla.project_terminal_ready_p95_ms)}), Jupyter=${formatDurationMs(jupyterP95)} (SLA ${formatDurationMs(sla.project_jupyter_ready_p95_ms)}), exec=${formatDurationMs(execP95)} (SLA ${formatDurationMs(sla.project_exec_ready_p95_ms)}), file visible=${formatDurationMs(fileVisibleP95)} (SLA ${formatDurationMs(sla.file_open_visible_p95_ms)}), file sync=${formatDurationMs(fileSyncReadyP95)} (SLA ${formatDurationMs(sla.file_open_sync_ready_p95_ms)}).`
+        ? `P95 over ${latency.window_minutes}m: lifecycle=${formatDurationMs(lifecycleP95)} n=${lifecycleMetric?.count ?? 0} (SLA ${formatDurationMs(sla.project_start_warm_p95_ms)}; health requires n=10), admission=${formatDurationMs(admissionMetric?.p95_ms)} n=${admissionMetric?.count ?? 0}, backend=${formatDurationMs(backendLifecycleMetric?.p95_ms)} n=${backendLifecycleMetric?.count ?? 0}, convergence=${formatDurationMs(frontendConvergenceMetric?.p95_ms)} n=${frontendConvergenceMetric?.count ?? 0}, terminal=${formatDurationMs(terminalP95)} (SLA ${formatDurationMs(sla.project_terminal_ready_p95_ms)}), Jupyter=${formatDurationMs(jupyterP95)} (SLA ${formatDurationMs(sla.project_jupyter_ready_p95_ms)}), exec=${formatDurationMs(execP95)} (SLA ${formatDurationMs(sla.project_exec_ready_p95_ms)}), file visible=${formatDurationMs(fileVisibleP95)} (SLA ${formatDurationMs(sla.file_open_visible_p95_ms)}), file sync=${formatDurationMs(fileSyncReadyP95)} (SLA ${formatDurationMs(sla.file_open_sync_ready_p95_ms)}).`
         : "Unable to read UX latency summary.",
       details:
         latencyResult.status === "rejected" ? [`${latencyResult.reason}`] : [],

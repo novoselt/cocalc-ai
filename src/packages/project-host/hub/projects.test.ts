@@ -57,12 +57,15 @@ const getProjectPortLeaseByHttpPort = jest.fn();
 const projectPortOffsetFromSshPort = jest.fn();
 const projectPortOffsetFromHttpPort = jest.fn();
 const acceptProjectVolumeQuotaDesired = jest.fn();
+const claimStoppedScratchVolumePreparations = jest.fn();
 const markProjectVolumeQuotaApplied = jest.fn();
 const markProjectVolumeQuotaApplying = jest.fn();
 const markProjectVolumeQuotaFailed = jest.fn();
+const markProjectVolumeQuotaResetComplete = jest.fn();
 const projectVolumeQuotaIsApplied = jest.fn();
 const getProjectVolumeQuota = jest.fn();
 const invalidateProjectVolumeQuota = jest.fn();
+const listStoppedScratchVolumePreparationBatch = jest.fn();
 const currentProjectVolumeLifecycleGeneration = jest.fn(() => 0);
 const getRecordedProjectVolumeIdentity = jest.fn();
 
@@ -209,15 +212,21 @@ jest.mock("../sqlite/port-leases", () => ({
 jest.mock("../sqlite/volume-quotas", () => ({
   acceptProjectVolumeQuotaDesired: (...args: any[]) =>
     acceptProjectVolumeQuotaDesired(...args),
+  claimStoppedScratchVolumePreparations: (...args: any[]) =>
+    claimStoppedScratchVolumePreparations(...args),
   getProjectVolumeQuota: (...args: any[]) => getProjectVolumeQuota(...args),
   invalidateProjectVolumeQuota: (...args: any[]) =>
     invalidateProjectVolumeQuota(...args),
+  listStoppedScratchVolumePreparationBatch: (...args: any[]) =>
+    listStoppedScratchVolumePreparationBatch(...args),
   markProjectVolumeQuotaApplied: (...args: any[]) =>
     markProjectVolumeQuotaApplied(...args),
   markProjectVolumeQuotaApplying: (...args: any[]) =>
     markProjectVolumeQuotaApplying(...args),
   markProjectVolumeQuotaFailed: (...args: any[]) =>
     markProjectVolumeQuotaFailed(...args),
+  markProjectVolumeQuotaResetComplete: (...args: any[]) =>
+    markProjectVolumeQuotaResetComplete(...args),
   projectVolumeQuotaIsApplied: (...args: any[]) =>
     projectVolumeQuotaIsApplied(...args),
 }));
@@ -320,6 +329,8 @@ describe("project host start ACP rehydrate ordering", () => {
     getCoolingProjectPortOffsets.mockReset();
     getCoolingProjectPortOffsets.mockReturnValue(new Set());
     acceptProjectVolumeQuotaDesired.mockReset();
+    claimStoppedScratchVolumePreparations.mockReset();
+    claimStoppedScratchVolumePreparations.mockReturnValue(0);
     acceptProjectVolumeQuotaDesired.mockImplementation(
       ({ project_id, volume_kind, desired_bytes, desired_revision = 0 }) => ({
         status: "accepted",
@@ -335,10 +346,14 @@ describe("project host start ACP rehydrate ordering", () => {
     markProjectVolumeQuotaApplied.mockReset();
     markProjectVolumeQuotaApplying.mockReset();
     markProjectVolumeQuotaFailed.mockReset();
+    markProjectVolumeQuotaResetComplete.mockReset();
+    markProjectVolumeQuotaResetComplete.mockReturnValue(true);
     projectVolumeQuotaIsApplied.mockReset();
     projectVolumeQuotaIsApplied.mockReturnValue(false);
     getProjectVolumeQuota.mockReset();
     invalidateProjectVolumeQuota.mockReset();
+    listStoppedScratchVolumePreparationBatch.mockReset();
+    listStoppedScratchVolumePreparationBatch.mockReturnValue([]);
     currentProjectVolumeLifecycleGeneration.mockReset();
     currentProjectVolumeLifecycleGeneration.mockReturnValue(0);
     getRecordedProjectVolumeIdentity.mockReset();
@@ -770,6 +785,7 @@ describe("project host start ACP rehydrate ordering", () => {
         project_id,
         volume_kind: "scratch",
         reason: "project stopped; scratch reset pending",
+        reset_required: true,
       });
       expect(resetScratchVolume).toHaveBeenCalledTimes(1);
       expect(startResult.phase_timings_ms).toEqual(
@@ -784,6 +800,69 @@ describe("project host start ACP rehydrate ordering", () => {
           scratch_prepared: true,
         }),
       });
+    } finally {
+      if (previousMode == null) {
+        delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+      } else {
+        process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = previousMode;
+      }
+    }
+  });
+
+  it("retries durable stopped scratch preparation after a process restart", async () => {
+    const previousMode = process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
+    process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE = "enforce";
+    getProject.mockReturnValue({
+      image: DEFAULT_PROJECT_IMAGE,
+      run_quota: { disk_quota: 65_000 },
+      run_quota_revision: 9,
+    });
+    getProjectVolumeQuota.mockImplementation((_project_id, volume_kind) => ({
+      project_id,
+      volume_kind,
+      desired_bytes: 65_000_000_000,
+      desired_revision: 9,
+      state: "applied",
+    }));
+    listStoppedScratchVolumePreparationBatch.mockReturnValue([
+      {
+        project_id,
+        volume_kind: "scratch",
+        reset_required: true,
+      },
+    ]);
+    resetScratchVolume.mockResolvedValue({
+      path: `/mnt/cocalc/project-${project_id}-scratch`,
+      quota: {
+        get: jest.fn(async () => ({ used: 0, size: 0 })),
+        set: jest.fn(async () => undefined),
+      },
+    });
+    getVolume.mockResolvedValue({
+      path: `/mnt/cocalc/project-${project_id}`,
+      quota: {
+        get: jest.fn(async () => ({ used: 1_000, size: 65_000_000_000 })),
+        set: jest.fn(async () => undefined),
+      },
+    });
+    const runnerApi = {
+      start: jest.fn(),
+      stop: jest.fn(),
+      status: jest.fn(async () => ({ state: "opened" })),
+    } as any;
+
+    try {
+      const { wireProjectsApi } = await import("./projects");
+      const maintenance = wireProjectsApi(runnerApi);
+      await expect(
+        maintenance.runStoppedVolumePreparationSweep(),
+      ).resolves.toBe(1);
+
+      expect(resetScratchVolume).toHaveBeenCalledWith(
+        project_id,
+        expect.objectContaining({ expected_lifecycle_generation: 0 }),
+      );
+      expect(invalidateProjectVolumeQuota).not.toHaveBeenCalled();
     } finally {
       if (previousMode == null) {
         delete process.env.COCALC_PROJECT_QUOTA_LEDGER_MODE;
@@ -1360,6 +1439,13 @@ describe("project host start ACP rehydrate ordering", () => {
       run_quota: { disk_quota: 65_000 },
       run_quota_revision: 9,
     });
+    getProjectVolumeQuota.mockImplementation((_project_id, volume_kind) => ({
+      project_id,
+      volume_kind,
+      desired_bytes: 65_000_000_000,
+      desired_revision: 9,
+      state: "applied",
+    }));
     getVolume.mockResolvedValueOnce({
       path: `/mnt/cocalc/project-${project_id}`,
       quota: {

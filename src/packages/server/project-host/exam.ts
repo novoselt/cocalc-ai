@@ -22,6 +22,7 @@ import {
 } from "@cocalc/server/cloud/dns";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import adminAlert from "@cocalc/server/messages/admin-alert";
+import type { RootfsImageManifest } from "@cocalc/util/rootfs-images";
 
 const logger = getLogger("server:project-host:exam");
 
@@ -446,19 +447,6 @@ function examDnsRoute(
   return { type: "CNAME", target: `${tunnelId}.cfargotunnel.com` };
 }
 
-function isHostOnDemand(host: ExamHostRow): boolean {
-  const metadata = host.metadata ?? {};
-  const pricing = `${
-    metadata.effective_pricing_model ??
-    metadata.desired_pricing_model ??
-    metadata.pricing_model ??
-    "on_demand"
-  }`
-    .trim()
-    .toLowerCase();
-  return pricing !== "spot";
-}
-
 function ownerAccountId(host: ExamHostRow): string {
   const owner = `${
     host.metadata?.owner ?? host.metadata?.owner_account_id ?? ""
@@ -467,6 +455,53 @@ function ownerAccountId(host: ExamHostRow): string {
     throw new Error("project host has no billing owner");
   }
   return owner;
+}
+
+async function ensureExamRootfsCached({
+  control,
+  rootfs_image,
+  actor_account_id,
+  loadVisibleRootfsImages = async (account_id) => {
+    const { listVisibleRootfsImages } =
+      await import("@cocalc/server/rootfs/catalog");
+    return await listVisibleRootfsImages(account_id);
+  },
+}: {
+  control: {
+    listRootfsImages: () => Promise<
+      Array<{ image: string; digest?: string | null }>
+    >;
+    pullRootfsImage: (opts: {
+      image: string;
+    }) => Promise<{ image: string; digest?: string | null }>;
+  };
+  rootfs_image: string;
+  actor_account_id: string;
+  loadVisibleRootfsImages?: (
+    account_id: string,
+  ) => Promise<RootfsImageManifest>;
+}): Promise<{ image: string; digest: string }> {
+  const image = rootfs_image.trim();
+  const cached = await control.listRootfsImages();
+  const existing = cached.find((entry) => entry.image === image);
+  if (existing?.digest) {
+    return { image: existing.image, digest: existing.digest };
+  }
+
+  const catalog = await loadVisibleRootfsImages(actor_account_id);
+  const visible = catalog.images.find((entry) => entry.image === image);
+  if (!visible) {
+    throw new Error(
+      "the selected RootFS is not available in your managed image catalog",
+    );
+  }
+  const pulled = await control.pullRootfsImage({ image: visible.image });
+  if (!pulled.digest) {
+    throw new Error(
+      "the selected RootFS could not be cached with an immutable digest",
+    );
+  }
+  return { image: pulled.image, digest: pulled.digest };
 }
 
 function validateIdempotencyKey(value: string): string {
@@ -853,9 +888,6 @@ export async function createExamRunLocal({
       "the project host must be running before preparing an exam",
     );
   }
-  if (!isHostOnDemand(host)) {
-    throw new Error("exam mode requires an on-demand project host");
-  }
   const config = await loadConfig(host.id);
   if (!config?.enabled) {
     throw new Error("exam mode is not enabled for this project host");
@@ -870,13 +902,11 @@ export async function createExamRunLocal({
     timeout: PROJECT_HOST_RPC_TIMEOUT_MS,
     fresh: true,
   });
-  const cached = await control.listRootfsImages();
-  const selected = cached.find((entry) => entry.image === rootfs_image);
-  if (!selected?.digest) {
-    throw new Error(
-      "the selected RootFS must already be cached with an immutable digest",
-    );
-  }
+  const selected = await ensureExamRootfsCached({
+    control,
+    rootfs_image,
+    actor_account_id,
+  });
 
   const run_id = randomUUID();
   const token = deterministicToken({ run_id, idempotency_key: key });
@@ -1215,6 +1245,7 @@ export async function stopAndEraseExamRunLocal({
 }): Promise<HostExamRun> {
   const run = await requireRunForMutation({ host_id: host.id, run_id });
   if (run.status === "stopped") return run;
+  assertExamHostRunningForCleanup(host);
   await getPool().query(
     `
       UPDATE ${RUN_TABLE}
@@ -1245,17 +1276,23 @@ export async function eraseActiveExamRunBeforeHostStopLocal({
 }): Promise<boolean> {
   const run = await loadCurrentRun(host.id);
   if (!run || run.status === "stopped") return false;
-  if (host.status !== "running") {
-    throw new Error(
-      "the exam host must be running so its temporary projects can be erased before stopping",
-    );
-  }
   await stopAndEraseExamRunLocal({
     host,
     run_id: run.run_id,
     poweroff: false,
   });
   return true;
+}
+
+function assertExamHostRunningForCleanup(host: ExamHostRow): void {
+  if (host.status === "running") return;
+  const status = `${host.status ?? "unknown"}`;
+  throw Object.assign(
+    new Error(
+      `the exam host must be running so its temporary projects can be erased before stopping (current status: ${status}); start the host and end the exam before stopping or deprovisioning it`,
+    ),
+    { code: "exam_host_cleanup_requires_running" },
+  );
 }
 
 export async function reconcileExamDnsOnce(): Promise<void> {
@@ -1329,21 +1366,6 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
           `,
           [row.run_id],
         );
-        if (stopHostAtDeadline) {
-          await db.query(
-            `
-              UPDATE project_hosts
-              SET metadata=jsonb_set(
-                COALESCE(metadata, '{}'::JSONB),
-                '{desired_state}',
-                '"stopped"'::JSONB,
-                true
-              )
-              WHERE id=$1
-            `,
-            [row.host_id],
-          );
-        }
         await db.query("COMMIT");
       } catch (err) {
         await db.query("ROLLBACK");
@@ -1422,10 +1444,11 @@ export const __test__ = {
   ensureSchema,
   examHostnameForHost,
   examDnsRoute,
+  ensureExamRootfsCached,
   hashToken,
-  isHostOnDemand,
   normalizeConfig,
   publicIp,
+  assertExamHostRunningForCleanup,
   shouldReconcileRunWithRuntime,
   tokenForRunRecord,
   validateDeadline,
