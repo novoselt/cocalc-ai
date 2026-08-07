@@ -24,21 +24,21 @@ export default async function getBillingSummary({
           FROM purchases
          WHERE account_id=$1
       )
-      SELECT ROUND(-COALESCE(SUM(effective_cost), 0), 2) AS balance,
-             ROUND(COALESCE(
+      SELECT -COALESCE(SUM(effective_cost), 0) AS balance,
+             COALESCE(
                SUM(cost) FILTER (
                  WHERE cost > 0
                    AND time >= NOW() - INTERVAL '30 days'
                ),
                0
-             ), 2) AS spend_30d,
-             ROUND(COALESCE(
+             ) AS spend_30d,
+             COALESCE(
                SUM(cost) FILTER (
                  WHERE cost > 0
                    AND time >= NOW() - INTERVAL '365 days'
                ),
                0
-             ), 2) AS spend_365d,
+             ) AS spend_365d,
              MAX(time) AS last_transaction_at
         FROM account_purchases
     `,

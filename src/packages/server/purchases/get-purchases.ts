@@ -73,7 +73,7 @@ export default async function getPurchases({
 
   if (group) {
     query = `
-  SELECT ROUND(SUM(${COST_OR_METERED_COST}), 2) AS cost, p.service, CAST(COUNT(*) AS INTEGER) AS count
+  SELECT SUM(${COST_OR_METERED_COST}) AS cost, p.service, CAST(COUNT(*) AS INTEGER) AS count
   FROM purchases AS p`;
   } else {
     query =

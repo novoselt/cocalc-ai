@@ -223,11 +223,11 @@ export async function createStatements({
 
 function getQuery(interval: Interval, type: "charges" | "credits"): string {
   if (interval == "day") {
-    return `SELECT account_id, ROUND(SUM(cost), 2) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
+    return `SELECT account_id, SUM(cost) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
       type == "charges" ? " > 0" : "< 0"
     } GROUP BY account_id`;
   } else if (interval == "month") {
-    return `SELECT account_id, ROUND(SUM(cost), 2) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
+    return `SELECT account_id, SUM(cost) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
       type == "charges" ? " > 0" : "< 0"
     } GROUP BY account_id`;
   } else {
@@ -283,5 +283,5 @@ async function getPreviousStatementBalance(
     "SELECT balance FROM statements WHERE interval=$1 AND account_id=$2 ORDER BY id DESC limit 1",
     [interval, account_id],
   );
-  return toDecimal(rows[0]?.balance ?? 0).toDecimalPlaces(2);
+  return toDecimal(rows[0]?.balance ?? 0);
 }

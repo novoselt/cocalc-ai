@@ -48,12 +48,11 @@ export default async function getBalance({
   const pool = client ?? getPool();
 
   // Criticism:
-  //   - user may have a large number of purchases, and this is adding the ALL up every single time
-  //     it computes the balance.
-  //   - the arithmetic is probably done using 32-bit floats and there could be a slight rounding error eventually.
+  //   - user may have a large number of purchases, and this is adding them all
+  //     up every single time it computes the balance.
 
   const { rows } = await pool.query(
-    `SELECT ROUND(-COALESCE(SUM(${COST_OR_METERED_COST}), 0), 2) as balance FROM purchases WHERE account_id=$1`,
+    `SELECT -COALESCE(SUM(${COST_OR_METERED_COST}), 0) as balance FROM purchases WHERE account_id=$1`,
     [account_id],
   );
   const balance = toDecimal(rows[0]?.balance ?? 0);
@@ -80,7 +79,7 @@ export async function getTotalBalance(
 ): Promise<MoneyValue> {
   const pool = client ?? getPool();
   const { rows } = await pool.query(
-    `SELECT ROUND(-COALESCE(SUM(${COST_OR_METERED_COST}), 0), 2) as balance FROM purchases WHERE account_id=$1`,
+    `SELECT -COALESCE(SUM(${COST_OR_METERED_COST}), 0) as balance FROM purchases WHERE account_id=$1`,
     [account_id],
   );
   return moneyToDbString(rows[0]?.balance ?? 0);
@@ -98,7 +97,7 @@ export async function getBalanceAsOf({
   const pool = client ?? getPool();
   const { rows } = await pool.query(
     `
-      SELECT ROUND(-COALESCE(SUM(${COST_OR_METERED_COST_AS_OF}), 0), 2) as balance
+      SELECT -COALESCE(SUM(${COST_OR_METERED_COST_AS_OF}), 0) as balance
         FROM purchases
        WHERE account_id=$1
          AND time <= $2

@@ -165,30 +165,27 @@ export async function ensurePurchaseCostCentsSchema(
     await db.query(
       `WITH balances AS (
          SELECT affected.account_id,
-                ROUND(
-                  -COALESCE(
-                    SUM(
-                      COALESCE(
-                        purchases.cost,
-                        ROUND(
-                          COALESCE(
-                            purchases.cost_so_far,
-                            purchases.cost_per_hour * (
-                              EXTRACT(
-                                EPOCH FROM (
-                                  COALESCE(purchases.period_end, NOW()) -
-                                  purchases.period_start
-                                )
-                              )::numeric / 3600
-                            )
-                          ),
-                          2
-                        )
+                -COALESCE(
+                  SUM(
+                    COALESCE(
+                      purchases.cost,
+                      ROUND(
+                        COALESCE(
+                          purchases.cost_so_far,
+                          purchases.cost_per_hour * (
+                            EXTRACT(
+                              EPOCH FROM (
+                                COALESCE(purchases.period_end, NOW()) -
+                                purchases.period_start
+                              )
+                            )::numeric / 3600
+                          )
+                        ),
+                        2
                       )
-                    ),
-                    0
+                    )
                   ),
-                  2
+                  0
                 ) AS balance
            FROM purchase_cost_cents_affected_accounts AS affected
            LEFT JOIN purchases

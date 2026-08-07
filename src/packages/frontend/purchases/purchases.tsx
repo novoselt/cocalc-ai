@@ -696,9 +696,7 @@ function getDetailedPrintColumns({
       title: "Balance",
       align: "right",
       render: ({ balance }) =>
-        balance == null
-          ? ""
-          : currency(moneyRoundToCents(balance).toNumber(), 2),
+        balance == null ? "" : currency(toDecimal(balance).toNumber(), 2),
     });
   }
   return columns;
@@ -1561,7 +1559,7 @@ function Balance({ balance }) {
     const balanceValue = toDecimal(balance);
     return (
       <span style={getAmountStyle(balanceValue.toNumber())}>
-        {currency(moneyRoundToCents(balanceValue).toNumber(), 2)}
+        {currency(balanceValue.toNumber(), 2)}
       </span>
     );
   }
