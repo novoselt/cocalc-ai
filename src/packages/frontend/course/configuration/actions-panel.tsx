@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Button, Card, Col, Row, Space, message } from "antd";
+import { Button, Card, Col, Progress, Row, Space, message } from "antd";
 import { useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 
@@ -14,6 +14,7 @@ import { course } from "@cocalc/frontend/i18n";
 import type { ProjectMap } from "@cocalc/frontend/todo-types";
 import { RESEND_INVITE_INTERVAL_DAYS } from "@cocalc/util/consts/invites";
 import { CourseActions } from "../actions";
+import type { CourseReconfigureProgress } from "../store";
 import { CourseStore } from "../store";
 import { DeleteAllStudentProjects } from "./delete-all-student-projects";
 import { DeleteAllStudents } from "./delete-all-students";
@@ -25,6 +26,7 @@ interface Props {
   name: string;
   project_map: ProjectMap;
   configuring_projects?: boolean;
+  configuring_projects_progress?: CourseReconfigureProgress;
   reinviting_students?: boolean;
 }
 
@@ -32,6 +34,7 @@ export function ActionsPanel({
   name,
   project_map,
   configuring_projects,
+  configuring_projects_progress,
   reinviting_students,
 }: Props) {
   const actions = useActions<CourseActions>({ name });
@@ -44,6 +47,7 @@ export function ActionsPanel({
           <br />
           <ReconfigureAllProjects
             configuring_projects={configuring_projects}
+            configuring_projects_progress={configuring_projects_progress}
             actions={actions}
           />
           <br />
@@ -156,11 +160,18 @@ export function ExportGrades({ actions, close }: { actions; close? }) {
 export function ReconfigureAllProjects({
   actions,
   configuring_projects,
+  configuring_projects_progress,
 }: {
   actions;
   configuring_projects?: boolean;
+  configuring_projects_progress?: CourseReconfigureProgress;
 }) {
   const intl = useIntl();
+  const progress = configuring_projects_progress;
+  const total = progress?.total ?? 0;
+  const complete =
+    (progress?.done ?? 0) + (progress?.failed ?? 0) + (progress?.canceled ?? 0);
+  const percent = total > 0 ? Math.round((100 * complete) / total) : 0;
 
   return (
     <Card
@@ -185,12 +196,37 @@ export function ReconfigureAllProjects({
       <Button
         disabled={configuring_projects}
         onClick={() => {
-          actions.configuration.configure_all_projects();
+          actions.configuration.configure_all_projects(true);
         }}
       >
         {configuring_projects ? <Icon name="cocalc-ring" spin /> : undefined}{" "}
         {intl.formatMessage(course.reconfigure_all_projects)}
       </Button>
+      {configuring_projects && (
+        <div style={{ marginTop: 12 }}>
+          <Progress
+            percent={percent}
+            status={(progress?.failed ?? 0) > 0 ? "exception" : "active"}
+          />
+          <div style={{ marginBottom: 8 }}>
+            {total > 0
+              ? `${progress?.done ?? 0} of ${total} projects configured`
+              : "Preparing course reconfiguration..."}
+            {(progress?.failed ?? 0) > 0 ? `; ${progress?.failed} failed` : ""}
+          </div>
+          <Button
+            danger
+            size="small"
+            onClick={() => {
+              void actions.configuration
+                .cancel_configure_all_projects()
+                .catch((err) => message.error(`${err}`));
+            }}
+          >
+            Cancel for everyone
+          </Button>
+        </div>
+      )}
     </Card>
   );
 }

@@ -306,6 +306,7 @@ export async function updateLro({
   heartbeat_at,
   dismissed_at,
   dismissed_by,
+  if_status,
 }: {
   op_id: string;
   status?: LroStatus;
@@ -316,6 +317,7 @@ export async function updateLro({
   heartbeat_at?: Date | null;
   dismissed_at?: Date | null;
   dismissed_by?: string | null;
+  if_status?: LroStatus[];
 }): Promise<LroSummary | undefined> {
   await ensureLroSchema();
   const sets: string[] = [];
@@ -364,8 +366,14 @@ export async function updateLro({
     return row ?? undefined;
   }
   sets.push("updated_at=now()");
+  let where = "op_id=$1";
+  if (if_status !== undefined) {
+    if (if_status.length === 0) return;
+    values.push(if_status);
+    where += ` AND status=ANY($${values.length}::text[])`;
+  }
   const { rows } = await pool().query(
-    `UPDATE long_running_operations SET ${sets.join(", ")} WHERE op_id=$1 RETURNING *`,
+    `UPDATE long_running_operations SET ${sets.join(", ")} WHERE ${where} RETURNING *`,
     values,
   );
   return rows[0] as LroSummary | undefined;

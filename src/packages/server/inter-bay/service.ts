@@ -454,6 +454,7 @@ import {
   unblockProjectAccessRequester,
 } from "@cocalc/server/projects/collaborators";
 import { ensureCourseManagerAccessLocal } from "@cocalc/server/projects/course/ensure-manager-access";
+import { reconcileCourseManagedProjectLocal } from "@cocalc/server/projects/course/reconcile-managed-project";
 import { getProjectCollaboratorInviteUsage } from "@cocalc/server/membership/project-limits";
 import { leaveOrDeleteProjectsForAccount } from "@cocalc/server/projects/ownership";
 import {
@@ -470,6 +471,9 @@ import {
   syncSiteSettingsToBays,
 } from "@cocalc/server/conat/api/system";
 import {
+  cancelCourseReconfigureOperationLocal,
+  getCourseReconfigureOperationLocal,
+  reconfigureCourseProjectsLocal,
   setLocalProjectDeletionProtection,
   setLocalProjectManageUsersOwnerOnly,
   setLocalProjectMetadata,
@@ -2090,6 +2094,14 @@ async function startProjectCollabInviteService(): Promise<void> {
         ...opts,
         trustedCourseAccess: true,
       }),
+    reconcileCourseManagedProject: async (opts) =>
+      await reconcileCourseManagedProjectLocal(opts),
+    reconfigureCourseProjects: async (opts) =>
+      await reconfigureCourseProjectsLocal(opts),
+    getCourseReconfigureOperation: async (opts) =>
+      await getCourseReconfigureOperationLocal(opts),
+    cancelCourseReconfigureOperation: async (opts) =>
+      await cancelCourseReconfigureOperationLocal(opts),
     getProjectAccessLandingInfo: async (opts) =>
       await getProjectAccessLandingInfo(opts),
     requestProjectAccess: async (opts) => await requestProjectAccess(opts),

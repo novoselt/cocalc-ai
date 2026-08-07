@@ -35,8 +35,6 @@ interface ConfigurationTarget {
 
 export class ConfigurationActions {
   private course_actions: CourseActions;
-  private configuring: boolean = false;
-  private configureAgain: boolean = false;
 
   constructor(course_actions: CourseActions) {
     this.course_actions = course_actions;
@@ -159,28 +157,11 @@ export class ConfigurationActions {
   };
 
   configure_all_projects = async (force: boolean = false): Promise<void> => {
-    if (this.configuring) {
-      // Important -- if configure_all_projects is called *while* it is running,
-      // wait until it is done, then call it again (though I'm being lazy about the
-      // await!).  Don't do the actual work more than once
-      // at the same time since that might confuse the db writes, but
-      // also don't just reuse in flight, which will miss the later calls.
-      this.configureAgain = true;
-      return;
-    }
-    try {
-      this.configureAgain = false;
-      this.configuring = true;
-      await this.course_actions.shared_project.configure();
-      await this.course_actions.student_projects.configure_all_projects(force);
-      await this.configure_nbgrader_grade_project();
-    } finally {
-      this.configuring = false;
-      if (this.configureAgain) {
-        this.configureAgain = false;
-        this.configure_all_projects();
-      }
-    }
+    await this.course_actions.student_projects.configure_all_projects(force);
+  };
+
+  cancel_configure_all_projects = async (): Promise<void> => {
+    await this.course_actions.student_projects.cancel_configure_all_projects();
   };
 
   push_missing_handouts_and_assignments = async (): Promise<void> => {
@@ -348,22 +329,15 @@ export class ConfigurationActions {
   set_datastore = (datastore: Datastore): void => {
     this.set({ datastore, table: "settings" });
     setTimeout(() => {
-      this.configure_all_projects_shared_and_nbgrader();
+      this.course_actions.student_projects.configure_all_projects();
     }, 1);
   };
 
   set_envvars = (inherit: boolean): void => {
     this.set({ envvars: { inherit }, table: "settings" });
     setTimeout(() => {
-      this.configure_all_projects_shared_and_nbgrader();
+      this.course_actions.student_projects.configure_all_projects();
     }, 1);
-  };
-
-  private configure_all_projects_shared_and_nbgrader = () => {
-    this.course_actions.student_projects.configure_all_projects();
-    this.course_actions.shared_project.set_datastore_and_envvars();
-    // in case there is a separate nbgrader project, we have to set the envvars as well
-    this.configure_nbgrader_grade_project();
   };
 
   purgeDeleted = (): void => {

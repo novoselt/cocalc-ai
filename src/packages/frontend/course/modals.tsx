@@ -40,7 +40,11 @@ import { course, IntlMessage, isIntlMessage } from "@cocalc/frontend/i18n";
 import type { ProjectMap, UserMap } from "@cocalc/frontend/todo-types";
 import { CourseEditorActions } from "../frame-editors/course-editor/actions";
 import { CourseActions } from "./actions";
-import type { CourseSettingsRecord, StudentsMap } from "./store";
+import type {
+  CourseReconfigureProgress,
+  CourseSettingsRecord,
+  StudentsMap,
+} from "./store";
 
 interface Props {
   frameActions: CourseEditorActions;
@@ -53,6 +57,7 @@ interface Props {
   project_id: string;
   path: string;
   configuring_projects?: boolean;
+  configuring_projects_progress?: CourseReconfigureProgress;
   reinviting_students?: boolean;
   settings?: CourseSettingsRecord;
   redux: AppRedux;

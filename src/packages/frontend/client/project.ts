@@ -175,6 +175,34 @@ export class ProjectClient {
     return await this.client.conat_client.hub.projects.collectAssignment(opts);
   };
 
+  reconfigureCourseProjects = async (
+    opts: import("@cocalc/conat/hub/api/projects").CourseReconfigureRequest,
+  ): Promise<
+    import("@cocalc/conat/hub/api/projects").CourseReconfigureResult
+  > => {
+    return await this.client.conat_client.hub.projects.reconfigureCourseProjects(
+      opts,
+    );
+  };
+
+  getCourseReconfigureOperation = async (opts: {
+    course_project_id: string;
+    op_id: string;
+  }): Promise<import("@cocalc/conat/hub/api/lro").LroSummary | undefined> => {
+    return await this.client.conat_client.hub.projects.getCourseReconfigureOperation(
+      opts,
+    );
+  };
+
+  cancelCourseReconfigureOperation = async (opts: {
+    course_project_id: string;
+    op_id: string;
+  }): Promise<void> => {
+    await this.client.conat_client.hub.projects.cancelCourseReconfigureOperation(
+      opts,
+    );
+  };
+
   sendCourseAssignmentPatch = async (opts: {
     course_project_id: string;
     assignment_id: string;
