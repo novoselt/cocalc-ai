@@ -4,10 +4,9 @@
  */
 
 import { Card, Col, Row, Spin } from "antd";
-import { debounce } from "lodash";
 import { FormattedMessage, useIntl } from "react-intl";
 
-import { useActions, useState, useStore } from "@cocalc/frontend/app-framework";
+import { useActions, useStore } from "@cocalc/frontend/app-framework";
 import type { AppRedux } from "@cocalc/frontend/app-framework";
 import {
   Icon,
@@ -15,7 +14,6 @@ import {
   MarkdownInput,
   TextInput,
 } from "@cocalc/frontend/components";
-import ShowError from "@cocalc/frontend/components/error";
 import HelpPopover from "@cocalc/frontend/course/common/help-popover";
 import { course } from "@cocalc/frontend/i18n";
 import { SharedProjectPanel } from "@cocalc/frontend/course/shared-project/shared-project-panel";
@@ -32,7 +30,6 @@ import { StudentProjectHostConfig } from "./student-project-host";
 import { StudentProjectRootfsConfig } from "./student-project-rootfs";
 import { SharedSecrets } from "./shared-secrets";
 import StudentPay from "./student-pay";
-import { getEmailInviteValidationError } from "./email-invite-validation";
 
 interface Props {
   frame_id: string;
@@ -214,24 +211,9 @@ export function TitleAndDescription({ actions, settings, name }) {
 
 export function EmailInvitation({ actions, name }) {
   const intl = useIntl();
-  const [error, setError] = useState<string>("");
   const store = useStore<CourseStore>({ name });
 
-  const check_email_body = debounce(
-    (body: string) => setError(getEmailInviteValidationError(body)),
-    500,
-    {
-      leading: true,
-      trailing: true,
-    },
-  );
-
   function saveEmailInvite(body: string): void {
-    const nextError = getEmailInviteValidationError(body);
-    setError(nextError);
-    if (nextError) {
-      return;
-    }
     actions.configuration.set_email_invite(body);
   }
 
@@ -248,7 +230,8 @@ export function EmailInvitation({ actions, name }) {
                 id="course.configuration.email_invitation.info"
                 defaultMessage={`If you add a student to this course using their email address,
                 and they do not have a CoCalc account, then they will receive this email invitation.
-                Also, "{title}" will be replaced by the title of the course and "{name}" by your name.`}
+                Also, "{title}" will be replaced by the title of the course and "{name}" by your name.
+                Depending on your membership, website links may be removed from outgoing invitations to prevent abuse; email addresses are preserved.`}
                 description={`Email invitations for students in an online course. Do not change {name} and {title} since they are variables.`}
                 values={{
                   title: "{title}",
@@ -267,16 +250,12 @@ export function EmailInvitation({ actions, name }) {
           borderRadius: "5px",
         }}
       >
-        <ShowError error={error} />
         <MarkdownInput
           persist_id={name + "email-invite-body"}
           attach_to={name}
           rows={6}
           default_value={store.get_email_invite()}
           on_save={saveEmailInvite}
-          save_disabled={!!error}
-          on_change={check_email_body}
-          on_cancel={() => setError("")}
         />
       </div>
     </Card>

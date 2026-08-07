@@ -35,7 +35,6 @@ import { CourseActions } from "../actions";
 import { CourseStore } from "../store";
 import { Result, run_in_all_projects } from "./run-in-all-projects";
 import type { StudentRecord } from "../store";
-import { getEmailInviteValidationError } from "../configuration/email-invite-validation";
 import { configureNewCourseSshTarget } from "../configuration/course-ssh-service";
 import {
   courseConfigurationErrorMessage,
@@ -367,10 +366,6 @@ export class StudentProjectsActions {
       const subject = `${site_name} course invitation: ${title}`;
       let body = store.get_email_invite();
       body = body.replace(/{title}/g, title).replace(/{name}/g, name);
-      const inviteError = getEmailInviteValidationError(body);
-      if (inviteError) {
-        throw new Error(inviteError);
-      }
       const message = body;
       const email = markdown_to_html(body);
       const result = await webapp_client.project_collaborators.invite_noncloud({
@@ -1111,10 +1106,6 @@ export class StudentProjectsActions {
     inviteMessage = inviteMessage
       .replace(/{title}/g, inviteTitle)
       .replace(/{name}/g, replyToName);
-    const inviteError = getEmailInviteValidationError(inviteMessage);
-    if (inviteError) {
-      throw new Error(inviteError);
-    }
 
     const students = store
       .get_students()

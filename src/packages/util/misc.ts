@@ -743,8 +743,26 @@ export function human_readable_size(
 export const re_url =
   /(http:\/\/www\.|https:\/\/www\.|http:\/\/|https:\/\/)?[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(:[0-9]{1,5})?(\/.*)?/gi;
 
+const websiteUrl = new RegExp(
+  String.raw`(^|[^@a-z0-9._%+-])((?:(?:https?:\/\/|www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})(?::[0-9]{1,5})?(?:\/[^\s<>"']*)?)`,
+  "gim",
+);
+
+export function sanitize_urls(
+  str: string,
+  replacement = "[link removed]",
+): string {
+  return str.replace(
+    websiteUrl,
+    (_match, prefix: string, candidate: string) => {
+      const trailing = candidate.match(/[),.;:!?\]}]+$/)?.[0] ?? "";
+      return `${prefix}${replacement}${trailing}`;
+    },
+  );
+}
+
 export function contains_url(str: string): boolean {
-  return !!str.toLowerCase().match(re_url);
+  return sanitize_urls(str) !== str;
 }
 
 export function hidden_meta_file(path: string, ext: string): string {
