@@ -1255,7 +1255,6 @@ export function ProjectComputeVms({
           if (!values.new_volume_name || !values.new_volume_size_gb) {
             throw new Error("A new volume name and size are required.");
           }
-          createdVolumeName = values.new_volume_name;
           const createdVolume =
             await webapp_client.conat_client.hub.compute.createVolume({
               project_id,
@@ -1265,6 +1264,7 @@ export function ProjectComputeVms({
               idempotency_key: uuid(),
               browser_id: webapp_client.browser_id,
             });
+          createdVolumeName = createdVolume.name;
           await waitForVolumeReady(createdVolume.id);
           volume = createdVolume.name;
         }

@@ -153,7 +153,7 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
     ),
     max_volumes_per_account: positiveInteger(
       settings.compute_vm_max_volumes_per_account,
-      2,
+      10,
     ),
     max_volume_gb: positiveInteger(settings.compute_vm_max_volume_gb, 10_000),
     unfunded_volume_delete_days: positiveNumber(
