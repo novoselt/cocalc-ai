@@ -452,7 +452,13 @@ export class StudentProjectsActions {
       });
     }
 
-    // Make sure all collaborators on course project are on the student's project:
+    // Use the authoritative course repair path rather than generic invites.
+    // The latter can apply child-project limits using stale Redux state.
+    await this.ensure_course_manager_access({
+      project_ids: [student_project_id],
+      quiet: false,
+    });
+
     const course_collaborators = redux
       .getStore("projects")
       .get_users(s.get("course_project_id"));
@@ -460,15 +466,6 @@ export class StudentProjectsActions {
       // console.log("projects store isn't sufficiently initialized yet...");
       return;
     }
-    for (const account_id of course_collaborators.keys()) {
-      if (!users.has(account_id)) {
-        await webapp_client.project_collaborators.invite({
-          project_id: student_project_id,
-          account_id,
-        });
-      }
-    }
-
     // Regarding student_account_id !== undefined below, see https://github.com/sagemathinc/cocalc/pull/3259
     // The problem is that student_account_id might not yet be known to the .course, even though
     // the student has been added and the account_id exists, and is known to the account opening
@@ -741,11 +738,13 @@ export class StudentProjectsActions {
     if (student_project_id == null) {
       await this.create_student_project(student_id);
     } else {
+      // The course link authorizes manager repair and must exist before the
+      // other configuration operations run.
+      await this.set_student_project_course_info({
+        student_id,
+        student_project_id,
+      });
       await Promise.all([
-        this.set_student_project_course_info({
-          student_id,
-          student_project_id,
-        }),
         this.configure_project_users({
           student_project_id,
           student_id,
