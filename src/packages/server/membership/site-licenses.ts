@@ -4149,6 +4149,14 @@ export async function reviewSiteLicensePoolRequest({
   if (action !== "approve" && action !== "reject") {
     throw Error("action must be approve or reject");
   }
+  const initialRequest = await getRequestById(requestId);
+  // Account authority may be on another bay. Resolve it before locking the
+  // seed-owned request rather than holding a database transaction across the
+  // cross-bay account lookup.
+  const currentVerifiedEmailAddress =
+    action === "approve"
+      ? await getCurrentClusterVerifiedEmailAddress(initialRequest.account_id)
+      : undefined;
   let reservedInstitutionalClaim:
     | {
         scope_key: string;
@@ -4163,6 +4171,7 @@ export async function reviewSiteLicensePoolRequest({
   try {
     const reviewed = await withSiteLicenseRequestTransaction({
       request_id: requestId,
+      initial_request: initialRequest,
       action: "review site-license pool request",
       fn: async ({ client, request, siteLicense, pkg }) => {
         await assertSiteLicenseManager({
@@ -4196,8 +4205,6 @@ export async function reviewSiteLicensePoolRequest({
           });
           return rejected;
         }
-        const currentVerifiedEmailAddress =
-          await getCurrentClusterVerifiedEmailAddress(request.account_id);
         const eligibility = await resolveSiteLicensePoolEmailEligibility({
           package_id: pkg.id,
           verified_email_address: currentVerifiedEmailAddress,
@@ -4484,9 +4491,11 @@ async function recordReleasedSeatsForSwitch({
 
 async function withSiteLicenseRequestTransaction<T>({
   request_id,
+  initial_request,
   fn,
 }: {
   request_id: string;
+  initial_request: SiteLicensePoolRequest;
   action: string;
   fn: (opts: {
     client: PoolClient;
@@ -4495,9 +4504,8 @@ async function withSiteLicenseRequestTransaction<T>({
     pkg: NonNullable<Awaited<ReturnType<typeof getMembershipPackage>>>;
   }) => Promise<T>;
 }): Promise<T> {
-  const initialRequest = await getRequestById(request_id);
   const { siteLicense } = await getSiteLicenseForPackage(
-    initialRequest.package_id,
+    initial_request.package_id,
   );
   return await withLocalSiteLicenseTransaction(async (client) => {
     const { rows } = await client.query<RawSiteLicensePoolRequest>(
