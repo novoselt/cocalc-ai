@@ -366,6 +366,7 @@ export default function ChatInput({
       overflowEllipsis={true}
       hideModeSwitch={!showModeSwitch}
       modeSwitchPlacement="toolbar"
+      disableModeSwitchShortcuts
       modeSwitchRightContent={
         <>
           {mode === "markdown" ? (
