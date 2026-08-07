@@ -13,6 +13,7 @@ import type {
 } from "@cocalc/conat/hub/api/compute";
 import type { HostCatalogMachineType } from "@cocalc/conat/hub/api/hosts";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import { assertComputeProjectAssignedToHost } from "@cocalc/server/compute/host-authorization";
 import { requireDangerousSessionAuth } from "./dangerous-session-auth";
 import { resolveProjectReferenceAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import {
@@ -854,6 +855,30 @@ export async function authorizeProjectSshKey(opts: {
     key,
     idempotency_key: opts.idempotency_key,
     actor_kind: "project",
+  });
+}
+
+export async function authorizeProjectSshKeyFromHost(opts: {
+  host_id?: string;
+  project_id: string;
+  id_or_name: string;
+  ssh_public_key: string;
+  idempotency_key: string;
+}) {
+  const hostId = `${opts.host_id ?? ""}`.trim();
+  const projectId = `${opts.project_id ?? ""}`.trim();
+  if (!hostId) throw new Error("must be a host");
+  if (!projectId) throw new Error("project_id is required");
+  await assertComputeProjectAssignedToHost({
+    project_id: projectId,
+    host_id: hostId,
+    bay_id: getConfiguredBayId(),
+  });
+  return await authorizeProjectSshKey({
+    project_id: projectId,
+    id_or_name: opts.id_or_name,
+    ssh_public_key: opts.ssh_public_key,
+    idempotency_key: opts.idempotency_key,
   });
 }
 

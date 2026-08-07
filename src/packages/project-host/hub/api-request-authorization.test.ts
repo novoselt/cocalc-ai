@@ -177,6 +177,7 @@ describe("project-host hub API request authorization", () => {
       ).not.toThrow();
     }
     for (const name of [
+      "compute.authorizeProjectSshKey",
       "system.assertProjectPublicSharingAllowed",
       "system.reserveProjectAppPublicSubdomain",
       "system.reserveProjectAppPrivateHostname",
