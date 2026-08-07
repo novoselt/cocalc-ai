@@ -4,7 +4,6 @@
  */
 
 import {
-  computeVmRegionFromSubnetwork,
   computeVmUiEnabled,
   requireComputeVmCreateAllowed,
   resolveComputeVmConfig,
@@ -102,7 +101,7 @@ describe("managed compute VM configuration", () => {
     );
   });
 
-  it("requires isolated credentials and a subnetwork in production", () => {
+  it("requires isolated credentials and a global network in production", () => {
     const base = {
       dns: "cocalc.ai",
       compute_vm_mode: "admin_canary",
@@ -124,52 +123,57 @@ describe("managed compute VM configuration", () => {
         }),
         "account-1",
       ),
-    ).toThrow("subnetwork is not configured");
+    ).toThrow("network is not configured");
 
     expect(() =>
       requireComputeVmCreateAllowed(
         resolveComputeVmConfig({
           ...base,
           compute_vm_gcp_service_account_json: credentials,
-          compute_vm_gcp_subnetwork:
-            "projects/compute-prod/regions/us-central1/subnetworks/compute",
+          compute_vm_gcp_network:
+            "projects/compute-prod/global/networks/compute",
         }),
         "account-1",
       ),
     ).not.toThrow();
 
-    expect(
-      computeVmRegionFromSubnetwork(
-        "projects/compute-prod/regions/us-central1/subnetworks/compute",
+    expect(() =>
+      requireComputeVmCreateAllowed(
+        resolveComputeVmConfig({
+          ...base,
+          compute_vm_gcp_service_account_json: credentials,
+          compute_vm_gcp_network: "not-a-network-uri",
+        }),
+        "account-1",
       ),
-    ).toBe("us-central1");
-    expect(
-      computeVmRegionFromSubnetwork(
-        "projects/compute-prod/zones/us-central1-a/subnetworks/compute",
-      ),
-    ).toBeUndefined();
+    ).toThrow("must be a global VPC");
 
     expect(() =>
       requireComputeVmCreateAllowed(
         resolveComputeVmConfig({
           ...base,
           compute_vm_gcp_service_account_json: credentials,
-          compute_vm_gcp_subnetwork: "not-a-subnetwork-uri",
+          compute_vm_gcp_network:
+            "projects/wrong-project/global/networks/compute",
         }),
         "account-1",
       ),
-    ).toThrow("subnetwork URI is invalid");
+    ).toThrow("must be a global VPC in the dedicated credential project");
+  });
 
-    expect(() =>
-      requireComputeVmCreateAllowed(
-        resolveComputeVmConfig({
-          ...base,
-          compute_vm_gcp_service_account_json: credentials,
-          compute_vm_gcp_subnetwork:
-            "projects/wrong-project/regions/us-central1/subnetworks/compute",
-        }),
-        "account-1",
-      ),
-    ).toThrow("must belong to the dedicated credential project");
+  it("migrates the default network from the legacy subnetwork setting", () => {
+    const credentials = JSON.stringify({
+      project_id: "compute-prod",
+      client_email: "compute@example.invalid",
+    });
+    const config = resolveComputeVmConfig({
+      dns: "cocalc.ai",
+      compute_vm_gcp_service_account_json: credentials,
+      compute_vm_gcp_subnetwork:
+        "projects/compute-prod/regions/us-central1/subnetworks/cocalc-compute-vm-us-central1",
+    });
+    expect(config.gcp_network).toBe(
+      "projects/compute-prod/global/networks/cocalc-compute-vm",
+    );
   });
 });

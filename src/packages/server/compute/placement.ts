@@ -16,20 +16,22 @@ export function regionFromComputeZone(zone: string): string {
     .replace(/-[a-z]$/, "");
 }
 
-export function requireComputeZoneInRegion(zone: string, region?: string) {
-  if (region && regionFromComputeZone(zone) !== region) {
+export function requireComputeZoneInRegions(
+  zone: string,
+  regions?: ReadonlySet<string>,
+) {
+  if (regions && !regions.has(regionFromComputeZone(zone))) {
     throw new Error(
-      `managed compute is currently available only in ${region}; zone '${zone}' uses a different regional network`,
+      `managed compute has no configured regional subnetwork for zone '${zone}'`,
     );
   }
 }
 
-export function restrictHostCatalogToRegion(
+export function restrictHostCatalogToRegions(
   catalog: HostCatalog,
-  region?: string,
+  regions?: ReadonlySet<string>,
 ): HostCatalog {
-  if (!region) return catalog;
-  const zonePrefix = `${region}-`;
+  if (!regions) return catalog;
   return {
     ...catalog,
     entries: catalog.entries
@@ -37,14 +39,14 @@ export function restrictHostCatalogToRegion(
         ({ kind, scope }) =>
           (kind !== "machine_types" && kind !== "gpu_types") ||
           !scope.startsWith("zone/") ||
-          scope.slice("zone/".length).startsWith(zonePrefix),
+          regions.has(regionFromComputeZone(scope.slice("zone/".length))),
       )
       .map((entry) => {
         if (entry.kind === "regions" && entry.scope === "global") {
           return {
             ...entry,
-            payload: (entry.payload as HostCatalogRegion[]).filter(
-              ({ name }) => name === region,
+            payload: (entry.payload as HostCatalogRegion[]).filter(({ name }) =>
+              regions.has(name),
             ),
           };
         }
@@ -52,8 +54,8 @@ export function restrictHostCatalogToRegion(
           return {
             ...entry,
             payload: (entry.payload as HostCatalogZone[]).filter(
-              ({ name, region: zoneRegion }) =>
-                zoneRegion === region || name.startsWith(zonePrefix),
+              ({ name, region }) =>
+                regions.has(region || regionFromComputeZone(name)),
             ),
           };
         }
@@ -62,15 +64,12 @@ export function restrictHostCatalogToRegion(
   };
 }
 
-export function defaultComputeZone(
-  catalog: HostCatalog,
-  region?: string,
-): string {
+export function defaultComputeZone(catalog: HostCatalog): string {
   const zones = catalog.entries.find(
     ({ kind, scope }) => kind === "zones" && scope === "global",
   )?.payload as HostCatalogZone[] | undefined;
   return (
     zones?.find(({ status }) => !status || status === "UP")?.name ??
-    (region ? `${region}-a` : "us-central1-a")
+    "us-central1-a"
   );
 }

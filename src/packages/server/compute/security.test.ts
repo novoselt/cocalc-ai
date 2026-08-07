@@ -9,9 +9,9 @@ import { assertComputeVmSecurity } from "./security";
 
 const config = {
   gcp_network_tag: "cocalc-compute-vm",
-  gcp_subnetwork:
-    "projects/compute-prod/regions/us-central1/subnetworks/hostile-guests",
 } as ComputeVmConfig;
+const expectedSubnetwork =
+  "projects/compute-prod/regions/us-central1/subnetworks/hostile-guests";
 
 function instance(overrides: Record<string, any> = {}): RemoteInstance {
   return {
@@ -35,7 +35,9 @@ function instance(overrides: Record<string, any> = {}): RemoteInstance {
 
 describe("managed compute VM security validation", () => {
   it("accepts the isolated hostile-guest shape", () => {
-    expect(() => assertComputeVmSecurity(instance(), config)).not.toThrow();
+    expect(() =>
+      assertComputeVmSecurity(instance(), config, expectedSubnetwork),
+    ).not.toThrow();
   });
 
   it("reports every observed isolation violation", () => {
@@ -51,6 +53,7 @@ describe("managed compute VM security validation", () => {
           subnetwork: "projects/wrong/regions/us-central1/subnetworks/default",
         }),
         config,
+        expectedSubnetwork,
       ),
     ).toThrow(
       /service account.*IP forwarding.*SSH keys.*network tag.*Standard Tier.*IPv6.*subnetwork/,

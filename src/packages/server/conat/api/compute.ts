@@ -29,7 +29,11 @@ import {
 } from "@cocalc/server/compute/db";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
-import { ensureProviderComputeSshAccess } from "@cocalc/server/compute/provider";
+import {
+  ensureProviderComputeSshAccess,
+  getProviderComputeRegions,
+  requireProviderComputeSubnetwork,
+} from "@cocalc/server/compute/provider";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
 import {
   getComputeVmConfig,
@@ -52,8 +56,8 @@ import { getCatalog as getHostCatalog } from "./hosts";
 import {
   defaultComputeZone,
   regionFromComputeZone,
-  requireComputeZoneInRegion,
-  restrictHostCatalogToRegion,
+  requireComputeZoneInRegions,
+  restrictHostCatalogToRegions,
 } from "@cocalc/server/compute/placement";
 
 const MIN_BOOT_DISK_GB = 10;
@@ -265,14 +269,15 @@ export async function getCatalog(opts: {
 }): Promise<ComputeCatalog> {
   const accountId = requireAccount(opts.account_id);
   const config = await getComputeVmConfig();
-  const catalog = restrictHostCatalogToRegion(
+  const configuredRegions = await getProviderComputeRegions();
+  const catalog = restrictHostCatalogToRegions(
     await getHostCatalog({
       account_id: accountId,
       provider: "gcp",
     }),
-    config.gcp_region,
+    configuredRegions,
   );
-  const zone = defaultComputeZone(catalog, config.gcp_region);
+  const zone = defaultComputeZone(catalog);
   return {
     host_catalog: catalog,
     defaults: {
@@ -309,7 +314,9 @@ export async function createVm(opts: CreateComputeVmRequest) {
 
   const name = normalizeName(opts.name);
   const zone = normalizeZone(opts.zone);
-  requireComputeZoneInRegion(zone, config.gcp_region);
+  const configuredRegions = await getProviderComputeRegions();
+  requireComputeZoneInRegions(zone, configuredRegions);
+  await requireProviderComputeSubnetwork(zone);
   let attachedVolume = opts.volume
     ? await resolveOwnedVolume(accountId, opts.volume)
     : undefined;
@@ -512,7 +519,9 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
   });
   const name = normalizeVolumeName(opts.name);
   const zone = normalizeZone(opts.zone);
-  requireComputeZoneInRegion(zone, config.gcp_region);
+  const configuredRegions = await getProviderComputeRegions();
+  requireComputeZoneInRegions(zone, configuredRegions);
+  await requireProviderComputeSubnetwork(zone);
   const sizeGb = volumeAuthorization({
     size_gb: opts.size_gb,
     max_volume_gb: config.max_volume_gb,

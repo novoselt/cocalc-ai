@@ -5,8 +5,8 @@
 
 import {
   defaultComputeZone,
-  requireComputeZoneInRegion,
-  restrictHostCatalogToRegion,
+  requireComputeZoneInRegions,
+  restrictHostCatalogToRegions,
 } from "./placement";
 
 const catalog = {
@@ -35,8 +35,11 @@ const catalog = {
 };
 
 describe("managed compute placement", () => {
-  it("limits the shared host catalog to the configured network region", () => {
-    const restricted = restrictHostCatalogToRegion(catalog, "us-central1");
+  it("limits the shared host catalog to configured network regions", () => {
+    const restricted = restrictHostCatalogToRegions(
+      catalog,
+      new Set(["us-central1"]),
+    );
     expect(
       restricted.entries.find(({ kind }) => kind === "regions")?.payload,
     ).toEqual([{ name: "us-central1", zones: ["us-central1-a"] }]);
@@ -47,15 +50,20 @@ describe("managed compute placement", () => {
       restricted.entries.some(({ scope }) => scope === "zone/us-south1-c"),
     ).toBe(false);
     expect(restricted.entries.some(({ kind }) => kind === "prices")).toBe(true);
-    expect(defaultComputeZone(restricted, "us-central1")).toBe("us-central1-a");
+    expect(defaultComputeZone(restricted)).toBe("us-central1-a");
   });
 
-  it("rejects zones outside the configured network region", () => {
+  it("rejects zones without a configured regional subnet", () => {
     expect(() =>
-      requireComputeZoneInRegion("us-south1-c", "us-central1"),
-    ).toThrow("available only in us-central1");
+      requireComputeZoneInRegions("us-south1-c", new Set(["us-central1"])),
+    ).toThrow("no configured regional subnetwork");
     expect(() =>
-      requireComputeZoneInRegion("us-central1-a", "us-central1"),
+      requireComputeZoneInRegions("us-central1-a", new Set(["us-central1"])),
     ).not.toThrow();
+  });
+
+  it("preserves the full catalog for staging's legacy auto network", () => {
+    expect(restrictHostCatalogToRegions(catalog)).toBe(catalog);
+    expect(() => requireComputeZoneInRegions("us-south1-c")).not.toThrow();
   });
 });

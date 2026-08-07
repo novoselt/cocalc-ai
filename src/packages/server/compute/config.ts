@@ -20,8 +20,7 @@ export interface ComputeVmConfig {
   admin_allowlist: Set<string>;
   gcp_service_account_json?: string;
   gcp_project_id?: string;
-  gcp_subnetwork?: string;
-  gcp_region?: string;
+  gcp_network?: string;
   gcp_network_tag: string;
   staging_legacy_provider: boolean;
   max_active_per_project: number;
@@ -114,12 +113,16 @@ function parseServiceAccount(value: unknown): {
   return { json, project_id };
 }
 
-export function computeVmRegionFromSubnetwork(
-  subnetwork?: string,
+function defaultNetworkFromLegacySubnetwork(
+  subnetwork: string,
+  networkTag: string,
 ): string | undefined {
-  return `${subnetwork ?? ""}`
-    .trim()
-    .match(/^projects\/[^/]+\/regions\/([^/]+)\/subnetworks\/[^/]+$/)?.[1];
+  const project = subnetwork.match(
+    /^projects\/([^/]+)\/regions\/[^/]+\/subnetworks\/[^/]+$/,
+  )?.[1];
+  return project
+    ? `projects/${project}/global/networks/${networkTag}`
+    : undefined;
 }
 
 export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
@@ -128,7 +131,13 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
   const serviceAccount = parseServiceAccount(
     settings.compute_vm_gcp_service_account_json,
   );
-  const gcp_subnetwork = `${settings.compute_vm_gcp_subnetwork ?? ""}`.trim();
+  const gcpNetworkTag =
+    `${settings.compute_vm_gcp_network_tag ?? ""}`.trim() ||
+    "cocalc-compute-vm";
+  const legacySubnetwork = `${settings.compute_vm_gcp_subnetwork ?? ""}`.trim();
+  const gcpNetwork =
+    `${settings.compute_vm_gcp_network ?? ""}`.trim() ||
+    defaultNetworkFromLegacySubnetwork(legacySubnetwork, gcpNetworkTag);
   const staging_legacy_provider =
     automatic && environment === "staging" && serviceAccount.json == null;
 
@@ -139,11 +148,8 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
     admin_allowlist: parseAllowlist(settings.compute_vm_admin_allowlist),
     gcp_service_account_json: serviceAccount.json,
     gcp_project_id: serviceAccount.project_id,
-    gcp_subnetwork: gcp_subnetwork || undefined,
-    gcp_region: computeVmRegionFromSubnetwork(gcp_subnetwork),
-    gcp_network_tag:
-      `${settings.compute_vm_gcp_network_tag ?? ""}`.trim() ||
-      "cocalc-compute-vm",
+    gcp_network: gcpNetwork || undefined,
+    gcp_network_tag: gcpNetworkTag,
     staging_legacy_provider,
     max_active_per_project: positiveInteger(
       settings.compute_vm_max_active_per_project,
@@ -227,21 +233,17 @@ export function requireComputeVmCreateAllowed(
         "managed compute VM production credentials are not configured",
       );
     }
-    if (!config.gcp_subnetwork) {
+    if (!config.gcp_network) {
       throw new Error(
-        "managed compute VM production subnetwork is not configured",
+        "managed compute VM production network is not configured",
       );
     }
-    if (!config.gcp_region) {
+    const networkProject = config.gcp_network.match(
+      /^projects\/([^/]+)\/global\/networks\/[^/]+$/,
+    )?.[1];
+    if (networkProject !== config.gcp_project_id) {
       throw new Error(
-        "managed compute VM production subnetwork URI is invalid",
-      );
-    }
-    if (
-      !config.gcp_subnetwork.startsWith(`projects/${config.gcp_project_id}/`)
-    ) {
-      throw new Error(
-        "managed compute VM subnetwork must belong to the dedicated credential project",
+        "managed compute VM network must be a global VPC in the dedicated credential project",
       );
     }
   }

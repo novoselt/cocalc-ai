@@ -343,6 +343,7 @@ export type SiteSettingsExtrasKeys =
   | "compute_vm_emergency_stop"
   | "compute_vm_admin_allowlist"
   | "compute_vm_gcp_service_account_json"
+  | "compute_vm_gcp_network"
   | "compute_vm_gcp_subnetwork"
   | "compute_vm_gcp_network_tag"
   | "compute_vm_max_active_per_project"
@@ -1684,9 +1685,21 @@ export const EXTRAS: SettingsExtras = {
     group: "Compute / Managed VMs",
     subgroup: "GCP Isolation",
   },
+  compute_vm_gcp_network: {
+    name: "Managed Compute VMs: GCP Network",
+    desc: "Full global VPC network URI in the dedicated compute project. CoCalc discovers the flow-log-enabled regional subnets on this custom network and selects the subnet matching each VM region.",
+    default: "",
+    to_val: to_trimmed_str,
+    valid: (value) =>
+      !`${value ?? ""}`.trim() ||
+      /^projects\/[^/]+\/global\/networks\/[^/]+$/.test(`${value}`.trim()),
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "GCP Isolation",
+  },
   compute_vm_gcp_subnetwork: {
-    name: "Managed Compute VMs: GCP Subnetwork",
-    desc: "Full subnetwork URI in the dedicated compute project. Production creation fails closed unless this is configured.",
+    name: "Managed Compute VMs: Legacy GCP Subnetwork",
+    desc: "Compatibility-only setting from the single-region beta. New setup stores the global custom-network URI and discovers one regional subnet per region.",
     default: "",
     to_val: to_trimmed_str,
     valid: () => true,
