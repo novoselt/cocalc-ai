@@ -13,6 +13,8 @@ import React, {
 } from "react";
 import { hash_string } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
+import { MinimapHideButton } from "@cocalc/frontend/components/minimap-hide-button";
+import { setMinimapEnabled } from "../minimap-settings";
 
 const MINIMAP_WIDTH = 40;
 const VIEWPORT_MIN_HEIGHT = 12;
@@ -506,6 +508,7 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
           if (el) el.scrollTop += e.deltaY;
         }}
       >
+        <MinimapHideButton onConfirm={() => setMinimapEnabled(false)} />
         {/* Cell bars */}
         {segments.map(({ entry, top, height: h }) => {
           const { id, status, isCode, isCurrent, isSelected } = entry;

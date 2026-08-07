@@ -26,6 +26,7 @@ import {
   useState,
 } from "@cocalc/frontend/app-framework";
 import { initFold, saveFold } from "@cocalc/frontend/codemirror/util";
+import { MinimapHideButton } from "@cocalc/frontend/components/minimap-hide-button";
 import { Cursors } from "@cocalc/frontend/jupyter/cursors";
 import { debounce, isEqual, throttle } from "lodash";
 import { cm_options } from "../codemirror/cm-options";
@@ -555,8 +556,13 @@ const CodeMirrorMinimap: React.FC<CodeMirrorMinimapProps> = React.memo(
             height: "100%",
             alignItems: "center",
             justifyContent: "center",
+            position: "relative",
           }}
         >
+          <MinimapHideButton
+            onConfirm={() => setCodeMirrorMinimapEnabled(false)}
+            top={22}
+          />
           <div
             ref={railRef}
             onMouseDown={onRailMouseDown}
