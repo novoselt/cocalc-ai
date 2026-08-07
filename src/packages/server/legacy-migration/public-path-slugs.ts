@@ -5,6 +5,7 @@
 
 import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { normalizePublicDirectoryShareSlug } from "@cocalc/server/public-directory-shares";
+import { decodeLegacyPublicPathDescriptionEscapes } from "@cocalc/util/legacy-migration";
 
 type QueryClient = PoolClient | ReturnType<typeof getPool>;
 
@@ -26,12 +27,7 @@ export function normalizeLegacyPublicPathDescription(
 ): string | undefined {
   const text = clean(value);
   if (!text) return undefined;
-  return text
-    .replace(/\\r\\n/g, "\n")
-    .replace(/\\n\\n/g, "\n\n")
-    .replace(/\\n(?![A-Za-z])/g, "\n")
-    .replace(/\\r(?![A-Za-z])/g, "\n")
-    .replace(/\\t(?![A-Za-z])/g, "\t");
+  return decodeLegacyPublicPathDescriptionEscapes(text);
 }
 
 export function isUnsupportedLegacyProxyPublicPath(
