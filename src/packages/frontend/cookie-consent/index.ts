@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import * as CookieConsent from "vanilla-cookieconsent";
 
 import { COLORS } from "@cocalc/util/theme";
+import { COOKIE_CONSENT_REVISION } from "@cocalc/util/cookie-consent";
 
 import { COOKIE_CATEGORIES, type CookieCategoryKey } from "./categories";
 import {
@@ -21,7 +22,7 @@ import {
 export { COOKIE_CATEGORIES };
 export type { CookieCategoryKey };
 
-export const COOKIE_CONSENT_REVISION = 2;
+export { COOKIE_CONSENT_REVISION };
 
 export type ConsentSnapshot = Record<CookieCategoryKey, boolean> & {
   timestamp: string;
