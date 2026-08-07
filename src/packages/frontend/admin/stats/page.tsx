@@ -135,6 +135,12 @@ function metricLabel(metric: string): string {
   switch (metric) {
     case "project_start_running":
       return "Project lifecycle to running";
+    case "project_start_admission":
+      return "Project start admission";
+    case "project_start_backend_lifecycle":
+      return "Project-host lifecycle";
+    case "project_start_frontend_convergence":
+      return "Running-state convergence";
     case "project_start_running_stuck":
       return "Project start appears stuck";
     case "project_start_running_timeout":
@@ -199,6 +205,12 @@ function metricHelp(metric: string, segment?: string): string {
   switch (metric) {
     case "project_start_running":
       return "Observed in the user's browser from pressing Start, or an automatic start request, until the project lifecycle state is running. This means the container/lifecycle is running; terminal, Jupyter, and exec readiness are measured separately. The aggregate row includes restore/dearchive cases; use the segment rows to separate them.";
+    case "project_start_admission":
+      return "Observed in the user's browser from issuing the start RPC until the hub returns the accepted lifecycle operation. This isolates placement, authorization, and control-plane request latency.";
+    case "project_start_backend_lifecycle":
+      return "Measured from the backend LRO's authoritative started and finished timestamps. This isolates project-host lifecycle work from browser and stream convergence.";
+    case "project_start_frontend_convergence":
+      return "Observed from receipt of the terminal start LRO until the browser's local project stream reports running. This isolates projection, subscription, and frontend convergence latency.";
     case "project_start_running_stuck":
       return "Observed in the user's browser when a project start request has not reached lifecycle state running after the user-visible stuck threshold. This is meant to catch starts that look stuck to users before the hard monitoring timeout.";
     case "project_start_running_timeout":

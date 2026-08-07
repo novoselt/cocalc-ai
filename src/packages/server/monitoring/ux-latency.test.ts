@@ -10,9 +10,33 @@ import type {
 } from "@cocalc/conat/hub/api/system";
 import {
   alertCandidates,
+  classifyLatencyP95Health,
   classifyProjectStartQuotaTelemetry,
   DEFAULT_UX_LATENCY_SLA_THRESHOLDS,
 } from "./ux-latency";
+
+describe("latency health sample requirements", () => {
+  it("does not warn on a P95 computed from too few project starts", () => {
+    expect(
+      classifyLatencyP95Health({
+        p95: 12_000,
+        sample_count: 6,
+        min_samples: 10,
+        warning_ms: 7_000,
+        critical_ms: 14_000,
+      }),
+    ).toBe("unknown");
+    expect(
+      classifyLatencyP95Health({
+        p95: 12_000,
+        sample_count: 10,
+        min_samples: 10,
+        warning_ms: 7_000,
+        critical_ms: 14_000,
+      }),
+    ).toBe("warning");
+  });
+});
 
 const event = {
   event_type: "project_start",

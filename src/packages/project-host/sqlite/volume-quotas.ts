@@ -25,6 +25,7 @@ export interface ProjectVolumeQuotaRow {
   applied_epoch?: string | null;
   volume_identity?: string | null;
   state: ProjectVolumeQuotaState;
+  reset_required: boolean;
   last_error?: string | null;
   desired_updated_at: number;
   apply_started_at?: number | null;
@@ -75,6 +76,7 @@ function ensureTable(): void {
       applied_epoch TEXT,
       volume_identity TEXT,
       state TEXT NOT NULL,
+      reset_required INTEGER NOT NULL DEFAULT 0,
       last_error TEXT,
       desired_updated_at INTEGER NOT NULL,
       apply_started_at INTEGER,
@@ -89,6 +91,11 @@ function ensureTable(): void {
   );
   try {
     db.exec(`ALTER TABLE ${TABLE} ADD COLUMN next_audit_at INTEGER`);
+  } catch {}
+  try {
+    db.exec(
+      `ALTER TABLE ${TABLE} ADD COLUMN reset_required INTEGER NOT NULL DEFAULT 0`,
+    );
   } catch {}
   db.exec(
     `CREATE INDEX IF NOT EXISTS ${TABLE}_audit_idx ON ${TABLE}(state, next_audit_at, updated_at)`,
@@ -109,6 +116,7 @@ function parseRow(row: any): ProjectVolumeQuotaRow {
     volume_identity:
       row.volume_identity == null ? null : `${row.volume_identity}`,
     state: row.state as ProjectVolumeQuotaState,
+    reset_required: row.reset_required === 1,
     last_error: row.last_error == null ? null : `${row.last_error}`,
     desired_updated_at: Number(row.desired_updated_at),
     apply_started_at:
@@ -183,14 +191,15 @@ export function acceptProjectVolumeQuotaDesired({
         INSERT INTO ${TABLE} (
           project_id, volume_kind, desired_bytes, desired_revision,
           applied_bytes, applied_revision, applied_epoch, volume_identity,
-          state, last_error, desired_updated_at, apply_started_at, applied_at,
-          next_audit_at, updated_at
+          state, reset_required, last_error, desired_updated_at,
+          apply_started_at, applied_at, next_audit_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id, volume_kind) DO UPDATE SET
           desired_bytes=excluded.desired_bytes,
           desired_revision=excluded.desired_revision,
           state=excluded.state,
+          reset_required=excluded.reset_required,
           last_error=NULL,
           desired_updated_at=excluded.desired_updated_at,
           next_audit_at=excluded.next_audit_at,
@@ -207,6 +216,7 @@ export function acceptProjectVolumeQuotaDesired({
       existing?.applied_epoch ?? null,
       existing?.volume_identity ?? null,
       preserveApplied ? (existing?.state ?? "applied") : "pending",
+      existing?.reset_required ? 1 : 0,
       now,
       existing?.apply_started_at ?? null,
       existing?.applied_at ?? null,
@@ -229,6 +239,7 @@ export function projectVolumeQuotaIsApplied(
   return (
     epoch != null &&
     volume_identity != null &&
+    !row.reset_required &&
     row.state === "applied" &&
     row.applied_bytes === row.desired_bytes &&
     row.applied_revision === row.desired_revision &&
@@ -321,6 +332,27 @@ export function markProjectVolumeQuotaApplied({
   return Number(result.changes) === 1;
 }
 
+export function markProjectVolumeQuotaResetComplete({
+  project_id,
+  desired_revision,
+}: {
+  project_id: string;
+  desired_revision: number;
+}): boolean {
+  ensureTable();
+  const result = getDatabase()
+    .prepare(
+      `UPDATE ${TABLE}
+          SET reset_required=0, updated_at=?
+        WHERE project_id=?
+          AND volume_kind='scratch'
+          AND desired_revision=?
+          AND state='applied'`,
+    )
+    .run(Date.now(), project_id, desired_revision);
+  return Number(result.changes) === 1;
+}
+
 export function markProjectVolumeQuotaFailed({
   project_id,
   volume_kind,
@@ -353,21 +385,32 @@ export function invalidateProjectVolumeQuota({
   volume_kind,
   reason,
   retry_at = Date.now(),
+  reset_required,
 }: {
   project_id: string;
   volume_kind: ProjectVolumeKind;
   reason?: string;
   retry_at?: number;
+  reset_required?: boolean;
 }): void {
   ensureTable();
   getDatabase()
     .prepare(
       `UPDATE ${TABLE}
           SET state='pending', applied_epoch=NULL, volume_identity=NULL,
+              reset_required=CASE WHEN ? IS NULL THEN reset_required ELSE ? END,
               last_error=?, next_audit_at=?, updated_at=?
         WHERE project_id=? AND volume_kind=?`,
     )
-    .run(reason ?? null, retry_at, Date.now(), project_id, volume_kind);
+    .run(
+      reset_required == null ? null : reset_required ? 1 : 0,
+      reset_required ? 1 : 0,
+      reason ?? null,
+      retry_at,
+      Date.now(),
+      project_id,
+      volume_kind,
+    );
 }
 
 export function bootstrapProjectVolumeQuotaLedger(): number {
@@ -431,10 +474,12 @@ export function listProjectVolumeQuotaAuditBatch({
         `SELECT * FROM ${TABLE}
           WHERE (
                state IN ('pending', 'applying')
+               AND reset_required=0
                AND (next_audit_at IS NULL OR next_audit_at <= ?)
              )
              OR (
                state = 'applied'
+               AND reset_required=0
                AND (
                  applied_bytes IS NULL
                  OR applied_bytes != desired_bytes
@@ -448,6 +493,7 @@ export function listProjectVolumeQuotaAuditBatch({
              )
              OR (
                state IN ('blocked', 'failed', 'missing')
+               AND reset_required=0
                AND (next_audit_at IS NULL OR next_audit_at <= ?)
              )
           ORDER BY
@@ -463,6 +509,52 @@ export function listProjectVolumeQuotaAuditBatch({
       )
       .all(now, epoch ?? "", now, now, boundedLimit) as any[]
   ).map(parseRow);
+}
+
+export function listStoppedScratchVolumePreparationBatch({
+  limit = 8,
+  now = Date.now(),
+}: {
+  limit?: number;
+  now?: number;
+} = {}): ProjectVolumeQuotaRow[] {
+  ensureTable();
+  const boundedLimit = Math.max(1, Math.min(64, Math.floor(limit)));
+  return (
+    getDatabase()
+      .prepare(
+        `SELECT q.* FROM ${TABLE} q
+          JOIN projects p ON p.project_id=q.project_id
+         WHERE q.volume_kind='scratch'
+           AND q.reset_required=1
+           AND (q.next_audit_at IS NULL OR q.next_audit_at <= ?)
+           AND p.state='opened'
+         ORDER BY COALESCE(q.next_audit_at, 0), q.updated_at, q.project_id
+         LIMIT ?`,
+      )
+      .all(now, boundedLimit) as any[]
+  ).map(parseRow);
+}
+
+export function claimStoppedScratchVolumePreparations(): number {
+  ensureTable();
+  const now = Date.now();
+  const result = getDatabase()
+    .prepare(
+      `UPDATE ${TABLE} AS q
+          SET reset_required=1,
+              next_audit_at=MIN(COALESCE(next_audit_at, ?), ?),
+              updated_at=?
+        WHERE q.volume_kind='scratch'
+          AND q.reset_required=0
+          AND q.state!='applied'
+          AND EXISTS (
+            SELECT 1 FROM projects p
+             WHERE p.project_id=q.project_id AND p.state='opened'
+          )`,
+    )
+    .run(now, now, now);
+  return Number(result.changes);
 }
 
 export function deleteProjectVolumeQuotas(project_id: string): void {
