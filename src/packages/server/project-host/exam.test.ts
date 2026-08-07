@@ -20,19 +20,76 @@ describe("project-host exam configuration", () => {
     ).toBe("exam-00000000-1000-4000-8000-000000000001-staging.cocalc.ai");
   });
 
-  it("requires an on-demand host", () => {
-    expect(
-      __test__.isHostOnDemand({
-        id: "00000000-1000-4000-8000-000000000001",
-        metadata: { effective_pricing_model: "spot" },
+  it("uses an already cached exam RootFS without pulling it again", async () => {
+    const pullRootfsImage = jest.fn();
+    const loadVisibleRootfsImages = jest.fn();
+    await expect(
+      __test__.ensureExamRootfsCached({
+        control: {
+          listRootfsImages: async () => [
+            { image: "cocalc.local/rootfs/sage", digest: "sha256:cached" },
+          ],
+          pullRootfsImage,
+        },
+        rootfs_image: "cocalc.local/rootfs/sage",
+        actor_account_id: "account-1",
+        loadVisibleRootfsImages,
       }),
-    ).toBe(false);
-    expect(
-      __test__.isHostOnDemand({
-        id: "00000000-1000-4000-8000-000000000001",
-        metadata: { effective_pricing_model: "on_demand" },
+    ).resolves.toEqual({
+      image: "cocalc.local/rootfs/sage",
+      digest: "sha256:cached",
+    });
+    expect(loadVisibleRootfsImages).not.toHaveBeenCalled();
+    expect(pullRootfsImage).not.toHaveBeenCalled();
+  });
+
+  it("pulls and pins a visible catalog RootFS during preparation", async () => {
+    const pullRootfsImage = jest.fn(async ({ image }) => ({
+      image,
+      digest: "sha256:pinned",
+    }));
+    await expect(
+      __test__.ensureExamRootfsCached({
+        control: {
+          listRootfsImages: async () => [],
+          pullRootfsImage,
+        },
+        rootfs_image: "cocalc.local/rootfs/sage",
+        actor_account_id: "account-1",
+        loadVisibleRootfsImages: async () => ({
+          version: 1,
+          images: [
+            {
+              id: "sage",
+              image: "cocalc.local/rootfs/sage",
+              label: "SageMath",
+            },
+          ],
+        }),
       }),
-    ).toBe(true);
+    ).resolves.toEqual({
+      image: "cocalc.local/rootfs/sage",
+      digest: "sha256:pinned",
+    });
+    expect(pullRootfsImage).toHaveBeenCalledWith({
+      image: "cocalc.local/rootfs/sage",
+    });
+  });
+
+  it("does not pull an uncached RootFS outside the visible catalog", async () => {
+    const pullRootfsImage = jest.fn();
+    await expect(
+      __test__.ensureExamRootfsCached({
+        control: {
+          listRootfsImages: async () => [],
+          pullRootfsImage,
+        },
+        rootfs_image: "registry.invalid/private",
+        actor_account_id: "account-1",
+        loadVisibleRootfsImages: async () => ({ version: 1, images: [] }),
+      }),
+    ).rejects.toThrow("not available in your managed image catalog");
+    expect(pullRootfsImage).not.toHaveBeenCalled();
   });
 
   it("requires the host runtime before destructive exam cleanup", () => {

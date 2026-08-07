@@ -38,14 +38,21 @@ import {
 } from "@cocalc/frontend/auth/fresh-auth";
 import { openAppDocs } from "@cocalc/frontend/docs/navigation";
 import { RootfsCatalogPicker } from "@cocalc/frontend/rootfs/catalog-picker";
+import { latestRootfsVersionEntries } from "@cocalc/frontend/rootfs/catalog-ui";
 import {
   managedRootfsCatalogUrl,
   useRootfsImages,
 } from "@cocalc/frontend/rootfs/manifest";
+import { isSpotHost } from "@cocalc/frontend/hosts/spot-ui";
 import {
   getHostCpuCount,
   getHostRamGiB,
 } from "@cocalc/frontend/hosts/utils/format";
+import { isNewProjectRootfsSelectable } from "@cocalc/frontend/projects/create-project-rootfs";
+import {
+  type ProjectCreateMode,
+  rootfsEntryMatchesProjectMode,
+} from "@cocalc/frontend/projects/create/project-create-draft";
 import {
   managedRootfsContentKey,
   type RootfsImageEntry,
@@ -72,6 +79,15 @@ const EXAM_MUTATION_TIMEOUT_MS = 2 * 60_000;
 const EXAM_LIFECYCLE_TIMEOUT_MS = 12 * 60_000;
 const EXAM_TRANSIENT_POLL_MS = 2_000;
 const EXAM_TRANSIENT_STATUSES = new Set(["preparing", "closing", "cleaning"]);
+const EXAM_ROOTFS_PRESETS: Array<{
+  mode: ProjectCreateMode;
+  label: string;
+}> = [
+  { mode: "standard", label: "Standard" },
+  { mode: "gpu", label: "GPU" },
+  { mode: "teaching", label: "Teaching" },
+  { mode: "custom", label: "All images" },
+];
 
 function defaultExamDeadline(projectTtlMinutes: number): Dayjs {
   // Keep clear of both server boundaries: at least one minute ahead and no
@@ -238,18 +254,11 @@ export function examRootfsCatalogEntries({
 }): RootfsImageEntry[] {
   const cached = cachedImages.filter((entry) => !!entry.digest);
   const used = new Set<string>();
-  const entries: RootfsImageEntry[] = [];
-  for (const catalog of catalogImages) {
-    const match = cached.find(
-      (entry) =>
-        !used.has(entry.image) &&
-        (entry.image === catalog.image ||
-          (!!entry.release_id && entry.release_id === catalog.release_id)),
-    );
-    if (!match) continue;
-    used.add(match.image);
-    entries.push({ ...catalog, digest: match.digest ?? catalog.digest });
-  }
+  const entries: RootfsImageEntry[] = catalogImages.map((catalog) => {
+    const match = cached.find((entry) => entry.image === catalog.image);
+    if (match) used.add(match.image);
+    return { ...catalog, digest: match?.digest ?? catalog.digest };
+  });
   for (const entry of cached) {
     if (used.has(entry.image)) continue;
     const contentKey = managedRootfsContentKey(entry.image);
@@ -287,20 +296,54 @@ export function HostExamPanel({
   const [pendingAction, setPendingAction] = useState<"prepare">();
   const [error, setError] = useState("");
   const [rootfsSearch, setRootfsSearch] = useState("");
+  const [rootfsPreset, setRootfsPreset] =
+    useState<ProjectCreateMode>("standard");
+  const [showOlderRootfsVersions, setShowOlderRootfsVersions] = useState(false);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
   const api = webapp_client.conat_client.hub.hosts;
   const {
     images: rootfsCatalog,
     loading: rootfsCatalogLoading,
     error: rootfsCatalogError,
-  } = useRootfsImages([managedRootfsCatalogUrl()], { limit: 200 });
-  const selectableRootfsImages = useMemo(
+  } = useRootfsImages([managedRootfsCatalogUrl()], { limit: 1000 });
+  const selectableRootfsImages = useMemo(() => {
+    const entries = examRootfsCatalogEntries({
+      cachedImages: rootfsImages,
+      catalogImages: rootfsCatalog,
+    });
+    const catalogImages = new Set(rootfsCatalog.map((entry) => entry.image));
+    const hostHasGpu =
+      host.gpu === true || Number(host.machine?.gpu_count ?? 0) > 0;
+    return entries.filter(
+      (entry) =>
+        !catalogImages.has(entry.image) ||
+        isNewProjectRootfsSelectable({
+          entry,
+          isGpu: hostHasGpu,
+        }),
+    );
+  }, [host.gpu, host.machine?.gpu_count, rootfsCatalog, rootfsImages]);
+  const pickerRootfsImages = useMemo(
     () =>
-      examRootfsCatalogEntries({
-        cachedImages: rootfsImages,
-        catalogImages: rootfsCatalog,
-      }),
-    [rootfsCatalog, rootfsImages],
+      latestRootfsVersionEntries(
+        selectableRootfsImages.filter(
+          (entry) =>
+            entry.image === rootfsImage ||
+            rootfsEntryMatchesProjectMode(entry, rootfsPreset),
+        ),
+        {
+          showOlderVersions: showOlderRootfsVersions,
+          preserveIds: selectableRootfsImages
+            .filter((entry) => entry.image === rootfsImage)
+            .map((entry) => entry.id),
+        },
+      ),
+    [
+      rootfsImage,
+      rootfsPreset,
+      selectableRootfsImages,
+      showOlderRootfsVersions,
+    ],
   );
 
   const refresh = async () => {
@@ -357,9 +400,12 @@ export function HostExamPanel({
   }, [host.id, loading, state?.run?.status]);
 
   useEffect(() => {
-    if (rootfsImage || rootfsImages.length === 0) return;
-    setRootfsImage(rootfsImages.find((entry) => !!entry.digest)?.image);
-  }, [rootfsImage, rootfsImages]);
+    if (rootfsImage || selectableRootfsImages.length === 0) return;
+    const preferred = selectableRootfsImages.find((entry) =>
+      rootfsEntryMatchesProjectMode(entry, "standard"),
+    );
+    setRootfsImage(preferred?.image ?? selectableRootfsImages[0].image);
+  }, [rootfsImage, selectableRootfsImages]);
 
   const mutate = async (
     action: () => Promise<HostExamState & { token?: string }>,
@@ -417,8 +463,8 @@ export function HostExamPanel({
     state != null &&
     (!state.config ||
       !sameExamConfig(config, editableExamConfig(state.config)));
-  const selectedRootfsIsReady = rootfsImages.some(
-    (entry) => entry.image === rootfsImage && !!entry.digest,
+  const selectedRootfsIsAvailable = selectableRootfsImages.some(
+    (entry) => entry.image === rootfsImage,
   );
   const now = Date.now();
   const earliestDeadline = now + 60_000;
@@ -429,8 +475,8 @@ export function HostExamPanel({
     !config.enabled ? "Enable and save exam mode." : undefined,
     configDirty ? "Save the exam configuration changes." : undefined,
     !hostRunning ? "Start the project host." : undefined,
-    !selectedRootfsIsReady
-      ? "Select a cached RootFS that has a digest."
+    !selectedRootfsIsAvailable
+      ? "Select a RootFS image from the managed catalog."
       : undefined,
     deadlineTooSoon
       ? "Choose a project-deletion time at least one minute in the future."
@@ -462,7 +508,7 @@ export function HostExamPanel({
             type="info"
             showIcon
             title="Preparing and testing the exam environment"
-            description="Creating a smoke-test project, starting Jupyter, checking network isolation and cleanup, then erasing the test project. This usually takes about one minute."
+            description="Downloading the RootFS when needed, creating a smoke-test project, starting Jupyter, checking network isolation and cleanup, then erasing the test project. A first download may take several minutes."
             style={{ maxWidth: 560, textAlign: "left" }}
           />
         ) : undefined
@@ -475,7 +521,7 @@ export function HostExamPanel({
           title="Ephemeral exam scratchpads"
           description={
             <>
-              Students get anonymous local projects on this Standard host.
+              Students get anonymous local projects on this project host.
               Outbound project networking is disabled. Existing private-host
               billing applies.
               <br />
@@ -491,6 +537,14 @@ export function HostExamPanel({
             </>
           }
         />
+        {isSpotHost(host) && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Spot capacity can be interrupted during an exam"
+            description="This host may be stopped or restarted by the cloud provider at any time. Spot is useful for testing and non-critical scratchpads, but use Standard/on-demand capacity for a live exam."
+          />
+        )}
         {error && <Alert type="error" showIcon title={error} />}
         {!hostRunning && (
           <Alert
@@ -666,24 +720,49 @@ export function HostExamPanel({
               size="middle"
               style={{ width: "100%" }}
             >
+              <Space size={4} wrap>
+                {EXAM_ROOTFS_PRESETS.map(({ mode, label }) => (
+                  <Button
+                    key={mode}
+                    size="small"
+                    type={rootfsPreset === mode ? "primary" : "default"}
+                    aria-pressed={rootfsPreset === mode}
+                    onClick={() => {
+                      setRootfsPreset(mode);
+                      setRootfsSearch("");
+                    }}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </Space>
               <RootfsCatalogPicker
-                images={selectableRootfsImages}
+                images={pickerRootfsImages}
                 selectedImage={rootfsImage}
                 onSelect={(entry) => setRootfsImage(entry.image)}
                 loading={
-                  rootfsCatalogLoading && selectableRootfsImages.length === 0
+                  rootfsCatalogLoading && pickerRootfsImages.length === 0
                 }
                 disabled={loading || !hostRunning}
                 search={rootfsSearch}
                 onSearchChange={setRootfsSearch}
-                searchPlaceholder="Search cached exam images..."
-                emptyText="No cached RootFS images match this search. Cache an image on the host before preparing the exam."
+                searchPlaceholder="Search by name, image, publisher, tag, or version"
+                emptyText="No managed RootFS images match this filter and search."
                 height={320}
               />
+              <Checkbox
+                checked={showOlderRootfsVersions}
+                onChange={(event) =>
+                  setShowOlderRootfsVersions(event.target.checked)
+                }
+                disabled={loading}
+              >
+                Show older versions
+              </Checkbox>
               {rootfsCatalogError && (
                 <Typography.Text type="secondary">
-                  Catalog metadata is unavailable; cached images are shown by
-                  immutable reference. {rootfsCatalogError}
+                  Catalog metadata is unavailable; any already cached images
+                  remain selectable. {rootfsCatalogError}
                 </Typography.Text>
               )}
               <Space wrap align="center">
@@ -713,7 +792,7 @@ export function HostExamPanel({
                 type="info"
                 showIcon
                 title="Preparation runs a complete rehearsal"
-                description="Allow about one minute. CoCalc freezes the selected RootFS and limits, creates an isolated smoke-test project, starts Jupyter, verifies network isolation and cleanup, then erases the test project. Admission remains closed until you select Open admission."
+                description="CoCalc downloads the selected RootFS to this host when needed, pins its immutable digest and limits, creates an isolated smoke-test project, starts Jupyter, verifies network isolation and cleanup, then erases the test project. A first download may take several minutes. Admission remains closed until you select Open admission."
               />
               {prepareBlockers.length > 0 && (
                 <Alert
