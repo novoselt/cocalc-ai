@@ -398,6 +398,49 @@ function normalizeDomainList(values: string[]): string[] {
   ).sort();
 }
 
+function DomainTags({ domains }: { domains: string[] }) {
+  const normalized = normalizeDomainList(domains);
+  if (normalized.length === 0) {
+    return <Text type="secondary">None</Text>;
+  }
+  return (
+    <Space wrap size={4}>
+      {normalized.map((domain) => (
+        <Tag key={domain}>{domain}</Tag>
+      ))}
+    </Space>
+  );
+}
+
+function AdditionalDomainsByPool({
+  pools,
+}: {
+  pools: Array<{ name: string; domains: string[] }>;
+}) {
+  const configuredPools = pools
+    .map((pool) => ({
+      ...pool,
+      domains: normalizeDomainList(pool.domains),
+    }))
+    .filter((pool) => pool.domains.length > 0);
+  return (
+    <CompactField label="Additional domains by pool">
+      {configuredPools.length === 0 ? (
+        <Text type="secondary">None</Text>
+      ) : (
+        <Space orientation="vertical" size="small">
+          {configuredPools.map((pool) => (
+            <Space key={pool.name} wrap size="small">
+              <Text>{pool.name}:</Text>
+              <DomainTags domains={pool.domains} />
+            </Space>
+          ))}
+        </Space>
+      )}
+    </CompactField>
+  );
+}
+
 const SITE_LICENSE_VERIFICATION_OPTIONS: {
   label: string;
   value: SiteLicenseVerificationPolicy;
@@ -865,6 +908,7 @@ function getSiteLicenseSearchText(overview: SiteLicenseOverview): string {
     overview.site_license.bay_id,
     ...(overview.site_license.allowed_domains ?? []),
     ...overview.pools.map((pool) => pool.pool_name),
+    ...overview.pools.flatMap((pool) => getPackageDomains(pool)),
   ]
     .filter(Boolean)
     .join(" ")
@@ -1874,6 +1918,13 @@ export function SiteLicenseAdminPanel({
       getSiteLicenseSearchText(overview).includes(needle),
     );
   }, [licenseSearch, overviews]);
+  const editTargetSiteLicenseId = `${
+    editTarget?.metadata?.site_license_id ?? ""
+  }`.trim();
+  const editTargetLicenseDomains =
+    overviews.find(
+      (overview) => overview.site_license.id === editTargetSiteLicenseId,
+    )?.site_license.allowed_domains ?? [];
 
   useEffect(() => {
     if (filteredOverviews.length === 0) {
@@ -2055,6 +2106,7 @@ export function SiteLicenseAdminPanel({
       <EditSiteLicenseModal
         open={editTarget != null}
         membershipPackage={editTarget}
+        inheritedDomains={editTargetLicenseDomains}
         tiers={tiers}
         onClose={() => setEditTarget(null)}
         onUpdated={async () => {
@@ -2155,7 +2207,7 @@ function SiteLicenseSummaryTable({
             render={(_, overview) => overview.pools.length}
           />
           <Table.Column<SiteLicenseOverview>
-            title="Domains"
+            title="All-pool domains"
             render={(_, overview) => {
               const domains = overview.site_license.allowed_domains ?? [];
               if (domains.length === 0) {
@@ -2397,7 +2449,7 @@ function SiteLicenseDashboard({
                   ) : null}
                   <Space wrap>
                     <Text strong style={{ color: "white" }}>
-                      Covered domains:
+                      Email domains eligible for all pools:
                     </Text>
                     {domains.length > 0 ? (
                       domains.map((domain) => <Tag key={domain}>{domain}</Tag>)
@@ -2890,6 +2942,9 @@ function SiteLicenseDashboard({
           setAddingPoolError("");
         }}
         mode="add"
+        inheritedDomains={
+          addingPool?.overview.site_license.allowed_domains ?? []
+        }
         error={addingPoolError}
         submitting={addingPoolSubmitting}
         onSubmit={async () => {
@@ -3556,7 +3611,7 @@ function EditSiteLicenseSettingsModal({
             />
           </CompactField>
         </div>
-        <CompactField label="Allowed domains">
+        <CompactField label="Email domains eligible for all pools">
           <Select
             mode="tags"
             tokenSeparators={[",", " ", "\n", ";"]}
@@ -3565,6 +3620,14 @@ function EditSiteLicenseSettingsModal({
             style={{ width: "100%" }}
           />
         </CompactField>
+        <AdditionalDomainsByPool
+          pools={
+            overview?.pools.map((pool) => ({
+              name: pool.pool_name,
+              domains: getPackageDomains(pool),
+            })) ?? []
+          }
+        />
         <div
           style={{
             display: "grid",
@@ -4122,8 +4185,7 @@ function ProvisionSiteLicenseModal({
           pool_description: `${pool.pool_description ?? ""}`.trim() || null,
           exclusive_group: `${pool.exclusive_group ?? ""}`.trim() || null,
           seat_count: Math.max(1, Math.trunc(Number(pool.seat_count) || 1)),
-          allowed_domains:
-            poolDomains.length > 0 ? poolDomains : allowed_domains,
+          allowed_domains: poolDomains,
           affiliation_reverification_days:
             pool.affiliation_reverification_days == null
               ? null
@@ -4263,7 +4325,7 @@ function ProvisionSiteLicenseModal({
         </Card>
 
         <Card
-          title="Eligibility domains (optional)"
+          title="Email domains eligible for all pools (optional)"
           size="small"
           style={{ borderRadius: 14 }}
         >
@@ -4295,6 +4357,12 @@ function ProvisionSiteLicenseModal({
             Separate domains with commas, spaces, or new lines. Do not include
             full email addresses.
           </Text>
+          <AdditionalDomainsByPool
+            pools={pools.map((pool) => ({
+              name: pool.pool_name,
+              domains: pool.allowed_domains ?? [],
+            }))}
+          />
         </Card>
 
         <Collapse
@@ -4558,6 +4626,7 @@ function ProvisionSiteLicenseModal({
             }
           }}
           onClose={() => setEditingPoolIndex(null)}
+          inheritedDomains={domains}
         />
         <FreshAuthModal {...freshAuthModalProps} />
       </Space>
@@ -4574,7 +4643,7 @@ function ProvisionPoolEditModal({
   onClose,
   mode = "edit",
   activeSeatCount = 0,
-  domainsRequired = false,
+  inheritedDomains = [],
   expiresAt,
   onExpiresAtChange,
   error,
@@ -4589,7 +4658,7 @@ function ProvisionPoolEditModal({
   onClose: () => void;
   mode?: "edit" | "add" | "persisted";
   activeSeatCount?: number;
-  domainsRequired?: boolean;
+  inheritedDomains?: string[];
   expiresAt?: Dayjs | null;
   onExpiresAtChange?: (value: Dayjs | null) => void;
   error?: string;
@@ -4612,9 +4681,7 @@ function ProvisionPoolEditModal({
   const seatMin = Math.max(1, activeSeatCount);
   const setDomains = (values: string[]) => {
     const next = normalizeDomainList(values);
-    onChange({
-      allowed_domains: domainsRequired || next.length > 0 ? next : undefined,
-    });
+    onChange({ allowed_domains: next });
     setDomainSearch("");
   };
 
@@ -4718,12 +4785,8 @@ function ProvisionPoolEditModal({
           />
         </CompactField>
         <CompactField
-          label="Allowed email domains"
-          help={
-            domainsRequired
-              ? "Add or remove domains for future verified-domain claims. Leave empty to disable verified-domain claims for this pool. Existing claimed seats stay assigned unless you revoke them explicitly."
-              : "Leave empty to use the site-license domains. If the license domains are also empty, use external claim links or manager assignment instead of verified-domain claims."
-          }
+          label="Additional email domains for this pool"
+          help="These domains are combined with the inherited license domains for future claims and requests. Existing claimed seats stay assigned unless they fail normal reverification."
         >
           <Select
             mode="tags"
@@ -4737,6 +4800,9 @@ function ProvisionPoolEditModal({
             placeholder="example.edu, department.example.edu"
             style={{ width: "100%" }}
           />
+        </CompactField>
+        <CompactField label="Inherited license domains">
+          <DomainTags domains={inheritedDomains} />
         </CompactField>
         <div
           style={{
@@ -4891,12 +4957,14 @@ function ProvisionPoolEditModal({
 function EditSiteLicenseModal({
   open,
   membershipPackage,
+  inheritedDomains,
   tiers,
   onClose,
   onUpdated,
 }: {
   open: boolean;
   membershipPackage: MembershipPackageDetails | null;
+  inheritedDomains: string[];
   tiers: MembershipTierLike[];
   onClose: () => void;
   onUpdated: () => Promise<void>;
@@ -4981,7 +5049,7 @@ function EditSiteLicenseModal({
       onClose={onClose}
       mode="persisted"
       activeSeatCount={activeSeats}
-      domainsRequired
+      inheritedDomains={inheritedDomains}
       expiresAt={expiresAt}
       onExpiresAtChange={setExpiresAt}
       error={error}
