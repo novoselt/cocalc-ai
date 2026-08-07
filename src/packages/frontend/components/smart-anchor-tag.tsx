@@ -24,7 +24,10 @@ import {
   removeOrigin,
 } from "@cocalc/frontend/lib/cocalc-urls";
 import Fragment, { FragmentId } from "@cocalc/frontend/misc/fragment-id";
-import { parsePathWithOptionalLineSuffix } from "@cocalc/frontend/project/parse-path-line";
+import {
+  parseLineFromHashFragment,
+  parsePathWithOptionalLineSuffix,
+} from "@cocalc/frontend/project/parse-path-line";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import {
   containingPath,
@@ -153,16 +156,6 @@ function parseSandboxFileHref(href: string): {
   const stripped = raw.slice("sandbox:".length);
   const parsed = parseAbsoluteFileHrefTarget(stripped || "/");
   return { path: parsed.path, line: parsed.line };
-}
-
-function parseLineFromHashFragment(hash?: string): number | undefined {
-  if (!hash) return undefined;
-  const cleaned = hash.startsWith("#") ? hash.slice(1) : hash;
-  // Support GitHub-style #L123 and #L123C4 anchors often produced by agents.
-  const match = cleaned.match(/^L(\d+)(?:C\d+)?(?:-L?\d+)?$/i);
-  if (!match) return undefined;
-  const line = Number(match[1]);
-  return Number.isFinite(line) && line > 0 ? line : undefined;
 }
 
 function decodePathForParsing(raw: string): string {

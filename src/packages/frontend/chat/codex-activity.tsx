@@ -19,6 +19,10 @@ import { Tooltip } from "@cocalc/frontend/components/tip";
 import { IS_TOUCH } from "@cocalc/frontend/feature";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
 import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
+import {
+  parseLineFromHashFragment,
+  parsePathWithOptionalLineSuffix,
+} from "@cocalc/frontend/project/parse-path-line";
 import { useEffectiveEditorThemeForPath } from "@cocalc/frontend/project/workspaces/use-effective-editor-theme";
 import type { LineDiffResult } from "@cocalc/util/line-diff";
 import { containingPath, humanSize, plural } from "@cocalc/util/misc";
@@ -1225,39 +1229,11 @@ export function parsePathLineTarget(
   const pathPart = hashIndex >= 0 ? normalized.slice(0, hashIndex) : normalized;
   const hashPart = hashIndex >= 0 ? normalized.slice(hashIndex) : undefined;
   const lineFromHash = parseLineFromHashFragment(hashPart);
-  const match = pathPart.match(/^(.*):(\d+)(?::\d+)?(?:[)\].,;!?'"`]+)?$/);
-  if (!match) {
-    return {
-      path: pathPart,
-      line: explicitLine ?? lineFromHash,
-    };
-  }
-  const candidatePath = (match[1] ?? "").trim();
-  const parsedLine = Number(match[2]);
-  if (
-    !candidatePath ||
-    candidatePath.endsWith("/") ||
-    !Number.isFinite(parsedLine) ||
-    parsedLine <= 0
-  ) {
-    return {
-      path: pathPart,
-      line: explicitLine ?? lineFromHash,
-    };
-  }
+  const parsed = parsePathWithOptionalLineSuffix(pathPart);
   return {
-    path: candidatePath,
-    line: explicitLine ?? parsedLine ?? lineFromHash,
+    path: parsed.path,
+    line: explicitLine ?? parsed.line ?? lineFromHash,
   };
-}
-
-function parseLineFromHashFragment(hash?: string): number | undefined {
-  if (!hash) return undefined;
-  const cleaned = hash.startsWith("#") ? hash.slice(1) : hash;
-  const match = cleaned.match(/^L(\d+)(?:C\d+)?(?:-L?\d+)?$/i);
-  if (!match) return undefined;
-  const line = Number(match[1]);
-  return Number.isFinite(line) && line > 0 ? line : undefined;
 }
 
 function DiffPreview({
