@@ -122,7 +122,11 @@ function regionFromZone(zone?: string): string {
 function compatibleOptions(options: HostFieldOption[]): HostFieldOption[] {
   return options.filter((option) => {
     const meta = (option.meta ?? {}) as { compatible?: boolean };
-    return !option.disabled && meta.compatible !== false;
+    return (
+      !option.disabled &&
+      option.stateLabel !== "price unavailable" &&
+      meta.compatible !== false
+    );
   });
 }
 

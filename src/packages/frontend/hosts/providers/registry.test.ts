@@ -6,6 +6,7 @@ import {
   getHostPriceEstimate,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
+  getGcpRegionOptions,
   getGcpZoneOptions,
   getNebiusRegionOptions,
   getProviderEnablement,
@@ -231,6 +232,74 @@ describe("buildCreateHostPayload", () => {
       spot_restore_retry_window_minutes: 5,
       standard_fallback_enabled: false,
     });
+  });
+});
+
+describe("GCP region options", () => {
+  it("omits regions where the selected configuration has no price", () => {
+    const machine = {
+      name: "e2-standard-2",
+      guestCpus: 2,
+      memoryMb: 8192,
+    };
+    const catalog = testCatalog([
+      {
+        kind: "regions",
+        scope: "global",
+        payload: [
+          { name: "us-west1", zones: ["us-west1-a"] },
+          { name: "us-east1", zones: ["us-east1-b"] },
+        ],
+      },
+      {
+        kind: "zones",
+        scope: "global",
+        payload: [
+          { name: "us-west1-a", region: "us-west1" },
+          { name: "us-east1-b", region: "us-east1" },
+        ],
+      },
+      {
+        kind: "machine_types",
+        scope: "zone/us-west1-a",
+        payload: [machine],
+      },
+      {
+        kind: "machine_types",
+        scope: "zone/us-east1-b",
+        payload: [machine],
+      },
+      {
+        kind: "prices",
+        scope: "global",
+        payload: {
+          fetched_at: "2026-08-06T00:00:00.000Z",
+          service_id: "compute",
+          families: {
+            e2: {
+              cpu: { "us-west1": 0.02 },
+              ram: { "us-west1": 0.003 },
+              spot_cpu: {},
+              spot_ram: {},
+            },
+          },
+          gpus: {},
+          disks: {
+            "pd-balanced": { "us-west1": 0.0001 },
+          },
+        },
+      },
+    ]);
+
+    const options = getGcpRegionOptions(catalog, {
+      machine_type: machine.name,
+      pricing_model: "on_demand",
+      storage_mode: "persistent",
+      disk_type: "balanced",
+      disk_gb: 20,
+    });
+
+    expect(options.map(({ value }) => value)).toEqual(["us-west1"]);
   });
 });
 

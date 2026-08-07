@@ -1223,7 +1223,7 @@ export const getGcpRegionOptions = (
   if (!regions?.length) return [];
   const priceDisplay =
     selection.price_display === "monthly" ? "monthly" : "hourly";
-  return regions.map((r) => {
+  return regions.flatMap((r) => {
     const zoneWithMeta = zones?.find(
       (z) => z.region === r.name && (z.location || z.lowC02),
     );
@@ -1268,12 +1268,15 @@ export const getGcpRegionOptions = (
       expectPrice,
       priceDisplay,
     });
-    return {
-      value: r.name,
-      ...label,
-      selectionLabel: regionLabel,
-      meta: { compatible, compatibleZone, hourlyRate, expectPrice },
-    };
+    if (label.stateLabel === "price unavailable") return [];
+    return [
+      {
+        value: r.name,
+        ...label,
+        selectionLabel: regionLabel,
+        meta: { compatible, compatibleZone, hourlyRate, expectPrice },
+      },
+    ];
   });
 };
 
