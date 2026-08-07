@@ -3,7 +3,21 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { projectActiveUserMapPosition } from "./active-users-map-geometry";
+import {
+  activeUsersMapAssetUrl,
+  projectActiveUserMapPosition,
+} from "./active-users-map-geometry";
+
+describe("active users map asset", () => {
+  it("resolves below the application base path", () => {
+    expect(activeUsersMapAssetUrl("/")).toBe(
+      "/public/admin/active-users-world-map-equal-earth-v1.svg",
+    );
+    expect(activeUsersMapAssetUrl("/cocalc")).toBe(
+      "/cocalc/public/admin/active-users-world-map-equal-earth-v1.svg",
+    );
+  });
+});
 
 describe("active users map projection", () => {
   it("projects the equator to the vertical center", () => {

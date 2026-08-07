@@ -3,6 +3,9 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import { joinUrlPath } from "@cocalc/util/url-path";
+
 const EQUAL_EARTH_A1 = 1.340264;
 const EQUAL_EARTH_A2 = -0.081106;
 const EQUAL_EARTH_A3 = 0.000893;
@@ -17,7 +20,11 @@ export const ACTIVE_USERS_MAP = {
   width: 1600,
 } as const;
 
-export const ACTIVE_USERS_MAP_ASSET_URL = `/public/admin/${ACTIVE_USERS_MAP.assetFilename}`;
+export function activeUsersMapAssetUrl(basePath = appBasePath): string {
+  return joinUrlPath(basePath, "public/admin", ACTIVE_USERS_MAP.assetFilename);
+}
+
+export const ACTIVE_USERS_MAP_ASSET_URL = activeUsersMapAssetUrl();
 
 function projectEqualEarthRaw({
   latitude,
