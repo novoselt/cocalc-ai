@@ -21,6 +21,7 @@ export interface ComputeVmConfig {
   gcp_service_account_json?: string;
   gcp_project_id?: string;
   gcp_subnetwork?: string;
+  gcp_region?: string;
   gcp_network_tag: string;
   staging_legacy_provider: boolean;
   max_active_per_project: number;
@@ -113,6 +114,14 @@ function parseServiceAccount(value: unknown): {
   return { json, project_id };
 }
 
+export function computeVmRegionFromSubnetwork(
+  subnetwork?: string,
+): string | undefined {
+  return `${subnetwork ?? ""}`
+    .trim()
+    .match(/^projects\/[^/]+\/regions\/([^/]+)\/subnetworks\/[^/]+$/)?.[1];
+}
+
 export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
   const environment = environmentFromSettings(settings);
   const { mode, automatic } = parseMode(settings.compute_vm_mode, environment);
@@ -131,6 +140,7 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
     gcp_service_account_json: serviceAccount.json,
     gcp_project_id: serviceAccount.project_id,
     gcp_subnetwork: gcp_subnetwork || undefined,
+    gcp_region: computeVmRegionFromSubnetwork(gcp_subnetwork),
     gcp_network_tag:
       `${settings.compute_vm_gcp_network_tag ?? ""}`.trim() ||
       "cocalc-compute-vm",
@@ -220,6 +230,11 @@ export function requireComputeVmCreateAllowed(
     if (!config.gcp_subnetwork) {
       throw new Error(
         "managed compute VM production subnetwork is not configured",
+      );
+    }
+    if (!config.gcp_region) {
+      throw new Error(
+        "managed compute VM production subnetwork URI is invalid",
       );
     }
     if (

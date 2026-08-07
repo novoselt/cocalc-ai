@@ -229,6 +229,20 @@ export async function listOwnedComputeVms(opts: {
   return rows;
 }
 
+export async function listProjectComputeVms(opts: {
+  project_id: string;
+  include_deleted?: boolean;
+}) {
+  const deletedClause = opts.include_deleted ? "" : "AND deleted_at IS NULL";
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+     WHERE project_id=$1 ${deletedClause}
+     ORDER BY created_at DESC`,
+    [opts.project_id],
+  );
+  return rows;
+}
+
 export async function listComputeVmsForBillingEnforcement() {
   const { rows } = await pool().query<ComputeVmRow>(
     `SELECT * FROM compute_vms

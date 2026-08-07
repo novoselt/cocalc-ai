@@ -18,7 +18,7 @@ import {
   volumeListSummary,
 } from "./vm";
 
-function harness(opts: { projectId?: string } = {}) {
+function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
   const sshCalls: string[][] = [];
   const rsyncCalls: string[][] = [];
   const callbackResults: unknown[] = [];
@@ -26,6 +26,8 @@ function harness(opts: { projectId?: string } = {}) {
   const createCalls: any[] = [];
   const sshAuthorizationCalls: any[] = [];
   const projectSshAuthorizationCalls: any[] = [];
+  const listCalls: any[] = [];
+  const projectListCalls: any[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -33,8 +35,19 @@ function harness(opts: { projectId?: string } = {}) {
     withContext: async (_command, _name, callback) => {
       const result = await callback({
         globals: {},
+        remote: {
+          user: opts.projectAuth ? { project_id: opts.projectId } : {},
+        },
         hub: {
           compute: {
+            listVms: async (callOpts: any) => {
+              listCalls.push(callOpts);
+              return [];
+            },
+            listProjectVms: async (callOpts: any) => {
+              projectListCalls.push(callOpts);
+              return [];
+            },
             getVm: async () => ({
               id: "vm-id",
               name: "build-vm",
@@ -93,8 +106,34 @@ function harness(opts: { projectId?: string } = {}) {
     createCalls,
     sshAuthorizationCalls,
     projectSshAuthorizationCalls,
+    listCalls,
+    projectListCalls,
   };
 }
+
+describe("vm list scope", () => {
+  it("defaults project authentication to the current project", async () => {
+    const { program, listCalls, projectListCalls } = harness({
+      projectId: "project-id",
+      projectAuth: true,
+    });
+    await program.parseAsync(["node", "cocalc", "vm", "list"]);
+    assert.equal(projectListCalls.length, 1);
+    assert.equal(listCalls.length, 0);
+  });
+
+  it("uses COCALC_PROJECT_ID as the account-authenticated default filter", async () => {
+    const { program, listCalls } = harness({ projectId: "project-id" });
+    await program.parseAsync(["node", "cocalc", "vm", "list"]);
+    assert.equal(listCalls[0]?.project_id, "project-id");
+  });
+
+  it("lists the whole account only when account authentication is available", async () => {
+    const { program, listCalls } = harness({ projectId: "project-id" });
+    await program.parseAsync(["node", "cocalc", "vm", "list", "--all"]);
+    assert.equal(listCalls[0]?.project_id, undefined);
+  });
+});
 
 describe("vm create", () => {
   it("can deliberately create without an initial SSH key", async () => {
@@ -180,7 +219,7 @@ describe("vm ssh", () => {
   it("authorizes SSH through the current project identity", async () => {
     const projectId = "af027aca-e308-41c2-b528-a3e73de50996";
     const { program, projectSshAuthorizationCalls, sshAuthorizationCalls } =
-      harness({ projectId });
+      harness({ projectId, projectAuth: true });
     await program.parseAsync(["node", "cocalc", "vm", "ssh", "build-vm"]);
     assert.equal(projectSshAuthorizationCalls[0]?.project_id, projectId);
     assert.equal(

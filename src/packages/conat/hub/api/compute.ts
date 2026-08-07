@@ -139,6 +139,8 @@ export const compute = {
   createVm: authFirstRequireAccount,
   listVms: authFirstRequireAccount,
   getVm: authFirstRequireAccount,
+  listProjectVms: authFirstRequireProject,
+  getProjectVm: authFirstRequireProject,
   authorizeSshKey: authFirstRequireAccount,
   authorizeProjectSshKey: authFirstRequireProject,
   authorizeProjectSshKeyFromHost: authFirstRequireHost,
@@ -149,6 +151,8 @@ export const compute = {
   createVolume: authFirstRequireAccount,
   listVolumes: authFirstRequireAccount,
   getVolume: authFirstRequireAccount,
+  listProjectVolumes: authFirstRequireProject,
+  getProjectVolume: authFirstRequireProject,
   resizeVolume: authFirstRequireAccount,
   deleteVolume: authFirstRequireAccount,
 };
@@ -163,6 +167,14 @@ export interface ComputeApi {
   }) => Promise<ComputeVm[]>;
   getVm: (opts: {
     account_id?: string;
+    id_or_name: string;
+  }) => Promise<ComputeVm>;
+  listProjectVms: (opts: {
+    project_id?: string;
+    include_deleted?: boolean;
+  }) => Promise<ComputeVm[]>;
+  getProjectVm: (opts: {
+    project_id?: string;
     id_or_name: string;
   }) => Promise<ComputeVm>;
   authorizeSshKey: (opts: {
@@ -220,6 +232,14 @@ export interface ComputeApi {
   }) => Promise<ComputeVolume[]>;
   getVolume: (opts: {
     account_id?: string;
+    id_or_name: string;
+  }) => Promise<ComputeVolume>;
+  listProjectVolumes: (opts: {
+    project_id?: string;
+    include_deleted?: boolean;
+  }) => Promise<ComputeVolume[]>;
+  getProjectVolume: (opts: {
+    project_id?: string;
     id_or_name: string;
   }) => Promise<ComputeVolume>;
   resizeVolume: (opts: {

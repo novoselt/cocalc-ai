@@ -18,6 +18,7 @@ import {
 import { getComputeVmConfig, type ComputeVmConfig } from "./config";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 import { assertComputeVmSecurity } from "./security";
+import { requireComputeZoneInRegion } from "./placement";
 
 const provider = new GcpProvider();
 let networkSecurityCheck: { key: string; checked_at: number } | undefined;
@@ -174,6 +175,7 @@ function specFor(
   pricingModel = vm.effective_pricing_model,
   volume?: ComputeVolumeRow,
 ): HostSpec {
+  requireComputeZoneInRegion(vm.zone, config.gcp_region);
   const cpu =
     Number(vm.metadata?.machine?.cpu) ||
     gcpCpuCountForMachineType(vm.machine_type);

@@ -4,6 +4,7 @@
  */
 
 import {
+  computeVmRegionFromSubnetwork,
   computeVmUiEnabled,
   requireComputeVmCreateAllowed,
   resolveComputeVmConfig,
@@ -136,6 +137,28 @@ describe("managed compute VM configuration", () => {
         "account-1",
       ),
     ).not.toThrow();
+
+    expect(
+      computeVmRegionFromSubnetwork(
+        "projects/compute-prod/regions/us-central1/subnetworks/compute",
+      ),
+    ).toBe("us-central1");
+    expect(
+      computeVmRegionFromSubnetwork(
+        "projects/compute-prod/zones/us-central1-a/subnetworks/compute",
+      ),
+    ).toBeUndefined();
+
+    expect(() =>
+      requireComputeVmCreateAllowed(
+        resolveComputeVmConfig({
+          ...base,
+          compute_vm_gcp_service_account_json: credentials,
+          compute_vm_gcp_subnetwork: "not-a-subnetwork-uri",
+        }),
+        "account-1",
+      ),
+    ).toThrow("subnetwork URI is invalid");
 
     expect(() =>
       requireComputeVmCreateAllowed(
