@@ -3188,7 +3188,6 @@ async function assertEmailInviteCreationLimits({
     }
     await assertCourseStudentInviteLimit({
       course_project_id,
-      resolution,
       additional: recipientCount,
     });
   }
