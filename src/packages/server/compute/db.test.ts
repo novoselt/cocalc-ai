@@ -16,6 +16,7 @@ import {
   insertComputeVm,
   getComputeVmById,
   listOwnedComputeVms,
+  resolveProjectComputeVm,
 } from "./db";
 import type { ComputeVmRow } from "./types";
 import type { ComputeVolumeRow } from "./types";
@@ -127,6 +128,30 @@ describe("compute VM durable state", () => {
     expect(
       await listOwnedComputeVms({ owner_account_id: input.owner_account_id }),
     ).toHaveLength(1);
+  });
+
+  it("resolves only an unambiguous VM attached to the project", async () => {
+    const project = randomUUID();
+    const first = await insertComputeVm(
+      vmInput({ project_id: project, name: "shared-name" }),
+    );
+    expect(
+      (
+        await resolveProjectComputeVm({
+          project_id: project,
+          id_or_name: first.id,
+        })
+      )?.id,
+    ).toBe(first.id);
+    await insertComputeVm(
+      vmInput({ project_id: project, name: "shared-name" }),
+    );
+    await expect(
+      resolveProjectComputeVm({
+        project_id: project,
+        id_or_name: "shared-name",
+      }),
+    ).rejects.toThrow("ambiguous");
   });
 
   it("enforces project admission limits without limiting the owner", async () => {

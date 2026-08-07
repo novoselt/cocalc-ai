@@ -12,6 +12,9 @@ export interface VmCreateCliValues {
   ttl_minutes?: number | null;
   boot_disk_gb: number;
   volume?: string;
+  create_volume?: boolean;
+  new_volume_name?: string;
+  new_volume_size_gb?: number;
   ssh_public_key?: string;
 }
 
@@ -38,6 +41,9 @@ export function vmCreateCli(opts: {
   values: Partial<VmCreateCliValues>;
 }): string {
   const { values } = opts;
+  const volumeName = values.create_volume
+    ? values.new_volume_name
+    : values.volume;
   const args = [
     "cocalc",
     "--api",
@@ -59,7 +65,7 @@ export function vmCreateCli(opts: {
   if (values.allow_on_demand_fallback) {
     args.push("--allow-standard-fallback");
   }
-  if (values.volume) args.push("--volume", shellQuote(values.volume));
+  if (volumeName) args.push("--volume", shellQuote(volumeName));
   if (values.ssh_public_key?.trim()) {
     args.push(
       "--ssh-public-key-value",
@@ -69,7 +75,18 @@ export function vmCreateCli(opts: {
     args.push("--no-ssh-key");
   }
   args.push("--wait", shellQuote(values.name || "vm-name"));
-  return args.join(" ");
+  const createVm = args.join(" ");
+  if (!values.create_volume) return createVm;
+  const createVolume = volumeCreateCli({
+    api: opts.api,
+    project_id: opts.project_id,
+    values: {
+      name: values.new_volume_name,
+      zone: values.zone,
+      size_gb: values.new_volume_size_gb,
+    },
+  });
+  return createVolume + " && " + createVm;
 }
 
 export function volumeCreateCli(opts: {

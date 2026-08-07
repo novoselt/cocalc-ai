@@ -186,6 +186,28 @@ export async function resolveOwnedComputeVm(opts: {
   return rows[0];
 }
 
+export async function resolveProjectComputeVm(opts: {
+  project_id: string;
+  id_or_name: string;
+  include_deleted?: boolean;
+}) {
+  const deletedClause = opts.include_deleted ? "" : "AND deleted_at IS NULL";
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+     WHERE project_id=$1
+       AND (id::text=$2 OR name=$2)
+       ${deletedClause}
+     ORDER BY created_at DESC LIMIT 2`,
+    [opts.project_id, opts.id_or_name],
+  );
+  if (rows.length > 1) {
+    throw new Error(
+      `compute VM name '${opts.id_or_name}' is ambiguous in this project; use its UUID`,
+    );
+  }
+  return rows[0];
+}
+
 export async function listOwnedComputeVms(opts: {
   owner_account_id: string;
   project_id?: string;

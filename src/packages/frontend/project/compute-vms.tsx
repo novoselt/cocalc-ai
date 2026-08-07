@@ -30,13 +30,14 @@ import type {
   ComputeVolume,
   ComputeVm,
 } from "@cocalc/conat/hub/api/compute";
-import { useRedux } from "@cocalc/frontend/app-framework";
+import { useRedux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import {
   FreshAuthModal,
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
-import { CopyToClipBoard, Icon } from "@cocalc/frontend/components";
+import { CopyToClipBoard, Icon, TimeAgo } from "@cocalc/frontend/components";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import { mapCountryRegionToR2Region } from "@cocalc/util/consts";
 import {
   COCALC_CLI_DOWNLOAD_URL,
   COCALC_CLI_INSTALL_COMMAND,
@@ -55,6 +56,7 @@ import {
   type HostFieldOption,
   type ProviderSelection,
 } from "../hosts/providers/registry";
+import { sortRegionOptionsByPreference } from "../hosts/utils/region-ranking";
 import {
   vmCreateCli,
   volumeCreateCli,
@@ -81,6 +83,10 @@ type VolumeDraft = VolumeCreateCliValues;
 interface TtlDraft {
   action: "set" | "extend" | "clear";
   minutes: number;
+}
+
+interface VolumeResizeDraft {
+  size_gb: number;
 }
 
 function shortProjectId(projectId: string): string {
@@ -150,6 +156,29 @@ function similarName(name: string, rows: ComputeVm[]): string {
   return `vm-${Date.now()}`.slice(0, 32);
 }
 
+function availableName(stem: string, names: Iterable<string>): string {
+  const used = new Set(names);
+  const base = stem.replace(/-+$/, "").slice(0, 32) || "compute-vm";
+  if (!used.has(base)) return base;
+  for (let index = 1; index < 10_000; index++) {
+    const suffix = "-" + index;
+    const candidate = base.slice(0, 32 - suffix.length) + suffix;
+    if (!used.has(candidate)) return candidate;
+  }
+  return ("vm-" + Date.now()).slice(0, 32);
+}
+
+function originalTtlMinutes(vm: ComputeVm): number | null {
+  if (!vm.expires_at) return null;
+  return Math.max(
+    5,
+    Math.round(
+      (new Date(vm.expires_at).valueOf() - new Date(vm.created_at).valueOf()) /
+        60_000,
+    ),
+  );
+}
+
 function VmCreateModal({
   open,
   project_id,
@@ -159,6 +188,7 @@ function VmCreateModal({
   projectSshPublicKey,
   sshKeys,
   saving,
+  error,
   onGenerateProjectSshKey,
   onCancel,
   onCreate,
@@ -171,6 +201,7 @@ function VmCreateModal({
   projectSshPublicKey: string | null;
   sshKeys: Array<{ label: string; value: string }>;
   saving: boolean;
+  error?: string;
   onGenerateProjectSshKey: () => Promise<string | undefined>;
   onCancel: () => void;
   onCreate: (values: VmDraft) => Promise<void>;
@@ -234,6 +265,23 @@ function VmCreateModal({
           pricingSettings,
         )
       : undefined;
+  const newVolumePrice = draft.create_volume
+    ? getProviderPriceEstimate(
+        "gcp",
+        catalog.host_catalog,
+        {
+          region: draft.region || regionFromZone(draft.zone),
+          zone: draft.zone,
+          machine_type: "e2-standard-2",
+          pricing_model: "on_demand",
+          storage_mode: "persistent",
+          disk_type: "balanced",
+          disk_gb: draft.new_volume_size_gb,
+          pricing_settings: pricingSettings,
+        },
+        pricingSettings,
+      )?.line_items.find((item) => item.key === "disk")
+    : undefined;
   const maximumSpend =
     draft.ttl_minutes && (standardFallbackPrice ?? price)
       ? ((standardFallbackPrice ?? price)!.usd_per_hour * draft.ttl_minutes) /
@@ -266,6 +314,15 @@ function VmCreateModal({
       }
       width={720}
     >
+      {error && (
+        <Alert
+          showIcon
+          type="error"
+          title="Unable to create VM"
+          description={error}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Form<VmDraft>
         form={form}
         layout="vertical"
@@ -411,26 +468,87 @@ function VmCreateModal({
             </Checkbox>
           </Form.Item>
         )}
-        <Form.Item
-          name="volume"
-          label="Persistent /work volume"
-          extra="Optional. Volumes survive VM deletion and can be attached to only one VM."
-        >
-          <Select
-            allowClear
-            placeholder="No persistent /work volume"
-            options={availableVolumes.map((volume) => ({
-              value: volume.name,
-              label: `${volume.name} · ${volume.size_gb} GB · ${volume.zone}${
-                volume.zone === draft.zone ? "" : " · unavailable in this zone"
-              }`,
-              disabled: volume.zone !== draft.zone,
-            }))}
-            onChange={(name) => {
-              patchDraft({ volume: name || undefined });
+        <Form.Item name="create_volume" valuePropName="checked">
+          <Checkbox
+            onChange={(event) => {
+              if (event.target.checked) patchDraft({ volume: undefined });
             }}
-          />
+          >
+            Create a new persistent Balanced SSD mounted at{" "}
+            <Text code>/work</Text>
+          </Checkbox>
         </Form.Item>
+        {draft.create_volume ? (
+          <>
+            <Flex gap={12} wrap>
+              <Form.Item
+                name="new_volume_name"
+                label="New volume name"
+                rules={[
+                  { required: true },
+                  {
+                    pattern: /^[a-z][a-z0-9-]{0,31}$/,
+                    message:
+                      "Use at most 32 lowercase letters, digits, or hyphens.",
+                  },
+                ]}
+                style={{ flex: "1 1 260px" }}
+              >
+                <Input />
+              </Form.Item>
+              <Form.Item
+                name="new_volume_size_gb"
+                label="Size (GB)"
+                rules={[{ required: true }]}
+                style={{ flex: "1 1 160px" }}
+              >
+                <InputNumber
+                  min={10}
+                  max={catalog.limits.max_volume_gb}
+                  style={{ width: "100%" }}
+                />
+              </Form.Item>
+            </Flex>
+            <Alert
+              showIcon
+              type="info"
+              title={
+                newVolumePrice
+                  ? `New /work volume: ${newVolumePrice.monthly_label}`
+                  : "New /work volume pricing is unavailable"
+              }
+              description={
+                "The volume will be created in " +
+                (draft.zone ?? "the selected zone") +
+                ", attached to this VM, and retained if the VM is deleted."
+              }
+              style={{ marginBottom: 16 }}
+            />
+          </>
+        ) : (
+          <Form.Item
+            name="volume"
+            label="Existing persistent /work volume"
+            extra="Optional. The VM and volume must be in the same zone. Volumes survive VM deletion and can be attached to only one VM."
+          >
+            <Select
+              allowClear
+              placeholder="No persistent /work volume"
+              options={availableVolumes.map((volume) => ({
+                value: volume.name,
+                label: `${volume.name} · ${volume.size_gb} GB · ${volume.zone}${
+                  volume.zone === draft.zone
+                    ? ""
+                    : " · unavailable in this zone"
+                }`,
+                disabled: volume.zone !== draft.zone,
+              }))}
+              onChange={(name) => {
+                patchDraft({ volume: name || undefined });
+              }}
+            />
+          </Form.Item>
+        )}
         {projectSshPublicKey ? (
           <Form.Item name="use_project_ssh_key" valuePropName="checked">
             <Checkbox>
@@ -692,13 +810,94 @@ function VolumeCreateModal({
             ? `Balanced persistent SSD: ${diskEstimate.monthly_label} (${(diskEstimate.usd_per_month / Number(draft.size_gb ?? 1)).toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 3, maximumFractionDigits: 3 })}/GB/month)`
             : "Balanced persistent SSD pricing is unavailable for this region"
         }
-        description="Volumes are retained when VMs are deleted. They can grow online but cannot shrink. The estimate includes the site surcharge."
+        description="The volume and VM must be in the same zone. Volumes are retained when VMs are deleted. They can grow online but cannot shrink. The estimate includes the site surcharge."
       />
       <Divider />
       <Text strong>Equivalent CLI command</Text>
       <CopyToClipBoard
         value={volumeCreateCli({ api, project_id, values: draft })}
         {...COPYABLE_PROPS}
+      />
+    </Modal>
+  );
+}
+
+function VolumeResizeModal({
+  volume,
+  maxSizeGb,
+  saving,
+  onCancel,
+  onResize,
+}: {
+  volume?: ComputeVolume;
+  maxSizeGb: number;
+  saving: boolean;
+  onCancel: () => void;
+  onResize: (values: VolumeResizeDraft) => Promise<void>;
+}) {
+  const [form] = Form.useForm<VolumeResizeDraft>();
+  const sizeGb = Form.useWatch("size_gb", form);
+
+  useEffect(() => {
+    if (!volume) return;
+    form.setFieldsValue({ size_gb: volume.size_gb });
+  }, [form, volume]);
+
+  const monthlyPrice =
+    volume && Number.isFinite(Number(sizeGb))
+      ? Number(sizeGb) * Number(volume.monthly_price_per_gb)
+      : undefined;
+  return (
+    <Modal
+      open={volume != null}
+      title={volume ? "Enlarge " + volume.name : "Enlarge volume"}
+      okText="Enlarge volume"
+      confirmLoading={saving}
+      onCancel={onCancel}
+      onOk={() => void form.validateFields().then(onResize)}
+    >
+      <Form<VolumeResizeDraft> form={form} layout="vertical">
+        <Form.Item
+          name="size_gb"
+          label="New size (GB)"
+          extra={
+            volume
+              ? "Current size: " +
+                volume.size_gb +
+                " GB. Volumes cannot shrink."
+              : undefined
+          }
+          rules={[
+            { required: true },
+            {
+              validator: async (_, value) => {
+                if (volume && Number(value) < volume.size_gb) {
+                  throw new Error("The new size cannot be smaller.");
+                }
+              },
+            },
+          ]}
+        >
+          <InputNumber
+            min={volume?.size_gb ?? 10}
+            max={maxSizeGb}
+            style={{ width: "100%" }}
+          />
+        </Form.Item>
+      </Form>
+      <Alert
+        showIcon
+        type="info"
+        title={
+          monthlyPrice == null
+            ? "Balanced persistent SSD"
+            : "Estimated storage: $" + monthlyPrice.toFixed(2) + "/month"
+        }
+        description={
+          volume?.attached_vm_id
+            ? "The block device grows online. The VM checks every 30 seconds and automatically grows the ext4 /work filesystem without a reboot."
+            : "The enlarged capacity is available the next time this volume is attached."
+        }
       />
     </Modal>
   );
@@ -748,6 +947,27 @@ function VmTtlModal({
       onCancel={onCancel}
       onOk={() => void form.validateFields().then(onSave)}
     >
+      <Alert
+        showIcon
+        type={vm?.expires_at ? "warning" : "info"}
+        title={
+          vm?.expires_at ? (
+            <>
+              This VM and its boot disk will be deleted{" "}
+              <TimeAgo date={new Date(vm.expires_at)} click_to_toggle={false} />
+              .
+            </>
+          ) : (
+            "This VM has no automatic deletion deadline."
+          )
+        }
+        description={
+          vm?.expires_at
+            ? "A separate persistent /work volume is retained."
+            : "It runs until you stop or delete it, or membership funding becomes unavailable."
+        }
+        style={{ marginBottom: 16 }}
+      />
       <Form<TtlDraft>
         form={form}
         layout="vertical"
@@ -803,7 +1023,17 @@ export function ProjectComputeVms({
 }) {
   const accountSshKeys = useRedux("account", "ssh_keys");
   const sshKeys = sshKeyOptions(accountSshKeys);
+  const cloudflareCountry = useTypedRedux("customize", "country");
+  const cloudflareRegionCode = useTypedRedux(
+    "customize",
+    "cloudflare_region_code",
+  );
+  const preferredR2Region = mapCountryRegionToR2Region(
+    cloudflareCountry,
+    cloudflareRegionCode,
+  );
   const [rows, setRows] = useState<ComputeVm[]>([]);
+  const [allRows, setAllRows] = useState<ComputeVm[]>([]);
   const [volumes, setVolumes] = useState<ComputeVolume[]>([]);
   const [catalog, setCatalog] = useState<ComputeCatalog>();
   const [loading, setLoading] = useState(true);
@@ -811,7 +1041,9 @@ export function ProjectComputeVms({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [vmModalOpen, setVmModalOpen] = useState(false);
+  const [vmCreateError, setVmCreateError] = useState<string>();
   const [volumeModalOpen, setVolumeModalOpen] = useState(false);
+  const [resizeVolumeTarget, setResizeVolumeTarget] = useState<ComputeVolume>();
   const [ttlVm, setTtlVm] = useState<ComputeVm>();
   const [vmInitial, setVmInitial] = useState<VmDraft>();
   const [projectSshPublicKey, setProjectSshPublicKey] = useState<string | null>(
@@ -823,12 +1055,13 @@ export function ProjectComputeVms({
   const load = async () => {
     setLoading(true);
     try {
-      const [vms, projectVolumes, computeCatalog] = await Promise.all([
-        webapp_client.conat_client.hub.compute.listVms({ project_id }),
+      const [ownedVms, projectVolumes, computeCatalog] = await Promise.all([
+        webapp_client.conat_client.hub.compute.listVms({}),
         webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
         webapp_client.conat_client.hub.compute.getCatalog({}),
       ]);
-      setRows(vms);
+      setAllRows(ownedVms);
+      setRows(ownedVms.filter((vm) => vm.project_id === project_id));
       setVolumes(projectVolumes);
       setCatalog(computeCatalog);
       setError(undefined);
@@ -872,34 +1105,81 @@ export function ProjectComputeVms({
   }, [isVisible, project_id]);
 
   const defaultVm = (): VmDraft => {
-    const zone = catalog?.defaults.zone ?? "us-central1-a";
-    return {
-      name: "compute-vm",
-      region: regionFromZone(zone),
-      zone,
+    const recent = [...rows].sort(
+      (a, b) =>
+        new Date(b.created_at).valueOf() - new Date(a.created_at).valueOf(),
+    )[0];
+    const catalogDefaultZone = catalog?.defaults.zone ?? "us-central1-a";
+    const defaultSelection: ProviderSelection = {
+      region: regionFromZone(catalogDefaultZone),
+      zone: catalogDefaultZone,
       machine_type: catalog?.defaults.machine_type ?? "e2-standard-2",
       pricing_model: "on_demand",
-      allow_on_demand_fallback: false,
-      ttl_minutes: catalog?.defaults.ttl_minutes ?? null,
-      boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
+      storage_mode: "persistent",
+      disk_type: "balanced",
+      disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
+    };
+    const nearestRegion = catalog
+      ? sortRegionOptionsByPreference({
+          options: compatibleOptions(
+            getGcpRegionOptions(catalog.host_catalog, {
+              ...defaultSelection,
+              region: undefined,
+              zone: undefined,
+            }),
+          ),
+          preference: "closest",
+          preferredRegion: preferredR2Region,
+        })[0]?.value
+      : undefined;
+    const nearestZone =
+      catalog && nearestRegion
+        ? compatibleOptions(
+            getGcpZoneOptions(catalog.host_catalog, {
+              ...defaultSelection,
+              region: nearestRegion,
+              zone: undefined,
+            }),
+          )[0]?.value
+        : undefined;
+    const zone = recent?.zone ?? nearestZone ?? catalogDefaultZone;
+    const name = availableName(
+      recent?.name ?? "compute-vm",
+      allRows.map((vm) => vm.name),
+    );
+    const ttlMinutes = recent ? originalTtlMinutes(recent) : null;
+    return {
+      name,
+      region: regionFromZone(zone),
+      zone,
+      machine_type:
+        recent?.machine_type ??
+        catalog?.defaults.machine_type ??
+        "e2-standard-2",
+      pricing_model: recent?.desired_pricing_model ?? "on_demand",
+      allow_on_demand_fallback: recent?.allow_on_demand_fallback ?? false,
+      ttl_minutes:
+        ttlMinutes == null
+          ? (catalog?.defaults.ttl_minutes ?? null)
+          : Math.min(ttlMinutes, catalog?.limits.max_ttl_minutes ?? ttlMinutes),
+      boot_disk_gb:
+        recent?.boot_disk_gb ?? catalog?.defaults.boot_disk_gb ?? 20,
+      create_volume: false,
+      new_volume_name: availableName(
+        name + "-work",
+        volumes.map((volume) => volume.name),
+      ),
+      new_volume_size_gb: 50,
       use_project_ssh_key: projectSshPublicKey != null,
       ssh_public_key: sshKeys[0]?.value ?? "",
     };
   };
 
   const openSimilar = (vm: ComputeVm) => {
-    const ttlMinutes = vm.expires_at
-      ? Math.max(
-          5,
-          Math.round(
-            (new Date(vm.expires_at).valueOf() -
-              new Date(vm.created_at).valueOf()) /
-              60_000,
-          ),
-        )
-      : null;
+    const ttlMinutes = originalTtlMinutes(vm);
+    const name = similarName(vm.name, allRows);
     setVmInitial({
-      name: similarName(vm.name, rows),
+      name,
       region: vm.region,
       zone: vm.zone,
       machine_type: vm.machine_type,
@@ -910,9 +1190,16 @@ export function ProjectComputeVms({
           ? null
           : Math.min(ttlMinutes, catalog?.limits.max_ttl_minutes ?? ttlMinutes),
       boot_disk_gb: vm.boot_disk_gb,
+      create_volume: false,
+      new_volume_name: availableName(
+        name + "-work",
+        volumes.map((volume) => volume.name),
+      ),
+      new_volume_size_gb: 50,
       use_project_ssh_key: projectSshPublicKey != null,
       ssh_public_key: sshKeys[0]?.value ?? "",
     });
+    setVmCreateError(undefined);
     setVmModalOpen(true);
   };
 
@@ -943,11 +1230,51 @@ export function ProjectComputeVms({
     }
   };
 
+  const waitForVolumeReady = async (idOrName: string) => {
+    const deadline = Date.now() + 5 * 60_000;
+    let state = "requested";
+    while (Date.now() < deadline) {
+      const volume = await webapp_client.conat_client.hub.compute.getVolume({
+        id_or_name: idOrName,
+      });
+      state = volume.state;
+      if (state === "ready") return volume;
+      if (state === "failed" || state === "deleted") {
+        throw new Error(
+          volume.error || "Volume creation failed (state=" + state + ").",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new Error(
+      "Timed out waiting for the /work volume (state=" + state + ").",
+    );
+  };
+
   const createVm = async (values: VmDraft) => {
     setSaving(true);
-    setError(undefined);
+    setVmCreateError(undefined);
+    let createdVolumeName: string | undefined;
     try {
       const completed = await runFreshAuthAction(async () => {
+        let volume = values.volume;
+        if (values.create_volume) {
+          if (!values.new_volume_name || !values.new_volume_size_gb) {
+            throw new Error("A new volume name and size are required.");
+          }
+          createdVolumeName = values.new_volume_name;
+          const createdVolume =
+            await webapp_client.conat_client.hub.compute.createVolume({
+              project_id,
+              name: values.new_volume_name,
+              zone: values.zone,
+              size_gb: values.new_volume_size_gb,
+              idempotency_key: uuid(),
+              browser_id: webapp_client.browser_id,
+            });
+          await waitForVolumeReady(createdVolume.id);
+          volume = createdVolume.name;
+        }
         await webapp_client.conat_client.hub.compute.createVm({
           project_id,
           name: values.name,
@@ -957,7 +1284,7 @@ export function ProjectComputeVms({
           allow_on_demand_fallback: values.allow_on_demand_fallback,
           ttl_minutes: values.ttl_minutes ?? null,
           boot_disk_gb: values.boot_disk_gb,
-          volume: values.volume,
+          volume,
           ssh_public_key: values.ssh_public_key,
           idempotency_key: uuid(),
           browser_id: webapp_client.browser_id,
@@ -968,7 +1295,15 @@ export function ProjectComputeVms({
       setNotice(`VM '${values.name}' requested.`);
       await load();
     } catch (err) {
-      setError(`${err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      setVmCreateError(
+        createdVolumeName
+          ? "Volume '" +
+              createdVolumeName +
+              "' was created and retained, but VM creation failed: " +
+              message
+          : message,
+      );
     } finally {
       setSaving(false);
     }
@@ -1060,6 +1395,36 @@ export function ProjectComputeVms({
     }
   };
 
+  const resizeVolume = async (values: VolumeResizeDraft) => {
+    if (!resizeVolumeTarget) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const completed = await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.compute.resizeVolume({
+          id_or_name: resizeVolumeTarget.id,
+          size_gb: values.size_gb,
+          idempotency_key: uuid(),
+          browser_id: webapp_client.browser_id,
+        });
+      });
+      if (!completed) return;
+      setNotice(
+        "Volume '" +
+          resizeVolumeTarget.name +
+          "' is growing to " +
+          values.size_gb +
+          " GB.",
+      );
+      setResizeVolumeTarget(undefined);
+      await load();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const deleteVolume = async (volume: ComputeVolume) => {
     setError(undefined);
     try {
@@ -1145,14 +1510,6 @@ export function ProjectComputeVms({
           ) : (
             <Text type="secondary">No public IP</Text>
           )}
-          {vm.private_ip && (
-            <>
-              <br />
-              <Text type="secondary" copyable={{ text: vm.private_ip }}>
-                private {vm.private_ip}
-              </Text>
-            </>
-          )}
         </div>
       ),
     },
@@ -1171,14 +1528,26 @@ export function ProjectComputeVms({
     {
       title: "Connect",
       render: (_, vm) => (
-        <Text code copyable={{ text: `cocalc vm ssh ${vm.name}` }}>
-          cocalc vm ssh {vm.name}
-        </Text>
+        <Space direction="vertical" size={2}>
+          <Text code copyable={{ text: `cocalc vm ssh ${vm.name}` }}>
+            cocalc vm ssh {vm.name}
+          </Text>
+          {vm.public_ip && (
+            <Text
+              code
+              copyable={{
+                text: `ssh ${vm.ssh_user || "ubuntu"}@${vm.public_ip}`,
+              }}
+            >
+              ssh {vm.ssh_user || "ubuntu"}@{vm.public_ip}
+            </Text>
+          )}
+        </Space>
       ),
     },
     {
       title: "Actions",
-      fixed: "right",
+      width: 300,
       render: (_, vm) => {
         const transitioning = ["starting", "stopping", "deleting"].includes(
           vm.state,
@@ -1186,7 +1555,7 @@ export function ProjectComputeVms({
         const running =
           vm.desired_state === "running" && vm.state !== "stopped";
         return (
-          <Space size={4}>
+          <Flex gap={4} wrap>
             <Button
               size="small"
               disabled={transitioning}
@@ -1195,7 +1564,17 @@ export function ProjectComputeVms({
               {running ? "Stop" : "Start"}
             </Button>
             <Button size="small" onClick={() => setTtlVm(vm)}>
-              Deadline
+              {vm.expires_at ? (
+                <>
+                  Deletes{" "}
+                  <TimeAgo
+                    date={new Date(vm.expires_at)}
+                    click_to_toggle={false}
+                  />
+                </>
+              ) : (
+                "Runs indefinitely"
+              )}
             </Button>
             <Button size="small" onClick={() => openSimilar(vm)}>
               Create similar
@@ -1211,7 +1590,7 @@ export function ProjectComputeVms({
                 Delete
               </Button>
             </Popconfirm>
-          </Space>
+          </Flex>
         );
       },
     },
@@ -1260,18 +1639,27 @@ export function ProjectComputeVms({
         const attached =
           !!volume.attached_vm_id || volume.attachment_state !== "detached";
         return (
-          <Popconfirm
-            title={`Permanently delete ${volume.name}?`}
-            description="All data on this volume will be lost."
-            okText="Delete volume"
-            okButtonProps={{ danger: true }}
-            disabled={attached}
-            onConfirm={() => deleteVolume(volume)}
-          >
-            <Button danger size="small" disabled={attached}>
-              Delete
+          <Flex gap={4} wrap>
+            <Button
+              size="small"
+              disabled={volume.state !== "ready"}
+              onClick={() => setResizeVolumeTarget(volume)}
+            >
+              Enlarge
             </Button>
-          </Popconfirm>
+            <Popconfirm
+              title={`Permanently delete ${volume.name}?`}
+              description="All data on this volume will be lost."
+              okText="Delete volume"
+              okButtonProps={{ danger: true }}
+              disabled={attached}
+              onConfirm={() => deleteVolume(volume)}
+            >
+              <Button danger size="small" disabled={attached}>
+                Delete
+              </Button>
+            </Popconfirm>
+          </Flex>
         );
       },
     },
@@ -1307,6 +1695,7 @@ export function ProjectComputeVms({
             loading={projectSshKeyLoading}
             onClick={() => {
               setVmInitial(defaultVm());
+              setVmCreateError(undefined);
               setVmModalOpen(true);
             }}
           >
@@ -1346,7 +1735,7 @@ export function ProjectComputeVms({
         showIcon
         type="info"
         title="VMs use your membership's dedicated-host spending limits."
-        description="Compute, boot disks, and retained /work volumes appear in Purchases. Public Internet egress costs $0.10/GB and appears as one accumulating purchase per VM per calendar month, not a new line item for every meter sample. Usage can take about five minutes to appear. Running VMs stop when funding is unavailable."
+        description="VMs run a minimal Ubuntu 24.04 LTS image; CoCalc and other special software are not installed. Compute, boot disks, and retained /work volumes appear in Purchases. Public Internet egress costs $0.10/GB and appears as one accumulating purchase per VM per calendar month, not a new line item for every meter sample. Usage can take about five minutes to appear. Running VMs stop when funding is unavailable. After authorizing an SSH key, connect with the CoCalc CLI or directly as ubuntu at the public IP."
         style={{ marginBottom: 12 }}
       />
       <Table<ComputeVm>
@@ -1368,7 +1757,10 @@ export function ProjectComputeVms({
             Persistent /work volumes
           </Title>
           <Text type="secondary">
-            Retained independently from virtual machines.
+            Retained independently from virtual machines. A volume can only be
+            attached to a VM in the same zone. Select an existing volume or
+            create a new one when creating the VM; changing attachments later is
+            not yet supported.
           </Text>
         </div>
         <Button
@@ -1419,8 +1811,12 @@ export function ProjectComputeVms({
           projectSshPublicKey={projectSshPublicKey}
           sshKeys={sshKeys}
           saving={saving}
+          error={vmCreateError}
           onGenerateProjectSshKey={generateProjectSshKey}
-          onCancel={() => setVmModalOpen(false)}
+          onCancel={() => {
+            setVmModalOpen(false);
+            setVmCreateError(undefined);
+          }}
           onCreate={createVm}
         />
       )}
@@ -1440,6 +1836,15 @@ export function ProjectComputeVms({
         onCancel={() => setTtlVm(undefined)}
         onSave={saveVmTtl}
       />
+      {catalog && (
+        <VolumeResizeModal
+          volume={resizeVolumeTarget}
+          maxSizeGb={catalog.limits.max_volume_gb}
+          saving={saving}
+          onCancel={() => setResizeVolumeTarget(undefined)}
+          onResize={resizeVolume}
+        />
+      )}
       <FreshAuthModal {...freshAuthModalProps} />
     </div>
   );

@@ -21,6 +21,7 @@ import {
   enqueueComputeWork,
   insertComputeVm,
   listOwnedComputeVms,
+  resolveProjectComputeVm,
   resolveOwnedComputeVm,
   updateComputeVm,
 } from "@cocalc/server/compute/db";
@@ -758,6 +759,32 @@ export async function authorizeSshKey(opts: {
   const key = normalizeSshPublicKey(opts.ssh_public_key);
   if (!key) throw new Error("ssh_public_key is required");
   const vm = await resolveOwned(accountId, opts.id_or_name);
+  return await authorizeSshKeyForVm({
+    vm,
+    key,
+    idempotency_key: opts.idempotency_key,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    beforeAdd: async () => {
+      await requireDangerousSessionAuth({
+        account_id: accountId,
+        browser_id: opts.browser_id,
+        session_hash: opts.session_hash,
+        require_second_factor: "if_enabled",
+      });
+    },
+  });
+}
+
+async function authorizeSshKeyForVm(opts: {
+  vm: ComputeVmRow;
+  key: string;
+  idempotency_key: string;
+  actor_account_id?: string;
+  actor_kind: "human" | "project";
+  beforeAdd?: () => Promise<void>;
+}) {
+  const { vm, key } = opts;
   if (vm.state !== "ready" || !vm.public_ip) {
     throw new Error(
       `compute VM '${vm.name}' is not SSH-ready (state=${vm.state})`,
@@ -778,15 +805,10 @@ export async function authorizeSshKey(opts: {
   let next = vm;
   let added = false;
   if (!existingKeys.includes(key)) {
-    await requireDangerousSessionAuth({
-      account_id: accountId,
-      browser_id: opts.browser_id,
-      session_hash: opts.session_hash,
-      require_second_factor: "if_enabled",
-    });
+    await opts.beforeAdd?.();
     const result = await addComputeVmSshPublicKey({
       id: vm.id,
-      owner_account_id: accountId,
+      owner_account_id: vm.owner_account_id,
       ssh_public_key: key,
     });
     next = result.vm;
@@ -799,8 +821,8 @@ export async function authorizeSshKey(opts: {
       : 1;
     await appendComputeEvent({
       vm: next,
-      actor_account_id: accountId,
-      actor_kind: "human",
+      actor_account_id: opts.actor_account_id,
+      actor_kind: opts.actor_kind,
       action: "authorize_ssh_key",
       idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
       old_state: vm.state,
@@ -810,6 +832,29 @@ export async function authorizeSshKey(opts: {
     });
   }
   return publicVm(next);
+}
+
+export async function authorizeProjectSshKey(opts: {
+  project_id?: string;
+  id_or_name: string;
+  ssh_public_key: string;
+  idempotency_key: string;
+}) {
+  const projectId = `${opts.project_id ?? ""}`.trim();
+  if (!projectId) throw new Error("must be a project");
+  const key = normalizeSshPublicKey(opts.ssh_public_key);
+  if (!key) throw new Error("ssh_public_key is required");
+  const vm = await resolveProjectComputeVm({
+    project_id: projectId,
+    id_or_name: `${opts.id_or_name ?? ""}`.trim(),
+  });
+  if (!vm) throw new Error(`compute VM '${opts.id_or_name}' not found`);
+  return await authorizeSshKeyForVm({
+    vm,
+    key,
+    idempotency_key: opts.idempotency_key,
+    actor_kind: "project",
+  });
 }
 
 async function requestState(opts: {

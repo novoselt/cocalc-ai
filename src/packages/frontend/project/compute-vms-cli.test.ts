@@ -59,4 +59,29 @@ describe("managed compute CLI equivalents", () => {
       "cocalc --api https://staging.cocalc.ai vm volume create --project project-id --zone us-central1-b --size-gb=80 --wait 'my data'",
     );
   });
+
+  it("creates and waits for a new /work volume before creating the VM", () => {
+    const command = vmCreateCli({
+      api: "https://staging.cocalc.ai",
+      project_id: "project-id",
+      values: {
+        name: "compute-vm",
+        zone: "us-west1-a",
+        machine_type: "e2-standard-2",
+        pricing_model: "on_demand",
+        allow_on_demand_fallback: false,
+        boot_disk_gb: 20,
+        create_volume: true,
+        new_volume_name: "compute-vm-work",
+        new_volume_size_gb: 100,
+      },
+    });
+    expect(command).toContain(
+      "vm volume create --project project-id --zone us-west1-a --size-gb=100 --wait compute-vm-work",
+    );
+    expect(command).toContain(
+      "&& cocalc --api https://staging.cocalc.ai vm create",
+    );
+    expect(command).toContain("--volume compute-vm-work");
+  });
 });

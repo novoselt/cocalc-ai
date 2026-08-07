@@ -18,13 +18,14 @@ import {
   volumeListSummary,
 } from "./vm";
 
-function harness() {
+function harness(opts: { projectId?: string } = {}) {
   const sshCalls: string[][] = [];
   const rsyncCalls: string[][] = [];
   const callbackResults: unknown[] = [];
   const ttlCalls: any[] = [];
   const createCalls: any[] = [];
   const sshAuthorizationCalls: any[] = [];
+  const projectSshAuthorizationCalls: any[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -43,6 +44,16 @@ function harness() {
             }),
             authorizeSshKey: async (opts: any) => {
               sshAuthorizationCalls.push(opts);
+              return {
+                id: "vm-id",
+                name: "build-vm",
+                state: "ready",
+                public_ip: "203.0.113.10",
+                ssh_user: "ubuntu",
+              };
+            },
+            authorizeProjectSshKey: async (callOpts: any) => {
+              projectSshAuthorizationCalls.push(callOpts);
               return {
                 id: "vm-id",
                 name: "build-vm",
@@ -71,6 +82,7 @@ function harness() {
       path: path ?? "/home/test/.ssh/id_ed25519.pub",
       key: "ssh-ed25519 AAAATEST test@example.com",
     }),
+    resolveProjectId: () => opts.projectId,
   });
   return {
     program,
@@ -80,6 +92,7 @@ function harness() {
     ttlCalls,
     createCalls,
     sshAuthorizationCalls,
+    projectSshAuthorizationCalls,
   };
 }
 
@@ -162,6 +175,19 @@ describe("vm ssh", () => {
       "ssh-ed25519 AAAATEST test@example.com",
     );
     assert.deepEqual(callbackResults, [undefined]);
+  });
+
+  it("authorizes SSH through the current project identity", async () => {
+    const projectId = "af027aca-e308-41c2-b528-a3e73de50996";
+    const { program, projectSshAuthorizationCalls, sshAuthorizationCalls } =
+      harness({ projectId });
+    await program.parseAsync(["node", "cocalc", "vm", "ssh", "build-vm"]);
+    assert.equal(projectSshAuthorizationCalls[0]?.project_id, projectId);
+    assert.equal(
+      projectSshAuthorizationCalls[0]?.ssh_public_key,
+      "ssh-ed25519 AAAATEST test@example.com",
+    );
+    assert.equal(sshAuthorizationCalls.length, 0);
   });
 
   it("passes a remote command and option-like arguments through to SSH", async () => {

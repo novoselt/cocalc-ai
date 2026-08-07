@@ -15,7 +15,17 @@ export type VmCommandDeps = {
   runSsh?: (args: string[]) => void;
   runRsync?: (args: string[]) => void;
   resolvePublicKey?: (path?: string) => { path?: string; key: string };
+  resolveProjectId?: () => string | undefined;
 };
+
+function projectIdFromEnvironment() {
+  const projectId = `${process.env.COCALC_PROJECT_ID ?? ""}`.trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    projectId,
+  )
+    ? projectId
+    : undefined;
+}
 
 function expandHome(path: string) {
   if (path === "~") return homedir();
@@ -310,6 +320,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     runSsh = defaultRunSsh,
     runRsync = defaultRunRsync,
     resolvePublicKey = readPublicKey,
+    resolveProjectId = projectIdFromEnvironment,
   } = deps;
   const authorizeSsh = async (
     ctx: any,
@@ -320,7 +331,12 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       opts.sshPublicKey ??
       (opts.identity ? `${expandHome(opts.identity)}.pub` : undefined);
     const key = resolvePublicKey(publicKeyPath);
-    return await ctx.hub.compute.authorizeSshKey({
+    const projectId = resolveProjectId();
+    const authorize = projectId
+      ? ctx.hub.compute.authorizeProjectSshKey
+      : ctx.hub.compute.authorizeSshKey;
+    return await authorize({
+      ...(projectId ? { project_id: projectId } : {}),
       id_or_name: idOrName,
       ssh_public_key: key.key,
       idempotency_key: randomUUID(),
