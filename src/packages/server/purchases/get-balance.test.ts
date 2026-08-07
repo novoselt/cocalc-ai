@@ -62,7 +62,7 @@ describe("test computing balance under various conditions", () => {
          VALUES (NOW(), $1, $2, 'student-pay', '{}'::jsonb)`,
         [uuid(), "1.001"],
       ),
-    ).rejects.toThrow("purchase cost must be a whole-cent amount");
+    ).rejects.toThrow("purchases_cost_must_be_whole_cents");
 
     const purchase_id = await createPurchase({
       account_id: uuid(),
@@ -77,7 +77,7 @@ describe("test computing balance under various conditions", () => {
         purchase_id,
         "0.001",
       ]),
-    ).rejects.toThrow("purchase cost must be a whole-cent amount");
+    ).rejects.toThrow("purchases_cost_must_be_whole_cents");
   });
 
   it("with an additional credit", async () => {

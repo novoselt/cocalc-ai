@@ -483,7 +483,10 @@ export async function syncSchema(
       await ensureAccountNotificationRevisionSchema(db);
     }
     if (dbSchema.purchases != null) {
-      await ensurePurchaseCostCentsSchema(db);
+      const result = await ensurePurchaseCostCentsSchema(db);
+      if (result.normalized_purchases > 0) {
+        dbg("normalized fractional purchase costs", result);
+      }
     }
     dbg("backfilling account display names");
     await backfillAccountDisplayNames(db);
@@ -556,7 +559,7 @@ export async function schemaNeedsSync(
       dbSchema.purchases != null &&
       (await purchaseCostCentsSchemaNeedsSync(db))
     ) {
-      dbg("detected missing purchase whole-cent trigger");
+      dbg("detected missing purchase whole-cent constraint");
       return true;
     }
     dbg("schema matches");
