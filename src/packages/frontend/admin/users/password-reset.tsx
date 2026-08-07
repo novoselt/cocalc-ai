@@ -260,10 +260,10 @@ export function PasswordReset({
     <Space vertical size="large" style={{ width: "100%" }}>
       {renderError()}
       {verifyMessage ? (
-        <Alert type="success" showIcon message={verifyMessage} />
+        <Alert type="success" showIcon title={verifyMessage} />
       ) : undefined}
       {twoFactorMessage ? (
-        <Alert type="success" showIcon message={twoFactorMessage} />
+        <Alert type="success" showIcon title={twoFactorMessage} />
       ) : undefined}
       {renderPasswordResetSection()}
       {renderEmailVerificationSection()}

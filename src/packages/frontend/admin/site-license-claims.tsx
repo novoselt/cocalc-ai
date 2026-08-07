@@ -919,7 +919,7 @@ export function SiteLicenseClaimsAdmin() {
             <Alert
               type="success"
               showIcon
-              message="Key id is reserved"
+              title="Key id is reserved"
               description="This key is pending until the issuer sends back their public key and you add it here."
             />
             <IssuerKeyInstructions claimKey={reservedKey} />
@@ -930,14 +930,14 @@ export function SiteLicenseClaimsAdmin() {
               <Alert
                 type="info"
                 showIcon
-                message="Step 1: reserve a key id"
+                title="Step 1: reserve a key id"
                 description="Choose a short globally unique key id. After it is reserved, this dialog will show instructions to send to the issuer. The key will stay pending until their public key is added."
               />
             ) : (
               <Alert
                 type="info"
                 showIcon
-                message="Step 2: add the issuer public key"
+                title="Step 2: add the issuer public key"
                 description="Paste the public key output the issuer sent back. The private key must stay with the issuer."
               />
             )}

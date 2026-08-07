@@ -18,7 +18,7 @@ export function notifyCount() {
   // know how many of them there are until querying stripe.
   return (
     (mentions?.getUnreadSize() ?? 0) +
-    getUnreadIncomingInviteCount() +
+    getUnreadIncomingInviteCount(account?.get("account_id")) +
     (news?.get("unread") ?? 0) +
     (account?.get("balance_alert") ? 1 : 0)
   );

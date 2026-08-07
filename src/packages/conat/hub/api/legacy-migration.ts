@@ -77,6 +77,43 @@ export interface LegacyMigrationListProjectsResponse {
   total_count: number;
 }
 
+export type LegacyMigrationPublicSharePathType =
+  | "directory"
+  | "file"
+  | "unknown";
+
+export interface LegacyMigrationPublicShareSummary {
+  legacy_public_path_id: string;
+  legacy_project_id: string;
+  legacy_account_ids: string[];
+  project_title?: string | null;
+  path: string;
+  path_type: LegacyMigrationPublicSharePathType;
+  title?: string | null;
+  description?: string | null;
+  legacy_url?: string | null;
+  disabled: boolean;
+  created?: Date | string | null;
+  last_edited?: Date | string | null;
+  project_id?: string | null;
+  import_status: LegacyMigrationProjectImportStatus;
+  restore_status?: LegacyMigrationProjectRestoreStatus | null;
+}
+
+export interface LegacyMigrationListPublicSharesOptions {
+  account_id?: string;
+  include_disabled?: boolean;
+  limit?: number;
+  offset?: number;
+  query?: string;
+}
+
+export interface LegacyMigrationListPublicSharesResponse {
+  legacy_account_ids: string[];
+  shares: LegacyMigrationPublicShareSummary[];
+  total_count: number;
+}
+
 export interface LegacyMigrationImportProjectsOptions {
   account_id?: string;
   legacy_project_ids: string[];
@@ -443,10 +480,63 @@ export interface LegacyMigrationAdminLinkedProjectsResponse {
   limit: number;
 }
 
+export interface LegacyMigrationAdminReplayPublicPathsOptions {
+  account_id?: string;
+  legacy_project_id: string;
+  commit?: boolean;
+  reason: string;
+  support_reference?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}
+
+export interface LegacyMigrationAdminReplayPublicPathsResponse {
+  legacy_project_id: string;
+  project_id: string;
+  restore_status?: LegacyMigrationProjectRestoreStatus | null;
+  public_path_count: number;
+  file_path_count: number;
+  imported: number;
+  skipped: number;
+  committed: boolean;
+}
+
+export interface LegacyMigrationAdminReplayRestoredPublicPathsOptions {
+  account_id?: string;
+  after_legacy_project_id?: string;
+  limit?: number;
+  commit?: boolean;
+  reason: string;
+  support_reference?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+}
+
+export interface LegacyMigrationAdminReplayRestoredPublicPathsProject {
+  legacy_project_id: string;
+  project_id: string;
+  public_path_count: number;
+  missing_share_count: number;
+  pending_share_count: number;
+  imported: number;
+  skipped: number;
+  error?: string;
+}
+
+export interface LegacyMigrationAdminReplayRestoredPublicPathsResponse {
+  projects: LegacyMigrationAdminReplayRestoredPublicPathsProject[];
+  committed: boolean;
+  has_more: boolean;
+  next_after_legacy_project_id?: string;
+}
+
 export interface LegacyMigration {
   listProjects: (
     opts?: LegacyMigrationListProjectsOptions,
   ) => Promise<LegacyMigrationListProjectsResponse>;
+  listPublicShares: (
+    opts?: LegacyMigrationListPublicSharesOptions,
+  ) => Promise<LegacyMigrationListPublicSharesResponse>;
   importProjects: (
     opts: LegacyMigrationImportProjectsOptions,
   ) => Promise<LegacyMigrationImportProjectsResponse>;
@@ -495,10 +585,17 @@ export interface LegacyMigration {
   adminListLinkedLegacyProjects: (
     opts: LegacyMigrationAdminLinkedProjectsOptions,
   ) => Promise<LegacyMigrationAdminLinkedProjectsResponse>;
+  adminReplayPublicPaths: (
+    opts: LegacyMigrationAdminReplayPublicPathsOptions,
+  ) => Promise<LegacyMigrationAdminReplayPublicPathsResponse>;
+  adminReplayRestoredPublicPaths: (
+    opts: LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  ) => Promise<LegacyMigrationAdminReplayRestoredPublicPathsResponse>;
 }
 
 export const legacyMigration = {
   listProjects: authFirstRequireAccount,
+  listPublicShares: authFirstRequireAccount,
   importProjects: authFirstRequireAccount,
   retryProjectRestore: authFirstRequireAccount,
   getProjectRemediation: authFirstRequireAccount,
@@ -515,4 +612,6 @@ export const legacyMigration = {
   adminLinkLegacyAccount: authFirstRequireAccount,
   adminUnlinkLegacyAccount: authFirstRequireAccount,
   adminListLinkedLegacyProjects: authFirstRequireAccount,
+  adminReplayPublicPaths: authFirstRequireAccount,
+  adminReplayRestoredPublicPaths: authFirstRequireAccount,
 } as const;

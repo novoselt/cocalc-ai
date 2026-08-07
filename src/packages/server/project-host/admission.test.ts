@@ -224,6 +224,36 @@ describe("evaluateDedicatedHostAdmission", () => {
     });
   });
 
+  it("allows explicitly trusted admin postpaid without automatic billing", () => {
+    expect(
+      evaluateDedicatedHostAdmission({
+        action: "resize",
+        machine_cloud: "gcp",
+        snapshot: snapshot({
+          funding_mode: "account-postpaid",
+          effective_limits: {
+            credit_spend_limit_5h_usd: 300,
+            credit_spend_limit_7d_usd: 1000,
+          },
+          has_payment_method: false,
+          has_usage_subscription: false,
+          admin_override: {
+            account_id: "acc-1",
+            enabled: true,
+            dedicated_hosts: {
+              funding_mode: { mode: "set", value: "account-postpaid" },
+            },
+            updated_by: "admin-1",
+            updated_at: "2026-08-05T00:00:00.000Z",
+          },
+        }) as any,
+      }),
+    ).toMatchObject({
+      allowed: true,
+      funding_lane: "credit",
+    });
+  });
+
   it("denies billable clouds when no dedicated-host spending lane is configured", () => {
     expect(
       evaluateDedicatedHostAdmission({

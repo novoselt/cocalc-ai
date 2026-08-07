@@ -44,7 +44,7 @@ export default function PublicViewerTasksRenderer({
       <Alert
         type="error"
         showIcon
-        message="Unable to parse tasks"
+        title="Unable to parse tasks"
         description={`${parsed}`}
       />
     );

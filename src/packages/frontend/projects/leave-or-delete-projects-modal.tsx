@@ -113,12 +113,12 @@ export function LeaveOrDeleteProjectsModal({
         </Button>,
       ]}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         {error ? (
           <Alert
             type="error"
             showIcon
-            message="Unable to leave or delete projects"
+            title="Unable to leave or delete projects"
             description={error}
           />
         ) : undefined}
@@ -126,9 +126,9 @@ export function LeaveOrDeleteProjectsModal({
           <Alert
             type="info"
             showIcon
-            message={bulkProgressMessage(progress, projectTitle)}
+            title={bulkProgressMessage(progress, projectTitle)}
             description={
-              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+              <Space vertical size={4} style={{ width: "100%" }}>
                 <Progress
                   percent={Math.round(
                     (100 * progress.completed) / Math.max(1, progress.total),

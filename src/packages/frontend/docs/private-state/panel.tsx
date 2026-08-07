@@ -261,7 +261,7 @@ export function DocsPrivateNotesPanel({
       <Flex gap="middle" vertical>
         {error ? (
           <Alert
-            message="Private docs state is unavailable"
+            title="Private docs state is unavailable"
             description={error}
             showIcon
             type="warning"

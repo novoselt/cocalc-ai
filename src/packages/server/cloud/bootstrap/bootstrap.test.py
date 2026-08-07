@@ -1107,6 +1107,109 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], bootstrap.RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S)
         self.assertNotIn("uid_map", contract)
+        self.assertEqual(contract["probe_error"], "timed out")
+
+    def test_runtime_user_contract_repairs_stale_boot_state_and_retries(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+        calls = []
+        repairs = []
+        original_which = bootstrap.shutil.which
+        original_probe = bootstrap.run_bounded_capture
+        original_repair = bootstrap.repair_stale_podman_boot_state
+        try:
+            bootstrap.shutil.which = lambda _name: "/usr/bin/podman"
+
+            def fake_probe(args, timeout_s):
+                calls.append((args, timeout_s))
+                if len(calls) == 1:
+                    return subprocess.CompletedProcess(
+                        args,
+                        125,
+                        "",
+                        "current system boot ID differs from cached boot ID; "
+                        "an unhandled reboot has occurred",
+                    )
+                map_text = "0 2000 1\n1 231072 65536\n65537 327680 4128768\n"
+                return subprocess.CompletedProcess(args, 0, map_text, "")
+
+            bootstrap.run_bounded_capture = fake_probe
+            bootstrap.repair_stale_podman_boot_state = lambda _cfg, **kwargs: repairs.append(
+                kwargs
+            )
+            contract = bootstrap.read_current_runtime_user_contract(cfg)
+        finally:
+            bootstrap.shutil.which = original_which
+            bootstrap.run_bounded_capture = original_probe
+            bootstrap.repair_stale_podman_boot_state = original_repair
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(repairs[0]["uid"], os.getuid())
+        self.assertIn("fingerprint", contract)
+        self.assertNotIn("probe_error", contract)
+
+    def test_stale_boot_repair_refuses_live_project_runtimes(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        original_active = bootstrap.project_host_runtime_is_active
+        try:
+            bootstrap.project_host_runtime_is_active = lambda: True
+            with self.assertRaisesRegex(RuntimeError, "project runtimes are active"):
+                bootstrap.repair_stale_podman_boot_state(
+                    cfg,
+                    uid=2000,
+                    gid=2000,
+                    runtime_dir=bootstrap.default_podman_runtime_dir(2000),
+                )
+        finally:
+            bootstrap.project_host_runtime_is_active = original_active
+
+    def test_stale_boot_repair_only_removes_boot_scoped_paths(self) -> None:
+        cfg = make_cfg(tempfile.mkdtemp())
+        cfg = replace(cfg, ssh_user="cocalc-host")
+        removed = []
+        owned = []
+        original_active = bootstrap.project_host_runtime_is_active
+        original_exists = Path.exists
+        original_is_symlink = Path.is_symlink
+        original_rmtree = bootstrap.shutil.rmtree
+        original_ensure_owned = bootstrap.ensure_owned_runtime_dir
+        try:
+            bootstrap.project_host_runtime_is_active = lambda: False
+            Path.exists = lambda _self: True  # type: ignore[method-assign]
+            Path.is_symlink = lambda _self: False  # type: ignore[method-assign]
+            bootstrap.shutil.rmtree = lambda path: removed.append(str(path))
+            bootstrap.ensure_owned_runtime_dir = (
+                lambda path, uid, gid: owned.append((str(path), uid, gid))
+            )
+            bootstrap.repair_stale_podman_boot_state(
+                cfg,
+                uid=2000,
+                gid=2000,
+                runtime_dir=bootstrap.default_podman_runtime_dir(2000),
+            )
+        finally:
+            bootstrap.project_host_runtime_is_active = original_active
+            Path.exists = original_exists  # type: ignore[method-assign]
+            Path.is_symlink = original_is_symlink  # type: ignore[method-assign]
+            bootstrap.shutil.rmtree = original_rmtree
+            bootstrap.ensure_owned_runtime_dir = original_ensure_owned
+
+        self.assertEqual(
+            removed,
+            [
+                "/run/cocalc/containers/rootless/cocalc-host",
+                "/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000/libpod/tmp",
+            ],
+        )
+        self.assertEqual(
+            owned,
+            [
+                ("/run/cocalc/containers/rootless/cocalc-host", 2000, 2000),
+                ("/mnt/cocalc/data/tmp/cocalc-podman-runtime-2000", 2000, 2000),
+            ],
+        )
+        self.assertFalse(any("/containers/rootless/" in path for path in removed[1:]))
 
     def test_runtime_user_contract_uses_managed_podman(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1151,6 +1254,71 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
             )
             self.assertIn("fingerprint", contract)
 
+    def test_runtime_user_contract_uses_loaded_podman_apparmor_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = make_cfg(tmpdir)
+            cfg = replace(cfg, ssh_user=pwd.getpwuid(os.getuid()).pw_name)
+            current = Path(tmpdir) / "runtime" / "current"
+            podman = current / "bin" / "podman"
+            conf = current / "etc" / "containers" / "containers.conf"
+            podman.parent.mkdir(parents=True)
+            conf.parent.mkdir(parents=True)
+            podman.write_text("#!/bin/sh\n", encoding="utf-8")
+            podman.chmod(0o755)
+            conf.write_text("[engine]\n", encoding="utf-8")
+            calls = []
+            original_current = os.environ.get("COCALC_CONTAINER_RUNTIME_CURRENT")
+            original_probe = bootstrap.run_bounded_capture
+            original_run = bootstrap.subprocess.run
+            original_which = bootstrap.shutil.which
+            try:
+                os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = str(current)
+                bootstrap.shutil.which = lambda name: (
+                    "/usr/bin/aa-exec" if name == "aa-exec" else original_which(name)
+                )
+                bootstrap.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+                    args[0], 0
+                )
+
+                def fake_probe(args, timeout_s):
+                    calls.append((args, timeout_s))
+                    map_text = "0 2000 1\n1 231072 65536\n65537 327680 4128768\n"
+                    return subprocess.CompletedProcess(args, 0, map_text, "")
+
+                bootstrap.run_bounded_capture = fake_probe
+                contract = bootstrap.read_current_runtime_user_contract(cfg)
+            finally:
+                bootstrap.run_bounded_capture = original_probe
+                bootstrap.subprocess.run = original_run
+                bootstrap.shutil.which = original_which
+                if original_current is None:
+                    os.environ.pop("COCALC_CONTAINER_RUNTIME_CURRENT", None)
+                else:
+                    os.environ["COCALC_CONTAINER_RUNTIME_CURRENT"] = original_current
+
+            self.assertEqual(len(calls), 2)
+            for args, _timeout_s in calls:
+                self.assertIn(
+                    f"/usr/bin/aa-exec -p podman -- {podman} unshare cat",
+                    args[-1],
+                )
+            self.assertIn("fingerprint", contract)
+
+    def test_runtime_user_contract_skips_missing_podman_apparmor_profile(self) -> None:
+        original_run = bootstrap.subprocess.run
+        original_which = bootstrap.shutil.which
+        try:
+            bootstrap.shutil.which = lambda name: (
+                "/usr/bin/aa-exec" if name == "aa-exec" else original_which(name)
+            )
+            bootstrap.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+                args[0], 1
+            )
+            self.assertEqual(bootstrap.podman_apparmor_exec_prefix(), [])
+        finally:
+            bootstrap.subprocess.run = original_run
+            bootstrap.shutil.which = original_which
+
     def test_verify_runtime_user_contract_raises_on_drift(self) -> None:
         cfg = make_cfg(tempfile.mkdtemp())
         original_expected = bootstrap.expected_runtime_user_contract
@@ -1171,8 +1339,12 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
                 "uid_map": ["0 1002 1", "1 231072 65536", "65537 327680 4128768"],
                 "gid_map": ["0 1003 1", "1 231072 65536", "65537 327680 4128768"],
                 "fingerprint": "different",
+                "probe_error": "current system boot ID differs from cached boot ID",
             }
-            with self.assertRaisesRegex(RuntimeError, "runtime userns contract mismatch"):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "podman probe failed: current system boot ID differs",
+            ):
                 bootstrap.verify_runtime_user_contract(cfg)
         finally:
             bootstrap.expected_runtime_user_contract = original_expected
@@ -2289,6 +2461,77 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn(
                 'PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"',
                 script,
+            )
+            reserve_startup_io_body = script.split(
+                "reserve_project_startup_io_capacity() {", 1
+            )[1].split("\n}\n", 1)[0]
+            self.assertIn(
+                'fields="$(project_io_policy_fields standard)"',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'if [ "$mode" != "enforce" ]; then',
+                reserve_startup_io_body,
+            )
+            self.assertIn(
+                'deny "project-io-normal-snapshot-empty"',
+                reserve_startup_io_body,
+            )
+            self.assertLess(
+                reserve_startup_io_body.index(
+                    'if [ "$mode" != "enforce" ]; then'
+                ),
+                reserve_startup_io_body.index(
+                    'deny "project-io-normal-snapshot-empty"'
+                ),
+            )
+            reserve_startup_io_function = (
+                "reserve_project_startup_io_capacity() {"
+                + reserve_startup_io_body
+                + "\n}\n"
+            )
+            pool_dir = Path(tmpdir) / "project-pool"
+            pool_dir.mkdir()
+            (pool_dir / "io.max").write_text("", encoding="utf-8")
+            snapshot_path = Path(tmpdir) / "normal-io.max"
+            released_path = Path(tmpdir) / "released"
+            reservation_harness = f"""
+set -euo pipefail
+PROJECT_POOL_CGROUP_DEFAULT={json.dumps(str(pool_dir))}
+PROJECT_IO_NORMAL_LIMITS_SNAPSHOT={json.dumps(str(snapshot_path))}
+project_io_policy_fields() {{ printf '%s\\t\\n' "$POLICY_MODE"; }}
+acquire_project_io_reservation_lock() {{ :; }}
+release_project_io_reservation_lock() {{ : > {json.dumps(str(released_path))}; }}
+project_io_pressure_protection_enabled() {{ return 1; }}
+apply_project_pool_io_policy() {{ :; }}
+deny() {{ printf 'SECURITY_DENY code=%s detail=%s\\n' "$1" "$2" >&2; exit 2; }}
+{reserve_startup_io_function}
+reserve_project_startup_io_capacity
+"""
+            disabled_result = subprocess.run(
+                ["bash"],
+                input=reservation_harness,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "POLICY_MODE": "disabled"},
+            )
+            self.assertEqual(
+                disabled_result.returncode, 0, disabled_result.stderr
+            )
+            self.assertTrue(released_path.exists())
+            self.assertFalse(snapshot_path.exists())
+            released_path.unlink()
+            enforced_result = subprocess.run(
+                ["bash"],
+                input=reservation_harness,
+                text=True,
+                capture_output=True,
+                env={**os.environ, "POLICY_MODE": "enforce"},
+            )
+            self.assertEqual(enforced_result.returncode, 2)
+            self.assertIn(
+                "SECURITY_DENY code=project-io-normal-snapshot-empty",
+                enforced_result.stderr,
             )
             self.assertIn(
                 '"pressure_protection_enabled": pressure_protection_enabled == "true"',

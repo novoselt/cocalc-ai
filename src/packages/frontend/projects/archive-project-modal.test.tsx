@@ -5,9 +5,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ArchiveProjectModal } from "./archive-project-modal";
 
 jest.mock("antd", () => ({
-  Alert: ({ message, description }: any) => (
+  Alert: ({ title, description }: any) => (
     <div>
-      <div>{message}</div>
+      <div>{title}</div>
       <div>{description}</div>
     </div>
   ),

@@ -71,14 +71,14 @@ Table({
     ssh_user: { type: "string", desc: "SSH login user." },
     ssh_public_key: {
       type: "string",
-      desc: "Public key installed for owner access; never a private key.",
+      desc: "Optional initial public key installed for owner access; additional authorized keys are stored in metadata and no private key is retained.",
     },
     created_at: { type: "timestamp", desc: "Lease creation time." },
     updated_at: { type: "timestamp", desc: "Last control-plane update." },
     ready_at: { type: "timestamp", desc: "Current generation readiness." },
     expires_at: {
       type: "timestamp",
-      desc: "Optional guest-independent deletion deadline; null uses only the project budget.",
+      desc: "Optional guest-independent deletion deadline; membership spending limits still apply when null.",
     },
     stopped_at: { type: "timestamp", desc: "Most recent stop time." },
     deleted_at: { type: "timestamp", desc: "Logical deletion completion." },

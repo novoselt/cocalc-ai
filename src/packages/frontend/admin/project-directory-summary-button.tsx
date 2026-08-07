@@ -74,7 +74,7 @@ export function ProjectDirectorySummaryButton({
           style={{ marginTop: "8px" }}
           type="error"
           showIcon
-          message="Unable to load directory summary"
+          title="Unable to load directory summary"
           description={error}
         />
       ) : null}

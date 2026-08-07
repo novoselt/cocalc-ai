@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+
+assert_backup_storage_ready
+printf 'backup storage ready: root=%s device=%s\n' \
+  "$COCALC_BACKUP_ROOT" \
+  "$(stat -c '%d' "$COCALC_BACKUP_ROOT")"

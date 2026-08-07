@@ -205,7 +205,7 @@ const TabContent: React.FC<TabContentProps> = (props: TabContentProps) => {
         showIcon
         type="info"
         style={{ margin: "24px" }}
-        message="Viewer access is read-only"
+        title="Viewer access is read-only"
         description="Viewers can browse and open allowed project files, but cannot create files, start runtimes, use terminals, open app servers, run agents, or change project settings."
       />
     );
@@ -291,7 +291,7 @@ const TabContent: React.FC<TabContentProps> = (props: TabContentProps) => {
               showIcon
               type="info"
               style={{ margin: "24px" }}
-              message="AI integrations are disabled"
+              title="AI integrations are disabled"
               description="Agents are hidden because AI integrations are disabled for this account or project."
             />
           );
@@ -400,7 +400,7 @@ const EditorContent: React.FC<EditorContentProps> = ({
         <Alert
           action={<Button onClick={retry}>Reload editor</Button>}
           description="The error was reported automatically. Other project tools remain available."
-          message="This editor could not be displayed"
+          title="This editor could not be displayed"
           showIcon
           type="warning"
         />

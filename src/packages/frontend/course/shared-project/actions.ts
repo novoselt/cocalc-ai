@@ -14,6 +14,7 @@ import { CourseStore } from "../store";
 import { delay } from "awaiting";
 import { WORKSPACE_LABEL } from "@cocalc/util/i18n/terminology";
 import { configureNewCourseSshTarget } from "../configuration/course-ssh-service";
+import type { CourseInfo } from "@cocalc/util/db-schema/projects";
 
 export class SharedProjectActions {
   private actions: CourseActions;
@@ -32,13 +33,26 @@ export class SharedProjectActions {
   private settings = (): {
     title: string;
     description: string;
+    course: CourseInfo;
   } => {
-    const settings = this.get_store().get("settings");
+    const store = this.get_store();
+    const settings = store.get("settings");
+    const course: CourseInfo = {
+      project_id: store.get("course_project_id"),
+      path: store.get("course_filename"),
+      datastore: store.get_datastore(),
+      type: "shared",
+    };
+    const envvars = store.get_envvars();
+    if (typeof envvars?.inherit === "boolean") {
+      course.envvars = envvars;
+    }
     return {
       title: `Shared ${WORKSPACE_LABEL} -- ${settings.get("title")}`,
       description:
         settings.get("description") +
         `\n\n---\n\nThis ${WORKSPACE_LABEL.toLowerCase()} is shared with all students in the course.`,
+      course,
     };
   };
 

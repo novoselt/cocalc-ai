@@ -1,5 +1,6 @@
 import {
   applyDedicatedHostSurchargeToBreakdown,
+  estimateGcpCatalogPersistentDiskRateBreakdown,
   estimateGcpCatalogRateBreakdown,
   estimateGcpCatalogRateUsdPerHour,
   estimateNebiusCatalogRateBreakdown,
@@ -79,6 +80,37 @@ describe("project host pricing", () => {
         storage_mode: "persistent",
       }),
     ).toBeCloseTo(0.1405, 9);
+  });
+
+  it("estimates a persistent GCP disk without VM pricing", () => {
+    const catalog: GcpCatalogPrices = {
+      fetched_at: "2026-08-07T00:00:00.000Z",
+      service_id: "compute",
+      families: {},
+      gpus: {},
+      disks: {
+        "pd-balanced": { "us-west1": 0.0001 },
+      },
+    };
+
+    expect(
+      estimateGcpCatalogPersistentDiskRateBreakdown(catalog, {
+        zone: "us-west1-a",
+        disk_type: "balanced",
+        disk_gb: 50,
+        storage_mode: "persistent",
+      }),
+    ).toEqual({
+      items: [
+        {
+          key: "disk",
+          label: "Persistent disk",
+          usd_per_hour: 0.005,
+          billing_states: ["running", "stopped"],
+        },
+      ],
+      total_usd_per_hour: 0.005,
+    });
   });
 
   it("adds GCP shared scratch disk as a separate line item", () => {

@@ -1223,7 +1223,7 @@ export function ManagedEgressHistoryPanel({
                 <Alert
                   showIcon
                   type="info"
-                  message="No recent events in this window."
+                  title="No recent events in this window."
                 />
               ) : (
                 <ManagedEgressRecentEventsList events={history.recent_events} />
@@ -1486,7 +1486,7 @@ export function ManagedEgressAdminHistoryModal({
                 <Alert
                   showIcon
                   type="info"
-                  message="No recent events in this window."
+                  title="No recent events in this window."
                 />
               ) : (
                 <ManagedEgressRecentEventsList events={history.recent_events} />

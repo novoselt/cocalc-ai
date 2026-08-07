@@ -1,0 +1,27 @@
+[Unit]
+Description=Prune unreferenced CoCalc Bay SQLite backup data
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cocalc-bay
+WorkingDirectory=/opt/cocalc/bay/current
+EnvironmentFile=/etc/cocalc/bay.env
+EnvironmentFile=-/etc/cocalc/bay-workers.env
+EnvironmentFile=-/etc/cocalc/bay-overlay.env
+EnvironmentFile=-/etc/cocalc/bay-topology.env
+EnvironmentFile=-/etc/cocalc/bay-secrets.env
+EnvironmentFile=-/etc/cocalc/bay-local.env
+ExecStart=/opt/cocalc/bay/current/bin/bay-sqlite-prune-run
+TimeoutStartSec=6h
+Nice=15
+CPUWeight=5
+CPUQuota=100%
+MemoryHigh=1G
+MemoryMax=1536M
+IOWeight=5
+IOReadBandwidthMax=/mnt/cocalc 10M
+IOWriteBandwidthMax=/mnt/cocalc 10M
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

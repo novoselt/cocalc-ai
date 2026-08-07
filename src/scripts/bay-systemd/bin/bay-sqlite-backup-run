@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+
+if [[ "${COCALC_BAY_SQLITE_BACKUP_ENABLED:-0}" != "1" ]]; then
+  bay_log "changed-only SQLite backup is disabled"
+  exit 0
+fi
+
+assert_backup_storage_ready
+
+: "${COCALC_BAY_SQLITE_SOURCE_DIR:=${COCALC_SYNC:-${COCALC_BAY_ROOT}/sync}}"
+: "${COCALC_BAY_SQLITE_MIRROR_DIR:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/sync}"
+: "${COCALC_BAY_SQLITE_MIRROR_CATALOG:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/catalog.json}"
+: "${COCALC_BAY_SQLITE_MIRROR_ENTRY:=${COCALC_BAY_CURRENT_LINK}/runtime/sqlite-mirror/index.js}"
+: "${COCALC_BAY_SQLITE_MIRROR_CONCURRENCY:=2}"
+: "${COCALC_BAY_SQLITE_RUSTIC_BIN:=/usr/local/bin/rustic}"
+: "${COCALC_BAY_SQLITE_RUSTIC_PROFILE:=${COCALC_BAY_BACKUP_DIR}/sqlite-mirror/rustic.toml}"
+: "${COCALC_BAY_SQLITE_RUSTIC_ROOT:=rustic/bay-sqlite/${COCALC_BAY_ID}}"
+: "${COCALC_BAY_SQLITE_BACKUP_STATUS_FILE:=${COCALC_BAY_STATE_DIR}/sqlite-backup-status.json}"
+: "${COCALC_BAY_SQLITE_RETENTION_HOURLY:=24}"
+: "${COCALC_BAY_SQLITE_RETENTION_DAILY:=14}"
+: "${COCALC_BAY_SQLITE_RETENTION_WEEKLY:=8}"
+: "${COCALC_BAY_SQLITE_RETENTION_MONTHLY:=12}"
+: "${COCALC_BAY_SQLITE_BACKUP_LOCK:=${COCALC_BAY_RUN_DIR}/sqlite-backup.lock}"
+
+required=(
+  COCALC_BAY_PGBACKREST_S3_BUCKET
+  COCALC_BAY_PGBACKREST_S3_ENDPOINT
+  COCALC_BAY_PGBACKREST_S3_ACCESS_KEY
+  COCALC_BAY_PGBACKREST_S3_SECRET_KEY
+  COCALC_BAY_SQLITE_RUSTIC_PASSWORD
+)
+for name in "${required[@]}"; do
+  require_var "$name"
+done
+if [[ ! -x "$COCALC_BAY_NODE_BIN" ]]; then
+  bay_log "Node binary is not executable: ${COCALC_BAY_NODE_BIN}"
+  exit 1
+fi
+if [[ ! -r "$COCALC_BAY_SQLITE_MIRROR_ENTRY" ]]; then
+  bay_log "SQLite mirror entrypoint is not readable: ${COCALC_BAY_SQLITE_MIRROR_ENTRY}"
+  exit 1
+fi
+if [[ ! -x "$COCALC_BAY_SQLITE_RUSTIC_BIN" ]]; then
+  bay_log "Rustic binary is not executable: ${COCALC_BAY_SQLITE_RUSTIC_BIN}"
+  exit 1
+fi
+if [[ ! -d "$COCALC_BAY_SQLITE_SOURCE_DIR" ]]; then
+  bay_log "SQLite source directory does not exist: ${COCALC_BAY_SQLITE_SOURCE_DIR}"
+  exit 1
+fi
+
+ensure_dirs
+mkdir -p \
+  "$COCALC_BAY_SQLITE_MIRROR_DIR" \
+  "$(dirname "$COCALC_BAY_SQLITE_MIRROR_CATALOG")" \
+  "$(dirname "$COCALC_BAY_SQLITE_RUSTIC_PROFILE")" \
+  "$(dirname "$COCALC_BAY_SQLITE_BACKUP_STATUS_FILE")"
+exec 9> "$COCALC_BAY_SQLITE_BACKUP_LOCK"
+if ! flock -n 9; then
+  bay_log "another SQLite backup or prune operation is active"
+  exit 0
+fi
+
+umask 077
+profile_tmp="${COCALC_BAY_SQLITE_RUSTIC_PROFILE}.tmp.$$"
+mirror_result="$(mktemp)"
+rustic_result="$(mktemp)"
+status_tmp="${COCALC_BAY_SQLITE_BACKUP_STATUS_FILE}.tmp.$$"
+trap 'rm -f "$profile_tmp" "$mirror_result" "$rustic_result" "$status_tmp"' EXIT
+export COCALC_BAY_SQLITE_RUSTIC_ROOT
+python3 - "$profile_tmp" <<'PY'
+import json
+import os
+import sys
+
+def value(name):
+    result = os.environ[name]
+    if "\n" in result or "\r" in result:
+        raise SystemExit(f"invalid newline in {name}")
+    return json.dumps(result)
+
+endpoint = os.environ["COCALC_BAY_PGBACKREST_S3_ENDPOINT"]
+if not endpoint.startswith(("http://", "https://")):
+    endpoint = "https://" + endpoint
+with open(sys.argv[1], "w", encoding="utf8") as out:
+    out.write("[repository]\n")
+    out.write('repository = "opendal:s3"\n')
+    out.write(f"password = {value('COCALC_BAY_SQLITE_RUSTIC_PASSWORD')}\n\n")
+    out.write("[repository.options]\n")
+    out.write(f"endpoint = {json.dumps(endpoint)}\n")
+    out.write('region = "auto"\n')
+    out.write(f"bucket = {value('COCALC_BAY_PGBACKREST_S3_BUCKET')}\n")
+    out.write(f"root = {value('COCALC_BAY_SQLITE_RUSTIC_ROOT')}\n")
+    out.write(f"access_key_id = {value('COCALC_BAY_PGBACKREST_S3_ACCESS_KEY')}\n")
+    out.write(f"secret_access_key = {value('COCALC_BAY_PGBACKREST_S3_SECRET_KEY')}\n")
+os.chmod(sys.argv[1], 0o600)
+PY
+mv -f "$profile_tmp" "$COCALC_BAY_SQLITE_RUSTIC_PROFILE"
+
+"$COCALC_BAY_NODE_BIN" "$COCALC_BAY_SQLITE_MIRROR_ENTRY" \
+  --source "$COCALC_BAY_SQLITE_SOURCE_DIR" \
+  --mirror "$COCALC_BAY_SQLITE_MIRROR_DIR" \
+  --catalog "$COCALC_BAY_SQLITE_MIRROR_CATALOG" \
+  --concurrency "$COCALC_BAY_SQLITE_MIRROR_CONCURRENCY" \
+  > "$mirror_result"
+
+profile="${COCALC_BAY_SQLITE_RUSTIC_PROFILE%.toml}"
+if ! "$COCALC_BAY_SQLITE_RUSTIC_BIN" -P "$profile" repoinfo >/dev/null 2>&1; then
+  "$COCALC_BAY_SQLITE_RUSTIC_BIN" -P "$profile" --no-progress init
+fi
+backup_id="$(date -u +%Y%m%dT%H%M%SZ)"
+(
+  cd "$COCALC_BAY_SQLITE_MIRROR_DIR"
+  "$COCALC_BAY_SQLITE_RUSTIC_BIN" -P "$profile" backup \
+    --json \
+    --host "$COCALC_BAY_ID" \
+    --tag "bay-id=${COCALC_BAY_ID}" \
+    --tag "sqlite-backup-id=${backup_id}" \
+    .
+) > "$rustic_result"
+"$COCALC_BAY_SQLITE_RUSTIC_BIN" -P "$profile" forget \
+  --filter-host "$COCALC_BAY_ID" \
+  --keep-hourly "$COCALC_BAY_SQLITE_RETENTION_HOURLY" \
+  --keep-daily "$COCALC_BAY_SQLITE_RETENTION_DAILY" \
+  --keep-weekly "$COCALC_BAY_SQLITE_RETENTION_WEEKLY" \
+  --keep-monthly "$COCALC_BAY_SQLITE_RETENTION_MONTHLY" \
+  --delete-unchanged
+
+python3 - "$mirror_result" "$rustic_result" "$status_tmp" "$backup_id" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+mirror_path, rustic_path, output_path, backup_id = sys.argv[1:]
+with open(mirror_path, encoding="utf8") as src:
+    mirror = json.load(src)
+with open(rustic_path, encoding="utf8") as src:
+    rustic = json.load(src)
+changed_files = mirror.pop("changed_files", [])
+deleted_files = mirror.pop("deleted_files", [])
+mirror["changed_files_count"] = len(changed_files)
+mirror["deleted_files_count"] = len(deleted_files)
+snapshot_id = rustic.get("snapshot_id") or rustic.get("id")
+if not snapshot_id:
+    raise SystemExit("Rustic backup output did not include a snapshot id")
+rustic["snapshot_id"] = snapshot_id
+result = {
+    "level": "ok",
+    "generated_at": datetime.now(timezone.utc).isoformat(),
+    "backup_id": backup_id,
+    "mirror": mirror,
+    "rustic": rustic,
+}
+with open(output_path, "w", encoding="utf8") as out:
+    json.dump(result, out, sort_keys=True)
+    out.write("\n")
+os.chmod(output_path, 0o600)
+print(json.dumps(result, sort_keys=True))
+PY
+mv -f "$status_tmp" "$COCALC_BAY_SQLITE_BACKUP_STATUS_FILE"
+trap - EXIT
+rm -f "$profile_tmp" "$mirror_result" "$rustic_result"

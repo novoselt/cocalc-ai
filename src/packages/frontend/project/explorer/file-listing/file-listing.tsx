@@ -1565,7 +1565,7 @@ export function FileListing({
             type="info"
             showIcon
             style={{ margin: "8px 16px 0 16px" }}
-            message="Project secrets are protected"
+            title="Project secrets are protected"
             description={
               <>
                 The file explorer intentionally does not list files under{" "}

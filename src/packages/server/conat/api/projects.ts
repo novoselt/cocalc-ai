@@ -76,6 +76,7 @@ import {
   resolvePublicViewerDns,
 } from "@cocalc/util/public-viewer-origin";
 import { isValidUUID } from "@cocalc/util/misc";
+import { membershipPackageCoversCourseProject } from "@cocalc/util/membership-package-product";
 import { projectStartFailureFromError } from "@cocalc/util/project-start-errors";
 import type { CodexUsageStatusInfo } from "@cocalc/conat/hub/api/system";
 import {
@@ -3182,8 +3183,10 @@ export async function getCoursePaymentOverview({
           packages: packages.filter(
             (membershipPackage) =>
               membershipPackage.kind === "course" &&
-              membershipPackage.metadata?.course_project_id ===
+              membershipPackageCoversCourseProject(
+                membershipPackage.metadata,
                 course_project_id,
+              ),
           ),
         };
       } catch (err) {

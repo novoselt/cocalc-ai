@@ -125,17 +125,17 @@ export const PROJECTS_ENTRIES: DocsEntry[] = [
     id: "projects.publish-files",
     image: docsIcon(
       "/public/docs/create-project-5b221552.webp",
-      "A project folder with read-only public share links",
+      "A project file or folder with a read-only public share link",
     ),
-    lastReviewed: "2026-06-29",
+    lastReviewed: "2026-08-06",
     noActionReason:
       "This page is normally opened from the publishing UI, so an action that reopens the same panel is redundant.",
     searchKeywords:
-      "public directory shares publish files folders whole project unlisted viewer copy slug",
+      "public exact file directory shares publish files folders whole project unlisted viewer copy slug legacy",
     slug: "projects/publish-files",
     status: "ready",
     summary:
-      "Publish read-only project folders or the whole project with unlisted signed-in share links.",
+      "Publish an exact file, a folder, or the whole project with an unlisted signed-in share link.",
     title: "Publish project files",
   },
   {

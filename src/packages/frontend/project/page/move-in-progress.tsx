@@ -420,7 +420,7 @@ export default function MoveInProgress({
                 padding: "12px",
               }}
             >
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space vertical size={8} style={{ width: "100%" }}>
                 <div style={{ fontWeight: 600 }}>Current sub-operation</div>
                 <Space size="small" wrap>
                   <Tag color="processing">

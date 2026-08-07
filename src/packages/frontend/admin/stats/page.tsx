@@ -106,7 +106,7 @@ function Scope({
     host_id ? `host ${host_id}` : undefined,
   ].filter((value): value is string => value != null);
   return values.length ? (
-    <Space direction="vertical" size={0}>
+    <Space vertical size={0}>
       {values.map((value) => (
         <Text key={value} code copyable={{ text: value.split(" ")[1] }}>
           {value}
@@ -595,7 +595,7 @@ export const UsageStatistics: React.FC = () => {
   const activeWindowLabel = windowLabel(windowMinutes).toLowerCase();
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Card
         title="Operations Monitor"
         extra={
@@ -611,7 +611,7 @@ export const UsageStatistics: React.FC = () => {
           <Alert
             type="error"
             showIcon
-            message="Unable to refresh all operations data"
+            title="Unable to refresh all operations data"
             description={error}
             style={{ marginBottom: 16 }}
           />
@@ -619,7 +619,7 @@ export const UsageStatistics: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message="Contained events are monitoring state, not admin alerts"
+          title="Contained events are monitoring state, not admin alerts"
           description="Admission controls rejected these requests to protect shared services. They remain searchable here for investigation; admin alerts are reserved for conditions that require immediate attention."
           style={{ marginBottom: 16 }}
         />
@@ -627,7 +627,7 @@ export const UsageStatistics: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            message="Some bay telemetry is unavailable"
+            title="Some bay telemetry is unavailable"
             description={unavailableBays
               .map((bay) => `${bay.bay_id}: ${bay.error || "unknown error"}`)
               .join(" | ")}

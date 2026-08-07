@@ -814,8 +814,8 @@ export function getAvailablePresets(
       label: draft.provider === "nebius" ? "HPC" : "Balanced CPU",
       description:
         draft.provider === "nebius"
-          ? "A high-value CPU/RAM host with on-demand pricing."
-          : "A general-purpose CPU host with on-demand pricing.",
+          ? "A high-value CPU/RAM host with Standard pricing."
+          : "A general-purpose CPU host with Standard pricing.",
     },
     {
       id: "low-cost-spot",
@@ -837,7 +837,7 @@ export function getAvailablePresets(
       label: draft.provider === "nebius" ? "Standard GPU" : "GPU workstation",
       description:
         draft.provider === "nebius"
-          ? "Use an on-demand GPU host."
+          ? "Use a Standard GPU host."
           : "Pick the first valid GPU shape for this provider.",
       disabled: !hasGpuOption,
       disabledReason: hasGpuOption

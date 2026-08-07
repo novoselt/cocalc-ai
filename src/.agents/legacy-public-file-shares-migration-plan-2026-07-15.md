@@ -2,7 +2,7 @@
 
 Date: 2026-07-15
 
-## Status: Proposed
+## Status: Core implementation complete; deployment and production canary pending
 
 This plan restores direct file publication on `cocalc.ai` and replays retained
 legacy `public_paths` records without broadening access from a single file to
@@ -41,6 +41,10 @@ realistically update everywhere.
 
 - Add first-class direct file shares.
 - Continue using live restored project files as the source of truth.
+- Never restore a legacy project merely because somebody follows an old share
+  URL. Shares are registered only after a collaborator explicitly imports the
+  project, remain pending while its archive restores, and become available
+  after restore completion.
 - Do not restore the old share server or duplicate files into a publication
   store.
 - Keep the current sign-in requirement for the first release. Anonymous static
@@ -248,7 +252,7 @@ On every replay:
 - retain the canonical slug and descriptive metadata;
 - set an explicit availability status;
 - re-enable rows previously disabled only because file sharing was unsupported;
-- leave user-disabled or historically disabled rows disabled.
+- omit historically disabled rows from replay and user-facing inventory.
 
 The replay must be safe under retries, concurrent project restoration, and
 partial failures.
@@ -317,7 +321,8 @@ historical URLs pass.
 ### Migration tests
 
 - replay old rows whose `path` was rewritten to a parent directory;
-- preserve historically disabled records;
+- retain historically disabled raw records for audit, but do not list or replay
+  them;
 - re-enable only migration-disabled file rows;
 - handle missing and unrestored projects;
 - handle missing files without losing the alias;
@@ -325,6 +330,16 @@ historical URLs pass.
 - resume safely after interruption.
 
 ## Rollout
+
+The implementation includes an audited, dry-run-by-default canary command:
+
+```text
+cocalc legacy-migration public-shares replay <legacy-project-id> \
+  --reason <audit-reason> --support-reference <ticket> [--commit]
+```
+
+`--commit` requires fresh administrator authentication. This command is for
+already-restored projects; it does not restore project data.
 
 1. Implement schema, API, policy, routing, frontend, and migration changes.
 2. Deploy to staging without running a broad replay.

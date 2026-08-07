@@ -205,7 +205,7 @@ export function SendSelectedAssignmentFilesModal({
         type={overwrite ? "warning" : "info"}
         showIcon
         style={{ marginBottom: "12px" }}
-        message={
+        title={
           overwrite
             ? "Selected files will replace existing student files."
             : "Existing student files are skipped and count as successful."
@@ -214,7 +214,7 @@ export function SendSelectedAssignmentFilesModal({
           targetRoot || "/"
         }${targetLabel ? ` (${targetLabel})` : ""}`}
       />
-      <Space direction="vertical" style={{ width: "100%" }} size="middle">
+      <Space vertical style={{ width: "100%" }} size="middle">
         <Input.Search
           allowClear
           placeholder="Search assignment files..."
@@ -235,7 +235,7 @@ export function SendSelectedAssignmentFilesModal({
               <Loading /> Loading assignment files...
             </div>
           ) : error ? (
-            <Alert type="error" message={error} />
+            <Alert type="error" title={error} />
           ) : visiblePaths.length ? (
             visiblePaths.map((item) => (
               <label
@@ -263,7 +263,7 @@ export function SendSelectedAssignmentFilesModal({
             </div>
           )}
         </div>
-        <Space direction="vertical">
+        <Space vertical>
           {explicitTargetCount == null ? (
             <Checkbox
               checked={includeNotAssigned}

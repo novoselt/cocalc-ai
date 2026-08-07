@@ -235,7 +235,10 @@ describe("project course info helpers", () => {
         kind: "course",
         membership_class: "student",
         seat_count: 10,
-        metadata: { course_project_id: COURSE_PROJECT_ID },
+        metadata: {
+          course_project_id: "another-course",
+          course_project_ids: ["another-course", COURSE_PROJECT_ID],
+        },
         assignments: [],
         active_assignment_count: 0,
         available_seat_count: 10,

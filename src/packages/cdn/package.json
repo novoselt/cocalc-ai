@@ -9,7 +9,8 @@
   ],
   "devDependencies": {
     "codemirror": "^5.65.18",
-    "katex": "^0.16.21"
+    "katex": "^0.16.21",
+    "pdfjs-dist": "^4.6.82"
   },
   "scripts": {
     "clean": "rm -rf build node_modules dist tsconfig.tsbuildinfo",

@@ -3,7 +3,12 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { authFirstRequireAccount } from "./util";
+import {
+  authFirstRequireAccount,
+  authFirstRequireHost,
+  authFirstRequireProject,
+} from "./util";
+import type { HostCatalog } from "./hosts";
 
 export type ComputeVmPricingModel = "spot" | "on_demand";
 export type ComputeVmDesiredState = "running" | "stopped" | "deleted";
@@ -64,8 +69,8 @@ export interface CreateComputeVmRequest {
   ttl_minutes?: number | null;
   boot_disk_gb?: number;
   volume?: string;
-  authorized_cost?: string;
-  ssh_public_key: string;
+  funding_mode?: "account-prepaid" | "account-postpaid";
+  ssh_public_key?: string;
   idempotency_key: string;
 }
 
@@ -105,41 +110,16 @@ export interface CreateComputeVolumeRequest {
   account_id?: string;
   browser_id?: string;
   session_hash?: string;
-  project_id?: string;
+  project_id: string;
   name: string;
   zone: string;
   size_gb: number;
-  authorized_monthly_cost?: string;
+  funding_mode?: "account-prepaid" | "account-postpaid";
   idempotency_key: string;
 }
 
-export type ComputeBudgetPeriod = "week" | "month";
-
-export interface ComputeProjectBudget {
-  id: string;
-  owner_account_id: string;
-  owning_bay_id: string;
-  project_id: string;
-  period: ComputeBudgetPeriod;
-  limit_usd: string;
-  enabled: boolean;
-  created_at: string | Date;
-  updated_at: string | Date;
-  period_started_at: string | Date;
-  period_ends_at: string | Date;
-  spent_usd: string;
-  remaining_usd: string;
-}
-
 export interface ComputeCatalog {
-  machines: Array<{
-    machine_type: string;
-    architecture: "x86_64" | "arm64";
-    cpu: number;
-    ram_gb: number;
-    spot_hourly_usd: number;
-    on_demand_hourly_usd: number;
-  }>;
+  host_catalog: HostCatalog;
   defaults: {
     zone: string;
     machine_type: string;
@@ -147,6 +127,7 @@ export interface ComputeCatalog {
     boot_disk_gb: number;
   };
   limits: {
+    max_active_per_project: number;
     max_ttl_minutes: number;
     max_boot_disk_gb: number;
     max_volume_gb: number;
@@ -158,6 +139,9 @@ export const compute = {
   createVm: authFirstRequireAccount,
   listVms: authFirstRequireAccount,
   getVm: authFirstRequireAccount,
+  authorizeSshKey: authFirstRequireAccount,
+  authorizeProjectSshKey: authFirstRequireProject,
+  authorizeProjectSshKeyFromHost: authFirstRequireHost,
   startVm: authFirstRequireAccount,
   stopVm: authFirstRequireAccount,
   deleteVm: authFirstRequireAccount,
@@ -167,8 +151,6 @@ export const compute = {
   getVolume: authFirstRequireAccount,
   resizeVolume: authFirstRequireAccount,
   deleteVolume: authFirstRequireAccount,
-  getProjectBudget: authFirstRequireAccount,
-  setProjectBudget: authFirstRequireAccount,
 };
 
 export interface ComputeApi {
@@ -182,6 +164,27 @@ export interface ComputeApi {
   getVm: (opts: {
     account_id?: string;
     id_or_name: string;
+  }) => Promise<ComputeVm>;
+  authorizeSshKey: (opts: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVm>;
+  authorizeProjectSshKey: (opts: {
+    project_id?: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVm>;
+  authorizeProjectSshKeyFromHost: (opts: {
+    host_id?: string;
+    project_id: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
   }) => Promise<ComputeVm>;
   startVm: (opts: {
     account_id?: string;
@@ -225,22 +228,9 @@ export interface ComputeApi {
     session_hash?: string;
     id_or_name: string;
     size_gb: number;
-    authorized_monthly_cost?: string;
+    funding_mode?: "account-prepaid" | "account-postpaid";
     idempotency_key: string;
   }) => Promise<ComputeVolume>;
-  getProjectBudget: (opts: {
-    account_id?: string;
-    project_id: string;
-  }) => Promise<ComputeProjectBudget | null>;
-  setProjectBudget: (opts: {
-    account_id?: string;
-    browser_id?: string;
-    session_hash?: string;
-    project_id: string;
-    period: ComputeBudgetPeriod;
-    limit_usd: string;
-    enabled?: boolean;
-  }) => Promise<ComputeProjectBudget>;
   deleteVolume: (opts: {
     account_id?: string;
     browser_id?: string;

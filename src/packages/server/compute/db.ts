@@ -8,6 +8,8 @@ import getPool from "@cocalc/database/pool";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
 
 const pool = () => getPool();
+const MAX_COMPUTE_VM_SSH_KEYS = 32;
+const MAX_COMPUTE_VM_SSH_KEY_METADATA_BYTES = 128 * 1024;
 
 export async function insertComputeVm(
   row: Omit<
@@ -15,7 +17,7 @@ export async function insertComputeVm(
     "created_at" | "updated_at" | "ready_at" | "stopped_at" | "deleted_at"
   >,
   limits?: {
-    max_active_per_account: number;
+    max_active_per_project: number;
     max_active_total: number;
   },
 ): Promise<ComputeVmRow> {
@@ -35,23 +37,23 @@ export async function insertComputeVm(
     }
     if (limits) {
       // Serialize admission so concurrent creates cannot independently pass
-      // the same account or site-wide capacity check.
+      // the same project or site-wide capacity check.
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('compute-vm-admission', 0))",
       );
-      const { rows: ownerRows } = await client.query<{ count: string }>(
+      const { rows: projectRows } = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM compute_vms
-         WHERE owner_account_id=$1 AND deleted_at IS NULL`,
-        [row.owner_account_id],
+         WHERE project_id=$1 AND deleted_at IS NULL`,
+        [row.project_id],
       );
       const { rows: totalRows } = await client.query<{ count: string }>(
         "SELECT COUNT(*)::text AS count FROM compute_vms WHERE deleted_at IS NULL",
       );
-      const ownerCount = Number(ownerRows[0]?.count ?? 0);
+      const projectCount = Number(projectRows[0]?.count ?? 0);
       const totalCount = Number(totalRows[0]?.count ?? 0);
-      if (ownerCount >= limits.max_active_per_account) {
+      if (projectCount >= limits.max_active_per_project) {
         throw new Error(
-          `managed compute VM account limit reached (${ownerCount}/${limits.max_active_per_account})`,
+          `managed compute VM project limit reached (${projectCount}/${limits.max_active_per_project})`,
         );
       }
       if (totalCount >= limits.max_active_total) {
@@ -184,6 +186,28 @@ export async function resolveOwnedComputeVm(opts: {
   return rows[0];
 }
 
+export async function resolveProjectComputeVm(opts: {
+  project_id: string;
+  id_or_name: string;
+  include_deleted?: boolean;
+}) {
+  const deletedClause = opts.include_deleted ? "" : "AND deleted_at IS NULL";
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+     WHERE project_id=$1
+       AND (id::text=$2 OR name=$2)
+       ${deletedClause}
+     ORDER BY created_at DESC LIMIT 2`,
+    [opts.project_id, opts.id_or_name],
+  );
+  if (rows.length > 1) {
+    throw new Error(
+      `compute VM name '${opts.id_or_name}' is ambiguous in this project; use its UUID`,
+    );
+  }
+  return rows[0];
+}
+
 export async function listOwnedComputeVms(opts: {
   owner_account_id: string;
   project_id?: string;
@@ -205,6 +229,35 @@ export async function listOwnedComputeVms(opts: {
   return rows;
 }
 
+export async function listComputeVmsForBillingEnforcement() {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+      WHERE deleted_at IS NULL
+        AND desired_state <> 'deleted'
+      ORDER BY owner_account_id, created_at`,
+  );
+  return rows;
+}
+
+export async function listComputeVmsForInventory() {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+      WHERE deleted_at IS NULL
+      ORDER BY created_at`,
+  );
+  return rows;
+}
+
+export async function listComputeVmsForEgressMetering() {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `SELECT * FROM compute_vms
+      WHERE deleted_at IS NULL
+         OR COALESCE((metadata#>>'{billing,egress,finalized}')::boolean, FALSE) IS NOT TRUE
+      ORDER BY created_at`,
+  );
+  return rows;
+}
+
 export async function updateComputeVm(
   id: string,
   updates: Partial<ComputeVmRow>,
@@ -221,6 +274,8 @@ export async function updateComputeVm(
     "metadata",
     "spot_recovery_state",
     "expires_at",
+    "billing_state",
+    "billing_updated_at",
   ]);
   const entries = Object.entries(updates).filter(([key]) => allowed.has(key));
   if (!entries.length) return await getComputeVmById(id);
@@ -232,6 +287,73 @@ export async function updateComputeVm(
     [id, ...values],
   );
   return rows[0];
+}
+
+export async function addComputeVmSshPublicKey({
+  id,
+  owner_account_id,
+  ssh_public_key,
+}: {
+  id: string;
+  owner_account_id: string;
+  ssh_public_key: string;
+}): Promise<{ vm: ComputeVmRow; added: boolean }> {
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<ComputeVmRow>(
+      "SELECT * FROM compute_vms " +
+        "WHERE id=$1 AND owner_account_id=$2 AND deleted_at IS NULL " +
+        "FOR UPDATE",
+      [id, owner_account_id],
+    );
+    const vm = rows[0];
+    if (!vm) {
+      throw new Error("compute VM not found or access denied");
+    }
+    const sshPublicKeys = Array.from(
+      new Set(
+        [
+          vm.ssh_public_key,
+          ...(Array.isArray(vm.metadata?.ssh_public_keys)
+            ? vm.metadata.ssh_public_keys
+            : []),
+        ]
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    if (sshPublicKeys.includes(ssh_public_key)) {
+      await client.query("COMMIT");
+      return { vm, added: false };
+    }
+    if (sshPublicKeys.length >= MAX_COMPUTE_VM_SSH_KEYS) {
+      throw new Error(
+        "compute VM SSH key limit reached (" + MAX_COMPUTE_VM_SSH_KEYS + ")",
+      );
+    }
+    const metadataBytes =
+      sshPublicKeys.reduce((total, key) => total + Buffer.byteLength(key), 0) +
+      Buffer.byteLength(ssh_public_key);
+    if (metadataBytes > MAX_COMPUTE_VM_SSH_KEY_METADATA_BYTES) {
+      throw new Error("compute VM SSH public key metadata is too large");
+    }
+    sshPublicKeys.push(ssh_public_key);
+    const metadata = { ...vm.metadata, ssh_public_keys: sshPublicKeys };
+    const updated = await client.query<ComputeVmRow>(
+      "UPDATE compute_vms " +
+        "SET metadata=$2::jsonb, updated_at=NOW() " +
+        "WHERE id=$1 RETURNING *",
+      [id, JSON.stringify(metadata)],
+    );
+    await client.query("COMMIT");
+    return { vm: updated.rows[0]!, added: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function insertComputeInstance(vm: ComputeVmRow) {

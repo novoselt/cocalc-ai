@@ -12,7 +12,7 @@ declare var DEBUG: boolean;
 
 import type { IconName } from "@cocalc/frontend/components/icon";
 
-import { Spin } from "antd";
+import { Alert, Spin } from "antd";
 import { useIntl } from "react-intl";
 import { Avatar } from "@cocalc/frontend/account/avatar/avatar";
 import { openAccountSettings } from "@cocalc/frontend/account/settings-routing";
@@ -166,6 +166,10 @@ export const Page: React.FC = () => {
   const account_id = useTypedRedux("account", "account_id");
   const is_logged_in = useTypedRedux("account", "is_logged_in");
   const examMode = useTypedRedux("customize", "exam_mode") === true;
+  const configurationLoadError = useTypedRedux(
+    "customize",
+    "configuration_load_error",
+  );
   const examProjectId = useTypedRedux("customize", "project_id");
   const scratchpadDeleteAt = useTypedRedux(
     "customize",
@@ -422,6 +426,9 @@ export const Page: React.FC = () => {
       <AutomaticUpdateNotice />
       {cookie_warning && <CookieWarning />}
       {local_storage_warning && <LocalStorageWarning />}
+      {configurationLoadError && (
+        <Alert banner showIcon type="error" title={configurationLoadError} />
+      )}
       {show_i18n && <I18NBanner />}
       <ImpersonationBanner />
       <TeamLicenseWarningBanner />

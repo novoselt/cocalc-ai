@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { after, before, getPool } from "@cocalc/server/test";
 import {
+  addComputeVmSshPublicKey,
   claimComputeWork,
   enqueueComputeWork,
   enqueueComputeEmergencyStops,
@@ -13,7 +14,9 @@ import {
   enqueueComputeReconciliation,
   finishComputeWork,
   insertComputeVm,
+  getComputeVmById,
   listOwnedComputeVms,
+  resolveProjectComputeVm,
 } from "./db";
 import type { ComputeVmRow } from "./types";
 import type { ComputeVolumeRow } from "./types";
@@ -77,7 +80,7 @@ function vmInput(
     spot_recovery_state: {},
     idempotency_key: overrides.idempotency_key ?? randomUUID(),
     error: null,
-    metadata: {},
+    metadata: overrides.metadata ?? {},
   };
 }
 
@@ -127,22 +130,131 @@ describe("compute VM durable state", () => {
     ).toHaveLength(1);
   });
 
-  it("enforces account admission limits", async () => {
-    const owner = randomUUID();
-    await insertComputeVm(vmInput({ owner_account_id: owner }), {
-      max_active_per_account: 1,
-      max_active_total: 10,
-    });
+  it("resolves only an unambiguous VM attached to the project", async () => {
+    const project = randomUUID();
+    const first = await insertComputeVm(
+      vmInput({ project_id: project, name: "shared-name" }),
+    );
+    expect(
+      (
+        await resolveProjectComputeVm({
+          project_id: project,
+          id_or_name: first.id,
+        })
+      )?.id,
+    ).toBe(first.id);
+    await insertComputeVm(
+      vmInput({ project_id: project, name: "shared-name" }),
+    );
     await expect(
-      insertComputeVm(vmInput({ owner_account_id: owner, name: "second-vm" }), {
-        max_active_per_account: 1,
-        max_active_total: 10,
+      resolveProjectComputeVm({
+        project_id: project,
+        id_or_name: "shared-name",
       }),
-    ).rejects.toThrow("account limit reached");
+    ).rejects.toThrow("ambiguous");
+  });
+
+  it("enforces project admission limits without limiting the owner", async () => {
+    const owner = randomUUID();
+    const project = randomUUID();
+    await insertComputeVm(
+      vmInput({ owner_account_id: owner, project_id: project }),
+      {
+        max_active_per_project: 1,
+        max_active_total: 10,
+      },
+    );
+    await expect(
+      insertComputeVm(
+        vmInput({
+          owner_account_id: owner,
+          project_id: project,
+          name: "second-vm",
+        }),
+        {
+          max_active_per_project: 1,
+          max_active_total: 10,
+        },
+      ),
+    ).rejects.toThrow("project limit reached");
+    await expect(
+      insertComputeVm(
+        vmInput({ owner_account_id: owner, name: "other-project" }),
+        {
+          max_active_per_project: 1,
+          max_active_total: 10,
+        },
+      ),
+    ).resolves.toMatchObject({ owner_account_id: owner });
+  });
+
+  it("adds SSH public keys idempotently", async () => {
+    const input = vmInput();
+    const vm = await insertComputeVm(input);
+    const first = await addComputeVmSshPublicKey({
+      id: vm.id,
+      owner_account_id: input.owner_account_id,
+      ssh_public_key: "ssh-ed25519 AAAASECOND second",
+    });
+    const duplicate = await addComputeVmSshPublicKey({
+      id: vm.id,
+      owner_account_id: input.owner_account_id,
+      ssh_public_key: "ssh-ed25519 AAAASECOND second",
+    });
+    expect(first.added).toBe(true);
+    expect(duplicate.added).toBe(false);
+    expect(duplicate.vm.metadata.ssh_public_keys).toEqual([
+      "ssh-ed25519 AAAATEST owner",
+      "ssh-ed25519 AAAASECOND second",
+    ]);
+  });
+
+  it("limits SSH public key metadata growth", async () => {
+    const input = vmInput({
+      metadata: {
+        ssh_public_keys: Array.from(
+          { length: 32 },
+          (_, index) => "ssh-ed25519 AAAA" + index,
+        ),
+      },
+    });
+    const vm = await insertComputeVm(input);
+    await expect(
+      addComputeVmSshPublicKey({
+        id: vm.id,
+        owner_account_id: input.owner_account_id,
+        ssh_public_key: "ssh-ed25519 AAAANEW new",
+      }),
+    ).rejects.toThrow("SSH key limit reached (32)");
+  });
+
+  postgresIt("serializes concurrent SSH public key additions", async () => {
+    const input = vmInput();
+    const vm = await insertComputeVm(input);
+    await Promise.all([
+      addComputeVmSshPublicKey({
+        id: vm.id,
+        owner_account_id: input.owner_account_id,
+        ssh_public_key: "ssh-ed25519 AAAAA first",
+      }),
+      addComputeVmSshPublicKey({
+        id: vm.id,
+        owner_account_id: input.owner_account_id,
+        ssh_public_key: "ssh-ed25519 AAAAB second",
+      }),
+    ]);
+    const updated = await getComputeVmById(vm.id);
+    expect(new Set(updated?.metadata.ssh_public_keys)).toEqual(
+      new Set([
+        "ssh-ed25519 AAAATEST owner",
+        "ssh-ed25519 AAAAA first",
+        "ssh-ed25519 AAAAB second",
+      ]),
+    );
   });
 
   postgresIt("serializes concurrent site-wide admission", async () => {
-    const limits = { max_active_per_account: 10, max_active_total: 1 };
+    const limits = { max_active_per_project: 10, max_active_total: 1 };
     const results = await Promise.allSettled([
       insertComputeVm(vmInput({ name: "first-vm" }), limits),
       insertComputeVm(vmInput({ name: "second-vm" }), limits),

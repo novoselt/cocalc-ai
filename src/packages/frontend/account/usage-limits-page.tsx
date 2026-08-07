@@ -526,7 +526,7 @@ function UsageLimitsSettingsContent(): ReactElement | null {
         <Alert
           type="warning"
           showIcon
-          message="Current usage overview is unavailable"
+          title="Current usage overview is unavailable"
           description={overviewError}
         />
       ) : null}
@@ -534,7 +534,7 @@ function UsageLimitsSettingsContent(): ReactElement | null {
         <Alert
           type="warning"
           showIcon
-          message="Some usage measurements are incomplete"
+          title="Some usage measurements are incomplete"
           description={
             <Space vertical size={0}>
               {overview.measurement_warnings.map((warning) => (

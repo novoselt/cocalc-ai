@@ -12,6 +12,7 @@ import { MAX_INTEREST_TIMEOUT } from "@cocalc/conat/core/client";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import {
   ensureProjectFileServerClientReady,
+  getProjectFsClient,
   getProjectFileServerClient,
 } from "@cocalc/server/conat/file-server-client";
 import createProject, {
@@ -38,11 +39,12 @@ import {
   syncProjectUsersOnHost,
 } from "@cocalc/server/project-host/control";
 import {
-  disableMigratedLegacyPublicDirectoryShare,
+  ensurePublicDirectorySharesSchema,
   normalizePublicDirectorySharePath,
   upsertMigratedLegacyPublicDirectoryShare,
 } from "@cocalc/server/public-directory-shares";
 import {
+  isUnsupportedLegacyProxyPublicPath,
   legacyPublicPathSlugForRecord,
   normalizeLegacyPublicPathDescription,
 } from "@cocalc/server/legacy-migration/public-path-slugs";
@@ -74,6 +76,10 @@ import type {
   LegacyMigrationAdminLinksResponse,
   LegacyMigrationAdminLinkSummary,
   LegacyMigrationAdminProjectSearchOptions,
+  LegacyMigrationAdminReplayPublicPathsOptions,
+  LegacyMigrationAdminReplayPublicPathsResponse,
+  LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  LegacyMigrationAdminReplayRestoredPublicPathsResponse,
   LegacyMigrationAdminProjectSearchResponse,
   LegacyMigrationAdminProjectAccountCandidate,
   LegacyMigrationAdminProjectSummary,
@@ -96,9 +102,14 @@ import type {
   LegacyMigrationImportProjectsResponse,
   LegacyMigrationListProjectsOptions,
   LegacyMigrationListProjectsResponse,
+  LegacyMigrationListPublicSharesOptions,
+  LegacyMigrationListPublicSharesResponse,
+  LegacyMigrationPublicSharePathType,
+  LegacyMigrationPublicShareSummary,
   LegacyMigrationMatchedAccount,
   LegacyMigrationPrepareProjectRemediationOptions,
   LegacyMigrationPrepareProjectRemediationResponse,
+  LegacyMigrationProjectImportStatus,
   LegacyMigrationProjectRemediationDiffEntry,
   LegacyMigrationProjectRemediationDiffKind,
   LegacyMigrationProjectRemediationStatusOptions,
@@ -111,7 +122,6 @@ import type {
 } from "@cocalc/conat/hub/api/legacy-migration";
 
 import { randomUUID } from "node:crypto";
-import { posix } from "node:path";
 import { assertLegacyMigrationEnabled } from "./enabled";
 import { moneyRound2Up, moneyToDbString, toDecimal } from "@cocalc/util/money";
 import { isValidUUID } from "@cocalc/util/misc";
@@ -119,6 +129,7 @@ import { mapCloudRegionToR2Region, parseR2Region } from "@cocalc/util/consts";
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
+const MAX_PUBLIC_SHARE_LIST_LIMIT = 1000;
 const PROJECT_ARCHIVE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const LEGACY_FINANCIAL_HOME_BAY_TIMEOUT_MS = MAX_INTEREST_TIMEOUT + 30_000;
 const DEFAULT_LEGACY_PROJECTS_BUCKET = "cocalc-projects";
@@ -223,6 +234,7 @@ const LEGACY_MIGRATION_LOOKUP_INDEXES = [
 ] as const;
 
 const LEGACY_MIGRATION_RAW_RECORD_INDEXES = [
+  "legacy_migration_raw_records_public_paths_project_id_idx",
   "legacy_migration_raw_records_source_legacy_account_id_idx",
   "legacy_migration_raw_records_site_license_account_idx",
   "legacy_migration_raw_records_stripe_customer_idx",
@@ -473,6 +485,11 @@ async function ensureLegacyMigrationRawRecordsSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_updated_idx
         ON legacy_migration_raw_records(updated)
     `);
+        await getPool().query(`
+      CREATE INDEX IF NOT EXISTS legacy_migration_raw_records_public_paths_project_id_idx
+        ON legacy_migration_raw_records ((payload->>'project_id'), updated DESC)
+        WHERE source='public_paths'
+    `);
         await ensureLegacyMigrationRawRecordIndexes();
       }),
     () => {
@@ -517,28 +534,133 @@ function projectDescription(row: LegacyProjectRow): string {
 }
 
 function legacyBoolean(value: unknown): boolean {
-  return value === true || `${value}`.toLowerCase() === "true";
+  return (
+    value === true || ["true", "t", "1"].includes(`${value}`.toLowerCase())
+  );
 }
 
-function normalizeLegacyPublicPathSharePath(row: Record<string, any>): string {
-  const rawPath = clean(row.path) ?? clean(row.original_path) ?? ".";
-  const originalPath = normalizePublicDirectorySharePath(rawPath);
-  if (clean(row.original_path_type) === "file") {
-    return normalizePublicDirectorySharePath(posix.dirname(originalPath));
+type LegacyPublicPathTarget = {
+  path: string;
+  path_type: "directory" | "file";
+};
+
+type LegacyPublicPathResolution = {
+  target: LegacyPublicPathTarget;
+  availability_status: "available" | "pending" | "unavailable";
+  availability_message: string | null;
+};
+
+function looksLikeLegacyFilePath(path: string): boolean {
+  if (path === ".") return false;
+  const tail = path.split("/").filter(Boolean).at(-1) ?? "";
+  return /\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/.test(tail);
+}
+
+export function legacyPublicPathTargetFromRetainedRecord(
+  row: Record<string, any>,
+): LegacyPublicPathTarget | undefined {
+  const retainedType = clean(row.original_path_type);
+  if (retainedType === "file" || retainedType === "directory") {
+    return {
+      path: normalizePublicDirectorySharePath(
+        clean(row.original_path) ?? clean(row.path) ?? ".",
+      ),
+      path_type: retainedType,
+    };
   }
-  return originalPath;
+  const path = normalizePublicDirectorySharePath(
+    clean(row.original_path) ?? clean(row.path) ?? ".",
+  );
+  // Older raw imports predate original_path_type. Only infer a file here:
+  // that narrows access. Inferring a directory could expose sibling files.
+  return looksLikeLegacyFilePath(path)
+    ? { path, path_type: "file" }
+    : undefined;
 }
 
-function legacyPublicPathIsFile(row: Record<string, any>): boolean {
-  return clean(row.original_path_type) === "file";
+function isMissingLegacyPublicPathError(err: unknown): boolean {
+  const value = `${(err as any)?.code ?? ""} ${(err as Error)?.message ?? err}`;
+  return /\bENOENT\b|no such file or directory|not found/i.test(value);
+}
+
+export async function resolveLegacyPublicPathTarget({
+  row,
+  fs,
+  restoreComplete,
+}: {
+  row: Record<string, any>;
+  fs?: Awaited<ReturnType<typeof getProjectFsClient>>;
+  restoreComplete: boolean;
+}): Promise<LegacyPublicPathResolution | undefined> {
+  const retained = legacyPublicPathTargetFromRetainedRecord(row);
+  const path = normalizePublicDirectorySharePath(
+    clean(row.original_path) ?? clean(row.path) ?? ".",
+  );
+  if (fs == null) {
+    if (!retained) return;
+    return {
+      target: retained,
+      availability_status: "pending",
+      availability_message: restoreComplete
+        ? "This project is restored, but CoCalc could not verify the published path yet."
+        : "This legacy project has been selected for migration, but its files have not finished restoring yet.",
+    };
+  }
+  try {
+    const stat = await fs.lstat(path);
+    if (stat.isFile()) {
+      return {
+        target: { path, path_type: "file" },
+        availability_status: "available",
+        availability_message: null,
+      };
+    }
+    if (stat.isDirectory()) {
+      return {
+        target: { path, path_type: "directory" },
+        availability_status: "available",
+        availability_message: null,
+      };
+    }
+    if (!retained) return;
+    return {
+      target: retained,
+      availability_status: "unavailable",
+      availability_message: stat.isSymbolicLink()
+        ? "The restored published path is a symbolic link, which cannot be published."
+        : "The restored published path is not a regular file or directory.",
+    };
+  } catch (err) {
+    logger.warn("unable to classify restored legacy public path", {
+      path,
+      error: `${err}`,
+    });
+    if (!retained) return;
+    return {
+      target: retained,
+      availability_status: isMissingLegacyPublicPathError(err)
+        ? "unavailable"
+        : "pending",
+      availability_message: isMissingLegacyPublicPathError(err)
+        ? "The published path was not found in the restored project."
+        : "This project is restored, but CoCalc could not verify the published path yet.",
+    };
+  }
 }
 
 function legacyPublicPathVisibility(
   row: Record<string, any>,
-): "disabled" | "listed" | "unlisted" {
-  if (legacyBoolean(row.disabled)) return "disabled";
+): "listed" | "unlisted" {
   if (legacyBoolean(row.unlisted)) return "unlisted";
   return "listed";
+}
+
+export function shouldReplayLegacyPublicPath(
+  row: Record<string, any>,
+): boolean {
+  return (
+    !legacyBoolean(row.disabled) && !isUnsupportedLegacyProxyPublicPath(row)
+  );
 }
 
 function validLegacyPublicPathSiteLicenseId(
@@ -555,7 +677,13 @@ function legacyPublicPathMetadata(row: Record<string, any>) {
     compute_image: row.compute_image ?? null,
     counter: row.counter ?? null,
     legacy_path: clean(row.original_path) ?? clean(row.path) ?? null,
-    legacy_path_type: clean(row.original_path_type) ?? "directory",
+    legacy_path_type:
+      clean(row.original_path_type) ??
+      (looksLikeLegacyFilePath(
+        clean(row.original_path) ?? clean(row.path) ?? ".",
+      )
+        ? "file"
+        : "unknown"),
     legacy_site_license_id: clean(row.legacy_site_license_id),
     jupyter_api: row.jupyter_api ?? null,
     source: "legacy-migration",
@@ -564,7 +692,7 @@ function legacyPublicPathMetadata(row: Record<string, any>) {
   };
 }
 
-async function replayLegacyPublicPathsForProject({
+export async function replayLegacyPublicPathsForProject({
   account_id,
   legacy_project_id,
   project_id,
@@ -572,48 +700,78 @@ async function replayLegacyPublicPathsForProject({
   account_id: string;
   legacy_project_id: string;
   project_id: string;
-}): Promise<void> {
+}): Promise<{ imported: number; skipped: number }> {
   await ensureLegacyMigrationRawRecordsSchema();
   const { rows } = await getPool().query<LegacyPublicPathRawRecord>(
     `
-      SELECT legacy_id, payload
-        FROM legacy_migration_raw_records
-       WHERE source='public_paths'
-         AND payload->>'project_id'=$1
-       ORDER BY payload->>'created', legacy_id
+      SELECT raw.legacy_id, raw.payload
+        FROM legacy_migration_raw_records raw
+        LEFT JOIN legacy_migration_projects project
+          ON project.legacy_project_id=raw.payload->>'project_id'
+       WHERE raw.source='public_paths'
+         AND raw.payload->>'project_id'=$1
+         AND lower(COALESCE(project.title, '')) NOT LIKE 'github-proxy%'
+       ORDER BY raw.payload->>'created', raw.legacy_id
     `,
     [legacy_project_id],
   );
-  if (rows.length === 0) return;
+  if (rows.length === 0) return { imported: 0, skipped: 0 };
+
+  const restore = await getPool().query<{ restore_status: string | null }>(
+    `SELECT restore_status
+       FROM legacy_migration_project_imports
+      WHERE legacy_project_id=$1
+      LIMIT 1`,
+    [legacy_project_id],
+  );
+  const restoreStatus = restore.rows[0]?.restore_status;
+  const restoreComplete = restoreStatus === "restored";
+  let fs: Awaited<ReturnType<typeof getProjectFsClient>> | undefined;
+  if (restoreStatus === "restored") {
+    try {
+      fs = await getProjectFsClient({ account_id, project_id });
+    } catch (err) {
+      logger.warn("unable to inspect restored legacy public paths", {
+        legacy_project_id,
+        project_id,
+        error: `${err}`,
+      });
+    }
+  }
 
   let imported = 0;
   let skipped = 0;
   for (const { legacy_id, payload } of rows) {
     const legacyPublicPathId = clean(payload.id) ?? legacy_id;
-    const slug = await legacyPublicPathSlugForRecord(payload);
-    if (!legacyPublicPathId || !slug) {
-      skipped += 1;
-      continue;
-    }
-    if (legacyPublicPathIsFile(payload)) {
-      // Do not replay legacy file public paths as containing-directory shares.
-      // That broadens access beyond the originally published file.
-      await disableMigratedLegacyPublicDirectoryShare({
-        account_id,
-        legacy_public_path_id: legacyPublicPathId,
-      });
-      skipped += 1;
-      continue;
-    }
     try {
+      if (!shouldReplayLegacyPublicPath(payload)) {
+        skipped += 1;
+        continue;
+      }
+      const slug = await legacyPublicPathSlugForRecord(payload);
+      if (!legacyPublicPathId || !slug) {
+        skipped += 1;
+        continue;
+      }
+      const resolution = await resolveLegacyPublicPathTarget({
+        row: payload,
+        fs,
+        restoreComplete,
+      });
+      if (resolution == null) {
+        skipped += 1;
+        continue;
+      }
       await upsertMigratedLegacyPublicDirectoryShare({
         account_id,
         project_id,
-        path: normalizeLegacyPublicPathSharePath(payload),
+        path: resolution.target.path,
+        path_type: resolution.target.path_type,
         slug,
         visibility: legacyPublicPathVisibility(payload),
         requires_auth: true,
-        availability_status: "available",
+        availability_status: resolution.availability_status,
+        availability_message: resolution.availability_message,
         title: clean(payload.title) ?? clean(payload.name) ?? null,
         description:
           normalizeLegacyPublicPathDescription(payload.description) ?? null,
@@ -644,15 +802,16 @@ async function replayLegacyPublicPathsForProject({
     imported,
     skipped,
   });
+  return { imported, skipped };
 }
 
-async function replayLegacyPublicPathsForProjectBestEffort(opts: {
+export async function replayLegacyPublicPathsForProjectBestEffort(opts: {
   account_id: string;
   legacy_project_id: string;
   project_id: string;
-}): Promise<void> {
+}): Promise<{ imported: number; skipped: number } | undefined> {
   try {
-    await replayLegacyPublicPathsForProject(opts);
+    return await replayLegacyPublicPathsForProject(opts);
   } catch (err) {
     logger.warn("failed to replay legacy public paths for imported project", {
       legacy_project_id: opts.legacy_project_id,
@@ -660,6 +819,282 @@ async function replayLegacyPublicPathsForProjectBestEffort(opts: {
       error: `${err}`,
     });
   }
+}
+
+export async function adminReplayPublicPaths({
+  account_id,
+  legacy_project_id,
+  commit,
+  reason,
+  support_reference,
+}: LegacyMigrationAdminReplayPublicPathsOptions): Promise<LegacyMigrationAdminReplayPublicPathsResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationRawRecordsSchema();
+  const actorAccountId = requireActorAccountId(account_id);
+  const auditReason = requireAuditReason(reason);
+  const legacyProjectId = `${legacy_project_id ?? ""}`.trim();
+  if (!isValidUUID(legacyProjectId)) {
+    throw Error("invalid legacy_project_id");
+  }
+  const migration = await getPool().query<{
+    project_id: string;
+    owner_account_id: string;
+    restore_status: LegacyMigrationProjectRestoreStatus | null;
+  }>(
+    `SELECT imports.project_id, imports.owner_account_id, imports.restore_status
+       FROM legacy_migration_project_imports imports
+       JOIN projects p ON p.project_id=imports.project_id
+        AND COALESCE(p.deleted, false)=false
+      WHERE imports.legacy_project_id=$1
+      LIMIT 1`,
+    [legacyProjectId],
+  );
+  const target = migration.rows[0];
+  if (!target?.project_id) {
+    throw Error("legacy project has not been explicitly imported");
+  }
+  const counts = await getPool().query<{
+    public_path_count: number | string;
+    file_path_count: number | string;
+  }>(
+    `SELECT COUNT(*) AS public_path_count,
+            COUNT(*) FILTER (
+              WHERE payload->>'original_path_type'='file'
+                 OR (
+                   COALESCE(payload->>'original_path_type', '')=''
+                   AND COALESCE(payload->>'original_path', payload->>'path', '')
+                     ~ '\\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}$'
+                 )
+            ) AS file_path_count
+       FROM legacy_migration_raw_records
+      WHERE source='public_paths'
+        AND payload->>'project_id'=$1`,
+    [legacyProjectId],
+  );
+  const publicPathCount = Number(counts.rows[0]?.public_path_count ?? 0);
+  const filePathCount = Number(counts.rows[0]?.file_path_count ?? 0);
+  if (commit !== true) {
+    return {
+      legacy_project_id: legacyProjectId,
+      project_id: target.project_id,
+      restore_status: target.restore_status,
+      public_path_count: publicPathCount,
+      file_path_count: filePathCount,
+      imported: 0,
+      skipped: 0,
+      committed: false,
+    };
+  }
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS legacy_migration_public_share_replay_events (
+      id UUID PRIMARY KEY,
+      legacy_project_id UUID NOT NULL,
+      project_id UUID NOT NULL,
+      actor_account_id UUID NOT NULL,
+      reason TEXT NOT NULL,
+      support_reference TEXT,
+      public_path_count INTEGER NOT NULL,
+      file_path_count INTEGER NOT NULL,
+      imported INTEGER NOT NULL,
+      skipped INTEGER NOT NULL,
+      status VARCHAR(16) NOT NULL,
+      error TEXT,
+      created TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await getPool().query(`
+    ALTER TABLE legacy_migration_public_share_replay_events
+      ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'succeeded',
+      ADD COLUMN IF NOT EXISTS error TEXT
+  `);
+  const eventId = randomUUID();
+  await getPool().query(
+    `INSERT INTO legacy_migration_public_share_replay_events (
+       id, legacy_project_id, project_id, actor_account_id, reason,
+       support_reference, public_path_count, file_path_count, imported, skipped,
+       status
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,0,'running')`,
+    [
+      eventId,
+      legacyProjectId,
+      target.project_id,
+      actorAccountId,
+      auditReason,
+      clean(support_reference) ?? null,
+      publicPathCount,
+      filePathCount,
+    ],
+  );
+  let replay: { imported: number; skipped: number };
+  try {
+    replay = await replayLegacyPublicPathsForProject({
+      account_id: target.owner_account_id,
+      legacy_project_id: legacyProjectId,
+      project_id: target.project_id,
+    });
+    await getPool().query(
+      `UPDATE legacy_migration_public_share_replay_events
+          SET imported=$2, skipped=$3, status='succeeded'
+        WHERE id=$1`,
+      [eventId, replay.imported, replay.skipped],
+    );
+  } catch (err) {
+    await getPool().query(
+      `UPDATE legacy_migration_public_share_replay_events
+          SET status='failed', error=$2
+        WHERE id=$1`,
+      [eventId, `${err}`.slice(0, 4000)],
+    );
+    throw err;
+  }
+  return {
+    legacy_project_id: legacyProjectId,
+    project_id: target.project_id,
+    restore_status: target.restore_status,
+    public_path_count: publicPathCount,
+    file_path_count: filePathCount,
+    imported: replay.imported,
+    skipped: replay.skipped,
+    committed: true,
+  };
+}
+
+const MAX_PUBLIC_SHARE_REPLAY_BATCH = 50;
+
+function publicShareReplayBatchLimit(limit?: number): number {
+  if (!Number.isFinite(limit)) return 25;
+  return Math.max(
+    1,
+    Math.min(MAX_PUBLIC_SHARE_REPLAY_BATCH, Math.floor(limit!)),
+  );
+}
+
+export async function adminReplayRestoredPublicPaths({
+  account_id,
+  after_legacy_project_id,
+  commit,
+  limit,
+  reason,
+  support_reference,
+}: LegacyMigrationAdminReplayRestoredPublicPathsOptions): Promise<LegacyMigrationAdminReplayRestoredPublicPathsResponse> {
+  await assertLegacyMigrationEnabled();
+  await ensureLegacyMigrationRawRecordsSchema();
+  await ensureLegacyMigrationProjectImportSchema();
+  await ensurePublicDirectorySharesSchema();
+  const actorAccountId = requireActorAccountId(account_id);
+  const auditReason = requireAuditReason(reason);
+  const after = `${after_legacy_project_id ?? ""}`.trim();
+  if (after && !isValidUUID(after)) {
+    throw Error("invalid after_legacy_project_id");
+  }
+  const batchLimit = publicShareReplayBatchLimit(limit);
+  const { rows } = await getPool().query<{
+    legacy_project_id: string;
+    project_id: string;
+    public_path_count: number | string;
+    missing_share_count: number | string;
+    pending_share_count: number | string;
+  }>(
+    `
+      WITH active_paths AS (
+        SELECT DISTINCT COALESCE(NULLIF(raw.payload->>'id', ''), raw.legacy_id)
+                 AS legacy_public_path_id,
+               raw.payload->>'project_id' AS legacy_project_id
+          FROM legacy_migration_raw_records raw
+         WHERE raw.source='public_paths'
+           AND lower(COALESCE(raw.payload->>'disabled', 'false'))
+                 NOT IN ('true', 't', '1')
+           AND lower(regexp_replace(
+                 COALESCE(raw.payload->>'url', ''),
+                 '^(https?://[^/]+/|/+)',
+                 ''
+               )) !~ '^(github|gist)(/|$)'
+      ), candidates AS (
+        SELECT imports.legacy_project_id,
+               imports.project_id,
+               COUNT(*)::INTEGER AS public_path_count,
+               COUNT(*) FILTER (WHERE current.id IS NULL)::INTEGER
+                 AS missing_share_count,
+               COUNT(*) FILTER (
+                 WHERE current.availability_status='pending'
+                   AND COALESCE(current.disabled, false)=false
+               )::INTEGER AS pending_share_count
+          FROM legacy_migration_project_imports imports
+          JOIN projects project
+            ON project.project_id=imports.project_id
+           AND COALESCE(project.deleted, false)=false
+          JOIN legacy_migration_projects legacy_project
+            ON legacy_project.legacy_project_id=imports.legacy_project_id
+           AND lower(COALESCE(legacy_project.title, ''))
+                 NOT LIKE 'github-proxy%'
+          JOIN active_paths active
+            ON active.legacy_project_id=imports.legacy_project_id
+          LEFT JOIN public_project_paths current
+            ON current.legacy_public_path_id=active.legacy_public_path_id
+         WHERE imports.restore_status='restored'
+         GROUP BY imports.legacy_project_id, imports.project_id
+        HAVING COUNT(*) FILTER (
+                 WHERE current.id IS NULL
+                    OR (
+                      current.availability_status='pending'
+                      AND COALESCE(current.disabled, false)=false
+                    )
+               ) > 0
+      )
+      SELECT legacy_project_id, project_id, public_path_count,
+             missing_share_count, pending_share_count
+        FROM candidates
+       WHERE ($1::TEXT='' OR legacy_project_id::TEXT>$1::TEXT)
+       ORDER BY legacy_project_id
+       LIMIT $2
+    `,
+    [after, batchLimit + 1],
+  );
+  const hasMore = rows.length > batchLimit;
+  const candidates = rows.slice(0, batchLimit);
+  const projects: LegacyMigrationAdminReplayRestoredPublicPathsResponse["projects"] =
+    [];
+  for (const candidate of candidates) {
+    const summary = {
+      legacy_project_id: candidate.legacy_project_id,
+      project_id: candidate.project_id,
+      public_path_count: Number(candidate.public_path_count),
+      missing_share_count: Number(candidate.missing_share_count),
+      pending_share_count: Number(candidate.pending_share_count),
+      imported: 0,
+      skipped: 0,
+    };
+    if (commit !== true) {
+      projects.push(summary);
+      continue;
+    }
+    try {
+      const replay = await adminReplayPublicPaths({
+        account_id: actorAccountId,
+        legacy_project_id: candidate.legacy_project_id,
+        commit: true,
+        reason: auditReason,
+        support_reference,
+      });
+      projects.push({
+        ...summary,
+        imported: replay.imported,
+        skipped: replay.skipped,
+      });
+    } catch (err) {
+      projects.push({
+        ...summary,
+        error: `${err}`.slice(0, 4000),
+      });
+    }
+  }
+  return {
+    projects,
+    committed: commit === true,
+    has_more: hasMore,
+    next_after_legacy_project_id:
+      candidates[candidates.length - 1]?.legacy_project_id,
+  };
 }
 
 function restoreStatusForProject(
@@ -3631,6 +4066,209 @@ export async function listProjects({
     legacy_accounts,
     projects: rows.map(importStatus),
     total_count: rows[0]?.total_count ?? 0,
+  };
+}
+
+function legacyPublicShareListLimit(limit?: number): number {
+  if (!Number.isFinite(limit)) return DEFAULT_LIMIT;
+  return Math.max(1, Math.min(MAX_PUBLIC_SHARE_LIST_LIMIT, Math.floor(limit!)));
+}
+
+function legacyPublicShareListOffset(offset?: number): number {
+  if (!Number.isFinite(offset)) return 0;
+  return Math.max(0, Math.floor(offset!));
+}
+
+function legacyPublicSharePathType(
+  payload: Record<string, any>,
+): LegacyMigrationPublicSharePathType {
+  const explicit = clean(payload.original_path_type);
+  if (explicit === "file" || explicit === "directory") return explicit;
+  const path = clean(payload.original_path) ?? clean(payload.path) ?? ".";
+  return looksLikeLegacyFilePath(path) ? "file" : "unknown";
+}
+
+function legacyPublicSharePath(payload: Record<string, any>): string {
+  const pathType = legacyPublicSharePathType(payload);
+  return (
+    (pathType === "file" ? clean(payload.original_path) : undefined) ??
+    clean(payload.path) ??
+    clean(payload.original_path) ??
+    "."
+  );
+}
+
+function legacyPublicShareImportStatus({
+  project_id,
+  import_status,
+}: {
+  project_id?: string | null;
+  import_status?: string | null;
+}): LegacyMigrationProjectImportStatus {
+  return import_status === "creating" || import_status === "failed"
+    ? import_status
+    : project_id
+      ? "imported"
+      : "not-imported";
+}
+
+export function legacyPublicShareUrl({
+  legacy_public_path_id,
+  payload,
+}: {
+  legacy_public_path_id: string;
+  payload: Record<string, any>;
+}): string | null {
+  if (isUnsupportedLegacyProxyPublicPath(payload)) return null;
+  const retainedUrl = clean(payload.url);
+  if (/^https?:\/\//i.test(retainedUrl ?? "")) return retainedUrl ?? null;
+  const base = `https://cocalc.com/share/public_paths/${encodeURIComponent(
+    legacy_public_path_id,
+  )}`;
+  if (legacyPublicSharePathType(payload) !== "file") return base;
+  const path = legacyPublicSharePath(payload)
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+  return path ? `${base}/files/${path}` : base;
+}
+
+export async function listPublicShares({
+  account_id,
+  include_disabled,
+  limit,
+  offset,
+  query,
+}: LegacyMigrationListPublicSharesOptions = {}): Promise<LegacyMigrationListPublicSharesResponse> {
+  await assertLegacyMigrationEnabled();
+  if (!account_id) {
+    throw Error("account_id is required");
+  }
+  await ensureLegacyMigrationProjectImportSchema();
+  await ensureLegacyMigrationRawRecordsSchema();
+  const legacy_accounts = await legacyAccounts(account_id);
+  const legacy_account_ids = legacy_accounts.map(
+    (account) => account.legacy_account_id,
+  );
+  if (legacy_account_ids.length === 0) {
+    return { legacy_account_ids, shares: [], total_count: 0 };
+  }
+  const { rows } = await getPool().query<{
+    legacy_id: string;
+    payload: Record<string, any>;
+    legacy_project_id: string;
+    project_title: string | null;
+    matched_legacy_account_ids: string[] | null;
+    project_id: string | null;
+    import_status: string | null;
+    restore_status: LegacyMigrationProjectRestoreStatus | null;
+    total_count: number | string;
+  }>(
+    `
+    WITH matched_projects AS (
+      SELECT projects.legacy_project_id,
+             ARRAY(
+               SELECT linked_id
+                 FROM unnest($1::TEXT[]) AS linked(linked_id)
+                WHERE projects.owner_legacy_account_id=linked_id
+                   OR COALESCE(projects.legacy_users, '{}'::jsonb) ? linked_id
+                ORDER BY linked_id
+             ) AS matched_legacy_account_ids
+        FROM legacy_migration_projects projects
+       WHERE projects.owner_legacy_account_id=ANY($1::TEXT[])
+          OR COALESCE(projects.legacy_users, '{}'::jsonb) ?| $1::TEXT[]
+    )
+    SELECT raw.legacy_id,
+           raw.payload,
+           projects.legacy_project_id,
+           projects.title AS project_title,
+           matched_projects.matched_legacy_account_ids,
+           active_project.project_id,
+           CASE WHEN active_project.project_id IS NULL THEN NULL ELSE imports.status END
+             AS import_status,
+           CASE WHEN active_project.project_id IS NULL THEN NULL ELSE imports.restore_status END
+             AS restore_status,
+           COUNT(*) OVER()::INTEGER AS total_count
+      FROM matched_projects
+      JOIN legacy_migration_projects projects
+        ON projects.legacy_project_id=matched_projects.legacy_project_id
+      JOIN legacy_migration_raw_records raw
+        ON raw.source='public_paths'
+       AND raw.payload->>'project_id'=projects.legacy_project_id
+      LEFT JOIN legacy_migration_project_imports imports
+        ON imports.legacy_project_id=projects.legacy_project_id
+      LEFT JOIN projects active_project
+        ON active_project.project_id=imports.project_id
+       AND COALESCE(active_project.deleted, false)=false
+     WHERE (
+       $2::BOOLEAN
+       OR lower(COALESCE(raw.payload->>'disabled', 'false')) NOT IN ('true', 't', '1')
+     )
+       AND lower(COALESCE(projects.title, '')) NOT LIKE 'github-proxy%'
+       AND lower(trim(both '/' from COALESCE(raw.payload->>'url', '')))
+             !~ '^(github|gist)(/|$)'
+       AND (
+         $5::TEXT=''
+         OR raw.legacy_id ILIKE '%' || $5::TEXT || '%'
+         OR COALESCE(raw.payload->>'path', '') ILIKE '%' || $5::TEXT || '%'
+         OR COALESCE(raw.payload->>'original_path', '') ILIKE '%' || $5::TEXT || '%'
+         OR COALESCE(raw.payload->>'name', '') ILIKE '%' || $5::TEXT || '%'
+         OR COALESCE(raw.payload->>'title', '') ILIKE '%' || $5::TEXT || '%'
+         OR COALESCE(projects.title, '') ILIKE '%' || $5::TEXT || '%'
+         OR projects.legacy_project_id ILIKE '%' || $5::TEXT || '%'
+       )
+     ORDER BY NULLIF(
+                COALESCE(
+                  raw.payload->>'last_edited',
+                  raw.payload->>'last_saved',
+                  raw.payload->>'created'
+                ),
+                ''
+              ) DESC NULLS LAST,
+              lower(COALESCE(projects.title, '')),
+              lower(COALESCE(raw.payload->>'path', raw.payload->>'original_path', '')),
+              raw.legacy_id
+     LIMIT $3
+     OFFSET $4
+    `,
+    [
+      legacy_account_ids,
+      include_disabled === true,
+      legacyPublicShareListLimit(limit),
+      legacyPublicShareListOffset(offset),
+      `${query ?? ""}`.trim().slice(0, 200),
+    ],
+  );
+  const shares: LegacyMigrationPublicShareSummary[] = rows.map((row) => {
+    const payload = row.payload ?? {};
+    const legacy_public_path_id = clean(payload.id) ?? row.legacy_id;
+    return {
+      legacy_public_path_id,
+      legacy_project_id: row.legacy_project_id,
+      legacy_account_ids: row.matched_legacy_account_ids ?? [],
+      project_title: row.project_title,
+      path: legacyPublicSharePath(payload),
+      path_type: legacyPublicSharePathType(payload),
+      title: clean(payload.title) ?? clean(payload.name) ?? null,
+      description:
+        normalizeLegacyPublicPathDescription(payload.description) ?? null,
+      legacy_url: legacyPublicShareUrl({
+        legacy_public_path_id,
+        payload,
+      }),
+      disabled: legacyBoolean(payload.disabled),
+      created: payload.created ?? null,
+      last_edited: payload.last_edited ?? payload.last_saved ?? null,
+      project_id: row.project_id,
+      import_status: legacyPublicShareImportStatus(row),
+      restore_status: row.restore_status,
+    };
+  });
+  return {
+    legacy_account_ids,
+    shares,
+    total_count: Number(rows[0]?.total_count ?? 0),
   };
 }
 

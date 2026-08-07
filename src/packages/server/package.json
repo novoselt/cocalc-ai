@@ -66,6 +66,7 @@
     "@cocalc/server": "workspace:*",
     "@cocalc/util": "workspace:*",
     "@google-cloud/compute": "^6.9.1",
+    "google-auth-library": "^10.6.2",
     "@isaacs/ttlcache": "^1.4.1",
     "@node-saml/passport-saml": "^5.1.0",
     "@sendgrid/client": "^8.1.4",

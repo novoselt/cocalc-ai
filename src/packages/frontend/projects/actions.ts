@@ -1302,6 +1302,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
                 title: null,
                 description: null,
                 theme: null,
+                labels: null,
                 users_summary: null,
                 state_summary: null,
                 last_edited: null,
@@ -3126,7 +3127,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     if (!(await this.have_project(project_id))) {
       const msg = `Can't set course info -- you are not a collaborator on project '${project_id}'.`;
       console.warn(msg);
-      return;
+      throw new Error(msg);
     }
     const course_info = (await ensureProjectCourseInfo(project_id))?.toJS();
     const course: CourseInfo = {
@@ -3198,6 +3199,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
   public async create_project(opts: {
     title?: string;
     description?: string;
+    course?: CourseInfo;
     rootfs_image?: string; // if given, sets the rootfs image
     rootfs_image_id?: string;
     start?: boolean; // immediately start on create
@@ -3208,6 +3210,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     const opts2: {
       title: string;
       description: string;
+      course?: CourseInfo;
       rootfs_image?: string;
       rootfs_image_id?: string;
       host_id?: string;
@@ -3217,6 +3220,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     } = defaults(opts, {
       title: "No Title",
       description: "No Description",
+      course: opts.course,
       rootfs_image: opts.rootfs_image,
       rootfs_image_id: opts.rootfs_image_id,
       host_id: undefined,
@@ -3229,6 +3233,9 @@ export class ProjectsActions extends Actions<ProjectsState> {
     }
     if (!opts2.rootfs_image_id) {
       delete opts2.rootfs_image_id;
+    }
+    if (!opts2.course) {
+      delete opts2.course;
     }
 
     const project_id = await webapp_client.project_client.create(opts2);

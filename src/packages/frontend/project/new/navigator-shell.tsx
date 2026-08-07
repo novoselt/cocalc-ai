@@ -1393,7 +1393,7 @@ export function NavigatorShell({
           title={presentedError?.title ?? error}
           description={
             presentedError?.kind === "other" ? undefined : (
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space vertical size={8} style={{ width: "100%" }}>
                 {presentedError?.description ? (
                   <span>{presentedError.description}</span>
                 ) : null}

@@ -42,7 +42,7 @@ export const HostPriceBreakdown: React.FC<HostPriceBreakdownProps> = ({
     <Popover
       trigger="click"
       content={
-        <Space direction="vertical" size={6} style={{ maxWidth: 360 }}>
+        <Space vertical size={6} style={{ maxWidth: 360 }}>
           {estimate.notes.map((note) => (
             <Typography.Text key={note}>{note}</Typography.Text>
           ))}

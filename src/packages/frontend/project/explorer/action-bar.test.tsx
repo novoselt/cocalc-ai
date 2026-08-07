@@ -242,6 +242,30 @@ describe("ActionBar", () => {
     expect(actions.set_file_action).not.toHaveBeenCalled();
   });
 
+  it("offers publishing for a selected file", () => {
+    const actions = {
+      project_id: "project-1",
+    } as any;
+
+    render(
+      <ActionBar
+        project_id="project-1"
+        checked_files={immutable.Set(["/work/a.txt"])}
+        listing={[{ isDir: false, name: "a.txt" }] as any}
+        current_path="/work"
+        actions={actions}
+      />,
+    );
+
+    expect(mockFileActionsDropdown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        names: expect.arrayContaining(["publish"]),
+        selectedPaths: ["/work/a.txt"],
+      }),
+    );
+    expect(screen.getByText("publish")).toBeInTheDocument();
+  });
+
   it("shows a direct copy action for read-only directory selections", () => {
     const actions = {
       project_id: "project-1",

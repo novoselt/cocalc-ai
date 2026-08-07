@@ -7,6 +7,8 @@ import {
   createInterBayAccountLocalClient,
   type AccountLocalCloseDedicatedHostPurchaseSessionRequest,
   type AccountLocalDedicatedHostPolicySnapshot,
+  type AccountLocalRecordDedicatedHostMeteredUsageRequest,
+  type AccountLocalRecordDedicatedHostMeteredUsageResult,
   type AccountLocalReconcileDedicatedHostPurchaseSessionRequest,
 } from "@cocalc/conat/inter-bay/api";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
@@ -14,6 +16,7 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { resolveAccountHomeBay } from "@cocalc/server/bay-directory";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { isDeepStrictEqual } from "node:util";
+import { randomUUID } from "node:crypto";
 import { loadNebiusInstanceTypes } from "@cocalc/server/cloud/providers";
 import { nextCalendarMonthStartAfter } from "@cocalc/server/purchases/billing-period";
 import createPurchase from "@cocalc/server/purchases/create-purchase";
@@ -31,6 +34,7 @@ import {
   ensureAccountUsageWindowsForEvent,
   getActiveAccountUsageWindows,
 } from "@cocalc/server/membership/usage-windows";
+import { isTrustedAdminPostpaid } from "./funding-policy";
 import {
   applyDedicatedHostSurchargeToBreakdown,
   estimateGcpCatalogRateBreakdown,
@@ -80,10 +84,15 @@ export interface DedicatedHostRateEstimate {
 }
 
 const HOST_PURCHASE_TAG_PREFIX = "dedicated-host:";
+const METERED_PURCHASE_TAG_PREFIX = "dedicated-host-metered:";
 const localPurchaseMutationTails = new Map<string, Promise<void>>();
 
 function purchaseTag(host_id: string): string {
   return `${HOST_PURCHASE_TAG_PREFIX}${host_id}`;
+}
+
+function meteredPurchaseTag(resource_id: string, periodStart: Date): string {
+  return `${METERED_PURCHASE_TAG_PREFIX}${resource_id}:${periodStart.toISOString().slice(0, 7)}`;
 }
 
 export function dedicatedHostRateFromPricingSnapshot({
@@ -206,6 +215,26 @@ function moneyMap(row: any): DedicatedHostWindowUsageSnapshot {
   };
 }
 
+function addWindowUsage(
+  left: DedicatedHostWindowUsageSnapshot,
+  right: DedicatedHostWindowUsageSnapshot,
+): DedicatedHostWindowUsageSnapshot {
+  return {
+    prepaid_5h_usd: moneyToDbString(
+      toDecimal(left.prepaid_5h_usd).add(right.prepaid_5h_usd),
+    ),
+    prepaid_7d_usd: moneyToDbString(
+      toDecimal(left.prepaid_7d_usd).add(right.prepaid_7d_usd),
+    ),
+    credit_5h_usd: moneyToDbString(
+      toDecimal(left.credit_5h_usd).add(right.credit_5h_usd),
+    ),
+    credit_7d_usd: moneyToDbString(
+      toDecimal(left.credit_7d_usd).add(right.credit_7d_usd),
+    ),
+  };
+}
+
 function hostMoneyMap(row: any): DedicatedHostOwnerWindowUsageSnapshot {
   return {
     spend_5h_usd: moneyToDbString(row?.spend_5h_usd ?? 0),
@@ -241,7 +270,10 @@ export function isDedicatedHostLaneCurrentlyAllowed({
   if (snapshot.funding_mode !== "account-postpaid") {
     return false;
   }
-  if (!snapshot.has_payment_method || !snapshot.has_usage_subscription) {
+  if (
+    !isTrustedAdminPostpaid(snapshot) &&
+    (!snapshot.has_payment_method || !snapshot.has_usage_subscription)
+  ) {
     return false;
   }
   if (
@@ -278,15 +310,16 @@ export async function getDedicatedHostWindowUsageLocal(
             CASE
               WHEN $2::timestamptz IS NOT NULL
                AND description->>'funding_lane' = 'prepaid'
-               AND period_start < $3::timestamptz
-               AND COALESCE(period_end, NOW()) > $2::timestamptz
-              THEN cost_per_hour * GREATEST(
+               AND ((cost IS NOT NULL AND time >= $2::timestamptz AND time < $3::timestamptz)
+                 OR (cost_per_hour IS NOT NULL AND period_start < $3::timestamptz
+                   AND COALESCE(period_end, NOW()) > $2::timestamptz))
+              THEN COALESCE(cost, cost_per_hour * GREATEST(
                 0::numeric,
                 EXTRACT(
                   EPOCH FROM LEAST(COALESCE(period_end, NOW()), $3::timestamptz)
                   - GREATEST(period_start, $2::timestamptz)
                 )::numeric / 3600
-              )
+              ))
               ELSE 0::numeric
             END
           ),
@@ -297,15 +330,16 @@ export async function getDedicatedHostWindowUsageLocal(
             CASE
               WHEN $4::timestamptz IS NOT NULL
                AND description->>'funding_lane' = 'prepaid'
-               AND period_start < $5::timestamptz
-               AND COALESCE(period_end, NOW()) > $4::timestamptz
-              THEN cost_per_hour * GREATEST(
+               AND ((cost IS NOT NULL AND time >= $4::timestamptz AND time < $5::timestamptz)
+                 OR (cost_per_hour IS NOT NULL AND period_start < $5::timestamptz
+                   AND COALESCE(period_end, NOW()) > $4::timestamptz))
+              THEN COALESCE(cost, cost_per_hour * GREATEST(
                 0::numeric,
                 EXTRACT(
                   EPOCH FROM LEAST(COALESCE(period_end, NOW()), $5::timestamptz)
                   - GREATEST(period_start, $4::timestamptz)
                 )::numeric / 3600
-              )
+              ))
               ELSE 0::numeric
             END
           ),
@@ -316,15 +350,16 @@ export async function getDedicatedHostWindowUsageLocal(
             CASE
               WHEN $2::timestamptz IS NOT NULL
                AND description->>'funding_lane' = 'credit'
-               AND period_start < $3::timestamptz
-               AND COALESCE(period_end, NOW()) > $2::timestamptz
-              THEN cost_per_hour * GREATEST(
+               AND ((cost IS NOT NULL AND time >= $2::timestamptz AND time < $3::timestamptz)
+                 OR (cost_per_hour IS NOT NULL AND period_start < $3::timestamptz
+                   AND COALESCE(period_end, NOW()) > $2::timestamptz))
+              THEN COALESCE(cost, cost_per_hour * GREATEST(
                 0::numeric,
                 EXTRACT(
                   EPOCH FROM LEAST(COALESCE(period_end, NOW()), $3::timestamptz)
                   - GREATEST(period_start, $2::timestamptz)
                 )::numeric / 3600
-              )
+              ))
               ELSE 0::numeric
             END
           ),
@@ -335,15 +370,16 @@ export async function getDedicatedHostWindowUsageLocal(
             CASE
               WHEN $4::timestamptz IS NOT NULL
                AND description->>'funding_lane' = 'credit'
-               AND period_start < $5::timestamptz
-               AND COALESCE(period_end, NOW()) > $4::timestamptz
-              THEN cost_per_hour * GREATEST(
+               AND ((cost IS NOT NULL AND time >= $4::timestamptz AND time < $5::timestamptz)
+                 OR (cost_per_hour IS NOT NULL AND period_start < $5::timestamptz
+                   AND COALESCE(period_end, NOW()) > $4::timestamptz))
+              THEN COALESCE(cost, cost_per_hour * GREATEST(
                 0::numeric,
                 EXTRACT(
                   EPOCH FROM LEAST(COALESCE(period_end, NOW()), $5::timestamptz)
                   - GREATEST(period_start, $4::timestamptz)
                 )::numeric / 3600
-              )
+              ))
               ELSE 0::numeric
             END
           ),
@@ -352,11 +388,12 @@ export async function getDedicatedHostWindowUsageLocal(
       FROM purchases
       WHERE account_id = $1
         AND service = $6
-        AND cost_per_hour IS NOT NULL
+        AND description->>'resource_kind' IS DISTINCT FROM 'compute-egress'
+        AND (cost_per_hour IS NOT NULL OR cost IS NOT NULL)
         AND period_start IS NOT NULL
         AND (
-          ($2::timestamptz IS NOT NULL AND period_start < $3::timestamptz AND COALESCE(period_end, NOW()) > $2::timestamptz)
-          OR ($4::timestamptz IS NOT NULL AND period_start < $5::timestamptz AND COALESCE(period_end, NOW()) > $4::timestamptz)
+          ($2::timestamptz IS NOT NULL AND ((cost IS NOT NULL AND time >= $2::timestamptz AND time < $3::timestamptz) OR (cost_per_hour IS NOT NULL AND period_start < $3::timestamptz AND COALESCE(period_end, NOW()) > $2::timestamptz)))
+          OR ($4::timestamptz IS NOT NULL AND ((cost IS NOT NULL AND time >= $4::timestamptz AND time < $5::timestamptz) OR (cost_per_hour IS NOT NULL AND period_start < $5::timestamptz AND COALESCE(period_end, NOW()) > $4::timestamptz)))
         )
     `,
     [
@@ -368,7 +405,43 @@ export async function getDedicatedHostWindowUsageLocal(
       "dedicated-host",
     ],
   );
-  return moneyMap(rows[0]);
+  const { rows: egressRows } = await getPool("medium").query(
+    `
+      SELECT
+        COALESCE(SUM(CASE
+          WHEN $2::timestamptz IS NOT NULL AND funding_lane='prepaid'
+            AND ended_at >= $2 AND ended_at < $3
+          THEN amount_usd
+          ELSE 0 END), 0) AS prepaid_5h_usd,
+        COALESCE(SUM(CASE
+          WHEN $4::timestamptz IS NOT NULL AND funding_lane='prepaid'
+            AND ended_at >= $4 AND ended_at < $5
+          THEN amount_usd
+          ELSE 0 END), 0) AS prepaid_7d_usd,
+        COALESCE(SUM(CASE
+          WHEN $2::timestamptz IS NOT NULL AND funding_lane='credit'
+            AND ended_at >= $2 AND ended_at < $3
+          THEN amount_usd
+          ELSE 0 END), 0) AS credit_5h_usd,
+        COALESCE(SUM(CASE
+          WHEN $4::timestamptz IS NOT NULL AND funding_lane='credit'
+            AND ended_at >= $4 AND ended_at < $5
+          THEN amount_usd
+          ELSE 0 END), 0) AS credit_7d_usd
+      FROM compute_egress_meter_intervals
+      WHERE owner_account_id=$1
+        AND (($2::timestamptz IS NOT NULL AND ended_at >= $2 AND ended_at < $3)
+          OR ($4::timestamptz IS NOT NULL AND ended_at >= $4 AND ended_at < $5))
+    `,
+    [
+      account_id,
+      window5h?.starts_at ?? null,
+      window5h?.resets_at ?? null,
+      window7d?.starts_at ?? null,
+      window7d?.resets_at ?? null,
+    ],
+  );
+  return addWindowUsage(moneyMap(rows[0]), moneyMap(egressRows[0]));
 }
 
 export async function getDedicatedHostWindowUsageForHostLocal({
@@ -536,6 +609,7 @@ export async function getDedicatedHostPostpaidUnbilledExposureLocal(
         SUM(
           COALESCE(
             cost,
+            cost_so_far,
             cost_per_hour * (
               EXTRACT(EPOCH FROM (COALESCE(period_end, NOW()) - period_start))::numeric / 3600
             )
@@ -930,6 +1004,283 @@ export async function closeDedicatedHostPurchaseSessionForAccount(
     client: getInterBayFabricClient(),
     dest_bay: home_bay_id,
   }).closeDedicatedHostPurchaseSession(opts);
+}
+
+export async function recordDedicatedHostMeteredUsageLocal(
+  opts: AccountLocalRecordDedicatedHostMeteredUsageRequest,
+): Promise<AccountLocalRecordDedicatedHostMeteredUsageResult> {
+  const intervalStart = new Date(opts.interval_start);
+  const intervalEnd = new Date(opts.interval_end);
+  if (
+    !Number.isFinite(intervalStart.getTime()) ||
+    !Number.isFinite(intervalEnd.getTime()) ||
+    intervalEnd < intervalStart ||
+    (intervalEnd.valueOf() === intervalStart.valueOf() && !opts.finalize)
+  ) {
+    throw new Error("invalid dedicated-host metered usage interval");
+  }
+  const bytes = Math.floor(Number(opts.bytes));
+  if (!Number.isSafeInteger(bytes) || bytes < 0) {
+    throw new Error("invalid dedicated-host metered usage byte count");
+  }
+  if (bytes > 0) {
+    await ensureAccountUsageWindowsForEvent({
+      account_id: opts.account_id,
+      occurred_at: intervalEnd,
+    });
+  }
+  return await withDedicatedHostPurchaseMutation({
+    account_id: opts.account_id,
+    host_id: opts.resource_id,
+    fn: async (client) => {
+      const purchasePeriodStart = new Date(
+        Date.UTC(
+          intervalStart.getUTCFullYear(),
+          intervalStart.getUTCMonth(),
+          1,
+        ),
+      );
+      const purchasePeriodEnd = nextCalendarMonthStartAfter(intervalStart);
+      if (intervalEnd > purchasePeriodEnd) {
+        throw new Error(
+          "managed compute egress interval crosses a billing-month boundary",
+        );
+      }
+      const tag = meteredPurchaseTag(opts.resource_id, purchasePeriodStart);
+      const summary = await client.query<{
+        first_started_at: Date | null;
+        metered_through_at: Date | null;
+        total_bytes: string;
+        total_cost_usd: string;
+      }>(
+        `SELECT MIN(started_at) AS first_started_at,
+                MAX(ended_at) AS metered_through_at,
+                COALESCE(SUM(bytes), 0)::text AS total_bytes,
+                COALESCE(SUM(amount_usd), 0)::text AS total_cost_usd
+           FROM compute_egress_meter_intervals
+          WHERE owner_account_id=$1 AND resource_id=$2`,
+        [opts.account_id, opts.resource_id],
+      );
+      const before = summary.rows[0];
+      const previousEnd = before?.metered_through_at
+        ? new Date(before.metered_through_at)
+        : undefined;
+      const latestPurchase = await client.query<{
+        id: number;
+        cost: string | null;
+        cost_so_far: string | null;
+        period_start: Date;
+        period_end: Date | null;
+      }>(
+        `SELECT id, cost, cost_so_far, period_start, period_end
+           FROM purchases
+          WHERE account_id=$1 AND service='dedicated-host' AND tag=$2
+          ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+        [opts.account_id, tag],
+      );
+      const purchase = latestPurchase.rows[0];
+
+      const result = ({ accepted }: { accepted: boolean }) => ({
+        accepted,
+        finalized: !!opts.finalize,
+        metered_through_at: (previousEnd ?? intervalEnd).toISOString(),
+        total_bytes: Number(before?.total_bytes ?? 0),
+        total_cost_usd: moneyToDbString(before?.total_cost_usd ?? 0),
+      });
+
+      if (previousEnd) {
+        if (intervalStart < previousEnd || intervalEnd <= previousEnd) {
+          if (
+            opts.finalize &&
+            intervalEnd.valueOf() === previousEnd.valueOf() &&
+            purchase &&
+            purchase.cost == null
+          ) {
+            await client.query(
+              `UPDATE purchases
+                  SET cost=cost_so_far, cost_so_far=NULL, period_end=$2
+                WHERE id=$1`,
+              [purchase.id, intervalEnd],
+            );
+          }
+          return result({ accepted: false });
+        }
+        if (intervalStart.valueOf() !== previousEnd.valueOf()) {
+          throw new Error(
+            `managed compute egress interval gap: expected ${previousEnd.toISOString()}, got ${intervalStart.toISOString()}`,
+          );
+        }
+      }
+      if (purchase?.cost != null) {
+        throw new Error("managed compute egress purchase is already finalized");
+      }
+
+      let inserted = false;
+      if (intervalEnd > intervalStart) {
+        const interval = await client.query<{ id: string }>(
+          `INSERT INTO compute_egress_meter_intervals (
+             id, owner_account_id, owning_bay_id, project_id, resource_id,
+             funding_lane, bytes, amount_usd, started_at, ended_at, details,
+             created_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+           ON CONFLICT (resource_id,started_at,ended_at) DO NOTHING
+           RETURNING id`,
+          [
+            randomUUID(),
+            opts.account_id,
+            getConfiguredBayId(),
+            opts.project_id ?? null,
+            opts.resource_id,
+            opts.funding_lane,
+            bytes,
+            moneyToDbString(opts.cost_usd),
+            intervalStart,
+            intervalEnd,
+            {
+              provider: opts.provider,
+              region: opts.region ?? null,
+              unit_cost_usd_per_gb: moneyToDbString(opts.unit_cost_usd_per_gb),
+            },
+          ],
+        );
+        inserted = !!interval.rowCount;
+      }
+
+      const totals = await client.query<{
+        first_started_at: Date;
+        metered_through_at: Date;
+        total_bytes: string;
+        total_cost_usd: string;
+      }>(
+        `SELECT MIN(started_at) AS first_started_at,
+                MAX(ended_at) AS metered_through_at,
+                COALESCE(SUM(bytes), 0)::text AS total_bytes,
+                COALESCE(SUM(amount_usd), 0)::text AS total_cost_usd
+           FROM compute_egress_meter_intervals
+          WHERE owner_account_id=$1 AND resource_id=$2`,
+        [opts.account_id, opts.resource_id],
+      );
+      const total = totals.rows[0];
+      const totalBytes = Number(total?.total_bytes ?? 0);
+      const totalCost = moneyToDbString(total?.total_cost_usd ?? 0);
+      const meteredThroughAt = total?.metered_through_at ?? intervalEnd;
+      const periodTotals = await client.query<{
+        first_started_at: Date;
+        metered_through_at: Date;
+        total_bytes: string;
+        total_cost_usd: string;
+      }>(
+        `SELECT MIN(started_at) AS first_started_at,
+                MAX(ended_at) AS metered_through_at,
+                COALESCE(SUM(bytes), 0)::text AS total_bytes,
+                COALESCE(SUM(amount_usd), 0)::text AS total_cost_usd
+           FROM compute_egress_meter_intervals
+          WHERE owner_account_id=$1 AND resource_id=$2
+            AND started_at >= $3 AND ended_at <= $4`,
+        [
+          opts.account_id,
+          opts.resource_id,
+          purchasePeriodStart,
+          purchasePeriodEnd,
+        ],
+      );
+      const period = periodTotals.rows[0];
+      const periodBytes = Number(period?.total_bytes ?? 0);
+      const periodCost = moneyToDbString(period?.total_cost_usd ?? 0);
+      const firstStartedAt = period?.first_started_at ?? intervalStart;
+      const periodMeteredThroughAt = period?.metered_through_at ?? intervalEnd;
+      const description: DedicatedHostPurchase = {
+        type: "dedicated-host",
+        host_id: opts.resource_id,
+        host_name: opts.resource_name ?? null,
+        host_bay_id: opts.resource_bay_id ?? null,
+        provider: opts.provider,
+        region: opts.region ?? null,
+        funding_lane: opts.funding_lane,
+        hourly_cost_usd: "0",
+        resource_kind: "compute-egress",
+        project_id: opts.project_id ?? null,
+        usage_bytes: periodBytes,
+        unit_cost_usd_per_gb: moneyToDbString(opts.unit_cost_usd_per_gb),
+        usage_interval_start: firstStartedAt.toISOString(),
+        usage_interval_end: periodMeteredThroughAt.toISOString(),
+      };
+      let purchaseId = purchase?.id;
+      if (periodBytes > 0) {
+        if (purchaseId == null) {
+          purchaseId = await createPurchase({
+            account_id: opts.account_id,
+            project_id: opts.project_id ?? undefined,
+            service: "dedicated-host",
+            description,
+            client,
+            cost_so_far: periodCost,
+            time: firstStartedAt,
+            period_start: firstStartedAt,
+            tag,
+          });
+        } else {
+          await client.query(
+            `UPDATE purchases
+                SET cost_so_far=$2, description=$3
+              WHERE id=$1 AND cost IS NULL`,
+            [purchaseId, periodCost, description],
+          );
+        }
+        await client.query(
+          `UPDATE compute_egress_meter_intervals
+              SET purchase_id=$3
+            WHERE owner_account_id=$1 AND resource_id=$2
+              AND purchase_id IS NULL
+              AND started_at >= $4 AND ended_at <= $5`,
+          [
+            opts.account_id,
+            opts.resource_id,
+            purchaseId,
+            purchasePeriodStart,
+            purchasePeriodEnd,
+          ],
+        );
+      }
+      const finalizePurchase =
+        !!opts.finalize ||
+        intervalEnd.valueOf() === purchasePeriodEnd.valueOf();
+      if (finalizePurchase && purchaseId != null) {
+        await client.query(
+          `UPDATE purchases
+              SET cost=cost_so_far, cost_so_far=NULL, period_end=$2,
+                  description=$3
+            WHERE id=$1 AND cost IS NULL`,
+          [purchaseId, periodMeteredThroughAt, description],
+        );
+      }
+      return {
+        accepted: inserted,
+        finalized: !!opts.finalize,
+        metered_through_at: meteredThroughAt.toISOString(),
+        total_bytes: totalBytes,
+        total_cost_usd: totalCost,
+      };
+    },
+  });
+}
+
+export async function recordDedicatedHostMeteredUsageForAccount(
+  opts: AccountLocalRecordDedicatedHostMeteredUsageRequest,
+): Promise<AccountLocalRecordDedicatedHostMeteredUsageResult> {
+  const location = await resolveAccountHomeBay({
+    account_id: opts.account_id,
+    user_account_id: opts.account_id,
+  });
+  const home_bay_id =
+    `${location.home_bay_id ?? ""}`.trim() || getConfiguredBayId();
+  if (home_bay_id === getConfiguredBayId()) {
+    return await recordDedicatedHostMeteredUsageLocal(opts);
+  }
+  return await createInterBayAccountLocalClient({
+    client: getInterBayFabricClient(),
+    dest_bay: home_bay_id,
+  }).recordDedicatedHostMeteredUsage(opts);
 }
 
 async function loadGcpPriceCatalog(): Promise<GcpCatalogPrices | undefined> {

@@ -9,6 +9,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ResolvedPublicDirectoryShare } from "@cocalc/conat/hub/api/public-directory-shares";
 import {
@@ -19,8 +20,17 @@ import {
 const copyToNewProject = jest.fn();
 const copyToProject = jest.fn();
 const getProjectRegion = jest.fn();
-const lroWait = jest.fn();
+const getLro = jest.fn();
 const openProject = jest.fn();
+
+jest.mock("@cocalc/frontend/project/explorer/copy-ops", () => ({
+  CopyOpRow: ({ op }: any) => (
+    <div>
+      Copy operation:{" "}
+      {op.summary?.status ?? op.last_progress?.message ?? "queued"}
+    </div>
+  ),
+}));
 
 jest.mock("antd", () => {
   const Button = ({ children, disabled, loading, onClick, type }: any) => (
@@ -77,8 +87,16 @@ jest.mock("@cocalc/frontend/components", () => ({
   Icon: ({ name }: any) => <span data-testid={`icon-${name}`} />,
 }));
 
+jest.mock("@cocalc/frontend/project/home-directory", () => ({
+  getProjectHomeDirectory: () => "/home/user",
+}));
+
 jest.mock("@cocalc/frontend/projects/select-project", () => ({
-  SelectProject: () => <div>SelectProject</div>,
+  SelectProject: ({ onChange }: any) => (
+    <button onClick={() => onChange("existing-project")} type="button">
+      SelectProject
+    </button>
+  ),
 }));
 
 jest.mock("@cocalc/frontend/components/theme-image-input", () => ({
@@ -101,6 +119,9 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
   webapp_client: {
     conat_client: {
       hub: {
+        lro: {
+          get: (...args: any[]) => getLro(...args),
+        },
         projects: {
           getProjectRegion: (...args: any[]) => getProjectRegion(...args),
         },
@@ -109,7 +130,6 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
           copyToProject: (...args: any[]) => copyToProject(...args),
         },
       },
-      lroWait: (...args: any[]) => lroWait(...args),
     },
   },
 }));
@@ -155,6 +175,7 @@ describe("PublicDirectoryShareBanner", () => {
     window.localStorage.clear();
     copyToNewProject.mockResolvedValue({
       destination_project_id: "new-project",
+      destination_path: "test2",
       op_id: "op-1",
       scope_id: "new-project",
       scope_type: "project",
@@ -162,8 +183,9 @@ describe("PublicDirectoryShareBanner", () => {
       created_project: true,
       reused_project: false,
       placed_on_requested_host: true,
+      requested_host_id: "source-host",
     });
-    lroWait.mockResolvedValue({ status: "succeeded" });
+    getLro.mockResolvedValue({ status: "succeeded" });
     getProjectRegion.mockResolvedValue("wnam");
   });
 
@@ -261,7 +283,7 @@ describe("PublicDirectoryShareBanner", () => {
       expect(openProject).toHaveBeenCalledWith({
         project_id: "new-project",
         switch_to: true,
-        target: "files",
+        target: "files/home/user/test2/",
       });
     });
     expect(copyToNewProject).toHaveBeenCalledWith({
@@ -270,19 +292,45 @@ describe("PublicDirectoryShareBanner", () => {
       overwrite_existing: false,
       options: { recursive: true },
     });
-    expect(lroWait).toHaveBeenCalledWith(
-      expect.objectContaining({
-        op_id: "op-1",
-        scope_id: "new-project",
-        scope_type: "project",
-      }),
-    );
+    expect(getLro).toHaveBeenCalledWith({ op_id: "op-1" });
     expect(getProjectRegion).toHaveBeenCalledWith({
       project_id: "new-project",
     });
-    expect(lroWait.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(getLro.mock.invocationCallOrder[0]).toBeLessThan(
       openProject.mock.invocationCallOrder[0],
     );
+  });
+
+  it("copies a folder into its slug when selecting an existing project", async () => {
+    copyToProject.mockResolvedValueOnce({
+      destination_project_id: "existing-project",
+      destination_path: "test2",
+      op_id: "op-existing",
+      scope_id: "existing-project",
+      scope_type: "project",
+      site_license_grant: null,
+    });
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    fireEvent.click(screen.getByText("Copy to existing project"));
+    expect(screen.getByLabelText("Destination path")).toHaveValue("test2");
+    fireEvent.click(screen.getByText("SelectProject"));
+    fireEvent.click(screen.getByText("Copy to project"));
+
+    await waitFor(() => {
+      expect(copyToProject).toHaveBeenCalledWith({
+        slug: "test2",
+        destination_project_id: "existing-project",
+        destination_path: "test2",
+        options: { recursive: true },
+      });
+    });
+    expect(openProject).toHaveBeenCalledWith({
+      project_id: "existing-project",
+      switch_to: true,
+      target: "files/home/user/test2/",
+    });
   });
 
   it("does not open the new project before it is readable", async () => {
@@ -294,7 +342,7 @@ describe("PublicDirectoryShareBanner", () => {
     clickModalCopyButton();
 
     await waitFor(() => {
-      expect(lroWait).toHaveBeenCalled();
+      expect(getLro).toHaveBeenCalled();
     });
     await act(async () => {
       await jest.runAllTimersAsync();
@@ -310,7 +358,7 @@ describe("PublicDirectoryShareBanner", () => {
   });
 
   it("does not open the new project when the queued copy fails", async () => {
-    lroWait.mockResolvedValueOnce({
+    getLro.mockResolvedValueOnce({
       status: "failed",
       error: "copy failed",
     });
@@ -325,9 +373,55 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).not.toHaveBeenCalled();
   });
 
+  it("surfaces a transient LRO refresh failure while retrying", async () => {
+    getLro.mockRejectedValue(
+      new Error("unable to track durable copy operation"),
+    );
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Unable to refresh copy status; retrying. unable to track durable copy operation",
+        ),
+      ).toBeTruthy();
+    });
+    expect(openProject).not.toHaveBeenCalled();
+  });
+
+  it("shows the destination and operation while a default copy is running", async () => {
+    getLro.mockResolvedValue({ status: "queued" });
+    render(<PublicDirectoryShareBanner share={share()} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(screen.getByText("Destination: new project")).toBeTruthy();
+    });
+    expect(screen.getByText("Copy operation: queued")).toBeTruthy();
+    expect(screen.getByText("new-project")).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText("test2")).toBeTruthy();
+    expect(screen.getByText("op-1")).toBeTruthy();
+    expect(
+      screen.getByText("Placed on the source host for a same-host copy."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Open destination project"));
+    expect(openProject).toHaveBeenCalledWith({
+      project_id: "new-project",
+      switch_to: true,
+      target: "files",
+    });
+  });
+
   it("shows progress and explains when same-host placement falls back", async () => {
     copyToNewProject.mockResolvedValueOnce({
       destination_project_id: "new-project",
+      destination_path: "test2",
       op_id: "op-1",
       scope_id: "new-project",
       scope_type: "project",
@@ -338,16 +432,7 @@ describe("PublicDirectoryShareBanner", () => {
       requested_host_id: "source-host",
       host_placement_message: "host source-host is unavailable",
     });
-    lroWait.mockImplementationOnce(async ({ onProgress }) => {
-      onProgress?.({
-        type: "progress",
-        ts: Date.now(),
-        phase: "copy",
-        message: "copying files",
-        progress: 37,
-      });
-      return { status: "succeeded" };
-    });
+    getLro.mockResolvedValue({ status: "succeeded" });
     render(<PublicDirectoryShareBanner share={share()} />);
 
     fireEvent.click(screen.getByText("Copy"));
@@ -369,15 +454,16 @@ describe("PublicDirectoryShareBanner", () => {
       reused_project: true,
       placed_on_requested_host: true,
       conflict: {
-        reason: "already_copied",
+        reason: "path_exists",
         message:
           "This published folder was already copied to the compatible project.",
-        destination_path: null,
+        destination_path: "test2",
         can_overwrite: true,
       },
     });
     copyToNewProject.mockResolvedValueOnce({
       destination_project_id: "existing-project",
+      destination_path: "test2",
       op_id: "op-2",
       scope_id: "existing-project",
       scope_type: "project",
@@ -402,7 +488,7 @@ describe("PublicDirectoryShareBanner", () => {
     expect(openProject).toHaveBeenCalledWith({
       project_id: "existing-project",
       switch_to: true,
-      target: "files",
+      target: "files/home/user/test2/",
     });
 
     fireEvent.click(screen.getByText("Overwrite"));
@@ -412,6 +498,37 @@ describe("PublicDirectoryShareBanner", () => {
         reuse_existing: true,
         overwrite_existing: true,
         options: { recursive: true },
+      });
+    });
+  });
+
+  it("opens an exact-file copy directly", async () => {
+    copyToNewProject.mockResolvedValueOnce({
+      destination_project_id: "new-project",
+      destination_path: "tutorial.ipynb",
+      op_id: "op-file",
+      scope_id: "new-project",
+      scope_type: "project",
+      site_license_grant: null,
+      created_project: true,
+      reused_project: false,
+      placed_on_requested_host: true,
+    });
+    const fileShare = {
+      ...share(),
+      path: "notebooks/tutorial.ipynb",
+      path_type: "file",
+    } as ResolvedPublicDirectoryShare;
+    render(<PublicDirectoryShareBanner share={fileShare} />);
+
+    fireEvent.click(screen.getByText("Copy"));
+    clickModalCopyButton();
+
+    await waitFor(() => {
+      expect(openProject).toHaveBeenCalledWith({
+        project_id: "new-project",
+        switch_to: true,
+        target: "files/home/user/tutorial.ipynb",
       });
     });
   });

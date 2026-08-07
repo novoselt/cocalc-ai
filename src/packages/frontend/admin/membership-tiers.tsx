@@ -1588,7 +1588,7 @@ export function MembershipTiers() {
                   </Col>
                   <Col {...fieldCol}>
                     <Form.Item label="Yearly price">
-                      <Space direction="vertical" style={{ width: "100%" }}>
+                      <Space vertical style={{ width: "100%" }}>
                         <Form.Item name="price_yearly" noStyle>
                           <InputNumber
                             min={0}
@@ -2706,7 +2706,7 @@ export function MembershipTiers() {
                           </tbody>
                         </table>
                       </div>
-                      <Space direction="vertical" style={{ width: "100%" }}>
+                      <Space vertical style={{ width: "100%" }}>
                         {economicsBar({
                           label:
                             expectedProfitLossUsd >= 0
@@ -2957,7 +2957,7 @@ export function MembershipTiers() {
                               </Col>
                             </Row>
                             <Space
-                              direction="vertical"
+                              vertical
                               style={{ width: "100%", marginTop: "16px" }}
                             >
                               {analysis.messages.map((message, index) => (
@@ -2965,7 +2965,7 @@ export function MembershipTiers() {
                                   key={index}
                                   showIcon
                                   type={riskSeverityType(message.severity)}
-                                  message={message.message}
+                                  title={message.message}
                                 />
                               ))}
                             </Space>
@@ -3658,7 +3658,7 @@ export function MembershipTiers() {
             style={{ marginBottom: "12px" }}
             type="error"
             showIcon
-            message={importError}
+            title={importError}
           />
         )}
         <Table<MembershipTierImportCandidate>
@@ -3758,13 +3758,13 @@ export function MembershipTiers() {
       ? overview.bays.length - failedBays.length
       : 0;
     return (
-      <Space direction="vertical" style={{ width: "100%" }}>
+      <Space vertical style={{ width: "100%" }}>
         {render_buttons()}
         {failedBays.length > 0 && (
           <Alert
             type="warning"
             showIcon
-            message="Partial cluster counts"
+            title="Partial cluster counts"
             description={
               <>
                 Membership tier counts include {okBayCount} of{" "}

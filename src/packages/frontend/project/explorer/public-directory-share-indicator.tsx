@@ -45,7 +45,7 @@ export function PublicDirectoryShareIndicator({
       <div style={{ fontWeight: 600 }}>
         {direct
           ? "This path is published."
-          : "This folder contains published paths."}
+          : "This directory contains published paths."}
       </div>
       {shares.slice(0, 5).map((share) => (
         <div key={share.id}>{shareLabel(share.path, share.slug)}</div>

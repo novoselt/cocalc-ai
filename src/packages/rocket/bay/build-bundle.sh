@@ -136,6 +136,9 @@ pnpm --filter @cocalc/project-host run build:bundle
 echo "- Clean static frontend outputs"
 rm -rf packages/static/dist
 
+echo "- Build CDN assets"
+pnpm --filter @cocalc/cdn run build
+
 echo "- Build static frontend assets"
 pnpm static
 
@@ -171,6 +174,11 @@ pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/pack
 
 copy_native_pkg "bufferutil" "$OUT/runtime/cloudflared"
 copy_native_pkg "utf-8-validate" "$OUT/runtime/cloudflared"
+
+echo "- Bundle changed-only SQLite mirror helper with @vercel/ncc"
+pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/packages/rocket/bin/bay-sqlite-mirror.js" \
+  -o "$OUT/runtime/sqlite-mirror" \
+  --license licenses.txt
 
 echo "- Copy bay systemd scaffold"
 mkdir -p "$OUT/scripts"
@@ -214,6 +222,7 @@ const manifest = {
     hub: "runtime/control-plane/bundle/index.js",
     migrateSchema: "runtime/migrate-schema/index.js",
     cloudflared: "runtime/cloudflared/index.js",
+    sqliteMirror: "runtime/sqlite-mirror/index.js",
     apiV2Root: "runtime/control-plane/http-api-dist/pages/api/v2",
     apiV2Routes: "runtime/control-plane/api-v2-routes/index.js",
   },
@@ -229,9 +238,14 @@ validate_file "$OUT/runtime/control-plane/bundle/index.js"
 validate_file "$OUT/runtime/control-plane/api-v2-routes/index.js"
 validate_file "$OUT/runtime/migrate-schema/index.js"
 validate_file "$OUT/runtime/cloudflared/index.js"
+validate_file "$OUT/runtime/sqlite-mirror/index.js"
 validate_file "$OUT/runtime/control-plane/http-api-dist/pages/api/v2/index.js"
 validate_file "$OUT/runtime/control-plane/static/public.html"
 validate_file "$OUT/runtime/control-plane/public/cocalc-content.css"
+validate_file "$OUT/runtime/control-plane/cdn/index.js"
+PDFJS_VERSION="$(node -e 'console.log(require(process.argv[1]).versions["pdfjs-dist"])' \
+  "$OUT/runtime/control-plane/cdn/index.js")"
+validate_file "$OUT/runtime/control-plane/cdn/pdfjs-dist-${PDFJS_VERSION}/cmaps/UniJIS-UTF16-H.bcmap"
 validate_file "$OUT/runtime/control-plane/webapp/favicon.ico"
 validate_file "$OUT/runtime/control-plane/bundle/gcp/gcp-setup.sh"
 validate_file "$OUT/runtime/control-plane/bundle/nebius/nebius-setup.sh"

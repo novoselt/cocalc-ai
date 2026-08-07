@@ -2914,60 +2914,102 @@ export class JupyterActions extends JupyterActions0 {
     c.close();
   };
 
-  private getJupyterClient = async (): Promise<JupyterClient | null> => {
-    if (this.isClosed()) return null;
-    let c = this.jupyterClient;
-    if (c != null && c.socket.state === "ready") {
-      this.runDebug("client.reuse", { socketState: c.socket.state });
-      return c;
-    }
-    if (c != null) {
-      this.closeJupyterClient("socket_not_ready");
-    }
-    await this.waitUntilProjectIsRunning();
-    if (this.isClosed()) return null;
-    this.runDebug("client.create.start");
-    const client = await webapp_client.conat_client.projectConat({
-      project_id: this.project_id,
-      caller: "JupyterActions.getJupyterClient",
-    });
-    c = jupyterClient({
-      path: this.syncdbPath,
-      client,
-      project_id: this.project_id,
-      stdin: async ({ id, prompt, password }) => {
-        // set the redux store so that it is known we would like some stdin,
-        // wait for the user to respond, and return the result.
-        this.setState({ stdin: { id, prompt, password } });
-        try {
-          const [input] = await once(this.store, "stdin");
-          this.setState({ stdin: undefined });
-          return input;
-        } catch (err) {
-          return `${err}`;
+  private getJupyterClient = reuseInFlight(
+    async (): Promise<JupyterClient | null> => {
+      if (this.isClosed()) return null;
+      let c = this.jupyterClient;
+      if (c != null && c.socket.state === "ready") {
+        this.runDebug("client.reuse", { socketState: c.socket.state });
+        return c;
+      }
+      if (c != null) {
+        if (c.socket.state === "connecting") {
+          this.runDebug("client.connect.wait", { socketState: c.socket.state });
+          try {
+            await c.socket.waitUntilReady();
+          } catch (err) {
+            this.runDebug("client.connect.failed", {
+              err: `${err}`,
+              socketState: c.socket.state,
+            });
+          }
+          if (
+            !this.isClosed() &&
+            this.jupyterClient === c &&
+            c.socket.state === "ready"
+          ) {
+            this.runDebug("client.connect.ready");
+            return c;
+          }
         }
-      },
-    });
-    c.socket.on("closed", () => {
-      if (this.isClosed()) {
-        return;
+        if (this.jupyterClient === c) {
+          this.closeJupyterClient("socket_not_ready");
+        }
       }
-      this.runDebug("client.socket.closed", {
-        previousState: c?.socket?.state,
-        currentClient: this.jupyterClient === c,
+      await this.waitUntilProjectIsRunning();
+      if (this.isClosed()) return null;
+      this.runDebug("client.create.start");
+      const client = await webapp_client.conat_client.projectConat({
+        project_id: this.project_id,
+        caller: "JupyterActions.getJupyterClient",
       });
-      if (this.jupyterClient !== c) {
-        return;
+      c = jupyterClient({
+        path: this.syncdbPath,
+        client,
+        project_id: this.project_id,
+        stdin: async ({ id, prompt, password }) => {
+          // set the redux store so that it is known we would like some stdin,
+          // wait for the user to respond, and return the result.
+          this.setState({ stdin: { id, prompt, password } });
+          try {
+            const [input] = await once(this.store, "stdin");
+            this.setState({ stdin: undefined });
+            return input;
+          } catch (err) {
+            return `${err}`;
+          }
+        },
+      });
+      c.socket.on("closed", () => {
+        if (this.isClosed()) {
+          return;
+        }
+        this.runDebug("client.socket.closed", {
+          previousState: c?.socket?.state,
+          currentClient: this.jupyterClient === c,
+        });
+        if (this.jupyterClient !== c) {
+          return;
+        }
+        this.jupyterClient = undefined;
+        // TODO: doing this is not ideal, but it's probably less confusing.
+        this.clearRunQueue();
+        this.runningNow = false;
+      });
+      this.jupyterClient = c;
+      this.runDebug("client.create.wait", { socketState: c.socket.state });
+      try {
+        await c.socket.waitUntilReady();
+      } catch (err) {
+        this.runDebug("client.create.failed", {
+          err: `${err}`,
+          socketState: c.socket.state,
+        });
+        if (this.jupyterClient === c) {
+          this.closeJupyterClient("socket_connect_failed");
+        } else {
+          c.close();
+        }
+        return null;
       }
-      this.jupyterClient = undefined;
-      // TODO: doing this is not ideal, but it's probably less confusing.
-      this.clearRunQueue();
-      this.runningNow = false;
-    });
-    this.jupyterClient = c;
-    this.runDebug("client.create.done", { socketState: c.socket.state });
-    return c;
-  };
+      if (this.isClosed() || this.jupyterClient !== c) {
+        c.close();
+        return null;
+      }
+      this.runDebug("client.create.done", { socketState: c.socket.state });
+      return c;
+    },
+  );
 
   private runQueue: any[] = [];
   private runningNow = false;

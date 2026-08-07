@@ -358,30 +358,38 @@ describe("classifyHostAvailabilitySnapshot", () => {
     });
   });
 
-  it("classifies high project-host persistence RSS without affecting host pressure", () => {
+  it("classifies project-host persistence RSS at the 2/4 GiB defaults", () => {
     const now = 2_000_000;
-    const row = _test.conatPersistAlertRow(
-      {
-        id: "persist-host",
-        status: "running",
-        metadata: { name: "asia-1" },
-        conat_persist: {
-          schema_version: 1,
-          collected_at: new Date(now - 30_000).toISOString(),
-          available: true,
-          ready: true,
-          pid: 123,
-          rss_bytes: 3 * 1024 ** 3,
-          open_streams: 500,
+    const makeRow = (rss_bytes: number) =>
+      _test.conatPersistAlertRow(
+        {
+          id: "persist-host",
+          status: "running",
+          metadata: { name: "asia-1" },
+          conat_persist: {
+            schema_version: 1,
+            collected_at: new Date(now - 30_000).toISOString(),
+            available: true,
+            ready: true,
+            pid: 123,
+            rss_bytes,
+            open_streams: 500,
+          },
         },
-      },
-      now,
-    );
+        now,
+      );
 
+    expect(makeRow(1.5 * 1024 ** 3)).toBeUndefined();
+    expect(makeRow(3 * 1024 ** 3)).toMatchObject({
+      persist_level: "warning",
+      persist_reason: expect.stringContaining("RSS 3.00 GiB >= 2.00 GiB"),
+    });
+
+    const row = makeRow(5 * 1024 ** 3);
     expect(row).toMatchObject({
       persist_level: "critical",
+      persist_reason: expect.stringContaining("RSS 5.00 GiB >= 4.00 GiB"),
     });
-    expect(row?.persist_reason).toContain("RSS 3.00 GiB");
     expect(_test.formatConatPersistAlertBody([row!])).toContain(
       "observational only",
     );

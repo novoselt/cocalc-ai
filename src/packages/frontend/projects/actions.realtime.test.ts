@@ -278,6 +278,9 @@ describe("ProjectsActions realtime feed", () => {
         ImmutableMap({
           project_id: "project-1",
           title: "Targeted Project",
+          labels: ImmutableMap({
+            "system/public-share/share-1": "published",
+          }),
           state: ImmutableMap({
             state: "starting",
             time: new Date("2026-04-05T03:01:00.000Z"),
@@ -294,6 +297,9 @@ describe("ProjectsActions realtime feed", () => {
             title: "Targeted Project",
             description: "targeted reconcile",
             theme: null,
+            labels: {
+              "system/public-share/share-1": "published",
+            },
             host_id: "host-1",
             owning_bay_id: "bay-0",
             users_summary: {
@@ -340,6 +346,7 @@ describe("ProjectsActions realtime feed", () => {
           expect.objectContaining({
             account_id: "acct-1",
             project_id: "project-1",
+            labels: null,
           }),
         ],
       },
@@ -348,6 +355,9 @@ describe("ProjectsActions realtime feed", () => {
     expect(projectMap.getIn(["project-1", "title"])).toBe("Targeted Project");
     expect(projectMap.getIn(["project-1", "state", "state"])).toBe("running");
     expect(projectMap.getIn(["project-1", "deletion_protection"])).toBe(true);
+    expect(
+      projectMap.getIn(["project-1", "labels", "system/public-share/share-1"]),
+    ).toBe("published");
   });
 
   it("reconciles hidden projected rows for already-known projects", async () => {

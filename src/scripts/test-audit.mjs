@@ -8,7 +8,7 @@ import {
   readdirSync,
   rmSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
@@ -48,6 +48,11 @@ const PACKAGE_OVERRIDES = {
     // Jest test timing, so run Jest directly.
     args: ["exec", "jest"],
   },
+  "project-host": {
+    // The package test script wraps Jest to skip unsupported macOS runs, so
+    // it is not detected by looking for "jest" in the package script.
+    args: ["exec", "jest", "--config", "jest.config.js"],
+  },
   server: {
     env: {
       NODE_NO_WARNINGS: "1",
@@ -55,7 +60,9 @@ const PACKAGE_OVERRIDES = {
       NODE_OPTIONS: "--experimental-vm-modules",
       TZ: "UTC",
     },
-    args: ["exec", "jest", "--maxWorkers=8"],
+    // Match the package test command. Eight workers can exceed the enforced
+    // project memory limit and produce false SIGKILL failures in CI.
+    args: ["exec", "jest", "--maxWorkers=4"],
   },
 };
 
@@ -174,24 +181,31 @@ function positiveInt(value, label) {
   return n;
 }
 
-function packageJson(name) {
-  return JSON.parse(
-    readFileSync(join(PACKAGES_DIR, name, "package.json"), "utf8"),
-  );
+function discoverPackagePaths(dir = PACKAGES_DIR) {
+  const paths = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (["build", "dist", "node_modules"].includes(entry.name)) continue;
+    const path = join(dir, entry.name);
+    if (existsSync(join(path, "package.json"))) {
+      paths.push(path);
+    }
+    paths.push(...discoverPackagePaths(path));
+  }
+  return paths;
 }
 
 function discoverPackages() {
   const packages = [];
-  for (const name of readdirSync(PACKAGES_DIR).sort()) {
-    const packageJsonPath = join(PACKAGES_DIR, name, "package.json");
-    if (!existsSync(packageJsonPath)) continue;
-    const pkg = packageJson(name);
+  for (const path of discoverPackagePaths().sort()) {
+    const name = basename(path);
+    const pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf8"));
     const testScript = pkg.scripts?.test ?? "";
     if (!/\bjest\b/.test(testScript) && !PACKAGE_OVERRIDES[name]) continue;
     packages.push({
       name,
       testScript,
-      path: join(PACKAGES_DIR, name),
+      path,
     });
   }
   return packages;

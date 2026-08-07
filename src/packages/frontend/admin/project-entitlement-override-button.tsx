@@ -163,7 +163,7 @@ export function ProjectEntitlementOverrideButton({
         okText="Save override"
         destroyOnHidden
       >
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+        <Space vertical style={{ width: "100%" }} size="middle">
           <Text type="secondary">
             Set a project-specific minimum disk quota. Membership defaults still
             apply, but this project will not be started with less disk space
@@ -173,7 +173,7 @@ export function ProjectEntitlementOverrideButton({
             <Alert
               type="error"
               showIcon
-              message={error.message}
+              title={error.message}
               description={
                 error.details ? (
                   <details style={{ fontSize: "12px", marginTop: "6px" }}>
@@ -196,7 +196,7 @@ export function ProjectEntitlementOverrideButton({
           <Alert
             type={current == null ? "info" : "success"}
             showIcon
-            message={
+            title={
               loading ? "Loading current override..." : formatDiskQuota(current)
             }
           />

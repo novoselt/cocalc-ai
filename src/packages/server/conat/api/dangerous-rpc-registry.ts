@@ -35,10 +35,6 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "changes or removes a managed compute VM spending deadline",
   },
-  "compute.setProjectBudget": {
-    decision: "fresh-auth-required",
-    reason: "changes the recurring managed compute spending ceiling",
-  },
   "compute.createVolume": {
     decision: "fresh-auth-required",
     reason: "creates billable persistent managed compute storage",
@@ -80,6 +76,18 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason:
       "admin-only bounded and audited host log inspection with server-side caps and redaction",
+  },
+  "adminSupport.update": {
+    decision: "fresh-auth-required",
+    reason: "posts comments or changes customer-visible Zendesk ticket state",
+  },
+  "adminSupport.merge": {
+    decision: "fresh-auth-required",
+    reason: "merges Zendesk tickets and can add customer-visible comments",
+  },
+  "adminSupport.spam": {
+    decision: "fresh-auth-required",
+    reason: "deletes a Zendesk ticket as spam and suspends its requester",
   },
   "adminData.deleteView": {
     decision: "fresh-auth-required",
@@ -819,6 +827,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "purchases.adminProvisionSiteLicense": {
     decision: "fresh-auth-required",
     reason: "admin site-license entitlement mutation",
+  },
+  "purchases.adminCreateMembershipPackagePurchase": {
+    decision: "fresh-auth-required",
+    reason: "admin custom-price membership package and billing mutation",
   },
   "purchases.adminResetMembershipUsageWindows": {
     decision: "fresh-auth-required",

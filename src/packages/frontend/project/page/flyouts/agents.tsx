@@ -2370,7 +2370,7 @@ export function AgentsFlyout({ project_id, wrap }: AgentsFlyoutProps) {
         showIcon
         type="info"
         style={{ margin: "12px" }}
-        message="AI integrations are disabled"
+        title="AI integrations are disabled"
         description="Agents are hidden because AI integrations are disabled for this account or project."
       />,
     );

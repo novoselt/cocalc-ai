@@ -278,6 +278,9 @@ importers:
       katex:
         specifier: ^0.16.21
         version: 0.16.25
+      pdfjs-dist:
+        specifier: ^4.6.82
+        version: 4.10.38
 
   chat:
     dependencies:
@@ -718,6 +721,12 @@ importers:
       '@types/codemirror':
         specifier: ^5.60.15
         version: 5.60.17
+      '@types/d3-selection':
+        specifier: ^3.0.11
+        version: 3.0.11
+      '@types/d3-zoom':
+        specifier: ^3.0.8
+        version: 3.0.8
       '@types/debug':
         specifier: ^4.1.12
         version: 4.1.12
@@ -811,6 +820,12 @@ importers:
       dayjs:
         specifier: ^1.11.11
         version: 1.11.19
+      d3-selection:
+        specifier: ^3.0.0
+        version: 3.0.0
+      d3-zoom:
+        specifier: ^3.0.0
+        version: 3.0.0
       debug:
         specifier: ^4.4.0
         version: 4.4.3
@@ -1671,6 +1686,9 @@ importers:
       express-session:
         specifier: ^1.18.1
         version: 1.18.2
+      google-auth-library:
+        specifier: ^10.6.2
+        version: 10.6.2
       htmlparser2:
         specifier: ^8.0.2
         version: 8.0.2

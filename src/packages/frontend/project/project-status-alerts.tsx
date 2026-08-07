@@ -99,7 +99,7 @@ export function ProjectStatusAlertDetails({
 }) {
   if (alerts.length === 0) return null;
   return (
-    <Space direction="vertical" size={8} style={{ maxWidth: 360 }}>
+    <Space vertical size={8} style={{ maxWidth: 360 }}>
       {alerts.map((alert) => (
         <div key={projectStatusAlertKey(alert)}>
           <b>{getAlertName(alert.type)} warning</b>

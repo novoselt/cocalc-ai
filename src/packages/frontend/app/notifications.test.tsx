@@ -27,6 +27,7 @@ jest.mock("@cocalc/frontend/app-framework", () => {
       set_active_tab: setActiveTabMock,
     }),
     useTypedRedux: (_store: string, field: string) => {
+      if (field === "account_id") return "account-1";
       if (field === "unread_count") return mentionsUnread;
       if (field === "unread") return newsUnread;
       return undefined;
@@ -35,7 +36,8 @@ jest.mock("@cocalc/frontend/app-framework", () => {
 });
 
 jest.mock("@cocalc/frontend/collaborators", () => ({
-  useUnreadIncomingInviteCount: () => inviteUnread,
+  useUnreadIncomingInviteCount: (account_id: string) =>
+    account_id === "account-1" ? inviteUnread : 0,
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({

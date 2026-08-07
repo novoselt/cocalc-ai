@@ -73,7 +73,7 @@ export function ProjectBackupShardsAdmin() {
   );
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Typography.Paragraph style={{ marginBottom: 0 }}>
         Seed-backed view of project-backup rustic shards. This is the
         authoritative allocator state in multi-bay mode and the main operator
@@ -94,7 +94,7 @@ export function ProjectBackupShardsAdmin() {
         <Alert
           type="error"
           showIcon
-          message="Failed to load backup shards"
+          title="Failed to load backup shards"
           description={error}
         />
       ) : null}

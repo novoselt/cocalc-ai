@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+# shellcheck source=pgbackrest-lib.sh
+source "${SCRIPT_DIR}/pgbackrest-lib.sh"
+
+wal_path="${1:-}"
+if [[ -z "$wal_path" ]]; then
+  bay_log "archive-push requires a WAL path"
+  exit 2
+fi
+pgbackrest_set_defaults
+pgbackrest_export_secrets
+stanza="$(pgbackrest_stanza)"
+exec nice -n 10 ionice -c 2 -n 7 \
+  "$COCALC_BAY_PGBACKREST_BIN" \
+  "--config=$COCALC_BAY_PGBACKREST_CONFIG" \
+  "--stanza=$stanza" \
+  archive-push "$wal_path"

@@ -200,6 +200,7 @@ import {
   resolveTeamLicenseQuote,
 } from "@cocalc/server/membership/team-licenses";
 import { purchaseTeamLicenseChange } from "@cocalc/server/purchases/team-license";
+import adminCreateMembershipPackagePurchase from "@cocalc/server/purchases/admin-membership-package";
 import createProject, {
   createProjectWithInternalProjectId,
 } from "@cocalc/server/projects/create";
@@ -272,6 +273,7 @@ import {
 import { getDedicatedHostPolicySnapshotLocal } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionLocal,
+  recordDedicatedHostMeteredUsageLocal,
   reconcileDedicatedHostPurchaseSessionLocal,
 } from "@cocalc/server/project-host/spend";
 import {
@@ -1006,6 +1008,9 @@ async function startAccountLocalService(): Promise<void> {
     closeDedicatedHostPurchaseSession: async (opts) => {
       await closeDedicatedHostPurchaseSessionLocal(opts);
     },
+    recordDedicatedHostMeteredUsage: async (opts) => {
+      return await recordDedicatedHostMeteredUsageLocal(opts);
+    },
     reserveProjectRuntimeSlot: async (opts) =>
       await reserveProjectRuntimeSlotLocal(opts),
     heartbeatProjectRuntimeSlot: async (opts) =>
@@ -1156,6 +1161,18 @@ async function startAccountLocalService(): Promise<void> {
       isSeedSiteLicenseBay()
         ? await adminProvisionSiteLicense({ ...opts, trusted_admin: true })
         : await getSeedSiteLicenseClient().adminProvisionSiteLicense(opts),
+    adminCreateMembershipPackagePurchase: async (opts) =>
+      await adminCreateMembershipPackagePurchase({
+        admin_account_id: opts.actor_account_id,
+        user_account_id: opts.user_account_id,
+        product: opts.product,
+        price: opts.price,
+        source: opts.source,
+        reason: opts.reason,
+        idempotency_key: opts.idempotency_key,
+        pricing_note: opts.pricing_note,
+        trusted_admin: opts.trusted_admin === true,
+      }),
     listSiteLicenseOverviews: async ({
       actor_account_id,
       admin,
@@ -1616,6 +1633,8 @@ async function startAccountLocalService(): Promise<void> {
       }),
     legacyMigrationListProjects: async (opts) =>
       await legacyMigration.listProjects(opts ?? {}),
+    legacyMigrationListPublicShares: async (opts) =>
+      await legacyMigration.listPublicShares(opts ?? {}),
     legacyMigrationImportProjects: async (opts) =>
       await legacyMigration.importProjects(opts),
     legacyMigrationRetryProjectRestore: async (opts) =>
@@ -1652,8 +1671,14 @@ async function startAccountLocalService(): Promise<void> {
       await legacyMigration.adminUnlinkLegacyAccount(opts),
     legacyMigrationAdminListLinkedLegacyProjects: async (opts) =>
       await legacyMigration.adminListLinkedLegacyProjects(opts),
+    legacyMigrationAdminReplayPublicPaths: async (opts) =>
+      await legacyMigration.adminReplayPublicPaths(opts),
+    legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
+      await legacyMigration.adminReplayRestoredPublicPaths(opts),
     publicDirectoryShareResolve: async (opts) =>
       await publicDirectoryShares.resolve(opts),
+    publicDirectoryShareListMine: async (opts) =>
+      await publicDirectoryShares.listMine(opts),
     publicDirectoryShareListProject: async (opts) =>
       await publicDirectoryShares.listProject(opts),
     publicDirectoryShareCreate: async (opts) =>

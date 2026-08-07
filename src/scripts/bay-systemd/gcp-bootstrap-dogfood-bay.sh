@@ -74,7 +74,7 @@ GCP:
 Control:
   --skip-build                  reuse existing Rocket bay bundle
   --skip-port-forward           do not start the local SSH port forward
-  --static-only                 deploy only frontend/static assets by creating
+  --static-only                 deploy only frontend and CDN assets by creating
                                 a new versioned release from the current VM
                                 release without restarting hub workers
   --restart-hub-workers         with --static-only, restart hub workers one at

@@ -471,7 +471,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
       (option) => option.value === provider.selectedProvider,
     )?.label ?? provider.selectedProvider;
   const selectedMode =
-    watchedPricingModel === "spot" ? "Spot / interruptible" : "On-demand";
+    watchedPricingModel === "spot" ? "Spot / interruptible" : "Standard";
   const selectedDiskLabel =
     selectedDiskGb != null ? `${selectedDiskGb.toLocaleString()} GB` : "Disk";
   const selectedMachineOption = React.useMemo(
@@ -809,7 +809,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
             padding: 10,
           }}
         >
-          <Space direction="vertical" size={4} style={{ width: "100%" }}>
+          <Space vertical size={4} style={{ width: "100%" }}>
             <Space size={6} wrap>
               <Tag color="blue">{providerLabel}</Tag>
               <Tag color={watchedPricingModel === "spot" ? "green" : "default"}>
@@ -891,7 +891,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Creating a similar host"
+          title="Creating a similar host"
           description={
             <>
               Based on {sourceHost.name || "host"}{" "}

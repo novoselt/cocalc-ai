@@ -173,7 +173,7 @@ export default function RuntimeRetentionPolicyWizard({
       width={860}
       title="Project Host Runtime Retention Policy Wizard"
     >
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Space vertical size={16} style={{ width: "100%" }}>
         <Alert
           type="info"
           showIcon

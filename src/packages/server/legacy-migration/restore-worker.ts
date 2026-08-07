@@ -721,6 +721,21 @@ async function markRestored({
     });
   }
   await setRestoreLabels({ row, restore_status: "restored" });
+  try {
+    const { replayLegacyPublicPathsForProjectBestEffort } =
+      await import("./index");
+    await replayLegacyPublicPathsForProjectBestEffort({
+      account_id: row.owner_account_id,
+      legacy_project_id: row.legacy_project_id,
+      project_id: row.project_id,
+    });
+  } catch (err) {
+    logger.warn("failed to activate legacy public shares after restore", {
+      legacy_project_id: row.legacy_project_id,
+      project_id: row.project_id,
+      err: `${err}`,
+    });
+  }
 }
 
 async function ensureRestoredProjectDiskQuota({

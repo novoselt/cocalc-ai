@@ -8,6 +8,16 @@ source "${SCRIPT_DIR}/bay-bootstrap-release.sh"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
+ORIGINAL_NODE="$(command -v node)"
+NODE_VERSION="test"
+NVM_DIR="${TMP_ROOT}/nvm"
+mkdir -p "${NVM_DIR}/versions/node/v${NODE_VERSION}/bin"
+ln -s "$ORIGINAL_NODE" "${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/node"
+if [[ "$(PATH=/nonexistent find_node)" != "${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/node" ]]; then
+  echo "configured Node runtime was not resolved when node was absent from PATH" >&2
+  exit 1
+fi
+
 INSTALL_BASE="${TMP_ROOT}/bay"
 RELEASES_DIR="${INSTALL_BASE}/releases"
 CURRENT_LINK="${INSTALL_BASE}/current"
@@ -47,4 +57,77 @@ for release in 050-stale 200-static 300-static; do
   fi
 done
 
-echo "bay release pruning test passed"
+PREVIOUS_RELEASE="${TMP_ROOT}/previous-release"
+TARGET_RELEASE="${TMP_ROOT}/target-release"
+PREVIOUS_CDN="${PREVIOUS_RELEASE}/runtime/control-plane/cdn"
+TARGET_CDN="${TARGET_RELEASE}/runtime/control-plane/cdn"
+mkdir -p \
+  "${PREVIOUS_CDN}/codemirror" \
+  "${PREVIOUS_CDN}/codemirror-0.9" \
+  "${TARGET_CDN}/codemirror"
+printf '%s\n' old >"${PREVIOUS_CDN}/codemirror/content.txt"
+printf '%s\n' historic >"${PREVIOUS_CDN}/codemirror-0.9/content.txt"
+printf '%s\n' new >"${TARGET_CDN}/codemirror/content.txt"
+ln -s codemirror "${PREVIOUS_CDN}/codemirror-1.0"
+ln -s codemirror "${TARGET_CDN}/codemirror-2.0"
+cat >"${PREVIOUS_CDN}/index.js" <<'EOF'
+exports.versions = { codemirror: "1.0" };
+EOF
+cat >"${TARGET_CDN}/index.js" <<'EOF'
+exports.versions = { codemirror: "2.0" };
+EOF
+
+preserve_previous_cdn_assets "$PREVIOUS_RELEASE"
+
+if [[ "$(cat "${TARGET_CDN}/codemirror-2.0/content.txt")" != "new" ]]; then
+  echo "current CDN version was overwritten" >&2
+  exit 1
+fi
+if [[ "$(cat "${TARGET_CDN}/codemirror-1.0/content.txt")" != "old" ]]; then
+  echo "previous CDN version was not retained" >&2
+  exit 1
+fi
+if [[ -L "${TARGET_CDN}/codemirror-1.0" ]]; then
+  echo "previous CDN version must be retained as a real directory" >&2
+  exit 1
+fi
+if [[ "$(cat "${TARGET_CDN}/codemirror-0.9/content.txt")" != "historic" ]]; then
+  echo "historic CDN version was not retained" >&2
+  exit 1
+fi
+
+VALIDATION_RELEASE="${TMP_ROOT}/validation-release"
+TARGET_RELEASE="$VALIDATION_RELEASE"
+OVERLAY_MODE="rocket-bundle"
+HUB_BUNDLE_PATH="${TMP_ROOT}/hub.tar.xz"
+STATIC_BUNDLE_PATH=""
+for required_file in \
+  scripts/bay-systemd/install-scaffold.sh \
+  scripts/bay-systemd/env/bay-rocket-bundle-overlay.env.example \
+  runtime/project-host/index.js \
+  runtime/control-plane/bundle/index.js \
+  runtime/control-plane/http-api-dist/pages/api/v2/index.js \
+  runtime/migrate-schema/index.js \
+  runtime/control-plane/static/public.html \
+  runtime/control-plane/public/cocalc-content.css \
+  runtime/control-plane/webapp/favicon.ico \
+  runtime/control-plane/bundle/gcp/gcp-setup.sh \
+  runtime/control-plane/bundle/nebius/nebius-setup.sh; do
+  mkdir -p "${VALIDATION_RELEASE}/$(dirname "$required_file")"
+  touch "${VALIDATION_RELEASE}/${required_file}"
+done
+chmod +x "${VALIDATION_RELEASE}/scripts/bay-systemd/install-scaffold.sh"
+
+# Hub-only releases must remain deployable over static releases that predate
+# the bundled CDN. Static and full releases still fail closed without it.
+validate_release
+HUB_BUNDLE_PATH=""
+if (validate_release >/dev/null 2>&1); then
+  echo "non-hub release unexpectedly passed without CDN assets" >&2
+  exit 1
+fi
+mkdir -p "${VALIDATION_RELEASE}/runtime/control-plane/cdn/pdfjs-dist/cmaps"
+touch "${VALIDATION_RELEASE}/runtime/control-plane/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap"
+validate_release
+
+echo "bay release pruning and CDN retention tests passed"

@@ -116,6 +116,11 @@ pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/pack
 copy_native_pkg "bufferutil" "$OUT/runtime/migrate-schema"
 copy_native_pkg "utf-8-validate" "$OUT/runtime/migrate-schema"
 
+echo "- Bundle changed-only SQLite mirror helper with @vercel/ncc"
+pnpm --filter @cocalc/project-host exec "$ROOT/scripts/ncc.sh" build "$ROOT/packages/rocket/bin/bay-sqlite-mirror.js" \
+  -o "$OUT/runtime/sqlite-mirror" \
+  --license licenses.txt
+
 echo "- Copy bay systemd scaffold"
 cp -a "$ROOT/scripts/bay-systemd" "$OUT/scripts/"
 
@@ -155,6 +160,7 @@ const manifest = {
   entrypoints: {
     hub: "runtime/control-plane/bundle/index.js",
     migrateSchema: "runtime/migrate-schema/index.js",
+    sqliteMirror: "runtime/sqlite-mirror/index.js",
     apiV2Root: "runtime/control-plane/http-api-dist/pages/api/v2",
     apiV2Routes: "runtime/control-plane/api-v2-routes/index.js",
   },
@@ -169,6 +175,7 @@ validate_file "$OUT/runtime/control-plane/bundle/index.js"
 validate_file "$OUT/runtime/control-plane/api-v2-routes/index.js"
 validate_file "$OUT/runtime/control-plane/http-api-dist/pages/api/v2/index.js"
 validate_file "$OUT/runtime/migrate-schema/index.js"
+validate_file "$OUT/runtime/sqlite-mirror/index.js"
 validate_file "$OUT/scripts/bay-systemd/install-scaffold.sh"
 validate_file "$OUT/scripts/bay-systemd/systemd/cocalc-bay-hub@.service"
 validate_file "$OUT/bay-hub-manifest.json"

@@ -204,7 +204,7 @@ export function ViewerReadPolicyEditor({
               showIcon
               type="warning"
               style={{ marginTop: 8 }}
-              message="This viewer policy currently allows no files."
+              title="This viewer policy currently allows no files."
             />
           )}
         </div>

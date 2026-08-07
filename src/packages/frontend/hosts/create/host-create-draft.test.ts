@@ -93,7 +93,12 @@ const gcpCatalog = () =>
             spot: { "us-west1": 0.2 },
           },
         },
-        disks: {},
+        disks: {
+          "pd-balanced": {
+            "us-west1": 0.0001,
+            "us-central1": 0.0001,
+          },
+        },
       },
     },
   ]);

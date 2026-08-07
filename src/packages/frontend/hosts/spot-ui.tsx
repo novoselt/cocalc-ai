@@ -152,7 +152,7 @@ function spotDescription({
       <div style={{ maxWidth: 360 }}>
         <div>
           This host is configured for spot pricing, but is currently running as
-          a standard on-demand fallback while CoCalc probes for spot capacity.
+          Standard fallback while CoCalc probes for Spot capacity.
         </div>
         {display?.current_estimate ? (
           <div style={{ marginTop: 8 }}>

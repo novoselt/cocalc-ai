@@ -456,7 +456,7 @@ export function HostExamPanel({
   return (
     <Spin
       spinning={loading}
-      tip={
+      description={
         pendingAction === "prepare" ? (
           <Alert
             type="info"
@@ -472,10 +472,10 @@ export function HostExamPanel({
         <Alert
           type="info"
           showIcon
-          message="Ephemeral exam scratchpads"
+          title="Ephemeral exam scratchpads"
           description={
             <>
-              Students get anonymous local projects on this on-demand host.
+              Students get anonymous local projects on this Standard host.
               Outbound project networking is disabled. Existing private-host
               billing applies.
               <br />
@@ -491,7 +491,7 @@ export function HostExamPanel({
             </>
           }
         />
-        {error && <Alert type="error" showIcon message={error} />}
+        {error && <Alert type="error" showIcon title={error} />}
         {!hostRunning && (
           <Alert
             type="warning"
@@ -504,7 +504,7 @@ export function HostExamPanel({
           <Alert
             type="warning"
             showIcon
-            message="Exam mode is not enabled for this account"
+            title="Exam mode is not enabled for this account"
             description={state.eligibility_reason}
           />
         )}

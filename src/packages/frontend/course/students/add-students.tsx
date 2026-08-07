@@ -96,7 +96,7 @@ export default function AddStudents({ name, students, close }: Props) {
           type="info"
           showIcon
           style={{ marginTop: "12px" }}
-          message="Adding students..."
+          title="Adding students..."
           description="CoCalc is preparing private student projects and invite links. Students get access only after they accept."
         />
       );
@@ -107,7 +107,7 @@ export default function AddStudents({ name, students, close }: Props) {
           type="warning"
           showIcon
           style={{ marginTop: "12px" }}
-          message="Some lines do not contain valid email addresses."
+          title="Some lines do not contain valid email addresses."
           description={parsed.invalidRows.slice(0, 5).join("; ")}
         />
       );
@@ -118,7 +118,7 @@ export default function AddStudents({ name, students, close }: Props) {
           type="info"
           showIcon
           style={{ marginTop: "12px" }}
-          message="Some entries will be skipped."
+          title="Some entries will be skipped."
           description={[
             parsed.alreadyAdded.length > 0
               ? `Already in this course: ${parsed.alreadyAdded.join(", ")}`
@@ -140,7 +140,7 @@ export default function AddStudents({ name, students, close }: Props) {
         borderColor: COLORS.GRAY_L0,
       }}
     >
-      <Space direction="vertical" size={18} style={{ width: "100%" }}>
+      <Space vertical size={18} style={{ width: "100%" }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
             <Icon name="users" /> Add Students to Your Course
@@ -186,7 +186,7 @@ export default function AddStudents({ name, students, close }: Props) {
           >
             <Flex gap={24} align="stretch" wrap="wrap">
               <div style={{ flex: "1 1 360px", minWidth: 280 }}>
-                <Space direction="vertical" size={12}>
+                <Space vertical size={12}>
                   <div>
                     <Text strong>
                       <Icon name="lock" /> Privacy-safe invite flow
@@ -196,7 +196,7 @@ export default function AddStudents({ name, students, close }: Props) {
                       or expose student accounts.
                     </Paragraph>
                   </div>
-                  <Space direction="vertical" size={10}>
+                  <Space vertical size={10}>
                     <StepTag n={1} text="Paste roster emails" />
                     <StepTag n={2} text="Prepare private projects" />
                     <StepTag n={3} text="Create invite links" />
@@ -209,7 +209,7 @@ export default function AddStudents({ name, students, close }: Props) {
                   type="success"
                   showIcon
                   style={{ height: "100%" }}
-                  message="Access starts after acceptance"
+                  title="Access starts after acceptance"
                   description="Opening the link shows an accept/decline page. The private project and invite link are prepared now, but students are not added until they accept."
                 />
               </div>

@@ -150,7 +150,7 @@ function FormulaEditDialog({
         </Space>
       }
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <FormulaPreview opts={opts} />
         <Input.TextArea
           autoFocus

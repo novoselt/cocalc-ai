@@ -323,7 +323,7 @@ export function ManageSeats({
           style={{ marginBottom: 16 }}
           title={`Linked course: ${courseTitle || coursePath}`}
           description={
-            <Space direction="vertical" size={0}>
+            <Space vertical size={0}>
               <Text>{coursePath}</Text>
               <Text type="secondary">Project {courseProjectId}</Text>
             </Space>
@@ -540,7 +540,7 @@ export function ManageSeats({
                       const additionalAssignments =
                         getAssignmentMatches(student).length - 1;
                       return (
-                        <Space direction="vertical" size={0}>
+                        <Space vertical size={0}>
                           <Tag
                             color={
                               accountMismatch

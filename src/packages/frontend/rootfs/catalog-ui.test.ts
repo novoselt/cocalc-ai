@@ -79,4 +79,28 @@ describe("rootfs catalog upgrade suggestions", () => {
       })?.id,
     ).toBe("v1.3");
   });
+
+  it("does not suggest an official sibling for a custom image", () => {
+    const base = image("basic-1.6", "1.6", {
+      official: true,
+      owner_id: "cocalc",
+    });
+    const custom = image("course-1.6", "1.6", {
+      label: "LS30B",
+      owner_id: "instructor",
+      supersedes_image_id: base.id,
+    });
+    const officialNext = image("basic-1.7", "1.7", {
+      official: true,
+      owner_id: "cocalc",
+      supersedes_image_id: base.id,
+    });
+
+    expect(
+      latestRootfsUpgradeEntry({
+        current: custom,
+        images: [base, officialNext],
+      }),
+    ).toBeUndefined();
+  });
 });
