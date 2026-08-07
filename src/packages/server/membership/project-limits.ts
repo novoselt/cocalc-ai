@@ -20,7 +20,7 @@ import { DEFAULT_MAX_PUBLIC_DIRECTORY_SHARES_PER_ACCOUNT } from "@cocalc/util/pu
 import { getEffectiveMembershipUsageLimits } from "./effective-limits";
 import { resolveMembershipForAccount } from "./resolve";
 import {
-  getProjectOwnerAccountId,
+  getProjectCollaborationAccountId,
   getProjectUsageAccountId,
   getUsageProjectCountForAccount,
 } from "./project-usage";
@@ -213,7 +213,7 @@ export async function getProjectCollaboratorInviteLimit({
   project_id: string;
   resolution?: MembershipResolution;
 }): Promise<number | undefined> {
-  const account_id = await getProjectOwnerAccountId(project_id);
+  const account_id = await getProjectCollaborationAccountId(project_id);
   if (!account_id) {
     return undefined;
   }
@@ -414,7 +414,7 @@ export async function assertProjectCollaboratorInviteLimit({
   resolution?: MembershipResolution;
   additional?: number;
 }): Promise<void> {
-  const account_id = await getProjectOwnerAccountId(project_id);
+  const account_id = await getProjectCollaborationAccountId(project_id);
   if (!account_id) {
     return;
   }

@@ -218,6 +218,14 @@ describe("project collaborators local bay access", () => {
     );
   }
 
+  function encryptedInviteToken(token: string): string {
+    return encryptSecretSettingValue(
+      "project_collab_invites.token",
+      token,
+      Buffer.alloc(32, 1),
+    );
+  }
+
   beforeEach(() => {
     jest.resetModules();
     assertLocalProjectCollaboratorMock = jest.fn(async () => undefined);
@@ -511,6 +519,69 @@ describe("project collaborators local bay access", () => {
       expect.stringContaining("INSERT INTO project_collab_invites"),
       expect.arrayContaining(["viewer"]),
     );
+  });
+
+  it("reuses another manager's pending account invite before checking capacity", async () => {
+    const inviteId = "77777777-7777-4777-8777-777777777777";
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("AS actor_group")) {
+        return {
+          rows: [{ actor_group: "owner", manage_users_owner_only: false }],
+        };
+      }
+      if (sql.includes("AS existing_group")) {
+        return { rows: [{ existing_group: null }] };
+      }
+      if (sql.includes("FROM project_collab_invite_blocks")) {
+        return { rows: [{ blocked: false }] };
+      }
+      if (
+        sql.includes("SELECT invite_id") &&
+        sql.includes("status='pending'")
+      ) {
+        return { rows: [{ invite_id: inviteId }] };
+      }
+      if (sql.includes("FROM project_collab_invites i")) {
+        return {
+          rows: [
+            {
+              invite_id: inviteId,
+              project_id: PROJECT_ID,
+              inviter_account_id: ACCOUNT_ID,
+              invitee_account_id: TARGET_ACCOUNT_ID,
+              invite_role: "collaborator",
+              status: "pending",
+              created: new Date("2026-04-01T00:00:00Z"),
+              updated: new Date("2026-04-01T00:00:00Z"),
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const { createCollabInvite } = await import("./collaborators");
+    await expect(
+      createCollabInvite({
+        account_id: ACCOUNT_ID,
+        invitee_account_id: TARGET_ACCOUNT_ID,
+        project_id: PROJECT_ID,
+      }),
+    ).resolves.toEqual({
+      created: false,
+      invite: expect.objectContaining({ invite_id: inviteId }),
+    });
+    expect(
+      queryMock.mock.calls.some(([sql]) => sql.includes("AS collaborators")),
+    ).toBe(false);
+    expect(
+      queryMock.mock.calls.some(
+        ([sql]) =>
+          sql.includes("SELECT invite_id") &&
+          sql.includes("status='pending'") &&
+          sql.includes("inviter_account_id"),
+      ),
+    ).toBe(false);
   });
 
   it("reports in-app delivery for existing account invites", async () => {
@@ -1203,6 +1274,76 @@ describe("project collaborators local bay access", () => {
     );
   });
 
+  it("reuses pending email invites before checking creation quotas", async () => {
+    const inviteId = "77777777-7777-4777-8777-777777777777";
+    const token = "existing-pending-invite-token";
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("AS actor_group")) {
+        return {
+          rows: [{ actor_group: "owner", manage_users_owner_only: false }],
+        };
+      }
+      if (
+        sql.includes("SELECT invite_id, token_hash, token_ciphertext") &&
+        sql.includes("status='pending'")
+      ) {
+        return {
+          rows: [
+            {
+              invite_id: inviteId,
+              token_hash: inviteTokenHash(token),
+              token_ciphertext: encryptedInviteToken(token),
+            },
+          ],
+        };
+      }
+      if (sql.includes("FROM project_collab_invites i")) {
+        return {
+          rows: [
+            {
+              invite_id: inviteId,
+              project_id: PROJECT_ID,
+              inviter_account_id: ACCOUNT_ID,
+              invitee_account_id: null,
+              invite_source: "email",
+              status: "pending",
+              created: new Date("2026-04-01T00:00:00Z"),
+              updated: new Date("2026-04-01T00:00:00Z"),
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const { inviteCollaboratorWithoutAccount } =
+      await import("./collaborators");
+    await expect(
+      inviteCollaboratorWithoutAccount({
+        account_id: ACCOUNT_ID,
+        opts: {
+          project_id: PROJECT_ID,
+          title: "Test Project",
+          link2proj: "https://example.com/project",
+          to: "student@example.com",
+          email: "<p>Hello</p>",
+          send_email: false,
+        },
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        invites: [expect.objectContaining({ invite_id: inviteId })],
+      }),
+    );
+    expect(
+      queryMock.mock.calls.some(
+        ([sql]) =>
+          sql.includes("COUNT(*)::int AS count") ||
+          sql.includes("AS collaborators"),
+      ),
+    ).toBe(false);
+  });
+
   it("shows the original target email on outgoing email-token invites", async () => {
     queryMock = jest.fn(async (sql: string) => {
       if (sql.includes("FROM project_collab_invites i")) {
@@ -1327,7 +1468,7 @@ describe("project collaborators local bay access", () => {
         };
       }
       if (sql.includes("context ->> 'course_project_id'")) {
-        return { rows: [{ count: 1 }] };
+        return { rows: [{ count: 2 }] };
       }
       if (sql.includes("COUNT(*)::int AS count")) {
         return { rows: [{ count: 0 }] };
@@ -1344,7 +1485,7 @@ describe("project collaborators local bay access", () => {
           project_id: PROJECT_ID,
           title: "Test Course",
           link2proj: "",
-          to: "one@example.com,two@example.com",
+          to: "one@example.com",
           email: "<p>Hello</p>",
           invite_scope: "course_student",
           invite_context: {
@@ -1352,7 +1493,7 @@ describe("project collaborators local bay access", () => {
           },
         },
       }),
-    ).rejects.toThrow("course pending email invite limit reached (1/2)");
+    ).rejects.toThrow("course pending email invite limit reached (2/2)");
   });
 
   it("blocks course email invites at the total course student cap", async () => {
@@ -1477,7 +1618,9 @@ describe("project collaborators local bay access", () => {
         },
       }),
     ).rejects.toThrow("course student limit reached (145/100)");
-    expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(ACCOUNT_ID);
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalledWith(
+      ACCOUNT_ID,
+    );
     expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(courseOwnerId);
   });
 
@@ -1488,13 +1631,15 @@ describe("project collaborators local bay access", () => {
       source: accountId === courseOwnerId ? "site-license" : "free",
       entitlements: {},
       effective_limits: {
-        invite_email_recipients_per_batch: 10,
-        invite_email_pending_per_project: 100,
-        invite_email_pending_per_course: 100,
-        invite_email_hourly_count: 100,
-        invite_email_daily_count: 100,
+        invite_email_recipients_per_batch: accountId === courseOwnerId ? 10 : 0,
+        invite_email_pending_per_project: accountId === courseOwnerId ? 100 : 1,
+        invite_email_pending_per_course: accountId === courseOwnerId ? 100 : 1,
+        invite_email_hourly_count: accountId === courseOwnerId ? 100 : 1,
+        invite_email_daily_count: accountId === courseOwnerId ? 100 : 1,
         invite_email_custom_message_max_chars:
           accountId === courseOwnerId ? 500 : 300,
+        project_max_collaborators_and_pending_invites:
+          accountId === courseOwnerId ? 100 : 10,
         course_max_students_and_pending_invites: 1000,
       },
     }));
@@ -1509,6 +1654,9 @@ describe("project collaborators local bay access", () => {
       if (sql.includes("course ->> 'type' = 'student'")) {
         return { rows: [{ students: 145, pending_invites: 0 }] };
       }
+      if (sql.includes("AS collaborators")) {
+        return { rows: [{ collaborators: 10, pending_invites: 0 }] };
+      }
       if (sql.includes("FROM projects AS p")) {
         return {
           rows: [
@@ -1521,7 +1669,7 @@ describe("project collaborators local bay access", () => {
         };
       }
       if (sql.includes("COUNT(*)::int AS count")) {
-        return { rows: [{ count: 0 }] };
+        return { rows: [{ count: 1 }] };
       }
       return { rows: [] };
     });
@@ -1545,7 +1693,9 @@ describe("project collaborators local bay access", () => {
         },
       }),
     ).rejects.toThrow("invite message is too long (526/500)");
-    expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(ACCOUNT_ID);
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalledWith(
+      ACCOUNT_ID,
+    );
     expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(courseOwnerId);
   });
 

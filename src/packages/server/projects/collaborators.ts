@@ -1204,10 +1204,6 @@ export async function createCollabInvite({
     throw new Error("target account is already a viewer");
   }
 
-  if (role === "collaborator") {
-    await assertProjectCollaboratorInviteLimit({ project_id });
-  }
-
   const { rows: blockedRows } = await pool.query<{ blocked: boolean }>(
     `SELECT EXISTS(
        SELECT 1
@@ -1226,6 +1222,9 @@ export async function createCollabInvite({
   if (direct) {
     if (!includeEmail) {
       throw new Error("direct collaborator add requires admin privileges");
+    }
+    if (role === "collaborator") {
+      await assertProjectCollaboratorInviteLimit({ project_id });
     }
     await addUserToProjectForAcceptedInvite({
       project_id,
@@ -1267,13 +1266,12 @@ export async function createCollabInvite({
     `SELECT invite_id
      FROM project_collab_invites
      WHERE project_id=$1
-       AND inviter_account_id=$2
-       AND invitee_account_id=$3
-       AND COALESCE(invite_role, 'collaborator')=$4
+       AND invitee_account_id=$2
+       AND COALESCE(invite_role, 'collaborator')=$3
        AND status='pending'
      ORDER BY created DESC
      LIMIT 1`,
-    [project_id, account_id, invitee_account_id, role],
+    [project_id, invitee_account_id, role],
   );
   const existingPending = pendingRows[0]?.invite_id;
   if (existingPending) {
@@ -1290,6 +1288,10 @@ export async function createCollabInvite({
       created: false,
       invite,
     };
+  }
+
+  if (role === "collaborator") {
+    await assertProjectCollaboratorInviteLimit({ project_id });
   }
 
   const invite_id = uuid();
@@ -3099,7 +3101,7 @@ async function normalizeInviteMessageForAccount({
   return trimmed;
 }
 
-async function getInviteMessagePolicyAccountId({
+async function getInvitePolicyAccountId({
   account_id,
   context,
   scope,
@@ -3145,18 +3147,22 @@ async function normalizeAccessRequestMessageForAccount({
 
 async function assertEmailInviteCreationLimits({
   account_id,
+  policy_account_id,
   project_id,
   context,
   recipientCount,
   scope,
 }: {
   account_id: string;
+  policy_account_id?: string;
   project_id: string;
   context?: Record<string, unknown>;
   recipientCount: number;
   scope?: string;
 }): Promise<void> {
-  const resolution = await resolveMembershipForAccount(account_id);
+  const resolution = await resolveMembershipForAccount(
+    policy_account_id ?? account_id,
+  );
   const limits = getEffectiveMembershipUsageLimits(resolution);
   const batchLimit = limits.invite_email_recipients_per_batch;
   if (batchLimit != null && recipientCount > batchLimit) {
@@ -3196,11 +3202,10 @@ async function assertEmailInviteCreationLimits({
       const { rows } = await getPool().query<{ count: number }>(
         `SELECT COUNT(*)::int AS count
            FROM project_collab_invites
-          WHERE inviter_account_id=$1
-            AND status='pending'
-            AND scope=$2
-            AND context ->> 'course_project_id' = $3`,
-        [account_id, COURSE_EMAIL_INVITE_SCOPE, course_project_id],
+          WHERE status='pending'
+            AND scope=$1
+            AND context ->> 'course_project_id' = $2`,
+        [COURSE_EMAIL_INVITE_SCOPE, course_project_id],
       );
       const current = rows[0]?.count ?? 0;
       if (current + recipientCount > pendingCourseLimit) {
@@ -3247,6 +3252,25 @@ async function assertEmailInviteCreationLimits({
         `daily email invite limit reached (${current}/${dailyLimit}); try again later or upgrade membership`,
       );
     }
+  }
+}
+
+async function assertEmailInviteBatchLimit({
+  account_id,
+  recipientCount,
+}: {
+  account_id: string;
+  recipientCount: number;
+}): Promise<void> {
+  const resolution = await resolveMembershipForAccount(account_id);
+  const limit =
+    getEffectiveMembershipUsageLimits(
+      resolution,
+    ).invite_email_recipients_per_batch;
+  if (limit != null && recipientCount > limit) {
+    throw new Error(
+      `too many invite recipients (${recipientCount}/${limit}); send a smaller batch or upgrade membership`,
+    );
   }
 }
 
@@ -3302,6 +3326,7 @@ async function assertCanManageProjectCollaborators({
 async function createEmailProjectInvite({
   account_id,
   context,
+  policy_account_id,
   project_id,
   email_address,
   message,
@@ -3312,6 +3337,7 @@ async function createEmailProjectInvite({
 }: {
   account_id: string;
   context?: Record<string, unknown>;
+  policy_account_id?: string;
   project_id: string;
   email_address: string;
   message?: string;
@@ -3326,13 +3352,11 @@ async function createEmailProjectInvite({
 }> {
   await ensureProjectCollabInviteEmailTokenSchema();
   const normalizedEmail = normalizeInviteEmail(email_address);
-  const messagePolicyAccountId = await getInviteMessagePolicyAccountId({
-    account_id,
-    context,
-    scope,
-  });
+  const policyAccountId =
+    policy_account_id ??
+    (await getInvitePolicyAccountId({ account_id, context, scope }));
   const normalizedMessage = await normalizeInviteMessageForAccount({
-    account_id: messagePolicyAccountId,
+    account_id: policyAccountId,
     message,
   });
   const email_hash = await hashInviteEmail(normalizedEmail);
@@ -3419,6 +3443,15 @@ async function createEmailProjectInvite({
       invite_url: url,
     };
   }
+
+  await assertEmailInviteCreationLimits({
+    account_id,
+    policy_account_id: policyAccountId,
+    project_id,
+    context,
+    recipientCount: 1,
+    scope,
+  });
 
   if (role === "collaborator") {
     await assertProjectCollaboratorInviteLimit({ project_id });
@@ -3979,16 +4012,14 @@ export async function inviteCollaboratorWithoutAccount({
     .replace(/;/g, ",")
     .split(",")
     .filter((x) => x);
-  await assertProjectCollaboratorInviteLimit({
-    project_id: opts.project_id,
-    additional: to.length,
-  });
-  await assertEmailInviteCreationLimits({
+  const policyAccountId = await getInvitePolicyAccountId({
     account_id,
     context: opts.invite_context,
-    project_id: opts.project_id,
-    recipientCount: to.length,
     scope: opts.invite_scope,
+  });
+  await assertEmailInviteBatchLimit({
+    account_id: policyAccountId,
+    recipientCount: to.length,
   });
 
   // Helper for inviting one user by email
@@ -4016,6 +4047,7 @@ export async function inviteCollaboratorWithoutAccount({
     const created = await createEmailProjectInvite({
       account_id,
       context: opts.invite_context,
+      policy_account_id: policyAccountId,
       project_id: opts.project_id,
       email_address,
       message: opts.message,
@@ -4030,7 +4062,7 @@ export async function inviteCollaboratorWithoutAccount({
       blockEmail({ reason: "send_disabled_by_request" });
       return created.invite;
     }
-    if (!(await canSendInviteEmail(account_id))) {
+    if (!(await canSendInviteEmail(policyAccountId))) {
       blockEmail({ reason: "tier_disallows_email" });
       return created.invite;
     }
@@ -4041,7 +4073,7 @@ export async function inviteCollaboratorWithoutAccount({
     });
     if (
       when_sent &&
-      when_sent >= (await getInviteEmailResendCutoff(account_id))
+      when_sent >= (await getInviteEmailResendCutoff(policyAccountId))
     ) {
       // recent email -- nothing more to do
       blockEmail({ reason: "cooldown" });
@@ -4071,7 +4103,7 @@ export async function inviteCollaboratorWithoutAccount({
           email_address,
           title: opts.title,
           allow_urls: await allowUrlsInEmails({
-            account_id,
+            account_id: policyAccountId,
             project_id: opts.project_id,
           }),
           replyto: opts.replyto ?? settings.organization_email,
@@ -4114,8 +4146,11 @@ export async function inviteCollaboratorWithoutAccount({
     return created.invite;
   };
 
-  // If any invite_user throws, its an error
-  const invites = await Promise.all(to.map((email) => invite_user(email)));
+  // Process sequentially so each creation observes the prior quota update.
+  const invites: ProjectCollabInviteRow[] = [];
+  for (const email of to) {
+    invites.push(await invite_user(email));
+  }
   return {
     invites,
     email_sent,

@@ -7,6 +7,7 @@ import { before, after, getPool } from "@cocalc/server/test";
 import { uuid } from "@cocalc/util/misc";
 import { createTestAccount } from "@cocalc/server/purchases/test-data";
 import {
+  getProjectCollaborationAccountId,
   getProjectUsageAccountId,
   setProjectUsageAccountId,
 } from "./project-usage";
@@ -21,6 +22,7 @@ describe("project usage attribution", () => {
   const student_account_id = uuid();
   const explicit_usage_account_id = uuid();
   const project_id = uuid();
+  const course_project_id = uuid();
 
   beforeAll(async () => {
     await createTestAccount(owner_account_id);
@@ -35,6 +37,19 @@ describe("project usage attribution", () => {
         JSON.stringify({
           [owner_account_id]: { group: "owner" },
         }),
+      ],
+    );
+    await getPool().query(
+      `INSERT INTO projects
+         (project_id, title, users, usage_account_id, last_edited)
+       VALUES ($1, $2, $3::jsonb, $4, NOW())`,
+      [
+        course_project_id,
+        "Parent course",
+        JSON.stringify({
+          [owner_account_id]: { group: "owner" },
+        }),
+        explicit_usage_account_id,
       ],
     );
   });
@@ -83,6 +98,25 @@ describe("project usage attribution", () => {
     expect(rows[0]?.course?.account_id).toBe(student_account_id);
     expect(rows[0]?.usage_account_id).toBe(explicit_usage_account_id);
     await expect(getProjectUsageAccountId(project_id)).resolves.toBe(
+      explicit_usage_account_id,
+    );
+  });
+
+  it("attributes managed-project collaboration to the parent course", async () => {
+    await getPool().query(
+      "UPDATE projects SET course=$2::jsonb WHERE project_id=$1",
+      [
+        project_id,
+        JSON.stringify({
+          type: "student",
+          account_id: student_account_id,
+          project_id: course_project_id,
+          path: "class.course",
+          datastore: false,
+        }),
+      ],
+    );
+    await expect(getProjectCollaborationAccountId(project_id)).resolves.toBe(
       explicit_usage_account_id,
     );
   });

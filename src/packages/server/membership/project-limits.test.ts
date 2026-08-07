@@ -12,6 +12,7 @@ const getBackupsMock = jest.fn();
 const conatWithProjectRoutingForAccountMock = jest.fn();
 const getUsageProjectCountForAccountMock = jest.fn();
 const getProjectOwnerAccountIdMock = jest.fn();
+const getProjectCollaborationAccountIdMock = jest.fn();
 const getProjectUsageAccountIdMock = jest.fn();
 
 jest.mock("@cocalc/database/pool", () => ({
@@ -57,6 +58,8 @@ jest.mock("./project-usage", () => ({
     getUsageProjectCountForAccountMock(...args),
   getProjectOwnerAccountId: (...args: any[]) =>
     getProjectOwnerAccountIdMock(...args),
+  getProjectCollaborationAccountId: (...args: any[]) =>
+    getProjectCollaborationAccountIdMock(...args),
   getProjectUsageAccountId: (...args: any[]) =>
     getProjectUsageAccountIdMock(...args),
 }));
@@ -75,6 +78,7 @@ describe("project membership limits", () => {
     peekCachedMembershipUsageStatusForAccountMock.mockReturnValue(undefined);
     getUsageProjectCountForAccountMock.mockResolvedValue(0);
     getProjectOwnerAccountIdMock.mockResolvedValue(undefined);
+    getProjectCollaborationAccountIdMock.mockResolvedValue(undefined);
     getProjectUsageAccountIdMock.mockResolvedValue(undefined);
   });
 
@@ -149,7 +153,7 @@ describe("project membership limits", () => {
   });
 
   it("returns collaborator and pending invite usage for a project", async () => {
-    getProjectOwnerAccountIdMock.mockResolvedValue("owner-1");
+    getProjectCollaborationAccountIdMock.mockResolvedValue("owner-1");
     resolveMembershipForAccountMock.mockResolvedValue({
       class: "member",
       source: "subscription",
@@ -172,8 +176,8 @@ describe("project membership limits", () => {
     });
   });
 
-  it("checks collaborator limits against project owner, not student usage account", async () => {
-    getProjectOwnerAccountIdMock.mockResolvedValue("instructor-1");
+  it("checks managed project collaborator limits against the parent course account", async () => {
+    getProjectCollaborationAccountIdMock.mockResolvedValue("instructor-1");
     getProjectUsageAccountIdMock.mockResolvedValue("student-1");
     resolveMembershipForAccountMock.mockImplementation(
       async (account_id: string) => ({
