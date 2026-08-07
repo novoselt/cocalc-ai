@@ -1418,6 +1418,11 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     }
     const value = file != null ? await readFile(file, "utf8") : text;
     if (value == null) return undefined;
+    if (text != null && /(?:\\r\\n|\\n)/.test(value)) {
+      throw new Error(
+        `${textOption} contains a literal \\n escape; use ${fileOption} for multiline text`,
+      );
+    }
     const normalized = value.replace(/\r\n/g, "\n").trim();
     if (!normalized) throw new Error("support comment must be non-empty");
     return normalized;
@@ -1446,9 +1451,15 @@ Merge comments are private unless their corresponding --*-comment-public flag is
 
   function adminSupportUpdateOptions(command: Command): Command {
     return command
-      .option("--public-reply <text>", "public reply body")
+      .option(
+        "--public-reply <text>",
+        "single-line public reply body; use --public-reply-file for multiline text",
+      )
       .option("--public-reply-file <path>", "read public reply from a file")
-      .option("--private-note <text>", "private internal note body")
+      .option(
+        "--private-note <text>",
+        "single-line private note body; use --private-note-file for multiline text",
+      )
       .option("--private-note-file <path>", "read private note from a file")
       .option(
         "--status <status>",
