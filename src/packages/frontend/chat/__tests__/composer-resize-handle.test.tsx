@@ -4,22 +4,31 @@ import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { ChatRoomComposer } from "../composer";
 
+let lastChatInputProps: any;
+
 jest.mock("../input", () => ({
   __esModule: true,
-  default: (props: any) => (
-    <button
-      data-testid="chat-input-focus-probe"
-      onFocus={props.onFocus}
-      onBlur={props.onBlur}
-      type="button"
-    >
-      focus-probe
-    </button>
-  ),
+  default: (props: any) => {
+    lastChatInputProps = props;
+    return (
+      <>
+        <button
+          data-testid="chat-input-focus-probe"
+          onFocus={props.onFocus}
+          onBlur={props.onBlur}
+          type="button"
+        >
+          focus-probe
+        </button>
+        {props.toolbarRightContent}
+      </>
+    );
+  },
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({
   Icon: () => null,
+  Tooltip: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 jest.mock("react-intl", () => ({
@@ -70,6 +79,10 @@ function renderComposer(
 }
 
 describe("ChatRoomComposer resize handle", () => {
+  beforeEach(() => {
+    lastChatInputProps = undefined;
+  });
+
   it("does not show the resize handle when the composer is empty but focused", () => {
     const { container } = renderComposer();
     expect(container.querySelector('[style*="row-resize"]')).toBeNull();
@@ -143,5 +156,55 @@ describe("ChatRoomComposer resize handle", () => {
         "To use AI in CoCalc, connect a ChatGPT plan or OpenAI API key.",
       ),
     ).toBeNull();
+  });
+
+  it("uses Send as the idle primary action and puts Zen in the toolbar", () => {
+    const onSend = jest.fn();
+    const onSendImmediately = jest.fn();
+    renderComposer({
+      hasInput: true,
+      input: "hello",
+      isSelectedThreadAI: true,
+      on_send: onSend,
+      on_send_immediately: onSendImmediately,
+    });
+
+    expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Zen" })).not.toBeNull();
+    expect(screen.queryByText("Zen")).toBeNull();
+
+    act(() => {
+      lastChatInputProps.on_send("hello");
+    });
+    expect(onSend).toHaveBeenCalledWith("hello");
+    expect(onSendImmediately).not.toHaveBeenCalled();
+  });
+
+  it("makes Steer the running-turn primary action and leaves Queue explicit", () => {
+    const onSend = jest.fn();
+    const onSendImmediately = jest.fn();
+    renderComposer({
+      hasActiveAcpTurn: true,
+      hasInput: true,
+      input: "guidance",
+      isSelectedThreadAI: true,
+      on_send: onSend,
+      on_send_immediately: onSendImmediately,
+    });
+
+    const steer = screen.getByRole("button", { name: "Steer" });
+    const queue = screen.getByRole("button", { name: "Queue" });
+    expect(steer.className).toContain("ant-btn-primary");
+    expect(queue.className).not.toContain("ant-btn-primary");
+
+    act(() => {
+      lastChatInputProps.on_send("shift-enter guidance");
+    });
+    expect(onSendImmediately).toHaveBeenCalledWith("shift-enter guidance");
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.click(queue);
+    expect(onSend).toHaveBeenCalledWith("guidance");
   });
 });

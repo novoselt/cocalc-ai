@@ -7,15 +7,8 @@
 // Composer presence is published with syncdoc cursors, so it is ephemeral
 // and doesn't spam chat rows.
 
-import {
-  CSSProperties,
-  MutableRefObject,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import type { CSSProperties, MutableRefObject, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "antd";
 import { useIntl } from "react-intl";
 import { useDebouncedCallback } from "use-debounce";
@@ -30,7 +23,6 @@ import { SubmitMentionsRef } from "./types";
 
 interface Props {
   on_send: (value: string) => void;
-  on_ctrl_enter?: (value: string) => void;
   on_font_size_change?: (delta: -1 | 1) => void;
   onChange: (value: string, sessionToken?: number) => void;
   syncdb: ImmerDB | undefined;
@@ -62,6 +54,7 @@ interface Props {
   onControlReady?: (control: ChatInputControl | null) => void;
   enableUpload?: boolean;
   enableMentions?: boolean;
+  toolbarRightContent?: ReactNode;
 }
 
 export interface ChatInputControl {
@@ -88,7 +81,6 @@ export default function ChatInput({
   autoGrowMinHeight,
   input: propsInput,
   on_send,
-  on_ctrl_enter,
   on_font_size_change,
   onBlur,
   onChange,
@@ -108,6 +100,7 @@ export default function ChatInput({
   onControlReady,
   enableUpload = true,
   enableMentions = true,
+  toolbarRightContent,
 }: Props) {
   const intl = useIntl();
   const controlRef = useRef<any>(null);
@@ -356,20 +349,7 @@ export default function ChatInput({
         publishNotComposing();
         on_send(value);
       }}
-      onCtrlEnter={
-        on_ctrl_enter == null
-          ? undefined
-          : (value) => {
-              if (!mountedRef.current) return;
-              if (isStaleSessionCallback(sessionToken)) {
-                return;
-              }
-              savePresence.cancel();
-              controlRef.current?.cancelPendingUploads?.();
-              publishNotComposing();
-              on_ctrl_enter(value);
-            }
-      }
+      onCtrlEnter={() => undefined}
       onFontSizeChange={on_font_size_change}
       undoMode="local"
       redoMode="local"
@@ -387,29 +367,32 @@ export default function ChatInput({
       hideModeSwitch={!showModeSwitch}
       modeSwitchPlacement="toolbar"
       modeSwitchRightContent={
-        mode === "markdown" ? (
-          <Popover
-            content={markdownHelp}
-            placement="topRight"
-            trigger={["hover", "click"]}
-          >
-            <span
-              aria-label="Markdown help"
-              role="button"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#777",
-                cursor: "pointer",
-                fontSize: "14px",
-                lineHeight: 1,
-              }}
+        <>
+          {mode === "markdown" ? (
+            <Popover
+              content={markdownHelp}
+              placement="topRight"
+              trigger={["hover", "click"]}
             >
-              <Icon name="info-circle" />
-            </span>
-          </Popover>
-        ) : null
+              <span
+                aria-label="Markdown help"
+                role="button"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#777",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  lineHeight: 1,
+                }}
+              >
+                <Icon name="info-circle" />
+              </span>
+            </Popover>
+          ) : null}
+          {toolbarRightContent}
+        </>
       }
       onModeChange={setMode}
       autoGrow
