@@ -1747,8 +1747,8 @@ export const EXTRAS: SettingsExtras = {
   },
   compute_vm_max_volumes_per_account: {
     name: "Managed Compute VMs: Maximum Volumes Per Account",
-    desc: "Maximum undeleted persistent /work volumes owned by one canary account.",
-    default: "2",
+    desc: "Maximum undeleted persistent /work volumes owned by one account.",
+    default: "10",
     to_val: to_int,
     valid: only_pos_int,
     tags: ["Cloud"],

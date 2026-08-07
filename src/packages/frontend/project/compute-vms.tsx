@@ -1255,7 +1255,6 @@ export function ProjectComputeVms({
           if (!values.new_volume_name || !values.new_volume_size_gb) {
             throw new Error("A new volume name and size are required.");
           }
-          createdVolumeName = values.new_volume_name;
           const createdVolume =
             await webapp_client.conat_client.hub.compute.createVolume({
               project_id,
@@ -1265,6 +1264,7 @@ export function ProjectComputeVms({
               idempotency_key: uuid(),
               browser_id: webapp_client.browser_id,
             });
+          createdVolumeName = createdVolume.name;
           await waitForVolumeReady(createdVolume.id);
           volume = createdVolume.name;
         }
@@ -1442,7 +1442,7 @@ export function ProjectComputeVms({
       title: "VM",
       dataIndex: "name",
       fixed: "left",
-      width: 190,
+      width: 180,
       render: (name: string, vm) => (
         <Space direction="vertical" size={0}>
           <Text strong>{name}</Text>
@@ -1455,26 +1455,22 @@ export function ProjectComputeVms({
     {
       title: "Status",
       dataIndex: "state",
-      width: 170,
+      width: 160,
       render: (state: string, vm) => (
-        <Space direction="vertical" size={1}>
-          <Space size={4}>
-            <Tag
-              color={state === "ready" ? "green" : undefined}
-              style={{ marginInlineEnd: 0 }}
-            >
-              {state}
-            </Tag>
-            {vm.expires_at && (
-              <Text type="secondary" style={{ whiteSpace: "nowrap" }}>
-                Deletes <TimeAgo date={new Date(vm.expires_at)} />
-              </Text>
-            )}
-          </Space>
-          {state === "recovering" && (
-            <Text type="secondary" style={{ whiteSpace: "nowrap" }}>
-              Spot unavailable; retrying
+        <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
+          <Tag
+            color={state === "ready" ? "green" : undefined}
+            style={{ marginInlineEnd: 0, width: "fit-content" }}
+          >
+            {state}
+          </Tag>
+          {vm.expires_at && (
+            <Text type="secondary">
+              Deletes <TimeAgo date={new Date(vm.expires_at)} />
             </Text>
+          )}
+          {state === "recovering" && (
+            <Text type="secondary">Spot unavailable; retrying</Text>
           )}
           {state === "failed" && vm.error && (
             <Text type="danger" title={vm.error}>
@@ -1487,11 +1483,10 @@ export function ProjectComputeVms({
     },
     {
       title: "Configuration",
-      width: 250,
+      width: 175,
       render: (_, vm) => (
-        <Space size={5} wrap>
+        <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
           <Text strong>{vm.machine_type}</Text>
-          <Text type="secondary">·</Text>
           <Text type="secondary">{vm.zone}</Text>
         </Space>
       ),
@@ -1773,7 +1768,7 @@ export function ProjectComputeVms({
         }}
         pagination={false}
         rowKey="id"
-        scroll={{ x: 1200 }}
+        scroll={{ x: 920 }}
         size="small"
       />
 
