@@ -11,7 +11,7 @@ import type {
 import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
-import { listConfiguredBays } from "@cocalc/server/bay-directory";
+import { listConfiguredBaysAuthoritative } from "@cocalc/server/bay-directory";
 import { getConfiguredClusterSeedBayId } from "@cocalc/server/cluster-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { COOKIE_CONSENT_REVISION } from "@cocalc/util/cookie-consent";
@@ -295,7 +295,7 @@ async function collectHistoryReports({
   const currentBayId = getConfiguredBayId();
   const bayIds = [
     ...new Set(
-      (await listConfiguredBays())
+      (await listConfiguredBaysAuthoritative())
         .map(({ bay_id }) => `${bay_id ?? ""}`.trim())
         .filter(Boolean)
         .concat(currentBayId),
