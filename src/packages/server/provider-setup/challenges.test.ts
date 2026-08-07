@@ -51,6 +51,46 @@ describe("provider setup challenges", () => {
     };
   }
 
+  it("keeps provider upload challenges valid for one hour", async () => {
+    const before = Date.now();
+    queryMock.mockImplementation(async (sql, params) => {
+      const text = `${sql}`;
+      if (text.includes("CREATE TABLE") || text.includes("CREATE INDEX")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("DELETE FROM")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("INSERT INTO provider_setup_challenges")) {
+        const expires_at = params[4];
+        return {
+          rows: [
+            {
+              ...pendingRow(),
+              id: params[0],
+              provider: params[1],
+              token_hash: params[3],
+              created_at: new Date(before),
+              expires_at,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const { createProviderSetupChallenge } = await import("./challenges");
+
+    const challenge = await createProviderSetupChallenge({
+      account_id,
+      provider: "gcp",
+    });
+    const lifetime = new Date(challenge.expires_at).getTime() - before;
+
+    expect(lifetime).toBeGreaterThanOrEqual(60 * 60 * 1000);
+    expect(lifetime).toBeLessThan(60 * 60 * 1000 + 5_000);
+  });
+
   it("atomically consumes a pending upload token", async () => {
     queryMock.mockImplementation(async (sql) => {
       const text = `${sql}`;

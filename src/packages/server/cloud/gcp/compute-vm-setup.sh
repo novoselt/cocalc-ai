@@ -114,7 +114,21 @@ for region in regions:
                 f"subnet {name} exists in {observed_region}, expected {region}"
             )
         cidr = ipaddress.ip_network(existing["ipCidrRange"])
-        plan.append((region, name, str(cidr), "update"))
+        log_config = existing.get("logConfig") or {}
+        flow_logs_enabled = (
+            existing.get("enableFlowLogs") is True
+            or log_config.get("enable") is True
+        )
+        aggregation_interval = str(log_config.get("aggregationInterval") or "").upper()
+        flow_sampling = float(log_config.get("flowSampling") or 0)
+        metadata = str(log_config.get("metadata") or "").upper()
+        action = "keep" if (
+            flow_logs_enabled
+            and aggregation_interval == "INTERVAL_5_SEC"
+            and flow_sampling == 1.0
+            and metadata == "INCLUDE_ALL_METADATA"
+        ) else "update"
+        plan.append((region, name, str(cidr), action))
     else:
         plan.append((region, name, str(allocate()), "create"))
 
@@ -132,12 +146,14 @@ while IFS=$'\t' read -r region subnet subnet_range action; do
       --range "$subnet_range" --enable-flow-logs \
       --logging-aggregation-interval=interval-5-sec \
       --logging-flow-sampling=1.0 --logging-metadata=include-all
-  else
+  elif [[ "$action" == "update" ]]; then
     echo "Ensuring VPC Flow Logs are enabled for $subnet in $region"
     gcloud compute networks subnets update "$subnet" \
       --project "$PROJECT_ID" --region "$region" --enable-flow-logs \
       --logging-aggregation-interval=interval-5-sec \
       --logging-flow-sampling=1.0 --logging-metadata=include-all
+  else
+    echo "Keeping configured subnet $subnet in $region"
   fi
 done <"$TMP_DIR/subnet-plan.tsv"
 
@@ -197,9 +213,9 @@ print("=== COCALC GCP CONFIG END ===")
 PY
 
 if [[ -n "${COCALC_SETUP_UPLOAD_URL:-}" && -n "${COCALC_SETUP_TOKEN:-}" ]]; then
-  python3 - "$KEY_FILE" "$PROJECT_ID" "$NETWORK" <<'PY' | \
-    curl -fsS -X POST -H "Authorization: Bearer ${COCALC_SETUP_TOKEN}" \
-      -H 'Content-Type: application/json' --data-binary @- "$COCALC_SETUP_UPLOAD_URL"
+  UPLOAD_PAYLOAD="$TMP_DIR/upload-payload.json"
+  UPLOAD_RESPONSE="$TMP_DIR/upload-response.json"
+  python3 - "$KEY_FILE" "$PROJECT_ID" "$NETWORK" >"$UPLOAD_PAYLOAD" <<'PY'
 import json, sys
 key_path, project, network = sys.argv[1:]
 with open(key_path) as f:
@@ -209,4 +225,18 @@ print(json.dumps({
     "compute_vm_gcp_network": f"projects/{project}/global/networks/{network}",
 }))
 PY
+  if ! upload_status=$(curl -sS -o "$UPLOAD_RESPONSE" -w '%{http_code}' \
+    -X POST -H "Authorization: Bearer ${COCALC_SETUP_TOKEN}" \
+    -H 'Content-Type: application/json' --data-binary "@$UPLOAD_PAYLOAD" \
+    "$COCALC_SETUP_UPLOAD_URL"); then
+    [[ ! -s "$UPLOAD_RESPONSE" ]] || cat "$UPLOAD_RESPONSE" >&2
+    echo "Failed to upload the CoCalc provider configuration." >&2
+    exit 1
+  fi
+  if [[ ! "$upload_status" =~ ^2[0-9][0-9]$ ]]; then
+    [[ ! -s "$UPLOAD_RESPONSE" ]] || cat "$UPLOAD_RESPONSE" >&2
+    echo "Provider configuration upload failed with HTTP $upload_status." >&2
+    exit 1
+  fi
+  cat "$UPLOAD_RESPONSE"
 fi
