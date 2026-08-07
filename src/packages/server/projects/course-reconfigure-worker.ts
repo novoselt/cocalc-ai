@@ -11,6 +11,10 @@ import type {
   CourseReconfigureRequest,
   CourseReconfigureStudentItem,
 } from "@cocalc/conat/hub/api/projects";
+import type {
+  ProjectCourseManagedProjectState,
+  ProjectReconcileCourseManagedProjectRequest,
+} from "@cocalc/conat/inter-bay/api";
 import type { LroStatus, LroSummary } from "@cocalc/conat/hub/api/lro";
 import { lroStreamName } from "@cocalc/conat/lro/names";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
@@ -26,7 +30,11 @@ import {
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import { createProjectWithInternalProjectId } from "@cocalc/server/projects/create";
-import { reconcileCourseManagedProjectLocal } from "./course/reconcile-managed-project";
+import {
+  courseManagedProjectNeedsReconcile,
+  getCourseManagedProjectStatesLocal,
+  reconcileCourseManagedProjectLocal,
+} from "./course/reconcile-managed-project";
 import type { CourseInfo } from "@cocalc/util/db-schema/projects";
 
 const logger = getLogger("server:projects:course-reconfigure-worker");
@@ -52,6 +60,8 @@ interface NormalizedStudentItem extends CourseReconfigureStudentItem {
   project_id: string;
   create: boolean;
 }
+
+type ReconcileRequest = ProjectReconcileCourseManagedProjectRequest;
 
 export interface CourseReconfigureLroInput extends CourseReconfigureRequest {
   account_id?: never;
@@ -216,17 +226,17 @@ function simpleCourseInfo({
 }
 
 async function reconcileOnOwningBay(
-  request: Parameters<typeof reconcileCourseManagedProjectLocal>[0],
+  request: ReconcileRequest,
+  knownBayId?: string,
 ) {
-  const ownership = await resolveProjectBay(request.project_id);
-  if (!ownership) {
-    throw new Error(`project ${request.project_id} not found`);
-  }
-  if (ownership.bay_id === getConfiguredBayId()) {
+  const bay_id =
+    knownBayId ?? (await resolveProjectBay(request.project_id))?.bay_id;
+  if (!bay_id) throw new Error(`project ${request.project_id} not found`);
+  if (bay_id === getConfiguredBayId()) {
     return await reconcileCourseManagedProjectLocal(request);
   }
   return await getInterBayBridge()
-    .projectCollabInvite(ownership.bay_id)
+    .projectCollabInvite(bay_id)
     .reconcileCourseManagedProject(request);
 }
 
@@ -234,14 +244,16 @@ async function ensureStudentProject({
   input,
   student,
   creatorAccountId,
+  knownBayId,
 }: {
   input: CourseReconfigureLroInput;
   student: NormalizedStudentItem;
   creatorAccountId: string;
-}): Promise<boolean> {
-  if (!student.create) return false;
-  const ownership = await resolveProjectBay(student.project_id);
-  if (ownership) return false;
+  knownBayId?: string;
+}): Promise<{ created: boolean; bay_id?: string }> {
+  if (!student.create || knownBayId) {
+    return { created: false, bay_id: knownBayId };
+  }
   const course = studentCourseInfo({ input, student });
   await createProjectWithInternalProjectId({
     project_id: student.project_id,
@@ -261,34 +273,29 @@ async function ensureStudentProject({
         }
       : {}),
   });
-  return true;
+  return { created: true, bay_id: getConfiguredBayId() };
 }
 
-async function reconcileOne({
+function buildReconcileRequest({
   op,
   input,
   result,
   managerAccountIds,
   activeStudentAccountIds,
+  studentsById,
 }: {
   op: LroSummary;
   input: CourseReconfigureLroInput;
   result: CourseReconfigureItemResult;
   managerAccountIds: string[];
   activeStudentAccountIds: string[];
-}): Promise<CourseReconfigureItemResult> {
+  studentsById: Map<string, NormalizedStudentItem>;
+}): ReconcileRequest {
   const account_id = op.created_by!;
   if (result.type === "student") {
-    const student = input.students.find(
-      (candidate) => candidate.student_id === result.student_id,
-    );
+    const student = studentsById.get(result.student_id ?? "");
     if (!student) throw new Error(`student ${result.student_id} not found`);
-    const created = await ensureStudentProject({
-      input,
-      student,
-      creatorAccountId: account_id,
-    });
-    const response = await reconcileOnOwningBay({
+    return {
       account_id,
       course_project_id: input.course_project_id,
       course_path: input.course_path,
@@ -308,20 +315,11 @@ async function reconcileOne({
       student_email_address: student.email_address,
       send_email_invite: !student.deleted && student.send_email_invite === true,
       invite: input.settings.invite,
-    });
-    return {
-      ...result,
-      status: "done",
-      ...(created ? { created: true } : {}),
-      ...(response.email_invited_at
-        ? { email_invited_at: response.email_invited_at }
-        : {}),
-      error: undefined,
     };
   }
 
   const isShared = result.type === "shared";
-  const response = await reconcileOnOwningBay({
+  return {
     account_id,
     course_project_id: input.course_project_id,
     course_path: input.course_path,
@@ -340,7 +338,106 @@ async function reconcileOne({
       : undefined,
     allow_collabs: input.settings.allow_collabs,
     desired_account_ids: isShared ? activeStudentAccountIds : [],
-  });
+  };
+}
+
+async function resolveCourseManagedProjectBays(
+  projectIds: string[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(projectIds)];
+  if (ids.length === 0) return new Map();
+  const localBayId = getConfiguredBayId();
+  const { rows } = await getPool().query<{
+    project_id: string;
+    bay_id: string;
+  }>(
+    `SELECT project_id::text,
+            COALESCE(owning_bay_id, $2::uuid)::text AS bay_id
+       FROM projects
+      WHERE project_id=ANY($1::uuid[])`,
+    [ids, localBayId],
+  );
+  const result = new Map(rows.map((row) => [row.project_id, row.bay_id]));
+  const missing = ids.filter((project_id) => !result.has(project_id));
+  await Promise.all(
+    missing.map(async (project_id) => {
+      const ownership = await resolveProjectBay(project_id);
+      if (ownership) result.set(project_id, ownership.bay_id);
+    }),
+  );
+  return result;
+}
+
+async function getCourseManagedProjectStatesByBay(
+  projectBays: Map<string, string>,
+): Promise<Map<string, ProjectCourseManagedProjectState>> {
+  const projectIdsByBay = new Map<string, string[]>();
+  for (const [project_id, bay_id] of projectBays) {
+    const ids = projectIdsByBay.get(bay_id) ?? [];
+    ids.push(project_id);
+    projectIdsByBay.set(bay_id, ids);
+  }
+  const localBayId = getConfiguredBayId();
+  const states = new Map<string, ProjectCourseManagedProjectState>();
+  await Promise.all(
+    [...projectIdsByBay].map(async ([bay_id, project_ids]) => {
+      try {
+        const rows =
+          bay_id === localBayId
+            ? await getCourseManagedProjectStatesLocal({ project_ids })
+            : await getInterBayBridge()
+                .projectCollabInvite(bay_id)
+                .getCourseManagedProjectStates({ project_ids });
+        for (const row of rows) states.set(row.project_id, row);
+      } catch (err) {
+        // A failed optimization must not prevent the locked repair path.
+        logger.warn("unable to bulk inspect course-managed projects", {
+          bay_id,
+          project_count: project_ids.length,
+          err: `${err}`,
+        });
+      }
+    }),
+  );
+  return states;
+}
+
+async function reconcileOne({
+  op,
+  input,
+  result,
+  studentsById,
+  request,
+  knownBayId,
+}: {
+  op: LroSummary;
+  input: CourseReconfigureLroInput;
+  result: CourseReconfigureItemResult;
+  studentsById: Map<string, NormalizedStudentItem>;
+  request: ReconcileRequest;
+  knownBayId?: string;
+}): Promise<CourseReconfigureItemResult> {
+  if (result.type === "student") {
+    const student = studentsById.get(result.student_id ?? "");
+    if (!student) throw new Error(`student ${result.student_id} not found`);
+    const ensured = await ensureStudentProject({
+      input,
+      student,
+      creatorAccountId: op.created_by!,
+      knownBayId,
+    });
+    const response = await reconcileOnOwningBay(request, ensured.bay_id);
+    return {
+      ...result,
+      status: "done",
+      ...(ensured.created ? { created: true } : {}),
+      ...(response.email_invited_at
+        ? { email_invited_at: response.email_invited_at }
+        : {}),
+      error: undefined,
+    };
+  }
+  const response = await reconcileOnOwningBay(request, knownBayId);
   return { ...result, status: "done", ...response, error: undefined };
 }
 
@@ -421,11 +518,51 @@ async function handleCourseReconfigureOpUnlocked(
   const results = buildInitialResults(input, existingItems);
 
   await updateProgress({ op, results });
+  const studentsById = new Map(
+    input.students.map((student) => [student.student_id, student]),
+  );
+  const requestsByKey = new Map<string, ReconcileRequest>();
+  for (const result of results) {
+    if (result.status === "done") continue;
+    try {
+      requestsByKey.set(
+        result.key,
+        buildReconcileRequest({
+          op,
+          input,
+          result,
+          managerAccountIds,
+          activeStudentAccountIds,
+          studentsById,
+        }),
+      );
+    } catch (err) {
+      result.status = "failed";
+      result.error = `${err}`;
+    }
+  }
+  const projectBays = await resolveCourseManagedProjectBays(
+    [...requestsByKey.values()].map(({ project_id }) => project_id),
+  );
+  const projectStates = await getCourseManagedProjectStatesByBay(projectBays);
+  for (const result of results) {
+    const request = requestsByKey.get(result.key);
+    if (!request || result.status === "done") continue;
+    const state = projectStates.get(request.project_id);
+    if (state && !courseManagedProjectNeedsReconcile(request, state)) {
+      result.status = "done";
+      result.error = undefined;
+    }
+  }
+  await updateProgress({ op, results });
+
   let next = 0;
   async function worker() {
     while (next < results.length) {
       const result = results[next++];
       if (result.status === "done") continue;
+      const request = requestsByKey.get(result.key);
+      if (!request) continue;
       const current = await getLro(op.op_id);
       if (current?.status === "canceled" || current?.status === "expired") {
         result.status = "canceled";
@@ -441,8 +578,9 @@ async function handleCourseReconfigureOpUnlocked(
             op,
             input,
             result,
-            managerAccountIds,
-            activeStudentAccountIds,
+            studentsById,
+            request,
+            knownBayId: projectBays.get(request.project_id),
           }),
         );
       } catch (err) {

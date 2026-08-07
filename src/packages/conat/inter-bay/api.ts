@@ -2233,6 +2233,26 @@ export interface ProjectReconcileCourseManagedProjectResult {
   email_invited_at?: string;
 }
 
+export interface ProjectCourseManagedProjectStatesRequest {
+  project_ids: string[];
+}
+
+export interface ProjectCourseManagedProjectState {
+  project_id: string;
+  users: Record<
+    string,
+    {
+      group?: "owner" | "collaborator" | "viewer";
+      hide?: boolean;
+      [key: string]: unknown;
+    }
+  > | null;
+  course: Record<string, unknown> | null;
+  title: string | null;
+  description: string | null;
+  env: ProjectEnv | null;
+}
+
 export interface ProjectCourseReconfigureOperationRequest {
   account_id: string;
   course_project_id: string;
@@ -2641,6 +2661,7 @@ export type ProjectCollabInviteMethod =
   | "repair-accepted-course-student-invite-accounts"
   | "ensure-course-manager-access"
   | "reconcile-course-managed-project"
+  | "get-course-managed-project-states"
   | "reconfigure-course-projects"
   | "get-course-reconfigure-operation"
   | "cancel-course-reconfigure-operation"
@@ -4315,6 +4336,9 @@ export interface InterBayProjectCollabInviteApi {
   reconcileCourseManagedProject: (
     opts: ProjectReconcileCourseManagedProjectRequest,
   ) => Promise<ProjectReconcileCourseManagedProjectResult>;
+  getCourseManagedProjectStates: (
+    opts: ProjectCourseManagedProjectStatesRequest,
+  ) => Promise<ProjectCourseManagedProjectState[]>;
   reconfigureCourseProjects: (
     opts: CourseReconfigureRequest & { account_id: string },
   ) => Promise<CourseReconfigureResult>;
@@ -10369,6 +10393,15 @@ export function createInterBayProjectCollabInviteClient({
       method: "reconcile-course-managed-project",
     }),
   });
+  const getCourseManagedProjectStatesClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "get-course-managed-project-states",
+    }),
+  });
   const reconfigureCourseProjectsClient = createServiceClient<
     Pick<InterBayProjectCollabInviteApi, "reconfigureCourseProjects">
   >({
@@ -10537,6 +10570,10 @@ export function createInterBayProjectCollabInviteClient({
       await ensureCourseManagerAccessClient.ensureCourseManagerAccess(opts),
     reconcileCourseManagedProject: async (opts) =>
       await reconcileCourseManagedProjectClient.reconcileCourseManagedProject(
+        opts,
+      ),
+    getCourseManagedProjectStates: async (opts) =>
+      await getCourseManagedProjectStatesClient.getCourseManagedProjectStates(
         opts,
       ),
     reconfigureCourseProjects: async (opts) =>
@@ -10806,6 +10843,20 @@ export function createInterBayProjectCollabInviteHandlers({
       impl: {
         reconcileCourseManagedProject: async (opts) =>
           await impl.reconcileCourseManagedProject(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "get-course-managed-project-states",
+      }),
+      impl: {
+        getCourseManagedProjectStates: async (opts) =>
+          await impl.getCourseManagedProjectStates(opts),
       },
     }),
     createServiceHandler<

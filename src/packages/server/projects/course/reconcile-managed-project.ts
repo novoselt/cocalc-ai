@@ -9,9 +9,12 @@ import getPool from "@cocalc/database/pool";
 import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
 import { assertProjectNotRehoming } from "@cocalc/database/postgres/project-rehome-fence";
 import type {
+  ProjectCourseManagedProjectState,
+  ProjectCourseManagedProjectStatesRequest,
   ProjectReconcileCourseManagedProjectRequest,
   ProjectReconcileCourseManagedProjectResult,
 } from "@cocalc/conat/inter-bay/api";
+import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { publishProjectDetailInvalidationBestEffort } from "@cocalc/server/account/project-detail-feed";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { syncProjectUsersOnHost } from "@cocalc/server/project-host/control";
@@ -38,6 +41,16 @@ interface ProjectRow {
   env: Record<string, string> | null;
 }
 
+interface CourseManagedProjectPlan {
+  changedFields: Set<string>;
+  missingDesiredAccountIds: string[];
+  nextCourse: Record<string, unknown>;
+  users: Record<string, ProjectUser>;
+  usersChanged: boolean;
+}
+
+const MAX_BULK_PROJECTS = 1_000;
+
 function uniqueAccountIds(ids: string[], name: string): string[] {
   const result = new Set<string>();
   for (const raw of ids) {
@@ -55,10 +68,13 @@ function sameJson(a: unknown, b: unknown): boolean {
   return isDeepStrictEqual(a ?? null, b ?? null);
 }
 
-export async function reconcileCourseManagedProjectLocal(
+function validateCourseManagedProjectRequest(
   request: ProjectReconcileCourseManagedProjectRequest,
-): Promise<ProjectReconcileCourseManagedProjectResult> {
-  const { account_id, course_project_id, project_id, type } = request;
+): {
+  desiredAccountIds: Set<string>;
+  managerAccountIds: string[];
+} {
+  const { account_id, course_project_id, project_id } = request;
   if (
     !isValidUUID(account_id) ||
     !isValidUUID(course_project_id) ||
@@ -73,16 +89,151 @@ export async function reconcileCourseManagedProjectLocal(
   if (!managerAccountIds.includes(account_id)) {
     throw new Error("course operation creator is no longer a course manager");
   }
+  return {
+    managerAccountIds,
+    desiredAccountIds: new Set([
+      ...managerAccountIds,
+      ...uniqueAccountIds(request.desired_account_ids, "desired account id"),
+    ]),
+  };
+}
 
-  const desiredAccountIds = new Set([
-    ...managerAccountIds,
-    ...uniqueAccountIds(request.desired_account_ids, "desired account id"),
-  ]);
+function planCourseManagedProjectReconciliation(
+  request: ProjectReconcileCourseManagedProjectRequest,
+  row: ProjectRow,
+): CourseManagedProjectPlan {
+  const { account_id, course_project_id, type } = request;
+  const { desiredAccountIds, managerAccountIds } =
+    validateCourseManagedProjectRequest(request);
   const course = {
     ...request.course,
     project_id: course_project_id,
     path: normalizeCoursePath(request.course_path),
   };
+  const users = { ...(row.users ?? {}) };
+  const missingDesiredAccountIds = [...desiredAccountIds].filter(
+    (desiredAccountId) =>
+      !managerAccountIds.includes(desiredAccountId) &&
+      users[desiredAccountId] == null,
+  );
+  const currentCourse = row.course;
+  const currentCourseProjectId = `${currentCourse?.project_id ?? ""}`;
+  if (currentCourseProjectId && currentCourseProjectId !== course_project_id) {
+    throw new Error("project belongs to a different course project");
+  }
+  const knownManagerOwnsProject = managerAccountIds.some((id) => {
+    const group = users[id]?.group;
+    return group === "owner" || group === "collaborator";
+  });
+  if (!currentCourseProjectId && !knownManagerOwnsProject) {
+    throw new Error(
+      "cannot repair course metadata because no current course manager has project access",
+    );
+  }
+
+  const preserveStudentCourse =
+    type === "nbgrader" && currentCourse?.type === "student";
+  const nextCourse = preserveStudentCourse ? currentCourse : course;
+  const changedFields = new Set<string>();
+  if (!sameJson(row.course, nextCourse)) {
+    changedFields.add("course");
+  }
+
+  let usersChanged = false;
+  for (const managerAccountId of managerAccountIds) {
+    const group = users[managerAccountId]?.group;
+    if (group !== "owner" && group !== "collaborator") {
+      users[managerAccountId] = {
+        ...(users[managerAccountId] ?? {}),
+        group: "collaborator",
+      };
+      usersChanged = true;
+    }
+  }
+  if (users[account_id] && users[account_id].hide !== true) {
+    users[account_id] = { ...users[account_id], hide: true };
+    usersChanged = true;
+  }
+  if (!request.allow_collabs) {
+    for (const [existingAccountId, info] of Object.entries(users)) {
+      if (
+        info?.group !== "owner" &&
+        !desiredAccountIds.has(existingAccountId)
+      ) {
+        delete users[existingAccountId];
+        usersChanged = true;
+      }
+    }
+  }
+
+  if (request.title !== undefined && row.title !== request.title) {
+    changedFields.add("title");
+  }
+  if (
+    request.description !== undefined &&
+    row.description !== request.description
+  ) {
+    changedFields.add("description");
+  }
+  if (request.env !== undefined && !sameJson(row.env, request.env)) {
+    changedFields.add("env");
+  }
+  return {
+    changedFields,
+    missingDesiredAccountIds,
+    nextCourse,
+    users,
+    usersChanged,
+  };
+}
+
+export function courseManagedProjectNeedsReconcile(
+  request: ProjectReconcileCourseManagedProjectRequest,
+  state: ProjectCourseManagedProjectState,
+): boolean {
+  if (request.send_email_invite) return true;
+  try {
+    const plan = planCourseManagedProjectReconciliation(request, state);
+    return (
+      plan.usersChanged ||
+      plan.changedFields.size > 0 ||
+      plan.missingDesiredAccountIds.length > 0
+    );
+  } catch {
+    // The locked reconciliation path reports validation and ownership errors.
+    return true;
+  }
+}
+
+export async function getCourseManagedProjectStatesLocal({
+  project_ids,
+}: ProjectCourseManagedProjectStatesRequest): Promise<
+  ProjectCourseManagedProjectState[]
+> {
+  const ids = uniqueAccountIds(project_ids, "project id");
+  if (ids.length > MAX_BULK_PROJECTS) {
+    throw new Error(
+      `too many course-managed projects (${ids.length}/${MAX_BULK_PROJECTS})`,
+    );
+  }
+  if (ids.length === 0) return [];
+  const bay_id = getConfiguredBayId();
+  const { rows } = await getPool().query<ProjectCourseManagedProjectState>(
+    `SELECT project_id::text, users, course, title, description, env
+       FROM projects
+      WHERE project_id=ANY($1::uuid[])
+        AND deleted IS NULL
+        AND COALESCE(owning_bay_id, $2::uuid)=$2::uuid`,
+    [ids, bay_id],
+  );
+  return rows;
+}
+
+export async function reconcileCourseManagedProjectLocal(
+  request: ProjectReconcileCourseManagedProjectRequest,
+): Promise<ProjectReconcileCourseManagedProjectResult> {
+  const { account_id, course_project_id, project_id } = request;
+  validateCourseManagedProjectRequest(request);
   const client = await getPool().connect();
   let usersChanged = false;
   let missingDesiredAccountIds: string[] = [];
@@ -106,75 +257,10 @@ export async function reconcileCourseManagedProjectLocal(
     if (!row) {
       throw new Error(`project ${project_id} not found on its owning bay`);
     }
-    const users = { ...(row.users ?? {}) };
-    missingDesiredAccountIds = [...desiredAccountIds].filter(
-      (desiredAccountId) =>
-        !managerAccountIds.includes(desiredAccountId) &&
-        users[desiredAccountId] == null,
-    );
-    const currentCourse = row.course;
-    const currentCourseProjectId = `${currentCourse?.project_id ?? ""}`;
-    if (
-      currentCourseProjectId &&
-      currentCourseProjectId !== course_project_id
-    ) {
-      throw new Error("project belongs to a different course project");
-    }
-    const knownManagerOwnsProject = managerAccountIds.some((id) => {
-      const group = users[id]?.group;
-      return group === "owner" || group === "collaborator";
-    });
-    if (!currentCourseProjectId && !knownManagerOwnsProject) {
-      throw new Error(
-        "cannot repair course metadata because no current course manager has project access",
-      );
-    }
-
-    const preserveStudentCourse =
-      type === "nbgrader" && currentCourse?.type === "student";
-    const nextCourse = preserveStudentCourse ? currentCourse : course;
-    if (!sameJson(row.course, nextCourse)) {
-      changedFields.add("course");
-    }
-
-    for (const managerAccountId of managerAccountIds) {
-      const group = users[managerAccountId]?.group;
-      if (group !== "owner" && group !== "collaborator") {
-        users[managerAccountId] = {
-          ...(users[managerAccountId] ?? {}),
-          group: "collaborator",
-        };
-        usersChanged = true;
-      }
-    }
-    if (users[account_id] && users[account_id].hide !== true) {
-      users[account_id] = { ...users[account_id], hide: true };
-      usersChanged = true;
-    }
-    if (!request.allow_collabs) {
-      for (const [existingAccountId, info] of Object.entries(users)) {
-        if (
-          info?.group !== "owner" &&
-          !desiredAccountIds.has(existingAccountId)
-        ) {
-          delete users[existingAccountId];
-          usersChanged = true;
-        }
-      }
-    }
-
-    if (request.title !== undefined && row.title !== request.title) {
-      changedFields.add("title");
-    }
-    if (
-      request.description !== undefined &&
-      row.description !== request.description
-    ) {
-      changedFields.add("description");
-    }
-    if (request.env !== undefined && !sameJson(row.env, request.env)) {
-      changedFields.add("env");
-    }
+    const plan = planCourseManagedProjectReconciliation(request, row);
+    usersChanged = plan.usersChanged;
+    missingDesiredAccountIds = plan.missingDesiredAccountIds;
+    for (const field of plan.changedFields) changedFields.add(field);
     if (usersChanged || changedFields.size > 0) {
       await client.query(
         `UPDATE projects
@@ -186,8 +272,8 @@ export async function reconcileCourseManagedProjectLocal(
           WHERE project_id=$1`,
         [
           project_id,
-          JSON.stringify(users),
-          JSON.stringify(nextCourse),
+          JSON.stringify(plan.users),
+          JSON.stringify(plan.nextCourse),
           request.title ?? null,
           request.description ?? null,
           request.env !== undefined,

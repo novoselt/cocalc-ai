@@ -12,8 +12,13 @@ let queryMock: jest.Mock;
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
   default: jest.fn(() => ({
+    query: (...args: any[]) => queryMock(...args),
     connect: async () => ({ query: queryMock, release: jest.fn() }),
   })),
+}));
+
+jest.mock("@cocalc/server/bay-config", () => ({
+  getConfiguredBayId: () => "88888888-8888-4888-8888-888888888888",
 }));
 
 jest.mock("@cocalc/database/postgres/project-events-outbox", () => ({
@@ -75,6 +80,28 @@ describe("course managed project reconciliation", () => {
       allow_collabs: false,
       desired_account_ids: [STUDENT],
       student_id: "student-1",
+      ...overrides,
+    };
+  }
+
+  function matchingState(overrides: Record<string, unknown> = {}) {
+    return {
+      project_id: PROJECT,
+      users: {
+        [ACTOR]: { group: "collaborator" as const, hide: true },
+        [MANAGER]: { group: "collaborator" as const },
+        [OWNER]: { group: "owner" as const },
+        [STUDENT]: { group: "collaborator" as const },
+      },
+      course: {
+        datastore: false,
+        path: "classes/main.course",
+        project_id: COURSE,
+        type: "student",
+      },
+      title: "Student - Course",
+      description: "Course project",
+      env: null,
       ...overrides,
     };
   }
@@ -214,6 +241,50 @@ describe("course managed project reconciliation", () => {
       queryMock.mock.calls.some(([sql]) => sql.includes("UPDATE projects")),
     ).toBe(false);
     expect(inviteCollaboratorMock).not.toHaveBeenCalled();
+  });
+
+  it("identifies exact matches without entering the mutation path", async () => {
+    const { courseManagedProjectNeedsReconcile } =
+      await import("./reconcile-managed-project");
+    expect(courseManagedProjectNeedsReconcile(request(), matchingState())).toBe(
+      false,
+    );
+    expect(
+      courseManagedProjectNeedsReconcile(
+        request(),
+        matchingState({ title: "Outdated title" }),
+      ),
+    ).toBe(true);
+    expect(
+      courseManagedProjectNeedsReconcile(
+        request({ send_email_invite: true }),
+        matchingState(),
+      ),
+    ).toBe(true);
+  });
+
+  it("loads project state for a bay in one query", async () => {
+    const secondProject = "99999999-9999-4999-8999-999999999999";
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("project_id=ANY")) {
+        return {
+          rows: [matchingState(), matchingState({ project_id: secondProject })],
+        };
+      }
+      return { rows: [] };
+    });
+    const { getCourseManagedProjectStatesLocal } =
+      await import("./reconcile-managed-project");
+    await expect(
+      getCourseManagedProjectStatesLocal({
+        project_ids: [PROJECT, secondProject, PROJECT],
+      }),
+    ).resolves.toHaveLength(2);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock.mock.calls[0][1]).toEqual([
+      [PROJECT, secondProject],
+      "88888888-8888-4888-8888-888888888888",
+    ]);
   });
 
   it("passes canonical course context to email invitations", async () => {

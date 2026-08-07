@@ -454,7 +454,10 @@ import {
   unblockProjectAccessRequester,
 } from "@cocalc/server/projects/collaborators";
 import { ensureCourseManagerAccessLocal } from "@cocalc/server/projects/course/ensure-manager-access";
-import { reconcileCourseManagedProjectLocal } from "@cocalc/server/projects/course/reconcile-managed-project";
+import {
+  getCourseManagedProjectStatesLocal,
+  reconcileCourseManagedProjectLocal,
+} from "@cocalc/server/projects/course/reconcile-managed-project";
 import { getProjectCollaboratorInviteUsage } from "@cocalc/server/membership/project-limits";
 import { leaveOrDeleteProjectsForAccount } from "@cocalc/server/projects/ownership";
 import {
@@ -2096,6 +2099,8 @@ async function startProjectCollabInviteService(): Promise<void> {
       }),
     reconcileCourseManagedProject: async (opts) =>
       await reconcileCourseManagedProjectLocal(opts),
+    getCourseManagedProjectStates: async (opts) =>
+      await getCourseManagedProjectStatesLocal(opts),
     reconfigureCourseProjects: async (opts) =>
       await reconfigureCourseProjectsLocal(opts),
     getCourseReconfigureOperation: async (opts) =>
