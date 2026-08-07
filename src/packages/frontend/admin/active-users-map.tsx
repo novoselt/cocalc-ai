@@ -299,13 +299,11 @@ export function ActiveUsersMapAdmin() {
               </Card>
             </Col>
           </Row>
-          <Card styles={{ body: { padding: 8 } }}>
-            <ActiveUsersMapPlot
-              countries={overview.countries}
-              selectedCountryCode={selectedCountry?.country_code}
-              onSelect={setSelectedGroup}
-            />
-          </Card>
+          <ActiveUsersMapPlot
+            countries={overview.countries}
+            selectedCountryCode={selectedCountry?.country_code}
+            onSelect={setSelectedGroup}
+          />
         </>
       ) : loading && !overview ? (
         <div style={{ padding: 48, textAlign: "center" }}>
