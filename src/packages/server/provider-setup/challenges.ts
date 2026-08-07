@@ -26,7 +26,9 @@ export interface CreatedProviderSetupChallenge extends ProviderSetupChallenge {
 }
 
 const TABLE = "provider_setup_challenges";
-const DEFAULT_TTL_MS = 15 * 60 * 1000;
+// Provider setup can legitimately spend tens of minutes enabling cloud APIs
+// and reconciling regional resources before it uploads the credential.
+const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const MAX_PAYLOAD_BYTES = 256 * 1024;
 
 function pool() {
