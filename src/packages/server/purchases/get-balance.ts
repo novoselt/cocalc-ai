@@ -15,9 +15,10 @@ compute the sum of the following, over all rows of the table for a given account
   current time.
 */
 
-// selects the cost, or if not done, the rate-based cost cost so far, or if not that the usage based cost so far.
+// Finalized costs are already whole cents. Active metered values remain precise
+// internally and are rounded only when they participate in the user ledger.
 export const COST_OR_METERED_COST =
-  "COALESCE(cost, COALESCE(cost_so_far, cost_per_hour * (EXTRACT(EPOCH FROM (COALESCE(period_end, NOW()) - period_start))::numeric / 3600)))";
+  "COALESCE(cost, ROUND(COALESCE(cost_so_far, cost_per_hour * (EXTRACT(EPOCH FROM (COALESCE(period_end, NOW()) - period_start))::numeric / 3600)), 2))";
 
 // Approximate purchase cost at a selected point in time.  Active rate-based
 // rows are evaluated using elapsed time up to asOf instead of NOW(), so a
@@ -25,7 +26,7 @@ export const COST_OR_METERED_COST =
 // This is still an approximation for rows whose final cost was recorded later
 // but whose transaction time is already within the selected window.
 const COST_OR_METERED_COST_AS_OF =
-  "COALESCE(cost, cost_per_hour * GREATEST(EXTRACT(EPOCH FROM (COALESCE(LEAST(period_end, $2::timestamptz), $2::timestamptz) - period_start))::numeric / 3600, 0), cost_so_far)";
+  "COALESCE(cost, ROUND(COALESCE(cost_per_hour * GREATEST(EXTRACT(EPOCH FROM (COALESCE(LEAST(period_end, $2::timestamptz), $2::timestamptz) - period_start))::numeric / 3600, 0), cost_so_far), 2))";
 
 // never update the balance more frequently than this for a given user.
 const MIN_BALANCE_UPDATE_MS = 1000;
@@ -52,7 +53,7 @@ export default async function getBalance({
   //   - the arithmetic is probably done using 32-bit floats and there could be a slight rounding error eventually.
 
   const { rows } = await pool.query(
-    `SELECT -SUM(${COST_OR_METERED_COST}) as balance FROM purchases WHERE account_id=$1`,
+    `SELECT ROUND(-COALESCE(SUM(${COST_OR_METERED_COST}), 0), 2) as balance FROM purchases WHERE account_id=$1`,
     [account_id],
   );
   const balance = toDecimal(rows[0]?.balance ?? 0);
@@ -79,7 +80,7 @@ export async function getTotalBalance(
 ): Promise<MoneyValue> {
   const pool = client ?? getPool();
   const { rows } = await pool.query(
-    `SELECT -SUM(${COST_OR_METERED_COST}) as balance FROM purchases WHERE account_id=$1`,
+    `SELECT ROUND(-COALESCE(SUM(${COST_OR_METERED_COST}), 0), 2) as balance FROM purchases WHERE account_id=$1`,
     [account_id],
   );
   return moneyToDbString(rows[0]?.balance ?? 0);
@@ -97,7 +98,7 @@ export async function getBalanceAsOf({
   const pool = client ?? getPool();
   const { rows } = await pool.query(
     `
-      SELECT -SUM(${COST_OR_METERED_COST_AS_OF}) as balance
+      SELECT ROUND(-COALESCE(SUM(${COST_OR_METERED_COST_AS_OF}), 0), 2) as balance
         FROM purchases
        WHERE account_id=$1
          AND time <= $2

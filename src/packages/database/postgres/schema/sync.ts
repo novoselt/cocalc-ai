@@ -16,6 +16,10 @@ import {
   accountNotificationRevisionSchemaNeedsSync,
   ensureAccountNotificationRevisionSchema,
 } from "./account-notification-revision";
+import {
+  ensurePurchaseCostCentsSchema,
+  purchaseCostCentsSchemaNeedsSync,
+} from "./purchase-cost-cents";
 
 const log = getLogger("db:schema:sync");
 
@@ -478,6 +482,9 @@ export async function syncSchema(
     if (dbSchema.account_notification_index != null) {
       await ensureAccountNotificationRevisionSchema(db);
     }
+    if (dbSchema.purchases != null) {
+      await ensurePurchaseCostCentsSchema(db);
+    }
     dbg("backfilling account display names");
     await backfillAccountDisplayNames(db);
   } catch (err) {
@@ -543,6 +550,13 @@ export async function schemaNeedsSync(
       (await accountNotificationRevisionSchemaNeedsSync(db))
     ) {
       dbg("detected missing account notification revision default");
+      return true;
+    }
+    if (
+      dbSchema.purchases != null &&
+      (await purchaseCostCentsSchemaNeedsSync(db))
+    ) {
+      dbg("detected missing purchase whole-cent trigger");
       return true;
     }
     dbg("schema matches");

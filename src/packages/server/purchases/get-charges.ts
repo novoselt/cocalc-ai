@@ -12,7 +12,7 @@ export async function getTotalChargesThisMonth(
 ): Promise<MoneyValue> {
   const pool = client ?? getPool();
   const periodStart = calendarMonthStart();
-  let query = `SELECT SUM(${COST_OR_METERED_COST}) as total FROM purchases WHERE account_id=$1 AND time > $2 AND cost > 0`;
+  let query = `SELECT ROUND(SUM(${COST_OR_METERED_COST}), 2) as total FROM purchases WHERE account_id=$1 AND time > $2 AND cost > 0`;
   const params = [account_id, periodStart];
   if (service != null) {
     query += " AND service=$3";
@@ -29,7 +29,7 @@ export async function getChargesThisMonthByService(
 ): Promise<{ [service: string]: MoneyValue }> {
   const pool = getPool();
   const periodStart = calendarMonthStart();
-  let query = `SELECT service, SUM(${COST_OR_METERED_COST}) as total FROM purchases WHERE account_id=$1 AND time > $2 GROUP BY service`;
+  let query = `SELECT service, ROUND(SUM(${COST_OR_METERED_COST}), 2) as total FROM purchases WHERE account_id=$1 AND time > $2 GROUP BY service`;
   const params = [account_id, periodStart];
   const { rows } = await pool.query(query, params);
   return rows.reduce(

@@ -36,6 +36,50 @@ describe("test computing balance under various conditions", () => {
     );
   });
 
+  it("posts finalized costs in whole cents", async () => {
+    const account_id = uuid();
+    const purchase_id = await createPurchase({
+      account_id,
+      service: "student-pay",
+      description: {} as any,
+      client: null,
+      cost: "1.005",
+    });
+    const { rows } = await getPool().query(
+      "SELECT cost FROM purchases WHERE id=$1",
+      [purchase_id],
+    );
+
+    expect(rows[0].cost).toBe("1.0100000000");
+    expect(await getBalance({ account_id })).toBe("-1.0100000000");
+  });
+
+  it("rejects direct fractional finalized ledger writes", async () => {
+    await expect(
+      getPool().query(
+        `INSERT INTO purchases
+           (time, account_id, cost, service, description)
+         VALUES (NOW(), $1, $2, 'student-pay', '{}'::jsonb)`,
+        [uuid(), "1.001"],
+      ),
+    ).rejects.toThrow("purchase cost must be a whole-cent amount");
+
+    const purchase_id = await createPurchase({
+      account_id: uuid(),
+      service: "dedicated-host",
+      description: {} as any,
+      client: null,
+      cost_per_hour: "0.02",
+      period_start: new Date(),
+    });
+    await expect(
+      getPool().query("UPDATE purchases SET cost=$2 WHERE id=$1", [
+        purchase_id,
+        "0.001",
+      ]),
+    ).rejects.toThrow("purchase cost must be a whole-cent amount");
+  });
+
   it("with an additional credit", async () => {
     await createPurchase({
       account_id,
@@ -159,6 +203,25 @@ describe("test computing balance under various conditions", () => {
       -1.25,
       2,
     );
+  });
+
+  it("rounds a precise active usage estimate in the account balance", async () => {
+    const account_id = uuid();
+    const purchase_id = await createPurchase({
+      account_id,
+      service: "dedicated-host",
+      description: {} as any,
+      client: null,
+      cost_so_far: "0.006",
+      period_start: new Date(),
+    });
+    const { rows } = await getPool().query(
+      "SELECT cost_so_far FROM purchases WHERE id=$1",
+      [purchase_id],
+    );
+
+    expect(rows[0].cost_so_far).toBe("0.0060000000");
+    expect(await getBalance({ account_id })).toBe("-0.0100000000");
   });
 
   it("with a purchase that has a closed range and a cost_per_hour", async () => {

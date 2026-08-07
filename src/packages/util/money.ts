@@ -34,6 +34,12 @@ export function moneyRound2Down(value: MoneyValue): Decimal {
   return new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_FLOOR);
 }
 
+// Finalized user-facing ledger amounts are always posted in whole cents.
+// ROUND_HALF_UP matches PostgreSQL round(numeric, 2), including for credits.
+export function moneyRoundToCents(value: MoneyValue): Decimal {
+  return new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+}
+
 export function moneyToStripe(amount: MoneyValue): number {
   return new Decimal(amount)
     .mul(100)

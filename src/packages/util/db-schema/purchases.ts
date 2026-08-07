@@ -261,7 +261,7 @@ Table({
     account_id: CREATED_BY,
     cost: {
       title: "Cost ($)",
-      desc: "The cost in US dollars. Not set if the purchase isn't finished, e.g., when upgrading a project this is only set when project stops or purchase is finalized. This takes precedence over the cost_per_hour times the length of the period when active.",
+      desc: "The finalized user-facing ledger cost in whole cents. Not set while a metered purchase is active. This takes precedence over precise metering fields once posted.",
       type: "number",
       pg_type: "numeric(20,10)",
     },

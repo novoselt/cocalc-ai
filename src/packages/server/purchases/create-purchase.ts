@@ -5,6 +5,7 @@ import getPool, { PoolClient } from "@cocalc/database/pool";
 import type { Service } from "@cocalc/util/db-schema/purchase-quotas";
 import type { Description } from "@cocalc/util/db-schema/purchases";
 import {
+  moneyRoundToCents,
   moneyToDbString,
   toDecimal,
   type MoneyValue,
@@ -53,6 +54,7 @@ export default async function createPurchase(opts: Options): Promise<number> {
     client,
     cost_so_far,
   } = opts;
+  const postedCost = cost == null ? null : moneyRoundToCents(cost);
   if (cost == null) {
     if (period_start == null) {
       throw Error("if cost is not set, then period_start must be set");
@@ -85,7 +87,7 @@ export default async function createPurchase(opts: Options): Promise<number> {
       time ?? new Date(),
       account_id,
       project_id,
-      cost == null ? null : moneyToDbString(cost),
+      postedCost == null ? null : moneyToDbString(postedCost),
       cost_per_hour == null ? null : moneyToDbString(cost_per_hour),
       cost_so_far == null ? null : moneyToDbString(cost_so_far),
       period_start,
