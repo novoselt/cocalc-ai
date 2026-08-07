@@ -77,6 +77,61 @@ describe("frontend/auth/api", () => {
     await request;
   });
 
+  it("reports an HTML routing fallback without exposing JSON parse noise", async () => {
+    (global as any).fetch = jest.fn(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: { get: () => "text/html; charset=utf-8" },
+      text: async () => "<!DOCTYPE html><html></html>",
+    }));
+
+    jest.doMock("@cocalc/frontend/customize/app-base-path", () => ({
+      appBasePath: "",
+    }));
+    jest.doMock("@cocalc/frontend/control-plane-origin", () => ({
+      clearStoredControlPlaneOrigin: jest.fn(),
+      getStoredControlPlaneOrigin: jest.fn(),
+      setStoredControlPlaneOrigin: jest.fn(),
+    }));
+    jest.doMock("@cocalc/frontend/misc/remember-me", () => ({
+      deleteRememberMe: jest.fn(),
+    }));
+
+    const { postAuthApi } = await import("./api");
+    await expect(
+      postAuthApi({ endpoint: "auth/fresh-auth-status", body: {} }),
+    ).rejects.toThrow(
+      "Authentication endpoint /api/v2/auth/fresh-auth-status returned HTTP 200 OK with text/html; charset=utf-8, not JSON",
+    );
+  });
+
+  it("rejects a descriptive label passed as an authentication origin", async () => {
+    const fetchMock = jest.fn();
+    (global as any).fetch = fetchMock;
+
+    jest.doMock("@cocalc/frontend/customize/app-base-path", () => ({
+      appBasePath: "",
+    }));
+    jest.doMock("@cocalc/frontend/control-plane-origin", () => ({
+      clearStoredControlPlaneOrigin: jest.fn(),
+      getStoredControlPlaneOrigin: jest.fn(),
+      setStoredControlPlaneOrigin: jest.fn(),
+    }));
+    jest.doMock("@cocalc/frontend/misc/remember-me", () => ({
+      deleteRememberMe: jest.fn(),
+    }));
+
+    const { postAuthApi } = await import("./api");
+    await expect(
+      postAuthApi({
+        endpoint: "auth/fresh-auth-status",
+        origin: "project managed compute",
+        body: {},
+      }),
+    ).rejects.toThrow("Authentication origin must be an absolute HTTP(S) URL");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("loads auth bootstrap from the stored control-plane origin", async () => {
     const fetchMock = jest.fn(async () => ({
       json: async () => ({

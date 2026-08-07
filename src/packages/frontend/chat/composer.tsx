@@ -382,6 +382,10 @@ export function ChatRoomComposer({
     (isSelectedThreadAI || isNewThreadCodex) &&
     !codexPaymentSourceLoading &&
     isCodexPaymentSourceNeedsUserConfiguration(codexPaymentSource);
+  const hasRunningCodexTurn = hasActiveAcpTurn && isSelectedThreadAI;
+  const handlePrimarySend = hasRunningCodexTurn
+    ? handleSendImmediately
+    : handleSend;
 
   const composerStyle: CSSProperties = {
     display: "flex",
@@ -499,12 +503,7 @@ export function ChatRoomComposer({
             cacheId={`${path}${project_id}-draft-${composerDraftKey}`}
             input={input}
             presenceThreadKey={presenceThreadKey}
-            on_send={handleSend}
-            on_ctrl_enter={
-              hasActiveAcpTurn && isSelectedThreadAI
-                ? handleSendImmediately
-                : undefined
-            }
+            on_send={handlePrimarySend}
             on_font_size_change={handleFontSizeChange}
             height={chatInputHeight}
             autoGrowMaxHeight={autoGrowMaxHeight}
@@ -526,6 +525,25 @@ export function ChatRoomComposer({
             editBarStyle={{ overflow: "hidden" }}
             placeholder={composerPlaceholder}
             externalMultilinePasteAsCodeBlock
+            toolbarRightContent={
+              hasInput ? (
+                <Tooltip
+                  title={
+                    isZenMode
+                      ? "Exit zen mode"
+                      : "Expand composer for focused writing"
+                  }
+                >
+                  <Button
+                    aria-label={isZenMode ? "Exit Zen" : "Zen"}
+                    icon={<Icon name="expand-arrows" />}
+                    onClick={toggleZenMode}
+                    size="small"
+                    type="text"
+                  />
+                </Tooltip>
+              ) : null
+            }
           />
         </div>
       </div>
@@ -540,22 +558,6 @@ export function ChatRoomComposer({
         <div style={{ flex: 1 }} />
         {hasInput && (
           <>
-            <Tooltip
-              title={
-                isZenMode
-                  ? "Exit zen mode"
-                  : "Expand composer for focused writing"
-              }
-            >
-              <Button
-                size="small"
-                onClick={toggleZenMode}
-                style={{ marginBottom: "5px" }}
-                icon={<Icon name="expand-arrows" />}
-              >
-                {isZenMode ? "Exit Zen" : "Zen"}
-              </Button>
-            </Tooltip>
             {hasAcpPrompt ? (
               <Tooltip title="View or edit the full prompt that will be sent to the agent">
                 <Button
@@ -567,26 +569,23 @@ export function ChatRoomComposer({
                 </Button>
               </Tooltip>
             ) : null}
-            {hasActiveAcpTurn && isSelectedThreadAI ? (
+            {hasRunningCodexTurn ? (
               <Tooltip
                 title={
                   <FormattedMessage
-                    id="chatroom.chat_input.queue_button.tooltip"
-                    defaultMessage={"Queue message (Shift+Enter)"}
+                    id="chatroom.chat_input.steer_button.tooltip"
+                    defaultMessage={"Steer running turn (Shift+Enter)"}
                   />
                 }
               >
                 <Button
-                  onClick={handleSend}
+                  onClick={handleSendImmediately}
                   disabled={!hasInput}
                   type="primary"
                   data-testid="chat-composer-send"
-                  icon={<Icon name="paper-plane" />}
+                  icon={<Icon name="bolt" />}
                 >
-                  <FormattedMessage
-                    id="chatroom.chat_input.queue_button.label"
-                    defaultMessage={"Queue"}
-                  />
+                  Steer
                 </Button>
               </Tooltip>
             ) : (
@@ -612,24 +611,27 @@ export function ChatRoomComposer({
                 </Button>
               </Tooltip>
             )}
-            {hasActiveAcpTurn && isSelectedThreadAI ? (
+            {hasRunningCodexTurn ? (
               <>
                 <div style={{ height: "5px" }} />
                 <Tooltip
                   title={
                     <FormattedMessage
-                      id="chatroom.chat_input.steer_button.tooltip"
-                      defaultMessage={"Steer running turn (Ctrl+Enter)"}
+                      id="chatroom.chat_input.queue_button.tooltip"
+                      defaultMessage={"Queue after the running turn"}
                     />
                   }
                 >
                   <Button
-                    onClick={handleSendImmediately}
+                    onClick={handleSend}
                     disabled={!hasInput}
                     type="default"
-                    icon={<Icon name="bolt" />}
+                    icon={<Icon name="paper-plane" />}
                   >
-                    Steer
+                    <FormattedMessage
+                      id="chatroom.chat_input.queue_button.label"
+                      defaultMessage={"Queue"}
+                    />
                   </Button>
                 </Tooltip>
               </>

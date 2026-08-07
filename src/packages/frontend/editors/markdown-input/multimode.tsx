@@ -26,6 +26,7 @@ export default function MultiMarkdownInput({
   cursors,
   defaultMode,
   dirtyRef,
+  disableModeSwitchShortcuts = false,
   editBarStyle,
   editorDivRef,
   enableMentions,
@@ -360,13 +361,17 @@ export default function MultiMarkdownInput({
                   }
             }
             onFontSizeChange={onFontSizeChange}
-            onAltEnter={(value, pos) => {
-              onChangeRef.current?.(value);
-              if (pos) {
-                rememberPendingSelection("editor", pos);
-              }
-              setMode("editor");
-            }}
+            onAltEnter={
+              disableModeSwitchShortcuts
+                ? () => undefined
+                : (value, pos) => {
+                    onChangeRef.current?.(value);
+                    if (pos) {
+                      rememberPendingSelection("editor", pos);
+                    }
+                    setMode("editor");
+                  }
+            }
             placeholder={placeholder ?? "Type markdown..."}
             fontSize={fontSize}
             cmOptions={cmOptions}
@@ -441,14 +446,18 @@ export default function MultiMarkdownInput({
                   }
             }
             onFontSizeChange={onFontSizeChange}
-            onAltEnter={(value) => {
-              onChangeRef.current?.(value);
-              const pos = getMarkdownPositionForSelection();
-              if (pos) {
-                rememberPendingSelection("markdown", pos);
-              }
-              setMode("markdown");
-            }}
+            onAltEnter={
+              disableModeSwitchShortcuts
+                ? () => undefined
+                : (value) => {
+                    onChangeRef.current?.(value);
+                    const pos = getMarkdownPositionForSelection();
+                    if (pos) {
+                      rememberPendingSelection("markdown", pos);
+                    }
+                    setMode("markdown");
+                  }
+            }
             onCursors={onCursors}
             onUndo={onUndo}
             onRedo={onRedo}

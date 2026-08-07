@@ -34,6 +34,7 @@ import {
   useState,
 } from "react";
 import { React } from "@cocalc/frontend/app-framework";
+import { MinimapHideButton } from "@cocalc/frontend/components/minimap-hide-button";
 import {
   MINIMAP_MAX_WIDTH,
   MINIMAP_MIN_WIDTH,
@@ -224,6 +225,7 @@ interface UseNotebookMinimapArgs {
 }
 
 interface UseNotebookMinimapResult {
+  enabled: boolean;
   layoutRef: MutableRefObject<any>;
   minimapNode: React.JSX.Element | null;
   settingsModal: React.JSX.Element;
@@ -990,6 +992,7 @@ export function useNotebookMinimap({
             overflow: "hidden",
           }}
         >
+          <MinimapHideButton onConfirm={() => setMinimapEnabled(false)} />
           <div
             ref={minimapScrollRef}
             data-cocalc-jupyter-minimap-scroll="1"
@@ -1087,6 +1090,7 @@ export function useNotebookMinimap({
   );
 
   return {
+    enabled: minimapOptIn,
     layoutRef,
     minimapNode,
     settingsModal,
