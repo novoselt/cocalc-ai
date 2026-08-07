@@ -18,7 +18,7 @@ jest.mock("@cocalc/database/pool", () => ({
 }));
 
 jest.mock("@cocalc/server/bay-config", () => ({
-  getConfiguredBayId: () => "88888888-8888-4888-8888-888888888888",
+  getConfiguredBayId: () => "bay-0",
 }));
 
 jest.mock("@cocalc/database/postgres/project-events-outbox", () => ({
@@ -283,8 +283,9 @@ describe("course managed project reconciliation", () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
     expect(queryMock.mock.calls[0][1]).toEqual([
       [PROJECT, secondProject],
-      "88888888-8888-4888-8888-888888888888",
+      "bay-0",
     ]);
+    expect(queryMock.mock.calls[0][0]).not.toContain("$2::uuid");
   });
 
   it("passes canonical course context to email invitations", async () => {

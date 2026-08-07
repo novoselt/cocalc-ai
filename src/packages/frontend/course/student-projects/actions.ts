@@ -1258,11 +1258,22 @@ export class StudentProjectsActions {
           scope_type: op.scope_type,
           scope_id: op.scope_id,
           timeout_ms: 2 * 60 * 60 * 1000,
-          getSummary: async () =>
-            await webapp_client.project_client.getCourseReconfigureOperation({
-              course_project_id: request.course_project_id,
-              op_id: op.op_id,
-            }),
+          getSummary: async () => {
+            try {
+              const local = await webapp_client.conat_client.hub.lro.get({
+                op_id: op.op_id,
+              });
+              if (local) return local;
+            } catch {
+              // The operation may be owned by another bay.
+            }
+            return await webapp_client.project_client.getCourseReconfigureOperation(
+              {
+                course_project_id: request.course_project_id,
+                op_id: op.op_id,
+              },
+            );
+          },
           onSummary: (current) => {
             if (this.course_actions.is_closed()) return;
             const progress = current.progress_summary;

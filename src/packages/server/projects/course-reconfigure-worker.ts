@@ -352,7 +352,7 @@ async function resolveCourseManagedProjectBays(
     bay_id: string;
   }>(
     `SELECT project_id::text,
-            COALESCE(owning_bay_id, $2::uuid)::text AS bay_id
+            COALESCE(owning_bay_id, $2) AS bay_id
        FROM projects
       WHERE project_id=ANY($1::uuid[])`,
     [ids, localBayId],

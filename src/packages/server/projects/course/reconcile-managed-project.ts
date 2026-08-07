@@ -220,10 +220,10 @@ export async function getCourseManagedProjectStatesLocal({
   const bay_id = getConfiguredBayId();
   const { rows } = await getPool().query<ProjectCourseManagedProjectState>(
     `SELECT project_id::text, users, course, title, description, env
-       FROM projects
+      FROM projects
       WHERE project_id=ANY($1::uuid[])
         AND deleted IS NULL
-        AND COALESCE(owning_bay_id, $2::uuid)=$2::uuid`,
+        AND COALESCE(owning_bay_id, $2)=$2`,
     [ids, bay_id],
   );
   return rows;
