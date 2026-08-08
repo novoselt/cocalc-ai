@@ -243,6 +243,32 @@ describe("course managed project reconciliation", () => {
     expect(inviteCollaboratorMock).not.toHaveBeenCalled();
   });
 
+  it("publishes metadata-only changes to the live account project feed", async () => {
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT users, course")) {
+        return {
+          rows: [matchingState({ title: "Outdated title" })],
+        };
+      }
+      return { rows: [] };
+    });
+    const { reconcileCourseManagedProjectLocal } =
+      await import("./reconcile-managed-project");
+
+    await reconcileCourseManagedProjectLocal(request({ allow_collabs: true }));
+
+    expect(publishProjectDetailInvalidationBestEffortMock).toHaveBeenCalledWith(
+      {
+        project_id: PROJECT,
+        fields: ["title"],
+      },
+    );
+    expect(publishProjectAccountFeedEventsBestEffortMock).toHaveBeenCalledWith({
+      project_id: PROJECT,
+    });
+    expect(syncProjectUsersOnHostMock).not.toHaveBeenCalled();
+  });
+
   it("removes unexpected collaborators when collaborator management is disabled", async () => {
     const { reconcileCourseManagedProjectLocal } =
       await import("./reconcile-managed-project");

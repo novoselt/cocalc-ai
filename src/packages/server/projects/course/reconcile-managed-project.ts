@@ -314,8 +314,14 @@ export async function reconcileCourseManagedProjectLocal(
       fields: [...changedFields] as any,
     });
   }
-  if (usersChanged) {
+  if (
+    usersChanged ||
+    changedFields.has("title") ||
+    changedFields.has("description")
+  ) {
     await publishProjectAccountFeedEventsBestEffort({ project_id });
+  }
+  if (usersChanged) {
     try {
       await syncProjectUsersOnHost({ project_id });
     } catch (err) {
