@@ -23,6 +23,7 @@ import HelpMeFix from "@cocalc/frontend/frame-editors/ai/help-me-fix";
 import { capitalize, is_different, path_split } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import { Actions } from "./actions";
+import { getLatexHelpInput } from "./help-input";
 import { use_build_logs } from "./hooks";
 import { BuildLogs } from "./types";
 
@@ -147,15 +148,7 @@ const Item: React.FC<ItemProps> = React.memo(
           task={"ran latex"}
           error={item.get("message") ?? ""}
           line={item.get("content") ?? ""}
-          input={() => {
-            const s = actions._syncstring.to_str();
-            const v = s
-              .split("\n")
-              .slice(0, line + 1)
-              .join("\n");
-            //line+1 since lines are 1-based
-            return v + `% this is line number ${line + 1}`;
-          }}
+          input={() => getLatexHelpInput(actions._syncstring, line)}
           language={"latex"}
           extraFileInfo={actions.languageModelExtraFileInfo()}
           tag={"latex-error-frame"}
