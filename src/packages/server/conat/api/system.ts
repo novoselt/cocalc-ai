@@ -251,6 +251,7 @@ import {
   getActiveUserMapOverviewAcrossBays,
   recordAccountPresenceLocation,
 } from "@cocalc/server/account-presence-locations";
+import { getActiveUserMapDailyHistory as getActiveUserMapDailyHistoryLocal } from "@cocalc/server/active-user-map-history";
 import { createRememberMeCookie } from "@cocalc/server/auth/remember-me";
 import {
   recordNewAuthSession,
@@ -277,7 +278,10 @@ import {
 } from "@cocalc/server/app-private-hostnames";
 import { getBayPublicOrigin } from "@cocalc/server/bay-public-origin";
 import { conat } from "@cocalc/backend/conat";
-import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
+import {
+  createInterBayAccountLocalClient,
+  type ActiveUserMapDailyHistory,
+} from "@cocalc/conat/inter-bay/api";
 import { sysApiMany } from "@cocalc/conat/core/sys";
 import type { ConnectionStats } from "@cocalc/conat/core/types";
 import { getParallelOpsStatus as getParallelOpsStatus0 } from "@cocalc/server/lro/worker-status";
@@ -6696,6 +6700,24 @@ export async function getActiveUserMap({
     account_id,
     active_minutes,
   });
+}
+
+export async function getActiveUserMapDailyHistory({
+  account_id,
+  days,
+}: {
+  account_id?: string;
+  days?: number;
+} = {}): Promise<ActiveUserMapDailyHistory> {
+  await assertAdmin(account_id);
+  const currentBayId = getConfiguredBayId();
+  const seedBayId = getConfiguredClusterSeedBayId();
+  if (currentBayId !== seedBayId) {
+    return await getInterBayBridge()
+      .bayOps(seedBayId, { timeout_ms: 30_000 })
+      .getActiveUserMapDailyHistory({ days });
+  }
+  return await getActiveUserMapDailyHistoryLocal({ days });
 }
 
 export async function listBrowserSessions({

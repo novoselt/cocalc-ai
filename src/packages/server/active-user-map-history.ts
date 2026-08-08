@@ -5,6 +5,8 @@
 
 import getLogger from "@cocalc/backend/logger";
 import type {
+  ActiveUserMapDailyHistory,
+  ActiveUserMapDailyHistoryPoint,
   ActiveUserMapHistoryAccount,
   ActiveUserMapHistoryReport,
 } from "@cocalc/conat/inter-bay/api";
@@ -19,6 +21,7 @@ import { COOKIE_CONSENT_REVISION } from "@cocalc/util/cookie-consent";
 const logger = getLogger("server:active-user-map-history");
 
 export const ACTIVE_USER_MAP_HISTORY_WINDOWS = [60, 1440] as const;
+export const ACTIVE_USER_MAP_DAILY_HISTORY_DAYS = 2 * 364;
 // Country-level aggregates are small and retain long-term analytical value.
 // Set this to a positive number to enable automatic pruning.
 export const ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS: number | null = null;
@@ -186,6 +189,61 @@ function snapshotHour(capturedAt: Date): Date {
   const value = new Date(capturedAt);
   value.setUTCMinutes(0, 0, 0);
   return value;
+}
+
+type DailyHistoryRow = Omit<
+  ActiveUserMapDailyHistoryPoint,
+  "snapshot_hour" | "captured_at"
+> & {
+  snapshot_hour: Date | string;
+  captured_at: Date | string;
+};
+
+export async function getActiveUserMapDailyHistory({
+  client,
+  days = ACTIVE_USER_MAP_DAILY_HISTORY_DAYS,
+  now = new Date(),
+}: {
+  client?: PoolClient;
+  days?: number;
+  now?: Date;
+} = {}): Promise<ActiveUserMapDailyHistory> {
+  if (!Number.isInteger(days) || days < 1 || days > 10 * 365) {
+    throw Error("days must be an integer between 1 and 3650");
+  }
+  if (!Number.isFinite(now.valueOf())) {
+    throw Error("now must be a valid date");
+  }
+  const pool = client ?? getPool();
+  const { rows } = await pool.query<DailyHistoryRow>(
+    `WITH daily AS (
+       SELECT DISTINCT ON (
+                (snapshot_hour AT TIME ZONE 'UTC')::date
+              )
+              snapshot_hour, captured_at, total_active, mapped_active,
+              unknown_location, usage_metrics_not_enabled, bay_count
+         FROM active_user_map_history_snapshots
+        WHERE active_minutes = 1440
+          AND snapshot_hour > $1::timestamptz - ($2::int * INTERVAL '1 day')
+          AND snapshot_hour <= $1::timestamptz
+        ORDER BY (snapshot_hour AT TIME ZONE 'UTC')::date,
+                 snapshot_hour DESC
+     )
+     SELECT snapshot_hour, captured_at, total_active, mapped_active,
+            unknown_location, usage_metrics_not_enabled, bay_count
+       FROM daily
+      ORDER BY snapshot_hour`,
+    [now, days],
+  );
+  return {
+    active_minutes: 1440,
+    days,
+    points: rows.map((row) => ({
+      ...row,
+      snapshot_hour: new Date(row.snapshot_hour).toISOString(),
+      captured_at: new Date(row.captured_at).toISOString(),
+    })),
+  };
 }
 
 export async function storeActiveUserMapHistorySnapshots({

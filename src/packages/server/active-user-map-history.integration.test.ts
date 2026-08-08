@@ -9,13 +9,14 @@ import { COOKIE_CONSENT_REVISION } from "@cocalc/util/cookie-consent";
 import { uuid } from "@cocalc/util/misc";
 import {
   aggregateActiveUserMapHistoryReports,
+  getActiveUserMapDailyHistory,
   getActiveUserMapHistoryReport,
   pruneActiveUserMapHistory,
   storeActiveUserMapHistorySnapshots,
 } from "./active-user-map-history";
 
 beforeAll(async () => {
-  await before();
+  await before({ noConat: true });
 }, 15_000);
 afterAll(after);
 
@@ -195,6 +196,83 @@ describe("active user map history database integration", () => {
       expect(countries.rows).toEqual([
         { country_code: "CA", active_count: 10 },
       ]);
+    } finally {
+      await client.query(
+        `DELETE FROM active_user_map_history_countries
+          WHERE snapshot_hour = ANY($1::timestamptz[])`,
+        [hours],
+      );
+      await client.query(
+        `DELETE FROM active_user_map_history_snapshots
+          WHERE snapshot_hour = ANY($1::timestamptz[])`,
+        [hours],
+      );
+      client.release();
+    }
+  });
+
+  it("returns the latest 24-hour snapshot for each UTC day", async () => {
+    const client = await getPool().connect();
+    const captured = [
+      new Date("2041-05-20T12:15:00.000Z"),
+      new Date("2041-06-01T10:15:00.000Z"),
+      new Date("2041-06-01T20:15:00.000Z"),
+      new Date("2041-06-02T08:15:00.000Z"),
+    ];
+    const hours = captured.map((date) => {
+      const hour = new Date(date);
+      hour.setUTCMinutes(0, 0, 0);
+      return hour;
+    });
+    try {
+      for (const [index, captured_at] of captured.entries()) {
+        await storeActiveUserMapHistorySnapshots({
+          client,
+          captured_at,
+          bay_count: 2,
+          snapshots: [
+            {
+              active_minutes: 1440,
+              total_active: 10 * (index + 1),
+              mapped_active: 8 * (index + 1),
+              unknown_location: index + 1,
+              usage_metrics_not_enabled: index + 1,
+              countries: [],
+            },
+          ],
+        });
+      }
+
+      await expect(
+        getActiveUserMapDailyHistory({
+          client,
+          days: 3,
+          now: new Date("2041-06-03T23:00:00.000Z"),
+        }),
+      ).resolves.toEqual({
+        active_minutes: 1440,
+        days: 3,
+        points: [
+          {
+            snapshot_hour: hours[2].toISOString(),
+            captured_at: captured[2].toISOString(),
+            total_active: 30,
+            mapped_active: 24,
+            unknown_location: 3,
+            usage_metrics_not_enabled: 3,
+            bay_count: 2,
+          },
+          {
+            snapshot_hour: hours[3].toISOString(),
+            captured_at: captured[3].toISOString(),
+            total_active: 40,
+            mapped_active: 32,
+            unknown_location: 4,
+            usage_metrics_not_enabled: 4,
+            bay_count: 2,
+          },
+        ],
+      });
     } finally {
       await client.query(
         `DELETE FROM active_user_map_history_countries

@@ -21,6 +21,7 @@ import type {
   ActiveUserMapUser,
   ActiveUserMapWindowMinutes,
 } from "@cocalc/conat/hub/api/system";
+import type { ActiveUserMapDailyHistory } from "@cocalc/conat/inter-bay/api";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { TimeAgo } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
@@ -34,6 +35,7 @@ import {
   activeUsersMapCountryName,
   ActiveUsersMapPlot,
 } from "./active-users-map-plot";
+import { ActiveUsersMapHistoryPlot } from "./active-users-map-history-plot";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
 const { Paragraph, Text } = Typography;
@@ -135,6 +137,9 @@ export function ActiveUsersMapAdmin() {
   const [overview, setOverview] = useState<ActiveUserMapOverview>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [history, setHistory] = useState<ActiveUserMapDailyHistory>();
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string>();
   const [selectedGroup, setSelectedGroup] = useState<string>();
   const [selectedUser, setSelectedUser] = useState<User>();
   const [loadingUser, setLoadingUser] = useState(false);
@@ -172,6 +177,26 @@ export function ActiveUsersMapAdmin() {
     }, REFRESH_MS);
     return () => clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        const next =
+          await webapp_client.conat_client.hub.system.getActiveUserMapDailyHistory(
+            {},
+          );
+        if (!disposed) setHistory(next);
+      } catch (err) {
+        if (!disposed) setHistoryError(`${err}`);
+      } finally {
+        if (!disposed) setHistoryLoading(false);
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   const selectedCountry = overview?.countries.find(
     (country) => country.country_code === selectedGroup,
@@ -265,6 +290,13 @@ export function ActiveUsersMapAdmin() {
             countries={overview.countries}
             selectedCountryCode={selectedCountry?.country_code}
             onSelect={setSelectedGroup}
+          />
+          {historyError && (
+            <ShowError error={historyError} setError={setHistoryError} />
+          )}
+          <ActiveUsersMapHistoryPlot
+            history={history}
+            loading={historyLoading}
           />
         </>
       ) : loading && !overview ? (

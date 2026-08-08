@@ -34,6 +34,7 @@ import type { NewsItemWebapp } from "@cocalc/util/types/news";
 import type {
   AccountRehomeOperationSummary,
   AccountRehomeResponse,
+  ActiveUserMapDailyHistory,
 } from "@cocalc/conat/inter-bay/api";
 import type {
   BrowserAutomationCentralAuditEvent,
@@ -57,6 +58,7 @@ export const system = {
   setBayProjectOwnershipAdmission: authFirstRequireAccount,
   getBayLoad: authFirst,
   getActiveUserMap: authFirst,
+  getActiveUserMapDailyHistory: authFirst,
   recordUxLatencyEvent: authFirst,
   getUxLatencySummary: authFirstRequireAccount,
   getLaunchHealth: authFirstRequireAccount,
@@ -2004,6 +2006,10 @@ export interface System {
   getActiveUserMap: (
     opts: ActiveUserMapQuery,
   ) => Promise<ActiveUserMapOverview>;
+
+  getActiveUserMapDailyHistory: (opts?: {
+    days?: number;
+  }) => Promise<ActiveUserMapDailyHistory>;
 
   recordUxLatencyEvent: (opts: {
     account_id?: string;

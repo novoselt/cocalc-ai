@@ -161,7 +161,10 @@ import {
   getMembershipAnalyticsOverviewLocal,
 } from "@cocalc/server/membership/analytics";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
-import { getActiveUserMapHistoryReport } from "@cocalc/server/active-user-map-history";
+import {
+  getActiveUserMapDailyHistory,
+  getActiveUserMapHistoryReport,
+} from "@cocalc/server/active-user-map-history";
 import {
   readWebappCrashesLocal,
   setWebappCrashResolutionLocal,
@@ -649,6 +652,12 @@ async function startBayOpsService(): Promise<void> {
       await getActiveUserMapOverview({ active_minutes }),
     getActiveUserMapHistoryReport: async (opts) =>
       await getActiveUserMapHistoryReport(opts),
+    getActiveUserMapDailyHistory: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("active user map history is authoritative on the seed bay");
+      }
+      return await getActiveUserMapDailyHistory(opts);
+    },
     getMembershipAnalyticsEvents: async (opts) =>
       await getMembershipAnalyticsEventsLocal({ query: opts }),
     backfillMembershipAnalyticsPurchases: async (opts) =>
