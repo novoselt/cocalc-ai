@@ -58,7 +58,7 @@ import {
   plural,
 } from "@cocalc/util/misc";
 import {
-  moneyRound2Down,
+  moneyRoundToCents,
   moneyToDbString,
   toDecimal,
   type MoneyValue,
@@ -696,9 +696,7 @@ function getDetailedPrintColumns({
       title: "Balance",
       align: "right",
       render: ({ balance }) =>
-        balance == null
-          ? ""
-          : currency(moneyRound2Down(toDecimal(balance)).toNumber(), 2),
+        balance == null ? "" : currency(toDecimal(balance).toNumber(), 2),
     });
   }
   return columns;
@@ -1561,7 +1559,7 @@ function Balance({ balance }) {
     const balanceValue = toDecimal(balance);
     return (
       <span style={getAmountStyle(balanceValue.toNumber())}>
-        {currency(moneyRound2Down(balanceValue).toNumber(), 2)}
+        {currency(balanceValue.toNumber(), 2)}
       </span>
     );
   }
@@ -1630,11 +1628,11 @@ function getCost(row: PurchaseItem) {
     return row.cost;
   }
   if (row.cost_so_far != null) {
-    return row.cost_so_far;
+    return moneyRoundToCents(row.cost_so_far);
   }
   if (row.cost_per_hour != null && row.period_start != null) {
     const hours = periodLengthInHours(row);
-    return toDecimal(row.cost_per_hour).mul(hours).toNumber();
+    return moneyRoundToCents(toDecimal(row.cost_per_hour).mul(hours));
   }
   return 0;
 }

@@ -262,6 +262,8 @@ export const TABLE_OWNERSHIP = {
 
   ...entries(
     [
+      "active_user_map_history_countries",
+      "active_user_map_history_snapshots",
       "buckets",
       "crm_leads",
       "crm_organizations",

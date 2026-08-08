@@ -50,6 +50,23 @@ function adminDeps(overrides: Record<string, any> = {}) {
   };
 }
 
+test("purchase cost migration requires explicit offline confirmation", async () => {
+  const program = new Command();
+  registerAdminCommand(program, adminDeps() as any);
+
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "purchase",
+      "migrate-cost-cents",
+      "--execute",
+    ]),
+    /--yes-i-stopped-cocalc/,
+  );
+});
+
 test("admin membership-package purchase previews before committing", async () => {
   let quoteArgs: any;
   let purchaseCalls = 0;

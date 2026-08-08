@@ -753,7 +753,7 @@ export const EXTRAS: SettingsExtras = {
   },
   active_user_map_enabled: {
     name: "Active Users Map: Enabled",
-    desc: "Collect one short-lived approximate Cloudflare location per active account and enable the admin active-users world map. No IP address or location history is stored. Disabled by default.",
+    desc: "Collect one short-lived approximate Cloudflare location per active account, enable the admin active-users world map, and retain consent-gated country aggregates for 24 months. No IP address or account-linked location history is stored. Disabled by default.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,

@@ -227,7 +227,9 @@ export function ActiveUsersMapAdmin() {
       <Paragraph type="secondary" style={{ marginBottom: 0 }}>
         Accounts across registered bays whose <code>last_active</code> changed
         during the selected window. Locations are approximate, short-lived
-        Cloudflare observations; no IP address or location history is stored.
+        Cloudflare observations; no IP address or account-linked location
+        history is stored. Country-level history includes only accounts that
+        enabled Usage metrics and is retained for up to 24 months.
       </Paragraph>
       <Space wrap>
         <Segmented

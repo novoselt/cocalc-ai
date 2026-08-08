@@ -383,22 +383,21 @@ export async function listClusterBayRegistry(): Promise<BayRegistryEntry[]> {
   return await getRegistryClient().list({});
 }
 
-export async function listClusterBayInfos(): Promise<BayInfo[]> {
-  const entries = await listClusterBayRegistry();
-  if (!entries.length) {
-    return [
-      {
-        bay_id: getConfiguredBayId(),
-        label: getConfiguredBayLabel(getConfiguredBayId()),
-        region: getConfiguredBayRegion(),
-        deployment_mode: isMultiBayCluster() ? "multi-bay" : "single-bay",
-        role: currentRoleForRegistry() as BayInfo["role"],
-        is_default: true,
-        accepts_project_ownership: true,
-        project_ownership_note: null,
-      },
-    ];
-  }
+function localBayInfo(): BayInfo {
+  const bay_id = getConfiguredBayId();
+  return {
+    bay_id,
+    label: getConfiguredBayLabel(bay_id),
+    region: getConfiguredBayRegion(),
+    deployment_mode: isMultiBayCluster() ? "multi-bay" : "single-bay",
+    role: currentRoleForRegistry() as BayInfo["role"],
+    is_default: true,
+    accepts_project_ownership: true,
+    project_ownership_note: null,
+  };
+}
+
+function bayInfosFromRegistry(entries: BayRegistryEntry[]): BayInfo[] {
   const localBayId = getConfiguredBayId();
   return entries.map((entry) => ({
     bay_id: entry.bay_id,
@@ -413,6 +412,22 @@ export async function listClusterBayInfos(): Promise<BayInfo[]> {
     accepts_project_ownership: entry.accepts_project_ownership !== false,
     project_ownership_note: entry.project_ownership_note ?? null,
   }));
+}
+
+export async function listClusterBayInfos(): Promise<BayInfo[]> {
+  const entries = await listClusterBayRegistry();
+  return entries.length ? bayInfosFromRegistry(entries) : [localBayInfo()];
+}
+
+export async function listAuthoritativeClusterBayInfos(): Promise<BayInfo[]> {
+  if (!isMultiBayCluster()) {
+    return [localBayInfo()];
+  }
+  const entries = await listClusterBayRegistry();
+  if (!entries.length) {
+    throw Error("authoritative multi-bay registry is empty");
+  }
+  return bayInfosFromRegistry(entries);
 }
 
 export async function buildLocalBayRegistration(): Promise<BayRegistryRegisterRequest> {

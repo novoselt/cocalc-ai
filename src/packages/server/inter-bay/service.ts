@@ -161,6 +161,7 @@ import {
   getMembershipAnalyticsOverviewLocal,
 } from "@cocalc/server/membership/analytics";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
+import { getActiveUserMapHistoryReport } from "@cocalc/server/active-user-map-history";
 import {
   readWebappCrashesLocal,
   setWebappCrashResolutionLocal,
@@ -646,6 +647,8 @@ async function startBayOpsService(): Promise<void> {
     }),
     getActiveUserMap: async ({ active_minutes }) =>
       await getActiveUserMapOverview({ active_minutes }),
+    getActiveUserMapHistoryReport: async (opts) =>
+      await getActiveUserMapHistoryReport(opts),
     getMembershipAnalyticsEvents: async (opts) =>
       await getMembershipAnalyticsEventsLocal({ query: opts }),
     backfillMembershipAnalyticsPurchases: async (opts) =>

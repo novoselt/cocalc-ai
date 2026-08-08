@@ -658,9 +658,12 @@ async function finalizeDedicatedHostPurchaseRowByIdLocal({
       SET period_end = $2::timestamp,
           cost = COALESCE(
             cost,
-            cost_per_hour * GREATEST(
-              0::numeric,
-              EXTRACT(EPOCH FROM ($2::timestamp - period_start))::numeric / 3600
+            ROUND(
+              cost_per_hour * GREATEST(
+                0::numeric,
+                EXTRACT(EPOCH FROM ($2::timestamp - period_start))::numeric / 3600
+              ),
+              2
             )
           )
       WHERE id=$1
@@ -1098,7 +1101,8 @@ export async function recordDedicatedHostMeteredUsageLocal(
           ) {
             await client.query(
               `UPDATE purchases
-                  SET cost=cost_so_far, cost_so_far=NULL, period_end=$2
+                  SET cost=ROUND(cost_so_far, 2), cost_so_far=NULL,
+                      period_end=$2
                 WHERE id=$1`,
               [purchase.id, intervalEnd],
             );
@@ -1248,7 +1252,7 @@ export async function recordDedicatedHostMeteredUsageLocal(
       if (finalizePurchase && purchaseId != null) {
         await client.query(
           `UPDATE purchases
-              SET cost=cost_so_far, cost_so_far=NULL, period_end=$2,
+              SET cost=ROUND(cost_so_far, 2), cost_so_far=NULL, period_end=$2,
                   description=$3
             WHERE id=$1 AND cost IS NULL`,
           [purchaseId, periodMeteredThroughAt, description],

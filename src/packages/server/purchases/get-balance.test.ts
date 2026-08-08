@@ -9,6 +9,10 @@ import { uuid } from "@cocalc/util/misc";
 import dayjs from "dayjs";
 import { before, after, getPool } from "@cocalc/server/test";
 import { toDecimal } from "@cocalc/util/money";
+import {
+  ensurePurchaseCostCentsSchema,
+  PURCHASE_COST_CENTS_TRIGGER,
+} from "@cocalc/database/postgres/schema/purchase-cost-cents";
 
 beforeAll(async () => {
   await before({ noConat: true });
@@ -34,6 +38,82 @@ describe("test computing balance under various conditions", () => {
       -3.89,
       2,
     );
+  });
+
+  it("posts finalized costs in whole cents", async () => {
+    const account_id = uuid();
+    const purchase_id = await createPurchase({
+      account_id,
+      service: "student-pay",
+      description: {} as any,
+      client: null,
+      cost: "1.005",
+    });
+    const { rows } = await getPool().query(
+      "SELECT cost FROM purchases WHERE id=$1",
+      [purchase_id],
+    );
+
+    expect(rows[0].cost).toBe("1.0100000000");
+    expect(await getBalance({ account_id })).toBe("-1.0100000000");
+  });
+
+  it("normalizes direct fractional finalized ledger writes", async () => {
+    const inserted = await getPool().query(
+      `INSERT INTO purchases
+         (time, account_id, cost, service, description)
+       VALUES (NOW(), $1, $2, 'student-pay', '{}'::jsonb)
+       RETURNING cost`,
+      [uuid(), "1.006"],
+    );
+    expect(inserted.rows[0].cost).toBe("1.0100000000");
+
+    const purchase_id = await createPurchase({
+      account_id: uuid(),
+      service: "dedicated-host",
+      description: {} as any,
+      client: null,
+      cost_per_hour: "0.02",
+      period_start: new Date(),
+    });
+    const updated = await getPool().query(
+      "UPDATE purchases SET cost=$2 WHERE id=$1 RETURNING cost",
+      [purchase_id, "0.006"],
+    );
+    expect(updated.rows[0].cost).toBe("0.0100000000");
+  });
+
+  it("preserves a zero aggregate balance for legacy fractional rows", async () => {
+    const account_id = uuid();
+    const pool = getPool();
+    await pool.query(
+      `DROP TRIGGER IF EXISTS ${PURCHASE_COST_CENTS_TRIGGER} ON purchases`,
+    );
+    try {
+      await pool.query(
+        `INSERT INTO purchases
+           (time, account_id, cost, service, description)
+         VALUES
+           (NOW(), $1, 0.005, 'dedicated-host', '{}'),
+           (NOW(), $1, 0.005, 'dedicated-host', '{}'),
+           (NOW(), $1, -0.01, 'refund', '{}')`,
+        [account_id],
+      );
+    } finally {
+      const client = await pool.connect();
+      try {
+        await ensurePurchaseCostCentsSchema(client);
+      } finally {
+        client.release();
+      }
+    }
+    try {
+      expect(await getBalance({ account_id })).toBe("0.0000000000");
+    } finally {
+      await pool.query("DELETE FROM purchases WHERE account_id=$1", [
+        account_id,
+      ]);
+    }
   });
 
   it("with an additional credit", async () => {
@@ -159,6 +239,25 @@ describe("test computing balance under various conditions", () => {
       -1.25,
       2,
     );
+  });
+
+  it("rounds a precise active usage estimate in the account balance", async () => {
+    const account_id = uuid();
+    const purchase_id = await createPurchase({
+      account_id,
+      service: "dedicated-host",
+      description: {} as any,
+      client: null,
+      cost_so_far: "0.006",
+      period_start: new Date(),
+    });
+    const { rows } = await getPool().query(
+      "SELECT cost_so_far FROM purchases WHERE id=$1",
+      [purchase_id],
+    );
+
+    expect(rows[0].cost_so_far).toBe("0.0060000000");
+    expect(await getBalance({ account_id })).toBe("-0.0100000000");
   });
 
   it("with a purchase that has a closed range and a cost_per_hour", async () => {

@@ -50,6 +50,52 @@ function pricingSnapshot(
 }
 
 describe("dedicated host spend accounting", () => {
+  it.each([
+    { minutes: 10, expected: "0.0000000000" },
+    { minutes: 20, expected: "0.0100000000" },
+  ])(
+    "rounds an independent $minutes-minute host transaction once when finalized",
+    async ({ minutes, expected }) => {
+      const account_id = uuid();
+      const host_id = uuid();
+      const ended_at = new Date();
+      const started_at = new Date(ended_at.valueOf() - minutes * 60_000);
+      await reconcileDedicatedHostPurchaseSessionLocal({
+        account_id,
+        host_id,
+        host_name: "Small Host",
+        host_bay_id: "bay-0",
+        provider: "gcp",
+        region: "us-central1",
+        billing_state: "running",
+        machine_type: "small",
+        pricing_model: "on_demand",
+        funding_lane: "prepaid",
+        hourly_cost_usd: "0.02",
+        pricing_snapshot: pricingSnapshot("0.02"),
+        started_at,
+      });
+      await closeDedicatedHostPurchaseSessionLocal({
+        account_id,
+        host_id,
+        ended_at,
+      });
+
+      const { rows } = await getPool().query(
+        `SELECT cost, cost_per_hour
+           FROM purchases
+          WHERE account_id=$1 AND tag=$2`,
+        [account_id, `dedicated-host:${host_id}`],
+      );
+      expect(rows).toEqual([
+        {
+          cost: expected,
+          cost_per_hour: "0.0200000000",
+        },
+      ]);
+    },
+  );
+
   it("accumulates idempotent VM egress intervals into one purchase", async () => {
     const account_id = uuid();
     const resource_id = uuid();
@@ -159,6 +205,53 @@ describe("dedicated host spend accounting", () => {
     const usage = await getDedicatedHostWindowUsageLocal(account_id);
     expect(toDecimal(usage.prepaid_5h_usd).toNumber()).toBeCloseTo(0.3, 8);
     expect(toDecimal(usage.prepaid_7d_usd).toNumber()).toBeCloseTo(0.3, 8);
+  });
+
+  it("keeps egress metering precise and rounds only its finalized purchase", async () => {
+    const account_id = uuid();
+    const resource_id = uuid();
+    const interval_start = dayjs().subtract(5, "minute").toDate();
+    const interval_end = new Date(interval_start.valueOf() + 5 * 60_000);
+    const request = {
+      account_id,
+      resource_id,
+      resource_name: "VM egress: small transfer",
+      resource_bay_id: "bay-0",
+      provider: "gcp",
+      region: "us-central1",
+      funding_lane: "prepaid" as const,
+      unit_cost_usd_per_gb: "0.10",
+    };
+    await recordDedicatedHostMeteredUsageLocal({
+      ...request,
+      bytes: 60_000_000,
+      cost_usd: "0.006",
+      interval_start,
+      interval_end,
+    });
+    await recordDedicatedHostMeteredUsageLocal({
+      ...request,
+      bytes: 0,
+      cost_usd: "0",
+      interval_start: interval_end,
+      interval_end,
+      finalize: true,
+    });
+
+    const { rows: intervals } = await getPool().query(
+      `SELECT amount_usd
+         FROM compute_egress_meter_intervals
+        WHERE owner_account_id=$1 AND resource_id=$2`,
+      [account_id, resource_id],
+    );
+    expect(intervals).toEqual([{ amount_usd: "0.0060000000" }]);
+    const { rows: purchases } = await getPool().query(
+      `SELECT cost, cost_so_far
+         FROM purchases
+        WHERE account_id=$1 AND tag LIKE $2`,
+      [account_id, `dedicated-host-metered:${resource_id}:%`],
+    );
+    expect(purchases).toEqual([{ cost: "0.0100000000", cost_so_far: null }]);
   });
 
   it("rotates one VM egress purchase per calendar billing month", async () => {

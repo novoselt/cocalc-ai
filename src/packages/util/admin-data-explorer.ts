@@ -229,6 +229,7 @@ export const ADMIN_DATA_EXPLORER_ALLOWED_SQL_COLUMNS = {
     "description",
     "tag",
     "day_statement_id",
+    "month_statement_id",
   ],
   statements: [
     "id",
