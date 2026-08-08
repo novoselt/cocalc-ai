@@ -15,6 +15,7 @@ import HelpMeFix from "@cocalc/frontend/frame-editors/ai/help-me-fix";
 import { capitalize } from "@cocalc/util/misc";
 import type { Actions } from "./actions";
 import { SPEC, SpecItem } from "./errors-and-warnings";
+import { getLatexHelpInput } from "./help-input";
 import { Error, IProcessedLatexLog } from "./latex-log-parser";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
 
@@ -89,15 +90,7 @@ function Component({
                   task={"ran latex"}
                   error={message}
                   line={content}
-                  input={() => {
-                    const s = actions._syncstring.to_str();
-                    const v = s
-                      .split("\n")
-                      .slice(0, line + 1)
-                      .join("\n");
-                    //line+1 since lines are 1-based
-                    return v + `% this is line number ${line + 1}`;
-                  }}
+                  input={() => getLatexHelpInput(actions._syncstring, line)}
                   language={"latex"}
                   extraFileInfo={actions.languageModelExtraFileInfo()}
                   tag={"latex-error-popover"}
