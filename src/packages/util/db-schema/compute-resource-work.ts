@@ -15,7 +15,8 @@ Table({
     id: { type: "uuid", desc: "Durable work identifier." },
     queue_order: {
       type: "integer",
-      pg_type: "BIGSERIAL UNIQUE",
+      pg_type: "BIGSERIAL",
+      unique: true,
       noCoerce: true,
       desc: "Database-assigned FIFO order for durable work.",
     },

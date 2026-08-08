@@ -168,8 +168,9 @@ async function getColumnActions(
       goal_type = "array";
     } else {
       goal_type = goal_type_raw.split(" ")[0];
-      if (goal_type === "serial") {
-        // We can't do anything with this (or we could, but it's way too complicated).
+      if (["smallserial", "serial", "bigserial"].includes(goal_type)) {
+        // Serial pseudo-types materialize as integer columns backed by a
+        // sequence, so information_schema will never report the pseudo-type.
         continue;
       }
       if (goal_type.slice(0, 4) === "char") {
