@@ -24,6 +24,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
   const callbackResults: unknown[] = [];
   const ttlCalls: any[] = [];
   const createCalls: any[] = [];
+  const progressMessages: string[] = [];
   const sshAuthorizationCalls: any[] = [];
   const projectSshAuthorizationCalls: any[] = [];
   const listCalls: any[] = [];
@@ -89,6 +90,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
       callbackResults.push(result);
       return result;
     },
+    progress: (message) => progressMessages.push(message),
     runSsh: (args) => sshCalls.push(args),
     runRsync: (args) => rsyncCalls.push(args),
     resolvePublicKey: (path) => ({
@@ -104,6 +106,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
     callbackResults,
     ttlCalls,
     createCalls,
+    progressMessages,
     sshAuthorizationCalls,
     projectSshAuthorizationCalls,
     listCalls,
@@ -168,6 +171,28 @@ describe("vm create", () => {
       createCalls[0]?.ssh_public_key,
       "ssh-ed25519 AAAAUSER user@example.com",
     );
+  });
+
+  it("reports when provider provisioning is queued", async () => {
+    const { program, progressMessages } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "status-vm",
+      "--project",
+      "project-id",
+      "--zone",
+      "us-west1-a",
+      "--machine",
+      "e2-standard-2",
+      "--no-ssh-key",
+    ]);
+    assert.deepEqual(progressMessages, [
+      "[vm create] Submitting 'status-vm' (e2-standard-2, us-west1-a)...",
+      "[vm create] Provider provisioning queued for 'status-vm' (id vm-id).",
+    ]);
   });
 });
 

@@ -12,6 +12,7 @@ import { Command } from "commander";
 
 export type VmCommandDeps = {
   withContext: any;
+  progress?: (message: string) => void;
   runSsh?: (args: string[]) => void;
   runRsync?: (args: string[]) => void;
   resolvePublicKey?: (path?: string) => { path?: string; key: string };
@@ -345,6 +346,7 @@ export function volumeListSummary(rows: any[]) {
 export function registerVmCommand(program: Command, deps: VmCommandDeps) {
   const {
     withContext,
+    progress = (message) => process.stderr.write(`${message}\n`),
     runSsh = defaultRunSsh,
     runRsync = defaultRunRsync,
     resolvePublicKey = readPublicKey,
@@ -478,6 +480,9 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             : opts.sshPublicKeyValue
               ? { key: `${opts.sshPublicKeyValue}`.trim(), path: undefined }
               : resolvePublicKey(opts.sshPublicKey);
+        progress(
+          `[vm create] Submitting '${name}' (${opts.machine}, ${opts.zone})...`,
+        );
         const created = await ctx.hub.compute.createVm({
           project_id: opts.project,
           name,
@@ -492,12 +497,16 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           ssh_public_key: key.key,
           idempotency_key: randomUUID(),
         });
+        progress(
+          `[vm create] Provider provisioning queued for '${name}' (id ${created.id}).`,
+        );
         if (!opts.wait) {
           return {
             ...created,
             ...(key.path ? { ssh_public_key_path: key.path } : {}),
           };
         }
+        progress(`[vm create] Waiting for '${name}' to become SSH-ready...`);
         return {
           ...(await waitForState(
             (vm) => getVmForContext(ctx, vm),

@@ -1630,12 +1630,16 @@ async function createEphemeralProjectAccountContext(
       ],
       { ...process.env, COCALC_CLI_CONFIG: configPath },
     );
-    return await contextForGlobals({
+    const ctx = await contextForGlobals({
       ...globals,
       api: siteUrl,
       profile,
       disableEnvAuthDefaults: true,
     });
+    process.stderr.write(
+      "Temporary account authorization approved. Continuing VM action...\n",
+    );
+    return ctx;
   } finally {
     if (previousConfig == null) {
       delete process.env.COCALC_CLI_CONFIG;
@@ -1669,6 +1673,9 @@ function runInteractiveFreshAuth(
     "This action needs fresh account approval; starting browser elevation.\n",
   );
   runCliAuthChild(args);
+  process.stderr.write(
+    "Fresh account authorization approved. Retrying action...\n",
+  );
 }
 
 function closeCommandContext(ctx: CommandContext | undefined): void {
