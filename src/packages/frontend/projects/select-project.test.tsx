@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { Map as ImmutableMap } from "immutable";
 import React from "react";
 
@@ -44,6 +44,14 @@ const projectMap = ImmutableMap({
       "account-1": ImmutableMap({ group: "viewer" }),
     }),
   }),
+  "hidden-project": ImmutableMap({
+    project_id: "hidden-project",
+    title: "Hidden Project",
+    last_edited: "2026-01-04",
+    users: ImmutableMap({
+      "account-1": ImmutableMap({ group: "owner", hide: true }),
+    }),
+  }),
 });
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
@@ -72,5 +80,21 @@ describe("SelectProject", () => {
     expect(screen.getByText("Owner Project")).toBeTruthy();
     expect(screen.getByText("Collaborator Project")).toBeTruthy();
     expect(screen.queryByText("Viewer Project")).toBeNull();
+  });
+
+  it("sorts visible projects by recent use and hides hidden projects", () => {
+    render(<SelectProject onChange={jest.fn()} />);
+
+    const options = screen.getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Owner Project",
+      "Collaborator Project",
+      "Viewer Project",
+    ]);
+    expect(screen.queryByText("Hidden Project")).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Hidden" }));
+    expect(screen.getByText("Hidden Project")).toBeTruthy();
+    expect(screen.queryByText("Owner Project")).toBeNull();
   });
 });

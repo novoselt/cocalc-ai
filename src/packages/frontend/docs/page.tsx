@@ -89,8 +89,13 @@ export function DocsPage({ print, slug }: { print?: boolean; slug?: string }) {
   );
   const docsPrivateState = useDocsPrivateState(accountId);
   const actionAvailability = useMemo(
-    () => listDocsAppActions({ includeAdmin: isAdmin, projectId: "" }),
-    [isAdmin],
+    () =>
+      listDocsAppActions({
+        docsAccess,
+        includeAdmin: isAdmin,
+        projectId: "",
+      }),
+    [docsAccess, isAdmin],
   );
   const allDocsEntries = useMemo(
     () => listDocsEntries(docsAccess),
@@ -124,6 +129,7 @@ export function DocsPage({ print, slug }: { print?: boolean; slug?: string }) {
     try {
       const result = await revealDocsAction({
         actionId: action.id,
+        docsAccess,
         includeAdmin: isAdmin,
         parameters,
         projectId: "",

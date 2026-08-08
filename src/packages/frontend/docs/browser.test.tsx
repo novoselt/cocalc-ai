@@ -20,6 +20,10 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
   },
 }));
 
+jest.mock("@cocalc/frontend/projects/select-project", () => ({
+  SelectProject: () => <div>Select project</div>,
+}));
+
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { getDocsEntry, listDocsEntries } from "@cocalc/docs";
