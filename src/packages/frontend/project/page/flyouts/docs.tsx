@@ -85,12 +85,18 @@ export function ProjectDocsPanel({
     useTypedRedux("account", "font_size") ?? DEFAULT_FONT_SIZE;
   const accountId = `${useTypedRedux("account", "account_id") ?? ""}`.trim();
   const isAdmin = !!useTypedRedux("account", "is_admin");
+  const computeVmEnabled =
+    useTypedRedux("customize", "compute_vm_enabled") === true;
   const docsAccess = useMemo<DocsAccess>(
     () =>
       lite
         ? { includeAdmin: false, includeSignedIn: false, product: "plus" }
-        : { includeAdmin: isAdmin, includeSignedIn: !!accountId },
-    [accountId, isAdmin],
+        : {
+            features: computeVmEnabled ? ["compute-vms"] : [],
+            includeAdmin: isAdmin,
+            includeSignedIn: !!accountId,
+          },
+    [accountId, computeVmEnabled, isAdmin],
   );
   const docsPrivateState = useDocsPrivateState(accountId);
   const [requestedEntry, setRequestedEntry] = useState<DocsEntry | undefined>();

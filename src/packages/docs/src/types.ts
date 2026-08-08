@@ -11,10 +11,12 @@ export type DocsAudience =
   | "teams";
 
 export type DocsEntryStatus = "draft" | "ready";
+export type DocsFeature = "compute-vms";
 export type DocsProduct = "cocalc" | "plus";
 export type DocsSiteProfile = "cocalc-ai";
 export type DocsVisibility = "public" | "signed-in" | "admin";
 export type DocsAccess = {
+  features?: readonly DocsFeature[];
   includeAdmin?: boolean;
   includeSignedIn?: boolean;
   product?: DocsProduct;
@@ -125,6 +127,7 @@ export interface DocsEntry {
   image?: DocsEntryImage;
   lastReviewed: string;
   noActionReason?: string;
+  requiredFeatures?: readonly DocsFeature[];
   searchKeywords?: string;
   siteProfiles?: DocsSiteProfile[];
   slug: string;

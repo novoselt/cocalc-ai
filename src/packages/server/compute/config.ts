@@ -113,18 +113,6 @@ function parseServiceAccount(value: unknown): {
   return { json, project_id };
 }
 
-function defaultNetworkFromLegacySubnetwork(
-  subnetwork: string,
-  networkTag: string,
-): string | undefined {
-  const project = subnetwork.match(
-    /^projects\/([^/]+)\/regions\/[^/]+\/subnetworks\/[^/]+$/,
-  )?.[1];
-  return project
-    ? `projects/${project}/global/networks/${networkTag}`
-    : undefined;
-}
-
 export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
   const environment = environmentFromSettings(settings);
   const { mode, automatic } = parseMode(settings.compute_vm_mode, environment);
@@ -134,10 +122,7 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
   const gcpNetworkTag =
     `${settings.compute_vm_gcp_network_tag ?? ""}`.trim() ||
     "cocalc-compute-vm";
-  const legacySubnetwork = `${settings.compute_vm_gcp_subnetwork ?? ""}`.trim();
-  const gcpNetwork =
-    `${settings.compute_vm_gcp_network ?? ""}`.trim() ||
-    defaultNetworkFromLegacySubnetwork(legacySubnetwork, gcpNetworkTag);
+  const gcpNetwork = `${settings.compute_vm_gcp_network ?? ""}`.trim();
   const staging_legacy_provider =
     automatic && environment === "staging" && serviceAccount.json == null;
 

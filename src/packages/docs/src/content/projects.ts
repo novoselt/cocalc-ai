@@ -115,6 +115,91 @@ environment, or host placement. For the short creation flow, see
 [Create a project](/docs/projects/create-project).
 `;
 
+export const VIRTUAL_MACHINES_BODY = String.raw`
+## What virtual machines are
+
+Managed Compute VMs are standalone Linux machines associated with a CoCalc
+project. Each VM starts with a minimal Ubuntu 24.04 LTS image. CoCalc, Jupyter,
+and other CoCalc project software are not installed automatically.
+
+Use a VM when the project runtime is not the right size or shape for a job, or
+when you need a conventional machine that you can configure over SSH. Managed
+Compute currently treats every VM independently; it does not provide private
+cluster networking or a cluster scheduler.
+
+## Create a VM
+
+Open **VMs** from the project menu and choose **Create VM**. Configure:
+
+- the region, zone, and machine type;
+- Standard or Spot capacity;
+- the persistent boot-disk size;
+- an optional deletion deadline;
+- an SSH key; and
+- an optional persistent \`/work\` volume.
+
+The create dialog shows the exact equivalent \`cocalc vm create\` command. A
+deletion deadline is optional. Spot capacity is less expensive but can be
+interrupted or unavailable at any time, so use Standard capacity for work that
+must remain continuously available.
+
+Creating or starting a VM requires a membership authorized for prepaid or
+postpaid dedicated-host spending.
+
+## Costs and funding
+
+Compute, the boot disk, and retained \`/work\` volumes appear in **Purchases**.
+Public Internet egress costs **$0.10/GB**. Egress accumulates in one purchase per
+VM per calendar month rather than creating a new purchase for every meter
+sample. Usage normally takes about five minutes to appear, and each VM row shows
+its cumulative metered public egress and cost.
+
+Running VMs stop when funding is unavailable. Site retention policies may later
+delete an unfunded VM and its root disk. A separate \`/work\` volume is retained
+independently, although prolonged inability to fund retained storage can
+eventually require deletion under the site's storage-exposure policy.
+
+## Connect and copy files
+
+After the VM is ready, use the CoCalc CLI:
+
+~~~sh
+cocalc vm list
+cocalc vm ssh my-vm
+cocalc vm ssh my-vm uname -a
+cocalc vm rsync ./data/ my-vm:/work/data/
+cocalc vm rsync my-vm:/work/results/ ./results/
+~~~
+
+To create a normal OpenSSH alias in \`~/.ssh/config\`:
+
+~~~sh
+cocalc vm ssh-config add my-vm
+ssh my-vm
+~~~
+
+Inside a CoCalc project, \`cocalc vm list\` defaults to that project. With
+account authentication, \`cocalc vm list --all\` lists every VM owned by the
+account.
+
+## Persistent /work volumes
+
+A \`/work\` volume is independent of a VM and survives VM deletion. A volume can
+only be attached to a VM in the same zone and to one VM at a time. Select an
+existing volume or create one while creating the VM; changing attachments later
+is not yet supported.
+
+Volumes can grow but cannot shrink. Deleting a detached volume is permanent and
+destroys all data on it.
+
+## Deletion and data safety
+
+Deleting a VM deletes its persistent root disk. It does not normally delete an
+attached \`/work\` volume. Keep durable data on \`/work\`, verify important
+results elsewhere, and delete unused retained volumes explicitly so they do not
+continue accruing storage charges.
+`;
+
 export const RSTUDIO_PROJECT_BODY = String.raw`
 ## What this page is for
 

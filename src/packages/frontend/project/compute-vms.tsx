@@ -38,6 +38,7 @@ import {
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { CopyToClipBoard, Icon, TimeAgo } from "@cocalc/frontend/components";
+import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { mapCountryRegionToR2Region } from "@cocalc/util/consts";
 import {
@@ -1698,9 +1699,44 @@ export function ProjectComputeVms({
     >
       <Flex align="center" justify="space-between" gap={12} wrap>
         <div>
-          <Title level={compact ? 5 : 3} style={{ marginBottom: 0 }}>
-            <Icon name="server" /> Virtual machines
-          </Title>
+          <Flex align="center" gap={4}>
+            <Title level={compact ? 5 : 3} style={{ marginBottom: 0 }}>
+              <Icon name="server" /> Virtual machines
+            </Title>
+            <Popover
+              trigger="click"
+              title="VMs use your membership's dedicated-host spending limits"
+              content={
+                <Space direction="vertical" size={10} style={{ maxWidth: 430 }}>
+                  <Paragraph style={{ marginBottom: 0 }}>
+                    VMs run a minimal Ubuntu 24.04 LTS image; CoCalc and other
+                    special software are not installed. Compute, boot disks, and
+                    retained <Text code>/work</Text> volumes appear in
+                    Purchases.
+                  </Paragraph>
+                  <Paragraph style={{ marginBottom: 0 }}>
+                    Public Internet egress costs $0.10/GB and appears as one
+                    accumulating purchase per VM per calendar month, not a new
+                    line item for every meter sample. Usage can take about five
+                    minutes to appear.
+                  </Paragraph>
+                  <Paragraph style={{ marginBottom: 0 }}>
+                    Running VMs stop when funding is unavailable. After
+                    authorizing an SSH key, connect with the CoCalc CLI or
+                    directly as <Text code>ubuntu</Text> at the public IP.
+                  </Paragraph>
+                </Space>
+              }
+            >
+              <Button
+                aria-label="Virtual machine help"
+                icon={<Icon name="question-circle" />}
+                shape="circle"
+                size="small"
+                type="text"
+              />
+            </Popover>
+          </Flex>
           {!compact && (
             <Paragraph type="secondary" style={{ marginBottom: 12 }}>
               Short-lived machines owned by you and attached to project{" "}
@@ -1709,6 +1745,17 @@ export function ProjectComputeVms({
           )}
         </div>
         <Space>
+          <Button
+            icon={<Icon name="book" />}
+            onClick={() =>
+              openProjectDocs({
+                projectId: project_id,
+                slug: "projects/virtual-machines",
+              })
+            }
+          >
+            Documentation
+          </Button>
           <Button
             type="primary"
             icon={<Icon name="plus" />}
@@ -1752,13 +1799,6 @@ export function ProjectComputeVms({
           style={{ marginBottom: 12 }}
         />
       )}
-      <Alert
-        showIcon
-        type="info"
-        title="VMs use your membership's dedicated-host spending limits."
-        description="VMs run a minimal Ubuntu 24.04 LTS image; CoCalc and other special software are not installed. Compute, boot disks, and retained /work volumes appear in Purchases. Public Internet egress costs $0.10/GB and appears as one accumulating purchase per VM per calendar month, not a new line item for every meter sample. Usage can take about five minutes to appear. Running VMs stop when funding is unavailable. After authorizing an SSH key, connect with the CoCalc CLI or directly as ubuntu at the public IP."
-        style={{ marginBottom: 12 }}
-      />
       <Table<ComputeVm>
         columns={vmColumns}
         dataSource={rows}
@@ -1774,15 +1814,31 @@ export function ProjectComputeVms({
 
       <Flex align="center" justify="space-between" style={{ marginTop: 28 }}>
         <div>
-          <Title level={4} style={{ marginBottom: 0 }}>
-            Persistent /work volumes
-          </Title>
-          <Text type="secondary">
-            Retained independently from virtual machines. A volume can only be
-            attached to a VM in the same zone. Select an existing volume or
-            create a new one when creating the VM; changing attachments later is
-            not yet supported.
-          </Text>
+          <Flex align="center" gap={4}>
+            <Title level={4} style={{ marginBottom: 0 }}>
+              Persistent /work volumes
+            </Title>
+            <Popover
+              trigger="click"
+              title="About persistent /work volumes"
+              content={
+                <Paragraph style={{ marginBottom: 0, maxWidth: 400 }}>
+                  Retained independently from virtual machines. A volume can
+                  only be attached to a VM in the same zone. Select an existing
+                  volume or create a new one when creating the VM; changing
+                  attachments later is not yet supported.
+                </Paragraph>
+              }
+            >
+              <Button
+                aria-label="Persistent volume help"
+                icon={<Icon name="question-circle" />}
+                shape="circle"
+                size="small"
+                type="text"
+              />
+            </Popover>
+          </Flex>
         </div>
         <Button
           icon={<Icon name="plus" />}

@@ -6,6 +6,7 @@ import {
   searchDocsEntries,
   type DocsAccess,
 } from "@cocalc/docs";
+import { getPublicDocsAccess } from "@cocalc/frontend/public/config";
 
 const plusAccess: DocsAccess = { product: "plus" };
 
@@ -81,5 +82,41 @@ describe("CoCalc Plus docs filter", () => {
     expect(getDocsAction("hosts.open", plusAccess)).toBeUndefined();
     expect(getDocsAction("projects.create.open", plusAccess)).toBeUndefined();
     expect(getDocsAction("docs.browser.open", plusAccess)).toBeUndefined();
+  });
+});
+
+describe("feature-gated docs", () => {
+  it("only exposes Managed Compute VM docs when the feature is enabled", () => {
+    expect(getDocsEntry("projects/virtual-machines")).toBeUndefined();
+    expect(
+      searchDocsEntries("managed compute virtual machines", 10).map(
+        (entry) => entry.id,
+      ),
+    ).not.toContain("projects.virtual-machines");
+
+    const access: DocsAccess = { features: ["compute-vms"] };
+    expect(getDocsEntry("projects/virtual-machines", access)?.id).toBe(
+      "projects.virtual-machines",
+    );
+    expect(
+      searchDocsEntries("managed compute virtual machines", 10, access).map(
+        (entry) => entry.id,
+      ),
+    ).toContain("projects.virtual-machines");
+  });
+
+  it("derives VM documentation access from public site configuration", () => {
+    expect(
+      getDocsEntry(
+        "projects/virtual-machines",
+        getPublicDocsAccess({ compute_vm_enabled: false }),
+      ),
+    ).toBeUndefined();
+    expect(
+      getDocsEntry(
+        "projects/virtual-machines",
+        getPublicDocsAccess({ compute_vm_enabled: true }),
+      )?.id,
+    ).toBe("projects.virtual-machines");
   });
 });
