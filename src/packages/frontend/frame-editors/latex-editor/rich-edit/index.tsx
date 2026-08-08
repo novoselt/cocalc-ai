@@ -5,12 +5,12 @@
 
 /*
 LatexCodemirrorEditor — wraps the standard CodemirrorEditor with a top
-toolbar (`RichEditToolbar`) hosting the rich-edit Segmented control
+toolbar (`RichEditToolbar`) hosting the LaTeX / Rich Text mode control
 and format-action buttons. The underlying CodemirrorEditor is
 unchanged. Wired in via `latex-editor/editor.ts` as the `cm` frame's
 component.
 
-When the user is in Rich mode (the default), this wrapper attaches
+When the user is in Rich Text mode, this wrapper attaches
 the widget manager to the live CM instance. The manager parses the
 visible viewport, mints `cm.markText({replacedWith})` markers for
 recognized LaTeX constructs, and reconciles across rescans via
@@ -25,7 +25,7 @@ useEffect deps, the manager would dispose and re-attach on every
 parent render — wiping the reconciler's live-marker registry. That
 flicker was the exact failure mode validated and fixed during the
 Phase 2.0 spike. We capture both through refs and depend only on the
-stable identifiers `richEditMode` + `props.id`.
+stable identifiers `richEditMode` + `props.id` + `props.path`.
 
 See `src/docs/latex-rich-edit-design.md` for the full design.
 */
@@ -36,6 +36,7 @@ import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame
 
 import { CodemirrorEditor } from "../../code-editor/codemirror-editor";
 import { EditorComponentProps } from "../../frame-tree/types";
+import { useLatexEditMode } from "./mode";
 import { RichEditToolbar } from "./toolbar";
 import { attachWidgetManager } from "./widget-manager";
 
@@ -64,20 +65,12 @@ export function LatexCodemirrorEditor(props: EditorComponentProps) {
   frameContextRef.current = frameContext;
   editorActionsRef.current = props.editor_actions;
 
-  // Per-frame view mode. Default Rich. When the user toggles the
-  // Segmented control, set_frame_data triggers a re-render of this
-  // wrapper, which re-reads here and re-runs the effect below.
-  //
-  // Frame data lives on the OWNING frame tree (`props.actions`), keyed
-  // by this leaf's id. For an included-file source pane (`switch_to_file`
-  // reuses the leaf for `\input`-ed files) `props.editor_actions` is the
-  // CHILD file's actions, whose tree does NOT contain this leaf — so the
-  // mode must be read/written via `props.actions`, not editor_actions.
-  // (For the main file the two are the same object.)
-  const richEditMode: boolean =
-    props.actions?._get_frame_data?.(props.id, "richEditMode", true) !== false;
+  // This device-wide preference is shared by every open LaTeX document.
+  // Raw LaTeX is the default when no preference has been saved.
+  const editMode = useLatexEditMode();
+  const richEditMode = editMode === "rich";
 
-  // Attach the widget manager when "Rich" is selected.
+  // Attach the widget manager when "Rich Text" is selected.
   useEffect(() => {
     if (!richEditMode) return;
     let dispose: (() => void) | null = null;
@@ -135,8 +128,8 @@ export function LatexCodemirrorEditor(props: EditorComponentProps) {
     <div style={WRAPPER_STYLE} className="cc-latex-rich-edit-frame">
       <RichEditToolbar
         id={props.id}
-        actions={props.actions}
         editor_actions={props.editor_actions}
+        editMode={editMode}
       />
       <div style={CM_CONTAINER_STYLE}>
         <CodemirrorEditor {...(props as any)} />
