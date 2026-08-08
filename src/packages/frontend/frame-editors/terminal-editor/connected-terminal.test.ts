@@ -363,7 +363,6 @@ describe("connected terminal resizing", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const terminal = new Terminal(makeActions(), 0, "term-1", parent);
-    terminal.is_visible = true;
 
     await terminal.connect();
 
@@ -373,6 +372,8 @@ describe("connected terminal resizing", () => {
       ),
     ).toBe(false);
 
+    // The editor becomes visible after its connection starts during tab mount.
+    terminal.is_visible = true;
     ptys[0].socket.state = "ready";
     const ready = ptys[0].socket.on.mock.calls.find(
       ([event]: [string]) => event === "ready",

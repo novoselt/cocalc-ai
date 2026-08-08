@@ -1188,7 +1188,6 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
           .getProjectsStore?.()
           ?.getIn?.(["project_map", this.project_id, "host_id"]),
         source,
-        surface_visible: this.is_visible,
         stale_after_ms: 120_000,
       }),
       timeout: undefined as unknown as ReturnType<typeof setTimeout>,
