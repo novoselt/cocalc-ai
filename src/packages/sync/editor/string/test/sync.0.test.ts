@@ -334,6 +334,22 @@ describe("syncdoc canonical identity path policy", () => {
     );
     await doc.close();
   });
+
+  it("does not canonicalize an identity path already validated by its caller", async () => {
+    const canonicalPath = "/root/ordinary.txt";
+    const testFs = makeFs();
+    const doc = new SyncString({
+      project_id,
+      path: canonicalPath,
+      client: new Client({}, client_id),
+      fs: testFs,
+      syncIdentityPathIsCanonical: true,
+    });
+    await once(doc, "ready");
+    expect(testFs.canonicalSyncIdentityPath).not.toHaveBeenCalled();
+    expect(doc.get_string_id()).toBe(client_db.sha1(project_id, canonicalPath));
+    await doc.close();
+  });
 });
 
 describe("syncdoc close waits for async table cleanup", () => {

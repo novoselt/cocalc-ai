@@ -666,6 +666,7 @@ describe("open_file wait_for_ready", () => {
     const path = "/home/user/share/a.md";
     const saveSession = jest.fn();
     const ensureOpenFileComponent = jest.fn();
+    const markSyncIdentityPathCanonical = jest.fn();
     const { open_files, openFilesState, store } = makeOpenFilesHarness({
       public_directory_share_id: "share-id",
       public_directory_share_path: "share",
@@ -699,6 +700,7 @@ describe("open_file wait_for_ready", () => {
       set_active_tab: jest.fn(),
       set_current_path: jest.fn(),
       ensure_open_file_component: ensureOpenFileComponent,
+      markSyncIdentityPathCanonical,
     } as any;
 
     await open_file(actions, {
@@ -716,6 +718,7 @@ describe("open_file wait_for_ready", () => {
     expect(ensureOpenFileComponent).toHaveBeenCalledWith(path, {
       noFocus: true,
     });
+    expect(markSyncIdentityPathCanonical).toHaveBeenCalledWith(path);
     expect(actions.set_active_tab).toHaveBeenCalledWith(`editor-${path}`, {
       change_history: false,
     });

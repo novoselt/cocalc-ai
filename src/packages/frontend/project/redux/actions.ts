@@ -779,6 +779,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     this.closeExpensive();
     this.open_files?.close();
     delete this.open_files;
+    this.canonicalSyncIdentityPaths.clear();
     this.state = "closed";
     this.filesystem = undefined;
   };
@@ -1679,9 +1680,17 @@ export class ProjectActions extends Actions<ProjectStoreState> {
         const ext = this.open_files?.get(path, "ext");
         const isViewer = this.isViewerProjectUser();
         const editorExt = isViewer ? viewerEditorExtension(ext) : ext;
+        const syncIdentityPathIsCanonical =
+          this.canonicalSyncIdentityPaths.has(syncPath);
+        const readOnlyPreview =
+          isViewer && shouldUseFrameEditorReadOnlyPreview(syncPath, editorExt);
         const initOptions =
-          isViewer && shouldUseFrameEditorReadOnlyPreview(syncPath, editorExt)
-            ? { readOnlyPreview: true }
+          readOnlyPreview || syncIdentityPathIsCanonical
+            ? {
+                readOnlyPreview: readOnlyPreview || undefined,
+                syncIdentityPathIsCanonical:
+                  syncIdentityPathIsCanonical || undefined,
+              }
             : undefined;
         const { name, Editor } = await this.init_file_react_redux(
           syncPath,
@@ -1741,6 +1750,11 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     string,
     Promise<void>
   >();
+  private canonicalSyncIdentityPaths = new Set<string>();
+
+  public markSyncIdentityPathCanonical(path: string): void {
+    this.canonicalSyncIdentityPaths.add(path);
+  }
 
   private openFileComponentRuntimeIsUsable(info: any, isViewer: boolean) {
     return openFileComponentRuntimeIsUsable({

@@ -488,6 +488,7 @@ export async function open_file(
         { path_changed: syncPath !== displayPath },
       );
       bindFileOpenV2TraceAlias(actions.project_id, displayPath, syncPath);
+      actions.markSyncIdentityPathCanonical?.(syncPath);
     } catch (err) {
       if (isCancelledSyncIdentityResolutionError(err)) {
         return;
@@ -563,6 +564,7 @@ export async function open_file(
     }
     if (actions.open_files != null) {
       actions.open_files.set(displayPath, "sync_path", syncPath);
+      actions.markSyncIdentityPathCanonical?.(syncPath);
       actions.open_files.set(displayPath, "display_path", displayPath);
     }
     // If this path resolves to a sync identity that is already open in this browser,
@@ -690,7 +692,9 @@ export async function open_file(
         "editor_tab_activated",
       );
     } else if (PRELOAD_BACKGROUND_TABS) {
-      await actions.initFileRedux(syncPath);
+      await actions.initFileRedux(syncPath, undefined, {
+        syncIdentityPathIsCanonical: true,
+      });
     }
 
     if (alreadyOpened && opts.chat) {

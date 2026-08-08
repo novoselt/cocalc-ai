@@ -140,6 +140,9 @@ export interface SyncOpts0 {
   document_activity_interval?: number;
 
   string_id?: string;
+  // The caller already resolved path with canonicalSyncIdentityPath. This is
+  // only a latency optimization; callers that cannot prove this must omit it.
+  syncIdentityPathIsCanonical?: boolean;
   cursors?: boolean;
   change_throttle?: number;
 
@@ -563,7 +566,10 @@ export class SyncDoc extends EventEmitter {
   };
 
   private canonicalizeFsIdentity = reuseInFlight(async (): Promise<void> => {
-    if (this.opts.string_id !== undefined) {
+    if (
+      this.opts.string_id !== undefined ||
+      this.opts.syncIdentityPathIsCanonical
+    ) {
       return;
     }
     const canonicalPath = await this.resolveCanonicalSyncIdentityPath(
@@ -1651,7 +1657,10 @@ export class SyncDoc extends EventEmitter {
     );
     this.emitOpenPhase("canonicalize_identity_start");
     await this.canonicalizeFsIdentity();
-    this.emitOpenPhase("canonicalize_identity_done");
+    this.emitOpenPhase("canonicalize_identity_done", {
+      prevalidated: this.opts.syncIdentityPathIsCanonical === true,
+      string_id_provided: this.opts.string_id !== undefined,
+    });
     if (!this.useConat) {
       this.emitOpenPhase("syncstring_table_start");
       await this.init_syncstring_table();

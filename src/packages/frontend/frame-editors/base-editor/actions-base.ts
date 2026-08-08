@@ -295,6 +295,7 @@ export interface CodeEditorState {
 
 export interface BaseEditorInitOptions {
   readOnlyPreview?: boolean;
+  syncIdentityPathIsCanonical?: boolean;
 }
 
 function getActiveDisplayPathForEditor(actions: {
@@ -659,6 +660,13 @@ export class BaseEditorActions<
     if (this.readOnlyPreview) {
       this.initReadOnlyPreview();
       return;
+    }
+
+    if (initOptions?.syncIdentityPathIsCanonical) {
+      this.syncDocOptions = {
+        ...this.syncDocOptions,
+        syncIdentityPathIsCanonical: true,
+      };
     }
 
     this._init_syncstring();

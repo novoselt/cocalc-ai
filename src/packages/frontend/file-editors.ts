@@ -32,6 +32,7 @@ type Elt = any;
 
 export interface FileEditorInitOptions {
   readOnlyPreview?: boolean;
+  syncIdentityPathIsCanonical?: boolean;
 }
 
 /*
