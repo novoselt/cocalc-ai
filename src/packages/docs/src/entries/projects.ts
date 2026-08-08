@@ -16,6 +16,7 @@ import {
   RSTUDIO_PROJECT_BODY,
   ROOTFS_BODY,
   TASKS_BODY,
+  VIRTUAL_MACHINES_BODY,
 } from "../content";
 
 export const PROJECTS_ENTRIES: DocsEntry[] = [
@@ -117,6 +118,30 @@ export const PROJECTS_ENTRIES: DocsEntry[] = [
     summary:
       "Find, open, create, and organize the CoCalc projects you can access.",
     title: "Use the projects page",
+  },
+  {
+    actions: [
+      {
+        description: "Open the virtual machines page in a selected project.",
+        executable: true,
+        id: "project.virtual-machines.open",
+        label: "Open project VMs",
+        parameters: projectActionParameters(),
+      },
+    ],
+    audiences: ["agents", "instructors", "researchers", "students", "teams"],
+    body: VIRTUAL_MACHINES_BODY.trim(),
+    category: "Projects",
+    id: "projects.virtual-machines",
+    lastReviewed: "2026-08-08",
+    requiredFeatures: ["compute-vms"],
+    searchKeywords:
+      "managed compute dedicated virtual machines vm ssh rsync work volume spot standard egress billing",
+    slug: "projects/virtual-machines",
+    status: "ready",
+    summary:
+      "Create and operate standalone Ubuntu VMs with SSH access, metered egress, and optional persistent /work storage.",
+    title: "Virtual machines",
   },
   {
     audiences: ["agents", "instructors", "researchers", "students", "teams"],

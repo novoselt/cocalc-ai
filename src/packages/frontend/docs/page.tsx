@@ -76,18 +76,26 @@ export function DocsPage({ print, slug }: { print?: boolean; slug?: string }) {
     useTypedRedux("account", "font_size") ?? DEFAULT_FONT_SIZE;
   const accountId = `${useTypedRedux("account", "account_id") ?? ""}`.trim();
   const isAdmin = !!useTypedRedux("account", "is_admin");
+  const computeVmEnabled =
+    useTypedRedux("customize", "compute_vm_enabled") === true;
   const docsAccess = useMemo<DocsAccess>(
     () => ({
+      features: computeVmEnabled ? ["compute-vms"] : [],
       includeAdmin: isAdmin,
       includeSignedIn: !!accountId,
       siteProfile: docsSiteProfileFromLocation(),
     }),
-    [accountId, isAdmin],
+    [accountId, computeVmEnabled, isAdmin],
   );
   const docsPrivateState = useDocsPrivateState(accountId);
   const actionAvailability = useMemo(
-    () => listDocsAppActions({ includeAdmin: isAdmin, projectId: "" }),
-    [isAdmin],
+    () =>
+      listDocsAppActions({
+        docsAccess,
+        includeAdmin: isAdmin,
+        projectId: "",
+      }),
+    [docsAccess, isAdmin],
   );
   const allDocsEntries = useMemo(
     () => listDocsEntries(docsAccess),
@@ -121,6 +129,7 @@ export function DocsPage({ print, slug }: { print?: boolean; slug?: string }) {
     try {
       const result = await revealDocsAction({
         actionId: action.id,
+        docsAccess,
         includeAdmin: isAdmin,
         parameters,
         projectId: "",

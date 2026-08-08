@@ -12,6 +12,7 @@ import {
   listDocsChapters,
   listDocsActions,
   listDocsEntries,
+  type DocsAccess,
   type DocsActionId,
 } from "./index";
 import { LEGACY_DOC_LINK_BASELINE } from "./legacy-doc-links-baseline";
@@ -570,7 +571,11 @@ export function listDocsLiveVerificationScenarios({
 }
 
 export function verifyDocsStatic(): DocsVerificationReport {
-  const docsAccess = { includeAdmin: true, includeSignedIn: true };
+  const docsAccess: DocsAccess = {
+    features: ["compute-vms"],
+    includeAdmin: true,
+    includeSignedIn: true,
+  };
   const entries = listDocsEntries(docsAccess);
   const actions = listDocsActions(docsAccess);
   const chapters = listDocsChapters(docsAccess);
@@ -844,7 +849,11 @@ export function buildDocsGapReport({
   now?: Date;
   staleReviewDays?: number;
 } = {}): DocsGapReport {
-  const docsAccess = { includeAdmin: true, includeSignedIn: true };
+  const docsAccess: DocsAccess = {
+    features: ["compute-vms"],
+    includeAdmin: true,
+    includeSignedIn: true,
+  };
   const entries = listDocsEntries(docsAccess);
   const categories = [
     ...new Set(entries.map((entry) => entry.category)),

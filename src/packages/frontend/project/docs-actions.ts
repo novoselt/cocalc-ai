@@ -530,6 +530,30 @@ function revealProjectFiles({
   };
 }
 
+function revealProjectVms({
+  actionId,
+  projectId,
+}: {
+  actionId: DocsActionId;
+  projectId: string;
+}): DocsActionRevealResult {
+  const path = `/projects/${projectId}/vms`;
+  selectProject(projectId);
+  projectActions(projectId)?.set_active_tab?.("vms", {
+    change_history: false,
+  });
+  if (typeof window !== "undefined") {
+    set_url_with_search(path, "");
+  }
+  return {
+    action_id: actionId,
+    opened: true,
+    path,
+    project_id: projectId,
+    tab: "vms",
+  };
+}
+
 function revealAdminNews({
   actionId,
   projectId,
@@ -1115,6 +1139,15 @@ const DOCS_APP_ACTIONS: Record<string, DocsAppAction> = {
       createDefaultProjectFile({
         actionId: "project.terminal.open",
         ext: "term",
+        projectId,
+      }),
+  },
+  "project.virtual-machines.open": {
+    id: "project.virtual-machines.open",
+    isAvailable: ({ projectId }) => validateProjectId(projectId),
+    run: ({ projectId }) =>
+      revealProjectVms({
+        actionId: "project.virtual-machines.open",
         projectId,
       }),
   },

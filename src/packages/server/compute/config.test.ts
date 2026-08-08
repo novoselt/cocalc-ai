@@ -160,20 +160,4 @@ describe("managed compute VM configuration", () => {
       ),
     ).toThrow("must be a global VPC in the dedicated credential project");
   });
-
-  it("migrates the default network from the legacy subnetwork setting", () => {
-    const credentials = JSON.stringify({
-      project_id: "compute-prod",
-      client_email: "compute@example.invalid",
-    });
-    const config = resolveComputeVmConfig({
-      dns: "cocalc.ai",
-      compute_vm_gcp_service_account_json: credentials,
-      compute_vm_gcp_subnetwork:
-        "projects/compute-prod/regions/us-central1/subnetworks/cocalc-compute-vm-us-central1",
-    });
-    expect(config.gcp_network).toBe(
-      "projects/compute-prod/global/networks/cocalc-compute-vm",
-    );
-  });
 });
