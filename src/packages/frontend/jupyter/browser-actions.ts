@@ -522,6 +522,14 @@ export class JupyterActions extends JupyterActions0 {
         typeof payload.error_name === "string"
           ? payload.error_name.slice(0, 80)
           : undefined,
+      prevalidated:
+        typeof payload.prevalidated === "boolean"
+          ? payload.prevalidated
+          : undefined,
+      string_id_provided:
+        typeof payload.string_id_provided === "boolean"
+          ? payload.string_id_provided
+          : undefined,
     });
     this.runDebug("open.syncdoc_phase", payload);
     this.noteOpenInitPhase(`syncdoc.${phase}`, payload);

@@ -1100,6 +1100,8 @@ export class BaseEditorActions<
     attempt?: unknown;
     error_code?: unknown;
     error_name?: unknown;
+    prevalidated?: unknown;
+    string_id_provided?: unknown;
   }): void => {
     const phase =
       typeof payload?.phase === "string" ? payload.phase.trim() : "";
@@ -1116,6 +1118,12 @@ export class BaseEditorActions<
     }
     if (typeof payload.error_name === "string") {
       details.error_name = payload.error_name.slice(0, 80);
+    }
+    if (typeof payload.prevalidated === "boolean") {
+      details.prevalidated = payload.prevalidated;
+    }
+    if (typeof payload.string_id_provided === "boolean") {
+      details.string_id_provided = payload.string_id_provided;
     }
     mark_file_open_v2_phase(
       this.project_id,
