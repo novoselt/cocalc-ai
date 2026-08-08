@@ -9435,9 +9435,9 @@ export async function deleteHost({
       { code: "host_deletion_protection_enabled" },
     );
   }
-  // Deprovisioning removes the running VM just like Stop, but retains its
-  // persistent disk. Exam projects must be erased while that disk is mounted
-  // and the project-host control endpoint is still available.
+  // Deprovisioning destroys the provider VM and its persistent disk, retaining
+  // only the host configuration. Close the exam run and erase its temporary
+  // projects while the disk is mounted and the control endpoint is available.
   await eraseActiveExamRunBeforeHostStopLocal({ host: row });
   const machineCloud = normalizeProviderId(row.metadata?.machine?.cloud);
   const managedCloud =
