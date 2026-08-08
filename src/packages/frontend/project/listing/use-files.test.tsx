@@ -533,7 +533,7 @@ describe("useFiles", () => {
     );
   });
 
-  it("refresh clears cached contents and fetches a fresh read-only listing", async () => {
+  it("refresh retains the current contents while fetching a fresh listing", async () => {
     let refreshFetches = 0;
     const fs = {
       getListing: jest.fn(async (path: string) => {
@@ -547,41 +547,36 @@ describe("useFiles", () => {
       }),
       listing: jest.fn(),
     };
-
-    let result = useFilesForTestWithOptions({
+    const options = {
       fs,
       path: "/refresh",
       cacheId: { project_id: "project-1", viewer: true },
       watch: false,
-    });
+      uxContext: { project_id: "project-1", surface_visible: true },
+    };
+
+    let result = useFilesForTestWithOptions(options);
     await flushEffects();
 
-    result = useFilesForTestWithOptions({
-      fs,
-      path: "/refresh",
-      cacheId: { project_id: "project-1", viewer: true },
-      watch: false,
-    });
+    result = useFilesForTestWithOptions(options);
     expect(result.files).toEqual({
       "old.txt": { mtime: 0, isDir: false, size: 1 },
     });
+    expect(result.telemetry).toEqual(
+      expect.objectContaining({ authoritative: true }),
+    );
 
     result.refresh();
-    result = useFilesForTestWithOptions({
-      fs,
-      path: "/refresh",
-      cacheId: { project_id: "project-1", viewer: true },
-      watch: false,
+    result = useFilesForTestWithOptions(options);
+    expect(result.files).toEqual({
+      "old.txt": { mtime: 0, isDir: false, size: 1 },
     });
-    expect(result.files).toBeNull();
+    expect(result.telemetry).toEqual(
+      expect.objectContaining({ authoritative: true }),
+    );
     await flushEffects();
 
-    result = useFilesForTestWithOptions({
-      fs,
-      path: "/refresh",
-      cacheId: { project_id: "project-1", viewer: true },
-      watch: false,
-    });
+    result = useFilesForTestWithOptions(options);
     expect(result.files).toEqual({
       "new.txt": { mtime: 0, isDir: false, size: 1 },
     });

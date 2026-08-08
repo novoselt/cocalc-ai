@@ -247,7 +247,12 @@ export default function useFiles({
     setErrorState((cur) =>
       cur.path === path && cur.error == null ? cur : { path, error: null },
     );
-    setFilesState({ path, files: null, telemetry: null });
+    // Keep the last successful listing visible while this path is revalidated.
+    // Navigation still returns null below because filesState.path no longer
+    // matches, but same-directory refreshes must not flash an empty listing.
+    setFilesState((cur) =>
+      cur.path === path ? cur : { path, files: null, telemetry: null },
+    );
     setCounter((value) => value + 1);
   }, [cacheId, path]);
 
@@ -298,7 +303,10 @@ export default function useFiles({
             cachedFiles == null ? undefined : Object.keys(cachedFiles).length,
         });
         setFilesState((cur) => {
-          if (cur.path === path && sameFiles(cur.files, cachedFiles)) {
+          if (
+            cur.path === path &&
+            (cachedFiles == null || sameFiles(cur.files, cachedFiles))
+          ) {
             return cur;
           }
           return {
