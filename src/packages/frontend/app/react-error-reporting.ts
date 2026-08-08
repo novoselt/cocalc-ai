@@ -17,9 +17,17 @@ export interface ReactErrorEventDetail {
   error: unknown;
   componentStack?: string | null;
   boundaryScope?: string;
+  boundaryAction?: "auto-retry" | "fallback";
+  boundaryRetryCount?: number;
 }
 
-const caughtErrorScopes = new WeakMap<object, string>();
+interface CaughtErrorContext {
+  scope: string;
+  action?: ReactErrorEventDetail["boundaryAction"];
+  retryCount?: number;
+}
+
+const caughtErrorContexts = new WeakMap<object, CaughtErrorContext>();
 
 function logDevelopmentError(
   kind: ReactErrorKind,
@@ -41,9 +49,13 @@ function isWeakMapKey(value: unknown): value is object {
   );
 }
 
-export function markCaughtReactError(error: unknown, scope: string): void {
+export function markCaughtReactError(
+  error: unknown,
+  scope: string,
+  context: Omit<CaughtErrorContext, "scope"> = {},
+): void {
   if (isWeakMapKey(error)) {
-    caughtErrorScopes.set(error, scope);
+    caughtErrorContexts.set(error, { scope, ...context });
   }
 }
 
@@ -53,15 +65,20 @@ function dispatchReactError(
   errorInfo: Pick<ErrorInfo, "componentStack">,
 ): void {
   if (typeof window === "undefined") return;
+  const context = isWeakMapKey(error)
+    ? caughtErrorContexts.get(error)
+    : undefined;
   window.dispatchEvent(
     new CustomEvent<ReactErrorEventDetail>(COCALC_REACT_ERROR_EVENT, {
       detail: {
         kind,
         error,
         componentStack: errorInfo.componentStack,
-        boundaryScope: isWeakMapKey(error)
-          ? caughtErrorScopes.get(error)
-          : undefined,
+        boundaryScope: context?.scope,
+        ...(context?.action == null ? {} : { boundaryAction: context.action }),
+        ...(context?.retryCount == null
+          ? {}
+          : { boundaryRetryCount: context.retryCount }),
       },
     }),
   );
