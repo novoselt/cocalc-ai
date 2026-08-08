@@ -7,7 +7,7 @@
 RichEditToolbar — top bar of the LaTeX CodeMirror frame.
 
 Layout (left → right):
-  [ Source | Rich ] │ Section▾ Math▾ List▾ │ B I U Size▾ │ 🔗 ⟨/⟩ ⊞table
+  Section▾ Math▾ List▾ │ B I U Size▾ │ 🔗 ⟨/⟩ ⊞table │ [ Rich Text | LaTeX ]
 
 The bar never wraps: when the format controls don't fit (e.g. in a
 narrow pane created by splitting), they collapse into a single
@@ -15,11 +15,9 @@ narrow pane created by splitting), they collapse into a single
 is driven by a ResizeObserver comparing the bar's natural content width
 to its available width.
 
-The Segmented control switches the per-frame view mode between
-"Source" (raw LaTeX) and "Rich" (rendered widgets). State is
-persisted via `editor_actions.set_frame_data` / `_get_frame_data` —
-frame-tree local view state (per-user, per-frame, localStorage — not
-synced to collaborators). Default mode: Rich.
+The mode control switches every LaTeX editor on this device between raw
+LaTeX and rendered Rich Text widgets. The preference is stored in
+localStorage, is not synced to collaborators, and defaults to LaTeX.
 
 Format buttons dispatch through `editor_actions.format_action(cmd)`,
 which routes to the existing CodeMirror `edit_selection` extension
@@ -30,7 +28,7 @@ regardless of view mode.
 See `src/docs/latex-rich-edit-design.md`.
 */
 
-import { Button, Divider, Dropdown, Popover, Segmented } from "antd";
+import { Button, Divider, Dropdown, Popover, Radio } from "antd";
 import { useLayoutEffect, useRef, useState } from "react";
 
 import { redux } from "@cocalc/frontend/app-framework";
@@ -38,6 +36,7 @@ import { Icon, Tooltip } from "@cocalc/frontend/components";
 import { COLORS } from "@cocalc/util/theme";
 
 import { FONT_SIZE_EM } from "./font-size";
+import { type LatexEditMode, setLatexEditMode } from "./mode";
 
 // Size menu: one entry per renderer-supported size (smallest → largest,
 // the declaration order of FONT_SIZE_EM). Derived from the same map the
@@ -63,10 +62,6 @@ function hasSeenHint(): boolean {
 function markHintSeen(): void {
   redux.getActions("account")?.setTourDone(HINT_TOUR_NAME);
 }
-
-const MODE_SOURCE = "Source";
-const MODE_RICH = "Rich";
-type ViewMode = typeof MODE_SOURCE | typeof MODE_RICH;
 
 const BAR_STYLE = {
   display: "flex",
@@ -101,25 +96,13 @@ const BTN_STYLE = {
 
 interface Props {
   id: string;
-  /** Owning frame-tree actions — holds this leaf's per-frame data
-   * (the Rich/Source mode). For an included-file pane this differs from
-   * `editor_actions`; see index.tsx. */
-  actions: any;
+  editMode: LatexEditMode;
   /** Actions for the file shown in this pane — drives the format
-   * buttons (they edit that file's buffer). Equals `actions` for the
-   * main file. */
+   * buttons (they edit that file's buffer). */
   editor_actions: any;
 }
 
-export function RichEditToolbar({ id, actions, editor_actions }: Props) {
-  // Per-frame view mode. Default Rich (so the feature is visible
-  // immediately when the user opens a .tex file). Read from the owning
-  // frame tree (`actions`), not the file's editor_actions — see the
-  // note in index.tsx about included-file panes.
-  const richMode: boolean =
-    actions?._get_frame_data?.(id, "richEditMode", true) !== false;
-  const currentMode: ViewMode = richMode ? MODE_RICH : MODE_SOURCE;
-
+export function RichEditToolbar({ id, editMode, editor_actions }: Props) {
   // Responsive layout: when the format controls don't fit, collapse
   // them into a single "Format" dropdown instead of wrapping the bar.
   // We compare the bar's natural content width (scrollWidth, with all
@@ -157,16 +140,10 @@ export function RichEditToolbar({ id, actions, editor_actions }: Props) {
     }
   };
 
-  const setMode = (value: string | number) => {
+  const setMode = (value: LatexEditMode) => {
     // Interacting with the toggle counts as "the user has seen it".
     dismissHint();
-    // Persist on the owning frame tree (`actions`), so the choice sticks
-    // even for an included-file pane (whose editor_actions is a child
-    // tree that doesn't contain this leaf).
-    actions?.set_frame_data?.({
-      id,
-      richEditMode: value === MODE_RICH,
-    });
+    setLatexEditMode(value);
   };
 
   // Route format actions to THIS pane. format_action() resolves the
@@ -204,8 +181,8 @@ export function RichEditToolbar({ id, actions, editor_actions }: Props) {
     { key: "insertorderedlist", label: "Numbered list (enumerate)" },
   ];
 
-  // Everything to the right of the Segmented control, collapsed into one
-  // menu for the compact (narrow) layout. Leaf keys are the same
+  // All format controls collapse into one menu in the compact (narrow)
+  // layout. Leaf keys are the same
   // format-action commands the expanded buttons dispatch.
   const formatMenuItems = [
     { key: "heading", label: "Heading", children: headingItems },
@@ -224,66 +201,6 @@ export function RichEditToolbar({ id, actions, editor_actions }: Props) {
 
   return (
     <div style={BAR_STYLE} ref={barRef} className="cc-latex-rich-edit-toolbar">
-      <div style={AREA_STYLE}>
-        <Popover
-          open={showHint}
-          onOpenChange={(open) => {
-            if (!open) dismissHint();
-          }}
-          // Block hover-triggered re-opens once dismissed.
-          trigger={[]}
-          placement="bottomLeft"
-          title="LaTeX rich preview"
-          content={
-            <div style={{ maxWidth: 320, fontSize: "0.92em" }}>
-              <p style={{ marginTop: 0, marginBottom: 8 }}>
-                <b>Rich</b> renders sections, formulas, lists, links, etc.
-                inline as widgets. The raw LaTeX stays in the buffer — click any
-                widget to dissolve back to source, hover to peek.
-              </p>
-              <p style={{ marginBottom: 12 }}>
-                Toggle to <b>Source</b> for the unrendered view.
-              </p>
-              <div style={{ textAlign: "right" }}>
-                <Button size="small" type="primary" onClick={dismissHint}>
-                  Got it
-                </Button>
-              </div>
-            </div>
-          }
-        >
-          <Tooltip
-            title={
-              currentMode === MODE_RICH
-                ? "Rich view — sections, formulas, etc. shown as rendered widgets. Click Source to return to raw LaTeX."
-                : "Source view — raw LaTeX. Click Rich to render sections, formulas, etc. inline."
-            }
-            placement="bottom"
-            mouseEnterDelay={0.2}
-          >
-            <span style={{ display: "inline-flex", alignItems: "center" }}>
-              <Segmented
-                size="small"
-                // `title: ""` suppresses antd's per-item native browser
-                // tooltip (it defaults to the label) — we already show the
-                // richer explanation via the wrapping <Tooltip> above.
-                options={[
-                  { label: MODE_SOURCE, value: MODE_SOURCE, title: "" },
-                  { label: MODE_RICH, value: MODE_RICH, title: "" },
-                ]}
-                value={currentMode}
-                onChange={setMode}
-              />
-            </span>
-          </Tooltip>
-        </Popover>
-      </div>
-
-      <Divider
-        orientation="vertical"
-        style={{ margin: "0 4px", flexShrink: 0 }}
-      />
-
       <div style={AREA_STYLE}>
         {compact ? (
           <Dropdown
@@ -406,6 +323,71 @@ export function RichEditToolbar({ id, actions, editor_actions }: Props) {
             </Tooltip>
           </>
         )}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }} />
+
+      <Divider
+        orientation="vertical"
+        style={{ margin: "0 4px", flexShrink: 0 }}
+      />
+
+      <div style={AREA_STYLE}>
+        <Popover
+          open={showHint}
+          onOpenChange={(open) => {
+            if (!open) dismissHint();
+          }}
+          // Block hover-triggered re-opens once dismissed.
+          trigger={[]}
+          placement="bottomRight"
+          title="LaTeX rich preview"
+          content={
+            <div style={{ maxWidth: 320, fontSize: "0.92em" }}>
+              <p style={{ marginTop: 0, marginBottom: 8 }}>
+                <b>Rich Text</b> renders sections, formulas, lists, links, etc.
+                inline as widgets. The raw LaTeX stays in the buffer — click any
+                widget to dissolve back to source, hover to peek.
+              </p>
+              <p style={{ marginBottom: 12 }}>
+                Toggle to <b>LaTeX</b> for the unrendered source view.
+              </p>
+              <div style={{ textAlign: "right" }}>
+                <Button size="small" type="primary" onClick={dismissHint}>
+                  Got it
+                </Button>
+              </div>
+            </div>
+          }
+        >
+          <Tooltip
+            title={
+              editMode === "rich"
+                ? "Rich Text shows sections, formulas, and other LaTeX constructs as rendered widgets."
+                : "LaTeX shows the unrendered document source."
+            }
+            placement="bottom"
+            mouseEnterDelay={0.2}
+          >
+            <Radio.Group
+              options={[
+                {
+                  label: <span style={{ fontWeight: 400 }}>Rich Text</span>,
+                  value: "rich",
+                },
+                {
+                  label: <span style={{ fontWeight: 400 }}>LaTeX</span>,
+                  value: "latex",
+                },
+              ]}
+              value={editMode}
+              onChange={(event) => setMode(event.target.value)}
+              optionType="button"
+              buttonStyle="solid"
+              size="small"
+            />
+          </Tooltip>
+        </Popover>
       </div>
     </div>
   );
