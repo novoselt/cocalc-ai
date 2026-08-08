@@ -24,7 +24,10 @@ describe("React root error reporting", () => {
     reactRootErrorHandlers.onCaughtError(error, {
       componentStack: "\n at ProjectsTable",
     });
-    markCaughtReactError(error, "projects.list");
+    markCaughtReactError(error, "projects.list", {
+      action: "auto-retry",
+      retryCount: 0,
+    });
     await Promise.resolve();
 
     expect(details).toEqual([
@@ -33,6 +36,8 @@ describe("React root error reporting", () => {
         error,
         componentStack: "\n at ProjectsTable",
         boundaryScope: "projects.list",
+        boundaryAction: "auto-retry",
+        boundaryRetryCount: 0,
       },
     ]);
     window.removeEventListener(COCALC_REACT_ERROR_EVENT, listener);

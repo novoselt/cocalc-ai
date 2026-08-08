@@ -6,6 +6,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { CocalcErrorBoundary } from "./error-boundary";
+import { isReactDomMutationError } from "./react-dom-mutation";
 import {
   COCALC_REACT_ERROR_EVENT,
   reactRootErrorHandlers,
@@ -49,6 +50,114 @@ describe("CocalcErrorBoundary", () => {
     expect(
       screen.queryByText("This part of CoCalc could not be displayed."),
     ).not.toBeInTheDocument();
+  });
+
+  it("recovers one DOM mutation quietly and escalates a recurrence", async () => {
+    const attempts = new Map<number, number>();
+    const onAutoRetry = jest.fn();
+    const reports: ReactErrorEventDetail[] = [];
+    const listener = (event: Event) => {
+      reports.push((event as CustomEvent<ReactErrorEventDetail>).detail);
+    };
+    window.addEventListener(COCALC_REACT_ERROR_EVENT, listener);
+
+    function DomMutationFailure({ episode }: { episode: number }) {
+      const attempt = attempts.get(episode) ?? 0;
+      attempts.set(episode, attempt + 1);
+      if (attempt < 2) {
+        throw Object.assign(
+          new Error(
+            "Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.",
+          ),
+          { name: "NotFoundError" },
+        );
+      }
+      return <div>Editor content {episode}</div>;
+    }
+
+    const boundary = (episode: number) => (
+      <CocalcErrorBoundary
+        autoRetry={({ error, retryCount }) =>
+          retryCount === 0 && isReactDomMutationError(error)
+        }
+        fallback={({ error }) =>
+          isReactDomMutationError(error) ? (
+            <div>Disable page translation or extensions</div>
+          ) : (
+            <div>Generic failure</div>
+          )
+        }
+        onAutoRetry={onAutoRetry}
+        scope="project.editor"
+      >
+        <DomMutationFailure episode={episode} />
+      </CocalcErrorBoundary>
+    );
+
+    const { rerender } = render(boundary(1), {
+      onCaughtError: reactRootErrorHandlers.onCaughtError,
+      onRecoverableError: () => {},
+    });
+
+    expect(await screen.findByText("Editor content 1")).toBeInTheDocument();
+    expect(onAutoRetry).toHaveBeenCalledWith({
+      error: expect.objectContaining({ name: "NotFoundError" }),
+      retryCount: 1,
+      scope: "project.editor",
+    });
+
+    rerender(boundary(2));
+
+    expect(
+      await screen.findByText("Disable page translation or extensions"),
+    ).toBeInTheDocument();
+    expect(onAutoRetry).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(reports.map(({ boundaryAction }) => boundaryAction)).toEqual([
+        "auto-retry",
+        "fallback",
+      ]);
+    });
+    expect(reports.map(({ boundaryRetryCount }) => boundaryRetryCount)).toEqual(
+      [0, 1],
+    );
+
+    window.removeEventListener(COCALC_REACT_ERROR_EVENT, listener);
+  });
+
+  it("does not announce recovery when the automatic remount also fails", async () => {
+    const onAutoRetry = jest.fn();
+
+    function PersistentDomMutationFailure() {
+      throw Object.assign(
+        new Error(
+          "Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.",
+        ),
+        { name: "NotFoundError" },
+      );
+    }
+
+    render(
+      <CocalcErrorBoundary
+        autoRetry={({ error, retryCount }) =>
+          retryCount === 0 && isReactDomMutationError(error)
+        }
+        fallback={<div>Browser changed the editor DOM</div>}
+        onAutoRetry={onAutoRetry}
+        scope="project.editor"
+      >
+        <PersistentDomMutationFailure />
+      </CocalcErrorBoundary>,
+      {
+        onCaughtError: reactRootErrorHandlers.onCaughtError,
+        onRecoverableError: () => {},
+      },
+    );
+
+    expect(
+      await screen.findByText("Browser changed the editor DOM"),
+    ).toBeInTheDocument();
+    expect(onAutoRetry).not.toHaveBeenCalled();
   });
 
   it("does not automatically remount a failed subtree by default", async () => {

@@ -1218,14 +1218,26 @@ export function DocsActions({
                     }}
                     value={values[parameter.name]}
                   />
-                ) : parameter.type === "project" ? (
+                ) : parameter.type === "project" && onRunAction != null ? (
                   <SelectProject
-                    disabled={state.disabled || onRunAction == null}
+                    disabled={state.disabled}
                     fullCollaboratorOnly
                     key={parameter.name}
                     onChange={(value) =>
                       setActionParameter(action, parameter.name, value)
                     }
+                    style={{
+                      minWidth: layout === "flyout" ? 0 : 220,
+                      width: layout === "flyout" ? "100%" : 360,
+                    }}
+                    value={values[parameter.name]}
+                  />
+                ) : parameter.type === "project" ? (
+                  <Select
+                    disabled
+                    key={parameter.name}
+                    placeholder={parameter.placeholder ?? parameter.label}
+                    size={layout === "flyout" ? "small" : "middle"}
                     style={{
                       minWidth: layout === "flyout" ? 0 : 220,
                       width: layout === "flyout" ? "100%" : 360,
