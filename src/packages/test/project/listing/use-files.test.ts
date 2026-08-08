@@ -33,6 +33,7 @@ describe("the useFiles hook", () => {
       files: null,
       error: null,
       refresh: expect.any(Function),
+      telemetry: null,
     });
 
     // eventually it will be initialized to not be null
@@ -43,6 +44,7 @@ describe("the useFiles hook", () => {
       files: {},
       error: null,
       refresh: expect.any(Function),
+      telemetry: null,
     });
 
     // now create a file
@@ -65,6 +67,7 @@ describe("the useFiles hook", () => {
       },
       error: null,
       refresh: expect.any(Function),
+      telemetry: null,
     });
 
     // change the path to one that does not exist and rerender,
@@ -98,6 +101,7 @@ describe("the useFiles hook", () => {
         },
         error: null,
         refresh: expect.any(Function),
+        telemetry: null,
       });
     });
 
@@ -114,6 +118,7 @@ describe("the useFiles hook", () => {
         files: {},
         error: null,
         refresh: expect.any(Function),
+        telemetry: null,
       });
     });
   });
