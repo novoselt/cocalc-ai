@@ -6,15 +6,11 @@
 import {
   Alert,
   Button,
-  Card,
-  Col,
   Drawer,
   List,
-  Row,
   Segmented,
   Space,
   Spin,
-  Statistic,
   Tag,
   Typography,
 } from "antd";
@@ -38,6 +34,7 @@ import {
   activeUsersMapCountryName,
   ActiveUsersMapPlot,
 } from "./active-users-map-plot";
+import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
 const { Paragraph, Text } = Typography;
 const REFRESH_MS = 60_000;
@@ -275,32 +272,12 @@ export function ActiveUsersMapAdmin() {
       ) : null}
       {overview?.enabled ? (
         <>
-          <Row gutter={[16, 16]}>
-            <Col xs={24} md={8}>
-              <Card size="small">
-                <Statistic title="Active users" value={overview.total_active} />
-              </Card>
-            </Col>
-            <Col xs={24} md={8}>
-              <Card size="small">
-                <Statistic title="Mapped" value={overview.mapped_active} />
-              </Card>
-            </Col>
-            <Col xs={24} md={8}>
-              <Card
-                size="small"
-                hoverable={overview.unknown_location > 0}
-                onClick={() =>
-                  overview.unknown_location > 0 && setSelectedGroup("unknown")
-                }
-              >
-                <Statistic
-                  title="Location unavailable"
-                  value={overview.unknown_location}
-                />
-              </Card>
-            </Col>
-          </Row>
+          <ActiveUsersMapSummary
+            total={overview.total_active}
+            mapped={overview.mapped_active}
+            unavailable={overview.unknown_location}
+            onShowUnavailable={() => setSelectedGroup("unknown")}
+          />
           <ActiveUsersMapPlot
             countries={overview.countries}
             selectedCountryCode={selectedCountry?.country_code}
