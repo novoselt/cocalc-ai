@@ -73,6 +73,7 @@ import {
   waitForCompletion as waitForLroCompletion,
 } from "@cocalc/conat/lro/client";
 import { terminalClient } from "@cocalc/conat/project/terminal";
+import type { SocketLifecycleReporter } from "@cocalc/conat/socket/util";
 import { lite } from "@cocalc/frontend/lite";
 import type {
   LroEvent,
@@ -3759,6 +3760,7 @@ export class ConatClient extends EventEmitter {
     project_id: string;
     getSize?: () => undefined | { rows: number; cols: number };
     reconnection?: boolean;
+    lifecycleReporter?: SocketLifecycleReporter;
   }) => {
     const routing = this.getProjectRoutingInfo(opts.project_id);
     if (!routing) {

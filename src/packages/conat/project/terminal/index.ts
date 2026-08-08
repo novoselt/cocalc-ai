@@ -7,6 +7,7 @@ import {
   type ConatSocketServer,
   type ServerSocket,
 } from "@cocalc/conat/socket";
+import type { SocketLifecycleReporter } from "@cocalc/conat/socket/util";
 import { getLogger } from "@cocalc/conat/logger";
 import { recordServiceAdmissionDenial } from "@cocalc/conat/admission/denials";
 import {
@@ -794,16 +795,19 @@ export class TerminalClient extends EventEmitter {
     subject,
     getSize,
     reconnection,
+    lifecycleReporter,
   }: {
     client: ConatClient;
     subject: string;
     getSize?: () => undefined | { rows: number; cols: number };
     reconnection?: boolean;
+    lifecycleReporter?: SocketLifecycleReporter;
   }) {
     super();
     this.getSize = getSize;
     this.socket = client.socket.connect(subject, {
       reconnection,
+      ...(lifecycleReporter ? { lifecycleReporter } : {}),
     });
 
     const handleRequest = ({ data }) => {
@@ -925,6 +929,7 @@ export function terminalClient(opts: {
   client: ConatClient;
   getSize?: () => undefined | { rows: number; cols: number };
   reconnection?: boolean;
+  lifecycleReporter?: SocketLifecycleReporter;
 }): TerminalClient {
   return new TerminalClient({ ...opts, subject: getSubject(opts) });
 }

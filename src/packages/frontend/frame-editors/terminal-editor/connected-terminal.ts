@@ -169,7 +169,28 @@ interface TerminalReadyTraceEntry {
   initialProjectState?: string;
   provisioned?: boolean;
   historyChars?: number;
+  socketLifecycleCounts?: Record<string, number>;
   timeout: ReturnType<typeof setTimeout>;
+}
+
+function safeSocketLifecycleDetails(
+  attempt: number,
+  details?: Record<string, string | number | boolean | undefined>,
+): Record<string, string | number | boolean | undefined> {
+  const safe: Record<string, string | number | boolean | undefined> = {
+    attempt,
+  };
+  for (const key of [
+    "transport_connected",
+    "publish_ms",
+    "response_wait_ms",
+    "wait_for_client_interest_ms",
+  ]) {
+    if (details?.[key] != null) {
+      safe[key] = details[key];
+    }
+  }
+  return safe;
 }
 
 function normalizeTerminalCommand(command: any): string | undefined {
@@ -1154,6 +1175,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
             initial_project_state: readyTrace.initialProjectState ?? "unknown",
             provisioned: readyTrace.provisioned,
             history_chars: readyTrace.historyChars ?? 0,
+            socket_lifecycle_counts: readyTrace.socketLifecycleCounts ?? {},
             readiness_observer: "spawn_complete_and_socket_ready",
           },
         })
@@ -1383,6 +1405,22 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
           if (this.is_visible) {
             return this.fitAddon.proposeDimensions();
           }
+        },
+        lifecycleReporter: (phase, details) => {
+          if (
+            generation !== this.connectGeneration ||
+            this.terminalReadyTrace !== v2Trace
+          ) {
+            return;
+          }
+          const counts = (v2Trace.socketLifecycleCounts ??= {});
+          const attempt = (counts[phase] ?? 0) + 1;
+          counts[phase] = attempt;
+          const safeDetails = safeSocketLifecycleDetails(attempt, details);
+          if (attempt === 1) {
+            v2Trace.trace.mark(`socket_${phase}_first`, safeDetails);
+          }
+          v2Trace.trace.mark(`socket_${phase}`, safeDetails);
         },
         // Use the terminal socket's default reconnection. Routed project-host
         // terminals may need one retry while browser-session auth is bootstrapped.

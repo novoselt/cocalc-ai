@@ -357,14 +357,30 @@ describe("connected terminal TUI selection", () => {
 
 describe("connected terminal resizing", () => {
   it("records input readiness only after spawn and socket readiness", async () => {
-    const { Terminal, ptys, uxLatencyEvents } = loadTerminalModule({
-      socketState: "connecting",
-    });
+    const { Terminal, ptys, terminalClient, uxLatencyEvents } =
+      loadTerminalModule({
+        socketState: "connecting",
+      });
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     const terminal = new Terminal(makeActions(), 0, "term-1", parent);
 
     await terminal.connect();
+
+    const lifecycleReporter = terminalClient.mock.calls[0][0].lifecycleReporter;
+    lifecycleReporter("transport_wait_start", {
+      transport_connected: false,
+    });
+    lifecycleReporter("transport_wait_done", {
+      transport_connected: true,
+    });
+    lifecycleReporter("connect_command_start");
+    lifecycleReporter("connect_command_start");
+    lifecycleReporter("connect_command_done", {
+      response_wait_ms: 120,
+      wait_for_client_interest_ms: 80,
+      server_id: "must-not-be-recorded",
+    });
 
     expect(
       uxLatencyEvents.mock.calls.some(
@@ -387,6 +403,21 @@ describe("connected terminal resizing", () => {
         details: expect.objectContaining({
           trace_version: 2,
           readiness_observer: "spawn_complete_and_socket_ready",
+          socket_lifecycle_counts: expect.objectContaining({
+            connect_command_start: 2,
+            transport_wait_start: 1,
+          }),
+          marks: expect.objectContaining({
+            socket_transport_wait_start_first: expect.any(Number),
+            socket_connect_command_done: expect.any(Number),
+          }),
+          phase_details: expect.objectContaining({
+            socket_connect_command_done: {
+              attempt: 1,
+              response_wait_ms: 120,
+              wait_for_client_interest_ms: 80,
+            },
+          }),
         }),
       }),
     );

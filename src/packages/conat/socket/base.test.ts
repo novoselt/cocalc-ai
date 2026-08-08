@@ -45,4 +45,30 @@ describe("ConatSocketBase.waitUntilReady", () => {
     });
     socket.close();
   });
+
+  it("reports time spent waiting for the underlying transport", async () => {
+    const lifecycleReporter = jest.fn();
+    const client = new EventEmitter() as any;
+    client.conn = { connected: false };
+    client.waitUntilConnected = jest.fn(async () => {
+      client.conn.connected = true;
+    });
+
+    const socket = new TestSocket({
+      subject: "test.socket",
+      client,
+      role: "client",
+      id: "socket-1",
+      reconnection: false,
+      lifecycleReporter,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lifecycleReporter.mock.calls).toEqual([
+      ["transport_wait_start", { transport_connected: false }],
+      ["transport_wait_done", { transport_connected: true }],
+    ]);
+    socket.close();
+  });
 });

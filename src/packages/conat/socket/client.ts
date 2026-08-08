@@ -38,7 +38,6 @@ export class ConatSocketClient extends ConatSocketBase {
   private serverId?: string;
   private loadBalancer?: (subject: string) => Promise<string>;
   private loadBalancerTimeout?: number;
-  private lifecycleReporter?: ConatSocketOptions["lifecycleReporter"];
   private nextConnectAttemptId = 0;
   private connectAttempts = new Map<
     number,
@@ -52,7 +51,6 @@ export class ConatSocketClient extends ConatSocketBase {
     super(opts);
     this.loadBalancer = opts.loadBalancer;
     this.loadBalancerTimeout = opts.loadBalancerTimeout;
-    this.lifecycleReporter = opts.lifecycleReporter;
     // logger.silly("creating a client socket connecting to ", this.subject);
     this.initTCP();
     this.on("ready", () => {

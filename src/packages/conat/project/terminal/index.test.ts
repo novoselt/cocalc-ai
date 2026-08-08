@@ -73,6 +73,27 @@ describe("mergeTerminalEnv0", () => {
     });
   });
 
+  it("forwards socket lifecycle telemetry to the terminal socket", () => {
+    const lifecycleReporter = jest.fn();
+    const connect = jest.fn(() => ({
+      on: jest.fn(),
+      request: jest.fn(),
+      close: jest.fn(),
+    }));
+    const client = { socket: { connect } } as any;
+
+    terminalClient({
+      client,
+      project_id: "project-1",
+      lifecycleReporter,
+    });
+
+    expect(connect).toHaveBeenCalledWith("terminal.project-project-1.0", {
+      reconnection: undefined,
+      lifecycleReporter,
+    });
+  });
+
   it("supports terminal introspection and safe input requests", async () => {
     const request = jest.fn(async (payload) => {
       if (payload.cmd === "list") {
