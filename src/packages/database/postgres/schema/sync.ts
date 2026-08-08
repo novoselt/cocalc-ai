@@ -198,6 +198,12 @@ async function getColumnActions(
       cur_type = cur_type.split(" ")[0];
     }
     const goal_type_raw = pgType(info).toLowerCase();
+    if (cur_type == null) {
+      // Missing serial columns still need to be added. Only skip serial type
+      // comparison after PostgreSQL has materialized the pseudo-type.
+      actions.push({ action: "add", column });
+      continue;
+    }
     let goal_type = goal_type_raw;
     if (goal_type_raw.includes("[]")) {
       goal_type = "array";
@@ -213,10 +219,7 @@ async function getColumnActions(
         goal_type = "var" + goal_type;
       }
     }
-    if (cur_type == null) {
-      // column is in our schema, but not in the actual database
-      actions.push({ action: "add", column });
-    } else if (cur_type !== goal_type) {
+    if (cur_type !== goal_type) {
       if (goal_type_raw.includes("[]") || goal_type_raw.includes("varchar")) {
         // NO support for array or varchar schema changes (even detecting)!
         continue;

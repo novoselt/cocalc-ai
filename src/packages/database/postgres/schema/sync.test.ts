@@ -27,6 +27,8 @@ jest.mock("./table", () => ({
         return ["input_sha1"];
       case "registration_tokens":
         return ["token"];
+      case "compute_resource_work":
+        return ["id"];
       default:
         return [];
     }
@@ -110,6 +112,10 @@ const registrationTokensIndexRows = createIndexesQueries(
 ).map(({ name }) => ({ name }));
 
 const registrationTokensPrimaryKeyRows = [{ name: "token" }];
+
+const computeWorkSchema: DBSchema = {
+  compute_resource_work: SCHEMA.compute_resource_work,
+};
 
 describe("schema column type introspection", () => {
   it("preserves numeric precision and scale", () => {
@@ -274,6 +280,34 @@ describe("schemaNeedsSync column actions", () => {
     const result = await schemaNeedsSync(embeddingSchema);
 
     expect(result).toBe(true);
+  });
+
+  it("adds a missing BIGSERIAL column with its unique constraint", async () => {
+    const client = createMockClient({
+      tableName: "compute_resource_work",
+      columnRows: Object.entries(SCHEMA.compute_resource_work.fields)
+        .filter(([name]) => name !== "queue_order")
+        .map(([column_name, field]) => ({
+          column_name,
+          data_type:
+            field.pg_type === "UUID"
+              ? "uuid"
+              : field.type === "timestamp"
+                ? "timestamp without time zone"
+                : "text",
+        })),
+      indexRows: createIndexesQueries(SCHEMA.compute_resource_work).map(
+        ({ name }) => ({ name }),
+      ),
+      primaryKeyRows: [{ name: "id" }],
+    });
+    (getClient as jest.Mock).mockReturnValue(client);
+
+    await syncSchema(computeWorkSchema);
+
+    expect(client.query).toHaveBeenCalledWith(
+      'ALTER TABLE "compute_resource_work" ADD COLUMN "queue_order" BIGSERIAL UNIQUE',
+    );
   });
 
   it("returns false when double precision types match number fields", async () => {
