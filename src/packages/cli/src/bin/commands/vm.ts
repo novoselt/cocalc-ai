@@ -173,8 +173,11 @@ function projectScopedAuthId(ctx: any): string | undefined {
 
 function requireAccountAuth(ctx: any, action: string) {
   if (projectScopedAuthId(ctx)) {
-    throw new Error(
-      `${action} requires account authentication; use an account CLI profile instead of the ambient project credential`,
+    throw Object.assign(
+      new Error(
+        `${action} requires account authentication instead of the ambient project credential`,
+      ),
+      { code: "account_auth_required" },
     );
   }
 }

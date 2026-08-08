@@ -2743,6 +2743,8 @@ export interface System {
 
   getPublicSiteUrl: (opts?: {
     account_id?: string;
+    project_id?: string;
+    host_id?: string;
   }) => Promise<{ url: string }>;
 
   testR2Credentials: (opts: {

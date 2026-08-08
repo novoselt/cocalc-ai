@@ -1663,6 +1663,12 @@ export async function main(
       });
     },
   });
+  try {
+    const { url } = await hubApi.system.getPublicSiteUrl({ host_id: hostId });
+    process.env.COCALC_SITE_URL = url;
+  } catch (err) {
+    logger.warn("unable to resolve public CoCalc site URL", { err: `${err}` });
+  }
   const stopReconciler = startReconciler(undefined, {
     reconcileProjectCgroup: async ({ project_id, run_quota, force }) =>
       await reconcileProjectCgroup({

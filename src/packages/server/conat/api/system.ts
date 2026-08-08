@@ -7413,10 +7413,14 @@ export async function resolveManagedProjectSshKeyAccount({
 
 export async function getPublicSiteUrl({
   account_id,
+  project_id,
+  host_id,
 }: {
   account_id?: string;
+  project_id?: string;
+  host_id?: string;
 }): Promise<{ url: string }> {
-  if (!account_id) {
+  if (!account_id && !project_id && !host_id) {
     throw Error("must be signed in");
   }
   const { dns } = await getServerSettings();

@@ -103,6 +103,14 @@ export function wireSystemApi(): void {
     return await forwardSystem("system.getCustomize", [fields]);
   };
 
+  hubApi.system.getPublicSiteUrl = async (opts?: {
+    account_id?: string;
+    project_id?: string;
+    host_id?: string;
+  }) => {
+    return await forwardSystem("system.getPublicSiteUrl", [opts]);
+  };
+
   hubApi.system.getProjectAppPublicPolicy = async (opts?: {
     account_id?: string;
     project_id?: string;

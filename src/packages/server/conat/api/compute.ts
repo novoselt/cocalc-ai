@@ -763,11 +763,11 @@ export async function listVms(opts: {
 }
 
 export async function listProjectVms(opts: {
+  host_id?: string;
   project_id?: string;
   include_deleted?: boolean;
 }) {
-  const projectId = `${opts.project_id ?? ""}`.trim();
-  if (!projectId) throw new Error("must be a project");
+  const projectId = await requireComputeProjectReadIdentity(opts);
   return (
     await listProjectComputeVms({
       project_id: projectId,
@@ -782,11 +782,11 @@ export async function getVm(opts: { account_id?: string; id_or_name: string }) {
 }
 
 export async function getProjectVm(opts: {
+  host_id?: string;
   project_id?: string;
   id_or_name: string;
 }) {
-  const projectId = `${opts.project_id ?? ""}`.trim();
-  if (!projectId) throw new Error("must be a project");
+  const projectId = await requireComputeProjectReadIdentity(opts);
   const vm = await resolveProjectComputeVm({
     project_id: projectId,
     id_or_name: `${opts.id_or_name ?? ""}`.trim(),
@@ -797,11 +797,11 @@ export async function getProjectVm(opts: {
 }
 
 export async function listProjectVolumes(opts: {
+  host_id?: string;
   project_id?: string;
   include_deleted?: boolean;
 }) {
-  const projectId = `${opts.project_id ?? ""}`.trim();
-  if (!projectId) throw new Error("must be a project");
+  const projectId = await requireComputeProjectReadIdentity(opts);
   return (
     await listProjectComputeVolumes({
       project_id: projectId,
@@ -811,11 +811,11 @@ export async function listProjectVolumes(opts: {
 }
 
 export async function getProjectVolume(opts: {
+  host_id?: string;
   project_id?: string;
   id_or_name: string;
 }) {
-  const projectId = `${opts.project_id ?? ""}`.trim();
-  if (!projectId) throw new Error("must be a project");
+  const projectId = await requireComputeProjectReadIdentity(opts);
   const volume = await resolveProjectComputeVolume({
     project_id: projectId,
     id_or_name: `${opts.id_or_name ?? ""}`.trim(),
@@ -823,6 +823,23 @@ export async function getProjectVolume(opts: {
   });
   if (!volume) throw new Error(`compute volume '${opts.id_or_name}' not found`);
   return publicVolume(volume);
+}
+
+async function requireComputeProjectReadIdentity(opts: {
+  host_id?: string;
+  project_id?: string;
+}): Promise<string> {
+  const projectId = `${opts.project_id ?? ""}`.trim();
+  if (!projectId) throw new Error("must be a project");
+  const hostId = `${opts.host_id ?? ""}`.trim();
+  if (hostId) {
+    await assertComputeProjectAssignedToHost({
+      project_id: projectId,
+      host_id: hostId,
+      bay_id: getConfiguredBayId(),
+    });
+  }
+  return projectId;
 }
 
 export async function authorizeSshKey(opts: {

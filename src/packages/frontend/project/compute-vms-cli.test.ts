@@ -24,7 +24,7 @@ describe("managed compute CLI equivalents", () => {
         },
       }),
     ).toBe(
-      "cocalc --api https://staging.cocalc.ai vm create --project project-id --zone us-central1-a --machine t2d-standard-16 --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --volume build-cache --ssh-public-key-value 'ssh-ed25519 AAAATEST user@example.com' --wait build-vm",
+      "cocalc vm create --project project-id --zone us-central1-a --machine t2d-standard-16 --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --volume build-cache --ssh-public-key-value 'ssh-ed25519 AAAATEST user@example.com' --wait build-vm",
     );
   });
 
@@ -56,7 +56,7 @@ describe("managed compute CLI equivalents", () => {
         values: { name: "my data", zone: "us-central1-b", size_gb: 80 },
       }),
     ).toBe(
-      "cocalc --api https://staging.cocalc.ai vm volume create --project project-id --zone us-central1-b --size-gb=80 --wait 'my data'",
+      "cocalc vm volume create --project project-id --zone us-central1-b --size-gb=80 --wait 'my data'",
     );
   });
 
@@ -79,9 +79,7 @@ describe("managed compute CLI equivalents", () => {
     expect(command).toContain(
       "vm volume create --project project-id --zone us-west1-a --size-gb=100 --wait compute-vm-work",
     );
-    expect(command).toContain(
-      "&& cocalc --api https://staging.cocalc.ai vm create",
-    );
+    expect(command).toContain("&& cocalc vm create");
     expect(command).toContain("--volume compute-vm-work");
   });
 });

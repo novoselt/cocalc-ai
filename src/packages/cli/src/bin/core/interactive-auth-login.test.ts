@@ -12,6 +12,8 @@ import test from "node:test";
 
 import {
   canOfferInteractiveAuthLogin,
+  canOfferInteractiveFreshAuth,
+  canOfferInteractiveProjectAccountBootstrap,
   interactiveAuthLoginArgs,
   interactiveAuthLoginEntrypoint,
   isCoCalcProjectEnvironment,
@@ -78,6 +80,57 @@ test("never starts account login from inside a CoCalc project", () => {
       stdinIsTTY: true,
       stderrIsTTY: true,
       secretMountExists: () => false,
+    }),
+    false,
+  );
+});
+
+test("offers temporary account bootstrap for an interactive project action", () => {
+  const error = Object.assign(new Error("account auth required"), {
+    code: "account_auth_required",
+  });
+  assert.equal(
+    canOfferInteractiveProjectAccountBootstrap({
+      error,
+      env: {
+        COCALC_PROJECT_ID: "project-1",
+        COCALC_SITE_URL: "https://cocalc.ai",
+      },
+      stdinIsTTY: true,
+      stderrIsTTY: true,
+      secretMountExists: () => false,
+    }),
+    true,
+  );
+  assert.equal(
+    canOfferInteractiveProjectAccountBootstrap({
+      error,
+      env: {},
+      stdinIsTTY: false,
+      stderrIsTTY: true,
+      secretMountExists: () => false,
+    }),
+    false,
+  );
+});
+
+test("offers browser elevation for fresh-auth failures in a pty", () => {
+  const error = Object.assign(new Error("fresh auth is required"), {
+    code: "fresh_auth_required",
+  });
+  assert.equal(
+    canOfferInteractiveFreshAuth({
+      error,
+      stdinIsTTY: true,
+      stderrIsTTY: true,
+    }),
+    true,
+  );
+  assert.equal(
+    canOfferInteractiveFreshAuth({
+      error,
+      stdinIsTTY: false,
+      stderrIsTTY: true,
     }),
     false,
   );

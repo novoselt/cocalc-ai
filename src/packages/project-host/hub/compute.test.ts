@@ -14,7 +14,7 @@ jest.mock("../master-status", () => ({
   getMasterConatClient: () => masterClient,
 }));
 jest.mock("@cocalc/lite/hub/api", () => ({
-  hubApi: { compute: {} },
+  hubApi: { compute: {} as any },
 }));
 
 import { hubApi } from "@cocalc/lite/hub/api";
@@ -45,4 +45,28 @@ describe("project-host compute hub bridge", () => {
       args: [opts],
     });
   });
+
+  it.each([
+    "listProjectVms",
+    "getProjectVm",
+    "listProjectVolumes",
+    "getProjectVolume",
+  ])(
+    "forwards project-scoped %s reads under the trusted host identity",
+    async (name) => {
+      const opts = {
+        project_id: "00000000-1000-4000-8000-000000000002",
+        id_or_name: "compute-vm",
+      };
+      await expect((hubApi.compute as any)[name](opts)).resolves.toEqual({
+        id: "vm-1",
+      });
+      expect(callHubMock).toHaveBeenCalledWith({
+        client: masterClient,
+        host_id: process.env.PROJECT_HOST_ID,
+        name: `compute.${name}`,
+        args: [opts],
+      });
+    },
+  );
 });

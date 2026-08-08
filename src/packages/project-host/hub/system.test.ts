@@ -60,6 +60,27 @@ describe("wireSystemApi", () => {
     });
   });
 
+  it("forwards the public site URL lookup through the master host scope", async () => {
+    callHubMock.mockResolvedValue({ url: "https://staging.cocalc.ai" });
+    const { hubApi } = await import("@cocalc/lite/hub/api");
+    const { wireSystemApi } = await import("./system");
+
+    wireSystemApi();
+
+    const request = {
+      project_id: "00000000-1000-4000-8000-000000000456",
+    };
+    await expect(hubApi.system.getPublicSiteUrl(request)).resolves.toEqual({
+      url: "https://staging.cocalc.ai",
+    });
+    expect(callHubMock).toHaveBeenCalledWith({
+      client: { id: "master-client" },
+      name: "system.getPublicSiteUrl",
+      args: [request],
+      host_id: "00000000-1000-4000-8000-000000000123",
+    });
+  });
+
   it("forwards private hostname reservation through the master host scope", async () => {
     callHubMock.mockResolvedValue({
       project_id: "00000000-1000-4000-8000-000000000456",
