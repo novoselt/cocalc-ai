@@ -484,7 +484,7 @@ describe("useFiles", () => {
     expect(fs.listing).not.toHaveBeenCalled();
   });
 
-  it("refresh clears cached contents and fetches a fresh read-only listing", async () => {
+  it("refresh retains the current contents while fetching a fresh listing", async () => {
     let refreshFetches = 0;
     const fs = {
       getListing: jest.fn(async (path: string) => {
@@ -524,7 +524,9 @@ describe("useFiles", () => {
       cacheId: { project_id: "project-1", viewer: true },
       watch: false,
     });
-    expect(result.files).toBeNull();
+    expect(result.files).toEqual({
+      "old.txt": { mtime: 0, isDir: false, size: 1 },
+    });
     await flushEffects();
 
     result = useFilesForTestWithOptions({

@@ -190,7 +190,10 @@ export default function useFiles({
     setErrorState((cur) =>
       cur.path === path && cur.error == null ? cur : { path, error: null },
     );
-    setFilesState({ path, files: null });
+    // Keep the last successful listing visible while this path is revalidated.
+    // Navigation still returns null below because filesState.path no longer
+    // matches, but same-directory refreshes must not flash an empty listing.
+    setFilesState((cur) => (cur.path === path ? cur : { path, files: null }));
     setCounter((value) => value + 1);
   }, [cacheId, path]);
 
@@ -231,11 +234,14 @@ export default function useFiles({
       try {
         staleFilesystemRefreshRequestedRef.current = false;
         const cachedFiles = getFiles({ cacheId, path });
-        setFilesState((cur) =>
-          cur.path === path && sameFiles(cur.files, cachedFiles)
+        setFilesState((cur) => {
+          if (cur.path === path && cachedFiles == null) {
+            return cur;
+          }
+          return cur.path === path && sameFiles(cur.files, cachedFiles)
             ? cur
-            : { path, files: cachedFiles },
-        );
+            : { path, files: cachedFiles };
+        });
         setErrorState((cur) =>
           cur.path === path && cur.error == null ? cur : { path, error: null },
         );
