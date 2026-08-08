@@ -93,6 +93,7 @@ import {
   mark_open_phase,
 } from "@cocalc/frontend/project/open-file";
 import { effectivePlainEditorSettings } from "@cocalc/frontend/project/workspaces/editor-theme";
+import { subscribeAccountSettingsStore } from "./account-settings-watcher";
 import {
   resolveRuntimeWorkspaceForPath,
   WORKSPACE_RECORDS_EVENT,
@@ -1282,6 +1283,9 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   protected init2(): void {
+    if (this.isClosed() || this.syncdb == null || this.store == null) {
+      return;
+    }
     this.noteOpenInitPhase("init2.start");
     this.initReconnectResource();
     this.initProjectRuntimeWatcher();
@@ -1405,11 +1409,7 @@ export class JupyterActions extends JupyterActions0 {
       this.set_jupyter_kernels(); // must be after setting project_id above.
 
       // set codemirror editor options whenever account editor_settings change.
-      const account_store = this.redux.getStore("account") as any; // TODO: check if ever is undefined
-      this.account_change = this.account_change.bind(this);
-      account_store.on("change", this.account_change);
-      this.account_change_editor_settings =
-        account_store.get("editor_settings");
+      this.initAccountSettingsWatcher();
       this.workspaceRecordsChange = ((event: Event) => {
         const detail = (
           event as CustomEvent<{
@@ -1426,6 +1426,21 @@ export class JupyterActions extends JupyterActions0 {
         this.workspaceRecordsChange,
       );
     }
+  }
+
+  private initAccountSettingsWatcher(): void {
+    if (this.isClosed()) {
+      return;
+    }
+    const accountStore = this.redux?.getStore?.("account") as any;
+    if (accountStore == null) {
+      return;
+    }
+    this.account_change = this.account_change.bind(this);
+    this.account_change_editor_settings = subscribeAccountSettingsStore(
+      accountStore,
+      this.account_change,
+    );
   }
 
   initOpenLog = () => {

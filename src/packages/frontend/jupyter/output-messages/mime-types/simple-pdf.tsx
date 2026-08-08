@@ -1,15 +1,10 @@
 import register from "./register";
+import { PDF } from "../pdf";
 
-register("application/pdf", 6, ({ value }) => {
+register("application/pdf", 6, ({ value, actions }) => {
   if (value == null) {
     console.warn("PDF: value must be specified");
     return <pre>Invalid PDF output</pre>;
   }
-  return (
-    <embed
-      style={{ width: "100%", height: "70vh" }}
-      src={`data:application/pdf;base64,${value.get("value")}`}
-      type="application/pdf"
-    />
-  );
+  return <PDF value={value} actions={actions} />;
 });
