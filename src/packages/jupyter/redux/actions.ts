@@ -1350,7 +1350,11 @@ export class JupyterActions extends Actions<JupyterStoreState> {
 
   // might throw a CellDeleteProtectedException
   _delete = (obj: any, save = true) => {
-    if (this._state === "closed" || this.store.get("read_only")) {
+    if (
+      this._state === "closed" ||
+      !this.syncdb?.isReady() ||
+      this.store.get("read_only")
+    ) {
       return;
     }
     // check: don't delete cells marked as deletable=false
