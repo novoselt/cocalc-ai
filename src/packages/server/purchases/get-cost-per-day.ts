@@ -22,7 +22,7 @@ export default async function getCostPerDay({
 }: Options): Promise<{ date: Date; total_cost: MoneyValue }[]> {
   const db = getPool("long");
   const { rows } = await db.query(
-    `SELECT date_trunc('day', "time" AT TIME ZONE 'UTC') AS date, SUM(${COST_OR_METERED_COST}) AS total_cost
+    `SELECT date_trunc('day', "time" AT TIME ZONE 'UTC') AS date, ROUND(SUM(${COST_OR_METERED_COST}), 2) AS total_cost
 FROM purchases
 WHERE account_id = $1 AND (cost > 0 OR cost_per_hour IS NOT NULL OR cost_so_far IS NOT NULL)
 GROUP BY date_trunc('day', "time" AT TIME ZONE 'UTC')

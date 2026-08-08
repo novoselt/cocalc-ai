@@ -648,6 +648,10 @@ async function loadMasterKeyMigration() {
   return await import("@cocalc/database/settings/master-key-migration");
 }
 
+async function loadPurchaseCostCentsMigration() {
+  return await import("@cocalc/database/postgres/schema/purchase-cost-cents");
+}
+
 function parseExpiresAtOption(value: string | undefined): string | null | void {
   const trimmed = `${value ?? ""}`.trim();
   if (!trimmed) return;
@@ -1186,6 +1190,52 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     }
     return membershipClass;
   }
+
+  adminPurchase
+    .command("migrate-cost-cents")
+    .description(
+      "offline migration of legacy fractional purchase costs; dry-run by default",
+    )
+    .option("--execute", "apply database updates; otherwise only report")
+    .option(
+      "--yes-i-stopped-cocalc",
+      "required with --execute; confirms all CoCalc services are stopped",
+    )
+    .option(
+      "--allow-balance-changes",
+      "allow the reviewed cent-level account balance changes",
+    )
+    .option(
+      "--allow-statement-rewrites",
+      "allow the reviewed historical statement rewrites",
+    )
+    .action(
+      async (opts: {
+        execute?: boolean;
+        yesIStoppedCocalc?: boolean;
+        allowBalanceChanges?: boolean;
+        allowStatementRewrites?: boolean;
+      }) => {
+        if (opts.execute && !opts.yesIStoppedCocalc) {
+          throw new Error(
+            "--execute requires --yes-i-stopped-cocalc; this migration must be run offline against the cluster seed database",
+          );
+        }
+        const { runPurchaseCostCentsMigration } =
+          await loadPurchaseCostCentsMigration();
+        console.log(
+          JSON.stringify(
+            await runPurchaseCostCentsMigration({
+              execute: !!opts.execute,
+              allowBalanceChanges: !!opts.allowBalanceChanges,
+              allowStatementRewrites: !!opts.allowStatementRewrites,
+            }),
+            null,
+            2,
+          ),
+        );
+      },
+    );
 
   adminPurchase
     .command("membership-package <user>")

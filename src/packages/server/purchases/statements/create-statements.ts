@@ -223,11 +223,11 @@ export async function createStatements({
 
 function getQuery(interval: Interval, type: "charges" | "credits"): string {
   if (interval == "day") {
-    return `SELECT account_id, SUM(cost) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
+    return `SELECT account_id, ROUND(SUM(cost), 2) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
       type == "charges" ? " > 0" : "< 0"
     } GROUP BY account_id`;
   } else if (interval == "month") {
-    return `SELECT account_id, SUM(cost) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
+    return `SELECT account_id, ROUND(SUM(cost), 2) AS total_${type}, count(*) AS num_${type} FROM purchases WHERE cost IS NOT NULL AND ${interval}_statement_id IS NULL AND time <= $1 AND cost ${
       type == "charges" ? " > 0" : "< 0"
     } GROUP BY account_id`;
   } else {

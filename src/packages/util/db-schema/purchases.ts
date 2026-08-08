@@ -261,7 +261,7 @@ Table({
     account_id: CREATED_BY,
     cost: {
       title: "Cost ($)",
-      desc: "The finalized user-facing ledger cost in whole cents. Not set while a metered purchase is active. This takes precedence over precise metering fields once posted.",
+      desc: "The finalized user-facing ledger cost. New entries are posted in whole cents; legacy entries may retain sub-cent precision until explicitly migrated. Not set while a metered purchase is active. This takes precedence over precise metering fields once posted.",
       type: "number",
       pg_type: "numeric(20,10)",
     },
