@@ -3104,10 +3104,12 @@ async function normalizeInviteMessageForAccount({
 async function getInvitePolicyAccountId({
   account_id,
   context,
+  project_id,
   scope,
 }: {
   account_id: string;
   context?: Record<string, unknown>;
+  project_id: string;
   scope?: string;
 }): Promise<string> {
   if (scope !== COURSE_EMAIL_INVITE_SCOPE) {
@@ -3120,6 +3122,37 @@ async function getInvitePolicyAccountId({
   if (!courseProjectId) {
     return account_id;
   }
+  if (!is_valid_uuid_string(courseProjectId)) {
+    throw new Error("course invite context has an invalid course_project_id");
+  }
+  const studentProjectId =
+    typeof context?.student_project_id === "string"
+      ? context.student_project_id.trim()
+      : "";
+  if (studentProjectId && studentProjectId !== project_id) {
+    throw new Error("course invite context does not match the target project");
+  }
+  const { rows } = await getPool().query<{
+    course: { project_id?: string; type?: string } | null;
+  }>(
+    `SELECT course
+       FROM projects
+      WHERE project_id=$1
+        AND deleted IS NULL
+      LIMIT 1`,
+    [project_id],
+  );
+  const course = rows[0]?.course;
+  if (
+    course?.type !== "student" ||
+    `${course.project_id ?? ""}`.trim() !== courseProjectId
+  ) {
+    throw new Error("target project does not belong to the specified course");
+  }
+  await assertProjectCollaboratorAccessAllowRemote({
+    account_id,
+    project_id: courseProjectId,
+  });
   return (await getProjectUsageAccountId(courseProjectId)) ?? account_id;
 }
 
@@ -3354,7 +3387,12 @@ async function createEmailProjectInvite({
   const normalizedEmail = normalizeInviteEmail(email_address);
   const policyAccountId =
     policy_account_id ??
-    (await getInvitePolicyAccountId({ account_id, context, scope }));
+    (await getInvitePolicyAccountId({
+      account_id,
+      context,
+      project_id,
+      scope,
+    }));
   const normalizedMessage = await normalizeInviteMessageForAccount({
     account_id: policyAccountId,
     message,
@@ -4015,6 +4053,7 @@ export async function inviteCollaboratorWithoutAccount({
   const policyAccountId = await getInvitePolicyAccountId({
     account_id,
     context: opts.invite_context,
+    project_id: opts.project_id,
     scope: opts.invite_scope,
   });
   await assertEmailInviteBatchLimit({

@@ -229,7 +229,7 @@ export function ActiveUsersMapAdmin() {
         during the selected window. Locations are approximate, short-lived
         Cloudflare observations; no IP address or account-linked location
         history is stored. Country-level history includes only accounts that
-        enabled Usage metrics and is retained for up to 24 months.
+        enabled Usage metrics and is retained indefinitely as aggregate data.
       </Paragraph>
       <Space wrap>
         <Segmented

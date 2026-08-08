@@ -193,6 +193,7 @@ describe("project collaborators local bay access", () => {
   const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
   const PROJECT_ID = "22222222-2222-4222-8222-222222222222";
   const TARGET_ACCOUNT_ID = "33333333-3333-4333-8333-333333333333";
+  const COURSE_PROJECT_ID = "44444444-4444-4444-8444-444444444444";
   const removeCollaboratorFromProject = jest.fn(async () => undefined);
   const addUserToProject = jest.fn(async () => undefined);
   const whenSentProjectInvite = jest.fn(async () => 0);
@@ -224,6 +225,17 @@ describe("project collaborators local bay access", () => {
       token,
       Buffer.alloc(32, 1),
     );
+  }
+
+  function courseInviteTargetQuery(sql: string) {
+    if (!sql.includes("SELECT course")) return;
+    return {
+      rows: [
+        {
+          course: { type: "student", project_id: COURSE_PROJECT_ID },
+        },
+      ],
+    };
   }
 
   beforeEach(() => {
@@ -1462,6 +1474,8 @@ describe("project collaborators local bay access", () => {
       },
     }));
     queryMock = jest.fn(async (sql: string) => {
+      const courseTarget = courseInviteTargetQuery(sql);
+      if (courseTarget) return courseTarget;
       if (sql.includes("AS actor_group")) {
         return {
           rows: [{ actor_group: "owner", manage_users_owner_only: false }],
@@ -1511,6 +1525,8 @@ describe("project collaborators local bay access", () => {
       },
     }));
     queryMock = jest.fn(async (sql: string) => {
+      const courseTarget = courseInviteTargetQuery(sql);
+      if (courseTarget) return courseTarget;
       if (sql.includes("AS actor_group")) {
         return {
           rows: [{ actor_group: "owner", manage_users_owner_only: false }],
@@ -1573,6 +1589,8 @@ describe("project collaborators local bay access", () => {
       },
     }));
     queryMock = jest.fn(async (sql: string) => {
+      const courseTarget = courseInviteTargetQuery(sql);
+      if (courseTarget) return courseTarget;
       if (sql.includes("AS actor_group")) {
         return {
           rows: [
@@ -1644,6 +1662,8 @@ describe("project collaborators local bay access", () => {
       },
     }));
     queryMock = jest.fn(async (sql: string) => {
+      const courseTarget = courseInviteTargetQuery(sql);
+      if (courseTarget) return courseTarget;
       if (sql.includes("AS actor_group")) {
         return {
           rows: [
@@ -1724,6 +1744,86 @@ describe("project collaborators local bay access", () => {
         },
       }),
     ).rejects.toThrow("course invite context is missing course_project_id");
+  });
+
+  it("rejects course policy inheritance for an unrelated target project", async () => {
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("AS actor_group")) {
+        return {
+          rows: [{ actor_group: "owner", manage_users_owner_only: false }],
+        };
+      }
+      if (sql.includes("SELECT course")) {
+        return {
+          rows: [
+            {
+              course: {
+                type: "student",
+                project_id: "55555555-5555-4555-8555-555555555555",
+              },
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const { inviteCollaboratorWithoutAccount } =
+      await import("./collaborators");
+    await expect(
+      inviteCollaboratorWithoutAccount({
+        account_id: ACCOUNT_ID,
+        opts: {
+          project_id: PROJECT_ID,
+          title: "Unrelated Project",
+          link2proj: "",
+          to: "student@example.com",
+          email: "<p>Hello</p>",
+          invite_scope: "course_student",
+          invite_context: { course_project_id: COURSE_PROJECT_ID },
+        },
+      }),
+    ).rejects.toThrow("target project does not belong to the specified course");
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("requires course-manager access before inheriting course invite limits", async () => {
+    queryMock = jest.fn(async (sql: string) => {
+      const courseTarget = courseInviteTargetQuery(sql);
+      if (courseTarget) return courseTarget;
+      if (sql.includes("AS actor_group")) {
+        return {
+          rows: [
+            { actor_group: "collaborator", manage_users_owner_only: false },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    assertProjectCollaboratorAccessAllowRemoteMock = jest.fn(async () => {
+      throw new Error("project collaborator access required");
+    });
+
+    const { inviteCollaboratorWithoutAccount } =
+      await import("./collaborators");
+    await expect(
+      inviteCollaboratorWithoutAccount({
+        account_id: ACCOUNT_ID,
+        opts: {
+          project_id: PROJECT_ID,
+          title: "Student Project",
+          link2proj: "",
+          to: "student@example.com",
+          email: "<p>Hello</p>",
+          invite_scope: "course_student",
+          invite_context: { course_project_id: COURSE_PROJECT_ID },
+        },
+      }),
+    ).rejects.toThrow("project collaborator access required");
+    expect(assertProjectCollaboratorAccessAllowRemoteMock).toHaveBeenCalledWith(
+      { account_id: ACCOUNT_ID, project_id: COURSE_PROJECT_ID },
+    );
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalled();
   });
 
   it("migrates copied pending invite links to bay-independent token hashes", async () => {
