@@ -8,9 +8,15 @@ SUBNET_POOL=${SUBNET_POOL:-10.128.0.0/9}
 SUBNET_PREFIX_LENGTH=${SUBNET_PREFIX_LENGTH:-20}
 NETWORK_TAG=${NETWORK_TAG:-cocalc-compute-vm}
 REGIONS=${REGIONS:-}
+SUBNET_CONCURRENCY=${SUBNET_CONCURRENCY:-8}
 
 if [[ -z "$PROJECT_ID" ]]; then
   echo "PROJECT_ID is required" >&2
+  exit 1
+fi
+
+if [[ ! "$SUBNET_CONCURRENCY" =~ ^[1-9][0-9]*$ ]]; then
+  echo "SUBNET_CONCURRENCY must be a positive integer" >&2
   exit 1
 fi
 
@@ -138,21 +144,74 @@ with open(plan_path, "w") as f:
 print(f"Planned {len(plan)} regional subnets on {network_uri}.")
 PY
 
-while IFS=$'\t' read -r region subnet subnet_range action; do
-  if [[ "$action" == "create" ]]; then
-    echo "Creating $subnet in $region with $subnet_range"
-    gcloud compute networks subnets create "$subnet" \
-      --project "$PROJECT_ID" --region "$region" --network "$NETWORK" \
-      --range "$subnet_range" --enable-flow-logs \
-      --logging-aggregation-interval=interval-5-sec \
-      --logging-flow-sampling=1.0 --logging-metadata=include-all
-  elif [[ "$action" == "update" ]]; then
-    echo "Ensuring VPC Flow Logs are enabled for $subnet in $region"
-    gcloud compute networks subnets update "$subnet" \
-      --project "$PROJECT_ID" --region "$region" --enable-flow-logs \
-      --logging-aggregation-interval=interval-5-sec \
-      --logging-flow-sampling=1.0 --logging-metadata=include-all
+SUBNET_WORKER="$TMP_DIR/provision-subnet.sh"
+cat >"$SUBNET_WORKER" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_id=$1
+network=$2
+log_dir=$3
+region=$4
+subnet=$5
+subnet_range=$6
+action=$7
+log_file="$log_dir/subnet-${region}.log"
+
+if [[ "$action" == "create" ]]; then
+  echo "Creating $subnet in $region with $subnet_range"
+  if gcloud compute networks subnets create "$subnet" \
+    --project "$project_id" --region "$region" --network "$network" \
+    --range "$subnet_range" --enable-flow-logs \
+    --logging-aggregation-interval=interval-5-sec \
+    --logging-flow-sampling=1.0 --logging-metadata=include-all \
+    >"$log_file" 2>&1; then
+    echo "Created $subnet in $region"
   else
+    cat "$log_file" >&2
+    echo "Failed to create $subnet in $region" >&2
+    exit 1
+  fi
+elif [[ "$action" == "update" ]]; then
+  echo "Ensuring VPC Flow Logs are enabled for $subnet in $region"
+  if gcloud compute networks subnets update "$subnet" \
+    --project "$project_id" --region "$region" --enable-flow-logs \
+    --logging-aggregation-interval=interval-5-sec \
+    --logging-flow-sampling=1.0 --logging-metadata=include-all \
+    >"$log_file" 2>&1; then
+    echo "Updated $subnet in $region"
+  else
+    cat "$log_file" >&2
+    echo "Failed to update $subnet in $region" >&2
+    exit 1
+  fi
+else
+  echo "Unsupported subnet action '$action' for $subnet" >&2
+  exit 1
+fi
+SH
+
+subnet_task_count=$(awk -F $'\t' '$4 != "keep" { count++ } END { print count + 0 }' \
+  "$TMP_DIR/subnet-plan.tsv")
+if ((subnet_task_count > 0)); then
+  echo "Provisioning $subnet_task_count regional subnets with up to $SUBNET_CONCURRENCY concurrent operations."
+  python3 - "$TMP_DIR/subnet-plan.tsv" <<'PY' |
+import csv
+import sys
+
+with open(sys.argv[1], newline="") as f:
+    for row in csv.reader(f, delimiter="\t"):
+        if len(row) != 4 or row[3] == "keep":
+            continue
+        for value in row:
+            sys.stdout.buffer.write(value.encode() + b"\0")
+PY
+    xargs -0 -n 4 -P "$SUBNET_CONCURRENCY" \
+      bash "$SUBNET_WORKER" "$PROJECT_ID" "$NETWORK" "$TMP_DIR"
+fi
+
+while IFS=$'\t' read -r region subnet _ action; do
+  if [[ "$action" == "keep" ]]; then
     echo "Keeping configured subnet $subnet in $region"
   fi
 done <"$TMP_DIR/subnet-plan.tsv"
