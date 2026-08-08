@@ -1255,6 +1255,43 @@ function projectHostRuntimeRoot(env: Record<string, string>): string {
   }
 }
 
+function projectHostRuntimeRootForVersion(
+  env: Record<string, string>,
+  desiredVersion?: string,
+): string {
+  const version = `${desiredVersion ?? ""}`.trim();
+  if (!version) {
+    return projectHostRuntimeRoot(env);
+  }
+  if (
+    path.basename(version) !== version ||
+    version === "." ||
+    version === ".."
+  ) {
+    throw new Error(`invalid project-host runtime version: ${version}`);
+  }
+  let currentRoot: string;
+  try {
+    currentRoot = fs.realpathSync(projectHostCurrentLinkPath(env));
+  } catch {
+    throw new Error(
+      `cannot resolve current project-host runtime while selecting ${version}`,
+    );
+  }
+  const versionRoot = path.join(path.dirname(currentRoot), version);
+  try {
+    const resolved = fs.realpathSync(versionRoot);
+    if (!fs.statSync(resolved).isDirectory()) {
+      throw new Error("not a directory");
+    }
+    return resolved;
+  } catch {
+    throw new Error(
+      `project-host runtime version is not installed: ${version}`,
+    );
+  }
+}
+
 function inferProjectHostBundleVersionFromCmdline(
   cmdline: string[],
 ): string | undefined {
@@ -1676,6 +1713,7 @@ function startManagedConatRouter(opts: {
   routerIngressPort?: number;
   projectHostHost: string;
   projectHostPort?: number;
+  runtimeRoot?: string;
 }): void {
   const {
     dataDir,
@@ -1723,7 +1761,7 @@ function startManagedConatRouter(opts: {
   } catch {
     // best effort
   }
-  const root = projectHostRuntimeRoot(env);
+  const root = opts.runtimeRoot ?? projectHostRuntimeRoot(env);
   const { command, args } = resolveExec(root);
   const childEnv = withoutHostAgentEnv(env);
   const child = processRuntime.spawn(command, args, {
@@ -2010,6 +2048,8 @@ function startManagedConatPersist(opts: {
   persistLogPath: string;
   persistHealthHost: string;
   persistHealthPort?: number;
+  runtimeRoot?: string;
+  runtimeVersion?: string;
 }): void {
   const {
     dataDir,
@@ -2059,8 +2099,9 @@ function startManagedConatPersist(opts: {
   } catch {
     // best effort
   }
-  const root = projectHostRuntimeRoot(env);
-  const selectedVersion = selectedProjectHostVersion(env);
+  const root = opts.runtimeRoot ?? projectHostRuntimeRoot(env);
+  const selectedVersion =
+    opts.runtimeVersion ?? selectedProjectHostVersion(env);
   const persistExec = resolveExec(root);
   const { command, args, supervised } = resolveSupervisedProjectHostExec({
     root,
@@ -2339,7 +2380,10 @@ function stopManagedConatPersist({
   );
 }
 
-export function restartManagedLocalConatRouter(index = 0): void {
+export function restartManagedLocalConatRouter(
+  index = 0,
+  options?: { desiredVersion?: string },
+): void {
   const {
     env,
     dataDir,
@@ -2358,6 +2402,10 @@ export function restartManagedLocalConatRouter(index = 0): void {
       "project-host conat router is not using managed local mode",
     );
   }
+  const runtimeRoot = projectHostRuntimeRootForVersion(
+    env,
+    options?.desiredVersion,
+  );
   stopManagedConatRouter({
     dataDir,
     routerPidPath,
@@ -2374,10 +2422,14 @@ export function restartManagedLocalConatRouter(index = 0): void {
     routerIngressPort,
     projectHostHost,
     projectHostPort,
+    runtimeRoot,
   });
 }
 
-export function restartManagedLocalConatPersist(index = 0): void {
+export function restartManagedLocalConatPersist(
+  index = 0,
+  options?: { desiredVersion?: string },
+): void {
   const {
     env,
     dataDir,
@@ -2392,6 +2444,10 @@ export function restartManagedLocalConatPersist(index = 0): void {
       "project-host conat persist is not using managed local mode",
     );
   }
+  const runtimeRoot = projectHostRuntimeRootForVersion(
+    env,
+    options?.desiredVersion,
+  );
   stopManagedConatPersist({
     dataDir,
     persistPidPath,
@@ -2404,6 +2460,8 @@ export function restartManagedLocalConatPersist(index = 0): void {
     persistLogPath,
     persistHealthHost,
     persistHealthPort,
+    runtimeRoot,
+    runtimeVersion: options?.desiredVersion,
   });
 }
 
@@ -3169,6 +3227,7 @@ export const __test__ = {
   matchingProjectHostPids,
   matchingSshpiperdPids,
   parsePort,
+  projectHostRuntimeRootForVersion,
   processRuntime,
   resolveSupervisedProjectHostExec,
   resetHealthFailureStreaks: () => healthFailureStreaks.clear(),

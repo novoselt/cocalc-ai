@@ -374,9 +374,19 @@ function managedComponentAlignmentFailures({
   desiredVersion?: string;
   row: any;
 }): string[] {
-  const expectedVersion =
-    normalizeObservedVersion(observedInstalledProjectHostBuildIdFromRow(row)) ??
-    normalizeObservedVersion(desiredVersion);
+  const normalizedDesiredVersion = normalizeObservedVersion(desiredVersion);
+  const currentArtifactVersion =
+    normalizeObservedVersion(observedInstalledProjectHostVersionFromRow(row)) ??
+    normalizeObservedVersion(row?.metadata?.software?.project_host) ??
+    normalizeObservedVersion(row?.version);
+  const stagedAuxiliaryVersion =
+    normalizedDesiredVersion != null &&
+    currentArtifactVersion !== normalizedDesiredVersion;
+  const expectedVersion = stagedAuxiliaryVersion
+    ? normalizedDesiredVersion
+    : (normalizeObservedVersion(
+        observedInstalledProjectHostBuildIdFromRow(row),
+      ) ?? normalizedDesiredVersion);
   const failures: string[] = [];
   for (const component of components) {
     const status = (statuses ?? []).find(
@@ -393,7 +403,10 @@ function managedComponentAlignmentFailures({
       failures.push(`${component}: runtime_state=${status.runtime_state}`);
       continue;
     }
-    if (status.version_state !== "aligned") {
+    if (
+      status.version_state !== "aligned" &&
+      !(stagedAuxiliaryVersion && component !== "acp-worker")
+    ) {
       failures.push(
         `${component}: version_state=${status.version_state}, running=${(status.running_versions ?? []).join(",") || "none"}, desired=${status.desired_version ?? "unknown"}`,
       );
@@ -408,7 +421,7 @@ function managedComponentAlignmentFailures({
             .filter((version): version is string => version != null),
         ),
       ];
-      if (desired && desired !== expectedVersion) {
+      if (!stagedAuxiliaryVersion && desired && desired !== expectedVersion) {
         failures.push(
           `${component}: desired=${desired}, expected=${expectedVersion}`,
         );

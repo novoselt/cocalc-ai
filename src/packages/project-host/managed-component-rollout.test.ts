@@ -114,6 +114,12 @@ describe("rolloutManagedComponents", () => {
     });
     expect(restartManagedLocalConatRouterMock).toHaveBeenCalledTimes(1);
     expect(restartManagedLocalConatPersistMock).toHaveBeenCalledTimes(1);
+    expect(restartManagedLocalConatRouterMock).toHaveBeenCalledWith(0, {
+      desiredVersion: undefined,
+    });
+    expect(restartManagedLocalConatPersistMock).toHaveBeenCalledWith(0, {
+      desiredVersion: undefined,
+    });
   });
 
   it("returns noop when router is not independently managed", async () => {
@@ -159,6 +165,21 @@ describe("rolloutManagedComponents", () => {
     });
     expect(rolloutProjectHostAcpWorkerMock).toHaveBeenCalledWith({
       restartReason: "bundle_upgrade",
+      desiredVersion: "artifact-v2",
+    });
+  });
+
+  it("launches router and persist from the requested staged artifact", async () => {
+    const { rolloutManagedComponents } =
+      await import("./managed-component-rollout");
+    await rolloutManagedComponents({
+      components: ["conat-router", "conat-persist"],
+      desired_version: "artifact-v2",
+    });
+    expect(restartManagedLocalConatRouterMock).toHaveBeenCalledWith(0, {
+      desiredVersion: "artifact-v2",
+    });
+    expect(restartManagedLocalConatPersistMock).toHaveBeenCalledWith(0, {
       desiredVersion: "artifact-v2",
     });
   });

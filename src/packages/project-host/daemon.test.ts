@@ -87,6 +87,35 @@ describe("project-host daemon stop", () => {
     expect(path.dirname(archived!)).toBe(path.join(dataDir, "log-history"));
   });
 
+  it("resolves an explicitly staged project-host runtime beside current", () => {
+    const root = mkTempDir("cocalc-project-host-versions-");
+    const current = path.join(root, "current");
+    const v1 = path.join(root, "artifact-v1");
+    const v2 = path.join(root, "artifact-v2");
+    fs.mkdirSync(v1);
+    fs.mkdirSync(v2);
+    fs.symlinkSync(v1, current);
+
+    expect(
+      __test__.projectHostRuntimeRootForVersion(
+        { COCALC_PROJECT_HOST_CURRENT: current },
+        "artifact-v2",
+      ),
+    ).toBe(fs.realpathSync(v2));
+    expect(() =>
+      __test__.projectHostRuntimeRootForVersion(
+        { COCALC_PROJECT_HOST_CURRENT: current },
+        "../artifact-v2",
+      ),
+    ).toThrow("invalid project-host runtime version");
+    expect(() =>
+      __test__.projectHostRuntimeRootForVersion(
+        { COCALC_PROJECT_HOST_CURRENT: current },
+        "artifact-v3",
+      ),
+    ).toThrow("project-host runtime version is not installed");
+  });
+
   it("bounds retained project-host log history", () => {
     const dataDir = mkTempDir("cocalc-project-host-daemon-");
     const logPath = path.join(dataDir, "log");

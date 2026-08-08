@@ -73,7 +73,9 @@ export async function rolloutManagedComponents({
           );
           break;
         }
-        restartManagedLocalConatRouter();
+        restartManagedLocalConatRouter(0, {
+          desiredVersion: desired_version,
+        });
         results.push({
           component,
           action: "restarted",
@@ -90,7 +92,9 @@ export async function rolloutManagedComponents({
           );
           break;
         }
-        restartManagedLocalConatPersist();
+        restartManagedLocalConatPersist(0, {
+          desiredVersion: desired_version,
+        });
         results.push({
           component,
           action: "restarted",
