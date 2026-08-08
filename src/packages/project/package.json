@@ -60,7 +60,7 @@
     "depcheck": "pnpm -w exec depcheck \"$PWD\" --ignores=@vercel/ncc,prettier --ignore-dirs=build,dist",
     "prepublishOnly": "pnpm test",
     "clean": "rm -rf dist build tsconfig.tsbuildinfo node_modules",
-    "build:bundle": "cd sea && ./build-bundle.sh ../build/bundle ../build/bundle-linux.tar.xz",
+    "build:bundle": "pnpm build && cd sea && ./build-bundle.sh ../build/bundle ../build/bundle-linux.tar.xz",
     "build:tools": "cd sea && ./build-tools.sh",
     "build:tools-minimal": "cd sea && ./build-tools-minimal.sh",
     "run:bundle": "node ./build/bundle/bundle/index.js",
