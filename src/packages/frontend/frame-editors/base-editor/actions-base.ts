@@ -151,6 +151,7 @@ import {
 } from "@cocalc/frontend/misc/local-storage";
 import {
   log_opened_time,
+  mark_file_open_v2_phase,
   mark_open_phase,
   restart_open_timer,
 } from "@cocalc/frontend/project/open-file";
@@ -909,6 +910,7 @@ export class BaseEditorActions<
     }
     this._syncstring.on("disconnected", this.handleSyncdocDisconnected);
     this._syncstring.on("connected", this.handleSyncdocConnected);
+    this._syncstring.on("open-phase", this.handleSyncdocOpenPhase);
 
     // File-open timing starts when live sync initialization actually begins,
     // not when a tab was created in the background.
@@ -1082,6 +1084,37 @@ export class BaseEditorActions<
   // Flag that there is activity (causes icon to turn orange).
   private activity = (): void => {
     this._get_project_actions()?.flag_file_activity(this.path);
+  };
+
+  private handleSyncdocOpenPhase = (payload: {
+    phase?: unknown;
+    elapsed_ms?: unknown;
+    attempt?: unknown;
+    error_code?: unknown;
+    error_name?: unknown;
+  }): void => {
+    const phase =
+      typeof payload?.phase === "string" ? payload.phase.trim() : "";
+    if (!phase) return;
+    const details: Record<string, string | number | boolean | undefined> = {};
+    if (Number.isFinite(Number(payload.elapsed_ms))) {
+      details.syncdoc_elapsed_ms = Number(payload.elapsed_ms);
+    }
+    if (Number.isFinite(Number(payload.attempt))) {
+      details.attempt = Number(payload.attempt);
+    }
+    if (typeof payload.error_code === "string") {
+      details.error_code = payload.error_code.slice(0, 80);
+    }
+    if (typeof payload.error_name === "string") {
+      details.error_name = payload.error_name.slice(0, 80);
+    }
+    mark_file_open_v2_phase(
+      this.project_id,
+      this.path,
+      `syncdoc.${phase}`,
+      details,
+    );
   };
 
   // This is currently NOT used in this base class.  It's used in other
@@ -1417,6 +1450,7 @@ export class BaseEditorActions<
     delete this._syncstring;
     s.removeListener?.("disconnected", this.handleSyncdocDisconnected);
     s.removeListener?.("connected", this.handleSyncdocConnected);
+    s.removeListener?.("open-phase", this.handleSyncdocOpenPhase);
     s.removeListener?.("closed", this.handleSyncstringClosed);
     s.close(); // this should save synctables in syncstring
   }

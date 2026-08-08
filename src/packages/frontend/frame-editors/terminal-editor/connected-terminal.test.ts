@@ -10,6 +10,7 @@ function loadTerminalModule({
   startLro,
   terminalSpawnError,
   project,
+  socketState = "ready",
 }: {
   projectState?: string;
   runtimeGeneration?: number;
@@ -24,6 +25,7 @@ function loadTerminalModule({
   startLro?: any;
   terminalSpawnError?: Error;
   project?: any;
+  socketState?: string;
 } = {}) {
   class MockProjectStore extends EventEmitter {
     private data = Map({
@@ -61,7 +63,7 @@ function loadTerminalModule({
 
   const makePty = () => ({
     socket: {
-      state: "ready",
+      state: socketState,
       on: jest.fn(),
       write: jest.fn(),
     },
@@ -105,6 +107,7 @@ function loadTerminalModule({
     return resource;
   });
   const alertMessage = jest.fn();
+  const uxLatencyEvents = jest.fn();
 
   jest.resetModules();
 
@@ -159,6 +162,11 @@ function loadTerminalModule({
 
   jest.doMock("@cocalc/frontend/alerts", () => ({
     alert_message: alertMessage,
+  }));
+
+  jest.doMock("@cocalc/frontend/monitoring/ux-latency", () => ({
+    ...jest.requireActual("@cocalc/frontend/monitoring/ux-latency"),
+    recordUxLatencyEvent: uxLatencyEvents,
   }));
 
   jest.doMock("@cocalc/frontend/app-framework", () => {
@@ -236,6 +244,7 @@ function loadTerminalModule({
     alertMessage,
     reconnectResources,
     registerReconnectResource,
+    uxLatencyEvents,
   };
 }
 
@@ -347,6 +356,42 @@ describe("connected terminal TUI selection", () => {
 });
 
 describe("connected terminal resizing", () => {
+  it("records input readiness only after spawn and socket readiness", async () => {
+    const { Terminal, ptys, uxLatencyEvents } = loadTerminalModule({
+      socketState: "connecting",
+    });
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const terminal = new Terminal(makeActions(), 0, "term-1", parent);
+    terminal.is_visible = true;
+
+    await terminal.connect();
+
+    expect(
+      uxLatencyEvents.mock.calls.some(
+        ([event]) => event.metric === "terminal_input_ready_v2",
+      ),
+    ).toBe(false);
+
+    ptys[0].socket.state = "ready";
+    const ready = ptys[0].socket.on.mock.calls.find(
+      ([event]: [string]) => event === "ready",
+    )?.[1];
+    ready();
+
+    expect(uxLatencyEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: "terminal",
+        metric: "terminal_input_ready_v2",
+        details: expect.objectContaining({
+          trace_version: 2,
+          readiness_observer: "spawn_complete_and_socket_ready",
+        }),
+      }),
+    );
+    terminal.close();
+  });
+
   it("swallows xterm resize failures during measureSize", async () => {
     const { Terminal } = loadTerminalModule();
     const parent = document.createElement("div");

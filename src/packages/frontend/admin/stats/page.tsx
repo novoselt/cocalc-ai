@@ -151,6 +151,30 @@ function metricLabel(metric: string): string {
       return "File open to visible";
     case "file_open_sync_ready":
       return "File open to sync ready";
+    case "file_content_paint_v2":
+      return "File content paint v2";
+    case "file_edit_ready_v2":
+      return "File edit ready v2";
+    case "file_sync_ready_v2":
+      return "File sync ready v2";
+    case "file_open_incomplete_v2":
+      return "Incomplete file open v2";
+    case "project_directory_first_paint_v2":
+      return "Project to first directory paint v2";
+    case "directory_navigation_first_paint_v2":
+      return "Directory navigation paint v2";
+    case "directory_listing_first_paint_v2":
+      return "Directory listing first paint v2";
+    case "directory_authoritative_paint_v2":
+      return "Authoritative directory paint v2";
+    case "directory_listing_incomplete_v2":
+      return "Incomplete directory listing v2";
+    case "terminal_input_ready_v2":
+      return "Terminal input ready v2";
+    case "terminal_connect_incomplete_v2":
+      return "Incomplete terminal connection v2";
+    case "terminal_connect_failed_v2":
+      return "Failed terminal connection v2";
     case "project_exec_ready":
       return "Project exec ready";
     case "project_jupyter_ready":
@@ -221,6 +245,30 @@ function metricHelp(metric: string, segment?: string): string {
       return "Observed in the user's browser from initiating a file open until the file is visibly rendered in the editor.";
     case "file_open_sync_ready":
       return "Observed in the user's browser from initiating a file open until the file sync session is connected and ready.";
+    case "file_content_paint_v2":
+      return "Version 2 trace from foreground file-open intent through loaded editor React commit and the following animation frame. The editor type, read-only state, payload phase marks, and stale/background classification are retained with the event.";
+    case "file_edit_ready_v2":
+      return "Version 2 trace from foreground file-open intent until the committed editor state is loaded, writable, and reports live realtime collaboration.";
+    case "file_sync_ready_v2":
+      return "Version 2 trace from the original foreground file-open intent until SyncDoc initialization reports ready. Named canonicalization, filesystem watch/reconcile, patchflow, cursor, attempt, and retry phases are retained in the event details.";
+    case "file_open_incomplete_v2":
+      return "Diagnostic version 2 trace that did not reach all expected file-open endpoints before timeout or was superseded. Do not interpret this row as a successful latency SLO.";
+    case "project_directory_first_paint_v2":
+      return "Version 2 trace from opening a project from a files target until the first directory contents commit and the following animation frame. The segment states whether content came from retained cache or a fresh snapshot.";
+    case "directory_navigation_first_paint_v2":
+      return "Version 2 trace from an in-project directory navigation intent until the first listing commit and following animation frame.";
+    case "directory_listing_first_paint_v2":
+      return "Version 2 trace created when a visible listing component mounts without an explicit navigation intent, through its first committed listing frame.";
+    case "directory_authoritative_paint_v2":
+      return "Version 2 trace through the first painted one-shot filesystem snapshot. Unlike the first-paint metric, retained cached content cannot satisfy this endpoint.";
+    case "directory_listing_incomplete_v2":
+      return "Diagnostic version 2 directory trace that did not paint an authoritative snapshot before timeout or supersession.";
+    case "terminal_input_ready_v2":
+      return "Version 2 trace from terminal connection intent until both the routed socket is ready and spawn plus history replay have completed, which is the gate that enables terminal input. Initial connections and reconnects are separate segments.";
+    case "terminal_connect_incomplete_v2":
+      return "Diagnostic version 2 terminal trace superseded, closed, or timed out before input became ready.";
+    case "terminal_connect_failed_v2":
+      return "Diagnostic version 2 terminal trace whose connection or spawn path failed before input became ready.";
     case "project_exec_ready":
       return "Observed in the user's browser from an action that runs code in the project, such as LaTeX compilation or exec, until the project exec request is accepted by the running project. If the project was stopped, this includes automatic start time.";
     case "project_jupyter_ready":
@@ -377,6 +425,18 @@ export const UsageStatistics: React.FC = () => {
       title: "Count",
       dataIndex: "count",
       key: "count",
+      align: "right" as const,
+    },
+    {
+      title: "Accounts",
+      dataIndex: "account_count",
+      key: "account_count",
+      align: "right" as const,
+    },
+    {
+      title: "Projects",
+      dataIndex: "project_count",
+      key: "project_count",
       align: "right" as const,
     },
     {

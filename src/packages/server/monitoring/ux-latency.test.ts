@@ -102,6 +102,8 @@ function metric({
     event_type: "project_ready",
     segment,
     count,
+    account_count: count,
+    project_count: count,
     avg_ms: p95_ms,
     p50_ms: 0,
     p95_ms,

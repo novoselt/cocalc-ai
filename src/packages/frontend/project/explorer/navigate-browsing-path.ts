@@ -7,6 +7,7 @@ import { normalize } from "path";
 
 import { redux } from "@cocalc/frontend/app-framework";
 import { normalizeAbsolutePath } from "@cocalc/util/path-model";
+import { startDirectoryNavigationTrace } from "@cocalc/frontend/project/listing/ux-latency";
 
 export function normalizeBrowsingPath(path: string): string {
   if (path == null || path === "" || path === ".") {
@@ -36,6 +37,13 @@ export function navigateBrowsingPath(
   if (opts.updateUrl) {
     void actions.open_directory(normalizedPath, true, true);
   } else {
+    startDirectoryNavigationTrace({
+      project_id,
+      host_id: redux
+        .getProjectsStore?.()
+        ?.getIn?.(["project_map", project_id, "host_id"]),
+      path: normalizedPath,
+    });
     actions.set_current_path(normalizedPath);
     actions.set_all_files_unchecked();
   }

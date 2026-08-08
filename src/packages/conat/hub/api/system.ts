@@ -365,6 +365,8 @@ export interface UxLatencyMetricSummary {
   event_type: string;
   segment?: string;
   count: number;
+  account_count: number;
+  project_count: number;
   avg_ms: number;
   p50_ms: number;
   p95_ms: number;

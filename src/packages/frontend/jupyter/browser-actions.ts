@@ -88,7 +88,10 @@ import {
   DELETED_CHECK_INTERVAL,
 } from "@cocalc/sync/editor/generic/sync-doc";
 import { type WatchIterator } from "@cocalc/conat/files/watch";
-import { mark_open_phase } from "@cocalc/frontend/project/open-file";
+import {
+  mark_file_open_v2_phase,
+  mark_open_phase,
+} from "@cocalc/frontend/project/open-file";
 import { effectivePlainEditorSettings } from "@cocalc/frontend/project/workspaces/editor-theme";
 import {
   resolveRuntimeWorkspaceForPath,
@@ -504,6 +507,22 @@ export class JupyterActions extends JupyterActions0 {
     if (phase == null) {
       return;
     }
+    mark_file_open_v2_phase(this.project_id, this.path, `syncdoc.${phase}`, {
+      syncdoc_elapsed_ms: Number.isFinite(Number(payload.elapsed_ms))
+        ? Number(payload.elapsed_ms)
+        : undefined,
+      attempt: Number.isFinite(Number(payload.attempt))
+        ? Number(payload.attempt)
+        : undefined,
+      error_code:
+        typeof payload.error_code === "string"
+          ? payload.error_code.slice(0, 80)
+          : undefined,
+      error_name:
+        typeof payload.error_name === "string"
+          ? payload.error_name.slice(0, 80)
+          : undefined,
+    });
     this.runDebug("open.syncdoc_phase", payload);
     this.noteOpenInitPhase(`syncdoc.${phase}`, payload);
   };

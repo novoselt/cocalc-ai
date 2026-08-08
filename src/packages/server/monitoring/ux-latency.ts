@@ -334,6 +334,8 @@ function metricSummaryFromRow(row: any): UxLatencyMetricSummary {
     event_type: `${row.event_type}`,
     segment: row.segment ?? undefined,
     count: Number(row.count) || 0,
+    account_count: Number(row.account_count) || 0,
+    project_count: Number(row.project_count) || 0,
     avg_ms: Math.round(Number(row.avg_ms) || 0),
     p50_ms: Math.round(Number(row.p50_ms) || 0),
     p95_ms: Math.round(Number(row.p95_ms) || 0),
@@ -355,6 +357,8 @@ export async function getUxLatencySummary({
       `
       SELECT metric, event_type, NULL::TEXT AS segment,
              COUNT(*)::INT AS count,
+             COUNT(DISTINCT account_id)::INT AS account_count,
+             COUNT(DISTINCT project_id)::INT AS project_count,
              AVG(duration_ms)::DOUBLE PRECISION AS avg_ms,
              percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p50_ms,
              percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p95_ms,
@@ -371,6 +375,8 @@ export async function getUxLatencySummary({
       `
       SELECT metric, event_type, segment,
              COUNT(*)::INT AS count,
+             COUNT(DISTINCT account_id)::INT AS account_count,
+             COUNT(DISTINCT project_id)::INT AS project_count,
              AVG(duration_ms)::DOUBLE PRECISION AS avg_ms,
              percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p50_ms,
              percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p95_ms,

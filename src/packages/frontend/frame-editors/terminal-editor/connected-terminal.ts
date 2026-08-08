@@ -34,6 +34,7 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
+import { UxLatencyTrace } from "@cocalc/frontend/monitoring/ux-latency-trace";
 import {
   classifyProjectReadinessUxSegment,
   ensure_project_running,
@@ -158,6 +159,17 @@ export interface TerminalOptions {
 
 export interface TerminalConnectOptions {
   autoStartProject?: boolean;
+}
+
+interface TerminalReadyTraceEntry {
+  generation: number;
+  trace: UxLatencyTrace;
+  source: "initial" | "reconnect";
+  segment?: string;
+  initialProjectState?: string;
+  provisioned?: boolean;
+  historyChars?: number;
+  timeout: ReturnType<typeof setTimeout>;
 }
 
 function normalizeTerminalCommand(command: any): string | undefined {
@@ -366,6 +378,8 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   private projectPreparationMessageShown = false;
   private autoStartProjectOnNextConnect = false;
   private connectGeneration = 0;
+  private terminalReadyTrace?: TerminalReadyTraceEntry;
+  private hasEverBeenInputReady = false;
   private initialOutputTimer?: ReturnType<typeof setTimeout>;
   private initialOutputReconnects = 0;
   private currentConnectStartedAt?: number;
@@ -908,6 +922,19 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
     this.reconnectResource = undefined;
     this.clearProjectStartingRetry();
     this.clearInitialOutputTimer();
+    if (this.terminalReadyTrace != null) {
+      clearTimeout(this.terminalReadyTrace.timeout);
+      if (
+        !this.terminalReadyTrace.trace.hasEmitted("terminal_input_ready_v2")
+      ) {
+        this.terminalReadyTrace.trace.record("terminal_connect_incomplete_v2", {
+          segment: `${this.terminalReadyTrace.source}:${this.terminalReadyTrace.segment ?? "unknown"}`,
+          surface_visible: this.is_visible,
+          details: { reason: "terminal_closed" },
+        });
+      }
+      this.terminalReadyTrace = undefined;
+    }
     this.pty?.close();
     this.pty = null;
     this.ptyInputReady = false;
@@ -1113,8 +1140,70 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       this.setTransientReconnectStyle(false);
       this.flushWriteBuffer();
     }
+    const readyTrace = this.terminalReadyTrace;
+    if (readyTrace?.generation === generation) {
+      readyTrace.trace.mark("input_enabled", { reason });
+      if (
+        readyTrace.trace.record("terminal_input_ready_v2", {
+          path_ext: filename_extension(this.path ?? ""),
+          segment: `${readyTrace.source}:${readyTrace.segment ?? "unknown"}`,
+          surface_visible: this.is_visible,
+          details: {
+            source: readyTrace.source,
+            command: this.command ?? "bash",
+            initial_project_state: readyTrace.initialProjectState ?? "unknown",
+            provisioned: readyTrace.provisioned,
+            history_chars: readyTrace.historyChars ?? 0,
+            readiness_observer: "spawn_complete_and_socket_ready",
+          },
+        })
+      ) {
+        clearTimeout(readyTrace.timeout);
+        this.hasEverBeenInputReady = true;
+      }
+    }
     return true;
   };
+
+  private startTerminalReadyTrace(generation: number): TerminalReadyTraceEntry {
+    const previous = this.terminalReadyTrace;
+    if (previous != null) {
+      clearTimeout(previous.timeout);
+      if (!previous.trace.hasEmitted("terminal_input_ready_v2")) {
+        previous.trace.record("terminal_connect_incomplete_v2", {
+          segment: `${previous.source}:${previous.segment ?? "unknown"}`,
+          surface_visible: this.is_visible,
+          details: { reason: "superseded" },
+        });
+      }
+    }
+    const source = this.hasEverBeenInputReady ? "reconnect" : "initial";
+    const entry: TerminalReadyTraceEntry = {
+      generation,
+      source,
+      trace: new UxLatencyTrace({
+        event_type: "terminal",
+        project_id: this.project_id,
+        host_id: redux
+          .getProjectsStore?.()
+          ?.getIn?.(["project_map", this.project_id, "host_id"]),
+        source,
+        surface_visible: this.is_visible,
+        stale_after_ms: 120_000,
+      }),
+      timeout: undefined as unknown as ReturnType<typeof setTimeout>,
+    };
+    entry.timeout = setTimeout(() => {
+      if (this.terminalReadyTrace !== entry) return;
+      entry.trace.record("terminal_connect_incomplete_v2", {
+        segment: `${entry.source}:${entry.segment ?? "unknown"}`,
+        surface_visible: this.is_visible,
+        details: { reason: "endpoint_timeout" },
+      });
+    }, 90_000);
+    this.terminalReadyTrace = entry;
+    return entry;
+  }
 
   private showManualStartMessage = async (): Promise<void> => {
     this.setTransientReconnectStyle(false);
@@ -1177,6 +1266,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
   connect = reuseInFlight(async (options: TerminalConnectOptions = {}) => {
     if (this.isClosed() || this.ptyExited) return;
     const generation = ++this.connectGeneration;
+    const v2Trace = this.startTerminalReadyTrace(generation);
     const connectStartedAt = Date.now();
     this.currentConnectStartedAt = connectStartedAt;
     this.projectDataDebugCount = 0;
@@ -1200,6 +1290,17 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         this.project_id,
         projectState,
       );
+      v2Trace.segment = readiness.segment;
+      v2Trace.initialProjectState = readiness.initial_state ?? "unknown";
+      v2Trace.provisioned =
+        typeof readiness.provisioned === "boolean"
+          ? readiness.provisioned
+          : undefined;
+      v2Trace.trace.mark("project_state_known", {
+        initial_project_state: readiness.initial_state ?? "unknown",
+        segment: readiness.segment,
+        provisioned: v2Trace.provisioned,
+      });
       this.debug("connect:project-state", {
         generation,
         projectState,
@@ -1245,6 +1346,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
           return;
         }
       }
+      v2Trace.trace.mark("project_running");
       this.autoStartProjectOnNextConnect = false;
       this.clearProjectStartingRetry();
       this.manualStartMessageShown = false;
@@ -1286,6 +1388,9 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         // Use the terminal socket's default reconnection. Routed project-host
         // terminals may need one retry while browser-session auth is bootstrapped.
       });
+      v2Trace.trace.mark("terminal_client_created", {
+        initial_socket_state: pty.socket.state,
+      });
       this.pty = pty;
       this.debug("terminal-client:create", {
         generation,
@@ -1299,6 +1404,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       });
 
       pty.socket.on("ready", () => {
+        v2Trace.trace.mark("socket_ready");
         this.restorePtyConnection(pty, generation, "socket_ready");
       });
 
@@ -1401,6 +1507,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         };
 
         const spawnStartedAt = Date.now();
+        v2Trace.trace.mark("spawn_request_start");
         this.debug("spawn:start", {
           generation,
           socket_id: pty.socket.id,
@@ -1413,6 +1520,11 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
           this.args,
           options,
         );
+        v2Trace.historyChars = history?.length ?? 0;
+        v2Trace.trace.mark("spawn_request_done", {
+          history_chars: v2Trace.historyChars,
+          socket_state: pty.socket.state,
+        });
         this.debug("spawn:done", {
           generation,
           socket_id: pty.socket.id,
@@ -1445,6 +1557,9 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
             fromProject: true,
           });
         }
+        v2Trace.trace.mark("history_replay_done", {
+          history_chars: history?.length ?? 0,
+        });
         if (!history && this.lastProjectData < connectStartedAt) {
           this.scheduleInitialOutputCheck({
             generation,
@@ -1491,6 +1606,22 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
         generation,
         error: `${err}`,
       });
+      v2Trace.trace.record("terminal_connect_failed_v2", {
+        path_ext: filename_extension(this.path ?? ""),
+        segment: `${v2Trace.source}:${v2Trace.segment ?? "unknown"}`,
+        surface_visible: this.is_visible,
+        details: {
+          error_code:
+            typeof (err as any)?.code === "string"
+              ? (err as any).code.slice(0, 80)
+              : undefined,
+          error_name:
+            typeof (err as any)?.name === "string"
+              ? (err as any).name.slice(0, 80)
+              : undefined,
+        },
+      });
+      clearTimeout(v2Trace.timeout);
       if (isProjectRootfsUnavailable(err)) {
         this.pty?.close();
         this.pty = null;

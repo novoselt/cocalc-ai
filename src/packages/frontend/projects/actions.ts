@@ -83,6 +83,8 @@ import {
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
 import { getLogger } from "@cocalc/frontend/logger";
+import { startProjectDirectoryOpenTrace } from "@cocalc/frontend/project/listing/ux-latency";
+import { captureUxTraceStart } from "@cocalc/frontend/monitoring/ux-latency-trace";
 
 import type {
   CourseInfo,
@@ -3303,7 +3305,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
     if (!is_valid_uuid_string(opts.project_id)) {
       throw Error(`invalid project_id - ${opts.project_id}`);
     }
-
     if (!store.getIn(["project_map", opts.project_id])) {
       if (COCALC_MINIMAL) {
         await switch_to_project(opts.project_id);
@@ -3335,6 +3336,14 @@ export class ProjectsActions extends Actions<ProjectsState> {
       }
       return;
     }
+    const mayOpenDirectory =
+      opts.switch_to !== false &&
+      (opts.target == null ||
+        opts.target === "files" ||
+        opts.target.startsWith("files/"));
+    const directoryOpenIntent = mayOpenDirectory
+      ? captureUxTraceStart()
+      : undefined;
     const host_id = store.getIn(["project_map", opts.project_id, "host_id"]);
     if (typeof host_id === "string") {
       // Ensure host routing info is ready before any conat project API calls.
@@ -3359,6 +3368,18 @@ export class ProjectsActions extends Actions<ProjectsState> {
       activeProjectTab,
       switchTo: opts.switch_to,
     });
+    if (
+      directoryOpenIntent != null &&
+      (opts.target === "files" ||
+        (typeof opts.target === "string" && opts.target.startsWith("files/")))
+    ) {
+      startProjectDirectoryOpenTrace({
+        project_id: opts.project_id,
+        host_id: store.getIn(["project_map", opts.project_id, "host_id"]),
+        surface_visible: true,
+        start: directoryOpenIntent,
+      });
+    }
     if (opts.target != null) {
       await project_actions.load_target(
         opts.target,

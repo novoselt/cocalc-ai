@@ -481,17 +481,32 @@ export class SyncDoc extends EventEmitter {
     // const start = Date.now();
     this.assert_not_closed("init");
     const log = this.dbg("init");
+    let attempt = 0;
     await until(
       async () => {
         if (this.state != "init") {
           return true;
         }
+        attempt += 1;
+        this.emitOpenPhase("init_attempt_start", { attempt });
         try {
           log("initializing all tables...");
           await this.initAll();
           log("initAll succeeded");
+          this.emitOpenPhase("init_attempt_done", { attempt });
           return true;
         } catch (err) {
+          this.emitOpenPhase("init_attempt_failed", {
+            attempt,
+            error_code:
+              typeof (err as any)?.code === "string"
+                ? (err as any).code.slice(0, 80)
+                : undefined,
+            error_name:
+              typeof (err as any)?.name === "string"
+                ? (err as any).name.slice(0, 80)
+                : undefined,
+          });
           if (this.isClosed()) {
             return true;
           }

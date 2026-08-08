@@ -18,6 +18,12 @@ import {
   isConatInfoBootstrapTimeout,
   isProjectRootfsUnavailable,
 } from "./project-host-errors";
+import {
+  claimDirectoryListingTrace,
+  directoryListingTelemetry,
+  markDirectoryListingPhase,
+  type DirectoryListingTelemetry,
+} from "./ux-latency";
 
 export interface FileData {
   mtime: number;
@@ -46,6 +52,12 @@ export type FilesDebugContext = {
   project_id: string;
   share_id: string;
   share_path: string;
+};
+
+export type FilesUxContext = {
+  project_id: string;
+  host_id?: string;
+  surface_visible: boolean;
 };
 
 type ConatErrorLike = Error & { code?: string | number; data?: unknown };
@@ -150,6 +162,7 @@ export default function useFiles({
   watch = true,
   refreshFs,
   debugContext,
+  uxContext,
 }: {
   // fs = undefined is supported and just waits until you provide a fs that is defined
   fs?: FilesystemClientLike | null;
@@ -162,15 +175,59 @@ export default function useFiles({
   watch?: boolean;
   refreshFs?: () => void;
   debugContext?: FilesDebugContext;
+  uxContext?: FilesUxContext;
 }): {
   files: Files | null;
   error: null | ConatErrorLike;
   refresh: () => void;
+  telemetry: DirectoryListingTelemetry | null;
 } {
+  const uxTraceRef = useRef<
+    | {
+        key: string;
+        entry: ReturnType<typeof claimDirectoryListingTrace>;
+      }
+    | undefined
+  >(undefined);
+  const uxKey = uxContext == null ? "" : `${uxContext.project_id}:${path}`;
+  if (uxContext != null) {
+    const entry = claimDirectoryListingTrace({
+      project_id: uxContext.project_id,
+      host_id: uxContext.host_id,
+      path,
+      surface_visible: uxContext.surface_visible,
+    });
+    if (
+      uxTraceRef.current?.key !== uxKey ||
+      uxTraceRef.current.entry.trace.id !== entry.trace.id
+    ) {
+      uxTraceRef.current = { key: uxKey, entry };
+    }
+  } else if (uxTraceRef.current != null) {
+    uxTraceRef.current = undefined;
+  }
+  const uxTrace = uxContext == null ? undefined : uxTraceRef.current?.entry;
+  const initialCachedFiles = getFiles({ cacheId, path });
   const [filesState, setFilesState] = useState<{
     path: string;
     files: Files | null;
-  }>(() => ({ path, files: getFiles({ cacheId, path }) }));
+    telemetry?: DirectoryListingTelemetry | null;
+  }>(() => ({
+    path,
+    files: initialCachedFiles,
+    telemetry:
+      initialCachedFiles == null
+        ? null
+        : directoryListingTelemetry({
+            entry: uxTrace,
+            revision: 0,
+            data_source: "cache",
+            authoritative: false,
+            cache_hit: true,
+            entries: Object.keys(initialCachedFiles).length,
+            truncated: false,
+          }),
+  }));
   const [errorState, setErrorState] = useState<{
     path: string;
     error: ConatErrorLike | null;
@@ -190,7 +247,7 @@ export default function useFiles({
     setErrorState((cur) =>
       cur.path === path && cur.error == null ? cur : { path, error: null },
     );
-    setFilesState({ path, files: null });
+    setFilesState({ path, files: null, telemetry: null });
     setCounter((value) => value + 1);
   }, [cacheId, path]);
 
@@ -198,6 +255,7 @@ export default function useFiles({
     async () => {
       const id = ++requestId.current;
       if (fs == null) {
+        markDirectoryListingPhase(uxTrace, "filesystem_client_wait");
         logPublicShareFiles(
           "info",
           "waiting for filesystem client",
@@ -212,10 +270,13 @@ export default function useFiles({
           cur.path === path && cur.error == null ? cur : { path, error: null },
         );
         setFilesState((cur) =>
-          cur.path === path && cur.files == null ? cur : { path, files: null },
+          cur.path === path && cur.files == null
+            ? cur
+            : { path, files: null, telemetry: null },
         );
         return;
       }
+      markDirectoryListingPhase(uxTrace, "filesystem_client_ready");
       const refreshStaleFilesystemClient = (err: unknown): boolean => {
         if (
           refreshFs == null ||
@@ -231,16 +292,42 @@ export default function useFiles({
       try {
         staleFilesystemRefreshRequestedRef.current = false;
         const cachedFiles = getFiles({ cacheId, path });
-        setFilesState((cur) =>
-          cur.path === path && sameFiles(cur.files, cachedFiles)
-            ? cur
-            : { path, files: cachedFiles },
-        );
+        markDirectoryListingPhase(uxTrace, "cache_checked", {
+          cache_hit: cachedFiles != null,
+          entries:
+            cachedFiles == null ? undefined : Object.keys(cachedFiles).length,
+        });
+        setFilesState((cur) => {
+          if (cur.path === path && sameFiles(cur.files, cachedFiles)) {
+            return cur;
+          }
+          return {
+            path,
+            files: cachedFiles,
+            telemetry:
+              cachedFiles == null
+                ? null
+                : directoryListingTelemetry({
+                    entry: uxTrace,
+                    revision: (cur.telemetry?.revision ?? 0) + 1,
+                    data_source: "cache",
+                    authoritative: false,
+                    cache_hit: true,
+                    entries: Object.keys(cachedFiles).length,
+                    truncated: false,
+                  }),
+          };
+        });
         setErrorState((cur) =>
           cur.path === path && cur.error == null ? cur : { path, error: null },
         );
         try {
-          const snapshot = await getListingSnapshot({ fs, path, debugContext });
+          const snapshot = await getListingSnapshot({
+            fs,
+            path,
+            debugContext,
+            uxTrace,
+          });
           if (requestId.current !== id) return;
           const snapshotFiles = snapshot.files ?? {};
           if (cacheId != null) {
@@ -248,11 +335,23 @@ export default function useFiles({
             notifyCacheListeners();
             cacheNeighbors({ fs, cacheId, path, files: snapshotFiles });
           }
-          setFilesState((cur) =>
-            cur.path === path && sameFiles(cur.files, snapshotFiles)
-              ? cur
-              : { path, files: { ...snapshotFiles } },
-          );
+          setFilesState((cur) => ({
+            path,
+            files:
+              cur.path === path && sameFiles(cur.files, snapshotFiles)
+                ? cur.files
+                : { ...snapshotFiles },
+            telemetry: directoryListingTelemetry({
+              entry: uxTrace,
+              revision: (cur.telemetry?.revision ?? 0) + 1,
+              data_source: "snapshot",
+              authoritative: true,
+              cache_hit: cachedFiles != null,
+              entries: Object.keys(snapshotFiles).length,
+              truncated: snapshot.truncated === true,
+              attempts: snapshot.attempts,
+            }),
+          }));
           setErrorState((cur) =>
             cur.path === path && cur.error == null
               ? cur
@@ -276,7 +375,7 @@ export default function useFiles({
           setFilesState((cur) =>
             cur.path === path && cur.files == null
               ? cur
-              : { path, files: null },
+              : { path, files: null, telemetry: null },
           );
         }
       } catch (err) {
@@ -295,7 +394,9 @@ export default function useFiles({
             : { path, error: err as ConatErrorLike },
         );
         setFilesState((cur) =>
-          cur.path === path && cur.files == null ? cur : { path, files: null },
+          cur.path === path && cur.files == null
+            ? cur
+            : { path, files: null, telemetry: null },
         );
       }
       if (!watch) {
@@ -303,12 +404,19 @@ export default function useFiles({
       }
       const attachListing = async (attempt = 0): Promise<void> => {
         try {
+          markDirectoryListingPhase(uxTrace, "watcher_attach_start", {
+            attempt: attempt + 1,
+          });
           const listing = await fs.listing(path);
           if (requestId.current !== id) {
             listing.close?.();
             return;
           }
           listingRef.current = listing;
+          markDirectoryListingPhase(uxTrace, "watcher_attach_done", {
+            attempt: attempt + 1,
+            entries: Object.keys(listing.files ?? {}).length,
+          });
           if (cacheId != null && listing.files != null) {
             cache.set(key(cacheId, path), listing.files);
             notifyCacheListeners();
@@ -319,7 +427,12 @@ export default function useFiles({
             setFilesState((cur) =>
               cur.path === path && sameFiles(cur.files, listing.files)
                 ? cur
-                : { path, files: { ...(listing.files ?? {}) } },
+                : {
+                    path,
+                    files: { ...(listing.files ?? {}) },
+                    telemetry:
+                      cur.path === path ? (cur.telemetry ?? null) : null,
+                  },
             );
             setErrorState((cur) =>
               cur.path === path && cur.error == null
@@ -364,6 +477,11 @@ export default function useFiles({
         } catch (err) {
           if (requestId.current !== id) return;
           console.warn("listing watcher bootstrap failed", { path, err });
+          markDirectoryListingPhase(uxTrace, "watcher_attach_failed", {
+            attempt: attempt + 1,
+            error_code:
+              `${(err as ConatErrorLike | undefined)?.code ?? ""}`.slice(0, 80),
+          });
           logPublicShareFiles(
             "warn",
             "listing watcher bootstrap failed",
@@ -412,8 +530,25 @@ export default function useFiles({
 
   const files = filesState.path === path ? filesState.files : null;
   const error = errorState.path === path ? errorState.error : null;
+  const telemetry =
+    filesState.path !== path
+      ? null
+      : files != null &&
+          uxTrace != null &&
+          filesState.telemetry?.trace_id !== uxTrace.trace.id
+        ? directoryListingTelemetry({
+            entry: uxTrace,
+            revision: 0,
+            data_source: "retained",
+            authoritative: filesState.telemetry?.authoritative ?? false,
+            cache_hit: true,
+            entries: Object.keys(files).length,
+            truncated: filesState.telemetry?.truncated ?? false,
+            attempts: filesState.telemetry?.attempts,
+          })
+        : (filesState.telemetry ?? null);
 
-  return { files, error, refresh };
+  return { files, error, refresh, telemetry };
 }
 
 function key(cacheId: JSONValue, path: string) {
@@ -468,11 +603,13 @@ async function getListingSnapshot({
   fs,
   path,
   debugContext,
+  uxTrace,
 }: {
   fs: FilesystemClientLike;
   path: string;
   debugContext?: FilesDebugContext;
-}): Promise<{ files: Files; truncated?: boolean }> {
+  uxTrace?: ReturnType<typeof claimDirectoryListingTrace>;
+}): Promise<{ files: Files; truncated?: boolean; attempts: number }> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= INITIAL_LISTING_MAX_ATTEMPTS; attempt++) {
     const started = Date.now();
@@ -480,6 +617,7 @@ async function getListingSnapshot({
       path,
       attempt,
     });
+    markDirectoryListingPhase(uxTrace, "snapshot_attempt_start", { attempt });
     try {
       const snapshot = await withTimeout(
         fs.getListing(path),
@@ -492,9 +630,22 @@ async function getListingSnapshot({
         entries: Object.keys(snapshot.files ?? {}).length,
         truncated: snapshot.truncated === true,
       });
-      return snapshot;
+      markDirectoryListingPhase(uxTrace, "snapshot_ready", {
+        attempt,
+        entries: Object.keys(snapshot.files ?? {}).length,
+        truncated: snapshot.truncated === true,
+      });
+      return { ...snapshot, attempts: attempt };
     } catch (err) {
       lastError = err;
+      markDirectoryListingPhase(uxTrace, "snapshot_attempt_failed", {
+        attempt,
+        retryable: isRetryableListingError(err),
+        error_code: `${(err as ConatErrorLike | undefined)?.code ?? ""}`.slice(
+          0,
+          80,
+        ),
+      });
       logPublicShareFiles(
         "warn",
         "initial listing attempt failed",
