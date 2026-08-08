@@ -22,7 +22,7 @@ import type {
   ActiveUserMapWindowMinutes,
 } from "@cocalc/conat/hub/api/system";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
-import { Icon, TimeAgo } from "@cocalc/frontend/components";
+import { TimeAgo } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
 import {
   user_search,
@@ -207,7 +207,6 @@ export function ActiveUsersMapAdmin() {
   const failedBays = overview?.bays.filter(({ ok }) => !ok) ?? [];
   const disabledBays =
     overview?.bays.filter(({ ok, enabled }) => ok && enabled === false) ?? [];
-  const responsiveBays = overview?.bays.filter(({ ok }) => ok).length ?? 0;
   const incompleteMapReasons = [
     failedBays.length
       ? `Unavailable: ${failedBays.map(({ bay_id }) => bay_id).join(", ")}.`
@@ -228,31 +227,15 @@ export function ActiveUsersMapAdmin() {
         history is stored. Country-level history includes only accounts that
         enabled Usage metrics and is retained indefinitely as aggregate data.
       </Paragraph>
-      <Space wrap>
-        <Segmented
-          value={activeMinutes}
-          options={WINDOW_OPTIONS}
-          onChange={(value) => {
-            setSelectedGroup(undefined);
-            setSelectedUser(undefined);
-            setActiveMinutes(value as ActiveUserMapWindowMinutes);
-          }}
-        />
-        <Button
-          icon={<Icon name="refresh" />}
-          loading={loading}
-          onClick={() => void load()}
-        >
-          Refresh
-        </Button>
-        {overview && (
-          <Text type="secondary">
-            Checked <TimeAgo date={overview.checked_at} /> · Current bay{" "}
-            {overview.current_bay_id} · Bays {responsiveBays}/
-            {overview.bays.length}
-          </Text>
-        )}
-      </Space>
+      <Segmented
+        value={activeMinutes}
+        options={WINDOW_OPTIONS}
+        onChange={(value) => {
+          setSelectedGroup(undefined);
+          setSelectedUser(undefined);
+          setActiveMinutes(value as ActiveUserMapWindowMinutes);
+        }}
+      />
       {error && <ShowError error={error} setError={setError} />}
       {incompleteMapReasons.length > 0 && overview?.enabled ? (
         <Alert
