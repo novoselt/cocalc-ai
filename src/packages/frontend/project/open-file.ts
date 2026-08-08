@@ -298,7 +298,10 @@ export async function open_file(
   // console.log("open_file: ", opts);
 
   const foreground = opts.foreground ?? true;
-  const foreground_project = opts.foreground_project ?? foreground;
+  // Opening a background tab must not foreground or otherwise navigate the
+  // project, even when a caller passes a stale foreground-project hint.
+  const foreground_project =
+    foreground && (opts.foreground_project ?? foreground);
   const wait_for_ready = opts.wait_for_ready ?? foreground;
   opts = defaults(opts, {
     path: required,
@@ -316,6 +319,7 @@ export async function open_file(
     explicit: false,
     workspaceSelection: undefined,
   });
+  opts.foreground_project = foreground_project;
   if (opts.line == null && opts.fragmentId?.line == null) {
     const parsed = parsePathWithOptionalLineSuffix(opts.path);
     if (parsed.line != null) {

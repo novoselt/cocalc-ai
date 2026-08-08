@@ -8,6 +8,7 @@ import { COLORS } from "@cocalc/util/theme";
 
 describe("saveStatus", () => {
   it("prioritizes file connection and backend confirmation before disk state", () => {
+    expect(saveStatus({ is_loading: true })).toBe("loading");
     expect(saveStatus({ read_only: true })).toBe("read-only");
     expect(saveStatus({ is_sync_error: true })).toBe("sync-error");
     expect(saveStatus({ is_connecting: true })).toBe("reconnecting");
@@ -15,6 +16,18 @@ describe("saveStatus", () => {
     expect(saveStatus({ has_uncommitted_changes: true })).toBe("syncing");
     expect(saveStatus({ has_unsaved_changes: true })).toBe("not-on-disk");
     expect(saveStatus({})).toBe("saved");
+  });
+
+  it("shows loading instead of temporary read-only during fast open", () => {
+    expect(
+      saveStatus({
+        is_loading: true,
+        read_only: true,
+      }),
+    ).toBe("loading");
+    expect(statusInfo("loading")).toMatchObject({
+      label: "Loading",
+    });
   });
 
   it("shows reconnecting instead of disk dirty while the file sync is not live", () => {

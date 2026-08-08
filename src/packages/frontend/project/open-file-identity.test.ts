@@ -847,7 +847,7 @@ describe("open_file wait_for_ready", () => {
     );
   });
 
-  it("returns immediately for background opens without hydrating the editor", async () => {
+  it("keeps background opens from foregrounding or hydrating the project", async () => {
     const path = "/home/user/background.txt";
     const ensureProjectIsOpen = jest.fn().mockResolvedValue(undefined);
     const openProject = jest.fn();
@@ -893,7 +893,9 @@ describe("open_file wait_for_ready", () => {
     const openPromise = open_file(actions, {
       path,
       foreground: false,
-      foreground_project: false,
+      // Full-page listings historically passed this foreground-only hint even
+      // for modifier-clicks. The background-open invariant must win.
+      foreground_project: true,
       wait_for_ready: false,
       change_history: false,
     });
@@ -911,6 +913,7 @@ describe("open_file wait_for_ready", () => {
     expect(openFilesState.get(path)?.ext).toBeUndefined();
     expect(canonicalSyncIdentityPath).not.toHaveBeenCalled();
     expect(ensureProjectIsOpen).not.toHaveBeenCalled();
+    expect(openProject).not.toHaveBeenCalled();
     expect(saveSession).toHaveBeenCalled();
   });
 });
