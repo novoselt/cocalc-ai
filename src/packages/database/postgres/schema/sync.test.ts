@@ -3,7 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { schemaNeedsSync, syncSchema } from "./sync";
+import {
+  columnTypeFromInformationSchema,
+  schemaNeedsSync,
+  syncSchema,
+} from "./sync";
 import { createIndexesQueries } from "./indexes";
 import { SCHEMA } from "@cocalc/util/schema";
 import type { DBSchema, TableSchema } from "./types";
@@ -33,6 +37,8 @@ type ColumnRow = {
   column_name: string;
   data_type: string;
   character_maximum_length?: number | null;
+  numeric_precision?: number | null;
+  numeric_scale?: number | null;
 };
 
 type QueryResult = { rows: Array<Record<string, any>> };
@@ -104,6 +110,37 @@ const registrationTokensIndexRows = createIndexesQueries(
 ).map(({ name }) => ({ name }));
 
 const registrationTokensPrimaryKeyRows = [{ name: "token" }];
+
+describe("schema column type introspection", () => {
+  it("preserves numeric precision and scale", () => {
+    expect(
+      columnTypeFromInformationSchema({
+        column_name: "cost",
+        data_type: "numeric",
+        numeric_precision: 20,
+        numeric_scale: 10,
+      }),
+    ).toBe("numeric(20,10)");
+  });
+
+  it("preserves unconstrained numeric and varchar types", () => {
+    expect(
+      columnTypeFromInformationSchema({
+        column_name: "amount",
+        data_type: "numeric",
+        numeric_precision: null,
+        numeric_scale: null,
+      }),
+    ).toBe("numeric");
+    expect(
+      columnTypeFromInformationSchema({
+        column_name: "name",
+        data_type: "character varying",
+        character_maximum_length: 127,
+      }),
+    ).toBe("varchar(127)");
+  });
+});
 
 describe("custom index generation", () => {
   it("wraps non-function expression indexes in expression parentheses", () => {

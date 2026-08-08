@@ -19,9 +19,34 @@ import {
 import {
   ensurePurchaseCostCentsSchema,
   purchaseCostCentsSchemaNeedsSync,
+  withPurchaseCostCentsTriggerSuspended,
 } from "./purchase-cost-cents";
 
 const log = getLogger("db:schema:sync");
+
+type InformationSchemaColumn = {
+  character_maximum_length?: number | null;
+  column_name: string;
+  data_type: string;
+  numeric_precision?: number | null;
+  numeric_scale?: number | null;
+};
+
+export function columnTypeFromInformationSchema(
+  column: InformationSchemaColumn,
+): string {
+  if (column.character_maximum_length) {
+    return `varchar(${column.character_maximum_length})`;
+  }
+  if (
+    column.data_type === "numeric" &&
+    column.numeric_precision != null &&
+    column.numeric_scale != null
+  ) {
+    return `numeric(${column.numeric_precision},${column.numeric_scale})`;
+  }
+  return column.data_type;
+}
 
 async function syncTableSchema(db: Client, schema: TableSchema): Promise<void> {
   const dbg = (...args) => log.debug("syncTableSchema", schema.name, ...args);
@@ -43,16 +68,15 @@ async function getColumnTypeInfo(
   const columns: { [column_name: string]: string } = {};
 
   const { rows } = await db.query(
-    "SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name=$1",
+    `SELECT column_name, data_type, character_maximum_length,
+            numeric_precision, numeric_scale
+       FROM information_schema.columns
+      WHERE table_name=$1`,
     [table],
   );
 
-  for (const y of rows) {
-    if (y.character_maximum_length) {
-      columns[y.column_name] = `varchar(${y.character_maximum_length})`;
-    } else {
-      columns[y.column_name] = y.data_type;
-    }
+  for (const y of rows as InformationSchemaColumn[]) {
+    columns[y.column_name] = columnTypeFromInformationSchema(y);
   }
 
   return columns;
@@ -121,7 +145,14 @@ async function alterColumnOfTable(
     );
     const query = `ALTER TABLE ${qTable} ALTER COLUMN ${col} TYPE ${desc} USING ${col}::${type}`;
     try {
-      await db.query(query);
+      if (schema.name === "purchases" && column === "cost") {
+        await withPurchaseCostCentsTriggerSuspended(
+          db,
+          async () => await db.query(query),
+        );
+      } else {
+        await db.query(query);
+      }
     } catch (err) {
       const dependency = parseTriggerDependencyError(err, schema.name);
       if (!dependency) {

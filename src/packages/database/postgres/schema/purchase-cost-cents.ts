@@ -83,6 +83,31 @@ async function dropPurchaseCostCentsTrigger(db: DatabaseClient): Promise<void> {
   await db.query(`DROP FUNCTION IF EXISTS ${PURCHASE_COST_CENTS_FUNCTION}()`);
 }
 
+async function installPurchaseCostCentsTrigger(
+  db: DatabaseClient,
+): Promise<void> {
+  await db.query(
+    `CREATE OR REPLACE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       IF TG_OP = 'INSERT' THEN
+         NEW.cost := ROUND(NEW.cost, 2);
+       ELSIF NEW.cost IS DISTINCT FROM OLD.cost THEN
+         NEW.cost := ROUND(NEW.cost, 2);
+       END IF;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+  );
+  await db.query(
+    `CREATE TRIGGER ${PURCHASE_COST_CENTS_TRIGGER}
+       BEFORE INSERT OR UPDATE OF cost
+       ON purchases
+       FOR EACH ROW
+       EXECUTE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()`,
+  );
+}
+
 async function withShortSchemaLock(
   db: DatabaseClient,
   fn: () => Promise<void>,
@@ -114,27 +139,36 @@ export async function ensurePurchaseCostCentsSchema(
   if (await triggerExists(db)) return;
 
   await withShortSchemaLock(db, async () => {
-    await db.query(
-      `CREATE OR REPLACE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()
-       RETURNS TRIGGER AS $$
-       BEGIN
-         IF TG_OP = 'INSERT' THEN
-           NEW.cost := ROUND(NEW.cost, 2);
-         ELSIF NEW.cost IS DISTINCT FROM OLD.cost THEN
-           NEW.cost := ROUND(NEW.cost, 2);
-         END IF;
-         RETURN NEW;
-       END;
-       $$ LANGUAGE plpgsql`,
-    );
-    await db.query(
-      `CREATE TRIGGER ${PURCHASE_COST_CENTS_TRIGGER}
-         BEFORE INSERT OR UPDATE OF cost
-         ON purchases
-         FOR EACH ROW
-         EXECUTE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()`,
-    );
+    await installPurchaseCostCentsTrigger(db);
   });
+}
+
+// PostgreSQL does not allow altering a column type while a trigger definition
+// depends on that column. Keep the guard transition atomic so a failed schema
+// change rolls back to the original trigger rather than leaving writes
+// unguarded.
+export async function withPurchaseCostCentsTriggerSuspended<T>(
+  db: DatabaseClient,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!(await triggerExists(db))) {
+    return await fn();
+  }
+
+  await db.query("BEGIN");
+  try {
+    await db.query("SET LOCAL lock_timeout='5s'");
+    await dropPurchaseCostCentsTrigger(db);
+    const result = await fn();
+    if (!(await constraintExists(db))) {
+      await installPurchaseCostCentsTrigger(db);
+    }
+    await db.query("COMMIT");
+    return result;
+  } catch (err) {
+    await db.query("ROLLBACK");
+    throw err;
+  }
 }
 
 async function inspectPurchaseCostCentsMigration(

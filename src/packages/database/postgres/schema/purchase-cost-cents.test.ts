@@ -13,6 +13,7 @@ import {
   PURCHASE_COST_CENTS_CONSTRAINT,
   PURCHASE_COST_CENTS_TRIGGER,
   purchaseCostCentsSchemaNeedsSync,
+  withPurchaseCostCentsTriggerSuspended,
 } from "./purchase-cost-cents";
 
 beforeAll(async () => {
@@ -38,6 +39,35 @@ async function dropPurchaseCostGuard(): Promise<void> {
 }
 
 describe("purchase cost whole-cent guard and migration", () => {
+  it("restores the trigger atomically around cost type changes", async () => {
+    const pool = getPool();
+    await dropPurchaseCostGuard();
+    const client = await pool.connect();
+    try {
+      await ensurePurchaseCostCentsSchema(client);
+      await withPurchaseCostCentsTriggerSuspended(client, async () => {
+        await client.query(
+          "ALTER TABLE purchases ALTER COLUMN cost TYPE numeric(21,10)",
+        );
+      });
+      expect(await purchaseCostCentsSchemaNeedsSync(client)).toBe(false);
+
+      await expect(
+        withPurchaseCostCentsTriggerSuspended(client, async () => {
+          throw new Error("simulated schema failure");
+        }),
+      ).rejects.toThrow("simulated schema failure");
+      expect(await purchaseCostCentsSchemaNeedsSync(client)).toBe(false);
+    } finally {
+      await withPurchaseCostCentsTriggerSuspended(client, async () => {
+        await client.query(
+          "ALTER TABLE purchases ALTER COLUMN cost TYPE numeric(20,10)",
+        );
+      });
+      client.release();
+    }
+  });
+
   it("normalizes new writes without rewriting legacy fractional costs", async () => {
     const pool = getPool();
     const account_id = uuid();
