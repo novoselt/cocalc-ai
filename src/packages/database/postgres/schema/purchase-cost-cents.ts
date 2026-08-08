@@ -83,6 +83,21 @@ async function dropPurchaseCostCentsTrigger(db: DatabaseClient): Promise<void> {
   await db.query(`DROP FUNCTION IF EXISTS ${PURCHASE_COST_CENTS_FUNCTION}()`);
 }
 
+async function withShortSchemaLock(
+  db: DatabaseClient,
+  fn: () => Promise<void>,
+): Promise<void> {
+  await db.query("BEGIN");
+  try {
+    await db.query("SET LOCAL lock_timeout='5s'");
+    await fn();
+    await db.query("COMMIT");
+  } catch (err) {
+    await db.query("ROLLBACK");
+    throw err;
+  }
+}
+
 // Install a forward-looking guard only. Existing fractional rows are preserved
 // until an operator explicitly reviews and runs the offline migration below.
 export async function ensurePurchaseCostCentsSchema(
@@ -90,32 +105,36 @@ export async function ensurePurchaseCostCentsSchema(
 ): Promise<void> {
   if (await constraintExists(db)) {
     if (await triggerExists(db)) {
-      await dropPurchaseCostCentsTrigger(db);
+      await withShortSchemaLock(db, async () => {
+        await dropPurchaseCostCentsTrigger(db);
+      });
     }
     return;
   }
   if (await triggerExists(db)) return;
 
-  await db.query(
-    `CREATE OR REPLACE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()
-     RETURNS TRIGGER AS $$
-     BEGIN
-       IF TG_OP = 'INSERT' THEN
-         NEW.cost := ROUND(NEW.cost, 2);
-       ELSIF NEW.cost IS DISTINCT FROM OLD.cost THEN
-         NEW.cost := ROUND(NEW.cost, 2);
-       END IF;
-       RETURN NEW;
-     END;
-     $$ LANGUAGE plpgsql`,
-  );
-  await db.query(
-    `CREATE TRIGGER ${PURCHASE_COST_CENTS_TRIGGER}
-       BEFORE INSERT OR UPDATE OF cost
-       ON purchases
-       FOR EACH ROW
-       EXECUTE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()`,
-  );
+  await withShortSchemaLock(db, async () => {
+    await db.query(
+      `CREATE OR REPLACE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()
+       RETURNS TRIGGER AS $$
+       BEGIN
+         IF TG_OP = 'INSERT' THEN
+           NEW.cost := ROUND(NEW.cost, 2);
+         ELSIF NEW.cost IS DISTINCT FROM OLD.cost THEN
+           NEW.cost := ROUND(NEW.cost, 2);
+         END IF;
+         RETURN NEW;
+       END;
+       $$ LANGUAGE plpgsql`,
+    );
+    await db.query(
+      `CREATE TRIGGER ${PURCHASE_COST_CENTS_TRIGGER}
+         BEFORE INSERT OR UPDATE OF cost
+         ON purchases
+         FOR EACH ROW
+         EXECUTE FUNCTION ${PURCHASE_COST_CENTS_FUNCTION}()`,
+    );
+  });
 }
 
 async function inspectPurchaseCostCentsMigration(
