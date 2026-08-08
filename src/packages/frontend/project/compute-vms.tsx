@@ -187,6 +187,7 @@ function VmCreateModal({
   sshKeys,
   saving,
   error,
+  preferredR2Region,
   onGenerateProjectSshKey,
   onCancel,
   onCreate,
@@ -200,12 +201,14 @@ function VmCreateModal({
   sshKeys: Array<{ label: string; value: string }>;
   saving: boolean;
   error?: string;
+  preferredR2Region: ReturnType<typeof mapCountryRegionToR2Region>;
   onGenerateProjectSshKey: () => Promise<string | undefined>;
   onCancel: () => void;
   onCreate: (values: VmDraft) => Promise<void>;
 }) {
   const [form] = Form.useForm<VmDraft>();
   const [draft, setDraft] = useState<Partial<VmDraft>>(initial);
+  const [sortRegionsByPrice, setSortRegionsByPrice] = useState(false);
   const [sortMachinesByPrice, setSortMachinesByPrice] = useState(false);
   const [sshKeyError, setSshKeyError] = useState<string>();
   const pricingSettings = useHostPricingSettings();
@@ -214,6 +217,7 @@ function VmCreateModal({
     if (!open) return;
     form.setFieldsValue(initial);
     setDraft(initial);
+    setSortRegionsByPrice(false);
     setSortMachinesByPrice(false);
     setSshKeyError(undefined);
   }, [form, initial, open]);
@@ -235,9 +239,13 @@ function VmCreateModal({
     price_display: "hourly",
     pricing_settings: pricingSettings,
   };
-  const regionOptions = compatibleOptions(
-    getGcpRegionOptions(catalog.host_catalog, selection),
-  );
+  const regionOptions = sortRegionOptionsByPreference({
+    options: compatibleOptions(
+      getGcpRegionOptions(catalog.host_catalog, selection),
+    ),
+    preference: sortRegionsByPrice ? "cheapest" : "closest",
+    preferredRegion: preferredR2Region,
+  });
   const zoneOptions = compatibleOptions(
     getGcpZoneOptions(catalog.host_catalog, selection),
   );
@@ -346,7 +354,21 @@ function VmCreateModal({
         <Flex gap={12} wrap>
           <Form.Item
             name="region"
-            label="Region"
+            label={
+              <Flex align="center" justify="space-between" gap={12}>
+                <span>Region</span>
+                <Space size={6}>
+                  <Text type="secondary" style={{ fontWeight: 400 }}>
+                    Sort by price
+                  </Text>
+                  <Switch
+                    size="small"
+                    checked={sortRegionsByPrice}
+                    onChange={setSortRegionsByPrice}
+                  />
+                </Space>
+              </Flex>
+            }
             rules={[{ required: true }]}
             style={{ flex: "1 1 280px" }}
           >
@@ -1889,6 +1911,7 @@ export function ProjectComputeVms({
           sshKeys={sshKeys}
           saving={saving}
           error={vmCreateError}
+          preferredR2Region={preferredR2Region}
           onGenerateProjectSshKey={generateProjectSshKey}
           onCancel={() => {
             setVmModalOpen(false);

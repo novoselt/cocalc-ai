@@ -503,6 +503,31 @@ describe("project docs actions", () => {
     });
   });
 
+  it("opens the VM page in the selected project", async () => {
+    const result = await revealDocsAction({
+      actionId: "project.virtual-machines.open",
+      docsAccess: { features: ["compute-vms"] },
+      parameters: { projectId: "project-2" },
+      projectId: "",
+    });
+
+    expect(mockSetPageActiveTab).toHaveBeenCalledWith("project-2", false);
+    expect(mockSetProjectActiveTab).toHaveBeenCalledWith("vms", {
+      change_history: false,
+    });
+    expect(mockSetUrlWithSearch).toHaveBeenCalledWith(
+      "/projects/project-2/vms",
+      "",
+    );
+    expect(result).toMatchObject({
+      action_id: "project.virtual-machines.open",
+      opened: true,
+      path: "/projects/project-2/vms",
+      project_id: "project-2",
+      tab: "vms",
+    });
+  });
+
   it("hides admin docs actions from non-admins and exposes them to admins", () => {
     expect(
       listDocsAppActions({ projectId: "project-1" }).map((action) => action.id),

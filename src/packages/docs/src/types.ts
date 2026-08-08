@@ -64,6 +64,7 @@ export type DocsActionId =
   | "hosts.logs.open"
   | "hosts.spot-recovery.open"
   | "settings.environment.secrets"
+  | "project.virtual-machines.open"
   | "project.terminal.open"
   | "project.jupyter.create"
   | "settings.runtime.rootfs"

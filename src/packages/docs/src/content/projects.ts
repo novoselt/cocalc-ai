@@ -123,13 +123,26 @@ project. Each VM starts with a minimal Ubuntu 24.04 LTS image. CoCalc, Jupyter,
 and other CoCalc project software are not installed automatically.
 
 Use a VM when the project runtime is not the right size or shape for a job, or
-when you need a conventional machine that you can configure over SSH. Managed
-Compute currently treats every VM independently; it does not provide private
-cluster networking or a cluster scheduler.
+when you need full control of a conventional machine. Unlike a locked-down
+CoCalc project container, a VM gives you:
+
+- full \`sudo\` access to install system packages and run system services;
+- Docker and other container runtimes;
+- FUSE filesystems and long-running system daemons;
+- the full machine for your workload, with no CoCalc project services competing
+  for its CPU or memory;
+- predictable, dedicated performance that you can benchmark directly; and
+- direct SSH access through a dedicated public IP address.
+
+That control also means you can misconfigure, exhaust, reboot, or crash the
+machine. Keep durable data on a separate \`/work\` volume. Managed Compute
+currently treats every VM independently; it does not provide private cluster
+networking or a cluster scheduler.
 
 ## Create a VM
 
-Open **VMs** from the project menu and choose **Create VM**. Configure:
+Use **Open project VMs** on this page to select a project and open its VM page,
+then choose **Create VM**. Configure:
 
 - the region, zone, and machine type;
 - Standard or Spot capacity;

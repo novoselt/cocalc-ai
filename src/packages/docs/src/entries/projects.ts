@@ -120,13 +120,20 @@ export const PROJECTS_ENTRIES: DocsEntry[] = [
     title: "Use the projects page",
   },
   {
+    actions: [
+      {
+        description: "Open the virtual machines page in a selected project.",
+        executable: true,
+        id: "project.virtual-machines.open",
+        label: "Open project VMs",
+        parameters: projectActionParameters(),
+      },
+    ],
     audiences: ["agents", "instructors", "researchers", "students", "teams"],
     body: VIRTUAL_MACHINES_BODY.trim(),
     category: "Projects",
     id: "projects.virtual-machines",
-    lastReviewed: "2026-08-07",
-    noActionReason:
-      "The project VM page links directly to this article, so an action that reopens the same page is redundant.",
+    lastReviewed: "2026-08-08",
     requiredFeatures: ["compute-vms"],
     searchKeywords:
       "managed compute dedicated virtual machines vm ssh rsync work volume spot standard egress billing",
