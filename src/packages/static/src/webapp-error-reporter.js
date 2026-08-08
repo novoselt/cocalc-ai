@@ -268,6 +268,8 @@ if (ENABLED) {
         JSON.stringify({
           react_error_kind: detail.kind,
           boundary_scope: detail.boundaryScope,
+          boundary_action: detail.boundaryAction,
+          boundary_retry_count: detail.boundaryRetryCount,
         }),
       );
       return;
@@ -279,6 +281,8 @@ if (ENABLED) {
       JSON.stringify({
         react_error_kind: detail.kind,
         boundary_scope: detail.boundaryScope,
+        boundary_action: detail.boundaryAction,
+        boundary_retry_count: detail.boundaryRetryCount,
       }),
     );
   });
