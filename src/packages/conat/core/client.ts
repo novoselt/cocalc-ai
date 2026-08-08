@@ -305,6 +305,17 @@ export const DEFAULT_SOCKETIO_CLIENT_OPTIONS = {
   reconnectionAttempts: 9999999999, // infinite
 };
 
+const SOCKETIO_DEFAULT_TIMEOUT = 20_000;
+const SOCKETIO_DEFAULT_RANDOMIZATION_FACTOR = 0.5;
+
+export type InitialConnectionPolicy = {
+  timeout: number;
+  reconnectionDelay: number;
+  reconnectionDelayMax: number;
+  randomizationFactor: number;
+  restoreAfterMs: number;
+};
+
 type State = "disconnected" | "connected" | "closed";
 
 const logger = getLogger("core/client");
@@ -330,6 +341,10 @@ interface Options {
   routeSubject?: (
     subject: string,
   ) => { address?: string; client?: Client } | undefined;
+  // Optionally retry the first transport connection more aggressively. The
+  // normal Socket.IO settings are restored after connecting or after the
+  // bounded startup window expires.
+  initialConnectionPolicy?: InitialConnectionPolicy;
 }
 
 export type ClientOptions = Options & {
@@ -630,6 +645,14 @@ export class Client extends EventEmitter {
   private scheduledSyncSubscriptionsTimer?: ReturnType<typeof setTimeout>;
   private statsLoopTimer?: ReturnType<typeof setTimeout>;
   private statsLoopResolve?: () => void;
+  private initialConnectionPolicyTimer?: ReturnType<typeof setTimeout>;
+  private initialConnectionPolicyActive = false;
+  private initialConnectionSteadyOptions?: {
+    timeout: number;
+    reconnectionDelay: number;
+    reconnectionDelayMax: number;
+    randomizationFactor: number;
+  };
   private lastSentRecvStats = { messages: 0, bytes: 0 };
   private lastSentRecvStatsAt = 0;
   public readonly recoveryScheduler: RecoveryScheduler;
@@ -652,9 +675,12 @@ export class Client extends EventEmitter {
       }
       options = { ...options, address: process.env.CONAT_SERVER };
     }
-    const { routeSubject, ...rest } = options;
+    const { routeSubject, initialConnectionPolicy, ...rest } = options;
     this.routeSubjectFn = routeSubject;
-    this.options = rest as ClientOptions;
+    this.options = {
+      ...rest,
+      initialConnectionPolicy,
+    } as ClientOptions;
     this.setMaxListeners(1000);
     this.recoveryScheduler = new RecoveryScheduler({
       canRun: () => !this.isClosed(),
@@ -672,6 +698,32 @@ export class Client extends EventEmitter {
     const { address, path } = cocalcServerToSocketioAddress(
       this.options.address!,
     );
+    const useInitialConnectionPolicy =
+      initialConnectionPolicy != null &&
+      (rest.reconnection ?? DEFAULT_SOCKETIO_CLIENT_OPTIONS.reconnection) !==
+        false;
+    const initialSocketOptions = useInitialConnectionPolicy
+      ? {
+          timeout: initialConnectionPolicy.timeout,
+          reconnectionDelay: initialConnectionPolicy.reconnectionDelay,
+          reconnectionDelayMax: initialConnectionPolicy.reconnectionDelayMax,
+          randomizationFactor: initialConnectionPolicy.randomizationFactor,
+        }
+      : undefined;
+    if (useInitialConnectionPolicy) {
+      this.initialConnectionPolicyActive = true;
+      this.initialConnectionSteadyOptions = {
+        timeout: rest.timeout ?? SOCKETIO_DEFAULT_TIMEOUT,
+        reconnectionDelay:
+          rest.reconnectionDelay ??
+          DEFAULT_SOCKETIO_CLIENT_OPTIONS.reconnectionDelay,
+        reconnectionDelayMax:
+          rest.reconnectionDelayMax ??
+          DEFAULT_SOCKETIO_CLIENT_OPTIONS.reconnectionDelayMax,
+        randomizationFactor:
+          rest.randomizationFactor ?? SOCKETIO_DEFAULT_RANDOMIZATION_FACTOR,
+      };
+    }
     logger.debug(`Conat: Connecting to ${this.getAddressForLog()}...`);
     //     if (options.extraHeaders == null) {
     //       console.trace("WARNING: no auth set");
@@ -686,18 +738,19 @@ export class Client extends EventEmitter {
       // not given, then we implement (in this file) reconnect ourselves.
       // The browser frontend explicit sets options.reconnection false
       // and uses its own logic.
-      ...options,
-      ...(options.systemAccountPassword
+      ...rest,
+      ...initialSocketOptions,
+      ...(rest.systemAccountPassword
         ? {
             extraHeaders: {
-              ...options.extraHeaders,
-              Cookie: `sys=${options.systemAccountPassword}`,
+              ...rest.extraHeaders,
+              Cookie: `sys=${rest.systemAccountPassword}`,
             },
           }
         : undefined),
       path,
       reconnection:
-        options.reconnection ?? DEFAULT_SOCKETIO_CLIENT_OPTIONS.reconnection,
+        rest.reconnection ?? DEFAULT_SOCKETIO_CLIENT_OPTIONS.reconnection,
     });
 
     this.conn.on("info", (info, ack) => {
@@ -737,6 +790,7 @@ export class Client extends EventEmitter {
     this.conn.on("fast-rpc-request", this.handleFastRpcRequest);
     this.conn.on("rpc-raw-response", this.handleRawRpcResponse);
     this.conn.on("connect", async () => {
+      this.restoreInitialConnectionPolicy();
       logger.debug(`Conat: Connected to ${this.getAddressForLog()}`);
       if (this.conn.connected) {
         this.setState("connected");
@@ -757,7 +811,8 @@ export class Client extends EventEmitter {
       this.setState("disconnected");
       this.disconnectAllSockets();
     });
-    if (options.autoConnect !== false) {
+    if (rest.autoConnect !== false) {
+      this.startInitialConnectionPolicyTimer();
       this.conn.io.connect();
     }
     this.statsLoop();
@@ -812,7 +867,46 @@ export class Client extends EventEmitter {
   };
 
   connect = () => {
+    this.startInitialConnectionPolicyTimer();
     this.conn.io.connect();
+  };
+
+  private startInitialConnectionPolicyTimer = () => {
+    if (
+      !this.initialConnectionPolicyActive ||
+      this.initialConnectionPolicyTimer != null
+    ) {
+      return;
+    }
+    const restoreAfterMs = this.options.initialConnectionPolicy?.restoreAfterMs;
+    if (restoreAfterMs == null) {
+      return;
+    }
+    this.initialConnectionPolicyTimer = setTimeout(
+      this.restoreInitialConnectionPolicy,
+      restoreAfterMs,
+    );
+    this.initialConnectionPolicyTimer.unref?.();
+  };
+
+  private restoreInitialConnectionPolicy = () => {
+    if (!this.initialConnectionPolicyActive) {
+      return;
+    }
+    this.initialConnectionPolicyActive = false;
+    if (this.initialConnectionPolicyTimer != null) {
+      clearTimeout(this.initialConnectionPolicyTimer);
+      this.initialConnectionPolicyTimer = undefined;
+    }
+    const steady = this.initialConnectionSteadyOptions;
+    this.initialConnectionSteadyOptions = undefined;
+    if (steady == null || this.isClosed()) {
+      return;
+    }
+    this.conn.io.timeout(steady.timeout);
+    this.conn.io.reconnectionDelay(steady.reconnectionDelay);
+    this.conn.io.reconnectionDelayMax(steady.reconnectionDelayMax);
+    this.conn.io.randomizationFactor(steady.randomizationFactor);
   };
 
   isConnected = () => this.state == "connected";
@@ -1064,6 +1158,10 @@ export class Client extends EventEmitter {
     if (this.statsLoopTimer != null) {
       clearTimeout(this.statsLoopTimer);
       this.statsLoopTimer = undefined;
+    }
+    if (this.initialConnectionPolicyTimer != null) {
+      clearTimeout(this.initialConnectionPolicyTimer);
+      this.initialConnectionPolicyTimer = undefined;
     }
     this.recoveryScheduler.close();
     this.heartbeatScheduler.close();
