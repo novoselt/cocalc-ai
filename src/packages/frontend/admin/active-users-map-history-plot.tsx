@@ -230,8 +230,7 @@ export function ActiveUsersMapHistoryPlot({
               line: { color: COLORS.BLUE_D },
               marker: { color: COLORS.BLUE_D },
               name: hasPrevious ? `Latest ${comparisonLabel}` : "Active users",
-              hovertemplate:
-                "%{customdata[0]}<br>%{y:,} active users<extra>%{fullData.name}</extra>",
+              hovertemplate: "%{y:,}<extra>%{fullData.name}</extra>",
             },
             ...(hasPrevious
               ? [
@@ -243,8 +242,7 @@ export function ActiveUsersMapHistoryPlot({
                     line: { color: COLORS.GRAY, dash: "dash" },
                     marker: { color: COLORS.GRAY },
                     name: `Previous ${comparisonLabel}`,
-                    hovertemplate:
-                      "%{customdata[0]}<br>%{y:,} active users<extra>%{fullData.name}</extra>",
+                    hovertemplate: "%{y:,}<extra>%{fullData.name}</extra>",
                   },
                 ]
               : []),
@@ -267,8 +265,14 @@ export function ActiveUsersMapHistoryPlot({
                 ]
               : [],
             showlegend: hasPrevious,
-            xaxis: { type: "date" },
-            yaxis: { title: "Active users", rangemode: "tozero" },
+            xaxis: {
+              type: "date",
+              hoverformat:
+                activeMinutes === 1440
+                  ? "%B %-d, %Y UTC"
+                  : "%B %-d, %Y, %H:%M UTC",
+            },
+            yaxis: { rangemode: "tozero" },
           }}
           config={{ displayModeBar: false, responsive: true }}
           onClick={(event) => {
