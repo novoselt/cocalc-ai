@@ -396,6 +396,13 @@ export class StudentProjectsActions {
       await webapp_client.project_collaborators.invite({
         project_id: student_project_id,
         account_id: student,
+        invite_context: {
+          course_path: this.get_store()?.get("course_filename"),
+          course_project_id: this.get_store()?.get("course_project_id"),
+          student_id,
+          student_project_id,
+        },
+        invite_scope: "course_student",
       });
     }
   };

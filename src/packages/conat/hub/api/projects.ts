@@ -1866,6 +1866,8 @@ export interface Projects {
       email?: string;
       subject?: string;
       message?: string;
+      invite_context?: Record<string, unknown>;
+      invite_scope?: string;
       invite_role?: Exclude<ProjectUserRole, "owner">;
       read_policy?: ProjectViewerReadPolicy | null;
     };

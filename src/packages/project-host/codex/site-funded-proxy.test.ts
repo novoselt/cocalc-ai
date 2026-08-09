@@ -150,7 +150,7 @@ describe("site-funded Codex provider proxy", () => {
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   });
 
-  it("permits only one provider request in flight per funded turn", async () => {
+  it("serializes overlapping provider requests within a funded turn", async () => {
     let releaseUpstream!: () => void;
     let noteUpstreamStarted!: () => void;
     const upstreamStarted = new Promise<void>((resolve) => {
@@ -160,8 +160,15 @@ describe("site-funded Codex provider proxy", () => {
       releaseUpstream = resolve;
     });
     let upstreamRequests = 0;
+    let upstreamRequestsInFlight = 0;
+    let maxUpstreamRequestsInFlight = 0;
     const upstream = createServer(async (_request, response) => {
       upstreamRequests += 1;
+      upstreamRequestsInFlight += 1;
+      maxUpstreamRequestsInFlight = Math.max(
+        maxUpstreamRequestsInFlight,
+        upstreamRequestsInFlight,
+      );
       noteUpstreamStarted();
       await upstreamRelease;
       response.writeHead(200, { "content-type": "application/json" });
@@ -171,6 +178,7 @@ describe("site-funded Codex provider proxy", () => {
           usage: { input_tokens: 10, output_tokens: 1 },
         }),
       );
+      upstreamRequestsInFlight -= 1;
     });
     await new Promise<void>((resolve) =>
       upstream.listen(0, "127.0.0.1", resolve),
@@ -199,12 +207,85 @@ describe("site-funded Codex provider proxy", () => {
 
     const first = request();
     await upstreamStarted;
-    const second = await request();
-    expect(second.status).toBe(429);
+    const second = request();
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
     expect(upstreamRequests).toBe(1);
 
     releaseUpstream();
     expect((await first).status).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(upstreamRequests).toBe(2);
+    expect(maxUpstreamRequestsInFlight).toBe(1);
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  it("queues a follow-on request while completed usage is settling", async () => {
+    let upstreamRequests = 0;
+    const upstream = createServer(async (_request, response) => {
+      upstreamRequests += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: `resp-${upstreamRequests}`,
+          usage: { input_tokens: 10, output_tokens: 1 },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+
+    let releaseFirstUsage!: () => void;
+    let noteFirstUsageStarted!: () => void;
+    const firstUsageStarted = new Promise<void>((resolve) => {
+      noteFirstUsageStarted = resolve;
+    });
+    const firstUsageRelease = new Promise<void>((resolve) => {
+      releaseFirstUsage = resolve;
+    });
+    let usageEvents = 0;
+    const session = await startSiteFundedCodexProxySession({
+      reservation: reservation(),
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async () => {
+        usageEvents += 1;
+        if (usageEvents !== 1) return;
+        noteFirstUsageStarted();
+        await firstUsageRelease;
+      },
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = async () => {
+      const result = await fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "hello" }),
+      });
+      await result.text();
+      return result.status;
+    };
+
+    expect(await request()).toBe(200);
+    await firstUsageStarted;
+    const second = request();
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(upstreamRequests).toBe(1);
+
+    releaseFirstUsage();
+    expect(await second).toBe(200);
+    expect(upstreamRequests).toBe(2);
+    expect(usageEvents).toBe(2);
+
     session.close();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   });

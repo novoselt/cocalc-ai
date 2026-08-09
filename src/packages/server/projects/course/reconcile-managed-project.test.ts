@@ -198,7 +198,17 @@ describe("course managed project reconciliation", () => {
     expect(users[EXTRA]).toBeUndefined();
     expect(inviteCollaboratorMock).toHaveBeenCalledWith({
       account_id: ACTOR,
-      opts: { project_id: PROJECT, account_id: STUDENT },
+      opts: {
+        project_id: PROJECT,
+        account_id: STUDENT,
+        invite_scope: "course_student",
+        invite_context: {
+          course_project_id: COURSE,
+          course_path: "/home/user/classes/main.course",
+          student_id: "student-1",
+          student_project_id: PROJECT,
+        },
+      },
     });
     expect(JSON.parse(update[1][2])).toMatchObject({
       project_id: COURSE,

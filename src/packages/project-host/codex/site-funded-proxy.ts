@@ -49,7 +49,8 @@ type ActiveTurn = {
   startedAt: number;
   requestSequence: number;
   costMicrousd: number;
-  requestInFlight: boolean;
+  requestQueueTail: Promise<void>;
+  requestQueueDepth: number;
   closed: boolean;
   blockedReason?: string;
   onUsage: (event: SiteFundedCodexUsageEvent) => Promise<void>;
@@ -354,7 +355,8 @@ class SiteFundedCodexProxy {
       startedAt: Date.now(),
       requestSequence: 0,
       costMicrousd: 0,
-      requestInFlight: false,
+      requestQueueTail: Promise.resolve(),
+      requestQueueDepth: 0,
       closed: false,
       onUsage,
     });
@@ -508,31 +510,50 @@ class SiteFundedCodexProxy {
     }
     const startedAt = Date.now();
     let bodyBuffer: Buffer;
-    let body: any;
+    let requestedBody: any;
     try {
       bodyBuffer = await readBody(
         request,
         siteFundedCodexMaxRequestBodyBytes(turn.policy),
       );
-      body = boundedProviderRequest({
-        body: JSON.parse(bodyBuffer.toString("utf8")),
-        turn,
-      });
+      requestedBody = JSON.parse(bodyBuffer.toString("utf8"));
     } catch (err: any) {
       jsonResponse(response, err?.statusCode ?? 400, `${err?.message ?? err}`);
       return;
     }
 
-    if (turn.requestInFlight) {
-      jsonResponse(
-        response,
-        429,
-        "a site-funded Codex provider request is already in progress",
-      );
-      return;
+    let releaseRequest!: () => void;
+    const previousRequest = turn.requestQueueTail;
+    const currentRequest = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    turn.requestQueueTail = previousRequest.then(() => currentRequest);
+    turn.requestQueueDepth += 1;
+    const queueDepth = turn.requestQueueDepth;
+    const queuedAt = Date.now();
+    await previousRequest;
+    const queueWaitMs = Date.now() - queuedAt;
+    if (queueDepth > 1) {
+      logger.info("serialized overlapping site-funded Codex request", {
+        reservationId: turn.reservation.reservationId,
+        queueDepth,
+        queueWaitMs,
+      });
     }
-    turn.requestInFlight = true;
     try {
+      let body: any;
+      try {
+        // Recheck turn limits after waiting because the preceding request may
+        // have closed or exhausted this turn while persisting its usage.
+        body = boundedProviderRequest({ body: requestedBody, turn });
+      } catch (err: any) {
+        jsonResponse(
+          response,
+          err?.statusCode ?? 400,
+          `${err?.message ?? err}`,
+        );
+        return;
+      }
       turn.requestSequence += 1;
       const requestSequence = turn.requestSequence;
       // Do not forward project-controlled OpenAI organization, project, or
@@ -678,7 +699,8 @@ class SiteFundedCodexProxy {
         });
       }
     } finally {
-      turn.requestInFlight = false;
+      turn.requestQueueDepth -= 1;
+      releaseRequest();
     }
   }
 }

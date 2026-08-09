@@ -62,4 +62,31 @@ describe("growth analytics browser API", () => {
     ).rejects.toThrow("not accepted from a browser");
     expect(ingestGrowthEvent).not.toHaveBeenCalled();
   });
+
+  it("accepts first-run milestones and preserves only safe dimensions", async () => {
+    await recordEvent({
+      account_id: ACCOUNT_ID,
+      event: {
+        event_id: EVENT_ID,
+        event_name: "project_create_started",
+        properties: {
+          onboarding_path: "codex",
+          outcome: "started",
+          auth_method: "must-not-pass-through",
+        },
+      },
+    });
+
+    expect(ingestGrowthEvent).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      event: expect.objectContaining({
+        event_name: "project_create_started",
+        properties: {
+          onboarding_path: "codex",
+          outcome: "started",
+          source_confidence: "browser",
+        },
+      }),
+    });
+  });
 });

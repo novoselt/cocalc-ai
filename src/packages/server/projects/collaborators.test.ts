@@ -599,6 +599,8 @@ describe("project collaborators local bay access", () => {
   it("reports in-app delivery for existing account invites", async () => {
     const inviteId = "88888888-8888-4888-8888-888888888888";
     queryMock = jest.fn(async (sql: string) => {
+      const courseTarget = courseInviteTargetQuery(sql);
+      if (courseTarget) return courseTarget;
       if (sql.includes("AS actor_group")) {
         return {
           rows: [{ actor_group: "owner", manage_users_owner_only: false }],
@@ -645,6 +647,12 @@ describe("project collaborators local bay access", () => {
         account_id: ACCOUNT_ID,
         opts: {
           account_id: TARGET_ACCOUNT_ID,
+          invite_context: {
+            course_project_id: COURSE_PROJECT_ID,
+            student_id: "student-1",
+            student_project_id: PROJECT_ID,
+          },
+          invite_scope: "course_student",
           project_id: PROJECT_ID,
         },
       }),
@@ -655,6 +663,23 @@ describe("project collaborators local bay access", () => {
       in_app_notification_sent: true,
       manual_delivery_required: false,
     });
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO project_collab_invites"),
+      expect.arrayContaining([
+        "course_student",
+        JSON.stringify({
+          course_project_id: COURSE_PROJECT_ID,
+          student_id: "student-1",
+          student_project_id: PROJECT_ID,
+        }),
+      ]),
+    );
+    expect(assertProjectCollaboratorAccessAllowRemoteMock).toHaveBeenCalledWith(
+      {
+        account_id: ACCOUNT_ID,
+        project_id: COURSE_PROJECT_ID,
+      },
+    );
   });
 
   it("treats inviting an existing full-access collaborator as idempotent", async () => {

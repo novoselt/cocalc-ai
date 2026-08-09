@@ -38,7 +38,7 @@ describe("AccountActions.set_other_settings", () => {
     jest.clearAllMocks();
   });
 
-  it("replaces the nested other_settings object instead of deep-merging it", () => {
+  it("replaces the nested other_settings object instead of deep-merging it", async () => {
     let currentOtherSettings: Record<string, any> = {
       vertical_fixed_bar: "both",
       launcher: {
@@ -67,7 +67,7 @@ describe("AccountActions.set_other_settings", () => {
     const actions = Object.create(AccountActions.prototype);
     actions.redux = redux;
 
-    actions.set_other_settings("launcher", launcher);
+    await actions.set_other_settings_and_wait("launcher", launcher);
 
     expect(set).toHaveBeenCalledWith(
       {
@@ -80,7 +80,7 @@ describe("AccountActions.set_other_settings", () => {
     );
   });
 
-  it("sets related other_settings values in one table update", () => {
+  it("sets related other_settings values in one table update", async () => {
     let currentOtherSettings: Record<string, any> = {
       vertical_fixed_bar: "both",
     };
@@ -102,7 +102,7 @@ describe("AccountActions.set_other_settings", () => {
     const actions = Object.create(AccountActions.prototype);
     actions.redux = redux;
 
-    actions.set_other_settings_many({
+    await actions.set_other_settings_many_and_wait({
       newsletter: true,
       marketing_email_consent_record: {
         version: 1,

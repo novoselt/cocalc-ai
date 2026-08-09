@@ -12,6 +12,8 @@ import { ingestGrowthEvent } from "@cocalc/server/growth-analytics/ingest";
 import * as queries from "@cocalc/server/growth-analytics/queries";
 
 const BROWSER_EVENT_NAMES = new Set([
+  "first_project_flow_seen",
+  "project_create_started",
   "project_ready",
   "project_entered",
   "project_surface_visible",
@@ -53,6 +55,12 @@ export async function recordEvent({
         source_confidence: "browser",
         ...(event.properties?.action_category
           ? { action_category: event.properties.action_category }
+          : {}),
+        ...(event.properties?.onboarding_path
+          ? { onboarding_path: event.properties.onboarding_path }
+          : {}),
+        ...(event.properties?.outcome
+          ? { outcome: event.properties.outcome }
           : {}),
       },
     },

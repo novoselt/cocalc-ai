@@ -29,6 +29,27 @@ describe("growth event validation", () => {
     });
   });
 
+  it("accepts the bounded onboarding dimensions used by the first-run flow", () => {
+    expect(
+      validateGrowthEvent(
+        {
+          event_id: EVENT_ID,
+          event_name: "guided_activation_done",
+          properties: {
+            onboarding_path: "jupyter-python",
+            outcome: "opened",
+          },
+        },
+        NOW,
+      ),
+    ).toMatchObject({
+      properties: {
+        onboarding_path: "jupyter-python",
+        outcome: "opened",
+      },
+    });
+  });
+
   it("rejects unknown payload fields so content cannot leak into analytics", () => {
     expect(() =>
       validateGrowthEvent(

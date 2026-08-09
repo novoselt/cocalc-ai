@@ -55,6 +55,7 @@ export interface GrowthEventInput {
     metadata_class?: string;
     source_confidence?: "canonical" | "server" | "browser" | "legacy_proxy";
     funding_class?: string;
+    onboarding_path?: string;
     outcome?: string;
   };
 }
