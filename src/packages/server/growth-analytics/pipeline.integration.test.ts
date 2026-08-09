@@ -93,6 +93,14 @@ describePglite("growth analytics pipeline", () => {
         (worker_name, scope_id, metric_definition_version, coverage_started_at)
       VALUES ('growth-materializer-v1', 'growth-test-bay', 'growth-v1', NULL)
     `);
+    const { SCHEMA } = await import("@cocalc/util/db-schema");
+    const { syncSchema } =
+      await import("@cocalc/database/postgres/schema/sync");
+    await syncSchema(
+      Object.fromEntries(
+        Object.entries(SCHEMA).filter(([name]) => name.startsWith("growth_")),
+      ),
+    );
     await getPool().query(
       `INSERT INTO accounts
          (account_id, home_bay_id, created, email_address,

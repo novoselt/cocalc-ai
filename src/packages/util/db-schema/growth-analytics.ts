@@ -10,6 +10,20 @@ Table({
   rules: {
     primary_key: "account_id",
     pg_indexes: ["home_bay_id", "cohort_date", "cohort_week"],
+    pg_custom_indexes: [
+      {
+        name: "growth_account_profiles_cohort_date_account_idx",
+        query: "(cohort_date, account_id)",
+      },
+      {
+        name: "growth_account_profiles_cohort_week_account_idx",
+        query: "(cohort_week, account_id)",
+      },
+      {
+        name: "growth_account_profiles_home_bay_cohort_date_idx",
+        query: "(home_bay_id, cohort_date)",
+      },
+    ],
   },
   fields: {
     account_id: { type: "uuid", desc: "Account-home analytics identity." },
@@ -43,6 +57,12 @@ Table({
   rules: {
     primary_key: ["account_id", "milestone", "definition_version"],
     pg_indexes: ["occurred_at", "milestone", "home_bay_id"],
+    pg_custom_indexes: [
+      {
+        name: "growth_account_milestones_occurred_idx",
+        query: "(milestone, occurred_at, account_id)",
+      },
+    ],
   },
   fields: {
     account_id: { type: "uuid" },
@@ -61,6 +81,16 @@ Table({
   rules: {
     primary_key: ["account_id", "activity_date", "metric_contract_version"],
     pg_indexes: ["activity_date", "account_id", "home_bay_id"],
+    pg_custom_indexes: [
+      {
+        name: "growth_activity_date_account_idx",
+        query: "(activity_date, account_id)",
+      },
+      {
+        name: "growth_activity_account_date_idx",
+        query: "(account_id, activity_date DESC)",
+      },
+    ],
   },
   fields: {
     account_id: { type: "uuid" },
@@ -91,6 +121,24 @@ Table({
       "account_id",
       "event_name",
       "home_bay_id",
+    ],
+    pg_custom_indexes: [
+      {
+        name: "growth_event_log_watermark_idx",
+        query: "(received_at, event_id)",
+      },
+      {
+        name: "growth_event_log_home_watermark_idx",
+        query: "(home_bay_id, received_at, event_id)",
+      },
+      {
+        name: "growth_event_log_account_idx",
+        query: "(account_id, received_at DESC)",
+      },
+      {
+        name: "growth_event_log_name_idx",
+        query: "(event_name, occurred_at DESC)",
+      },
     ],
   },
   fields: {
@@ -160,6 +208,12 @@ Table({
       "segment_value",
     ],
     pg_indexes: ["period_start", "metric_name", "scope_id"],
+    pg_custom_indexes: [
+      {
+        name: "growth_metric_series_read_idx",
+        query: "(scope_id, period_grain, metric_name, period_start)",
+      },
+    ],
   },
   fields: {
     scope_id: { type: "string", pg_type: "VARCHAR(64)" },
@@ -191,6 +245,13 @@ Table({
       "segment_value",
     ],
     pg_indexes: ["cohort_start", "activity_signal", "scope_id"],
+    pg_custom_indexes: [
+      {
+        name: "growth_retention_cells_read_idx",
+        query:
+          "(scope_id, cohort_grain, activity_signal, cohort_start, period_index)",
+      },
+    ],
   },
   fields: {
     scope_id: { type: "string", pg_type: "VARCHAR(64)" },
@@ -221,6 +282,12 @@ Table({
       "segment_value",
     ],
     pg_indexes: ["week_start", "scope_id"],
+    pg_custom_indexes: [
+      {
+        name: "growth_weekly_accounting_read_idx",
+        query: "(scope_id, activity_signal, week_start)",
+      },
+    ],
   },
   fields: {
     scope_id: { type: "string", pg_type: "VARCHAR(64)" },
