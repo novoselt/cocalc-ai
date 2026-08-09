@@ -5,8 +5,60 @@
 
 import type { CodexPaymentSourceInfo } from "@cocalc/conat/hub/api/system";
 
+type CodexOnboardingMode =
+  | "general"
+  | "latex"
+  | "notebook"
+  | "software"
+  | "terminal";
+
+function detectCodexOnboardingMode(request: string): CodexOnboardingMode {
+  const goal = request.toLowerCase();
+  if (/\b(latex|tex|bibtex|biblatex|beamer|tikz|typeset)\b/.test(goal)) {
+    return "latex";
+  }
+  if (
+    /\b(linux|unix|terminal|shell|bash|zsh|command[ -]line|cli|ssh|sysadmin)\b/.test(
+      goal,
+    )
+  ) {
+    return "terminal";
+  }
+  if (
+    /\b(jupyter|notebook|data ?frame|pandas|numpy|matplotlib|plots?|visuali[sz](e|ation|ing)|data analysis|statistics?|benchmarks?|benchmarking|experiments?|simulation|number theory)\b/.test(
+      goal,
+    )
+  ) {
+    return "notebook";
+  }
+  if (
+    /\b(code|coding|program|software|script|app|website|package|library|api|typescript|javascript|python|rust|golang|java|c\+\+)\b/.test(
+      goal,
+    )
+  ) {
+    return "software";
+  }
+  return "general";
+}
+
+function modeInstructions(mode: CodexOnboardingMode): string {
+  switch (mode) {
+    case "latex":
+      return "Create a compile-ready LaTeX deliverable. Prefer a focused .tex document plus any needed bibliography or image assets, compile it to PDF when the required tools are available, and fix compilation errors. Do not create a notebook unless the user asks for one.";
+    case "terminal":
+      return "Use a terminal-first workflow. Run the relevant Linux commands directly and create scripts, configuration files, or a short README when they make the result reusable. Do not create a notebook unless the user asks for one.";
+    case "notebook":
+      return "Prefer a runnable Jupyter notebook with concise explanatory text, executable code, and useful output already produced. Use another format only when it is clearly better for the requested result.";
+    case "software":
+      return "Create the appropriate source files and a short README when useful. Run the code or its focused tests and leave the project in a working state. Do not create a notebook unless the user asks for one.";
+    case "general":
+      return "Choose the format that best fits the requested result rather than defaulting to a notebook. Create files only when they make the result more useful or reusable.";
+  }
+}
+
 export function buildCodexOnboardingPrompt(userRequest: string): string {
   const goal = userRequest.trim();
+  const formatGuidance = modeInstructions(detectCodexOnboardingMode(goal));
   return `You are helping a brand-new CoCalc user complete their first useful task.
 
 This project was just created by the onboarding flow and is intentionally empty. Work directly in /home/user. Treat the user's goal below as a request to create a useful result, not as a request to locate files that should already exist.
@@ -18,7 +70,7 @@ ${goal}
 Complete the goal autonomously and make the first experience successful:
 
 - Create a small, concrete, polished deliverable in /home/user that directly addresses the goal.
-- For mathematics, data, science, visualization, or computational exploration, prefer a runnable Jupyter notebook unless another format is clearly better. For software tasks, create the appropriate source files and a short README when useful.
+- ${formatGuidance}
 - If data or exact requirements are missing, use a clearly labeled, representative example and reasonable defaults. Do not stop merely to ask for clarification when a useful first version can be made.
 - Actually run or otherwise validate what you create, inspect the result, and fix obvious errors.
 - Keep the scope focused enough to finish during this onboarding turn. Favor a working demonstration that the user can extend over a broad unfinished scaffold.

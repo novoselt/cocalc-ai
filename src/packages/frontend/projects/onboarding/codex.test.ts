@@ -29,11 +29,29 @@ describe("Codex onboarding availability", () => {
       "<user_goal>\nSee benchmarks of some basic number theory algorithms.\n</user_goal>",
     );
     expect(prompt).toContain("project was just created");
-    expect(prompt).toContain("prefer a runnable Jupyter notebook");
+    expect(prompt).toContain("Prefer a runnable Jupyter notebook");
     expect(prompt).toContain("Actually run or otherwise validate");
     expect(prompt).toContain("Do not search browser tabs");
     expect(prompt).toContain("Begin by creating the deliverable");
   });
+
+  it.each<[string, string, boolean]>([
+    ["Write my first LaTeX paper with BibTeX", "compile-ready LaTeX", true],
+    ["Teach me Linux terminal commands", "terminal-first workflow", true],
+    ["Build a small TypeScript app", "appropriate source files", true],
+    ["Help me organize my research ideas", "best fits", false],
+  ])(
+    "uses request-specific guidance for %s",
+    (request, expected, excludesNotebook) => {
+      const prompt = buildCodexOnboardingPrompt(request);
+      expect(prompt).toContain(expected);
+      if (excludesNotebook) {
+        expect(prompt).toContain("Do not create a notebook");
+      } else {
+        expect(prompt).not.toContain("Prefer a runnable Jupyter notebook");
+      }
+    },
+  );
 
   it("requires both a positive allowance and enabled site funding", () => {
     expect(
