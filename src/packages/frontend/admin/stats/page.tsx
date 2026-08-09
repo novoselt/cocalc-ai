@@ -33,6 +33,7 @@ import type {
   UxLatencyRecentEvent,
   UxLatencySummary,
 } from "@cocalc/conat/hub/api/system";
+import { UX_LATENCY_HEALTH_METRICS } from "@cocalc/conat/hub/api/system";
 
 const { Text } = Typography;
 
@@ -908,11 +909,15 @@ export const UsageStatistics: React.FC = () => {
               <Statistic
                 title={
                   <LabelWithHelp
-                    label={`File visible P95 (${activeWindowLabel})`}
-                    help={metricHelp("file_open_visible")}
+                    label={`File content paint P95 (${activeWindowLabel})`}
+                    help={metricHelp(UX_LATENCY_HEALTH_METRICS.fileVisible)}
                   />
                 }
-                value={summaryValue(summary, "file_open_visible", "p95_ms")}
+                value={summaryValue(
+                  summary,
+                  UX_LATENCY_HEALTH_METRICS.fileVisible,
+                  "p95_ms",
+                )}
               />
             </Col>
             <Col xs={24} md={8}>
@@ -920,10 +925,14 @@ export const UsageStatistics: React.FC = () => {
                 title={
                   <LabelWithHelp
                     label={`File sync-ready P95 (${activeWindowLabel})`}
-                    help={metricHelp("file_open_sync_ready")}
+                    help={metricHelp(UX_LATENCY_HEALTH_METRICS.fileSyncReady)}
                   />
                 }
-                value={summaryValue(summary, "file_open_sync_ready", "p95_ms")}
+                value={summaryValue(
+                  summary,
+                  UX_LATENCY_HEALTH_METRICS.fileSyncReady,
+                  "p95_ms",
+                )}
               />
             </Col>
           </Row>

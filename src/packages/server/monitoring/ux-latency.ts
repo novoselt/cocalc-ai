@@ -20,6 +20,7 @@ import type {
   UxLatencyRecentEvent,
   UxLatencySummary,
 } from "@cocalc/conat/hub/api/system";
+import { UX_LATENCY_HEALTH_METRICS } from "@cocalc/conat/hub/api/system";
 import { v4 as uuid } from "uuid";
 import { getUxSaturationContext } from "./ux-saturation";
 
@@ -731,7 +732,10 @@ export function alertCandidates(
     });
   }
 
-  const visible = rowByMetric(summary.metrics, "file_open_visible");
+  const visible = rowByMetric(
+    summary.metrics,
+    UX_LATENCY_HEALTH_METRICS.fileVisible,
+  );
   const visibleAlert = shouldAlertOnLatencySla({
     summary,
     row: visible,
@@ -740,19 +744,22 @@ export function alertCandidates(
   });
   if (visibleAlert.alert && visible) {
     alerts.push({
-      subject: "file open visible latency is high",
+      subject: "file content paint latency is high",
       body: actionableLatencyBody({
         summary,
         row: visible,
         expectation:
-          "File-open visible latency violated the configured P95 SLA.",
+          "Foreground file-open content paint latency violated the configured P95 SLA.",
         thresholdMs: sla.file_open_visible_p95_ms,
         slowSamples: visibleAlert.slowSamples,
       }),
     });
   }
 
-  const syncReady = rowByMetric(summary.metrics, "file_open_sync_ready");
+  const syncReady = rowByMetric(
+    summary.metrics,
+    UX_LATENCY_HEALTH_METRICS.fileSyncReady,
+  );
   const syncReadyAlert = shouldAlertOnLatencySla({
     summary,
     row: syncReady,
@@ -766,7 +773,7 @@ export function alertCandidates(
         summary,
         row: syncReady,
         expectation:
-          "File-open sync-ready latency violated the configured P95 SLA.",
+          "Foreground file-open SyncDoc readiness latency violated the configured P95 SLA.",
         thresholdMs: sla.file_open_sync_ready_p95_ms,
         slowSamples: syncReadyAlert.slowSamples,
       }),

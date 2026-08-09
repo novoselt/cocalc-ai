@@ -402,6 +402,11 @@ export interface UxLatencySummary {
   recent_slow_events: UxLatencyRecentEvent[];
 }
 
+export const UX_LATENCY_HEALTH_METRICS = {
+  fileVisible: "file_content_paint_v2",
+  fileSyncReady: "file_sync_ready_v2",
+} as const;
+
 export type LaunchHealthLevel = "healthy" | "warning" | "critical" | "unknown";
 
 export interface LaunchHealthCheck {

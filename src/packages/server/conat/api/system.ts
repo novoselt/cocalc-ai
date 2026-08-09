@@ -148,6 +148,7 @@ import type {
   ActiveUserMapWindowMinutes,
   BrowserSessionLocation,
 } from "@cocalc/conat/hub/api/system";
+import { UX_LATENCY_HEALTH_METRICS } from "@cocalc/conat/hub/api/system";
 import {
   bootstrapCloudflareConfiguration as bootstrapCloudflareConfiguration0,
   type CloudflareBootstrapResult,
@@ -2105,14 +2106,16 @@ export async function getLaunchHealth({
     metric: "project_start_frontend_convergence",
     segment: "warm_provisioned",
   });
-  const fileVisibleP95 = uxLatencyP95({
+  const fileVisibleMetric = uxLatencyMetric({
     summary: latency,
-    metric: "file_open_visible",
+    metric: UX_LATENCY_HEALTH_METRICS.fileVisible,
   });
-  const fileSyncReadyP95 = uxLatencyP95({
+  const fileVisibleP95 = fileVisibleMetric?.p95_ms ?? null;
+  const fileSyncReadyMetric = uxLatencyMetric({
     summary: latency,
-    metric: "file_open_sync_ready",
+    metric: UX_LATENCY_HEALTH_METRICS.fileSyncReady,
   });
+  const fileSyncReadyP95 = fileSyncReadyMetric?.p95_ms ?? null;
   const configBayStates =
     config?.scopes.flatMap((scope) => scope.bays.map((bay) => bay.status)) ??
     [];
@@ -2330,7 +2333,7 @@ export async function getLaunchHealth({
       label: "Browser-observed latency",
       level: latencyResult.status === "rejected" ? "critical" : latencyLevel,
       summary: latency
-        ? `P95 over ${latency.window_minutes}m: lifecycle=${formatDurationMs(lifecycleP95)} n=${lifecycleMetric?.count ?? 0} (SLA ${formatDurationMs(sla.project_start_warm_p95_ms)}; health requires n=10), admission=${formatDurationMs(admissionMetric?.p95_ms)} n=${admissionMetric?.count ?? 0}, backend=${formatDurationMs(backendLifecycleMetric?.p95_ms)} n=${backendLifecycleMetric?.count ?? 0}, convergence=${formatDurationMs(frontendConvergenceMetric?.p95_ms)} n=${frontendConvergenceMetric?.count ?? 0}, terminal=${formatDurationMs(terminalP95)} (SLA ${formatDurationMs(sla.project_terminal_ready_p95_ms)}), Jupyter=${formatDurationMs(jupyterP95)} (SLA ${formatDurationMs(sla.project_jupyter_ready_p95_ms)}), exec=${formatDurationMs(execP95)} (SLA ${formatDurationMs(sla.project_exec_ready_p95_ms)}), file visible=${formatDurationMs(fileVisibleP95)} (SLA ${formatDurationMs(sla.file_open_visible_p95_ms)}), file sync=${formatDurationMs(fileSyncReadyP95)} (SLA ${formatDurationMs(sla.file_open_sync_ready_p95_ms)}).`
+        ? `P95 over ${latency.window_minutes}m: lifecycle=${formatDurationMs(lifecycleP95)} n=${lifecycleMetric?.count ?? 0} (SLA ${formatDurationMs(sla.project_start_warm_p95_ms)}; health requires n=10), admission=${formatDurationMs(admissionMetric?.p95_ms)} n=${admissionMetric?.count ?? 0}, backend=${formatDurationMs(backendLifecycleMetric?.p95_ms)} n=${backendLifecycleMetric?.count ?? 0}, convergence=${formatDurationMs(frontendConvergenceMetric?.p95_ms)} n=${frontendConvergenceMetric?.count ?? 0}, terminal=${formatDurationMs(terminalP95)} (SLA ${formatDurationMs(sla.project_terminal_ready_p95_ms)}), Jupyter=${formatDurationMs(jupyterP95)} (SLA ${formatDurationMs(sla.project_jupyter_ready_p95_ms)}), exec=${formatDurationMs(execP95)} (SLA ${formatDurationMs(sla.project_exec_ready_p95_ms)}), file content paint=${formatDurationMs(fileVisibleP95)} n=${fileVisibleMetric?.count ?? 0} (SLA ${formatDurationMs(sla.file_open_visible_p95_ms)}), file sync=${formatDurationMs(fileSyncReadyP95)} n=${fileSyncReadyMetric?.count ?? 0} (SLA ${formatDurationMs(sla.file_open_sync_ready_p95_ms)}).`
         : "Unable to read UX latency summary.",
       details:
         latencyResult.status === "rejected" ? [`${latencyResult.reason}`] : [],

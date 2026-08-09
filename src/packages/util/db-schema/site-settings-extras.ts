@@ -553,8 +553,8 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "Launch SLA Thresholds",
   },
   launch_sla_file_open_visible_p95_ms: {
-    name: "File Visible P95 SLA",
-    desc: "Maximum acceptable P95 milliseconds from file-open initiation until contents are visibly rendered. If empty, the default is 10000.",
+    name: "File Content Paint P95 SLA",
+    desc: "Maximum acceptable P95 milliseconds from foreground file-open intent through the loaded editor React commit and following animation frame. If empty, the default is 10000.",
     default: "10000",
     valid: optionalPositiveInteger,
     to_val: to_trimmed_str,
@@ -564,7 +564,7 @@ export const EXTRAS: SettingsExtras = {
   },
   launch_sla_file_open_sync_ready_p95_ms: {
     name: "File Sync Ready P95 SLA",
-    desc: "Maximum acceptable P95 milliseconds from file-open initiation until realtime sync is connected and ready. If empty, the default is 5000.",
+    desc: "Maximum acceptable P95 milliseconds from foreground file-open intent until SyncDoc initialization reports ready. If empty, the default is 5000.",
     default: "5000",
     valid: optionalPositiveInteger,
     to_val: to_trimmed_str,
