@@ -2,7 +2,20 @@
 
 Date: 2026-08-04
 
+Last updated: 2026-08-09
+
 Status: proposed for review
+
+Revision notes for 2026-08-09:
+
+- incorporate the durable, consent-gated active-user location history merged in
+  PR #244 and the related seed-authoritative collection work;
+- reuse the new versioned UX traces for signed-in bootstrap, project entry,
+  directory paint, file open, Jupyter, terminal, LaTeX, upload, and Codex;
+- account for site-funded Codex now being available to free as well as paid
+  CoCalc-ai users;
+- make first-project and Codex-guided activation explicit product experiments,
+  not merely future dashboard ideas.
 
 ## Objective
 
@@ -13,11 +26,15 @@ SageMath, Inc. answer, quickly and reproducibly:
 - Are active users, activation, and retention improving over time?
 - Which acquisition sources produce retained users rather than only signups?
 - Where do users leave the signup and activation funnels?
+- How long does each step from sign-in to visible, usable project work take, and
+  how strongly do latency and failures predict abandonment?
 - Which product changes improve retention and growth?
 - Are changes caused by acquisition mix, seasonality, product quality, or an
   experiment?
 - What does it cost to serve each product and user population, and where is the
   next discrete capacity cost?
+- Can a guided first-project experience and Codex-assisted first task convert
+  more new accounts into self-directed, retained users?
 
 The first user-visible requirement is that `/admin/retention` becomes fast and
 stays fast as CoCalc accumulates years of history and orders of magnitude more
@@ -38,6 +55,120 @@ The target architecture has four layers:
 
 This makes dashboard cost proportional to the number of plotted points, not to
 the number of users or historical events.
+
+## Implemented Baseline as of 2026-08-09
+
+Several capabilities described abstractly in the original plan now exist. The
+new analytics system should reuse them deliberately rather than create parallel
+definitions.
+
+### Durable Active-User Location History
+
+PR #244 and its prerequisite work added:
+
+- `active_user_map_history_snapshots` and
+  `active_user_map_history_countries`;
+- seed-authoritative hourly collection for trailing 60-minute and 1,440-minute
+  active windows;
+- complete cross-bay collection with transient account-id deduplication;
+- country-level persistence only, with no account ids or precise locations in
+  historical rows;
+- consent-gated country counts plus explicit mapped, unknown-location, and
+  consent-not-enabled totals;
+- indefinitely retained history by default, daily and hourly serving APIs, and
+  map/plot playback in the admin UI.
+
+This is already a useful, compact global serving product for regional adoption
+and broad active-population trends. It must remain distinct from canonical
+growth retention:
+
+- its active definition is based on `accounts.last_active`, not
+  `project_engaged_v1` or `project_work_v1`;
+- its 24-hour value is a rolling window, not a UTC DAU fact or a retention
+  cohort cell;
+- country series include only consenting mapped accounts, while `total_active`
+  intentionally has broader operational semantics;
+- it contains no account-level history and therefore cannot calculate
+  retention, activation, resurrection, or acquisition quality.
+
+The growth dashboard should link to or read this existing aggregate for a
+clearly labeled regional-adoption panel. Do not copy it into account/day facts,
+attempt to infer cohorts from it, or silently label it canonical DAU. Its
+completeness metadata and seed-authoritative convergence pattern are good models
+for global growth aggregate publication.
+
+### Retention-Critical UX Traces
+
+Versioned browser-observed traces now cover important portions of time to
+value, including:
+
+- `signed_in_app_ready_v2` and `app_bootstrap_failed_v2`;
+- project-open routing phases, `project_directory_first_paint_v2`,
+  `directory_authoritative_paint_v2`, and
+  `directory_listing_incomplete_v2`;
+- file content paint, edit readiness, sync readiness, and incomplete opens;
+- Jupyter document readiness, first visible cell, sync readiness, first output,
+  completed/no-op/failed/incomplete runs;
+- terminal input readiness and failed/incomplete connections;
+- upload completion/failure/abandonment and LaTeX build completion/failure;
+- Codex backend acknowledgement, first visible response, failure, and
+  incompletion.
+
+The shared `UxLatencyTrace` adds deterministic success sampling, records
+failures and incomplete traces without sampling, rejects hidden/stale surfaces,
+correlates events with system-pressure context, and avoids awaiting telemetry in
+the user action. These are substantial improvements over treating generic web
+usage as product intent.
+
+However, `ux_latency_events` remains audit-local operational telemetry. It may
+contain sampled successes, is not account-home authoritative, and is optimized
+for recent diagnosis rather than permanent semantic facts. Therefore:
+
+1. use v2 traces as source evidence for latency, reliability, and funnel-step
+   outcomes;
+2. inverse-probability weight sampled aggregate success metrics by
+   `1 / sample_rate`, while displaying the actual sampled row count;
+3. never interpret the absence of a sampled success as user inactivity;
+4. emit a separate unsampled, rate-limited semantic event when a trace endpoint
+   must set a canonical account milestone or daily activity bit;
+5. materialize only bounded outcome classes and latency buckets/percentiles,
+   not trace details, project ids, or pressure payloads, into long-term growth
+   facts.
+
+### Email-First Signup and Attribution
+
+Production signup is now email-first and password-optional, with email proof and
+account completion presented as one flow. This makes `auth_started`,
+`email_delivery_requested`, `identity_proved`, `account_created`, and
+`profile_completed` real funnel boundaries rather than inferred states. The
+existing expiring `analytics` link still provides landing/referrer/UTM context,
+so immutable attribution snapshotting at account creation remains urgent.
+
+Email code is the dominant successful proof method. Code and link remain
+separate `auth_method` values for diagnostics, but product decisions should
+optimize total identity-proof completion and elapsed time rather than assume
+link usage is inherently desirable.
+
+### Site-Funded Codex for Every Membership Tier
+
+CoCalc-ai now makes bounded site-funded Codex available to free and paid users,
+using GPT-5.6 Luna with global/free/paid pool controls, per-turn reservations,
+provider-cost accounting, and a kill switch. A new user can therefore receive
+agentic help in their real project without first buying a subscription,
+supplying an API key, or connecting an external ChatGPT account.
+
+This changes Codex from an optional advanced feature into a viable activation
+surface. Growth facts must snapshot the funding/eligibility class at exposure
+time and separately measure:
+
+- offer shown and accepted;
+- funded-turn admission, denial, failure, and interruption;
+- backend acknowledgement and first visible response latency;
+- onboarding completion;
+- continued or self-directed work after the guided interaction;
+- provider cost per assisted activation and retained user.
+
+Never put prompts, responses, filenames, or generated content in growth data.
 
 ## Performance and Correctness SLOs
 
@@ -132,16 +263,29 @@ Record the first occurrence of these milestones when applicable:
 | `identity_proved`          | Email code/link or SSO proved control of the identity.                   |
 | `account_created`          | Durable account creation completed.                                      |
 | `profile_completed`        | Required post-verification account setup completed.                      |
+| `first_project_flow_seen`  | The first-project entry point or guided wizard was visibly presented.    |
+| `project_create_started`   | The account deliberately submitted its first project creation.           |
 | `project_created`          | The account created its first project.                                   |
+| `project_ready`            | The first project reached a usable runtime state.                        |
 | `project_entered`          | The account deliberately entered a ready project.                        |
+| `project_surface_visible`  | Its initial directory or requested work surface visibly rendered.        |
 | `first_meaningful_work`    | The account performed its first high-intent project action.              |
 | `first_ai_prompt`          | The account submitted its first AI prompt.                               |
+| `guided_activation_done`   | The account completed the bounded guided first-task experience.          |
+| `first_self_directed_work` | Meaningful work occurred after completing or dismissing onboarding.      |
 | `first_collaboration`      | The account participated in a project with another person.               |
 | `first_purchase`           | The account first completed a paid purchase or received paid membership. |
 
 These milestones support conversion-time distributions as well as conversion
 rates. For example, the dashboard should show median and p90 time from account
 creation to first meaningful work.
+
+Failures and abandonment are not milestones. Record allowlisted funnel outcomes
+such as `project_create_failed`, `project_ready_timeout`,
+`project_surface_incomplete`, `codex_admission_denied`, and
+`guided_activation_abandoned` in the short-lived event log and materialize
+aggregate rates. Keep the milestone table monotone and earliest-occurrence
+only.
 
 ### Activity Signals
 
@@ -187,15 +331,25 @@ continue without a present user.
 The user submitted an AI prompt or continued an AI interaction. Loading an old
 AI session does not count.
 
+#### `self_directed_work_v1`
+
+The account performed `project_work_v1` after the first-project/Codex onboarding
+surface was completed, dismissed, or had not been shown for an applicable
+reason. An automatically submitted onboarding prompt, agent-generated file, or
+background agent turn does not count.
+
+This signal prevents a Codex onboarding treatment from mechanically improving
+its own success metric merely by causing the event used to define activation.
+
 ### Default Active User Definition
 
 The default headline active-user metric is distinct eligible accounts with
 `project_engaged_v1` during the period.
 
 The dashboard should expose `project_work_v1`, `app_foreground_v1`,
-`compute_consumed_v1`, and `ai_engaged_v1` as comparisons. The label must always
-say which definition is selected; avoid a bare, ambiguous label such as
-"activity."
+`compute_consumed_v1`, `ai_engaged_v1`, and `self_directed_work_v1` as
+comparisons. The label must always say which definition is selected; avoid a
+bare, ambiguous label such as "activity."
 
 ### Activation
 
@@ -207,6 +361,33 @@ The default activation metric is:
 Also report activation within 1 hour, 7 days, and 30 days. Project creation alone
 is not activation because projects may be created automatically or abandoned
 without use.
+
+For onboarding experiments, report assisted activation and self-directed
+activation separately. The primary success metric for a Codex-guided treatment
+should normally be `first_self_directed_work` within 24 hours, with D1/D7
+`project_work_v1` retention as a maturity check. Do not use the guided prompt
+itself as the sole primary outcome.
+
+### Time-to-Value and Reliability
+
+Activation rate without experienced performance can hide the mechanism of a
+loss. Materialize bounded attempt/outcome and latency distributions for:
+
+- signed-in browser to usable projects page;
+- first-project create submission to durable project row;
+- project entry to routing resolved, runtime ready, first directory paint, and
+  authoritative directory paint;
+- file open to visible content and edit/sync readiness;
+- Jupyter open to visible document and first executable result;
+- terminal open to input readiness;
+- Codex prompt to admission, backend acknowledgement, and first visible
+  response.
+
+For each step show attempt count, success, explicit failure, incomplete/timeout,
+p50, p90, and p95. Correlate duration buckets with next-step conversion and
+activation, but do not retain arbitrary trace payloads in growth facts. Preserve
+trace version, sampling coverage, browser visibility validity, and source
+confidence so instrumentation changes create visible boundaries.
 
 ### Retention
 
@@ -311,6 +492,8 @@ Important fields:
 | `legacy_status`                            | Legacy-linked, migrated, or genuinely new.                                      |
 | `institution_class`                        | Coarse domain classification without storing the email address.                 |
 | `actor_class`                              | Customer, staff, test, ephemeral, suspected automation.                         |
+| `onboarding_eligibility`                   | New, legacy, invited, course-managed, or other bounded onboarding class.        |
+| `codex_entitlement_at_creation`            | Site-funded free/paid, user-funded, unavailable, or unknown.                    |
 | `excluded_from_growth`                     | Current default-population exclusion.                                           |
 | `exclusion_reason`                         | Bounded enum.                                                                   |
 | `definition_version`                       | Profile-classification version.                                                 |
@@ -345,7 +528,8 @@ Fields include:
 - `home_bay_id`;
 - `metric_contract_version`;
 - explicit boolean or small-integer columns for `app_foreground`,
-  `project_engaged`, `project_work`, `compute_consumed`, and `ai_engaged`;
+  `project_engaged`, `project_work`, `self_directed_work`, `compute_consumed`,
+  and `ai_engaged`;
 - earliest and latest meaningful activity timestamps for the day;
 - membership/product tier snapshot;
 - source confidence;
@@ -386,6 +570,12 @@ milestones, and aggregates remain after raw events expire.
 No source code, prompts, filenames, URLs with query strings, email addresses,
 IP addresses, or arbitrary client payloads are allowed.
 
+Operational UX traces are an ingest source, not a second event contract. A
+bridge may translate allowlisted v2 trace endpoints into bounded growth outcomes
+and latency buckets. It must understand `sample_rate`, trace version, stale or
+hidden classifications, and audit-local source authority. Canonical account
+activity still requires its own unsampled semantic event.
+
 ### `growth_materialization_state`
 
 Durable worker progress, including:
@@ -420,6 +610,10 @@ Stores bounded day/week/month series such as:
 - DAU/WAU/MAU;
 - stickiness ratios;
 - milestone latency percentiles;
+- first-project and guided-onboarding attempts, outcomes, abandonment, and
+  latency percentiles;
+- Codex funded admission, response visibility, assisted activation,
+  self-directed activation, and provider cost;
 - AI engagement;
 - paid conversion.
 
@@ -682,7 +876,8 @@ Prefer server-observed events for:
 - purchases and memberships;
 - collaboration changes;
 - AI prompt submission;
-- managed compute attribution.
+- managed compute attribution;
+- site-funded Codex admission, reservation outcome, and provider cost.
 
 Use browser or project-host events where the server cannot infer intent:
 
@@ -691,6 +886,12 @@ Use browser or project-host events where the server cannot infer intent:
 - notebook cell execution;
 - terminal input submission;
 - editor modification/save.
+
+Reuse the existing v2 UX trace endpoints for experienced latency and explicit
+failure/incomplete outcomes. Do not add a second browser timer for the same
+workflow. At the trace endpoint, emit or enqueue a separate small semantic event
+only when canonical account activity or a milestone must be set, regardless of
+whether the diagnostic success trace was sampled.
 
 Browser events are best effort and rate limited. Important project-data-plane
 events should be accepted by a narrow project-host analytics subject and sent
@@ -701,6 +902,10 @@ asynchronously; they must not route project content through the hub.
 - Presence emits at most once per account per hour while foregrounded.
 - Project engagement emits at most once per account/project per bounded session.
 - Work-action events may be collapsed by category and short time window.
+- The first canonical work signal per account/day is never success-sampled;
+  later repetitions may be collapsed.
+- UX success samples retain their `sample_rate`; failure, timeout, and
+  incomplete outcomes remain unsampled and are never reweighted.
 - Event ids are stable across retry.
 - Daily fact upserts are idempotent even if the same semantic activity arrives
   more than once.
@@ -848,8 +1053,19 @@ Show:
 - signup trend by canonical channel;
 - funnel from attributable landing through meaningful work;
 - median/p90 time to identity proof and activation;
+- first-project exposure, create submission, durable creation, runtime readiness,
+  visible project surface, and meaningful-work conversion;
+- experienced p50/p90/p95 time through signed-in bootstrap, project creation,
+  project entry, and first visible work surface;
+- Codex offer, admission, first visible response, assisted activation,
+  self-directed activation, and cost per outcome;
 - activation rate by channel, landing group, and auth method;
 - retained users by source, not only raw signup volume.
+
+Add a regional-adoption link or panel backed by the existing
+`active_user_map_history_*` aggregates. Label its 60-minute/1,440-minute rolling
+`last_active` definition and consent coverage explicitly; do not combine it
+with canonical DAU or retention cells.
 
 ### Retention
 
@@ -888,6 +1104,144 @@ with fewer than 20 accounts by default.
   its age.
 - Remove the 120-second request timeout.
 - Permit aggregate CSV export without account-level rows.
+
+## Activation Product Program
+
+Analytics is useful only if it supports concrete product changes. The first two
+high-priority interventions should address the observed losses before first
+project creation and before first useful work.
+
+These flows need durable product state separate from analytics. A user must be
+able to reload, change device, or return later without corrupting the wizard.
+Growth events describe exposure and outcomes; they must never become the source
+of truth that controls which UI the account sees.
+
+### Intervention A: Guided First Project
+
+Hypothesis:
+
+> A focused first-project wizard will reduce the large account-to-project loss
+> by removing an unfamiliar blank-project decision and carrying the user through
+> a visibly usable directory.
+
+Eligibility should initially require all of:
+
+- a genuinely new eligible account;
+- no existing or previously created project;
+- no collaboration, course, registration-token, public-share copy, or explicit
+  post-auth destination that already determines what should happen;
+- no completed or dismissed first-project onboarding state.
+
+Legacy users and users arriving through an invite should follow their intended
+destination rather than be intercepted by generic onboarding. Mobile may use a
+simplified treatment or remain out of the first experiment until it is tested.
+
+The minimal wizard should:
+
+1. ask one bounded intent question such as notebook/data science, mathematics,
+   terminal/Linux, LaTeX, course work, or something else;
+2. recommend a project name and RootFS/template while keeping advanced resource
+   and region settings out of the critical path;
+3. submit one idempotent create request and show durable provisioning progress;
+4. survive reload and resume from authoritative project/LRO state;
+5. enter the project automatically when ready and remain present until the
+   first directory or requested surface is visibly rendered;
+6. offer an obvious skip and preserve normal advanced project creation.
+
+The RootFS/template recommendation is part of the experiment definition and
+must be versioned. Never infer wizard success from a project row alone: record
+exposure, start, submit, create success/failure, runtime ready, first visible
+surface, completion, skip, and timeout. Use the existing project-open and
+directory v2 traces for timing, plus unsampled semantic milestones for durable
+conversion.
+
+Primary outcome: `project_surface_visible` within 15 minutes of account
+creation. Secondary outcomes: project creation, elapsed time to visible surface,
+`first_meaningful_work` and `first_self_directed_work` within 24 hours, and D1/D7
+project-work retention. Guardrails: create/start failure, p95 time to surface,
+duplicate projects, support contacts, unexpected spend, and invite/deep-link
+regressions.
+
+### Intervention B: Codex-Guided First Task
+
+Hypothesis:
+
+> Once a new user can see a project, a short Codex-guided task in that real
+> environment will demonstrate CoCalc's value and teach the next action better
+> than a passive product tour.
+
+This is now economically feasible because bounded site-funded Luna is available
+to free users. The experience should begin only after
+`project_surface_visible`; it must not compete with project startup or hide a
+failure behind chat.
+
+Offer a small set of intent-specific, user-initiated tasks, for example:
+
+- create and run a small Jupyter notebook;
+- solve or explore a mathematical example;
+- upload or inspect data and make a plot;
+- create and compile a short LaTeX document;
+- explain the project and help the user choose their own next task.
+
+The user must choose and submit the task. Do not silently send an automatic
+prompt merely to manufacture AI engagement. Codex should work in the actual
+project with a bounded onboarding policy, narrate consequential actions, and end
+with a clear handoff such as running a cell, editing a generated file, asking a
+follow-up, or choosing an independent task.
+
+The product flow should:
+
+- resume after reload without duplicating a funded turn;
+- expose skip/dismiss controls and never trap the user in chat;
+- use current site-funded reservation, concurrency, pool, and kill-switch
+  enforcement rather than a special unmetered path;
+- degrade gracefully to ordinary project use when admission is denied or Codex
+  fails;
+- distinguish site-funded free, site-funded paid, and user-funded Codex;
+- record no prompt, response, code, filename, or generated artifact in growth
+  analytics.
+
+Record offer visible, task selected, prompt submitted, funded admission outcome,
+backend acknowledgement, first response visible, guided task completion,
+dismissal, and subsequent self-directed work. The existing Codex v2 traces
+provide response latency and reliability; provider-side reservations provide
+authoritative cost.
+
+Primary outcome: `first_self_directed_work` within 24 hours. Secondary outcomes:
+guided completion, meaningful work within 1 hour, D1/D7 project-work retention,
+second independent Codex turn, and paid conversion. Guardrails: first-response
+failure/incompletion, p95 response latency, funded-pool denial, cost per exposed
+account, cost per assisted activation, support incidents, and ordinary non-AI
+activation.
+
+### Experiment Structure and Rollout
+
+Do not launch both changes globally without preserving a baseline. Recommended
+initial variants are:
+
+- control: current first-project experience;
+- project wizard only;
+- project wizard plus optional Codex-guided task.
+
+If sample size permits, a later factorial design can isolate the Codex effect.
+Assign before the first onboarding surface, stratify at least by acquisition and
+legacy/invite eligibility, and retain assignment even across reloads. Analyze
+institutional/course bursts separately so one class signup does not decide the
+general consumer experience.
+
+Roll out in this order:
+
+1. instrument the current account-to-project-to-surface funnel and run it long
+   enough to establish weekday/acquisition baselines;
+2. dogfood and canary the first-project wizard with failure paths forced;
+3. run the controlled first-project experiment;
+4. add Codex guidance behind a separate treatment and budget guardrail;
+5. wait for mature D1/D7 outcomes before choosing a permanent default;
+6. preserve release annotations and experiment versions in all serving data.
+
+The first iteration should optimize successful passage to a real work surface,
+not maximize wizard completion. A user who skips onboarding and productively
+uses CoCalc is a success, not an abandonment.
 
 ## Experimentation Support
 
@@ -949,8 +1303,14 @@ Backfill what has a defensible meaning:
 - first-touch attribution where the `analytics` link still exists;
 - email-auth funnel data from `email_auth_challenges` for its available period;
 - recent browser-project proxy activity from `ux_latency_events`;
+- allowlisted v2 UX trace latency/outcome aggregates from their actual coverage
+  start, with success sampling weights and trace versions preserved;
 - recent compute activity from `account_cpu_usage_events`;
 - selected runtime reservation events where actor identity is reliable.
+
+Do not backfill account/day activity from sampled v2 successes. Existing
+`active_user_map_history_*` rows remain their own durable regional series and
+need no account-level backfill or duplication.
 
 ### Backfill Rules
 
@@ -979,10 +1339,12 @@ contains:
    prompt events;
 3. deliberate project entry, foreground engagement, notebook execution,
    terminal submission, and editor modification categories;
-4. restart-safe daily and weekly materialization;
-5. summary, active-user, and retention aggregate APIs;
-6. `/admin/retention` cutover with data-health metadata;
-7. clearly labeled recent proxy backfill where available.
+4. translation of allowlisted v2 UX trace outcomes into bounded latency and
+   reliability aggregates, without using sampled traces as canonical activity;
+5. restart-safe daily and weekly materialization;
+6. summary, active-user, retention, and activation-funnel aggregate APIs;
+7. `/admin/retention` cutover with data-health metadata;
+8. clearly labeled recent proxy backfill where available.
 
 Experiments, paid-conversion panels, extensive segment combinations, global
 multibay replication, and polished annotation workflows may follow. They must
@@ -993,8 +1355,11 @@ not delay removing raw request-time SQL from `/admin/retention`.
 1. Approve the definitions and review decisions at the end of this document.
 2. Capture current `/admin/retention` query timings and `EXPLAIN (ANALYZE,
 BUFFERS)` in staging with production-scale synthetic data.
-3. Record the canonical metric-definition version and collection start time.
-4. Add a data dictionary visible from the admin page.
+3. Inventory existing `active_user_map_history_*`, `ux_latency_events`, email
+   auth, attribution, project lifecycle, and site-funded Codex sources, with
+   authority, sampling, consent, retention, and coverage boundaries.
+4. Record the canonical metric-definition version and collection start time.
+5. Add a data dictionary visible from the admin page.
 
 ### Phase 1: Storage and Restart-Safe Materializer
 
@@ -1017,6 +1382,10 @@ BUFFERS)` in staging with production-scale synthetic data.
 5. Implement foreground engagement with visibility-aware rate limiting.
 6. Verify that automatic reconnect and restored tabs do not count as deliberate
    activity.
+7. Reuse v2 UX traces for time-to-value and failure outcomes, and add unsampled
+   semantic events only for missing canonical milestones/activity bits.
+8. Snapshot Codex eligibility/funding class and materialize reservation cost,
+   admission outcome, and first-response reliability without user content.
 
 ### Phase 3: Fast Admin Cutover
 
@@ -1074,9 +1443,15 @@ not block the Phase 3 retention cutover.
 1. Add stable experiment assignment and exposure recording.
 2. Add variant segmentation to activation and retention aggregates.
 3. Add experiment maturity and guardrail panels.
-4. Establish a weekly review cadence for acquisition, activation, retention,
-   resurrection, and experiment outcomes.
-5. Require new signup/onboarding projects to specify their expected metric and
+4. Instrument and baseline the account-to-first-project-to-visible-surface
+   funnel using existing project/directory traces plus canonical milestones.
+5. Run the guided first-project experiment described above.
+6. Run the optional site-funded Codex onboarding treatment, measuring
+   self-directed work and D1/D7 retention rather than guided prompt submission
+   alone.
+7. Establish a weekly review cadence for acquisition, activation, retention,
+   resurrection, cost per assisted activation, and experiment outcomes.
+8. Require new signup/onboarding projects to specify their expected metric and
    add or reuse instrumentation before launch.
 
 ### Phase 6: Multibay Global Aggregation
@@ -1104,9 +1479,21 @@ Recommended new modules:
 - `src/packages/server/conat/api/growth-analytics.ts`
 - `src/packages/frontend/admin/growth-retention.tsx`
 - `src/packages/frontend/monitoring/product-activity.ts`
+- `src/packages/frontend/onboarding/first-project.tsx`
+- `src/packages/frontend/onboarding/codex-first-task.tsx`
 
 Existing areas requiring integration:
 
+- `src/packages/util/db-schema/active-user-map-history.ts` and
+  `src/packages/server/active-user-map-history.ts` for existing aggregate-only
+  regional history and convergence semantics;
+- `src/packages/frontend/monitoring/ux-latency-trace.ts` and
+  `src/packages/server/monitoring/ux-latency.ts` for existing sampled v2
+  performance traces;
+- `src/packages/frontend/project/listing/ux-latency.ts`, project actions, file
+  open, Jupyter, terminal, upload, LaTeX, and Codex UX trace producers;
+- `src/packages/server/ai/site-funded-codex-*` and project-host Codex metering
+  for funded admission, outcome, and cost facts;
 - email challenge completion and SSO account creation;
 - account creation and attribution linking;
 - project creation and user-initiated project opening;
@@ -1118,6 +1505,11 @@ Existing areas requiring integration:
 - server maintenance startup;
 - admin routing and documentation;
 - table ownership metadata.
+
+The exact onboarding-state module is intentionally undecided, but durable UI
+control state must live with account-home product state rather than in
+`growth_event_log`, `ux_latency_events`, browser local storage alone, or an
+aggregate table.
 
 The current retention RPCs may temporarily delegate to the new serving queries,
 but the long-term API should move out of purchases.
@@ -1136,6 +1528,11 @@ Test:
 - attribution normalization;
 - experiment assignment stability;
 - membership-tier snapshot semantics.
+- guided versus self-directed activation semantics;
+- project/Codex onboarding eligibility and invite/deep-link bypass;
+- rolling location-map activity versus canonical UTC DAU labeling;
+- success-sampled UX traces never creating false inactivity or unweighted
+  conversion counts.
 
 ### Pipeline Correctness
 
@@ -1150,6 +1547,12 @@ Test:
 - source event expiration after facts are materialized;
 - account ban/unban and test-account reclassification;
 - cross-bay delivery retry and deduplication.
+- UX trace-to-growth outcome translation with version, stale/visibility, and
+  sampling boundaries;
+- site-funded Codex reservation admission/cost reconciliation without prompt or
+  response content;
+- onboarding resume, skip, duplicate-submit, failed project creation, failed
+  project start, Codex denial, and Codex failure paths.
 
 ### Performance
 
@@ -1175,6 +1578,12 @@ Run old and new metrics side by side for at least seven days. Differences should
 be explained by the definition, not unexplained loss. Deliberately restart the
 control plane, pause the worker, deliver duplicate and late events, and confirm
 that the system converges without manual intervention.
+
+Before an onboarding experiment reaches production, exercise the full first-use
+path in staging with new, legacy, invited, course, registration-token, mobile,
+Codex-admitted, Codex-denied, and project-start-failure accounts. Confirm that
+analytics failure cannot block project creation or Codex and that no event
+contains user content.
 
 ## Operational Rollout
 
@@ -1206,6 +1615,12 @@ This project is successful when:
   losses;
 - active growth separates acquisition from retention, resurrection, and churn;
 - experiments can be tied to activation and retention outcomes;
+- the account-to-project-to-visible-surface funnel identifies where first-time
+  users fail or abandon and how long each step took;
+- guided first-project and Codex onboarding can be evaluated by subsequent
+  self-directed work, D1/D7 retention, reliability, and provider cost;
+- regional active-user history is available long term with explicit consent
+  coverage and is not mislabeled as canonical retention;
 - average and marginal infrastructure cost use explicit denominators and cost
   classes, with provider actuals reconciled to estimates;
 - regional capacity cliffs and their expected monthly cost are visible before
@@ -1242,3 +1657,11 @@ Recommended defaults for approval:
 11. Keep source cost, revenue, allocation, and capacity facts separate; show
     cost inclusion, denominator, source confidence, and allocation version on
     every unit-economics metric.
+12. Reuse `active_user_map_history_*` as the regional-adoption series; do not
+    duplicate it or use its rolling `last_active` counts as canonical retention.
+13. Use v2 UX traces for latency and reliability, but require unsampled,
+    rate-limited semantic events for canonical milestones and activity facts.
+14. Prioritize a controlled guided first-project experiment, followed by an
+    optional site-funded Codex first-task treatment.
+15. Judge Codex onboarding primarily by later self-directed work and mature
+    retention, not by the guided prompt that the treatment itself caused.
