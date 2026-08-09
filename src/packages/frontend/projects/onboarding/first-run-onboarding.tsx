@@ -39,6 +39,7 @@ import {
 import { useProjectCreateDraft } from "../create/use-project-create-draft";
 import { chooseOnboardingRootfs, type OnboardingProjectKind } from "./rootfs";
 import {
+  buildCodexOnboardingPrompt,
   codexAvailableForOnboarding,
   codexOnboardingFundingDescription,
 } from "./codex";
@@ -559,10 +560,11 @@ export function FirstRunOnboarding({
           switch_to: true,
           restore_session: false,
         });
+        const visiblePrompt = codexPrompt.trim();
         const submitted = await submitNavigatorPromptInWorkspaceChat({
           project_id,
-          prompt: codexPrompt.trim(),
-          visiblePrompt: codexPrompt.trim(),
+          prompt: buildCodexOnboardingPrompt(visiblePrompt),
+          visiblePrompt,
           title: "Getting started",
           tag: "intent:onboarding",
           forceCodex: true,

@@ -1,5 +1,6 @@
 import type { CodexPaymentSourceInfo } from "@cocalc/conat/hub/api/system";
 import {
+  buildCodexOnboardingPrompt,
   codexAvailableForOnboarding,
   codexOnboardingFundingDescription,
 } from "./codex";
@@ -19,6 +20,21 @@ function source(
 }
 
 describe("Codex onboarding availability", () => {
+  it("turns a first-project goal into an action-oriented hidden prompt", () => {
+    const prompt = buildCodexOnboardingPrompt(
+      "  See benchmarks of some basic number theory algorithms.  ",
+    );
+
+    expect(prompt).toContain(
+      "<user_goal>\nSee benchmarks of some basic number theory algorithms.\n</user_goal>",
+    );
+    expect(prompt).toContain("project was just created");
+    expect(prompt).toContain("prefer a runnable Jupyter notebook");
+    expect(prompt).toContain("Actually run or otherwise validate");
+    expect(prompt).toContain("Do not search browser tabs");
+    expect(prompt).toContain("Begin by creating the deliverable");
+  });
+
   it("requires both a positive allowance and enabled site funding", () => {
     expect(
       codexAvailableForOnboarding(
