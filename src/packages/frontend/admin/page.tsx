@@ -456,7 +456,7 @@ function getAdminSections({
     {
       key: "active-users",
       title: "Active Users Map",
-      description: "See where recently active users are around the world.",
+      description: "",
       icon: "map",
       group: "operations",
       component: () => <ActiveUsersMapAdmin />,
