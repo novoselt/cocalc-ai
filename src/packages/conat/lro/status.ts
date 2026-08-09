@@ -7,7 +7,7 @@ import type { LroStatus } from "@cocalc/conat/hub/api/lro";
 
 export type LroTerminalStatus = Exclude<LroStatus, "queued" | "running">;
 
-export const LRO_TERMINAL_STATUSES: ReadonlySet<LroTerminalStatus> = new Set([
+export const LRO_TERMINAL_STATUSES: ReadonlySet<LroStatus> = new Set([
   "succeeded",
   "failed",
   "canceled",
