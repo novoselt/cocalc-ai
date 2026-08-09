@@ -30,12 +30,18 @@ import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activ
 import { markFirstRunCompletedThisSession } from "@cocalc/frontend/app/onboarding-session";
 import { submitNavigatorPromptInWorkspaceChat } from "@cocalc/frontend/project/new/navigator-intents";
 import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
+import { useCodexPaymentSource } from "@cocalc/frontend/chat/use-codex-payment-source";
+import { getLogger } from "@cocalc/frontend/logger";
 import {
   applyProjectPreset,
   createInitialProjectDraft,
 } from "../create/project-create-draft";
 import { useProjectCreateDraft } from "../create/use-project-create-draft";
 import { chooseOnboardingRootfs, type OnboardingProjectKind } from "./rootfs";
+import {
+  codexAvailableForOnboarding,
+  codexOnboardingFundingDescription,
+} from "./codex";
 import {
   FIRST_RUN_ONBOARDING_SETTING,
   FIRST_RUN_ONBOARDING_VERSION,
@@ -47,6 +53,7 @@ import {
 } from "./state";
 
 const { Paragraph, Text, Title } = Typography;
+const logger = getLogger("frontend:projects:first-run-onboarding");
 
 type WizardStep =
   | "home"
@@ -313,11 +320,13 @@ export function FirstRunOnboarding({
   decision,
   inviteState,
   createDisabled,
+  showLegacyProjects,
   onOpenAdvanced,
 }: {
   decision: FirstRunDecision;
   inviteState: InviteInboxState;
   createDisabled: boolean;
+  showLegacyProjects: boolean;
   onOpenAdvanced: () => void;
 }) {
   const runtime = useProjectRuntimeCapabilities();
@@ -332,6 +341,15 @@ export function FirstRunOnboarding({
   const recordedDecision = useRef("");
   const { context, rootfsImages, rootfsLoading, rootfsError, isAdmin } =
     useProjectCreateDraft({ defaultValue: "" });
+  const { paymentSource: codexPaymentSource } = useCodexPaymentSource({
+    enabled:
+      decision.kind === "intent" ||
+      step === "home-create" ||
+      selectedPath?.kind === "codex",
+  });
+  const codexAvailable = codexAvailableForOnboarding(codexPaymentSource);
+  const codexFundingDescription =
+    codexOnboardingFundingDescription(codexPaymentSource);
 
   useEffect(() => {
     if (
@@ -348,7 +366,7 @@ export function FirstRunOnboarding({
     });
   }, [decision]);
 
-  function persist(
+  async function persist(
     status: StoredFirstRunOnboarding["status"],
     intent?: OnboardingIntent,
     project_id?: string,
@@ -361,15 +379,30 @@ export function FirstRunOnboarding({
       updated_at: new Date().toISOString(),
     };
     const actions = redux.getActions("account");
-    actions.set_other_settings(FIRST_RUN_ONBOARDING_SETTING, value);
+    try {
+      await actions.set_other_settings_and_wait(
+        FIRST_RUN_ONBOARDING_SETTING,
+        value,
+      );
+    } catch (err) {
+      // Onboarding metadata must not block a successfully created project or
+      // accepted invitation. The ordinary project/invite state still prevents
+      // duplicate onboarding, while diagnostics retain this failure.
+      logger.warn("failed to persist first-run onboarding state", {
+        status,
+        intent,
+        project_id,
+        err: `${err}`,
+      });
+    }
     if (intent) {
       actions.set_account_table({ sign_up_usage_intent: intent });
     }
   }
 
-  function complete(intent: OnboardingIntent, project_id?: string) {
+  async function complete(intent: OnboardingIntent, project_id?: string) {
     markFirstRunCompletedThisSession();
-    persist("completed", intent, project_id);
+    await persist("completed", intent, project_id);
   }
 
   function chooseProject(kind: OnboardingProjectKind, next?: WizardStep) {
@@ -387,7 +420,7 @@ export function FirstRunOnboarding({
     setBusy(project.project_id);
     setError("");
     try {
-      complete(intent, project.project_id);
+      await complete(intent, project.project_id);
       recordProductActivity({
         event_name: "project_entered",
         project_id: project.project_id,
@@ -415,7 +448,10 @@ export function FirstRunOnboarding({
       await (
         redux.getActions("projects") as any
       )?.ensureRealtimeFeedForCurrentAccount?.();
-      complete(course ? "course-invite" : "project-invite", invite.project_id);
+      await complete(
+        course ? "course-invite" : "project-invite",
+        invite.project_id,
+      );
       recordProductActivity({
         event_name: "project_entered",
         project_id: invite.project_id,
@@ -444,6 +480,12 @@ export function FirstRunOnboarding({
     }
     if (selectedPath.kind === "codex" && !codexPrompt.trim()) {
       setError("Describe what you want Codex to help you build.");
+      return;
+    }
+    if (selectedPath.kind === "codex" && !codexAvailable) {
+      setError(
+        "Codex access is not currently available for this account. Choose another project type or connect a ChatGPT plan in Account settings.",
+      );
       return;
     }
     setBusy("create");
@@ -483,7 +525,7 @@ export function FirstRunOnboarding({
           : undefined),
       });
       createdProjectId = project_id;
-      persist("in_progress", intent, project_id);
+      await persist("in_progress", intent, project_id);
       setProgress(42);
       await redux.getActions("projects").open_project({
         project_id,
@@ -504,7 +546,7 @@ export function FirstRunOnboarding({
         );
       }
       setProgress(88);
-      complete(intent, project_id);
+      await complete(intent, project_id);
       recordProductActivity({
         event_name: "project_ready",
         project_id,
@@ -554,7 +596,7 @@ export function FirstRunOnboarding({
       });
     } catch (err) {
       if (createdProjectId) {
-        complete(intent, createdProjectId);
+        await complete(intent, createdProjectId);
         recordProductActivity({
           event_name: "guided_activation_done",
           project_id: createdProjectId,
@@ -586,12 +628,24 @@ export function FirstRunOnboarding({
     intent: OnboardingIntent,
     page: "membership" | "team-licenses" | "site-licenses",
   ) {
-    complete(intent);
+    void complete(intent);
     recordProductActivity({
       event_name: "guided_activation_done",
       properties: { onboarding_path: intent, outcome: "routed" },
     });
     openAccountSettings({ page });
+  }
+
+  function routeToLegacyProjects() {
+    void complete("legacy-restore");
+    recordProductActivity({
+      event_name: "guided_activation_done",
+      properties: {
+        onboarding_path: "legacy-restore",
+        outcome: "routed",
+      },
+    });
+    openAccountSettings({ page: "legacy-migration" });
   }
 
   function goHome() {
@@ -603,7 +657,7 @@ export function FirstRunOnboarding({
   }
 
   function openAdvancedProjectSetup() {
-    persist("dismissed");
+    void persist("dismissed");
     recordProductActivity({
       event_name: "guided_activation_abandoned",
       properties: {
@@ -878,18 +932,30 @@ export function FirstRunOnboarding({
               />
             </label>
             {step === "codex" ? (
-              <label>
-                <Text strong>What would you like to make or accomplish?</Text>
-                <Input.TextArea
-                  autoFocus
-                  rows={5}
-                  value={codexPrompt}
-                  onChange={(event) => setCodexPrompt(event.target.value)}
-                  placeholder="For example: Help me analyze a CSV file and make an interactive plot."
-                  disabled={!!busy}
-                  style={{ marginTop: 7 }}
+              <Space
+                orientation="vertical"
+                size="middle"
+                style={{ width: "100%" }}
+              >
+                <Alert
+                  type="info"
+                  showIcon
+                  title="Codex is ready to use"
+                  description={codexFundingDescription}
                 />
-              </label>
+                <label>
+                  <Text strong>What would you like to make or accomplish?</Text>
+                  <Input.TextArea
+                    autoFocus
+                    rows={5}
+                    value={codexPrompt}
+                    onChange={(event) => setCodexPrompt(event.target.value)}
+                    placeholder="For example: Help me analyze a CSV file and make an interactive plot."
+                    disabled={!!busy}
+                    style={{ marginTop: 7 }}
+                  />
+                </label>
+              </Space>
             ) : null}
             <div
               style={{
@@ -939,7 +1005,7 @@ export function FirstRunOnboarding({
           <Button
             type="link"
             onClick={() => {
-              persist("dismissed");
+              void persist("dismissed");
               recordProductActivity({
                 event_name: "guided_activation_abandoned",
                 properties: {
@@ -963,16 +1029,18 @@ export function FirstRunOnboarding({
         />
       ) : null}
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={12}>
-          <IntentCard
-            title="Build something with Codex"
-            description="Describe your goal. Codex is included and can create files, run code, and guide you."
-            icon="robot"
-            featured
-            onClick={() => chooseProject("codex")}
-          />
-        </Col>
-        <Col xs={24} md={12}>
+        {codexAvailable ? (
+          <Col xs={24} md={12}>
+            <IntentCard
+              title="Build something with Codex"
+              description={`Describe your goal and let Codex help. ${codexFundingDescription}`}
+              icon="robot"
+              featured
+              onClick={() => chooseProject("codex")}
+            />
+          </Col>
+        ) : null}
+        <Col xs={24} md={codexAvailable ? 12 : 24}>
           <IntentCard
             title="Start a Jupyter notebook"
             description="Use Python, SageMath, R, Julia, and other kernels."
@@ -998,6 +1066,16 @@ export function FirstRunOnboarding({
             onClick={() => setStep("license")}
           />
         </Col>
+        {showLegacyProjects ? (
+          <Col xs={24} sm={12}>
+            <IntentCard
+              title="Restore my legacy projects"
+              description="Bring projects from your legacy cocalc.com account into this site."
+              icon="exchange"
+              onClick={routeToLegacyProjects}
+            />
+          </Col>
+        ) : null}
       </Row>
       {accountId ? null : (
         <Alert

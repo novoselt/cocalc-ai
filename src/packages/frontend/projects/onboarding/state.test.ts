@@ -56,6 +56,39 @@ describe("classifyFirstRunOnboarding", () => {
     ).toEqual({ kind: "hidden" });
   });
 
+  it("offers onboarding again after its only completed project is deleted", () => {
+    expect(
+      classifyFirstRunOnboarding({
+        projects: [],
+        invitations: [],
+        invitesLoading: false,
+        saved: {
+          version: 1,
+          status: "completed",
+          intent: "codex",
+          project_id: "deleted-project",
+          updated_at: new Date().toISOString(),
+        },
+      }),
+    ).toEqual({ kind: "intent" });
+  });
+
+  it("keeps non-project onboarding completion durable", () => {
+    expect(
+      classifyFirstRunOnboarding({
+        projects: [],
+        invitations: [],
+        invitesLoading: false,
+        saved: {
+          version: 1,
+          status: "completed",
+          intent: "license-site",
+          updated_at: new Date().toISOString(),
+        },
+      }),
+    ).toEqual({ kind: "hidden" });
+  });
+
   it("resumes a project whose first-run setup was interrupted", () => {
     const project = { project_id: "project-1" };
     expect(

@@ -20,6 +20,7 @@ export type OnboardingIntent =
   | "membership-self"
   | "license-team"
   | "license-site"
+  | "legacy-restore"
   | "course-invite"
   | "project-invite"
   | "existing-project";
@@ -76,7 +77,17 @@ export function classifyFirstRunOnboarding({
   accountCreated?: Date | string | number;
   saved?: StoredFirstRunOnboarding;
 }): FirstRunDecision {
-  if (saved?.status === "completed" || saved?.status === "dismissed") {
+  if (saved?.status === "dismissed") {
+    return { kind: "hidden" };
+  }
+  // A purchase/migration route has no project, so completing it is durable.
+  // Project-based onboarding is complete only while the account still has a
+  // nondeleted project. If the user deletes their only project, help them
+  // start again instead of leaving them at another blank project list.
+  if (
+    saved?.status === "completed" &&
+    (!saved.project_id || projects.length > 0)
+  ) {
     return { kind: "hidden" };
   }
 

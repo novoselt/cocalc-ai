@@ -233,7 +233,6 @@ export const ProjectsPage: React.FC = () => {
     const projects: FirstRunProject[] = [];
     project_map?.forEach((project, project_id) => {
       if (project.get("deleted")) return;
-      if (accountId && project.getIn(["users", accountId, "hide"])) return;
       projects.push({
         project_id: `${project_id}`,
         title: project.get("title"),
@@ -535,6 +534,7 @@ export const ProjectsPage: React.FC = () => {
                   decision={firstRunDecision}
                   inviteState={inviteState}
                   createDisabled={createProjectDisabled}
+                  showLegacyProjects={showLegacyProjectsButton}
                   onOpenAdvanced={handleCreateProject}
                 />
               </CocalcErrorBoundary>
