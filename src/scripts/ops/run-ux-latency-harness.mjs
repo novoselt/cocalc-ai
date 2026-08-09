@@ -5,7 +5,14 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,8 +28,12 @@ function usage(exitCode = 0) {
     --api https://staging.cocalc.ai --profile staging \\
     --project <uuid> [--browser <id>] [--iterations 3] [--include-codex]
 
+For an isolated test account, set COCALC_UX_HARNESS_SIGN_IN_URL to a one-time
+sign-in URL and pass --direct. This launches a clean Chromium process directly,
+without exposing the operator's account cookie or discovering browser sessions.
+
 The target browser must already be signed in and connected. The harness creates
-small fixtures under /home/user/.cocalc-ux-harness, drives a hard refresh,
+small fixtures under /home/user/cocalc-ux-harness, drives a hard refresh,
 directory listing, text file, Jupyter, LaTeX, upload, terminal, and optionally a
 real Codex turn, then writes the ordinary browser-harness report.
 `);
@@ -34,6 +45,8 @@ function parseArgs(argv) {
     iterations: 1,
     includeCodex: false,
     reportDir: undefined,
+    direct: false,
+    chromium: "/usr/local/bin/chromium-browser",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -49,12 +62,15 @@ function parseArgs(argv) {
     else if (arg === "--iterations") options.iterations = Number(value());
     else if (arg === "--report-dir") options.reportDir = value();
     else if (arg === "--include-codex") options.includeCodex = true;
+    else if (arg === "--direct") options.direct = true;
+    else if (arg === "--chromium") options.chromium = value();
     else if (arg === "--help" || arg === "-h") usage();
     else throw Error(`unknown option '${arg}'`);
   }
   options.api ??= process.env.COCALC_SITE_URL;
   options.project ??= process.env.COCALC_PROJECT_ID;
   options.browser ??= process.env.COCALC_BROWSER_ID;
+  options.signInUrl = process.env.COCALC_UX_HARNESS_SIGN_IN_URL;
   if (!options.api) throw Error("--api or COCALC_SITE_URL is required");
   if (!options.project)
     throw Error("--project or COCALC_PROJECT_ID is required");
@@ -64,6 +80,9 @@ function parseArgs(argv) {
     options.iterations > 100
   ) {
     throw Error("--iterations must be an integer from 1 through 100");
+  }
+  if (options.direct && !options.signInUrl) {
+    throw Error("COCALC_UX_HARNESS_SIGN_IN_URL is required with --direct");
   }
   return options;
 }
@@ -75,17 +94,30 @@ const reportDir = resolve(
   options.reportDir ?? `.cocalc-browser-harness/${runId}`,
 );
 const fixtureDir = mkdtempSync(join(tmpdir(), "cocalc-ux-harness-"));
-const remoteRoot = "/home/user/.cocalc-ux-harness";
+const remoteRoot = "/home/user/cocalc-ux-harness";
 
 const globalArgs = [];
+globalArgs.push("--no-daemon", "--disable-env-auth-defaults");
 if (options.profile) globalArgs.push("--profile", options.profile);
 globalArgs.push("--api", options.api);
 
 function run(args, { capture = false } = {}) {
+  const env = { ...process.env };
+  for (const name of [
+    "COCALC_API_KEY",
+    "COCALC_API_URL",
+    "COCALC_BEARER_TOKEN",
+    "COCALC_HUB_PASSWORD",
+    "COCALC_PROJECT_ID",
+    "COCALC_SECRETS",
+    "COCALC_SECRET_TOKEN",
+  ]) {
+    delete env[name];
+  }
   const result = spawnSync(process.execPath, [cli, ...globalArgs, ...args], {
     encoding: "utf8",
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
-    env: process.env,
+    env,
   });
   if (result.status !== 0) {
     const detail = capture ? `\n${result.stderr || result.stdout}` : "";
@@ -94,13 +126,17 @@ function run(args, { capture = false } = {}) {
   return capture ? result.stdout : "";
 }
 
-function remoteUrl(path = "") {
-  const relative = `${remoteRoot}/${path}`
+function projectFileUrl(path = "") {
+  const relative = `${path}`
     .replace(/^\/home\/user\/?/, "")
     .split("/")
     .map(encodeURIComponent)
     .join("/");
   return `${origin}/projects/${options.project}/files/home/user/${relative}`;
+}
+
+function remoteUrl(path = "") {
+  return projectFileUrl(`${remoteRoot}/${path}`);
 }
 
 function waitForText(name, includes, timeout_ms = 45_000) {
@@ -115,6 +151,33 @@ function navigate(name, path) {
     name,
     action: { name: "navigate", url: remoteUrl(path), wait_for_url_ms: 20_000 },
   };
+}
+
+function navigateProjectHome(name) {
+  return {
+    name,
+    action: {
+      name: "navigate",
+      url: projectFileUrl(""),
+      wait_for_url_ms: 20_000,
+    },
+  };
+}
+
+function enterHarnessDirectorySteps(prefix) {
+  return [
+    navigateProjectHome(`${prefix}: open project home`),
+    waitForText(`${prefix}: harness folder visible`, "cocalc-ux-harness"),
+    {
+      name: `${prefix}: enter harness folder`,
+      action: {
+        name: "click",
+        selector: "span[title='cocalc-ux-harness']",
+        timeout_ms: 30_000,
+      },
+    },
+    waitForText(`${prefix}: directory listing`, "visible.md"),
+  ];
 }
 
 function createFixtures() {
@@ -153,21 +216,33 @@ function createFixtures() {
     `\\documentclass{article}\n\\begin{document}\nLaTeX ${runId}\n\\end{document}\n`,
   );
   writeFileSync(join(fixtureDir, "terminal.term"), "");
-  run(["project", "file", "mkdir", "-w", options.project, remoteRoot]);
+  if (options.direct) return;
+  run([
+    "project",
+    "exec",
+    "-w",
+    options.project,
+    "--",
+    "mkdir",
+    "-p",
+    remoteRoot,
+  ]);
   for (const name of [
     "visible.md",
     "notebook.ipynb",
     "document.tex",
     "terminal.term",
   ]) {
+    const content = readFileSync(join(fixtureDir, name)).toString("base64");
     run([
       "project",
-      "file",
-      "put",
+      "exec",
       "-w",
       options.project,
-      join(fixtureDir, name),
-      `${remoteRoot}/${name}`,
+      "--",
+      "bash",
+      "-lc",
+      `printf '%s' '${content}' | base64 --decode > '${remoteRoot}/${name}'`,
     ]);
   }
 }
@@ -179,8 +254,7 @@ function iterationSteps(iteration) {
     `Upload marker ${runId} iteration ${iteration}\n`,
   ).toString("base64");
   const steps = [
-    navigate(`${prefix}: open directory`, ""),
-    waitForText(`${prefix}: directory listing`, "visible.md"),
+    ...enterHarnessDirectorySteps(prefix),
     navigate(`${prefix}: open text file`, "visible.md"),
     waitForText(`${prefix}: text visible`, `Visible marker ${runId}`),
     navigate(`${prefix}: open Jupyter`, "notebook.ipynb"),
@@ -215,7 +289,7 @@ function iterationSteps(iteration) {
       action: { name: "click", selector: "[data-testid='latex-build']" },
     },
     { name: `${prefix}: allow LaTeX completion`, sleep_ms: 5_000 },
-    navigate(`${prefix}: return to directory for upload`, ""),
+    ...enterHarnessDirectorySteps(`${prefix}: return for upload`),
     {
       name: `${prefix}: upload input ready`,
       action: {
@@ -248,33 +322,46 @@ function iterationSteps(iteration) {
     },
   ];
   if (options.includeCodex) {
+    const prompt = `Reply with the words UX, HARNESS, and READY joined by underscores, followed by a space and the number ${iteration}.`;
     steps.push(
       navigate(`${prefix}: open Codex chat`, `codex-${runId}.chat`),
       {
         name: `${prefix}: Codex composer ready`,
         action: {
           name: "wait_for_selector",
-          selector:
-            "[data-testid='chat-composer-input'] [data-slate-editor='true']",
+          selector: "[data-testid='chat-composer-input']",
           timeout_ms: 60_000,
         },
       },
-      {
-        name: `${prefix}: enter Codex prompt`,
-        action: {
-          name: "type",
-          selector:
-            "[data-testid='chat-composer-input'] [data-slate-editor='true']",
-          text: `Reply with the three underscore-separated words UX, HARNESS, and READY followed by ${iteration}.`,
-        },
-      },
-      {
-        name: `${prefix}: send Codex prompt`,
-        action: {
-          name: "click",
-          selector: "[data-testid='chat-composer-send']",
-        },
-      },
+      ...(options.direct
+        ? [
+            {
+              name: `${prefix}: send Codex prompt`,
+              action: {
+                name: "send_codex_prompt",
+                prompt,
+                timeout_ms: 60_000,
+              },
+            },
+          ]
+        : [
+            {
+              name: `${prefix}: enter Codex prompt`,
+              action: {
+                name: "type",
+                selector:
+                  "[data-testid='chat-composer-input'] [data-slate-editor='true']",
+                text: prompt,
+              },
+            },
+            {
+              name: `${prefix}: send Codex prompt`,
+              action: {
+                name: "click",
+                selector: "[data-testid='chat-composer-send']",
+              },
+            },
+          ]),
       waitForText(
         `${prefix}: Codex first response`,
         `UX_HARNESS_READY ${iteration}`,
@@ -283,6 +370,304 @@ function iterationSteps(iteration) {
     );
   }
   return steps;
+}
+
+async function runDirectHarness(plan) {
+  const require = createRequire(import.meta.url);
+  const { chromium } = require(
+    resolve(srcRoot, "packages/cli/node_modules/playwright-core"),
+  );
+  const browser = await chromium.launch({
+    executablePath: options.chromium,
+    headless: true,
+  });
+  const context = await browser.newContext({
+    ignoreHTTPSErrors: false,
+    viewport: { width: 1440, height: 1000 },
+  });
+  const page = await context.newPage();
+  const browserLogs = [];
+  page.on("console", (message) => {
+    browserLogs.push({
+      at: new Date().toISOString(),
+      level: message.type(),
+      message: message.text(),
+    });
+    if (browserLogs.length > 500) browserLogs.shift();
+  });
+  page.on("pageerror", (error) => {
+    browserLogs.push({
+      at: new Date().toISOString(),
+      level: "pageerror",
+      message: `${error}`,
+    });
+  });
+  page.on("response", (response) => {
+    if (response.status() < 400) return;
+    browserLogs.push({
+      at: new Date().toISOString(),
+      level: "http",
+      message: `${response.status()} ${response.request().method()} ${response.url()}`,
+    });
+    if (browserLogs.length > 500) browserLogs.shift();
+  });
+
+  const steps = [];
+  const startedAt = new Date().toISOString();
+
+  async function createDirectFixtures() {
+    await page.goto(projectFileUrl(`ux-harness-setup-${runId}.term`), {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    const terminal = page.locator(".xterm-helper-textarea").first();
+    await terminal.waitFor({ state: "attached", timeout: 90_000 });
+    await terminal.click();
+    await page.waitForTimeout(1_000);
+    const commands = [`mkdir -p '${remoteRoot}'`];
+    for (const name of [
+      "visible.md",
+      "notebook.ipynb",
+      "document.tex",
+      "terminal.term",
+    ]) {
+      const content = readFileSync(join(fixtureDir, name)).toString("base64");
+      commands.push(
+        `printf '%s' '${content}' | base64 --decode > '${remoteRoot}/${name}'`,
+      );
+    }
+    const readyMarker = `UX_FIXTURES_READY_${runId}`;
+    commands.push(
+      `test -f '${remoteRoot}/visible.md' && printf '\\n%s%s\\n' 'UX_FIXTURES_' 'READY_${runId}'`,
+    );
+    for (const command of commands) {
+      await page.keyboard.insertText(command);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(500);
+    }
+    await page.waitForFunction(
+      (text) => document.body?.innerText?.includes(text),
+      readyMarker,
+      { timeout: 30_000, polling: 100 },
+    );
+  }
+
+  async function cleanupDirectFixtures() {
+    if (page.isClosed()) return;
+    const setupPath = `/home/user/ux-harness-setup-${runId}.term`;
+    await page.goto(projectFileUrl(setupPath), {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    const terminal = page.locator(".xterm-helper-textarea").first();
+    await terminal.waitFor({ state: "attached", timeout: 90_000 });
+    await terminal.click();
+    const marker = `UX_FIXTURES_REMOVED_${runId}`;
+    await page.keyboard.insertText(
+      `rm -rf '${remoteRoot}'; rm -f '${setupPath}'; printf '\\n%s\\n' '${marker}'`,
+    );
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(
+      (text) => document.body?.innerText?.includes(text),
+      marker,
+      { timeout: 30_000, polling: 100 },
+    );
+  }
+
+  async function executeStep(step) {
+    if (step.sleep_ms != null) {
+      await page.waitForTimeout(step.sleep_ms);
+      return;
+    }
+    const action = step.action ?? {};
+    const timeout = action.timeout_ms ?? plan.default_timeout_ms;
+    switch (action.name) {
+      case "navigate":
+        await page.goto(action.url, {
+          waitUntil: "domcontentloaded",
+          timeout: action.wait_for_url_ms ?? timeout,
+        });
+        break;
+      case "reload":
+        await page.reload({ waitUntil: "domcontentloaded", timeout });
+        break;
+      case "wait_for_text":
+        await page
+          .locator("body :visible", { hasText: action.includes })
+          .last()
+          .waitFor({ state: "visible", timeout });
+        break;
+      case "wait_for_selector":
+        await page
+          .locator(action.selector)
+          .first()
+          .waitFor({
+            state: action.state ?? "visible",
+            timeout,
+          });
+        break;
+      case "click":
+        await page.locator(action.selector).first().click({ timeout });
+        break;
+      case "press": {
+        const modifiers = [
+          action.control ? "Control" : undefined,
+          action.alt ? "Alt" : undefined,
+          action.shift ? "Shift" : undefined,
+          action.meta ? "Meta" : undefined,
+        ].filter(Boolean);
+        const key = [...modifiers, action.key].join("+");
+        await page.keyboard.press(key);
+        break;
+      }
+      case "type": {
+        const target = page.locator(action.selector).first();
+        await target.click({ timeout });
+        await target.fill(action.text, { timeout });
+        break;
+      }
+      case "send_codex_prompt": {
+        const connectAi = page.getByText(
+          "To use AI in CoCalc, connect a ChatGPT plan or OpenAI API key.",
+          { exact: true },
+        );
+        if (await connectAi.isVisible().catch(() => false)) {
+          throw Error(
+            "the harness account must connect a ChatGPT plan or OpenAI API key before --include-codex can run",
+          );
+        }
+        const createChat = page.getByRole("button", {
+          name: "Create chat",
+          exact: true,
+        });
+        if (await createChat.isVisible().catch(() => false)) {
+          await createChat.click({ timeout });
+          await createChat.waitFor({ state: "hidden", timeout });
+        }
+        const input = page
+          .locator(
+            "[data-testid='chat-composer-input'] [data-slate-editor='true']",
+          )
+          .first();
+        await input.fill(action.prompt, { timeout });
+        await page
+          .locator("[data-testid='chat-composer-send']")
+          .first()
+          .click({ timeout });
+        break;
+      }
+      case "upload_file":
+        await page
+          .locator(action.selector)
+          .first()
+          .setInputFiles({
+            name: action.filename,
+            mimeType: action.mime_type ?? "application/octet-stream",
+            buffer: Buffer.from(action.content_base64, "base64"),
+          });
+        break;
+      default:
+        throw Error(`unsupported direct action '${action.name}'`);
+    }
+  }
+
+  async function runStep(step) {
+    const maxAttempts = 1 + (step.retries ?? plan.default_retries ?? 0);
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const started = Date.now();
+      try {
+        await executeStep(step);
+        if (step.pause_ms ?? plan.default_pause_ms) {
+          await page.waitForTimeout(step.pause_ms ?? plan.default_pause_ms);
+        }
+        steps.push({
+          name: step.name,
+          status: "passed",
+          attempt,
+          duration_ms: Date.now() - started,
+          url: page.url(),
+        });
+        return;
+      } catch (err) {
+        lastError = err;
+        steps.push({
+          name: step.name,
+          status: "failed",
+          attempt,
+          duration_ms: Date.now() - started,
+          error: `${err}`,
+          url: page.url(),
+        });
+        if (attempt < maxAttempts && plan.default_recovery === "reload") {
+          await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  let failure;
+  try {
+    await page.goto(options.signInUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    const continueImpersonation = page.getByText("Continue impersonation", {
+      exact: true,
+    });
+    if (await continueImpersonation.isVisible().catch(() => false)) {
+      await continueImpersonation.click();
+    }
+    await page.waitForURL(
+      (url) => !url.pathname.startsWith("/auth/impersonate"),
+      { timeout: 60_000 },
+    );
+    await createDirectFixtures();
+    for (const step of [
+      ...(plan.before_all ?? []),
+      ...(plan.steps ?? []),
+      ...(plan.after_all ?? []),
+    ]) {
+      await runStep(step);
+    }
+  } catch (err) {
+    failure = `${err}`;
+    mkdirSync(reportDir, { recursive: true });
+    await page
+      .screenshot({ path: join(reportDir, "failure.png"), fullPage: true })
+      .catch(() => {});
+  } finally {
+    await cleanupDirectFixtures().catch((err) => {
+      browserLogs.push({
+        at: new Date().toISOString(),
+        level: "cleanup-error",
+        message: `${err}`,
+      });
+    });
+    mkdirSync(reportDir, { recursive: true });
+    writeFileSync(
+      join(reportDir, "report.json"),
+      JSON.stringify(
+        {
+          name: plan.name,
+          mode: "direct-playwright",
+          started_at: startedAt,
+          finished_at: new Date().toISOString(),
+          status: failure ? "failed" : "passed",
+          failure,
+          project_id: options.project,
+          steps,
+          browser_logs: browserLogs,
+        },
+        null,
+        2,
+      ),
+    );
+    await context.close();
+    await browser.close();
+  }
+  if (failure) throw Error(failure);
 }
 
 try {
@@ -300,19 +685,19 @@ try {
       network_on_fail: 160,
     },
     before_all: [
-      navigate("load project before hard refresh", ""),
+      navigateProjectHome("load project before hard refresh"),
       {
         name: "hard refresh application",
         action: { name: "reload", hard: true },
         pause_ms: 2_500,
         retries: 2,
       },
-      waitForText("application and project ready", "visible.md", 90_000),
+      ...enterHarnessDirectorySteps("application and project ready"),
     ],
     steps: Array.from({ length: options.iterations }, (_, index) =>
       iterationSteps(index + 1),
     ).flat(),
-    after_all: [navigate("finish on harness directory", "")],
+    after_all: enterHarnessDirectorySteps("finish"),
   };
   const planPath = join(fixtureDir, "plan.json");
   writeFileSync(planPath, JSON.stringify(plan, null, 2));
@@ -335,7 +720,11 @@ try {
   console.log(`ux_harness_run_id=${runId}`);
   console.log(`ux_harness_started_at=${new Date().toISOString()}`);
   console.log(`ux_harness_report_dir=${reportDir}`);
-  run(harnessArgs);
+  if (options.direct) {
+    await runDirectHarness(plan);
+  } else {
+    run(harnessArgs);
+  }
   console.log(`ux_harness_finished_at=${new Date().toISOString()}`);
 } finally {
   rmSync(fixtureDir, { recursive: true, force: true });
