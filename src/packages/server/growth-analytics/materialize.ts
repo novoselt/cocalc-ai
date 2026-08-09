@@ -17,7 +17,7 @@ const DEFAULT_BATCH_SIZE = 2_000;
 const RETENTION_DAYS = 90;
 
 type Watermark = { received_at?: string; event_id?: string };
-type EventCursorRow = { event_id: string; received_at: Date };
+type EventCursorRow = { event_id: string; received_at: string };
 
 function batchSize(): number {
   const value = Number(process.env.COCALC_GROWTH_MATERIALIZER_BATCH_SIZE);
@@ -246,7 +246,7 @@ async function selectEventBatch(
   watermark: Watermark,
 ): Promise<EventCursorRow[]> {
   const { rows } = await client.query<EventCursorRow>(
-    `SELECT event_id, received_at
+    `SELECT event_id, received_at::text AS received_at
        FROM growth_event_log
       WHERE home_bay_id = $1
         AND (

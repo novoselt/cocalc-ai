@@ -128,10 +128,19 @@ describePglite("growth analytics pipeline", () => {
       ingestGrowthEvent({ account_id: ACCOUNT_ID, event }),
     ).resolves.toEqual({ recorded: false });
 
+    const getPool = (await import("@cocalc/database/pool")).default;
+    // PostgreSQL timestamps have microsecond precision, while JavaScript Date
+    // only has milliseconds. A text cursor must preserve all six digits or the
+    // same final event remains perpetually greater than the saved watermark.
+    await getPool().query(
+      `UPDATE growth_event_log
+          SET received_at='2026-08-09 12:00:00.123456+00'::timestamptz
+        WHERE event_id=$1`,
+      [EVENT_ID],
+    );
     const { runGrowthMaterializationOnce } = await import("./materialize");
     const first = await runGrowthMaterializationOnce();
     expect(first).toMatchObject({ status: "ok", events: 1 });
-    const getPool = (await import("@cocalc/database/pool")).default;
     const migratedState = await getPool().query(
       `SELECT coverage_started_at IS NOT NULL AS has_coverage,
               source_watermark IS NOT NULL AS has_watermark
