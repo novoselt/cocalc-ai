@@ -581,14 +581,11 @@ export function ActiveUsersMapAdmin() {
         {view === "history" && (
           <Space>
             <Text>Speed:</Text>
-            <Radio.Group
-              buttonStyle="solid"
-              optionType="button"
+            <Select
               options={SPEED_OPTIONS}
               value={playbackSpeed}
-              onChange={({ target: { value } }) =>
-                setPlaybackSpeed(Number(value))
-              }
+              onChange={setPlaybackSpeed}
+              style={{ width: 72 }}
             />
           </Space>
         )}
