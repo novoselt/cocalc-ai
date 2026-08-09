@@ -619,6 +619,11 @@ export function ActiveUsersMapAdmin() {
             <ActiveUsersMapSummary
               total={displaySummary.total_active}
               mapped={displaySummary.mapped_active}
+              usageMetricsNotEnabled={
+                view === "history"
+                  ? historySnapshot?.usage_metrics_not_enabled
+                  : undefined
+              }
               unavailable={displaySummary.unknown_location}
               onShowUnavailable={
                 view === "live" ? () => setSelectedGroup("unknown") : undefined

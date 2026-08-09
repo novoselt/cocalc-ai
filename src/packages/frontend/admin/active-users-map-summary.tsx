@@ -10,11 +10,13 @@ const { Text } = Typography;
 export function ActiveUsersMapSummary({
   total,
   mapped,
+  usageMetricsNotEnabled,
   unavailable,
   onShowUnavailable,
 }: {
   total: number;
   mapped: number;
+  usageMetricsNotEnabled?: number;
   unavailable: number;
   onShowUnavailable?: () => void;
 }) {
@@ -27,6 +29,15 @@ export function ActiveUsersMapSummary({
       <Text>
         On map: <Text strong>{mapped}</Text>
       </Text>
+      {usageMetricsNotEnabled != null && (
+        <Space>
+          <Text type="secondary">·</Text>
+          <Text>
+            Usage metrics not enabled:{" "}
+            <Text strong>{usageMetricsNotEnabled}</Text>
+          </Text>
+        </Space>
+      )}
       <Text type="secondary">·</Text>
       {unavailable > 0 && onShowUnavailable ? (
         <Button type="link" size="small" onClick={onShowUnavailable}>
@@ -34,7 +45,7 @@ export function ActiveUsersMapSummary({
         </Button>
       ) : (
         <Text>
-          Location unavailable: <Text strong>0</Text>
+          Location unavailable: <Text strong>{unavailable}</Text>
         </Text>
       )}
     </Space>
