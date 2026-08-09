@@ -32,6 +32,7 @@ export const ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS: number | null = null;
 const MAX_ACTIVITY_MINUTES = 1440;
 const MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 const COLLECTION_LOCK = "active-user-map-history-collection";
+const ACTIVE_USER_MAP_COUNTRY_CODE_PATTERN = /^[A-Z0-9]{2}$/;
 
 type HistoryWindow = (typeof ACTIVE_USER_MAP_HISTORY_WINDOWS)[number];
 
@@ -158,7 +159,7 @@ export function aggregateActiveUserMapHistoryReports({
       }
       const countryCode = `${account.country_code ?? ""}`.trim().toUpperCase();
       if (
-        !/^[A-Z0-9]{2}$/.test(countryCode) ||
+        !ACTIVE_USER_MAP_COUNTRY_CODE_PATTERN.test(countryCode) ||
         countryCode === "XX" ||
         countryCode === "K1"
       ) {
@@ -205,8 +206,8 @@ type HistoryPointRow = Omit<
 function normalizeHistoryCountryCode(countryCode?: string): string | null {
   if (countryCode == null || !countryCode.trim()) return null;
   const normalized = countryCode.trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(normalized)) {
-    throw Error("country_code must be a two-letter country code");
+  if (!ACTIVE_USER_MAP_COUNTRY_CODE_PATTERN.test(normalized)) {
+    throw Error("country_code must be a two-character alphanumeric code");
   }
   return normalized;
 }

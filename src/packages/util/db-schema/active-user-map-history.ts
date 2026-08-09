@@ -69,7 +69,7 @@ Table({
     country_code: {
       type: "string",
       pg_type: "VARCHAR(2)",
-      desc: "Normalized ISO alpha-2 country code.",
+      desc: "Normalized two-character alphanumeric country code.",
     },
     active_count: {
       type: "integer",
