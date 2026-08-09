@@ -6,7 +6,6 @@
 import getPool from "@cocalc/database/pool";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import type { GrowthEventInput } from "@cocalc/conat/hub/api/growth-analytics";
-import { ensureGrowthAnalyticsSchema } from "./schema";
 import { validateGrowthEvent } from "./events";
 
 export async function ingestGrowthEvent({
@@ -17,7 +16,6 @@ export async function ingestGrowthEvent({
   event: GrowthEventInput;
 }): Promise<{ recorded: boolean }> {
   const validated = validateGrowthEvent(event);
-  await ensureGrowthAnalyticsSchema();
   const { rows } = await getPool().query<{ home_bay_id: string | null }>(
     "SELECT home_bay_id FROM accounts WHERE account_id=$1",
     [account_id],

@@ -17,7 +17,6 @@ import {
   type GrowthWeeklyAccounting,
 } from "@cocalc/conat/hub/api/growth-analytics";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
-import { ensureGrowthAnalyticsSchema } from "./schema";
 
 const MAX_RANGE_DAYS = 730;
 const DEFAULT_RANGE_DAYS = 90;
@@ -96,7 +95,6 @@ async function readSeries({
   metricNames: string[];
   range: Range;
 }): Promise<GrowthMetricSeries[]> {
-  await ensureGrowthAnalyticsSchema();
   const { rows } = await getPool("medium").query<{
     metric_name: string;
     period_start: string;
@@ -255,7 +253,6 @@ export async function getGrowthFunnel(
 export async function getRetentionMatrix(
   opts: GrowthRangeQuery & { cohort_grain?: "day" | "week" } = {},
 ): Promise<GrowthRetentionMatrix> {
-  await ensureGrowthAnalyticsSchema();
   const range = normalizeRange(opts);
   const cohortGrain = opts.cohort_grain === "week" ? "week" : "day";
   const { rows } = await getPool("medium").query<{
@@ -322,7 +319,6 @@ export async function getRetentionMatrix(
 export async function getWeeklyGrowthAccounting(
   opts: GrowthRangeQuery = {},
 ): Promise<GrowthWeeklyAccounting> {
-  await ensureGrowthAnalyticsSchema();
   const range = normalizeRange(opts);
   const { rows } = await getPool("medium").query<{
     week_start: string;
@@ -375,7 +371,6 @@ export async function getWeeklyGrowthAccounting(
 }
 
 export async function getGrowthDataHealth(): Promise<GrowthDataHealth> {
-  await ensureGrowthAnalyticsSchema();
   const scopeId = getConfiguredBayId();
   const { rows } = await getPool().query<{
     last_success_at: Date | null;

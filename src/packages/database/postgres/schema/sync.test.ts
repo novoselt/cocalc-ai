@@ -29,6 +29,8 @@ jest.mock("./table", () => ({
         return ["token"];
       case "compute_resource_work":
         return ["id"];
+      case "schema_invariant_test":
+        return ["id"];
       default:
         return [];
     }
@@ -37,8 +39,10 @@ jest.mock("./table", () => ({
 
 type ColumnRow = {
   column_name: string;
+  column_default?: string | null;
   data_type: string;
   character_maximum_length?: number | null;
+  is_nullable?: "YES" | "NO";
   numeric_precision?: number | null;
   numeric_scale?: number | null;
 };
@@ -116,6 +120,32 @@ const registrationTokensPrimaryKeyRows = [{ name: "token" }];
 const computeWorkSchema: DBSchema = {
   compute_resource_work: SCHEMA.compute_resource_work,
 };
+
+const invariantSchemaDef: TableSchema = {
+  name: "schema_invariant_test",
+  primary_key: "id",
+  fields: {
+    id: { type: "uuid" },
+    state: {
+      type: "map",
+      pg_default: "'{}'::jsonb",
+      not_null: true,
+      pg_null_backfill: "'{}'::jsonb",
+    },
+    started_at: {
+      type: "timestamp",
+      pg_default: "now()",
+      not_null: true,
+      pg_null_backfill: "now()",
+    },
+  },
+};
+
+const invariantSchema: DBSchema = {
+  schema_invariant_test: invariantSchemaDef,
+};
+
+const invariantPrimaryKeyRows = [{ name: "id" }];
 
 describe("schema column type introspection", () => {
   it("preserves numeric precision and scale", () => {
@@ -233,7 +263,11 @@ function createMockClient(options: {
     if (text.includes("FROM   pg_index i")) {
       return { rows: primaryKeyRows };
     }
-    if (text.startsWith("ALTER TABLE ") || text.startsWith("DROP INDEX ")) {
+    if (
+      text.startsWith("ALTER TABLE ") ||
+      text.startsWith("DROP INDEX ") ||
+      text.startsWith("UPDATE ")
+    ) {
       return { rows: [] };
     }
     throw new Error(`Unexpected query: ${text}`);
@@ -400,5 +434,71 @@ describe("schemaNeedsSync column actions", () => {
         process.env.COCALC_DB = originalDatabase;
       }
     }
+  });
+
+  it("detects and repairs declared defaults and nullability", async () => {
+    const client = createMockClient({
+      tableName: "schema_invariant_test",
+      columnRows: [
+        { column_name: "id", data_type: "uuid", is_nullable: "NO" },
+        {
+          column_name: "state",
+          data_type: "jsonb",
+          column_default: null,
+          is_nullable: "YES",
+        },
+        {
+          column_name: "started_at",
+          data_type: "timestamp without time zone",
+          column_default: null,
+          is_nullable: "YES",
+        },
+      ],
+      indexRows: [],
+      primaryKeyRows: invariantPrimaryKeyRows,
+    });
+    (getClient as jest.Mock).mockReturnValue(client);
+
+    expect(await schemaNeedsSync(invariantSchema)).toBe(true);
+    await syncSchema(invariantSchema);
+
+    expect(client.query).toHaveBeenCalledWith(
+      `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET DEFAULT '{}'::jsonb`,
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      `UPDATE "schema_invariant_test" SET "state"='{}'::jsonb WHERE "state" IS NULL`,
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET NOT NULL`,
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      `ALTER TABLE "schema_invariant_test" ALTER COLUMN "started_at" SET DEFAULT now()`,
+    );
+  });
+
+  it("accepts PostgreSQL-normalized declared invariants", async () => {
+    const client = createMockClient({
+      tableName: "schema_invariant_test",
+      columnRows: [
+        { column_name: "id", data_type: "uuid", is_nullable: "NO" },
+        {
+          column_name: "state",
+          data_type: "jsonb",
+          column_default: "'{}'::jsonb",
+          is_nullable: "NO",
+        },
+        {
+          column_name: "started_at",
+          data_type: "timestamp without time zone",
+          column_default: "now()",
+          is_nullable: "NO",
+        },
+      ],
+      indexRows: [],
+      primaryKeyRows: invariantPrimaryKeyRows,
+    });
+    (getClient as jest.Mock).mockReturnValue(client);
+
+    expect(await schemaNeedsSync(invariantSchema)).toBe(false);
   });
 });

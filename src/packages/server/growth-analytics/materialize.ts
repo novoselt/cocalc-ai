@@ -8,7 +8,6 @@ import { getPoolClient, type PoolClient } from "@cocalc/database/pool";
 
 import { GROWTH_METRIC_VERSION } from "@cocalc/conat/hub/api/growth-analytics";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
-import { ensureGrowthAnalyticsSchema } from "./schema";
 
 const logger = getLogger("server:growth-analytics:materialize");
 const WORKER_NAME = "growth-materializer-v1";
@@ -837,7 +836,6 @@ export type GrowthMaterializationResult =
     };
 
 export async function runGrowthMaterializationOnce(): Promise<GrowthMaterializationResult> {
-  await ensureGrowthAnalyticsSchema();
   const started = Date.now();
   const scopeId = getConfiguredBayId();
   const client = await getPoolClient();

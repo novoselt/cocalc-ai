@@ -135,6 +135,17 @@ export interface FieldSpec {
   desc?: string;
   title?: string;
   pg_type?: string;
+  // PostgreSQL-only column invariants. These are applied both when a table is
+  // created and when the startup schema synchronizer converges an existing
+  // table. Expressions are trusted SQL from this source tree.
+  // Use PostgreSQL's normalized spelling (e.g. `now()`), since startup compares
+  // this with information_schema.columns.column_default before applying DDL.
+  pg_default?: string;
+  not_null?: boolean;
+  // Used only when adding NOT NULL to an existing nullable column. The
+  // synchronizer updates NULL rows to this expression before the constraint.
+  pg_null_backfill?: string;
+  pg_check?: string;
   unique?: boolean;
   noCoerce?: boolean; // if true, don't coerce to this type when doing set query
   render?: RenderSpec;

@@ -50,9 +50,8 @@ describePglite("growth analytics pipeline", () => {
         account_id UUID
       )
     `);
-    // The generated schema may create new fields as nullable before runtime
-    // bootstrap applies defaults and invariants. Reproduce that deployment
-    // ordering so the integration test covers the repair migration.
+    // Reproduce the legacy nullable shape so startup schema convergence must
+    // backfill rows before adding defaults and NOT NULL constraints.
     await getPool().query(`
       CREATE TABLE growth_event_log (
         event_id UUID PRIMARY KEY,
@@ -94,18 +93,18 @@ describePglite("growth analytics pipeline", () => {
       VALUES ('growth-materializer-v1', 'growth-test-bay', 'growth-v1', NULL)
     `);
     const { SCHEMA } = await import("@cocalc/util/db-schema");
-    const { syncSchema } =
+    const { schemaNeedsSync, syncSchema } =
       await import("@cocalc/database/postgres/schema/sync");
-    await syncSchema(
-      Object.fromEntries(
-        Object.entries(SCHEMA).filter(([name]) => name.startsWith("growth_")),
-      ),
+    const growthSchema = Object.fromEntries(
+      Object.entries(SCHEMA).filter(([name]) => name.startsWith("growth_")),
     );
+    await syncSchema(growthSchema);
+    expect(await schemaNeedsSync(growthSchema)).toBe(false);
     await getPool().query(
       `INSERT INTO accounts
-         (account_id, home_bay_id, created, email_address,
+       (account_id, home_bay_id, created, email_address,
           email_address_verified, banned, groups, tags)
-       VALUES ($1, $2, NOW() AT TIME ZONE 'UTC', $3::text,
+       VALUES ($1, $2, NOW() AT TIME ZONE 'UTC' - INTERVAL '1 day', $3::text,
          jsonb_build_object($3::text, to_jsonb(NOW())), FALSE, '{}', '{}')`,
       [ACCOUNT_ID, "growth-test-bay", "person@example.edu"],
     );

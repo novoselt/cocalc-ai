@@ -27,7 +27,9 @@ const log = getLogger("db:schema:sync");
 type InformationSchemaColumn = {
   character_maximum_length?: number | null;
   column_name: string;
+  column_default?: string | null;
   data_type: string;
+  is_nullable?: "YES" | "NO";
   numeric_precision?: number | null;
   numeric_scale?: number | null;
 };
@@ -56,6 +58,7 @@ async function syncTableSchema(db: Client, schema: TableSchema): Promise<void> {
     return;
   }
   await syncTableSchemaColumns(db, schema);
+  await syncTableSchemaColumnInvariants(db, schema);
   await syncTableSchemaIndexes(db, schema);
   await syncTableSchemaPrimaryKeys(db, schema);
 }
@@ -69,7 +72,7 @@ async function getColumnTypeInfo(
 
   const { rows } = await db.query(
     `SELECT column_name, data_type, character_maximum_length,
-            numeric_precision, numeric_scale
+            numeric_precision, numeric_scale, column_default, is_nullable
        FROM information_schema.columns
       WHERE table_name=$1`,
     [table],
@@ -178,9 +181,105 @@ async function alterColumnOfTable(
     }
   } else if (action == "add") {
     log.debug("alterColumnOfTable", schema.name, "add this column:", col);
+    if (info.pg_default != null) {
+      desc += ` DEFAULT ${info.pg_default}`;
+    }
+    if (info.not_null) {
+      desc += " NOT NULL";
+    }
     await db.query(`ALTER TABLE ${qTable} ADD COLUMN ${col} ${desc}`);
   } else {
     throw Error(`unknown action '${action}`);
+  }
+}
+
+type ColumnInvariantAction =
+  | { action: "set-default"; column: string; expression: string }
+  | {
+      action: "set-not-null";
+      column: string;
+      backfill?: string;
+    };
+
+function normalizeDefaultExpression(expression: string | null | undefined) {
+  // PostgreSQL may normalize whitespace, but quoted literal contents remain
+  // case-sensitive. Declare expressions using PostgreSQL's deparsed spelling
+  // (for example, `now()` rather than `NOW()`).
+  return expression?.trim().replace(/\s+/g, " ");
+}
+
+async function getColumnInvariantActions(
+  db: Client,
+  schema: TableSchema,
+): Promise<ColumnInvariantAction[]> {
+  if (
+    !Object.keys(schema.fields).some((column) => {
+      const info = schema.fields[column];
+      return info.pg_default != null || info.not_null;
+    })
+  ) {
+    return [];
+  }
+  const { rows } = await db.query(
+    `SELECT column_name, column_default, is_nullable
+       FROM information_schema.columns
+      WHERE table_name=$1`,
+    [schema.name],
+  );
+  const current = new Map<
+    string,
+    { column_default?: string | null; is_nullable?: "YES" | "NO" }
+  >(rows.map((row) => [row.column_name, row]));
+  const actions: ColumnInvariantAction[] = [];
+
+  for (const column in schema.fields) {
+    const info = schema.fields[column];
+    const existing = current.get(column);
+    // A missing column is handled by getColumnActions, which includes these
+    // invariants in the ADD COLUMN statement.
+    if (existing == null) continue;
+    if (
+      info.pg_default != null &&
+      normalizeDefaultExpression(existing.column_default) !==
+        normalizeDefaultExpression(info.pg_default)
+    ) {
+      actions.push({
+        action: "set-default",
+        column,
+        expression: info.pg_default,
+      });
+    }
+    if (info.not_null && existing.is_nullable === "YES") {
+      actions.push({
+        action: "set-not-null",
+        column,
+        backfill: info.pg_null_backfill,
+      });
+    }
+  }
+  return actions;
+}
+
+async function syncTableSchemaColumnInvariants(
+  db: Client,
+  schema: TableSchema,
+): Promise<void> {
+  const qTable = quoteField(schema.name);
+  const actions = await getColumnInvariantActions(db, schema);
+  for (const action of actions) {
+    const column = quoteField(action.column);
+    if (action.action === "set-default") {
+      await db.query(
+        `ALTER TABLE ${qTable} ALTER COLUMN ${column} SET DEFAULT ${action.expression}`,
+      );
+      continue;
+    }
+    if (action.backfill != null) {
+      await db.query(
+        `UPDATE ${qTable} SET ${column}=${action.backfill} WHERE ${column} IS NULL`,
+      );
+    }
+    await db.query(`ALTER TABLE ${qTable} ALTER COLUMN ${column} SET NOT NULL`);
   }
 }
 
@@ -567,6 +666,15 @@ export async function schemaNeedsSync(
       const columnActions = await getColumnActions(db, schema);
       if (columnActions.length > 0) {
         dbg("detected column changes needed", schema.name, columnActions);
+        return true;
+      }
+      const invariantActions = await getColumnInvariantActions(db, schema);
+      if (invariantActions.length > 0) {
+        dbg(
+          "detected column invariant changes needed",
+          schema.name,
+          invariantActions,
+        );
         return true;
       }
       const indexActions = await getIndexActions(db, schema);
