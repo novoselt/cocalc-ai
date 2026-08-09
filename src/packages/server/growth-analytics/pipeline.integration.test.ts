@@ -50,6 +50,31 @@ describePglite("growth analytics pipeline", () => {
         account_id UUID
       )
     `);
+    // The generated schema may create new fields as nullable before runtime
+    // bootstrap applies defaults and invariants. Reproduce that deployment
+    // ordering so the integration test covers the repair migration.
+    await getPool().query(`
+      CREATE TABLE growth_materialization_state (
+        worker_name VARCHAR(64) NOT NULL,
+        scope_id VARCHAR(64) NOT NULL,
+        source_watermark JSONB NOT NULL DEFAULT '{}'::jsonb,
+        metric_definition_version VARCHAR(32) NOT NULL,
+        coverage_started_at TIMESTAMPTZ,
+        last_success_at TIMESTAMPTZ,
+        last_duration_ms INTEGER,
+        rows_processed INTEGER,
+        last_error TEXT,
+        lease_owner VARCHAR(96),
+        lease_expires_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (worker_name, scope_id)
+      )
+    `);
+    await getPool().query(`
+      INSERT INTO growth_materialization_state
+        (worker_name, scope_id, metric_definition_version, coverage_started_at)
+      VALUES ('growth-materializer-v1', 'growth-test-bay', 'growth-v1', NULL)
+    `);
     await getPool().query(
       `INSERT INTO accounts
          (account_id, home_bay_id, created, email_address,
@@ -88,10 +113,16 @@ describePglite("growth analytics pipeline", () => {
     const { runGrowthMaterializationOnce } = await import("./materialize");
     const first = await runGrowthMaterializationOnce();
     expect(first).toMatchObject({ status: "ok", events: 1 });
+    const getPool = (await import("@cocalc/database/pool")).default;
+    const migratedState = await getPool().query(
+      `SELECT coverage_started_at IS NOT NULL AS has_coverage
+         FROM growth_materialization_state
+        WHERE worker_name='growth-materializer-v1' AND scope_id='growth-test-bay'`,
+    );
+    expect(migratedState.rows).toEqual([{ has_coverage: true }]);
     const second = await runGrowthMaterializationOnce();
     expect(second).toMatchObject({ status: "ok", events: 0 });
 
-    const getPool = (await import("@cocalc/database/pool")).default;
     const facts = await getPool().query(
       `SELECT project_engaged, project_work, ai_engaged
          FROM growth_account_activity_daily WHERE account_id=$1`,

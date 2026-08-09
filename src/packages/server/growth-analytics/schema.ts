@@ -124,6 +124,13 @@ export function ensureGrowthAnalyticsSchema(): Promise<void> {
       );
       ALTER TABLE growth_materialization_state
         ADD COLUMN IF NOT EXISTS coverage_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      ALTER TABLE growth_materialization_state
+        ALTER COLUMN coverage_started_at SET DEFAULT NOW();
+      UPDATE growth_materialization_state
+         SET coverage_started_at=COALESCE(last_success_at, NOW())
+       WHERE coverage_started_at IS NULL;
+      ALTER TABLE growth_materialization_state
+        ALTER COLUMN coverage_started_at SET NOT NULL;
 
       CREATE TABLE IF NOT EXISTS growth_dirty_periods (
         metric_version VARCHAR(32) NOT NULL,
