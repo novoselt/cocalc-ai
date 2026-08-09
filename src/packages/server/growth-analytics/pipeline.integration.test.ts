@@ -54,10 +54,28 @@ describePglite("growth analytics pipeline", () => {
     // bootstrap applies defaults and invariants. Reproduce that deployment
     // ordering so the integration test covers the repair migration.
     await getPool().query(`
+      CREATE TABLE growth_event_log (
+        event_id UUID PRIMARY KEY,
+        event_name VARCHAR(64) NOT NULL,
+        event_version INTEGER NOT NULL,
+        occurred_at TIMESTAMPTZ NOT NULL,
+        received_at TIMESTAMPTZ,
+        account_id UUID NOT NULL,
+        visitor_id VARCHAR(96),
+        project_id UUID,
+        home_bay_id VARCHAR(64) NOT NULL,
+        source_bay_id VARCHAR(64) NOT NULL,
+        source_component VARCHAR(48) NOT NULL,
+        experiment VARCHAR(64),
+        variant VARCHAR(48),
+        properties JSONB
+      )
+    `);
+    await getPool().query(`
       CREATE TABLE growth_materialization_state (
         worker_name VARCHAR(64) NOT NULL,
         scope_id VARCHAR(64) NOT NULL,
-        source_watermark JSONB NOT NULL DEFAULT '{}'::jsonb,
+        source_watermark JSONB,
         metric_definition_version VARCHAR(32) NOT NULL,
         coverage_started_at TIMESTAMPTZ,
         last_success_at TIMESTAMPTZ,
@@ -115,11 +133,20 @@ describePglite("growth analytics pipeline", () => {
     expect(first).toMatchObject({ status: "ok", events: 1 });
     const getPool = (await import("@cocalc/database/pool")).default;
     const migratedState = await getPool().query(
-      `SELECT coverage_started_at IS NOT NULL AS has_coverage
+      `SELECT coverage_started_at IS NOT NULL AS has_coverage,
+              source_watermark IS NOT NULL AS has_watermark
          FROM growth_materialization_state
         WHERE worker_name='growth-materializer-v1' AND scope_id='growth-test-bay'`,
     );
-    expect(migratedState.rows).toEqual([{ has_coverage: true }]);
+    expect(migratedState.rows).toEqual([
+      { has_coverage: true, has_watermark: true },
+    ]);
+    const migratedEvent = await getPool().query(
+      `SELECT received_at IS NOT NULL AS has_received_at
+         FROM growth_event_log WHERE event_id=$1`,
+      [EVENT_ID],
+    );
+    expect(migratedEvent.rows).toEqual([{ has_received_at: true }]);
     const second = await runGrowthMaterializationOnce();
     expect(second).toMatchObject({ status: "ok", events: 0 });
 

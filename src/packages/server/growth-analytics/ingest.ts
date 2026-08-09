@@ -27,10 +27,10 @@ export async function ingestGrowthEvent({
   const homeBayId = `${rows[0].home_bay_id ?? sourceBayId}`.trim();
   const result = await getPool().query(
     `INSERT INTO growth_event_log
-       (event_id, event_name, event_version, occurred_at, account_id,
+       (event_id, event_name, event_version, occurred_at, received_at, account_id,
         project_id, home_bay_id, source_bay_id, source_component,
         experiment, variant, properties)
-     VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+     VALUES ($1, $2, 1, $3, NOW(), $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
      ON CONFLICT (event_id) DO NOTHING`,
     [
       validated.event_id,

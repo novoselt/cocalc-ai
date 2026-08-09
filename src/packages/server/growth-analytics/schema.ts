@@ -106,6 +106,13 @@ export function ensureGrowthAnalyticsSchema(): Promise<void> {
         ON growth_event_log (account_id, received_at DESC);
       CREATE INDEX IF NOT EXISTS growth_event_log_name_idx
         ON growth_event_log (event_name, occurred_at DESC);
+      ALTER TABLE growth_event_log
+        ALTER COLUMN received_at SET DEFAULT NOW();
+      UPDATE growth_event_log
+         SET received_at=NOW()
+       WHERE received_at IS NULL;
+      ALTER TABLE growth_event_log
+        ALTER COLUMN received_at SET NOT NULL;
 
       CREATE TABLE IF NOT EXISTS growth_materialization_state (
         worker_name VARCHAR(64) NOT NULL,
@@ -124,6 +131,13 @@ export function ensureGrowthAnalyticsSchema(): Promise<void> {
       );
       ALTER TABLE growth_materialization_state
         ADD COLUMN IF NOT EXISTS coverage_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      ALTER TABLE growth_materialization_state
+        ALTER COLUMN source_watermark SET DEFAULT '{}'::jsonb;
+      UPDATE growth_materialization_state
+         SET source_watermark='{}'::jsonb
+       WHERE source_watermark IS NULL;
+      ALTER TABLE growth_materialization_state
+        ALTER COLUMN source_watermark SET NOT NULL;
       ALTER TABLE growth_materialization_state
         ALTER COLUMN coverage_started_at SET DEFAULT NOW();
       UPDATE growth_materialization_state

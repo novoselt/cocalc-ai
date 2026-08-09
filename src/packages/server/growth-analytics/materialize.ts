@@ -62,8 +62,9 @@ export function activityFlagsForEvent(eventName: string): {
 async function ensureState(client: PoolClient, scopeId: string): Promise<void> {
   await client.query(
     `INSERT INTO growth_materialization_state
-       (worker_name, scope_id, metric_definition_version)
-     VALUES ($1, $2, $3)
+       (worker_name, scope_id, source_watermark, metric_definition_version,
+        coverage_started_at, updated_at)
+     VALUES ($1, $2, '{}'::jsonb, $3, NOW(), NOW())
      ON CONFLICT (worker_name, scope_id) DO NOTHING`,
     [WORKER_NAME, scopeId, GROWTH_METRIC_VERSION],
   );

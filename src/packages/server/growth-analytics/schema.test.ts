@@ -32,6 +32,12 @@ describe("growth analytics schema", () => {
     expect(sql).toContain("growth_weekly_accounting");
     expect(sql).toContain("growth_event_log_watermark_idx");
     expect(sql).toContain("growth_event_log_home_watermark_idx");
+    expect(sql).toContain("ALTER COLUMN received_at SET DEFAULT NOW()");
+    expect(sql).toContain("ALTER COLUMN received_at SET NOT NULL");
+    expect(sql).toContain(
+      "ALTER COLUMN source_watermark SET DEFAULT '{}'::jsonb",
+    );
+    expect(sql).toContain("ALTER COLUMN source_watermark SET NOT NULL");
     expect(sql).toContain("ALTER COLUMN coverage_started_at SET DEFAULT NOW()");
     expect(sql).toContain("ALTER COLUMN coverage_started_at SET NOT NULL");
   });
