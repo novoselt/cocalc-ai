@@ -396,10 +396,12 @@ export function ActiveUsersMapAdmin() {
   const historicalDate = historySnapshot
     ? dayjs.utc(historySnapshot.snapshot_hour)
     : undefined;
-  const displaySummary = view === "history" ? historySnapshot : overview;
+  const pendingHistoryFallback = snapshotLoading ? overview : undefined;
+  const displaySummary =
+    view === "history" ? (historySnapshot ?? pendingHistoryFallback) : overview;
   const displayCountries =
     view === "history"
-      ? (historySnapshot?.countries ?? [])
+      ? (historySnapshot?.countries ?? pendingHistoryFallback?.countries)
       : overview?.countries;
 
   function selectHistoryDate(value: Dayjs | null) {
@@ -460,7 +462,7 @@ export function ActiveUsersMapAdmin() {
             setSelectedGroup(undefined);
             setSelectedUser(undefined);
             if (nextView === "history") {
-              setHistorySnapshot(undefined);
+              setSnapshotLoading(true);
             }
             setView(nextView);
           }}
@@ -481,7 +483,7 @@ export function ActiveUsersMapAdmin() {
               } else {
                 requestedHistorySnapshot.current =
                   historySnapshot?.snapshot_hour;
-                setHistorySnapshot(undefined);
+                setSnapshotLoading(true);
                 setHistoryActiveMinutes(
                   value as ActiveUserMapHistoryWindowMinutes,
                 );
