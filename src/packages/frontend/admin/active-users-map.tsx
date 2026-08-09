@@ -16,6 +16,7 @@ import {
   Tag,
   Typography,
 } from "antd";
+import { CaretRightFilled, PauseOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -106,6 +107,10 @@ const HOUR_OPTIONS = Array.from({ length: 24 }, (_, hour) => ({
 
 type MapView = "live" | "history";
 type Playback = "date" | "time";
+
+function PlaybackIcon({ playing }: { playing: boolean }) {
+  return playing ? <PauseOutlined /> : <CaretRightFilled />;
+}
 
 function userName(user: ActiveUserMapUser): string {
   return displayNameFromAccount(user) || user.email_address || user.account_id;
@@ -521,7 +526,7 @@ export function ActiveUsersMapAdmin() {
                     : "Play one day per frame"
                 }
                 disabled={!historicalDate}
-                icon={<Icon name={playback === "date" ? "pause" : "play"} />}
+                icon={<PlaybackIcon playing={playback === "date"} />}
                 onClick={() =>
                   setPlayback((current) =>
                     current === "date" ? undefined : "date",
@@ -562,7 +567,7 @@ export function ActiveUsersMapAdmin() {
                     : "Play one hour per frame"
                 }
                 disabled={!historicalDate}
-                icon={<Icon name={playback === "time" ? "pause" : "play"} />}
+                icon={<PlaybackIcon playing={playback === "time"} />}
                 onClick={() =>
                   setPlayback((current) =>
                     current === "time" ? undefined : "time",
