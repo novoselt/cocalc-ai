@@ -16,7 +16,7 @@ export function ActiveUsersMapSummary({
   total: number;
   mapped: number;
   unavailable: number;
-  onShowUnavailable: () => void;
+  onShowUnavailable?: () => void;
 }) {
   return (
     <Space wrap>
@@ -28,7 +28,7 @@ export function ActiveUsersMapSummary({
         On map: <Text strong>{mapped}</Text>
       </Text>
       <Text type="secondary">·</Text>
-      {unavailable > 0 ? (
+      {unavailable > 0 && onShowUnavailable ? (
         <Button type="link" size="small" onClick={onShowUnavailable}>
           Location unavailable: <strong>{unavailable}</strong>
         </Button>

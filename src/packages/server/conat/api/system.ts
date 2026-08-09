@@ -251,7 +251,10 @@ import {
   getActiveUserMapOverviewAcrossBays,
   recordAccountPresenceLocation,
 } from "@cocalc/server/account-presence-locations";
-import { getActiveUserMapDailyHistory as getActiveUserMapDailyHistoryLocal } from "@cocalc/server/active-user-map-history";
+import {
+  getActiveUserMapHistorySeries as getActiveUserMapHistorySeriesLocal,
+  getActiveUserMapHistorySnapshot as getActiveUserMapHistorySnapshotLocal,
+} from "@cocalc/server/active-user-map-history";
 import { createRememberMeCookie } from "@cocalc/server/auth/remember-me";
 import {
   recordNewAuthSession,
@@ -280,7 +283,10 @@ import { getBayPublicOrigin } from "@cocalc/server/bay-public-origin";
 import { conat } from "@cocalc/backend/conat";
 import {
   createInterBayAccountLocalClient,
-  type ActiveUserMapDailyHistory,
+  type ActiveUserMapHistorySeries,
+  type ActiveUserMapHistorySeriesRequest,
+  type ActiveUserMapHistorySnapshot,
+  type ActiveUserMapHistorySnapshotRequest,
 } from "@cocalc/conat/inter-bay/api";
 import { sysApiMany } from "@cocalc/conat/core/sys";
 import type { ConnectionStats } from "@cocalc/conat/core/types";
@@ -6702,22 +6708,38 @@ export async function getActiveUserMap({
   });
 }
 
-export async function getActiveUserMapDailyHistory({
+export async function getActiveUserMapHistorySeries({
   account_id,
-  days,
-}: {
+  ...opts
+}: ActiveUserMapHistorySeriesRequest & {
   account_id?: string;
-  days?: number;
-} = {}): Promise<ActiveUserMapDailyHistory> {
+}): Promise<ActiveUserMapHistorySeries> {
   await assertAdmin(account_id);
   const currentBayId = getConfiguredBayId();
   const seedBayId = getConfiguredClusterSeedBayId();
   if (currentBayId !== seedBayId) {
     return await getInterBayBridge()
       .bayOps(seedBayId, { timeout_ms: 30_000 })
-      .getActiveUserMapDailyHistory({ days });
+      .getActiveUserMapHistorySeries(opts);
   }
-  return await getActiveUserMapDailyHistoryLocal({ days });
+  return await getActiveUserMapHistorySeriesLocal(opts);
+}
+
+export async function getActiveUserMapHistorySnapshot({
+  account_id,
+  ...opts
+}: ActiveUserMapHistorySnapshotRequest & {
+  account_id?: string;
+}): Promise<ActiveUserMapHistorySnapshot | null> {
+  await assertAdmin(account_id);
+  const currentBayId = getConfiguredBayId();
+  const seedBayId = getConfiguredClusterSeedBayId();
+  if (currentBayId !== seedBayId) {
+    return await getInterBayBridge()
+      .bayOps(seedBayId, { timeout_ms: 30_000 })
+      .getActiveUserMapHistorySnapshot(opts);
+  }
+  return await getActiveUserMapHistorySnapshotLocal(opts);
 }
 
 export async function listBrowserSessions({

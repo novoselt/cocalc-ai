@@ -6,14 +6,18 @@
 import {
   Alert,
   Button,
+  DatePicker,
   Drawer,
   List,
-  Segmented,
+  Radio,
+  Select,
   Space,
   Spin,
   Tag,
   Typography,
 } from "antd";
+import dayjs, { type Dayjs } from "dayjs";
+import utc from "dayjs/plugin/utc";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
@@ -21,9 +25,13 @@ import type {
   ActiveUserMapUser,
   ActiveUserMapWindowMinutes,
 } from "@cocalc/conat/hub/api/system";
-import type { ActiveUserMapDailyHistory } from "@cocalc/conat/inter-bay/api";
+import type {
+  ActiveUserMapHistorySeries,
+  ActiveUserMapHistorySnapshot,
+  ActiveUserMapHistoryWindowMinutes,
+} from "@cocalc/conat/inter-bay/api";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
-import { TimeAgo } from "@cocalc/frontend/components";
+import { Icon, TimeAgo } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
 import {
   user_search,
@@ -31,14 +39,13 @@ import {
 } from "@cocalc/frontend/frame-editors/generic/client";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { UserResult } from "./users/user";
-import {
-  activeUsersMapCountryName,
-  ActiveUsersMapPlot,
-} from "./active-users-map-plot";
+import { activeUsersMapCountryName } from "./active-users-map-country";
+import { ActiveUsersMapPlot } from "./active-users-map-plot";
 import { ActiveUsersMapHistoryPlot } from "./active-users-map-history-plot";
 import { ActiveUsersMapSummary } from "./active-users-map-summary";
 
 const { Paragraph, Text } = Typography;
+dayjs.extend(utc);
 const REFRESH_MS = 60_000;
 const DRAWER_WIDTH_STORAGE_KEY = "cocalc:admin:activeUsersMapDrawerWidth";
 const DEFAULT_DRAWER_WIDTH = "70%";
@@ -80,6 +87,25 @@ const WINDOW_OPTIONS: Array<{
   { label: "1 hour", value: 60 },
   { label: "1 day", value: 1440 },
 ];
+
+const HISTORY_WINDOW_OPTIONS: Array<{
+  label: string;
+  value: ActiveUserMapHistoryWindowMinutes;
+}> = [
+  { label: "1 hour", value: 60 },
+  { label: "1 day", value: 1440 },
+];
+const SPEED_OPTIONS = [1, 2, 4, 8].map((speed) => ({
+  label: `${speed}×`,
+  value: speed,
+}));
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, hour) => ({
+  label: `${hour.toString().padStart(2, "0")}:00 UTC`,
+  value: hour,
+}));
+
+type MapView = "live" | "history";
+type Playback = "date" | "time";
 
 function userName(user: ActiveUserMapUser): string {
   return displayNameFromAccount(user) || user.email_address || user.account_id;
@@ -132,14 +158,24 @@ function UserList({
 }
 
 export function ActiveUsersMapAdmin() {
-  const [activeMinutes, setActiveMinutes] =
+  const [view, setView] = useState<MapView>("live");
+  const [liveActiveMinutes, setLiveActiveMinutes] =
     useState<ActiveUserMapWindowMinutes>(15);
+  const [historyActiveMinutes, setHistoryActiveMinutes] =
+    useState<ActiveUserMapHistoryWindowMinutes>(60);
   const [overview, setOverview] = useState<ActiveUserMapOverview>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
-  const [history, setHistory] = useState<ActiveUserMapDailyHistory>();
+  const [history, setHistory] = useState<ActiveUserMapHistorySeries>();
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string>();
+  const [historySnapshot, setHistorySnapshot] =
+    useState<ActiveUserMapHistorySnapshot>();
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string>();
+  const [historyCountry, setHistoryCountry] = useState<string>();
+  const [playback, setPlayback] = useState<Playback>();
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [selectedGroup, setSelectedGroup] = useState<string>();
   const [selectedUser, setSelectedUser] = useState<User>();
   const [loadingUser, setLoadingUser] = useState(false);
@@ -147,6 +183,17 @@ export function ActiveUsersMapAdmin() {
     readDrawerWidth,
   );
   const requestInFlight = useRef(false);
+  const snapshotRequest = useRef(0);
+  const requestedHistorySnapshot = useRef<string | undefined>(undefined);
+  const snapshotCache = useRef(
+    new Map<string, ActiveUserMapHistorySnapshot | null>(),
+  );
+  const plotActiveMinutes: ActiveUserMapHistoryWindowMinutes =
+    view === "history"
+      ? historyActiveMinutes
+      : liveActiveMinutes === 1440
+        ? 1440
+        : 60;
 
   const load = useCallback(async () => {
     if (requestInFlight.current) return;
@@ -156,7 +203,7 @@ export function ActiveUsersMapAdmin() {
     try {
       const next = await webapp_client.conat_client.hub.system.getActiveUserMap(
         {
-          active_minutes: activeMinutes,
+          active_minutes: liveActiveMinutes,
         },
       );
       setOverview(next);
@@ -166,9 +213,10 @@ export function ActiveUsersMapAdmin() {
       requestInFlight.current = false;
       setLoading(false);
     }
-  }, [activeMinutes]);
+  }, [liveActiveMinutes]);
 
   useEffect(() => {
+    if (view !== "live") return;
     void load();
     const timer = setInterval(() => {
       if (typeof document === "undefined" || !document.hidden) {
@@ -176,15 +224,20 @@ export function ActiveUsersMapAdmin() {
       }
     }, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [load]);
+  }, [load, view]);
 
   useEffect(() => {
     let disposed = false;
+    setHistoryLoading(true);
+    setHistoryError(undefined);
     void (async () => {
       try {
         const next =
-          await webapp_client.conat_client.hub.system.getActiveUserMapDailyHistory(
-            {},
+          await webapp_client.conat_client.hub.system.getActiveUserMapHistorySeries(
+            {
+              active_minutes: plotActiveMinutes,
+              country_code: historyCountry,
+            },
           );
         if (!disposed) setHistory(next);
       } catch (err) {
@@ -196,7 +249,105 @@ export function ActiveUsersMapAdmin() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [historyCountry, plotActiveMinutes]);
+
+  const loadHistorySnapshot = useCallback(
+    async ({
+      activeMinutes,
+      snapshotHour,
+      direction = "nearest",
+    }: {
+      activeMinutes: ActiveUserMapHistoryWindowMinutes;
+      snapshotHour?: string;
+      direction?: "backward" | "forward" | "nearest";
+    }): Promise<ActiveUserMapHistorySnapshot | null> => {
+      const cacheKey = `${activeMinutes}:${snapshotHour ?? "latest"}:${direction}`;
+      const request = ++snapshotRequest.current;
+      if (snapshotHour && snapshotCache.current.has(cacheKey)) {
+        const cached = snapshotCache.current.get(cacheKey) ?? null;
+        if (cached) setHistorySnapshot(cached);
+        setSnapshotLoading(false);
+        return cached;
+      }
+      setSnapshotLoading(true);
+      setSnapshotError(undefined);
+      try {
+        const next =
+          await webapp_client.conat_client.hub.system.getActiveUserMapHistorySnapshot(
+            {
+              active_minutes: activeMinutes,
+              snapshot_hour: snapshotHour,
+              direction,
+            },
+          );
+        if (next) {
+          if (snapshotHour) snapshotCache.current.set(cacheKey, next);
+          snapshotCache.current.set(
+            `${activeMinutes}:${next.snapshot_hour}:nearest`,
+            next,
+          );
+        }
+        if (request === snapshotRequest.current && next) {
+          setHistorySnapshot(next);
+        }
+        return next;
+      } catch (err) {
+        if (request === snapshotRequest.current) setSnapshotError(`${err}`);
+        return null;
+      } finally {
+        if (request === snapshotRequest.current) setSnapshotLoading(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (view !== "history") return;
+    setPlayback(undefined);
+    const snapshotHour = requestedHistorySnapshot.current;
+    requestedHistorySnapshot.current = undefined;
+    void loadHistorySnapshot({
+      activeMinutes: historyActiveMinutes,
+      snapshotHour,
+    });
+  }, [historyActiveMinutes, loadHistorySnapshot, view]);
+
+  const stepHistorySnapshot = useCallback(
+    async (kind: Playback, amount: -1 | 1) => {
+      if (!historySnapshot) return null;
+      const snapshotHour = dayjs
+        .utc(historySnapshot.snapshot_hour)
+        .add(amount, kind === "date" ? "day" : "hour")
+        .toISOString();
+      return await loadHistorySnapshot({
+        activeMinutes: historyActiveMinutes,
+        snapshotHour,
+        direction: amount < 0 ? "backward" : "forward",
+      });
+    },
+    [historyActiveMinutes, historySnapshot, loadHistorySnapshot],
+  );
+
+  useEffect(() => {
+    if (!playback || view !== "history" || snapshotLoading) return;
+    const currentSnapshotHour = historySnapshot?.snapshot_hour;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const next = await stepHistorySnapshot(playback, 1);
+        if (!next || next.snapshot_hour === currentSnapshotHour) {
+          setPlayback(undefined);
+        }
+      })();
+    }, 1000 / playbackSpeed);
+    return () => clearTimeout(timer);
+  }, [
+    historySnapshot?.snapshot_hour,
+    playback,
+    playbackSpeed,
+    snapshotLoading,
+    stepHistorySnapshot,
+    view,
+  ]);
 
   const selectedCountry = overview?.countries.find(
     (country) => country.country_code === selectedGroup,
@@ -242,6 +393,48 @@ export function ActiveUsersMapAdmin() {
           .join(", ")}.`
       : "",
   ].filter(Boolean);
+  const historicalDate = historySnapshot
+    ? dayjs.utc(historySnapshot.snapshot_hour)
+    : undefined;
+  const displaySummary = view === "history" ? historySnapshot : overview;
+  const displayCountries =
+    view === "history"
+      ? (historySnapshot?.countries ?? [])
+      : overview?.countries;
+
+  function selectHistoryDate(value: Dayjs | null) {
+    if (!value || !historicalDate) return;
+    const snapshotHour = historicalDate
+      .year(value.year())
+      .month(value.month())
+      .date(value.date())
+      .toISOString();
+    void loadHistorySnapshot({
+      activeMinutes: historyActiveMinutes,
+      snapshotHour,
+    });
+  }
+
+  function selectHistoryHour(hour: number) {
+    if (!historicalDate) return;
+    void loadHistorySnapshot({
+      activeMinutes: historyActiveMinutes,
+      snapshotHour: historicalDate.hour(hour).toISOString(),
+    });
+  }
+
+  function selectPlotSnapshot(snapshotHour: string) {
+    const activeMinutes = history?.active_minutes ?? plotActiveMinutes;
+    requestedHistorySnapshot.current = snapshotHour;
+    setHistoryActiveMinutes(activeMinutes);
+    setSelectedGroup(undefined);
+    setSelectedUser(undefined);
+    setView("history");
+    if (view === "history" && activeMinutes === historyActiveMinutes) {
+      requestedHistorySnapshot.current = undefined;
+      void loadHistorySnapshot({ activeMinutes, snapshotHour });
+    }
+  }
 
   return (
     <Space vertical size={16} style={{ width: "100%" }}>
@@ -252,16 +445,149 @@ export function ActiveUsersMapAdmin() {
         history is stored. Country-level history includes only accounts that
         enabled Usage metrics and is retained indefinitely as aggregate data.
       </Paragraph>
-      <Segmented
-        value={activeMinutes}
-        options={WINDOW_OPTIONS}
-        onChange={(value) => {
-          setSelectedGroup(undefined);
-          setSelectedUser(undefined);
-          setActiveMinutes(value as ActiveUserMapWindowMinutes);
-        }}
-      />
+      <Space wrap>
+        <Radio.Group
+          buttonStyle="solid"
+          optionType="button"
+          options={[
+            { label: "Live", value: "live" },
+            { label: "History", value: "history" },
+          ]}
+          value={view}
+          onChange={({ target: { value } }) => {
+            const nextView = value as MapView;
+            setPlayback(undefined);
+            setSelectedGroup(undefined);
+            setSelectedUser(undefined);
+            if (nextView === "history") {
+              setHistorySnapshot(undefined);
+            }
+            setView(nextView);
+          }}
+        />
+        <Space>
+          <Text>Active within:</Text>
+          <Radio.Group
+            buttonStyle="solid"
+            optionType="button"
+            options={view === "live" ? WINDOW_OPTIONS : HISTORY_WINDOW_OPTIONS}
+            value={view === "live" ? liveActiveMinutes : historyActiveMinutes}
+            onChange={({ target: { value } }) => {
+              setPlayback(undefined);
+              if (view === "live") {
+                setSelectedGroup(undefined);
+                setSelectedUser(undefined);
+                setLiveActiveMinutes(value as ActiveUserMapWindowMinutes);
+              } else {
+                setHistorySnapshot(undefined);
+                setHistoryActiveMinutes(
+                  value as ActiveUserMapHistoryWindowMinutes,
+                );
+              }
+            }}
+          />
+        </Space>
+        {view === "history" && (
+          <Space>
+            <Text>Date:</Text>
+            <Space.Compact>
+              <Button
+                aria-label="Previous day"
+                disabled={!historicalDate || snapshotLoading}
+                icon={<Icon name="chevron-left" />}
+                onClick={() => void stepHistorySnapshot("date", -1)}
+              />
+              <DatePicker
+                allowClear={false}
+                disabled={!historicalDate || snapshotLoading}
+                format="MMMM D, YYYY"
+                value={historicalDate}
+                onChange={selectHistoryDate}
+              />
+              <Button
+                aria-label="Next day"
+                disabled={!historicalDate || snapshotLoading}
+                icon={<Icon name="chevron-right" />}
+                onClick={() => void stepHistorySnapshot("date", 1)}
+              />
+              <Button
+                aria-label={
+                  playback === "date"
+                    ? "Pause daily playback"
+                    : "Play one day per frame"
+                }
+                disabled={!historicalDate}
+                icon={<Icon name={playback === "date" ? "pause" : "play"} />}
+                onClick={() =>
+                  setPlayback((current) =>
+                    current === "date" ? undefined : "date",
+                  )
+                }
+                type={playback === "date" ? "primary" : "default"}
+              />
+            </Space.Compact>
+          </Space>
+        )}
+        {view === "history" && (
+          <Space>
+            <Text>Time:</Text>
+            <Space.Compact>
+              <Button
+                aria-label="Previous hour"
+                disabled={!historicalDate || snapshotLoading}
+                icon={<Icon name="chevron-left" />}
+                onClick={() => void stepHistorySnapshot("time", -1)}
+              />
+              <Select
+                disabled={!historicalDate || snapshotLoading}
+                options={HOUR_OPTIONS}
+                value={historicalDate?.hour()}
+                onChange={selectHistoryHour}
+                style={{ width: 120 }}
+              />
+              <Button
+                aria-label="Next hour"
+                disabled={!historicalDate || snapshotLoading}
+                icon={<Icon name="chevron-right" />}
+                onClick={() => void stepHistorySnapshot("time", 1)}
+              />
+              <Button
+                aria-label={
+                  playback === "time"
+                    ? "Pause hourly playback"
+                    : "Play one hour per frame"
+                }
+                disabled={!historicalDate}
+                icon={<Icon name={playback === "time" ? "pause" : "play"} />}
+                onClick={() =>
+                  setPlayback((current) =>
+                    current === "time" ? undefined : "time",
+                  )
+                }
+                type={playback === "time" ? "primary" : "default"}
+              />
+            </Space.Compact>
+          </Space>
+        )}
+        {view === "history" && (
+          <Space>
+            <Text>Speed:</Text>
+            <Radio.Group
+              buttonStyle="solid"
+              optionType="button"
+              options={SPEED_OPTIONS}
+              value={playbackSpeed}
+              onChange={({ target: { value } }) =>
+                setPlaybackSpeed(Number(value))
+              }
+            />
+          </Space>
+        )}
+      </Space>
       {error && <ShowError error={error} setError={setError} />}
+      {snapshotError && (
+        <ShowError error={snapshotError} setError={setSnapshotError} />
+      )}
       {incompleteMapReasons.length > 0 && overview?.enabled ? (
         <Alert
           showIcon
@@ -280,16 +606,29 @@ export function ActiveUsersMapAdmin() {
       ) : null}
       {overview?.enabled ? (
         <>
-          <ActiveUsersMapSummary
-            total={overview.total_active}
-            mapped={overview.mapped_active}
-            unavailable={overview.unknown_location}
-            onShowUnavailable={() => setSelectedGroup("unknown")}
-          />
+          {displaySummary ? (
+            <ActiveUsersMapSummary
+              total={displaySummary.total_active}
+              mapped={displaySummary.mapped_active}
+              unavailable={displaySummary.unknown_location}
+              onShowUnavailable={
+                view === "live" ? () => setSelectedGroup("unknown") : undefined
+              }
+            />
+          ) : snapshotLoading || loading ? (
+            <div style={{ padding: 48, textAlign: "center" }}>
+              <Spin />
+            </div>
+          ) : null}
           <ActiveUsersMapPlot
-            countries={overview.countries}
-            selectedCountryCode={selectedCountry?.country_code}
-            onSelect={setSelectedGroup}
+            key="active-users-map"
+            countries={displayCountries ?? []}
+            selectedCountryCode={
+              view === "history"
+                ? historyCountry
+                : selectedCountry?.country_code
+            }
+            onSelect={view === "history" ? setHistoryCountry : setSelectedGroup}
           />
           {historyError && (
             <ShowError error={historyError} setError={setHistoryError} />
@@ -297,6 +636,12 @@ export function ActiveUsersMapAdmin() {
           <ActiveUsersMapHistoryPlot
             history={history}
             loading={historyLoading}
+            selectedCountryCode={historyCountry}
+            selectedSnapshotHour={
+              view === "history" ? historySnapshot?.snapshot_hour : undefined
+            }
+            onCountryChange={setHistoryCountry}
+            onSelectSnapshot={selectPlotSnapshot}
           />
         </>
       ) : loading && !overview ? (
@@ -305,7 +650,7 @@ export function ActiveUsersMapAdmin() {
         </div>
       ) : null}
       <Drawer
-        open={selectedGroup != null}
+        open={view === "live" && selectedGroup != null}
         placement="right"
         size={drawerWidth ?? DEFAULT_DRAWER_WIDTH}
         resizable={{

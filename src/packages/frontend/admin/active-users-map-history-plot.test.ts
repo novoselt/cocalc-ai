@@ -1,10 +1,10 @@
-import type { ActiveUserMapDailyHistoryPoint } from "@cocalc/conat/inter-bay/api";
+import type { ActiveUserMapHistoryPoint } from "@cocalc/conat/inter-bay/api";
 import { buildActiveUsersHistoryPlotSeries } from "./active-users-map-history-plot";
 
 function point(
   snapshot_hour: string,
   total_active: number,
-): ActiveUserMapDailyHistoryPoint {
+): ActiveUserMapHistoryPoint {
   return {
     snapshot_hour,
     captured_at: snapshot_hour,
@@ -13,6 +13,7 @@ function point(
     unknown_location: 0,
     usage_metrics_not_enabled: 0,
     bay_count: 1,
+    active_count: total_active,
   };
 }
 
@@ -28,19 +29,19 @@ describe("buildActiveUsersHistoryPlotSeries", () => {
         actual_date: "2026-08-01",
         display_date: "2026-08-01",
         snapshot_hour: "2026-08-01T23:00:00.000Z",
-        total_active: 10,
+        active_count: 10,
       },
       {
         actual_date: "2026-08-02",
         display_date: "2026-08-02",
         snapshot_hour: null,
-        total_active: null,
+        active_count: null,
       },
       {
         actual_date: "2026-08-03",
         display_date: "2026-08-03",
         snapshot_hour: "2026-08-03T23:00:00.000Z",
-        total_active: 12,
+        active_count: 12,
       },
     ]);
     expect(result.previous).toEqual([]);
@@ -55,13 +56,34 @@ describe("buildActiveUsersHistoryPlotSeries", () => {
     expect(result.current.at(-1)).toMatchObject({
       actual_date: "2026-08-07",
       display_date: "2026-08-07",
-      total_active: 15,
+      active_count: 15,
     });
     expect(result.previous.at(-1)).toEqual({
       actual_date: "2025-08-08",
       display_date: "2026-08-07",
       snapshot_hour: "2025-08-08T23:00:00.000Z",
-      total_active: 8,
+      active_count: 8,
+    });
+  });
+
+  it("aligns hourly history by four weeks", () => {
+    const result = buildActiveUsersHistoryPlotSeries(
+      [
+        point("2026-07-10T14:00:00.000Z", 6),
+        point("2026-08-07T14:00:00.000Z", 14),
+      ],
+      60,
+    );
+
+    expect(result.current.at(-1)).toMatchObject({
+      actual_date: "2026-08-07T14:00:00.000Z",
+      active_count: 14,
+    });
+    expect(result.previous.at(-1)).toEqual({
+      actual_date: "2026-07-10T14:00:00.000Z",
+      display_date: "2026-08-07T14:00:00.000Z",
+      snapshot_hour: "2026-07-10T14:00:00.000Z",
+      active_count: 6,
     });
   });
 });

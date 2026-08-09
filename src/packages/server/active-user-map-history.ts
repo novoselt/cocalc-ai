@@ -5,10 +5,12 @@
 
 import getLogger from "@cocalc/backend/logger";
 import type {
-  ActiveUserMapDailyHistory,
-  ActiveUserMapDailyHistoryPoint,
   ActiveUserMapHistoryAccount,
+  ActiveUserMapHistoryPoint,
   ActiveUserMapHistoryReport,
+  ActiveUserMapHistorySeries,
+  ActiveUserMapHistorySnapshot,
+  ActiveUserMapHistoryWindowMinutes,
 } from "@cocalc/conat/inter-bay/api";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
@@ -22,6 +24,7 @@ const logger = getLogger("server:active-user-map-history");
 
 export const ACTIVE_USER_MAP_HISTORY_WINDOWS = [60, 1440] as const;
 export const ACTIVE_USER_MAP_DAILY_HISTORY_DAYS = 2 * 364;
+export const ACTIVE_USER_MAP_HOURLY_HISTORY_DAYS = 2 * 28;
 // Country-level aggregates are small and retain long-term analytical value.
 // Set this to a positive number to enable automatic pruning.
 export const ACTIVE_USER_MAP_HISTORY_RETENTION_MONTHS: number | null = null;
@@ -191,58 +194,184 @@ function snapshotHour(capturedAt: Date): Date {
   return value;
 }
 
-type DailyHistoryRow = Omit<
-  ActiveUserMapDailyHistoryPoint,
+type HistoryPointRow = Omit<
+  ActiveUserMapHistoryPoint,
   "snapshot_hour" | "captured_at"
 > & {
   snapshot_hour: Date | string;
   captured_at: Date | string;
 };
 
-export async function getActiveUserMapDailyHistory({
+function normalizeHistoryCountryCode(countryCode?: string): string | null {
+  if (countryCode == null || !countryCode.trim()) return null;
+  const normalized = countryCode.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(normalized)) {
+    throw Error("country_code must be a two-letter country code");
+  }
+  return normalized;
+}
+
+function validateHistoryWindow(
+  activeMinutes: number,
+): asserts activeMinutes is ActiveUserMapHistoryWindowMinutes {
+  if (
+    !ACTIVE_USER_MAP_HISTORY_WINDOWS.includes(activeMinutes as HistoryWindow)
+  ) {
+    throw Error("active_minutes must be 60 or 1440");
+  }
+}
+
+export async function getActiveUserMapHistorySeries({
   client,
-  days = ACTIVE_USER_MAP_DAILY_HISTORY_DAYS,
+  active_minutes,
+  days = active_minutes === 1440
+    ? ACTIVE_USER_MAP_DAILY_HISTORY_DAYS
+    : ACTIVE_USER_MAP_HOURLY_HISTORY_DAYS,
+  country_code,
   now = new Date(),
 }: {
   client?: PoolClient;
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
   days?: number;
+  country_code?: string;
   now?: Date;
-} = {}): Promise<ActiveUserMapDailyHistory> {
+}): Promise<ActiveUserMapHistorySeries> {
+  validateHistoryWindow(active_minutes);
   if (!Number.isInteger(days) || days < 1 || days > 10 * 365) {
     throw Error("days must be an integer between 1 and 3650");
   }
   if (!Number.isFinite(now.valueOf())) {
     throw Error("now must be a valid date");
   }
+  const countryCode = normalizeHistoryCountryCode(country_code);
   const pool = client ?? getPool();
-  const { rows } = await pool.query<DailyHistoryRow>(
-    `WITH daily AS (
-       SELECT DISTINCT ON (
-                (snapshot_hour AT TIME ZONE 'UTC')::date
-              )
-              snapshot_hour, captured_at, total_active, mapped_active,
-              unknown_location, usage_metrics_not_enabled, bay_count
-         FROM active_user_map_history_snapshots
-        WHERE active_minutes = 1440
-          AND snapshot_hour > $1::timestamptz - ($2::int * INTERVAL '1 day')
-          AND snapshot_hour <= $1::timestamptz
-        ORDER BY (snapshot_hour AT TIME ZONE 'UTC')::date,
-                 snapshot_hour DESC
-     )
-     SELECT snapshot_hour, captured_at, total_active, mapped_active,
-            unknown_location, usage_metrics_not_enabled, bay_count
-       FROM daily
-      ORDER BY snapshot_hour`,
-    [now, days],
+  const sampleQuery =
+    active_minutes === 1440
+      ? `SELECT DISTINCT ON ((snapshot_hour AT TIME ZONE 'UTC')::date)
+                snapshot_hour, captured_at, total_active, mapped_active,
+                unknown_location, usage_metrics_not_enabled, bay_count
+           FROM active_user_map_history_snapshots
+          WHERE active_minutes = $1
+            AND snapshot_hour > $2::timestamptz - ($3::int * INTERVAL '1 day')
+            AND snapshot_hour <= $2::timestamptz
+          ORDER BY (snapshot_hour AT TIME ZONE 'UTC')::date,
+                   snapshot_hour DESC`
+      : `SELECT snapshot_hour, captured_at, total_active, mapped_active,
+                unknown_location, usage_metrics_not_enabled, bay_count
+           FROM active_user_map_history_snapshots
+          WHERE active_minutes = $1
+            AND snapshot_hour > $2::timestamptz - ($3::int * INTERVAL '1 day')
+            AND snapshot_hour <= $2::timestamptz`;
+  const { rows } = await pool.query<HistoryPointRow>(
+    `WITH samples AS (${sampleQuery})
+     SELECT s.snapshot_hour, s.captured_at, s.total_active, s.mapped_active,
+            s.unknown_location, s.usage_metrics_not_enabled, s.bay_count,
+            CASE WHEN $4::text IS NULL THEN s.total_active
+                 ELSE COALESCE(c.active_count, 0)
+             END AS active_count
+       FROM samples s
+       LEFT JOIN active_user_map_history_countries c
+         ON c.snapshot_hour = s.snapshot_hour
+        AND c.active_minutes = $1
+        AND c.country_code = $4
+      ORDER BY s.snapshot_hour`,
+    [active_minutes, now, days, countryCode],
+  );
+  const countryRows = await pool.query<{ country_code: string }>(
+    `SELECT DISTINCT country_code
+       FROM active_user_map_history_countries
+      WHERE active_minutes = $1
+        AND snapshot_hour > $2::timestamptz - ($3::int * INTERVAL '1 day')
+        AND snapshot_hour <= $2::timestamptz
+      ORDER BY country_code`,
+    [active_minutes, now, days],
   );
   return {
-    active_minutes: 1440,
+    active_minutes,
     days,
+    country_code: countryCode,
+    country_codes: countryRows.rows.map(({ country_code }) => country_code),
     points: rows.map((row) => ({
       ...row,
       snapshot_hour: new Date(row.snapshot_hour).toISOString(),
       captured_at: new Date(row.captured_at).toISOString(),
     })),
+  };
+}
+
+type HistorySnapshotRow = Omit<
+  ActiveUserMapHistorySnapshot,
+  "snapshot_hour" | "captured_at" | "active_minutes" | "countries"
+> & {
+  snapshot_hour: Date | string;
+  captured_at: Date | string;
+};
+
+export async function getActiveUserMapHistorySnapshot({
+  client,
+  active_minutes,
+  snapshot_hour,
+  direction = "nearest",
+}: {
+  client?: PoolClient;
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  snapshot_hour?: string;
+  direction?: "backward" | "forward" | "nearest";
+}): Promise<ActiveUserMapHistorySnapshot | null> {
+  validateHistoryWindow(active_minutes);
+  const requested = snapshot_hour == null ? null : new Date(snapshot_hour);
+  if (requested && !Number.isFinite(requested.valueOf())) {
+    throw Error("snapshot_hour must be a valid timestamp");
+  }
+  if (!(["backward", "forward", "nearest"] as const).includes(direction)) {
+    throw Error("invalid snapshot direction");
+  }
+  const pool = client ?? getPool();
+  const boundary =
+    requested == null
+      ? ""
+      : direction === "backward"
+        ? "AND snapshot_hour <= $2::timestamptz"
+        : direction === "forward"
+          ? "AND snapshot_hour >= $2::timestamptz"
+          : "";
+  const ordering =
+    requested == null
+      ? "snapshot_hour DESC"
+      : direction === "nearest"
+        ? "ABS(EXTRACT(EPOCH FROM snapshot_hour - $2::timestamptz)), snapshot_hour DESC"
+        : direction === "backward"
+          ? "snapshot_hour DESC"
+          : "snapshot_hour ASC";
+  const { rows } = await pool.query<HistorySnapshotRow>(
+    `SELECT snapshot_hour, captured_at, total_active, mapped_active,
+            unknown_location, usage_metrics_not_enabled, bay_count
+       FROM active_user_map_history_snapshots
+      WHERE active_minutes = $1
+        ${boundary}
+      ORDER BY ${ordering}
+      LIMIT 1`,
+    requested == null ? [active_minutes] : [active_minutes, requested],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const countryRows = await pool.query<{
+    country_code: string;
+    count: number;
+  }>(
+    `SELECT country_code, active_count AS count
+       FROM active_user_map_history_countries
+      WHERE snapshot_hour = $1
+        AND active_minutes = $2
+      ORDER BY country_code`,
+    [row.snapshot_hour, active_minutes],
+  );
+  return {
+    ...row,
+    active_minutes,
+    snapshot_hour: new Date(row.snapshot_hour).toISOString(),
+    captured_at: new Date(row.captured_at).toISOString(),
+    countries: countryRows.rows,
   };
 }
 

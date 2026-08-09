@@ -9,7 +9,8 @@ import { COOKIE_CONSENT_REVISION } from "@cocalc/util/cookie-consent";
 import { uuid } from "@cocalc/util/misc";
 import {
   aggregateActiveUserMapHistoryReports,
-  getActiveUserMapDailyHistory,
+  getActiveUserMapHistorySeries,
+  getActiveUserMapHistorySnapshot,
   getActiveUserMapHistoryReport,
   pruneActiveUserMapHistory,
   storeActiveUserMapHistorySnapshots,
@@ -237,21 +238,24 @@ describe("active user map history database integration", () => {
               mapped_active: 8 * (index + 1),
               unknown_location: index + 1,
               usage_metrics_not_enabled: index + 1,
-              countries: [],
+              countries: [{ country_code: "CA", active_count: index + 1 }],
             },
           ],
         });
       }
 
       await expect(
-        getActiveUserMapDailyHistory({
+        getActiveUserMapHistorySeries({
           client,
+          active_minutes: 1440,
           days: 3,
           now: new Date("2041-06-03T23:00:00.000Z"),
         }),
       ).resolves.toEqual({
         active_minutes: 1440,
         days: 3,
+        country_code: null,
+        country_codes: ["CA"],
         points: [
           {
             snapshot_hour: hours[2].toISOString(),
@@ -261,6 +265,7 @@ describe("active user map history database integration", () => {
             unknown_location: 3,
             usage_metrics_not_enabled: 3,
             bay_count: 2,
+            active_count: 30,
           },
           {
             snapshot_hour: hours[3].toISOString(),
@@ -270,8 +275,35 @@ describe("active user map history database integration", () => {
             unknown_location: 4,
             usage_metrics_not_enabled: 4,
             bay_count: 2,
+            active_count: 40,
           },
         ],
+      });
+
+      await expect(
+        getActiveUserMapHistorySeries({
+          client,
+          active_minutes: 1440,
+          country_code: "ca",
+          days: 3,
+          now: new Date("2041-06-03T23:00:00.000Z"),
+        }),
+      ).resolves.toMatchObject({
+        country_code: "CA",
+        points: [{ active_count: 3 }, { active_count: 4 }],
+      });
+
+      await expect(
+        getActiveUserMapHistorySnapshot({
+          client,
+          active_minutes: 1440,
+          snapshot_hour: "2041-06-01T18:00:00.000Z",
+          direction: "forward",
+        }),
+      ).resolves.toMatchObject({
+        snapshot_hour: hours[2].toISOString(),
+        total_active: 30,
+        countries: [{ country_code: "CA", count: 3 }],
       });
     } finally {
       await client.query(
