@@ -17,6 +17,13 @@ import type { ChatMessage } from "./types";
 import type { CodexThreadConfig } from "@cocalc/chat";
 import { dateValue, field, historyArray, parentMessageId } from "./access";
 import { type ChatActions } from "./actions";
+import {
+  markCodexResponseTrace,
+  recordCodexBackendAcknowledged,
+  recordCodexResponseFailed,
+  resetCodexUxLatencyForTests,
+  startCodexResponseTrace,
+} from "./codex-ux-latency";
 
 let lastGeneratedAcpMessageMs = 0;
 const ACP_ACK_TIMEOUT_MS = 2 * 60 * 1000;
@@ -25,6 +32,7 @@ const ACP_ACK_BACKOFF_MS = 2000;
 
 export function resetAcpApiStateForTests(): void {
   lastGeneratedAcpMessageMs = 0;
+  resetCodexUxLatencyForTests();
 }
 
 function isRetryableAcpAckError(err: unknown): boolean {
@@ -299,6 +307,11 @@ export async function processAcpLLM({
     });
     return;
   }
+  startCodexResponseTrace({
+    message_id: user_message_id,
+    project_id,
+    send_mode: sendMode,
+  });
   const config = {
     ...(actions.getCodexConfig?.(thread_id) ?? {}),
     ...(acpConfigOverride ?? {}),
@@ -397,6 +410,7 @@ export async function processAcpLLM({
   let acknowledged = false;
   try {
     await ensureChatStatePersisted();
+    markCodexResponseTrace(user_message_id, "chat_state_persisted");
     const acpRequest = {
       project_id,
       prompt: workingInput,
@@ -425,6 +439,10 @@ export async function processAcpLLM({
       } else {
         setState("");
       }
+      recordCodexBackendAcknowledged({
+        message_id: user_message_id,
+        state: response.state ?? "unknown",
+      });
     } else {
       let lastError: unknown;
       for (let attempt = 1; attempt <= ACP_ACK_MAX_ATTEMPTS; attempt += 1) {
@@ -443,6 +461,10 @@ export async function processAcpLLM({
               continue;
             }
             acknowledged = true;
+            recordCodexBackendAcknowledged({
+              message_id: user_message_id,
+              state: response.state ?? "unknown",
+            });
             if (response.state === "queued") {
               setState("queue");
             } else if (response.state === "running") {
@@ -478,6 +500,11 @@ export async function processAcpLLM({
       }
     }
   } catch (err) {
+    recordCodexResponseFailed({
+      message_id: user_message_id,
+      error_name: err instanceof Error ? err.name : "unknown",
+      acknowledged,
+    });
     console.error("ACP turn failed", err);
     // Backend owns the assistant reply row, but if we fail before the backend
     // can even enqueue the turn, we still want the user to see *something*.

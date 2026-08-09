@@ -5,6 +5,7 @@
 
 import {
   UxLatencyTrace,
+  type UxTracePhaseDetails,
   type UxTraceStart,
 } from "@cocalc/frontend/monitoring/ux-latency-trace";
 
@@ -134,6 +135,50 @@ export function startProjectDirectoryOpenTrace({
     surface_visible,
     start,
   });
+}
+
+export function cancelProjectDirectoryOpenTrace(project_id: string): void {
+  const entry = directoryTraces.get(project_id);
+  if (entry?.source !== "project_open") return;
+  clearTimeout(entry.incompleteTimer);
+  if (entry.cleanupTimer != null) clearTimeout(entry.cleanupTimer);
+  directoryTraces.delete(project_id);
+}
+
+export function recordProjectDirectoryOpenIncomplete({
+  project_id,
+  reason,
+}: {
+  project_id: string;
+  reason: string;
+}): void {
+  const entry = directoryTraces.get(project_id);
+  if (entry?.source !== "project_open") return;
+  entry.trace.record("directory_listing_incomplete_v2", {
+    surface_visible: true,
+    details: {
+      reason,
+      trace_source: entry.source,
+      path_depth: pathDepth(entry.path),
+      first_painted: entry.firstPainted,
+      authoritative_painted: entry.authoritativePainted,
+    },
+  });
+  cancelProjectDirectoryOpenTrace(project_id);
+}
+
+export function markProjectDirectoryOpenPhase({
+  project_id,
+  phase,
+  details,
+}: {
+  project_id: string;
+  phase: string;
+  details?: UxTracePhaseDetails;
+}): void {
+  const entry = directoryTraces.get(project_id);
+  if (entry?.source !== "project_open") return;
+  entry.trace.mark(phase, details);
 }
 
 export function startDirectoryNavigationTrace({

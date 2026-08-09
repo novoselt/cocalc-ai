@@ -83,7 +83,12 @@ import {
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
 import { getLogger } from "@cocalc/frontend/logger";
-import { startProjectDirectoryOpenTrace } from "@cocalc/frontend/project/listing/ux-latency";
+import {
+  cancelProjectDirectoryOpenTrace,
+  markProjectDirectoryOpenPhase,
+  recordProjectDirectoryOpenIncomplete,
+  startProjectDirectoryOpenTrace,
+} from "@cocalc/frontend/project/listing/ux-latency";
 import { captureUxTraceStart } from "@cocalc/frontend/monitoring/ux-latency-trace";
 
 import type {
@@ -3345,11 +3350,47 @@ export class ProjectsActions extends Actions<ProjectsState> {
       ? captureUxTraceStart()
       : undefined;
     const host_id = store.getIn(["project_map", opts.project_id, "host_id"]);
+    if (directoryOpenIntent != null) {
+      startProjectDirectoryOpenTrace({
+        project_id: opts.project_id,
+        host_id: typeof host_id === "string" ? host_id : undefined,
+        surface_visible: true,
+        start: directoryOpenIntent,
+      });
+    }
     if (typeof host_id === "string") {
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "host_routing_start",
+        details: { host_info_required: true },
+      });
       // Ensure host routing info is ready before any conat project API calls.
-      await this.ensure_host_info(host_id);
+      try {
+        await this.ensure_host_info(host_id);
+      } catch (err) {
+        recordProjectDirectoryOpenIncomplete({
+          project_id: opts.project_id,
+          reason: "host_routing_failed",
+        });
+        throw err;
+      }
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "host_routing_ready",
+        details: { host_info_required: true },
+      });
+    } else {
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "host_routing_ready",
+        details: { host_info_required: false },
+      });
     }
     const project_actions = redux.getProjectActions(opts.project_id);
+    markProjectDirectoryOpenPhase({
+      project_id: opts.project_id,
+      phase: "project_actions_ready",
+    });
     let relation = store.get_my_group(opts.project_id);
     if (relation == null || ["public", "admin"].includes(relation)) {
       this.fetch_public_project_title(opts.project_id);
@@ -3357,9 +3398,19 @@ export class ProjectsActions extends Actions<ProjectsState> {
     this.hydrateProjectMoveState(project_actions, opts.project_id);
     if (!this.isProjectOpen(opts.project_id)) {
       this.setProjectOpen(opts.project_id);
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "project_open_state_set",
+        details: { restored_session: opts.restore_session === true },
+      });
       if (opts.restore_session) {
         redux.getActions("page").restore_session(opts.project_id);
       }
+    } else {
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "project_already_open",
+      });
     }
     const pstore = project_actions.get_store();
     const activeProjectTab = pstore?.get("active_project_tab");
@@ -3373,29 +3424,53 @@ export class ProjectsActions extends Actions<ProjectsState> {
       (opts.target === "files" ||
         (typeof opts.target === "string" && opts.target.startsWith("files/")))
     ) {
-      startProjectDirectoryOpenTrace({
+      markProjectDirectoryOpenPhase({
         project_id: opts.project_id,
-        host_id: store.getIn(["project_map", opts.project_id, "host_id"]),
-        surface_visible: true,
-        start: directoryOpenIntent,
+        phase: "directory_target_resolved",
       });
+    } else if (directoryOpenIntent != null) {
+      cancelProjectDirectoryOpenTrace(opts.project_id);
     }
     if (opts.target != null) {
-      await project_actions.load_target(
-        opts.target,
-        opts.switch_to,
-        opts.ignore_kiosk,
-        opts.change_history,
-        opts.fragmentId,
-      );
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "target_load_start",
+      });
+      try {
+        await project_actions.load_target(
+          opts.target,
+          opts.switch_to,
+          opts.ignore_kiosk,
+          opts.change_history,
+          opts.fragmentId,
+        );
+      } catch (err) {
+        recordProjectDirectoryOpenIncomplete({
+          project_id: opts.project_id,
+          reason: "target_load_failed",
+        });
+        throw err;
+      }
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "target_loaded",
+      });
     }
     if (opts.switch_to) {
       redux
         .getActions("page")
         .set_active_tab(opts.project_id, opts.change_history);
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "project_foregrounded",
+      });
     }
     // initialize project
     project_actions.init();
+    markProjectDirectoryOpenPhase({
+      project_id: opts.project_id,
+      phase: "project_init_called",
+    });
   };
 
   // tab at old_index taken out and then inserted into the resulting array's new index

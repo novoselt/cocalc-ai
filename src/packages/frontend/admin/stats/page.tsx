@@ -169,6 +169,46 @@ function metricLabel(metric: string): string {
       return "Authoritative directory paint v2";
     case "directory_listing_incomplete_v2":
       return "Incomplete directory listing v2";
+    case "signed_in_app_ready_v2":
+      return "Signed-in application ready v2";
+    case "app_bootstrap_failed_v2":
+      return "Failed application bootstrap v2";
+    case "jupyter_document_ready_v2":
+      return "Jupyter document ready v2";
+    case "jupyter_sync_ready_v2":
+      return "Jupyter sync ready v2";
+    case "jupyter_first_cell_visible_v2":
+      return "Jupyter first cell visible v2";
+    case "jupyter_open_incomplete_v2":
+      return "Incomplete Jupyter open v2";
+    case "jupyter_first_output_v2":
+      return "Jupyter first output v2";
+    case "jupyter_run_complete_v2":
+      return "Jupyter run complete v2";
+    case "jupyter_run_noop_v2":
+      return "Jupyter run no-op v2";
+    case "jupyter_run_incomplete_v2":
+      return "Incomplete Jupyter run v2";
+    case "jupyter_run_failed_v2":
+      return "Failed Jupyter run v2";
+    case "file_upload_complete_v2":
+      return "File upload complete v2";
+    case "file_upload_failed_v2":
+      return "File upload failed v2";
+    case "file_upload_abandoned_v2":
+      return "File upload abandoned v2";
+    case "latex_build_complete_v2":
+      return "LaTeX build complete v2";
+    case "latex_build_failed_v2":
+      return "LaTeX build failed v2";
+    case "codex_backend_ack_v2":
+      return "Codex backend acknowledged v2";
+    case "codex_first_response_visible_v2":
+      return "Codex first response visible v2";
+    case "codex_response_incomplete_v2":
+      return "Incomplete Codex response v2";
+    case "codex_response_failed_v2":
+      return "Failed Codex response v2";
     case "terminal_input_ready_v2":
       return "Terminal input ready v2";
     case "terminal_connect_incomplete_v2":
@@ -263,6 +303,46 @@ function metricHelp(metric: string, segment?: string): string {
       return "Version 2 trace through the first painted one-shot filesystem snapshot. Unlike the first-paint metric, retained cached content cannot satisfy this endpoint.";
     case "directory_listing_incomplete_v2":
       return "Diagnostic version 2 directory trace that did not paint an authoritative snapshot before timeout or supersession.";
+    case "signed_in_app_ready_v2":
+      return "Deep trace from browser navigation start until the signed-in application, account data, site configuration, and first React paint are ready. Navigation, network, bundle/bootstrap, and account milestones are retained without URLs or user content.";
+    case "app_bootstrap_failed_v2":
+      return "Diagnostic browser bootstrap trace that failed while loading or mounting the application.";
+    case "jupyter_document_ready_v2":
+      return "Sampled trace from Jupyter editor initialization until notebook data is available from the optimistic disk path or authoritative realtime path.";
+    case "jupyter_sync_ready_v2":
+      return "Sampled trace from Jupyter editor initialization until the notebook realtime SyncDoc reports ready.";
+    case "jupyter_first_cell_visible_v2":
+      return "Sampled trace through the animation frame after the first notebook cell state becomes renderable. Empty notebooks do not emit this optional endpoint.";
+    case "jupyter_open_incomplete_v2":
+      return "Diagnostic Jupyter-open trace that closed or timed out before both document and realtime sync readiness.";
+    case "jupyter_first_output_v2":
+      return "Sampled trace from Run Cell until the animation frame after the first visible output or running-state change is written.";
+    case "jupyter_run_complete_v2":
+      return "Sampled trace from Run Cell until the Jupyter output stream completes, including project and kernel preparation.";
+    case "jupyter_run_noop_v2":
+      return "Sampled Run Cell trace that found no executable code cells and therefore performed no backend run.";
+    case "jupyter_run_incomplete_v2":
+      return "Diagnostic run trace that ended before a Jupyter runner stream completed.";
+    case "jupyter_run_failed_v2":
+      return "Diagnostic run trace whose Jupyter execution path threw before completion.";
+    case "file_upload_complete_v2":
+      return "Sampled trace from adding a project file to Dropzone until the project-host or hub upload endpoint confirms it was written.";
+    case "file_upload_failed_v2":
+      return "Diagnostic project-file upload that received an error before completion.";
+    case "file_upload_abandoned_v2":
+      return "Diagnostic project-file upload canceled before completion.";
+    case "latex_build_complete_v2":
+      return "Sampled trace from a LaTeX build request through source save, build pipeline completion, preview refresh request, and the following animation frame.";
+    case "latex_build_failed_v2":
+      return "Diagnostic LaTeX build whose save or build pipeline threw before completion.";
+    case "codex_backend_ack_v2":
+      return "Sampled trace from frontend Codex dispatch until the ACP backend acknowledges a queued or running turn.";
+    case "codex_first_response_visible_v2":
+      return "Sampled trace from frontend Codex dispatch through the animation frame after the first nonempty response is rendered.";
+    case "codex_response_incomplete_v2":
+      return "Diagnostic Codex trace that was superseded or did not render a response before timeout.";
+    case "codex_response_failed_v2":
+      return "Diagnostic Codex dispatch that failed before a visible response.";
     case "terminal_input_ready_v2":
       return "Version 2 trace from terminal connection intent until both the routed socket is ready and spawn plus history replay have completed, which is the gate that enables terminal input. Initial connections and reconnects are separate segments.";
     case "terminal_connect_incomplete_v2":

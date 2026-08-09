@@ -5,7 +5,12 @@
 
 import { uuid } from "@cocalc/util/misc";
 
-import { elapsedUxMs, recordUxLatencyEvent, startUxTimer } from "./ux-latency";
+import {
+  elapsedUxMs,
+  getLightweightUxSuccessSampleRate,
+  recordUxLatencyEvent,
+  startUxTimer,
+} from "./ux-latency";
 
 const DEFAULT_STALE_AFTER_MS = 60_000;
 const WALL_CLOCK_SKEW_MS = 10_000;
@@ -54,6 +59,7 @@ export interface UxTraceOptions {
   surface_visible?: boolean;
   stale_after_ms?: number;
   start?: UxTraceStart;
+  sample_successes?: boolean;
 }
 
 export interface UxTraceStart {
@@ -103,6 +109,24 @@ export function classifyUxTraceStaleReason({
   return;
 }
 
+export function isDiagnosticUxMetric(metric: string): boolean {
+  return /(?:failed|failure|incomplete|stale|timeout|stuck|blocked|abandon)/i.test(
+    metric,
+  );
+}
+
+export function shouldSampleUxTrace(id: string, sampleRate: number): boolean {
+  const rate = Math.min(1, Math.max(0, sampleRate));
+  if (rate <= 0) return false;
+  if (rate >= 1) return true;
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 0x1_0000_0000 < rate;
+}
+
 export class UxLatencyTrace {
   public readonly id: string;
   public readonly started_at: string;
@@ -116,6 +140,8 @@ export class UxLatencyTrace {
   private readonly startUx: number;
   private readonly emitted = new Set<string>();
   private readonly phaseDetails: Record<string, UxTracePhaseDetails> = {};
+  private readonly successSampleRate: number;
+  private readonly sampled: boolean;
 
   constructor(private readonly options: UxTraceOptions) {
     const start = options.start ?? captureUxTraceStart();
@@ -127,6 +153,10 @@ export class UxLatencyTrace {
     this.started_at = new Date(this.startWall).toISOString();
     this.startedSurfaceVisible = options.surface_visible;
     this.staleAfterMs = options.stale_after_ms ?? DEFAULT_STALE_AFTER_MS;
+    this.successSampleRate = options.sample_successes
+      ? getLightweightUxSuccessSampleRate()
+      : 1;
+    this.sampled = shouldSampleUxTrace(this.id, this.successSampleRate);
     if (options.source) {
       this.phaseDetails.intent = { source: options.source };
     }
@@ -138,6 +168,16 @@ export class UxLatencyTrace {
 
   mark(phase: string, details?: UxTracePhaseDetails): number {
     const elapsed = this.elapsed();
+    this.markAt(phase, elapsed, details);
+    return elapsed;
+  }
+
+  markAt(
+    phase: string,
+    elapsed_ms: number,
+    details?: UxTracePhaseDetails,
+  ): number {
+    const elapsed = Math.max(0, Math.round(elapsed_ms));
     this.marks[phase] = elapsed;
     if (
       details != null &&
@@ -171,14 +211,19 @@ export class UxLatencyTrace {
             surface_visible_at_start: this.startedSurfaceVisible,
             surface_visible_at_end: options.surface_visible,
           });
+    const metric = staleReason == null ? endpoint : `${endpoint}_stale`;
+    if (!this.sampled && !isDiagnosticUxMetric(metric)) {
+      return true;
+    }
     recordUxLatencyEvent({
       event_type: this.options.event_type,
-      metric: staleReason == null ? endpoint : `${endpoint}_stale`,
+      metric,
       duration_ms: elapsed,
       project_id: this.options.project_id,
       host_id: this.options.host_id,
       client_event_id: this.id,
       started_at: this.started_at,
+      sample_rate: isDiagnosticUxMetric(metric) ? 1 : this.successSampleRate,
       path_ext: options.path_ext,
       editor: options.editor,
       segment: options.segment,

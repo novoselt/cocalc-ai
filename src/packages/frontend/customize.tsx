@@ -96,6 +96,8 @@ export interface CustomizeState {
   stripe_enabled: boolean;
   ssh_remote_target?: string;
   ssh_remote_url?: string;
+  ux_latency_telemetry_enabled: boolean;
+  ux_latency_success_sample_rate: number;
 
   openai_enabled: boolean;
   agent_openai_codex_enabled: boolean;

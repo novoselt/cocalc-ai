@@ -25,8 +25,10 @@ jest.mock("@cocalc/frontend/monitoring/ux-latency-trace", () => ({
 }));
 
 import {
+  cancelProjectDirectoryOpenTrace,
   claimDirectoryListingTrace,
   directoryListingTelemetry,
+  recordProjectDirectoryOpenIncomplete,
   recordDirectoryListingPaint,
   startDirectoryNavigationTrace,
   startProjectDirectoryOpenTrace,
@@ -133,5 +135,53 @@ describe("directory listing UX traces", () => {
     expect((entry.trace as any).records[1].options.details.data_source).toBe(
       "snapshot",
     );
+  });
+
+  it("records routing failures immediately and clears the trace", () => {
+    const project_id = "project-routing-failure";
+    startProjectDirectoryOpenTrace({ project_id, surface_visible: true });
+    const original = claimDirectoryListingTrace({
+      project_id,
+      path: "/home/user",
+      surface_visible: true,
+    });
+
+    recordProjectDirectoryOpenIncomplete({
+      project_id,
+      reason: "host_routing_failed",
+    });
+
+    expect((original.trace as any).records).toEqual([
+      expect.objectContaining({
+        endpoint: "directory_listing_incomplete_v2",
+        options: expect.objectContaining({
+          details: expect.objectContaining({ reason: "host_routing_failed" }),
+        }),
+      }),
+    ]);
+    const replacement = claimDirectoryListingTrace({
+      project_id,
+      path: "/home/user",
+      surface_visible: true,
+    });
+    expect(replacement.trace.id).not.toBe(original.trace.id);
+  });
+
+  it("cancels a project-open trace when target resolution selects a file", () => {
+    const project_id = "project-file-target";
+    startProjectDirectoryOpenTrace({ project_id, surface_visible: true });
+    const original = claimDirectoryListingTrace({
+      project_id,
+      path: "/home/user",
+      surface_visible: true,
+    });
+    cancelProjectDirectoryOpenTrace(project_id);
+    const replacement = claimDirectoryListingTrace({
+      project_id,
+      path: "/home/user",
+      surface_visible: true,
+    });
+    expect((original.trace as any).records).toEqual([]);
+    expect(replacement.trace.id).not.toBe(original.trace.id);
   });
 });

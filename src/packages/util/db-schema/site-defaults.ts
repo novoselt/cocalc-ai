@@ -95,6 +95,8 @@ export type SiteSettingsKeys =
   | "terms_of_service_url"
   | "commercial"
   | "google_analytics"
+  | "ux_latency_telemetry_enabled"
+  | "ux_latency_success_sample_rate"
   | "kucalc"
   | "i18n"
   | "dns"
@@ -752,6 +754,26 @@ export const site_settings_conf: SiteSettings = {
     desc: `A Google Analytics GA4 tag for tracking usage of your site ("G-...").`,
     default: "",
     show: only_cocalc_com,
+    group: "System / Advanced",
+    subgroup: "Analytics",
+  },
+  ux_latency_telemetry_enabled: {
+    name: "Browser UX Latency Telemetry",
+    desc: "Record privacy-bounded browser workflow latency traces for performance engineering. Telemetry is observational and never blocks the measured action.",
+    default: "yes",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["SLA", "Support"],
+    group: "System / Advanced",
+    subgroup: "Analytics",
+  },
+  ux_latency_success_sample_rate: {
+    name: "Browser UX Success Sample Rate",
+    desc: "Fraction from 0 through 1 of successful lightweight workflow traces to retain. Diagnostic failures and incomplete traces are always retained. Core launch SLO traces are not sampled.",
+    default: "0.25",
+    valid: (value) => onlyNonnegFloat(value) && toFloat(value) <= 1,
+    to_val: toFloat,
+    tags: ["SLA", "Support"],
     group: "System / Advanced",
     subgroup: "Analytics",
   },

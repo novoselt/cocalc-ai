@@ -125,11 +125,16 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
+import {
+  afterNextPaint,
+  UxLatencyTrace,
+} from "@cocalc/frontend/monitoring/ux-latency-trace";
 
 const OUTPUT_FPS = 29;
 const DEFAULT_OUTPUT_MESSAGE_LIMIT = 500;
 const STALE_LIVE_RUN_IDLE_CHECK_MS = 10_000;
 const WATCH_RECREATE_WAIT = 3000;
+const JUPYTER_OPEN_INCOMPLETE_AFTER_MS = 45_000;
 
 type LiveRunRenderContext = {
   handlers: globalThis.Map<string, OutputHandler>;
@@ -217,6 +222,10 @@ export class JupyterActions extends JupyterActions0 {
   private openInitMarks: Record<string, number> = {};
   private openInitSummaryLogged = false;
   private openInitFirstVisibleLogged = false;
+  private openUxTrace?: UxLatencyTrace;
+  private openUxIncompleteTimer?: ReturnType<typeof setTimeout>;
+  private openUxDocumentReady = false;
+  private openUxSyncReady = false;
   private runDebugCounter: number = 0;
   private runDebugMode: "off" | "on" | "json" | undefined;
   private workspaceRecordsChange?: EventListener;
@@ -474,6 +483,18 @@ export class JupyterActions extends JupyterActions0 {
       this.openInitMarks = { open_start: 0 };
       this.openInitSummaryLogged = false;
       this.openInitFirstVisibleLogged = false;
+      this.openUxTrace = new UxLatencyTrace({
+        event_type: "jupyter_open",
+        project_id: this.project_id,
+        source: "editor_actions_init",
+        surface_visible: true,
+        stale_after_ms: JUPYTER_OPEN_INCOMPLETE_AFTER_MS,
+        sample_successes: true,
+      });
+      this.openUxIncompleteTimer = setTimeout(() => {
+        this.recordJupyterOpenIncomplete("endpoint_timeout");
+      }, JUPYTER_OPEN_INCOMPLETE_AFTER_MS);
+      (this.openUxIncompleteTimer as any).unref?.();
     }
     this.runDebug("open.init.start", data);
   };
@@ -490,10 +511,71 @@ export class JupyterActions extends JupyterActions0 {
       Date.now() - (this.openInitStartedAt as number),
     );
     this.openInitMarks[phase] = elapsedMs;
+    this.openUxTrace?.markAt(phase, elapsedMs, {
+      source: typeof data.source === "string" ? data.source : undefined,
+      mode: typeof data.mode === "string" ? data.mode : undefined,
+      reason: typeof data.reason === "string" ? data.reason : undefined,
+    });
+    if (phase === "optimistic_ready" || phase === "initial_load_done") {
+      this.recordJupyterDocumentReady(phase);
+    } else if (phase === "initial_load_skipped") {
+      this.recordJupyterDocumentReady("rtc");
+    } else if (phase === "sync_ready") {
+      this.openUxSyncReady = true;
+      this.openUxTrace?.record("jupyter_sync_ready_v2", {
+        path_ext: filename_extension(this.path ?? ""),
+        editor: "jupyter",
+        segment: this.optimisticFastOpenApplied ? "optimistic" : "syncdb",
+        surface_visible: true,
+      });
+      this.maybeFinishJupyterOpenTrace();
+    }
     this.runDebug(`open.${phase}`, {
       elapsedMs,
       ...data,
     });
+  };
+
+  private recordJupyterDocumentReady = (source: string): void => {
+    if (this.openUxDocumentReady) return;
+    this.openUxDocumentReady = true;
+    this.openUxTrace?.record("jupyter_document_ready_v2", {
+      path_ext: filename_extension(this.path ?? ""),
+      editor: "jupyter",
+      segment: source,
+      surface_visible: true,
+      details: {
+        optimistic: this.optimisticFastOpenApplied,
+      },
+    });
+    this.maybeFinishJupyterOpenTrace();
+  };
+
+  private maybeFinishJupyterOpenTrace = (): void => {
+    if (!this.openUxDocumentReady || !this.openUxSyncReady) return;
+    if (this.openUxIncompleteTimer != null) {
+      clearTimeout(this.openUxIncompleteTimer);
+      this.openUxIncompleteTimer = undefined;
+    }
+  };
+
+  private recordJupyterOpenIncomplete = (reason: string): void => {
+    if (this.openUxTrace == null) return;
+    if (this.openUxDocumentReady && this.openUxSyncReady) return;
+    this.openUxTrace.record("jupyter_open_incomplete_v2", {
+      path_ext: filename_extension(this.path ?? ""),
+      editor: "jupyter",
+      surface_visible: true,
+      details: {
+        reason,
+        document_ready: this.openUxDocumentReady,
+        sync_ready: this.openUxSyncReady,
+      },
+    });
+    if (this.openUxIncompleteTimer != null) {
+      clearTimeout(this.openUxIncompleteTimer);
+      this.openUxIncompleteTimer = undefined;
+    }
   };
 
   private handleSyncdbOpenPhase = (payload: {
@@ -564,6 +646,17 @@ export class JupyterActions extends JupyterActions0 {
       cellCount,
     });
     this.maybeLogOpenInitSummary(`first_cell_visible:${source}`);
+    afterNextPaint(() => {
+      this.openUxTrace?.record("jupyter_first_cell_visible_v2", {
+        path_ext: filename_extension(this.path ?? ""),
+        editor: "jupyter",
+        segment: source,
+        surface_visible: true,
+        details: {
+          paint_observer: "state_update_next_animation_frame",
+        },
+      });
+    });
   };
 
   private rememberIgnoredLiveRunId = (runId: string) => {
@@ -1580,6 +1673,7 @@ export class JupyterActions extends JupyterActions0 {
   public async close(): Promise<void> {
     try {
       if (this.isClosed()) return;
+      this.recordJupyterOpenIncomplete("editor_closed");
       this.reconnectResource?.close();
       this.reconnectResource = undefined;
       this.projectStore?.removeListener?.(
@@ -3127,6 +3221,8 @@ export class JupyterActions extends JupyterActions0 {
     let totalChunks = 0;
     let totalMesgs = 0;
     let runError: string | undefined;
+    let runAbortReason: string | undefined;
+    let runCompleted = false;
     const readyTimer = startUxTimer();
     const initialProjectState = this.getProjectRuntimeState();
     const readiness = classifyProjectReadinessUxSegment(
@@ -3148,23 +3244,36 @@ export class JupyterActions extends JupyterActions0 {
       });
       return;
     }
+    const runUxTrace = new UxLatencyTrace({
+      event_type: "jupyter_run",
+      project_id: this.project_id,
+      source: "run_cells",
+      surface_visible: true,
+      stale_after_ms: 10 * 60_000,
+      sample_successes: true,
+    });
+    runUxTrace.mark("run_accepted", { cells_requested: ids.length });
     let client: null | JupyterClient = null;
     try {
       this.runningNow = true;
       this.runDebug("runCells.start", { runId });
       await this.waitUntilProjectIsRunning();
+      runUxTrace.mark("project_running");
       if (this.isClosed()) {
+        runAbortReason = "editor_closed_after_project_start";
         return;
       }
       const cells: InputCell[] = [];
       const kernel = await this.ensureKernelForRun(runId);
       if (!kernel) {
+        runAbortReason = "kernel_unavailable";
         this.runDebug("runCells.abort.no_kernel_ready", {
           runId,
           ids,
         });
         return;
       }
+      runUxTrace.mark("kernel_ready", { kernel });
 
       this.clearMoreOutput(ids);
       for (const id of ids) {
@@ -3214,6 +3323,7 @@ export class JupyterActions extends JupyterActions0 {
         ids: cells.map((x) => x.id),
       });
       if (cells.length === 0) {
+        runAbortReason = "no_runnable_cells";
         this.runDebug("runCells.abort.no_runnable_cells", {
           runId,
           requestedIds: ids,
@@ -3228,6 +3338,8 @@ export class JupyterActions extends JupyterActions0 {
       const limit = opts.limit ?? this.getMessageLimit();
       client = await this.getJupyterClient();
       if (client == null || this.isClosed()) {
+        runAbortReason =
+          client == null ? "client_unavailable" : "editor_closed";
         this.runDebug("runCells.abort.no_client_or_closed", {
           runId,
           hasClient: client != null,
@@ -3247,6 +3359,7 @@ export class JupyterActions extends JupyterActions0 {
         },
       });
       runnerStartedAt = Date.now();
+      runUxTrace.mark("runner_started", { kernel });
       recordUxLatencyEvent({
         event_type: "project_ready",
         metric: "project_jupyter_ready",
@@ -3290,6 +3403,19 @@ export class JupyterActions extends JupyterActions0 {
           onFirstWrite: () => {
             if (firstWriteAt == null) {
               firstWriteAt = Date.now();
+              afterNextPaint(() => {
+                runUxTrace.record("jupyter_first_output_v2", {
+                  path_ext: filename_extension(this.path ?? ""),
+                  editor: "jupyter",
+                  segment: readiness.segment,
+                  surface_visible: true,
+                  details: {
+                    cells: cells.length,
+                    kernel,
+                    paint_observer: "state_update_next_animation_frame",
+                  },
+                });
+              });
             }
           },
         });
@@ -3423,6 +3549,7 @@ export class JupyterActions extends JupyterActions0 {
         chunkNo: totalChunks,
         totalMesgs,
       });
+      runCompleted = true;
       if (this.isClosed()) {
         return;
       }
@@ -3435,6 +3562,16 @@ export class JupyterActions extends JupyterActions0 {
       }, 1000);
     } catch (err) {
       runError = `${err}`;
+      runUxTrace.record("jupyter_run_failed_v2", {
+        path_ext: filename_extension(this.path ?? ""),
+        editor: "jupyter",
+        segment: readiness.segment,
+        surface_visible: true,
+        details: {
+          error_name: err instanceof Error ? err.name : "unknown",
+          runner_started: runnerStartedAt != null,
+        },
+      });
       this.runDebug("runCells.error", {
         runId,
         err: `${err}`,
@@ -3447,6 +3584,25 @@ export class JupyterActions extends JupyterActions0 {
         this.set_error(err);
       }
     } finally {
+      if (runError == null) {
+        const endpoint = runCompleted
+          ? "jupyter_run_complete_v2"
+          : runAbortReason === "no_runnable_cells"
+            ? "jupyter_run_noop_v2"
+            : "jupyter_run_incomplete_v2";
+        runUxTrace.record(endpoint, {
+          path_ext: filename_extension(this.path ?? ""),
+          editor: "jupyter",
+          segment: readiness.segment,
+          surface_visible: true,
+          details: {
+            reason: runCompleted ? "stream_complete" : runAbortReason,
+            cells: cellsPrepared,
+            runner_started: runnerStartedAt != null,
+            first_output: firstWriteAt != null,
+          },
+        });
+      }
       if (this.isClosed()) return;
       this.rememberIgnoredLiveRunId(runId);
       this.runningNow = false;

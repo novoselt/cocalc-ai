@@ -2,11 +2,13 @@
 
 import { act, render, waitFor } from "@testing-library/react";
 import { BlobUpload, FileUploadWrapper } from "./file-upload";
+import { configureUxLatency } from "./monitoring/ux-latency";
 
 let latestDropzone: any;
 const mockEnsureProjectHostBrowserSessionForProject = jest.fn();
 const mockRouteProjectHostHttpUrl = jest.fn();
 const mockLog = jest.fn();
+const mockRecordUxLatencyEvent = jest.fn();
 
 (globalThis as any).$ = {
   extend: (...args: any[]) => {
@@ -71,6 +73,12 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
         mockEnsureProjectHostBrowserSessionForProject(...args),
       routeProjectHostHttpUrl: (...args: any[]) =>
         mockRouteProjectHostHttpUrl(...args),
+      hub: {
+        system: {
+          recordUxLatencyEvent: (...args: any[]) =>
+            mockRecordUxLatencyEvent(...args),
+        },
+      },
     },
   },
 }));
@@ -84,6 +92,8 @@ describe("BlobUpload", () => {
     mockRouteProjectHostHttpUrl.mockImplementation(
       async ({ url }) => `https://host.example${url}`,
     );
+    mockRecordUxLatencyEvent.mockReset().mockResolvedValue(undefined);
+    configureUxLatency({ telemetry_enabled: true, success_sample_rate: 1 });
   });
 
   it("routes project file uploads directly to the project host", async () => {
@@ -133,7 +143,7 @@ describe("BlobUpload", () => {
     });
 
     expect(latestDropzone.handlers.addedfile).toHaveLength(2);
-    expect(latestDropzone.handlers.sending).toHaveLength(2);
+    expect(latestDropzone.handlers.sending).toHaveLength(3);
     expect(latestDropzone.handlers.complete).toHaveLength(1);
 
     act(() => {
@@ -155,6 +165,46 @@ describe("BlobUpload", () => {
       action: "uploaded",
       file: "/home/user/data.csv",
     });
+  });
+
+  it("records project upload completion without exposing its path", async () => {
+    render(
+      <FileUploadWrapper
+        show_upload={false}
+        project_id="project-1"
+        dest_path="/home/user/private"
+      >
+        <div>body</div>
+      </FileUploadWrapper>,
+    );
+
+    await waitFor(() => {
+      expect(latestDropzone).toBeTruthy();
+    });
+
+    const file = { name: "data.csv", size: 1234 };
+    act(() => {
+      for (const handler of latestDropzone.handlers.addedfile) handler(file);
+      for (const handler of latestDropzone.handlers.sending) {
+        handler(file, {}, { append: jest.fn() });
+      }
+      for (const handler of latestDropzone.handlers.success) handler(file);
+    });
+
+    await waitFor(() => {
+      expect(mockRecordUxLatencyEvent).toHaveBeenCalledWith({
+        event: expect.objectContaining({
+          event_type: "file_upload",
+          metric: "file_upload_complete_v2",
+          path_ext: "csv",
+          project_id: "project-1",
+          sample_rate: 1,
+        }),
+      });
+    });
+    expect(JSON.stringify(mockRecordUxLatencyEvent.mock.calls)).not.toContain(
+      "/home/user/private",
+    );
   });
 
   it("falls back to the hub upload route when project-host upload routing is unavailable", async () => {

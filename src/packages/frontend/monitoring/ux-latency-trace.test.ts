@@ -1,4 +1,8 @@
-import { classifyUxTraceStaleReason } from "./ux-latency-trace";
+import {
+  classifyUxTraceStaleReason,
+  isDiagnosticUxMetric,
+  shouldSampleUxTrace,
+} from "./ux-latency-trace";
 
 const BASE = {
   elapsed_ms: 1000,
@@ -38,5 +42,24 @@ describe("classifyUxTraceStaleReason", () => {
     expect(
       classifyUxTraceStaleReason({ ...BASE, visibility_changed: true }),
     ).toBe("page_hidden");
+  });
+});
+
+describe("UX trace sampling", () => {
+  it("has stable per-trace decisions and honors boundary rates", () => {
+    expect(shouldSampleUxTrace("trace-1", 0)).toBe(false);
+    expect(shouldSampleUxTrace("trace-1", 1)).toBe(true);
+    const decisions = Array.from({ length: 1000 }, (_, i) =>
+      shouldSampleUxTrace(`trace-${i}`, 0.25),
+    );
+    expect(decisions.filter(Boolean).length).toBeGreaterThan(200);
+    expect(decisions.filter(Boolean).length).toBeLessThan(300);
+  });
+
+  it("always recognizes diagnostic endpoints", () => {
+    expect(isDiagnosticUxMetric("upload_failed_v2")).toBe(true);
+    expect(isDiagnosticUxMetric("jupyter_open_incomplete_v2")).toBe(true);
+    expect(isDiagnosticUxMetric("file_content_paint_v2_stale")).toBe(true);
+    expect(isDiagnosticUxMetric("file_content_paint_v2")).toBe(false);
   });
 });

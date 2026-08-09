@@ -17,9 +17,15 @@ import { useStudentProjectFunctionality } from "@cocalc/frontend/course";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { labels } from "@cocalc/frontend/i18n";
 import { MAX_BLOB_SIZE } from "@cocalc/util/db-schema/blobs";
-import { defaults, is_array, merge } from "@cocalc/util/misc";
+import {
+  defaults,
+  filename_extension,
+  is_array,
+  merge,
+} from "@cocalc/util/misc";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import { UxLatencyTrace } from "@cocalc/frontend/monitoring/ux-latency-trace";
 
 // very large upload limit -- should be plenty?
 // there is no cost for ingress, and as cocalc is a data platform
@@ -189,6 +195,9 @@ interface FileUploadWrapperProps {
   event_handlers?: {
     addedfile?: Function | Function[];
     complete?: Function | Function[];
+    success?: Function | Function[];
+    error?: Function | Function[];
+    canceled?: Function | Function[];
     sending?: Function | Function[];
     removedfile?: Function | Function[];
   };
@@ -230,6 +239,7 @@ export function FileUploadWrapper({
   const eventsSetUpRef = useRef(false);
   const mouseEvt = useRef<any>(null);
   const destPathRef = useRef(dest_path);
+  const uploadUxTracesRef = useRef(new WeakMap<object, UxLatencyTrace>());
   destPathRef.current = dest_path;
   const configuredUrl = (config as { url?: unknown }).url;
   const hasConfiguredUrl =
@@ -487,12 +497,72 @@ export function FileUploadWrapper({
 
     dropzone.current.on("addedfile", (file) => {
       if (!file) return;
+      if (project_id && typeof file === "object") {
+        const trace = new UxLatencyTrace({
+          event_type: "file_upload",
+          project_id,
+          source: "dropzone_added_file",
+          surface_visible: true,
+          stale_after_ms: 10 * 60_000,
+          sample_successes: true,
+        });
+        trace.mark("upload_queued", {
+          size_bytes: Number.isFinite(file.size) ? file.size : undefined,
+          transport: uploadWithCredentials ? "project_host" : "hub",
+        });
+        uploadUxTracesRef.current.set(file, trace);
+      }
       set_files((prev) => prev.concat([file]));
       log({
         event: "file_action",
         action: "uploaded",
         file: join(destPathRef.current, file.name),
       });
+    });
+
+    dropzone.current.on("sending", (file) => {
+      uploadUxTracesRef.current.get(file)?.mark("upload_started");
+    });
+    dropzone.current.on("success", (file) => {
+      uploadUxTracesRef.current.get(file)?.record("file_upload_complete_v2", {
+        path_ext: filename_extension(`${file?.name ?? ""}`),
+        segment: uploadWithCredentials ? "project_host" : "hub",
+        surface_visible: true,
+        details: {
+          size_bytes: Number.isFinite(file?.size) ? file.size : undefined,
+          chunked: true,
+        },
+      });
+      if (file && typeof file === "object") {
+        uploadUxTracesRef.current.delete(file);
+      }
+    });
+    dropzone.current.on("error", (file, _message, xhr) => {
+      uploadUxTracesRef.current.get(file)?.record("file_upload_failed_v2", {
+        path_ext: filename_extension(`${file?.name ?? ""}`),
+        segment: uploadWithCredentials ? "project_host" : "hub",
+        surface_visible: true,
+        details: {
+          size_bytes: Number.isFinite(file?.size) ? file.size : undefined,
+          http_status: Number.isFinite(xhr?.status) ? xhr.status : undefined,
+        },
+      });
+      if (file && typeof file === "object") {
+        uploadUxTracesRef.current.delete(file);
+      }
+    });
+    dropzone.current.on("canceled", (file) => {
+      uploadUxTracesRef.current.get(file)?.record("file_upload_abandoned_v2", {
+        path_ext: filename_extension(`${file?.name ?? ""}`),
+        segment: uploadWithCredentials ? "project_host" : "hub",
+        surface_visible: true,
+        details: {
+          size_bytes: Number.isFinite(file?.size) ? file.size : undefined,
+        },
+      });
+      if (file && typeof file === "object") {
+        uploadUxTracesRef.current.delete(file);
+      }
     });
   }
 
