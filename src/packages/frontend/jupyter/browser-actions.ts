@@ -129,6 +129,7 @@ import {
   afterNextPaint,
   UxLatencyTrace,
 } from "@cocalc/frontend/monitoring/ux-latency-trace";
+import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 
 const OUTPUT_FPS = 29;
 const DEFAULT_OUTPUT_MESSAGE_LIMIT = 500;
@@ -3237,6 +3238,13 @@ export class JupyterActions extends JupyterActions0 {
     if (this.store?.get("read_only")) {
       this.runDebug("runCells.skip.read_only", { runId });
       return;
+    }
+    if (ids.length) {
+      recordProductActivity({
+        event_name: "project_work",
+        project_id: this.project_id,
+        properties: { action_category: "jupyter_execute" },
+      });
     }
     if (this.runningNow) {
       const runQueue = this.getMutableRunQueue();

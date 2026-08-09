@@ -144,6 +144,7 @@ import { syncdocDiagnosticLog } from "@cocalc/frontend/syncdoc-diagnostics";
 import { open_new_tab } from "@cocalc/frontend/misc";
 import type { FragmentId } from "@cocalc/frontend/misc/fragment-id";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
+import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 import {
   delete_local_storage,
   get_local_storage,
@@ -2267,6 +2268,13 @@ export class BaseEditorActions<
       return;
     }
     const hasUnsavedChanges = this.store.get("has_unsaved_changes");
+    if (hasUnsavedChanges) {
+      recordProductActivity({
+        event_name: "project_work",
+        project_id: this.project_id,
+        properties: { action_category: "editor_save" },
+      });
+    }
     // TODO: Maybe just move this to some explicit menu of actions, which also includes
     // several other formatting actions.
     // Doing this automatically is fraught with error, since cursors aren't precise...

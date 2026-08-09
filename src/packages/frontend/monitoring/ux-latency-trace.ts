@@ -11,6 +11,10 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "./ux-latency";
+import {
+  recordProductActivity,
+  recordProjectEngagedAfterForeground,
+} from "./product-activity";
 
 const DEFAULT_STALE_AFTER_MS = 60_000;
 const WALL_CLOCK_SKEW_MS = 10_000;
@@ -222,6 +226,17 @@ export class UxLatencyTrace {
             surface_visible_at_end: options.surface_visible,
           });
     const metric = staleReason == null ? endpoint : `${endpoint}_stale`;
+    if (
+      staleReason == null &&
+      endpoint === "directory_authoritative_paint_v2" &&
+      this.options.project_id
+    ) {
+      recordProductActivity({
+        event_name: "project_surface_visible",
+        project_id: this.options.project_id,
+      });
+      recordProjectEngagedAfterForeground(this.options.project_id);
+    }
     if (!this.sampled && !isDiagnosticUxMetric(metric)) {
       return true;
     }

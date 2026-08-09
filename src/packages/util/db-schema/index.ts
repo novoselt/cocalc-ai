@@ -52,6 +52,7 @@ import "./email-counter";
 import "./email-auth";
 import "./external-credentials";
 import "./global-config";
+import "./growth-analytics";
 import "./hub-servers";
 import "./instances"; // probably deprecated
 import "./listings";

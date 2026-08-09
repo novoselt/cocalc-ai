@@ -35,6 +35,7 @@ import {
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
 import { UxLatencyTrace } from "@cocalc/frontend/monitoring/ux-latency-trace";
+import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 import {
   classifyProjectReadinessUxSegment,
   ensure_project_running,
@@ -538,6 +539,7 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       });
 
     const handleData = (data: string, kind: TerminalMessageKind) => {
+      if (kind === "user") this.recordTerminalSubmit(data);
       this.sendMessage({ data, kind }, { touch: kind === "user" });
     };
 
@@ -1681,8 +1683,18 @@ export class Terminal<T extends CodeEditorState = CodeEditorState> {
       throw Error("conn_write - only strings");
     }
     if (this.isClosed()) return;
+    this.recordTerminalSubmit(data);
     this.sendMessage({ data, kind: "user" }, { touch: true });
   };
+
+  private recordTerminalSubmit(data: string): void {
+    if (!data.includes("\r") && !data.includes("\n")) return;
+    recordProductActivity({
+      event_name: "project_work",
+      project_id: this.project_id,
+      properties: { action_category: "terminal_submit" },
+    });
+  }
 
   private lastReceivedData: number = 0;
   private lastProjectData: number = 0;

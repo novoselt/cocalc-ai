@@ -4,7 +4,8 @@ Date: 2026-08-04
 
 Last updated: 2026-08-09
 
-Status: proposed for review
+Status: approved; minimum fast release slice implemented, staging validation
+pending
 
 Revision notes for 2026-08-09:
 
@@ -16,6 +17,31 @@ Revision notes for 2026-08-09:
   CoCalc-ai users;
 - make first-project and Codex-guided activation explicit product experiments,
   not merely future dashboard ideas.
+
+Implementation progress for 2026-08-09:
+
+- added the versioned event contract, bounded privacy-safe ingestion API,
+  canonical account profiles/milestones/daily facts, restart-safe materializer,
+  dirty-period repair, and compact metric/retention/weekly serving tables;
+- persisted a per-bay canonical coverage boundary so legacy accounts may count
+  toward post-launch activity without being misrepresented as new signup or
+  retention cohorts;
+- replaced `/admin/retention` request-time scans with one bounded dashboard RPC
+  over serving tables, including freshness, backlog, definition, coverage, and
+  partial-period labels;
+- added canonical semantic instrumentation for account creation/verification,
+  project creation/visible surface, foreground engagement, editor/terminal/
+  Jupyter work, and AI prompt submission without recording user content;
+- added focused validation for payload rejection, activity semantics, serving
+  queries, idempotent schema creation, duplicate delivery, durable watermarks,
+  and restart-safe materialization;
+- retained the active-user location snapshots as a separate regional-adoption
+  series rather than mislabeling them as canonical retention;
+- deferred pre-account anonymous funnel events, provider delivery webhooks,
+  experiment assignment, guided onboarding UI, unit economics, multibay global
+  aggregate publication, and historical legacy-proxy backfill to subsequent
+  phases. The schema and event vocabulary reserve these extensions without
+  putting them on the `/admin/retention` request path.
 
 ## Objective
 

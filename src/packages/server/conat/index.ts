@@ -57,6 +57,7 @@ import startPurchasesMaintenanceLoop from "@cocalc/server/purchases/maintenance"
 import { startLroExpirationMaintenance } from "@cocalc/server/lro/expiration-maintenance";
 import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-retention-maintenance";
 import { startActiveUserMapHistoryMaintenance } from "@cocalc/server/active-user-map-history";
+import { startGrowthAnalyticsMaintenance } from "@cocalc/server/growth-analytics/maintenance";
 
 export { loadConatConfiguration };
 
@@ -130,6 +131,7 @@ export function startConatApiBackgroundWorkers(): void {
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();
     startActiveUserMapHistoryMaintenance();
+    startGrowthAnalyticsMaintenance();
     startHostRuntimeFleetRolloutWorker();
     startExamHostMaintenance();
   }

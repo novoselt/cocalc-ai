@@ -24,6 +24,7 @@ import {
   resetCodexUxLatencyForTests,
   startCodexResponseTrace,
 } from "./codex-ux-latency";
+import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 
 let lastGeneratedAcpMessageMs = 0;
 const ACP_ACK_TIMEOUT_MS = 2 * 60 * 1000;
@@ -307,6 +308,11 @@ export async function processAcpLLM({
     });
     return;
   }
+  recordProductActivity({
+    event_name: "ai_prompt_submitted",
+    project_id,
+    properties: { action_category: "ai_prompt" },
+  });
   startCodexResponseTrace({
     message_id: user_message_id,
     project_id,

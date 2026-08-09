@@ -13,6 +13,7 @@ import { updateClusterAccountEmailAddressVerified } from "@cocalc/server/inter-b
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import { is_valid_email_address as isValidEmailAddress } from "@cocalc/util/misc";
+import { recordServerGrowthEvent } from "@cocalc/server/growth-analytics/server-events";
 
 function normalizeEmailAddress(email_address: string): string {
   const value = `${email_address ?? ""}`.trim().toLowerCase();
@@ -111,6 +112,12 @@ export async function redeemVerifyEmailLocal(
   await updateClusterAccountEmailAddressVerified({
     account_id,
     email_address_verified: true,
+  });
+  recordServerGrowthEvent({
+    account_id,
+    event_name: "identity_proved",
+    source_component: "auth",
+    properties: { auth_method: "email_link" },
   });
 }
 
