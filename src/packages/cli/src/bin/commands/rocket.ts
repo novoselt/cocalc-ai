@@ -12,6 +12,7 @@ import https from "node:https";
 import { homedir } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { Command } from "commander";
+import { mapParallelLimit } from "@cocalc/util/async-utils";
 
 import { buildCookieHeader } from "../../core/auth-cookies";
 import { applyAuthProfile, loadAuthConfig } from "../../core/auth-config";
@@ -602,7 +603,11 @@ async function runHostRouteHealth({
   }
   const resolvedProbes = [
     ...probes,
-    ...(await runConcurrent(probeTasks, probeConcurrency)),
+    ...(await mapParallelLimit(
+      probeTasks,
+      async (probe) => await probe(),
+      probeConcurrency,
+    )),
   ];
   const probesMs = Date.now() - probesStarted;
   return {
@@ -620,24 +625,6 @@ async function runHostRouteHealth({
       total: Date.now() - totalStarted,
     },
   };
-}
-
-async function runConcurrent<T>(
-  tasks: Array<() => Promise<T>>,
-  concurrency: number,
-): Promise<T[]> {
-  const results = new Array<T>(tasks.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(tasks.length, concurrency) }, async () => {
-      while (true) {
-        const index = next++;
-        if (index >= tasks.length) return;
-        results[index] = await tasks[index]();
-      }
-    }),
-  );
-  return results;
 }
 
 function resolveAuthCookieForHealth({

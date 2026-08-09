@@ -18,6 +18,7 @@ import type {
 import type { LroStatus, LroSummary } from "@cocalc/conat/hub/api/lro";
 import { lroStreamName } from "@cocalc/conat/lro/names";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
+import { mapParallelLimit } from "@cocalc/util/async-utils";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
@@ -556,17 +557,16 @@ async function handleCourseReconfigureOpUnlocked(
   }
   await updateProgress({ op, results });
 
-  let next = 0;
-  async function worker() {
-    while (next < results.length) {
-      const result = results[next++];
-      if (result.status === "done") continue;
+  await mapParallelLimit(
+    results,
+    async (result) => {
+      if (result.status === "done") return;
       const request = requestsByKey.get(result.key);
-      if (!request) continue;
+      if (!request) return;
       const current = await getLro(op.op_id);
       if (current?.status === "canceled" || current?.status === "expired") {
         result.status = "canceled";
-        continue;
+        return;
       }
       result.status = "running";
       result.error = undefined;
@@ -588,13 +588,8 @@ async function handleCourseReconfigureOpUnlocked(
         result.error = `${err}`;
       }
       await updateProgress({ op, results });
-    }
-  }
-  await Promise.all(
-    Array.from(
-      { length: Math.min(DEFAULT_ITEM_PARALLEL, results.length || 1) },
-      () => worker(),
-    ),
+    },
+    DEFAULT_ITEM_PARALLEL,
   );
   const current = await getLro(op.op_id);
   if (current?.status === "canceled" || current?.status === "expired") {

@@ -310,20 +310,29 @@ export async function async_as_callback(
   }
 }
 
-// From https://stackoverflow.com/questions/70470728/how-can-i-execute-some-async-tasks-in-parallel-with-limit-in-generator-function
-export async function mapParallelLimit(values, fn, max = 10) {
-  const promises = new Set();
+export async function mapParallelLimit<T, R>(
+  values: readonly T[],
+  fn: (value: T, index: number) => Promise<R>,
+  max = 10,
+): Promise<R[]> {
+  if (!Number.isInteger(max) || max < 1) {
+    throw new RangeError("mapParallelLimit max must be a positive integer");
+  }
+  const results = new Array<R>(values.length);
+  let next = 0;
 
-  for (const i in values) {
-    while (promises.size >= max) {
-      await Promise.race(promises.values());
+  async function worker(): Promise<void> {
+    while (true) {
+      const index = next++;
+      if (index >= values.length) return;
+      results[index] = await fn(values[index], index);
     }
-
-    let promise = fn(values[i], i).finally(() => promises.delete(promise));
-    promises.add(promise);
   }
 
-  return Promise.all(promises.values());
+  await Promise.all(
+    Array.from({ length: Math.min(values.length, max) }, () => worker()),
+  );
+  return results;
 }
 
 export async function parallelHandler({
