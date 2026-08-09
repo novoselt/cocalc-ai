@@ -37,11 +37,20 @@ Implementation progress for 2026-08-09:
   and restart-safe materialization;
 - retained the active-user location snapshots as a separate regional-adoption
   series rather than mislabeling them as canonical retention;
+- implemented a versioned, account-home-persisted first-run flow on the Projects
+  page for invitation acceptance, prepared projects, personal/team/site access,
+  Jupyter, SageMath, terminal/code, LaTeX, teaching, and user-initiated Codex;
+- made RootFS selection site-configurable through documented
+  `onboarding:*` catalog tags, retained advanced project creation as an escape
+  hatch, and removed the legacy automatic empty-project creation race;
+- preserved course scope/context for both email-only and existing-account
+  invitations, and added bounded browser analytics for onboarding exposure,
+  project-create start, readiness, entry, completion, and abandonment;
 - deferred pre-account anonymous funnel events, provider delivery webhooks,
-  experiment assignment, guided onboarding UI, unit economics, multibay global
-  aggregate publication, and historical legacy-proxy backfill to subsequent
-  phases. The schema and event vocabulary reserve these extensions without
-  putting them on the `/admin/retention` request path.
+  experiment assignment, unit economics, multibay global aggregate publication,
+  and historical legacy-proxy backfill to subsequent phases. The schema and
+  event vocabulary reserve these extensions without putting them on the
+  `/admin/retention` request path.
 
 ## Objective
 
@@ -1242,28 +1251,34 @@ activation.
 
 ### Experiment Structure and Rollout
 
-Do not launch both changes globally without preserving a baseline. Recommended
-initial variants are:
+Decision update (2026-08-09): ship the first-run wizard as the default after
+scenario-based staging acceptance rather than withholding it from a control
+cohort. Current activation is poor enough, the intervention follows standard
+onboarding practice, and a few hundred daily signups would make a long-running
+multi-variant test both slow and operationally distracting. Measure release
+cohorts and weekday/acquisition-adjusted before/after outcomes instead. Preserve
+the event dimensions needed for a controlled experiment if a later,
+genuinely uncertain onboarding choice warrants one.
 
-- control: current first-project experience;
-- project wizard only;
-- project wizard plus optional Codex-guided task.
-
-If sample size permits, a later factorial design can isolate the Codex effect.
-Assign before the first onboarding surface, stratify at least by acquisition and
-legacy/invite eligibility, and retain assignment even across reloads. Analyze
-institutional/course bursts separately so one class signup does not decide the
-general consumer experience.
+Keep a release annotation and compare equivalent weekday and acquisition
+cohorts before and after rollout. Analyze institutional/course bursts
+separately so one class signup does not decide the general consumer experience.
+If a later controlled test is justified, assign before the first onboarding
+surface, stratify by acquisition and legacy/invite eligibility, and retain the
+assignment across reloads.
 
 Roll out in this order:
 
-1. instrument the current account-to-project-to-surface funnel and run it long
-   enough to establish weekday/acquisition baselines;
+1. instrument the account-to-project-to-surface funnel and preserve the current
+   weekday/acquisition baseline;
 2. dogfood and canary the first-project wizard with failure paths forced;
-3. run the controlled first-project experiment;
-4. add Codex guidance behind a separate treatment and budget guardrail;
-5. wait for mature D1/D7 outcomes before choosing a permanent default;
-6. preserve release annotations and experiment versions in all serving data.
+3. make the wizard and user-initiated Codex path the default after staging
+   acceptance;
+4. monitor project creation, visible surface, self-directed work, failures,
+   support contacts, and D1/D7 outcomes by release cohort;
+5. iterate promptly on observed friction rather than waiting for an
+   underpowered A/B test;
+6. preserve release annotations and onboarding versions in serving data.
 
 The first iteration should optimize successful passage to a real work surface,
 not maximize wizard completion. A user who skips onboarding and productively
@@ -1471,10 +1486,10 @@ not block the Phase 3 retention cutover.
 3. Add experiment maturity and guardrail panels.
 4. Instrument and baseline the account-to-first-project-to-visible-surface
    funnel using existing project/directory traces plus canonical milestones.
-5. Run the guided first-project experiment described above.
-6. Run the optional site-funded Codex onboarding treatment, measuring
-   self-directed work and D1/D7 retention rather than guided prompt submission
-   alone.
+5. Operate and iterate on the default guided first-project flow using release
+   cohorts and explicit outcome/failure events.
+6. Evaluate the optional site-funded Codex onboarding path using self-directed
+   work and D1/D7 retention rather than guided prompt submission alone.
 7. Establish a weekly review cadence for acquisition, activation, retention,
    resurrection, cost per assisted activation, and experiment outcomes.
 8. Require new signup/onboarding projects to specify their expected metric and
@@ -1505,8 +1520,9 @@ Recommended new modules:
 - `src/packages/server/conat/api/growth-analytics.ts`
 - `src/packages/frontend/admin/growth-retention.tsx`
 - `src/packages/frontend/monitoring/product-activity.ts`
-- `src/packages/frontend/onboarding/first-project.tsx`
-- `src/packages/frontend/onboarding/codex-first-task.tsx`
+- `src/packages/frontend/projects/onboarding/first-run-onboarding.tsx`
+- `src/packages/frontend/projects/onboarding/state.ts`
+- `src/packages/frontend/projects/onboarding/rootfs.ts`
 
 Existing areas requiring integration:
 
@@ -1532,10 +1548,11 @@ Existing areas requiring integration:
 - admin routing and documentation;
 - table ownership metadata.
 
-The exact onboarding-state module is intentionally undecided, but durable UI
-control state must live with account-home product state rather than in
-`growth_event_log`, `ux_latency_events`, browser local storage alone, or an
-aggregate table.
+The implemented onboarding state is versioned in account `other_settings`, so
+it follows account-home authority and survives reloads and devices. Analytics
+events describe exposure and outcomes but do not control the UI. Session
+storage is used only to avoid showing the unrelated marketing-email prompt in
+the same session, never as durable onboarding state.
 
 The current retention RPCs may temporarily delegate to the new serving queries,
 but the long-term API should move out of purchases.
@@ -1687,7 +1704,8 @@ Recommended defaults for approval:
     duplicate it or use its rolling `last_active` counts as canonical retention.
 13. Use v2 UX traces for latency and reliability, but require unsampled,
     rate-limited semantic events for canonical milestones and activity facts.
-14. Prioritize a controlled guided first-project experiment, followed by an
-    optional site-funded Codex first-task treatment.
+14. Ship the guided first-project flow after scenario-based staging acceptance,
+    including an optional user-initiated site-funded Codex path; reserve
+    controlled experiments for later uncertain choices with adequate power.
 15. Judge Codex onboarding primarily by later self-directed work and mature
     retention, not by the guided prompt that the treatment itself caused.

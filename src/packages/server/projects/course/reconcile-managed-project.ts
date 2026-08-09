@@ -333,9 +333,25 @@ export async function reconcileCourseManagedProjectLocal(
   }
 
   for (const desiredAccountId of missingDesiredAccountIds) {
+    const courseStudentInvite =
+      request.type === "student" && request.student_id != null;
     await inviteCollaborator({
       account_id,
-      opts: { project_id, account_id: desiredAccountId },
+      opts: {
+        project_id,
+        account_id: desiredAccountId,
+        ...(courseStudentInvite
+          ? {
+              invite_scope: "course_student",
+              invite_context: {
+                course_project_id,
+                course_path: request.course_path,
+                student_id: request.student_id,
+                student_project_id: project_id,
+              },
+            }
+          : undefined),
+      },
     });
   }
 

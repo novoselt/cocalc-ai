@@ -1137,6 +1137,8 @@ export async function createCollabInvite({
   project_id,
   invitee_account_id,
   message,
+  invite_context,
+  invite_scope,
   direct,
   invite_role,
   read_policy,
@@ -1145,6 +1147,8 @@ export async function createCollabInvite({
   project_id: string;
   invitee_account_id: string;
   message?: string;
+  invite_context?: Record<string, unknown>;
+  invite_scope?: string;
   direct?: boolean;
   invite_role?: Exclude<ProjectUserRole, "owner">;
   read_policy?: ProjectViewerReadPolicy | null;
@@ -1181,6 +1185,43 @@ export async function createCollabInvite({
     account_id,
     message,
   });
+  const scope = `${invite_scope ?? ""}`.trim() || undefined;
+  if (scope && scope.length > 48) {
+    throw new Error("invite_scope must be at most 48 characters");
+  }
+  if (scope && scope !== COURSE_EMAIL_INVITE_SCOPE) {
+    throw new Error("invite_scope is not supported for account invitations");
+  }
+  if (invite_context != null && scope !== COURSE_EMAIL_INVITE_SCOPE) {
+    throw new Error(
+      "invite_context is only supported for course account invitations",
+    );
+  }
+  if (
+    invite_context != null &&
+    (typeof invite_context !== "object" || Array.isArray(invite_context))
+  ) {
+    throw new Error("invite_context must be an object");
+  }
+  const serializedContext =
+    invite_context == null ? undefined : JSON.stringify(invite_context);
+  if ((serializedContext?.length ?? 0) > 8_192) {
+    throw new Error("invite_context is too large");
+  }
+  if (scope === COURSE_EMAIL_INVITE_SCOPE) {
+    if (
+      typeof invite_context?.course_project_id !== "string" ||
+      !invite_context.course_project_id.trim()
+    ) {
+      throw new Error("course invite context is missing course_project_id");
+    }
+    await getInvitePolicyAccountId({
+      account_id,
+      context: invite_context,
+      project_id,
+      scope,
+    });
+  }
 
   const inviteeAccount = await getClusterAccountById(invitee_account_id);
   if (!inviteeAccount?.account_id) {
@@ -1249,6 +1290,9 @@ export async function createCollabInvite({
         project_id,
         inviter_account_id: account_id,
         invitee_account_id,
+        invite_source: "account",
+        scope,
+        context: invite_context,
         status: "accepted",
         invite_role: role,
         read_policy: policy,
@@ -1275,6 +1319,17 @@ export async function createCollabInvite({
   );
   const existingPending = pendingRows[0]?.invite_id;
   if (existingPending) {
+    if (scope || serializedContext) {
+      await pool.query(
+        `UPDATE project_collab_invites
+            SET invite_source=COALESCE(invite_source, 'account'),
+                scope=$2,
+                context=$3::jsonb,
+                updated=NOW()
+          WHERE invite_id=$1`,
+        [existingPending, scope ?? null, serializedContext ?? null],
+      );
+    }
     const invite = await fetchInviteById(existingPending, includeEmail);
     if (!invite) {
       throw new Error("failed to load existing pending invite");
@@ -1298,9 +1353,11 @@ export async function createCollabInvite({
   await pool.query(
     `INSERT INTO project_collab_invites
       (invite_id, project_id, inviter_account_id, invitee_account_id,
-       invite_role, read_policy, status, message, created, updated)
+       invite_source, invite_role, read_policy, status, message, scope, context,
+       created, updated)
      VALUES
-      ($1, $2, $3, $4, $5, $6::jsonb, 'pending', $7, NOW(), NOW())`,
+      ($1, $2, $3, $4, 'account', $5, $6::jsonb, 'pending', $7, $8,
+       $9::jsonb, NOW(), NOW())`,
     [
       invite_id,
       project_id,
@@ -1309,6 +1366,8 @@ export async function createCollabInvite({
       role,
       JSON.stringify(policy),
       normalizedMessage,
+      scope ?? null,
+      serializedContext ?? null,
     ],
   );
   const invite = await fetchInviteById(invite_id, includeEmail);
@@ -3881,6 +3940,8 @@ export async function inviteCollaborator({
     email?: string;
     subject?: string;
     message?: string;
+    invite_context?: Record<string, unknown>;
+    invite_scope?: string;
     invite_role?: Exclude<ProjectUserRole, "owner">;
     read_policy?: ProjectViewerReadPolicy | null;
   };
@@ -3904,6 +3965,8 @@ export async function inviteCollaborator({
       project_id: opts.project_id,
       invitee_account_id: opts.account_id,
       message: opts.message,
+      invite_context: opts.invite_context,
+      invite_scope: opts.invite_scope,
       invite_role: opts.invite_role,
       read_policy: opts.read_policy,
     });

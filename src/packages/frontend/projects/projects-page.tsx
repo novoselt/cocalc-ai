@@ -57,6 +57,13 @@ import {
 import { projectRootfsEntryLabel } from "./project-rootfs-badge";
 import { openAccountSettings } from "@cocalc/frontend/account/settings-routing";
 import { OTHER_SETTINGS_LEGACY_MIGRATION_PROJECTS_BUTTON } from "@cocalc/util/legacy-migration";
+import { FirstRunOnboarding } from "./onboarding/first-run-onboarding";
+import {
+  classifyFirstRunOnboarding,
+  FIRST_RUN_ONBOARDING_SETTING,
+  normalizeStoredFirstRunOnboarding,
+  type FirstRunProject,
+} from "./onboarding/state";
 
 const LOADING_STYLE: CSS = {
   fontSize: "40px",
@@ -145,6 +152,8 @@ export const ProjectsPage: React.FC = () => {
   const host_info = useTypedRedux("projects", "host_info");
   const user_map = useTypedRedux("users", "user_map");
   const activeTopTab = useTypedRedux("page", "active_top_tab");
+  const accountId = useTypedRedux("account", "account_id");
+  const accountCreated = useTypedRedux("account", "created");
   const otherSettings = useTypedRedux("account", "other_settings");
   const legacyMigrationEnabled = !!useTypedRedux(
     "customize",
@@ -220,6 +229,43 @@ export const ProjectsPage: React.FC = () => {
   });
   const emailVerificationRequired = useEmailVerificationRequired();
   const createProjectDisabled = emailVerificationRequired;
+  const onboardingProjects = useMemo(() => {
+    const projects: FirstRunProject[] = [];
+    project_map?.forEach((project, project_id) => {
+      if (project.get("deleted")) return;
+      if (accountId && project.getIn(["users", accountId, "hide"])) return;
+      projects.push({
+        project_id: `${project_id}`,
+        title: project.get("title"),
+        course_type: `${project.getIn(["course", "type"]) ?? ""}` || undefined,
+        last_active: accountId
+          ? project.getIn(["last_active", accountId])
+          : undefined,
+      });
+    });
+    return projects;
+  }, [accountId, project_map]);
+  const savedFirstRunOnboarding = normalizeStoredFirstRunOnboarding(
+    otherSettings?.get?.(FIRST_RUN_ONBOARDING_SETTING),
+  );
+  const firstRunDecision = useMemo(
+    () =>
+      classifyFirstRunOnboarding({
+        projects: onboardingProjects,
+        invitations: inviteState.incoming,
+        invitesLoading: inviteState.loading,
+        accountCreated,
+        saved: savedFirstRunOnboarding,
+      }),
+    [
+      accountCreated,
+      inviteState.incoming,
+      inviteState.loading,
+      onboardingProjects,
+      savedFirstRunOnboarding,
+    ],
+  );
+  const showFirstRunOnboarding = firstRunDecision.kind !== "hidden";
 
   const selected_hashtags: Map<string, ImmutableSet<string>> = useTypedRedux(
     "projects",
@@ -472,7 +518,7 @@ export const ProjectsPage: React.FC = () => {
               overflowY: mobileProjectsList ? "auto" : "hidden",
             }}
           >
-            {emailVerificationRequired ? (
+            {emailVerificationRequired && !showFirstRunOnboarding ? (
               <VerifyEmailRequiredPanel
                 title="Verify your email to create projects"
                 description="You can accept project invites and open projects you already have access to. Please verify your email address before creating new projects or starting project runtimes."
@@ -480,197 +526,213 @@ export const ProjectsPage: React.FC = () => {
                 style={{ marginBottom: 12 }}
               />
             ) : null}
-            <div style={contentStyle}>
-              <div
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  flex: "1 1 0",
-                  flexDirection: "column",
-                  gap: 10,
-                  height: "100%",
-                  minHeight: 0,
-                  padding: narrow ? "0 10px 0 10px" : "0",
-                }}
+            {showFirstRunOnboarding ? (
+              <CocalcErrorBoundary
+                scope="projects.first-run-onboarding"
+                resetKeys={[firstRunDecision.kind]}
               >
+                <FirstRunOnboarding
+                  decision={firstRunDecision}
+                  inviteState={inviteState}
+                  createDisabled={createProjectDisabled}
+                  onOpenAdvanced={handleCreateProject}
+                />
+              </CocalcErrorBoundary>
+            ) : (
+              <div style={contentStyle}>
                 <div
                   style={{
-                    marginTop: mobileProjectsList ? "8px" : "20px",
-                    display: "flex",
                     width: "100%",
+                    display: "flex",
+                    flex: "1 1 0",
+                    flexDirection: "column",
                     gap: 10,
-                    alignItems: "center",
-                    flexWrap: mobileProjectsList ? "wrap" : "nowrap",
-                    flex: "0 0 auto",
+                    height: "100%",
+                    minHeight: 0,
+                    padding: narrow ? "0 10px 0 10px" : "0",
                   }}
                 >
-                  <Title
-                    level={3}
-                    style={{
-                      flex: "0 1 auto",
-                      marginBottom: mobileProjectsList ? 0 : "15px",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <Icon name="edit" /> {intl.formatMessage(labels.projects)}
-                  </Title>
-                  <Button
-                    ref={createNewRef}
-                    type="primary"
-                    disabled={createProjectDisabled}
-                    title={
-                      createProjectDisabled
-                        ? "Verify your email address before creating projects."
-                        : undefined
-                    }
-                    onClick={handleCreateProject}
-                    icon={<Icon name="plus-circle" />}
-                  >
-                    {capitalize(intl.formatMessage(labels.create))}
-                  </Button>
-                  {showLegacyProjectsButton ? (
-                    <Button
-                      icon={<Icon name="exchange" />}
-                      onClick={() =>
-                        openAccountSettings({ page: "legacy-migration" })
-                      }
-                      title="View projects available from legacy migration."
-                    >
-                      Legacy Projects
-                    </Button>
-                  ) : null}
                   <div
                     style={{
-                      flex: mobileProjectsList ? "1 0 100%" : "1 1 auto",
-                      minWidth: 0,
+                      marginTop: mobileProjectsList ? "8px" : "20px",
+                      display: "flex",
+                      width: "100%",
+                      gap: 10,
+                      alignItems: "center",
+                      flexWrap: mobileProjectsList ? "wrap" : "nowrap",
+                      flex: "0 0 auto",
                     }}
                   >
-                    <StarredProjectsBar />
+                    <Title
+                      level={3}
+                      style={{
+                        flex: "0 1 auto",
+                        marginBottom: mobileProjectsList ? 0 : "15px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <Icon name="edit" /> {intl.formatMessage(labels.projects)}
+                    </Title>
+                    <Button
+                      ref={createNewRef}
+                      type="primary"
+                      disabled={createProjectDisabled}
+                      title={
+                        createProjectDisabled
+                          ? "Verify your email address before creating projects."
+                          : undefined
+                      }
+                      onClick={handleCreateProject}
+                      icon={<Icon name="plus-circle" />}
+                    >
+                      {capitalize(intl.formatMessage(labels.create))}
+                    </Button>
+                    {showLegacyProjectsButton ? (
+                      <Button
+                        icon={<Icon name="exchange" />}
+                        onClick={() =>
+                          openAccountSettings({ page: "legacy-migration" })
+                        }
+                        title="View projects available from legacy migration."
+                      >
+                        Legacy Projects
+                      </Button>
+                    ) : null}
+                    <div
+                      style={{
+                        flex: mobileProjectsList ? "1 0 100%" : "1 1 auto",
+                        minWidth: 0,
+                      }}
+                    >
+                      <StarredProjectsBar />
+                    </div>
+                    {!narrow && (
+                      <div
+                        ref={filenameSearchRef}
+                        style={{
+                          flex: "0 1 auto",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                        }}
+                      >
+                        <FilenameSearch
+                          style={{
+                            width: IS_MOBILE ? "100px" : "200px",
+                            display: "inline-block",
+                          }}
+                        />
+                        <RecentDocumentActivityButton />
+                      </div>
+                    )}
                   </div>
-                  {!narrow && (
+
+                  {narrow && (
                     <div
                       ref={filenameSearchRef}
                       style={{
-                        flex: "0 1 auto",
                         display: "flex",
-                        alignItems: "center",
+                        justifyContent: "flex-end",
                         gap: "8px",
+                        flex: "0 0 auto",
                       }}
                     >
+                      <RecentDocumentActivityButton />
                       <FilenameSearch
                         style={{
                           width: IS_MOBILE ? "100px" : "200px",
                           display: "inline-block",
                         }}
                       />
-                      <RecentDocumentActivityButton />
                     </div>
                   )}
-                </div>
 
-                {narrow && (
                   <div
-                    ref={filenameSearchRef}
                     style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      gap: "8px",
+                      maxHeight: "50vh",
+                      overflow: "auto",
                       flex: "0 0 auto",
                     }}
                   >
-                    <RecentDocumentActivityButton />
-                    <FilenameSearch
-                      style={{
-                        width: IS_MOBILE ? "100px" : "200px",
-                        display: "inline-block",
-                      }}
+                    <IncomingInviteBanner
+                      state={inviteState}
+                      onReview={openInvitations}
                     />
                   </div>
-                )}
 
-                <div
-                  style={{
-                    maxHeight: "50vh",
-                    overflow: "auto",
-                    flex: "0 0 auto",
-                  }}
-                >
-                  <IncomingInviteBanner
-                    state={inviteState}
-                    onReview={openInvitations}
-                  />
-                </div>
+                  {/* Table Controls (Search, Filters, Create Button) */}
+                  <div style={{ flex: "0 0 auto" }}>
+                    <ProjectsTableControls
+                      visible_projects={visible_projects}
+                      searchRef={searchRef}
+                      filtersRef={filtersRef}
+                      projectListChanged={backendWindowDirty}
+                      projectListChangedCount={backendWindowDirtyCount}
+                      onRefreshProjectList={refreshBackendWindow}
+                      tour={
+                        <ProjectsPageTour
+                          searchRef={searchRef}
+                          filtersRef={filtersRef}
+                          createNewRef={createNewRef}
+                          projectListRef={projectListRef}
+                          filenameSearchRef={filenameSearchRef}
+                          style={{ flex: 0 }}
+                        />
+                      }
+                    />
+                  </div>
+                  {/* Bulk Operations (when filters active) */}
+                  <div style={{ flex: "0 0 auto" }}>
+                    <ProjectsOperations
+                      visible_projects={visible_projects}
+                      selected_project_ids={selectedProjectIds}
+                      onSelectionChange={setSelectedProjectIds}
+                      filteredCollaborators={filteredCollaborators}
+                      onClearCollaboratorFilter={handleClearCollaboratorFilter}
+                      rootfsImages={rootfsImages}
+                      rootfsImagesLoading={rootfsImagesLoading}
+                    />
+                  </div>
 
-                {/* Table Controls (Search, Filters, Create Button) */}
-                <div style={{ flex: "0 0 auto" }}>
-                  <ProjectsTableControls
-                    visible_projects={visible_projects}
-                    searchRef={searchRef}
-                    filtersRef={filtersRef}
-                    projectListChanged={backendWindowDirty}
-                    projectListChangedCount={backendWindowDirtyCount}
-                    onRefreshProjectList={refreshBackendWindow}
-                    tour={
-                      <ProjectsPageTour
-                        searchRef={searchRef}
-                        filtersRef={filtersRef}
-                        createNewRef={createNewRef}
-                        projectListRef={projectListRef}
-                        filenameSearchRef={filenameSearchRef}
-                        style={{ flex: 0 }}
-                      />
-                    }
-                  />
-                </div>
-                {/* Bulk Operations (when filters active) */}
-                <div style={{ flex: "0 0 auto" }}>
-                  <ProjectsOperations
-                    visible_projects={visible_projects}
-                    selected_project_ids={selectedProjectIds}
-                    onSelectionChange={setSelectedProjectIds}
-                    filteredCollaborators={filteredCollaborators}
-                    onClearCollaboratorFilter={handleClearCollaboratorFilter}
-                    rootfsImages={rootfsImages}
-                    rootfsImagesLoading={rootfsImagesLoading}
-                  />
-                </div>
-
-                <div
-                  ref={projectListRef}
-                  style={{
-                    flex: mobileProjectsList ? "0 0 auto" : "1 1 0",
-                    height: mobileProjectsList ? undefined : "100%",
-                    minHeight: 0,
-                    overflow: mobileProjectsList ? undefined : "hidden",
-                  }}
-                >
-                  <CocalcErrorBoundary scope="projects.list">
-                    {mobileProjectsList ? (
-                      <MobileProjectsList
-                        visible_projects={visible_projects}
-                        rootfsImages={rootfsImages}
-                        rootfsImagesLoading={rootfsImagesLoading}
-                        selectedProjectIds={selectedProjectIds}
-                        onSelectedProjectIdsChange={setSelectedProjectIds}
-                      />
-                    ) : (
-                      <ProjectsTable
-                        visible_projects={visible_projects}
-                        rootfsImages={rootfsImages}
-                        rootfsImagesLoading={rootfsImagesLoading}
-                        height={tableHeight}
-                        narrow={narrow}
-                        filteredCollaborators={filteredCollaborators}
-                        onFilteredCollaboratorsChange={setFilteredCollaborators}
-                        selectedProjectIds={selectedProjectIds}
-                        onSelectedProjectIdsChange={setSelectedProjectIds}
-                        freezeOrder={backendWindowDirty}
-                      />
-                    )}
-                  </CocalcErrorBoundary>
+                  <div
+                    ref={projectListRef}
+                    style={{
+                      flex: mobileProjectsList ? "0 0 auto" : "1 1 0",
+                      height: mobileProjectsList ? undefined : "100%",
+                      minHeight: 0,
+                      overflow: mobileProjectsList ? undefined : "hidden",
+                    }}
+                  >
+                    <CocalcErrorBoundary scope="projects.list">
+                      {mobileProjectsList ? (
+                        <MobileProjectsList
+                          visible_projects={visible_projects}
+                          rootfsImages={rootfsImages}
+                          rootfsImagesLoading={rootfsImagesLoading}
+                          selectedProjectIds={selectedProjectIds}
+                          onSelectedProjectIdsChange={setSelectedProjectIds}
+                        />
+                      ) : (
+                        <ProjectsTable
+                          visible_projects={visible_projects}
+                          rootfsImages={rootfsImages}
+                          rootfsImagesLoading={rootfsImagesLoading}
+                          height={tableHeight}
+                          narrow={narrow}
+                          filteredCollaborators={filteredCollaborators}
+                          onFilteredCollaboratorsChange={
+                            setFilteredCollaborators
+                          }
+                          selectedProjectIds={selectedProjectIds}
+                          onSelectedProjectIdsChange={setSelectedProjectIds}
+                          freezeOrder={backendWindowDirty}
+                        />
+                      )}
+                    </CocalcErrorBoundary>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </Layout.Content>
       </Layout>

@@ -10,6 +10,33 @@ In practice: the hub loads `COALESCE(rootfs_image, compute_image)` from Postgres
 - Project-host sqlite stores the resolved `image` for each project.
 - Defaults come from `DEFAULT_PROJECT_IMAGE` (and legacy `DEFAULT_COMPUTE_IMAGE`).
 
+## Onboarding image tags
+
+The first-run project wizard selects images by catalog tags rather than by a
+hard-coded image id or registry reference. This lets each site change its
+available images without shipping new frontend code. Assign at most one
+preferred image per onboarding tag when possible:
+
+| Tag                         | First-run path                    |
+| --------------------------- | --------------------------------- |
+| `onboarding:jupyter-python` | Python Jupyter notebook           |
+| `onboarding:jupyter-r`      | R Jupyter notebook                |
+| `onboarding:jupyter-julia`  | Julia Jupyter notebook            |
+| `onboarding:jupyter`        | Fallback for any Jupyter notebook |
+| `onboarding:sage`           | SageMath notebook                 |
+| `onboarding:math`           | Fallback computational-math image |
+| `onboarding:code`           | Terminal/code project             |
+| `onboarding:codex`          | Codex-guided project              |
+| `onboarding:latex`          | LaTeX document project            |
+| `onboarding:documents`      | Fallback technical-document image |
+| `onboarding:teaching`       | Course project                    |
+
+The selector prefers the most specific tag, then a non-deprecated official
+image, catalog priority, and newest creation date. Existing broad tags such as
+`jupyter`, `sage`, `latex`, `preset:standard`, and `preset:teaching` remain
+compatibility fallbacks. If no tagged image is available, the site's normal
+project-creation default is used.
+
 ## End-to-end flow
 
 ```mermaid

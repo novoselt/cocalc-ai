@@ -15,6 +15,7 @@ import {
 } from "@cocalc/util/notification-preferences";
 import { COLORS } from "@cocalc/util/theme";
 import type { CSS } from "@cocalc/frontend/app-framework";
+import { firstRunCompletedThisSession } from "./onboarding-session";
 
 const PROMPT_DELAY_MS = 1_200;
 
@@ -84,6 +85,7 @@ export function OnboardingEmailPrompt(): React.JSX.Element | null {
       !isLoggedIn ||
       impersonation != null ||
       fullscreen ||
+      firstRunCompletedThisSession() ||
       eligibilityRef.current !== "eligible" ||
       typeof activeTopTab !== "string" ||
       projectMap?.has?.(activeTopTab) !== true

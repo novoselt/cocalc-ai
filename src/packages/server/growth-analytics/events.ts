@@ -17,6 +17,7 @@ const PROPERTY_KEYS = new Set([
   "metadata_class",
   "source_confidence",
   "funding_class",
+  "onboarding_path",
   "outcome",
 ]);
 const SOURCE_COMPONENTS = new Set([
