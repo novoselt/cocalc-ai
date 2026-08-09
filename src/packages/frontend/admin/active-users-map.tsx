@@ -479,6 +479,8 @@ export function ActiveUsersMapAdmin() {
                 setSelectedUser(undefined);
                 setLiveActiveMinutes(value as ActiveUserMapWindowMinutes);
               } else {
+                requestedHistorySnapshot.current =
+                  historySnapshot?.snapshot_hour;
                 setHistorySnapshot(undefined);
                 setHistoryActiveMinutes(
                   value as ActiveUserMapHistoryWindowMinutes,
