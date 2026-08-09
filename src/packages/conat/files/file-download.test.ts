@@ -193,6 +193,39 @@ describe("handleFileDownload", () => {
     );
   });
 
+  it.each(["ENOENT", "ENOTDIR"])(
+    "returns 404 when a streamed file fails with %s before sending data",
+    async (code) => {
+      mockReadFile.mockRejectedValue(
+        Object.assign(new Error("missing file"), { code }),
+      );
+      const req: any = {
+        method: "GET",
+        url: "/project-123/files/home/user/missing.pdf",
+      };
+      const res: any = {
+        statusCode: undefined,
+        setHeader: jest.fn(),
+        write: jest.fn(() => true),
+        end: jest.fn(),
+        destroy: jest.fn(),
+        on: jest.fn(),
+        writableEnded: false,
+        destroyed: false,
+      };
+
+      await handleFileDownload({
+        req,
+        res,
+        client: { id: "client-1" } as any,
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.end).toHaveBeenCalledWith("File not found.");
+      expect(res.destroy).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the requested display filename and removes temporary archives after streaming", async () => {
     mockReadFile.mockResolvedValue([Buffer.from("archive")]);
     mockFsRm.mockResolvedValue(undefined);

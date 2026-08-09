@@ -229,8 +229,9 @@ workflow is retained, then restore the production sampling rate.
 For an isolated run, issue a one-time impersonation link for a disposable test
 account and pass it only through the environment. Direct mode launches
 `/usr/local/bin/chromium-browser` in a fresh Playwright context, records HTTP and
-page errors in the report, removes its project fixtures, and destroys the
-browser context at the end:
+page errors in the report, uses run-specific project fixture paths, closes the
+measured editor session before removing those fixtures, and destroys the browser
+context at the end:
 
 ```bash
 COCALC_UX_HARNESS_SIGN_IN_URL='<one-time URL>' \

@@ -68,6 +68,11 @@ function encodeDownloadErrorHeader(message: string): string {
   return encodeURIComponent(message);
 }
 
+function isMissingFileError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 async function cleanupTemporaryDownloadArchive({
   client,
   project_id,
@@ -210,9 +215,9 @@ export async function handleFileDownload({
         path,
         err: `${err}`,
       });
-      res.statusCode = err?.code === "ENOENT" ? 404 : 500;
+      res.statusCode = isMissingFileError(err) ? 404 : 500;
       res.end(
-        err?.code === "ENOENT" ? "File not found." : "Error reading file.",
+        isMissingFileError(err) ? "File not found." : "Error reading file.",
       );
       return;
     }
@@ -258,8 +263,9 @@ export async function handleFileDownload({
   } catch (err) {
     logger.debug("ERROR streaming file", { project_id, path }, err);
     if (!headersSent) {
-      res.statusCode = 500;
-      res.end("Error reading file.");
+      const missing = isMissingFileError(err);
+      res.statusCode = missing ? 404 : 500;
+      res.end(missing ? "File not found." : "Error reading file.");
     } else {
       // Data sent, forcibly kill the connection
       res.destroy(err);

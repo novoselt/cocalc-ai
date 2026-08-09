@@ -94,7 +94,10 @@ const reportDir = resolve(
   options.reportDir ?? `.cocalc-browser-harness/${runId}`,
 );
 const fixtureDir = mkdtempSync(join(tmpdir(), "cocalc-ux-harness-"));
-const remoteRoot = "/home/user/cocalc-ux-harness";
+const remoteRootName = options.direct
+  ? `cocalc-ux-harness-${runId.slice(-8)}`
+  : "cocalc-ux-harness";
+const remoteRoot = `/home/user/${remoteRootName}`;
 
 const globalArgs = [];
 globalArgs.push("--no-daemon", "--disable-env-auth-defaults");
@@ -167,12 +170,12 @@ function navigateProjectHome(name) {
 function enterHarnessDirectorySteps(prefix) {
   return [
     navigateProjectHome(`${prefix}: open project home`),
-    waitForText(`${prefix}: harness folder visible`, "cocalc-ux-harness"),
+    waitForText(`${prefix}: harness folder visible`, remoteRootName),
     {
       name: `${prefix}: enter harness folder`,
       action: {
         name: "click",
-        selector: "span[title='cocalc-ux-harness']",
+        selector: `span[title='${remoteRootName}']`,
         timeout_ms: 30_000,
       },
     },
@@ -452,22 +455,21 @@ async function runDirectHarness(plan) {
     );
   }
 
-  async function cleanupDirectFixtures() {
-    if (page.isClosed()) return;
+  async function cleanupDirectFixtures(cleanupPage) {
     const setupPath = `/home/user/ux-harness-setup-${runId}.term`;
-    await page.goto(projectFileUrl(setupPath), {
+    await cleanupPage.goto(projectFileUrl(setupPath), {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
-    const terminal = page.locator(".xterm-helper-textarea").first();
+    const terminal = cleanupPage.locator(".xterm-helper-textarea").first();
     await terminal.waitFor({ state: "attached", timeout: 90_000 });
     await terminal.click();
     const marker = `UX_FIXTURES_REMOVED_${runId}`;
-    await page.keyboard.insertText(
-      `rm -rf '${remoteRoot}'; rm -f '${setupPath}'; printf '\\n%s\\n' '${marker}'`,
+    await cleanupPage.keyboard.insertText(
+      `rm -rf '${remoteRoot}'; printf '\\n%s\\n' '${marker}'; (sleep 2; rm -f '${setupPath}') >/dev/null 2>&1 &`,
     );
-    await page.keyboard.press("Enter");
-    await page.waitForFunction(
+    await cleanupPage.keyboard.press("Enter");
+    await cleanupPage.waitForFunction(
       (text) => document.body?.innerText?.includes(text),
       marker,
       { timeout: 30_000, polling: 100 },
@@ -638,13 +640,23 @@ async function runDirectHarness(plan) {
       .screenshot({ path: join(reportDir, "failure.png"), fullPage: true })
       .catch(() => {});
   } finally {
-    await cleanupDirectFixtures().catch((err) => {
+    // Stop every measured sync document before deleting its backing fixture.
+    // Otherwise a retained watcher can race the next run's recreation of the
+    // same path and make the harness observe stale collaborative history.
+    await page.close().catch(() => {});
+    let cleanupPage;
+    try {
+      cleanupPage = await context.newPage();
+      await cleanupDirectFixtures(cleanupPage);
+    } catch (err) {
       browserLogs.push({
         at: new Date().toISOString(),
         level: "cleanup-error",
         message: `${err}`,
       });
-    });
+    } finally {
+      await cleanupPage?.close().catch(() => {});
+    }
     mkdirSync(reportDir, { recursive: true });
     writeFileSync(
       join(reportDir, "report.json"),
