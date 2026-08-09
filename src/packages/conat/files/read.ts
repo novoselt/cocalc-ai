@@ -163,7 +163,13 @@ async function handleMessage(mesg, createReadStream) {
     await mesg.respond(null, { headers: { done: true } });
   } catch (err) {
     logger.debug("handleMessage: ERROR", err);
-    mesg.respondSync(null, { headers: { error: `${err}` } });
+    const code = (err as { code?: unknown } | null)?.code;
+    mesg.respondSync(null, {
+      headers: {
+        error: `${err}`,
+        ...(typeof code === "string" ? { code } : {}),
+      },
+    });
   }
 }
 
@@ -253,7 +259,11 @@ export async function* readFile({
       continue;
     }
     if (resp.headers.error) {
-      throw Error(`${resp.headers.error}`);
+      const err = Error(`${resp.headers.error}`) as NodeJS.ErrnoException;
+      if (typeof resp.headers.code === "string") {
+        err.code = resp.headers.code;
+      }
+      throw err;
     }
     if (resp.headers.done) {
       return;
