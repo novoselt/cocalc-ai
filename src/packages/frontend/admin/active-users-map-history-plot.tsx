@@ -194,21 +194,20 @@ export function ActiveUsersMapHistoryPlot({
 
   return (
     <Space vertical style={{ width: "100%" }}>
-      <Space wrap style={{ justifyContent: "space-between", width: "100%" }}>
-        <Typography.Title level={4}>{title}</Typography.Title>
-        <Space>
-          <Typography.Text>Country:</Typography.Text>
-          <Select
-            showSearch
-            optionFilterProp="label"
-            options={countryOptions}
-            value={selectedCountryCode ?? ALL_COUNTRIES}
-            onChange={(value) =>
-              onCountryChange(value === ALL_COUNTRIES ? undefined : value)
-            }
-            style={{ minWidth: 180 }}
-          />
-        </Space>
+      <Space align="center" wrap>
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          {title}
+        </Typography.Title>
+        <Select
+          showSearch
+          optionFilterProp="label"
+          options={countryOptions}
+          value={selectedCountryCode ?? ALL_COUNTRIES}
+          onChange={(value) =>
+            onCountryChange(value === ALL_COUNTRIES ? undefined : value)
+          }
+          style={{ minWidth: 180 }}
+        />
       </Space>
       {!history ? (
         loading ? (
