@@ -2,7 +2,6 @@ import { getClient, Client } from "@cocalc/database/pool";
 import type { DBSchema, TableSchema } from "./types";
 import { quoteField } from "./util";
 import { pgType } from "./pg-type";
-import { createIndexesQueries } from "./indexes";
 import { createTable } from "./table";
 import getLogger from "@cocalc/backend/logger";
 import { SCHEMA } from "@cocalc/util/schema";
@@ -25,6 +24,7 @@ import {
   getColumnInvariantActions,
   syncTableSchemaColumnInvariants,
 } from "./column-invariants";
+import { getIndexActions, syncTableSchemaIndexes } from "./index-convergence";
 
 const log = getLogger("db:schema:sync");
 
@@ -252,103 +252,6 @@ async function syncTableSchemaColumns(
   const actions = await getColumnActions(db, schema);
   for (const { action, column } of actions) {
     await alterColumnOfTable(db, schema, action, column);
-  }
-}
-
-async function getCurrentIndexes(
-  db: Client,
-  table: string,
-): Promise<Set<string>> {
-  const { rows } = await db.query(
-    "SELECT c.relname AS name FROM pg_class AS a JOIN pg_index AS b ON (a.oid = b.indrelid) JOIN pg_class AS c ON (c.oid = b.indexrelid) WHERE a.relname=$1",
-    [table],
-  );
-
-  const curIndexes = new Set<string>([]);
-  for (const { name } of rows) {
-    curIndexes.add(name);
-  }
-
-  return curIndexes;
-}
-
-// There is also code in database/postgres/schema/indexes.ts that creates indexes.
-
-async function updateIndex(
-  db: Client,
-  table: string,
-  action: "create" | "delete",
-  name: string,
-  query?: string,
-  unique?: boolean,
-): Promise<void> {
-  log.debug("updateIndex", { table, action, name });
-  if (action == "create") {
-    // ATTN if you consider adding CONCURRENTLY to create index, read the note earlier above about this
-    await db.query(
-      `CREATE ${unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quoteField(
-        name,
-      )} ON ${quoteField(table)} ${query}`,
-    );
-  } else if (action == "delete") {
-    // PGlite does not support PostgreSQL's concurrent index teardown reliably.
-    const concurrently =
-      process.env.COCALC_DB === "pglite" ? "" : " CONCURRENTLY";
-    await db.query(`DROP INDEX${concurrently} IF EXISTS ${quoteField(name)}`);
-  } else {
-    // typescript would catch this, but just in case:
-    throw Error(`BUG: unknown action ${name}`);
-  }
-}
-
-type IndexAction = {
-  action: "create" | "delete";
-  name: string;
-  query?: string;
-  unique?: boolean;
-};
-
-async function getIndexActions(
-  db: Client,
-  schema: TableSchema,
-): Promise<IndexAction[]> {
-  const curIndexes = await getCurrentIndexes(db, schema.name);
-  const goalIndexes = createIndexesQueries(schema);
-  const goalIndexNames = new Set<string>();
-  const actions: IndexAction[] = [];
-
-  for (const x of goalIndexes) {
-    goalIndexNames.add(x.name);
-    if (!curIndexes.has(x.name)) {
-      actions.push({
-        action: "create",
-        name: x.name,
-        query: x.query,
-        unique: x.unique,
-      });
-    }
-  }
-  for (const name of curIndexes) {
-    // only delete indexes that end with _idx; don't want to delete, e.g., pkey primary key indexes.
-    if (name.endsWith("_idx") && !goalIndexNames.has(name)) {
-      actions.push({ action: "delete", name });
-    }
-  }
-
-  return actions;
-}
-
-async function syncTableSchemaIndexes(
-  db: Client,
-  schema: TableSchema,
-): Promise<void> {
-  const dbg = (...args) =>
-    log.debug("syncTableSchemaIndexes", "table = ", schema.name, ...args);
-  dbg();
-  const actions = await getIndexActions(db, schema);
-  dbg("indexActions", actions);
-  for (const { action, name, query, unique } of actions) {
-    await updateIndex(db, schema.name, action, name, query, unique);
   }
 }
 

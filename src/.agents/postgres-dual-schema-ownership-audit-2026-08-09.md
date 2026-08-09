@@ -18,6 +18,24 @@ A CI test now contains an exact debt allowlist. A newly introduced dual-owned
 table fails the test; removing a runtime bootstrap also requires removing its
 allowlist entry, so progress is visible.
 
+## Convergence Hardening
+
+The follow-up schema work closes two risks found while reviewing this audit:
+
+- Nullable-to-`NOT NULL` changes now install a `NOT VALID` write guard before
+  applying bounded legacy-data backfills. Constraint validation and final
+  promotion are resumable from PostgreSQL catalog/data state, so concurrent
+  writers cannot reintroduce NULLs between backfill and promotion.
+- Existing indexes are now compared structurally rather than by name. Desired
+  definitions are canonicalized by PostgreSQL on empty temporary table clones;
+  existing indexes are compared using catalog fields, then tagged with durable
+  ownership fingerprints. Repairs use concurrent replacement builds and
+  restart-safe swaps. Equivalent legacy names are adopted, while unknown
+  indexes are no longer dropped based only on an `_idx` suffix.
+
+See `packages/database/postgres/schema/README.md` for the migration protocol
+and rolling-deployment requirements.
+
 ## Synchronizer Capability Added
 
 Field metadata now supports:
