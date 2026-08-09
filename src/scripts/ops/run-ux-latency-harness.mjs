@@ -457,16 +457,18 @@ async function runDirectHarness(plan) {
 
   async function cleanupDirectFixtures(cleanupPage) {
     const setupPath = `/home/user/ux-harness-setup-${runId}.term`;
-    await cleanupPage.goto(projectFileUrl(setupPath), {
+    const cleanupPath = `/home/user/ux-harness-cleanup-${runId}.term`;
+    await cleanupPage.goto(projectFileUrl(cleanupPath), {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
     const terminal = cleanupPage.locator(".xterm-helper-textarea").first();
     await terminal.waitFor({ state: "attached", timeout: 90_000 });
     await terminal.click();
+    await cleanupPage.waitForTimeout(1_000);
     const marker = `UX_FIXTURES_REMOVED_${runId}`;
     await cleanupPage.keyboard.insertText(
-      `rm -rf '${remoteRoot}'; printf '\\n%s\\n' '${marker}'; (sleep 2; rm -f '${setupPath}') >/dev/null 2>&1 &`,
+      `rm -rf '${remoteRoot}'; printf '\\n%s\\n' '${marker}'; (sleep 2; rm -f '${setupPath}' '${cleanupPath}') >/dev/null 2>&1 &`,
     );
     await cleanupPage.keyboard.press("Enter");
     await cleanupPage.waitForFunction(
@@ -649,6 +651,7 @@ async function runDirectHarness(plan) {
       cleanupPage = await context.newPage();
       await cleanupDirectFixtures(cleanupPage);
     } catch (err) {
+      failure ??= `fixture cleanup failed: ${err}`;
       browserLogs.push({
         at: new Date().toISOString(),
         level: "cleanup-error",
