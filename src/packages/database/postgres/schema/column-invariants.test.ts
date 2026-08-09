@@ -163,4 +163,34 @@ describe("declarative NOT NULL migration", () => {
     );
     expect(rows).toEqual([]);
   });
+
+  it("relaxes NOT NULL only when nullability is explicitly managed", async () => {
+    const table = "invariant_nullable_test";
+    await db.query(
+      `CREATE TABLE ${table} (id integer PRIMARY KEY, managed text NOT NULL, unmanaged text NOT NULL)`,
+    );
+    const schema: TableSchema = {
+      name: table,
+      primary_key: "id",
+      fields: {
+        id: { type: "integer" },
+        managed: { type: "string", not_null: false },
+        unmanaged: { type: "string" },
+      },
+    };
+
+    await syncTableSchemaColumnInvariants(clientFor(db), schema);
+
+    const { rows } = await db.query(
+      `SELECT column_name, is_nullable
+         FROM information_schema.columns
+        WHERE table_name=$1 AND column_name IN ('managed', 'unmanaged')
+        ORDER BY column_name`,
+      [table],
+    );
+    expect(rows).toEqual([
+      { column_name: "managed", is_nullable: "YES" },
+      { column_name: "unmanaged", is_nullable: "NO" },
+    ]);
+  });
 });

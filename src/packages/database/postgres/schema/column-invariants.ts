@@ -30,6 +30,7 @@ export type ColumnInvariantAction =
       column: string;
       backfill?: string;
     }
+  | { action: "drop-not-null"; column: string }
   | { action: "drop-not-null-guard"; column: string };
 
 function normalizeDefaultExpression(expression: string | null | undefined) {
@@ -99,7 +100,7 @@ export async function getColumnInvariantActions(
   const guards = await getNotNullGuards(db, schema.name);
   const hasDeclaredInvariants = Object.keys(schema.fields).some((column) => {
     const info = schema.fields[column];
-    return info.pg_default != null || info.not_null;
+    return info.pg_default != null || info.not_null != null;
   });
   if (!hasDeclaredInvariants && guards.size === 0) {
     return [];
@@ -133,16 +134,22 @@ export async function getColumnInvariantActions(
         expression: info.pg_default,
       });
     }
-    if (info.not_null && existing.is_nullable === "YES") {
+    if (info.not_null === true && existing.is_nullable === "YES") {
       actions.push({
         action: "set-not-null",
         column,
         backfill: info.pg_null_backfill,
       });
-    } else if (guard != null) {
+    } else if (info.not_null === false && existing.is_nullable === "NO") {
+      actions.push({ action: "drop-not-null", column });
+    }
+    if (info.not_null !== true && guard != null) {
+      // An explicit nullable declaration also rolls back an interrupted newer
+      // NOT NULL migration before relaxing the column itself.
+      actions.push({ action: "drop-not-null-guard", column });
+    } else if (existing.is_nullable === "NO" && guard != null) {
       // A process may have stopped after SET NOT NULL but before removing the
-      // temporary guard. A rollback of the declaration also removes a guard
-      // that was installed by an interrupted newer version.
+      // temporary guard.
       actions.push({ action: "drop-not-null-guard", column });
     }
   }
@@ -320,6 +327,10 @@ export async function syncTableSchemaColumnInvariants(
         column: action.column,
         backfill: action.backfill,
       });
+    } else if (action.action === "drop-not-null") {
+      await db.query(
+        `ALTER TABLE ${qTable} ALTER COLUMN ${column} DROP NOT NULL`,
+      );
     } else {
       await db.query(
         `ALTER TABLE ${qTable} DROP CONSTRAINT ${quoteField(
