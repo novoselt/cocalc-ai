@@ -28,7 +28,8 @@ import type {
   ProjectControlStateRequest,
   ProjectControlStopRequest,
 } from "@cocalc/conat/inter-bay/api";
-import type { LroStatus, LroSummary } from "@cocalc/conat/hub/api/lro";
+import type { LroSummary } from "@cocalc/conat/hub/api/lro";
+import { isLroTerminalStatus } from "@cocalc/conat/lro/status";
 import type { ProjectEntitlementOverride } from "@cocalc/conat/hub/api/projects";
 import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
@@ -88,12 +89,6 @@ import {
   getManagedProjectCpuPolicy,
 } from "@cocalc/server/membership/managed-cpu-policy";
 
-const LRO_TERMINAL_STATUSES = new Set<LroStatus>([
-  "succeeded",
-  "failed",
-  "canceled",
-  "expired",
-]);
 const BACKUP_POLL_INTERVAL_MS = 1_000;
 const PROJECT_RUNTIME_SLOT_TTL_MS = 30 * 60 * 1000;
 const logger = getLogger("inter-bay:project-control");
@@ -521,7 +516,7 @@ export async function handleProjectControlBackup(
   const deadline = Date.now() + BACKUP_TIMEOUT_MS + 60_000;
   while (Date.now() < deadline) {
     const summary = await getLro(op.op_id);
-    if (summary != null && LRO_TERMINAL_STATUSES.has(summary.status)) {
+    if (summary != null && isLroTerminalStatus(summary.status)) {
       return summary;
     }
     await sleep(BACKUP_POLL_INTERVAL_MS, { unref: true });

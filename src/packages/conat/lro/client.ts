@@ -3,12 +3,12 @@ import type { DStream } from "@cocalc/conat/sync/dstream";
 import type {
   LroEvent,
   LroScopeType,
-  LroStatus,
   LroSummary,
 } from "@cocalc/conat/hub/api/lro";
 import type { Configuration } from "@cocalc/conat/persist/storage";
 import { isValidUUID } from "@cocalc/util/misc";
 import { lroStreamName } from "./names";
+import { isLroTerminalStatus } from "./status";
 
 type LroLocation = {
   project_id?: string;
@@ -93,13 +93,6 @@ export async function get({
   });
 }
 
-const TERMINAL_STATUSES = new Set<LroStatus>([
-  "succeeded",
-  "failed",
-  "canceled",
-  "expired",
-]);
-
 export async function waitForCompletion({
   op_id,
   stream_name,
@@ -144,7 +137,7 @@ export async function waitForCompletion({
         lastSummaryKey = summaryKey;
         onSummary?.(summary);
       }
-      if (TERMINAL_STATUSES.has(summary.status)) {
+      if (isLroTerminalStatus(summary.status)) {
         finish(summary);
         return true;
       }

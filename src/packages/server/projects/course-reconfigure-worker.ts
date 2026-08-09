@@ -15,8 +15,9 @@ import type {
   ProjectCourseManagedProjectState,
   ProjectReconcileCourseManagedProjectRequest,
 } from "@cocalc/conat/inter-bay/api";
-import type { LroStatus, LroSummary } from "@cocalc/conat/hub/api/lro";
+import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import { lroStreamName } from "@cocalc/conat/lro/names";
+import { isLroTerminalStatus } from "@cocalc/conat/lro/status";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
 import { mapParallelLimit } from "@cocalc/util/async-utils";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
@@ -50,13 +51,6 @@ const TICK_MS = 5_000;
 const DEFAULT_MAX_PARALLEL = 2;
 const DEFAULT_ITEM_PARALLEL = 4;
 
-const TERMINAL_STATUSES = new Set<LroStatus>([
-  "succeeded",
-  "failed",
-  "canceled",
-  "expired",
-]);
-
 interface NormalizedStudentItem extends CourseReconfigureStudentItem {
   project_id: string;
   create: boolean;
@@ -77,7 +71,7 @@ let tickRunning = false;
 let tickRequested = false;
 
 function isTerminal(status?: string | null): boolean {
-  return TERMINAL_STATUSES.has(status as LroStatus);
+  return isLroTerminalStatus(status);
 }
 
 function summarize(results: CourseReconfigureItemResult[]) {
