@@ -36,13 +36,18 @@ export function applyQueuedUserMessageEditToRequest<
     chat?: AcpChatContext;
   },
 >({ request, latestContent }: { request: T; latestContent?: string }): T {
-  if (
-    typeof latestContent !== "string" ||
-    latestContent.trim().length === 0 ||
-    latestContent === request.prompt
-  ) {
+  if (typeof latestContent !== "string" || latestContent.trim().length === 0) {
     return request;
   }
+  // The visible chat message can intentionally differ from the prompt sent to
+  // ACP (for example, agent modals store detailed instructions in acp_prompt).
+  // Only replace that hidden prompt when the persisted visible message changed.
+  const submittedVisibleContent =
+    typeof request.chat?.user_message_content === "string"
+      ? request.chat.user_message_content
+      : request.prompt;
+  if (latestContent.trim() === submittedVisibleContent.trim()) return request;
+
   return {
     ...request,
     prompt: latestContent,
