@@ -9,6 +9,7 @@ import {
   syncSchema,
 } from "./sync";
 import { createIndexesQueries } from "./indexes";
+import { notNullGuardName } from "./column-invariants";
 import { SCHEMA } from "@cocalc/util/schema";
 import type { DBSchema, TableSchema } from "./types";
 import { getClient } from "@cocalc/database/pool";
@@ -257,16 +258,31 @@ function createMockClient(options: {
       }
       return { rows: columnRows };
     }
+    if (text.includes("FROM pg_constraint AS constraint_row")) {
+      return { rows: [] };
+    }
     if (text.includes("FROM pg_class AS a JOIN pg_index AS b")) {
       return { rows: indexRows };
     }
     if (text.includes("FROM   pg_index i")) {
       return { rows: primaryKeyRows };
     }
+    if (text.includes("WITH batch AS MATERIALIZED")) {
+      return { rows: [] };
+    }
+    if (
+      text.includes("SELECT EXISTS") &&
+      text.includes('FROM "schema_invariant_test"')
+    ) {
+      return { rows: [{ exists: false }] };
+    }
     if (
       text.startsWith("ALTER TABLE ") ||
       text.startsWith("DROP INDEX ") ||
-      text.startsWith("UPDATE ")
+      text.startsWith("UPDATE ") ||
+      text === "BEGIN" ||
+      text === "COMMIT" ||
+      text === "ROLLBACK"
     ) {
       return { rows: [] };
     }
@@ -466,7 +482,12 @@ describe("schemaNeedsSync column actions", () => {
       `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET DEFAULT '{}'::jsonb`,
     );
     expect(client.query).toHaveBeenCalledWith(
-      `UPDATE "schema_invariant_test" SET "state"='{}'::jsonb WHERE "state" IS NULL`,
+      expect.stringContaining(
+        `ADD CONSTRAINT "${notNullGuardName(
+          "schema_invariant_test",
+          "state",
+        )}" CHECK ("state" IS NOT NULL) NOT VALID`,
+      ),
     );
     expect(client.query).toHaveBeenCalledWith(
       `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET NOT NULL`,
