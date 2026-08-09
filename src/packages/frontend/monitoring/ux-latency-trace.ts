@@ -19,8 +19,18 @@ const MAX_PHASE_DETAILS = 32;
 let visibilityEpoch = 0;
 let visibilityListenerInstalled = false;
 
-function getVisibilityEpoch(): number {
-  if (typeof document === "undefined") return visibilityEpoch;
+export interface PageVisibilitySnapshot {
+  page_hidden: boolean;
+  visibility_epoch: number;
+}
+
+export function capturePageVisibility(): PageVisibilitySnapshot {
+  if (typeof document === "undefined") {
+    return {
+      page_hidden: false,
+      visibility_epoch: visibilityEpoch,
+    };
+  }
   if (!visibilityListenerInstalled) {
     visibilityListenerInstalled = true;
     document.addEventListener("visibilitychange", () => {
@@ -29,11 +39,10 @@ function getVisibilityEpoch(): number {
       }
     });
   }
-  return visibilityEpoch;
-}
-
-function documentIsHidden(): boolean {
-  return typeof document !== "undefined" && document.hidden;
+  return {
+    page_hidden: document.hidden,
+    visibility_epoch: visibilityEpoch,
+  };
 }
 
 export type UxTracePhaseDetails = Record<
@@ -70,11 +79,11 @@ export interface UxTraceStart {
 }
 
 export function captureUxTraceStart(): UxTraceStart {
+  const visibility = capturePageVisibility();
   return {
     wall_ms: Date.now(),
     ux_ms: startUxTimer(),
-    page_hidden: documentIsHidden(),
-    visibility_epoch: getVisibilityEpoch(),
+    ...visibility,
   };
 }
 
@@ -197,6 +206,7 @@ export class UxLatencyTrace {
     this.emitted.add(endpoint);
     const elapsed = this.mark(endpoint);
     const wallElapsed = Date.now() - this.startWall;
+    const visibility = capturePageVisibility();
     const staleReason =
       options.classify_stale === false
         ? undefined
@@ -205,9 +215,9 @@ export class UxLatencyTrace {
             wall_elapsed_ms: wallElapsed,
             stale_after_ms: this.staleAfterMs,
             started_hidden: this.startedHidden,
-            hidden_now: documentIsHidden(),
+            hidden_now: visibility.page_hidden,
             visibility_changed:
-              getVisibilityEpoch() !== this.startedVisibilityEpoch,
+              visibility.visibility_epoch !== this.startedVisibilityEpoch,
             surface_visible_at_start: this.startedSurfaceVisible,
             surface_visible_at_end: options.surface_visible,
           });

@@ -1,4 +1,5 @@
 import {
+  capturePageVisibility,
   classifyUxTraceStaleReason,
   isDiagnosticUxMetric,
   shouldSampleUxTrace,
@@ -61,5 +62,24 @@ describe("UX trace sampling", () => {
     expect(isDiagnosticUxMetric("jupyter_open_incomplete_v2")).toBe(true);
     expect(isDiagnosticUxMetric("file_content_paint_v2_stale")).toBe(true);
     expect(isDiagnosticUxMetric("file_content_paint_v2")).toBe(false);
+  });
+});
+
+describe("capturePageVisibility", () => {
+  it("shares one epoch that advances when the page becomes hidden", () => {
+    const hidden = jest.spyOn(document, "hidden", "get");
+    hidden.mockReturnValue(false);
+    const before = capturePageVisibility();
+
+    hidden.mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    const after = capturePageVisibility();
+
+    expect(before.page_hidden).toBe(false);
+    expect(after).toEqual({
+      page_hidden: true,
+      visibility_epoch: before.visibility_epoch + 1,
+    });
+    hidden.mockRestore();
   });
 });

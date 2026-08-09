@@ -46,6 +46,7 @@ import {
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
 import {
+  capturePageVisibility,
   UxLatencyTrace,
   type UxTracePhaseDetails,
 } from "@cocalc/frontend/monitoring/ux-latency-trace";
@@ -878,8 +879,6 @@ const FILE_OPEN_STALE_AFTER_MS = 60_000;
 const FILE_OPEN_WALL_CLOCK_SKEW_MS = 10_000;
 const FILE_OPEN_INCOMPLETE_AFTER_MS = 45_000;
 const FILE_OPEN_TRACE_CLEANUP_DELAY_MS = 10_000;
-let visibilityEpoch = 0;
-let visibilityListenerInstalled = false;
 
 interface FileOpenV2Trace {
   trace: UxLatencyTrace;
@@ -902,23 +901,6 @@ function deleteFileOpenV2Trace(entry: FileOpenV2Trace): void {
       fileOpenV2Traces.delete(key);
     }
   }
-}
-
-function getVisibilityEpoch(): number {
-  if (typeof document === "undefined") return visibilityEpoch;
-  if (!visibilityListenerInstalled) {
-    visibilityListenerInstalled = true;
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
-        visibilityEpoch += 1;
-      }
-    });
-  }
-  return visibilityEpoch;
-}
-
-function isDocumentHidden(): boolean {
-  return typeof document !== "undefined" && document.hidden;
 }
 
 function openTimingKey(project_id: string, path: string): string {
@@ -1195,10 +1177,11 @@ function recordFileOpenUxLatency(
   if (data.ux_latency_logged[flag]) return;
   data.ux_latency_logged[flag] = true;
   const wallElapsedMs = Date.now() - data.wallStart;
+  const visibility = capturePageVisibility();
   const hiddenDuringOpen =
     data.startedHidden ||
-    isDocumentHidden() ||
-    getVisibilityEpoch() !== data.visibilityEpoch;
+    visibility.page_hidden ||
+    visibility.visibility_epoch !== data.visibilityEpoch;
   const wallClockSkewMs = wallElapsedMs - elapsed_ms;
   const staleReason =
     elapsed_ms > FILE_OPEN_STALE_AFTER_MS
@@ -1243,8 +1226,9 @@ export function restart_open_timer(
   if (data == null) return;
   data.wallStart = Date.now();
   data.uxStart = startUxTimer();
-  data.visibilityEpoch = getVisibilityEpoch();
-  data.startedHidden = isDocumentHidden();
+  const visibility = capturePageVisibility();
+  data.visibilityEpoch = visibility.visibility_epoch;
+  data.startedHidden = visibility.page_hidden;
   data.marks = {};
   data.lastPhase = undefined;
   data.lastPhaseDetails = details;
@@ -1324,14 +1308,15 @@ export function log_file_open(
   // not simple to define.
   if (id !== undefined) {
     const key = openTimingKey(project_id, path);
+    const visibility = capturePageVisibility();
     log_open_time[key] = {
       id,
       project_id,
       path,
       wallStart: Date.now(),
       uxStart: startUxTimer(),
-      visibilityEpoch: getVisibilityEpoch(),
-      startedHidden: isDocumentHidden(),
+      visibilityEpoch: visibility.visibility_epoch,
+      startedHidden: visibility.page_hidden,
       marks: { open_start: 0 },
       lastPhaseDetails: undefined,
       lastPhase: undefined,

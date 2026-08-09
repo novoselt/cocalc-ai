@@ -226,13 +226,6 @@ type ProjectStartUxMilestones = {
   lro_completed_after_ms?: number;
 };
 
-function projectStartTimestampMs(value: unknown): number | undefined {
-  if (value == null) return undefined;
-  const timestamp =
-    value instanceof Date ? value.getTime() : Date.parse(`${value}`);
-  return Number.isFinite(timestamp) ? timestamp : undefined;
-}
-
 const ROOTFS_PREPARE_SEGMENT_MIN_MS = 1_000;
 
 function classifyCompletedProjectStartUxSegment({
@@ -3933,10 +3926,10 @@ export class ProjectsActions extends Actions<ProjectsState> {
           initialSegment: segment,
           completion: terminal,
         });
-        const backendStartedAtMs = projectStartTimestampMs(
+        const backendStartedAtMs = dateValueMs(
           terminal?.started_at ?? terminal?.created_at,
         );
-        const backendFinishedAtMs = projectStartTimestampMs(
+        const backendFinishedAtMs = dateValueMs(
           terminal?.finished_at ?? terminal?.updated_at,
         );
         const backendLifecycleMs =

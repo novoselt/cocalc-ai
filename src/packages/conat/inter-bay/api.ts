@@ -1923,6 +1923,52 @@ export interface ActiveUserMapHistoryReport {
   accounts: ActiveUserMapHistoryAccount[];
 }
 
+export type ActiveUserMapHistoryWindowMinutes = 60 | 1440;
+
+export interface ActiveUserMapHistorySeriesRequest {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  days?: number;
+  country_code?: string;
+}
+
+export interface ActiveUserMapHistoryPoint {
+  snapshot_hour: string;
+  captured_at: string;
+  total_active: number;
+  mapped_active: number;
+  unknown_location: number;
+  usage_metrics_not_enabled: number;
+  bay_count: number;
+  active_count: number;
+}
+
+export interface ActiveUserMapHistorySeries {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  days: number;
+  country_code: string | null;
+  country_codes: string[];
+  points: ActiveUserMapHistoryPoint[];
+}
+
+export interface ActiveUserMapHistorySnapshotRequest {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  snapshot_hour?: string;
+  direction?: "backward" | "forward" | "nearest";
+}
+
+export interface ActiveUserMapHistorySnapshotCountry {
+  country_code: string;
+  count: number;
+}
+
+export interface ActiveUserMapHistorySnapshot extends Omit<
+  ActiveUserMapHistoryPoint,
+  "active_count"
+> {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  countries: ActiveUserMapHistorySnapshotCountry[];
+}
+
 export interface BayOpsSetServerSettingRequest {
   name: string;
   value: string;
@@ -2658,6 +2704,8 @@ export type BayOpsMethod =
   | "get-membership-analytics-overview"
   | "get-active-user-map"
   | "get-active-user-map-history-report"
+  | "get-active-user-map-history-series"
+  | "get-active-user-map-history-snapshot"
   | "get-membership-analytics-events"
   | "backfill-membership-analytics-purchases"
   | "get-webapp-crashes"
@@ -4288,6 +4336,12 @@ export interface InterBayBayOpsApi {
   getActiveUserMapHistoryReport: (
     opts: ActiveUserMapHistoryReportRequest,
   ) => Promise<ActiveUserMapHistoryReport>;
+  getActiveUserMapHistorySeries: (
+    opts: ActiveUserMapHistorySeriesRequest,
+  ) => Promise<ActiveUserMapHistorySeries>;
+  getActiveUserMapHistorySnapshot: (
+    opts: ActiveUserMapHistorySnapshotRequest,
+  ) => Promise<ActiveUserMapHistorySnapshot | null>;
   getMembershipAnalyticsEvents: (
     opts: MembershipAnalyticsEventsQuery,
   ) => Promise<MembershipAnalyticsEventRow[]>;
@@ -9774,6 +9828,24 @@ export function createInterBayBayOpsClient({
       method: "get-active-user-map-history-report",
     }),
   });
+  const activeUserMapHistorySeriesClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistorySeries">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-series",
+    }),
+  });
+  const activeUserMapHistorySnapshotClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistorySnapshot">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-snapshot",
+    }),
+  });
   const membershipAnalyticsEventsClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getMembershipAnalyticsEvents">
   >({
@@ -9839,6 +9911,14 @@ export function createInterBayBayOpsClient({
       await activeUserMapClient.getActiveUserMap(opts),
     getActiveUserMapHistoryReport: async (opts) =>
       await activeUserMapHistoryReportClient.getActiveUserMapHistoryReport(
+        opts,
+      ),
+    getActiveUserMapHistorySeries: async (opts) =>
+      await activeUserMapHistorySeriesClient.getActiveUserMapHistorySeries(
+        opts,
+      ),
+    getActiveUserMapHistorySnapshot: async (opts) =>
+      await activeUserMapHistorySnapshotClient.getActiveUserMapHistorySnapshot(
         opts,
       ),
     getMembershipAnalyticsEvents: async (opts) =>
@@ -10126,6 +10206,34 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getActiveUserMapHistoryReport: async (opts) =>
           await impl.getActiveUserMapHistoryReport(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistorySeries">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-series",
+      }),
+      impl: {
+        getActiveUserMapHistorySeries: async (opts) =>
+          await impl.getActiveUserMapHistorySeries(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistorySnapshot">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-snapshot",
+      }),
+      impl: {
+        getActiveUserMapHistorySnapshot: async (opts) =>
+          await impl.getActiveUserMapHistorySnapshot(opts),
       },
     }),
     createServiceHandler<

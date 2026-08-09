@@ -1,4 +1,4 @@
-import { once } from "./async-utils";
+import { mapParallelLimit, once } from "./async-utils";
 import { EventEmitter } from "events";
 
 describe("test once timing out due to close", () => {
@@ -33,5 +33,32 @@ describe("test once timing out due to close", () => {
       // timeout error, obviously
       expect(err.code).toBe(408);
     }
+  });
+});
+
+describe("mapParallelLimit", () => {
+  it("bounds concurrency and preserves input order", async () => {
+    let active = 0;
+    let peak = 0;
+    const result = await mapParallelLimit(
+      [30, 5, 10, 1],
+      async (delay, index) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        active -= 1;
+        return index;
+      },
+      2,
+    );
+
+    expect(peak).toBe(2);
+    expect(result).toEqual([0, 1, 2, 3]);
+  });
+
+  it("rejects invalid concurrency instead of waiting forever", async () => {
+    await expect(
+      mapParallelLimit([1], async (value) => value, 0),
+    ).rejects.toThrow("positive integer");
   });
 });
