@@ -31,11 +31,14 @@ preferred image per onboarding tag when possible:
 | `onboarding:documents`      | Fallback technical-document image |
 | `onboarding:teaching`       | Course project                    |
 
-The selector prefers the most specific tag, then a non-deprecated official
-image, catalog priority, and newest creation date. Existing broad tags such as
-`jupyter`, `sage`, `latex`, `preset:standard`, and `preset:teaching` remain
-compatibility fallbacks. If no tagged image is available, the site's normal
-project-creation default is used.
+Only official images are eligible for onboarding tag selection. The publish
+modal suggests the `onboarding:*` tags only to admins, since only admins can
+publish official images. Among eligible images, the selector prefers the most
+specific tag, then a non-deprecated image, catalog priority, and newest creation
+date. Existing broad tags such as `jupyter`, `sage`, `latex`,
+`preset:standard`, and `preset:teaching` remain compatibility fallbacks. If no
+official tagged image is available, the site's normal project-creation default
+is used.
 
 ## End-to-end flow
 

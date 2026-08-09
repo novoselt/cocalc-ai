@@ -22,11 +22,23 @@ describe("chooseOnboardingRootfs", () => {
       kind: "latex",
       images: [
         image("generic", ["latex"], { official: true, priority: 100 }),
-        image("onboarding", ["onboarding:latex"]),
+        image("onboarding", ["onboarding:latex"], { official: true }),
       ],
     });
     expect(result?.image_id).toBe("onboarding");
     expect(result?.matched_tag).toBe("onboarding:latex");
+  });
+
+  it("never selects a non-official image from onboarding tags", () => {
+    const result = chooseOnboardingRootfs({
+      kind: "latex",
+      images: [image("community", ["onboarding:latex"])],
+      fallback: { image: "registry/default:1", image_id: "default" },
+    });
+    expect(result).toEqual({
+      image: "registry/default:1",
+      image_id: "default",
+    });
   });
 
   it("prefers non-deprecated official images within a tag", () => {

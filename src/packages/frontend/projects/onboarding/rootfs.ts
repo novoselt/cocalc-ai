@@ -23,6 +23,20 @@ export type OnboardingRootfsSelection = {
   matched_tag?: string;
 };
 
+export const ONBOARDING_ROOTFS_ADMIN_TAGS = [
+  "onboarding:jupyter-python",
+  "onboarding:jupyter-r",
+  "onboarding:jupyter-julia",
+  "onboarding:jupyter",
+  "onboarding:sage",
+  "onboarding:math",
+  "onboarding:code",
+  "onboarding:codex",
+  "onboarding:latex",
+  "onboarding:documents",
+  "onboarding:teaching",
+] as const;
+
 // Sites can change images without changing onboarding code. The first tag is
 // the stable convention; later tags keep existing catalogs useful.
 export const ONBOARDING_ROOTFS_TAGS: Record<
@@ -117,8 +131,10 @@ export function chooseOnboardingRootfs({
 }): OnboardingRootfsSelection | undefined {
   const tags = ONBOARDING_ROOTFS_TAGS[kind];
   const candidates = images
-    .filter((entry) =>
-      isNewProjectRootfsSelectable({ entry, isGpu: false, isAdmin }),
+    .filter(
+      (entry) =>
+        entry.official === true &&
+        isNewProjectRootfsSelectable({ entry, isGpu: false, isAdmin }),
     )
     .map((entry) => ({ entry, rank: tagRank(entry, tags) }))
     .filter(
