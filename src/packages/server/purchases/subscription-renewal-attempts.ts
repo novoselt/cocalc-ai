@@ -31,7 +31,7 @@ export async function scheduleSubscriptionRenewalAttempt({
   const { rows } = await queryable(client).query<{ id: string }>(
     `INSERT INTO subscription_renewal_attempts
        (id, subscription_id, account_id, period_end, target_period_end,
-        amount, state, not_before, next_attempt_at, attempt_count,
+        amount, funding_version, state, not_before, next_attempt_at, attempt_count,
         created_at, updated_at)
      SELECT gen_random_uuid(), s.id, s.account_id, s.current_period_end,
             s.current_period_end +
@@ -40,7 +40,7 @@ export async function scheduleSubscriptionRenewalAttempt({
                   THEN INTERVAL '1 year'
                 ELSE INTERVAL '1 month'
               END,
-            s.cost, 'scheduled', s.current_period_end,
+            s.cost, 1, 'scheduled', s.current_period_end,
             s.current_period_end, 0, NOW(), NOW()
        FROM subscriptions s
      WHERE s.id=$1
@@ -57,6 +57,8 @@ export async function scheduleSubscriptionRenewalAttempt({
        lease_expires_at=NULL,
        last_attempt_at=NULL,
        attempt_count=0,
+       balance_applied=NULL,
+       funding_version=1,
        last_error=NULL,
        completed_at=NULL,
        updated_at=NOW()
@@ -69,6 +71,22 @@ export async function scheduleSubscriptionRenewalAttempt({
   if (rows[0]?.id) {
     return rows[0].id;
   }
+  await queryable(client).query(
+    `UPDATE subscription_renewal_attempts a
+        SET funding_version=1, updated_at=NOW()
+       FROM subscriptions s
+      WHERE a.subscription_id=$1
+        AND a.account_id=$2
+        AND s.id=a.subscription_id
+        AND s.account_id=a.account_id
+        AND a.period_end=s.current_period_end
+        AND a.funding_version IS NULL
+        AND a.attempt_count=0
+        AND a.last_attempt_at IS NULL
+        AND a.stripe_invoice_id IS NULL
+        AND a.payment_intent_id IS NULL`,
+    [subscription_id, account_id],
+  );
   const existing = await queryable(client).query<{ id: string }>(
     `SELECT a.id
        FROM subscription_renewal_attempts a
@@ -85,10 +103,20 @@ export async function scheduleSubscriptionRenewalAttempt({
 
 export async function scheduleMissingSubscriptionRenewalAttempts(): Promise<number> {
   await cancelStaleSubscriptionRenewalAttempts();
+  await getPool().query(
+    `UPDATE subscription_renewal_attempts
+        SET funding_version=1, updated_at=NOW()
+      WHERE funding_version IS NULL
+        AND state IN ('scheduled','processing')
+        AND attempt_count=0
+        AND last_attempt_at IS NULL
+        AND stripe_invoice_id IS NULL
+        AND payment_intent_id IS NULL`,
+  );
   const { rowCount } = await getPool().query(
     `INSERT INTO subscription_renewal_attempts
        (id, subscription_id, account_id, period_end, target_period_end,
-        amount, state, not_before, next_attempt_at, attempt_count,
+        amount, funding_version, state, not_before, next_attempt_at, attempt_count,
         created_at, updated_at)
      SELECT gen_random_uuid(), s.id, s.account_id, s.current_period_end,
             s.current_period_end +
@@ -97,7 +125,7 @@ export async function scheduleMissingSubscriptionRenewalAttempts(): Promise<numb
                   THEN INTERVAL '1 year'
                 ELSE INTERVAL '1 month'
               END,
-            s.cost, 'scheduled', s.current_period_end,
+            s.cost, 1, 'scheduled', s.current_period_end,
             s.current_period_end, 0, NOW(), NOW()
        FROM subscriptions s
       WHERE s.metadata->>'type'='membership'
@@ -293,6 +321,7 @@ export async function setSubscriptionPaymentFromAttempt({
     payment_intent_id: payment_intent_id ?? attempt.payment_intent_id,
     subscription_id: attempt.subscription_id,
     amount: toDecimal(attempt.amount).toNumber(),
+    balance_applied: toDecimal(attempt.balance_applied ?? 0).toNumber(),
     created: new Date(attempt.created_at).valueOf(),
     status: "active",
     new_expires_ms: new Date(attempt.target_period_end).valueOf(),

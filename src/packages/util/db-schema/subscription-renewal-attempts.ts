@@ -20,6 +20,8 @@ export interface SubscriptionRenewalAttempt {
   period_end: Date;
   target_period_end: Date;
   amount: MoneyValue;
+  balance_applied?: MoneyValue | null;
+  funding_version?: number | null;
   state: SubscriptionRenewalAttemptState;
   not_before: Date;
   next_attempt_at: Date;
@@ -87,6 +89,15 @@ Table({
       type: "number",
       pg_type: "numeric(20,10)",
       desc: "Renewal charge in US dollars.",
+    },
+    balance_applied: {
+      type: "number",
+      pg_type: "numeric(20,10)",
+      desc: "Account balance committed to this renewal before any Stripe payment is created. Null means the funding decision has not been made.",
+    },
+    funding_version: {
+      type: "integer",
+      desc: "Version of the funding decision algorithm. Null preserves full-card compatibility for attempts that may predate durable split funding.",
     },
     state: {
       type: "string",

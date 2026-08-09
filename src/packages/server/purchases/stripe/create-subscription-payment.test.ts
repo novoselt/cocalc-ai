@@ -12,6 +12,7 @@ import {
   createTestMembershipSubscription,
 } from "@cocalc/server/purchases/test-data";
 import createCredit from "@cocalc/server/purchases/create-credit";
+import createPurchase from "@cocalc/server/purchases/create-purchase";
 import getBalance from "@cocalc/server/purchases/get-balance";
 import { bindSubscriptionRenewalPaymentIntent } from "../subscription-renewal-attempts";
 
@@ -79,6 +80,7 @@ afterAll(after);
 
 describe("createSubscriptionPayment", () => {
   beforeEach(async () => {
+    await getPool().query("DELETE FROM subscription_renewal_attempts");
     await getPool().query("DELETE FROM subscriptions");
     mockCreatePaymentIntent.mockReset().mockImplementation(async (opts) => {
       await bindSubscriptionRenewalPaymentIntent({
@@ -350,6 +352,249 @@ describe("createSubscriptionPayment", () => {
       { payment_intent_id: null, state: "succeeded" },
       { payment_intent_id: null, state: "scheduled" },
     ]);
+  });
+
+  it("uses partial balance and charges Stripe only for the remainder", async () => {
+    const account_id = uuid();
+    const end = new Date(Date.now() - 60_000);
+    await createTestAccount(account_id);
+    await createCredit({ account_id, amount: 68.78 });
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end,
+      },
+    );
+    mockUseBalanceTowardSubscriptions.mockResolvedValue(true);
+
+    const result = await createSubscriptionPayment({
+      account_id,
+      subscription_id,
+    });
+
+    expect(result).toEqual({ payment_intent_id: "pi_renewal" });
+    expect(mockCreatePaymentIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lineItems: [
+          expect.objectContaining({ amount: 72 }),
+          expect.objectContaining({ amount: -68.78 }),
+        ],
+        metadata: expect.objectContaining({
+          balance_applied_usd: "68.78",
+          renewal_total_usd: "72.00",
+        }),
+      }),
+    );
+
+    const { rows: attempts } = await getPool().query(
+      `SELECT id, balance_applied
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1 AND payment_intent_id='pi_renewal'`,
+      [subscription_id],
+    );
+    expect(Number(attempts[0].balance_applied)).toBe(68.78);
+
+    const credit_id = await createCredit({
+      account_id,
+      amount: 3.22,
+      invoice_id: "pi_renewal",
+    });
+    const paymentIntent = {
+      id: "pi_renewal",
+      metadata: {
+        credit_id: `${credit_id}`,
+        renewal_attempt_id: attempts[0].id,
+        subscription_id: `${subscription_id}`,
+      },
+    };
+    await processSubscriptionRenewal({
+      account_id,
+      paymentIntent,
+      amount: 3.22,
+    });
+    await processSubscriptionRenewal({
+      account_id,
+      paymentIntent,
+      amount: 3.22,
+    });
+
+    expect(Number(await getBalance({ account_id }))).toBe(0);
+    const { rows: purchases } = await getPool().query(
+      `SELECT cost, description
+         FROM purchases
+        WHERE account_id=$1
+          AND service='membership'
+          AND (description->>'subscription_id')::int=$2`,
+      [account_id, subscription_id],
+    );
+    expect(purchases).toHaveLength(1);
+    expect(Number(purchases[0].cost)).toBe(72);
+    expect(purchases[0].description).toMatchObject({ credit_id });
+  });
+
+  it("rejects an invalid persisted balance allocation", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end: new Date(Date.now() - 60_000),
+      },
+    );
+    await getPool().query(
+      `UPDATE subscription_renewal_attempts
+          SET balance_applied=80
+        WHERE subscription_id=$1`,
+      [subscription_id],
+    );
+
+    await expect(
+      createSubscriptionPayment({ account_id, subscription_id }),
+    ).rejects.toThrow(/invalid account balance allocation/);
+    expect(mockCreatePaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("does not fulfill a split renewal after its balance was spent", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    await createCredit({ account_id, amount: 68.78 });
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end: new Date(Date.now() - 60_000),
+      },
+    );
+    mockUseBalanceTowardSubscriptions.mockResolvedValue(true);
+    await createSubscriptionPayment({ account_id, subscription_id });
+    const { rows: attempts } = await getPool().query(
+      `SELECT id
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1 AND payment_intent_id='pi_renewal'`,
+      [subscription_id],
+    );
+
+    await createPurchase({
+      account_id,
+      client: null,
+      cost: 1,
+      description: { type: "credit", description: "Concurrent purchase" },
+      service: "credit",
+    });
+    const credit_id = await createCredit({
+      account_id,
+      amount: 3.22,
+      invoice_id: "pi_renewal",
+    });
+
+    await expect(
+      processSubscriptionRenewal({
+        account_id,
+        paymentIntent: {
+          id: "pi_renewal",
+          metadata: {
+            credit_id: `${credit_id}`,
+            renewal_attempt_id: attempts[0].id,
+            subscription_id: `${subscription_id}`,
+          },
+        },
+        amount: 3.22,
+      }),
+    ).rejects.toThrow(/balance allocated.*no longer available/);
+
+    const { rows: purchases } = await getPool().query(
+      `SELECT id
+         FROM purchases
+        WHERE account_id=$1
+          AND service='membership'
+          AND (description->>'subscription_id')::int=$2`,
+      [account_id, subscription_id],
+    );
+    expect(purchases).toHaveLength(0);
+  });
+
+  it("preserves partial balance when an open PAYG purchase exists", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    await createCredit({ account_id, amount: 68.78 });
+    await createPurchase({
+      account_id,
+      client: null,
+      cost_per_hour: 1,
+      description: {
+        type: "dedicated-host",
+        host_id: uuid(),
+        provider: "test",
+        funding_lane: "prepaid",
+        hourly_cost_usd: 1,
+      },
+      period_start: new Date(),
+      service: "dedicated-host",
+    });
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end: new Date(Date.now() - 60_000),
+      },
+    );
+    mockUseBalanceTowardSubscriptions.mockResolvedValue(true);
+
+    await createSubscriptionPayment({ account_id, subscription_id });
+
+    expect(mockCreatePaymentIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lineItems: [expect.objectContaining({ amount: 72 })],
+        metadata: expect.objectContaining({ balance_applied_usd: "0.00" }),
+      }),
+    );
+    const { rows } = await getPool().query(
+      `SELECT balance_applied
+         FROM subscription_renewal_attempts
+        WHERE subscription_id=$1 AND payment_intent_id='pi_renewal'`,
+      [subscription_id],
+    );
+    expect(Number(rows[0].balance_applied)).toBe(0);
+  });
+
+  it("keeps an already-attempted pre-split renewal on full-card funding", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    await createCredit({ account_id, amount: 68.78 });
+    const { subscription_id } = await createTestMembershipSubscription(
+      account_id,
+      {
+        cost: 72,
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        end: new Date(Date.now() - 60_000),
+      },
+    );
+    await getPool().query(
+      `UPDATE subscription_renewal_attempts
+          SET funding_version=NULL,
+              attempt_count=1,
+              last_attempt_at=NOW() - INTERVAL '5 minutes',
+              lease_expires_at=NULL,
+              next_attempt_at=NOW()
+        WHERE subscription_id=$1`,
+      [subscription_id],
+    );
+    mockUseBalanceTowardSubscriptions.mockResolvedValue(true);
+
+    await createSubscriptionPayment({ account_id, subscription_id });
+
+    expect(mockCreatePaymentIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lineItems: [expect.objectContaining({ amount: 72 })],
+        metadata: expect.objectContaining({ balance_applied_usd: "0.00" }),
+      }),
+    );
   });
 
   it("does not let the legacy payment route collect before period end", async () => {
