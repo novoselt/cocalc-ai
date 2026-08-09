@@ -14,7 +14,7 @@ import {
   type ManagedProjectEgressPolicy,
 } from "@cocalc/server/membership/managed-egress-policy";
 import { recordManagedProjectEgress as recordManagedProjectEgressRaw } from "@cocalc/server/membership/managed-egress";
-import { capitalize, humanSize } from "@cocalc/util/misc";
+import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 import {
   clearHubManagedEgressBlockedAccount,
   clearHubManagedEgressBlockedAccounts,
@@ -206,53 +206,12 @@ function summarizeActiveSocketsByAccount(
   return byAccount;
 }
 
-function formatByteCount(bytes: number): string {
-  return humanSize(Math.max(0, bytes));
-}
-
-function formatManagedEgressCategory(category: string): string {
-  if (category === "file-download") return "File downloads";
-  if (category === "http-proxy") return "App server HTTP traffic";
-  if (category === "ws-proxy") return "App server WebSocket traffic";
-  if (category === "ssh") return "SSH traffic";
-  if (category === "interactive-conat") return "Interactive session traffic";
-  if (category === "control-plane-conat") return "Account control traffic";
-  if (category === "backup-upload") return "Project backup uploads";
-  return capitalize(category.replace(/[-_]/g, " "));
-}
-
 function buildBlockedMessage(policy: ManagedProjectEgressPolicy): string {
-  const breakdown = Object.entries(
-    policy.managed_egress_categories_5h_bytes ?? {},
-  )
-    .filter(
-      ([, bytes]) =>
-        typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-    )
-    .map(
-      ([category, bytes]) =>
-        `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-    );
-  const lines = [
+  return [
     "Account control traffic safety limit reached.",
     "New browser control-plane connections are temporarily blocked because this account generated an abnormal amount of control traffic.",
-  ];
-  if (policy.egress_5h_bytes != null) {
-    lines.push(
-      `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes ?? 0)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-    );
-  }
-  if (policy.egress_7d_bytes != null) {
-    lines.push(
-      `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes ?? 0)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-    );
-  }
-  if (breakdown.length > 0) {
-    lines.push(
-      `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-    );
-  }
-  return lines.join("\n");
+    ...formatManagedEgressPolicyDetails(policy),
+  ].join("\n");
 }
 
 export function startHubConatManagedEgressLoop({

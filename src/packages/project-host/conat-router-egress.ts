@@ -11,7 +11,7 @@ import type { ConatServer } from "@cocalc/conat/core/server";
 import { hubApi } from "@cocalc/lite/hub/api";
 import { getExamUsageAccountId } from "./exam/usage";
 import type { ManagedProjectEgressCategory } from "@cocalc/conat/hub/api/system";
-import { capitalize, humanSize } from "@cocalc/util/misc";
+import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 import {
   clearProjectHostManagedEgressBlockedAccount,
   clearProjectHostManagedEgressBlockedAccounts,
@@ -199,59 +199,20 @@ function summarizeActiveSocketsByAccount(
   return byAccount;
 }
 
-function formatByteCount(bytes: number): string {
-  return humanSize(Math.max(0, bytes));
-}
-
-function formatManagedEgressCategory(category: string): string {
-  if (category === "file-download") return "File downloads";
-  if (category === "http-proxy") return "App server HTTP traffic";
-  if (category === "ws-proxy") return "App server WebSocket traffic";
-  if (category === "ssh") return "SSH traffic";
-  if (category === "interactive-conat") return "Interactive session traffic";
-  if (category === "backup-upload") return "Project backup uploads";
-  if (category === "raw-network") return "Project outbound network traffic";
-  return capitalize(category.replace(/[-_]/g, " "));
-}
-
 function buildBlockedMessage(policy: {
+  blocked_by?: "5h" | "7d";
   managed_egress_5h_bytes?: number;
   managed_egress_7d_bytes?: number;
   egress_5h_bytes?: number;
   egress_7d_bytes?: number;
   managed_egress_categories_5h_bytes?: Record<string, number>;
+  managed_egress_categories_7d_bytes?: Record<string, number>;
 }): string {
-  const breakdown = Object.entries(
-    policy.managed_egress_categories_5h_bytes ?? {},
-  )
-    .filter(
-      ([, bytes]) =>
-        typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-    )
-    .map(
-      ([category, bytes]) =>
-        `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-    );
-  const lines = [
+  return [
     "Interactive session traffic limit reached for this account.",
     "New terminal, notebook, and editor session traffic is temporarily blocked until the egress usage window resets.",
-  ];
-  if (policy.egress_5h_bytes != null) {
-    lines.push(
-      `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes ?? 0)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-    );
-  }
-  if (policy.egress_7d_bytes != null) {
-    lines.push(
-      `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes ?? 0)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-    );
-  }
-  if (breakdown.length > 0) {
-    lines.push(
-      `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-    );
-  }
-  return lines.join("\n");
+    ...formatManagedEgressPolicyDetails(policy),
+  ].join("\n");
 }
 
 export function startConatRouterManagedEgressLoop({

@@ -26,7 +26,7 @@ import {
   type Client as ConatClient,
 } from "@cocalc/conat/core/client";
 import { setConatClient } from "@cocalc/conat/client";
-import { humanSize } from "@cocalc/util/misc";
+import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 import { server as createPersistServer } from "@cocalc/backend/conat/persist";
 import { init as initRunner } from "@cocalc/project-runner/run";
 import { client as projectRunnerClient } from "@cocalc/conat/project/runner/run";
@@ -189,10 +189,7 @@ import {
   MANAGED_WS_EGRESS_CATEGORY,
   setManagedWsEgressContext,
 } from "./ws-egress";
-import {
-  MANAGED_RAW_NETWORK_EGRESS_CATEGORY,
-  startManagedRawNetworkEgressLoop,
-} from "./raw-network-egress";
+import { startManagedRawNetworkEgressLoop } from "./raw-network-egress";
 import { startManagedCpuUsageLoop } from "./cpu-usage";
 import { startExamWatchdog } from "./exam/controller";
 import { getExamUsageAccountId } from "./exam/usage";
@@ -233,30 +230,6 @@ const PRIVATE_APP_ROUTE_CACHE_MS = Math.max(
   1000,
   Number(process.env.COCALC_PROJECT_HOST_PRIVATE_APP_ROUTE_CACHE_MS ?? 30_000),
 );
-
-function formatManagedEgressCategory(category: string): string {
-  if (category === "file-download") return "File downloads";
-  if (category === MANAGED_HTTP_EGRESS_CATEGORY) {
-    return "App server HTTP traffic";
-  }
-  if (category === MANAGED_WS_EGRESS_CATEGORY) {
-    return "App server WebSocket traffic";
-  }
-  if (category === "ssh") return "SSH traffic";
-  if (category === "interactive-conat") return "Interactive session traffic";
-  if (category === "backup-upload") return "Project backup uploads";
-  if (category === MANAGED_RAW_NETWORK_EGRESS_CATEGORY) {
-    return "Project outbound network traffic";
-  }
-  return category.replace(/[-_]/g, " ");
-}
-
-function formatByteCount(bytes?: number): string {
-  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
-    return "unknown";
-  }
-  return humanSize(bytes);
-}
 
 export interface ProjectHostConfig {
   hostId?: string;
@@ -842,36 +815,11 @@ export async function main(
       if (policy.allowed) {
         return { allowed: true };
       }
-      const breakdown = Object.entries(
-        policy.managed_egress_categories_5h_bytes ?? {},
-      )
-        .filter(
-          ([, bytes]) =>
-            typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-        )
-        .map(
-          ([category, bytes]) =>
-            `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-        );
       const lines = [
         "Managed download limit reached for this account.",
         "New file downloads are temporarily blocked until the egress usage window resets.",
+        ...formatManagedEgressPolicyDetails(policy),
       ];
-      if (policy.egress_5h_bytes != null) {
-        lines.push(
-          `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-        );
-      }
-      if (policy.egress_7d_bytes != null) {
-        lines.push(
-          `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-        );
-      }
-      if (breakdown.length > 0) {
-        lines.push(
-          `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-        );
-      }
       return {
         allowed: false,
         message: lines.join("\n"),
@@ -948,36 +896,11 @@ export async function main(
       if (policy.allowed) {
         return { allowed: true };
       }
-      const breakdown = Object.entries(
-        policy.managed_egress_categories_5h_bytes ?? {},
-      )
-        .filter(
-          ([, bytes]) =>
-            typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-        )
-        .map(
-          ([category, bytes]) =>
-            `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-        );
       const lines = [
         "Managed app HTTP limit reached for this project.",
         "New app HTTP responses are temporarily blocked until the egress usage window resets.",
+        ...formatManagedEgressPolicyDetails(policy),
       ];
-      if (policy.egress_5h_bytes != null) {
-        lines.push(
-          `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-        );
-      }
-      if (policy.egress_7d_bytes != null) {
-        lines.push(
-          `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-        );
-      }
-      if (breakdown.length > 0) {
-        lines.push(
-          `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-        );
-      }
       return {
         allowed: false,
         message: lines.join("\n"),
@@ -1059,36 +982,11 @@ export async function main(
       if (policy.allowed) {
         return { allowed: true };
       }
-      const breakdown = Object.entries(
-        policy.managed_egress_categories_5h_bytes ?? {},
-      )
-        .filter(
-          ([, bytes]) =>
-            typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-        )
-        .map(
-          ([category, bytes]) =>
-            `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-        );
       const lines = [
         "Managed app WebSocket limit reached for this project.",
         "New app WebSocket traffic is temporarily blocked until the egress usage window resets.",
+        ...formatManagedEgressPolicyDetails(policy),
       ];
-      if (policy.egress_5h_bytes != null) {
-        lines.push(
-          `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-        );
-      }
-      if (policy.egress_7d_bytes != null) {
-        lines.push(
-          `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-        );
-      }
-      if (breakdown.length > 0) {
-        lines.push(
-          `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-        );
-      }
       return {
         allowed: false,
         message: lines.join("\n"),
