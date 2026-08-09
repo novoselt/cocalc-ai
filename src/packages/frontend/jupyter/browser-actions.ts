@@ -477,7 +477,9 @@ export class JupyterActions extends JupyterActions0 {
     };
   };
 
-  public noteOpenInitStart = (data: Record<string, any> = {}): void => {
+  public noteOpenInitStart = (
+    data: Record<string, any> & { project_id?: string } = {},
+  ): void => {
     if (this.openInitStartedAt == null) {
       this.openInitStartedAt = Date.now();
       this.openInitMarks = { open_start: 0 };
@@ -485,7 +487,9 @@ export class JupyterActions extends JupyterActions0 {
       this.openInitFirstVisibleLogged = false;
       this.openUxTrace = new UxLatencyTrace({
         event_type: "jupyter_open",
-        project_id: this.project_id,
+        // create_jupyter_actions starts this trace before _init assigns the
+        // inherited project_id field.
+        project_id: data.project_id ?? this.project_id,
         source: "editor_actions_init",
         surface_visible: true,
         stale_after_ms: JUPYTER_OPEN_INCOMPLETE_AFTER_MS,

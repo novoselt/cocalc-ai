@@ -36,6 +36,19 @@ describe("JupyterActions reconnect coordination", () => {
     mockJupyterClient.mockReset();
   });
 
+  it("captures the project id when open tracing starts before initialization", () => {
+    const actions: any = new JupyterActions("jupyter-test", {
+      getStore: jest.fn(() => undefined),
+      removeActions: jest.fn(),
+    } as any);
+    actions.runDebug = jest.fn();
+
+    actions.noteOpenInitStart({ project_id: "project-1" });
+
+    expect(actions.openUxTrace.options.project_id).toBe("project-1");
+    clearTimeout(actions.openUxIncompleteTimer);
+  });
+
   it("registers a reconnect resource that waits for live syncdb recovery", async () => {
     const wait_until_live_connected = jest.fn(async () => {});
     const wait_until_ready = jest.fn(async () => {});
