@@ -1,4 +1,7 @@
-import { classifyUxTraceStaleReason } from "./ux-latency-trace";
+import {
+  capturePageVisibility,
+  classifyUxTraceStaleReason,
+} from "./ux-latency-trace";
 
 const BASE = {
   elapsed_ms: 1000,
@@ -38,5 +41,24 @@ describe("classifyUxTraceStaleReason", () => {
     expect(
       classifyUxTraceStaleReason({ ...BASE, visibility_changed: true }),
     ).toBe("page_hidden");
+  });
+});
+
+describe("capturePageVisibility", () => {
+  it("shares one epoch that advances when the page becomes hidden", () => {
+    const hidden = jest.spyOn(document, "hidden", "get");
+    hidden.mockReturnValue(false);
+    const before = capturePageVisibility();
+
+    hidden.mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    const after = capturePageVisibility();
+
+    expect(before.page_hidden).toBe(false);
+    expect(after).toEqual({
+      page_hidden: true,
+      visibility_epoch: before.visibility_epoch + 1,
+    });
+    hidden.mockRestore();
   });
 });
