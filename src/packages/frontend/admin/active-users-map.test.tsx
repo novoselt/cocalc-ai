@@ -11,11 +11,15 @@ describe("ActiveUsersMapSummary", () => {
         mapped={435}
         unavailable={358}
         onShowUnavailable={onShowUnavailable}
+        hint="Select a country to view its active users."
       />,
     );
 
     expect(screen.getByText("Active users:")).toHaveTextContent("793");
     expect(screen.getByText("On map:")).toHaveTextContent("435");
+    expect(
+      screen.getByText("Select a country to view its active users."),
+    ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Location unavailable: 358" }),
     );
@@ -29,6 +33,7 @@ describe("ActiveUsersMapSummary", () => {
         mapped={42}
         unavailable={0}
         onShowUnavailable={jest.fn()}
+        hint="Select a country to view its active users."
       />,
     );
 

@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Button, Space, Typography } from "antd";
+import { Button, Flex, Space, Typography } from "antd";
 
 const { Text } = Typography;
 
@@ -13,41 +13,46 @@ export function ActiveUsersMapSummary({
   usageMetricsNotEnabled,
   unavailable,
   onShowUnavailable,
+  hint,
 }: {
   total: number;
   mapped: number;
   usageMetricsNotEnabled?: number;
   unavailable: number;
   onShowUnavailable?: () => void;
+  hint: string;
 }) {
   return (
-    <Space wrap>
-      <Text>
-        Active users: <Text strong>{total}</Text>
-      </Text>
-      <Text type="secondary">·</Text>
-      <Text>
-        On map: <Text strong>{mapped}</Text>
-      </Text>
-      {usageMetricsNotEnabled != null && (
-        <Space>
-          <Text type="secondary">·</Text>
-          <Text>
-            Usage metrics not enabled:{" "}
-            <Text strong>{usageMetricsNotEnabled}</Text>
-          </Text>
-        </Space>
-      )}
-      <Text type="secondary">·</Text>
-      {unavailable > 0 && onShowUnavailable ? (
-        <Button type="link" size="small" onClick={onShowUnavailable}>
-          Location unavailable: <strong>{unavailable}</strong>
-        </Button>
-      ) : (
+    <Flex justify="space-between" align="center" wrap gap="small">
+      <Space wrap>
         <Text>
-          Location unavailable: <Text strong>{unavailable}</Text>
+          Active users: <Text strong>{total}</Text>
         </Text>
-      )}
-    </Space>
+        <Text type="secondary">·</Text>
+        <Text>
+          On map: <Text strong>{mapped}</Text>
+        </Text>
+        {usageMetricsNotEnabled != null && (
+          <Space>
+            <Text type="secondary">·</Text>
+            <Text>
+              Usage metrics not enabled:{" "}
+              <Text strong>{usageMetricsNotEnabled}</Text>
+            </Text>
+          </Space>
+        )}
+        <Text type="secondary">·</Text>
+        {unavailable > 0 && onShowUnavailable ? (
+          <Button type="link" size="small" onClick={onShowUnavailable}>
+            Location unavailable: <strong>{unavailable}</strong>
+          </Button>
+        ) : (
+          <Text>
+            Location unavailable: <Text strong>{unavailable}</Text>
+          </Text>
+        )}
+      </Space>
+      <Text type="secondary">{hint}</Text>
+    </Flex>
   );
 }

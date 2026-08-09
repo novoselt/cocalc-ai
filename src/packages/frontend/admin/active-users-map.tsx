@@ -628,6 +628,11 @@ export function ActiveUsersMapAdmin() {
               onShowUnavailable={
                 view === "live" ? () => setSelectedGroup("unknown") : undefined
               }
+              hint={
+                view === "live"
+                  ? "Select a country to view its active users."
+                  : "Select a country to filter the plot."
+              }
             />
           ) : snapshotLoading || loading ? (
             <div style={{ padding: 48, textAlign: "center" }}>

@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Empty, Select, Space, Spin, Typography } from "antd";
+import { Empty, Flex, Select, Space, Spin, Typography } from "antd";
 
 import type {
   ActiveUserMapHistoryPoint,
@@ -194,21 +194,26 @@ export function ActiveUsersMapHistoryPlot({
 
   return (
     <Space vertical style={{ width: "100%" }}>
-      <Space align="center" wrap>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          {title}
-        </Typography.Title>
-        <Select
-          showSearch
-          optionFilterProp="label"
-          options={countryOptions}
-          value={selectedCountryCode ?? ALL_COUNTRIES}
-          onChange={(value) =>
-            onCountryChange(value === ALL_COUNTRIES ? undefined : value)
-          }
-          style={{ minWidth: 180 }}
-        />
-      </Space>
+      <Flex justify="space-between" align="center" wrap gap="small">
+        <Space align="center" wrap>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {title}
+          </Typography.Title>
+          <Select
+            showSearch
+            optionFilterProp="label"
+            options={countryOptions}
+            value={selectedCountryCode ?? ALL_COUNTRIES}
+            onChange={(value) =>
+              onCountryChange(value === ALL_COUNTRIES ? undefined : value)
+            }
+            style={{ minWidth: 180 }}
+          />
+        </Space>
+        <Typography.Text type="secondary">
+          Select a time to view it on the map.
+        </Typography.Text>
+      </Flex>
       {!history ? (
         loading ? (
           <Spin />
