@@ -91,6 +91,30 @@ describe("rolloutManagedComponents", () => {
     expect(rolloutProjectHostAcpWorkerMock).not.toHaveBeenCalled();
   });
 
+  it("leaves a project-host version transition to the host agent", async () => {
+    getManagedComponentStatusMock = jest.fn(() => [
+      { ...status("project-host"), version_state: "drifted" },
+    ]);
+    const { rolloutManagedComponents } =
+      await import("./managed-component-rollout");
+
+    await expect(
+      rolloutManagedComponents({
+        components: ["project-host"],
+        desired_version: "v2",
+      }),
+    ).resolves.toEqual({
+      results: [
+        {
+          component: "project-host",
+          action: "restart_scheduled",
+          message: "project-host version transition is owned by the host agent",
+        },
+      ],
+    });
+    expect(scheduleProjectHostRestartMock).not.toHaveBeenCalled();
+  });
+
   it("restarts managed local router and persist components", async () => {
     const { rolloutManagedComponents } =
       await import("./managed-component-rollout");

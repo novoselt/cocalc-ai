@@ -56,6 +56,15 @@ export async function rolloutManagedComponents({
     const status = statusByComponent.get(component);
     switch (component) {
       case "project-host":
+        if (status?.version_state === "drifted") {
+          results.push({
+            component,
+            action: "restart_scheduled",
+            message:
+              "project-host version transition is owned by the host agent",
+          });
+          break;
+        }
         await scheduleProjectHostRestart();
         results.push({
           component,
