@@ -5,6 +5,10 @@ const mockGetChatActions = jest.fn();
 const mockInitChat = jest.fn();
 const mockProcessAI = jest.fn();
 const mockOpenFloating = jest.fn();
+const mockBeginAgentSessionLaunch = jest.fn(() => ({
+  launchId: "launch-1",
+}));
+const mockClearAgentSessionLaunch = jest.fn();
 const mockLoadOpenedAgentSessionSelection = jest.fn();
 const mockEnsureWorkspaceChatForPath = jest.fn();
 const mockEnsureWorkspaceChatPath = jest.fn();
@@ -37,6 +41,10 @@ jest.mock("@cocalc/frontend/chat/use-chat-composer-draft", () => ({
 
 jest.mock("@cocalc/frontend/project/page/agent-panel-state", () => ({
   AGENT_PANEL_INLINE_CHAT_INSTANCE_KEY: "agents-panel-inline",
+  beginAgentSessionLaunch: (...args: any[]) =>
+    mockBeginAgentSessionLaunch(...args),
+  clearAgentSessionLaunch: (...args: any[]) =>
+    mockClearAgentSessionLaunch(...args),
   revealAgentSession: (...args: any[]) => mockOpenFloating(...args),
   loadOpenedAgentSessionSelection: (...args: any[]) =>
     mockLoadOpenedAgentSessionSelection(...args),
@@ -1828,10 +1836,18 @@ describe("submitNavigatorPromptToCurrentThread", () => {
         codexConfig: { model: "gpt-5.4-mini" },
         openFloating: true,
       });
+      expect(mockBeginAgentSessionLaunch).toHaveBeenCalledWith(
+        "00000000-1000-4000-8000-000000000000",
+        "Agent",
+      );
       await jest.advanceTimersByTimeAsync(6_000);
       const ok = await pending;
 
       expect(ok).toBe(true);
+      expect(mockClearAgentSessionLaunch).toHaveBeenCalledWith(
+        "00000000-1000-4000-8000-000000000000",
+        "launch-1",
+      );
       expect(createEmptyThread).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Agent",

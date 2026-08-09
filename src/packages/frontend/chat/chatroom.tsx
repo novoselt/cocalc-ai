@@ -1576,6 +1576,10 @@ export function ChatPanel({
           typeof acpConfig?.serviceTier === "string"
             ? acpConfig.serviceTier
             : undefined,
+        paymentSource:
+          typeof acpConfig?.paymentSource === "string"
+            ? acpConfig.paymentSource
+            : undefined,
         thread_color:
           typeof thread.threadColor === "string"
             ? thread.threadColor

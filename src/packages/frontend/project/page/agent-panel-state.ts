@@ -7,8 +7,16 @@ import { redux } from "@cocalc/frontend/app-framework";
 import type { AgentSessionRecord } from "@cocalc/frontend/chat/agent-session-index";
 
 export const AGENT_PANEL_REVEAL_EVENT = "cocalc:agent-panel:reveal";
+export const AGENT_PANEL_LAUNCH_EVENT = "cocalc:agent-panel:launch";
 export const AGENT_PANEL_INLINE_CHAT_INSTANCE_KEY = "agents-panel-inline";
 export const AGENT_PANEL_PIN_CHAT_INSTANCE_KEY = "agents-panel-pin";
+
+export interface AgentPanelLaunchState {
+  launchId: string;
+  projectId: string;
+  title: string;
+  startedAt: string;
+}
 
 export interface AgentPanelRevealDetail {
   projectId: string;
@@ -22,6 +30,52 @@ export interface OpenedAgentSessionSelection {
   chat_path: string;
   thread_key: string;
   session?: AgentSessionRecord;
+}
+
+const pendingLaunches = new Map<string, AgentPanelLaunchState>();
+
+export function loadPendingAgentSessionLaunch(
+  projectId: string,
+): AgentPanelLaunchState | null {
+  return pendingLaunches.get(projectId) ?? null;
+}
+
+export function beginAgentSessionLaunch(
+  projectId: string,
+  title?: string,
+): AgentPanelLaunchState {
+  const launch: AgentPanelLaunchState = {
+    launchId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    projectId,
+    title: `${title ?? ""}`.trim() || "Agent",
+    startedAt: new Date().toISOString(),
+  };
+  pendingLaunches.set(projectId, launch);
+  redux.getProjectActions(projectId)?.setFlyoutExpanded?.("agents", true);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<AgentPanelLaunchState>(AGENT_PANEL_LAUNCH_EVENT, {
+        detail: launch,
+      }),
+    );
+  }
+  return launch;
+}
+
+export function clearAgentSessionLaunch(
+  projectId: string,
+  launchId?: string,
+): void {
+  const current = pendingLaunches.get(projectId);
+  if (!current || (launchId && current.launchId !== launchId)) return;
+  pendingLaunches.delete(projectId);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent<AgentPanelLaunchState | null>(AGENT_PANEL_LAUNCH_EVENT, {
+        detail: null,
+      }),
+    );
+  }
 }
 
 function openedSessionStorageKey(
@@ -89,6 +143,7 @@ export function revealAgentSession(
     workspaceOnly?: boolean;
   },
 ): void {
+  clearAgentSessionLaunch(projectId);
   const selection = selectionFromSession(session);
   if (selection) {
     saveOpenedAgentSessionSelection(projectId, "flyout", selection);

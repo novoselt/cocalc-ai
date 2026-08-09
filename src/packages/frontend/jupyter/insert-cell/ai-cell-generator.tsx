@@ -36,8 +36,6 @@ interface AIGenerateCodeCellProps {
   showAICellGen: Position;
 }
 
-const DEFAULT_GENERATE_AGENT_MODEL = "gpt-5.4-mini";
-
 function normalizeCellType(value: string | undefined): "code" | "markdown" {
   return value === "markdown" ? "markdown" : "code";
 }
@@ -178,7 +176,6 @@ export function AIGenerateCodeCell({
       title: "Agent",
       tag: `intent:jupyter-generate-cell:${showAICellGen}`,
       forceCodex: true,
-      codexConfig: { model: DEFAULT_GENERATE_AGENT_MODEL },
       openFloating: true,
       waitForAgent: false,
       agentSession: agentSessionSelection.selectedAgentSession,
@@ -196,7 +193,9 @@ export function AIGenerateCodeCell({
         projectActions?.log({
           event: "llm",
           usage: "jupyter-generate-cell",
-          model: DEFAULT_GENERATE_AGENT_MODEL,
+          model:
+            agentSessionSelection.selectedAgentSession?.model ??
+            agentSessionSelection.defaultCodexModel,
           path,
         });
       })

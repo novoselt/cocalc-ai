@@ -1,8 +1,5 @@
-import {
-  DEFAULT_CODEX_MODEL_NAME,
-  DEFAULT_CODEX_MODELS,
-  isCodexModelName,
-} from "@cocalc/util/ai/codex";
+import { getDefaultCodexNewChatDefaults } from "@cocalc/frontend/chat/codex-defaults";
+import { isCodexModelName } from "@cocalc/util/ai/codex";
 import {
   dispatchNavigatorPromptIntent,
   stageNavigatorPromptInWorkspaceChat,
@@ -45,6 +42,7 @@ export type AssistantAgentSessionTarget = Pick<
   | "model"
   | "reasoning"
   | "serviceTier"
+  | "paymentSource"
   | "thread_color"
   | "thread_accent_color"
   | "thread_icon"
@@ -56,15 +54,11 @@ interface TerminalAssistantContext {
   terminal_file_path?: string;
 }
 
-export const DEFAULT_ASSISTANT_CODEX_MODEL =
-  DEFAULT_CODEX_MODELS.find((model) => model.name === "gpt-5.4-mini")?.name ??
-  DEFAULT_CODEX_MODEL_NAME;
-
 export function resolveAssistantCodexModel(model?: string): string {
   const normalized = `${model ?? ""}`.trim();
   return isCodexModelName(normalized)
     ? normalized
-    : DEFAULT_ASSISTANT_CODEX_MODEL;
+    : getDefaultCodexNewChatDefaults().model;
 }
 
 export function getAssistantMaxTokens(model?: string): number {
@@ -116,7 +110,6 @@ export default async function createChat({
         title,
         tag: intent,
         forceCodex: true,
-        codexConfig: { model: codexModel },
         agentSession: options.agentSession,
         createNewThread: options.createNewThread,
         openFloating: true,
@@ -130,7 +123,6 @@ export default async function createChat({
         title,
         tag: intent,
         forceCodex: true,
-        codexConfig: { model: codexModel },
         agentSession: options.agentSession,
         createNewThread: options.createNewThread,
         stageInComposer: true,
@@ -144,7 +136,6 @@ export default async function createChat({
       title,
       tag: intent,
       forceCodex: true,
-      codexConfig: { model: codexModel },
       createNewThread: options.createNewThread,
     });
   }

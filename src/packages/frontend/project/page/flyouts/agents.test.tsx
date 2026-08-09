@@ -331,7 +331,9 @@ jest.mock("@cocalc/frontend/misc", () => ({
 }));
 
 jest.mock("@cocalc/frontend/project/page/agent-panel-state", () => ({
+  AGENT_PANEL_LAUNCH_EVENT: "cocalc:agent-panel:launch",
   AGENT_PANEL_REVEAL_EVENT: "cocalc:agent-panel:reveal",
+  loadPendingAgentSessionLaunch: () => null,
   loadOpenedAgentSessionSelection: () => null,
   revealAgentSession: (...args: any[]) => mockOpenFloatingAgentSession(...args),
   saveOpenedAgentSessionSelection: jest.fn(),
@@ -668,6 +670,44 @@ describe("AgentsPanel session cards", () => {
       expect(screen.getByTestId("agents-inline-chat")).toBeTruthy(),
     );
     expect(mockChatActions.setSelectedThread).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("shows launch feedback before the real agent session is ready", async () => {
+    render(<AgentsPanel project_id="project-1" layout="page" />);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("cocalc:agent-panel:launch", {
+          detail: {
+            launchId: "launch-1",
+            projectId: "project-1",
+            title: "Getting started",
+            startedAt: "2026-08-09T00:00:00.000Z",
+          },
+        }),
+      );
+    });
+
+    expect(screen.getByText("Getting started")).toBeTruthy();
+    expect(screen.getByText("Preparing your agent session…")).toBeTruthy();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("cocalc:agent-panel:reveal", {
+          detail: {
+            projectId: "project-1",
+            session: mockSessions[0],
+            workspaceId: null,
+            workspaceOnly: false,
+          },
+        }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText("Preparing your agent session…")).toBeNull(),
+    );
+    expect(screen.getByTestId("agents-inline-chat")).toBeTruthy();
   });
 
   it("does not open the inline chat when the menu button is clicked", async () => {
