@@ -106,6 +106,7 @@ export function isAllowedActionName(
     clean === "click_at" ||
     clean === "drag" ||
     clean === "type" ||
+    clean === "upload_file" ||
     clean === "press" ||
     clean === "reload" ||
     clean === "navigate" ||

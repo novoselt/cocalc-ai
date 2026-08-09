@@ -309,6 +309,7 @@ export function parseBrowserExecPolicy(raw: string): BrowserExecPolicyV1 {
           x === "click_at" ||
           x === "drag" ||
           x === "type" ||
+          x === "upload_file" ||
           x === "press" ||
           x === "reload" ||
           x === "navigate" ||

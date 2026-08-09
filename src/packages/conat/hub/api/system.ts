@@ -390,6 +390,7 @@ export interface UxLatencyRecentEvent {
   path_ext?: string;
   editor?: string;
   details?: Record<string, unknown>;
+  saturation?: Record<string, unknown>;
 }
 
 export interface UxLatencySummary {

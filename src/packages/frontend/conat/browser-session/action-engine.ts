@@ -17,6 +17,8 @@ import {
 } from "@cocalc/conat/service/browser-session";
 import { isValidUUID } from "@cocalc/util/misc";
 
+const MAX_UPLOAD_FILE_BYTES = 256 * 1024;
+
 function asFinitePositive(value: unknown): number | undefined {
   if (value == null || value === "") return undefined;
   const num = typeof value === "number" ? value : Number(`${value}`);
@@ -1331,6 +1333,59 @@ export async function executeBrowserAction({
       append,
       clear,
       submitted: !!action.submit,
+    };
+  }
+
+  if (action.name === "upload_file") {
+    const selector = `${action.selector ?? ""}`.trim();
+    const filename = `${action.filename ?? ""}`.trim();
+    const contentBase64 = `${action.content_base64 ?? ""}`.trim();
+    if (!selector) throw Error("selector must be specified");
+    if (!filename || filename !== filename.split(/[\\/]/).pop()) {
+      throw Error("filename must be a basename");
+    }
+    if (!contentBase64) throw Error("content_base64 must be specified");
+    const timeout_ms = asFinitePositive(action.timeout_ms) ?? 30_000;
+    const { element } = await waitForSelectorState({
+      selector,
+      state: "attached",
+      timeout_ms,
+      poll_ms: 50,
+    });
+    if (!(element instanceof HTMLInputElement) || element.type !== "file") {
+      throw Error(`selector '${selector}' must target a file input`);
+    }
+    let binary: string;
+    try {
+      binary = atob(contentBase64);
+    } catch (err) {
+      throw Error(`content_base64 is invalid: ${err}`);
+    }
+    if (binary.length > MAX_UPLOAD_FILE_BYTES) {
+      throw Error(
+        `upload file is too large (${binary.length} bytes); max ${MAX_UPLOAD_FILE_BYTES}`,
+      );
+    }
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const file = new File([bytes], filename, {
+      type: `${action.mime_type ?? "application/octet-stream"}`.slice(0, 120),
+      lastModified: Date.now(),
+    });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    element.files = transfer.files;
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return {
+      name: "upload_file",
+      ok: true,
+      page_url: location.href,
+      elapsed_ms: Date.now() - started,
+      selector,
+      filename,
+      bytes: bytes.length,
     };
   }
 

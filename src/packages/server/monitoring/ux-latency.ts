@@ -21,6 +21,7 @@ import type {
   UxLatencySummary,
 } from "@cocalc/conat/hub/api/system";
 import { v4 as uuid } from "uuid";
+import { getUxSaturationContext } from "./ux-saturation";
 
 const logger = getLogger("server:monitoring:ux-latency");
 
@@ -159,9 +160,13 @@ export async function ensureUxLatencySchema(): Promise<void> {
         path_ext TEXT,
         editor TEXT,
         segment TEXT,
-        details JSONB NOT NULL DEFAULT '{}'::jsonb
+        details JSONB NOT NULL DEFAULT '{}'::jsonb,
+        saturation JSONB
       )
     `);
+    await getPool().query(
+      `ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS saturation JSONB`,
+    );
     await getPool().query(
       `CREATE INDEX IF NOT EXISTS ${TABLE}_received_idx
          ON ${TABLE} (received_at DESC)`,
@@ -290,24 +295,42 @@ export async function recordUxLatencyEvent({
     throw Error("event_type and metric must be specified");
   }
   await ensureUxLatencySchema();
-  const details = cleanDetails(event.details);
-  const hostId = cleanUuid(event.host_id) ?? cleanUuid(details.host_id);
+  const originalDetails = cleanDetails(event.details);
+  const projectId = cleanUuid(event.project_id);
+  const eventHostId =
+    cleanUuid(event.host_id) ?? cleanUuid(originalDetails.host_id);
+  let hostId = eventHostId;
+  let saturation: Record<string, unknown> | undefined;
+  try {
+    const result = await getUxSaturationContext({
+      host_id: eventHostId,
+      project_id: projectId,
+    });
+    hostId = cleanUuid(result.host_id) ?? hostId;
+    saturation = result.context;
+  } catch (err) {
+    logger.debug("unable to correlate ux latency with saturation", {
+      project_id: projectId,
+      host_id: eventHostId,
+      err: `${err}`,
+    });
+  }
   await getPool().query(
     `
     INSERT INTO ${TABLE}
       (id, event_type, metric, account_id, project_id, host_id, bay_id,
        client_event_id, duration_ms, started_at, sample_rate, path_ext,
-       editor, segment, details)
+       editor, segment, details, saturation)
     VALUES
       ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-       $10::TIMESTAMPTZ, $11, $12, $13, $14, $15::jsonb)
+       $10::TIMESTAMPTZ, $11, $12, $13, $14, $15::jsonb, $16::jsonb)
     `,
     [
       uuid(),
       eventType,
       metric,
       cleanUuid(account_id),
-      cleanUuid(event.project_id),
+      projectId,
       hostId,
       cleanText(event.bay_id, 80) ?? getConfiguredBayId(),
       cleanText(event.client_event_id, 120),
@@ -317,7 +340,8 @@ export async function recordUxLatencyEvent({
       cleanText(event.path_ext, 40),
       cleanText(event.editor, 80),
       cleanText(event.segment, 120),
-      JSON.stringify(details),
+      JSON.stringify(originalDetails),
+      saturation == null ? null : JSON.stringify(saturation),
     ],
   );
 }
@@ -396,7 +420,7 @@ export async function getUxLatencySummary({
              e.duration_ms, e.account_id, e.project_id, p.title AS project_title,
              COALESCE(e.host_id::text, e.details->>'host_id') AS host_id,
              e.bay_id, e.client_event_id, e.path_ext, e.editor,
-             e.details
+             e.details, e.saturation
         FROM ${TABLE} e
         LEFT JOIN projects p ON p.project_id = e.project_id
        WHERE e.received_at >= $1
@@ -432,6 +456,7 @@ export async function getUxLatencySummary({
         path_ext: row.path_ext ?? undefined,
         editor: row.editor ?? undefined,
         details: row.details ?? {},
+        saturation: row.saturation ?? undefined,
       }),
     ),
   };

@@ -206,6 +206,26 @@ Example harness plan:
 }
 ```
 
+For repeatable retention-critical latency sampling against a full signed-in
+site, use the repository UX harness. It creates isolated fixtures in the target
+project and drives a hard refresh, directory listing, text file, Jupyter run,
+LaTeX build, browser upload, and terminal open. A real Codex turn is opt-in
+because it consumes model capacity.
+
+```bash
+node src/scripts/ops/run-ux-latency-harness.mjs \
+  --api https://staging.cocalc.ai \
+  --profile staging \
+  --project <project-id> \
+  --iterations 3 \
+  --include-codex
+```
+
+The script reuses an active signed-in Chromium session by default. Pass
+`--browser <browser-id>` to pin a particular tab. Set the site's
+`ux_latency_success_sample_rate` to `1` while validating so every successful
+workflow is retained, then restore the production sampling rate.
+
 ### Screenshot support (next iterations)
 
 - First pass now exists:
