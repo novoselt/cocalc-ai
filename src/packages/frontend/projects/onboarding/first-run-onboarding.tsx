@@ -38,6 +38,7 @@ import {
 } from "../create/project-create-draft";
 import { useProjectCreateDraft } from "../create/use-project-create-draft";
 import { chooseOnboardingRootfs, type OnboardingProjectKind } from "./rootfs";
+import { onboardingArtifactCreationForProject } from "./artifact";
 import {
   buildCodexOnboardingPrompt,
   codexAvailableForOnboarding,
@@ -264,27 +265,6 @@ function WizardFrame({
   );
 }
 
-function artifactForKind(kind: OnboardingProjectKind): {
-  name: string;
-  ext: string;
-} | null {
-  switch (kind) {
-    case "jupyter-python":
-    case "jupyter-r":
-    case "jupyter-julia":
-    case "sage":
-      return { name: "Welcome", ext: "ipynb" };
-    case "code":
-      return { name: "Terminal", ext: "term" };
-    case "latex":
-      return { name: "document", ext: "tex" };
-    case "teaching":
-      return { name: "Course", ext: "course" };
-    case "codex":
-      return null;
-  }
-}
-
 async function createArtifactWhenReady({
   project_id,
   kind,
@@ -292,7 +272,10 @@ async function createArtifactWhenReady({
   project_id: string;
   kind: OnboardingProjectKind;
 }): Promise<string | undefined> {
-  const artifact = artifactForKind(kind);
+  const artifact = await onboardingArtifactCreationForProject({
+    kind,
+    project_id,
+  });
   if (!artifact) return undefined;
   const actions = redux.getProjectActions(project_id);
   if (!actions) throw new Error("Project workspace did not initialize.");
@@ -302,11 +285,11 @@ async function createArtifactWhenReady({
     await actions.createFile({
       name: artifact.name,
       ext: artifact.ext,
-      current_path: "/",
-      switch_over: false,
+      current_path: artifact.current_path,
+      switch_over: artifact.switch_over,
     });
     lastError = `${actions.get_store()?.get("file_creation_error") ?? ""}`;
-    if (!lastError) return `${artifact.name}.${artifact.ext}`;
+    if (!lastError) return artifact.relative_path;
     if (
       !/not running|closed|initializ|file server|connect|route/i.test(lastError)
     ) {
