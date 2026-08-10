@@ -13,7 +13,10 @@ import {
 import type { ManagedProjectEgressOverride } from "@cocalc/conat/files/file-server";
 import { hubApi } from "@cocalc/lite/hub/api";
 import type { API as ProjectRunnerApi } from "@cocalc/conat/project/runner/run";
-import type { ManagedProjectEgressCategory } from "@cocalc/conat/hub/api/system";
+import type {
+  ManagedProjectEgressCategory,
+  ProjectBandwidthRelayEvidence,
+} from "@cocalc/conat/hub/api/system";
 import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 import {
   getProjectHostManagedEgressMode,
@@ -24,12 +27,16 @@ import {
   type ManagedProjectEgressResidualTracker,
   type ManagedRawNetworkResidualSample,
 } from "./managed-egress-residual";
+import { detectProjectBandwidthRelayEvidence } from "./bandwidth-relay-detector";
 import { getProject } from "./sqlite/projects";
 
 const logger = getLogger("project-host:raw-network-egress");
 
 const DEFAULT_INTERVAL_MS = 5_000;
 const CATEGORY: ManagedProjectEgressCategory = "raw-network";
+const DEFAULT_RELAY_SCAN_MIN_DELTA_BYTES = 64 * 1024 ** 2;
+const DEFAULT_RELAY_SCAN_COOLDOWN_MS = 60_000;
+const DEFAULT_RELAY_EVIDENCE_TTL_MS = 5 * 60_000;
 
 type PodmanLike = (
   args: string[],
@@ -428,16 +435,38 @@ export function startManagedRawNetworkEgressLoop({
   ),
   sample = collectRunningProjectNetworkSamples,
   residualTracker = managedProjectEgressResidualTracker,
+  detectRelayEvidence = ({ rootPid }) =>
+    detectProjectBandwidthRelayEvidence({ rootPid }),
 }: {
   runnerApi: Pick<ProjectRunnerApi, "stop">;
   intervalMs?: number;
   sample?: typeof collectRunningProjectNetworkSamples;
   residualTracker?: ManagedProjectEgressResidualTracker;
+  detectRelayEvidence?: (opts: {
+    rootPid: number;
+  }) => Promise<ProjectBandwidthRelayEvidence | undefined>;
 }): () => void {
   let previous = new Map<string, ProjectNetworkSample>();
   let previousSampleAt: number | undefined;
   let running = false;
   const stopping = new Set<string>();
+  const relayScans = new Map<
+    string,
+    { checked_at: number; evidence?: ProjectBandwidthRelayEvidence }
+  >();
+  const relayScanCandidateBytes = new Map<string, number>();
+  const relayScanMinDeltaBytes = envPositiveInt(
+    "COCALC_PROJECT_HOST_BANDWIDTH_RELAY_SCAN_MIN_DELTA_BYTES",
+    DEFAULT_RELAY_SCAN_MIN_DELTA_BYTES,
+  );
+  const relayScanCooldownMs = envPositiveInt(
+    "COCALC_PROJECT_HOST_BANDWIDTH_RELAY_SCAN_COOLDOWN_MS",
+    DEFAULT_RELAY_SCAN_COOLDOWN_MS,
+  );
+  const relayEvidenceTtlMs = envPositiveInt(
+    "COCALC_PROJECT_HOST_BANDWIDTH_RELAY_EVIDENCE_TTL_MS",
+    DEFAULT_RELAY_EVIDENCE_TTL_MS,
+  );
 
   residualTracker.configure({
     bucketMs: intervalMs,
@@ -454,6 +483,11 @@ export function startManagedRawNetworkEgressLoop({
       const current = new Map(
         currentSamples.map((entry) => [entry.project_id, entry] as const),
       );
+      for (const projectId of relayScanCandidateBytes.keys()) {
+        if (!current.has(projectId)) {
+          relayScanCandidateBytes.delete(projectId);
+        }
+      }
       const deltas = summarizeManagedRawNetworkEgressDeltas({
         previous,
         current,
@@ -464,6 +498,35 @@ export function startManagedRawNetworkEgressLoop({
           ? sampledAt
           : Math.floor((previousSampleAt + sampledAt) / 2);
       previousSampleAt = sampledAt;
+
+      if (mode !== "off") {
+        for (const delta of deltas) {
+          const candidateBytes =
+            (relayScanCandidateBytes.get(delta.project_id) ?? 0) + delta.bytes;
+          relayScanCandidateBytes.set(delta.project_id, candidateBytes);
+          if (candidateBytes < relayScanMinDeltaBytes) continue;
+          const previousScan = relayScans.get(delta.project_id);
+          if (
+            previousScan &&
+            sampledAt - previousScan.checked_at < relayScanCooldownMs
+          ) {
+            continue;
+          }
+          try {
+            relayScanCandidateBytes.set(delta.project_id, 0);
+            relayScans.set(delta.project_id, {
+              checked_at: sampledAt,
+              evidence: await detectRelayEvidence({ rootPid: delta.pid }),
+            });
+          } catch (err) {
+            relayScans.set(delta.project_id, { checked_at: sampledAt });
+            logger.debug("unable to inspect high-egress project processes", {
+              project_id: delta.project_id,
+              err: `${err}`,
+            });
+          }
+        }
+      }
 
       for (const delta of deltas) {
         residualTracker.noteBoundaryBytes({
@@ -490,13 +553,21 @@ export function startManagedRawNetworkEgressLoop({
       }
 
       for (const residual of residuals) {
+        const relayScan = relayScans.get(residual.project_id);
+        const bandwidthRelayEvidence =
+          relayScan?.evidence &&
+          sampledAt - relayScan.checked_at <= relayEvidenceTtlMs
+            ? relayScan.evidence
+            : undefined;
+        let stoppedForRelay = false;
         try {
-          await hubApi.system.recordManagedProjectEgress({
+          const result = await hubApi.system.recordManagedProjectEgress({
             account_id:
               getProject(residual.project_id)?.usage_account_id ?? undefined,
             project_id: residual.project_id,
             category: CATEGORY,
             bytes: residual.bytes,
+            bandwidth_relay_evidence: bandwidthRelayEvidence,
             metadata: {
               interface_name: residual.metadata?.interface_name,
               pid: residual.metadata?.pid,
@@ -506,8 +577,33 @@ export function startManagedRawNetworkEgressLoop({
               bucket_start: residual.bucket_start,
               bucket_ms: residual.bucket_ms,
               mode: "residual-v1",
+              bandwidth_relay_evidence: bandwidthRelayEvidence,
             },
           });
+          if (result?.stop_project && !stopping.has(residual.project_id)) {
+            stoppedForRelay = true;
+            stopping.add(residual.project_id);
+            logger.warn("stopping project after bandwidth relay detection", {
+              project_id: residual.project_id,
+              account_id: result.account_id,
+              membership_class: result.stop_project.membership_class,
+              membership_source: result.stop_project.membership_source,
+              auto_banned: result.stop_project.auto_banned,
+              raw_network_bytes_5h: result.stop_project.raw_network_bytes_5h,
+              raw_network_bytes_7d: result.stop_project.raw_network_bytes_7d,
+            });
+            void runnerApi
+              .stop({ project_id: residual.project_id, force: true })
+              .catch((err) => {
+                logger.warn("unable to stop bandwidth relay project", {
+                  project_id: residual.project_id,
+                  err: `${err}`,
+                });
+              })
+              .finally(() => {
+                stopping.delete(residual.project_id);
+              });
+          }
         } catch (err) {
           logger.warn("unable to record raw network egress", {
             project_id: residual.project_id,
@@ -516,6 +612,8 @@ export function startManagedRawNetworkEgressLoop({
           });
           continue;
         }
+
+        if (stoppedForRelay) continue;
 
         if (mode !== "enforce") continue;
         try {
@@ -553,6 +651,12 @@ export function startManagedRawNetworkEgressLoop({
           });
         }
       }
+      for (const [projectId, relayScan] of relayScans) {
+        if (sampledAt - relayScan.checked_at > relayEvidenceTtlMs) {
+          relayScans.delete(projectId);
+          relayScanCandidateBytes.delete(projectId);
+        }
+      }
     } catch (err) {
       logger.warn("managed raw network egress sampling failed", {
         err: `${err}`,
@@ -579,4 +683,7 @@ export const __test__ = {
   parseProcNetRouteDefaultInterface,
   summarizeResidualSamplesForLog,
   summarizeManagedRawNetworkEgressDeltas,
+  DEFAULT_RELAY_EVIDENCE_TTL_MS,
+  DEFAULT_RELAY_SCAN_COOLDOWN_MS,
+  DEFAULT_RELAY_SCAN_MIN_DELTA_BYTES,
 };

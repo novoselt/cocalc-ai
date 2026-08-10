@@ -1,4 +1,8 @@
 import callHub from "@cocalc/conat/hub/call-hub";
+import type {
+  ProjectBandwidthRelayEvidence,
+  ProjectCryptominingEvidence,
+} from "@cocalc/conat/hub/api/system";
 import { hubApi } from "@cocalc/lite/hub/api";
 import { getMasterConatClient } from "../master-status";
 
@@ -68,6 +72,7 @@ export function wireSystemApi(): void {
       | "raw-network"
       | "backup-upload";
     bytes: number;
+    bandwidth_relay_evidence?: ProjectBandwidthRelayEvidence;
     metadata?: Record<string, unknown>;
   }) => {
     return await forwardSystem("system.recordManagedProjectEgress", [opts]);
@@ -81,6 +86,7 @@ export function wireSystemApi(): void {
     sample_started_at?: Date;
     sample_ended_at?: Date;
     source?: string;
+    cryptomining_evidence?: ProjectCryptominingEvidence;
     metadata?: Record<string, unknown>;
   }) => {
     return await forwardSystem("system.recordManagedProjectCpuUsage", [opts]);

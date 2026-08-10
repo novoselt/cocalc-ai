@@ -22,15 +22,25 @@ import { ManagedProjectEgressResidualTracker } from "./managed-egress-residual";
 
 describe("project-host raw network egress", () => {
   const originalMode = process.env.COCALC_PROJECT_HOST_MANAGED_EGRESS_MODE;
+  const originalRelayScanMin =
+    process.env.COCALC_PROJECT_HOST_BANDWIDTH_RELAY_SCAN_MIN_DELTA_BYTES;
 
   beforeEach(() => {
     process.env.COCALC_PROJECT_HOST_MANAGED_EGRESS_MODE = "enforce";
+    delete process.env.COCALC_PROJECT_HOST_BANDWIDTH_RELAY_SCAN_MIN_DELTA_BYTES;
     recordManagedProjectEgressMock.mockReset();
     getManagedProjectEgressPolicyMock.mockReset();
   });
 
   afterAll(() => {
     process.env.COCALC_PROJECT_HOST_MANAGED_EGRESS_MODE = originalMode;
+    if (originalRelayScanMin == null) {
+      delete process.env
+        .COCALC_PROJECT_HOST_BANDWIDTH_RELAY_SCAN_MIN_DELTA_BYTES;
+    } else {
+      process.env.COCALC_PROJECT_HOST_BANDWIDTH_RELAY_SCAN_MIN_DELTA_BYTES =
+        originalRelayScanMin;
+    }
   });
 
   it("parses the namespace boundary interface from /proc/net/route", () => {
@@ -361,5 +371,104 @@ ens4\t0100B40A\t00000000\t0005
       project_id: "11111111-1111-4111-8111-111111111111",
       force: true,
     });
+  });
+
+  it("reports conjunctive relay evidence and honors the hub stop decision", async () => {
+    process.env.COCALC_PROJECT_HOST_BANDWIDTH_RELAY_SCAN_MIN_DELTA_BYTES =
+      "100";
+    const stopMock = jest.fn().mockResolvedValue({ state: "opened" });
+    const evidence = {
+      confidence: "high" as const,
+      signals: [
+        {
+          kind: "tunnel_process" as const,
+          pattern: "cloudflared-tunnel",
+          matched: "cloudflared tunnel",
+        },
+        {
+          kind: "automated_uploader_process" as const,
+          pattern: "automated-uploader-script",
+          matched: "uploader_bot/bot.py",
+        },
+      ],
+    };
+    const detectRelayEvidence = jest.fn().mockResolvedValue(evidence);
+    recordManagedProjectEgressMock.mockResolvedValue({
+      recorded: true,
+      account_id: "22222222-2222-4222-8222-222222222222",
+      stop_project: {
+        reason: "bandwidth_relay_detected",
+        auto_banned: true,
+        raw_network_bytes_5h: 2_000_000_000,
+      },
+    });
+    const residualTracker = new ManagedProjectEgressResidualTracker({
+      bucketMs: 10,
+      graceMs: 10,
+    });
+    const sample = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          pid: 1234,
+          interface_name: "ens4",
+          tx_bytes: 1500,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          pid: 1234,
+          interface_name: "ens4",
+          tx_bytes: 1540,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          pid: 1234,
+          interface_name: "ens4",
+          tx_bytes: 1580,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          pid: 1234,
+          interface_name: "ens4",
+          tx_bytes: 1620,
+        },
+      ])
+      .mockResolvedValue([
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+          pid: 1234,
+          interface_name: "ens4",
+          tx_bytes: 1620,
+        },
+      ]);
+
+    const stop = startManagedRawNetworkEgressLoop({
+      runnerApi: { stop: stopMock } as any,
+      intervalMs: 10,
+      sample: sample as any,
+      residualTracker,
+      detectRelayEvidence,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    stop();
+
+    expect(detectRelayEvidence).toHaveBeenCalledWith({ rootPid: 1234 });
+    expect(recordManagedProjectEgressMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bandwidth_relay_evidence: evidence,
+      }),
+    );
+    expect(stopMock).toHaveBeenCalledWith({
+      project_id: "11111111-1111-4111-8111-111111111111",
+      force: true,
+    });
+    expect(getManagedProjectEgressPolicyMock).not.toHaveBeenCalled();
   });
 });
