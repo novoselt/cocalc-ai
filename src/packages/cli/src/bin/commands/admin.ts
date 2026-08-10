@@ -3749,6 +3749,42 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     );
 
   adminUser
+    .command("ban <user>")
+    .description(
+      "ban an account and equivalent email identities (account id, email, or name query)",
+    )
+    .requiredOption("--reason <reason>", "audit reason for the account ban")
+    .action(
+      async (user: string, opts: { reason: string }, command: Command) => {
+        await withContext(command, "admin user ban", async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          return await ctx.hub.system.adminBanUser({
+            user_account_id: userAccountId,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminUser
+    .command("unban <user>")
+    .description(
+      "remove one account ban; quarantined billing/resources require separate review",
+    )
+    .requiredOption("--reason <reason>", "audit reason for removing the ban")
+    .action(
+      async (user: string, opts: { reason: string }, command: Command) => {
+        await withContext(command, "admin user unban", async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          return await ctx.hub.system.adminUnbanUser({
+            user_account_id: userAccountId,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminUser
     .command("issue-impersonation-link <user>")
     .description(
       "create an impersonation sign-in link for a user (account id, email, or name query)",

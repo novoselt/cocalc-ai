@@ -66,9 +66,11 @@ import {
   adminGrantClusterAccountAdminRole,
   adminRevokeClusterAccountAdminRole,
   adminVerifyClusterAccountEmailAddress,
+  banClusterAccountAndEquivalentEmails,
   createClusterAccount,
   deleteClusterAccount,
   searchClusterAccounts,
+  setClusterAccountBan,
   touchClusterAccountDirectoryEntry,
 } from "@cocalc/server/inter-bay/accounts";
 import {
@@ -109,7 +111,7 @@ import {
 } from "@cocalc/server/launch/kill-switches";
 import { to_bool } from "@cocalc/util/db-schema/site-defaults";
 import { EXTRAS as SITE_SETTINGS_EXTRAS } from "@cocalc/util/db-schema/site-settings-extras";
-import { is_valid_email_address } from "@cocalc/util/misc";
+import { is_valid_email_address, isValidUUID } from "@cocalc/util/misc";
 import { site_settings_conf } from "@cocalc/util/schema";
 import {
   displayNameFromParts,
@@ -138,6 +140,7 @@ import type {
   SiteSetupStatus,
   SiteSetupStep,
   SiteSetupStepState,
+  ProjectBandwidthRelayEvidence,
   StarServerInfo,
   ProjectCryptominingEvidence,
   SiteSettingsReadResult,
@@ -316,6 +319,11 @@ import { getAccountCollaboratorIndexProjectionMaintenanceStatus } from "@cocalc/
 import { getAccountNotificationIndexProjectionMaintenanceStatus } from "@cocalc/server/projections/account-notification-index-maintenance";
 import { getManagedProjectEgressPolicy as getManagedProjectEgressPolicyRaw } from "@cocalc/server/membership/managed-egress-policy";
 import { recordManagedProjectEgress as recordManagedProjectEgressRaw } from "@cocalc/server/membership/managed-egress";
+import {
+  getProjectBandwidthRelayAbuseSettings,
+  handleProjectBandwidthRelayEvidence,
+  sanitizeBandwidthRelayEvidenceMetadata,
+} from "@cocalc/server/membership/bandwidth-relay-abuse";
 import { recordManagedProjectCpuUsage as recordManagedProjectCpuUsageRaw } from "@cocalc/server/membership/managed-cpu";
 import {
   getManagedProjectCpuPolicy,
@@ -5486,6 +5494,110 @@ function defaultDisplayNameFromEmail(email: string): string {
   return parts.join(" ");
 }
 
+function requireAdminAccountActionReason(reason: unknown): string {
+  const normalized = `${reason ?? ""}`.trim();
+  if (!normalized) {
+    throw Error("reason is required");
+  }
+  if (normalized.length > 4000) {
+    throw Error("reason must be at most 4000 characters");
+  }
+  return normalized;
+}
+
+export async function adminBanUser({
+  account_id,
+  browser_id,
+  session_hash,
+  user_account_id,
+  reason,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  user_account_id: string;
+  reason: string;
+}) {
+  if (!account_id || !(await isAdmin(account_id))) {
+    throw Error("must be an admin");
+  }
+  const userAccountId = `${user_account_id ?? ""}`.trim().toLowerCase();
+  if (!isValidUUID(userAccountId)) {
+    throw Error("user_account_id must be a valid uuid");
+  }
+  if (userAccountId === account_id) {
+    throw Error("an admin cannot ban their current account");
+  }
+  const normalizedReason = requireAdminAccountActionReason(reason);
+  await requireDangerousSessionAuth({
+    account_id,
+    browser_id,
+    session_hash,
+    require_second_factor: true,
+    allow_actor_impersonation: false,
+  });
+  const affectedAccounts = await banClusterAccountAndEquivalentEmails({
+    account_id: userAccountId,
+    actor_account_id: account_id,
+    reason: normalizedReason,
+    metadata: {
+      source: "admin-user-ban-rpc",
+    },
+  });
+  return {
+    user_account_id: userAccountId,
+    affected_accounts: affectedAccounts.map((affected) => ({
+      account_id: affected.account_id,
+      home_bay_id: affected.home_bay_id,
+      banned: true as const,
+    })),
+  };
+}
+
+export async function adminUnbanUser({
+  account_id,
+  browser_id,
+  session_hash,
+  user_account_id,
+  reason,
+}: {
+  account_id?: string;
+  browser_id?: string | null;
+  session_hash?: string | null;
+  user_account_id: string;
+  reason: string;
+}) {
+  if (!account_id || !(await isAdmin(account_id))) {
+    throw Error("must be an admin");
+  }
+  const userAccountId = `${user_account_id ?? ""}`.trim().toLowerCase();
+  if (!isValidUUID(userAccountId)) {
+    throw Error("user_account_id must be a valid uuid");
+  }
+  const normalizedReason = requireAdminAccountActionReason(reason);
+  await requireDangerousSessionAuth({
+    account_id,
+    browser_id,
+    session_hash,
+    require_second_factor: true,
+    allow_actor_impersonation: false,
+  });
+  const result = await setClusterAccountBan({
+    account_id: userAccountId,
+    banned: false,
+    actor_account_id: account_id,
+    reason: normalizedReason,
+    metadata: {
+      source: "admin-user-unban-rpc",
+    },
+  });
+  return {
+    user_account_id: userAccountId,
+    home_bay_id: result.home_bay_id,
+    banned: false as const,
+  };
+}
+
 export async function adminCreateUser({
   account_id,
   browser_id,
@@ -7252,6 +7364,7 @@ export async function recordManagedProjectEgress({
   project_id,
   category,
   bytes,
+  bandwidth_relay_evidence,
   metadata,
 }: {
   account_id?: string;
@@ -7267,6 +7380,7 @@ export async function recordManagedProjectEgress({
     | "raw-network"
     | "backup-upload";
   bytes: number;
+  bandwidth_relay_evidence?: ProjectBandwidthRelayEvidence;
   metadata?: Record<string, unknown>;
 }) {
   const resolvedProjectId = `${project_id ?? ""}`.trim()
@@ -7279,13 +7393,80 @@ export async function recordManagedProjectEgress({
   if (!resolvedProjectId && !`${account_id ?? ""}`.trim()) {
     throw Error("project_id or account_id is required");
   }
-  return await recordManagedProjectEgressRaw({
-    account_id,
+  let abuseSettings;
+  try {
+    abuseSettings =
+      bandwidth_relay_evidence && host_id
+        ? await getProjectBandwidthRelayAbuseSettings()
+        : undefined;
+  } catch (err) {
+    logger.warn("failed to load bandwidth relay abuse settings", {
+      project_id: resolvedProjectId,
+      err: `${err}`,
+    });
+  }
+  // Runtime detector evidence is authoritative only from the host currently
+  // assigned to the project. Project-authenticated callers may report usage,
+  // but cannot manufacture evidence that stops a project or bans its owner.
+  const effectiveBandwidthRelayEvidence =
+    host_id && abuseSettings?.enforcement_enabled
+      ? bandwidth_relay_evidence
+      : undefined;
+  const effectiveMetadata = sanitizeBandwidthRelayEvidenceMetadata({
+    metadata,
+    enforcement_enabled:
+      !!host_id && abuseSettings?.enforcement_enabled === true,
+  });
+  const result = await recordManagedProjectEgressRaw({
+    // Project attribution is authoritative in project state. Never let a
+    // project- or host-scoped telemetry caller nominate another account.
+    account_id: resolvedProjectId ? undefined : account_id,
     project_id: resolvedProjectId,
     category,
     bytes,
-    metadata,
+    metadata: effectiveBandwidthRelayEvidence
+      ? {
+          ...effectiveMetadata,
+          bandwidth_relay_evidence: effectiveBandwidthRelayEvidence,
+        }
+      : effectiveMetadata,
   });
+  if (
+    !result.recorded ||
+    !result.account_id ||
+    !resolvedProjectId ||
+    category !== "raw-network"
+  ) {
+    return result;
+  }
+  try {
+    const abuseDecision = await handleProjectBandwidthRelayEvidence({
+      account_id: result.account_id,
+      project_id: resolvedProjectId,
+      evidence: effectiveBandwidthRelayEvidence,
+      settings: abuseSettings,
+    });
+    if (abuseDecision.should_stop_project) {
+      return {
+        ...result,
+        stop_project: {
+          reason: "bandwidth_relay_detected" as const,
+          membership_class: abuseDecision.membership_class,
+          membership_source: abuseDecision.membership_source,
+          auto_banned: abuseDecision.auto_banned,
+          raw_network_bytes_5h: abuseDecision.raw_network_bytes_5h,
+          raw_network_bytes_7d: abuseDecision.raw_network_bytes_7d,
+        },
+      };
+    }
+  } catch (err) {
+    logger.warn("failed to evaluate bandwidth relay evidence", {
+      account_id: result.account_id,
+      project_id: resolvedProjectId,
+      err: `${err}`,
+    });
+  }
+  return result;
 }
 
 export async function recordManagedProjectCpuUsage({
@@ -7321,24 +7502,31 @@ export async function recordManagedProjectCpuUsage({
   }
   let abuseSettings;
   try {
-    abuseSettings = cryptomining_evidence
-      ? await getProjectCryptominingAbuseSettings()
-      : undefined;
+    abuseSettings =
+      cryptomining_evidence && host_id
+        ? await getProjectCryptominingAbuseSettings()
+        : undefined;
   } catch (err) {
     logger.warn("failed to load cryptomining abuse settings", {
       project_id: resolvedProjectId,
       err: `${err}`,
     });
   }
-  const effectiveCryptominingEvidence = abuseSettings?.enforcement_enabled
-    ? cryptomining_evidence
-    : undefined;
+  // As above, project-authenticated callers cannot nominate their owner for
+  // automatic enforcement by supplying fabricated process evidence.
+  const effectiveCryptominingEvidence =
+    host_id && abuseSettings?.enforcement_enabled
+      ? cryptomining_evidence
+      : undefined;
   const effectiveMetadata = sanitizeCryptominingEvidenceMetadata({
     metadata,
-    enforcement_enabled: abuseSettings?.enforcement_enabled === true,
+    enforcement_enabled:
+      !!host_id && abuseSettings?.enforcement_enabled === true,
   });
   const result = await recordManagedProjectCpuUsageRaw({
-    account_id,
+    // Project attribution is authoritative in project state. Never let a
+    // project- or host-scoped telemetry caller nominate another account.
+    account_id: resolvedProjectId ? undefined : account_id,
     project_id: resolvedProjectId,
     host_id,
     cpu_seconds,
@@ -7436,7 +7624,7 @@ export async function getManagedProjectEgressPolicy({
     throw Error("project_id or account_id is required");
   }
   return await getManagedProjectEgressPolicyRaw({
-    account_id,
+    account_id: resolvedProjectId ? undefined : account_id,
     project_id: resolvedProjectId,
     category,
   });

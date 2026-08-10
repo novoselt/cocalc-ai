@@ -233,6 +233,9 @@ export type SiteSettingsExtrasKeys =
   | "cryptomining_abuse_heading"
   | "cryptomining_abuse_enforcement_enabled"
   | "cryptomining_abuse_auto_ban_enabled"
+  | "bandwidth_relay_abuse_heading"
+  | "bandwidth_relay_abuse_enforcement_enabled"
+  | "bandwidth_relay_abuse_auto_ban_enabled"
   | "user_search_max_results"
   | "launch_sla_heading"
   | "launch_sla_project_start_warm_p95_ms"
@@ -476,6 +479,35 @@ export const EXTRAS: SettingsExtras = {
   cryptomining_abuse_auto_ban_enabled: {
     name: "Enable Automatic Compute Abuse Bans",
     desc: "When enabled together with compute abuse enforcement, new free accounts with high-confidence cryptomining evidence and all free accounts executing QEMU system emulators are automatically banned using the normal account ban path. Paid accounts are stopped but not automatically banned.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_heading: {
+    name: "Bandwidth Relay Abuse Detection",
+    desc: "Operator controls for detecting high-volume tunnel and automated transfer workloads on project hosts. Runtime evidence excludes full command lines and credentials. These settings are off by default for self-hosted sites.",
+    default: "",
+    type: "header",
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_enforcement_enabled: {
+    name: "Enable Bandwidth Relay Enforcement",
+    desc: "When enabled, the hub stops projects after a project host reports both live tunneling and automated bulk-transfer indicators and the attributed account has at least 1 GiB of raw-network egress in five hours or 3 GiB in seven days.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_auto_ban_enabled: {
+    name: "Enable Automatic Bandwidth Relay Bans",
+    desc: "When enabled together with bandwidth relay enforcement, a new free account is automatically banned only when it owns the affected project. Paid accounts, older free accounts, and project sponsors are stopped but not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
