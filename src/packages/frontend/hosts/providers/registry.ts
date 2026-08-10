@@ -16,6 +16,7 @@ import type {
 import {
   applyDedicatedHostSurchargeToBreakdown,
   applyDedicatedHostSurchargeToHourlyRate,
+  estimateGcpCatalogPersistentDiskRateBreakdown,
   estimateGcpCatalogRateBreakdown,
   estimateGcpCatalogRateUsdPerHour,
   estimateNebiusCatalogRateBreakdown,
@@ -772,7 +773,11 @@ export const getProviderPriceEstimate = (
       ? getDedicatedHostSurchargeFraction(provider, pricingSettings)
       : 0;
   const hourlyRate = breakdown?.total_usd_per_hour;
-  if (typeof hourlyRate !== "number" || !Number.isFinite(hourlyRate)) {
+  if (
+    !breakdown ||
+    typeof hourlyRate !== "number" ||
+    !Number.isFinite(hourlyRate)
+  ) {
     return undefined;
   }
   const usd_per_hour = hourlyRate;
@@ -803,6 +808,58 @@ export const getProviderPriceEstimate = (
     monthly_label: formatUsdMonthlyLabel(usd_per_hour),
     line_items,
     notes,
+  };
+};
+
+export const getGcpPersistentDiskPriceEstimate = (
+  catalog: HostCatalog | undefined,
+  selection: Pick<
+    ProviderSelection,
+    | "region"
+    | "zone"
+    | "disk_type"
+    | "disk_gb"
+    | "storage_mode"
+    | "pricing_settings"
+  >,
+  surchargeSettings?: DedicatedHostSurchargeSettings,
+): ProviderPriceEstimate | undefined => {
+  const pricingSettings = surchargeSettings ?? selection.pricing_settings;
+  const breakdown = applyDedicatedHostSurchargeToBreakdown(
+    estimateGcpCatalogPersistentDiskRateBreakdown(
+      getGcpPriceCatalog(catalog),
+      selection,
+    ),
+    getDedicatedHostSurchargeFraction("gcp", pricingSettings),
+  );
+  const hourlyRate = breakdown?.total_usd_per_hour;
+  if (
+    !breakdown ||
+    typeof hourlyRate !== "number" ||
+    !Number.isFinite(hourlyRate)
+  ) {
+    return undefined;
+  }
+  const line_items = breakdown.items.map((item) => ({
+    ...item,
+    usd_per_month: item.usd_per_hour * MONTHLY_HOURS,
+    hourly_label: formatUsdHourlyLabel(item.usd_per_hour),
+    monthly_label: formatUsdMonthlyLabel(item.usd_per_hour),
+  }));
+  const surchargeFraction = getDedicatedHostSurchargeFraction(
+    "gcp",
+    pricingSettings,
+  );
+  return {
+    usd_per_hour: hourlyRate,
+    usd_per_month: hourlyRate * MONTHLY_HOURS,
+    hourly_label: formatUsdHourlyLabel(hourlyRate),
+    monthly_label: formatUsdMonthlyLabel(hourlyRate),
+    line_items,
+    notes:
+      surchargeFraction > 0
+        ? [`Includes a ${Math.round(surchargeFraction * 100)}% site surcharge.`]
+        : [],
   };
 };
 
@@ -1223,7 +1280,7 @@ export const getGcpRegionOptions = (
   if (!regions?.length) return [];
   const priceDisplay =
     selection.price_display === "monthly" ? "monthly" : "hourly";
-  return regions.map((r) => {
+  return regions.flatMap((r) => {
     const zoneWithMeta = zones?.find(
       (z) => z.region === r.name && (z.location || z.lowC02),
     );
@@ -1268,12 +1325,15 @@ export const getGcpRegionOptions = (
       expectPrice,
       priceDisplay,
     });
-    return {
-      value: r.name,
-      ...label,
-      selectionLabel: regionLabel,
-      meta: { compatible, compatibleZone, hourlyRate, expectPrice },
-    };
+    if (label.stateLabel === "price unavailable") return [];
+    return [
+      {
+        value: r.name,
+        ...label,
+        selectionLabel: regionLabel,
+        meta: { compatible, compatibleZone, hourlyRate, expectPrice },
+      },
+    ];
   });
 };
 

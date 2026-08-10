@@ -1,4 +1,27 @@
-import { transformArgs } from "./index";
+import { initHubApi, transformArgs } from "./index";
+
+describe("hub API response handling", () => {
+  it("returns failed LRO summaries instead of throwing their operation error", async () => {
+    const summary = {
+      op_id: "op-1",
+      scope_type: "project",
+      scope_id: "project-1",
+      status: "failed",
+      error: "copy failed",
+    };
+    const api = initHubApi(async () => summary);
+
+    await expect(api.lro.get({ op_id: "op-1" })).resolves.toBe(summary);
+  });
+
+  it("still throws legacy RPC error envelopes for lro.get", async () => {
+    const api = initHubApi(async () => ({ error: "not authorized" }));
+
+    await expect(api.lro.get({ op_id: "op-1" })).rejects.toThrow(
+      "not authorized",
+    );
+  });
+});
 
 describe("hub API argument transforms", () => {
   it("injects CLI auth_session_hash as session_hash for fresh-auth RPCs", async () => {
@@ -124,6 +147,34 @@ describe("hub API argument transforms", () => {
         host_id: "host-1",
       }),
     ).rejects.toThrow("user must be signed in");
+  });
+
+  it("binds project VM SSH forwarding to the authenticated host", async () => {
+    const args = await transformArgs({
+      name: "compute.authorizeProjectSshKeyFromHost",
+      args: [
+        {
+          host_id: "spoofed-host",
+          project_id: "project-1",
+          id_or_name: "compute-vm",
+          ssh_public_key: "ssh-ed25519 AAAATEST project",
+          idempotency_key: "authorize-1",
+        },
+      ],
+      host_id: "host-1",
+    });
+    expect(args[0]).toMatchObject({
+      host_id: "host-1",
+      project_id: "project-1",
+    });
+
+    await expect(
+      transformArgs({
+        name: "compute.authorizeProjectSshKeyFromHost",
+        args: [{ project_id: "project-1" }],
+        project_id: "project-1",
+      }),
+    ).rejects.toThrow("must be a host");
   });
 
   it("restricts managed metering RPCs to project or host principals", async () => {

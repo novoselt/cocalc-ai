@@ -40,7 +40,7 @@ export function ManagedEgressBlockedScreen({
   return (
     <div style={CONTAINER_STYLE}>
       <Card style={CARD_STYLE}>
-        <Space direction="vertical" size="large" style={{ width: "100%" }}>
+        <Space vertical size="large" style={{ width: "100%" }}>
           <div>
             <Text strong style={{ color: COLORS.ORANGE_WARN }}>
               Network access temporarily blocked
@@ -57,7 +57,7 @@ export function ManagedEgressBlockedScreen({
           <Alert
             type="warning"
             showIcon
-            message="Upgrade is still available"
+            title="Upgrade is still available"
             description="Use the upgrade flow below if you need more network capacity immediately. Purchase APIs continue to work even while interactive network access is blocked."
           />
           {blocked.details.length > 0 ? (

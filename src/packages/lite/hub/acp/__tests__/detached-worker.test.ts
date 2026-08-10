@@ -1226,6 +1226,34 @@ describe("shouldStopDetachedWorkerForIdle", () => {
 });
 
 describe("shouldStopDetachedWorkerForDrain", () => {
+  it("does not drain-stop while an in-memory Codex turn is active", () => {
+    expect(
+      shouldStopDetachedWorkerForDrain({
+        isDraining: true,
+        runningJobs: 0,
+        runningTurnLeases: 0,
+        activeTurns: 1,
+        exitRequestedAt: 1_000,
+        quiesceMs: 30_000,
+        now: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not drain-stop while Codex owns a background terminal", () => {
+    expect(
+      shouldStopDetachedWorkerForDrain({
+        isDraining: true,
+        runningJobs: 0,
+        runningTurnLeases: 0,
+        backgroundTerminalProcesses: 1,
+        exitRequestedAt: 1_000,
+        quiesceMs: 30_000,
+        now: 60_000,
+      }),
+    ).toBe(false);
+  });
+
   it("does not drain-stop while the worker still owns a running turn lease", () => {
     expect(
       shouldStopDetachedWorkerForDrain({

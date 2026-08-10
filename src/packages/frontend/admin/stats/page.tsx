@@ -33,6 +33,7 @@ import type {
   UxLatencyRecentEvent,
   UxLatencySummary,
 } from "@cocalc/conat/hub/api/system";
+import { UX_LATENCY_HEALTH_METRICS } from "@cocalc/conat/hub/api/system";
 
 const { Text } = Typography;
 
@@ -106,7 +107,7 @@ function Scope({
     host_id ? `host ${host_id}` : undefined,
   ].filter((value): value is string => value != null);
   return values.length ? (
-    <Space direction="vertical" size={0}>
+    <Space vertical size={0}>
       {values.map((value) => (
         <Text key={value} code copyable={{ text: value.split(" ")[1] }}>
           {value}
@@ -135,6 +136,12 @@ function metricLabel(metric: string): string {
   switch (metric) {
     case "project_start_running":
       return "Project lifecycle to running";
+    case "project_start_admission":
+      return "Project start admission";
+    case "project_start_backend_lifecycle":
+      return "Project-host lifecycle";
+    case "project_start_frontend_convergence":
+      return "Running-state convergence";
     case "project_start_running_stuck":
       return "Project start appears stuck";
     case "project_start_running_timeout":
@@ -145,6 +152,70 @@ function metricLabel(metric: string): string {
       return "File open to visible";
     case "file_open_sync_ready":
       return "File open to sync ready";
+    case "file_content_paint_v2":
+      return "File content paint v2";
+    case "file_edit_ready_v2":
+      return "File edit ready v2";
+    case "file_sync_ready_v2":
+      return "File sync ready v2";
+    case "file_open_incomplete_v2":
+      return "Incomplete file open v2";
+    case "project_directory_first_paint_v2":
+      return "Project to first directory paint v2";
+    case "directory_navigation_first_paint_v2":
+      return "Directory navigation paint v2";
+    case "directory_listing_first_paint_v2":
+      return "Directory listing first paint v2";
+    case "directory_authoritative_paint_v2":
+      return "Authoritative directory paint v2";
+    case "directory_listing_incomplete_v2":
+      return "Incomplete directory listing v2";
+    case "signed_in_app_ready_v2":
+      return "Signed-in application ready v2";
+    case "app_bootstrap_failed_v2":
+      return "Failed application bootstrap v2";
+    case "jupyter_document_ready_v2":
+      return "Jupyter document ready v2";
+    case "jupyter_sync_ready_v2":
+      return "Jupyter sync ready v2";
+    case "jupyter_first_cell_visible_v2":
+      return "Jupyter first cell visible v2";
+    case "jupyter_open_incomplete_v2":
+      return "Incomplete Jupyter open v2";
+    case "jupyter_first_output_v2":
+      return "Jupyter first output v2";
+    case "jupyter_run_complete_v2":
+      return "Jupyter run complete v2";
+    case "jupyter_run_noop_v2":
+      return "Jupyter run no-op v2";
+    case "jupyter_run_incomplete_v2":
+      return "Incomplete Jupyter run v2";
+    case "jupyter_run_failed_v2":
+      return "Failed Jupyter run v2";
+    case "file_upload_complete_v2":
+      return "File upload complete v2";
+    case "file_upload_failed_v2":
+      return "File upload failed v2";
+    case "file_upload_abandoned_v2":
+      return "File upload abandoned v2";
+    case "latex_build_complete_v2":
+      return "LaTeX build complete v2";
+    case "latex_build_failed_v2":
+      return "LaTeX build failed v2";
+    case "codex_backend_ack_v2":
+      return "Codex backend acknowledged v2";
+    case "codex_first_response_visible_v2":
+      return "Codex first response visible v2";
+    case "codex_response_incomplete_v2":
+      return "Incomplete Codex response v2";
+    case "codex_response_failed_v2":
+      return "Failed Codex response v2";
+    case "terminal_input_ready_v2":
+      return "Terminal input ready v2";
+    case "terminal_connect_incomplete_v2":
+      return "Incomplete terminal connection v2";
+    case "terminal_connect_failed_v2":
+      return "Failed terminal connection v2";
     case "project_exec_ready":
       return "Project exec ready";
     case "project_jupyter_ready":
@@ -199,6 +270,12 @@ function metricHelp(metric: string, segment?: string): string {
   switch (metric) {
     case "project_start_running":
       return "Observed in the user's browser from pressing Start, or an automatic start request, until the project lifecycle state is running. This means the container/lifecycle is running; terminal, Jupyter, and exec readiness are measured separately. The aggregate row includes restore/dearchive cases; use the segment rows to separate them.";
+    case "project_start_admission":
+      return "Observed in the user's browser from issuing the start RPC until the hub returns the accepted lifecycle operation. This isolates placement, authorization, and control-plane request latency.";
+    case "project_start_backend_lifecycle":
+      return "Measured from the backend LRO's authoritative started and finished timestamps. This isolates project-host lifecycle work from browser and stream convergence.";
+    case "project_start_frontend_convergence":
+      return "Observed from receipt of the terminal start LRO until the browser's local project stream reports running. This isolates projection, subscription, and frontend convergence latency.";
     case "project_start_running_stuck":
       return "Observed in the user's browser when a project start request has not reached lifecycle state running after the user-visible stuck threshold. This is meant to catch starts that look stuck to users before the hard monitoring timeout.";
     case "project_start_running_timeout":
@@ -209,6 +286,70 @@ function metricHelp(metric: string, segment?: string): string {
       return "Observed in the user's browser from initiating a file open until the file is visibly rendered in the editor.";
     case "file_open_sync_ready":
       return "Observed in the user's browser from initiating a file open until the file sync session is connected and ready.";
+    case "file_content_paint_v2":
+      return "Version 2 trace from foreground file-open intent through loaded editor React commit and the following animation frame. The editor type, read-only state, payload phase marks, and stale/background classification are retained with the event.";
+    case "file_edit_ready_v2":
+      return "Version 2 trace from foreground file-open intent until the committed editor state is loaded, writable, and reports live realtime collaboration.";
+    case "file_sync_ready_v2":
+      return "Version 2 trace from the original foreground file-open intent until SyncDoc initialization reports ready. Named canonicalization, filesystem watch/reconcile, patchflow, cursor, attempt, and retry phases are retained in the event details.";
+    case "file_open_incomplete_v2":
+      return "Diagnostic version 2 trace that did not reach all expected file-open endpoints before timeout or was superseded. Do not interpret this row as a successful latency SLO.";
+    case "project_directory_first_paint_v2":
+      return "Version 2 trace from opening a project from a files target until the first directory contents commit and the following animation frame. The segment states whether content came from retained cache or a fresh snapshot.";
+    case "directory_navigation_first_paint_v2":
+      return "Version 2 trace from an in-project directory navigation intent until the first listing commit and following animation frame.";
+    case "directory_listing_first_paint_v2":
+      return "Version 2 trace created when a visible listing component mounts without an explicit navigation intent, through its first committed listing frame.";
+    case "directory_authoritative_paint_v2":
+      return "Version 2 trace through the first painted one-shot filesystem snapshot. Unlike the first-paint metric, retained cached content cannot satisfy this endpoint.";
+    case "directory_listing_incomplete_v2":
+      return "Diagnostic version 2 directory trace that did not paint an authoritative snapshot before timeout or supersession.";
+    case "signed_in_app_ready_v2":
+      return "Deep trace from browser navigation start until the signed-in application, account data, site configuration, and first React paint are ready. Navigation, network, bundle/bootstrap, and account milestones are retained without URLs or user content.";
+    case "app_bootstrap_failed_v2":
+      return "Diagnostic browser bootstrap trace that failed while loading or mounting the application.";
+    case "jupyter_document_ready_v2":
+      return "Sampled trace from Jupyter editor initialization until notebook data is available from the optimistic disk path or authoritative realtime path.";
+    case "jupyter_sync_ready_v2":
+      return "Sampled trace from Jupyter editor initialization until the notebook realtime SyncDoc reports ready.";
+    case "jupyter_first_cell_visible_v2":
+      return "Sampled trace through the animation frame after the first notebook cell state becomes renderable. Empty notebooks do not emit this optional endpoint.";
+    case "jupyter_open_incomplete_v2":
+      return "Diagnostic Jupyter-open trace that closed or timed out before both document and realtime sync readiness.";
+    case "jupyter_first_output_v2":
+      return "Sampled trace from Run Cell until the animation frame after the first visible output or running-state change is written.";
+    case "jupyter_run_complete_v2":
+      return "Sampled trace from Run Cell until the Jupyter output stream completes, including project and kernel preparation.";
+    case "jupyter_run_noop_v2":
+      return "Sampled Run Cell trace that found no executable code cells and therefore performed no backend run.";
+    case "jupyter_run_incomplete_v2":
+      return "Diagnostic run trace that ended before a Jupyter runner stream completed.";
+    case "jupyter_run_failed_v2":
+      return "Diagnostic run trace whose Jupyter execution path threw before completion.";
+    case "file_upload_complete_v2":
+      return "Sampled trace from adding a project file to Dropzone until the project-host or hub upload endpoint confirms it was written.";
+    case "file_upload_failed_v2":
+      return "Diagnostic project-file upload that received an error before completion.";
+    case "file_upload_abandoned_v2":
+      return "Diagnostic project-file upload canceled before completion.";
+    case "latex_build_complete_v2":
+      return "Sampled trace from a LaTeX build request through source save, build pipeline completion, preview refresh request, and the following animation frame.";
+    case "latex_build_failed_v2":
+      return "Diagnostic LaTeX build whose save or build pipeline threw before completion.";
+    case "codex_backend_ack_v2":
+      return "Sampled trace from frontend Codex dispatch until the ACP backend acknowledges a queued or running turn.";
+    case "codex_first_response_visible_v2":
+      return "Sampled trace from frontend Codex dispatch through the animation frame after the first nonempty response is rendered.";
+    case "codex_response_incomplete_v2":
+      return "Diagnostic Codex trace that was superseded or did not render a response before timeout.";
+    case "codex_response_failed_v2":
+      return "Diagnostic Codex dispatch that failed before a visible response.";
+    case "terminal_input_ready_v2":
+      return "Version 2 trace from terminal connection intent until both the routed socket is ready and spawn plus history replay have completed, which is the gate that enables terminal input. Initial connections and reconnects are separate segments.";
+    case "terminal_connect_incomplete_v2":
+      return "Diagnostic version 2 terminal trace superseded, closed, or timed out before input became ready.";
+    case "terminal_connect_failed_v2":
+      return "Diagnostic version 2 terminal trace whose connection or spawn path failed before input became ready.";
     case "project_exec_ready":
       return "Observed in the user's browser from an action that runs code in the project, such as LaTeX compilation or exec, until the project exec request is accepted by the running project. If the project was stopped, this includes automatic start time.";
     case "project_jupyter_ready":
@@ -365,6 +506,18 @@ export const UsageStatistics: React.FC = () => {
       title: "Count",
       dataIndex: "count",
       key: "count",
+      align: "right" as const,
+    },
+    {
+      title: "Accounts",
+      dataIndex: "account_count",
+      key: "account_count",
+      align: "right" as const,
+    },
+    {
+      title: "Projects",
+      dataIndex: "project_count",
+      key: "project_count",
       align: "right" as const,
     },
     {
@@ -595,7 +748,7 @@ export const UsageStatistics: React.FC = () => {
   const activeWindowLabel = windowLabel(windowMinutes).toLowerCase();
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    <Space vertical size="middle" style={{ width: "100%" }}>
       <Card
         title="Operations Monitor"
         extra={
@@ -611,7 +764,7 @@ export const UsageStatistics: React.FC = () => {
           <Alert
             type="error"
             showIcon
-            message="Unable to refresh all operations data"
+            title="Unable to refresh all operations data"
             description={error}
             style={{ marginBottom: 16 }}
           />
@@ -619,7 +772,7 @@ export const UsageStatistics: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message="Contained events are monitoring state, not admin alerts"
+          title="Contained events are monitoring state, not admin alerts"
           description="Admission controls rejected these requests to protect shared services. They remain searchable here for investigation; admin alerts are reserved for conditions that require immediate attention."
           style={{ marginBottom: 16 }}
         />
@@ -627,7 +780,7 @@ export const UsageStatistics: React.FC = () => {
           <Alert
             type="warning"
             showIcon
-            message="Some bay telemetry is unavailable"
+            title="Some bay telemetry is unavailable"
             description={unavailableBays
               .map((bay) => `${bay.bay_id}: ${bay.error || "unknown error"}`)
               .join(" | ")}
@@ -756,11 +909,15 @@ export const UsageStatistics: React.FC = () => {
               <Statistic
                 title={
                   <LabelWithHelp
-                    label={`File visible P95 (${activeWindowLabel})`}
-                    help={metricHelp("file_open_visible")}
+                    label={`File content paint P95 (${activeWindowLabel})`}
+                    help={metricHelp(UX_LATENCY_HEALTH_METRICS.fileVisible)}
                   />
                 }
-                value={summaryValue(summary, "file_open_visible", "p95_ms")}
+                value={summaryValue(
+                  summary,
+                  UX_LATENCY_HEALTH_METRICS.fileVisible,
+                  "p95_ms",
+                )}
               />
             </Col>
             <Col xs={24} md={8}>
@@ -768,10 +925,14 @@ export const UsageStatistics: React.FC = () => {
                 title={
                   <LabelWithHelp
                     label={`File sync-ready P95 (${activeWindowLabel})`}
-                    help={metricHelp("file_open_sync_ready")}
+                    help={metricHelp(UX_LATENCY_HEALTH_METRICS.fileSyncReady)}
                   />
                 }
-                value={summaryValue(summary, "file_open_sync_ready", "p95_ms")}
+                value={summaryValue(
+                  summary,
+                  UX_LATENCY_HEALTH_METRICS.fileSyncReady,
+                  "p95_ms",
+                )}
               />
             </Col>
           </Row>

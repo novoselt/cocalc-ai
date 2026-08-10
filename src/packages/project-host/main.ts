@@ -26,7 +26,7 @@ import {
   type Client as ConatClient,
 } from "@cocalc/conat/core/client";
 import { setConatClient } from "@cocalc/conat/client";
-import { humanSize } from "@cocalc/util/misc";
+import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 import { server as createPersistServer } from "@cocalc/backend/conat/persist";
 import { init as initRunner } from "@cocalc/project-runner/run";
 import { client as projectRunnerClient } from "@cocalc/conat/project/runner/run";
@@ -59,6 +59,7 @@ import { attachProjectProxy } from "@cocalc/project-proxy/proxy";
 import { hubApi, init as initHubApi } from "@cocalc/lite/hub/api";
 import { authorizeProjectHostHubApiRequest } from "./hub/api-request-authorization";
 import { wireDbApi } from "./hub/db";
+import { wireComputeApi } from "./hub/compute";
 import { listAcpAutomationProjectIds } from "@cocalc/lite/hub/sqlite/acp-automations";
 import {
   getAccountEffectiveLimits,
@@ -188,10 +189,7 @@ import {
   MANAGED_WS_EGRESS_CATEGORY,
   setManagedWsEgressContext,
 } from "./ws-egress";
-import {
-  MANAGED_RAW_NETWORK_EGRESS_CATEGORY,
-  startManagedRawNetworkEgressLoop,
-} from "./raw-network-egress";
+import { startManagedRawNetworkEgressLoop } from "./raw-network-egress";
 import { startManagedCpuUsageLoop } from "./cpu-usage";
 import { startExamWatchdog } from "./exam/controller";
 import { getExamUsageAccountId } from "./exam/usage";
@@ -232,30 +230,6 @@ const PRIVATE_APP_ROUTE_CACHE_MS = Math.max(
   1000,
   Number(process.env.COCALC_PROJECT_HOST_PRIVATE_APP_ROUTE_CACHE_MS ?? 30_000),
 );
-
-function formatManagedEgressCategory(category: string): string {
-  if (category === "file-download") return "File downloads";
-  if (category === MANAGED_HTTP_EGRESS_CATEGORY) {
-    return "App server HTTP traffic";
-  }
-  if (category === MANAGED_WS_EGRESS_CATEGORY) {
-    return "App server WebSocket traffic";
-  }
-  if (category === "ssh") return "SSH traffic";
-  if (category === "interactive-conat") return "Interactive session traffic";
-  if (category === "backup-upload") return "Project backup uploads";
-  if (category === MANAGED_RAW_NETWORK_EGRESS_CATEGORY) {
-    return "Project outbound network traffic";
-  }
-  return category.replace(/[-_]/g, " ");
-}
-
-function formatByteCount(bytes?: number): string {
-  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
-    return "unknown";
-  }
-  return humanSize(bytes);
-}
 
 export interface ProjectHostConfig {
   hostId?: string;
@@ -560,6 +534,7 @@ export async function main(
     authorizeRequest: authorizeProjectHostHubApiRequest,
   });
   wireDbApi();
+  wireComputeApi();
   wireSystemApi();
   wireHostsApi();
   wireNotificationsApi();
@@ -840,36 +815,11 @@ export async function main(
       if (policy.allowed) {
         return { allowed: true };
       }
-      const breakdown = Object.entries(
-        policy.managed_egress_categories_5h_bytes ?? {},
-      )
-        .filter(
-          ([, bytes]) =>
-            typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-        )
-        .map(
-          ([category, bytes]) =>
-            `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-        );
       const lines = [
         "Managed download limit reached for this account.",
         "New file downloads are temporarily blocked until the egress usage window resets.",
+        ...formatManagedEgressPolicyDetails(policy),
       ];
-      if (policy.egress_5h_bytes != null) {
-        lines.push(
-          `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-        );
-      }
-      if (policy.egress_7d_bytes != null) {
-        lines.push(
-          `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-        );
-      }
-      if (breakdown.length > 0) {
-        lines.push(
-          `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-        );
-      }
       return {
         allowed: false,
         message: lines.join("\n"),
@@ -946,36 +896,11 @@ export async function main(
       if (policy.allowed) {
         return { allowed: true };
       }
-      const breakdown = Object.entries(
-        policy.managed_egress_categories_5h_bytes ?? {},
-      )
-        .filter(
-          ([, bytes]) =>
-            typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-        )
-        .map(
-          ([category, bytes]) =>
-            `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-        );
       const lines = [
         "Managed app HTTP limit reached for this project.",
         "New app HTTP responses are temporarily blocked until the egress usage window resets.",
+        ...formatManagedEgressPolicyDetails(policy),
       ];
-      if (policy.egress_5h_bytes != null) {
-        lines.push(
-          `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-        );
-      }
-      if (policy.egress_7d_bytes != null) {
-        lines.push(
-          `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-        );
-      }
-      if (breakdown.length > 0) {
-        lines.push(
-          `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-        );
-      }
       return {
         allowed: false,
         message: lines.join("\n"),
@@ -1057,36 +982,11 @@ export async function main(
       if (policy.allowed) {
         return { allowed: true };
       }
-      const breakdown = Object.entries(
-        policy.managed_egress_categories_5h_bytes ?? {},
-      )
-        .filter(
-          ([, bytes]) =>
-            typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-        )
-        .map(
-          ([category, bytes]) =>
-            `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-        );
       const lines = [
         "Managed app WebSocket limit reached for this project.",
         "New app WebSocket traffic is temporarily blocked until the egress usage window resets.",
+        ...formatManagedEgressPolicyDetails(policy),
       ];
-      if (policy.egress_5h_bytes != null) {
-        lines.push(
-          `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-        );
-      }
-      if (policy.egress_7d_bytes != null) {
-        lines.push(
-          `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-        );
-      }
-      if (breakdown.length > 0) {
-        lines.push(
-          `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-        );
-      }
       return {
         allowed: false,
         message: lines.join("\n"),
@@ -1599,7 +1499,10 @@ export async function main(
     waitForInterest: false,
     timeout: PROJECT_RUNNER_RPC_TIMEOUT_MS,
   });
-  wireProjectsApi(runnerApi);
+  const { startStoppedVolumePreparationMaintenance } =
+    wireProjectsApi(runnerApi);
+  const stopStoppedVolumePreparationMaintenance =
+    startStoppedVolumePreparationMaintenance();
   startExamWatchdog();
   const stopRawNetworkEgressLoop = startManagedRawNetworkEgressLoop({
     runnerApi,
@@ -1638,6 +1541,7 @@ export async function main(
       force,
       pressure_zone,
       reason,
+      shared_compute_priority,
     }) => {
       if (!hubApi.projects?.stop) {
         throw new Error("local project stop API unavailable");
@@ -1647,14 +1551,22 @@ export async function main(
         force: !!force,
         pressure_zone,
         reason,
+        shared_compute_priority,
       });
       await hubApi.projects.stop({
         project_id,
         force,
-        runtime_exit_reason: "host_pressure",
+        runtime_exit_reason:
+          shared_compute_priority <= 0 ? "host_pressure_free" : "host_pressure",
       });
     },
   });
+  try {
+    const { url } = await hubApi.system.getPublicSiteUrl({ host_id: hostId });
+    process.env.COCALC_SITE_URL = url;
+  } catch (err) {
+    logger.warn("unable to resolve public CoCalc site URL", { err: `${err}` });
+  }
   const stopReconciler = startReconciler(undefined, {
     reconcileProjectCgroup: async ({ project_id, run_quota, force }) =>
       await reconcileProjectCgroup({
@@ -1750,6 +1662,7 @@ export async function main(
     stopStorageAdmissionController?.();
     stopRawNetworkEgressLoop?.();
     stopCpuUsageLoop?.();
+    stopStoppedVolumePreparationMaintenance();
     stopEventLoopStallMonitor?.();
     stopGcpPreemptionWatcher();
     stopConatRevocationKickLoop?.();

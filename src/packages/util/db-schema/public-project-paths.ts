@@ -25,6 +25,7 @@ Table({
           id: null,
           project_id: null,
           path: null,
+          path_type: null,
           slug: null,
           visibility: null,
           requires_auth: null,
@@ -58,6 +59,7 @@ Table({
         fields: {
           project_id: null,
           path: null,
+          path_type: null,
           slug: null,
           visibility: null,
           requires_auth: null,
@@ -97,7 +99,13 @@ Table({
     },
     path: {
       type: "string",
-      desc: "Directory path inside the project that is visible through the public share.",
+      desc: "Path inside the project that is visible through the public share.",
+    },
+    path_type: {
+      type: "string",
+      pg_type: "VARCHAR(16)",
+      desc: "Shared path type: directory or exact file.",
+      pg_check: "CHECK (path_type IN ('directory', 'file'))",
     },
     slug: {
       type: "string",
@@ -221,6 +229,11 @@ Table({
       type: "string",
       desc: "Canonical display slug.",
     },
+    alias_kind: {
+      type: "string",
+      pg_type: "VARCHAR(32)",
+      desc: "Alias type: canonical or a legacy compatibility form.",
+    },
     owning_bay_id: {
       type: "string",
       desc: "Bay that owns the authoritative public_project_paths row.",
@@ -242,5 +255,54 @@ Table({
       type: "timestamp",
       desc: "When this slug directory row was last updated.",
     },
+  },
+});
+
+Table({
+  name: "legacy_migration_public_share_replay_events",
+  rules: {
+    primary_key: "id",
+    pg_indexes: [
+      "legacy_project_id",
+      "project_id",
+      "actor_account_id",
+      "status",
+      "created",
+    ],
+    user_query: {
+      get: {
+        admin: true,
+        fields: {
+          id: null,
+          legacy_project_id: null,
+          project_id: null,
+          actor_account_id: null,
+          reason: null,
+          support_reference: null,
+          public_path_count: null,
+          file_path_count: null,
+          imported: null,
+          skipped: null,
+          status: null,
+          error: null,
+          created: null,
+        },
+      },
+    },
+  },
+  fields: {
+    id: { type: "uuid" },
+    legacy_project_id: { type: "uuid" },
+    project_id: { type: "uuid", render: { type: "project_link" } },
+    actor_account_id: { type: "uuid", render: { type: "account" } },
+    reason: { type: "string" },
+    support_reference: { type: "string" },
+    public_path_count: { type: "integer" },
+    file_path_count: { type: "integer" },
+    imported: { type: "integer" },
+    skipped: { type: "integer" },
+    status: { type: "string", pg_type: "VARCHAR(16)" },
+    error: { type: "string" },
+    created: { type: "timestamp" },
   },
 });

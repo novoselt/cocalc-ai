@@ -117,6 +117,7 @@ export async function getEnvironment({
   const cloudZone = normalizedCloudZone();
   const aptUbuntuMirror =
     cloudProvider === "gcp" ? gceUbuntuMirrorForZone(cloudZone) : undefined;
+  const siteUrl = `${process.env.COCALC_SITE_URL ?? ""}`.trim() || undefined;
 
   const USER = DEFAULT_PROJECT_RUNTIME_USER;
   const DATA = dataPath(HOME);
@@ -162,6 +163,7 @@ export async function getEnvironment({
     // is selected in run/podman.ts.
     CONAT_SERVER: normalizeProjectContainerConatServer(conatServer),
     COCALC_SECRET_TOKEN: secretTokenPath(HOME),
+    ...(siteUrl ? { COCALC_SITE_URL: siteUrl } : {}),
     [PROJECT_SECRETS_ENV]: PROJECT_SECRETS_MOUNT_PATH,
     BASE_PATH: base_path,
     DEBIAN_FRONTEND: "noninteractive",

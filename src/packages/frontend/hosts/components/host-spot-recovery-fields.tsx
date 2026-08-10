@@ -111,11 +111,11 @@ export const HostSpotRecoveryFields: React.FC<HostSpotRecoveryFieldsProps> = ({
         destroyOnHidden={false}
         width={900}
       >
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Space vertical size={16} style={{ width: "100%" }}>
           <Alert
             showIcon
             type="info"
-            message="Read-only recovery diagram"
+            title="Read-only recovery diagram"
             description="The boxes show the possible recovery states; they are not buttons. Configure behavior with the settings below the diagram."
           />
           <HostSpotRecoveryDiagram
@@ -127,7 +127,7 @@ export const HostSpotRecoveryFields: React.FC<HostSpotRecoveryFieldsProps> = ({
             <Alert
               showIcon
               type="warning"
-              message="Recovery strategy inactive"
+              title="Recovery strategy inactive"
               description="These settings only apply while interruption restore is set to Restore immediately."
             />
           ) : (

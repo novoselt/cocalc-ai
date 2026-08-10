@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 
 import getLogger from "@cocalc/backend/logger";
 import { createHostStatusClient } from "@cocalc/conat/project-host/api";
-import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  BtrfsMutationDeferredError,
+  withBtrfsMutationContext,
+} from "@cocalc/file-server/btrfs/operation-cache";
 import {
   DEFAULT_BACKUP_COUNTS,
   DEFAULT_SNAPSHOT_COUNTS,
@@ -14,14 +17,20 @@ import {
   runScheduledBackupMaintenance,
   runScheduledSnapshotMaintenance,
 } from "./file-server";
-import { admitStorageOperation } from "./storage-admission";
+import {
+  admitStorageOperation,
+  getStorageAdmissionStatus,
+} from "./storage-admission";
 import type { StorageOperationKind } from "./storage-operation-registry";
 
 const logger = getLogger("project-host:snapshot-backup-maintenance");
 
 const DEFAULT_ACTIVE_DAYS = 2;
 const DEFAULT_SWEEP_MS = 15 * 60 * 1000;
-const DEFAULT_PARALLELISM = 4;
+// Btrfs metadata discovery is filesystem-wide enough that concurrent project
+// scans amplify latency without increasing useful mutation throughput (the
+// mutation lock is global). Operators can raise this only after qualification.
+const DEFAULT_PARALLELISM = 1;
 const DEFAULT_INITIAL_DELAY_MS = DEFAULT_SWEEP_MS;
 const GIB = 1024 ** 3;
 const DEFAULT_MEMORY_AVAILABLE_RATIO = 0.25;
@@ -285,18 +294,29 @@ async function runScheduledStorageOperation({
     });
   }
   try {
-    await withBtrfsMutationContext(
-      {
-        operation_id: ticket.operation_id,
+    try {
+      await withBtrfsMutationContext(
+        {
+          operation_id: ticket.operation_id,
+          project_id,
+          priority: "scheduled",
+          operation_class: operation_kind,
+          cgroup_path: "/sys/fs/cgroup/cocalc-maintenance",
+          checkpointable: true,
+        },
+        run,
+      );
+      return true;
+    } catch (err) {
+      if (!(err instanceof BtrfsMutationDeferredError)) throw err;
+      logger.info("deferred scheduled storage operation at mutation boundary", {
+        hostId,
         project_id,
-        priority: "scheduled",
-        operation_class: operation_kind,
-        cgroup_path: "/sys/fs/cgroup/cocalc-maintenance",
-        checkpointable: true,
-      },
-      run,
-    );
-    return true;
+        operation_kind,
+        reason: err.reason,
+      });
+      return false;
+    }
   } finally {
     ticket.release();
   }
@@ -307,6 +327,18 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
 }: {
   hostId: string;
 }) {
+  const admission = getStorageAdmissionStatus();
+  if (
+    admission?.mode === "enforce" &&
+    (admission.lifecycle_active > 0 || admission.pressure_state !== "normal")
+  ) {
+    logger.info("deferring snapshot/backup maintenance sweep", {
+      hostId,
+      lifecycle_active: admission.lifecycle_active,
+      pressure_state: admission.pressure_state,
+    });
+    return;
+  }
   const configuredParallelism = parsePositiveInteger(
     process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_PARALLELISM,
     DEFAULT_PARALLELISM,

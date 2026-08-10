@@ -1,8 +1,22 @@
 import { authFirst } from "./util";
 import type { MoneyValue } from "@cocalc/util/money";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
+import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
 export type MembershipClass = string;
 export type MembershipPackageKind = "course" | "team" | "site";
+
+export interface AdminMembershipPackagePurchaseResult {
+  package_id: string;
+  purchase_id: number;
+  credit_id?: number;
+  payment_intent_id?: string;
+  hosted_invoice_url?: string;
+  price: number;
+  standard_price: number;
+  starts_at: Date;
+  expires_at: Date;
+  existing: boolean;
+}
 
 export type MembershipEgressPolicy =
   | "metered-shared-hosts"
@@ -90,6 +104,8 @@ export interface EnumOverride<T extends string> {
 export interface AccountFeatureOverrides {
   create_hosts?: boolean;
   exam_mode?: boolean;
+  bandwidth_relay_abuse_exempt?: boolean;
+  cryptomining_abuse_exempt?: boolean;
 }
 
 export interface ProjectDefaultOverrides {
@@ -1581,6 +1597,18 @@ export interface Purchases {
     expires_at?: Date | string | null;
     metadata?: Record<string, unknown> | null;
   }) => Promise<SiteLicenseOverview>;
+  adminCreateMembershipPackagePurchase: (opts?: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string | null;
+    user_account_id?: string;
+    product?: MembershipPackageProduct;
+    price?: number;
+    source?: "card" | "credit" | "free";
+    reason?: string;
+    idempotency_key?: string;
+    pricing_note?: string;
+  }) => Promise<AdminMembershipPackagePurchaseResult>;
   listSiteLicenseOverviews: (opts?: {
     account_id?: string;
     admin?: boolean;
@@ -1814,6 +1842,7 @@ export const purchases = {
   getClaimableMembershipPackages: authFirst,
   claimMembershipPackageSeat: authFirst,
   adminProvisionSiteLicense: authFirst,
+  adminCreateMembershipPackagePurchase: authFirst,
   listSiteLicenseOverviews: authFirst,
   getSiteLicenseOverview: authFirst,
   updateSiteLicense: authFirst,

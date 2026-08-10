@@ -7,8 +7,6 @@ import { trunc, trunc_left, trunc_middle } from "@cocalc/util/misc";
 import { CUTOFF } from "./consts";
 import shortenError from "./shorten-error";
 
-const DEFAULT_HELP_ME_FIX_AGENT_MODEL = "gpt-5.4-mini";
-
 export interface GetHelpOptions {
   project_id: string;
   path: string;
@@ -204,7 +202,6 @@ export function createNavigatorIntentMessage({
     context: {
       project_id,
       path,
-      codex_model: DEFAULT_HELP_ME_FIX_AGENT_MODEL,
       source_tag: sourceTag,
     },
     mutation_mode: "in-place-edit",

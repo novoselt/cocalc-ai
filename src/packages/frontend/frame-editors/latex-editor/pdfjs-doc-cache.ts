@@ -24,16 +24,12 @@ import LRU from "lru-cache";
 import { versions } from "@cocalc/cdn";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
+import { joinUrlPath } from "@cocalc/util/url-path";
 
-/* IMPORTANT:
- - We do NOT install pdfjs-dist into the @cocalc/frontend module at all though we import it here!!
- - The reason is because it includes its own copy of webpack as a side effect of having its
-   own webpack loader included.   Having two copies of webpack obviously doesn't work, since
-   they have different state.
- - Instead, pdfjs-dist is installed into packages/static instead.  That works fine.
- - Oh, for some reason pdfjs-dist is shipping built js files with optional chaining in
-   them, which causes trouble, so we explicitly use a babel plugin just to deal
-   with this package.  That's all in packages/static.
+/*
+PDF.js is bundled by the frontend. Its packed CMaps are copied separately by
+@cocalc/cdn so private and offline CoCalc installations do not depend on an
+external CDN.
 */
 import { getDocument as pdfjs_getDocument } from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist/webpack.mjs";
@@ -66,15 +62,22 @@ async function ensurePdfjsWorker(): Promise<void> {
   await pdfjsWorkerInit;
 }
 
+export function pdfjsCMapUrl(basePath = appBasePath): string {
+  const version = versions["pdfjs-dist"];
+  if (typeof version !== "string" || version.length === 0) {
+    throw new Error("@cocalc/cdn does not provide PDF.js CMap assets");
+  }
+  return `${joinUrlPath(basePath || "/", "cdn", `pdfjs-dist-${version}`, "cmaps")}/`;
+}
+
 export const getDocument = reuseInFlight(async function (url: string) {
   let doc: PDFDocumentProxy | undefined = doc_cache.get(url);
   if (doc === undefined) {
     await ensurePdfjsWorker();
-    const resDir = `pdfjs-dist-${versions["pdfjs-dist"]}`;
     doc = (await pdfjs_getDocument({
       url,
       withCredentials: true,
-      cMapUrl: `${appBasePath}/cdn/${resDir}/cmaps/`,
+      cMapUrl: pdfjsCMapUrl(),
       cMapPacked: true,
       disableStream: true,
       disableAutoFetch: true,

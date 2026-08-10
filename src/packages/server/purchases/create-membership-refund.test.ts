@@ -33,8 +33,13 @@ import createRefund from "./create-refund";
 import getBalance from "./get-balance";
 import {
   createTestAccount,
+  createTestMembershipPackage,
   createTestMembershipSubscription,
 } from "./test-data";
+import {
+  assignMembershipPackageSeat,
+  listMembershipPackageAssignments,
+} from "@cocalc/server/membership/packages";
 
 beforeAll(async () => {
   await before({ noConat: true });
@@ -379,23 +384,40 @@ describe("membership admin refund", () => {
     expect(Number(await getBalance({ account_id }))).toBe(0);
   });
 
-  it("reverses non-subscription membership products without cancellation", async () => {
+  it("expires a refunded membership package and revokes its seats", async () => {
     const account_id = uuid();
     await createTestAccount(account_id);
+    const packageId = await createTestMembershipPackage({
+      owner_account_id: account_id,
+      kind: "team",
+      membership_class: "member",
+      seat_count: 1,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    });
     const purchaseId = await createPurchase({
       account_id,
       service: "membership",
       cost: 30,
       description: {
         type: "membership-package",
-        package_id: uuid(),
-        kind: "test-package",
+        package_id: packageId,
+        kind: "team",
         membership_class: "member",
         seat_count: 1,
         seat_price: 30,
         total_price: 30,
+        expanded_existing_package: false,
       },
       client: null,
+    });
+    await getPool().query(
+      "UPDATE membership_packages SET purchase_id=$2 WHERE id=$1",
+      [packageId, purchaseId],
+    );
+    await assignMembershipPackageSeat({
+      package_id: packageId,
+      account_id,
+      assigned_by_account_id: account_id,
     });
 
     const refundPurchaseId = await createRefund({
@@ -404,13 +426,223 @@ describe("membership admin refund", () => {
       reason: "duplicate",
       notes: "Duplicate package transaction",
     });
+    await expect(
+      createRefund({
+        account_id: uuid(),
+        purchase_id: purchaseId,
+        reason: "duplicate",
+        notes: "Duplicate package transaction",
+      }),
+    ).resolves.toBe(refundPurchaseId);
 
     expect(mockGetConn).not.toHaveBeenCalled();
-    const { rows } = await getPool().query(
+    const { rows: refunds } = await getPool().query(
       "SELECT cost, description FROM purchases WHERE id=$1",
       [refundPurchaseId],
     );
-    expect(Number(rows[0]?.cost)).toBe(-30);
-    expect(rows[0]?.description?.purchase_id).toBe(purchaseId);
+    expect(Number(refunds[0]?.cost)).toBe(-30);
+    expect(refunds[0]?.description?.purchase_id).toBe(purchaseId);
+    const { rows: packages } = await getPool().query(
+      "SELECT expires_at FROM membership_packages WHERE id=$1",
+      [packageId],
+    );
+    expect(new Date(packages[0]?.expires_at).getTime()).toBeLessThanOrEqual(
+      Date.now(),
+    );
+    const assignments = await listMembershipPackageAssignments({
+      package_id: packageId,
+      include_revoked: true,
+    });
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0]?.revoked_at).toBeInstanceOf(Date);
+    const { rows: grants } = await getPool().query(
+      "SELECT revoked_at FROM membership_grants WHERE package_id=$1",
+      [packageId],
+    );
+    expect(grants).toHaveLength(1);
+    expect(grants[0]?.revoked_at).not.toBeNull();
+    expect(Number(await getBalance({ account_id }))).toBe(0);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("refunds an unassigned package seat expansion", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const packageId = await createTestMembershipPackage({
+      owner_account_id: account_id,
+      kind: "team",
+      membership_class: "member",
+      seat_count: 3,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    });
+    await assignMembershipPackageSeat({
+      package_id: packageId,
+      account_id,
+      assigned_by_account_id: account_id,
+    });
+    const purchaseId = await createPurchase({
+      account_id,
+      service: "membership",
+      cost: 60,
+      description: {
+        type: "membership-package",
+        package_id: packageId,
+        kind: "team",
+        membership_class: "member",
+        seat_count: 2,
+        seat_price: 30,
+        total_price: 60,
+        expanded_existing_package: true,
+      },
+      client: null,
+    });
+
+    await createRefund({
+      account_id: uuid(),
+      purchase_id: purchaseId,
+      reason: "requested_by_customer",
+      notes: "Unused expansion",
+    });
+
+    const { rows: packages } = await getPool().query(
+      "SELECT seat_count, expires_at FROM membership_packages WHERE id=$1",
+      [packageId],
+    );
+    expect(packages[0]?.seat_count).toBe(1);
+    expect(new Date(packages[0]?.expires_at).getTime()).toBeGreaterThan(
+      Date.now(),
+    );
+    const assignments = await listMembershipPackageAssignments({
+      package_id: packageId,
+      include_revoked: true,
+    });
+    expect(assignments[0]?.revoked_at).toBeUndefined();
+    expect(Number(await getBalance({ account_id }))).toBe(0);
+  });
+
+  it("does not refund a package expansion while its seats are assigned", async () => {
+    const account_id = uuid();
+    const second_account_id = uuid();
+    await createTestAccount(account_id);
+    await createTestAccount(second_account_id);
+    const packageId = await createTestMembershipPackage({
+      owner_account_id: account_id,
+      kind: "team",
+      membership_class: "member",
+      seat_count: 3,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    });
+    for (const target of [account_id, second_account_id]) {
+      await assignMembershipPackageSeat({
+        package_id: packageId,
+        account_id: target,
+        assigned_by_account_id: account_id,
+      });
+    }
+    const purchaseId = await createPurchase({
+      account_id,
+      service: "membership",
+      cost: 60,
+      description: {
+        type: "membership-package",
+        package_id: packageId,
+        kind: "team",
+        membership_class: "member",
+        seat_count: 2,
+        seat_price: 30,
+        total_price: 60,
+        expanded_existing_package: true,
+      },
+      client: null,
+    });
+
+    await expect(
+      createRefund({
+        account_id: uuid(),
+        purchase_id: purchaseId,
+        reason: "requested_by_customer",
+        notes: "Seats still assigned",
+      }),
+    ).rejects.toThrow("Revoke at least 1 assigned seat");
+
+    const { rows: packages } = await getPool().query(
+      "SELECT seat_count FROM membership_packages WHERE id=$1",
+      [packageId],
+    );
+    expect(packages[0]?.seat_count).toBe(3);
+    const { rows: refunds } = await getPool().query(
+      `SELECT id FROM purchases
+        WHERE service='refund'
+          AND description->>'purchase_id'=$1`,
+      [`${purchaseId}`],
+    );
+    expect(refunds).toHaveLength(0);
+  });
+
+  it("requires expansions to be refunded before the original package", async () => {
+    const account_id = uuid();
+    await createTestAccount(account_id);
+    const packageId = await createTestMembershipPackage({
+      owner_account_id: account_id,
+      kind: "team",
+      membership_class: "member",
+      seat_count: 2,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    });
+    const originalPurchaseId = await createPurchase({
+      account_id,
+      service: "membership",
+      cost: 30,
+      description: {
+        type: "membership-package",
+        package_id: packageId,
+        kind: "team",
+        membership_class: "member",
+        seat_count: 1,
+        seat_price: 30,
+        total_price: 30,
+        expanded_existing_package: false,
+      },
+      client: null,
+    });
+    await getPool().query(
+      "UPDATE membership_packages SET purchase_id=$2 WHERE id=$1",
+      [packageId, originalPurchaseId],
+    );
+    const expansionPurchaseId = await createPurchase({
+      account_id,
+      service: "membership",
+      cost: 30,
+      description: {
+        type: "membership-package",
+        package_id: packageId,
+        kind: "team",
+        membership_class: "member",
+        seat_count: 1,
+        seat_price: 30,
+        total_price: 30,
+        expanded_existing_package: true,
+      },
+      client: null,
+    });
+
+    await expect(
+      createRefund({
+        account_id: uuid(),
+        purchase_id: originalPurchaseId,
+        reason: "requested_by_customer",
+        notes: "Refund package",
+      }),
+    ).rejects.toThrow(
+      `Refund membership package expansion transaction ${expansionPurchaseId}`,
+    );
+
+    const { rows: packages } = await getPool().query(
+      "SELECT expires_at FROM membership_packages WHERE id=$1",
+      [packageId],
+    );
+    expect(new Date(packages[0]?.expires_at).getTime()).toBeGreaterThan(
+      Date.now(),
+    );
   });
 });

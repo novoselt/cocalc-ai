@@ -136,10 +136,20 @@ describe("AdminRefund", () => {
   });
 
   it("does not describe a membership package as a subscription", () => {
-    render(<AdminRefund purchase_id={600} service="membership" cost={30} />);
+    render(
+      <AdminRefund
+        purchase_id={600}
+        service="membership"
+        cost={30}
+        membership_package
+      />,
+    );
 
     fireEvent.click(screen.getByText("Admin Refund"));
-    expect(screen.getByText(/does not undo resources/i)).toBeTruthy();
+    expect(screen.getByText(/package will expire immediately/i)).toBeTruthy();
+    expect(
+      screen.getByText(/refund that credit transaction separately/i),
+    ).toBeTruthy();
     expect(screen.queryByText(/exact subscription/i)).toBeNull();
   });
 });

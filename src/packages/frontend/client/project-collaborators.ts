@@ -87,6 +87,8 @@ export class ProjectCollaborators {
     email?: string;
     subject?: string;
     message?: string;
+    invite_context?: Record<string, unknown>;
+    invite_scope?: string;
     invite_role?: "collaborator" | "viewer";
     read_policy?: ProjectViewerReadPolicy | null;
   }): Promise<ProjectInviteDeliveryResult> {

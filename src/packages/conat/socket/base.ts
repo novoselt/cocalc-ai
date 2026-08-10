@@ -49,6 +49,7 @@ export abstract class ConatSocketBase extends EventEmitter {
   private recoveryPaused = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private recoveryRegistration?: RegisteredRecoverableResource;
+  protected readonly lifecycleReporter?: ConatSocketOptions["lifecycleReporter"];
   private readonly onClientDisconnected = () => {
     this.disconnect();
   };
@@ -71,6 +72,7 @@ export abstract class ConatSocketBase extends EventEmitter {
     keepAlive = DEFAULT_KEEP_ALIVE,
     keepAliveTimeout = DEFAULT_KEEP_ALIVE_TIMEOUT,
     desc,
+    lifecycleReporter,
   }: ConatSocketOptions) {
     super();
     this.maxQueueSize = maxQueueSize;
@@ -82,6 +84,7 @@ export abstract class ConatSocketBase extends EventEmitter {
     this.keepAlive = keepAlive;
     this.keepAliveTimeout = keepAliveTimeout;
     this.desc = desc;
+    this.lifecycleReporter = lifecycleReporter;
     this.conn = { id };
     if (this.reconnection) {
       this.recoveryRegistration =
@@ -267,7 +270,13 @@ export abstract class ConatSocketBase extends EventEmitter {
       return;
     }
     this.setState("connecting");
+    this.lifecycleReporter?.("transport_wait_start", {
+      transport_connected: !!this.client.conn?.connected,
+    });
     await this.client.waitUntilConnected();
+    this.lifecycleReporter?.("transport_wait_done", {
+      transport_connected: !!this.client.conn?.connected,
+    });
     try {
       await this.run();
     } catch (err) {

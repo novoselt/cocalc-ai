@@ -28,6 +28,7 @@ export interface DisposableRestoreWorkerConfig {
   result_nonce: string;
   bay_id: string;
   backup_set_id: string;
+  repository_type?: "legacy-rustic" | "pgbackrest";
   snapshot_id: string;
   restore_mode: "snapshot" | "pitr";
   target_time?: string;
@@ -43,8 +44,14 @@ export interface DisposableRestoreWorkerConfig {
   rustic_repo_root: string;
   rustic_repo_password: string;
   wal_object_prefix?: string;
+  pgbackrest_repo_path?: string;
+  pgbackrest_cipher_pass?: string;
+  pgbackrest_stanza?: string;
+  pgbackrest_version?: string;
+  pgbackrest_source_sha256?: string;
   require_conat: boolean;
   minimum_free_bytes: number;
+  worker_timeout_seconds?: number;
 }
 
 export interface DisposableRestoreWorkerResult {
@@ -57,6 +64,8 @@ export interface DisposableRestoreWorkerResult {
   duration_ms: number;
   error?: string;
   postgres?: {
+    repository_type?: "legacy-rustic" | "pgbackrest";
+    backup_label?: string | null;
     restore_mode: "snapshot" | "pitr";
     pitr_verified: boolean;
     pre_count: number | null;
@@ -223,6 +232,7 @@ STAGE = "bootstrap"
 
 with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
     CONFIG = json.load(handle)
+REPOSITORY_TYPE = CONFIG.get("repository_type", "legacy-rustic")
 
 def bounded(value, limit=2000):
     text = str(value)
@@ -252,8 +262,9 @@ def report(status, *, error=None, postgres=None, conat=None, disk=None):
         serial.write("\n" + marker + "\n")
         serial.flush()
 
-def run(args, *, timeout=1800, env=None, capture=False, input_text=None):
-    print("restore-drill:", " ".join(str(arg) for arg in args[:4]), flush=True)
+def run(args, *, timeout=1800, env=None, capture=False, input_text=None, log=True):
+    if log:
+        print("restore-drill:", " ".join(str(arg) for arg in args[:4]), flush=True)
     return subprocess.run(
         [str(arg) for arg in args],
         check=True,
@@ -277,16 +288,27 @@ def locate_one(pattern):
         raise RuntimeError(f"expected one {pattern}, found {len(matches)}")
     return matches[0]
 
-def psql(container, sql):
+def pgbackrest_env():
+    env = os.environ.copy()
+    env.update({
+        "PGBACKREST_REPO1_S3_KEY": CONFIG["r2_access_key_id"],
+        "PGBACKREST_REPO1_S3_KEY_SECRET": CONFIG["r2_secret_access_key"],
+        "PGBACKREST_REPO1_S3_TOKEN": CONFIG["r2_session_token"],
+        "PGBACKREST_REPO1_CIPHER_PASS": CONFIG["pgbackrest_cipher_pass"],
+    })
+    return env
+
+def psql(container, sql, *, log=True):
     completed = run([
         "podman", "exec", container, "psql", "-h", "/tmp",
+        "-p", "5432",
         "-U", CONFIG["postgres_user"], "-d", CONFIG["postgres_database"],
         "-tAc", sql,
-    ], timeout=60, capture=True)
+    ], timeout=60, capture=True, log=log)
     return completed.stdout.strip()
 
 def postgres_diagnostics(container):
-    logs = run(["podman", "logs", container], timeout=60, capture=True)
+    logs = run(["podman", "logs", "--tail", "80", container], timeout=60, capture=True)
     noisy = (
         "FATAL:  the database system is starting up",
         "FATAL:  the database system is in recovery mode",
@@ -306,15 +328,43 @@ try:
     STAGE = "install-tools"
     os.environ["DEBIAN_FRONTEND"] = "noninteractive"
     run(["apt-get", "update"], timeout=900)
-    run([
+    packages = [
         "apt-get", "install", "-y", "--no-install-recommends",
         "ca-certificates", "curl", "podman", "sqlite3", "zstd",
-    ], timeout=1200)
+    ]
+    if REPOSITORY_TYPE == "pgbackrest":
+        packages.extend([
+            "build-essential", "meson", "ninja-build", "pkg-config",
+            "libbz2-dev", "liblz4-dev", "libpq-dev", "libssh2-1-dev",
+            "libssl-dev", "libsystemd-dev", "libxml2-dev", "libz-dev",
+            "libzstd-dev",
+        ])
+    run(packages, timeout=1200)
     arch = subprocess.check_output(["uname", "-m"], text=True).strip()
     rustic_arch = "x86_64" if arch in ("x86_64", "amd64") else "arm64"
     rustic_url = f"https://github.com/sagemathinc/rustic/releases/download/v0.11.1/rustic-v0.11.1-linux-{rustic_arch}.tar.gz"
     run(["bash", "-lc", f"curl -fsSL {rustic_url} | tar -xz -C /usr/local/bin rustic"], timeout=600)
     os.chmod("/usr/local/bin/rustic", 0o755)
+
+    if REPOSITORY_TYPE == "pgbackrest":
+        STAGE = "build-pgbackrest"
+        ROOT.mkdir(parents=True, exist_ok=True)
+        version = CONFIG["pgbackrest_version"]
+        source_sha256 = CONFIG["pgbackrest_source_sha256"]
+        source = ROOT / f"pgbackrest-{version}.tar.gz"
+        source_url = f"https://github.com/pgbackrest/pgbackrest/releases/download/release%2F{version}/pgbackrest-{version}.tar.gz"
+        run(["curl", "-fsSL", source_url, "-o", str(source)], timeout=600)
+        checked = run(["sha256sum", str(source)], timeout=60, capture=True).stdout.split()[0]
+        if checked != source_sha256:
+            raise RuntimeError(f"pgBackRest source checksum mismatch: {checked}")
+        source_dir = ROOT / f"pgbackrest-{version}"
+        build_dir = ROOT / "pgbackrest-build"
+        run(["tar", "-xzf", str(source), "-C", str(ROOT)], timeout=300)
+        run(["meson", "setup", str(build_dir), str(source_dir)], timeout=600)
+        run(["ninja", "-C", str(build_dir)], timeout=1200)
+        shutil.copy2(build_dir / "src" / "pgbackrest", "/usr/local/bin/pgbackrest")
+        os.chmod("/usr/local/bin/pgbackrest", 0o755)
+        run(["/usr/local/bin/pgbackrest", "version"], timeout=60)
 
     STAGE = "disk-preflight"
     ROOT.mkdir(parents=True, exist_ok=True)
@@ -349,8 +399,11 @@ try:
     ], timeout=3600)
 
     STAGE = "validate-conat"
-    sync_dirs = [path for path in SNAPSHOT.glob("**/sync") if path.is_dir()]
-    sync_dir = sync_dirs[0] if sync_dirs else None
+    if REPOSITORY_TYPE == "pgbackrest":
+        sync_dir = SNAPSHOT
+    else:
+        sync_dirs = [path for path in SNAPSHOT.glob("**/sync") if path.is_dir()]
+        sync_dir = sync_dirs[0] if sync_dirs else None
     db_files = sorted(sync_dir.rglob("*.db")) if sync_dir else []
     database_bytes = sum(path.stat().st_size for path in db_files)
     quick_passed = 0
@@ -359,10 +412,16 @@ try:
             ["sqlite3", "-readonly", str(path), "PRAGMA quick_check;"],
             timeout=120,
             capture=True,
+            log=False,
         ).stdout.strip()
         if checked != "ok":
             raise RuntimeError(f"Conat SQLite quick_check failed for {path.name}: {bounded(checked, 500)}")
         quick_passed += 1
+        if quick_passed % 1000 == 0 or quick_passed == len(db_files):
+            print(
+                f"restore-drill: SQLite quick_check progress {quick_passed}/{len(db_files)}",
+                flush=True,
+            )
     catalogs = sorted(sync_dir.rglob("catalog.sqlite")) if sync_dir else []
     catalog_status = None
     if catalogs:
@@ -387,6 +446,49 @@ try:
         raise RuntimeError("backup requires Conat validation but no restored .db files were found")
 
     STAGE = "prepare-postgres"
+    pgbackrest_config = None
+    if REPOSITORY_TYPE == "pgbackrest":
+        required = (
+            "target_time", "pitr_run_id", "pgbackrest_repo_path",
+            "pgbackrest_cipher_pass", "pgbackrest_stanza",
+        )
+        missing = [name for name in required if not CONFIG.get(name)]
+        if missing:
+            raise RuntimeError("pgBackRest PITR config is missing: " + ", ".join(missing))
+        pgdata = SNAPSHOT / "postgres" / "base"
+        pgdata.mkdir(parents=True, exist_ok=True)
+        pgbackrest_config = pathlib.Path("/etc/pgbackrest/pgbackrest.conf")
+        pgbackrest_config.parent.mkdir(parents=True, exist_ok=True)
+        endpoint = CONFIG["r2_endpoint"].removeprefix("https://").removeprefix("http://").rstrip("/")
+        pgbackrest_config.write_text("\n".join([
+            "[global]",
+            "repo1-type=s3",
+            "repo1-path=" + CONFIG["pgbackrest_repo_path"],
+            "repo1-s3-bucket=" + CONFIG["r2_bucket"],
+            "repo1-s3-endpoint=" + endpoint,
+            "repo1-s3-region=auto",
+            "repo1-s3-uri-style=path",
+            "repo1-cipher-type=aes-256-cbc",
+            "process-max=2",
+            "log-level-console=info",
+            "",
+            "[" + CONFIG["pgbackrest_stanza"] + "]",
+            "pg1-path=/var/lib/postgresql/data",
+            "",
+        ]), encoding="utf-8")
+        os.chmod(pgbackrest_config, 0o644)
+        STAGE = "restore-pgbackrest"
+        run([
+            "/usr/local/bin/pgbackrest",
+            "--config=" + str(pgbackrest_config),
+            "--stanza=" + CONFIG["pgbackrest_stanza"],
+            "--pg1-path=" + str(pgdata),
+            "--set=" + CONFIG["backup_set_id"],
+            "--type=time",
+            "--target=" + CONFIG["target_time"],
+            "--target-action=promote",
+            "restore",
+        ], timeout=7200, env=pgbackrest_env())
     pg_versions = sorted(SNAPSHOT.glob("**/postgres/base/PG_VERSION"))
     if len(pg_versions) != 1:
         raise RuntimeError(f"expected one restored PostgreSQL PG_VERSION, found {len(pg_versions)}")
@@ -398,8 +500,14 @@ try:
         for source in bundled_wal_dirs[0].iterdir():
             if source.is_file():
                 shutil.copy2(source, target_wal / source.name)
-    for stale in ("postmaster.pid", "postmaster.opts", "recovery.signal", "standby.signal"):
+    # pgBackRest creates recovery.signal and recovery settings for PITR. Only
+    # remove stale runtime state here; deleting the signal would boot the base
+    # backup without replaying archived WAL.
+    for stale in ("postmaster.pid", "postmaster.opts"):
         (pgdata / stale).unlink(missing_ok=True)
+    if REPOSITORY_TYPE != "pgbackrest":
+        for stale in ("recovery.signal", "standby.signal"):
+            (pgdata / stale).unlink(missing_ok=True)
 
     hba = pgdata / "pg_hba.conf"
     hba.write_text("local all all trust\n" + hba.read_text(encoding="utf-8"), encoding="utf-8")
@@ -419,11 +527,21 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
 ''', encoding="utf-8")
     os.chmod(restore_script, 0o700)
     auto_conf = pgdata / "postgresql.auto.conf"
+    if REPOSITORY_TYPE == "pgbackrest":
+        auto_conf_text = auto_conf.read_text(encoding="utf-8")
+        if "restore_command" not in auto_conf_text:
+            raise RuntimeError("pgBackRest restore did not configure restore_command")
+        # pgBackRest records the worker's host-side pg1-path in restore_command.
+        # PostgreSQL sees the restored tree at the container mount point instead.
+        auto_conf.write_text(
+            auto_conf_text.replace(str(pgdata), "/var/lib/postgresql/data"),
+            encoding="utf-8",
+        )
     with auto_conf.open("a", encoding="utf-8") as handle:
         handle.write("\n# cocalc disposable restore drill\n")
         handle.write("archive_mode = 'off'\n")
         handle.write("archive_command = '/bin/false'\n")
-        if CONFIG["restore_mode"] == "pitr":
+        if CONFIG["restore_mode"] == "pitr" and REPOSITORY_TYPE != "pgbackrest":
             if not CONFIG.get("target_time") or not CONFIG.get("pitr_run_id") or not CONFIG.get("wal_object_prefix"):
                 raise RuntimeError("PITR mode requires target time, sentinel run, and WAL prefix")
             handle.write("restore_command = '/usr/local/bin/restore-wal.sh %f %p'\n")
@@ -431,19 +549,31 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
             handle.write("recovery_target_inclusive = 'true'\n")
             handle.write("recovery_target_timeline = 'current'\n")
             handle.write("recovery_target_action = 'promote'\n")
-    if CONFIG["restore_mode"] == "pitr":
+    if CONFIG["restore_mode"] == "pitr" and REPOSITORY_TYPE != "pgbackrest":
         (pgdata / "standby.signal").write_text("", encoding="utf-8")
 
     context = ROOT / "postgres-image"
     context.mkdir(parents=True, exist_ok=True)
     shutil.copy2(restore_script, context / "restore-wal.sh")
-    (context / "Containerfile").write_text(
-        f"FROM docker.io/library/postgres:{CONFIG['postgres_major']}-bookworm\n"
-        "RUN apt-get update && apt-get install -y --no-install-recommends curl zstd && rm -rf /var/lib/apt/lists/*\n"
-        "COPY restore-wal.sh /usr/local/bin/restore-wal.sh\n"
-        "RUN chmod 700 /usr/local/bin/restore-wal.sh\n",
-        encoding="utf-8",
-    )
+    containerfile = [
+        f"FROM docker.io/library/postgres:{CONFIG['postgres_major']}-bookworm",
+    ]
+    if REPOSITORY_TYPE == "pgbackrest":
+        shutil.copy2("/usr/local/bin/pgbackrest", context / "pgbackrest")
+        shutil.copy2(pgbackrest_config, context / "pgbackrest.conf")
+        containerfile.extend([
+            "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libbz2-1.0 liblz4-1 libpq5 libssh2-1 libssl3 libsystemd0 libxml2 libzstd1 zlib1g && rm -rf /var/lib/apt/lists/*",
+            "COPY pgbackrest /usr/local/bin/pgbackrest",
+            "COPY pgbackrest.conf /etc/pgbackrest/pgbackrest.conf",
+            "RUN chmod 755 /usr/local/bin/pgbackrest && chmod 644 /etc/pgbackrest/pgbackrest.conf",
+        ])
+    else:
+        containerfile.extend([
+            "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl zstd && rm -rf /var/lib/apt/lists/*",
+            "COPY restore-wal.sh /usr/local/bin/restore-wal.sh",
+            "RUN chmod 700 /usr/local/bin/restore-wal.sh",
+        ])
+    (context / "Containerfile").write_text("\n".join(containerfile) + "\n", encoding="utf-8")
     run(["podman", "build", "-t", "cocalc-restore-postgres", str(context)], timeout=1800)
     run(["chown", "-R", "999:999", str(pgdata)], timeout=600)
 
@@ -469,6 +599,7 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     postgres_args = [
         "podman", "run", "--detach", "--name", container,
         "--security-opt=no-new-privileges",
+        "--security-opt=apparmor=unconfined",
         "--user", "999:999",
         "--volume", f"{pgdata}:/var/lib/postgresql/data:rw",
         "--env", "R2_ENDPOINT=" + CONFIG["r2_endpoint"],
@@ -479,8 +610,16 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
         "--env", "WAL_PREFIX=" + CONFIG.get("wal_object_prefix", ""),
         "cocalc-restore-postgres", "postgres", "-D", "/var/lib/postgresql/data",
         "-c", "listen_addresses=", "-c", "unix_socket_directories=/tmp",
-        "-c", "shared_preload_libraries=",
+        "-c", "port=5432", "-c", "shared_preload_libraries=",
     ]
+    if REPOSITORY_TYPE == "pgbackrest":
+        postgres_args[postgres_args.index("cocalc-restore-postgres"):postgres_args.index("cocalc-restore-postgres")] = [
+            "--env", "PGBACKREST_REPO1_S3_KEY=" + CONFIG["r2_access_key_id"],
+            "--env", "PGBACKREST_REPO1_S3_KEY_SECRET=" + CONFIG["r2_secret_access_key"],
+            "--env", "PGBACKREST_REPO1_S3_TOKEN=" + CONFIG["r2_session_token"],
+            "--env", "PGBACKREST_REPO1_CIPHER_PASS=" + CONFIG["pgbackrest_cipher_pass"],
+        ]
+        postgres_args.extend(["-c", "archive_mode=off", "-c", "archive_command=/bin/false"])
     if CONFIG["restore_mode"] == "snapshot":
         # This VM is destroyed after validation. Avoid making the restore drill's
         # result depend on an end-of-recovery fsync of the entire restored tree;
@@ -494,29 +633,61 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
 
     counts = None
     postgres_ready = False
-    startup_timeout = 600 if CONFIG["restore_mode"] == "snapshot" else 300
-    deadline = time.time() + startup_timeout
+    next_recovery_diagnostic = time.time() + 300
+    if CONFIG["restore_mode"] == "snapshot":
+        deadline = time.time() + 600
+    else:
+        # WAL replay time depends on the age of the latest full backup. Give
+        # PITR the remainder of the worker's overall budget while reserving
+        # enough time to report the result and let the controller delete the VM.
+        worker_timeout = max(900, int(CONFIG.get("worker_timeout_seconds", 7200)))
+        deadline = STARTED + worker_timeout - 300
     last_error = "PostgreSQL unavailable"
     while time.time() < deadline:
         try:
             if CONFIG["restore_mode"] == "pitr":
                 value = psql(container,
                     "SELECT count(*) FILTER (WHERE phase='pre')::text || ',' || "
-                    "count(*) FILTER (WHERE phase='post')::text "
+                    "count(*) FILTER (WHERE phase='post')::text || ',' || "
+                    "pg_is_in_recovery()::text "
                     "FROM public.bay_restore_test_pitr_events WHERE run_id = " +
-                    sql_quote(CONFIG["pitr_run_id"]))
-                pre, post = [int(part) for part in value.split(",")]
+                    sql_quote(CONFIG["pitr_run_id"]), log=False)
+                pre_text, post_text, recovery_text = value.split(",")
+                pre, post = int(pre_text), int(post_text)
+                if recovery_text not in ("true", "false"):
+                    raise RuntimeError("invalid pg_is_in_recovery result: " + recovery_text)
                 counts = (pre, post)
-                if counts == (1, 0):
+                if counts == (1, 0) and recovery_text == "false":
                     postgres_ready = True
                     break
                 if counts == (1, 1):
                     raise RuntimeError("PITR crossed the requested target transaction")
-            elif psql(container, "SELECT 1") == "1":
+            elif psql(container, "SELECT 1", log=False) == "1":
                 postgres_ready = True
                 break
         except Exception as err:
             last_error = bounded(err, 1000)
+            inspected = subprocess.run(
+                ["podman", "inspect", "--format={{.State.Running}}", container],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            if inspected.returncode != 0 or inspected.stdout.strip() != "true":
+                raise RuntimeError(
+                    "PostgreSQL container exited before readiness: " +
+                    last_error + " logs=" + postgres_diagnostics(container)
+                )
+        if time.time() >= next_recovery_diagnostic:
+            print(
+                "restore-drill: PostgreSQL recovery still in progress " +
+                "elapsed_seconds=" + str(int(time.time() - STARTED)) +
+                " sentinel_counts=" + str(counts),
+                flush=True,
+            )
+            print(postgres_diagnostics(container), flush=True)
+            next_recovery_diagnostic = time.time() + 300
         time.sleep(2)
     if CONFIG["restore_mode"] == "pitr" and counts != (1, 0):
         raise RuntimeError("PITR verification timed out: " + last_error + " logs=" + postgres_diagnostics(container))
@@ -531,6 +702,8 @@ curl "${"$"}{common[@]}" --fail "$base" -o "$destination"
     if psql(container, "SELECT pg_is_in_recovery()::text") != "false":
         raise RuntimeError("restored PostgreSQL did not promote after PITR target")
     postgres_result = {
+        "repository_type": REPOSITORY_TYPE,
+        "backup_label": CONFIG["backup_set_id"] if REPOSITORY_TYPE == "pgbackrest" else None,
         "restore_mode": CONFIG["restore_mode"],
         "durability": "fsync-disabled-disposable-validation" if CONFIG["restore_mode"] == "snapshot" else "normal",
         "pitr_verified": CONFIG["restore_mode"] == "pitr",
@@ -561,14 +734,28 @@ except Exception as err:
         traceback.print_exc()
 finally:
     subprocess.run(["podman", "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(["shutdown", "-h", "now"], check=False)
 `;
 }
 
 export function buildDisposableRestoreStartupScript(
   config: DisposableRestoreWorkerConfig,
 ): string {
-  const encodedConfig = Buffer.from(JSON.stringify(config)).toString("base64");
+  const workerConfig = { ...config };
+  if (workerConfig.restore_mode === "pitr" && workerConfig.target_time) {
+    const target = new Date(workerConfig.target_time);
+    if (Number.isNaN(target.getTime())) {
+      throw new Error(
+        `invalid disposable PITR target '${workerConfig.target_time}'`,
+      );
+    }
+    workerConfig.target_time = target
+      .toISOString()
+      .replace("T", " ")
+      .replace("Z", "+00");
+  }
+  const encodedConfig = Buffer.from(JSON.stringify(workerConfig)).toString(
+    "base64",
+  );
   const encodedWorker = Buffer.from(pythonWorkerSource()).toString("base64");
   return `#!/bin/bash
 set -euo pipefail
@@ -687,7 +874,10 @@ export async function runDisposableGcpRestoreWorker({
   const clients = providedClients ?? defaultClients(auth);
   const instance_name = `cocalc-restore-${config.run_id.replace(/-/g, "").slice(0, 20)}`;
   const region = zone.replace(/-[a-z]$/, "");
-  const startupScript = buildDisposableRestoreStartupScript(config);
+  const startupScript = buildDisposableRestoreStartupScript({
+    ...config,
+    worker_timeout_seconds: Math.ceil(timeout_ms / 1000),
+  });
   const timeoutSeconds = Math.max(900, Math.ceil(timeout_ms / 1000) + 600);
   let created = false;
   let cleanup: DisposableGcpRestoreResult["cleanup"] = "already-deleted";

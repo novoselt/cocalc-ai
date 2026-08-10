@@ -115,6 +115,33 @@ describeIfLinux("baseline mutator parity behavior", () => {
     expect(await fs.readFile("cp-dir/cp-source.txt", "utf8")).toBe("cp-data");
   });
 
+  it("preserves dangling symlinks during recursive cp", async () => {
+    await fs.mkdir("cp-links");
+    await symlink("missing-target", join(fs.path, "cp-links", "doc"));
+
+    await fs.cp("cp-links", "copied-links", { recursive: true });
+
+    expect((await fs.lstat("copied-links/doc")).isSymbolicLink()).toBe(true);
+    expect(await fs.readlink("copied-links/doc")).toBe("missing-target");
+  });
+
+  it("overwrites an existing dangling symlink during recursive cp", async () => {
+    await fs.mkdir("cp-links-source");
+    await fs.mkdir("cp-links-dest");
+    await symlink(
+      "new-missing-target",
+      join(fs.path, "cp-links-source", "doc"),
+    );
+    await symlink("old-missing-target", join(fs.path, "cp-links-dest", "doc"));
+
+    await fs.cp("cp-links-source", "cp-links-dest", {
+      recursive: true,
+      force: true,
+    });
+
+    expect(await fs.readlink("cp-links-dest/doc")).toBe("new-missing-target");
+  });
+
   it("supports rm for single path and array path arguments", async () => {
     await fs.writeFile("x.txt", "x");
     await fs.writeFile("y.txt", "y");

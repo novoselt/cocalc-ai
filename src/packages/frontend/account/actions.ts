@@ -264,7 +264,7 @@ export class AccountActions extends Actions<AccountState> {
   }
 
   public set_other_settings_many(values: Record<string, any>): void {
-    void this.setOtherSettingsAndWaitForProjection(values).catch((err) => {
+    void this.set_other_settings_many_and_wait(values).catch((err) => {
       const names = Object.keys(values).join(", ");
       console.warn("error setting account other_settings", {
         names,
@@ -277,7 +277,14 @@ export class AccountActions extends Actions<AccountState> {
     });
   }
 
-  private async setOtherSettingsAndWaitForProjection(
+  public async set_other_settings_and_wait(
+    name: string,
+    value: any,
+  ): Promise<void> {
+    await this.set_other_settings_many_and_wait({ [name]: value });
+  }
+
+  public async set_other_settings_many_and_wait(
     values: Record<string, any>,
   ): Promise<void> {
     const current =

@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { createHash } from "node:crypto";
 import { ADMIN_SEARCH_LIMIT } from "@cocalc/util/db-schema/accounts";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS } from "@cocalc/util/membership-entitlement-overrides";
@@ -19,8 +20,14 @@ import type {
 } from "@cocalc/conat/hub/api/admin-data-explorer";
 import type { AdminDbDiagnostic } from "@cocalc/conat/hub/api/admin-db";
 import {
+  ADMIN_SUPPORT_CONVENTIONS,
+  ADMIN_SUPPORT_MUTABLE_TICKET_STATUSES,
+  ADMIN_SUPPORT_TICKET_PRIORITIES,
   ADMIN_SUPPORT_TICKET_STATUSES,
+  type AdminSupportMutableTicketStatus,
+  type AdminSupportTicketPriority,
   type AdminSupportTicketStatus,
+  type AdminSupportUpdateChanges,
 } from "@cocalc/conat/hub/api/admin-support";
 import {
   ADMIN_CRASH_STATUSES,
@@ -103,6 +110,57 @@ const MEMBERSHIP_TIER_FIELDS = {
   site_license_count: null,
   updated: null,
 } as const;
+
+function parseAdminPackagePositiveInteger(
+  value: string | undefined,
+  flagName: string,
+): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flagName} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseAdminPackagePrice(value: string | undefined): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("--price must be a finite nonnegative number");
+  }
+  return parsed;
+}
+
+function parseAdminPackageMetadata(
+  value: string | undefined,
+): Record<string, unknown> | undefined {
+  const raw = `${value ?? ""}`.trim();
+  if (!raw) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`invalid --metadata-json: ${err}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("--metadata-json must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseAdminPackageKind(value: string | undefined) {
+  if (value === "course" || value === "team" || value === "site") {
+    return value;
+  }
+  throw new Error("--kind must be course, team, or site");
+}
+
+function parseAdminPackageDate(value: string | undefined, flagName: string) {
+  const date = new Date(`${value ?? ""}`.trim());
+  if (!Number.isFinite(date.valueOf())) {
+    throw new Error(`${flagName} must be an ISO date`);
+  }
+  return date.toISOString();
+}
 
 function parseAdminDataQueryKind(
   value: string | undefined,
@@ -264,6 +322,20 @@ export function buildEntitlementOverrideSchemaDoc() {
         label: "Create dedicated hosts",
         description:
           "Whether this account is allowed to create dedicated project hosts.",
+      },
+      {
+        path: "features.bandwidth_relay_abuse_exempt",
+        kind: "boolean",
+        label: descriptions.features.bandwidth_relay_abuse_exempt.label,
+        description:
+          descriptions.features.bandwidth_relay_abuse_exempt.adminDescription,
+      },
+      {
+        path: "features.cryptomining_abuse_exempt",
+        kind: "boolean",
+        label: descriptions.features.cryptomining_abuse_exempt.label,
+        description:
+          descriptions.features.cryptomining_abuse_exempt.adminDescription,
       },
       fieldDoc({
         path: "project_defaults.disk_quota",
@@ -480,7 +552,7 @@ export function buildEntitlementOverrideSchemaDoc() {
         label: "Dedicated-host funding mode",
         values: ["account-prepaid", "account-postpaid", "site-funded"],
         description:
-          "Advanced/internal account-specific default/policy for dedicated-host funding mode.",
+          "Advanced/internal account-specific dedicated-host funding policy. Setting account-postpaid explicitly authorizes administrator-managed collection without requiring Stripe automatic billing; postpaid spend windows still apply.",
       },
     ],
     examples: {
@@ -609,6 +681,21 @@ function requireReason(value: string | undefined): string {
     throw new Error("--reason is required");
   }
   return reason;
+}
+
+function parseMembershipAssignmentExpiration(value: string): Date | null {
+  const parsed = parseExpiresAtOption(value);
+  if (parsed === undefined) {
+    throw new Error("--expires-at is required");
+  }
+  if (parsed === null) {
+    return null;
+  }
+  const expiresAt = new Date(parsed);
+  if (expiresAt.getTime() <= Date.now()) {
+    throw new Error("--expires-at must be in the future, or never");
+  }
+  return expiresAt;
 }
 
 function formatCurrencyValue(value: unknown): string {
@@ -1003,6 +1090,12 @@ export function registerAdminCommand(
     .command("entitlement-override")
     .description("admin account entitlement override operations")
     .addHelpText("after", ENTITLEMENT_OVERRIDE_HELP);
+  const adminMembershipAssignment = admin
+    .command("membership-assignment")
+    .description("admin-assigned membership operations");
+  const adminPurchase = admin
+    .command("purchase")
+    .description("audited admin-assisted purchase operations");
   const adminMasterKey = admin
     .command("master-key")
     .description("local site master key lifecycle operations");
@@ -1026,7 +1119,23 @@ export function registerAdminCommand(
     .description("audited project-host diagnostics");
   const adminSupport = admin
     .command("support")
-    .description("audited redacted support ticket diagnostics");
+    .description("audited Zendesk support diagnostics and operator actions")
+    .addHelpText(
+      "after",
+      `
+Human-in-the-loop workflow:
+  1. Run update, reply, note, merge, or spam without --commit and review the plan.
+  2. Re-run with the returned updated_at value(s) and --commit.
+  3. Mutations require fresh admin authentication and reject stale tickets.
+
+Reply example:
+  cocalc admin support reply 20437 --file /tmp/reply.txt --reason "approved response"
+  cocalc admin support reply 20437 --file /tmp/reply.txt --status solved \\
+    --expected-updated-at <timestamp-from-plan> --reason "approved response" --commit
+
+Merge comments are private unless their corresponding --*-comment-public flag is set.
+`,
+    );
   const adminCrashes = admin
     .command("crashes")
     .description("audited frontend crash report diagnostics and triage");
@@ -1051,6 +1160,179 @@ export function registerAdminCommand(
     }
     return userAccountId;
   }
+
+  async function requireAssignableMembershipTier(
+    ctx: any,
+    tier: string,
+  ): Promise<string> {
+    const membershipClass = `${tier ?? ""}`.trim();
+    if (!membershipClass) {
+      throw new Error("--tier must be non-empty");
+    }
+    const result = (await ctx.hub.db.userQuery({
+      query: {
+        membership_tiers: {
+          id: "*",
+          label: null,
+          disabled: null,
+        },
+      },
+      options: [],
+    })) as { membership_tiers?: MembershipTierRow[] };
+    const tiers = result.membership_tiers ?? [];
+    const selected = tiers.find(
+      (candidate) => candidate.id === membershipClass,
+    );
+    if (!selected) {
+      const available = tiers
+        .filter((candidate) => candidate.id && !candidate.disabled)
+        .map((candidate) => candidate.id)
+        .sort()
+        .join(", ");
+      throw new Error(
+        `unknown membership tier '${membershipClass}'${
+          available ? `; enabled tiers: ${available}` : ""
+        }`,
+      );
+    }
+    if (selected.disabled) {
+      throw new Error(`membership tier '${membershipClass}' is disabled`);
+    }
+    return membershipClass;
+  }
+
+  adminPurchase
+    .command("membership-package <user>")
+    .description(
+      "preview or create a custom-price membership package for an account",
+    )
+    .requiredOption("--kind <kind>", "package kind: course, team, or site")
+    .requiredOption("--membership-class <class>", "membership class")
+    .requiredOption("--seat-count <n>", "number of package seats")
+    .requiredOption("--price <usd>", "custom total price in USD")
+    .requiredOption("--source <source>", "card, credit, or free")
+    .requiredOption("--reason <text>", "operator audit reason")
+    .option("--interval <interval>", "month or year")
+    .option("--course-project <uuid>", "course project UUID")
+    .option("--starts-at <iso>", "explicit package start time")
+    .option("--expires-at <iso>", "explicit package expiry time")
+    .option("--metadata-json <json>", "package metadata JSON object")
+    .option("--pricing-note <text>", "internal custom-pricing explanation")
+    .option(
+      "--idempotency-key <key>",
+      "stable retry key; derived from the reviewed request by default",
+    )
+    .option("--commit", "create the package and purchase", false)
+    .action(async (user: string, opts: any, command: Command) => {
+      await withContext(
+        command,
+        "admin purchase membership-package",
+        async (ctx) => {
+          const user_account_id = await resolveTargetAccountId(ctx, user);
+          const kind = parseAdminPackageKind(opts.kind);
+          const membership_class = `${opts.membershipClass ?? ""}`.trim();
+          if (!membership_class) {
+            throw new Error("--membership-class must be non-empty");
+          }
+          const seat_count = parseAdminPackagePositiveInteger(
+            opts.seatCount,
+            "--seat-count",
+          );
+          const price = parseAdminPackagePrice(opts.price);
+          const source = `${opts.source ?? ""}`.trim();
+          if (source !== "card" && source !== "credit" && source !== "free") {
+            throw new Error("--source must be card, credit, or free");
+          }
+          const reason = `${opts.reason ?? ""}`.trim();
+          if (!reason) throw new Error("--reason must be non-empty");
+          const interval = `${opts.interval ?? ""}`.trim() || undefined;
+          if (interval && interval !== "month" && interval !== "year") {
+            throw new Error("--interval must be month or year");
+          }
+          const course_project_id =
+            `${opts.courseProject ?? ""}`.trim() || undefined;
+          if (course_project_id && !isValidUUID(course_project_id)) {
+            throw new Error("--course-project must be a project UUID");
+          }
+          if (kind === "course" && !course_project_id) {
+            throw new Error("--course-project is required for course packages");
+          }
+          const starts_at = opts.startsAt
+            ? parseAdminPackageDate(opts.startsAt, "--starts-at")
+            : undefined;
+          const expires_at = opts.expiresAt
+            ? parseAdminPackageDate(opts.expiresAt, "--expires-at")
+            : undefined;
+          const metadata = parseAdminPackageMetadata(opts.metadataJson);
+          const product = {
+            type: "membership-package" as const,
+            kind,
+            membership_class,
+            seat_count,
+            interval: interval as "month" | "year" | undefined,
+            course_project_id,
+            starts_at,
+            expires_at,
+            metadata,
+          };
+          const quote = await ctx.hub.purchases.getMembershipPackageQuote({
+            account_id: ctx.accountId,
+            kind,
+            membership_class,
+            seat_count,
+            interval,
+            course_project_id,
+            starts_at,
+            expires_at,
+            metadata: metadata ?? null,
+          });
+          const idempotency_key =
+            `${opts.idempotencyKey ?? ""}`.trim() ||
+            createHash("sha256")
+              .update(
+                JSON.stringify({
+                  user_account_id,
+                  product,
+                  price,
+                  source,
+                  reason,
+                  pricing_note: `${opts.pricingNote ?? ""}`.trim() || null,
+                }),
+              )
+              .digest("hex")
+              .slice(0, 32);
+          const preview = {
+            dry_run: !opts.commit,
+            user_account_id,
+            product,
+            source,
+            custom_price: price,
+            standard_price: quote.total_price,
+            discount: quote.total_price - price,
+            starts_at: starts_at ?? quote.starts_at,
+            expires_at: expires_at ?? quote.expires_at,
+            idempotency_key,
+            reason,
+          };
+          if (!opts.commit) return preview;
+          return {
+            ...preview,
+            dry_run: false,
+            result:
+              await ctx.hub.purchases.adminCreateMembershipPackagePurchase({
+                account_id: ctx.accountId,
+                user_account_id,
+                product,
+                price,
+                source,
+                reason,
+                idempotency_key,
+                pricing_note: `${opts.pricingNote ?? ""}`.trim() || undefined,
+              }),
+          };
+        },
+      );
+    });
 
   function adminSupportListOptions(command: Command): Command {
     return command
@@ -1096,6 +1378,243 @@ export function registerAdminCommand(
       }),
       reason: opts.reason,
     };
+  }
+
+  function parseSupportTags(value: string | undefined): string[] | undefined {
+    if (value == null) return undefined;
+    return [
+      ...new Set(
+        value
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      ),
+    ];
+  }
+
+  function parseSupportStatus(
+    value: string | undefined,
+  ): AdminSupportMutableTicketStatus | undefined {
+    if (value == null) return undefined;
+    if (!ADMIN_SUPPORT_MUTABLE_TICKET_STATUSES.includes(value as any)) {
+      throw new Error(
+        `--status must be one of ${ADMIN_SUPPORT_MUTABLE_TICKET_STATUSES.join(", ")}`,
+      );
+    }
+    return value as AdminSupportMutableTicketStatus;
+  }
+
+  function parseSupportPriority(
+    value: string | undefined,
+  ): AdminSupportTicketPriority | undefined {
+    if (value == null) return undefined;
+    if (!ADMIN_SUPPORT_TICKET_PRIORITIES.includes(value as any)) {
+      throw new Error(
+        `--priority must be one of ${ADMIN_SUPPORT_TICKET_PRIORITIES.join(", ")}`,
+      );
+    }
+    return value as AdminSupportTicketPriority;
+  }
+
+  async function readSupportComment({
+    text,
+    file,
+    textOption,
+    fileOption,
+  }: {
+    text?: string;
+    file?: string;
+    textOption: string;
+    fileOption: string;
+  }): Promise<string | undefined> {
+    if (text != null && file != null) {
+      throw new Error(`specify only one of ${textOption} or ${fileOption}`);
+    }
+    const value = file != null ? await readFile(file, "utf8") : text;
+    if (value == null) return undefined;
+    if (text != null && /(?:\\r\\n|\\n)/.test(value)) {
+      throw new Error(
+        `${textOption} contains a literal \\n escape; use ${fileOption} for multiline text`,
+      );
+    }
+    const normalized = value.replace(/\r\n/g, "\n").trim();
+    if (!normalized) throw new Error("support comment must be non-empty");
+    return normalized;
+  }
+
+  function supportIdempotencyKey(
+    operation: "update" | "merge" | "spam",
+    request: Record<string, unknown>,
+    explicit: string | undefined,
+  ): string {
+    if (explicit?.trim()) return explicit.trim();
+    const hash = createHash("sha256")
+      .update(
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(request).filter(
+              ([key]) => key !== "reason" && key !== "idempotency_key",
+            ),
+          ),
+        ),
+      )
+      .digest("hex")
+      .slice(0, 40);
+    return `support-${operation}-${hash}`;
+  }
+
+  function adminSupportUpdateOptions(command: Command): Command {
+    return command
+      .option(
+        "--public-reply <text>",
+        "single-line public reply body; use --public-reply-file for multiline text",
+      )
+      .option("--public-reply-file <path>", "read public reply from a file")
+      .option(
+        "--private-note <text>",
+        "single-line private note body; use --private-note-file for multiline text",
+      )
+      .option("--private-note-file <path>", "read private note from a file")
+      .option(
+        "--status <status>",
+        `new ticket status (${ADMIN_SUPPORT_MUTABLE_TICKET_STATUSES.join(", ")})`,
+      )
+      .option(
+        "--priority <priority>",
+        `new priority (${ADMIN_SUPPORT_TICKET_PRIORITIES.join(", ")})`,
+      )
+      .option("--clear-priority", "clear the ticket priority")
+      .option("--assignee-id <id>", "assign to this Zendesk user id")
+      .option("--unassign", "clear the ticket assignee")
+      .option("--add-tags <tags>", "comma-separated tags to add")
+      .option("--remove-tags <tags>", "comma-separated tags to remove")
+      .option(
+        "--expected-updated-at <timestamp>",
+        "exact updated_at reviewed during dry-run; required with --commit",
+      )
+      .option(
+        "--idempotency-key <key>",
+        "stable logical request key; generated from the approved payload by default",
+      )
+      .option(
+        "--commit",
+        "apply the update; otherwise only show a dry-run",
+        false,
+      )
+      .requiredOption("--reason <reason>", "human-readable audit reason");
+  }
+
+  async function adminSupportUpdateRequest(opts: any) {
+    if (opts.clearPriority && opts.priority != null) {
+      throw new Error("specify only one of --priority or --clear-priority");
+    }
+    if (opts.unassign && opts.assigneeId != null) {
+      throw new Error("specify only one of --assignee-id or --unassign");
+    }
+    const publicReply = await readSupportComment({
+      text: opts.publicReply,
+      file: opts.publicReplyFile,
+      textOption: "--public-reply",
+      fileOption: "--public-reply-file",
+    });
+    const privateNote = await readSupportComment({
+      text: opts.privateNote,
+      file: opts.privateNoteFile,
+      textOption: "--private-note",
+      fileOption: "--private-note-file",
+    });
+    if (publicReply && privateNote) {
+      throw new Error("specify only a public reply or a private note");
+    }
+    let assigneeId: number | null | undefined;
+    if (opts.unassign) {
+      assigneeId = null;
+    } else if (opts.assigneeId != null) {
+      assigneeId = parsePositiveIntegerOption({
+        name: "--assignee-id",
+        value: opts.assigneeId,
+        fallback: 0,
+        max: Number.MAX_SAFE_INTEGER,
+      });
+    }
+    const changes: AdminSupportUpdateChanges = {
+      ...(publicReply ? { public_reply: publicReply } : {}),
+      ...(privateNote ? { private_note: privateNote } : {}),
+      ...(opts.status != null
+        ? { status: parseSupportStatus(opts.status) }
+        : {}),
+      ...(opts.clearPriority
+        ? { priority: null }
+        : opts.priority != null
+          ? { priority: parseSupportPriority(opts.priority) }
+          : {}),
+      ...(assigneeId !== undefined ? { assignee_id: assigneeId } : {}),
+      add_tags: parseSupportTags(opts.addTags),
+      remove_tags: parseSupportTags(opts.removeTags),
+    };
+    return changes;
+  }
+
+  async function executeAdminSupportUpdate({
+    ctx,
+    ticketId,
+    opts,
+    changes,
+  }: {
+    ctx: any;
+    ticketId: number;
+    opts: {
+      expectedUpdatedAt?: string;
+      idempotencyKey?: string;
+      commit?: boolean;
+      reason?: string;
+    };
+    changes: AdminSupportUpdateChanges;
+  }) {
+    const request = {
+      ticket_id: ticketId,
+      ...changes,
+      expected_updated_at: opts.expectedUpdatedAt,
+      reason: opts.reason,
+    };
+    if (!opts.commit) {
+      return await ctx.hub.adminSupport.planUpdate(request);
+    }
+    if (!opts.expectedUpdatedAt?.trim()) {
+      throw new Error(
+        "--expected-updated-at is required with --commit; use the value returned by the dry-run",
+      );
+    }
+    return await ctx.hub.adminSupport.update({
+      ...request,
+      expected_updated_at: opts.expectedUpdatedAt,
+      timeout: 60_000,
+      idempotency_key: supportIdempotencyKey(
+        "update",
+        request,
+        opts.idempotencyKey,
+      ),
+    });
+  }
+
+  function adminSupportSimpleMutationOptions(command: Command): Command {
+    return command
+      .requiredOption("--file <path>", "read comment body from this file")
+      .option(
+        "--status <status>",
+        `new ticket status (${ADMIN_SUPPORT_MUTABLE_TICKET_STATUSES.join(", ")})`,
+      )
+      .option(
+        "--expected-updated-at <timestamp>",
+        "exact updated_at reviewed during dry-run; required with --commit",
+      )
+      .option("--idempotency-key <key>", "stable logical request key")
+      .option(
+        "--commit",
+        "apply the update; otherwise only show a dry-run",
+        false,
+      )
+      .requiredOption("--reason <reason>", "human-readable audit reason");
   }
 
   function adminCrashListOptions(command: Command): Command {
@@ -1302,8 +1821,19 @@ export function registerAdminCommand(
     });
 
   adminSupport
+    .command("conventions")
+    .description("show the human-in-the-loop Zendesk support conventions")
+    .action(async (_opts, command: Command) => {
+      await withContext(command, "admin support conventions", async () => {
+        return ADMIN_SUPPORT_CONVENTIONS;
+      });
+    });
+
+  adminSupport
     .command("show <ticket-id>")
-    .description("show one redacted ticket conversation")
+    .description(
+      "show one redacted ticket conversation with validated image references",
+    )
     .option("--max-comments <n>", "maximum recent comments", "50")
     .option("--max-bytes <n>", "maximum response bytes", "262144")
     .requiredOption("--reason <reason>", "human-readable audit reason")
@@ -1343,11 +1873,314 @@ export function registerAdminCommand(
       },
     );
 
+  adminSupport
+    .command("image <ticket-id> <attachment-id>")
+    .description(
+      "download one validated Zendesk image attachment without exposing its URL",
+    )
+    .option("--output <path>", "output file; defaults to a safe generated name")
+    .option("--max-bytes <n>", "maximum downloaded image bytes", "8388608")
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(
+      async (
+        ticketId: string,
+        attachmentId: string,
+        opts: {
+          output?: string;
+          maxBytes?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(command, "admin support image", async (ctx) => {
+          const result = await ctx.hub.adminSupport.getImage({
+            ticket_id: parsePositiveIntegerOption({
+              name: "ticket-id",
+              value: ticketId,
+              fallback: 0,
+              max: Number.MAX_SAFE_INTEGER,
+            }),
+            attachment_id: parsePositiveIntegerOption({
+              name: "attachment-id",
+              value: attachmentId,
+              fallback: 0,
+              max: Number.MAX_SAFE_INTEGER,
+            }),
+            max_bytes: parsePositiveIntegerOption({
+              name: "--max-bytes",
+              value: opts.maxBytes,
+              fallback: 8 * 1024 * 1024,
+              max: 20 * 1024 * 1024,
+            }),
+            reason: opts.reason,
+          });
+          const data = Buffer.from(result.data_base64, "base64");
+          const digest = createHash("sha256").update(data).digest("hex");
+          if (data.length !== result.size || digest !== result.sha256) {
+            throw new Error("downloaded support image failed integrity checks");
+          }
+          const output = opts.output?.trim() || result.filename;
+          await writeFile(output, data);
+          const { data_base64: _dataBase64, ...metadata } = result;
+          return { ...metadata, output };
+        });
+      },
+    );
+
   adminSupportListOptions(adminSupport.command("triage"))
     .description("group recent tickets by deterministic operational signals")
     .action(async (opts, command: Command) => {
       await withContext(command, "admin support triage", async (ctx) => {
         return await ctx.hub.adminSupport.triage(adminSupportListRequest(opts));
+      });
+    });
+
+  adminSupport
+    .command("search")
+    .description("run a bounded redacted Zendesk ticket search")
+    .requiredOption("--query <query>", "Zendesk search expression")
+    .option("--limit <n>", "maximum ticket count", "50")
+    .option("--max-bytes <n>", "maximum response bytes", "262144")
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(async (opts, command: Command) => {
+      await withContext(command, "admin support search", async (ctx) => {
+        return await ctx.hub.adminSupport.search({
+          query: opts.query,
+          limit: parsePositiveIntegerOption({
+            name: "--limit",
+            value: opts.limit,
+            fallback: 50,
+            max: 100,
+          }),
+          max_bytes: parsePositiveIntegerOption({
+            name: "--max-bytes",
+            value: opts.maxBytes,
+            fallback: 256 * 1024,
+            max: 1024 * 1024,
+          }),
+          reason: opts.reason,
+        });
+      });
+    });
+
+  adminSupportUpdateOptions(adminSupport.command("update <ticket-id>"))
+    .description(
+      "plan or atomically apply a Zendesk reply, note, status, assignment, priority, or tag update",
+    )
+    .action(async (ticketId: string, opts: any, command: Command) => {
+      await withContext(command, "admin support update", async (ctx) => {
+        const id = parsePositiveIntegerOption({
+          name: "ticket-id",
+          value: ticketId,
+          fallback: 0,
+          max: Number.MAX_SAFE_INTEGER,
+        });
+        return await executeAdminSupportUpdate({
+          ctx,
+          ticketId: id,
+          opts,
+          changes: await adminSupportUpdateRequest(opts),
+        });
+      });
+    });
+
+  adminSupportSimpleMutationOptions(adminSupport.command("reply <ticket-id>"))
+    .description("plan or send a public Zendesk reply")
+    .action(async (ticketId: string, opts: any, command: Command) => {
+      await withContext(command, "admin support reply", async (ctx) => {
+        const body = await readSupportComment({
+          file: opts.file,
+          textOption: "--reply",
+          fileOption: "--file",
+        });
+        if (!body) throw new Error("public reply file must be non-empty");
+        return await executeAdminSupportUpdate({
+          ctx,
+          ticketId: parsePositiveIntegerOption({
+            name: "ticket-id",
+            value: ticketId,
+            fallback: 0,
+            max: Number.MAX_SAFE_INTEGER,
+          }),
+          opts,
+          changes: {
+            public_reply: body,
+            ...(opts.status != null
+              ? { status: parseSupportStatus(opts.status) }
+              : {}),
+          },
+        });
+      });
+    });
+
+  adminSupportSimpleMutationOptions(adminSupport.command("note <ticket-id>"))
+    .description("plan or add a private Zendesk note")
+    .action(async (ticketId: string, opts: any, command: Command) => {
+      await withContext(command, "admin support note", async (ctx) => {
+        const body = await readSupportComment({
+          file: opts.file,
+          textOption: "--note",
+          fileOption: "--file",
+        });
+        if (!body) throw new Error("private note file must be non-empty");
+        return await executeAdminSupportUpdate({
+          ctx,
+          ticketId: parsePositiveIntegerOption({
+            name: "ticket-id",
+            value: ticketId,
+            fallback: 0,
+            max: Number.MAX_SAFE_INTEGER,
+          }),
+          opts,
+          changes: {
+            private_note: body,
+            ...(opts.status != null
+              ? { status: parseSupportStatus(opts.status) }
+              : {}),
+          },
+        });
+      });
+    });
+
+  adminSupport
+    .command("merge")
+    .description("plan or merge one Zendesk ticket into another")
+    .requiredOption("--target <ticket-id>", "ticket that remains after merge")
+    .requiredOption("--source <ticket-id>", "ticket merged into the target")
+    .option("--target-comment <text>", "comment added to the target ticket")
+    .option(
+      "--target-comment-file <path>",
+      "read the target comment from a file",
+    )
+    .option("--source-comment <text>", "comment added to the source ticket")
+    .option(
+      "--source-comment-file <path>",
+      "read the source comment from a file",
+    )
+    .option("--target-comment-public", "make the target comment public", false)
+    .option("--source-comment-public", "make the source comment public", false)
+    .option(
+      "--target-expected-updated-at <timestamp>",
+      "reviewed target updated_at; required with --commit",
+    )
+    .option(
+      "--source-expected-updated-at <timestamp>",
+      "reviewed source updated_at; required with --commit",
+    )
+    .option("--idempotency-key <key>", "stable logical request key")
+    .option(
+      "--commit",
+      "perform the merge; otherwise only show a dry-run",
+      false,
+    )
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(async (opts: any, command: Command) => {
+      await withContext(command, "admin support merge", async (ctx) => {
+        const targetTicketId = parsePositiveIntegerOption({
+          name: "--target",
+          value: opts.target,
+          fallback: 0,
+          max: Number.MAX_SAFE_INTEGER,
+        });
+        const sourceTicketId = parsePositiveIntegerOption({
+          name: "--source",
+          value: opts.source,
+          fallback: 0,
+          max: Number.MAX_SAFE_INTEGER,
+        });
+        const request = {
+          target_ticket_id: targetTicketId,
+          source_ticket_id: sourceTicketId,
+          target_comment: await readSupportComment({
+            text: opts.targetComment,
+            file: opts.targetCommentFile,
+            textOption: "--target-comment",
+            fileOption: "--target-comment-file",
+          }),
+          source_comment: await readSupportComment({
+            text: opts.sourceComment,
+            file: opts.sourceCommentFile,
+            textOption: "--source-comment",
+            fileOption: "--source-comment-file",
+          }),
+          target_comment_public: opts.targetCommentPublic === true,
+          source_comment_public: opts.sourceCommentPublic === true,
+          target_expected_updated_at: opts.targetExpectedUpdatedAt,
+          source_expected_updated_at: opts.sourceExpectedUpdatedAt,
+          reason: opts.reason,
+        };
+        if (!opts.commit) {
+          return await ctx.hub.adminSupport.planMerge(request);
+        }
+        if (
+          !opts.targetExpectedUpdatedAt?.trim() ||
+          !opts.sourceExpectedUpdatedAt?.trim()
+        ) {
+          throw new Error(
+            "both --target-expected-updated-at and --source-expected-updated-at are required with --commit; use the dry-run values",
+          );
+        }
+        return await ctx.hub.adminSupport.merge({
+          ...request,
+          target_expected_updated_at: opts.targetExpectedUpdatedAt,
+          source_expected_updated_at: opts.sourceExpectedUpdatedAt,
+          timeout: 120_000,
+          idempotency_key: supportIdempotencyKey(
+            "merge",
+            request,
+            opts.idempotencyKey,
+          ),
+        });
+      });
+    });
+
+  adminSupport
+    .command("spam <ticket-id>")
+    .description(
+      "plan or mark a Zendesk ticket as spam and suspend its requester",
+    )
+    .option(
+      "--expected-updated-at <timestamp>",
+      "exact updated_at reviewed during dry-run; required with --commit",
+    )
+    .option("--idempotency-key <key>", "stable logical request key")
+    .option(
+      "--commit",
+      "mark as spam; otherwise only show a dry-run warning",
+      false,
+    )
+    .requiredOption("--reason <reason>", "human-readable audit reason")
+    .action(async (ticketId: string, opts: any, command: Command) => {
+      await withContext(command, "admin support spam", async (ctx) => {
+        const id = parsePositiveIntegerOption({
+          name: "ticket-id",
+          value: ticketId,
+          fallback: 0,
+          max: Number.MAX_SAFE_INTEGER,
+        });
+        const request = {
+          ticket_id: id,
+          expected_updated_at: opts.expectedUpdatedAt,
+          reason: opts.reason,
+        };
+        if (!opts.commit) {
+          return await ctx.hub.adminSupport.planSpam(request);
+        }
+        if (!opts.expectedUpdatedAt?.trim()) {
+          throw new Error(
+            "--expected-updated-at is required with --commit; use the value returned by the dry-run",
+          );
+        }
+        return await ctx.hub.adminSupport.spam({
+          ...request,
+          expected_updated_at: opts.expectedUpdatedAt,
+          timeout: 60_000,
+          idempotency_key: supportIdempotencyKey(
+            "spam",
+            request,
+            opts.idempotencyKey,
+          ),
+        });
       });
     });
 
@@ -2930,6 +3763,42 @@ export function registerAdminCommand(
     );
 
   adminUser
+    .command("ban <user>")
+    .description(
+      "ban an account and equivalent email identities (account id, email, or name query)",
+    )
+    .requiredOption("--reason <reason>", "audit reason for the account ban")
+    .action(
+      async (user: string, opts: { reason: string }, command: Command) => {
+        await withContext(command, "admin user ban", async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          return await ctx.hub.system.adminBanUser({
+            user_account_id: userAccountId,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminUser
+    .command("unban <user>")
+    .description(
+      "remove one account ban; quarantined billing/resources require separate review",
+    )
+    .requiredOption("--reason <reason>", "audit reason for removing the ban")
+    .action(
+      async (user: string, opts: { reason: string }, command: Command) => {
+        await withContext(command, "admin user unban", async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          return await ctx.hub.system.adminUnbanUser({
+            user_account_id: userAccountId,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminUser
     .command("issue-impersonation-link <user>")
     .description(
       "create an impersonation sign-in link for a user (account id, email, or name query)",
@@ -3062,6 +3931,91 @@ Run "cocalc admin entitlement-override schema" for the accepted JSON payload.
         );
       },
     );
+
+  adminMembershipAssignment
+    .command("get <user>")
+    .description("get the admin-assigned membership for a user")
+    .action(async (user: string, command: Command) => {
+      await withContext(
+        command,
+        "admin membership-assignment get",
+        async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          const assignment = await ctx.hub.system.getAdminAssignedMembership({
+            user_account_id: userAccountId,
+          });
+          return {
+            account_id: userAccountId,
+            assignment: assignment ?? null,
+          };
+        },
+      );
+    });
+
+  adminMembershipAssignment
+    .command("set <user>")
+    .description("set or replace the admin-assigned membership for a user")
+    .requiredOption("--tier <id>", "membership tier id, e.g. member")
+    .requiredOption(
+      "--expires-at <iso>",
+      "expiration as ISO-8601, or never for a permanent assignment",
+    )
+    .requiredOption("--reason <reason>", "reason stored with the assignment")
+    .action(
+      async (
+        user: string,
+        opts: { tier: string; expiresAt: string; reason: string },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "admin membership-assignment set",
+          async (ctx) => {
+            const userAccountId = await resolveTargetAccountId(ctx, user);
+            const membershipClass = await requireAssignableMembershipTier(
+              ctx,
+              opts.tier,
+            );
+            const expiresAt = parseMembershipAssignmentExpiration(
+              opts.expiresAt,
+            );
+            await ctx.hub.system.setAdminAssignedMembership({
+              user_account_id: userAccountId,
+              membership_class: membershipClass,
+              expires_at: expiresAt,
+              notes: requireReason(opts.reason),
+            });
+            const assignment = await ctx.hub.system.getAdminAssignedMembership({
+              user_account_id: userAccountId,
+            });
+            return {
+              account_id: userAccountId,
+              assignment: assignment ?? null,
+            };
+          },
+        );
+      },
+    );
+
+  adminMembershipAssignment
+    .command("clear <user>")
+    .description("clear the admin-assigned membership for a user")
+    .action(async (user: string, command: Command) => {
+      await withContext(
+        command,
+        "admin membership-assignment clear",
+        async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          await ctx.hub.system.clearAdminAssignedMembership({
+            user_account_id: userAccountId,
+          });
+          return {
+            account_id: userAccountId,
+            cleared: true,
+          };
+        },
+      );
+    });
 
   adminMessage
     .command("send-system-notice")

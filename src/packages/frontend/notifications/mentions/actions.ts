@@ -204,6 +204,7 @@ export class MentionsActions extends Actions<MentionsState> {
   private realtimeFeedAccountId?: string;
   private realtimeFeedDiagnosticsCleanup?: () => void;
   private notificationRowProjectionVersion = 0;
+  private readThroughRevision?: string;
 
   _init() {
     this.destroyed = false;
@@ -213,6 +214,7 @@ export class MentionsActions extends Actions<MentionsState> {
     this.signedOutListener = () => {
       this.clearRefreshRetry();
       this.closeRealtimeFeed();
+      this.readThroughRevision = undefined;
       this.setState({ mentions: Map(), unread_count: 0, loading: false });
     };
     this.conatConnectedListener = () => {
@@ -327,13 +329,15 @@ export class MentionsActions extends Actions<MentionsState> {
     }
     this.setState({ loading: true });
     try {
-      const [initialRows, counts] = await Promise.all([
-        notifications.list({ limit: MAX_NOTIFICATION_INBOX_LIST_LIMIT }),
+      const [snapshot, counts] = await Promise.all([
+        notifications.listSnapshot({
+          limit: MAX_NOTIFICATION_INBOX_LIST_LIMIT,
+        }),
         notifications.counts({}),
       ]);
       const rows = await this.repairMissingUnreadRows({
         notifications,
-        rows: initialRows,
+        rows: snapshot.rows,
         counts,
       });
       this.setState({
@@ -341,6 +345,7 @@ export class MentionsActions extends Actions<MentionsState> {
         mentions: buildNotificationInboxMap({ account_id, rows }),
         unread_count: getUnreadNotificationCount(counts),
       });
+      this.readThroughRevision = snapshot.read_through_revision;
       this.notificationRowProjectionVersion += 1;
       this.lastSuccessfulRefreshAt = Date.now();
       this.clearRefreshRetry();
@@ -613,7 +618,7 @@ export class MentionsActions extends Actions<MentionsState> {
       case "notification.counts":
         this.setState({ unread_count: event.counts.unread });
         if (
-          event.counts.unread >
+          event.counts.unread !==
           countUnreadMentions(this.getMentions(), account_id)
         ) {
           void this.repairNotificationProjection({
@@ -806,10 +811,23 @@ export class MentionsActions extends Actions<MentionsState> {
       .toArray();
     this.applyOptimisticReadState(notification_ids, as === "read");
     try {
-      await this.updateReadState({
-        notification_ids,
-        read: as === "read",
-      });
+      if (as === "read") {
+        const read_through_revision = this.readThroughRevision;
+        if (read_through_revision == null) {
+          throw Error("notification snapshot is not available");
+        }
+        await this.ensureSignedIn();
+        await webapp_client.conat_client.hub.notifications.markAllRead({
+          project_id,
+          read_through_revision,
+        });
+        await this.refresh();
+      } else {
+        await this.updateReadState({
+          notification_ids,
+          read: false,
+        });
+      }
     } catch (err) {
       console.warn("WARNING: notifications markAll error -- ", err);
       await this.refresh();

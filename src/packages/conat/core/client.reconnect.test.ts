@@ -9,6 +9,129 @@ jest.mock("@cocalc/conat/logger", () => ({
 }));
 
 describe("core client socket.io reconnect policy", () => {
+  it("restores steady reconnect settings after the initial connection", async () => {
+    jest.resetModules();
+
+    const handlers: Record<string, () => void> = {};
+    const manager = {
+      on: jest.fn(),
+      connect: jest.fn(),
+      disconnect: jest.fn(),
+      timeout: jest.fn(),
+      reconnectionDelay: jest.fn(),
+      reconnectionDelayMax: jest.fn(),
+      randomizationFactor: jest.fn(),
+    };
+    const socket = {
+      connected: true,
+      on: jest.fn((event, handler) => {
+        handlers[event] = handler;
+      }),
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      close: jest.fn(),
+      io: manager,
+    };
+    const connectToSocketIO = jest.fn(() => socket);
+
+    jest.doMock("socket.io-client", () => ({
+      connect: connectToSocketIO,
+    }));
+
+    const { Client } = require("./client");
+    const client = new Client({
+      address: "http://example.com",
+      autoConnect: false,
+      timeout: 12_000,
+      reconnectionDelay: 700,
+      reconnectionDelayMax: 9_000,
+      randomizationFactor: 0.25,
+      initialConnectionPolicy: {
+        timeout: 250,
+        reconnectionDelay: 50,
+        reconnectionDelayMax: 250,
+        randomizationFactor: 0,
+        restoreAfterMs: 5_000,
+      },
+    });
+
+    const socketOptions = connectToSocketIO.mock.calls[0][1];
+    expect(socketOptions).toEqual(
+      expect.objectContaining({
+        timeout: 250,
+        reconnectionDelay: 50,
+        reconnectionDelayMax: 250,
+        randomizationFactor: 0,
+      }),
+    );
+    expect(socketOptions).not.toHaveProperty("initialConnectionPolicy");
+    expect(socketOptions).not.toHaveProperty("restoreAfterMs");
+
+    client.connect();
+    handlers.connect();
+
+    expect(manager.timeout).toHaveBeenCalledWith(12_000);
+    expect(manager.reconnectionDelay).toHaveBeenCalledWith(700);
+    expect(manager.reconnectionDelayMax).toHaveBeenCalledWith(9_000);
+    expect(manager.randomizationFactor).toHaveBeenCalledWith(0.25);
+
+    client.close();
+  });
+
+  it("restores steady reconnect settings when the startup window expires", async () => {
+    jest.resetModules();
+    jest.useFakeTimers();
+
+    const manager = {
+      on: jest.fn(),
+      connect: jest.fn(),
+      disconnect: jest.fn(),
+      timeout: jest.fn(),
+      reconnectionDelay: jest.fn(),
+      reconnectionDelayMax: jest.fn(),
+      randomizationFactor: jest.fn(),
+    };
+    const socket = {
+      connected: false,
+      on: jest.fn(),
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      close: jest.fn(),
+      io: manager,
+    };
+
+    jest.doMock("socket.io-client", () => ({
+      connect: jest.fn(() => socket),
+    }));
+
+    let client: { close: () => void } | undefined;
+    try {
+      const { Client } = require("./client");
+      client = new Client({
+        address: "http://example.com",
+        initialConnectionPolicy: {
+          timeout: 250,
+          reconnectionDelay: 50,
+          reconnectionDelayMax: 250,
+          randomizationFactor: 0,
+          restoreAfterMs: 5_000,
+        },
+      });
+
+      jest.advanceTimersByTime(4_999);
+      expect(manager.timeout).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1);
+
+      expect(manager.timeout).toHaveBeenCalledWith(20_000);
+      expect(manager.reconnectionDelay).toHaveBeenCalledWith(500);
+      expect(manager.reconnectionDelayMax).toHaveBeenCalledWith(15_000);
+      expect(manager.randomizationFactor).toHaveBeenCalledWith(0.5);
+    } finally {
+      client?.close();
+      jest.useRealTimers();
+    }
+  });
+
   it("respects reconnection false passed by callers", async () => {
     jest.resetModules();
 

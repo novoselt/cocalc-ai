@@ -340,6 +340,7 @@ const INTERNAL_METHODS = new Set([
   "cpDirectoryRequiresRecursiveError",
   "cpUnsupportedTypeError",
   "cpDestNotDirectoryError",
+  "cpSafeSymlink",
   "cpSafeDirectoryRecursive",
   "cpSafeOne",
   "resolveOuchOptionPaths",
@@ -1620,9 +1621,75 @@ export class SandboxedFilesystem {
     return err;
   };
 
+  private cpSafeSymlink = async (
+    source: string,
+    dest: string,
+    options?: CopyOptions,
+  ): Promise<void> => {
+    const target = await this.readlink(source);
+    const force = options?.force ?? true;
+    const openAt2Target = await this.getOpenAt2PathTarget(dest);
+    if (
+      openAt2Target != null &&
+      typeof openAt2Target.root.symlink === "function"
+    ) {
+      const create = () =>
+        openAt2Target.root.symlink!(target, openAt2Target.rel);
+      try {
+        create();
+        return;
+      } catch (err: any) {
+        if (this.parseOpenAt2Error(err).code !== "EEXIST") {
+          this.throwOpenAt2PathError(dest, err);
+        }
+      }
+      if (!force) {
+        if (options?.errorOnExist) {
+          const err: NodeJS.ErrnoException = new Error(
+            "SystemError [ERR_FS_CP_EEXIST]: Target already exists",
+          );
+          err.code = "ERR_FS_CP_EEXIST";
+          err.path = dest;
+          throw err;
+        }
+        return;
+      }
+      try {
+        openAt2Target.root.unlink(openAt2Target.rel);
+        create();
+        return;
+      } catch (err) {
+        this.throwOpenAt2PathError(dest, err);
+      }
+    }
+
+    const destPath = await this.resolveWritableSandboxPath(dest);
+    try {
+      await lstat(destPath);
+      if (!force) {
+        if (options?.errorOnExist) {
+          const err: NodeJS.ErrnoException = new Error(
+            "SystemError [ERR_FS_CP_EEXIST]: Target already exists",
+          );
+          err.code = "ERR_FS_CP_EEXIST";
+          err.path = dest;
+          throw err;
+        }
+        return;
+      }
+      await unlink(destPath);
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+    await symlink(target, destPath);
+  };
+
   private cpSafeDirectoryRecursive = async (
     sourceDir: string,
     destDir: string,
+    options?: CopyOptions,
   ): Promise<void> => {
     try {
       const destStat = await this.stat(destDir);
@@ -1640,11 +1707,15 @@ export class SandboxedFilesystem {
     for (const name of entries) {
       const childSource = join(sourceDir, name);
       const childDest = join(destDir, name);
-      const childStat = await this.stat(childSource);
+      const childStat = options?.dereference
+        ? await this.stat(childSource)
+        : await this.lstat(childSource);
       if (childStat.isDirectory()) {
-        await this.cpSafeDirectoryRecursive(childSource, childDest);
+        await this.cpSafeDirectoryRecursive(childSource, childDest, options);
       } else if (childStat.isFile()) {
         await this.copyFile(childSource, childDest);
+      } else if (childStat.isSymbolicLink() && !options?.dereference) {
+        await this.cpSafeSymlink(childSource, childDest, options);
       } else {
         throw this.cpUnsupportedTypeError(childSource);
       }
@@ -1657,7 +1728,9 @@ export class SandboxedFilesystem {
     destInput: string,
     options?: CopyOptions,
   ): Promise<void> => {
-    const sourceStat = await this.stat(source);
+    const sourceStat = options?.dereference
+      ? await this.stat(source)
+      : await this.lstat(source);
     if (sourceStat.isFile()) {
       await this.copyFile(source, destInput);
       return;
@@ -1666,7 +1739,11 @@ export class SandboxedFilesystem {
       if (!options?.recursive) {
         throw this.cpDirectoryRequiresRecursiveError(source, destInput);
       }
-      await this.cpSafeDirectoryRecursive(source, destInput);
+      await this.cpSafeDirectoryRecursive(source, destInput, options);
+      return;
+    }
+    if (sourceStat.isSymbolicLink() && !options?.dereference) {
+      await this.cpSafeSymlink(source, destInput, options);
       return;
     }
     throw this.cpUnsupportedTypeError(sourceAbs);

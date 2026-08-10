@@ -49,27 +49,32 @@ export async function history({
     project_id,
     noInventory: true,
   });
-  const patches: Patch[] = [];
-  for await (const patch of await astream.getAll({
-    start_seq,
-    end_seq,
-  })) {
-    patches.push(patch as any);
-  }
-
   const akv = conatClient.sync.akv({
     name: `__dko__syncstrings:${client_db.sha1(project_id, path)}`,
     project_id,
     noInventory: true,
   });
-  const keys = await akv.keys();
-  const info: Partial<HistoryInfo> = {};
-  for (const key of keys) {
-    if (key[0] != "[") continue;
-    info[JSON.parse(key)[1]] = await akv.get(key);
-  }
+  try {
+    const patches: Patch[] = [];
+    for await (const patch of await astream.getAll({
+      start_seq,
+      end_seq,
+    })) {
+      patches.push(patch as any);
+    }
 
-  return { patches, info: info as HistoryInfo };
+    const keys = await akv.keys();
+    const info: Partial<HistoryInfo> = {};
+    for (const key of keys) {
+      if (key[0] != "[") continue;
+      info[JSON.parse(key)[1]] = await akv.get(key);
+    }
+
+    return { patches, info: info as HistoryInfo };
+  } finally {
+    astream.close();
+    akv.close();
+  }
 }
 
 export async function purgeHistory({

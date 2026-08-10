@@ -2,7 +2,6 @@ import { getClient, Client } from "@cocalc/database/pool";
 import type { DBSchema, TableSchema } from "./types";
 import { quoteField } from "./util";
 import { pgType } from "./pg-type";
-import { createIndexesQueries } from "./indexes";
 import { createTable } from "./table";
 import getLogger from "@cocalc/backend/logger";
 import { SCHEMA } from "@cocalc/util/schema";
@@ -12,8 +11,48 @@ import {
 } from "./drop-deprecated-tables";
 import { primaryKeys } from "./table";
 import { isEqual } from "lodash";
+import {
+  accountNotificationRevisionSchemaNeedsSync,
+  ensureAccountNotificationRevisionSchema,
+} from "./account-notification-revision";
+import {
+  ensurePurchaseCostCentsSchema,
+  purchaseCostCentsSchemaNeedsSync,
+  withPurchaseCostCentsTriggerSuspended,
+} from "./purchase-cost-cents";
+import {
+  getColumnInvariantActions,
+  syncTableSchemaColumnInvariants,
+} from "./column-invariants";
+import { getIndexActions, syncTableSchemaIndexes } from "./index-convergence";
 
 const log = getLogger("db:schema:sync");
+
+type InformationSchemaColumn = {
+  character_maximum_length?: number | null;
+  column_name: string;
+  column_default?: string | null;
+  data_type: string;
+  is_nullable?: "YES" | "NO";
+  numeric_precision?: number | null;
+  numeric_scale?: number | null;
+};
+
+export function columnTypeFromInformationSchema(
+  column: InformationSchemaColumn,
+): string {
+  if (column.character_maximum_length) {
+    return `varchar(${column.character_maximum_length})`;
+  }
+  if (
+    column.data_type === "numeric" &&
+    column.numeric_precision != null &&
+    column.numeric_scale != null
+  ) {
+    return `numeric(${column.numeric_precision},${column.numeric_scale})`;
+  }
+  return column.data_type;
+}
 
 async function syncTableSchema(db: Client, schema: TableSchema): Promise<void> {
   const dbg = (...args) => log.debug("syncTableSchema", schema.name, ...args);
@@ -23,6 +62,7 @@ async function syncTableSchema(db: Client, schema: TableSchema): Promise<void> {
     return;
   }
   await syncTableSchemaColumns(db, schema);
+  await syncTableSchemaColumnInvariants(db, schema);
   await syncTableSchemaIndexes(db, schema);
   await syncTableSchemaPrimaryKeys(db, schema);
 }
@@ -35,16 +75,15 @@ async function getColumnTypeInfo(
   const columns: { [column_name: string]: string } = {};
 
   const { rows } = await db.query(
-    "SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name=$1",
+    `SELECT column_name, data_type, character_maximum_length,
+            numeric_precision, numeric_scale, column_default, is_nullable
+       FROM information_schema.columns
+      WHERE table_name=$1`,
     [table],
   );
 
-  for (const y of rows) {
-    if (y.character_maximum_length) {
-      columns[y.column_name] = `varchar(${y.character_maximum_length})`;
-    } else {
-      columns[y.column_name] = y.data_type;
-    }
+  for (const y of rows as InformationSchemaColumn[]) {
+    columns[y.column_name] = columnTypeFromInformationSchema(y);
   }
 
   return columns;
@@ -113,7 +152,14 @@ async function alterColumnOfTable(
     );
     const query = `ALTER TABLE ${qTable} ALTER COLUMN ${col} TYPE ${desc} USING ${col}::${type}`;
     try {
-      await db.query(query);
+      if (schema.name === "purchases" && column === "cost") {
+        await withPurchaseCostCentsTriggerSuspended(
+          db,
+          async () => await db.query(query),
+        );
+      } else {
+        await db.query(query);
+      }
     } catch (err) {
       const dependency = parseTriggerDependencyError(err, schema.name);
       if (!dependency) {
@@ -139,6 +185,12 @@ async function alterColumnOfTable(
     }
   } else if (action == "add") {
     log.debug("alterColumnOfTable", schema.name, "add this column:", col);
+    if (info.pg_default != null) {
+      desc += ` DEFAULT ${info.pg_default}`;
+    }
+    if (info.not_null && info.pg_default != null) {
+      desc += " NOT NULL";
+    }
     await db.query(`ALTER TABLE ${qTable} ADD COLUMN ${col} ${desc}`);
   } else {
     throw Error(`unknown action '${action}`);
@@ -159,13 +211,20 @@ async function getColumnActions(
       cur_type = cur_type.split(" ")[0];
     }
     const goal_type_raw = pgType(info).toLowerCase();
+    if (cur_type == null) {
+      // Missing serial columns still need to be added. Only skip serial type
+      // comparison after PostgreSQL has materialized the pseudo-type.
+      actions.push({ action: "add", column });
+      continue;
+    }
     let goal_type = goal_type_raw;
     if (goal_type_raw.includes("[]")) {
       goal_type = "array";
     } else {
       goal_type = goal_type_raw.split(" ")[0];
-      if (goal_type === "serial") {
-        // We can't do anything with this (or we could, but it's way too complicated).
+      if (["smallserial", "serial", "bigserial"].includes(goal_type)) {
+        // Serial pseudo-types materialize as integer columns backed by a
+        // sequence, so information_schema will never report the pseudo-type.
         continue;
       }
       if (goal_type.slice(0, 4) === "char") {
@@ -173,10 +232,7 @@ async function getColumnActions(
         goal_type = "var" + goal_type;
       }
     }
-    if (cur_type == null) {
-      // column is in our schema, but not in the actual database
-      actions.push({ action: "add", column });
-    } else if (cur_type !== goal_type) {
+    if (cur_type !== goal_type) {
       if (goal_type_raw.includes("[]") || goal_type_raw.includes("varchar")) {
         // NO support for array or varchar schema changes (even detecting)!
         continue;
@@ -196,103 +252,6 @@ async function syncTableSchemaColumns(
   const actions = await getColumnActions(db, schema);
   for (const { action, column } of actions) {
     await alterColumnOfTable(db, schema, action, column);
-  }
-}
-
-async function getCurrentIndexes(
-  db: Client,
-  table: string,
-): Promise<Set<string>> {
-  const { rows } = await db.query(
-    "SELECT c.relname AS name FROM pg_class AS a JOIN pg_index AS b ON (a.oid = b.indrelid) JOIN pg_class AS c ON (c.oid = b.indexrelid) WHERE a.relname=$1",
-    [table],
-  );
-
-  const curIndexes = new Set<string>([]);
-  for (const { name } of rows) {
-    curIndexes.add(name);
-  }
-
-  return curIndexes;
-}
-
-// There is also code in database/postgres/schema/indexes.ts that creates indexes.
-
-async function updateIndex(
-  db: Client,
-  table: string,
-  action: "create" | "delete",
-  name: string,
-  query?: string,
-  unique?: boolean,
-): Promise<void> {
-  log.debug("updateIndex", { table, action, name });
-  if (action == "create") {
-    // ATTN if you consider adding CONCURRENTLY to create index, read the note earlier above about this
-    await db.query(
-      `CREATE ${unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quoteField(
-        name,
-      )} ON ${quoteField(table)} ${query}`,
-    );
-  } else if (action == "delete") {
-    // PGlite does not support PostgreSQL's concurrent index teardown reliably.
-    const concurrently =
-      process.env.COCALC_DB === "pglite" ? "" : " CONCURRENTLY";
-    await db.query(`DROP INDEX${concurrently} IF EXISTS ${quoteField(name)}`);
-  } else {
-    // typescript would catch this, but just in case:
-    throw Error(`BUG: unknown action ${name}`);
-  }
-}
-
-type IndexAction = {
-  action: "create" | "delete";
-  name: string;
-  query?: string;
-  unique?: boolean;
-};
-
-async function getIndexActions(
-  db: Client,
-  schema: TableSchema,
-): Promise<IndexAction[]> {
-  const curIndexes = await getCurrentIndexes(db, schema.name);
-  const goalIndexes = createIndexesQueries(schema);
-  const goalIndexNames = new Set<string>();
-  const actions: IndexAction[] = [];
-
-  for (const x of goalIndexes) {
-    goalIndexNames.add(x.name);
-    if (!curIndexes.has(x.name)) {
-      actions.push({
-        action: "create",
-        name: x.name,
-        query: x.query,
-        unique: x.unique,
-      });
-    }
-  }
-  for (const name of curIndexes) {
-    // only delete indexes that end with _idx; don't want to delete, e.g., pkey primary key indexes.
-    if (name.endsWith("_idx") && !goalIndexNames.has(name)) {
-      actions.push({ action: "delete", name });
-    }
-  }
-
-  return actions;
-}
-
-async function syncTableSchemaIndexes(
-  db: Client,
-  schema: TableSchema,
-): Promise<void> {
-  const dbg = (...args) =>
-    log.debug("syncTableSchemaIndexes", "table = ", schema.name, ...args);
-  dbg();
-  const actions = await getIndexActions(db, schema);
-  dbg("indexActions", actions);
-  for (const { action, name, query, unique } of actions) {
-    await updateIndex(db, schema.name, action, name, query, unique);
   }
 }
 
@@ -471,6 +430,12 @@ export async function syncSchema(
       //dbg("sync existing table", table);
       await syncTableSchema(db, schema);
     }
+    if (dbSchema.account_notification_index != null) {
+      await ensureAccountNotificationRevisionSchema(db);
+    }
+    if (dbSchema.purchases != null) {
+      await ensurePurchaseCostCentsSchema(db);
+    }
     dbg("backfilling account display names");
     await backfillAccountDisplayNames(db);
   } catch (err) {
@@ -520,6 +485,15 @@ export async function schemaNeedsSync(
         dbg("detected column changes needed", schema.name, columnActions);
         return true;
       }
+      const invariantActions = await getColumnInvariantActions(db, schema);
+      if (invariantActions.length > 0) {
+        dbg(
+          "detected column invariant changes needed",
+          schema.name,
+          invariantActions,
+        );
+        return true;
+      }
       const indexActions = await getIndexActions(db, schema);
       if (indexActions.length > 0) {
         dbg("detected index changes needed", schema.name, indexActions);
@@ -530,6 +504,20 @@ export async function schemaNeedsSync(
         dbg("detected primary key changes needed", schema.name, primaryKeyDiff);
         return true;
       }
+    }
+    if (
+      dbSchema.account_notification_index != null &&
+      (await accountNotificationRevisionSchemaNeedsSync(db))
+    ) {
+      dbg("detected missing account notification revision default");
+      return true;
+    }
+    if (
+      dbSchema.purchases != null &&
+      (await purchaseCostCentsSchemaNeedsSync(db))
+    ) {
+      dbg("detected missing purchase whole-cent guard");
+      return true;
     }
     dbg("schema matches");
     return false;

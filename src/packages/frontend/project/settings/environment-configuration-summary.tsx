@@ -78,7 +78,7 @@ function ConfigurationCard({
       style={{ borderColor: COLORS.GRAY_LL, height: "100%" }}
       styles={{ body: { padding: 12 } }}
     >
-      <Space direction="vertical" size={10} style={{ width: "100%" }}>
+      <Space vertical size={10} style={{ width: "100%" }}>
         <div
           style={{
             alignItems: "flex-start",
@@ -209,7 +209,7 @@ export function EnvironmentConfigurationSummary({
   }
 
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space vertical size={12} style={{ width: "100%" }}>
       <div
         style={{
           display: "grid",

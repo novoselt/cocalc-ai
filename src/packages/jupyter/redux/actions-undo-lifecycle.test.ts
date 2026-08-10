@@ -5,7 +5,7 @@
 
 import { JupyterActions } from "./actions";
 
-describe("JupyterActions undo lifecycle", () => {
+describe("JupyterActions sync document lifecycle", () => {
   function createActions(syncdb: object): JupyterActions {
     const actions = new JupyterActions("undo-lifecycle-test", {
       getStore: jest.fn(() => undefined),
@@ -45,4 +45,16 @@ describe("JupyterActions undo lifecycle", () => {
       expect(invoke).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("ignores deletes after the sync document loses readiness", () => {
+    const deleteRecord = jest.fn();
+    const actions = createActions({
+      isReady: () => false,
+      delete: deleteRecord,
+    });
+
+    actions._delete({ type: "cell", id: "cell-id" });
+
+    expect(deleteRecord).not.toHaveBeenCalled();
+  });
 });

@@ -57,7 +57,10 @@ import type {
 } from "@cocalc/conat/hub/api/hosts";
 import { getAccountProductAccessTrust } from "@cocalc/server/accounts/trusted-product-access";
 import { getClusterAccountsByIdsDirect } from "@cocalc/server/accounts/cluster-directory";
-import type { MembershipEffectiveLimits } from "@cocalc/conat/hub/api/purchases";
+import type {
+  AccountUsageOverview,
+  MembershipEffectiveLimits,
+} from "@cocalc/conat/hub/api/purchases";
 import {
   normalizeProviderId,
   type HostSpec,
@@ -188,22 +191,28 @@ import {
   aiUsageUnitsToMicrousd,
   computeAIUsageUnits,
 } from "@cocalc/server/ai/usage-units";
-import { saveAIResponse } from "@cocalc/server/ai/save-response";
+import {
+  recordSiteFundedCodexAccountUsage,
+  saveAIResponse,
+} from "@cocalc/server/ai/save-response";
+import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
+import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
 import {
   assertSiteFundedCodexReservationHost,
-  finishSiteFundedCodexTurn as finishSiteFundedCodexTurnLedger,
-  getSiteFundedCodexPoolStatus as getSiteFundedCodexPoolStatusLedger,
-  heartbeatSiteFundedCodexTurn as heartbeatSiteFundedCodexTurnLedger,
-  recordSiteFundedCodexUsageEvent as recordSiteFundedCodexUsageEventLedger,
-  reserveSiteFundedCodexTurn as reserveSiteFundedCodexTurnLedger,
+  finishSiteFundedCodexTurn as finishSiteFundedCodexTurnLocal,
+  getSiteFundedCodexPoolStatus as getSiteFundedCodexPoolStatusLocal,
+  heartbeatSiteFundedCodexTurn as heartbeatSiteFundedCodexTurnLocal,
+  recordSiteFundedCodexUsageEvent as recordSiteFundedCodexUsageEventLocal,
+  reserveSiteFundedCodexTurn as reserveSiteFundedCodexTurnLocal,
   type ReserveSiteFundedCodexTurnOptions,
-} from "@cocalc/server/ai/site-funded-codex-ledger";
+} from "@cocalc/server/ai/site-funded-codex-reservations";
 import { getSiteFundedCodexConfiguration } from "@cocalc/server/ai/site-funded-codex-policy";
 import type {
   SiteFundedCodexAdmission,
   SiteFundedCodexPoolStatus,
   SiteFundedCodexReservation,
   SiteFundedCodexUsageEvent,
+  SiteFundedCodexUsageRecordResult,
 } from "@cocalc/util/ai/site-funded-codex";
 import { moneyToDbString, type MoneyValue } from "@cocalc/util/money";
 import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
@@ -864,6 +873,32 @@ async function loadOwnedHost(id: string, account_id?: string): Promise<any> {
   return row;
 }
 
+async function loadHostForMachineUpdate(
+  id: string,
+  account_id?: string,
+): Promise<any> {
+  const actor = requireAccount(account_id);
+  const { rows } = await pool().query(
+    `SELECT * FROM project_hosts WHERE id=$1 AND deleted IS NULL`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) {
+    throw new Error("host not found");
+  }
+  const owner = `${row.metadata?.owner ?? ""}`.trim();
+  if (owner !== actor && !(await isAdmin(actor))) {
+    throw new Error("not authorized");
+  }
+  return row;
+}
+
+function hostBillingOwnerAccountId(row: any, fallback: string): string {
+  // Permission and fresh-auth checks follow the actor, but every billing
+  // decision must follow the persisted host owner, including for admin calls.
+  return `${row?.metadata?.owner ?? ""}`.trim() || fallback;
+}
+
 async function loadHostForDestructiveAction(
   id: string,
   account_id?: string,
@@ -1358,6 +1393,21 @@ async function assertRequestedHostFundingModeAllowed({
   funding_mode?: DedicatedHostFundingMode;
 }): Promise<void> {
   if (funding_mode == null) {
+    if (!isBillableDedicatedHostCloud(machine_cloud)) {
+      return;
+    }
+    const snapshot = await getDedicatedHostPolicySnapshotForAccount({
+      account_id,
+    });
+    if (
+      snapshot.funding_mode === "site-funded" &&
+      !(await isAdmin(account_id))
+    ) {
+      throw Object.assign(
+        new Error("site-funded dedicated hosts are limited to admins"),
+        { code: "site_funded_requires_admin" },
+      );
+    }
     return;
   }
   if (!isBillableDedicatedHostCloud(machine_cloud)) {
@@ -3090,12 +3140,26 @@ export async function recordCodexSiteUsage({
   return { usage_units };
 }
 
-function usageLimitMicrousd(
+function usageLimitAndRemainingMicrousd(
   status: Awaited<ReturnType<typeof getAIUsageStatus>>,
   window: "5h" | "7d",
-): number {
-  const limit = status.windows.find((entry) => entry.window === window)?.limit;
-  return aiUsageUnitsToMicrousd(limit);
+): { limit: number; remaining: number } {
+  const usage = status.windows.find((entry) => entry.window === window);
+  return {
+    limit: aiUsageUnitsToMicrousd(usage?.limit),
+    remaining: aiUsageUnitsToMicrousd(usage?.remaining),
+  };
+}
+
+function overviewLimitAndRemainingMicrousd(
+  overview: AccountUsageOverview,
+  window: "5h" | "7d",
+): { limit: number; remaining: number } {
+  const meter = overview.meters.find(({ id }) => id === `ai-${window}`);
+  return {
+    limit: aiUsageUnitsToMicrousd(meter?.limit),
+    remaining: aiUsageUnitsToMicrousd(meter?.remaining),
+  };
 }
 
 function remoteSiteFundedCodexSeed() {
@@ -3159,11 +3223,7 @@ export async function reserveSiteFundedCodexTurn({
         "Site-funded Codex is disabled. Connect a ChatGPT plan or personal OpenAI API key to continue.",
     };
   }
-  const [membership, usageStatus, accounts] = await Promise.all([
-    resolveMembershipForAccount(account_id),
-    getAIUsageStatus({ account_id }),
-    getClusterAccountsByIdsDirect([account_id]),
-  ]);
+  const accounts = await getClusterAccountsByIdsDirect([account_id]);
   const account = accounts.find((entry) => entry.account_id === account_id);
   if (!account || account.banned || !account.email_address_verified) {
     return {
@@ -3173,10 +3233,38 @@ export async function reserveSiteFundedCodexTurn({
         "A verified, active CoCalc account is required for included Codex usage.",
     };
   }
+  const homeBayId =
+    `${account.home_bay_id ?? ""}`.trim() || getConfiguredBayId();
+  const [membership, account5h, account7d] =
+    homeBayId === getConfiguredBayId()
+      ? await (async () => {
+          const [membership, usageStatus] = await Promise.all([
+            resolveMembershipForAccount(account_id),
+            getAIUsageStatus({ account_id }),
+          ]);
+          return [
+            membership,
+            usageLimitAndRemainingMicrousd(usageStatus, "5h"),
+            usageLimitAndRemainingMicrousd(usageStatus, "7d"),
+          ] as const;
+        })()
+      : await (async () => {
+          const accountHome = createInterBayAccountLocalClient({
+            client: getInterBayFabricClient(),
+            dest_bay: homeBayId,
+          });
+          const [membership, overview] = await Promise.all([
+            accountHome.getMembership({ account_id }),
+            accountHome.getAccountUsageOverview({ account_id }),
+          ]);
+          return [
+            membership,
+            overviewLimitAndRemainingMicrousd(overview, "5h"),
+            overviewLimitAndRemainingMicrousd(overview, "7d"),
+          ] as const;
+        })();
   const paid = membership.source !== "free";
-  const accountLimit5hMicrousd = usageLimitMicrousd(usageStatus, "5h");
-  const accountLimit7dMicrousd = usageLimitMicrousd(usageStatus, "7d");
-  if (accountLimit5hMicrousd <= 0 || accountLimit7dMicrousd <= 0) {
+  if (account5h.limit <= 0 || account7d.limit <= 0) {
     return {
       allowed: false,
       code: "ineligible",
@@ -3196,12 +3284,12 @@ export async function reserveSiteFundedCodexTurn({
     accountId: account_id,
     projectId: project_id,
     hostId: host_id,
-    homeBayId: account.home_bay_id ?? undefined,
+    homeBayId,
     owningBayId: getConfiguredBayId(),
     membershipTier: membership.class,
     policy: configuration.policy,
-    accountLimit5hMicrousd,
-    accountLimit7dMicrousd,
+    accountRemaining5hMicrousd: account5h.remaining,
+    accountRemaining7dMicrousd: account7d.remaining,
     surface: path?.endsWith(".ipynb")
       ? "jupyter"
       : path?.endsWith(".chat")
@@ -3213,7 +3301,7 @@ export async function reserveSiteFundedCodexTurn({
   const remoteSeed = remoteSiteFundedCodexSeed();
   return remoteSeed
     ? await remoteSeed.reserveSiteFundedCodexTurn(reservationOptions)
-    : await reserveSiteFundedCodexTurnLedger(reservationOptions);
+    : await reserveSiteFundedCodexTurnLocal(reservationOptions);
 }
 
 export async function heartbeatSiteFundedCodexTurn({
@@ -3236,7 +3324,7 @@ export async function heartbeatSiteFundedCodexTurn({
     hostId: host_id,
   });
   return {
-    active: await heartbeatSiteFundedCodexTurnLedger({
+    active: await heartbeatSiteFundedCodexTurnLocal({
       reservationId: reservation_id,
     }),
   };
@@ -3251,17 +3339,41 @@ export async function recordSiteFundedCodexUsageEvent({
 }): Promise<{ costMicrousd: number; inserted: boolean }> {
   if (!host_id) throw new Error("host_id must be specified");
   const remoteSeed = remoteSiteFundedCodexSeed();
+  let result: SiteFundedCodexUsageRecordResult;
   if (remoteSeed) {
-    return await remoteSeed.recordSiteFundedCodexUsage({
+    result = await remoteSeed.recordSiteFundedCodexUsage({
       hostId: host_id,
       event,
     });
+  } else {
+    await assertSiteFundedCodexReservationHost({
+      reservationId: event.reservationId,
+      hostId: host_id,
+    });
+    result = await recordSiteFundedCodexUsageEventLocal(event);
   }
-  await assertSiteFundedCodexReservationHost({
-    reservationId: event.reservationId,
-    hostId: host_id,
-  });
-  return await recordSiteFundedCodexUsageEventLedger(event);
+  const usage = {
+    account_id: result.accountId,
+    funded_turn_id: result.fundedTurnId,
+    project_id: result.projectId,
+    event,
+    cost_microusd: result.costMicrousd,
+    price_version: result.priceVersion,
+    long_context: result.longContext,
+  };
+  const homeBayId = `${result.homeBayId ?? ""}`.trim() || getConfiguredBayId();
+  if (homeBayId === getConfiguredBayId()) {
+    await recordSiteFundedCodexAccountUsage(usage);
+  } else {
+    await createInterBayAccountLocalClient({
+      client: getInterBayFabricClient(),
+      dest_bay: homeBayId,
+    }).recordSiteFundedCodexUsage(usage);
+  }
+  return {
+    costMicrousd: result.costMicrousd,
+    inserted: result.inserted,
+  };
 }
 
 export async function finishSiteFundedCodexTurn({
@@ -3277,23 +3389,26 @@ export async function finishSiteFundedCodexTurn({
 }): Promise<SiteFundedCodexReservation> {
   if (!host_id) throw new Error("host_id must be specified");
   const remoteSeed = remoteSiteFundedCodexSeed();
+  let reservation: SiteFundedCodexReservation;
   if (remoteSeed) {
-    return await remoteSeed.finishSiteFundedCodexTurn({
+    reservation = await remoteSeed.finishSiteFundedCodexTurn({
       reservationId: reservation_id,
       hostId: host_id,
       status,
       outcome,
     });
+  } else {
+    await assertSiteFundedCodexReservationHost({
+      reservationId: reservation_id,
+      hostId: host_id,
+    });
+    reservation = await finishSiteFundedCodexTurnLocal({
+      reservationId: reservation_id,
+      status,
+      outcome,
+    });
   }
-  await assertSiteFundedCodexReservationHost({
-    reservationId: reservation_id,
-    hostId: host_id,
-  });
-  return await finishSiteFundedCodexTurnLedger({
-    reservationId: reservation_id,
-    status,
-    outcome,
-  });
+  return reservation;
 }
 
 export async function getSiteFundedCodexPoolStatus({
@@ -3306,7 +3421,7 @@ export async function getSiteFundedCodexPoolStatus({
   if (remoteSeed) {
     return (await remoteSeed.getSiteFundedCodexStatus({})).pools;
   }
-  return await getSiteFundedCodexPoolStatusLedger();
+  return await getSiteFundedCodexPoolStatusLocal();
 }
 
 type ListHostsOptions = {
@@ -3316,6 +3431,7 @@ type ListHostsOptions = {
   catalog?: boolean;
   show_all?: boolean;
   trusted_admin_view?: boolean;
+  route_health?: boolean;
 };
 
 function sanitizeMachineForPlacement(
@@ -3424,12 +3540,16 @@ export async function listHostsLocal({
   catalog,
   show_all,
   trusted_admin_view,
+  route_health,
 }: ListHostsOptions): Promise<Host[]> {
   const owner = requireAccount(account_id);
   const isTrustedAdminView =
     !!admin_view && (trusted_admin_view || (await isAdmin(owner)));
   if (admin_view && !trusted_admin_view && !(await isAdmin(owner))) {
     throw new Error("not authorized");
+  }
+  if (route_health && !isTrustedAdminView) {
+    throw new Error("route health host listing requires admin view");
   }
   const filters: string[] = [];
   const params: any[] = [owner];
@@ -3465,6 +3585,18 @@ export async function listHostsLocal({
       ORDER BY updated DESC NULLS LAST, created DESC NULLS LAST`,
     params,
   );
+  if (route_health) {
+    // Release smoke only needs stable routing identifiers. Avoid the expensive
+    // backup, metrics, runtime, owner-directory, and spend-window enrichments.
+    return rows.map((row) =>
+      parseRow(row, {
+        scope: "shared",
+        access_role: "admin",
+        can_place: false,
+        can_start: false,
+      }),
+    );
+  }
   const backupStatus = await loadHostBackupStatus(rows.map((row) => row.id));
 
   const membership = await loadMembership(owner);
@@ -6049,6 +6181,7 @@ export async function startHost({
   session_hash?: string;
   id: string;
 }): Promise<HostLroResponse> {
+  const actor = requireAccount(account_id);
   const remoteBay = await resolveRemoteHostBayIfAuthoritative(id);
   if (remoteBay) {
     const auth = await maybeRequireFreshAuthForInteractiveHostAction({
@@ -6066,7 +6199,13 @@ export async function startHost({
         id,
       });
   }
-  const row = await loadHostForStartStop(id, account_id);
+  const row = await loadHostForStartStop(id, actor);
+  const billingOwner = hostBillingOwnerAccountId(row, actor);
+  await assertRequestedHostFundingModeAllowed({
+    account_id: billingOwner,
+    machine_cloud: row.metadata?.machine?.cloud,
+    funding_mode: currentHostFundingMode(row.metadata),
+  });
   assertHostBillingEnforcementAllowsStart(row.metadata);
   const auth = await maybeRequireFreshAuthForInteractiveHostAction({
     account_id,
@@ -6078,7 +6217,7 @@ export async function startHost({
   });
   await assertNoPendingDestructiveHostOp(row.id);
   await assertDedicatedHostAdmissionForAccount({
-    account_id: requireAccount(account_id),
+    account_id: billingOwner,
     action: "start",
     machine_cloud: row.metadata?.machine?.cloud,
     has_active_second_factor_override: auth.allow_second_factor_override,
@@ -6809,13 +6948,14 @@ export async function updateHostMachine({
   spot_recovery_policy?: HostSpotRecoveryPolicy;
   timeout?: number;
 }): Promise<Host> {
-  const owner = requireAccount(account_id);
-  const row = await loadOwnedHost(id, owner);
+  const actor = requireAccount(account_id);
+  const row = await loadHostForMachineUpdate(id, actor);
+  const billingOwner = hostBillingOwnerAccountId(row, actor);
   const metadata = row.metadata ?? {};
   const machine: HostMachine = metadata.machine ?? {};
   const machineCloud = normalizeProviderId(machine.cloud);
   const auth = await maybeRequireFreshAuthForInteractiveHostAction({
-    account_id: owner,
+    account_id: actor,
     browser_id,
     session_hash,
     required: hostActionRequiresInteractiveFreshAuth(machineCloud),
@@ -6848,18 +6988,18 @@ export async function updateHostMachine({
   });
   if (
     (requestedCloud === "self-host" || machineCloud === "self-host") &&
-    !(await isAdmin(owner))
+    !(await isAdmin(actor))
   ) {
     throw new Error("self-hosted hosts are limited to admins");
   }
   const currentFundingMode = currentHostFundingMode(metadata);
   await assertRequestedHostFundingModeAllowed({
-    account_id: owner,
+    account_id: billingOwner,
     machine_cloud: effectiveFundingCloud,
     funding_mode: requestedFundingMode,
   });
   await assertDedicatedHostAdmissionForAccount({
-    account_id: owner,
+    account_id: billingOwner,
     action: "resize",
     machine_cloud: effectiveFundingCloud,
     has_active_second_factor_override: auth.allow_second_factor_override,
@@ -6868,9 +7008,15 @@ export async function updateHostMachine({
   });
   const cloudChanged =
     requestedCloudRaw !== undefined && requestedCloud !== machineCloud;
+  const isLiveSiteFundedCorrection =
+    currentFundingMode === "site-funded" &&
+    (requestedFundingMode === "account-prepaid" ||
+      requestedFundingMode === "account-postpaid") &&
+    HOST_RUNNING_STATUSES.has(String(row.status ?? ""));
   if (
     requestedFundingMode !== undefined &&
     requestedFundingMode !== currentFundingMode &&
+    !isLiveSiteFundedCorrection &&
     !(
       isDeprovisioned ||
       row.status === "off" ||
@@ -7468,7 +7614,7 @@ export async function updateHostMachine({
     }
     const snapshot = applyDedicatedHostFundingModeOverride(
       await getDedicatedHostPolicySnapshotForAccount({
-        account_id: owner,
+        account_id: billingOwner,
         funding_mode_override: nextBillingFundingMode,
       }),
       nextBillingFundingMode,
@@ -7479,7 +7625,7 @@ export async function updateHostMachine({
       const fundingLane = selectDedicatedHostFundingLane(snapshot);
       if (!fundingLane) {
         throw new Error(
-          `dedicated-host funding is not currently available for account ${owner}`,
+          `dedicated-host funding is not currently available for account ${billingOwner}`,
         );
       }
       const enforcement = evaluateDedicatedHostBillingEnforcement({
@@ -7822,7 +7968,10 @@ export async function updateHostMachine({
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
         pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === activeBillableSession.funding_mode &&
+          metadata.billing?.funding_lane === activeBillableSession.funding_lane
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else if (activeBillableSession?.funding_mode === "account-postpaid") {
       nextMetadata.billing = {
@@ -7831,13 +7980,18 @@ export async function updateHostMachine({
         hourly_cost_usd: activeBillableSession.hourly_cost_usd,
         pricing_snapshot: activeBillableSession.pricing_snapshot,
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === activeBillableSession.funding_mode &&
+          metadata.billing?.funding_lane === activeBillableSession.funding_lane
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else if (activeBillableSession?.funding_mode === "site-funded") {
       nextMetadata.billing = {
         funding_mode: "site-funded",
         started_at:
-          metadata.billing?.started_at ?? metadata.billing?.updated_at,
+          currentFundingMode === "site-funded"
+            ? (metadata.billing?.started_at ?? metadata.billing?.updated_at)
+            : new Date().toISOString(),
       };
     } else {
       nextMetadata.billing = { funding_mode: nextBillingFundingMode };
@@ -7860,7 +8014,7 @@ export async function updateHostMachine({
     nextMachineCloud
   ) {
     await reconcileDedicatedHostPurchaseSessionForAccount({
-      account_id: owner,
+      account_id: billingOwner,
       host_id: row.id,
       host_name: row.name ?? undefined,
       host_bay_id: getConfiguredBayId(),
@@ -9281,6 +9435,10 @@ export async function deleteHost({
       { code: "host_deletion_protection_enabled" },
     );
   }
+  // Deprovisioning destroys the provider VM and its persistent disk, retaining
+  // only the host configuration. Close the exam run and erase its temporary
+  // projects while the disk is mounted and the control endpoint is available.
+  await eraseActiveExamRunBeforeHostStopLocal({ host: row });
   const machineCloud = normalizeProviderId(row.metadata?.machine?.cloud);
   const managedCloud =
     machineCloud && machineCloud !== "self-host" && machineCloud !== "local";

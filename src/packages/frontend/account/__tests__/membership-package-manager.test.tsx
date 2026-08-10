@@ -828,6 +828,11 @@ describe("membership package managers", () => {
     expect(new Set(provisionCall.allowed_domains)).toEqual(
       new Set(["example.edu", "dept.example.edu"]),
     );
+    expect(provisionCall.pools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ allowed_domains: [] }),
+      ]),
+    );
   });
 
   it("provisions an admin site license without allowed email domains", async () => {
@@ -1230,7 +1235,7 @@ describe("membership package managers", () => {
       available_seat_count: 48,
       assignments: [],
       metadata: {
-        allowed_domains: ["example.edu"],
+        allowed_domains: ["research.example.edu"],
         pool_name: "Students",
         site_license_id: "license-1",
         requires_approval: false,
@@ -1285,6 +1290,12 @@ describe("membership package managers", () => {
     });
 
     fireEvent.click(screen.getByText("Edit pool"));
+    expect(
+      screen.getByText("Additional email domains for this pool"),
+    ).toBeTruthy();
+    expect(screen.getByText("Inherited license domains")).toBeTruthy();
+    expect(screen.getByText("research.example.edu")).toBeTruthy();
+    expect(screen.getAllByText("example.edu").length).toBeGreaterThan(0);
     const seats = await screen.findByDisplayValue("50");
     fireEvent.change(seats, { target: { value: "75" } });
     fireEvent.click(screen.getByText("Save pool"));
@@ -1300,7 +1311,7 @@ describe("membership package managers", () => {
         requires_approval: false,
         affiliation_reverification_days: null,
         affiliation_reverification_grace_days: null,
-        allowed_domains: ["example.edu"],
+        allowed_domains: ["research.example.edu"],
         expires_at: null,
       });
     });
@@ -1624,7 +1635,9 @@ describe("membership package managers", () => {
         "Starts on June 5, 2099 · Valid until December 31, 2099",
       ),
     ).toBeTruthy();
-    expect(screen.getByText("Covered domains:")).toBeTruthy();
+    expect(
+      screen.getByText("Email domains eligible for all pools:"),
+    ).toBeTruthy();
     expect(screen.getByText("greatplains.edu")).toBeTruthy();
     expect(screen.queryByText("Site license")).toBeNull();
     expect(screen.queryByText("University of Great Plains")).toBeNull();

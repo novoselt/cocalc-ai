@@ -73,6 +73,9 @@ describe("Codex auth source preference", () => {
       source: "site-api-key",
       env: { OPENAI_API_KEY: "site-key" },
     });
+    expect(mockGetSiteOpenAiApiKeyFromHub).toHaveBeenCalledWith({
+      forceRefresh: true,
+    });
     expect(mockHasSubscriptionAuthInRegistry).not.toHaveBeenCalled();
   });
 });

@@ -39,7 +39,7 @@ write bay env/secrets files.
 Options:
   --source <dir>           built src root to stage (required)
   --bundle <tarball>       packaged Rocket bay runtime tarball to stage
-  --static-bundle <tarball> packaged static/frontend-only update tarball
+  --static-bundle <tarball> packaged frontend/CDN-only update tarball
   --hub-bundle <tarball>   packaged hub/control-plane-only update tarball
   --bay-id <id>            bay id (default: bay-0)
   --bay-user <user>        service user / db user (default: cocalc-bay)
@@ -73,6 +73,20 @@ EOF
 run() {
   echo "+ $*"
   "$@"
+}
+
+find_node() {
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+  local configured_node="$NVM_DIR/versions/node/v$NODE_VERSION/bin/node"
+  if [[ -x "$configured_node" ]]; then
+    printf '%s\n' "$configured_node"
+    return 0
+  fi
+  echo "node runtime not found (checked PATH and $configured_node)" >&2
+  return 1
 }
 
 make_target_release_accessible() {
@@ -299,6 +313,7 @@ stage_bundle_release() {
   run tar -xf "$BUNDLE_PATH" -C "$TARGET_RELEASE" --strip-components=1
   make_target_release_accessible
   preserve_previous_static_assets
+  preserve_previous_cdn_assets
 }
 
 stage_static_bundle_release() {
@@ -331,15 +346,18 @@ stage_static_bundle_release() {
 
   run rm -rf \
     "${TARGET_RELEASE}/runtime/control-plane/public" \
+    "${TARGET_RELEASE}/runtime/control-plane/cdn" \
     "${TARGET_RELEASE}/runtime/control-plane/webapp" \
     "${TARGET_RELEASE}/runtime/control-plane/bundle/gcp" \
     "${TARGET_RELEASE}/runtime/control-plane/bundle/nebius" \
     "${TARGET_RELEASE}/bay-static-manifest.json"
   run rsync -a "${extract_dir}/" "$TARGET_RELEASE/"
+  preserve_previous_cdn_assets "$current_release"
   make_target_release_accessible
   run chown -R "${BAY_USER}:${BAY_GROUP}" \
     "${TARGET_RELEASE}/runtime/control-plane/static" \
     "${TARGET_RELEASE}/runtime/control-plane/public" \
+    "${TARGET_RELEASE}/runtime/control-plane/cdn" \
     "${TARGET_RELEASE}/runtime/control-plane/webapp" \
     "${TARGET_RELEASE}/runtime/control-plane/bundle/gcp" \
     "${TARGET_RELEASE}/runtime/control-plane/bundle/nebius" \
@@ -433,6 +451,54 @@ preserve_previous_static_assets() {
   run rsync -a --ignore-existing "${previous_static}/" "${target_static}/"
 }
 
+preserve_previous_cdn_assets() {
+  local current_release="${1:-}"
+  if [[ -z "$current_release" ]]; then
+    if [[ ! -L "$CURRENT_LINK" ]]; then
+      return
+    fi
+    current_release="$(readlink -f "$CURRENT_LINK")"
+  fi
+  if [[ -z "$current_release" || ! -d "$current_release" || "$current_release" == "$TARGET_RELEASE" ]]; then
+    return
+  fi
+
+  local previous_cdn="${current_release}/runtime/control-plane/cdn"
+  local target_cdn="${TARGET_RELEASE}/runtime/control-plane/cdn"
+  if [[ ! -f "${previous_cdn}/index.js" || ! -f "${target_cdn}/index.js" ]]; then
+    return
+  fi
+
+  local node_bin package_names
+  node_bin="$(find_node)"
+  package_names="$("$node_bin" - "${previous_cdn}/index.js" "${target_cdn}/index.js" <<'NODE'
+const [previous, target] = process.argv.slice(2);
+const names = new Set([
+  ...Object.keys(require(previous).versions ?? {}),
+  ...Object.keys(require(target).versions ?? {}),
+]);
+process.stdout.write([...names].join("\n"));
+NODE
+)"
+
+  local package_name previous_path versioned_name
+  while IFS= read -r package_name; do
+    [[ -n "$package_name" ]] || continue
+    for previous_path in "${previous_cdn}/${package_name}-"*; do
+      if [[ ! -e "$previous_path" && ! -L "$previous_path" ]]; then
+        continue
+      fi
+      versioned_name="$(basename "$previous_path")"
+      if [[ -e "${target_cdn}/${versioned_name}" || -L "${target_cdn}/${versioned_name}" ]]; then
+        continue
+      fi
+      # The CDN build uses versioned symlinks. Dereference old aliases so they
+      # remain pinned to their old contents after the unversioned tree changes.
+      run cp -aL "$previous_path" "${target_cdn}/${versioned_name}"
+    done
+  done <<<"$package_names"
+}
+
 validate_release() {
   if [[ ! -x "${TARGET_RELEASE}/scripts/bay-systemd/install-scaffold.sh" ]]; then
     echo "release is missing scripts/bay-systemd/install-scaffold.sh" >&2
@@ -462,12 +528,26 @@ validate_release() {
       echo "release is missing public frontend assets" >&2
       exit 1
     fi
+    # A hub-only release inherits the currently deployed static tree. Older
+    # static releases predate the bundled CDN, so do not make a hub rollout
+    # depend on first upgrading an unrelated component.
+    if [[
+      -z "$HUB_BUNDLE_PATH" &&
+        ! -f "${TARGET_RELEASE}/runtime/control-plane/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap"
+    ]]; then
+      echo "release is missing CDN frontend assets" >&2
+      exit 1
+    fi
     if [[ ! -f "${TARGET_RELEASE}/runtime/control-plane/webapp/favicon.ico" ]]; then
       echo "release is missing webapp frontend assets" >&2
       exit 1
     fi
     if [[ ! -f "${TARGET_RELEASE}/runtime/control-plane/bundle/gcp/gcp-setup.sh" ]]; then
       echo "release is missing GCP provider setup script" >&2
+      exit 1
+    fi
+    if [[ ! -f "${TARGET_RELEASE}/runtime/control-plane/bundle/gcp/compute-vm-setup.sh" ]]; then
+      echo "release is missing managed compute VM setup script" >&2
       exit 1
     fi
     if [[ ! -f "${TARGET_RELEASE}/runtime/control-plane/bundle/nebius/nebius-setup.sh" ]]; then
@@ -824,7 +904,40 @@ COCALC_BAY_STATE_DIR=${BAY_ROOT}/state
 COCALC_BAY_RUN_DIR=${BAY_ROOT}/run
 COCALC_BAY_LOG_DIR=${BAY_ROOT}/logs
 COCALC_BAY_BACKUP_DIR=${BAY_ROOT}/backups
+COCALC_BACKUP_ROOT=${BAY_ROOT}/backups
+COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM=0
+COCALC_BAY_BACKUP_MIN_FREE_BYTES=68719476736
+COCALC_BAY_BACKUP_RETRY_MAX_MS=21600000
 COCALC_BIN_PATH=${BAY_ROOT}/bin
+COCALC_BAY_PGBACKREST_ENABLED=0
+COCALC_BAY_PGBACKREST_BIN=/usr/local/bin/pgbackrest
+COCALC_BAY_PGBACKREST_CONFIG=\${COCALC_BACKUP_ROOT}/pgbackrest/pgbackrest.conf
+COCALC_BAY_PGBACKREST_SPOOL_PATH=\${COCALC_BACKUP_ROOT}/pgbackrest/spool
+COCALC_BAY_PGBACKREST_LOCK_PATH=${BAY_ROOT}/run/pgbackrest
+COCALC_BAY_PGBACKREST_LOG_PATH=${BAY_ROOT}/logs/pgbackrest
+COCALC_BAY_PGBACKREST_REPO_PATH=/pgbackrest/${BAY_ID}
+COCALC_BAY_PGBACKREST_PROCESS_MAX=1
+COCALC_BAY_PGBACKREST_RETENTION_FULL=2
+COCALC_BAY_PGBACKREST_RETENTION_DIFF=14
+COCALC_BAY_PGBACKREST_STATUS_FILE=${BAY_ROOT}/state/pgbackrest-status.json
+COCALC_BAY_PGBACKREST_RESTORE_STATUS_FILE=${BAY_ROOT}/state/pgbackrest-restore-test-status.json
+COCALC_BAY_PGBACKREST_MAX_BACKUP_AGE_S=129600
+COCALC_BAY_PGBACKREST_MAX_SPOOL_AGE_S=600
+COCALC_BAY_PGBACKREST_MAX_WAL_BACKLOG_BYTES=8589934592
+COCALC_BAY_SQLITE_BACKUP_ENABLED=0
+COCALC_BAY_SQLITE_SOURCE_DIR=${BAY_ROOT}/sync
+COCALC_BAY_SQLITE_MIRROR_DIR=\${COCALC_BACKUP_ROOT}/sqlite-mirror/sync
+COCALC_BAY_SQLITE_MIRROR_CATALOG=\${COCALC_BACKUP_ROOT}/sqlite-mirror/catalog.json
+COCALC_BAY_SQLITE_MIRROR_ENTRY=/opt/cocalc/bay/current/runtime/sqlite-mirror/index.js
+COCALC_BAY_SQLITE_MIRROR_CONCURRENCY=2
+COCALC_BAY_SQLITE_RUSTIC_BIN=/usr/local/bin/rustic
+COCALC_BAY_SQLITE_RUSTIC_PROFILE=\${COCALC_BACKUP_ROOT}/sqlite-mirror/rustic.toml
+COCALC_BAY_SQLITE_RUSTIC_ROOT=rustic/bay-sqlite/${BAY_ID}
+COCALC_BAY_SQLITE_BACKUP_STATUS_FILE=${BAY_ROOT}/state/sqlite-backup-status.json
+COCALC_BAY_SQLITE_RETENTION_HOURLY=24
+COCALC_BAY_SQLITE_RETENTION_DAILY=14
+COCALC_BAY_SQLITE_RETENTION_WEEKLY=8
+COCALC_BAY_SQLITE_RETENTION_MONTHLY=12
 
 COCALC_BAY_POSTGRES_HOST=127.0.0.1
 COCALC_BAY_POSTGRES_PORT=5432

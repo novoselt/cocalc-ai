@@ -70,7 +70,11 @@ describe("admin entitlement overrides", () => {
     const result = applyAccountEntitlementOverride({
       membership: membership(),
       override: override({
-        features: { create_hosts: true },
+        features: {
+          create_hosts: true,
+          bandwidth_relay_abuse_exempt: true,
+          cryptomining_abuse_exempt: true,
+        },
         usage_limits: {
           max_projects: { mode: "maximum", value: 5 },
           max_sponsored_running_projects: { mode: "set", value: 2 },
@@ -88,6 +92,10 @@ describe("admin entitlement overrides", () => {
     });
 
     expect(result.entitlements.features?.create_hosts).toBe(true);
+    expect(result.entitlements.features?.bandwidth_relay_abuse_exempt).toBe(
+      true,
+    );
+    expect(result.entitlements.features?.cryptomining_abuse_exempt).toBe(true);
     expect(result.effective_limits).toMatchObject({
       max_projects: 5,
       max_sponsored_running_projects: 2,

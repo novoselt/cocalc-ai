@@ -185,7 +185,7 @@ export default function EditSchedule() {
               showIcon
               type="info"
               style={{ marginBottom: "15px" }}
-              message="Schedule is read-only"
+              title="Schedule is read-only"
               description="Only project owners can change automatic snapshot schedules unless the owner allows collaborators to manage storage history."
             />
           ) : undefined}

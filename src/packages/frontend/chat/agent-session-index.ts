@@ -1,5 +1,6 @@
 import type { DKV } from "@cocalc/conat/sync/dkv";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import type { CodexPaymentSourcePreference } from "@cocalc/util/ai/codex";
 
 const AGENT_SESSION_STORE = "cocalc-agent-sessions-v1";
 
@@ -34,6 +35,7 @@ export interface AgentSessionRecord {
   model?: string;
   reasoning?: string;
   serviceTier?: string;
+  paymentSource?: CodexPaymentSourcePreference;
   thread_color?: string;
   thread_accent_color?: string;
   thread_icon?: string;

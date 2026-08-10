@@ -153,7 +153,7 @@ export function GitCommitDrawerTitle({
         ? COLORS.ANTD_ORANGE
         : COLORS.ANTD_RED;
   const progressPopover = (
-    <Space direction="vertical" size="small" style={{ width: 280 }}>
+    <Space vertical size="small" style={{ width: 280 }}>
       <Typography.Text strong>Recent commit review scope</Typography.Text>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         Progress counts loaded non-merge commits on or after this cutoff date.
@@ -185,7 +185,7 @@ export function GitCommitDrawerTitle({
     </Space>
   );
   const shortcutsPopover = (
-    <Space direction="vertical" size={4} style={{ minWidth: 220 }}>
+    <Space vertical size={4} style={{ minWidth: 220 }}>
       {[
         ["Space", "Scroll down"],
         ["Shift+Space", "Scroll up"],

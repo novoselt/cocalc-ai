@@ -129,6 +129,74 @@ export const TABLE_OWNERSHIP = {
       "Bay-local daily membership count snapshots. These are derived from account-home membership state and aggregated across bays for admin analytics.",
   }),
 
+  ...entries(
+    ["account_managed_egress_events", "account_managed_egress_rollups"],
+    {
+      ownership: "account-home",
+      authority: "account_id",
+      portability: "unsupported",
+      secondary_reference_fields: {
+        project_id: "Usage attribution dimension, not placement authority.",
+      },
+      notes:
+        "Account-home managed-egress event and rollup state. Reads and writes must route to the account home bay; account rehome is unsafe until this state has explicit migration support.",
+    },
+  ),
+
+  ...entries(
+    [
+      "growth_account_activity_daily",
+      "growth_account_milestones",
+      "growth_account_profiles",
+    ],
+    {
+      ownership: "account-home",
+      authority: "account_id",
+      portability: "unsupported",
+      notes:
+        "Canonical account growth facts. Writes must route to the account home bay; global dashboards consume aggregate projections rather than these account rows.",
+    },
+  ),
+
+  ...entries(["growth_event_log"], {
+    ownership: "audit-local",
+    authority: "local",
+    portability: "unsupported",
+    secondary_reference_fields: {
+      account_id:
+        "Authenticated account reference; the row is retained only in the bay-local diagnostic ledger.",
+      project_id:
+        "Optional project context for the event, not project placement authority.",
+    },
+    notes:
+      "Short-lived validated product-event ledger. The materializer converts these rows into account-home facts and bay-local aggregate projections before bounded retention cleanup.",
+  }),
+
+  ...entries(
+    [
+      "growth_dirty_periods",
+      "growth_materialization_state",
+      "growth_metric_series",
+      "growth_retention_cells",
+      "growth_weekly_accounting",
+    ],
+    {
+      ownership: "projection",
+      authority: "local",
+      portability: "rebuildable",
+      notes:
+        "Bay-scoped growth materialization state and compact serving projections. These tables are restart-safe and rebuildable from account-home facts and the short-lived event log.",
+    },
+  ),
+
+  ...entries(["growth_annotations"], {
+    ownership: "stable-bay",
+    authority: "local",
+    portability: "stable",
+    notes:
+      "Admin-authored growth timeline annotations retained on the bay where they are created.",
+  }),
+
   ...entries(["purchases"], {
     ownership: "account-home",
     authority: "account_id",
@@ -262,6 +330,8 @@ export const TABLE_OWNERSHIP = {
 
   ...entries(
     [
+      "active_user_map_history_countries",
+      "active_user_map_history_snapshots",
       "buckets",
       "crm_leads",
       "crm_organizations",
@@ -283,6 +353,7 @@ export const TABLE_OWNERSHIP = {
       "legacy_migration_project_import_accounts",
       "legacy_migration_project_imports",
       "legacy_migration_projects",
+      "legacy_migration_public_share_replay_events",
       "lti",
       "membership_claim_identities",
       "membership_claim_scopes",
@@ -406,6 +477,41 @@ export const TABLE_OWNERSHIP = {
     rebuild:
       "Recreate from a later browser presence observation or durable worker source state.",
   }),
+
+  ...entries(
+    [
+      "compute_vms",
+      "compute_vm_instances",
+      "compute_volumes",
+      "compute_egress_meter_intervals",
+    ],
+    {
+      ownership: "account-home",
+      authority: "owner_account_id",
+      portability: "stable",
+      secondary_reference_fields: {
+        project_id: "Project attachment controls discovery but not authority.",
+      },
+      notes:
+        "Account-owned managed compute state. Project attachment controls discovery but does not transfer ownership.",
+    },
+  ),
+
+  ...entries(["compute_resource_work"], {
+    ownership: "ephemeral",
+    authority: "local",
+    portability: "rebuildable",
+    notes:
+      "Account-home-bay provider work. Desired resource state remains the durable source of truth.",
+    rebuild: "Reconcile desired compute resource state against the provider.",
+  }),
+
+  ...entries(["compute_resource_events"], {
+    ownership: "audit-local",
+    authority: "local",
+    portability: "stable",
+    notes: "Append-only managed compute lifecycle and authorization audit.",
+  }),
 } satisfies Record<string, TableOwnershipEntry>;
 
 export interface AdHocPostgresTableOwnershipEntry extends TableOwnershipEntry {
@@ -423,9 +529,24 @@ function adHocEntries(
 }
 
 export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
+  ...adHocEntries(["admin_support_mutations"], {
+    ownership: "seed-global",
+    authority: "seed",
+    portability: "stable",
+    secondary_reference_fields: {
+      account_id:
+        "Admin actor reference for auditing, not ownership authority.",
+    },
+    source: "admin support mutation ledger",
+    migrate_to_schema: true,
+    notes:
+      "Cluster-global idempotency and audit state for Zendesk mutations. The seed bay is authoritative so retries resolve against one ledger across all bays.",
+  }),
+
   ...adHocEntries(
     [
       "admin_data_explorer_views",
+      "admin_support_mutations",
       "cluster_account_api_key_directory",
       "cluster_account_directory",
       "cluster_bay_registry",
@@ -471,8 +592,6 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     [
       "account_abuse_review_annotations",
       "account_cpu_usage_events",
-      "account_managed_egress_events",
-      "account_managed_egress_rollups",
       "account_revocations",
       "account_security_state",
       "account_usage_windows",
@@ -536,6 +655,23 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     notes:
       "Global usage-window epoch/reset state. This defines cluster-wide reset semantics and should be seed-authoritative.",
   }),
+
+  ...adHocEntries(
+    [
+      "site_ai_account_holds",
+      "site_ai_funding_periods",
+      "site_ai_turn_reservations",
+    ],
+    {
+      ownership: "seed-global",
+      authority: "seed",
+      portability: "stable",
+      source: "server site-funded Codex reservation schema bootstrap",
+      migrate_to_schema: true,
+      notes:
+        "Cluster-wide site-funded Codex budget, hold, and reservation state. All admission and settlement operations route to the seed bay so concurrency and spending limits are enforced globally.",
+    },
+  ),
 
   ...adHocEntries(
     [

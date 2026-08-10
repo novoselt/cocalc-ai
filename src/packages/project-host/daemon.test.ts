@@ -87,6 +87,35 @@ describe("project-host daemon stop", () => {
     expect(path.dirname(archived!)).toBe(path.join(dataDir, "log-history"));
   });
 
+  it("resolves an explicitly staged project-host runtime beside current", () => {
+    const root = mkTempDir("cocalc-project-host-versions-");
+    const current = path.join(root, "current");
+    const v1 = path.join(root, "artifact-v1");
+    const v2 = path.join(root, "artifact-v2");
+    fs.mkdirSync(v1);
+    fs.mkdirSync(v2);
+    fs.symlinkSync(v1, current);
+
+    expect(
+      __test__.projectHostRuntimeRootForVersion(
+        { COCALC_PROJECT_HOST_CURRENT: current },
+        "artifact-v2",
+      ),
+    ).toBe(fs.realpathSync(v2));
+    expect(() =>
+      __test__.projectHostRuntimeRootForVersion(
+        { COCALC_PROJECT_HOST_CURRENT: current },
+        "../artifact-v2",
+      ),
+    ).toThrow("invalid project-host runtime version");
+    expect(() =>
+      __test__.projectHostRuntimeRootForVersion(
+        { COCALC_PROJECT_HOST_CURRENT: current },
+        "artifact-v3",
+      ),
+    ).toThrow("project-host runtime version is not installed");
+  });
+
   it("bounds retained project-host log history", () => {
     const dataDir = mkTempDir("cocalc-project-host-daemon-");
     const logPath = path.join(dataDir, "log");
@@ -372,6 +401,83 @@ describe("project-host daemon stop", () => {
     expect(killSpy).toHaveBeenCalledWith(222, "SIGTERM");
     expect(killSpy).toHaveBeenCalledWith(444, "SIGTERM");
     expect(fs.existsSync(pidPath)).toBe(false);
+  });
+
+  it("preserves detached ACP workers while recovering a stale daemon pid", () => {
+    const dataDir = mkTempDir("cocalc-project-host-daemon-");
+    const pidPath = path.join(dataDir, "daemon.pid");
+    fs.writeFileSync(pidPath, "9999");
+    process.env.COCALC_DATA = dataDir;
+    process.env.PORT = "9002";
+    process.env.COCALC_PROJECT_HOST_EXTERNAL_CONAT_ROUTER = "1";
+    process.env.COCALC_PROJECT_HOST_EXTERNAL_CONAT_PERSIST = "1";
+    fs.writeFileSync(path.join(dataDir, "conat-router.pid"), "555");
+    fs.writeFileSync(path.join(dataDir, "conat-persist.pid"), "666");
+
+    const realReadFileSync = fs.readFileSync;
+    const realReaddirSync = fs.readdirSync;
+    jest.spyOn(fs, "readdirSync").mockImplementation(((
+      file: any,
+      opts?: any,
+    ) => {
+      if (file === "/proc") {
+        return [
+          { name: "111", isDirectory: () => true },
+          { name: "444", isDirectory: () => true },
+        ] as any;
+      }
+      return (realReaddirSync as any)(file, opts);
+    }) as typeof fs.readdirSync);
+    jest.spyOn(fs, "readFileSync").mockImplementation(((
+      file: any,
+      options?: any,
+    ) => {
+      if (file === "/proc/111/cmdline") {
+        return Buffer.from(
+          "node\u0000/opt/cocalc/project-host/bundles/old/main/index.js\u0000",
+        ) as any;
+      }
+      if (file === "/proc/111/environ") {
+        return Buffer.from(
+          `COCALC_DATA=${dataDir}\u0000PORT=9002\u0000`,
+        ) as any;
+      }
+      if (file === "/proc/444/cmdline") {
+        return Buffer.from("project-host:acp-worker\u0000") as any;
+      }
+      if (file === "/proc/444/environ") {
+        return Buffer.from(
+          `COCALC_DATA=${dataDir}\u0000COCALC_PROJECT_HOST_ACP_WORKER=1\u0000`,
+        ) as any;
+      }
+      return (realReadFileSync as any)(file, options);
+    }) as typeof fs.readFileSync);
+
+    const alive = new Set([111, 444, 555, 666]);
+    const killSpy = jest.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
+      if (signal === 0 || signal === undefined) {
+        if (alive.has(pid)) return true;
+        throw new Error("not running");
+      }
+      if (pid === 111 && signal === "SIGTERM") {
+        alive.delete(pid);
+        return true;
+      }
+      throw new Error(`unexpected signal ${signal} for pid ${pid}`);
+    }) as typeof process.kill);
+    jest
+      .spyOn(__test__.processRuntime, "spawnSync")
+      .mockReturnValue({ status: 0 } as any);
+    mockSpawn().mockReturnValue({ pid: 3333, unref: () => {} } as any);
+
+    ensureDaemon(0);
+
+    expect(killSpy).toHaveBeenCalledWith(111, "SIGTERM");
+    expect(killSpy).not.toHaveBeenCalledWith(444, "SIGTERM");
+    expect(fs.readFileSync(pidPath, "utf8")).toBe("3333");
   });
 
   it("treats a stale daemon pid file with no live process as a successful stop", () => {

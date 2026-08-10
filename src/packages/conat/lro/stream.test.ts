@@ -15,9 +15,10 @@ describe("lro stream explicit routing", () => {
   it("publishes with the provided client", async () => {
     const { publishLroSummary } = await import("./stream");
     const publish = jest.fn();
+    const close = jest.fn();
     const client = {
       sync: {
-        astream: jest.fn(() => ({ publish })),
+        astream: jest.fn(() => ({ publish, close })),
       },
     } as any;
 
@@ -40,5 +41,30 @@ describe("lro stream explicit routing", () => {
       }),
       { ttl: 24 * 60 * 60 * 1000 },
     );
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the stream when publish fails", async () => {
+    const { publishLroEvent } = await import("./stream");
+    const close = jest.fn();
+    const client = {
+      sync: {
+        astream: jest.fn(() => ({
+          publish: jest.fn().mockRejectedValue(new Error("publish failed")),
+          close,
+        })),
+      },
+    } as any;
+
+    await expect(
+      publishLroEvent({
+        client,
+        scope_type: "project",
+        scope_id: "proj-1",
+        op_id: "op-1",
+        event: { type: "summary", ts: 1, summary: {} as any },
+      }),
+    ).rejects.toThrow("publish failed");
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

@@ -4,6 +4,7 @@ const mockEffectSlots: {
   cleanup?: () => void;
 }[] = [];
 let mockHookIndex = 0;
+let mockDirectoryTraceId = "trace-1";
 
 function mockDepsChanged(prev: unknown[] | undefined, next: unknown[]) {
   return (
@@ -63,6 +64,17 @@ jest.mock("@cocalc/util/async-utils", () => ({
   withTimeout: jest.fn(async (promise: Promise<any>) => await promise),
 }));
 
+jest.mock("./ux-latency", () => ({
+  claimDirectoryListingTrace: jest.fn(() => ({
+    trace: { id: mockDirectoryTraceId, marks: {}, mark: jest.fn() },
+  })),
+  directoryListingTelemetry: jest.fn(({ entry, ...telemetry }) => ({
+    trace_id: entry?.trace?.id ?? "trace-1",
+    ...telemetry,
+  })),
+  markDirectoryListingPhase: jest.fn(),
+}));
+
 jest.mock("use-async-effect", () => {
   const React = require("react");
   return {
@@ -114,6 +126,7 @@ function useFilesForTestWithOptions(opts: Parameters<typeof useFiles>[0]) {
 describe("useFiles", () => {
   beforeEach(() => {
     mockResetHooks();
+    mockDirectoryTraceId = "trace-1";
     jest.clearAllMocks();
   });
 
@@ -484,7 +497,43 @@ describe("useFiles", () => {
     expect(fs.listing).not.toHaveBeenCalled();
   });
 
-  it("refresh clears cached contents and fetches a fresh read-only listing", async () => {
+  it("preserves authoritative status for a retained live listing", async () => {
+    const fs = {
+      getListing: jest.fn(async () => ({
+        files: { "live.txt": { mtime: 0, isDir: false, size: 1 } },
+      })),
+      listing: jest.fn(),
+    };
+    const options = {
+      fs,
+      path: "/retained",
+      watch: false,
+      uxContext: { project_id: "project-1", surface_visible: true },
+    };
+
+    useFilesForTestWithOptions(options);
+    await flushEffects();
+    let result = useFilesForTestWithOptions(options);
+    expect(result.telemetry).toEqual(
+      expect.objectContaining({
+        trace_id: "trace-1",
+        data_source: "snapshot",
+        authoritative: true,
+      }),
+    );
+
+    mockDirectoryTraceId = "trace-2";
+    result = useFilesForTestWithOptions(options);
+    expect(result.telemetry).toEqual(
+      expect.objectContaining({
+        trace_id: "trace-2",
+        data_source: "retained",
+        authoritative: true,
+      }),
+    );
+  });
+
+  it("refresh retains the current contents while fetching a fresh listing", async () => {
     let refreshFetches = 0;
     const fs = {
       getListing: jest.fn(async (path: string) => {
@@ -498,41 +547,36 @@ describe("useFiles", () => {
       }),
       listing: jest.fn(),
     };
-
-    let result = useFilesForTestWithOptions({
+    const options = {
       fs,
       path: "/refresh",
       cacheId: { project_id: "project-1", viewer: true },
       watch: false,
-    });
+      uxContext: { project_id: "project-1", surface_visible: true },
+    };
+
+    let result = useFilesForTestWithOptions(options);
     await flushEffects();
 
-    result = useFilesForTestWithOptions({
-      fs,
-      path: "/refresh",
-      cacheId: { project_id: "project-1", viewer: true },
-      watch: false,
-    });
+    result = useFilesForTestWithOptions(options);
     expect(result.files).toEqual({
       "old.txt": { mtime: 0, isDir: false, size: 1 },
     });
+    expect(result.telemetry).toEqual(
+      expect.objectContaining({ authoritative: true }),
+    );
 
     result.refresh();
-    result = useFilesForTestWithOptions({
-      fs,
-      path: "/refresh",
-      cacheId: { project_id: "project-1", viewer: true },
-      watch: false,
+    result = useFilesForTestWithOptions(options);
+    expect(result.files).toEqual({
+      "old.txt": { mtime: 0, isDir: false, size: 1 },
     });
-    expect(result.files).toBeNull();
+    expect(result.telemetry).toEqual(
+      expect.objectContaining({ authoritative: true }),
+    );
     await flushEffects();
 
-    result = useFilesForTestWithOptions({
-      fs,
-      path: "/refresh",
-      cacheId: { project_id: "project-1", viewer: true },
-      watch: false,
-    });
+    result = useFilesForTestWithOptions(options);
     expect(result.files).toEqual({
       "new.txt": { mtime: 0, isDir: false, size: 1 },
     });

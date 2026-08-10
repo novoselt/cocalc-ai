@@ -115,6 +115,104 @@ environment, or host placement. For the short creation flow, see
 [Create a project](/docs/projects/create-project).
 `;
 
+export const VIRTUAL_MACHINES_BODY = String.raw`
+## What virtual machines are
+
+Managed Compute VMs are standalone Linux machines associated with a CoCalc
+project. Each VM starts with a minimal Ubuntu 24.04 LTS image. CoCalc, Jupyter,
+and other CoCalc project software are not installed automatically.
+
+Use a VM when the project runtime is not the right size or shape for a job, or
+when you need full control of a conventional machine. Unlike a locked-down
+CoCalc project container, a VM gives you:
+
+- full \`sudo\` access to install system packages and run system services;
+- Docker and other container runtimes;
+- FUSE filesystems and long-running system daemons;
+- the full machine for your workload, with no CoCalc project services competing
+  for its CPU or memory;
+- predictable, dedicated performance that you can benchmark directly; and
+- direct SSH access through a dedicated public IP address.
+
+That control also means you can misconfigure, exhaust, reboot, or crash the
+machine. Keep durable data on a separate \`/work\` volume. Managed Compute
+currently treats every VM independently; it does not provide private cluster
+networking or a cluster scheduler.
+
+## Create a VM
+
+Use **Open project VMs** on this page to select a project and open its VM page,
+then choose **Create VM**. Configure:
+
+- the region, zone, and machine type;
+- Standard or Spot capacity;
+- the persistent boot-disk size;
+- an optional deletion deadline;
+- an SSH key; and
+- an optional persistent \`/work\` volume.
+
+The create dialog shows the exact equivalent \`cocalc vm create\` command. A
+deletion deadline is optional. Spot capacity is less expensive but can be
+interrupted or unavailable at any time, so use Standard capacity for work that
+must remain continuously available.
+
+Creating or starting a VM requires a membership authorized for prepaid or
+postpaid dedicated-host spending.
+
+## Costs and funding
+
+Compute, the boot disk, and retained \`/work\` volumes appear in **Purchases**.
+Public Internet egress costs **$0.10/GB**. Egress accumulates in one purchase per
+VM per calendar month rather than creating a new purchase for every meter
+sample. Usage normally takes about five minutes to appear, and each VM row shows
+its cumulative metered public egress and cost.
+
+Running VMs stop when funding is unavailable. Site retention policies may later
+delete an unfunded VM and its root disk. A separate \`/work\` volume is retained
+independently, although prolonged inability to fund retained storage can
+eventually require deletion under the site's storage-exposure policy.
+
+## Connect and copy files
+
+After the VM is ready, use the CoCalc CLI:
+
+~~~sh
+cocalc vm list
+cocalc vm ssh my-vm
+cocalc vm ssh my-vm uname -a
+cocalc vm rsync ./data/ my-vm:/work/data/
+cocalc vm rsync my-vm:/work/results/ ./results/
+~~~
+
+To create a normal OpenSSH alias in \`~/.ssh/config\`:
+
+~~~sh
+cocalc vm ssh-config add my-vm
+ssh my-vm
+~~~
+
+Inside a CoCalc project, \`cocalc vm list\` defaults to that project. With
+account authentication, \`cocalc vm list --all\` lists every VM owned by the
+account.
+
+## Persistent /work volumes
+
+A \`/work\` volume is independent of a VM and survives VM deletion. A volume can
+only be attached to a VM in the same zone and to one VM at a time. Select an
+existing volume or create one while creating the VM; changing attachments later
+is not yet supported.
+
+Volumes can grow but cannot shrink. Deleting a detached volume is permanent and
+destroys all data on it.
+
+## Deletion and data safety
+
+Deleting a VM deletes its persistent root disk. It does not normally delete an
+attached \`/work\` volume. Keep durable data on \`/work\`, verify important
+results elsewhere, and delete unused retained volumes explicitly so they do not
+continue accruing storage charges.
+`;
+
 export const RSTUDIO_PROJECT_BODY = String.raw`
 ## What this page is for
 
@@ -169,8 +267,8 @@ export const PUBLISH_FILES_BODY = String.raw`
 ## What file publishing is for
 
 Publish project files when you want to share read-only content from a project
-through an unlisted URL. A published share points at one folder, or at the
-whole project HOME directory.
+through an unlisted URL. A published share can point at one exact file, one
+folder, or the whole project HOME directory.
 
 Use file publishing for examples, notebooks, reports, course material,
 workshop folders, chat logs, and other project content that should be viewable
@@ -180,17 +278,23 @@ This is different from [RootFS publishing](/docs/projects/publish-rootfs).
 RootFS publishing shares a reusable software environment. File publishing
 shares read-only files under \`/home/user\`.
 
-## Publish a folder
+## Publish a file or folder
 
 Open the project and use one of these entry points:
 
-1. In the file explorer, right-click a folder and choose **Publish**.
-2. Select a folder, then use the file action to publish it.
+1. Right-click a file or folder in the full-page or flyout file listing and
+   choose **Publish**, or select it and use **Actions -> Publish**.
+2. While editing or viewing an individual file, open the **File** menu and
+   choose **Publish File**.
 3. Open **Settings** and use the **Publish** section to create or manage
    shares.
 
 The file explorer shows a **Published** tag for paths that are already shared.
 Click that tag to open the publish configuration for that path.
+
+An exact-file share exposes only that file. It does not allow viewers to list
+the containing folder or read sibling files. A folder share exposes that folder
+and its descendants, but nothing above or beside it.
 
 ## Publish the whole project
 
@@ -247,6 +351,10 @@ new project and copy the selected content there. Copying uses the same
 path-restricted policy as viewing. Whole-project copies exclude private and
 internal paths.
 
+Copying an exact-file share preserves its filename. Copying a folder share
+creates a folder named after the share slug, copies the shared contents into
+it, and opens the destination project inside that new folder.
+
 When the source and destination projects can be placed on the same host, copies
 are usually fast. Cross-host or cross-bay copies can take longer, and CoCalc
 shows progress while the copy is running.
@@ -266,6 +374,12 @@ content, disable the share immediately and rotate any exposed credentials.
 
 Public shares are not available while the source project is archived. Restore
 or restart the project before expecting published links to work again.
+
+Legacy publications retained from cocalc.com appear under **Account Settings
+-> Public Shares** for accounts linked through legacy migration. They become
+available only after a collaborator explicitly restores the corresponding
+project. Historically disabled publications and unsupported legacy proxy URLs
+are not migrated.
 
 ## Manage all shares
 

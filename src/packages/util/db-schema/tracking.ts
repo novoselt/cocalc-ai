@@ -15,6 +15,12 @@ Table({
   rules: {
     primary_key: ["token"],
     pg_indexes: ["token", "data_time"],
+    pg_custom_indexes: [
+      {
+        name: "analytics_account_growth_idx",
+        query: "(account_id, data_time) WHERE account_id IS NOT NULL",
+      },
+    ],
     durability: "soft",
     user_query: {
       get: {

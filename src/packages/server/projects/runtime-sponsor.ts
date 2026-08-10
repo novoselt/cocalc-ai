@@ -8,6 +8,7 @@ export type ProjectUsers = Record<string, { group?: string }> | null;
 export interface RuntimeSponsorProjectFields {
   runtime_sponsor_account_id?: string | null;
   usage_account_id?: string | null;
+  course?: { type?: string; account_id?: string } | null;
   allow_collaborator_starts_using_sponsor?: boolean | null;
   autostart_enabled?: boolean | null;
   users?: ProjectUsers;
@@ -44,6 +45,15 @@ export function resolveRuntimeSponsorAccountId(
   const usageSponsor = nonemptyString(project.usage_account_id);
   if (isProjectCollaborator(project.users, usageSponsor)) {
     return usageSponsor;
+  }
+  // Instructors initially own course-created projects, but each joined student
+  // must consume their own runtime slot and runtime quota.
+  const courseSponsor =
+    project.course?.type === "student"
+      ? nonemptyString(project.course.account_id)
+      : undefined;
+  if (isProjectCollaborator(project.users, courseSponsor)) {
+    return courseSponsor;
   }
   return getProjectOwnerAccountId(project.users);
 }

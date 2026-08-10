@@ -12,16 +12,16 @@ export const CODEX_USAGE_URL = "https://chatgpt.com/codex/settings/usage";
 export const CODEX_USAGE_LABEL = "Open ChatGPT Codex Usage";
 
 export const CODEX_USAGE_STATUS_TIMEOUT_MS = 60_000;
-const CODEX_USAGE_STATUS_CACHE_PREFIX = "cocalc.chat.codexUsageStatusCache.v1";
+const CODEX_USAGE_STATUS_CACHE_PREFIX = "cocalc.chat.codexUsageStatusCache.v2";
 
 export interface CachedCodexUsageStatus {
   status: CodexUsageStatusInfo;
   cachedAt: number;
 }
 
-function getCodexUsageStatusCacheKey(projectId?: string): string {
+function getCodexUsageStatusCacheKey(accountId?: string): string {
   return `${CODEX_USAGE_STATUS_CACHE_PREFIX}:${encodeURIComponent(
-    projectId || "account",
+    accountId || "account",
   )}`;
 }
 
@@ -50,6 +50,22 @@ function getCodexRateLimit(status?: CodexUsageStatusInfo): any {
   );
 }
 
+export function getChatGptAccountInfo(
+  status?: CodexUsageStatusInfo,
+): { email?: string; planType?: string } | undefined {
+  const account = (status?.account as any)?.account;
+  if (account?.type !== "chatgpt") return undefined;
+  return {
+    email: typeof account.email === "string" ? account.email : undefined,
+    planType:
+      typeof account.planType === "string"
+        ? account.planType
+        : typeof account.plan_type === "string"
+          ? account.plan_type
+          : undefined,
+  };
+}
+
 export function hasCodexUsageRateLimitWindows(
   status?: CodexUsageStatusInfo,
 ): boolean {
@@ -58,13 +74,13 @@ export function hasCodexUsageRateLimitWindows(
 }
 
 export function readCachedCodexUsageStatus({
-  projectId,
+  accountId,
 }: {
-  projectId?: string;
+  accountId?: string;
 }): CachedCodexUsageStatus | undefined {
   try {
     const raw = globalThis.localStorage?.getItem(
-      getCodexUsageStatusCacheKey(projectId),
+      getCodexUsageStatusCacheKey(accountId),
     );
     if (!raw) return undefined;
     const parsed = JSON.parse(raw);
@@ -82,16 +98,16 @@ export function readCachedCodexUsageStatus({
 }
 
 export function writeCachedCodexUsageStatus({
-  projectId,
+  accountId,
   status,
 }: {
-  projectId?: string;
+  accountId?: string;
   status: CodexUsageStatusInfo;
 }): void {
   if (!hasCodexUsageRateLimitWindows(status)) return;
   try {
     globalThis.localStorage?.setItem(
-      getCodexUsageStatusCacheKey(projectId),
+      getCodexUsageStatusCacheKey(accountId),
       JSON.stringify({
         version: 1,
         cachedAt: Date.now(),

@@ -20,6 +20,10 @@ export type CodexSiteFundedTurnRuntime = {
     status: "committed" | "interrupted" | "failed" | "released";
     outcome?: string;
   }) => Promise<void>;
+  beginTurn: (
+    request: CodexSiteFundedTurnRequest,
+  ) => Promise<CodexSiteFundedTurnRuntime>;
+  close: () => Promise<void>;
 };
 
 export type CodexProjectSpawnOptions = {
@@ -79,6 +83,7 @@ export type CodexProjectSpawner = {
     proc: ChildProcess;
     cmd: string;
     args: string[];
+    logArgs?: string;
     cwd?: string;
     authSource?: string;
     containerPathMap?: CodexProjectContainerPathMap;

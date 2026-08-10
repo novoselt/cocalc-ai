@@ -66,5 +66,10 @@ export interface AcpAgent {
   evaluate(request: AcpEvaluateRequest): Promise<void>;
   steer?(threadId: string, request: AcpSteerRequest): Promise<AcpSteerResult>;
   hasRunningTurn?(threadId: string): boolean;
+  getRuntimeStatus?(): {
+    liveRuntimes: number;
+    activeTurns: number;
+    backgroundTerminals: number;
+  };
   dispose?(): Promise<void>;
 }

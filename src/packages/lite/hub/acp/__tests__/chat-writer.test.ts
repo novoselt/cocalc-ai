@@ -2208,6 +2208,36 @@ describe("ChatStreamWriter", () => {
     (writer as any).dispose?.(true);
   });
 
+  it("heartbeats a silent turn lease while the agent is preparing", async () => {
+    jest.useFakeTimers();
+    const { syncdb } = makeFakeSyncDB();
+    const writer: any = new ChatStreamWriter({
+      metadata: baseMetadata,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      sessionKey: "thread-seed",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+    });
+
+    try {
+      (turns.heartbeatAcpTurnLease as jest.Mock).mockClear();
+      expect(turns.heartbeatAcpTurnLease).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(2_000);
+      expect(turns.heartbeatAcpTurnLease).toHaveBeenCalledTimes(1);
+
+      writer.dispose(true);
+      jest.advanceTimersByTime(10_000);
+      expect(turns.heartbeatAcpTurnLease).toHaveBeenCalledTimes(1);
+    } finally {
+      writer.dispose(true);
+      jest.useRealTimers();
+    }
+  });
+
   it("marks lease aborted when disposed before terminal payload", async () => {
     const { syncdb } = makeFakeSyncDB();
     const writer: any = new ChatStreamWriter({

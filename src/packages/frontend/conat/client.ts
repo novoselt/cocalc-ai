@@ -73,6 +73,7 @@ import {
   waitForCompletion as waitForLroCompletion,
 } from "@cocalc/conat/lro/client";
 import { terminalClient } from "@cocalc/conat/project/terminal";
+import type { SocketLifecycleReporter } from "@cocalc/conat/socket/util";
 import { lite } from "@cocalc/frontend/lite";
 import type {
   LroEvent,
@@ -2885,31 +2886,32 @@ export class ConatClient extends EventEmitter {
       return info?.user ? inboxPrefix(info?.user) : undefined;
     };
 
-    client.on("info", (info) => {
-      if (client.info?.user?.account_id) {
-        reconnectDebugLog("Connected as ", JSON.stringify(client.info?.user));
+    let lastHandledInfo: typeof client.info;
+    const handleInfo = (info: NonNullable<typeof client.info>) => {
+      if (info === lastHandledInfo) {
+        return;
+      }
+      lastHandledInfo = info;
+      const account_id = info.user?.account_id;
+      if (account_id) {
+        reconnectDebugLog("Connected as ", JSON.stringify(info.user));
         this.signedIn({
-          account_id: info.user.account_id,
+          account_id,
           hub: info.id ?? "",
         });
         const browserSessionAction = isExamMode()
           ? this.browserSessionAutomation.stop()
-          : this.browserSessionAutomation.start(info.user.account_id);
-        void browserSessionAction.catch((err) =>
+          : this.browserSessionAutomation.start(account_id);
+        void Promise.resolve(browserSessionAction).catch((err) =>
           console.warn(`failed to start browser session automation: ${err}`),
         );
         const cookie = Cookies.get(ACCOUNT_ID_COOKIE);
-        if (
-          !lite &&
-          !isExamMode() &&
-          cookie &&
-          cookie != client.info.user.account_id
-        ) {
+        if (!lite && !isExamMode() && cookie && cookie != account_id) {
           // make sure account_id cookie is set to the actual account we're
           // signed in as, then refresh since some things are going to be
           // broken otherwise. To test this use dev tools and just change the account_id
           // cookies value to something random.
-          Cookies.set(ACCOUNT_ID_COOKIE, client.info.user.account_id);
+          Cookies.set(ACCOUNT_ID_COOKIE, account_id);
           // and we're out of here:
           const wait = 5000;
           console.warn(`COOKIE ISSUE -- RELOAD IN ${wait / 1000} SECONDS...`, {
@@ -2922,12 +2924,12 @@ export class ConatClient extends EventEmitter {
             location.reload();
           }, 5000);
         }
-      } else if (lite && client.info?.user?.project_id) {
+      } else if (lite && info.user?.project_id) {
         // we *also* sign in as the PROJECT in lite mode.
         reconnectDebugLog("lite: created project client");
       } else {
-        console.log("Sign in failed -- ", client.info);
-        const error = client.info?.user?.error ?? "Failed to sign in.";
+        console.log("Sign in failed -- ", info);
+        const error = info.user?.error ?? "Failed to sign in.";
         const managedEgressBlocked = parseManagedEgressBlockedError(error);
         if (managedEgressBlocked != null) {
           this.managedEgressBlocked(error);
@@ -2950,7 +2952,14 @@ export class ConatClient extends EventEmitter {
         }
         this.standby();
       }
-    });
+    };
+    client.on("info", handleInfo);
+    // Another startup consumer can create the synchronous Conat client while
+    // control-plane discovery is still in flight. In that case its initial
+    // identity may arrive before this wrapper installs the listener.
+    if (client.info != null) {
+      handleInfo(client.info);
+    }
   };
 
   public signedInMessage?: { account_id: string; hub: string };
@@ -3732,14 +3741,17 @@ export class ConatClient extends EventEmitter {
     scope_id?: string;
     timeout_ms?: number;
     poll_ms?: number;
+    getSummary?: () => Promise<LroSummary | null | undefined>;
     onProgress?: (event: Extract<LroEvent, { type: "progress" }>) => void;
     onSummary?: (summary: LroSummary) => void;
   }) => {
     return waitForLroCompletion({
       client: this.conat(),
-      getSummary: opts.op_id
-        ? async () => await this.hub.lro.get({ op_id: opts.op_id! })
-        : undefined,
+      getSummary:
+        opts.getSummary ??
+        (opts.op_id
+          ? async () => await this.hub.lro.get({ op_id: opts.op_id! })
+          : undefined),
       ...opts,
     });
   };
@@ -3748,6 +3760,7 @@ export class ConatClient extends EventEmitter {
     project_id: string;
     getSize?: () => undefined | { rows: number; cols: number };
     reconnection?: boolean;
+    lifecycleReporter?: SocketLifecycleReporter;
   }) => {
     const routing = this.getProjectRoutingInfo(opts.project_id);
     if (!routing) {

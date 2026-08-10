@@ -5,7 +5,6 @@
 
 import { Alert, Button, Checkbox, Input, Modal, Space } from "antd";
 import { useEffect, useMemo, useState } from "react";
-import { Icon } from "@cocalc/frontend/components";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
@@ -14,9 +13,10 @@ import type { ProviderSetupChallenge } from "@cocalc/conat/hub/api/system";
 interface WizardProps {
   open: boolean;
   onClose: () => void;
-  onApplyJson: (json: string) => void;
+  onSave: (settings: Record<string, string>) => Promise<void>;
   currentJson?: string;
   domainName?: string;
+  computeVm?: boolean;
 }
 
 const START_MARKER = "=== COCALC GCP CONFIG START ===";
@@ -65,6 +65,7 @@ function normalizeServiceAccountJson(input: string): any | null {
   const raw = extractJsonBlock(input);
   if (!raw) return null;
   let candidate =
+    raw.compute_vm_gcp_service_account_json ??
     raw.google_cloud_service_account_json ??
     raw.service_account_json ??
     raw.service_account ??
@@ -83,15 +84,20 @@ function normalizeServiceAccountJson(input: string): any | null {
 export default function GcpServiceAccountWizard({
   open,
   onClose,
-  onApplyJson,
+  onSave,
   currentJson,
   domainName,
+  computeVm = false,
 }: WizardProps) {
+  const defaultServiceAccountName = computeVm
+    ? "cocalc-compute-vm"
+    : "cocalc-host";
   const [projectId, setProjectId] = useState("");
-  const [serviceAccountName, setServiceAccountName] = useState("cocalc-host");
+  const [serviceAccountName, setServiceAccountName] = useState(
+    defaultServiceAccountName,
+  );
   const [gcloudReady, setGcloudReady] = useState(false);
   const [jsonInput, setJsonInput] = useState("");
-  const [jsonNotice, setJsonNotice] = useState("");
   const [challenge, setChallenge] = useState<
     (ProviderSetupChallenge & { token?: string }) | null
   >(null);
@@ -100,18 +106,21 @@ export default function GcpServiceAccountWizard({
   );
   const [challengeError, setChallengeError] = useState("");
   const [challengeLoading, setChallengeLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setProjectId("");
-      setServiceAccountName("cocalc-host");
+      setServiceAccountName(defaultServiceAccountName);
       setGcloudReady(false);
       setJsonInput("");
-      setJsonNotice("");
       setChallenge(null);
       setUseDirectUpload(defaultUseDirectUpload());
       setChallengeError("");
       setChallengeLoading(false);
+      setSaving(false);
+      setCleanupOpen(false);
       return;
     }
     const parsed = normalizeServiceAccountJson(currentJson ?? "");
@@ -119,15 +128,14 @@ export default function GcpServiceAccountWizard({
       setProjectId(`${parsed.project_id}`);
     }
     if (parsed?.client_email) {
-      const name = `${parsed.client_email}`.split("@")[0];
+      const name = `${parsed.client_email}`.split("@")[0].trim();
       if (name) setServiceAccountName(name);
     }
-  }, [open, currentJson]);
+  }, [open, currentJson, defaultServiceAccountName]);
 
   const trimmedProject = projectId.trim();
-  const trimmedServiceAccount = serviceAccountName.trim() || "cocalc-host";
   const serviceAccountEmail = trimmedProject
-    ? `${trimmedServiceAccount}@${trimmedProject}.iam.gserviceaccount.com`
+    ? `${serviceAccountName}@${trimmedProject}.iam.gserviceaccount.com`
     : "";
 
   const scriptUrl = useMemo(() => {
@@ -137,13 +145,13 @@ export default function GcpServiceAccountWizard({
       const withScheme = /^https?:\/\//.test(trimmedDomain)
         ? trimmedDomain
         : `https://${trimmedDomain}`;
-      return `${withScheme.replace(/\/+$/, "")}${basePath}/project-host/gcp-setup.sh`;
+      return `${withScheme.replace(/\/+$/, "")}${basePath}/project-host/${computeVm ? "compute-vm-setup.sh" : "gcp-setup.sh"}`;
     }
     if (typeof window !== "undefined") {
-      return `${window.location.origin}${basePath}/project-host/gcp-setup.sh`;
+      return `${window.location.origin}${basePath}/project-host/${computeVm ? "compute-vm-setup.sh" : "gcp-setup.sh"}`;
     }
-    return `http://localhost:9001${basePath}/project-host/gcp-setup.sh`;
-  }, [domainName]);
+    return `http://localhost:9001${basePath}/project-host/${computeVm ? "compute-vm-setup.sh" : "gcp-setup.sh"}`;
+  }, [computeVm, domainName]);
 
   const scriptCommand = useMemo(() => {
     if (!scriptUrl) {
@@ -160,35 +168,31 @@ export default function GcpServiceAccountWizard({
     if (!trimmedProject) {
       return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}bash`;
     }
-    return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}PROJECT_ID=\"${trimmedProject}\" SA_NAME=\"${trimmedServiceAccount}\" bash`;
+    return `curl -fsSL \"${scriptUrl}\" | ${uploadEnv}PROJECT_ID=\"${trimmedProject}\" SA_NAME=\"${serviceAccountName}\" bash`;
   }, [
     scriptUrl,
     trimmedProject,
-    trimmedServiceAccount,
+    serviceAccountName,
     challenge,
     useDirectUpload,
+    computeVm,
   ]);
 
   const scriptMarkdown = useMemo(
-    () =>
-      `\`\`\`sh\n${scriptCommand}\n\`\`\`\n\nReview the script here: ${
-        scriptUrl
-          ? `[${scriptUrl}](${scriptUrl})`
-          : "<software-base-url>/gcp/gcp-setup.sh"
-      }\n`,
-    [scriptCommand, scriptUrl],
+    () => `\`\`\`sh\n${scriptCommand}\n\`\`\``,
+    [scriptCommand],
   );
 
   const cleanupBlock = useMemo(() => {
     if (!trimmedProject) return "";
     const lines = [
       `PROJECT_ID="${trimmedProject}"`,
-      `SA_EMAIL="${trimmedServiceAccount}@${trimmedProject}.iam.gserviceaccount.com"`,
+      `SA_EMAIL="${serviceAccountEmail}"`,
       "",
       'gcloud iam service-accounts delete "$SA_EMAIL" --project "$PROJECT_ID"',
     ];
     return `\`\`\`sh\n${lines.join("\n")}\n\`\`\``;
-  }, [trimmedProject, trimmedServiceAccount]);
+  }, [serviceAccountEmail, trimmedProject]);
 
   const parsedJson = normalizeServiceAccountJson(jsonInput.trim());
   const uploadedJson = normalizeServiceAccountJson(
@@ -209,7 +213,6 @@ export default function GcpServiceAccountWizard({
           { provider: "gcp" },
         );
       setChallenge(next);
-      setJsonNotice("Direct upload challenge created.");
     } catch (err) {
       setChallengeError(`${err}`);
     } finally {
@@ -245,70 +248,113 @@ export default function GcpServiceAccountWizard({
   }, [useDirectUpload, challenge?.id, challenge?.status]);
 
   useEffect(() => {
-    if (!open || !useDirectUpload || challenge?.id || challengeLoading) return;
+    if (
+      !open ||
+      !gcloudReady ||
+      !trimmedProject ||
+      !useDirectUpload ||
+      challenge?.id ||
+      challengeError ||
+      challengeLoading
+    ) {
+      return;
+    }
     void startUploadChallenge();
-  }, [open, useDirectUpload, challenge?.id, challengeLoading]);
+  }, [
+    open,
+    gcloudReady,
+    trimmedProject,
+    useDirectUpload,
+    challenge?.id,
+    challengeError,
+    challengeLoading,
+  ]);
 
-  async function copyCommands() {
-    if (!scriptCommand) return;
-    try {
-      await navigator.clipboard.writeText(scriptCommand);
-      setJsonNotice("Commands copied.");
-    } catch {
-      setJsonNotice("Copy failed; please copy manually.");
-    }
-  }
-
-  async function copyCleanup() {
-    if (!trimmedProject) return;
-    try {
-      const raw = cleanupBlock.replace(/^```sh\n/, "").replace(/\n```$/, "");
-      await navigator.clipboard.writeText(raw);
-      setJsonNotice("Cleanup command copied.");
-    } catch {
-      setJsonNotice("Copy failed; please copy manually.");
-    }
-  }
-
-  function applyJson() {
-    if (!jsonValid) return;
-    onApplyJson(JSON.stringify(parsedJson, null, 2));
-    setJsonNotice("Service account JSON applied to the form.");
-    onClose();
-  }
-
-  async function applyUploadedJson() {
-    if (!uploadedJsonValid) return;
-    onApplyJson(JSON.stringify(uploadedJson, null, 2));
+  async function restartUploadChallenge() {
+    setChallengeLoading(true);
+    setChallengeError("");
     if (challenge?.id) {
       try {
         await webapp_client.conat_client.hub.system.clearProviderSetupChallenge(
           { id: challenge.id },
         );
       } catch {
-        // Non-fatal: settings are applied and expired challenge cleanup will
-        // remove the temporary payload later.
+        // Expired challenges are also removed by routine cleanup.
       }
     }
-    setJsonNotice("Uploaded service account JSON applied to the form.");
-    onClose();
+    setChallenge(null);
+    setChallengeLoading(false);
   }
+
+  async function saveChanges() {
+    const serviceAccount = useDirectUpload ? uploadedJson : parsedJson;
+    if (!serviceAccount) return;
+    const payload = useDirectUpload
+      ? challenge?.payload
+      : extractJsonBlock(jsonInput);
+    const settings: Record<string, string> = {
+      [computeVm
+        ? "compute_vm_gcp_service_account_json"
+        : "google_cloud_service_account_json"]: JSON.stringify(
+        serviceAccount,
+        null,
+        2,
+      ),
+    };
+    if (computeVm) {
+      settings.compute_vm_gcp_network =
+        `${payload?.compute_vm_gcp_network ?? ""}`.trim() ||
+        `projects/${serviceAccount.project_id}/global/networks/cocalc-compute-vm`;
+    }
+    setSaving(true);
+    setChallengeError("");
+    try {
+      await onSave(settings);
+      if (challenge?.id) {
+        try {
+          await webapp_client.conat_client.hub.system.clearProviderSetupChallenge(
+            { id: challenge.id },
+          );
+        } catch {
+          // Settings are saved; expired challenge cleanup removes the payload.
+        }
+      }
+      onClose();
+    } catch (err) {
+      setChallengeError(`${err}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const configurationValid = useDirectUpload ? uploadedJsonValid : jsonValid;
 
   return (
     <Modal
       open={open}
       onCancel={onClose}
-      onOk={onClose}
-      okText="Close"
-      title="Google Cloud Service Account JSON Wizard (gcloud)"
+      onOk={() => void saveChanges()}
+      okText="Save Changes"
+      okButtonProps={{ disabled: !configurationValid }}
+      confirmLoading={saving}
+      cancelText="Cancel"
+      title={
+        computeVm
+          ? "Connect a dedicated GCP project for Managed Compute VMs"
+          : "Connect a dedicated GCP project"
+      }
       width={920}
     >
       <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         <Alert
           type="info"
           showIcon
-          title="This wizard generates a service account JSON key using gcloud."
-          description="Advanced users can skip this and paste JSON directly into the setting."
+          title="Use a GCP project dedicated exclusively to this CoCalc site."
+          description={
+            computeVm
+              ? "This project should only run Managed Compute VMs for this site. Do not share it with project hosts or unrelated workloads. CoCalc creates the service account with a standard name; you do not need to choose one."
+              : "Do not share this project with another CoCalc site or unrelated workloads. CoCalc creates the service account with a standard name; you do not need to choose one."
+          }
         />
         <div>
           <strong>Step 1 — Project ID</strong>
@@ -341,183 +387,138 @@ export default function GcpServiceAccountWizard({
         {gcloudReady ? (
           <>
             <div>
-              <strong>Step 3 — Name your service account</strong>
-              <div style={{ marginTop: "6px", color: "#666" }}>
-                Service account email:{" "}
-                {serviceAccountEmail || "(enter project id first)"}
-              </div>
-              <Input
-                style={{ marginTop: "8px" }}
-                placeholder="service account name (no spaces)"
-                value={serviceAccountName}
-                onChange={(e) => setServiceAccountName(e.target.value)}
-              />
-            </div>
-            <div>
-              <strong>
-                Step 4 — Run this script to create your service account
-              </strong>
-              <div style={{ marginTop: "8px" }}>
-                <Button
-                  size="small"
-                  icon={<Icon name="cloud-upload" />}
-                  onClick={() => setUseDirectUpload(!useDirectUpload)}
-                >
-                  {useDirectUpload
-                    ? "Use paste instead of direct upload"
-                    : "Use direct upload instead of paste"}
-                </Button>
-                {useDirectUpload && challenge ? (
-                  <Button
-                    size="small"
-                    style={{ marginLeft: "8px" }}
-                    loading={challengeLoading}
-                    onClick={refreshUploadChallenge}
-                  >
-                    Check upload
-                  </Button>
-                ) : null}
-              </div>
-              <div style={{ marginTop: "6px", color: "#666" }}>
-                {useDirectUpload
-                  ? "Direct upload is best when this admin page is publicly reachable from Cloud Shell."
-                  : "Paste mode is safest for localhost because Cloud Shell cannot usually reach your local browser origin."}
-              </div>
+              <strong>Step 3 — Run this command in your gcloud terminal</strong>
               {challengeError ? (
                 <Alert
                   type="warning"
                   showIcon
                   style={{ marginTop: "8px" }}
                   title="Direct upload setup error"
-                  description={challengeError}
+                  description={
+                    <Space orientation="vertical" size={4}>
+                      <span>{challengeError}</span>
+                      {!challenge?.id ? (
+                        <Button
+                          size="small"
+                          loading={challengeLoading}
+                          onClick={() => void restartUploadChallenge()}
+                        >
+                          Try again
+                        </Button>
+                      ) : null}
+                    </Space>
+                  }
                 />
               ) : null}
-              {useDirectUpload &&
-              challenge?.status === "uploaded" &&
-              uploadedJsonValid ? (
+              {useDirectUpload ? (
+                challenge?.id ? (
+                  <div style={{ marginTop: "8px" }}>
+                    <StaticMarkdown value={scriptMarkdown} />
+                  </div>
+                ) : (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginTop: "8px" }}
+                    title="Preparing a secure setup command..."
+                  />
+                )
+              ) : (
+                <div style={{ marginTop: "8px" }}>
+                  <StaticMarkdown value={scriptMarkdown} />
+                  <Input.TextArea
+                    placeholder="Paste the output from the script (or just the JSON key)"
+                    value={jsonInput}
+                    onChange={(e) => setJsonInput(e.target.value)}
+                    autoSize={{ minRows: 6, maxRows: 10 }}
+                  />
+                  {jsonInput.trim() && !jsonValid ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginTop: "8px" }}
+                      title="This does not look like a service account key JSON."
+                    />
+                  ) : null}
+                  {jsonValid ? (
+                    <Alert
+                      type="success"
+                      showIcon
+                      style={{ marginTop: "8px" }}
+                      title={`Detected service account: ${jsonEmail}`}
+                      description={`Project ID: ${jsonProjectId}`}
+                    />
+                  ) : null}
+                </div>
+              )}
+              {useDirectUpload && challenge?.status === "pending" ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginTop: "8px" }}
+                  title="Waiting for setup to finish..."
+                  description={
+                    computeVm
+                      ? "The first run creates regional networking and may take several minutes. This page will update automatically."
+                      : "This page will update automatically when the command uploads its configuration."
+                  }
+                />
+              ) : null}
+              {useDirectUpload && uploadedJsonValid ? (
                 <Alert
                   type="success"
                   showIcon
                   style={{ marginTop: "8px" }}
-                  title="Configuration uploaded."
+                  title="Setup finished successfully"
+                  description={`Ready to save ${uploadedJson.client_email}.`}
+                />
+              ) : null}
+              {useDirectUpload && challenge?.status === "expired" ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: "8px" }}
+                  title="This setup command expired"
                   description={
-                    <div>
-                      <div>
-                        <b>Project:</b> {uploadedJson.project_id}
-                      </div>
-                      <div>
-                        <b>Service account:</b> {uploadedJson.client_email}
-                      </div>
-                      <Button
-                        type="primary"
-                        style={{ marginTop: "8px" }}
-                        onClick={applyUploadedJson}
-                      >
-                        Apply Uploaded JSON
-                      </Button>
-                    </div>
+                    <Button
+                      size="small"
+                      loading={challengeLoading}
+                      onClick={() => void restartUploadChallenge()}
+                    >
+                      Generate a new command
+                    </Button>
                   }
                 />
               ) : null}
-              <div style={{ marginTop: "8px" }}>
-                <StaticMarkdown value={scriptMarkdown} />
-              </div>
-              <Button
-                icon={<Icon name="copy" />}
-                onClick={copyCommands}
-                disabled={!gcloudReady}
-              >
-                Copy Commands
+            </div>
+            <div style={{ marginTop: "12px" }}>
+              <Button danger size="small" onClick={() => setCleanupOpen(true)}>
+                Delete Service Account...
               </Button>
             </div>
           </>
         ) : null}
-        {gcloudReady ? (
-          <div>
-            <strong>
-              Step 5 —{" "}
-              {useDirectUpload
-                ? "Wait for direct upload"
-                : "Paste the output here"}
-            </strong>
-            {useDirectUpload ? (
-              <Alert
-                type={uploadedJsonValid ? "success" : "info"}
-                showIcon
-                style={{ marginTop: "8px" }}
-                title={
-                  uploadedJsonValid
-                    ? "Uploaded service account JSON is ready."
-                    : "Run the script, then wait for the upload."
-                }
-                description={
-                  uploadedJsonValid
-                    ? `Detected ${uploadedJson.client_email}.`
-                    : "If the upload does not appear automatically, use Check upload above."
-                }
-              />
-            ) : (
-              <>
-                <Input.TextArea
-                  placeholder="Paste the output from the script (or just the JSON key)"
-                  value={jsonInput}
-                  onChange={(e) => setJsonInput(e.target.value)}
-                  autoSize={{ minRows: 6, maxRows: 10 }}
-                />
-                {jsonInput.trim() && !jsonValid ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginTop: "8px" }}
-                    title="This does not look like a service account key JSON."
-                  />
-                ) : null}
-                {jsonValid ? (
-                  <Alert
-                    type="success"
-                    showIcon
-                    style={{ marginTop: "8px" }}
-                    title={`Detected service account: ${jsonEmail}`}
-                    description={`Project ID: ${jsonProjectId}`}
-                  />
-                ) : null}
-              </>
-            )}
-            {!useDirectUpload ? (
-              <Button
-                type="primary"
-                style={{ marginTop: "8px" }}
-                disabled={!jsonValid}
-                onClick={applyJson}
-              >
-                Apply Pasted JSON
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-        {gcloudReady ? (
-          <div>
-            <strong>Cleanup if needed</strong>
-            <div style={{ marginTop: "6px", color: "#666" }}>
-              If you created the wrong service account, remove it in Cloud
-              Shell:
-            </div>
-            <StaticMarkdown
-              value={cleanupBlock || "Enter a project id first."}
-            />
-            <Button
-              icon={<Icon name="copy" />}
-              onClick={copyCleanup}
-              disabled={!trimmedProject}
-            >
-              Copy Cleanup Command
-            </Button>
-          </div>
-        ) : null}
-        {jsonNotice ? (
-          <Alert type="success" showIcon title={jsonNotice} />
-        ) : null}
       </Space>
+      <Modal
+        open={cleanupOpen}
+        onCancel={() => setCleanupOpen(false)}
+        onOk={() => setCleanupOpen(false)}
+        okText="Close"
+        cancelButtonProps={{ style: { display: "none" } }}
+        title="Delete the GCP service account"
+      >
+        <Alert
+          type="warning"
+          showIcon
+          title="Use this only to undo the setup"
+          description="Deleting the service account immediately prevents CoCalc from managing resources in this GCP project. Existing VMs, disks, and other cloud resources are not deleted automatically."
+        />
+        <div style={{ marginTop: "12px" }}>
+          <StaticMarkdown
+            value={cleanupBlock || "Enter a GCP project ID first."}
+          />
+        </div>
+      </Modal>
     </Modal>
   );
 }

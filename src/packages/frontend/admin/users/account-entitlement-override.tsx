@@ -664,6 +664,20 @@ function describeOverride(override?: AccountEntitlementOverride): string[] {
       }`,
     );
   }
+  if (override.features?.bandwidth_relay_abuse_exempt != null) {
+    effects.push(
+      `Bandwidth relay enforcement: ${
+        override.features.bandwidth_relay_abuse_exempt ? "exempt" : "enforce"
+      }`,
+    );
+  }
+  if (override.features?.cryptomining_abuse_exempt != null) {
+    effects.push(
+      `Compute abuse enforcement: ${
+        override.features.cryptomining_abuse_exempt ? "exempt" : "enforce"
+      }`,
+    );
+  }
   if (override.dedicated_hosts?.funding_mode) {
     effects.push(
       `Account host billing mode: ${override.dedicated_hosts.funding_mode.value}`,
@@ -708,6 +722,18 @@ function resetFormFields(
         : override.features.exam_mode
           ? "true"
           : "false",
+    bandwidth_relay_abuse_exempt:
+      override?.features?.bandwidth_relay_abuse_exempt == null
+        ? "inherit"
+        : override.features.bandwidth_relay_abuse_exempt
+          ? "true"
+          : "false",
+    cryptomining_abuse_exempt:
+      override?.features?.cryptomining_abuse_exempt == null
+        ? "inherit"
+        : override.features.cryptomining_abuse_exempt
+          ? "true"
+          : "false",
   };
   for (const field of NUMERIC_FIELDS) {
     applyRuleToFields(values, field, getNumericRule(override, field));
@@ -731,6 +757,22 @@ export function buildOverride(values: Record<string, any>) {
   if (values.exam_mode === "true" || values.exam_mode === "false") {
     override.features ??= {};
     override.features.exam_mode = values.exam_mode === "true";
+  }
+  if (
+    values.bandwidth_relay_abuse_exempt === "true" ||
+    values.bandwidth_relay_abuse_exempt === "false"
+  ) {
+    override.features ??= {};
+    override.features.bandwidth_relay_abuse_exempt =
+      values.bandwidth_relay_abuse_exempt === "true";
+  }
+  if (
+    values.cryptomining_abuse_exempt === "true" ||
+    values.cryptomining_abuse_exempt === "false"
+  ) {
+    override.features ??= {};
+    override.features.cryptomining_abuse_exempt =
+      values.cryptomining_abuse_exempt === "true";
   }
   return override;
 }
@@ -904,7 +946,7 @@ function NumericFieldGroup({
   form: FormInstance;
 }) {
   return (
-    <Space direction="vertical" size="small" style={{ width: "100%" }}>
+    <Space vertical size="small" style={{ width: "100%" }}>
       <OverrideGridHeader />
       {fields.map((field) => (
         <NumericRuleEditor
@@ -1046,7 +1088,7 @@ export function AccountEntitlementOverridePanel({
         {loading ? (
           <Spin />
         ) : (
-          <Space direction="vertical" style={{ width: "100%" }} size="middle">
+          <Space vertical style={{ width: "100%" }} size="middle">
             {error && (
               <ErrorDisplay error={error} onClose={() => setError("")} />
             )}
@@ -1092,6 +1134,9 @@ export function AccountEntitlementOverridePanel({
               initialValues={{
                 enabled: true,
                 create_hosts: "inherit",
+                exam_mode: "inherit",
+                bandwidth_relay_abuse_exempt: "inherit",
+                cryptomining_abuse_exempt: "inherit",
               }}
             >
               <Form.Item label="Override status" name="enabled">
@@ -1128,11 +1173,7 @@ export function AccountEntitlementOverridePanel({
                   />
                 </Collapse.Panel>
                 <Collapse.Panel header="Storage and egress" key="egress">
-                  <Space
-                    direction="vertical"
-                    size="small"
-                    style={{ width: "100%" }}
-                  >
+                  <Space vertical size="small" style={{ width: "100%" }}>
                     <OverrideGridHeader />
                     {NUMERIC_FIELDS.filter((field) =>
                       STORAGE_EGRESS_FIELD_IDS.has(field.id),
@@ -1144,6 +1185,60 @@ export function AccountEntitlementOverridePanel({
                         form={form}
                       />
                     ))}
+                  </Space>
+                </Collapse.Panel>
+                <Collapse.Panel
+                  header="Abuse enforcement exemptions"
+                  key="abuse"
+                >
+                  <Space vertical size="small" style={{ width: "100%" }}>
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="Exemptions disable automatic stops and bans"
+                      description="Use exemptions only for reviewed legitimate workloads, provide an audit reason, and prefer an expiration. Usage accounting and telemetry remain enabled."
+                    />
+                    <OverrideGridHeader />
+                    <SelectOverrideEditor
+                      label={
+                        MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS.features
+                          .bandwidth_relay_abuse_exempt.label
+                      }
+                      description={
+                        MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS.features
+                          .bandwidth_relay_abuse_exempt.adminDescription
+                      }
+                      current={
+                        details?.selected.entitlements.features
+                          ?.bandwidth_relay_abuse_exempt
+                      }
+                      name="bandwidth_relay_abuse_exempt"
+                      options={[
+                        { value: "inherit", label: "No override" },
+                        { value: "true", label: "Exempt" },
+                        { value: "false", label: "Enforce" },
+                      ]}
+                    />
+                    <SelectOverrideEditor
+                      label={
+                        MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS.features
+                          .cryptomining_abuse_exempt.label
+                      }
+                      description={
+                        MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS.features
+                          .cryptomining_abuse_exempt.adminDescription
+                      }
+                      current={
+                        details?.selected.entitlements.features
+                          ?.cryptomining_abuse_exempt
+                      }
+                      name="cryptomining_abuse_exempt"
+                      options={[
+                        { value: "inherit", label: "No override" },
+                        { value: "true", label: "Exempt" },
+                        { value: "false", label: "Enforce" },
+                      ]}
+                    />
                   </Space>
                 </Collapse.Panel>
                 <Collapse.Panel header="AI" key="ai">
@@ -1183,11 +1278,7 @@ export function AccountEntitlementOverridePanel({
                   />
                 </Collapse.Panel>
                 <Collapse.Panel header="Dedicated hosts" key="hosts">
-                  <Space
-                    direction="vertical"
-                    size="small"
-                    style={{ width: "100%" }}
-                  >
+                  <Space vertical size="small" style={{ width: "100%" }}>
                     <OverrideGridHeader />
                     <SelectOverrideEditor
                       label="Dedicated host creation"
@@ -1204,7 +1295,7 @@ export function AccountEntitlementOverridePanel({
                     />
                     <SelectOverrideEditor
                       label="Exam scratchpad hosts"
-                      description="Allows or blocks configuring ephemeral exam scratchpads on private on-demand hosts owned or managed by this account."
+                      description="Allows or blocks configuring ephemeral exam scratchpads on private Standard hosts owned or managed by this account."
                       current={
                         details?.selected.entitlements.features?.exam_mode
                       }
@@ -1255,7 +1346,7 @@ export function AccountEntitlementOverridePanel({
               <Alert
                 type="success"
                 showIcon
-                message={actionSuccess}
+                title={actionSuccess}
                 closable
                 onClose={() => setActionSuccess("")}
               />

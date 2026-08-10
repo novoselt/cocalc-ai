@@ -170,6 +170,42 @@ describe("project-snapshots.createSnapshot", () => {
   });
 });
 
+describe("project-snapshots.deleteSnapshot", () => {
+  beforeEach(() => {
+    jest.resetModules();
+    assertCanPerformDestructiveStorageActionMock = jest.fn(
+      async () => undefined,
+    );
+    requireDangerousProjectMutationAuthMock = jest.fn(async () => undefined);
+    getProjectFileServerClientMock = jest.fn(async () => ({
+      deleteSnapshot: jest.fn(async () => undefined),
+    }));
+  });
+
+  it("propagates the requested timeout to the project-host client", async () => {
+    const { deleteSnapshot } = await import("./project-snapshots");
+    await deleteSnapshot({
+      account_id: "acct-1",
+      browser_id: "browser-1",
+      session_hash: "session-1",
+      project_id: "proj-1",
+      name: "manual-1",
+      timeout: 60_000,
+    });
+
+    expect(getProjectFileServerClientMock).toHaveBeenCalledWith({
+      project_id: "proj-1",
+      account_id: "acct-1",
+      timeout: 60_000,
+    });
+    const client = await getProjectFileServerClientMock.mock.results[0].value;
+    expect(client.deleteSnapshot).toHaveBeenCalledWith({
+      project_id: "proj-1",
+      name: "manual-1",
+    });
+  });
+});
+
 describe("project-snapshots.restoreSnapshot", () => {
   beforeEach(() => {
     jest.resetModules();

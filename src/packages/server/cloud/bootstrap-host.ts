@@ -671,10 +671,10 @@ export function buildProjectIoPolicy({
     mode,
     mountpoint: "/mnt/cocalc",
     profile: supportsDynamicCapacity
-      ? "gcp-pd-balanced-dynamic"
+      ? "gcp-pd-balanced-btrfs-headroom"
       : "unconfigured",
     capacitySource: supportsDynamicCapacity
-      ? "gcp-pd-balanced-size-formula-2026-07-24"
+      ? "gcp-pd-balanced-btrfs-headroom-2026-08-04"
       : "unconfigured",
     capacity: { mode: capacityMode },
     pool: limits,

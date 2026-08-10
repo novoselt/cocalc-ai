@@ -88,7 +88,7 @@ export function getHostRecoveryDisplay(
       active: true,
       title: "Project host is restarting on guaranteed capacity",
       description:
-        "Spot capacity was not available, so CoCalc switched this host to a regular on-demand VM and is reconnecting projects automatically.",
+        "Spot capacity was not available, so CoCalc switched this host to Standard capacity and is reconnecting projects automatically.",
       etaMinutes,
     };
   }

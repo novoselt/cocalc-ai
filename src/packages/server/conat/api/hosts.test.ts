@@ -528,6 +528,7 @@ jest.mock("@cocalc/server/project-host/spend", () => ({
 
 const HOST_ID = "host-123";
 const ACCOUNT_ID = "acct-123";
+const CUSTOMER_ACCOUNT_ID = "customer-acct-456";
 
 beforeEach(() => {
   getClusterAccountsByIdsDirectMock = jest.fn(async () => []);
@@ -1539,6 +1540,9 @@ describe("hosts browser fresh auth gating", () => {
     process.env.COCALC_CLUSTER_BAY_IDS = "bay-0,bay-1,bay-2";
     isAdminMock = jest.fn(async () => false);
     isBannedMock = jest.fn(async () => false);
+    getServerSettingsMock = jest.fn(async () => ({
+      project_hosts_funding_mode: "account-prepaid",
+    }));
     resolveHostBayMock = jest.fn(async () => ({
       bay_id: "bay-0",
       epoch: 1,
@@ -2252,6 +2256,151 @@ describe("hosts browser fresh auth gating", () => {
     });
   });
 
+  it("uses the customer owner for admission when an admin starts a host", async () => {
+    isAdminMock = jest.fn(async (account_id: string) => {
+      return account_id === ACCOUNT_ID;
+    });
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return {
+          rows: [
+            {
+              id: HOST_ID,
+              name: "customer-host",
+              region: "us-central1",
+              status: "off",
+              bay_id: "bay-0",
+              metadata: {
+                owner: CUSTOMER_ACCOUNT_ID,
+                machine: {
+                  cloud: "gcp",
+                  machine_type: "e2-standard-4",
+                },
+                billing: { funding_mode: "account-prepaid" },
+              },
+            },
+          ],
+        };
+      }
+      if (sql.includes("FROM account_impersonation_sessions")) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { startHost } = await import("./hosts");
+    await startHost({
+      account_id: ACCOUNT_ID,
+      session_hash: "session-hash",
+      id: HOST_ID,
+    });
+
+    expect(resolveAccountHomeBayMock).toHaveBeenCalledWith({
+      account_id: CUSTOMER_ACCOUNT_ID,
+      user_account_id: CUSTOMER_ACCOUNT_ID,
+    });
+    expect(requireFreshAuthForSessionHashMock).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      allow_actor_impersonation: true,
+      session_hash: "session-hash",
+    });
+  });
+
+  it("changes a running customer host from site-funded without a restart", async () => {
+    isAdminMock = jest.fn(async (account_id: string) => {
+      return account_id === ACCOUNT_ID;
+    });
+    resolveMembershipForAccountMock = jest.fn(async (account_id: string) => ({
+      class: "member",
+      entitlements: { features: { create_hosts: true } },
+      effective_limits:
+        account_id === CUSTOMER_ACCOUNT_ID
+          ? {
+              credit_spend_limit_5h_usd: 300,
+              credit_spend_limit_7d_usd: 1000,
+            }
+          : {},
+    }));
+    let savedMetadata: any;
+    queryMock = jest.fn(async (sql: string, params?: any[]) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return {
+          rows: [
+            {
+              id: HOST_ID,
+              name: "customer-host",
+              region: "us-central1",
+              status: "running",
+              metadata:
+                savedMetadata ??
+                ({
+                  owner: CUSTOMER_ACCOUNT_ID,
+                  machine: {
+                    cloud: "gcp",
+                    machine_type: "e2-standard-4",
+                  },
+                  pricing_model: "on_demand",
+                  billing: { funding_mode: "site-funded" },
+                } as any),
+            },
+          ],
+        };
+      }
+      if (sql.includes("SELECT stripe_usage_subscription FROM accounts")) {
+        return {
+          rows: [
+            {
+              stripe_usage_subscription: {
+                status: "active",
+                current_period_end: Date.now() / 1000 + 3600,
+              },
+            },
+          ],
+        };
+      }
+      if (sql.includes("UPDATE project_hosts SET region=$2")) {
+        savedMetadata = params?.[2];
+        return { rowCount: 1, rows: [] };
+      }
+      if (sql.includes("FROM account_impersonation_sessions")) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { updateHostMachine } = await import("./hosts");
+    await updateHostMachine({
+      account_id: ACCOUNT_ID,
+      session_hash: "session-hash",
+      id: HOST_ID,
+      funding_mode: "account-postpaid",
+    });
+
+    expect(savedMetadata.billing).toEqual(
+      expect.objectContaining({
+        funding_mode: "account-postpaid",
+        funding_lane: "credit",
+        started_at: expect.any(String),
+      }),
+    );
+    expect(resolveMembershipForAccountMock).toHaveBeenCalledWith(
+      CUSTOMER_ACCOUNT_ID,
+    );
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalledWith(
+      ACCOUNT_ID,
+    );
+    expect(
+      reconcileDedicatedHostPurchaseSessionForAccountMock,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: CUSTOMER_ACCOUNT_ID,
+        host_id: HOST_ID,
+        funding_lane: "credit",
+        billing_state: "running",
+      }),
+    );
+  });
+
   it("requires fresh auth before granting host manager access", async () => {
     queryMock = jest.fn(async (sql: string) => {
       if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
@@ -2560,7 +2709,8 @@ describe("hosts browser fresh auth gating", () => {
     expect(getBrowserAuthSessionHashMock).not.toHaveBeenCalled();
   });
 
-  it("allows host start when the host itself is marked site-funded", async () => {
+  it("allows an admin-owned host start when the host is marked site-funded", async () => {
+    isAdminMock = jest.fn(async () => true);
     getServerSettingsMock = jest.fn(async () => ({
       project_hosts_funding_mode: "account-prepaid",
     }));
@@ -2677,6 +2827,7 @@ describe("hosts browser fresh auth gating", () => {
   });
 
   it("blocks host start when a destructive host op is already pending", async () => {
+    isAdminMock = jest.fn(async () => true);
     getServerSettingsMock = jest.fn(async () => ({
       project_hosts_funding_mode: "site-funded",
     }));
@@ -2782,9 +2933,57 @@ describe("hosts browser fresh auth gating", () => {
       allow_actor_impersonation: true,
       session_hash: "session-hash",
     });
+    expect(eraseActiveExamRunBeforeHostStopLocalMock).toHaveBeenCalledWith({
+      host: expect.objectContaining({ id: HOST_ID }),
+    });
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "host-delete" }),
     );
+  });
+
+  it("does not deprovision a host when active exam cleanup fails", async () => {
+    getBrowserAuthSessionHashMock = jest.fn(() => "session-hash");
+    eraseActiveExamRunBeforeHostStopLocalMock = jest.fn(async () => {
+      throw Object.assign(new Error("exam cleanup failed"), {
+        code: "exam_cleanup_failed",
+      });
+    });
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return {
+          rows: [
+            {
+              id: HOST_ID,
+              name: "exam-host",
+              status: "running",
+              metadata: {
+                owner: ACCOUNT_ID,
+                runtime: { instance_id: "exam-instance" },
+                machine: {
+                  cloud: "gcp",
+                  machine_type: "e2-standard-4",
+                },
+              },
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { deleteHost } = await import("./hosts");
+    await expect(
+      deleteHost({
+        account_id: ACCOUNT_ID,
+        browser_id: "browser-1",
+        id: HOST_ID,
+      }),
+    ).rejects.toMatchObject({ code: "exam_cleanup_failed" });
+
+    expect(eraseActiveExamRunBeforeHostStopLocalMock).toHaveBeenCalledWith({
+      host: expect.objectContaining({ id: HOST_ID, status: "running" }),
+    });
+    expect(createLroMock).not.toHaveBeenCalled();
   });
 
   it("allows admins to delete validation hosts owned by another account", async () => {
@@ -6271,6 +6470,40 @@ describe("hosts.listHosts bootstrap normalization", () => {
       host_override_count: 2,
       host_override_targets: ["conat-router", "project-host"],
     });
+  });
+
+  it("uses a lightweight admin-only listing for route health", async () => {
+    const { listHostsLocal } = await import("./hosts");
+    const hosts = await listHostsLocal({
+      account_id: ACCOUNT_ID,
+      admin_view: true,
+      route_health: true,
+    });
+
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]).toEqual(
+      expect.objectContaining({
+        id: HOST_ID,
+        status: "running",
+        access_role: "admin",
+        can_place: false,
+        can_start: false,
+      }),
+    );
+    expect(hosts[0].backup_status).toBeUndefined();
+    expect(hosts[0].metrics_history).toBeUndefined();
+    expect(loadProjectHostMetricsHistoryMock).not.toHaveBeenCalled();
+    expect(resolveMembershipForAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects route health listing outside admin view", async () => {
+    const { listHostsLocal } = await import("./hosts");
+    await expect(
+      listHostsLocal({
+        account_id: ACCOUNT_ID,
+        route_health: true,
+      }),
+    ).rejects.toThrow("route health host listing requires admin view");
   });
 
   it("includes visible hosts from remote bays", async () => {

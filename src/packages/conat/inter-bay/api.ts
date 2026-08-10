@@ -30,6 +30,7 @@ import type {
   Hosts,
 } from "@cocalc/conat/hub/api/hosts";
 import type {
+  AdminMembershipPackagePurchaseResult,
   ClaimableMembershipPackage,
   AccountEntitlementOverride,
   AccountUsageOverview,
@@ -63,6 +64,7 @@ import type {
 } from "@cocalc/conat/hub/api/purchases";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 import type { DedicatedHostPricingSnapshot } from "@cocalc/util/db-schema/purchases";
+import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
 import type {
   AuthorizePublicDirectoryShareReadOptions,
   AuthorizePublicDirectoryShareReadResponse,
@@ -77,6 +79,7 @@ import type {
   GrantTemporaryViewerAccessResponse,
   ListPublicDirectoryShareDirectoryOptions,
   ListPublicDirectoryShareDirectoryResponse,
+  ListMyPublicDirectorySharesOptions,
   ListProjectPublicDirectorySharesOptions,
   ListPublicDirectorySharesResponse,
   PublicDirectoryShareSummary,
@@ -100,6 +103,10 @@ import type {
   LegacyMigrationAdminLinksResponse,
   LegacyMigrationAdminProjectSearchOptions,
   LegacyMigrationAdminProjectSearchResponse,
+  LegacyMigrationAdminReplayPublicPathsOptions,
+  LegacyMigrationAdminReplayPublicPathsResponse,
+  LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  LegacyMigrationAdminReplayRestoredPublicPathsResponse,
   LegacyMigrationAdminUnlinkLegacyAccountOptions,
   LegacyMigrationAdminUnlinkLegacyAccountResponse,
   LegacyMigrationConfigureFinancialRenewalHomeBayOptions,
@@ -118,6 +125,8 @@ import type {
   LegacyMigrationImportProjectsResponse,
   LegacyMigrationListProjectsOptions,
   LegacyMigrationListProjectsResponse,
+  LegacyMigrationListPublicSharesOptions,
+  LegacyMigrationListPublicSharesResponse,
   LegacyMigrationPrepareProjectRemediationOptions,
   LegacyMigrationPrepareProjectRemediationResponse,
   LegacyMigrationProjectRemediationStatusOptions,
@@ -149,6 +158,9 @@ import type {
   ProjectAccessRequestStatus,
   ProjectBackupSchedule,
   CourseManagerAccessResult,
+  CourseReconfigureManagedProjectType,
+  CourseReconfigureRequest,
+  CourseReconfigureResult,
   CourseStudentInviteAccountRepairInput,
   CourseStudentInviteAccountRepairRow,
   ProjectCollabInviteAction,
@@ -217,6 +229,7 @@ import type {
   SiteFundedCodexPolicy,
   SiteFundedCodexReservation,
   SiteFundedCodexUsageEvent,
+  SiteFundedCodexUsageRecordResult,
 } from "@cocalc/util/ai/site-funded-codex";
 
 export interface BayOwnership {
@@ -933,6 +946,17 @@ export interface AccountLocalGetUsageOverviewRequest {
   account_id: string;
 }
 
+export interface AccountLocalRecordSiteFundedCodexUsageRequest {
+  account_id: string;
+  funded_turn_id: string;
+  project_id: string;
+  event: SiteFundedCodexUsageEvent;
+  cost_microusd: number;
+  price_version: string;
+  long_context: boolean;
+  occurred_at?: Date | string;
+}
+
 export interface AccountLocalGetVerifiedEmailAddressesRequest {
   account_id: string;
 }
@@ -1050,6 +1074,31 @@ export interface AccountLocalCloseDedicatedHostPurchaseSessionRequest {
   account_id: string;
   host_id: string;
   ended_at?: Date | string | number | null;
+}
+
+export interface AccountLocalRecordDedicatedHostMeteredUsageRequest {
+  account_id: string;
+  resource_id: string;
+  resource_name?: string | null;
+  resource_bay_id?: string | null;
+  project_id?: string | null;
+  provider: string;
+  region?: string | null;
+  funding_lane: "prepaid" | "credit";
+  bytes: number;
+  cost_usd: MoneyValue;
+  unit_cost_usd_per_gb: MoneyValue;
+  interval_start: Date | string | number;
+  interval_end: Date | string | number;
+  finalize?: boolean;
+}
+
+export interface AccountLocalRecordDedicatedHostMeteredUsageResult {
+  accepted: boolean;
+  finalized: boolean;
+  metered_through_at: string;
+  total_bytes: number;
+  total_cost_usd: MoneyValue;
 }
 
 export type ProjectRuntimeSlotState =
@@ -1385,6 +1434,18 @@ export interface AccountLocalAdminProvisionSiteLicenseRequest {
   starts_at?: Date | string | null;
   expires_at?: Date | string | null;
   metadata?: Record<string, unknown> | null;
+}
+
+export interface AccountLocalAdminCreateMembershipPackagePurchaseRequest {
+  actor_account_id: string;
+  user_account_id: string;
+  product: MembershipPackageProduct;
+  price: number;
+  source: "card" | "credit" | "free";
+  reason: string;
+  idempotency_key: string;
+  pricing_note?: string;
+  trusted_admin?: boolean;
 }
 
 export interface AccountLocalUpdateMembershipPackageRequest {
@@ -1845,6 +1906,69 @@ export interface BayOpsMembershipTierUsageReportRequest {
   account_id?: string;
 }
 
+export interface ActiveUserMapHistoryReportRequest {
+  usage_metrics_consent_required: boolean;
+  captured_at: string;
+}
+
+export interface ActiveUserMapHistoryAccount {
+  account_id: string;
+  last_active: string;
+  country_code: string | null;
+  usage_metrics_enabled: boolean;
+}
+
+export interface ActiveUserMapHistoryReport {
+  bay_id: string;
+  accounts: ActiveUserMapHistoryAccount[];
+}
+
+export type ActiveUserMapHistoryWindowMinutes = 60 | 1440;
+
+export interface ActiveUserMapHistorySeriesRequest {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  days?: number;
+  country_code?: string;
+}
+
+export interface ActiveUserMapHistoryPoint {
+  snapshot_hour: string;
+  captured_at: string;
+  total_active: number;
+  mapped_active: number;
+  unknown_location: number;
+  usage_metrics_not_enabled: number;
+  bay_count: number;
+  active_count: number;
+}
+
+export interface ActiveUserMapHistorySeries {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  days: number;
+  country_code: string | null;
+  country_codes: string[];
+  points: ActiveUserMapHistoryPoint[];
+}
+
+export interface ActiveUserMapHistorySnapshotRequest {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  snapshot_hour?: string;
+  direction?: "backward" | "forward" | "nearest";
+}
+
+export interface ActiveUserMapHistorySnapshotCountry {
+  country_code: string;
+  count: number;
+}
+
+export interface ActiveUserMapHistorySnapshot extends Omit<
+  ActiveUserMapHistoryPoint,
+  "active_count"
+> {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  countries: ActiveUserMapHistorySnapshotCountry[];
+}
+
 export interface BayOpsSetServerSettingRequest {
   name: string;
   value: string;
@@ -1888,8 +2012,8 @@ export interface BayOpsReserveSiteFundedCodexTurnRequest {
   owningBayId?: string;
   membershipTier: string;
   policy: SiteFundedCodexPolicy;
-  accountLimit5hMicrousd?: number | null;
-  accountLimit7dMicrousd?: number | null;
+  accountRemaining5hMicrousd?: number | null;
+  accountRemaining7dMicrousd?: number | null;
   surface?: string;
 }
 
@@ -1909,9 +2033,6 @@ export interface BayOpsFinishSiteFundedCodexTurnRequest extends BayOpsSiteFunded
 }
 
 export interface BayOpsSiteFundedCodexStatusRequest {
-  account_id?: string;
-  limit5hMicrousd?: number | null;
-  limit7dMicrousd?: number | null;
   reconcile?: boolean;
 }
 
@@ -2142,6 +2263,63 @@ export interface ProjectEnsureCourseManagerAccessRequest {
   course_path?: string;
   project_ids: string[];
   manager_account_ids: string[];
+}
+
+export interface ProjectReconcileCourseManagedProjectRequest {
+  account_id: string;
+  course_project_id: string;
+  course_path: string;
+  manager_account_ids: string[];
+  project_id: string;
+  type: CourseReconfigureManagedProjectType;
+  course: NonNullable<ProjectCourseInfo>;
+  title?: string;
+  description?: string;
+  env?: ProjectEnv;
+  allow_collabs: boolean;
+  desired_account_ids: string[];
+  student_id?: string;
+  student_email_address?: string;
+  send_email_invite?: boolean;
+  invite?: {
+    subject: string;
+    message: string;
+    email_html: string;
+    reply_to?: string;
+    reply_to_name?: string;
+    base_url?: string;
+  };
+}
+
+export interface ProjectReconcileCourseManagedProjectResult {
+  project_id: string;
+  email_invited_at?: string;
+}
+
+export interface ProjectCourseManagedProjectStatesRequest {
+  project_ids: string[];
+}
+
+export interface ProjectCourseManagedProjectState {
+  project_id: string;
+  users: Record<
+    string,
+    {
+      group?: "owner" | "collaborator" | "viewer";
+      hide?: boolean;
+      [key: string]: unknown;
+    }
+  > | null;
+  course: Record<string, unknown> | null;
+  title: string | null;
+  description: string | null;
+  env: ProjectEnv | null;
+}
+
+export interface ProjectCourseReconfigureOperationRequest {
+  account_id: string;
+  course_project_id: string;
+  op_id: string;
 }
 
 export interface ProjectRemoveCollaboratorRequest {
@@ -2404,6 +2582,7 @@ export type AccountLocalMethod =
   | "set-password-from-reset"
   | "assert-product-access-trust"
   | "reconcile-dedicated-host-purchase-session"
+  | "record-dedicated-host-metered-usage"
   | "close-dedicated-host-purchase-session"
   | "reserve-project-runtime-slot"
   | "heartbeat-project-runtime-slot"
@@ -2415,6 +2594,7 @@ export type AccountLocalMethod =
   | "get-membership"
   | "get-membership-details"
   | "get-account-usage-overview"
+  | "record-site-funded-codex-usage"
   | "get-verified-email-addresses"
   | "create-legacy-migration-project"
   | "get-admin-assigned-membership"
@@ -2434,6 +2614,7 @@ export type AccountLocalMethod =
   | "claim-membership-package-seat"
   | "claim-membership-package-seat-for-account"
   | "admin-provision-site-license"
+  | "admin-create-membership-package-purchase"
   | "update-site-license"
   | "add-site-license-pool"
   | "create-site-license-external-claim-pool"
@@ -2469,6 +2650,7 @@ export type AccountLocalMethod =
   | "get-membership-portable-state"
   | "replace-membership-portable-state"
   | "legacy-migration-list-projects"
+  | "legacy-migration-list-public-shares"
   | "legacy-migration-import-projects"
   | "legacy-migration-retry-project-restore"
   | "legacy-migration-get-project-remediation"
@@ -2487,7 +2669,10 @@ export type AccountLocalMethod =
   | "legacy-migration-admin-link-legacy-account"
   | "legacy-migration-admin-unlink-legacy-account"
   | "legacy-migration-admin-list-linked-legacy-projects"
+  | "legacy-migration-admin-replay-public-paths"
+  | "legacy-migration-admin-replay-restored-public-paths"
   | "public-directory-share-resolve"
+  | "public-directory-share-list-mine"
   | "public-directory-share-list-project"
   | "public-directory-share-create"
   | "public-directory-share-update"
@@ -2518,6 +2703,9 @@ export type BayOpsMethod =
   | "get-membership-tier-usage-report"
   | "get-membership-analytics-overview"
   | "get-active-user-map"
+  | "get-active-user-map-history-report"
+  | "get-active-user-map-history-series"
+  | "get-active-user-map-history-snapshot"
   | "get-membership-analytics-events"
   | "backfill-membership-analytics-purchases"
   | "get-webapp-crashes"
@@ -2538,6 +2726,11 @@ export type ProjectCollabInviteMethod =
   | "list"
   | "repair-accepted-course-student-invite-accounts"
   | "ensure-course-manager-access"
+  | "reconcile-course-managed-project"
+  | "get-course-managed-project-states"
+  | "reconfigure-course-projects"
+  | "get-course-reconfigure-operation"
+  | "cancel-course-reconfigure-operation"
   | "access-landing-info"
   | "request-access"
   | "list-access-requests"
@@ -3798,6 +3991,9 @@ export interface InterBayAccountLocalApi {
   closeDedicatedHostPurchaseSession: (
     opts: AccountLocalCloseDedicatedHostPurchaseSessionRequest,
   ) => Promise<void>;
+  recordDedicatedHostMeteredUsage: (
+    opts: AccountLocalRecordDedicatedHostMeteredUsageRequest,
+  ) => Promise<AccountLocalRecordDedicatedHostMeteredUsageResult>;
   reserveProjectRuntimeSlot: (
     opts: AccountLocalReserveProjectRuntimeSlotRequest,
   ) => Promise<AccountLocalReserveProjectRuntimeSlotResult>;
@@ -3828,6 +4024,9 @@ export interface InterBayAccountLocalApi {
   getAccountUsageOverview: (
     opts: AccountLocalGetUsageOverviewRequest,
   ) => Promise<AccountUsageOverview>;
+  recordSiteFundedCodexUsage: (
+    opts: AccountLocalRecordSiteFundedCodexUsageRequest,
+  ) => Promise<void>;
   getVerifiedEmailAddresses: (
     opts: AccountLocalGetVerifiedEmailAddressesRequest,
   ) => Promise<AccountLocalGetVerifiedEmailAddressesResult>;
@@ -3870,6 +4069,9 @@ export interface InterBayAccountLocalApi {
   adminProvisionSiteLicense: (
     opts: AccountLocalAdminProvisionSiteLicenseRequest,
   ) => Promise<SiteLicenseOverview>;
+  adminCreateMembershipPackagePurchase: (
+    opts: AccountLocalAdminCreateMembershipPackagePurchaseRequest,
+  ) => Promise<AdminMembershipPackagePurchaseResult>;
   listSiteLicenseOverviews: (
     opts: AccountLocalListSiteLicenseOverviewsRequest,
   ) => Promise<SiteLicenseOverview[]>;
@@ -3990,6 +4192,9 @@ export interface InterBayAccountLocalApi {
   legacyMigrationListProjects: (
     opts?: LegacyMigrationListProjectsOptions,
   ) => Promise<LegacyMigrationListProjectsResponse>;
+  legacyMigrationListPublicShares: (
+    opts?: LegacyMigrationListPublicSharesOptions,
+  ) => Promise<LegacyMigrationListPublicSharesResponse>;
   legacyMigrationImportProjects: (
     opts: LegacyMigrationImportProjectsOptions,
   ) => Promise<LegacyMigrationImportProjectsResponse>;
@@ -4044,9 +4249,18 @@ export interface InterBayAccountLocalApi {
   legacyMigrationAdminListLinkedLegacyProjects: (
     opts: LegacyMigrationAdminLinkedProjectsOptions,
   ) => Promise<LegacyMigrationAdminLinkedProjectsResponse>;
+  legacyMigrationAdminReplayPublicPaths: (
+    opts: LegacyMigrationAdminReplayPublicPathsOptions,
+  ) => Promise<LegacyMigrationAdminReplayPublicPathsResponse>;
+  legacyMigrationAdminReplayRestoredPublicPaths: (
+    opts: LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+  ) => Promise<LegacyMigrationAdminReplayRestoredPublicPathsResponse>;
   publicDirectoryShareResolve: (
     opts: ResolvePublicDirectoryShareOptions,
   ) => Promise<ResolvedPublicDirectoryShare>;
+  publicDirectoryShareListMine: (
+    opts: ListMyPublicDirectorySharesOptions,
+  ) => Promise<ListPublicDirectorySharesResponse>;
   publicDirectoryShareListProject: (
     opts: ListProjectPublicDirectorySharesOptions,
   ) => Promise<ListPublicDirectorySharesResponse>;
@@ -4119,6 +4333,15 @@ export interface InterBayBayOpsApi {
   getActiveUserMap: (
     opts: ActiveUserMapQuery,
   ) => Promise<ActiveUserMapOverview>;
+  getActiveUserMapHistoryReport: (
+    opts: ActiveUserMapHistoryReportRequest,
+  ) => Promise<ActiveUserMapHistoryReport>;
+  getActiveUserMapHistorySeries: (
+    opts: ActiveUserMapHistorySeriesRequest,
+  ) => Promise<ActiveUserMapHistorySeries>;
+  getActiveUserMapHistorySnapshot: (
+    opts: ActiveUserMapHistorySnapshotRequest,
+  ) => Promise<ActiveUserMapHistorySnapshot | null>;
   getMembershipAnalyticsEvents: (
     opts: MembershipAnalyticsEventsQuery,
   ) => Promise<MembershipAnalyticsEventRow[]>;
@@ -4152,7 +4375,7 @@ export interface InterBayBayOpsApi {
   ) => Promise<{ active: boolean }>;
   recordSiteFundedCodexUsage: (
     opts: BayOpsRecordSiteFundedCodexUsageRequest,
-  ) => Promise<{ costMicrousd: number; inserted: boolean }>;
+  ) => Promise<SiteFundedCodexUsageRecordResult>;
   finishSiteFundedCodexTurn: (
     opts: BayOpsFinishSiteFundedCodexTurnRequest,
   ) => Promise<SiteFundedCodexReservation>;
@@ -4185,6 +4408,21 @@ export interface InterBayProjectCollabInviteApi {
   ensureCourseManagerAccess: (
     opts: ProjectEnsureCourseManagerAccessRequest,
   ) => Promise<CourseManagerAccessResult[]>;
+  reconcileCourseManagedProject: (
+    opts: ProjectReconcileCourseManagedProjectRequest,
+  ) => Promise<ProjectReconcileCourseManagedProjectResult>;
+  getCourseManagedProjectStates: (
+    opts: ProjectCourseManagedProjectStatesRequest,
+  ) => Promise<ProjectCourseManagedProjectState[]>;
+  reconfigureCourseProjects: (
+    opts: CourseReconfigureRequest & { account_id: string },
+  ) => Promise<CourseReconfigureResult>;
+  getCourseReconfigureOperation: (
+    opts: ProjectCourseReconfigureOperationRequest,
+  ) => Promise<LroSummary | undefined>;
+  cancelCourseReconfigureOperation: (
+    opts: ProjectCourseReconfigureOperationRequest,
+  ) => Promise<void>;
   getProjectAccessLandingInfo: (
     opts: ProjectAccessLandingInfoRequest,
   ) => Promise<ProjectAccessLandingInfo>;
@@ -6290,6 +6528,15 @@ export function createInterBayAccountLocalClient({
       method: "close-dedicated-host-purchase-session",
     }),
   });
+  const recordDedicatedHostMeteredUsageClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "recordDedicatedHostMeteredUsage">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "record-dedicated-host-metered-usage",
+    }),
+  });
   const reserveProjectRuntimeSlotClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "reserveProjectRuntimeSlot">
   >({
@@ -6378,6 +6625,15 @@ export function createInterBayAccountLocalClient({
     subject: accountLocalSubject({
       dest_bay,
       method: "get-account-usage-overview",
+    }),
+  });
+  const recordSiteFundedCodexUsageClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "recordSiteFundedCodexUsage">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "record-site-funded-codex-usage",
     }),
   });
   const getVerifiedEmailAddressesClient = createServiceClient<
@@ -6504,6 +6760,15 @@ export function createInterBayAccountLocalClient({
     subject: accountLocalSubject({
       dest_bay,
       method: "admin-provision-site-license",
+    }),
+  });
+  const adminCreateMembershipPackagePurchaseClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "adminCreateMembershipPackagePurchase">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "admin-create-membership-package-purchase",
     }),
   });
   const listSiteLicenseOverviewsClient = createServiceClient<
@@ -6875,6 +7140,15 @@ export function createInterBayAccountLocalClient({
       method: "legacy-migration-list-projects",
     }),
   });
+  const legacyMigrationListPublicSharesClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationListPublicShares">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-list-public-shares",
+    }),
+  });
   const legacyMigrationImportProjectsClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "legacyMigrationImportProjects">
   >({
@@ -7053,6 +7327,28 @@ export function createInterBayAccountLocalClient({
         method: "legacy-migration-admin-list-linked-legacy-projects",
       }),
     });
+  const legacyMigrationAdminReplayPublicPathsClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "legacyMigrationAdminReplayPublicPaths">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "legacy-migration-admin-replay-public-paths",
+    }),
+  });
+  const legacyMigrationAdminReplayRestoredPublicPathsClient =
+    createServiceClient<
+      Pick<
+        InterBayAccountLocalApi,
+        "legacyMigrationAdminReplayRestoredPublicPaths"
+      >
+    >({
+      ...serviceClientOptions({ client, timeout }),
+      subject: accountLocalSubject({
+        dest_bay,
+        method: "legacy-migration-admin-replay-restored-public-paths",
+      }),
+    });
   const publicDirectoryShareResolveClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "publicDirectoryShareResolve">
   >({
@@ -7060,6 +7356,15 @@ export function createInterBayAccountLocalClient({
     subject: accountLocalSubject({
       dest_bay,
       method: "public-directory-share-resolve",
+    }),
+  });
+  const publicDirectoryShareListMineClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "publicDirectoryShareListMine">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "public-directory-share-list-mine",
     }),
   });
   const publicDirectoryShareListProjectClient = createServiceClient<
@@ -7214,6 +7519,10 @@ export function createInterBayAccountLocalClient({
       await closeDedicatedHostPurchaseSessionClient.closeDedicatedHostPurchaseSession(
         opts,
       ),
+    recordDedicatedHostMeteredUsage: async (opts) =>
+      await recordDedicatedHostMeteredUsageClient.recordDedicatedHostMeteredUsage(
+        opts,
+      ),
     reserveProjectRuntimeSlot: async (opts) =>
       await reserveProjectRuntimeSlotClient.reserveProjectRuntimeSlot(opts),
     heartbeatProjectRuntimeSlot: async (opts) =>
@@ -7236,6 +7545,8 @@ export function createInterBayAccountLocalClient({
       await getMembershipDetailsClient.getMembershipDetails(opts),
     getAccountUsageOverview: async (opts) =>
       await getAccountUsageOverviewClient.getAccountUsageOverview(opts),
+    recordSiteFundedCodexUsage: async (opts) =>
+      await recordSiteFundedCodexUsageClient.recordSiteFundedCodexUsage(opts),
     getVerifiedEmailAddresses: async (opts) =>
       await getVerifiedEmailAddressesClient.getVerifiedEmailAddresses(opts),
     createLegacyMigrationProject: async (opts) =>
@@ -7276,6 +7587,10 @@ export function createInterBayAccountLocalClient({
       await purchaseTeamLicenseChangeClient.purchaseTeamLicenseChange(opts),
     adminProvisionSiteLicense: async (opts) =>
       await adminProvisionSiteLicenseClient.adminProvisionSiteLicense(opts),
+    adminCreateMembershipPackagePurchase: async (opts) =>
+      await adminCreateMembershipPackagePurchaseClient.adminCreateMembershipPackagePurchase(
+        opts,
+      ),
     listSiteLicenseOverviews: async (opts) =>
       await listSiteLicenseOverviewsClient.listSiteLicenseOverviews(opts),
     revokeSiteLicensePoolSeat: async (opts) =>
@@ -7394,6 +7709,10 @@ export function createInterBayAccountLocalClient({
       await legacyMigrationListProjectsClient.legacyMigrationListProjects(
         opts ?? {},
       ),
+    legacyMigrationListPublicShares: async (opts) =>
+      await legacyMigrationListPublicSharesClient.legacyMigrationListPublicShares(
+        opts ?? {},
+      ),
     legacyMigrationImportProjects: async (opts) =>
       await legacyMigrationImportProjectsClient.legacyMigrationImportProjects(
         opts,
@@ -7466,8 +7785,20 @@ export function createInterBayAccountLocalClient({
       await legacyMigrationAdminListLinkedLegacyProjectsClient.legacyMigrationAdminListLinkedLegacyProjects(
         opts,
       ),
+    legacyMigrationAdminReplayPublicPaths: async (opts) =>
+      await legacyMigrationAdminReplayPublicPathsClient.legacyMigrationAdminReplayPublicPaths(
+        opts,
+      ),
+    legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
+      await legacyMigrationAdminReplayRestoredPublicPathsClient.legacyMigrationAdminReplayRestoredPublicPaths(
+        opts,
+      ),
     publicDirectoryShareResolve: async (opts) =>
       await publicDirectoryShareResolveClient.publicDirectoryShareResolve(opts),
+    publicDirectoryShareListMine: async (opts) =>
+      await publicDirectoryShareListMineClient.publicDirectoryShareListMine(
+        opts,
+      ),
     publicDirectoryShareListProject: async (opts) =>
       await publicDirectoryShareListProjectClient.publicDirectoryShareListProject(
         opts,
@@ -7860,6 +8191,20 @@ export function createInterBayAccountLocalHandler({
       },
     }),
     createServiceHandler<
+      Pick<InterBayAccountLocalApi, "recordDedicatedHostMeteredUsage">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "record-dedicated-host-metered-usage",
+      }),
+      impl: {
+        recordDedicatedHostMeteredUsage: async (opts) =>
+          await impl.recordDedicatedHostMeteredUsage(opts),
+      },
+    }),
+    createServiceHandler<
       Pick<InterBayAccountLocalApi, "reserveProjectRuntimeSlot">
     >({
       ...options,
@@ -7994,6 +8339,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         getAccountUsageOverview: async (opts) =>
           await impl.getAccountUsageOverview(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "recordSiteFundedCodexUsage">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "record-site-funded-codex-usage",
+      }),
+      impl: {
+        recordSiteFundedCodexUsage: async (opts) =>
+          await impl.recordSiteFundedCodexUsage(opts),
       },
     }),
     createServiceHandler<
@@ -8185,6 +8544,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         adminProvisionSiteLicense: async (opts) =>
           await impl.adminProvisionSiteLicense(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "adminCreateMembershipPackagePurchase">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "admin-create-membership-package-purchase",
+      }),
+      impl: {
+        adminCreateMembershipPackagePurchase: async (opts) =>
+          await impl.adminCreateMembershipPackagePurchase(opts),
       },
     }),
     createServiceHandler<
@@ -8751,6 +9124,20 @@ export function createInterBayAccountLocalHandler({
       },
     }),
     createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationListPublicShares">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-list-public-shares",
+      }),
+      impl: {
+        legacyMigrationListPublicShares: async (opts) =>
+          await impl.legacyMigrationListPublicShares(opts),
+      },
+    }),
+    createServiceHandler<
       Pick<InterBayAccountLocalApi, "legacyMigrationImportProjects">
     >({
       ...options,
@@ -9018,6 +9405,37 @@ export function createInterBayAccountLocalHandler({
       },
     }),
     createServiceHandler<
+      Pick<InterBayAccountLocalApi, "legacyMigrationAdminReplayPublicPaths">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-replay-public-paths",
+      }),
+      impl: {
+        legacyMigrationAdminReplayPublicPaths: async (opts) =>
+          await impl.legacyMigrationAdminReplayPublicPaths(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<
+        InterBayAccountLocalApi,
+        "legacyMigrationAdminReplayRestoredPublicPaths"
+      >
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "legacy-migration-admin-replay-restored-public-paths",
+      }),
+      impl: {
+        legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
+          await impl.legacyMigrationAdminReplayRestoredPublicPaths(opts),
+      },
+    }),
+    createServiceHandler<
       Pick<InterBayAccountLocalApi, "publicDirectoryShareResolve">
     >({
       ...options,
@@ -9029,6 +9447,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         publicDirectoryShareResolve: async (opts) =>
           await impl.publicDirectoryShareResolve(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "publicDirectoryShareListMine">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "public-directory-share-list-mine",
+      }),
+      impl: {
+        publicDirectoryShareListMine: async (opts) =>
+          await impl.publicDirectoryShareListMine(opts),
       },
     }),
     createServiceHandler<
@@ -9387,6 +9819,33 @@ export function createInterBayBayOpsClient({
       method: "get-active-user-map",
     }),
   });
+  const activeUserMapHistoryReportClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistoryReport">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-report",
+    }),
+  });
+  const activeUserMapHistorySeriesClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistorySeries">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-series",
+    }),
+  });
+  const activeUserMapHistorySnapshotClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistorySnapshot">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-snapshot",
+    }),
+  });
   const membershipAnalyticsEventsClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getMembershipAnalyticsEvents">
   >({
@@ -9450,6 +9909,18 @@ export function createInterBayBayOpsClient({
       ),
     getActiveUserMap: async (opts) =>
       await activeUserMapClient.getActiveUserMap(opts),
+    getActiveUserMapHistoryReport: async (opts) =>
+      await activeUserMapHistoryReportClient.getActiveUserMapHistoryReport(
+        opts,
+      ),
+    getActiveUserMapHistorySeries: async (opts) =>
+      await activeUserMapHistorySeriesClient.getActiveUserMapHistorySeries(
+        opts,
+      ),
+    getActiveUserMapHistorySnapshot: async (opts) =>
+      await activeUserMapHistorySnapshotClient.getActiveUserMapHistorySnapshot(
+        opts,
+      ),
     getMembershipAnalyticsEvents: async (opts) =>
       await membershipAnalyticsEventsClient.getMembershipAnalyticsEvents(opts),
     backfillMembershipAnalyticsPurchases: async (opts) =>
@@ -9721,6 +10192,48 @@ export function createInterBayBayOpsHandlers({
       }),
       impl: {
         getActiveUserMap: async (opts) => await impl.getActiveUserMap(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistoryReport">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-report",
+      }),
+      impl: {
+        getActiveUserMapHistoryReport: async (opts) =>
+          await impl.getActiveUserMapHistoryReport(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistorySeries">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-series",
+      }),
+      impl: {
+        getActiveUserMapHistorySeries: async (opts) =>
+          await impl.getActiveUserMapHistorySeries(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistorySnapshot">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-snapshot",
+      }),
+      impl: {
+        getActiveUserMapHistorySnapshot: async (opts) =>
+          await impl.getActiveUserMapHistorySnapshot(opts),
       },
     }),
     createServiceHandler<
@@ -10027,6 +10540,51 @@ export function createInterBayProjectCollabInviteClient({
       method: "ensure-course-manager-access",
     }),
   });
+  const reconcileCourseManagedProjectClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "reconcileCourseManagedProject">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "reconcile-course-managed-project",
+    }),
+  });
+  const getCourseManagedProjectStatesClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "get-course-managed-project-states",
+    }),
+  });
+  const reconfigureCourseProjectsClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "reconfigureCourseProjects">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "reconfigure-course-projects",
+    }),
+  });
+  const getCourseReconfigureOperationClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "getCourseReconfigureOperation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "get-course-reconfigure-operation",
+    }),
+  });
+  const cancelCourseReconfigureOperationClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "cancelCourseReconfigureOperation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "cancel-course-reconfigure-operation",
+    }),
+  });
   const accessLandingInfoClient = createServiceClient<
     Pick<InterBayProjectCollabInviteApi, "getProjectAccessLandingInfo">
   >({
@@ -10166,6 +10724,24 @@ export function createInterBayProjectCollabInviteClient({
       ),
     ensureCourseManagerAccess: async (opts) =>
       await ensureCourseManagerAccessClient.ensureCourseManagerAccess(opts),
+    reconcileCourseManagedProject: async (opts) =>
+      await reconcileCourseManagedProjectClient.reconcileCourseManagedProject(
+        opts,
+      ),
+    getCourseManagedProjectStates: async (opts) =>
+      await getCourseManagedProjectStatesClient.getCourseManagedProjectStates(
+        opts,
+      ),
+    reconfigureCourseProjects: async (opts) =>
+      await reconfigureCourseProjectsClient.reconfigureCourseProjects(opts),
+    getCourseReconfigureOperation: async (opts) =>
+      await getCourseReconfigureOperationClient.getCourseReconfigureOperation(
+        opts,
+      ),
+    cancelCourseReconfigureOperation: async (opts) =>
+      await cancelCourseReconfigureOperationClient.cancelCourseReconfigureOperation(
+        opts,
+      ),
     removeCollaborator: async (opts) =>
       await removeCollaboratorClient.removeCollaborator(opts),
     setProjectUserRole: async (opts) =>
@@ -10409,6 +10985,76 @@ export function createInterBayProjectCollabInviteHandlers({
       impl: {
         ensureCourseManagerAccess: async (opts) =>
           await impl.ensureCourseManagerAccess(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "reconcileCourseManagedProject">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "reconcile-course-managed-project",
+      }),
+      impl: {
+        reconcileCourseManagedProject: async (opts) =>
+          await impl.reconcileCourseManagedProject(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "get-course-managed-project-states",
+      }),
+      impl: {
+        getCourseManagedProjectStates: async (opts) =>
+          await impl.getCourseManagedProjectStates(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "reconfigureCourseProjects">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "reconfigure-course-projects",
+      }),
+      impl: {
+        reconfigureCourseProjects: async (opts) =>
+          await impl.reconfigureCourseProjects(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "getCourseReconfigureOperation">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "get-course-reconfigure-operation",
+      }),
+      impl: {
+        getCourseReconfigureOperation: async (opts) =>
+          await impl.getCourseReconfigureOperation(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "cancelCourseReconfigureOperation">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "cancel-course-reconfigure-operation",
+      }),
+      impl: {
+        cancelCourseReconfigureOperation: async (opts) =>
+          await impl.cancelCourseReconfigureOperation(opts),
       },
     }),
     createServiceHandler<

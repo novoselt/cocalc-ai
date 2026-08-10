@@ -104,6 +104,10 @@ import {
   getExistingSideChatActions,
 } from "@cocalc/frontend/chat/unread";
 import { syncdocDiagnosticLog } from "@cocalc/frontend/syncdoc-diagnostics";
+import {
+  afterNextPaint,
+  UxLatencyTrace,
+} from "@cocalc/frontend/monitoring/ux-latency-trace";
 import { clean } from "./clean";
 import { KNITR_EXTS } from "./constants";
 import { count_words } from "./count_words";
@@ -962,11 +966,41 @@ export class Actions extends BaseActions<LatexEditorState> {
         return;
       }
     }
+    const buildTrace = new UxLatencyTrace({
+      event_type: "latex_build",
+      project_id: this.project_id,
+      source: force ? "force_build" : "build",
+      surface_visible: true,
+      stale_after_ms: 10 * 60_000,
+      sample_successes: true,
+    });
     this.is_building = true;
     try {
       await this.save_all(false);
+      buildTrace.mark("sources_saved");
       await this.run_build(this.last_save_time(), force);
+      buildTrace.mark("build_pipeline_done");
+      afterNextPaint(() => {
+        buildTrace.record("latex_build_complete_v2", {
+          path_ext: "tex",
+          editor: "latex",
+          segment: force ? "forced" : "normal",
+          surface_visible: true,
+          details: {
+            preview_refresh_requested: true,
+          },
+        });
+      });
     } catch (err) {
+      buildTrace.record("latex_build_failed_v2", {
+        path_ext: "tex",
+        editor: "latex",
+        segment: force ? "forced" : "normal",
+        surface_visible: true,
+        details: {
+          error_name: err instanceof Error ? err.name : "unknown",
+        },
+      });
       this.set_error(`${err}`);
       // if there is an error, we issue a stop, but keep the build logs
       await this.stop_build();

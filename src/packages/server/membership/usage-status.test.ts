@@ -5,7 +5,9 @@
 
 const queryMock = jest.fn();
 const getDiskQuotaMock = jest.fn();
-const clientCloseMock = jest.fn();
+const getProjectFileServerClientMock = jest.fn(async () => ({
+  getQuota: (...args: any[]) => getDiskQuotaMock(...args),
+}));
 const getManagedEgressUsageForAccountMock = jest.fn();
 const getRecentManagedEgressEventsForAccountMock = jest.fn();
 const getManagedCpuUsageForAccountMock = jest.fn();
@@ -13,9 +15,6 @@ const getRecentManagedCpuEventsForAccountMock = jest.fn();
 const listUsageProjectsForAccountMock = jest.fn();
 const getRootfsUsageForAccountMock = jest.fn();
 const getAccountBlobUsageMock = jest.fn();
-const conatWithProjectRoutingForAccountMock = jest.fn(() => ({
-  close: clientCloseMock,
-}));
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -24,13 +23,9 @@ jest.mock("@cocalc/database/pool", () => ({
   }),
 }));
 
-jest.mock("@cocalc/conat/project/storage-info", () => ({
-  getDiskQuota: (...args: any[]) => getDiskQuotaMock(...args),
-}));
-
-jest.mock("@cocalc/server/conat/route-client", () => ({
-  conatWithProjectRoutingForAccount: (...args: any[]) =>
-    conatWithProjectRoutingForAccountMock(...args),
+jest.mock("@cocalc/server/conat/file-server-client", () => ({
+  getProjectFileServerClient: (...args: any[]) =>
+    getProjectFileServerClientMock(...args),
 }));
 
 jest.mock("./managed-egress", () => ({
@@ -127,8 +122,11 @@ describe("getMembershipUsageStatusForAccount", () => {
     expect(result.remaining_project_slots).toBe(-1);
     expect(result.over_max_projects).toBe(true);
     expect(result.managed_egress_5h_bytes).toBe(0);
-    expect(conatWithProjectRoutingForAccountMock).toHaveBeenCalledWith({
+    expect(getProjectFileServerClientMock).toHaveBeenCalledWith({
+      project_id: "project-1",
       account_id: "account-1",
+      timeout: 5_000,
+      fresh: false,
     });
     expect(getManagedEgressUsageForAccountMock).toHaveBeenCalledWith({
       account_id: "account-1",
@@ -142,7 +140,6 @@ describe("getMembershipUsageStatusForAccount", () => {
     expect(getRootfsUsageForAccountMock).toHaveBeenCalledWith({
       account_id: "account-1",
     });
-    expect(clientCloseMock).toHaveBeenCalled();
   });
 
   it("includes RootFS usage and remaining membership capacity", async () => {

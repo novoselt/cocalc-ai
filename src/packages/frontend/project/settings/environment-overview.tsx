@@ -391,7 +391,7 @@ function StartupScriptCard({ project_id }: { project_id: string }) {
       }}
       styles={{ body: CARD_BODY_STYLE }}
     >
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         <Space align="start" size={10} style={{ width: "100%" }}>
           <div
             style={{
@@ -566,7 +566,7 @@ export function EnvironmentOverview({
         ? "Technical Details"
         : collapseLabel("diagnostics", "Technical Details"),
       children: (
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space vertical size={12} style={{ width: "100%" }}>
           <Typography.Text type="secondary">
             Full feature probe output and formatter details for debugging or
             support.
@@ -634,11 +634,7 @@ export function EnvironmentOverview({
   ];
 
   return (
-    <Space
-      direction="vertical"
-      size={isFlyout ? 10 : 14}
-      style={{ width: "100%" }}
-    >
+    <Space vertical size={isFlyout ? 10 : 14} style={{ width: "100%" }}>
       {isFlyout ? (
         <EnvironmentStatusHeader
           envCount={envCount}

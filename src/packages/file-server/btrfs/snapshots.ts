@@ -39,14 +39,17 @@ export async function updateRollingSnapshots({
   }
   counts = { ...DEFAULT_SNAPSHOT_COUNTS, ...counts };
 
-  const changed = await snapshots.hasUnsavedChanges();
+  // Snapshot discovery can require one targeted Btrfs metadata command per
+  // retained snapshot. Reuse one inventory throughout the rolling update
+  // instead of listing again for change detection and the create limit.
+  const allSnapshotNames = await snapshots.readdir();
+  const changed = await snapshots.hasUnsavedChanges(allSnapshotNames);
   logger.debug("updateRollingSnapshots", {
     name: snapshots.subvolume.name,
     counts,
     changed,
   });
 
-  const allSnapshotNames = await snapshots.readdir();
   // get exactly the iso timestamp snapshot names:
   const snapshotNames = allSnapshotNames.filter(isISODate);
   snapshotNames.sort();
@@ -81,7 +84,10 @@ export async function updateRollingSnapshots({
     try {
       const { beforeCreate, afterCreate, ...createOpts } = opts ?? {};
       await beforeCreate?.();
-      const created = await snapshots.create(name, createOpts);
+      const created = await snapshots.create(name, {
+        ...createOpts,
+        existingSnapshotNames: allSnapshotNames,
+      });
       await afterCreate?.(created);
       snapshotNames.push(name);
     } catch (err) {

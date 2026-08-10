@@ -134,6 +134,31 @@ test("createHubApiForContext exposes the adminCrashes hub group", async () => {
   ]);
 });
 
+test("createHubApiForContext exposes the compute hub group", async () => {
+  const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
+  const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
+    calls.push({ name, args, timeout });
+    return [] as T;
+  });
+
+  const result = await hub.compute.listVms({
+    project_id: "11111111-1111-4111-8111-111111111111",
+  });
+
+  assert.deepEqual(result, []);
+  assert.deepEqual(calls, [
+    {
+      name: "compute.listVms",
+      args: [
+        {
+          project_id: "11111111-1111-4111-8111-111111111111",
+        },
+      ],
+      timeout: undefined,
+    },
+  ]);
+});
+
 test("createHubApiForContext forwards explicit per-call timeout", async () => {
   const calls: Array<{ name: string; args: any[]; timeout?: number }> = [];
   const hub = createHubApiForContext(async <T>(name, args = [], timeout) => {
@@ -186,6 +211,51 @@ test("hubCallByName forwards auth_session_hash from the remote user", async () =
       auth_session_hash: "session-hash-1",
       name: "system.createImpersonationGrant",
       args: [{ subject_account_id: "acct-2" }],
+      timeout: 15_000,
+    },
+  ]);
+});
+
+test("hubCallByName routes project-scoped auth through the project subject", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+
+  await hubCallByName({
+    ctx: {
+      timeoutMs: 15_000,
+      rpcTimeoutMs: 15_000,
+      accountId: "00000000-1000-4000-8000-000000000001",
+      remote: {
+        client: {} as any,
+        user: {
+          project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+        },
+      },
+    },
+    name: "compute.authorizeProjectSshKey",
+    args: [
+      {
+        project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+        id_or_name: "compute-vm",
+      },
+    ],
+    callHub: async (opts) => {
+      calls.push(opts);
+      return { ok: true };
+    },
+  });
+
+  assert.deepEqual(calls, [
+    {
+      client: {},
+      project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+      auth_session_hash: null,
+      name: "compute.authorizeProjectSshKey",
+      args: [
+        {
+          project_id: "af027aca-e308-41c2-b528-a3e73de50996",
+          id_or_name: "compute-vm",
+        },
+      ],
       timeout: 15_000,
     },
   ]);

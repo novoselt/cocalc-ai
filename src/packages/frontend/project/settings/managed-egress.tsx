@@ -25,7 +25,7 @@ export function ManagedEgress({
         interactive sessions, SSH, and raw outbound network traffic on supported
         shared hosts.
       </Paragraph>
-      <Space direction="vertical" size="small">
+      <Space vertical size="small">
         <ManagedEgressRateSummary project_id={project_id} />
         <ManagedEgressHistoryButton
           project_id={project_id}

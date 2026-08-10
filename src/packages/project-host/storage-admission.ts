@@ -10,7 +10,11 @@ import type {
   HostStorageAdmissionMode,
   HostStoragePressureState,
 } from "@cocalc/conat/hub/api/hosts";
-import { getBtrfsMutationLockStatus } from "@cocalc/file-server/btrfs/operation-cache";
+import {
+  configureBtrfsBackgroundMutationGuard,
+  getBtrfsMutationLockStatus,
+} from "@cocalc/file-server/btrfs/operation-cache";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseIoPressure } from "./io-metrics";
@@ -25,17 +29,21 @@ const logger = getLogger("project-host:storage-admission");
 
 const PROJECT_POOL_IO_PRESSURE =
   "/sys/fs/cgroup/cocalc-project-pool/io.pressure";
+const BEES_IO_PRESSURE = "/sys/fs/cgroup/cocalc-bees/io.pressure";
+const RUNTIME_STORAGE = "/usr/local/sbin/cocalc-runtime-storage";
 const DEFAULT_SAMPLE_MS = 5_000;
 const DEFAULT_CONTENDED_FULL_AVG10 = 5;
 const DEFAULT_EMERGENCY_FULL_AVG10 = 10;
 const DEFAULT_RECOVERY_FULL_AVG10 = 1;
 const DEFAULT_RECOVERY_MS = 60_000;
 const DEFAULT_CONTENDED_SAMPLES = 2;
+const DEFAULT_BACKGROUND_QUIET_MS = 2_000;
 
 type StorageAdmissionInputs = {
   sampled_at_ms: number;
   host_io_full_avg10?: number;
   project_pool_io_full_avg10?: number;
+  bees_io_full_avg10?: number;
   starting_projects: number;
   stopping_projects: number;
   btrfs_mutation_locks: number;
@@ -65,11 +73,14 @@ type StorageAdmissionControllerOptions = {
   recoveryFullAvg10?: number;
   recoveryMs?: number;
   contendedSamples?: number;
+  backgroundQuietMs?: number;
+  onPressureStateChange?: (state: HostStoragePressureState) => void;
 };
 
 export interface StorageAdmissionController {
   sample: () => HostStorageAdmissionMetrics;
   admit: (request: StorageAdmissionRequest) => StorageAdmissionTicket;
+  backgroundDeferralReason: () => string | undefined;
   getStatus: () => HostStorageAdmissionMetrics;
 }
 
@@ -105,6 +116,7 @@ function defaultReadInputs(): StorageAdmissionInputs {
     sampled_at_ms: Date.now(),
     host_io_full_avg10: hostIoFullAvg10,
     project_pool_io_full_avg10: readIoFullAvg10(PROJECT_POOL_IO_PRESSURE),
+    bees_io_full_avg10: readIoFullAvg10(BEES_IO_PRESSURE),
     starting_projects: projectCounts.starting ?? 0,
     stopping_projects: projectCounts.stopping ?? 0,
     btrfs_mutation_locks: locks.length,
@@ -123,6 +135,36 @@ function maxDefined(...values: Array<number | undefined>): number | undefined {
     (value): value is number => value != null && Number.isFinite(value),
   );
   return defined.length > 0 ? Math.max(...defined) : undefined;
+}
+
+function uncontainedIoFullAvg10(
+  host: number | undefined,
+  projectPool: number | undefined,
+  bees: number | undefined,
+): number | undefined {
+  if (host == null || !Number.isFinite(host)) return undefined;
+  // Root PSI includes project-pool stalls caused by our own io.max limits and
+  // BEES workers waiting on their expected background reads. Neither should
+  // be counted again as uncontained pressure. The maximum is used because
+  // cgroup PSI intervals can overlap and therefore are not additive.
+  return Math.max(0, host - (maxDefined(projectPool, bees) ?? 0));
+}
+
+function effectiveIoFullAvg10(
+  inputs: StorageAdmissionInputs,
+): number | undefined {
+  if (inputs.bees_io_full_avg10 == null) {
+    return maxDefined(
+      inputs.host_io_full_avg10,
+      inputs.project_pool_io_full_avg10,
+    );
+  }
+  return maxDefined(
+    inputs.project_pool_io_full_avg10,
+    inputs.host_io_full_avg10 == null
+      ? undefined
+      : Math.max(0, inputs.host_io_full_avg10 - inputs.bees_io_full_avg10),
+  );
 }
 
 function emptyActiveCounts(): Record<StorageOperationPriority, number> {
@@ -176,6 +218,12 @@ export function createStorageAdmissionController(
       process.env.COCALC_PROJECT_HOST_STORAGE_IO_CONTENDED_SAMPLES,
       DEFAULT_CONTENDED_SAMPLES,
     );
+  const backgroundQuietMs =
+    options.backgroundQuietMs ??
+    positiveInteger(
+      process.env.COCALC_PROJECT_HOST_STORAGE_BACKGROUND_QUIET_MS,
+      DEFAULT_BACKGROUND_QUIET_MS,
+    );
 
   let pressureState: HostStoragePressureState = "normal";
   let stateSince = now();
@@ -191,6 +239,7 @@ export function createStorageAdmissionController(
     btrfs_mutation_waiters: 0,
   };
   let lastDecision: HostStorageAdmissionDecision | undefined;
+  let lastLifecycleActiveAt: number | undefined;
   let admittedTotal = 0;
   let deferredTotal = 0;
   let observedDeferralTotal = 0;
@@ -206,10 +255,7 @@ export function createStorageAdmissionController(
       from: pressureState,
       to: next,
       reason,
-      effective_io_full_avg10: maxDefined(
-        lastInputs.host_io_full_avg10,
-        lastInputs.project_pool_io_full_avg10,
-      ),
+      effective_io_full_avg10: effectiveIoFullAvg10(lastInputs),
       lifecycle_active:
         lastInputs.starting_projects + lastInputs.stopping_projects,
     });
@@ -217,14 +263,12 @@ export function createStorageAdmissionController(
     stateSince = at;
     transitionCount += 1;
     lastTransitionReason = reason;
+    options.onPressureStateChange?.(next);
   };
 
   const updateState = (inputs: StorageAdmissionInputs) => {
     const at = inputs.sampled_at_ms;
-    const full = maxDefined(
-      inputs.host_io_full_avg10,
-      inputs.project_pool_io_full_avg10,
-    );
+    const full = effectiveIoFullAvg10(inputs);
     const lifecycleActive = inputs.starting_projects + inputs.stopping_projects;
     if (full == null) {
       return;
@@ -272,9 +316,11 @@ export function createStorageAdmissionController(
   };
 
   const status = (): HostStorageAdmissionMetrics => {
-    const effective = maxDefined(
+    const effective = effectiveIoFullAvg10(lastInputs);
+    const uncontained = uncontainedIoFullAvg10(
       lastInputs.host_io_full_avg10,
       lastInputs.project_pool_io_full_avg10,
+      lastInputs.bees_io_full_avg10,
     );
     return {
       schema_version: 1,
@@ -289,6 +335,12 @@ export function createStorageAdmissionController(
         ? {
             project_pool_io_full_avg10: lastInputs.project_pool_io_full_avg10,
           }
+        : {}),
+      ...(lastInputs.bees_io_full_avg10 != null
+        ? { bees_io_full_avg10: lastInputs.bees_io_full_avg10 }
+        : {}),
+      ...(uncontained != null
+        ? { uncontained_io_full_avg10: uncontained }
         : {}),
       ...(effective != null ? { effective_io_full_avg10: effective } : {}),
       lifecycle_active:
@@ -321,7 +373,35 @@ export function createStorageAdmissionController(
       };
     }
     updateState(lastInputs);
+    if (lastInputs.starting_projects + lastInputs.stopping_projects > 0) {
+      lastLifecycleActiveAt = lastInputs.sampled_at_ms;
+    }
     return status();
+  };
+
+  const backgroundReason = (
+    current: HostStorageAdmissionMetrics,
+  ): string | undefined => {
+    if (current.lifecycle_active > 0) {
+      return "lifecycle_active";
+    }
+    if (
+      lastLifecycleActiveAt != null &&
+      now() - lastLifecycleActiveAt < backgroundQuietMs
+    ) {
+      return "lifecycle_settle";
+    }
+    if (current.sample_error) {
+      return "io_pressure_unavailable";
+    }
+    if (current.pressure_state !== "normal") {
+      return `io_pressure_${current.pressure_state}`;
+    }
+    return undefined;
+  };
+
+  const backgroundDeferralReason = (): string | undefined => {
+    return backgroundReason(sample());
   };
 
   const admit = ({
@@ -332,14 +412,7 @@ export function createStorageAdmissionController(
     const spec = getStorageOperationSpec(operation_kind);
     const background =
       spec.priority === "scheduled" || spec.priority === "scavenger";
-    let reason: string | undefined;
-    if (background && current.lifecycle_active > 0) {
-      reason = "lifecycle_active";
-    } else if (background && current.sample_error) {
-      reason = "io_pressure_unavailable";
-    } else if (background && current.pressure_state !== "normal") {
-      reason = `io_pressure_${current.pressure_state}`;
-    }
+    const reason = background ? backgroundReason(current) : undefined;
     const wouldDefer = reason != null;
     const admitted = mode !== "enforce" || !wouldDefer;
     if (admitted) {
@@ -381,15 +454,64 @@ export function createStorageAdmissionController(
   };
 
   sample();
-  return { sample, admit, getStatus: status };
+  return { sample, admit, backgroundDeferralReason, getStatus: status };
 }
 
 let activeController: StorageAdmissionController | undefined;
 let activeTimer: ReturnType<typeof setInterval> | undefined;
+let pressurePolicyQueue: Promise<void> = Promise.resolve();
+let lastRequestedPressureMode: "normal" | "protect" | undefined;
+
+function setProjectPoolPressurePolicy(state: HostStoragePressureState): void {
+  const mode = state === "normal" ? "normal" : "protect";
+  if (mode === lastRequestedPressureMode) return;
+  lastRequestedPressureMode = mode;
+  pressurePolicyQueue = pressurePolicyQueue
+    .catch(() => {})
+    .then(
+      () =>
+        new Promise<void>((resolve) => {
+          execFile(
+            "/usr/bin/sudo",
+            ["-n", RUNTIME_STORAGE, "set-project-pool-pressure-mode", mode],
+            { timeout: 5_000, maxBuffer: 1024 * 1024 },
+            (err, _stdout, stderr) => {
+              if (err) {
+                logger.warn(
+                  "failed to reconcile project pool pressure policy",
+                  {
+                    mode,
+                    err: `${err}`,
+                    stderr: `${stderr ?? ""}`.trim().slice(0, 2_000),
+                  },
+                );
+                if (lastRequestedPressureMode === mode) {
+                  lastRequestedPressureMode = undefined;
+                  const retry = setTimeout(
+                    () => setProjectPoolPressurePolicy(state),
+                    5_000,
+                  );
+                  retry.unref?.();
+                }
+              }
+              resolve();
+            },
+          );
+        }),
+    );
+}
 
 export function startStorageAdmissionController(): () => void {
   if (activeController) return () => {};
-  activeController = createStorageAdmissionController();
+  activeController = createStorageAdmissionController({
+    onPressureStateChange: setProjectPoolPressurePolicy,
+  });
+  configureBtrfsBackgroundMutationGuard(() =>
+    activeController?.backgroundDeferralReason(),
+  );
+  // Reconcile even when the initial sample is normal; /run state may have
+  // survived a project-host restart but not the controller's in-memory state.
+  setProjectPoolPressurePolicy(activeController.getStatus().pressure_state);
   const sampleMs = positiveInteger(
     process.env.COCALC_PROJECT_HOST_STORAGE_IO_SAMPLE_MS,
     DEFAULT_SAMPLE_MS,
@@ -403,12 +525,19 @@ export function startStorageAdmissionController(): () => void {
   return () => {
     if (activeTimer) clearInterval(activeTimer);
     activeTimer = undefined;
+    configureBtrfsBackgroundMutationGuard(undefined);
     activeController = undefined;
+    lastRequestedPressureMode = undefined;
   };
 }
 
 function controller(): StorageAdmissionController {
-  activeController ??= createStorageAdmissionController();
+  if (!activeController) {
+    activeController = createStorageAdmissionController({
+      onPressureStateChange: setProjectPoolPressurePolicy,
+    });
+    setProjectPoolPressurePolicy(activeController.getStatus().pressure_state);
+  }
   return activeController;
 }
 
@@ -427,6 +556,7 @@ export function getStorageAdmissionStatus():
 export function resetStorageAdmissionControllerForTest(): void {
   if (activeTimer) clearInterval(activeTimer);
   activeTimer = undefined;
+  configureBtrfsBackgroundMutationGuard(undefined);
   activeController = undefined;
 }
 

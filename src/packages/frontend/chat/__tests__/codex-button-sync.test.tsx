@@ -17,9 +17,9 @@ jest.mock("antd", () => {
   Radio.Group = ({ children }: any) => <div>{children}</div>;
   return {
     __esModule: true,
-    Alert: ({ children, description, message }: any) => (
+    Alert: ({ children, description, title }: any) => (
       <div>
-        {message}
+        {title}
         {description}
         {children}
       </div>
@@ -44,6 +44,7 @@ jest.mock("antd", () => {
               {menu?.items?.map((item: any) => (
                 <button
                   key={item.key}
+                  disabled={item.disabled}
                   onClick={(event) =>
                     menu?.onClick?.({ domEvent: event, key: item.key })
                   }
@@ -58,6 +59,9 @@ jest.mock("antd", () => {
     },
     Input: () => <input />,
     Modal: ({ open, children }: any) => (open ? <div>{children}</div> : null),
+    Progress: ({ "aria-label": ariaLabel }: any) => (
+      <div aria-label={ariaLabel} />
+    ),
     Radio,
     Select: ({ value }: any) => <div>{String(value ?? "")}</div>,
     Space: ({ children }: any) => <div>{children}</div>,
@@ -93,6 +97,10 @@ jest.mock("@cocalc/frontend/lite", () => ({
   lite: false,
 }));
 
+jest.mock("@cocalc/frontend/components/time-ago", () => ({
+  TimeAgo: () => <span>later</span>,
+}));
+
 jest.mock("@cocalc/frontend/account/codex-credentials-panel", () => ({
   CodexCredentialsPanel: () => null,
   CodexUsageMeters: ({ compact, status, stale, updating }: any) => (
@@ -123,7 +131,8 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
 }));
 
 jest.mock("../use-codex-payment-source", () => ({
-  getCodexPaymentSourceShortLabel: () => "ChatGPT",
+  getCodexPaymentSourceShortLabel: (source: string) =>
+    source === "site-api-key" ? "Membership" : "ChatGPT",
   getCodexPaymentSourceOptions: (source: any) => [
     {
       value: "auto",
@@ -143,8 +152,8 @@ jest.mock("../use-codex-payment-source", () => ({
       ? [
           {
             value: "site-api-key",
-            label: "Included by CoCalc",
-            description: "Use included allowance",
+            label: "CoCalc Membership",
+            description: "Use membership allowance",
           },
         ]
       : []),
@@ -283,7 +292,7 @@ describe("CodexConfigButton", () => {
     });
   });
 
-  it("locks the payment source after a Codex session starts", async () => {
+  it("does not let an established personal session enter Membership mode", async () => {
     const actions = {
       getCodexConfig: jest.fn(() => undefined),
       setCodexConfig: jest.fn(),
@@ -315,13 +324,148 @@ describe("CodexConfigButton", () => {
     await waitFor(() => {
       expect(screen.getByText("gpt-5.4")).toBeTruthy();
     });
-    expect(screen.queryByTitle("Change Codex payment source")).toBeNull();
+    fireEvent.click(screen.getByTitle("Change Codex payment source"));
+    expect(
+      (screen.getByText("CoCalc Membership") as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     fireEvent.click(screen.getByText("Codex"));
     expect(document.body.textContent).toContain(
-      "This source is fixed for the lifetime of the Codex session",
+      "Switching an established personal session into membership-funded mode is disabled",
     );
+    await waitFor(() => {
+      expect(
+        screen.getByText("compact usage meters usage loaded"),
+      ).toBeTruthy();
+    });
     expect(actions.setCodexConfig).not.toHaveBeenCalled();
+  });
+
+  it("loads and exposes the connected ChatGPT email when Plan is hovered", async () => {
+    getCodexUsageStatus.mockResolvedValue({
+      available: true,
+      account: {
+        account: {
+          type: "chatgpt",
+          email: "member@example.com",
+        },
+      },
+    });
+
+    render(
+      <CodexConfigButton
+        threadKey="thread-1"
+        chatPath="foo.chat"
+        projectId="project-1"
+        actions={
+          {
+            getCodexConfig: jest.fn(() => undefined),
+            setCodexConfig: jest.fn(),
+          } as any
+        }
+        threadConfig={{ paymentSource: "subscription" }}
+        paymentSource={{
+          source: "subscription",
+          hasSubscription: true,
+          hasProjectApiKey: false,
+          hasAccountApiKey: false,
+          hasSiteApiKey: true,
+          siteAiUsageLimitPositive: true,
+          siteFundedCodex: { enabled: true },
+          sharedHomeMode: "disabled",
+        }}
+      />,
+    );
+
+    fireEvent.mouseEnter(screen.getByLabelText("Change Codex payment source"));
+
+    await waitFor(() => {
+      expect(getCodexUsageStatus).toHaveBeenCalledWith({
+        project_id: "project-1",
+        timeout: 60_000,
+      });
+      expect(
+        screen.getByLabelText(
+          "Change Codex payment source. Connected ChatGPT account: member@example.com",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("upgrades a Membership session to ChatGPT without losing its context", async () => {
+    const actions = {
+      getCodexConfig: jest.fn(() => undefined),
+      setCodexConfig: jest.fn(),
+    } as any;
+
+    render(
+      <CodexConfigButton
+        threadKey="thread-1"
+        chatPath="foo.chat"
+        actions={actions}
+        threadConfig={{
+          model: "gpt-5.6-sol",
+          paymentSource: "site-api-key",
+          sessionId: "thr-established",
+        }}
+        paymentSource={
+          {
+            source: "site-api-key",
+            hasSubscription: true,
+            hasProjectApiKey: false,
+            hasAccountApiKey: false,
+            hasSiteApiKey: true,
+            siteAiUsageLimitPositive: true,
+            siteFundedCodex: {
+              enabled: true,
+              policy: {
+                model: "gpt-5.6-luna",
+                reasoning: "low",
+                serviceTier: "standard",
+              },
+              status: {
+                pools: [],
+                account: {
+                  accountId: "account-1",
+                  committed5hMicrousd: 50_000,
+                  committed7dMicrousd: 100_000,
+                  activeReservedMicrousd: 0,
+                  limit5hMicrousd: 200_000,
+                  limit7dMicrousd: 500_000,
+                  remaining5hMicrousd: 150_000,
+                  remaining7dMicrousd: 400_000,
+                  reset5hAt: "2026-08-04T04:00:00.000Z",
+                  reset7dAt: "2026-08-10T23:00:00.000Z",
+                },
+              },
+            },
+            sharedHomeMode: "disabled",
+          } as any
+        }
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-5.6-luna")).toBeTruthy();
+    });
+    expect(screen.queryByText("Standard")).toBeNull();
+    fireEvent.click(screen.getByTitle("Change Codex payment source"));
+    fireEvent.click(screen.getByText("ChatGPT Plan"));
+
+    expect(actions.setCodexConfig).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        model: "gpt-5.6-luna",
+        paymentSource: "subscription",
+        reasoning: "low",
+        serviceTier: "standard",
+        sessionId: "thr-established",
+      }),
+    );
+
+    fireEvent.click(screen.getByText("Codex"));
+    expect(screen.getByLabelText("5-hour limit: 75% remaining")).toBeTruthy();
+    expect(screen.getByLabelText("7-day limit: 80% remaining")).toBeTruthy();
   });
 
   it("uses a stable thread config key independent of object identity", () => {
@@ -538,7 +682,6 @@ describe("CodexConfigButton", () => {
     });
     getCodexUsageStatus.mockReturnValue(liveUsagePromise);
     writeCachedCodexUsageStatus({
-      projectId: "project-1",
       status: {
         available: true,
         checkedAt: "2026-06-20T00:00:00.000Z",

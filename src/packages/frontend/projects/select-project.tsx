@@ -15,6 +15,7 @@ type ProjectSelectionList = { id: string; title: string }[];
 interface Props {
   exclude?: string[]; // project_id's to exclude
   at_top?: string[]; // include these projects at the top of the selector first (assuming they are in the project_map)
+  disabled?: boolean;
   fullCollaboratorOnly?: boolean;
   onChange: (project_id: string) => void; // called when specific project selected
   value?: string; // currently selected project
@@ -34,6 +35,7 @@ function hasFullCollaboratorAccess(project: any, account_id?: string): boolean {
 export function SelectProject({
   exclude,
   at_top,
+  disabled = false,
   fullCollaboratorOnly = false,
   onChange,
   value,
@@ -121,6 +123,7 @@ export function SelectProject({
       <div style={{ display: "flex", flexDirection: "row" }}>
         <Select
           allowClear
+          disabled={disabled}
           style={{ marginRight: "15px", flex: 1 }}
           showSearch={true}
           placeholder={"Select a project..."}

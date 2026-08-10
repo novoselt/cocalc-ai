@@ -15,11 +15,18 @@ interface FallbackProps {
   scope: string;
 }
 
+export interface ErrorBoundaryRetryInfo {
+  error: unknown;
+  retryCount: number;
+  scope: string;
+}
+
 interface Props {
   children: ReactNode;
   scope: string;
-  autoRetry?: boolean;
+  autoRetry?: boolean | ((info: ErrorBoundaryRetryInfo) => boolean);
   fallback?: ReactNode | ((props: FallbackProps) => ReactNode);
+  onAutoRetry?: (info: ErrorBoundaryRetryInfo) => void;
   resetKeys?: readonly unknown[];
 }
 
@@ -48,28 +55,63 @@ export class CocalcErrorBoundary extends Component<Props, State> {
     retries: 0,
   };
 
+  private pendingAutoRetry: ErrorBoundaryRetryInfo | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   static getDerivedStateFromError(error: unknown): Partial<State> {
     return { error, hasError: true };
   }
 
+  private shouldAutoRetry(error: unknown): boolean {
+    const { autoRetry, scope } = this.props;
+    if (typeof autoRetry === "function") {
+      return autoRetry({
+        error,
+        retryCount: this.state.retries,
+        scope,
+      });
+    }
+    return autoRetry === true && this.state.retries === 0;
+  }
+
   componentDidCatch(error: unknown, _info: ErrorInfo): void {
-    markCaughtReactError(error, this.props.scope);
-    if (this.props.autoRetry === true && this.state.retries === 0) {
+    const autoRetry = this.shouldAutoRetry(error);
+    markCaughtReactError(error, this.props.scope, {
+      action: autoRetry ? "auto-retry" : "fallback",
+      retryCount: this.state.retries,
+    });
+    if (!autoRetry) {
+      this.pendingAutoRetry = undefined;
+    }
+    if (autoRetry) {
+      const retryCount = this.state.retries + 1;
       this.retryTimer = setTimeout(() => {
         this.retryTimer = undefined;
+        this.pendingAutoRetry = {
+          error,
+          retryCount,
+          scope: this.props.scope,
+        };
         this.setState(({ generation }) => ({
           error: undefined,
           generation: generation + 1,
           hasError: false,
-          retries: 1,
+          retries: retryCount,
         }));
       }, 0);
     }
   }
 
-  componentDidUpdate(previousProps: Props): void {
+  componentDidUpdate(previousProps: Props, previousState: State): void {
+    if (
+      previousState.hasError &&
+      !this.state.hasError &&
+      this.pendingAutoRetry != null
+    ) {
+      const retryInfo = this.pendingAutoRetry;
+      this.pendingAutoRetry = undefined;
+      this.props.onAutoRetry?.(retryInfo);
+    }
     if (
       this.state.hasError &&
       resetKeysChanged(previousProps.resetKeys, this.props.resetKeys)
@@ -85,6 +127,7 @@ export class CocalcErrorBoundary extends Component<Props, State> {
   }
 
   private reset = (retries = this.state.retries): void => {
+    this.pendingAutoRetry = undefined;
     if (this.retryTimer != null) {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
@@ -103,6 +146,9 @@ export class CocalcErrorBoundary extends Component<Props, State> {
 
   render(): ReactNode {
     if (this.state.hasError) {
+      if (this.shouldAutoRetry(this.state.error)) {
+        return null;
+      }
       if (typeof this.props.fallback === "function") {
         return this.props.fallback({
           error: this.state.error,

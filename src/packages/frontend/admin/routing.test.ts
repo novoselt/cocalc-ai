@@ -44,6 +44,10 @@ describe("admin routing", () => {
       kind: "index",
       section: "membership-analytics",
     });
+    expect(parseAdminRoute("admin/codex-pools")).toEqual({
+      kind: "index",
+      section: "codex-pools",
+    });
     expect(getAdminTargetPath({ kind: "index", section: "user-search" })).toBe(
       "admin/user-search",
     );

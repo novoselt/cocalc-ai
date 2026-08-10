@@ -36,6 +36,7 @@ describe("the useListing hook", () => {
       listing: null,
       error: null,
       refresh: expect.any(Function),
+      telemetry: null,
     });
     fs2 = fs;
     rerender();
@@ -49,6 +50,7 @@ describe("the useListing hook", () => {
       listing: [],
       error: null,
       refresh: expect.any(Function),
+      telemetry: null,
     });
 
     // now create a file
@@ -69,6 +71,7 @@ describe("the useListing hook", () => {
       ],
       error: null,
       refresh: expect.any(Function),
+      telemetry: null,
     });
 
     // change the path to one that does not exist and rerender,
@@ -103,6 +106,7 @@ describe("the useListing hook", () => {
           ],
           error: null,
           refresh: expect.any(Function),
+          telemetry: null,
         });
       },
       { timeout: 3000 },
@@ -121,6 +125,7 @@ describe("the useListing hook", () => {
         listing: [],
         error: null,
         refresh: expect.any(Function),
+        telemetry: null,
       });
     });
   });

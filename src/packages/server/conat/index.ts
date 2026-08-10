@@ -16,12 +16,14 @@ import { initHostStatusService } from "./host-status";
 import { startBackupLroWorker } from "@cocalc/server/projects/backup-worker";
 import { startCopyLroWorker } from "@cocalc/server/projects/copy-worker";
 import { startCourseCollectLroWorker } from "@cocalc/server/projects/course-collect-worker";
+import { startCourseReconfigureLroWorker } from "@cocalc/server/projects/course-reconfigure-worker";
 import { startProjectHardDeleteWorker } from "@cocalc/server/projects/hard-delete-worker";
 import { startMoveLroWorker } from "@cocalc/server/projects/move-worker";
 import { startRootfsPublishLroWorker } from "@cocalc/server/projects/rootfs-publish-worker";
 import { startRestoreLroWorker } from "@cocalc/server/projects/restore-worker";
 import { startHostLroWorker } from "@cocalc/server/hosts/start-worker";
 import { startHostRuntimeFleetRolloutWorker } from "@cocalc/server/hosts/runtime-fleet-rollout-worker";
+import { startComputeVmWorker } from "@cocalc/server/compute/worker";
 import { startLegacyMigrationProjectRestoreWorker } from "@cocalc/server/legacy-migration/restore-worker";
 import { startLegacyMigrationArtifactRefreshMaintenance } from "@cocalc/server/legacy-migration/artifact-refresh-maintenance";
 import { getProjectRuntimeMode } from "@cocalc/server/launchpad/project-runtime";
@@ -38,6 +40,7 @@ import { enableDbAccountRowFeedPublishing } from "@cocalc/server/account/account
 import { enableDbCollaboratorAccountFeedPublishing } from "@cocalc/server/account/collaborator-feed";
 import { enableDbProjectAccountFeedPublishing } from "@cocalc/server/account/project-feed";
 import {
+  startBayBackupHealthMaintenance,
   startBayBackupMaintenance,
   startBayWalArchiveMaintenance,
 } from "@cocalc/server/bay-backup";
@@ -53,6 +56,8 @@ import { startSiteFundedCodexMaintenance } from "@cocalc/server/ai/site-funded-c
 import startPurchasesMaintenanceLoop from "@cocalc/server/purchases/maintenance";
 import { startLroExpirationMaintenance } from "@cocalc/server/lro/expiration-maintenance";
 import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-retention-maintenance";
+import { startActiveUserMapHistoryMaintenance } from "@cocalc/server/active-user-map-history";
+import { startGrowthAnalyticsMaintenance } from "@cocalc/server/growth-analytics/maintenance";
 
 export { loadConatConfiguration };
 
@@ -102,6 +107,7 @@ export function startConatApiBackgroundWorkers(): void {
   startBackupLroWorker();
   startCopyLroWorker();
   startCourseCollectLroWorker();
+  startCourseReconfigureLroWorker();
   startProjectHardDeleteWorker();
   startMoveLroWorker();
   startBackgroundAutoGrowMaintenance();
@@ -121,8 +127,11 @@ export function startConatApiBackgroundWorkers(): void {
   }
   startHostLroWorker();
   if (isPrimaryBayWorker()) {
+    startComputeVmWorker();
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();
+    startActiveUserMapHistoryMaintenance();
+    startGrowthAnalyticsMaintenance();
     startHostRuntimeFleetRolloutWorker();
     startExamHostMaintenance();
   }
@@ -153,8 +162,15 @@ export function startConatApiBackgroundWorkers(): void {
       worker_id: process.env.COCALC_BAY_WORKER_ID,
     });
   }
-  startBayBackupMaintenance();
-  startBayWalArchiveMaintenance();
+  if (isPrimaryBayWorker()) {
+    startBayBackupHealthMaintenance();
+    startBayBackupMaintenance();
+    startBayWalArchiveMaintenance();
+  } else {
+    logger.info("bay backup maintenance skipped on non-primary bay worker", {
+      worker_id: process.env.COCALC_BAY_WORKER_ID,
+    });
+  }
 }
 
 export async function initConatApi({

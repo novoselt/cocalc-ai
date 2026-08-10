@@ -622,10 +622,51 @@ describe("open_file wait_for_ready", () => {
     jest.restoreAllMocks();
   });
 
+  it("normalizes a :line suffix before creating the file tab", async () => {
+    const path = "/home/user/c.txt";
+    const saveSession = jest.fn();
+    const { open_files, openFilesState, store } = makeOpenFilesHarness();
+
+    jest.spyOn(redux as any, "getStore").mockImplementation((name: string) => {
+      if (name === "page") {
+        return { get: jest.fn().mockReturnValue(false) };
+      }
+      return undefined;
+    });
+    jest
+      .spyOn(redux as any, "getActions")
+      .mockImplementation((name: string) => {
+        if (name === "page") {
+          return { save_session: saveSession };
+        }
+        return {};
+      });
+
+    const actions = {
+      project_id: "project-1",
+      get_store: () => store,
+      open_files,
+    } as any;
+
+    await open_file(actions, {
+      path: `${path}:5`,
+      foreground: false,
+      foreground_project: false,
+      wait_for_ready: false,
+    });
+
+    expect(openFilesState.has(`${path}:5`)).toBe(false);
+    expect(openFilesState.get(path)).toMatchObject({
+      display_path: path,
+      fragmentId: { line: "5" },
+    });
+  });
+
   it("bootstraps the editor component for public share viewer opens", async () => {
     const path = "/home/user/share/a.md";
     const saveSession = jest.fn();
     const ensureOpenFileComponent = jest.fn();
+    const markSyncIdentityPathCanonical = jest.fn();
     const { open_files, openFilesState, store } = makeOpenFilesHarness({
       public_directory_share_id: "share-id",
       public_directory_share_path: "share",
@@ -659,6 +700,7 @@ describe("open_file wait_for_ready", () => {
       set_active_tab: jest.fn(),
       set_current_path: jest.fn(),
       ensure_open_file_component: ensureOpenFileComponent,
+      markSyncIdentityPathCanonical,
     } as any;
 
     await open_file(actions, {
@@ -676,6 +718,7 @@ describe("open_file wait_for_ready", () => {
     expect(ensureOpenFileComponent).toHaveBeenCalledWith(path, {
       noFocus: true,
     });
+    expect(markSyncIdentityPathCanonical).toHaveBeenCalledWith(path);
     expect(actions.set_active_tab).toHaveBeenCalledWith(`editor-${path}`, {
       change_history: false,
     });
@@ -804,7 +847,7 @@ describe("open_file wait_for_ready", () => {
     );
   });
 
-  it("returns immediately for background opens without hydrating the editor", async () => {
+  it("keeps background opens from foregrounding or hydrating the project", async () => {
     const path = "/home/user/background.txt";
     const ensureProjectIsOpen = jest.fn().mockResolvedValue(undefined);
     const openProject = jest.fn();
@@ -850,7 +893,9 @@ describe("open_file wait_for_ready", () => {
     const openPromise = open_file(actions, {
       path,
       foreground: false,
-      foreground_project: false,
+      // Full-page listings historically passed this foreground-only hint even
+      // for modifier-clicks. The background-open invariant must win.
+      foreground_project: true,
       wait_for_ready: false,
       change_history: false,
     });
@@ -868,6 +913,7 @@ describe("open_file wait_for_ready", () => {
     expect(openFilesState.get(path)?.ext).toBeUndefined();
     expect(canonicalSyncIdentityPath).not.toHaveBeenCalled();
     expect(ensureProjectIsOpen).not.toHaveBeenCalled();
+    expect(openProject).not.toHaveBeenCalled();
     expect(saveSession).toHaveBeenCalled();
   });
 });

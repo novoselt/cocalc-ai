@@ -23,7 +23,7 @@ jest.mock("@cocalc/lite/hub/acp", () => ({
     setGeneratedImageBlobWriter(...args),
 }));
 
-jest.mock("../master-status", () => ({
+jest.mock("../master-conat-client", () => ({
   getMasterConatClient: () => getMasterConatClient(),
 }));
 

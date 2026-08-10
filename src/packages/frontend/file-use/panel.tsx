@@ -103,7 +103,7 @@ export function RecentDocumentActivityPanel({ onClose, title }: Props) {
         <Alert
           type="info"
           showIcon
-          message="Showing fast results first while slower projects continue loading."
+          title="Showing fast results first while slower projects continue loading."
           style={{ marginBottom: "10px" }}
         />
       ) : null}

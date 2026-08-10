@@ -16,6 +16,7 @@ import {
   RSTUDIO_PROJECT_BODY,
   ROOTFS_BODY,
   TASKS_BODY,
+  VIRTUAL_MACHINES_BODY,
 } from "../content";
 
 export const PROJECTS_ENTRIES: DocsEntry[] = [
@@ -119,23 +120,47 @@ export const PROJECTS_ENTRIES: DocsEntry[] = [
     title: "Use the projects page",
   },
   {
+    actions: [
+      {
+        description: "Open the virtual machines page in a selected project.",
+        executable: true,
+        id: "project.virtual-machines.open",
+        label: "Open project VMs",
+        parameters: projectActionParameters(),
+      },
+    ],
+    audiences: ["agents", "instructors", "researchers", "students", "teams"],
+    body: VIRTUAL_MACHINES_BODY.trim(),
+    category: "Projects",
+    id: "projects.virtual-machines",
+    lastReviewed: "2026-08-08",
+    requiredFeatures: ["compute-vms"],
+    searchKeywords:
+      "managed compute dedicated virtual machines vm ssh rsync work volume spot standard egress billing",
+    slug: "projects/virtual-machines",
+    status: "ready",
+    summary:
+      "Create and operate standalone Ubuntu VMs with SSH access, metered egress, and optional persistent /work storage.",
+    title: "Virtual machines",
+  },
+  {
     audiences: ["agents", "instructors", "researchers", "students", "teams"],
     body: PUBLISH_FILES_BODY.trim(),
     category: "Projects",
     id: "projects.publish-files",
     image: docsIcon(
       "/public/docs/create-project-5b221552.webp",
-      "A project folder with read-only public share links",
+      "A project file or folder with a read-only public share link",
     ),
-    lastReviewed: "2026-06-29",
+    lastReviewed: "2026-08-06",
     noActionReason:
       "This page is normally opened from the publishing UI, so an action that reopens the same panel is redundant.",
     searchKeywords:
-      "public directory shares publish files folders whole project unlisted viewer copy slug",
+      "public exact file directory shares publish files folders whole project unlisted viewer copy slug legacy",
     slug: "projects/publish-files",
     status: "ready",
     summary:
-      "Publish read-only project folders or the whole project with unlisted signed-in share links.",
+      "Publish an exact file, a folder, or the whole project with an unlisted signed-in share link.",
     title: "Publish project files",
   },
   {

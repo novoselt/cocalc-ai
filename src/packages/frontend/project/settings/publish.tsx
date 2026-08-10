@@ -121,20 +121,20 @@ export function PublishPanel({
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space vertical size={16} style={{ width: "100%" }}>
       <Space align="center" style={{ justifyContent: "space-between" }}>
         <Text strong>Publish read-only project content</Text>
         <Popover
           title="About public project shares"
           content={
-            <Space direction="vertical" size={10} style={{ maxWidth: 340 }}>
+            <Space vertical size={10} style={{ maxWidth: 340 }}>
               <Paragraph style={{ marginBottom: 0 }}>
-                Published directories are unlisted and visible to signed-in
-                CoCalc users who know the URL. Publishing the entire project
-                means <code>/home/user</code>; private internals such as{" "}
+                Published files and directories are unlisted and visible to
+                signed-in CoCalc users who know the URL. Publishing the entire
+                project means <code>/home/user</code>; private internals such as{" "}
                 <code>.ssh</code>, <code>.cache</code>, <code>.local</code>, and{" "}
                 <code>.snapshots</code> are excluded. Your membership tier
-                limits how many active directories you can publish.
+                limits how many active paths you can publish.
               </Paragraph>
               <Button
                 size="small"
@@ -171,14 +171,14 @@ export function PublishPanel({
         </Button>
       </Space>
 
-      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {error ? <Alert type="error" showIcon title={error} /> : null}
 
       {loading && shares.length === 0 ? (
         <Loading />
       ) : shares.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No project directories are published."
+          description="No project paths are published."
         />
       ) : (
         <Table<PublicDirectoryShareSummary>
@@ -193,7 +193,7 @@ export function PublishPanel({
               const url = shareUrl(share.slug);
               const editPath = share.path === "." ? "/home/user" : share.path;
               return (
-                <Space direction="vertical" size={6} style={{ width: "100%" }}>
+                <Space vertical size={6} style={{ width: "100%" }}>
                   <div>
                     <Text strong>{pathLabel(share.path)}</Text>{" "}
                     <Text code>
@@ -201,6 +201,7 @@ export function PublishPanel({
                     </Text>
                   </div>
                   <Space wrap size={[4, 4]}>
+                    <Tag>{share.path_type}</Tag>
                     <Tag color={visibilityColor(share.visibility)}>
                       {share.visibility}
                     </Tag>

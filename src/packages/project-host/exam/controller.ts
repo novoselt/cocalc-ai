@@ -217,7 +217,6 @@ function readinessForRow(row: LocalExamRunRow): HostExamReadinessCheck[] {
   const ready = row.status === "ready" || row.status === "open";
   return [
     { name: "host_running", ok: true },
-    { name: "on_demand", ok: true },
     { name: "public_route", ok: ready },
     {
       name: "rootfs",

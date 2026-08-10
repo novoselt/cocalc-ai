@@ -153,6 +153,48 @@ describe("host runtime fleet rollout planning", () => {
         components: ["acp-worker"],
       }),
     ).toBe(true);
+    status.observed_components[1].version_state = "drifted";
+    status.observed_components[1].running_versions = ["artifact-v2"];
+    expect(
+      __test__.runtimeObservationIsStable({
+        status,
+        version: "artifact-v2",
+        components: ["acp-worker"],
+      }),
+    ).toBe(false);
+  });
+
+  test("accepts a staged auxiliary router only when it runs the requested artifact", () => {
+    expect(
+      __test__.runtimeObservationIsStable({
+        version: "artifact-v2",
+        components: ["conat-router"],
+        status: {
+          host_id: "host-a",
+          configured: [],
+          effective: [],
+          observed_artifacts: [
+            {
+              artifact: "project-host",
+              current_version: "artifact-v1",
+              current_build_id: "build-v1",
+              installed_versions: ["artifact-v1", "artifact-v2"],
+            },
+          ],
+          observed_components: [
+            {
+              component: "conat-router",
+              artifact: "project-host",
+              runtime_state: "running",
+              version_state: "drifted",
+              running_versions: ["artifact-v2"],
+              running_pids: [456],
+            },
+          ],
+          observed_targets: [],
+        },
+      }),
+    ).toBe(true);
   });
 
   test("defaults old durable operations to project-host and rejects invalid input", () => {

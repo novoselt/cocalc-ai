@@ -1,0 +1,11 @@
+[Unit]
+Description=Observe CoCalc Bay pgBackRest health every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=cocalc-bay-pgbackrest-status.service
+
+[Install]
+WantedBy=timers.target

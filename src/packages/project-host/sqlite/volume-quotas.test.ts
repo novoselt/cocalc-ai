@@ -161,4 +161,200 @@ describe("project volume quota ledger", () => {
       }),
     ).toBe(false);
   });
+
+  it("audits dirty rows immediately and stable applied rows only when due", async () => {
+    const ledger = await import("./volume-quotas");
+    ledger.acceptProjectVolumeQuotaDesired({
+      project_id: "project-audit",
+      volume_kind: "home",
+      desired_bytes: 10,
+      desired_revision: 2,
+    });
+    expect(
+      ledger.listProjectVolumeQuotaAuditBatch({
+        now: Date.now(),
+        epoch: "filesystem-1:1",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        project_id: "project-audit",
+        state: "pending",
+      }),
+    ]);
+
+    ledger.markProjectVolumeQuotaApplied({
+      project_id: "project-audit",
+      volume_kind: "home",
+      desired_bytes: 10,
+      desired_revision: 2,
+      volume_identity: "volume-1",
+      epoch: "filesystem-1:1",
+    });
+    const applied = ledger.getProjectVolumeQuota("project-audit", "home")!;
+    expect(applied.next_audit_at).toBeGreaterThan(Date.now());
+    expect(
+      ledger.listProjectVolumeQuotaAuditBatch({
+        now: Date.now(),
+        epoch: "filesystem-1:1",
+      }),
+    ).toEqual([]);
+    expect(
+      ledger.listProjectVolumeQuotaAuditBatch({
+        now: applied.next_audit_at!,
+        epoch: "filesystem-1:1",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        project_id: "project-audit",
+        state: "applied",
+      }),
+    ]);
+  });
+
+  it("delays failed-row retries but immediately detects an epoch change", async () => {
+    const ledger = await import("./volume-quotas");
+    ledger.acceptProjectVolumeQuotaDesired({
+      project_id: "project-retry",
+      volume_kind: "home",
+      desired_bytes: 10,
+      desired_revision: 1,
+    });
+    ledger.markProjectVolumeQuotaFailed({
+      project_id: "project-retry",
+      volume_kind: "home",
+      error: "temporary failure",
+    });
+    const failed = ledger.getProjectVolumeQuota("project-retry", "home")!;
+    expect(
+      ledger.listProjectVolumeQuotaAuditBatch({
+        now: Date.now(),
+        epoch: "filesystem-1:1",
+      }),
+    ).not.toContainEqual(
+      expect.objectContaining({
+        project_id: "project-stopped-scratch",
+        volume_kind: "scratch",
+      }),
+    );
+    expect(
+      ledger.listProjectVolumeQuotaAuditBatch({
+        now: failed.next_audit_at!,
+        epoch: "filesystem-1:1",
+      }),
+    ).toHaveLength(1);
+
+    ledger.acceptProjectVolumeQuotaDesired({
+      project_id: "project-epoch",
+      volume_kind: "home",
+      desired_bytes: 10,
+      desired_revision: 1,
+    });
+    ledger.markProjectVolumeQuotaApplied({
+      project_id: "project-epoch",
+      volume_kind: "home",
+      desired_bytes: 10,
+      desired_revision: 1,
+      volume_identity: "volume-epoch",
+      epoch: "filesystem-1:1",
+    });
+    expect(
+      ledger.listProjectVolumeQuotaAuditBatch({
+        now: Date.now(),
+        epoch: "filesystem-1:2",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        project_id: "project-epoch",
+        state: "applied",
+      }),
+    ]);
+  });
+
+  it("keeps stopped scratch resets out of generic quota repair until prepared", async () => {
+    const projects = await import("./projects");
+    const ledger = await import("./volume-quotas");
+    projects.upsertProject({
+      project_id: "project-stopped-scratch",
+      state: "opened",
+      disk: 10,
+      scratch: 10,
+      run_quota_revision: 1,
+    });
+    ledger.acceptProjectVolumeQuotaDesired({
+      project_id: "project-stopped-scratch",
+      volume_kind: "scratch",
+      desired_bytes: 10,
+      desired_revision: 1,
+    });
+    expect(ledger.claimStoppedScratchVolumePreparations()).toBe(1);
+    expect(
+      ledger.getProjectVolumeQuota("project-stopped-scratch", "scratch"),
+    ).toEqual(expect.objectContaining({ reset_required: true }));
+    ledger.invalidateProjectVolumeQuota({
+      project_id: "project-stopped-scratch",
+      volume_kind: "scratch",
+      reason: "project stopped; scratch reset pending",
+      reset_required: true,
+    });
+
+    expect(
+      ledger.listProjectVolumeQuotaAuditBatch({
+        now: Date.now(),
+        epoch: "filesystem-1:1",
+      }),
+    ).not.toContainEqual(
+      expect.objectContaining({
+        project_id: "project-stopped-scratch",
+        volume_kind: "scratch",
+      }),
+    );
+    expect(ledger.listStoppedScratchVolumePreparationBatch()).toEqual([
+      expect.objectContaining({
+        project_id: "project-stopped-scratch",
+        reset_required: true,
+      }),
+    ]);
+
+    ledger.markProjectVolumeQuotaFailed({
+      project_id: "project-stopped-scratch",
+      volume_kind: "scratch",
+      error: "temporary reset failure",
+    });
+    const failed = ledger.getProjectVolumeQuota(
+      "project-stopped-scratch",
+      "scratch",
+    )!;
+    expect(ledger.listStoppedScratchVolumePreparationBatch()).toEqual([]);
+    expect(
+      ledger.listStoppedScratchVolumePreparationBatch({
+        now: failed.next_audit_at!,
+      }),
+    ).toHaveLength(1);
+
+    ledger.markProjectVolumeQuotaApplied({
+      project_id: "project-stopped-scratch",
+      volume_kind: "scratch",
+      desired_bytes: 10,
+      desired_revision: 1,
+      volume_identity: "scratch-volume-1",
+      epoch: "filesystem-1:1",
+    });
+    expect(
+      ledger.getProjectVolumeQuota("project-stopped-scratch", "scratch"),
+    ).toEqual(expect.objectContaining({ reset_required: true }));
+    expect(
+      ledger.markProjectVolumeQuotaResetComplete({
+        project_id: "project-stopped-scratch",
+        desired_revision: 1,
+      }),
+    ).toBe(true);
+    expect(
+      ledger.getProjectVolumeQuota("project-stopped-scratch", "scratch"),
+    ).toEqual(expect.objectContaining({ reset_required: false }));
+    expect(
+      ledger.listStoppedScratchVolumePreparationBatch({
+        now: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual([]);
+  });
 });

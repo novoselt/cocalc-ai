@@ -17,6 +17,7 @@ import {
   PROJECT_SECRETS_MOUNT_PATH,
 } from "@cocalc/util/project-secrets";
 import { projectRuntimePathForProcess } from "@cocalc/util/project-runtime";
+import { getProjectHubApi } from "./hub";
 
 const logger = getLogger("project:conat:terminal-server");
 
@@ -37,12 +38,61 @@ function supportsTerminalInitFile(command?: string): boolean {
 }
 
 export function projectScopedCliEnv(): Record<string, string> {
-  return {
+  const env = {
     COCALC_API_URL: conatServer,
     COCALC_PROJECT_ID: project_id,
     COCALC_SECRET_TOKEN: join(data, "secret-token"),
     [PROJECT_SECRETS_ENV]: PROJECT_SECRETS_MOUNT_PATH,
   };
+  const siteUrl = normalizeSiteUrl(process.env.COCALC_SITE_URL);
+  return siteUrl ? { ...env, COCALC_SITE_URL: siteUrl } : env;
+}
+
+let resolvedSiteUrl: string | undefined;
+let siteUrlRequest: Promise<string | undefined> | undefined;
+
+function normalizeSiteUrl(value?: string): string | undefined {
+  const raw = `${value ?? ""}`.trim();
+  if (!raw) return;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return;
+  }
+}
+
+async function requestProjectSiteUrl(): Promise<string | undefined> {
+  const fromEnv = normalizeSiteUrl(process.env.COCALC_SITE_URL);
+  if (fromEnv) return fromEnv;
+  if (resolvedSiteUrl) return resolvedSiteUrl;
+  if (!siteUrlRequest) {
+    siteUrlRequest = getProjectHubApi()
+      .system.getPublicSiteUrl({ project_id })
+      .then(({ url }) => {
+        resolvedSiteUrl = normalizeSiteUrl(url);
+        if (resolvedSiteUrl) {
+          process.env.COCALC_SITE_URL = resolvedSiteUrl;
+        }
+        return resolvedSiteUrl;
+      })
+      .catch((err) => {
+        logger.debug("unable to resolve public CoCalc site URL", {
+          err: `${err}`,
+        });
+        return undefined;
+      })
+      .finally(() => {
+        siteUrlRequest = undefined;
+      });
+  }
+  return await Promise.race([
+    siteUrlRequest,
+    new Promise<undefined>((resolve) =>
+      setTimeout(() => resolve(undefined), 2_000),
+    ),
+  ]);
 }
 
 export function applyTerminalRuntimeCwd(
@@ -97,6 +147,7 @@ async function preHook(hook: {
 }) {
   const { command, args, options } = hook;
   applyTerminalRuntimeCwd(options);
+  await requestProjectSiteUrl();
   options.env0 = {
     ...projectScopedCliEnv(),
     ...(options.env0 ?? {}),

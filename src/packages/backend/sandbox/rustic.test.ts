@@ -32,6 +32,8 @@ afterAll(async () => {
 });
 
 describeIfNotDarwin("rustic does something", () => {
+  jest.setTimeout(15_000);
+
   it("there are initially no backups", async () => {
     const { stdout, truncated } = await rustic(
       ["snapshots", "--json"],

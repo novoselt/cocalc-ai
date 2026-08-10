@@ -5,7 +5,8 @@
     "check-deps": "check-dependency-version-consistency --ignore-dep entities .",
     "lint:frontend": "oxlint --config .oxlintrc.jsonc frontend && pnpm --dir frontend check:antd-tooltip-imports",
     "lint:non-frontend": "oxlint --config .oxlintrc.non-frontend.jsonc .",
-    "tsc:build": "node --max-old-space-size=6144 node_modules/typescript/bin/tsc --build tsconfig.solution.json",
+    "tsc:prepare": "pnpm --filter @cocalc/cdn build && pnpm --filter @cocalc/frontend i18n:compile",
+    "tsc:build": "pnpm tsc:prepare && node --max-old-space-size=6144 node_modules/typescript/bin/tsc --build tsconfig.solution.json",
     "tsc:watch": "tsc --build --watch --pretty --preserveWatchOutput tsconfig.solution.json"
   },
   "devDependencies": {

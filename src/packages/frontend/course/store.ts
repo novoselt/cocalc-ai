@@ -192,6 +192,16 @@ export type ActivityMap = Map<number, string>;
 // more than once at the same time, which is probably just *inefficient*.
 export type NBgraderRunInfo = Map<string, number>;
 
+export interface CourseReconfigureProgress {
+  phase?: string;
+  total?: number;
+  queued?: number;
+  running?: number;
+  done?: number;
+  failed?: number;
+  canceled?: number;
+}
+
 export interface CourseState {
   activity: ActivityMap;
   action_all_projects_state: string;
@@ -201,6 +211,8 @@ export interface CourseState {
   course_filename: string;
   course_project_id: string;
   configuring_projects?: boolean;
+  configuring_projects_op_id?: string;
+  configuring_projects_progress?: CourseReconfigureProgress;
   reinviting_students?: boolean;
   error?: string;
   expanded_students: Set<string>;

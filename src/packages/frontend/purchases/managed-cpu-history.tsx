@@ -407,7 +407,7 @@ function TopAccounts({ accounts }: { accounts: ManagedCpuAccountSummary[] }) {
 function RecentEvents({ events }: { events: ManagedCpuEventSummary[] }) {
   if (events.length === 0) {
     return (
-      <Alert showIcon type="info" message="No recent events in this window." />
+      <Alert showIcon type="info" title="No recent events in this window." />
     );
   }
   return (

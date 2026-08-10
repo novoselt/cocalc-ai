@@ -141,6 +141,16 @@ export interface DedicatedHostPurchase {
   funding_lane: "prepaid" | "credit";
   hourly_cost_usd: MoneyValue;
   pricing_snapshot?: DedicatedHostPricingSnapshot;
+  resource_kind?:
+    | "project-host"
+    | "compute-vm"
+    | "compute-volume"
+    | "compute-egress";
+  project_id?: string | null;
+  usage_bytes?: number;
+  unit_cost_usd_per_gb?: MoneyValue;
+  usage_interval_start?: string;
+  usage_interval_end?: string;
 }
 
 export interface DedicatedHostPricingComponent {
@@ -251,7 +261,7 @@ Table({
     account_id: CREATED_BY,
     cost: {
       title: "Cost ($)",
-      desc: "The cost in US dollars. Not set if the purchase isn't finished, e.g., when upgrading a project this is only set when project stops or purchase is finalized. This takes precedence over the cost_per_hour times the length of the period when active.",
+      desc: "The finalized user-facing ledger cost. New entries are posted in whole cents; legacy entries may retain sub-cent precision until explicitly migrated. Not set while a metered purchase is active. This takes precedence over precise metering fields once posted.",
       type: "number",
       pg_type: "numeric(20,10)",
     },

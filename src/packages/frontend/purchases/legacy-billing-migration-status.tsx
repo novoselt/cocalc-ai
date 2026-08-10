@@ -13,6 +13,7 @@ import openSupportTab from "@cocalc/frontend/support/open";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { LegacyMigrationFinancialPreviewResponse } from "@cocalc/conat/hub/api/legacy-migration";
 import { legacyBillingMigrationReviewRequested } from "./legacy-billing-migration-review";
+import { activeLegacyMembershipGrantClass } from "./legacy-billing-migration-state";
 import { getPaymentMethods } from "./api";
 
 const { Text } = Typography;
@@ -156,7 +157,7 @@ export default function LegacyBillingMigrationStatus({
   async function configureRenewal(
     membership_class: "basic" | "member" | "pro" | null,
   ) {
-    if (!preview?.applied_membership_class) return;
+    if (!activeLegacyMembershipGrantClass(preview)) return;
     setRenewalSaving(membership_class ?? "cancel");
     setError("");
     try {
@@ -191,7 +192,7 @@ export default function LegacyBillingMigrationStatus({
       <Alert
         showIcon
         type="warning"
-        message="Legacy billing migration status is unavailable"
+        title="Legacy billing migration status is unavailable"
         description={error}
       />
     );
@@ -218,7 +219,7 @@ export default function LegacyBillingMigrationStatus({
         <Alert
           showIcon
           type="warning"
-          message="Verify your email address to migrate legacy billing"
+          title="Verify your email address to migrate legacy billing"
           description={
             <span>
               {verificationEmail ? (
@@ -253,7 +254,7 @@ export default function LegacyBillingMigrationStatus({
 
   const pending =
     preview.pending_credit_amount > 0 || preview.active_subscription_count > 0;
-  const continueMembership = preview.applied_membership_class;
+  const continueMembership = activeLegacyMembershipGrantClass(preview);
   const suggestedMembership = preview.suggested_membership_class;
   const suggestedMembershipLabel = membershipLabel(suggestedMembership);
   const continueMembershipLabel = membershipLabel(continueMembership);
@@ -318,11 +319,11 @@ export default function LegacyBillingMigrationStatus({
         </Space>
       }
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <Alert
           showIcon
           type={pending ? "info" : "success"}
-          message={
+          title={
             pending
               ? "Legacy billing data found"
               : "Legacy billing data migrated"
@@ -339,9 +340,9 @@ export default function LegacyBillingMigrationStatus({
           <Alert
             showIcon
             type="success"
-            message={`Free ${grantDays}-day ${continueMembershipLabel} grant`}
+            title={`Free ${grantDays}-day ${continueMembershipLabel} grant`}
             description={
-              <Space direction="vertical" size="small">
+              <Space vertical size="small">
                 <span>
                   You can use the free membership until the grant ends. Choose
                   what should happen after that; you can change this any time
@@ -432,7 +433,7 @@ export default function LegacyBillingMigrationStatus({
                   <Alert
                     showIcon
                     type="warning"
-                    message="Add a payment method before renewal"
+                    title="Add a payment method before renewal"
                     description={
                       <span>
                         Renewal is scheduled after the free month, but CoCalc
@@ -456,19 +457,19 @@ export default function LegacyBillingMigrationStatus({
           />
         ) : null}
         <Space wrap size="large">
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Pending credit</Text>
             <Text strong>{formatMoney(preview.pending_credit_amount)}</Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Remaining paid value</Text>
             <Text>{formatMoney(pendingEntitlementCredit)}</Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Migrated credit</Text>
             <Text>{formatMoney(preview.applied_credit_amount)}</Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Membership grant</Text>
             <Text>
               {suggestedMembership ? (
@@ -486,7 +487,7 @@ export default function LegacyBillingMigrationStatus({
               )}
             </Text>
           </Space>
-          <Space direction="vertical" size={0}>
+          <Space vertical size={0}>
             <Text type="secondary">Stripe customer</Text>
             <Text copyable={!!preview.stripe_customer_id}>
               {preview.stripe_customer_id ?? "None found"}
@@ -497,9 +498,9 @@ export default function LegacyBillingMigrationStatus({
           <Alert
             showIcon
             type="warning"
-            message="Some active legacy site licenses need manual review"
+            title="Some active legacy site licenses need manual review"
             description={
-              <Space direction="vertical" size="small">
+              <Space vertical size="small">
                 <span>
                   {unvaluedSiteLicenseCount} active legacy site license
                   {unvaluedSiteLicenseCount === 1 ? "" : "s"} did not include

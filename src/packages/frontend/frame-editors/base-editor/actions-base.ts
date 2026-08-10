@@ -32,6 +32,19 @@ const FAST_OPEN_HANDOFF_DIFF_STATUS =
   "Updated to the latest live collaboration state.";
 const ANCHOR_CHAT_READY_TIMEOUT_MS = 8000;
 
+type ProgrammaticLineNavigation = {
+  line: number;
+  cursor?: boolean;
+  focus?: boolean;
+  frameId?: string;
+  ch?: number;
+};
+
+type ProgrammaticLineNavigationOptions = {
+  shouldContinue?: () => boolean;
+  onApplied?: () => void;
+};
+
 function parseBooleanFlag(value?: string | null): boolean | undefined {
   if (value == null) return;
   const v = value.trim().toLowerCase();
@@ -124,12 +137,14 @@ import { normalizeUserFacingError } from "@cocalc/frontend/components/user-facin
 import { get_buffer, set_buffer } from "@cocalc/frontend/copy-paste-buffer";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import { filenameMode } from "@cocalc/frontend/file-associations";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 import { ensureSideChatActions } from "@cocalc/frontend/chat/unread";
 import { chat } from "@cocalc/frontend/frame-editors/generic/chat";
 import { syncdocDiagnosticLog } from "@cocalc/frontend/syncdoc-diagnostics";
 import { open_new_tab } from "@cocalc/frontend/misc";
 import type { FragmentId } from "@cocalc/frontend/misc/fragment-id";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
+import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 import {
   delete_local_storage,
   get_local_storage,
@@ -137,6 +152,7 @@ import {
 } from "@cocalc/frontend/misc/local-storage";
 import {
   log_opened_time,
+  mark_file_open_v2_phase,
   mark_open_phase,
   restart_open_timer,
 } from "@cocalc/frontend/project/open-file";
@@ -280,6 +296,7 @@ export interface CodeEditorState {
 
 export interface BaseEditorInitOptions {
   readOnlyPreview?: boolean;
+  syncIdentityPathIsCanonical?: boolean;
 }
 
 function getActiveDisplayPathForEditor(actions: {
@@ -355,6 +372,8 @@ export class BaseEditorActions<
   private optimisticFastOpenValue?: string;
   private optimisticFastOpenApplied: boolean = false;
   private optimisticFastOpenStatusToken: number = 0;
+  private optimisticFastOpenNavigation?: ProgrammaticLineNavigation;
+  private optimisticFastOpenNavigationApplied: boolean = false;
   private readOnlyPreview: boolean = false;
   // True when the next syncstring change event is expected to be our own commit,
   // so remote handling can skip re-merging our own write.
@@ -477,14 +496,45 @@ export class BaseEditorActions<
         });
         // "Visible to user" for fast-open is when this fs.readFile result lands.
         log_opened_time(this.project_id, this.path);
+        this.applyPendingOptimisticFastOpenNavigation(token);
       } catch {
         // fallback to normal path when optimistic read fails
       }
     })();
   }
 
+  private applyPendingOptimisticFastOpenNavigation(token: number): void {
+    const navigation = this.optimisticFastOpenNavigation;
+    if (navigation == null || !this.optimisticFastOpenApplied) return;
+    void this.applyProgrammaticLineNavigation(navigation, {
+      shouldContinue: () =>
+        !this.isClosed() &&
+        this.optimisticFastOpenApplied &&
+        token === this.optimisticFastOpenToken &&
+        navigation === this.optimisticFastOpenNavigation,
+      onApplied: () => {
+        if (
+          this.optimisticFastOpenApplied &&
+          token === this.optimisticFastOpenToken &&
+          navigation === this.optimisticFastOpenNavigation
+        ) {
+          this.optimisticFastOpenNavigationApplied = true;
+        }
+      },
+    });
+  }
+
   private completeOptimisticFastOpen(): void {
-    if (!this.optimisticFastOpenApplied) return;
+    const navigation = this.optimisticFastOpenNavigation;
+    const navigationApplied = this.optimisticFastOpenNavigationApplied;
+    this.optimisticFastOpenNavigation = undefined;
+    this.optimisticFastOpenNavigationApplied = false;
+    if (!this.optimisticFastOpenApplied) {
+      if (navigation != null) {
+        void this.applyProgrammaticLineNavigation(navigation);
+      }
+      return;
+    }
     this.optimisticFastOpenToken += 1;
     this.optimisticFastOpenApplied = false;
     let liveValue: string | undefined;
@@ -514,6 +564,9 @@ export class BaseEditorActions<
     }
     this.setState({ rtc_status: "live" });
     mark_open_phase(this.project_id, this.path, "handoff_done");
+    if (navigation != null && (differs || !navigationApplied)) {
+      void this.applyProgrammaticLineNavigation(navigation);
+    }
   }
 
   private setTransientOptimisticFastOpenStatus(
@@ -608,6 +661,13 @@ export class BaseEditorActions<
     if (this.readOnlyPreview) {
       this.initReadOnlyPreview();
       return;
+    }
+
+    if (initOptions?.syncIdentityPathIsCanonical) {
+      this.syncDocOptions = {
+        ...this.syncDocOptions,
+        syncIdentityPathIsCanonical: true,
+      };
     }
 
     this._init_syncstring();
@@ -859,6 +919,7 @@ export class BaseEditorActions<
     }
     this._syncstring.on("disconnected", this.handleSyncdocDisconnected);
     this._syncstring.on("connected", this.handleSyncdocConnected);
+    this._syncstring.on("open-phase", this.handleSyncdocOpenPhase);
 
     // File-open timing starts when live sync initialization actually begins,
     // not when a tab was created in the background.
@@ -1032,6 +1093,45 @@ export class BaseEditorActions<
   // Flag that there is activity (causes icon to turn orange).
   private activity = (): void => {
     this._get_project_actions()?.flag_file_activity(this.path);
+  };
+
+  private handleSyncdocOpenPhase = (payload: {
+    phase?: unknown;
+    elapsed_ms?: unknown;
+    attempt?: unknown;
+    error_code?: unknown;
+    error_name?: unknown;
+    prevalidated?: unknown;
+    string_id_provided?: unknown;
+  }): void => {
+    const phase =
+      typeof payload?.phase === "string" ? payload.phase.trim() : "";
+    if (!phase) return;
+    const details: Record<string, string | number | boolean | undefined> = {};
+    if (Number.isFinite(Number(payload.elapsed_ms))) {
+      details.syncdoc_elapsed_ms = Number(payload.elapsed_ms);
+    }
+    if (Number.isFinite(Number(payload.attempt))) {
+      details.attempt = Number(payload.attempt);
+    }
+    if (typeof payload.error_code === "string") {
+      details.error_code = payload.error_code.slice(0, 80);
+    }
+    if (typeof payload.error_name === "string") {
+      details.error_name = payload.error_name.slice(0, 80);
+    }
+    if (typeof payload.prevalidated === "boolean") {
+      details.prevalidated = payload.prevalidated;
+    }
+    if (typeof payload.string_id_provided === "boolean") {
+      details.string_id_provided = payload.string_id_provided;
+    }
+    mark_file_open_v2_phase(
+      this.project_id,
+      this.path,
+      `syncdoc.${phase}`,
+      details,
+    );
   };
 
   // This is currently NOT used in this base class.  It's used in other
@@ -1367,6 +1467,7 @@ export class BaseEditorActions<
     delete this._syncstring;
     s.removeListener?.("disconnected", this.handleSyncdocDisconnected);
     s.removeListener?.("connected", this.handleSyncdocConnected);
+    s.removeListener?.("open-phase", this.handleSyncdocOpenPhase);
     s.removeListener?.("closed", this.handleSyncstringClosed);
     s.close(); // this should save synctables in syncstring
   }
@@ -2167,6 +2268,13 @@ export class BaseEditorActions<
       return;
     }
     const hasUnsavedChanges = this.store.get("has_unsaved_changes");
+    if (hasUnsavedChanges) {
+      recordProductActivity({
+        event_name: "project_work",
+        project_id: this.project_id,
+        properties: { action_category: "editor_save" },
+      });
+    }
     // TODO: Maybe just move this to some explicit menu of actions, which also includes
     // several other formatting actions.
     // Doing this automatically is fraught with error, since cursors aren't precise...
@@ -2670,6 +2778,7 @@ export class BaseEditorActions<
   // per-session sync-aware undo -- only work when editing text in
   // a codemirror editor!
   undo(id: string): void {
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     const cm = this._get_cm(id);
     if (cm == null) {
       return;
@@ -2685,6 +2794,7 @@ export class BaseEditorActions<
   // per-session sync-aware redo -- only work when editing text in
   // a codemirror editor!
   redo(id: string): void {
+    if (!canUseSyncDocHistory(this._syncstring)) return;
     const cm = this._get_cm(id);
     if (cm == null) {
       return;
@@ -2773,39 +2883,72 @@ export class BaseEditorActions<
     frameId?: string, // if given scroll the frame with this id
     ch?: number, // specific character in line
   ): Promise<void> {
-    if (!(await this.wait_until_syncdoc_ready())) {
+    const navigation = this.normalizeProgrammaticLineNavigation({
+      line,
+      cursor,
+      focus,
+      frameId,
+      ch,
+    });
+    if (navigation == null) return;
+
+    if (
+      this.canUseOptimisticFastOpen() &&
+      this._syncstring?.get_state?.() !== "ready"
+    ) {
+      this.optimisticFastOpenNavigation = navigation;
+      this.optimisticFastOpenNavigationApplied = false;
+      this.applyPendingOptimisticFastOpenNavigation(
+        this.optimisticFastOpenToken,
+      );
       return;
     }
 
-    // This implementation of goto_line only supports integer line numbers.
-    // However, derived classes may support id's or other types of more general "lines".
-    try {
-      if (typeof line == "string") {
-        line = parseInt(line);
-        if (!isFinite(line)) {
-          throw Error();
-        }
-      }
-    } catch (_err) {
+    if (!(await this.wait_until_syncdoc_ready())) return;
+    await this.applyProgrammaticLineNavigation(navigation);
+  }
+
+  private normalizeProgrammaticLineNavigation({
+    line,
+    cursor,
+    focus,
+    frameId,
+    ch,
+  }: {
+    line: string | number;
+    cursor?: boolean;
+    focus?: boolean;
+    frameId?: string;
+    ch?: number;
+  }): ProgrammaticLineNavigation | undefined {
+    if (typeof line === "string") {
+      line = parseInt(line);
+    }
+    if (!Number.isFinite(line)) {
       console.log(`WARNING: can't go to non-integer line ${line}`);
       return;
     }
+    return {
+      // Lines <= 0 cause an exception in CodeMirror. A line beyond the end is
+      // clamped after the editor document becomes available.
+      line: Math.max(1, line as number),
+      cursor,
+      focus,
+      frameId,
+      ch,
+    };
+  }
 
-    if (typeof line != "number") {
-      throw Error("impossible");
-    }
-
-    if (line <= 0) {
-      /* Lines <= 0 cause an exception in codemirror later.
-         If the line number is much larger than the number of lines
-         in the buffer, codemirror just goes to the last line with
-         no error, which is fine (however, scroll into view fails).
-         If you want a negative or 0 line
-         the most sensible behavior is line 0.  See
-         https://github.com/sagemathinc/cocalc/issues/3219
-      */
-      line = 1;
-    }
+  protected async applyProgrammaticLineNavigation(
+    navigation: ProgrammaticLineNavigation,
+    {
+      shouldContinue = () => !this.isClosed(),
+      onApplied,
+    }: ProgrammaticLineNavigationOptions = {},
+  ): Promise<boolean> {
+    let { line, frameId } = navigation;
+    const { cursor, focus, ch } = navigation;
+    if (!shouldContinue()) return false;
 
     // ensure a cm frame exists.
     if (frameId == null) {
@@ -2826,42 +2969,40 @@ export class BaseEditorActions<
       cm = this._get_cm(frameId);
       if (cm == null) {
         await delay(50);
-        if (this.isClosed()) return;
+        if (!shouldContinue()) return false;
       }
     }
     if (cm == null) {
       // still failed -- give up.
-      return;
+      return false;
     }
 
     const doc = cm.getDoc();
     // there is a moment between when the editor exists and the actual document
     // is loaded into it.
-    while (line >= doc.lineCount() && Date.now() - start <= 15000) {
-      if (this.isClosed()) return;
+    while (line > doc.lineCount() && Date.now() - start <= 15000) {
+      if (!shouldContinue()) return false;
       await delay(50);
     }
 
-    if (line > doc.lineCount()) {
-      line = doc.lineCount();
-    }
+    line = Math.min(line, Math.max(1, doc.lineCount()));
     const pos = { line: line - 1, ch: ch ?? 0 };
     const info = cm.getScrollInfo();
     cm.scrollIntoView(pos, info.clientHeight / 2);
     if (focus) {
       cm.focus();
     }
+    onApplied?.();
     for (let i = 0; i < 5; i++) {
       if (cursor) {
         doc.setCursor(pos);
         await delay(100);
-        if (this.isClosed()) {
-          return;
-        }
+        if (!shouldContinue()) return true;
         doc.setCursor(pos);
         cm.scrollIntoView(pos, cm.getScrollInfo().clientHeight / 2);
       }
     }
+    return true;
   }
 
   cut(id: string): void {

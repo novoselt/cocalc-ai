@@ -44,6 +44,28 @@ function config(): DisposableRestoreWorkerConfig {
   };
 }
 
+function pgBackRestConfig(): DisposableRestoreWorkerConfig {
+  return {
+    ...config(),
+    repository_type: "pgbackrest",
+    snapshot_id: "sqlite-snapshot-1",
+    rustic_repo_root: "rustic/bay-sqlite/bay-1",
+    pgbackrest_repo_path: "/pgbackrest/bay-1",
+    pgbackrest_cipher_pass: "pgbackrest-password",
+    pgbackrest_stanza: "cocalc-bay-1",
+    pgbackrest_version: "2.59.0",
+    pgbackrest_source_sha256:
+      "faaf8faa14a6392279654ee216a493fcd07b0c513af4b55fe34faec062cb8875",
+    wal_object_prefix: undefined,
+  };
+}
+
+function decodedStartupBlocks(script: string): string[] {
+  return Array.from(script.matchAll(/printf '%s' '([^']+)' \| base64 -d/g)).map(
+    (match) => Buffer.from(match[1], "base64").toString("utf8"),
+  );
+}
+
 function passedWorker(): DisposableRestoreWorkerResult {
   return {
     version: 1,
@@ -173,6 +195,78 @@ test("startup script supports checkpoint-only snapshot recovery", () => {
   expect(compiled.status).toBe(0);
 });
 
+test("startup script supports pgBackRest PITR and independent SQLite restore", () => {
+  const script = buildDisposableRestoreStartupScript(pgBackRestConfig());
+  expect(script).not.toContain("pgbackrest-password");
+  expect(script).not.toContain("temporary-secret");
+  const [encodedConfig, workerSource] = decodedStartupBlocks(script);
+  expect(JSON.parse(encodedConfig)).toMatchObject({
+    repository_type: "pgbackrest",
+    backup_set_id: "backup-1",
+    snapshot_id: "sqlite-snapshot-1",
+    target_time: "2026-07-19 12:00:00.000+00",
+  });
+  expect(workerSource).toContain('STAGE = "build-pgbackrest"');
+  expect(workerSource).toContain('"--type=time"');
+  expect(workerSource).toContain('"--target-action=promote"');
+  expect(workerSource).toContain('if REPOSITORY_TYPE != "pgbackrest"');
+  expect(workerSource).toContain(
+    'for stale in ("recovery.signal", "standby.signal")',
+  );
+  expect(workerSource).toContain(
+    'auto_conf_text.replace(str(pgdata), "/var/lib/postgresql/data")',
+  );
+  expect(workerSource).toContain('"-c", "port=5432"');
+  expect(workerSource).toContain('"-p", "5432"');
+  expect(workerSource).toContain('"--security-opt=apparmor=unconfined"');
+  expect(workerSource).toContain(
+    "--no-install-recommends ca-certificates libbz2-1.0",
+  );
+  expect(workerSource).toContain(
+    '"PostgreSQL container exited before readiness: "',
+  );
+  expect(workerSource).toContain(
+    '["podman", "logs", "--tail", "80", container]',
+  );
+  expect(workerSource).toContain(
+    '"restore-drill: PostgreSQL recovery still in progress "',
+  );
+  expect(workerSource).toContain('" sentinel_counts=" + str(counts)');
+  expect(workerSource).toContain("deadline = STARTED + worker_timeout - 300");
+  expect(workerSource).not.toContain('["shutdown", "-h", "now"]');
+  expect(workerSource).toContain("PGBACKREST_REPO1_S3_TOKEN");
+  expect(workerSource).toContain("sync_dir = SNAPSHOT");
+  expect(workerSource).toContain("input_text=None, log=True");
+  expect(workerSource).toContain("log=False");
+  expect(workerSource).toContain("def psql(container, sql, *, log=True)");
+  expect(workerSource).toContain(
+    'sql_quote(CONFIG["pitr_run_id"]), log=False)',
+  );
+  expect(workerSource).toContain('"pg_is_in_recovery()::text "');
+  expect(workerSource).toContain(
+    'if counts == (1, 0) and recovery_text == "false"',
+  );
+  expect(workerSource).toContain(
+    "SQLite quick_check progress {quick_passed}/{len(db_files)}",
+  );
+  const compiled = spawnSync(
+    "python3",
+    ["-c", "import sys; compile(sys.stdin.read(), '<worker>', 'exec')"],
+    { input: workerSource, encoding: "utf8" },
+  );
+  expect(compiled.stderr).toBe("");
+  expect(compiled.status).toBe(0);
+});
+
+test("startup script rejects an invalid PITR target", () => {
+  expect(() =>
+    buildDisposableRestoreStartupScript({
+      ...pgBackRestConfig(),
+      target_time: "not-a-timestamp",
+    }),
+  ).toThrow("invalid disposable PITR target 'not-a-timestamp'");
+});
+
 test("GCP worker attempts cleanup when instance insertion fails ambiguously", async () => {
   const deleteInstance = jest.fn(async () => {
     const err = new Error("not found") as Error & { code: number };
@@ -241,6 +335,12 @@ test("GCP worker parses a bounded result and always deletes the VM", async () =>
       }),
     }),
   );
+  const startupScript =
+    insert.mock.calls[0][0].instanceResource.metadata.items.find(
+      (item: { key: string }) => item.key === "startup-script",
+    ).value;
+  const [encodedConfig] = decodedStartupBlocks(startupScript);
+  expect(JSON.parse(encodedConfig).worker_timeout_seconds).toBe(7200);
   expect(deleteInstance).toHaveBeenCalledTimes(1);
 });
 

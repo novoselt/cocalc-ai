@@ -140,6 +140,9 @@ export interface SyncOpts0 {
   document_activity_interval?: number;
 
   string_id?: string;
+  // The caller already resolved path with canonicalSyncIdentityPath. This is
+  // only a latency optimization; callers that cannot prove this must omit it.
+  syncIdentityPathIsCanonical?: boolean;
   cursors?: boolean;
   change_throttle?: number;
 
@@ -481,17 +484,32 @@ export class SyncDoc extends EventEmitter {
     // const start = Date.now();
     this.assert_not_closed("init");
     const log = this.dbg("init");
+    let attempt = 0;
     await until(
       async () => {
         if (this.state != "init") {
           return true;
         }
+        attempt += 1;
+        this.emitOpenPhase("init_attempt_start", { attempt });
         try {
           log("initializing all tables...");
           await this.initAll();
           log("initAll succeeded");
+          this.emitOpenPhase("init_attempt_done", { attempt });
           return true;
         } catch (err) {
+          this.emitOpenPhase("init_attempt_failed", {
+            attempt,
+            error_code:
+              typeof (err as any)?.code === "string"
+                ? (err as any).code.slice(0, 80)
+                : undefined,
+            error_name:
+              typeof (err as any)?.name === "string"
+                ? (err as any).name.slice(0, 80)
+                : undefined,
+          });
           if (this.isClosed()) {
             return true;
           }
@@ -548,7 +566,10 @@ export class SyncDoc extends EventEmitter {
   };
 
   private canonicalizeFsIdentity = reuseInFlight(async (): Promise<void> => {
-    if (this.opts.string_id !== undefined) {
+    if (
+      this.opts.string_id !== undefined ||
+      this.opts.syncIdentityPathIsCanonical
+    ) {
       return;
     }
     const canonicalPath = await this.resolveCanonicalSyncIdentityPath(
@@ -1636,7 +1657,10 @@ export class SyncDoc extends EventEmitter {
     );
     this.emitOpenPhase("canonicalize_identity_start");
     await this.canonicalizeFsIdentity();
-    this.emitOpenPhase("canonicalize_identity_done");
+    this.emitOpenPhase("canonicalize_identity_done", {
+      prevalidated: this.opts.syncIdentityPathIsCanonical === true,
+      string_id_provided: this.opts.string_id !== undefined,
+    });
     if (!this.useConat) {
       this.emitOpenPhase("syncstring_table_start");
       await this.init_syncstring_table();
@@ -3439,10 +3463,15 @@ export class SyncDoc extends EventEmitter {
       myPatches[env.time] = { time: env.time } as any;
       this.snapshotIfNecessary();
     } catch (err) {
+      // Keep the draft, but do not claim that it was committed. In
+      // particular, save_to_disk must never write this unrecorded state and
+      // let sync-fs import it back as a filesystem-authored revision.
+      this.last = current;
       console.warn("patchflow commit failed", err?.message ?? err);
       console.warn(err?.stack ?? "");
       this.dbg("commitWithPatchflow")(`commit failed -- ${err}`);
       this.notifyPatchflowWriteFailure(err);
+      return false;
     }
     const latest = this.patchflowSession.versions().slice(-1)[0];
     if (latest != null) {
@@ -3600,7 +3629,19 @@ export class SyncDoc extends EventEmitter {
       // properly.
       return;
     }
-    this.commit();
+    // Persist the live draft to Patchflow before writing its serialized form
+    // to disk. Otherwise a failed history commit followed by a disk write is
+    // observed by sync-fs as a destructive edit made by "The Filesystem".
+    await this.save();
+    if (
+      this.doc == null ||
+      this.last == null ||
+      !this.documentsEqual(this.doc, this.last)
+    ) {
+      throw new Error(
+        `Refusing to save ${this.path} to disk because its collaborative history is not up to date`,
+      );
+    }
     await this.writeFile();
     this.update_has_unsaved_changes();
   });

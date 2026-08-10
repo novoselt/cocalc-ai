@@ -80,7 +80,9 @@ import {
 import {
   assignMembershipPackageSeat as assignMembershipPackageSeat0,
   claimMembershipPackageSeat as claimMembershipPackageSeat0,
+  getEffectiveSiteLicensePoolDomains,
   getMembershipPackage,
+  getSiteLicensePoolDomains,
   listClaimableMembershipPackagesForAccount,
   listMembershipPackageDetailsForOwner,
   resolveMembershipPackageQuote as resolveMembershipPackageQuote0,
@@ -125,6 +127,7 @@ import type { MembershipPackageProduct } from "@cocalc/util/membership-package-p
 import purchaseMembershipPackage0, {
   purchaseMembershipPackages as purchaseMembershipPackages0,
 } from "@cocalc/server/purchases/membership-package";
+import adminCreateMembershipPackagePurchase0 from "@cocalc/server/purchases/admin-membership-package";
 import {
   verifyDirectStudentCourseProduct,
   verifyDirectStudentCourseProducts,
@@ -163,6 +166,7 @@ import type {
   SiteLicensePoolConfig,
   SiteLicensePoolRequest,
   MembershipPackageAssignment,
+  AdminMembershipPackagePurchaseResult,
   SiteLicenseAccountDetails,
   SiteLicensePoolAccountSearchResult,
 } from "@cocalc/conat/hub/api/purchases";
@@ -1874,11 +1878,10 @@ export async function searchSiteLicensePoolAccounts({
       query_kind: request.kind,
     };
   }
-  const allowedDomains = Array.isArray(pool.metadata?.allowed_domains)
-    ? pool.metadata.allowed_domains.map((domain) =>
-        `${domain ?? ""}`.trim().toLowerCase(),
-      )
-    : [];
+  const allowedDomains = getEffectiveSiteLicensePoolDomains({
+    license_domains: overview.site_license.allowed_domains,
+    pool_domains: getSiteLicensePoolDomains(pool.metadata),
+  });
   const actorHomeBay = await resolveTargetAccountHomeBay({
     account_id: actorId,
     user_account_id: actorId,
@@ -2066,6 +2069,81 @@ export async function adminProvisionSiteLicense({
     starts_at,
     expires_at,
     metadata,
+  });
+}
+
+export async function adminCreateMembershipPackagePurchase({
+  account_id,
+  browser_id,
+  session_hash,
+  user_account_id,
+  product,
+  price,
+  source,
+  reason,
+  idempotency_key,
+  pricing_note,
+}: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string | null;
+  user_account_id?: string;
+  product?: MembershipPackageProduct;
+  price?: number;
+  source?: "card" | "credit" | "free";
+  reason?: string;
+  idempotency_key?: string;
+  pricing_note?: string;
+} = {}): Promise<AdminMembershipPackagePurchaseResult> {
+  const actorId = requireAccount(account_id);
+  if (!(await isAdmin(actorId))) {
+    throw Error("must be an admin");
+  }
+  await validatePurchaseFreshAuth({
+    account_id: actorId,
+    browser_id,
+    session_hash,
+    allow_actor_impersonation: false,
+  });
+  const userAccountId = `${user_account_id ?? ""}`.trim();
+  if (!userAccountId) throw Error("user_account_id is required");
+  if (!product) throw Error("product is required");
+  if (source !== "card" && source !== "credit" && source !== "free") {
+    throw Error("source must be card, credit, or free");
+  }
+  const homeBay = await resolveTargetAccountHomeBay({
+    account_id: actorId,
+    user_account_id: userAccountId,
+    allow_cross_account_routing: true,
+  });
+  const options = {
+    actor_account_id: actorId,
+    user_account_id: userAccountId,
+    product,
+    price: Number(price),
+    source,
+    reason: `${reason ?? ""}`,
+    idempotency_key: `${idempotency_key ?? ""}`,
+    pricing_note,
+  };
+  if (homeBay !== getConfiguredBayId()) {
+    return await createInterBayAccountLocalClient({
+      client: getInterBayFabricClient(),
+      dest_bay: homeBay,
+    }).adminCreateMembershipPackagePurchase({
+      ...options,
+      trusted_admin: true,
+    });
+  }
+  return await adminCreateMembershipPackagePurchase0({
+    admin_account_id: actorId,
+    user_account_id: userAccountId,
+    product,
+    price: Number(price),
+    source,
+    reason: `${reason ?? ""}`,
+    idempotency_key: `${idempotency_key ?? ""}`,
+    pricing_note,
   });
 }
 

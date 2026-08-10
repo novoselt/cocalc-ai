@@ -1,0 +1,28 @@
+[Unit]
+Description=CoCalc Bay pgBackRest %i backup
+After=network-online.target cocalc-bay-postgres.service cocalc-bay-pgbackrest-setup.service
+Requires=cocalc-bay-postgres.service
+Wants=cocalc-bay-pgbackrest-setup.service
+
+[Service]
+Type=oneshot
+User=cocalc-bay
+WorkingDirectory=/opt/cocalc/bay/current
+EnvironmentFile=/etc/cocalc/bay.env
+EnvironmentFile=-/etc/cocalc/bay-workers.env
+EnvironmentFile=-/etc/cocalc/bay-overlay.env
+EnvironmentFile=-/etc/cocalc/bay-topology.env
+EnvironmentFile=-/etc/cocalc/bay-secrets.env
+EnvironmentFile=-/etc/cocalc/bay-local.env
+ExecStart=/opt/cocalc/bay/current/bin/bay-pgbackrest-run %i
+TimeoutStartSec=infinity
+Nice=10
+CPUWeight=10
+CPUQuota=200%
+MemoryHigh=2G
+MemoryMax=3G
+IOWeight=10
+IOReadBandwidthMax=/mnt/cocalc 25M
+IOWriteBandwidthMax=/mnt/cocalc 25M
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

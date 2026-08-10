@@ -690,14 +690,14 @@ function rawSoftwareComponentInfo(
     case "static":
       return {
         component,
-        title: "Bay static frontend assets",
+        title: "Bay static frontend and CDN assets",
         status: "build-and-deploy",
         artifact_component: "static",
         target_kind: "rocket-bay",
         purpose:
-          "Ship browser frontend, public assets, webapp assets, and provider setup scripts to a bay.",
+          "Ship browser frontend, CDN, public, webapp, and provider setup assets to a bay.",
         lifecycle: [
-          "Build static assets and package a static bundle.",
+          "Build frontend and CDN assets and package them together in a static bundle.",
           "Push to R2 or let deploy push it.",
           "Deploy to a site profile with Rocket scope static.",
           "Smoke HTTP bootstrap and static asset endpoints.",
@@ -720,7 +720,7 @@ function rawSoftwareComponentInfo(
           "Smoke uses the profile API URL and does not need SSH.",
         ],
         common_failure_modes: [
-          "Static bundle missing the expected manifest or frontend assets.",
+          "Static bundle missing the expected manifest, frontend, or CDN assets.",
           "Profile does not resolve an API URL for smoke.",
         ],
       };
@@ -1518,7 +1518,7 @@ function parseLimit(raw: string | undefined): number {
 }
 
 function parseTimeoutMs(raw: string | undefined, option = "--timeout"): number {
-  const value = raw == null || raw.trim() === "" ? 15_000 : Number(raw);
+  const value = raw == null || raw.trim() === "" ? 30_000 : Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${option} must be a positive number of milliseconds`);
   }
@@ -1668,6 +1668,8 @@ async function smokeHttpChecks({
       "/auth/email/continue/00000000-0000-4000-8000-000000000000",
     ],
     ["webapp favicon", "/webapp/favicon.ico"],
+    ["managed compute VM setup", "/project-host/compute-vm-setup.sh"],
+    ["PDF.js Japanese CMap", "/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap"],
   ] as const) {
     checks.push(
       await runTimedSmokeCheck(
@@ -4950,6 +4952,12 @@ Supported deploy/smoke components:
         }
         if (component === "hub" || component === "bay") {
           const cli = currentCliInvocation();
+          const routeProbeTimeoutMs = Math.min(timeoutMs, 10_000);
+          const routeHealthHostId = `${
+            opts.host ??
+            (deps.env ?? process.env).COCALC_ROCKET_HEALTH_HOST_ID ??
+            ""
+          }`.trim();
           checks.push(
             await runTimedSmokeCheck(
               "host route health",
@@ -4967,10 +4975,13 @@ Supported deploy/smoke components:
                     target.api!,
                     "--host-limit",
                     "1",
+                    ...(routeHealthHostId
+                      ? ["--host-id", routeHealthHostId]
+                      : ["--site-funded-only"]),
                     "--request-timeout-ms",
-                    `${timeoutMs}`,
+                    `${routeProbeTimeoutMs}`,
                     "--rpc-timeout",
-                    smokeRpcTimeout(timeoutMs),
+                    smokeRpcTimeout(routeProbeTimeoutMs),
                   ],
                   {
                     stdio: "inherit",

@@ -14,6 +14,7 @@ export const MAX_PUBLIC_DIRECTORY_SHARE_LICENSE_LENGTH = 120;
 export interface PublicDirectoryShareProjectLabel {
   id: string;
   path: string;
+  path_type?: "directory" | "file";
   slug: string;
   title?: string;
   requires_auth?: boolean;
@@ -64,6 +65,7 @@ function shortString(value: unknown, maxLength: number): string | undefined {
 
 export function publicDirectoryShareProjectLabelValue(opts: {
   path: string;
+  path_type?: "directory" | "file";
   slug: string;
   title?: string | null;
   requires_auth?: boolean | null;
@@ -73,6 +75,7 @@ export function publicDirectoryShareProjectLabelValue(opts: {
   const value = JSON.stringify({
     v: 1,
     p: path,
+    y: opts.path_type === "file" ? "f" : undefined,
     s: shortString(opts.slug, MAX_PUBLIC_DIRECTORY_SHARE_SLUG_LENGTH),
     t: shortString(opts.title, 80),
     a: opts.requires_auth === false ? 0 : 1,
@@ -98,6 +101,7 @@ export function parsePublicDirectoryShareProjectLabel(
     return {
       id,
       path: normalizeProjectPath(parsed.p),
+      path_type: parsed.y === "f" ? "file" : "directory",
       slug: typeof parsed.s === "string" ? parsed.s : "",
       title: typeof parsed.t === "string" ? parsed.t : undefined,
       requires_auth: parsed.a !== 0,
@@ -135,8 +139,10 @@ export function publicDirectoryShareIndicatorsForPath({
     descendants: labels.filter((label) =>
       isAncestorPath(normalizedPath, label.path),
     ),
-    ancestors: labels.filter((label) =>
-      isAncestorPath(label.path, normalizedPath),
+    ancestors: labels.filter(
+      (label) =>
+        label.path_type !== "file" &&
+        isAncestorPath(label.path, normalizedPath),
     ),
   };
 }

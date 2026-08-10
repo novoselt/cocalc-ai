@@ -159,4 +159,47 @@ describe("GCP billing catalog pricing", () => {
     expect(catalog.families.g2?.cpu["us-west1"]).toBeCloseTo(0.04, 9);
     expect(catalog.families.g2?.ram["us-west1"]).toBeCloseTo(0.005, 9);
   });
+
+  it("applies one SKU price to every advertised service region", () => {
+    const serviceRegions = ["us-west1", "us-east1"];
+    const pricingInfo = (nanos: number, usageUnit: string) => [
+      {
+        pricingExpression: {
+          usageUnit,
+          tieredRates: [
+            {
+              startUsageAmount: 0,
+              unitPrice: { units: "0", nanos },
+            },
+          ],
+        },
+      },
+    ];
+    const catalog = normalizeGcpBillingSkus([
+      {
+        description: "E2 Instance Core running in Americas",
+        serviceRegions,
+        category: { usageType: "OnDemand" },
+        pricingInfo: pricingInfo(21_000_000, "h"),
+      },
+      {
+        description: "E2 Instance Ram running in Americas",
+        serviceRegions,
+        category: { usageType: "OnDemand" },
+        pricingInfo: pricingInfo(3_000_000, "GiBy.h"),
+      },
+      {
+        description: "Balanced PD Capacity in Americas",
+        serviceRegions,
+        category: { usageType: "OnDemand" },
+        pricingInfo: pricingInfo(100_000, "GiBy.h"),
+      },
+    ]);
+
+    for (const region of serviceRegions) {
+      expect(catalog.families.e2?.cpu[region]).toBeCloseTo(0.021, 9);
+      expect(catalog.families.e2?.ram[region]).toBeCloseTo(0.003, 9);
+      expect(catalog.disks["pd-balanced"]?.[region]).toBeCloseTo(0.0001, 9);
+    }
+  });
 });

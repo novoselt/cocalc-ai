@@ -11,6 +11,7 @@ underlying synchronized state.
 import { history_path } from "@cocalc/util/misc";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { Actions, Store, TypedMap } from "@cocalc/frontend/app-framework";
+import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
 import { List } from "immutable";
 
 export interface StopwatchEditorState {
@@ -148,15 +149,13 @@ export class TimeActions extends Actions<StopwatchEditorState> {
   }
 
   public undo(): void {
-    if (this.syncdb) {
-      this.syncdb.undo();
-    }
+    if (!canUseSyncDocHistory(this.syncdb)) return;
+    this.syncdb.undo();
   }
 
   public redo(): void {
-    if (this.syncdb) {
-      this.syncdb.redo();
-    }
+    if (!canUseSyncDocHistory(this.syncdb)) return;
+    this.syncdb.redo();
   }
 
   public addTimer(): void {

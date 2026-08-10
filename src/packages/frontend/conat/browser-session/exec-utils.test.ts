@@ -1,8 +1,16 @@
-import { normalizeRawExecPolicy, resolveExecMode } from "./exec-utils";
+import {
+  isAllowedActionName,
+  normalizeRawExecPolicy,
+  resolveExecMode,
+} from "./exec-utils";
 
 const PROJECT_ID = "94ee01cf-2d7a-4e56-b8af-76d9a697877b";
 
 describe("browser exec raw JavaScript policy", () => {
+  it("allows the bounded file-upload action", () => {
+    expect(isAllowedActionName("upload_file")).toBe(true);
+  });
+
   it("normalizes invalid raw exec policy to disabled", () => {
     expect(normalizeRawExecPolicy("disabled")).toBe("disabled");
     expect(normalizeRawExecPolicy("admin_only")).toBe("admin_only");

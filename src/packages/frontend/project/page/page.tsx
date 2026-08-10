@@ -110,7 +110,10 @@ import { shouldBypassWorkspaceStartupGuardForTab } from "./workspace-startup";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import ProjectVersionUpdate from "./project-version-update";
 import { isProjectRuntimePreparing } from "@cocalc/frontend/project/runtime-start-readiness";
-import { shouldShowProjectRuntimeRecoveryBanner } from "@cocalc/frontend/project/runtime-recovery";
+import {
+  isFreeTierPressureRecovery,
+  shouldShowProjectRuntimeRecoveryBanner,
+} from "@cocalc/frontend/project/runtime-recovery";
 
 const START_BANNER = false;
 
@@ -293,13 +296,17 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     const shareRelativePath = `${props.publicDirectorySharePath ?? ""}`
       .trim()
       .replace(/^\/+|\/+$/g, "");
-    const targetPath = shareRelativePath
-      ? path_to_file(sharePath, shareRelativePath)
-      : "";
+    const targetPath =
+      share.path_type === "file"
+        ? sharePath
+        : shareRelativePath
+          ? path_to_file(sharePath, shareRelativePath)
+          : "";
     const targetIsFile =
       targetPath != null &&
       targetPath.length > 0 &&
-      !props.publicDirectorySharePathIsDirectory;
+      (share.path_type === "file" ||
+        !props.publicDirectorySharePathIsDirectory);
 
     if (targetIsFile && !openFilesReady) {
       return;
@@ -307,7 +314,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
 
     actions.set_current_path(
       targetIsFile
-        ? path_split(targetPath).head || sharePath
+        ? path_split(targetPath).head || "."
         : targetPath || sharePath,
     );
     actions.set_all_files_unchecked?.();
@@ -338,6 +345,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     actions,
     props.publicDirectoryShare?.id,
     props.publicDirectoryShare?.path,
+    props.publicDirectoryShare?.path_type,
     props.publicDirectoryShare?.slug,
     props.publicDirectorySharePath,
     props.publicDirectorySharePathIsDirectory,
@@ -897,7 +905,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         showIcon
         type="warning"
         banner
-        message={
+        title={
           hostRecovery.active
             ? hostRecovery.title
             : "Project host is not available"
@@ -960,14 +968,27 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     ) {
       return;
     }
+    const freeTierPressure = isFreeTierPressureRecovery(notice);
     return (
       <Alert
         showIcon
         closable
         type="info"
         banner
-        message="Reconnecting project tools..."
-        description="CoCalc is restarting the project automatically. Files and collaborative documents remain available. Previous terminal sessions and notebook kernels ended; active tools will reconnect automatically."
+        title="Reconnecting project tools..."
+        description={
+          freeTierPressure ? (
+            <>
+              This free shared-compute project was paused to preserve host
+              responsiveness. CoCalc is restarting it automatically; previous
+              terminal sessions and notebook kernels ended. Higher membership
+              tiers receive stronger shared-compute priority.{" "}
+              <a href="/settings/membership">Upgrade membership</a>
+            </>
+          ) : (
+            "CoCalc is restarting the project automatically. Files and collaborative documents remain available. Previous terminal sessions and notebook kernels ended; active tools will reconnect automatically."
+          )
+        }
         onClose={() => actions?.dismissRuntimeRecoveryNotice?.()}
       />
     );
@@ -1205,7 +1226,7 @@ function ViewerReadOnlyTag({ project_id }: { project_id: string }) {
           </Button>,
         ]}
       >
-        <Space direction="vertical" style={{ width: "100%" }}>
+        <Space vertical style={{ width: "100%" }}>
           <Paragraph>
             You can browse and open allowed project files, but cannot edit
             files, start the runtime, use terminals, run agents, or change
@@ -1215,7 +1236,7 @@ function ViewerReadOnlyTag({ project_id }: { project_id: string }) {
             <Alert
               showIcon
               type="success"
-              message="Request sent"
+              title="Request sent"
               description="A project owner or authorized collaborator can approve collaborator access."
             />
           )}
@@ -1223,7 +1244,7 @@ function ViewerReadOnlyTag({ project_id }: { project_id: string }) {
             <Alert
               showIcon
               type="error"
-              message="Unable to request collaborator access"
+              title="Unable to request collaborator access"
               description={error}
             />
           )}
@@ -1246,7 +1267,7 @@ function ProjectAccessSignInRequired() {
       }}
     >
       <Card style={{ maxWidth: 520, width: "100%" }}>
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Title level={3} style={{ margin: 0 }}>
             Sign in to request project access
           </Title>
@@ -1449,7 +1470,7 @@ function ProjectAccessLandingPage({
       }}
     >
       <Card style={{ width: "100%", maxWidth: 680 }}>
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
             <Title level={3} style={{ marginTop: 0, marginBottom: 4 }}>
               Project access
@@ -1496,7 +1517,7 @@ function ProjectAccessLandingPage({
             <Alert
               showIcon
               type="success"
-              message={`You were invited as a ${info.pending_invite.invite_role}.`}
+              title={`You were invited as a ${info.pending_invite.invite_role}.`}
               description={
                 <Space wrap style={{ marginTop: 8 }}>
                   <Button type="primary" loading={busy} onClick={acceptInvite}>
@@ -1512,18 +1533,18 @@ function ProjectAccessLandingPage({
             <Alert
               showIcon
               type="info"
-              message="Access request pending"
+              title="Access request pending"
               description={`You requested ${info.pending_request.requested_role} access. A project owner or authorized collaborator can approve it.`}
             />
           ) : info.blocked ? (
             <Alert
               showIcon
               type="warning"
-              message="Access requests are not available"
+              title="Access requests are not available"
               description="This project is not accepting access requests from your account."
             />
           ) : (
-            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Space vertical size="middle" style={{ width: "100%" }}>
               <Paragraph style={{ marginBottom: 0 }}>
                 Request access from the project owner or an authorized
                 collaborator.
@@ -1556,7 +1577,7 @@ function ProjectAccessLandingPage({
             <Alert
               showIcon
               type="error"
-              message="Unable to update project access"
+              title="Unable to update project access"
               description={actionError ?? error}
             />
           )}
@@ -1588,7 +1609,7 @@ function ProjectAccessLandingError({
       <Alert
         showIcon
         type="error"
-        message="Unable to open project"
+        title="Unable to open project"
         description={error}
         action={
           <Button
@@ -1702,7 +1723,7 @@ function HardDeleteProjectStatus({
           boxShadow: "0 12px 32px rgba(15, 23, 42, 0.14)",
         }}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <Space align="start" size="middle">
             <span
               style={{
@@ -1738,13 +1759,13 @@ function HardDeleteProjectStatus({
           <Alert
             showIcon
             type={failed ? "error" : "warning"}
-            message={
+            title={
               failed
                 ? "Deletion failed after it had already been accepted."
                 : "Deletion has already been accepted and cannot be undone."
             }
             description={
-              <Space direction="vertical" size={4}>
+              <Space vertical size={4}>
                 {op_id ? (
                   <span>
                     Operation id: <code>{op_id}</code>

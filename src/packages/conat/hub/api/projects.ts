@@ -29,6 +29,7 @@ import type {
   RootfsConfigExport,
 } from "@cocalc/util/rootfs-images";
 import type { CodexUsageStatusInfo } from "./system";
+import type { LroSummary } from "./lro";
 import type {
   ProjectUserRole,
   ProjectViewerReadPolicy,
@@ -136,6 +137,75 @@ export interface CourseCollectAssignmentResult {
   scope_id: string;
   service: string;
   stream_name: string;
+}
+
+export type CourseReconfigureManagedProjectType =
+  | "student"
+  | "shared"
+  | "nbgrader";
+
+export interface CourseReconfigureStudentItem {
+  student_id: string;
+  project_id?: string;
+  name: string;
+  account_id?: string;
+  email_address?: string;
+  deleted?: boolean;
+  send_email_invite?: boolean;
+}
+
+export interface CourseReconfigureSettings {
+  title: string;
+  description: string;
+  allow_collabs: boolean;
+  datastore: CourseInfo["datastore"];
+  student_pay?: boolean;
+  institute_pay?: boolean;
+  site_license_pay?: boolean;
+  required_membership_class?: string;
+  student_membership_required_at?: string;
+  student_membership_grace_days?: number;
+  course_ends_at?: string;
+  student_project_functionality?: CourseInfo["student_project_functionality"];
+  envvars?: CourseInfo["envvars"];
+  inherited_env?: ProjectEnv;
+  student_project_host_id?: string;
+  student_project_rootfs_image?: string;
+  student_project_rootfs_image_id?: string;
+  shared_project_id?: string;
+  nbgrader_project_id?: string;
+  invite: {
+    subject: string;
+    message: string;
+    email_html: string;
+    reply_to?: string;
+    reply_to_name?: string;
+    base_url?: string;
+  };
+}
+
+export interface CourseReconfigureRequest {
+  account_id?: string;
+  course_project_id: string;
+  course_path: string;
+  settings: CourseReconfigureSettings;
+  students: CourseReconfigureStudentItem[];
+}
+
+export interface CourseReconfigureItemResult {
+  key: string;
+  type: CourseReconfigureManagedProjectType;
+  student_id?: string;
+  project_id: string;
+  status: "queued" | "running" | "done" | "failed" | "canceled";
+  created?: boolean;
+  email_invited_at?: string;
+  error?: string;
+}
+
+export interface CourseReconfigureResult extends CourseCollectAssignmentResult {
+  requested_snapshot_hash: string;
+  operation_snapshot_hash: string;
 }
 
 export interface CourseAssignmentPatchDestination {
@@ -1053,6 +1123,9 @@ export const projects = {
   createProject: authFirstRequireAccount,
   copyPathBetweenProjects: authFirstRequireAccount,
   collectAssignment: authFirstRequireAccount,
+  reconfigureCourseProjects: authFirstRequireAccount,
+  getCourseReconfigureOperation: authFirstRequireAccount,
+  cancelCourseReconfigureOperation: authFirstRequireAccount,
   sendCourseAssignmentPatch: authFirstRequireAccount,
   inspectPublicPath: authFirstRequireAccount,
   importPublicUrl: authFirstRequireAccount,
@@ -1241,6 +1314,22 @@ export interface Projects {
     options?: CopyOptions;
     run_at?: string;
   }) => Promise<CourseCollectAssignmentResult>;
+
+  reconfigureCourseProjects: (
+    opts: CourseReconfigureRequest,
+  ) => Promise<CourseReconfigureResult>;
+
+  getCourseReconfigureOperation: (opts: {
+    account_id?: string;
+    course_project_id: string;
+    op_id: string;
+  }) => Promise<LroSummary | undefined>;
+
+  cancelCourseReconfigureOperation: (opts: {
+    account_id?: string;
+    course_project_id: string;
+    op_id: string;
+  }) => Promise<void>;
 
   sendCourseAssignmentPatch: (opts: {
     account_id?: string;
@@ -1777,6 +1866,8 @@ export interface Projects {
       email?: string;
       subject?: string;
       message?: string;
+      invite_context?: Record<string, unknown>;
+      invite_scope?: string;
       invite_role?: Exclude<ProjectUserRole, "owner">;
       read_policy?: ProjectViewerReadPolicy | null;
     };
@@ -2019,6 +2110,7 @@ export interface Projects {
     session_hash?: string | null;
     project_id: string;
     name: string;
+    timeout?: number;
   }) => Promise<void>;
 
   pruneSnapshotPath: (opts: {

@@ -48,6 +48,7 @@ import {
   rename,
   rm,
   stat,
+  statfs,
   writeFile,
   chmod,
 } from "node:fs/promises";
@@ -83,8 +84,10 @@ import { which } from "@cocalc/backend/which";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
 import dbPassword from "@cocalc/database/pool/password";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
+import adminAlert from "@cocalc/server/messages/admin-alert";
 import type {
   BayBackupArtifactInfo,
+  BayBackupFilesystemStatus,
   BayBackupRunResult,
   BayRestoreRunResult,
   BayRestoreTestRunResult,
@@ -116,6 +119,7 @@ import {
   type DisposableGcpRestoreResult,
   type DisposableRestoreWorkerResult,
 } from "./disposable-gcp";
+import { refreshSqliteMirror } from "./sqlite-mirror";
 
 const logger = getLogger("server:bay-backup");
 const execFile = promisify(execFile0);
@@ -157,6 +161,21 @@ type PitrRestoreSentinel = {
   target_time: string;
 };
 
+type PgBackRestApplicationStatus = {
+  backup?: {
+    latest_label?: string;
+  };
+};
+
+type PgBackRestRestoreStatus = {
+  level?: string;
+  tested_at?: string;
+  backup_label?: string;
+  pitr_target_time?: string;
+  error?: string;
+  worker?: DisposableGcpRestoreResult | null;
+};
+
 type StoredBayBackupState = {
   bay_id: string;
   current_storage_backend: StorageBackend;
@@ -191,6 +210,7 @@ type StoredBayBackupState = {
   maintenance_last_success_at: string | null;
   maintenance_last_error_at: string | null;
   maintenance_last_error: string | null;
+  maintenance_consecutive_failures?: number;
   maintenance_next_run_at: string | null;
   last_pruned_at: string | null;
   last_pruned_wal_count: number;
@@ -305,6 +325,8 @@ let walMaintenanceTimer: NodeJS.Timeout | undefined;
 let walMaintenanceRunning = false;
 let backupMaintenanceTimer: NodeJS.Timeout | undefined;
 let backupMaintenanceRunning = false;
+let backupMaintenanceConsecutiveFailures = 0;
+let backupHealthTimer: NodeJS.Timeout | undefined;
 
 const DEFAULT_WAL_ARCHIVE_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_WAL_ARCHIVE_MAX_UPLOAD_SEGMENTS = 32;
@@ -320,8 +342,18 @@ const BAY_BACKUP_RUN_LOCK_PREFIX = "bay-backup-full-snapshot";
 const DEFAULT_BAY_BACKUP_NICE_LEVEL = 10;
 const DEFAULT_BAY_BACKUP_IONICE_CLASS = 2;
 const DEFAULT_BAY_BACKUP_IONICE_LEVEL = 7;
+const GIB = 1024 * 1024 * 1024;
+const PGBACKREST_VERSION = "2.59.0";
+const PGBACKREST_SOURCE_SHA256 =
+  "faaf8faa14a6392279654ee216a493fcd07b0c513af4b55fe34faec062cb8875";
+const DEFAULT_BAY_BACKUP_MIN_FREE_BYTES = 64 * GIB;
+const DEFAULT_BAY_BACKUP_WORKSPACE_FLOOR_BYTES = 64 * GIB;
+const DEFAULT_BAY_BACKUP_WORKSPACE_MULTIPLIER = 4;
+const DEFAULT_BAY_BACKUP_STALE_STAGE_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_BAY_BACKUP_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
 const WAL_SEGMENT_SIZE = 16n * 1024n * 1024n;
 const XLOG_SEGMENTS_PER_XLOG_ID = (1n << 32n) / WAL_SEGMENT_SIZE;
+const NEW_BACKUP_HEALTH_INTERVAL_MS = 5 * 60_000;
 
 class BayBackupAlreadyRunningError extends Error {
   constructor(bay_id: string) {
@@ -506,6 +538,65 @@ function parsePositiveIntEnv({
   return parsed;
 }
 
+function parseBooleanEnv(name: string, defaultValue = false): boolean {
+  const raw = `${process.env[name] ?? ""}`.trim().toLowerCase();
+  if (!raw) return defaultValue;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return defaultValue;
+}
+
+function getBayBackupMinimumFreeBytes(): number {
+  return parsePositiveIntEnv({
+    name: "COCALC_BAY_BACKUP_MIN_FREE_BYTES",
+    defaultValue: DEFAULT_BAY_BACKUP_MIN_FREE_BYTES,
+    allowZero: true,
+  });
+}
+
+function getBayBackupEstimatedWorkspaceBytes(
+  state: StoredBayBackupState,
+): number {
+  const explicit = `${
+    process.env.COCALC_BAY_BACKUP_ESTIMATED_WORKSPACE_BYTES ?? ""
+  }`.trim();
+  if (explicit) {
+    return parsePositiveIntEnv({
+      name: "COCALC_BAY_BACKUP_ESTIMATED_WORKSPACE_BYTES",
+      defaultValue: DEFAULT_BAY_BACKUP_WORKSPACE_FLOOR_BYTES,
+      allowZero: true,
+    });
+  }
+  const latestArtifactBytes = Number(state.latest_artifact_bytes ?? 0);
+  return Math.max(
+    DEFAULT_BAY_BACKUP_WORKSPACE_FLOOR_BYTES,
+    Number.isFinite(latestArtifactBytes) && latestArtifactBytes > 0
+      ? latestArtifactBytes * DEFAULT_BAY_BACKUP_WORKSPACE_MULTIPLIER
+      : 0,
+  );
+}
+
+function requireSeparateBackupFilesystem(): boolean {
+  return parseBooleanEnv(
+    "COCALC_BAY_BACKUP_REQUIRE_SEPARATE_FILESYSTEM",
+    false,
+  );
+}
+
+function getBayBackupStaleStageAgeMs(): number {
+  return parsePositiveIntEnv({
+    name: "COCALC_BAY_BACKUP_STALE_STAGE_AGE_MS",
+    defaultValue: DEFAULT_BAY_BACKUP_STALE_STAGE_AGE_MS,
+  });
+}
+
+function getBayBackupRetryMaxMs(): number {
+  return parsePositiveIntEnv({
+    name: "COCALC_BAY_BACKUP_RETRY_MAX_MS",
+    defaultValue: DEFAULT_BAY_BACKUP_RETRY_MAX_MS,
+  });
+}
+
 function getBayBackupIntervalMs(): number | null {
   const raw = `${process.env.COCALC_BAY_BACKUP_INTERVAL_MS ?? ""}`.trim();
   if (raw === "") {
@@ -565,6 +656,7 @@ function getBayBackupPaths(bay_id: string) {
   const backup_root = getBackupRoot();
   const bay_root = join(backup_root, "bay-backups", bay_id);
   const wal_dir = join(bay_root, "wal");
+  const sync_mirror_root = join(bay_root, "sync-mirror");
   return {
     backup_root,
     bay_root,
@@ -574,10 +666,103 @@ function getBayBackupPaths(bay_id: string) {
     staging_dir: join(bay_root, "staging"),
     wal_dir,
     wal_archive_dir: join(wal_dir, "archive"),
+    sync_mirror_dir: join(sync_mirror_root, "sync"),
+    sync_mirror_catalog: join(sync_mirror_root, "catalog.json"),
     readme_file: join(bay_root, "README.md"),
     events_log_file: join(bay_root, "events.log"),
     state_file: join(bay_root, "state.json"),
   };
+}
+
+async function inspectBackupFilesystem({
+  paths,
+  state,
+  create_if_missing = false,
+}: {
+  paths: ReturnType<typeof getBayBackupPaths>;
+  state: StoredBayBackupState;
+  create_if_missing?: boolean;
+}): Promise<BayBackupFilesystemStatus> {
+  const require_separate_filesystem = requireSeparateBackupFilesystem();
+  const minimum_free_bytes = getBayBackupMinimumFreeBytes();
+  const estimated_workspace_bytes = getBayBackupEstimatedWorkspaceBytes(state);
+  const required_available_bytes =
+    minimum_free_bytes + estimated_workspace_bytes;
+  if (create_if_missing && !require_separate_filesystem) {
+    await ensureDir(paths.backup_root);
+  }
+  try {
+    const [rootInfo, parentInfo, filesystem] = await Promise.all([
+      stat(paths.backup_root),
+      stat(dirname(paths.backup_root)),
+      statfs(paths.backup_root),
+    ]);
+    if (!rootInfo.isDirectory()) {
+      throw new Error(`backup root is not a directory: ${paths.backup_root}`);
+    }
+    const device = `${rootInfo.dev}`;
+    const parent_device = `${parentInfo.dev}`;
+    const separate = device !== parent_device;
+    const total_bytes = filesystem.blocks * filesystem.bsize;
+    const available_bytes = filesystem.bavail * filesystem.bsize;
+    const error =
+      require_separate_filesystem && !separate
+        ? `backup root '${paths.backup_root}' is not a separate filesystem`
+        : null;
+    return {
+      require_separate_filesystem,
+      valid: error == null,
+      error,
+      device,
+      parent_device,
+      total_bytes,
+      available_bytes,
+      minimum_free_bytes,
+      estimated_workspace_bytes,
+      required_available_bytes,
+      admission_allowed:
+        error == null && available_bytes >= required_available_bytes,
+    };
+  } catch (err) {
+    return {
+      require_separate_filesystem,
+      valid: false,
+      error: String(err),
+      device: null,
+      parent_device: null,
+      total_bytes: null,
+      available_bytes: null,
+      minimum_free_bytes,
+      estimated_workspace_bytes,
+      required_available_bytes,
+      admission_allowed: false,
+    };
+  }
+}
+
+async function assertBackupFilesystemReady({
+  paths,
+  state,
+  require_capacity = false,
+}: {
+  paths: ReturnType<typeof getBayBackupPaths>;
+  state: StoredBayBackupState;
+  require_capacity?: boolean;
+}): Promise<BayBackupFilesystemStatus> {
+  const filesystem = await inspectBackupFilesystem({
+    paths,
+    state,
+    create_if_missing: true,
+  });
+  if (!filesystem.valid) {
+    throw new Error(filesystem.error ?? "backup filesystem is unavailable");
+  }
+  if (require_capacity && !filesystem.admission_allowed) {
+    throw new Error(
+      `insufficient backup filesystem capacity: available=${filesystem.available_bytes ?? 0} required=${filesystem.required_available_bytes}`,
+    );
+  }
+  return filesystem;
 }
 
 function parsePostgresHost(hostEntry: string): { host?: string; port: number } {
@@ -637,8 +822,127 @@ async function readJsonIfExists<T>(path: string): Promise<T | undefined> {
 async function writeJson(path: string, value: unknown): Promise<void> {
   await ensureDir(dirname(path));
   const tempPath = `${path}.tmp-${randomUUID()}`;
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(tempPath, path);
+  let renamed = false;
+  try {
+    await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await rename(tempPath, path);
+    renamed = true;
+  } finally {
+    if (!renamed) {
+      await rm(tempPath, { force: true }).catch(() => undefined);
+    }
+  }
+}
+
+async function backupStatusIssue({
+  label,
+  path,
+  timestamp_field,
+  maximum_age_ms,
+}: {
+  label: string;
+  path: string;
+  timestamp_field: string;
+  maximum_age_ms: number;
+}): Promise<string | undefined> {
+  const value = await readJsonIfExists<Record<string, any>>(path);
+  if (!value) return `${label}: status file is missing (${path})`;
+  if (value.level !== "ok") {
+    const reasons = Array.isArray(value.reasons)
+      ? value.reasons.join("; ")
+      : `${value.error ?? value.level ?? "unknown failure"}`;
+    return `${label}: ${reasons}`;
+  }
+  const timestamp = Date.parse(`${value[timestamp_field] ?? ""}`);
+  if (!Number.isFinite(timestamp)) {
+    return `${label}: status timestamp '${timestamp_field}' is missing or invalid`;
+  }
+  const age = Date.now() - timestamp;
+  if (age > maximum_age_ms) {
+    return `${label}: status is ${Math.floor(age / 60_000)} minutes old`;
+  }
+  return;
+}
+
+export async function runBayBackupHealthCheck({
+  send_alert = true,
+}: {
+  send_alert?: boolean;
+} = {}): Promise<string[]> {
+  const pgEnabled =
+    `${process.env.COCALC_BAY_PGBACKREST_ENABLED ?? ""}` === "1";
+  const sqliteEnabled =
+    `${process.env.COCALC_BAY_SQLITE_BACKUP_ENABLED ?? ""}` === "1";
+  if (!pgEnabled && !sqliteEnabled) return [];
+  const stateDir =
+    `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state");
+  const checks: Promise<string | undefined>[] = [];
+  if (pgEnabled) {
+    checks.push(
+      backupStatusIssue({
+        label: "pgBackRest",
+        path:
+          `${process.env.COCALC_BAY_PGBACKREST_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-status.json"),
+        timestamp_field: "generated_at",
+        maximum_age_ms: 15 * 60_000,
+      }),
+    );
+  }
+  if (sqliteEnabled) {
+    checks.push(
+      backupStatusIssue({
+        label: "SQLite",
+        path:
+          `${process.env.COCALC_BAY_SQLITE_BACKUP_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "sqlite-backup-status.json"),
+        timestamp_field: "generated_at",
+        maximum_age_ms: 2 * 60 * 60_000,
+      }),
+    );
+  }
+  if (pgEnabled && sqliteEnabled) {
+    checks.push(
+      backupStatusIssue({
+        label: "disposable PITR restore drill",
+        path:
+          `${process.env.COCALC_BAY_PGBACKREST_RESTORE_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-restore-test-status.json"),
+        timestamp_field: "tested_at",
+        maximum_age_ms: 8 * 24 * 60 * 60_000,
+      }),
+    );
+  }
+  const issues = (await Promise.all(checks)).filter(
+    (issue): issue is string => issue != null,
+  );
+  if (send_alert && issues.length) {
+    await adminAlert({
+      subject: "Bay backup health requires attention",
+      body: [
+        `${getSingleBayInfo().bay_id} has unhealthy application-level backup state.`,
+        "",
+        ...issues.map((issue) => `- ${issue}`),
+        "",
+        "This check is observational only and performs no automatic restart or backup operation.",
+      ].join("\n"),
+      dedupMinutes: 30,
+      dedupBySubject: true,
+    });
+  }
+  return issues;
+}
+
+export function startBayBackupHealthMaintenance(): void {
+  if (backupHealthTimer) return;
+  const run = () => {
+    void runBayBackupHealthCheck().catch((err) =>
+      logger.warn("bay backup health check failed", { err }),
+    );
+  };
+  backupHealthTimer = setInterval(run, NEW_BACKUP_HEALTH_INTERVAL_MS);
+  backupHealthTimer.unref?.();
+  setTimeout(run, 60_000).unref?.();
 }
 
 function defaultState({
@@ -684,6 +988,7 @@ function defaultState({
     maintenance_last_success_at: null,
     maintenance_last_error_at: null,
     maintenance_last_error: null,
+    maintenance_consecutive_failures: 0,
     maintenance_next_run_at: null,
     last_pruned_at: null,
     last_pruned_wal_count: 0,
@@ -709,6 +1014,7 @@ type BayBackupMaintenanceConfig = {
   enabled: boolean;
   full_snapshot_interval_ms: number | null;
   full_snapshot_retry_interval_ms: number;
+  full_snapshot_retry_max_ms: number;
   full_snapshot_retention_count: number;
   restore_workspace_retention_days: number;
   local_wal_retention_count: number;
@@ -721,11 +1027,25 @@ function getBayBackupMaintenanceConfig(): BayBackupMaintenanceConfig {
     enabled: full_snapshot_interval_ms != null,
     full_snapshot_interval_ms,
     full_snapshot_retry_interval_ms: getBayBackupRetryIntervalMs(),
+    full_snapshot_retry_max_ms: getBayBackupRetryMaxMs(),
     full_snapshot_retention_count: getBayBackupRetentionCount(),
     restore_workspace_retention_days: getBayBackupRestoreRetentionDays(),
     local_wal_retention_count: getBayWalLocalRetentionCount(),
     remote_wal_retention_backups: getBayWalRemoteRetentionBackups(),
   };
+}
+
+export function computeBayBackupRetryDelayMs({
+  retry_interval_ms,
+  retry_max_ms,
+  consecutive_failures,
+}: {
+  retry_interval_ms: number;
+  retry_max_ms: number;
+  consecutive_failures: number;
+}): number {
+  const exponent = Math.max(0, Math.min(20, consecutive_failures - 1));
+  return Math.min(retry_max_ms, retry_interval_ms * 2 ** exponent);
 }
 
 async function loadBayBackupState({
@@ -807,6 +1127,10 @@ async function writeUpdatedBayBackupState({
 }): Promise<StoredBayBackupState> {
   const loaded = await loadBayBackupState({ bay_id });
   const next = update(loaded.state);
+  await assertBackupFilesystemReady({
+    paths: loaded.paths,
+    state: loaded.state,
+  });
   await ensureDir(dirname(loaded.paths.state_file));
   await writeJson(loaded.paths.state_file, next);
   return next;
@@ -823,6 +1147,12 @@ function computeNextBackupMaintenanceDelayMs({
 }): number | null {
   if (!config.enabled || config.full_snapshot_interval_ms == null) {
     return null;
+  }
+  const scheduled = state.maintenance_next_run_at
+    ? Date.parse(state.maintenance_next_run_at)
+    : Number.NaN;
+  if (Number.isFinite(scheduled) && scheduled > now) {
+    return scheduled - now;
   }
   const lastSuccessful = state.last_successful_backup_at
     ? Date.parse(state.last_successful_backup_at)
@@ -1538,10 +1868,6 @@ async function restoreBayRusticPath({
   });
 }
 
-function sqliteShellQuote(arg: string): string {
-  return `'${arg.replace(/'/g, "''")}'`;
-}
-
 async function tarGzDirectory({
   sourceDir,
   archivePath,
@@ -1557,68 +1883,6 @@ async function tarGzDirectory({
       maxBuffer: 10 * 1024 * 1024,
     },
   );
-}
-
-async function backupSqliteDatabase({
-  sourcePath,
-  destinationPath,
-}: {
-  sourcePath: string;
-  destinationPath: string;
-}): Promise<void> {
-  await ensureDir(dirname(destinationPath));
-  await execFile(
-    "sqlite3",
-    [
-      sourcePath,
-      ".timeout 5000",
-      `.backup ${sqliteShellQuote(destinationPath)}`,
-    ],
-    {
-      maxBuffer: 10 * 1024 * 1024,
-    },
-  );
-}
-
-async function snapshotSyncTree({
-  sourceDir,
-  destinationDir,
-}: {
-  sourceDir: string;
-  destinationDir: string;
-}): Promise<void> {
-  await ensureDir(destinationDir);
-  const entries = await readdir(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = join(sourceDir, entry.name);
-    const destinationPath = join(destinationDir, entry.name);
-    if (entry.isDirectory()) {
-      // If the sync tree ever grows large, keep a persistent staged snapshot
-      // and refresh only sqlite files whose .db/.db-wal/.db-shm inputs changed
-      // since the previous backup instead of rebuilding the whole tree here.
-      await snapshotSyncTree({
-        sourceDir: sourcePath,
-        destinationDir: destinationPath,
-      });
-      continue;
-    }
-    if (entry.isFile()) {
-      if (entry.name.endsWith(".db")) {
-        await backupSqliteDatabase({
-          sourcePath,
-          destinationPath,
-        });
-        continue;
-      }
-      if (entry.name.endsWith(".db-wal") || entry.name.endsWith(".db-shm")) {
-        continue;
-      }
-      await ensureDir(dirname(destinationPath));
-      await copyFile(sourcePath, destinationPath);
-      const info = await stat(sourcePath);
-      await chmod(destinationPath, info.mode);
-    }
-  }
 }
 
 async function treeContainsSqliteDatabase(sourceDir: string): Promise<boolean> {
@@ -1706,28 +1970,27 @@ async function copySecretsTree({
 
 async function stageControlPlaneArtifacts({
   stagingDir,
+  syncMirrorDir,
+  syncMirrorCatalog,
 }: {
   stagingDir: string;
+  syncMirrorDir: string;
+  syncMirrorCatalog: string;
 }): Promise<ControlPlaneArtifact[]> {
   const artifacts: ControlPlaneArtifact[] = [];
 
   if (await exists(syncFiles.local)) {
-    const syncSnapshotDir = join(stagingDir, "sync");
-    await snapshotSyncTree({
+    const mirror = await refreshSqliteMirror({
       sourceDir: syncFiles.local,
-      destinationDir: syncSnapshotDir,
+      mirrorDir: syncMirrorDir,
+      catalogPath: syncMirrorCatalog,
     });
+    logger.info("refreshed changed-only bay SQLite mirror", mirror);
     const syncArchivePath = join(stagingDir, "sync.tar.gz");
-    // This gzip/tar packaging is simple and works well for the current
-    // local-cache plus direct-object-storage layout. If the rustic repo becomes
-    // the long-term canonical remote backend, we should reconsider this and
-    // likely snapshot the uncompressed tree instead so rustic can deduplicate
-    // unchanged sqlite pages and other repeated content across bay backups.
     await tarGzDirectory({
-      sourceDir: syncSnapshotDir,
+      sourceDir: syncMirrorDir,
       archivePath: syncArchivePath,
     });
-    await rm(syncSnapshotDir, { recursive: true, force: true });
     artifacts.push({
       name: "sync.tar.gz",
       local_path: syncArchivePath,
@@ -2159,6 +2422,87 @@ async function pruneLocalArchiveDirectories({
   return removed;
 }
 
+async function cleanupAbandonedBackupWorkspaces({
+  paths,
+}: {
+  paths: ReturnType<typeof getBayBackupPaths>;
+}): Promise<{ staging: number; manifest_temps: number; archives: number }> {
+  const cutoff = Date.now() - getBayBackupStaleStageAgeMs();
+  let staging = 0;
+  for (const name of await readdir(paths.staging_dir).catch((err) => {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw err;
+  })) {
+    const path = join(paths.staging_dir, name);
+    const info = await stat(path).catch((err) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      throw err;
+    });
+    if (!info || info.mtimeMs >= cutoff) continue;
+    await rm(path, { recursive: true, force: true });
+    staging += 1;
+  }
+
+  let manifest_temps = 0;
+  for (const name of await readdir(paths.manifests_dir).catch((err) => {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw err;
+  })) {
+    if (!name.includes(".json.tmp-")) continue;
+    await rm(join(paths.manifests_dir, name), { force: true });
+    manifest_temps += 1;
+  }
+
+  const committed = new Set(
+    (await readStoredBackupManifests({ paths })).map(
+      (manifest) => manifest.backup_set_id,
+    ),
+  );
+  let archives = 0;
+  for (const name of await readdir(paths.archives_dir).catch((err) => {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw err;
+  })) {
+    if (committed.has(name)) continue;
+    const path = join(paths.archives_dir, name);
+    const info = await stat(path).catch((err) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      throw err;
+    });
+    if (!info?.isDirectory()) continue;
+    await rm(path, { recursive: true, force: true });
+    archives += 1;
+  }
+  return { staging, manifest_temps, archives };
+}
+
+async function pruneLocalArchivesBeforeBackup({
+  paths,
+  state,
+}: {
+  paths: ReturnType<typeof getBayBackupPaths>;
+  state: StoredBayBackupState;
+}): Promise<number> {
+  const retentionCount = getBayBackupRetentionCount();
+  if (retentionCount <= 0) return 0;
+  const manifests = await readStoredBackupManifests({ paths });
+  const keep = new Set(
+    manifests
+      .slice(0, Math.max(1, retentionCount - 1))
+      .map((manifest) => manifest.backup_set_id),
+  );
+  for (const pinned of [
+    state.last_restore_test_backup_set_id,
+    state.last_pitr_test_backup_set_id,
+  ]) {
+    if (pinned) keep.add(pinned);
+  }
+  return await pruneLocalArchiveDirectories({
+    paths,
+    keep_backup_set_ids: keep,
+  });
+}
+
 async function pruneRestoreWorkspaces({
   paths,
   retention_days,
@@ -2310,7 +2654,8 @@ async function applyBayBackupRetention({
     last_pruned_at: new Date().toISOString(),
     last_pruned_wal_count: state.last_pruned_wal_count ?? 0,
     last_pruned_remote_wal_count: state.last_pruned_remote_wal_count ?? 0,
-    last_pruned_local_archive_count: pruned_local_archive_count,
+    last_pruned_local_archive_count:
+      (state.last_pruned_local_archive_count ?? 0) + pruned_local_archive_count,
     last_pruned_restore_count: pruned_restore_count,
   };
 }
@@ -3080,12 +3425,128 @@ async function waitForWalArchiveAdvance({
   return snapshot;
 }
 
-async function syncBayWalArchive({
+async function retryLatestLocalBackupToRustic({
+  bay_id,
+  paths,
+  state,
+  rusticRepo,
+}: {
+  bay_id: string;
+  paths: ReturnType<typeof getBayBackupPaths>;
+  state: StoredBayBackupState;
+  rusticRepo: BayRusticRepoConfig | null;
+}): Promise<StoredBayBackupState> {
+  if (
+    !rusticRepo ||
+    state.latest_storage_backend !== "local" ||
+    !state.latest_backup_set_id ||
+    !state.latest_format
+  ) {
+    return state;
+  }
+  const backup_set_id = state.latest_backup_set_id;
+  const archiveDir = join(paths.archives_dir, backup_set_id);
+  const localManifestPath =
+    state.latest_local_manifest_path ??
+    join(paths.manifests_dir, `${backup_set_id}.json`);
+  const manifest =
+    await readJsonIfExists<StoredBayBackupManifest>(localManifestPath);
+  if (!manifest || !(await exists(archiveDir))) {
+    return state;
+  }
+  let stageDir: string | null = null;
+  try {
+    await assertBackupFilesystemReady({
+      paths,
+      state,
+      require_capacity: true,
+    });
+    await ensureDir(paths.staging_dir);
+    stageDir = await mkdtemp(
+      join(paths.staging_dir, `${backup_set_id}-rustic-retry-`),
+    );
+    await materializeRusticSnapshotTree({
+      archiveDir,
+      destinationDir: stageDir,
+    });
+    const repoProfilePath = await ensureBayRusticRepoProfile(rusticRepo);
+    const remoteSnapshot = await backupToBayRusticRepo({
+      repoProfilePath,
+      snapshotHost: bay_id,
+      backup_set_id,
+      format: state.latest_format,
+      sourceDir: stageDir,
+    });
+    const finishedAt = new Date().toISOString();
+    const updatedManifest: StoredBayBackupManifest = {
+      ...manifest,
+      current_storage_backend: "rustic",
+      latest_storage_backend: "rustic",
+      remote_snapshot_id: remoteSnapshot.id,
+      remote_snapshot_host: remoteSnapshot.hostname ?? bay_id,
+      rustic_repo_selector: rusticRepo.repo_selector,
+    };
+    await writeJson(join(archiveDir, "manifest.json"), updatedManifest);
+    await writeJson(localManifestPath, updatedManifest);
+    const updatedState: StoredBayBackupState = {
+      ...state,
+      current_storage_backend: "rustic",
+      latest_storage_backend: "rustic",
+      latest_remote_snapshot_id: remoteSnapshot.id,
+      latest_remote_snapshot_host: remoteSnapshot.hostname ?? bay_id,
+      rustic_repo_selector: rusticRepo.repo_selector,
+      last_successful_remote_backup_at: finishedAt,
+      last_error_at: `${state.last_error ?? ""}`.startsWith(
+        "remote rustic upload failed:",
+      )
+        ? null
+        : state.last_error_at,
+      last_error: `${state.last_error ?? ""}`.startsWith(
+        "remote rustic upload failed:",
+      )
+        ? null
+        : state.last_error,
+    };
+    await writeJson(paths.state_file, updatedState);
+    logger.info("uploaded existing local bay backup to rustic", {
+      bay_id,
+      backup_set_id,
+      remote_snapshot_id: remoteSnapshot.id,
+    });
+    return updatedState;
+  } catch (err) {
+    const failedState: StoredBayBackupState = {
+      ...state,
+      last_error_at: new Date().toISOString(),
+      last_error: `remote rustic upload failed: ${String(err)}`,
+    };
+    await writeJson(paths.state_file, failedState).catch(() => undefined);
+    logger.warn("retrying local bay backup upload to rustic failed", {
+      bay_id,
+      backup_set_id,
+      err,
+    });
+    return failedState;
+  } finally {
+    if (stageDir) {
+      await rm(stageDir, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+}
+
+export async function syncBayWalArchive({
   bay_id,
   forceSwitch = false,
+  // A local-only full snapshot can require hundreds of GB of temporary I/O to
+  // materialize for Rustic. WAL maintenance must never trigger that work as a
+  // side effect; callers that intentionally retry a full upload opt in.
+  retryLocalSnapshot = false,
 }: {
   bay_id?: string;
   forceSwitch?: boolean;
+  retryLocalSnapshot?: boolean;
 } = {}): Promise<{
   state: StoredBayBackupState;
   snapshot: WalArchiveSnapshot;
@@ -3102,7 +3563,6 @@ async function syncBayWalArchive({
     ? "rustic"
     : "local";
   const paths = getBayBackupPaths(resolvedBayId);
-  await ensureDir(paths.wal_archive_dir);
   const stored =
     (await readJsonIfExists<StoredBayBackupState>(paths.state_file)) ??
     defaultState({
@@ -3110,6 +3570,8 @@ async function syncBayWalArchive({
       current_storage_backend,
       r2,
     });
+  await assertBackupFilesystemReady({ paths, state: stored });
+  await ensureDir(paths.wal_archive_dir);
   let state: StoredBayBackupState = {
     ...stored,
     bay_id: resolvedBayId,
@@ -3139,6 +3601,14 @@ async function syncBayWalArchive({
       stored.last_pruned_local_archive_count ?? 0,
     last_pruned_restore_count: stored.last_pruned_restore_count ?? 0,
   };
+  if (retryLocalSnapshot) {
+    state = await retryLatestLocalBackupToRustic({
+      bay_id: resolvedBayId,
+      paths,
+      state,
+      rusticRepo,
+    });
+  }
   const resolvedWalObjectPrefix = walObjectPrefix(
     r2.object_prefix_root ?? state.object_prefix_root ?? null,
   );
@@ -3419,6 +3889,10 @@ async function runBayBackupMaintenance({
     return;
   }
   const { state } = await loadBayBackupState({ bay_id });
+  backupMaintenanceConsecutiveFailures = Math.max(
+    backupMaintenanceConsecutiveFailures,
+    state.maintenance_consecutive_failures ?? 0,
+  );
   const dueDelay = computeNextBackupMaintenanceDelayMs({ state, config });
   if (dueDelay == null) {
     scheduleBayBackupMaintenance({ bay_id, delay_ms: null });
@@ -3444,6 +3918,7 @@ async function runBayBackupMaintenance({
     });
     await runBayBackup({ bay_id });
     const finished_at = new Date().toISOString();
+    backupMaintenanceConsecutiveFailures = 0;
     await writeUpdatedBayBackupState({
       bay_id,
       update: (state) => ({
@@ -3452,6 +3927,7 @@ async function runBayBackupMaintenance({
         maintenance_last_success_at: finished_at,
         maintenance_last_error_at: null,
         maintenance_last_error: null,
+        maintenance_consecutive_failures: 0,
       }),
     });
     scheduleBayBackupMaintenance({
@@ -3483,6 +3959,7 @@ async function runBayBackupMaintenance({
       return;
     }
     const finished_at = new Date().toISOString();
+    backupMaintenanceConsecutiveFailures += 1;
     await writeUpdatedBayBackupState({
       bay_id,
       update: (state) => ({
@@ -3490,6 +3967,7 @@ async function runBayBackupMaintenance({
         maintenance_last_finished_at: finished_at,
         maintenance_last_error_at: finished_at,
         maintenance_last_error: String(err),
+        maintenance_consecutive_failures: backupMaintenanceConsecutiveFailures,
       }),
     }).catch((writeErr) => {
       logger.warn("failed to persist bay backup maintenance error", {
@@ -3503,7 +3981,11 @@ async function runBayBackupMaintenance({
     });
     scheduleBayBackupMaintenance({
       bay_id,
-      delay_ms: config.full_snapshot_retry_interval_ms,
+      delay_ms: computeBayBackupRetryDelayMs({
+        retry_interval_ms: config.full_snapshot_retry_interval_ms,
+        retry_max_ms: config.full_snapshot_retry_max_ms,
+        consecutive_failures: backupMaintenanceConsecutiveFailures,
+      }),
     });
   } finally {
     backupMaintenanceRunning = false;
@@ -3529,6 +4011,8 @@ export function startBayBackupMaintenance(): void {
   void (async () => {
     try {
       const { state } = await loadBayBackupState({ bay_id });
+      backupMaintenanceConsecutiveFailures =
+        state.maintenance_consecutive_failures ?? 0;
       scheduleBayBackupMaintenance({
         bay_id,
         delay_ms: computeNextBackupMaintenanceDelayMs({
@@ -3553,12 +4037,15 @@ function mapStateToStatus({
   paths,
   state,
   wal,
+  filesystem,
 }: {
   paths: ReturnType<typeof getBayBackupPaths>;
   state: StoredBayBackupState;
   wal: WalArchiveSnapshot;
+  filesystem: BayBackupFilesystemStatus;
 }): BayBackupStatus {
   const config = getBayBackupMaintenanceConfig();
+  const workerId = `${process.env.COCALC_BAY_WORKER_ID ?? ""}`.trim();
   return {
     enabled: true,
     backup_root: paths.backup_root,
@@ -3567,6 +4054,9 @@ function mapStateToStatus({
     manifests_dir: paths.manifests_dir,
     staging_dir: paths.staging_dir,
     wal_archive_dir: wal.wal_archive_dir,
+    filesystem,
+    automatic_scheduler_worker_id: "1",
+    current_worker_is_scheduler: !workerId || workerId === "1",
     r2_configured: state.r2_configured,
     current_storage_backend: state.current_storage_backend,
     bucket_name: state.bucket_name,
@@ -3601,6 +4091,7 @@ function mapStateToStatus({
     full_snapshot_scheduler_enabled: config.enabled,
     full_snapshot_interval_ms: config.full_snapshot_interval_ms,
     full_snapshot_retry_interval_ms: config.full_snapshot_retry_interval_ms,
+    full_snapshot_retry_max_ms: config.full_snapshot_retry_max_ms,
     full_snapshot_retention_count: config.full_snapshot_retention_count,
     restore_workspace_retention_days: config.restore_workspace_retention_days,
     local_wal_retention_count: config.local_wal_retention_count,
@@ -3612,6 +4103,10 @@ function mapStateToStatus({
     maintenance_last_success_at: state.maintenance_last_success_at,
     maintenance_last_error_at: state.maintenance_last_error_at,
     maintenance_last_error: state.maintenance_last_error,
+    maintenance_consecutive_failures: Math.max(
+      state.maintenance_consecutive_failures ?? 0,
+      backupMaintenanceConsecutiveFailures,
+    ),
     last_pruned_at: state.last_pruned_at,
     last_pruned_wal_count: state.last_pruned_wal_count,
     last_pruned_remote_wal_count: state.last_pruned_remote_wal_count,
@@ -3761,6 +4256,100 @@ function mapRestoreReadiness({
   };
 }
 
+function mapPgBackRestRestoreReadiness({
+  legacy,
+  postgresStatus,
+  restoreStatus,
+}: {
+  legacy: BayRestoreReadinessStatus;
+  postgresStatus?: PgBackRestApplicationStatus;
+  restoreStatus?: PgBackRestRestoreStatus;
+}): BayRestoreReadinessStatus {
+  const latestBackupLabel =
+    `${postgresStatus?.backup?.latest_label ?? ""}`.trim();
+  if (!latestBackupLabel) return legacy;
+
+  const testedAt = `${restoreStatus?.tested_at ?? ""}`.trim() || null;
+  const testedAtMs = testedAt == null ? Number.NaN : Date.parse(testedAt);
+  const testIsCurrent =
+    Number.isFinite(testedAtMs) &&
+    Date.now() - testedAtMs <= 8 * 24 * 60 * 60_000;
+  const testStatus: "not-run" | "stale" | "passed" | "failed" =
+    restoreStatus == null
+      ? "not-run"
+      : restoreStatus.level !== "ok"
+        ? "failed"
+        : testIsCurrent
+          ? "passed"
+          : "stale";
+  const testedBackupLabel =
+    `${restoreStatus?.backup_label ?? ""}`.trim() || null;
+  const workerRun = restoreStatus?.worker ?? null;
+  const worker = workerRun?.worker ?? null;
+  const targetDir = workerRun
+    ? `gcp://${workerRun.project_id}/${workerRun.zone}/${workerRun.instance_name}`
+    : null;
+  const evidence: BayRestoreTestEvidence | null = workerRun
+    ? {
+        execution_mode: "disposable-gcp",
+        duration_ms: worker?.duration_ms ?? null,
+        worker_status: worker?.status ?? null,
+        worker_stage: worker?.stage ?? null,
+        worker_error:
+          worker?.error ?? (`${restoreStatus?.error ?? ""}`.trim() || null),
+        worker_instance_name: workerRun.instance_name,
+        worker_project_id: workerRun.project_id,
+        worker_zone: workerRun.zone,
+        worker_machine_type: workerRun.machine_type,
+        worker_boot_disk_gb: workerRun.boot_disk_gb,
+        worker_cleanup: workerRun.cleanup,
+        conat_database_count: worker?.conat?.database_count ?? null,
+        conat_database_bytes: worker?.conat?.database_bytes ?? null,
+        conat_quick_check_passed: worker?.conat?.quick_check_passed ?? null,
+      }
+    : null;
+  const summary =
+    testStatus === "passed"
+      ? `pgBackRest backup ${latestBackupLabel} is current; disposable PITR backup ${testedBackupLabel ?? "unknown"} passed at ${testedAt}.`
+      : testStatus === "failed"
+        ? `The latest disposable pgBackRest PITR restore drill failed at ${testedAt ?? "unknown time"}.`
+        : testStatus === "stale"
+          ? `The latest disposable pgBackRest PITR restore drill is stale (${testedAt ?? "unknown time"}).`
+          : `pgBackRest backup ${latestBackupLabel} has not passed a disposable PITR restore drill.`;
+
+  return {
+    latest_backup_set_id: latestBackupLabel,
+    // A pgBackRest physical backup has the same recovery semantics as the
+    // legacy pg_basebackup representation used by this API.
+    latest_backup_format: "pg_basebackup",
+    latest_backup_restore_test_status: testStatus,
+    latest_backup_restore_tested: testStatus === "passed",
+    latest_backup_restore_tested_at:
+      testStatus === "passed" || testStatus === "failed" ? testedAt : null,
+    latest_backup_pitr_test_status: testStatus,
+    latest_backup_pitr_tested: testStatus === "passed",
+    latest_backup_pitr_tested_at:
+      testStatus === "passed" || testStatus === "failed" ? testedAt : null,
+    gold_star: testStatus === "passed",
+    last_restore_test_backup_set_id: testedBackupLabel,
+    last_restore_test_status:
+      testStatus === "passed" || testStatus === "failed" ? testStatus : null,
+    last_restore_tested_at: testedAt,
+    last_restore_test_target_dir: targetDir,
+    last_restore_test_recovery_ready: testStatus === "passed",
+    last_pitr_test_backup_set_id: testedBackupLabel,
+    last_pitr_test_status:
+      testStatus === "passed" || testStatus === "failed" ? testStatus : null,
+    last_pitr_tested_at: testedAt,
+    last_pitr_test_target_time:
+      `${restoreStatus?.pitr_target_time ?? ""}`.trim() || null,
+    last_pitr_test_target_dir: targetDir,
+    last_pitr_test_remote_only: restoreStatus == null ? null : true,
+    last_restore_test_evidence: evidence,
+    summary,
+  };
+}
+
 export async function getBayBackupStatus({
   bay_id,
 }: {
@@ -3843,14 +4432,36 @@ export async function getBayBackupStatus({
     state,
     remote_object_keys: remoteWalObjectKeys,
   });
+  const filesystem = await inspectBackupFilesystem({ paths, state });
+  let restoreReadiness = mapRestoreReadiness({ state });
+  if (`${process.env.COCALC_BAY_PGBACKREST_ENABLED ?? ""}` === "1") {
+    const stateDir =
+      `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state");
+    const [postgresStatus, restoreStatus] = await Promise.all([
+      readJsonIfExists<PgBackRestApplicationStatus>(
+        `${process.env.COCALC_BAY_PGBACKREST_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-status.json"),
+      ),
+      readJsonIfExists<PgBackRestRestoreStatus>(
+        `${process.env.COCALC_BAY_PGBACKREST_RESTORE_STATUS_FILE ?? ""}`.trim() ||
+          join(stateDir, "pgbackrest-restore-test-status.json"),
+      ),
+    ]);
+    restoreReadiness = mapPgBackRestRestoreReadiness({
+      legacy: restoreReadiness,
+      postgresStatus,
+      restoreStatus,
+    });
+  }
   return {
     postgres,
     bay_backup: mapStateToStatus({
       paths,
       state,
       wal,
+      filesystem,
     }),
-    restore_readiness: mapRestoreReadiness({ state }),
+    restore_readiness: restoreReadiness,
   };
 }
 
@@ -3891,12 +4502,35 @@ export async function runBayBackup({
             current_storage_backend,
             r2,
           });
+        await assertBackupFilesystemReady({ paths, state: previous });
         await Promise.all([
           ensureDir(paths.archives_dir),
           ensureDir(paths.manifests_dir),
           ensureDir(paths.staging_dir),
           ensureDir(paths.wal_archive_dir),
         ]);
+        const cleaned = await cleanupAbandonedBackupWorkspaces({ paths });
+        const prunedBeforeRun = await pruneLocalArchivesBeforeBackup({
+          paths,
+          state: previous,
+        });
+        if (
+          cleaned.staging > 0 ||
+          cleaned.manifest_temps > 0 ||
+          cleaned.archives > 0 ||
+          prunedBeforeRun > 0
+        ) {
+          logger.info("reconciled bay backup workspace before full snapshot", {
+            bay_id: resolvedBayId,
+            ...cleaned,
+            pruned_before_run: prunedBeforeRun,
+          });
+        }
+        await assertBackupFilesystemReady({
+          paths,
+          state: previous,
+          require_capacity: true,
+        });
         const started_at = new Date().toISOString();
         const backup_set_id = randomUUID();
         const initialState: StoredBayBackupState = {
@@ -3928,8 +4562,7 @@ export async function runBayBackup({
           last_pruned_wal_count: previous.last_pruned_wal_count ?? 0,
           last_pruned_remote_wal_count:
             previous.last_pruned_remote_wal_count ?? 0,
-          last_pruned_local_archive_count:
-            previous.last_pruned_local_archive_count ?? 0,
+          last_pruned_local_archive_count: cleaned.archives + prunedBeforeRun,
           last_pruned_restore_count: previous.last_pruned_restore_count ?? 0,
         };
         await writeJson(paths.state_file, initialState);
@@ -3938,6 +4571,8 @@ export async function runBayBackup({
         );
         let archive_dir: string | null = null;
         let rustic_stage_dir: string | null = null;
+        let local_manifest_path: string | null = null;
+        let committed = false;
         try {
           logger.info("starting bay postgres backup", {
             bay_id: resolvedBayId,
@@ -3953,6 +4588,8 @@ export async function runBayBackup({
           });
           await stageControlPlaneArtifacts({
             stagingDir: staging_dir,
+            syncMirrorDir: paths.sync_mirror_dir,
+            syncMirrorCatalog: paths.sync_mirror_catalog,
           });
           archive_dir = join(paths.archives_dir, backup_set_id);
           await rename(staging_dir, archive_dir);
@@ -3965,7 +4602,7 @@ export async function runBayBackup({
             (sum, artifact) => sum + artifact.bytes,
             0,
           );
-          const local_manifest_path = join(
+          local_manifest_path = join(
             paths.manifests_dir,
             `${backup_set_id}.json`,
           );
@@ -4082,11 +4719,13 @@ export async function runBayBackup({
                 : "ready-local-only",
           };
           await writeJson(paths.state_file, state);
+          committed = true;
           try {
             const walSync = await syncBayWalArchive({
               bay_id: resolvedBayId,
               forceSwitch:
                 `${postgres.archive_mode ?? ""}`.toLowerCase() === "on",
+              retryLocalSnapshot: false,
             });
             state = walSync.state;
           } catch (err) {
@@ -4121,6 +4760,7 @@ export async function runBayBackup({
             }
           }
           const wal = await getWalArchiveSnapshot({ paths, state });
+          const filesystem = await inspectBackupFilesystem({ paths, state });
           await publishBayBackupMetadata({
             bay_id: resolvedBayId,
             paths,
@@ -4160,6 +4800,7 @@ export async function runBayBackup({
               paths,
               state,
               wal,
+              filesystem,
             }),
           };
         } catch (err) {
@@ -4178,6 +4819,21 @@ export async function runBayBackup({
             await rm(staging_dir, { recursive: true, force: true }).catch(
               () => undefined,
             );
+          } else if (!committed) {
+            await rm(archive_dir, { recursive: true, force: true }).catch(
+              (err) => {
+                logger.warn("failed to remove uncommitted bay backup archive", {
+                  bay_id: resolvedBayId,
+                  archive_dir,
+                  err,
+                });
+              },
+            );
+            if (local_manifest_path) {
+              await rm(local_manifest_path, { force: true }).catch(
+                () => undefined,
+              );
+            }
           }
           if (rustic_stage_dir != null) {
             await rm(rustic_stage_dir, { recursive: true, force: true }).catch(
@@ -4836,10 +5492,12 @@ async function preparePitrRestoreSentinel({
   bay_id,
   backup_set_id,
   remote_only,
+  archive_backend = "legacy",
 }: {
   bay_id: string;
   backup_set_id: string;
   remote_only: boolean;
+  archive_backend?: "legacy" | "pgbackrest";
 }): Promise<PitrRestoreSentinel> {
   const run_id = randomUUID();
   const note = `${bay_id}:${backup_set_id}:${remote_only ? "remote-only" : "local"}`;
@@ -4875,14 +5533,25 @@ async function preparePitrRestoreSentinel({
     `INSERT INTO ${RESTORE_TEST_PITR_TABLE} (run_id, phase, note) VALUES ($1, 'post', $2)`,
     [run_id, note],
   );
-  const walSync = await syncBayWalArchive({
-    bay_id,
-    forceSwitch: true,
-  });
-  if (`${walSync.state.last_error ?? ""}`.startsWith("wal archive:")) {
-    throw new Error(
-      `failed to archive PITR validation WAL: ${walSync.state.last_error}`,
-    );
+  if (archive_backend === "pgbackrest") {
+    await getPool().query("SELECT pg_switch_wal()");
+    const currentLink =
+      `${process.env.COCALC_BAY_CURRENT_LINK ?? ""}`.trim() ||
+      "/opt/cocalc/bay/current";
+    await execFile(join(currentLink, "bin", "bay-pgbackrest-run"), ["check"], {
+      timeout: 10 * 60_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } else {
+    const walSync = await syncBayWalArchive({
+      bay_id,
+      forceSwitch: true,
+    });
+    if (`${walSync.state.last_error ?? ""}`.startsWith("wal archive:")) {
+      throw new Error(
+        `failed to archive PITR validation WAL: ${walSync.state.last_error}`,
+      );
+    }
   }
   return { run_id, target_time };
 }
@@ -5017,12 +5686,25 @@ async function waitForRestorePitrSentinel({
   );
 }
 
-const GIB = 1024 ** 3;
-
 async function resolveDisposableRestoreGcpZone(): Promise<string> {
   const configured =
     `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_ZONE ?? ""}`.trim();
   if (configured) return configured;
+  try {
+    const response = await fetch(
+      "http://metadata.google.internal/computeMetadata/v1/instance/zone",
+      {
+        headers: { "Metadata-Flavor": "Google" },
+        signal: AbortSignal.timeout(1_500),
+      },
+    );
+    if (response.ok) {
+      const zone = `${await response.text()}`.trim().split("/").pop() ?? "";
+      if (/^[a-z][a-z0-9-]+-[a-z]$/.test(zone)) return zone;
+    }
+  } catch {
+    // Non-GCP development bays fall back to the latest visible GCP host.
+  }
   const { rows } = await getPool().query<{ zone: string | null }>(
     `SELECT metadata #>> '{machine,zone}' AS zone
        FROM project_hosts
@@ -5122,6 +5804,284 @@ function assertDisposableWorkerPassed(
     throw new Error(
       "disposable restore worker did not validate every Conat SQLite database",
     );
+  }
+}
+
+function requiredBackupEnv(name: string): string {
+  const value = `${process.env[name] ?? ""}`.trim();
+  if (!value) {
+    throw new Error(`missing required backup environment variable: ${name}`);
+  }
+  return value;
+}
+
+async function latestPgBackRestBackup(requestedLabel?: string): Promise<{
+  label: string;
+  repository_bytes: number;
+}> {
+  const binary =
+    `${process.env.COCALC_BAY_PGBACKREST_BIN ?? ""}`.trim() ||
+    "/usr/local/bin/pgbackrest";
+  const config = requiredBackupEnv("COCALC_BAY_PGBACKREST_CONFIG");
+  const stanza = `cocalc-${getSingleBayInfo().bay_id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+  const env = {
+    ...process.env,
+    PGBACKREST_REPO1_S3_KEY: requiredBackupEnv(
+      "COCALC_BAY_PGBACKREST_S3_ACCESS_KEY",
+    ),
+    PGBACKREST_REPO1_S3_KEY_SECRET: requiredBackupEnv(
+      "COCALC_BAY_PGBACKREST_S3_SECRET_KEY",
+    ),
+    PGBACKREST_REPO1_CIPHER_PASS: requiredBackupEnv(
+      "COCALC_BAY_PGBACKREST_CIPHER_PASS",
+    ),
+  };
+  const { stdout } = await execFile(
+    binary,
+    [`--config=${config}`, `--stanza=${stanza}`, "--output=json", "info"],
+    { env, timeout: 5 * 60_000, maxBuffer: 10 * 1024 * 1024 },
+  );
+  const info = JSON.parse(stdout) as any[];
+  const backups = (info[0]?.backup ?? []).filter(
+    (backup: any) => !backup?.error && `${backup?.label ?? ""}`.trim(),
+  );
+  const latest = requestedLabel
+    ? backups.find((backup: any) => `${backup.label}` === requestedLabel)
+    : backups.sort(
+        (left: any, right: any) =>
+          Number(right?.timestamp?.stop ?? 0) -
+          Number(left?.timestamp?.stop ?? 0),
+      )[0];
+  if (!latest) {
+    throw new Error(
+      requestedLabel
+        ? `pgBackRest backup '${requestedLabel}' was not found`
+        : "pgBackRest has no successful backup to restore-test",
+    );
+  }
+  return {
+    label: `${latest.label}`,
+    repository_bytes: Number(latest?.info?.repository?.size ?? 0) || 0,
+  };
+}
+
+async function latestSqliteRusticSnapshot(): Promise<string> {
+  const statusPath =
+    `${process.env.COCALC_BAY_SQLITE_BACKUP_STATUS_FILE ?? ""}`.trim() ||
+    join(
+      `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state"),
+      "sqlite-backup-status.json",
+    );
+  const status = await readJsonIfExists<any>(statusPath);
+  const snapshotId = `${status?.rustic?.snapshot_id ?? ""}`.trim();
+  if (!snapshotId || status?.level !== "ok") {
+    throw new Error(
+      `no successful changed-only SQLite snapshot is recorded in ${statusPath}`,
+    );
+  }
+  return snapshotId;
+}
+
+async function runPgBackRestDisposableGcpRestoreTest({
+  resolvedBayId,
+  started_at,
+  backup_label,
+}: {
+  resolvedBayId: string;
+  started_at: string;
+  backup_label?: string;
+}): Promise<BayRestoreTestRunResult> {
+  if (`${process.env.COCALC_BAY_SQLITE_BACKUP_ENABLED ?? ""}` !== "1") {
+    throw new Error(
+      "pgBackRest disposable restore tests require changed-only SQLite backups",
+    );
+  }
+  const [postgresBackup, sqliteSnapshotId, sizingInfo, zone, r2, settings] =
+    await Promise.all([
+      latestPgBackRestBackup(backup_label),
+      latestSqliteRusticSnapshot(),
+      disposableRestorePostgresSizing(),
+      resolveDisposableRestoreGcpZone(),
+      resolveR2Target(resolvedBayId),
+      getServerSettings(),
+    ]);
+  if (!r2.account_id || !r2.api_token) {
+    throw new Error(
+      "pgBackRest disposable restore tests require the Cloudflare account and API token",
+    );
+  }
+  const serviceAccountJson =
+    `${settings.google_cloud_service_account_json ?? ""}`.trim();
+  if (!serviceAccountJson) {
+    throw new Error(
+      "pgBackRest disposable restore tests require google_cloud_service_account_json",
+    );
+  }
+  const bucket = requiredBackupEnv("COCALC_BAY_PGBACKREST_S3_BUCKET");
+  const endpoint = requiredBackupEnv("COCALC_BAY_PGBACKREST_S3_ENDPOINT");
+  const parentAccessKey = requiredBackupEnv(
+    "COCALC_BAY_PGBACKREST_S3_ACCESS_KEY",
+  );
+  const pgbackrestRepoPath =
+    `${process.env.COCALC_BAY_PGBACKREST_REPO_PATH ?? ""}`.trim() ||
+    `/pgbackrest/${resolvedBayId}`;
+  const sqliteRepoRoot =
+    `${process.env.COCALC_BAY_SQLITE_RUSTIC_ROOT ?? ""}`.trim() ||
+    `rustic/bay-sqlite/${resolvedBayId}`;
+  const stanza = `cocalc-${resolvedBayId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+  const timeoutMs = Math.max(
+    30 * 60_000,
+    Number.parseInt(
+      `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_TIMEOUT_MS ?? ""}`,
+      10,
+    ) || 4 * 60 * 60_000,
+  );
+  const temporaryR2 = await createTemporaryR2ReadCredentials({
+    account_id: r2.account_id,
+    api_token: r2.api_token,
+    bucket,
+    parent_access_key_id: parentAccessKey,
+    prefixes: [pgbackrestRepoPath, sqliteRepoRoot],
+    ttl_seconds: Math.min(
+      7 * 24 * 60 * 60,
+      Math.ceil(timeoutMs / 1000) + 30 * 60,
+    ),
+  });
+  const pitrRun = await preparePitrRestoreSentinel({
+    bay_id: resolvedBayId,
+    backup_set_id: postgresBackup.label,
+    remote_only: true,
+    archive_backend: "pgbackrest",
+  });
+  const sizing = disposableRestoreDiskSizing({
+    database_bytes: sizingInfo.database_bytes,
+    artifact_bytes: postgresBackup.repository_bytes,
+  });
+  const identity = newDisposableRestoreWorkerIdentity();
+  const machineType =
+    `${process.env.COCALC_BAY_RESTORE_DRILL_GCP_MACHINE_TYPE ?? ""}`.trim() ||
+    "n2-standard-4";
+  const statusPath =
+    `${process.env.COCALC_BAY_PGBACKREST_RESTORE_STATUS_FILE ?? ""}`.trim() ||
+    join(
+      `${process.env.COCALC_BAY_STATE_DIR ?? ""}`.trim() || join(data, "state"),
+      "pgbackrest-restore-test-status.json",
+    );
+  let workerRun: DisposableGcpRestoreResult | null = null;
+  try {
+    workerRun = await runDisposableGcpRestoreWorker({
+      service_account_json: serviceAccountJson,
+      zone,
+      machine_type: machineType,
+      // Balanced PD performance scales with disk size. Production WAL replay
+      // is random-I/O heavy, so a space-only disk can make a valid drill time
+      // out even though the ephemeral capacity is inexpensive.
+      boot_disk_gb: Math.max(500, sizing.boot_disk_gb),
+      timeout_ms: timeoutMs,
+      config: {
+        ...identity,
+        bay_id: resolvedBayId,
+        backup_set_id: postgresBackup.label,
+        repository_type: "pgbackrest",
+        snapshot_id: sqliteSnapshotId,
+        restore_mode: "pitr",
+        target_time: pitrRun.target_time,
+        pitr_run_id: pitrRun.run_id,
+        postgres_major: sizingInfo.postgres_major,
+        postgres_user: pguser,
+        postgres_database: pgdatabase,
+        r2_endpoint: endpoint,
+        r2_bucket: bucket,
+        r2_access_key_id: temporaryR2.access_key_id,
+        r2_secret_access_key: temporaryR2.secret_access_key,
+        r2_session_token: temporaryR2.session_token,
+        rustic_repo_root: sqliteRepoRoot,
+        rustic_repo_password: requiredBackupEnv(
+          "COCALC_BAY_SQLITE_RUSTIC_PASSWORD",
+        ),
+        pgbackrest_repo_path: pgbackrestRepoPath,
+        pgbackrest_cipher_pass: requiredBackupEnv(
+          "COCALC_BAY_PGBACKREST_CIPHER_PASS",
+        ),
+        pgbackrest_stanza: stanza,
+        pgbackrest_version: PGBACKREST_VERSION,
+        pgbackrest_source_sha256: PGBACKREST_SOURCE_SHA256,
+        require_conat: true,
+        minimum_free_bytes: sizing.minimum_free_bytes,
+      },
+    });
+    assertDisposableWorkerPassed(workerRun.worker, "pitr");
+    const finished_at = new Date().toISOString();
+    const conat = workerRun.worker.conat!;
+    await writeJson(statusPath, {
+      level: "ok",
+      tested_at: finished_at,
+      backup_label: postgresBackup.label,
+      sqlite_snapshot_id: sqliteSnapshotId,
+      pitr_target_time: pitrRun.target_time,
+      pitr_run_id: pitrRun.run_id,
+      worker: workerRun,
+    });
+    return {
+      ...getSingleBayInfo(),
+      started_at,
+      finished_at,
+      remote_only: true,
+      target_time: pitrRun.target_time,
+      backup_set_id: postgresBackup.label,
+      target_dir: `gcp://${workerRun.project_id}/${workerRun.zone}/${workerRun.instance_name}`,
+      data_dir: null,
+      sync_dir: null,
+      secrets_dir: null,
+      backup_manifest_path: null,
+      restore_manifest_path: null,
+      source_storage_backend: "r2",
+      source_snapshot_id: postgresBackup.label,
+      rustic_repo_selector: sqliteRepoRoot,
+      wal_archive_dir: null,
+      wal_storage_backend: "r2",
+      wal_segment_count: 0,
+      recovery_ready: true,
+      pitr_verified: true,
+      pitr_run_id: pitrRun.run_id,
+      kept_on_disk: false,
+      verified_queries: [
+        "pitr_pre_count=1",
+        "pitr_post_count=0",
+        ...workerRun.worker.postgres!.tables_verified.map(
+          (table) => `${table}_table=${table}`,
+        ),
+        `conat_sqlite_quick_check=${conat.quick_check_passed}/${conat.database_count}`,
+      ],
+      notes: [
+        `Restored pgBackRest backup ${postgresBackup.label} exclusively from R2.`,
+        `Recovered to ${pitrRun.target_time} and proved the post-target transaction was absent.`,
+        `Restored and checked SQLite snapshot ${sqliteSnapshotId}.`,
+        `Deleted disposable worker ${workerRun.instance_name} and its auto-delete boot disk.`,
+      ],
+      execution_mode: "disposable-gcp",
+      worker_instance_name: workerRun.instance_name,
+      worker_project_id: workerRun.project_id,
+      worker_zone: workerRun.zone,
+      worker_machine_type: workerRun.machine_type,
+      worker_boot_disk_gb: workerRun.boot_disk_gb,
+      worker_cleanup: workerRun.cleanup,
+      conat_database_count: conat.database_count,
+      conat_database_bytes: conat.database_bytes,
+      conat_quick_check_passed: conat.quick_check_passed,
+    };
+  } catch (err) {
+    await writeJson(statusPath, {
+      level: "critical",
+      tested_at: new Date().toISOString(),
+      backup_label: postgresBackup.label,
+      sqlite_snapshot_id: sqliteSnapshotId,
+      pitr_target_time: pitrRun.target_time,
+      pitr_run_id: pitrRun.run_id,
+      error: String(err).slice(0, 2_000),
+      worker: workerRun,
+    });
+    throw err;
   }
 }
 
@@ -5370,6 +6330,21 @@ export async function runBayRestoreTest({
     throw new Error(`bay '${resolvedBayId}' not found`);
   }
   const started_at = new Date().toISOString();
+  if (
+    disposable_gcp &&
+    `${process.env.COCALC_BAY_PGBACKREST_ENABLED ?? ""}` === "1"
+  ) {
+    if (target_dir?.trim() || keep) {
+      throw new Error(
+        "--target-dir and --keep are only supported for bay-local restore tests",
+      );
+    }
+    return await runPgBackRestDisposableGcpRestoreTest({
+      resolvedBayId,
+      started_at,
+      backup_label: backup_set_id?.trim() || undefined,
+    });
+  }
   const paths = getBayBackupPaths(resolvedBayId);
   const r2 = await resolveR2Target(resolvedBayId);
   const rusticRepo = await buildBayRusticRepoConfig({ r2 });

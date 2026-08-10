@@ -127,7 +127,23 @@ const STAR_HIDDEN_SETTING_PREFIXES = [
   "stripe_",
 ];
 
-export default function SiteSettings({ close }) {
+export type SiteSettingsScope = "general" | "codex-pools";
+
+export function isCodexPoolsSetting(name: string): boolean {
+  return (
+    name === "openai_section" ||
+    name === "openai_api_key" ||
+    name.startsWith("site_funded_codex_")
+  );
+}
+
+export default function SiteSettings({
+  close,
+  scope = "general",
+}: {
+  close: () => void;
+  scope?: SiteSettingsScope;
+}) {
   const { inc: change } = useCounter();
   const cloudflareStatus = useTypedRedux(
     "customize",
@@ -176,12 +192,22 @@ export default function SiteSettings({ close }) {
   }, []);
 
   const prevExpandAllRef = useRef<boolean>(expandAll);
+  const openedScopedDetailsRef = useRef(false);
 
   useEffect(() => {
     const details = document.querySelectorAll(
       "details[data-admin-subgroup]",
     ) as NodeListOf<HTMLDetailsElement>;
-    if (expandAll) {
+    if (
+      scope === "codex-pools" &&
+      !openedScopedDetailsRef.current &&
+      details.length > 0
+    ) {
+      details.forEach((el) => {
+        el.open = true;
+      });
+      openedScopedDetailsRef.current = true;
+    } else if (expandAll) {
       details.forEach((el) => {
         el.open = true;
       });
@@ -191,7 +217,7 @@ export default function SiteSettings({ close }) {
       });
     }
     prevExpandAllRef.current = expandAll;
-  }, [expandAll, filterStr, filterTag, showAdvanced, showHidden, data]);
+  }, [expandAll, filterStr, filterTag, showAdvanced, showHidden, data, scope]);
 
   async function load(): Promise<void> {
     setState("load");
@@ -271,6 +297,7 @@ export default function SiteSettings({ close }) {
 
   function shouldShowSetting(name: string, conf): boolean {
     if (data == null) return false;
+    if (!isSettingInScope(name)) return false;
     if (isRemovedSetting(name, conf)) {
       return false;
     }
@@ -307,6 +334,11 @@ export default function SiteSettings({ close }) {
       }
     }
     return true;
+  }
+
+  function isSettingInScope(name: string): boolean {
+    const isCodexPools = isCodexPoolsSetting(name);
+    return scope === "codex-pools" ? isCodexPools : !isCodexPools;
   }
 
   function inferGroup(conf): string {
@@ -400,6 +432,7 @@ export default function SiteSettings({ close }) {
 
     const ret: { name: string; value: string }[] = [];
     for (const name in editedRef.current) {
+      if (!isSettingInScope(name)) continue;
       const value = editedRef.current[name];
       if (isHeader[name]) continue;
       if (isModified(name)) {
@@ -716,7 +749,7 @@ export default function SiteSettings({ close }) {
             showIcon
             style={{ marginTop: "8px" }}
             type="error"
-            message="Could not load site settings propagation status"
+            title="Could not load site settings propagation status"
             description={settingsPropagationError}
           />
         ) : settingsPropagationStatus == null ? null : (
@@ -724,7 +757,7 @@ export default function SiteSettings({ close }) {
             showIcon
             style={{ marginTop: "8px" }}
             type={unhealthy.length ? "warning" : "success"}
-            message={
+            title={
               unhealthy.length
                 ? "Some bays do not have the latest site settings"
                 : "All registered bays have the latest site settings"
@@ -849,7 +882,7 @@ export default function SiteSettings({ close }) {
             showIcon
             style={{ marginTop: "8px" }}
             type={failed?.length ? "error" : "success"}
-            message={
+            title={
               failed?.length
                 ? "Some bays failed to sync"
                 : "Site settings synced"
@@ -873,7 +906,7 @@ export default function SiteSettings({ close }) {
             showIcon
             style={{ marginTop: "8px" }}
             type="error"
-            message="Site settings sync failed"
+            title="Site settings sync failed"
             description={settingsSyncError}
           />
         )}
@@ -912,7 +945,7 @@ export default function SiteSettings({ close }) {
             showIcon
             style={{ marginTop: "8px" }}
             type={emailTestResult.success ? "success" : "error"}
-            message={formatEmailTestRoute(emailTestResult)}
+            title={formatEmailTestRoute(emailTestResult)}
             description={
               <div>
                 {emailTestResult.to && (
@@ -956,7 +989,7 @@ export default function SiteSettings({ close }) {
             showIcon
             style={{ marginTop: "8px" }}
             type="error"
-            message="Test email failed"
+            title="Test email failed"
             description={emailTestError}
           />
         )}
@@ -1027,7 +1060,7 @@ export default function SiteSettings({ close }) {
                 showIcon
                 style={{ marginTop: "8px" }}
                 type={cloudflareApplyResult.running ? "success" : "warning"}
-                message={cloudflareApplyResult.message}
+                title={cloudflareApplyResult.message}
               />
             )}
             {cloudflareApplyError && (
@@ -1035,7 +1068,7 @@ export default function SiteSettings({ close }) {
                 showIcon
                 style={{ marginTop: "8px" }}
                 type="error"
-                message="Could not apply Cloudflare tunnel settings"
+                title="Could not apply Cloudflare tunnel settings"
                 description={cloudflareApplyError}
               />
             )}
@@ -1078,6 +1111,9 @@ export default function SiteSettings({ close }) {
     for (const configData of [site_settings_conf, EXTRAS]) {
       for (const name of keys(configData)) {
         const conf = configData[name];
+        if (!isSettingInScope(name)) {
+          continue;
+        }
         if (isRemovedSetting(name, conf)) {
           continue;
         }
@@ -1096,7 +1132,7 @@ export default function SiteSettings({ close }) {
       }
     }
     return [...groupMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [data, isSet, showHidden, showAdvanced]);
+  }, [data, isSet, showHidden, showAdvanced, scope]);
 
   const groupStatus = useMemo(() => {
     if (data == null) return new Map<string, boolean>();
@@ -1104,6 +1140,9 @@ export default function SiteSettings({ close }) {
     for (const configData of [site_settings_conf, EXTRAS]) {
       for (const name of keys(configData)) {
         const conf = configData[name];
+        if (!isSettingInScope(name)) {
+          continue;
+        }
         if (isRemovedSetting(name, conf)) {
           continue;
         }
@@ -1117,7 +1156,7 @@ export default function SiteSettings({ close }) {
       }
     }
     return status;
-  }, [data, isSet, showHidden, showAdvanced]);
+  }, [data, isSet, showHidden, showAdvanced, scope]);
 
   const groupMissingCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1133,6 +1172,9 @@ export default function SiteSettings({ close }) {
     for (const configData of [site_settings_conf, EXTRAS]) {
       for (const name of keys(configData)) {
         const conf = configData[name];
+        if (!isSettingInScope(name)) {
+          continue;
+        }
         if (isRemovedSetting(name, conf)) {
           continue;
         }
@@ -1147,13 +1189,16 @@ export default function SiteSettings({ close }) {
       }
     }
     return counts;
-  }, [data, isSet, showHidden, showAdvanced]);
+  }, [data, isSet, showHidden, showAdvanced, scope]);
 
   const editRows = useMemo(() => {
     const allItems: { name: string; conf: any }[] = [];
     for (const configData of [site_settings_conf, EXTRAS]) {
       for (const name of keys(configData)) {
         const conf = configData[name];
+        if (!isSettingInScope(name)) {
+          continue;
+        }
         if (isRemovedSetting(name, conf)) {
           continue;
         }
@@ -1287,7 +1332,7 @@ export default function SiteSettings({ close }) {
                         showIcon
                         type="info"
                         style={{ margin: "8px 0 12px 0" }}
-                        message="Signup incident runbook"
+                        title="Signup incident runbook"
                         description={
                           <span>
                             These switches limit post-signup capabilities. If
@@ -1353,9 +1398,11 @@ export default function SiteSettings({ close }) {
     emailTestLoading,
     emailTestResult,
     emailTestError,
+    scope,
   ]);
 
-  const activeFilter = !filterStr.trim() || filterTag;
+  const activeFilter =
+    scope === "general" && (!!filterStr.trim() || filterTag != null);
 
   return (
     <div>
@@ -1374,10 +1421,21 @@ export default function SiteSettings({ close }) {
         />
       )}
       <Well>
-        <Warning />
-        {to_bool(data?.site_funded_codex_enabled) && (
+        {scope === "general" ? <Warning /> : null}
+        {scope === "codex-pools" &&
+        state === "edit" &&
+        !to_bool(data?.site_funded_codex_enabled) ? (
+          <Alert
+            showIcon
+            type="info"
+            style={{ marginBottom: 20 }}
+            title="Site-funded Codex is disabled"
+            description="Configure the OpenAI API key and pool controls below, then enable site-funded Codex when you are ready to admit turns. Use a dedicated OpenAI Platform project and API key with an enforced hard spend limit, not only a notification threshold. Personal ChatGPT subscriptions and API keys are unaffected."
+          />
+        ) : null}
+        {scope === "codex-pools" && to_bool(data?.site_funded_codex_enabled) ? (
           <SiteFundedCodexStatusCard />
-        )}
+        ) : null}
         <ShowError
           error={error}
           setError={setError}
@@ -1418,68 +1476,82 @@ export default function SiteSettings({ close }) {
             }
           />
         )}
-        <CloudflareConfigWizard
-          open={activeWizard === "cloudflare-config"}
-          onClose={closeWizard}
-          data={data ?? {}}
-          isSet={isSet ?? {}}
-          onApply={applyWizardSettings}
-        />
-        <GcpServiceAccountWizard
-          open={activeWizard === "gcp-service-account-json"}
-          onClose={closeWizard}
-          onApplyJson={(json) =>
-            onJsonEntryChange("google_cloud_service_account_json", json)
-          }
-          currentJson={data?.google_cloud_service_account_json}
-          domainName={data?.dns}
-        />
-        <NebiusCliWizard
-          open={activeWizard === "nebius-cli"}
-          onClose={closeWizard}
-          onApply={applyWizardSettings}
-          softwareBaseUrl={data?.project_hosts_software_base_url}
-        />
-        <LauncherDefaultsWizard
-          open={activeWizard === "launcher-defaults"}
-          onClose={closeWizard}
-          data={data ?? {}}
-          onApply={applyWizardSettings}
-        />
-        <RuntimeRetentionPolicyWizard
-          open={activeWizard === "runtime-retention-policy"}
-          onClose={closeWizard}
-          currentJson={data?.project_hosts_runtime_retention_policy}
-          onApply={applyWizardSettings}
-        />
+        {scope === "general" ? (
+          <>
+            <CloudflareConfigWizard
+              open={activeWizard === "cloudflare-config"}
+              onClose={closeWizard}
+              data={data ?? {}}
+              isSet={isSet ?? {}}
+              onApply={applyWizardSettings}
+            />
+            <GcpServiceAccountWizard
+              open={activeWizard === "gcp-service-account-json"}
+              onClose={closeWizard}
+              onSave={applyWizardSettings}
+              currentJson={data?.google_cloud_service_account_json}
+              domainName={data?.dns}
+            />
+            <GcpServiceAccountWizard
+              open={activeWizard === "compute-vm-gcp-service-account-json"}
+              onClose={closeWizard}
+              computeVm
+              onSave={applyWizardSettings}
+              currentJson={data?.compute_vm_gcp_service_account_json}
+              domainName={data?.dns}
+            />
+            <NebiusCliWizard
+              open={activeWizard === "nebius-cli"}
+              onClose={closeWizard}
+              onApply={applyWizardSettings}
+              softwareBaseUrl={data?.project_hosts_software_base_url}
+            />
+            <LauncherDefaultsWizard
+              open={activeWizard === "launcher-defaults"}
+              onClose={closeWizard}
+              data={data ?? {}}
+              onApply={applyWizardSettings}
+            />
+            <RuntimeRetentionPolicyWizard
+              open={activeWizard === "runtime-retention-policy"}
+              onClose={closeWizard}
+              currentJson={data?.project_hosts_runtime_retention_policy}
+              onApply={applyWizardSettings}
+            />
+          </>
+        ) : null}
         <Row key="filter">
-          <Col span={12}>
+          <Col xs={24} lg={12}>
             <Buttons />
           </Col>
-          <Col span={12}>
-            <Input.Search
-              style={{ marginBottom: "5px" }}
-              allowClear
-              value={filterStr}
-              placeholder="Filter Site Settings..."
-              onChange={(e) => setFilterStr(e.target.value)}
-            />
-            {[...TAGS].sort().map((name) => (
-              <CheckableTag
-                key={name}
-                style={{ cursor: "pointer" }}
-                checked={filterTag === name}
-                onChange={(checked) => {
-                  if (checked) {
-                    setFilterTag(name);
-                  } else {
-                    setFilterTag(null);
-                  }
-                }}
-              >
-                {name}
-              </CheckableTag>
-            ))}
+          <Col xs={24} lg={12}>
+            {scope === "general" ? (
+              <>
+                <Input.Search
+                  style={{ marginBottom: "5px" }}
+                  allowClear
+                  value={filterStr}
+                  placeholder="Filter Site Settings..."
+                  onChange={(e) => setFilterStr(e.target.value)}
+                />
+                {[...TAGS].sort().map((name) => (
+                  <CheckableTag
+                    key={name}
+                    style={{ cursor: "pointer" }}
+                    checked={filterTag === name}
+                    onChange={(checked) => {
+                      if (checked) {
+                        setFilterTag(name);
+                      } else {
+                        setFilterTag(null);
+                      }
+                    }}
+                  >
+                    {name}
+                  </CheckableTag>
+                ))}
+              </>
+            ) : null}
             <div
               style={{
                 marginTop: "8px",
@@ -1489,27 +1561,33 @@ export default function SiteSettings({ close }) {
                 alignItems: "center",
               }}
             >
-              <span>
-                <Switch
-                  checked={showHidden}
-                  onChange={(value) => setShowHidden(value)}
-                />{" "}
-                Show hidden
-              </span>
+              {scope === "general" ? (
+                <span>
+                  <Switch
+                    checked={showHidden}
+                    onChange={(value) => setShowHidden(value)}
+                  />{" "}
+                  Show hidden
+                </span>
+              ) : null}
               <span>
                 <Switch
                   checked={showAdvanced}
                   onChange={(value) => setShowAdvanced(value)}
                 />{" "}
-                Show advanced
+                {scope === "codex-pools"
+                  ? "Show advanced safety controls"
+                  : "Show advanced"}
               </span>
-              <span>
-                <Switch
-                  checked={expandAll}
-                  onChange={(value) => setExpandAll(value)}
-                />{" "}
-                Expand all
-              </span>
+              {scope === "general" ? (
+                <span>
+                  <Switch
+                    checked={expandAll}
+                    onChange={(value) => setExpandAll(value)}
+                  />{" "}
+                  Expand all
+                </span>
+              ) : null}
             </div>
           </Col>
         </Row>

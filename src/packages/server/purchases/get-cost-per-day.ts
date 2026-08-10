@@ -5,6 +5,7 @@ by the given account, and return that amount.
 
 import getPool from "@cocalc/database/pool";
 import type { MoneyValue } from "@cocalc/util/money";
+import { COST_OR_METERED_COST } from "./get-balance";
 
 const DEFAULT_LIMIT = 100;
 
@@ -21,9 +22,9 @@ export default async function getCostPerDay({
 }: Options): Promise<{ date: Date; total_cost: MoneyValue }[]> {
   const db = getPool("long");
   const { rows } = await db.query(
-    `SELECT date_trunc('day', "time" AT TIME ZONE 'UTC') AS date, SUM(COALESCE(cost, cost_per_hour * (EXTRACT(EPOCH FROM (COALESCE(period_end, NOW()) - period_start))::numeric / 3600))) AS total_cost
+    `SELECT date_trunc('day', "time" AT TIME ZONE 'UTC') AS date, ROUND(SUM(${COST_OR_METERED_COST}), 2) AS total_cost
 FROM purchases
-WHERE account_id = $1 AND (cost > 0 OR cost_per_hour IS NOT NULL)
+WHERE account_id = $1 AND (cost > 0 OR cost_per_hour IS NOT NULL OR cost_so_far IS NOT NULL)
 GROUP BY date_trunc('day', "time" AT TIME ZONE 'UTC')
 ORDER BY date DESC LIMIT ${limit ?? DEFAULT_LIMIT} OFFSET ${offset ?? 0}`,
     [account_id],

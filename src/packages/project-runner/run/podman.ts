@@ -2062,8 +2062,18 @@ async function startUnlocked({
 
     ({ home, scratch, quota_applied } = await timings.measure(
       "ensure_local_path",
-      async () =>
-        await localPath({
+      async () => {
+        if (
+          config?.storage_quota_prepared === true &&
+          config?.scratch_prepared === true
+        ) {
+          // The project host has already verified both volume identities,
+          // reset scratch when needed, and applied the authoritative quotas.
+          // Re-running Subvolume.init here issues redundant Btrfs probes on
+          // every warm start and can stall behind unrelated filesystem work.
+          return { home, scratch, quota_applied: true };
+        }
+        return await localPath({
           project_id,
           disk: config?.disk,
           scratch: config?.scratch,
@@ -2072,7 +2082,8 @@ async function startUnlocked({
             !podmanReportsLiveProjectRunning &&
             config?.scratch_prepared !== true,
           applyQuota: config?.storage_quota_prepared !== true,
-        }),
+        });
+      },
     ));
 
     const image = getImage(config);

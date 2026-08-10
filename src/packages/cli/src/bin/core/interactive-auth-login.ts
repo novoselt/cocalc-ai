@@ -22,6 +22,51 @@ export function isMissingCookieAuthError(error: unknown): boolean {
   );
 }
 
+export function isAccountAuthRequiredError(error: unknown): boolean {
+  return `${(error as any)?.code ?? ""}` === "account_auth_required";
+}
+
+export function isFreshAuthRequiredError(error: unknown): boolean {
+  const message = `${(error as any)?.message ?? error ?? ""}`.toLowerCase();
+  return (
+    `${(error as any)?.code ?? ""}` === "fresh_auth_required" ||
+    message.includes("code='fresh_auth_required'")
+  );
+}
+
+export function canOfferInteractiveProjectAccountBootstrap({
+  error,
+  env = process.env,
+  stdinIsTTY = process.stdin.isTTY === true,
+  stderrIsTTY = process.stderr.isTTY === true,
+  secretMountExists,
+}: {
+  error: unknown;
+  env?: NodeJS.ProcessEnv;
+  stdinIsTTY?: boolean;
+  stderrIsTTY?: boolean;
+  secretMountExists?: (path: string) => boolean;
+}): boolean {
+  return Boolean(
+    isAccountAuthRequiredError(error) &&
+    stdinIsTTY &&
+    stderrIsTTY &&
+    isCoCalcProjectEnvironment(env, secretMountExists),
+  );
+}
+
+export function canOfferInteractiveFreshAuth({
+  error,
+  stdinIsTTY = process.stdin.isTTY === true,
+  stderrIsTTY = process.stderr.isTTY === true,
+}: {
+  error: unknown;
+  stdinIsTTY?: boolean;
+  stderrIsTTY?: boolean;
+}): boolean {
+  return Boolean(isFreshAuthRequiredError(error) && stdinIsTTY && stderrIsTTY);
+}
+
 export function isCoCalcProjectEnvironment(
   env: NodeJS.ProcessEnv = process.env,
   secretMountExists: (path: string) => boolean = existsSync,

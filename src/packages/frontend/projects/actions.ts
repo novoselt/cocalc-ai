@@ -83,6 +83,13 @@ import {
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
 import { getLogger } from "@cocalc/frontend/logger";
+import {
+  cancelProjectDirectoryOpenTrace,
+  markProjectDirectoryOpenPhase,
+  recordProjectDirectoryOpenIncomplete,
+  startProjectDirectoryOpenTrace,
+} from "@cocalc/frontend/project/listing/ux-latency";
+import { captureUxTraceStart } from "@cocalc/frontend/monitoring/ux-latency-trace";
 
 import type {
   CourseInfo,
@@ -201,11 +208,22 @@ type ProjectStartUxSegment =
 type ProjectStartCompletion = {
   status: LroSummary["status"];
   error?: LroSummary["error"];
+  started_at?: LroSummary["started_at"];
   finished_at?: LroSummary["finished_at"];
   updated_at?: LroSummary["updated_at"];
   created_at?: LroSummary["created_at"];
   result?: LroSummary["result"];
   progress_summary?: LroSummary["progress_summary"];
+};
+
+type ProjectStartUxMilestones = {
+  browser_started_at: string;
+  browser_started_at_ms: number;
+  start_rpc_returned_at?: string;
+  start_rpc_returned_after_ms?: number;
+  lro_completed_at?: string;
+  lro_completed_at_ms?: number;
+  lro_completed_after_ms?: number;
 };
 
 const ROOTFS_PREPARE_SEGMENT_MIN_MS = 1_000;
@@ -1302,6 +1320,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
                 title: null,
                 description: null,
                 theme: null,
+                labels: null,
                 users_summary: null,
                 state_summary: null,
                 last_edited: null,
@@ -3126,7 +3145,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     if (!(await this.have_project(project_id))) {
       const msg = `Can't set course info -- you are not a collaborator on project '${project_id}'.`;
       console.warn(msg);
-      return;
+      throw new Error(msg);
     }
     const course_info = (await ensureProjectCourseInfo(project_id))?.toJS();
     const course: CourseInfo = {
@@ -3198,6 +3217,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
   public async create_project(opts: {
     title?: string;
     description?: string;
+    course?: CourseInfo;
     rootfs_image?: string; // if given, sets the rootfs image
     rootfs_image_id?: string;
     start?: boolean; // immediately start on create
@@ -3208,6 +3228,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     const opts2: {
       title: string;
       description: string;
+      course?: CourseInfo;
       rootfs_image?: string;
       rootfs_image_id?: string;
       host_id?: string;
@@ -3217,6 +3238,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     } = defaults(opts, {
       title: "No Title",
       description: "No Description",
+      course: opts.course,
       rootfs_image: opts.rootfs_image,
       rootfs_image_id: opts.rootfs_image_id,
       host_id: undefined,
@@ -3229,6 +3251,9 @@ export class ProjectsActions extends Actions<ProjectsState> {
     }
     if (!opts2.rootfs_image_id) {
       delete opts2.rootfs_image_id;
+    }
+    if (!opts2.course) {
+      delete opts2.course;
     }
 
     const project_id = await webapp_client.project_client.create(opts2);
@@ -3278,7 +3303,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
     if (!is_valid_uuid_string(opts.project_id)) {
       throw Error(`invalid project_id - ${opts.project_id}`);
     }
-
     if (!store.getIn(["project_map", opts.project_id])) {
       if (COCALC_MINIMAL) {
         await switch_to_project(opts.project_id);
@@ -3310,12 +3334,56 @@ export class ProjectsActions extends Actions<ProjectsState> {
       }
       return;
     }
+    const mayOpenDirectory =
+      opts.switch_to !== false &&
+      (opts.target == null ||
+        opts.target === "files" ||
+        opts.target.startsWith("files/"));
+    const directoryOpenIntent = mayOpenDirectory
+      ? captureUxTraceStart()
+      : undefined;
     const host_id = store.getIn(["project_map", opts.project_id, "host_id"]);
+    if (directoryOpenIntent != null) {
+      startProjectDirectoryOpenTrace({
+        project_id: opts.project_id,
+        host_id: typeof host_id === "string" ? host_id : undefined,
+        surface_visible: true,
+        start: directoryOpenIntent,
+      });
+    }
     if (typeof host_id === "string") {
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "host_routing_start",
+        details: { host_info_required: true },
+      });
       // Ensure host routing info is ready before any conat project API calls.
-      await this.ensure_host_info(host_id);
+      try {
+        await this.ensure_host_info(host_id);
+      } catch (err) {
+        recordProjectDirectoryOpenIncomplete({
+          project_id: opts.project_id,
+          reason: "host_routing_failed",
+        });
+        throw err;
+      }
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "host_routing_ready",
+        details: { host_info_required: true },
+      });
+    } else {
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "host_routing_ready",
+        details: { host_info_required: false },
+      });
     }
     const project_actions = redux.getProjectActions(opts.project_id);
+    markProjectDirectoryOpenPhase({
+      project_id: opts.project_id,
+      phase: "project_actions_ready",
+    });
     let relation = store.get_my_group(opts.project_id);
     if (relation == null || ["public", "admin"].includes(relation)) {
       this.fetch_public_project_title(opts.project_id);
@@ -3323,9 +3391,19 @@ export class ProjectsActions extends Actions<ProjectsState> {
     this.hydrateProjectMoveState(project_actions, opts.project_id);
     if (!this.isProjectOpen(opts.project_id)) {
       this.setProjectOpen(opts.project_id);
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "project_open_state_set",
+        details: { restored_session: opts.restore_session === true },
+      });
       if (opts.restore_session) {
         redux.getActions("page").restore_session(opts.project_id);
       }
+    } else {
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "project_already_open",
+      });
     }
     const pstore = project_actions.get_store();
     const activeProjectTab = pstore?.get("active_project_tab");
@@ -3334,22 +3412,58 @@ export class ProjectsActions extends Actions<ProjectsState> {
       activeProjectTab,
       switchTo: opts.switch_to,
     });
+    if (
+      directoryOpenIntent != null &&
+      (opts.target === "files" ||
+        (typeof opts.target === "string" && opts.target.startsWith("files/")))
+    ) {
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "directory_target_resolved",
+      });
+    } else if (directoryOpenIntent != null) {
+      cancelProjectDirectoryOpenTrace(opts.project_id);
+    }
     if (opts.target != null) {
-      await project_actions.load_target(
-        opts.target,
-        opts.switch_to,
-        opts.ignore_kiosk,
-        opts.change_history,
-        opts.fragmentId,
-      );
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "target_load_start",
+      });
+      try {
+        await project_actions.load_target(
+          opts.target,
+          opts.switch_to,
+          opts.ignore_kiosk,
+          opts.change_history,
+          opts.fragmentId,
+        );
+      } catch (err) {
+        recordProjectDirectoryOpenIncomplete({
+          project_id: opts.project_id,
+          reason: "target_load_failed",
+        });
+        throw err;
+      }
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "target_loaded",
+      });
     }
     if (opts.switch_to) {
       redux
         .getActions("page")
         .set_active_tab(opts.project_id, opts.change_history);
+      markProjectDirectoryOpenPhase({
+        project_id: opts.project_id,
+        phase: "project_foregrounded",
+      });
     }
     // initialize project
     project_actions.init();
+    markProjectDirectoryOpenPhase({
+      project_id: opts.project_id,
+      phase: "project_init_called",
+    });
   };
 
   // tab at old_index taken out and then inserted into the resulting array's new index
@@ -3755,6 +3869,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     segment,
     op_id,
     completion,
+    milestones,
     details,
     deadline_ms = 20 * 60 * 1000,
     stuck_after_ms = ProjectsActions.PROJECT_START_USER_OBSERVED_STUCK_MS,
@@ -3765,6 +3880,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     segment: ProjectStartUxSegment;
     op_id?: string;
     completion?: Promise<ProjectStartCompletion | undefined>;
+    milestones: ProjectStartUxMilestones;
     details?: Record<string, unknown>;
     deadline_ms?: number;
     stuck_after_ms?: number;
@@ -3794,6 +3910,8 @@ export class ProjectsActions extends Actions<ProjectsState> {
       }
     };
     const recordRunning = ({ observed_state }: { observed_state?: string }) => {
+      const runningObservedAtMs = Date.now();
+      const runningObservedAt = new Date(runningObservedAtMs).toISOString();
       const duration_ms = elapsedUxMs(timer);
       void (async () => {
         let terminal: ProjectStartCompletion | undefined;
@@ -3808,6 +3926,40 @@ export class ProjectsActions extends Actions<ProjectsState> {
           initialSegment: segment,
           completion: terminal,
         });
+        const backendStartedAtMs = dateValueMs(
+          terminal?.started_at ?? terminal?.created_at,
+        );
+        const backendFinishedAtMs = dateValueMs(
+          terminal?.finished_at ?? terminal?.updated_at,
+        );
+        const backendLifecycleMs =
+          backendStartedAtMs != null &&
+          backendFinishedAtMs != null &&
+          backendFinishedAtMs >= backendStartedAtMs
+            ? backendFinishedAtMs - backendStartedAtMs
+            : undefined;
+        const frontendConvergenceMs =
+          milestones.lro_completed_at_ms == null
+            ? undefined
+            : Math.max(0, runningObservedAtMs - milestones.lro_completed_at_ms);
+        const milestoneDetails = {
+          browser_started_at: milestones.browser_started_at,
+          start_rpc_returned_at: milestones.start_rpc_returned_at,
+          start_rpc_returned_after_ms: milestones.start_rpc_returned_after_ms,
+          lro_completed_at: milestones.lro_completed_at,
+          lro_completed_after_ms: milestones.lro_completed_after_ms,
+          running_observed_at: runningObservedAt,
+          backend_started_at:
+            backendStartedAtMs == null
+              ? undefined
+              : new Date(backendStartedAtMs).toISOString(),
+          backend_finished_at:
+            backendFinishedAtMs == null
+              ? undefined
+              : new Date(backendFinishedAtMs).toISOString(),
+          backend_lifecycle_ms: backendLifecycleMs,
+          frontend_convergence_ms: frontendConvergenceMs,
+        };
         recordUxLatencyEvent({
           event_type: "project_start",
           metric: "project_start_running",
@@ -3815,15 +3967,56 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           host_id: projectHostId(),
           client_event_id,
+          started_at: milestones.browser_started_at,
           segment: classification.segment,
           details: {
             ...details,
+            ...milestoneDetails,
             observed_state,
             state_source: "project_stream",
             lro_status: classification.lro_status,
             rootfs_cache_ms: classification.rootfs_cache_ms,
           },
         });
+        if (milestones.start_rpc_returned_after_ms != null) {
+          recordUxLatencyEvent({
+            event_type: "project_start",
+            metric: "project_start_admission",
+            duration_ms: milestones.start_rpc_returned_after_ms,
+            project_id,
+            host_id: projectHostId(),
+            client_event_id,
+            started_at: milestones.browser_started_at,
+            segment: classification.segment,
+            details: { ...details, ...milestoneDetails },
+          });
+        }
+        if (backendLifecycleMs != null && backendStartedAtMs != null) {
+          recordUxLatencyEvent({
+            event_type: "project_start",
+            metric: "project_start_backend_lifecycle",
+            duration_ms: backendLifecycleMs,
+            project_id,
+            host_id: projectHostId(),
+            client_event_id,
+            started_at: new Date(backendStartedAtMs).toISOString(),
+            segment: classification.segment,
+            details: { ...details, ...milestoneDetails },
+          });
+        }
+        if (frontendConvergenceMs != null) {
+          recordUxLatencyEvent({
+            event_type: "project_start",
+            metric: "project_start_frontend_convergence",
+            duration_ms: frontendConvergenceMs,
+            project_id,
+            host_id: projectHostId(),
+            client_event_id,
+            started_at: milestones.lro_completed_at,
+            segment: classification.segment,
+            details: { ...details, ...milestoneDetails },
+          });
+        }
         void this.project_log(project_id, {
           event: "project_started",
           duration_ms,
@@ -3845,9 +4038,13 @@ export class ProjectsActions extends Actions<ProjectsState> {
         project_id,
         host_id: projectHostId(),
         client_event_id,
+        started_at: milestones.browser_started_at,
         segment,
         details: {
           ...details,
+          browser_started_at: milestones.browser_started_at,
+          start_rpc_returned_at: milestones.start_rpc_returned_at,
+          lro_completed_at: milestones.lro_completed_at,
           observed_state,
           authoritative_state: "running",
           state_source: "authoritative_probe",
@@ -3901,9 +4098,13 @@ export class ProjectsActions extends Actions<ProjectsState> {
         project_id,
         host_id: projectHostId(),
         client_event_id,
+        started_at: milestones.browser_started_at,
         segment,
         details: {
           ...details,
+          browser_started_at: milestones.browser_started_at,
+          start_rpc_returned_at: milestones.start_rpc_returned_at,
+          lro_completed_at: milestones.lro_completed_at,
           observed_state: state,
           ...extraDetails,
           op_status: blocked.status,
@@ -3944,9 +4145,13 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           host_id: projectHostId(),
           client_event_id,
+          started_at: milestones.browser_started_at,
           segment,
           details: {
             ...details,
+            browser_started_at: milestones.browser_started_at,
+            start_rpc_returned_at: milestones.start_rpc_returned_at,
+            lro_completed_at: milestones.lro_completed_at,
             observed_state: state,
             stuck_after_ms,
             deadline_ms,
@@ -3977,9 +4182,13 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           host_id: projectHostId(),
           client_event_id,
+          started_at: milestones.browser_started_at,
           segment,
           details: {
             ...details,
+            browser_started_at: milestones.browser_started_at,
+            start_rpc_returned_at: milestones.start_rpc_returned_at,
+            lro_completed_at: milestones.lro_completed_at,
             observed_state: state,
           },
         });
@@ -4078,6 +4287,12 @@ export class ProjectsActions extends Actions<ProjectsState> {
       }
 
       const uxTimer = startUxTimer();
+      const uxStartedAtMs = Date.now();
+      const uxStartedAt = new Date(uxStartedAtMs).toISOString();
+      const uxMilestones: ProjectStartUxMilestones = {
+        browser_started_at: uxStartedAt,
+        browser_started_at_ms: uxStartedAtMs,
+      };
       const uxClientEventId = uuid();
       const uxSegment = this.classifyProjectStartUxSegment({
         project_id,
@@ -4105,6 +4320,12 @@ export class ProjectsActions extends Actions<ProjectsState> {
           wait: false,
           foreground_wait_ms: 5_000,
         });
+        const rpcReturnedAtMs = Date.now();
+        uxMilestones.start_rpc_returned_at = new Date(
+          rpcReturnedAtMs,
+        ).toISOString();
+        uxMilestones.start_rpc_returned_after_ms =
+          rpcReturnedAtMs - uxStartedAtMs;
         actions.trackStartOp(resp);
         opts.onStartOp?.(resp);
         const applySucceededStart = (summary: ProjectStartCompletion) => {
@@ -4139,12 +4360,23 @@ export class ProjectsActions extends Actions<ProjectsState> {
                 op: resp,
                 timeout_ms: opts.waitTimeoutMs,
               }).then(applySucceededStart);
-        const telemetryCompletion =
+        const rawTelemetryCompletion =
           resp.terminal_status === "succeeded" && resp.op_id
             ? webapp_client.conat_client.hub.lro
                 .get({ op_id: resp.op_id })
                 .catch(() => undefined)
             : startConvergence;
+        const telemetryCompletion = rawTelemetryCompletion.then((summary) => {
+          if (summary && isTerminal(summary.status)) {
+            const completedAtMs = Date.now();
+            uxMilestones.lro_completed_at = new Date(
+              completedAtMs,
+            ).toISOString();
+            uxMilestones.lro_completed_at_ms = completedAtMs;
+            uxMilestones.lro_completed_after_ms = completedAtMs - uxStartedAtMs;
+          }
+          return summary;
+        });
         this.recordProjectStartUxLatencyWhenRunning({
           project_id,
           timer: uxTimer,
@@ -4152,6 +4384,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
           segment: uxSegment,
           op_id: resp?.op_id,
           completion: telemetryCompletion,
+          milestones: uxMilestones,
           details: {
             ...uxDetails,
             op_id: resp?.op_id,
@@ -4191,6 +4424,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
               | string
               | undefined) ?? undefined,
           client_event_id: uxClientEventId,
+          started_at: uxStartedAt,
           segment: uxSegment,
           details: {
             ...uxDetails,

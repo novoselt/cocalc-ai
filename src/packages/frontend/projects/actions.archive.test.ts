@@ -1103,6 +1103,8 @@ describe("ProjectsActions archive flow", () => {
       });
       mockedWebappClient.conat_client.lroWait.mockResolvedValueOnce({
         status: "succeeded",
+        started_at: new Date(Date.now() - 4_000),
+        finished_at: new Date(),
         result: { phase_timings_ms: { cache_rootfs: 21 } },
       } as any);
       const { actions } = makeActions();
@@ -1126,9 +1128,33 @@ describe("ProjectsActions archive flow", () => {
           metric: "project_start_running",
           segment: "warm_provisioned",
           details: expect.objectContaining({
+            browser_started_at: expect.any(String),
+            start_rpc_returned_at: expect.any(String),
+            lro_completed_at: expect.any(String),
+            running_observed_at: expect.any(String),
             lro_status: "succeeded",
             rootfs_cache_ms: 21,
           }),
+        }),
+      );
+      expect(mockRecordUxLatencyEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metric: "project_start_admission",
+          segment: "warm_provisioned",
+          started_at: expect.any(String),
+        }),
+      );
+      expect(mockRecordUxLatencyEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metric: "project_start_backend_lifecycle",
+          duration_ms: 4_000,
+          segment: "warm_provisioned",
+        }),
+      );
+      expect(mockRecordUxLatencyEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metric: "project_start_frontend_convergence",
+          segment: "warm_provisioned",
         }),
       );
     } finally {

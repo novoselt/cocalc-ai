@@ -7,6 +7,8 @@ const getClusterAccountByIdMock = jest.fn();
 const banClusterAccountAndEquivalentEmailsMock = jest.fn();
 const resolveMembershipForAccountMock = jest.fn();
 const getServerSettingsMock = jest.fn();
+const getProjectOwnerAccountIdMock = jest.fn();
+const getProjectUserAccountIdsMock = jest.fn();
 
 jest.mock("@cocalc/server/inter-bay/accounts", () => ({
   __esModule: true,
@@ -24,6 +26,14 @@ jest.mock("./resolve", () => ({
 jest.mock("@cocalc/database/settings/server-settings", () => ({
   __esModule: true,
   getServerSettings: (...args: any[]) => getServerSettingsMock(...args),
+}));
+
+jest.mock("./project-usage", () => ({
+  __esModule: true,
+  getProjectOwnerAccountId: (...args: any[]) =>
+    getProjectOwnerAccountIdMock(...args),
+  getProjectUserAccountIds: (...args: any[]) =>
+    getProjectUserAccountIdsMock(...args),
 }));
 
 import type { ProjectCryptominingEvidence } from "@cocalc/conat/hub/api/system";
@@ -76,6 +86,8 @@ describe("cryptomining abuse policy", () => {
       source: "free",
       entitlements: {},
     });
+    getProjectOwnerAccountIdMock.mockReset().mockResolvedValue(ACCOUNT_ID);
+    getProjectUserAccountIdsMock.mockReset().mockResolvedValue([ACCOUNT_ID]);
     banClusterAccountAndEquivalentEmailsMock
       .mockReset()
       .mockResolvedValue([{ account_id: ACCOUNT_ID, banned: true }]);
@@ -214,7 +226,7 @@ describe("cryptomining abuse policy", () => {
         reason: "automatic prohibited QEMU execution detection",
         metadata: expect.objectContaining({
           automatic: true,
-          detector: "project-abuse-policy-v2",
+          detector: "project-abuse-policy-v4",
           abuse_kind: "prohibited_qemu",
           project_id: PROJECT_ID,
           evidence: QEMU_EVIDENCE,
@@ -241,6 +253,30 @@ describe("cryptomining abuse policy", () => {
         should_stop_project: true,
         auto_banned: false,
         abuse_kind: "prohibited_qemu",
+      }),
+    );
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-ban when another project collaborator could be responsible", async () => {
+    getProjectUserAccountIdsMock.mockResolvedValueOnce([
+      ACCOUNT_ID,
+      "33333333-3333-4333-8333-333333333333",
+    ]);
+
+    const decision = await handleProjectCryptominingEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        should_stop_project: true,
+        auto_banned: false,
+        account_owns_project: true,
+        account_is_sole_project_user: false,
       }),
     );
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
@@ -292,6 +328,31 @@ describe("cryptomining abuse policy", () => {
         membership_source: "subscription",
       }),
     );
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not stop an account with an active compute abuse exemption", async () => {
+    resolveMembershipForAccountMock.mockResolvedValueOnce({
+      class: "standard",
+      source: "subscription",
+      entitlements: {
+        features: { cryptomining_abuse_exempt: true },
+      },
+    });
+
+    const decision = await handleProjectCryptominingEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toMatchObject({
+      should_stop_project: false,
+      auto_banned: false,
+      account_exempt: true,
+      membership_class: "standard",
+    });
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
   });
 

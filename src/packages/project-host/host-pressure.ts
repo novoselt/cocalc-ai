@@ -18,6 +18,11 @@ import {
   type ProjectStopPolicyRow,
   upsertProjectStopState,
 } from "./sqlite/stop-policy";
+import {
+  ProjectWorkloadActivityTracker,
+  sampleProjectWorkloads,
+  type ProjectWorkloadRates,
+} from "./project-workload-activity";
 
 const logger = getLogger("project-host:host-pressure");
 
@@ -123,6 +128,59 @@ const RECENT_PRESSURE_STOP_WINDOW_MS = 60 * 60_000;
 const RESOURCE_PRESSURE_MODE = resourcePressureMode(
   process.env.COCALC_PROJECT_HOST_RESOURCE_PRESSURE_MODE,
 );
+const IO_PRESSURE_MODE = resourcePressureMode(
+  process.env.COCALC_PROJECT_HOST_IO_PRESSURE_MODE ?? "enforce",
+);
+const IO_PRESSURE_DWELL_MS = Math.max(
+  30_000,
+  Number(process.env.COCALC_PROJECT_HOST_IO_PRESSURE_DWELL_MS ?? 2 * 60_000),
+);
+const IO_EMERGENCY_DWELL_MS = Math.max(
+  IO_PRESSURE_DWELL_MS,
+  Number(process.env.COCALC_PROJECT_HOST_IO_EMERGENCY_DWELL_MS ?? 10 * 60_000),
+);
+const IO_EVICTION_FULL_AVG10 = clampPercent(
+  process.env.COCALC_PROJECT_HOST_IO_EVICTION_FULL_AVG10 ??
+    process.env.COCALC_PROJECT_HOST_STORAGE_IO_EMERGENCY_FULL_AVG10,
+  10,
+);
+const IO_DIRECT_OFFENDER_FULL_PERCENT = clampPercent(
+  process.env.COCALC_PROJECT_HOST_IO_DIRECT_OFFENDER_FULL_PERCENT,
+  25,
+);
+const BTRFS_HEADROOM_POLICY_PROFILE = "gcp-pd-balanced-btrfs-headroom";
+const IO_PRESSURE_MIN_IDLE_MS = Math.max(
+  STARTUP_PROTECTION_MS,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_PRESSURE_MIN_IDLE_MS ?? 6 * 60 * 60_000,
+  ),
+);
+const IO_EMERGENCY_MIN_IDLE_MS = Math.max(
+  STARTUP_PROTECTION_MS,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_EMERGENCY_MIN_IDLE_MS ?? 60 * 60_000,
+  ),
+);
+const IO_WORKLOAD_PROTECTION_MS = Math.max(
+  CONTROLLER_INTERVAL_MS * 2,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_WORKLOAD_PROTECTION_MS ?? 15 * 60_000,
+  ),
+);
+const IO_ACTIVE_CPU_CORES = Math.max(
+  0,
+  Number(process.env.COCALC_PROJECT_HOST_IO_ACTIVE_CPU_CORES ?? 0.05),
+);
+const IO_ACTIVE_BYTES_PER_SECOND = Math.max(
+  0,
+  Number(
+    process.env.COCALC_PROJECT_HOST_IO_ACTIVE_BYTES_PER_SECOND ?? 64 * 1024,
+  ),
+);
+const IO_ACTIVE_OPERATIONS_PER_SECOND = Math.max(
+  0,
+  Number(process.env.COCALC_PROJECT_HOST_IO_ACTIVE_OPS_PER_SECOND ?? 1),
+);
 const DEFAULT_PROJECT_INOTIFY_INSTANCES_WARN = 512;
 const DEFAULT_PROJECT_INOTIFY_INSTANCES_STOP = 1024;
 const DEFAULT_PROJECT_INOTIFY_WATCHES_WARN = 131_072;
@@ -218,7 +276,10 @@ function memoryAvailableThreshold(
   ratio: number,
 ): number {
   if (totalBytes == null || totalBytes <= 0 || ratio <= 0) return fixedBytes;
-  return Math.max(fixedBytes, Math.floor(totalBytes * ratio));
+  // Fixed reserves are a fallback for old/incomplete metrics. Applying them
+  // to small hosts can make the host permanently pressured (for example, a
+  // 6 GiB reserve on an 8 GiB host) even when most memory is available.
+  return Math.floor(totalBytes * ratio);
 }
 
 function parseRunQuota(run_quota: unknown): Record<string, any> | undefined {
@@ -510,6 +571,142 @@ function hasResourcePressureReason(reason: string | undefined): boolean {
   return !!reason?.split(",").some((part) => part.startsWith("resource_"));
 }
 
+function hasIoPressureReason(reason: string | undefined): boolean {
+  return !!reason?.split(",").some((part) => part.startsWith("storage_io_"));
+}
+
+function storagePressureIsLifecycleOnly(
+  storage: HostCurrentMetrics["storage_admission"],
+): boolean {
+  if (!storage) return false;
+  const projectPool = parseNonNegativeNumber(
+    storage.project_pool_io_full_avg10,
+  );
+  const lifecycleActive =
+    storage.lifecycle_active > 0 ||
+    storage.starting_projects > 0 ||
+    (storage.active_by_priority?.lifecycle ?? 0) > 0;
+  return (
+    lifecycleActive &&
+    (projectPool == null || projectPool < IO_EVICTION_FULL_AVG10)
+  );
+}
+
+function storagePressureCanEvict(metrics: HostCurrentMetrics): boolean {
+  const storage = metrics.storage_admission;
+  if (!storage || storage.pressure_state !== "emergency") return false;
+  const uncontained = parseNonNegativeNumber(storage.uncontained_io_full_avg10);
+  // RootFS extraction and other lifecycle preparation run outside the
+  // project pool. Stopping unrelated projects cannot relieve that pressure
+  // when the pool itself is healthy, and only adds more Btrfs cleanup work.
+  if (storagePressureIsLifecycleOnly(storage)) {
+    return false;
+  }
+  const projectPool = parseNonNegativeNumber(
+    storage.project_pool_io_full_avg10,
+  );
+  const host = parseNonNegativeNumber(storage.host_io_full_avg10);
+  if (
+    metrics.io_containment?.policy_profile === BTRFS_HEADROOM_POLICY_PROFILE &&
+    projectPool != null &&
+    projectPool >= IO_EVICTION_FULL_AVG10 &&
+    host != null &&
+    host >= IO_EVICTION_FULL_AVG10
+  ) {
+    return true;
+  }
+  // Older project-host versions do not publish the split signal. Preserve
+  // their behavior during rolling upgrades, then require the signal once it
+  // is available.
+  return uncontained == null || uncontained >= IO_EVICTION_FULL_AVG10;
+}
+
+function storagePressureFindings(
+  metrics: HostCurrentMetrics,
+  now: number,
+  ioPressureSinceMs?: number,
+): {
+  observeReasons: string[];
+  pressureReasons: string[];
+  emergencyReasons: string[];
+} {
+  const observeReasons: string[] = [];
+  const pressureReasons: string[] = [];
+  const emergencyReasons: string[] = [];
+  const storage = metrics.storage_admission;
+  if (!storage || storage.mode === "disabled") {
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  const stateSinceMs = Date.parse(storage.state_since);
+  const episodeSinceMs =
+    ioPressureSinceMs != null && Number.isFinite(ioPressureSinceMs)
+      ? ioPressureSinceMs
+      : stateSinceMs;
+  const dwellMs = Number.isFinite(episodeSinceMs)
+    ? Math.max(0, now - episodeSinceMs)
+    : 0;
+  const effectiveFull = parseNonNegativeNumber(storage.effective_io_full_avg10);
+  const uncontainedFull = parseNonNegativeNumber(
+    storage.uncontained_io_full_avg10,
+  );
+  const detail = `state=${storage.pressure_state},dwell_ms=${Math.floor(
+    dwellMs,
+  )}${effectiveFull == null ? "" : `,full_avg10=${effectiveFull}`}${
+    uncontainedFull == null ? "" : `,uncontained_full_avg10=${uncontainedFull}`
+  }`;
+
+  if (storage.pressure_state === "normal") {
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (storage.pressure_state === "recovery") {
+    observeReasons.push(`storage_io_recovery:${detail}`);
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (storage.pressure_state === "contended") {
+    observeReasons.push(`storage_io_contended:${detail}`);
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (!storagePressureCanEvict(metrics)) {
+    observeReasons.push(
+      `${
+        storagePressureIsLifecycleOnly(storage)
+          ? "storage_io_lifecycle_active"
+          : "storage_io_pool_throttled"
+      }:${detail}`,
+    );
+    return { observeReasons, pressureReasons, emergencyReasons };
+  }
+  if (dwellMs >= IO_EMERGENCY_DWELL_MS) {
+    emergencyReasons.push(`storage_io_emergency:${detail}`);
+  } else if (dwellMs >= IO_PRESSURE_DWELL_MS) {
+    pressureReasons.push(`storage_io_sustained:${detail}`);
+  } else {
+    observeReasons.push(`storage_io_transient:${detail}`);
+  }
+  return { observeReasons, pressureReasons, emergencyReasons };
+}
+
+export function directIoPressureOffenders(
+  ratesByProject: ReadonlyMap<string, ProjectWorkloadRates>,
+  fullPressurePercent: number = IO_DIRECT_OFFENDER_FULL_PERCENT,
+): Map<string, DirectResourceOffender> {
+  const offenders = new Map<string, DirectResourceOffender>();
+  for (const [project_id, rates] of ratesByProject) {
+    if (rates.io_full_pressure_percent < fullPressurePercent) continue;
+    offenders.set(project_id, {
+      project_id,
+      reason: `storage_io_full_project:${rates.io_full_pressure_percent.toFixed(
+        1,
+      )}%`,
+      score:
+        rates.io_full_pressure_percent * 1_000_000 +
+        rates.io_operations_per_second,
+      zone: "pressure",
+    });
+  }
+  return offenders;
+}
+
 function countsTowardResourceQuarantine(reason: string): boolean {
   return reason.split(",").some((part) => part.startsWith("direct:resource_"));
 }
@@ -581,7 +778,11 @@ function pressureStopStateUpdate({
 export function classifyHostPressure(
   metrics: HostCurrentMetrics | undefined,
   now: number = Date.now(),
-  opts: { resourcePressureMode?: ResourcePressureMode } = {},
+  opts: {
+    resourcePressureMode?: ResourcePressureMode;
+    ioPressureMode?: ResourcePressureMode;
+    ioPressureSinceMs?: number;
+  } = {},
 ): HostPressureState | undefined {
   if (!metrics) return undefined;
   const usedPercent = parseNonNegativeNumber(metrics.memory_used_percent);
@@ -606,6 +807,7 @@ export function classifyHostPressure(
   const pressureReasons: string[] = [];
   const observeReasons: string[] = [];
   const mode = opts.resourcePressureMode ?? RESOURCE_PRESSURE_MODE;
+  const ioMode = opts.ioPressureMode ?? IO_PRESSURE_MODE;
   if (usedPercent != null && usedPercent >= EMERGENCY_MEMORY_USED_PERCENT) {
     emergencyReasons.push(
       `memory_used_percent>=${EMERGENCY_MEMORY_USED_PERCENT}`,
@@ -633,6 +835,16 @@ export function classifyHostPressure(
     emergencyReasons.push(...resourceFindings.emergencyReasons);
     pressureReasons.push(...resourceFindings.pressureReasons);
     observeReasons.push(...resourceFindings.observeReasons);
+  }
+  if (ioMode !== "metrics") {
+    const storageFindings = storagePressureFindings(
+      metrics,
+      now,
+      opts.ioPressureSinceMs,
+    );
+    emergencyReasons.push(...storageFindings.emergencyReasons);
+    pressureReasons.push(...storageFindings.pressureReasons);
+    observeReasons.push(...storageFindings.observeReasons);
   }
   if (emergencyReasons.length > 0) {
     return {
@@ -670,6 +882,10 @@ export function buildStopCandidates({
   zone,
   now,
   directResourceOffenders,
+  minimumIdleMs,
+  requireActivityPolicy = false,
+  preserveEmergencyProtections = false,
+  workloadProtectedProjects,
 }: {
   projects: ProjectRow[];
   policies: Map<string, ProjectStopPolicyRow>;
@@ -677,11 +893,18 @@ export function buildStopCandidates({
   zone: HostPressureZone;
   now: number;
   directResourceOffenders?: Map<string, DirectResourceOffender>;
+  minimumIdleMs?: number;
+  requireActivityPolicy?: boolean;
+  preserveEmergencyProtections?: boolean;
+  workloadProtectedProjects?: ReadonlySet<string>;
 }): StopCandidate[] {
   const candidates: StopCandidate[] = [];
   for (const row of projects) {
     const state = `${row.state ?? ""}`.trim();
-    const canConsiderStarting = zone === "emergency" && state === "starting";
+    const emergencyBypassesProtections =
+      zone === "emergency" && !preserveEmergencyProtections;
+    const canConsiderStarting =
+      emergencyBypassesProtections && state === "starting";
     if (state !== "running" && !canConsiderStarting) {
       continue;
     }
@@ -689,22 +912,51 @@ export function buildStopCandidates({
     if (!project_id) continue;
     const directResourceOffender = directResourceOffenders?.get(project_id);
     const policy = policies.get(project_id);
+    if (
+      workloadProtectedProjects?.has(project_id) &&
+      (policy?.shared_compute_priority ?? 0) > 0
+    ) {
+      continue;
+    }
+    if (requireActivityPolicy && !policy) {
+      continue;
+    }
+    if (
+      minimumIdleMs != null &&
+      !directResourceOffender &&
+      (policy?.authoritative_last_edited_ms == null ||
+        now - policy.authoritative_last_edited_ms < minimumIdleMs)
+    ) {
+      continue;
+    }
     const stopState = getStopState(project_id);
     const startupProtected =
       STARTUP_PROTECTION_MS > 0 &&
       stopState?.last_started_ms != null &&
       now - stopState.last_started_ms < STARTUP_PROTECTION_MS;
-    if (startupProtected && zone !== "emergency" && !directResourceOffender) {
+    if (
+      startupProtected &&
+      !emergencyBypassesProtections &&
+      !directResourceOffender
+    ) {
       continue;
     }
     const protectOverride = policy?.stop_override === "protect";
-    if (protectOverride && zone !== "emergency" && !directResourceOffender) {
+    if (
+      protectOverride &&
+      !emergencyBypassesProtections &&
+      !directResourceOffender
+    ) {
       continue;
     }
     const cooldownActive =
       stopState?.pressure_cooldown_until_ms != null &&
       stopState.pressure_cooldown_until_ms > now;
-    if (cooldownActive && zone !== "emergency" && !directResourceOffender) {
+    if (
+      cooldownActive &&
+      !emergencyBypassesProtections &&
+      !directResourceOffender
+    ) {
       continue;
     }
     const runQuota = parseRunQuota(row.run_quota);
@@ -801,6 +1053,7 @@ export function startHostPressureController({
     force?: boolean;
     pressure_zone: HostPressureZone;
     reason: string;
+    shared_compute_priority: number;
   }) => Promise<void>;
   reportPressureAction?: (opts: {
     project_id: string;
@@ -818,12 +1071,19 @@ export function startHostPressureController({
   let timer: NodeJS.Timeout | undefined;
   let running = false;
   let pressureSinceMs: number | undefined;
+  let ioPressureSinceMs: number | undefined;
   let settleUntilMs = 0;
   let lastActionAtMs: number | undefined;
   let lastActionProjectId: string | undefined;
   let lastActionStatus: StopActionStatus | undefined;
   let lastActionReason: string | undefined;
   const recentPressureStopsMs: number[] = [];
+  const workloadTracker = new ProjectWorkloadActivityTracker({
+    protectionMs: IO_WORKLOAD_PROTECTION_MS,
+    activeCpuCores: IO_ACTIVE_CPU_CORES,
+    activeBytesPerSecond: IO_ACTIVE_BYTES_PER_SECOND,
+    activeOperationsPerSecond: IO_ACTIVE_OPERATIONS_PER_SECOND,
+  });
 
   const trimRecentStops = (now: number) => {
     while (
@@ -876,8 +1136,40 @@ export function startHostPressureController({
     const now = Date.now();
     const metrics = (await refreshMetrics()) ?? getCurrentMetrics();
     const resourcePressureMode = RESOURCE_PRESSURE_MODE;
+    const ioPressureMode = IO_PRESSURE_MODE;
+    let workloadProtectedProjects: ReadonlySet<string> | undefined;
+    let workloadSampleHealthy = true;
+    if (ioPressureMode === "enforce") {
+      try {
+        workloadProtectedProjects = workloadTracker.update(
+          await sampleProjectWorkloads({ now }),
+          now,
+        );
+      } catch (err) {
+        workloadSampleHealthy = false;
+        logger.warn("unable to sample project workload activity", {
+          err: `${err}`,
+        });
+      }
+    }
+    const storageAdmission = metrics?.storage_admission;
+    if (
+      !storageAdmission ||
+      storageAdmission.mode === "disabled" ||
+      !metrics ||
+      !storagePressureCanEvict(metrics)
+    ) {
+      ioPressureSinceMs = undefined;
+    } else if (ioPressureSinceMs == null) {
+      const stateSinceMs = Date.parse(storageAdmission.state_since);
+      ioPressureSinceMs = Number.isFinite(stateSinceMs)
+        ? Math.min(now, stateSinceMs)
+        : now;
+    }
     const classified = classifyHostPressure(metrics, now, {
       resourcePressureMode,
+      ioPressureMode,
+      ioPressureSinceMs,
     });
     if (!classified) {
       clearLastAction();
@@ -904,6 +1196,10 @@ export function startHostPressureController({
     const resourceOnlyPressure =
       hasResourcePressureReason(classified.reason) &&
       !hasMemoryPressureReason(classified.reason);
+    const ioOnlyPressure =
+      hasIoPressureReason(classified.reason) &&
+      !hasMemoryPressureReason(classified.reason) &&
+      !hasResourcePressureReason(classified.reason);
     const directResourceOffenders =
       resourcePressureMode === "enforce"
         ? resourcePressureFindings(metrics).directOffenders
@@ -923,17 +1219,53 @@ export function startHostPressureController({
       });
       return;
     }
+    if (ioOnlyPressure && ioPressureMode !== "enforce") {
+      publishState({
+        zone: classified.zone,
+        reason: classified.reason,
+        evaluated_at_ms: now,
+        candidate_count: 0,
+      });
+      return;
+    }
+    if (ioOnlyPressure && !workloadSampleHealthy) {
+      publishState({
+        zone: "observe",
+        reason: `${classified.reason},workload_activity_unavailable`,
+        evaluated_at_ms: now,
+        candidate_count: 0,
+      });
+      return;
+    }
     const projects = listProjectsByStates(["running"]);
     const policies = new Map(
       listProjectStopPolicies().map((row) => [row.project_id, row]),
     );
+    const ioOffenders = ioOnlyPressure
+      ? directIoPressureOffenders(workloadTracker.ratesByProject())
+      : undefined;
+    const stopOffenders = new Map(directResourceOffenders ?? []);
+    for (const [projectId, offender] of ioOffenders ?? []) {
+      stopOffenders.set(projectId, offender);
+    }
     const candidates = buildStopCandidates({
       projects,
       policies,
       getStopState: (project_id) => getProjectStopState(project_id),
       zone: classified.zone,
       now,
-      directResourceOffenders,
+      directResourceOffenders: stopOffenders,
+      ...(ioOnlyPressure
+        ? {
+            minimumIdleMs:
+              classified.zone === "emergency"
+                ? IO_EMERGENCY_MIN_IDLE_MS
+                : IO_PRESSURE_MIN_IDLE_MS,
+            requireActivityPolicy: true,
+            preserveEmergencyProtections: true,
+            workloadProtectedProjects,
+          }
+        : {}),
     });
     for (const candidate of candidates) {
       upsertProjectStopState({
@@ -978,13 +1310,16 @@ export function startHostPressureController({
       });
       return;
     }
-    const maxStops =
-      classified.zone === "emergency"
+    const maxStops = ioOnlyPressure
+      ? 1
+      : classified.zone === "emergency"
         ? EMERGENCY_MAX_STOPS_PER_CYCLE
         : PRESSURE_MAX_STOPS_PER_CYCLE;
     let stoppedCount = 0;
     for (const candidate of candidates) {
-      const reason = candidateExplanation(candidate);
+      const reason = [classified.reason, candidateExplanation(candidate)]
+        .filter(Boolean)
+        .join(",");
       upsertProjectStopState({
         project_id: candidate.project_id,
         last_decision_reason: reason,
@@ -997,6 +1332,7 @@ export function startHostPressureController({
           force: true,
           pressure_zone: classified.zone,
           reason,
+          shared_compute_priority: candidate.shared_compute_priority,
         });
         upsertProjectStopState({
           ...pressureStopStateUpdate({
@@ -1152,6 +1488,7 @@ export function startHostPressureController({
 export const _test = {
   classifyHostPressure,
   buildStopCandidates,
+  directIoPressureOffenders,
   resourcePressureFindings,
   pressureStopStateUpdate,
 };

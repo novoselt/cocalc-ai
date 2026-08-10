@@ -827,6 +827,25 @@ describe("queue-stalled ACP workers", () => {
     ).toBe(false);
   });
 
+  it("does not terminate a queue-stalled worker with a background terminal", () => {
+    mockOldestQueuedAcpJobTimestamp.mockReturnValue(10_000);
+
+    expect(
+      __test__.shouldTerminateQueueStalledWorker({
+        worker: worker as any,
+        status: {
+          worker_id: "worker-stalled",
+          started_at: 1_000,
+          last_queue_progress_at: 10_000,
+          running_turn_leases: 0,
+          background_terminal_processes: 1,
+        } as any,
+        now: 200_000,
+        stallMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
   it("does not terminate a worker that is running a queued command job without a turn lease", () => {
     mockListRunningAcpJobsByWorker.mockReturnValue([
       {
@@ -998,6 +1017,23 @@ describe("overdue draining ACP workers", () => {
           exit_requested_at: 10_000,
           last_seen_running_jobs: 0,
           running_turn_leases: 0,
+        } as any,
+        now: 70_000,
+        drainTerminateMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not terminate a worker that owns a background terminal", () => {
+    expect(
+      shouldTerminateOverdueDrainingWorker({
+        worker: worker as any,
+        status: {
+          state: "draining",
+          exit_requested_at: 10_000,
+          last_seen_running_jobs: 0,
+          running_turn_leases: 0,
+          background_terminal_processes: 1,
         } as any,
         now: 70_000,
         drainTerminateMs: 60_000,

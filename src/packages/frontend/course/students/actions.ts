@@ -72,7 +72,9 @@ export class StudentsActions {
         until: (store: CourseStore) => store.get_student(student_id),
         timeout: 60,
       });
-      this.course_actions.student_projects.create_student_project(student_id);
+      await this.course_actions.student_projects.create_student_project(
+        student_id,
+      );
       store = this.get_store();
       await callback2(store.wait, {
         until: (store: CourseStore) =>

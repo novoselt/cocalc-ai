@@ -162,4 +162,49 @@ describe("forced cookie consent", () => {
     expect(document.getElementById(FORCE_CONSENT_OVERLAY_ID)).toBeNull();
     expect(show).not.toHaveBeenCalled();
   });
+
+  it("unblocks the page when an extension hides the consent dialog", () => {
+    jest.useFakeTimers();
+    const consentRoot = document.createElement("div");
+    consentRoot.id = "cc-main";
+    consentRoot.style.display = "none";
+    const modal = document.createElement("div");
+    modal.className = "cm";
+    consentRoot.appendChild(modal);
+    document.body.appendChild(consentRoot);
+
+    enableForceConsent();
+    markBannerReady();
+
+    expect(document.getElementById(FORCE_CONSENT_OVERLAY_ID)).not.toBeNull();
+    jest.runAllTimers();
+
+    expect(document.getElementById(FORCE_CONSENT_OVERLAY_ID)).toBeNull();
+    expect(document.documentElement.classList).not.toContain(
+      "disable--interaction",
+    );
+    jest.useRealTimers();
+  });
+
+  it("keeps blocking while the consent dialog is visible", () => {
+    jest.useFakeTimers();
+    const consentRoot = document.createElement("div");
+    consentRoot.id = "cc-main";
+    const modal = document.createElement("div");
+    modal.className = "cm";
+    consentRoot.appendChild(modal);
+    document.body.appendChild(consentRoot);
+
+    const cleanup = enableForceConsent();
+    markBannerReady();
+    jest.runAllTimers();
+
+    expect(document.getElementById(FORCE_CONSENT_OVERLAY_ID)).not.toBeNull();
+    expect(document.documentElement.classList).toContain(
+      "disable--interaction",
+    );
+
+    cleanup();
+    jest.useRealTimers();
+  });
 });

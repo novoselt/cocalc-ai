@@ -143,7 +143,7 @@ export function ProjectSettingsHealthRail({
           <Icon name="dashboard" /> Health
         </Text>
       </div>
-      <Space direction="vertical" style={{ width: "100%" }} size={6}>
+      <Space vertical style={{ width: "100%" }} size={6}>
         <RuntimeHealthBlock
           displayProjectState={displayProjectState}
           displayStateValue={displayStateValue}
@@ -184,7 +184,7 @@ export function ProjectSettingsHealthRail({
           <Alert
             type="warning"
             showIcon
-            message="No internet access"
+            title="No internet access"
             description="This project currently has no internet access."
           />
         )}
@@ -274,7 +274,7 @@ function RecoveryHealthRow({
   const { loading, snapshot } = useLatestSnapshot(project_id);
   return (
     <RailRow icon="life-ring" iconColor={COLORS.COCALC_ORANGE} label="Recovery">
-      <Space direction="vertical" size={2} style={{ width: "100%" }}>
+      <Space vertical size={2} style={{ width: "100%" }}>
         <RecoveryLine
           action="Backup"
           onOpen={() => openDirectory(project_id, BACKUPS)}
@@ -431,7 +431,7 @@ function ProcessHealthRow({ project_id }: { project_id: string }) {
         </Button>
       }
     >
-      <Space direction="vertical" size={0}>
+      <Space vertical size={0}>
         {cpuPct != null && memoryMiB != null && (
           <Text style={{ fontSize: 12, whiteSpace: "nowrap" }}>
             CPU {cpuPct.toFixed(1)}% · RAM {memoryMiB.toFixed(0)} MiB
@@ -469,7 +469,7 @@ function StorageHealthRow({ project_id }: { project_id: string }) {
         />
       }
     >
-      <Space direction="vertical" size={3} style={{ width: "100%" }}>
+      <Space vertical size={3} style={{ width: "100%" }}>
         {quotaLabel ? (
           <>
             <Text>{quotaLabel}</Text>

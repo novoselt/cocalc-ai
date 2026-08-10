@@ -1,5 +1,7 @@
 import {
   classifySharePath,
+  exactFileShareRouteAllowed,
+  retainedLegacyShareRelativePath,
   shareRouteCandidates,
 } from "./public-directory-share-route";
 
@@ -88,6 +90,69 @@ describe("shareRouteCandidates", () => {
       { slug: "test2/files", relativePath: "a.py" },
       { slug: "test2", relativePath: "files/a.py" },
     ]);
+  });
+});
+
+describe("exactFileShareRouteAllowed", () => {
+  it("accepts canonical and historical filename forms", () => {
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "",
+      }),
+    ).toBe(true);
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "admcycles tutorial.ipynb",
+      }),
+    ).toBe(true);
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "tutorials/admcycles tutorial.ipynb",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects sibling and nested paths", () => {
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "private.ipynb",
+      }),
+    ).toBe(false);
+    expect(
+      exactFileShareRouteAllowed({
+        sharePath: "tutorials/admcycles tutorial.ipynb",
+        relativePath: "admcycles tutorial.ipynb/output.txt",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("retainedLegacyShareRelativePath", () => {
+  it("removes the historical files route segment from retained shares", () => {
+    expect(
+      retainedLegacyShareRelativePath({
+        legacyPublicPathId: "0a48957b67f375b9e3107216504ca0c4efb678fd",
+        relativePath: "files/admcycles tutorial.ipynb",
+      }),
+    ).toBe("admcycles tutorial.ipynb");
+    expect(
+      retainedLegacyShareRelativePath({
+        legacyPublicPathId: "0a48957b67f375b9e3107216504ca0c4efb678fd",
+        relativePath: "files",
+      }),
+    ).toBe("");
+  });
+
+  it("preserves files paths for non-legacy shares", () => {
+    expect(
+      retainedLegacyShareRelativePath({
+        relativePath: "files/example.ipynb",
+      }),
+    ).toBe("files/example.ipynb");
   });
 });
 

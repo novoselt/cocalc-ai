@@ -28,6 +28,7 @@ describe("hub api admission", () => {
       isLowPriorityHubApiMethod("purchases.getManagedEgressAdminHistory"),
     ).toBe(true);
     expect(isLowPriorityHubApiMethod("purchases.getAIUsage")).toBe(true);
+    expect(isLowPriorityHubApiMethod("growthAnalytics.recordEvent")).toBe(true);
     expect(isLowPriorityHubApiMethod("db.userQuery")).toBe(false);
   });
 

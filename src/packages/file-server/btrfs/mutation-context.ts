@@ -15,6 +15,11 @@ export type BtrfsMutationContext = {
   checkpointable?: boolean;
   yield_requested?: boolean;
   lifecycle_backlog?: number;
+  // A short, indivisible Btrfs transaction currently owns the filesystem
+  // mutation lock. Background discovery stays in the maintenance cgroup, but
+  // the transaction itself must inherit foreground I/O priority so it cannot
+  // hold filesystem-wide resources while deeply throttled.
+  mutation_lock_held?: boolean;
 };
 
 const mutationContext = new AsyncLocalStorage<BtrfsMutationContext>();
@@ -42,6 +47,9 @@ export async function withBtrfsMutationContext<T>(
 }
 
 export function isBackgroundBtrfsMutation(): boolean {
-  const priority = getBtrfsMutationContext().priority;
-  return priority === "scheduled" || priority === "scavenger";
+  const context = getBtrfsMutationContext();
+  return (
+    context.mutation_lock_held !== true &&
+    (context.priority === "scheduled" || context.priority === "scavenger")
+  );
 }

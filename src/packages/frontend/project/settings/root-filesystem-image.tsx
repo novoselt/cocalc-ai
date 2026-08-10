@@ -104,9 +104,11 @@ import {
 import {
   buildRootfsPublishAgentPrompt,
   buildRootfsPublishAssistCommand,
+  rootfsSupersedesOptions,
   rootfsThemeFromPublishDraft,
   type PublishDraft,
 } from "./rootfs-publish-assist";
+import { buildRootfsPublishTagOptions } from "./rootfs-publish-tags";
 import { RuntimeAction, RuntimePanel } from "./rootfs-runtime-panel";
 import type {
   RootfsConfigExport,
@@ -482,17 +484,11 @@ export default function RootFilesystemImage({
   );
   const publishTagOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          [
-            ...catalogRootfsImages.flatMap((entry) => entry.tags ?? []),
-            ...Object.values(ROOTFS_PROJECT_PRESET_TAGS).flat(),
-          ].filter(Boolean),
-        ),
-      )
-        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
-        .map((tag) => ({ label: tag, value: tag })),
-    [catalogRootfsImages],
+      buildRootfsPublishTagOptions({
+        catalogTags: catalogRootfsImages.flatMap((entry) => entry.tags ?? []),
+        isAdmin,
+      }),
+    [catalogRootfsImages, isAdmin],
   );
   const publishFamilyOptions = useMemo(
     () =>
@@ -526,13 +522,12 @@ export default function RootFilesystemImage({
   );
   const publishSupersedesOptions = useMemo(
     () =>
-      catalogRootfsImages
-        .filter((entry) => entry.id !== publishSourceEntry?.id)
-        .map((entry) => ({
-          value: entry.id,
-          label: `${entry.label || entry.image}${entry.version ? ` (${entry.version})` : ""}`,
-        })),
-    [publishSourceEntry?.id, catalogRootfsImages],
+      rootfsSupersedesOptions({
+        images: catalogRootfsImages,
+        publishMode,
+        publishSourceEntryId: publishSourceEntry?.id,
+      }),
+    [catalogRootfsImages, publishMode, publishSourceEntry?.id],
   );
   const rootfsConfigCatalogSourceOptions = useMemo(
     () =>
@@ -1251,7 +1246,7 @@ export default function RootFilesystemImage({
             : { marginLeft: "15px" }
         }
       >
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Space vertical size={16} style={{ width: "100%" }}>
           <div
             style={{
               ...rootfsHeroCardStyle(activeDisplayEntry),
@@ -1367,11 +1362,7 @@ export default function RootFilesystemImage({
                 </>
               }
               description={
-                <Space
-                  direction="vertical"
-                  size="small"
-                  style={{ width: "100%" }}
-                >
+                <Space vertical size="small" style={{ width: "100%" }}>
                   <span>
                     This keeps your current image available as the rollback
                     target.
@@ -1400,11 +1391,7 @@ export default function RootFilesystemImage({
               showIcon
               title="Live project image preflight scan"
               description={
-                <Space
-                  direction="vertical"
-                  size="small"
-                  style={{ width: "100%" }}
-                >
+                <Space vertical size="small" style={{ width: "100%" }}>
                   {renderLiveRootfsScanSummary(liveRootfsScan)}
                   {renderLiveRootfsScanActions(liveRootfsScan)}
                 </Space>
@@ -1436,7 +1423,7 @@ export default function RootFilesystemImage({
                     : "Change, publish, or manage the catalog entry."
               }
             >
-              <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              <Space vertical size={10} style={{ width: "100%" }}>
                 <RuntimeAction
                   title="Change or upgrade image"
                   description={
@@ -1526,7 +1513,7 @@ export default function RootFilesystemImage({
               title="Safety & lifecycle"
               subtitle="What happens when this project's image changes."
             >
-              <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              <Space vertical size={10} style={{ width: "100%" }}>
                 <LifecycleRow
                   label="Current"
                   value={activeLabel}
@@ -1913,11 +1900,7 @@ export default function RootFilesystemImage({
                       padding: "12px 14px",
                     }}
                   >
-                    <Space
-                      direction="vertical"
-                      size={6}
-                      style={{ width: "100%" }}
-                    >
+                    <Space vertical size={6} style={{ width: "100%" }}>
                       <div style={{ fontWeight: 700 }}>
                         Selected:{" "}
                         {displayRootfsUpgradeLabel(
@@ -2028,7 +2011,7 @@ export default function RootFilesystemImage({
                 : "Save Image to My Images"
           }
         >
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Space vertical size={16} style={{ width: "100%" }}>
             <div
               style={rootfsHeroCardStyle({
                 theme:
@@ -2112,11 +2095,7 @@ export default function RootFilesystemImage({
                   key: "publish",
                   label: "Publish",
                   children: (
-                    <Space
-                      direction="vertical"
-                      size={16}
-                      style={{ width: "100%" }}
-                    >
+                    <Space vertical size={16} style={{ width: "100%" }}>
                       <RuntimePanel
                         icon="copy"
                         title="Publish mode"
@@ -2195,11 +2174,7 @@ export default function RootFilesystemImage({
 
                       {publishMode === "copy" &&
                       publishCopyMode === "project" ? (
-                        <Space
-                          direction="vertical"
-                          size={12}
-                          style={{ width: "100%" }}
-                        >
+                        <Space vertical size={12} style={{ width: "100%" }}>
                           <Checkbox
                             checked={switchPublishedProject}
                             onChange={(e) =>
@@ -2247,7 +2222,7 @@ export default function RootFilesystemImage({
                               title="Preflight scan the live project image before publishing"
                               description={
                                 <Space
-                                  direction="vertical"
+                                  vertical
                                   size="small"
                                   style={{ width: "100%" }}
                                 >
@@ -2282,7 +2257,7 @@ export default function RootFilesystemImage({
                             <Alert
                               type="info"
                               showIcon
-                              message="Preflight scan is only for publishing a live project image."
+                              title="Preflight scan is only for publishing a live project image."
                               description="Metadata-only catalog updates do not snapshot the current project filesystem, so there is no live image to scan in this dialog."
                             />
                           ),
@@ -2298,11 +2273,7 @@ export default function RootFilesystemImage({
                       title="Metadata"
                       subtitle="Name, describe, tag, and control who can see this image."
                     >
-                      <Space
-                        direction="vertical"
-                        size={12}
-                        style={{ width: "100%" }}
-                      >
+                      <Space vertical size={12} style={{ width: "100%" }}>
                         <div
                           style={{
                             display: "grid",
@@ -2416,7 +2387,7 @@ export default function RootFilesystemImage({
                             <Alert
                               showIcon
                               type="error"
-                              message={`Invalid slug: ${publishSlugError}`}
+                              title={`Invalid slug: ${publishSlugError}`}
                               style={{ marginTop: 8 }}
                             />
                           ) : normalizedPublishSlug &&
@@ -2493,11 +2464,7 @@ export default function RootFilesystemImage({
                             Public landing page
                           </Paragraph>
                           {rootfsLandingUrl ? (
-                            <Space
-                              direction="vertical"
-                              size={8}
-                              style={{ width: "100%" }}
-                            >
+                            <Space vertical size={8} style={{ width: "100%" }}>
                               <Typography.Text
                                 copyable={{ text: rootfsLandingUrl }}
                               >
@@ -2531,7 +2498,7 @@ export default function RootFilesystemImage({
                             <Alert
                               type="info"
                               showIcon
-                              message="Save or publish this catalog entry to create a public landing URL."
+                              title="Save or publish this catalog entry to create a public landing URL."
                             />
                           )}
                         </div>
@@ -2543,11 +2510,7 @@ export default function RootFilesystemImage({
                   key: "manifest",
                   label: "Manifest",
                   children: (
-                    <Space
-                      direction="vertical"
-                      size={14}
-                      style={{ width: "100%" }}
-                    >
+                    <Space vertical size={14} style={{ width: "100%" }}>
                       <RuntimePanel
                         icon="file-export"
                         title="Import / export config"
@@ -2646,17 +2609,13 @@ export default function RootFilesystemImage({
                       title="Advanced publish options"
                       subtitle="Version metadata, theme, admin flags, and CLI or agent helpers."
                     >
-                      <Space
-                        direction="vertical"
-                        size="middle"
-                        style={{ width: "100%" }}
-                      >
+                      <Space vertical size="middle" style={{ width: "100%" }}>
                         <div>
                           <Paragraph strong style={{ marginBottom: "6px" }}>
                             Version metadata
                           </Paragraph>
                           <Space
-                            direction="vertical"
+                            vertical
                             size="small"
                             style={{ width: "100%" }}
                           >
@@ -2811,7 +2770,7 @@ export default function RootFilesystemImage({
                           </Space>
                         </div>
                         {isAdmin && (
-                          <Space direction="vertical" size="small">
+                          <Space vertical size="small">
                             <Checkbox
                               checked={publishDraft.official}
                               onChange={(e) =>
@@ -2911,11 +2870,11 @@ export default function RootFilesystemImage({
           onCancel={() => setRootfsConfigImportCandidate(null)}
           onOk={applyRootfsConfigImport}
         >
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Space vertical size={12} style={{ width: "100%" }}>
             <Alert
               type="info"
               showIcon
-              message="Choose which parts of this image config to import."
+              title="Choose which parts of this image config to import."
               description="Import changes this draft only. Save or publish to update the image catalog metadata."
             />
             <Checkbox
@@ -3796,7 +3755,7 @@ function RootfsTechnicalDetails({
           key: "technical",
           label: "Technical Details",
           children: (
-            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Space vertical size={12} style={{ width: "100%" }}>
               <TechnicalGroup title="Current image state">
                 <TechnicalRow
                   label="Catalog label"

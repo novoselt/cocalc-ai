@@ -34,7 +34,7 @@ Options:
   --package-filter <name>   optional package to build before common deps
   --include-pglite          externalize and copy @electric-sql/pglite
   --exclude-static <glob>   rsync exclude applied when copying static assets
-  --no-static               do not copy frontend/static, public, or webapp assets
+  --no-static               do not copy frontend, CDN, public, or webapp assets
   --no-bootstrap            do not copy server/cloud/bootstrap/bootstrap.py
   -h, --help                show help
 EOF
@@ -170,6 +170,10 @@ copy_provider_setup_scripts() {
   if [[ -f "packages/server/cloud/gcp/gcp-setup.sh" ]]; then
     mkdir -p "$dest"/bundle/gcp
     cp "packages/server/cloud/gcp/gcp-setup.sh" "$dest"/bundle/gcp/
+  fi
+  if [[ -f "packages/server/cloud/gcp/compute-vm-setup.sh" ]]; then
+    mkdir -p "$dest"/bundle/gcp
+    cp "packages/server/cloud/gcp/compute-vm-setup.sh" "$dest"/bundle/gcp/
   fi
   if [[ -f "packages/server/cloud/nebius/nebius-setup.sh" ]]; then
     mkdir -p "$dest"/bundle/nebius
@@ -347,6 +351,11 @@ rm -rf "$OUT"/*
 
 cd "$ROOT"
 
+if [[ "$COPY_STATIC" -eq 1 ]]; then
+  echo "- Build CDN assets"
+  pnpm --filter @cocalc/cdn run build
+fi
+
 if [[ -n "$PACKAGE_FILTER" ]]; then
   echo "- Build package ${PACKAGE_FILTER}"
   pnpm --filter "$PACKAGE_FILTER" run build
@@ -435,6 +444,10 @@ if [[ "$COPY_STATIC" -eq 1 ]]; then
   echo "- Copy public assets"
   mkdir -p "$OUT"/public
   rsync -a --delete packages/assets/public/ "$OUT/public/"
+
+  echo "- Copy CDN assets"
+  mkdir -p "$OUT/cdn"
+  rsync -a --delete packages/cdn/dist/ "$OUT/cdn/"
 
   copy_webapp_assets "$OUT"
 fi

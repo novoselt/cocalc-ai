@@ -68,7 +68,7 @@ describe("UseBalance", () => {
     ).toBeChecked();
     expect(
       screen.getByText(
-        "Renewals use your account balance only when it covers the full renewal amount; otherwise CoCalc charges your payment method in full.",
+        "Renewals use your available account balance first and charge your payment method only for the remainder. If you have an open pay-as-you-go purchase, CoCalc preserves your balance and charges the payment method in full unless the balance covers the entire renewal.",
       ),
     ).toBeTruthy();
   });

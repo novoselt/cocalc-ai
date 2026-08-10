@@ -148,8 +148,11 @@ describe("bay-directory", () => {
   });
 
   it("returns the default one-bay configuration", async () => {
-    const { getSingleBayInfo, listConfiguredBays } =
-      await import("./bay-directory");
+    const {
+      getSingleBayInfo,
+      listConfiguredBays,
+      listConfiguredBaysAuthoritative,
+    } = await import("./bay-directory");
     expect(getSingleBayInfo()).toEqual({
       bay_id: "bay-0",
       label: "bay-0",
@@ -159,6 +162,16 @@ describe("bay-directory", () => {
       is_default: true,
     });
     await expect(listConfiguredBays()).resolves.toEqual([
+      {
+        bay_id: "bay-0",
+        label: "bay-0",
+        region: null,
+        deployment_mode: "single-bay",
+        role: "combined",
+        is_default: true,
+      },
+    ]);
+    await expect(listConfiguredBaysAuthoritative()).resolves.toEqual([
       {
         bay_id: "bay-0",
         label: "bay-0",

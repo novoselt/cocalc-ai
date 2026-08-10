@@ -67,6 +67,18 @@ describe("project container environment", () => {
     expect(env.DEBUG_CONSOLE).toBe("yes");
   });
 
+  it("propagates the public CoCalc site URL into project containers", async () => {
+    process.env.COCALC_SITE_URL = "https://staging.cocalc.ai";
+    const { getEnvironment } = await import("./env");
+    const env = await getEnvironment({
+      HOME: "/home/user",
+      project_id: "00000000-1000-4000-8000-000000000000",
+      image: "test-image",
+    });
+
+    expect(env.COCALC_SITE_URL).toBe("https://staging.cocalc.ai");
+  });
+
   it("allows project debug logging to be explicitly enabled by the host", async () => {
     process.env.COCALC_PROJECT_DEBUG = "cocalc:project:*";
     process.env.COCALC_PROJECT_DEBUG_CONSOLE = "yes";

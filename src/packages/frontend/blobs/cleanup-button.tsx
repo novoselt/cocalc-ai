@@ -87,9 +87,9 @@ export function BlobCleanupButton({ mode, project_id }: Props) {
       type="info"
       showIcon
       icon={<Icon name="database" />}
-      message={title(mode)}
+      title={title(mode)}
       description={
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        <Space vertical size={8} style={{ width: "100%" }}>
           <Text>{description(mode)}</Text>
           <Space wrap>
             <Text>Delete oldest</Text>

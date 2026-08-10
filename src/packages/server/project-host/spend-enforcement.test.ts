@@ -120,6 +120,46 @@ describe("dedicated host billing enforcement", () => {
     );
   });
 
+  it("enforces spend windows without payment remediation for trusted postpaid", () => {
+    const decision = evaluateDedicatedHostBillingEnforcement({
+      snapshot: snapshot({
+        funding_mode: "account-postpaid",
+        effective_limits: {
+          credit_spend_limit_5h_usd: 300,
+          credit_spend_limit_7d_usd: 1000,
+        },
+        has_payment_method: false,
+        has_usage_subscription: false,
+        admin_override: {
+          account_id: "acc-1",
+          enabled: true,
+          dedicated_hosts: {
+            funding_mode: { mode: "set", value: "account-postpaid" },
+          },
+          updated_by: "admin-1",
+          updated_at: "2026-08-05T00:00:00.000Z",
+        },
+        dedicated_host_window_usage: {
+          prepaid_5h_usd: "0",
+          prepaid_7d_usd: "0",
+          credit_5h_usd: "299",
+          credit_7d_usd: "999",
+        },
+      }),
+      funding_lane: "credit",
+      hourly_cost_usd: "10",
+      lane_allowed: false,
+    });
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        state: "draining",
+        reason_code: "postpaid_usage_window_5h_exhausted",
+        recovery_actions: ["support_limit_increase"],
+      }),
+    );
+  });
+
   it("preserves first-detected time when updating enforcement metadata", () => {
     const decision = evaluateDedicatedHostBillingEnforcement({
       snapshot: snapshot({ balance: "0" }),

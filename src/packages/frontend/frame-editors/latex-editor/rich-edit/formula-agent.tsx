@@ -22,8 +22,6 @@ import { COLORS } from "@cocalc/util/theme";
 
 import { prepareMathEnvSource, stripMathLabels } from "./widgets/math-source";
 
-const DEFAULT_FORMULA_AGENT_MODEL = "gpt-5.4-mini";
-
 interface Position {
   line: number;
   ch: number;
@@ -150,7 +148,7 @@ function FormulaEditDialog({
         </Space>
       }
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Space vertical size="middle" style={{ width: "100%" }}>
         <FormulaPreview opts={opts} />
         <Input.TextArea
           autoFocus
@@ -194,7 +192,6 @@ export async function openFormulaAgent(opts: FormulaAgentOpts): Promise<void> {
     forceCodex: true,
     openFloating: true,
     waitForAgent: false,
-    codexConfig: { model: DEFAULT_FORMULA_AGENT_MODEL },
   });
   if (!sent) {
     dispatchNavigatorPromptIntent({
@@ -203,7 +200,6 @@ export async function openFormulaAgent(opts: FormulaAgentOpts): Promise<void> {
       title,
       tag: "intent:latex-formula-edit",
       forceCodex: true,
-      codexConfig: { model: DEFAULT_FORMULA_AGENT_MODEL },
     });
   }
 }

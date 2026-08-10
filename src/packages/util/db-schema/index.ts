@@ -16,6 +16,8 @@ export { retentionModels } from "./retention";
 export * from "./table-ownership";
 
 // The tables
+import "./active-user-map-history";
+import "./account-managed-egress";
 import "./account-collaborator-index";
 import "./account-ban-audit-log";
 import "./account-admin-audit-log";
@@ -38,6 +40,12 @@ import "./cloud-reconcile-state";
 import "./cloud-vm-log";
 import "./cloud-vm-usage";
 import "./cloud-vm-work";
+import "./compute-resource-events";
+import "./compute-resource-work";
+import "./compute-egress-meter-intervals";
+import "./compute-vm-instances";
+import "./compute-vms";
+import "./compute-volumes";
 import "./collaborators";
 import "./crm";
 import "./deleted-projects";
@@ -45,6 +53,7 @@ import "./email-counter";
 import "./email-auth";
 import "./external-credentials";
 import "./global-config";
+import "./growth-analytics";
 import "./hub-servers";
 import "./instances"; // probably deprecated
 import "./listings";

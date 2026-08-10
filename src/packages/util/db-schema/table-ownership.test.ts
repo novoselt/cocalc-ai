@@ -18,6 +18,53 @@ const REFERENCE_FIELDS = [
   "bay_id",
 ] as const satisfies readonly TableReferenceField[];
 
+// Transitional debt only: these tables are declared in db-schema but still
+// contain a runtime CREATE TABLE bootstrap. Do not add entries. Move supported
+// invariants into db-schema and leave only explicit data/rename migrations in
+// the runtime module, then remove the corresponding entry here.
+const LEGACY_DUAL_SCHEMA_OWNERSHIP: Record<string, string> = {
+  account_admin_audit_log: "packages/server/accounts/admin-audit.ts",
+  account_ban_audit_log: "packages/server/accounts/ban-audit.ts",
+  account_resource_quarantine_audit_log:
+    "packages/server/accounts/resource-quarantine-audit.ts",
+  deleted_projects: "packages/server/projects/hard-delete.ts",
+  email_auth_challenges: "packages/server/auth/email/challenge-store.ts",
+  legacy_migration_account_link_events:
+    "packages/server/legacy-migration/index.ts",
+  legacy_migration_financial_claims:
+    "packages/server/legacy-migration/index.ts",
+  legacy_migration_public_share_replay_events:
+    "packages/server/legacy-migration/index.ts",
+  membership_analytics_daily_counts: "packages/server/membership/analytics.ts",
+  membership_analytics_events: "packages/server/membership/analytics.ts",
+  membership_claim_identities: "packages/server/membership/claim-directory.ts",
+  membership_claim_scopes: "packages/server/membership/claim-directory.ts",
+  project_access_request_blocks: "packages/server/projects/collaborators.ts",
+  project_access_requests: "packages/server/projects/collaborators.ts",
+  project_backup_indexes: "packages/server/project-backup/index.ts",
+  project_backup_repos: "packages/server/project-backup/index.ts",
+  project_entitlement_override_events:
+    "packages/server/membership/project-entitlement-overrides.ts",
+  project_entitlement_overrides:
+    "packages/server/membership/project-entitlement-overrides.ts",
+  project_host_exam_configs: "packages/server/project-host/exam.ts",
+  project_host_exam_runs: "packages/server/project-host/exam.ts",
+  project_rootfs_builds: "packages/server/rootfs/build-index.ts",
+  public_project_path_slugs: "packages/server/public-directory-shares/index.ts",
+  public_project_paths: "packages/server/public-directory-shares/index.ts",
+  rootfs_rustic_repos: "packages/server/rootfs/rustic-repo-schema.ts",
+  site_license_audit_log: "packages/server/membership/site-licenses.ts",
+  site_license_external_claim_consumptions:
+    "packages/server/membership/site-licenses.ts",
+  site_license_external_claim_keys:
+    "packages/server/membership/site-licenses.ts",
+  site_license_external_claim_pools:
+    "packages/server/membership/site-licenses.ts",
+  site_license_managers: "packages/server/membership/site-licenses.ts",
+  site_license_pool_requests: "packages/server/membership/site-licenses.ts",
+  site_licenses: "packages/server/membership/site-licenses.ts",
+};
+
 const ALLOWED_OWNERSHIP_BY_REFERENCE_FIELD: Record<
   TableReferenceField,
   Set<TableOwnershipEntry["ownership"]>
@@ -260,6 +307,29 @@ describe("table ownership manifest", () => {
 
     expect(unresolved).toEqual([]);
     expect(unknown).toEqual([]);
+  });
+
+  it("does not add new runtime CREATE TABLE bootstraps for db-schema tables", () => {
+    const serverDir = resolve(__dirname, "../../server");
+    const dualOwned: Record<string, string> = {};
+
+    for (const file of serverSourceFiles(serverDir)) {
+      const source = readFileSync(file, "utf8");
+      if (!source.match(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS/i)) continue;
+      for (const match of postgresCreateTables({ file, source })) {
+        const table = match.table;
+        if (table == null || SCHEMA[table] == null || SCHEMA[table].virtual) {
+          continue;
+        }
+        dualOwned[table] = relative(resolve(__dirname, "../../.."), file);
+      }
+    }
+
+    expect(
+      Object.fromEntries(
+        Object.entries(dualOwned).sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    ).toEqual(LEGACY_DUAL_SCHEMA_OWNERSHIP);
   });
 
   it("keeps schema reference fields consistent with ownership", () => {

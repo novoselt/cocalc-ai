@@ -8,11 +8,36 @@ import type {
   UxLatencyMetricSummary,
   UxLatencySummary,
 } from "@cocalc/conat/hub/api/system";
+import { UX_LATENCY_HEALTH_METRICS } from "@cocalc/conat/hub/api/system";
 import {
   alertCandidates,
+  classifyLatencyP95Health,
   classifyProjectStartQuotaTelemetry,
   DEFAULT_UX_LATENCY_SLA_THRESHOLDS,
 } from "./ux-latency";
+
+describe("latency health sample requirements", () => {
+  it("does not warn on a P95 computed from too few project starts", () => {
+    expect(
+      classifyLatencyP95Health({
+        p95: 12_000,
+        sample_count: 6,
+        min_samples: 10,
+        warning_ms: 7_000,
+        critical_ms: 14_000,
+      }),
+    ).toBe("unknown");
+    expect(
+      classifyLatencyP95Health({
+        p95: 12_000,
+        sample_count: 10,
+        min_samples: 10,
+        warning_ms: 7_000,
+        critical_ms: 14_000,
+      }),
+    ).toBe("warning");
+  });
+});
 
 const event = {
   event_type: "project_start",
@@ -65,19 +90,23 @@ describe("project start quota telemetry", () => {
 });
 
 function metric({
+  name = "project_exec_ready",
   segment,
   count = 30,
   p95_ms,
 }: {
+  name?: string;
   segment?: string;
   count?: number;
   p95_ms: number;
 }): UxLatencyMetricSummary {
   return {
-    metric: "project_exec_ready",
+    metric: name,
     event_type: "project_ready",
     segment,
     count,
+    account_count: count,
+    project_count: count,
     avg_ms: p95_ms,
     p50_ms: 0,
     p95_ms,
@@ -98,7 +127,7 @@ function summary({
   const recent_slow_events = Array.from({ length: 3 }, (_, index) => ({
     received_at: `2026-07-15T22:30:0${index}.000Z`,
     event_type: "project_ready",
-    metric: "project_exec_ready",
+    metric: aggregate.metric,
     segment: warm?.segment ?? autostart?.segment,
     duration_ms: warm?.p95_ms ?? autostart?.p95_ms ?? aggregate.p95_ms,
   }));
@@ -142,5 +171,59 @@ describe("project exec readiness alerts", () => {
       }),
     );
     expect(alerts[0].body).toContain("Segment: warm");
+  });
+});
+
+describe("file-open latency alerts", () => {
+  it("uses foreground v2 content paint instead of the legacy visible metric", () => {
+    const v2 = metric({
+      name: UX_LATENCY_HEALTH_METRICS.fileVisible,
+      count: 50,
+      p95_ms: 12_000,
+    });
+    expect(
+      alertCandidates(summary({ aggregate: v2 }), {
+        ...DEFAULT_UX_LATENCY_SLA_THRESHOLDS,
+        file_open_visible_p95_ms: 10_000,
+      }).map(({ subject }) => subject),
+    ).toContain("file content paint latency is high");
+
+    const legacy = metric({
+      name: "file_open_visible",
+      count: 50,
+      p95_ms: 12_000,
+    });
+    expect(
+      alertCandidates(
+        summary({ aggregate: legacy }),
+        DEFAULT_UX_LATENCY_SLA_THRESHOLDS,
+      ),
+    ).toEqual([]);
+  });
+
+  it("uses foreground v2 SyncDoc readiness instead of the legacy sync metric", () => {
+    const v2 = metric({
+      name: UX_LATENCY_HEALTH_METRICS.fileSyncReady,
+      count: 50,
+      p95_ms: 7000,
+    });
+    expect(
+      alertCandidates(
+        summary({ aggregate: v2 }),
+        DEFAULT_UX_LATENCY_SLA_THRESHOLDS,
+      ).map(({ subject }) => subject),
+    ).toContain("file open sync-ready latency is high");
+
+    const legacy = metric({
+      name: "file_open_sync_ready",
+      count: 50,
+      p95_ms: 7000,
+    });
+    expect(
+      alertCandidates(
+        summary({ aggregate: legacy }),
+        DEFAULT_UX_LATENCY_SLA_THRESHOLDS,
+      ),
+    ).toEqual([]);
   });
 });

@@ -162,18 +162,22 @@ import {
 } from "@cocalc/server/membership/analytics";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
 import {
+  getActiveUserMapHistorySeries,
+  getActiveUserMapHistorySnapshot,
+  getActiveUserMapHistoryReport,
+} from "@cocalc/server/active-user-map-history";
+import {
   readWebappCrashesLocal,
   setWebappCrashResolutionLocal,
 } from "@cocalc/server/webapp-crashes";
 import {
   assertSiteFundedCodexReservationHost,
   finishSiteFundedCodexTurn,
-  getSiteFundedCodexAccountStatus,
   getSiteFundedCodexPoolStatus,
   heartbeatSiteFundedCodexTurn,
   recordSiteFundedCodexUsageEvent,
   reserveSiteFundedCodexTurn,
-} from "@cocalc/server/ai/site-funded-codex-ledger";
+} from "@cocalc/server/ai/site-funded-codex-reservations";
 import { reconcileSiteFundedCodexCosts } from "@cocalc/server/ai/site-funded-codex-reconciliation";
 import { createImpersonationGrantLocal } from "@cocalc/server/auth/impersonation";
 import { getAccountIdFromRememberMe as getLocalAccountIdFromRememberMe } from "@cocalc/server/auth/get-account";
@@ -201,6 +205,7 @@ import {
   resolveTeamLicenseQuote,
 } from "@cocalc/server/membership/team-licenses";
 import { purchaseTeamLicenseChange } from "@cocalc/server/purchases/team-license";
+import adminCreateMembershipPackagePurchase from "@cocalc/server/purchases/admin-membership-package";
 import createProject, {
   createProjectWithInternalProjectId,
 } from "@cocalc/server/projects/create";
@@ -251,6 +256,7 @@ import {
 import * as legacyMigration from "@cocalc/server/legacy-migration";
 import * as publicDirectoryShares from "@cocalc/server/public-directory-shares";
 import { getAccountUsageOverviewForAccount } from "@cocalc/server/membership/account-usage-overview";
+import { recordSiteFundedCodexAccountUsage } from "@cocalc/server/ai/save-response";
 import {
   clearAccountEntitlementOverrideLocal,
   getAccountEntitlementOverrideLocal,
@@ -272,6 +278,7 @@ import {
 import { getDedicatedHostPolicySnapshotLocal } from "@cocalc/server/project-host/admission";
 import {
   closeDedicatedHostPurchaseSessionLocal,
+  recordDedicatedHostMeteredUsageLocal,
   reconcileDedicatedHostPurchaseSessionLocal,
 } from "@cocalc/server/project-host/spend";
 import {
@@ -452,6 +459,10 @@ import {
   unblockProjectAccessRequester,
 } from "@cocalc/server/projects/collaborators";
 import { ensureCourseManagerAccessLocal } from "@cocalc/server/projects/course/ensure-manager-access";
+import {
+  getCourseManagedProjectStatesLocal,
+  reconcileCourseManagedProjectLocal,
+} from "@cocalc/server/projects/course/reconcile-managed-project";
 import { getProjectCollaboratorInviteUsage } from "@cocalc/server/membership/project-limits";
 import { leaveOrDeleteProjectsForAccount } from "@cocalc/server/projects/ownership";
 import {
@@ -468,6 +479,9 @@ import {
   syncSiteSettingsToBays,
 } from "@cocalc/server/conat/api/system";
 import {
+  cancelCourseReconfigureOperationLocal,
+  getCourseReconfigureOperationLocal,
+  reconfigureCourseProjectsLocal,
   setLocalProjectDeletionProtection,
   setLocalProjectManageUsersOwnerOnly,
   setLocalProjectMetadata,
@@ -637,6 +651,20 @@ async function startBayOpsService(): Promise<void> {
     }),
     getActiveUserMap: async ({ active_minutes }) =>
       await getActiveUserMapOverview({ active_minutes }),
+    getActiveUserMapHistoryReport: async (opts) =>
+      await getActiveUserMapHistoryReport(opts),
+    getActiveUserMapHistorySeries: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("active user map history is authoritative on the seed bay");
+      }
+      return await getActiveUserMapHistorySeries(opts);
+    },
+    getActiveUserMapHistorySnapshot: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("active user map history is authoritative on the seed bay");
+      }
+      return await getActiveUserMapHistorySnapshot(opts);
+    },
     getMembershipAnalyticsEvents: async (opts) =>
       await getMembershipAnalyticsEventsLocal({ query: opts }),
     backfillMembershipAnalyticsPurchases: async (opts) =>
@@ -692,23 +720,11 @@ async function startBayOpsService(): Promise<void> {
         outcome,
       });
     },
-    getSiteFundedCodexStatus: async ({
-      account_id,
-      limit5hMicrousd,
-      limit7dMicrousd,
-      reconcile,
-    }) => {
+    getSiteFundedCodexStatus: async ({ reconcile }) => {
       assertSiteFundedCodexSeedAuthority();
       const pools = await getSiteFundedCodexPoolStatus();
       return {
         pools,
-        account: account_id
-          ? await getSiteFundedCodexAccountStatus({
-              accountId: account_id,
-              limit5hMicrousd,
-              limit7dMicrousd,
-            })
-          : undefined,
         reconciliation: reconcile
           ? await reconcileSiteFundedCodexCosts(pools)
           : undefined,
@@ -1018,6 +1034,9 @@ async function startAccountLocalService(): Promise<void> {
     closeDedicatedHostPurchaseSession: async (opts) => {
       await closeDedicatedHostPurchaseSessionLocal(opts);
     },
+    recordDedicatedHostMeteredUsage: async (opts) => {
+      return await recordDedicatedHostMeteredUsageLocal(opts);
+    },
     reserveProjectRuntimeSlot: async (opts) =>
       await reserveProjectRuntimeSlotLocal(opts),
     heartbeatProjectRuntimeSlot: async (opts) =>
@@ -1050,6 +1069,8 @@ async function startAccountLocalService(): Promise<void> {
       }),
     getAccountUsageOverview: async ({ account_id }) =>
       await getAccountUsageOverviewForAccount({ account_id }),
+    recordSiteFundedCodexUsage: async (opts) =>
+      await recordSiteFundedCodexAccountUsage(opts),
     getVerifiedEmailAddresses: async ({ account_id }) => ({
       email_addresses: await getVerifiedEmailAddressesForAccount(account_id),
     }),
@@ -1166,6 +1187,18 @@ async function startAccountLocalService(): Promise<void> {
       isSeedSiteLicenseBay()
         ? await adminProvisionSiteLicense({ ...opts, trusted_admin: true })
         : await getSeedSiteLicenseClient().adminProvisionSiteLicense(opts),
+    adminCreateMembershipPackagePurchase: async (opts) =>
+      await adminCreateMembershipPackagePurchase({
+        admin_account_id: opts.actor_account_id,
+        user_account_id: opts.user_account_id,
+        product: opts.product,
+        price: opts.price,
+        source: opts.source,
+        reason: opts.reason,
+        idempotency_key: opts.idempotency_key,
+        pricing_note: opts.pricing_note,
+        trusted_admin: opts.trusted_admin === true,
+      }),
     listSiteLicenseOverviews: async ({
       actor_account_id,
       admin,
@@ -1626,6 +1659,8 @@ async function startAccountLocalService(): Promise<void> {
       }),
     legacyMigrationListProjects: async (opts) =>
       await legacyMigration.listProjects(opts ?? {}),
+    legacyMigrationListPublicShares: async (opts) =>
+      await legacyMigration.listPublicShares(opts ?? {}),
     legacyMigrationImportProjects: async (opts) =>
       await legacyMigration.importProjects(opts),
     legacyMigrationRetryProjectRestore: async (opts) =>
@@ -1662,8 +1697,14 @@ async function startAccountLocalService(): Promise<void> {
       await legacyMigration.adminUnlinkLegacyAccount(opts),
     legacyMigrationAdminListLinkedLegacyProjects: async (opts) =>
       await legacyMigration.adminListLinkedLegacyProjects(opts),
+    legacyMigrationAdminReplayPublicPaths: async (opts) =>
+      await legacyMigration.adminReplayPublicPaths(opts),
+    legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
+      await legacyMigration.adminReplayRestoredPublicPaths(opts),
     publicDirectoryShareResolve: async (opts) =>
       await publicDirectoryShares.resolve(opts),
+    publicDirectoryShareListMine: async (opts) =>
+      await publicDirectoryShares.listMine(opts),
     publicDirectoryShareListProject: async (opts) =>
       await publicDirectoryShares.listProject(opts),
     publicDirectoryShareCreate: async (opts) =>
@@ -2075,6 +2116,16 @@ async function startProjectCollabInviteService(): Promise<void> {
         ...opts,
         trustedCourseAccess: true,
       }),
+    reconcileCourseManagedProject: async (opts) =>
+      await reconcileCourseManagedProjectLocal(opts),
+    getCourseManagedProjectStates: async (opts) =>
+      await getCourseManagedProjectStatesLocal(opts),
+    reconfigureCourseProjects: async (opts) =>
+      await reconfigureCourseProjectsLocal(opts),
+    getCourseReconfigureOperation: async (opts) =>
+      await getCourseReconfigureOperationLocal(opts),
+    cancelCourseReconfigureOperation: async (opts) =>
+      await cancelCourseReconfigureOperationLocal(opts),
     getProjectAccessLandingInfo: async (opts) =>
       await getProjectAccessLandingInfo(opts),
     requestProjectAccess: async (opts) => await requestProjectAccess(opts),

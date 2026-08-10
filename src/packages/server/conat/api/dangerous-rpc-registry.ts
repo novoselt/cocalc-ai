@@ -23,6 +23,38 @@ const TELEMETRY_ONLY =
 // public hub API exports with destructive/admin-looking names and fails until
 // new RPCs are added here with a fresh-auth decision.
 export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
+  "compute.createVm": {
+    decision: "fresh-auth-required",
+    reason: "creates billable managed compute infrastructure",
+  },
+  "compute.deleteVm": {
+    decision: "fresh-auth-required",
+    reason: "deletes a managed compute VM and its persistent root disk",
+  },
+  "compute.setVmTtl": {
+    decision: "fresh-auth-required",
+    reason: "changes or removes a managed compute VM spending deadline",
+  },
+  "compute.createVolume": {
+    decision: "fresh-auth-required",
+    reason: "creates billable persistent managed compute storage",
+  },
+  "compute.resizeVolume": {
+    decision: "fresh-auth-required",
+    reason: "increases recurring managed compute storage cost",
+  },
+  "compute.deleteVolume": {
+    decision: "fresh-auth-required",
+    reason: "irreversibly deletes a persistent managed compute volume",
+  },
+  "compute.startVm": {
+    decision: "fresh-auth-not-required",
+    reason: "starts an owned VM inside its existing TTL and cost envelope",
+  },
+  "compute.stopVm": {
+    decision: "fresh-auth-not-required",
+    reason: "stops an owned managed compute VM",
+  },
   "adminDb.diagnostic": {
     decision: "fresh-auth-not-required",
     reason:
@@ -44,6 +76,18 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason:
       "admin-only bounded and audited host log inspection with server-side caps and redaction",
+  },
+  "adminSupport.update": {
+    decision: "fresh-auth-required",
+    reason: "posts comments or changes customer-visible Zendesk ticket state",
+  },
+  "adminSupport.merge": {
+    decision: "fresh-auth-required",
+    reason: "merges Zendesk tickets and can add customer-visible comments",
+  },
+  "adminSupport.spam": {
+    decision: "fresh-auth-required",
+    reason: "deletes a Zendesk ticket as spam and suspends its requester",
   },
   "adminData.deleteView": {
     decision: "fresh-auth-required",
@@ -463,6 +507,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason: ORDINARY_AUTHZ,
   },
+  "notifications.markAllRead": {
+    decision: "fresh-auth-not-required",
+    reason: ORDINARY_AUTHZ,
+  },
   "notifications.save": {
     decision: "fresh-auth-not-required",
     reason: ORDINARY_AUTHZ,
@@ -510,6 +558,15 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "projects.cancelPendingCopy": {
     decision: "fresh-auth-not-required",
     reason: ORDINARY_AUTHZ,
+  },
+  "projects.cancelCourseReconfigureOperation": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "course-project collaborator cancellation of an in-project durable reconciliation operation",
+  },
+  "projects.cancelCourseReconfigureOperationLocal": {
+    decision: "internal-auth-only",
+    reason: INTERNAL_AUTH_ONLY,
   },
   "projects.cancelProjectRootfsBuild": {
     decision: "fresh-auth-not-required",
@@ -780,6 +837,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "admin site-license entitlement mutation",
   },
+  "purchases.adminCreateMembershipPackagePurchase": {
+    decision: "fresh-auth-required",
+    reason: "admin custom-price membership package and billing mutation",
+  },
   "purchases.adminResetMembershipUsageWindows": {
     decision: "fresh-auth-required",
     reason: "admin operation resets user-visible membership usage windows",
@@ -949,6 +1010,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "admin account creation with password issuance",
   },
+  "system.adminBanUser": {
+    decision: "fresh-auth-required",
+    reason: "admin account ban and security-resource quarantine",
+  },
   "system.adminResetPasswordLink": {
     decision: "fresh-auth-required",
     reason: "admin password reset link generation for another user",
@@ -968,6 +1033,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "system.adminRevokeAdminRole": {
     decision: "fresh-auth-required",
     reason: "admin removes site-admin privileges from an account",
+  },
+  "system.adminUnbanUser": {
+    decision: "fresh-auth-required",
+    reason: "admin account ban removal",
   },
   "system.adminSalesloftSync": {
     decision: "fresh-auth-not-required",
@@ -1052,11 +1121,13 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   },
   "system.recordManagedProjectEgress": {
     decision: "fresh-auth-not-required",
-    reason: TELEMETRY_ONLY,
+    reason:
+      "project- or host-scoped accounting with canonical project attribution and server-side abuse enforcement",
   },
   "system.recordManagedProjectCpuUsage": {
     decision: "fresh-auth-not-required",
-    reason: TELEMETRY_ONLY,
+    reason:
+      "project- or host-scoped accounting with canonical project attribution and server-side abuse enforcement",
   },
   "system.recordServiceAdmissionDenial": {
     decision: "fresh-auth-not-required",

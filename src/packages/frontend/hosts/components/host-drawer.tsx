@@ -316,7 +316,7 @@ function HostAccessDocsAnchor() {
           width: 112,
         }}
       />
-      <Space direction="vertical" size={2} style={{ flex: "1 1 260px" }}>
+      <Space vertical size={2} style={{ flex: "1 1 260px" }}>
         <Typography.Text type="secondary">
           Host access controls who can place projects here and what RAM projects
           may use.
@@ -997,7 +997,7 @@ function RuntimeVersionDisplay({
   const badges = runtimeVersionBadges({ rollbackTarget, version, section });
   const detailLine = [builtAt, source, message].filter(Boolean).join(" · ");
   return (
-    <Space direction="vertical" size={2} style={{ width: "100%", minWidth: 0 }}>
+    <Space vertical size={2} style={{ width: "100%", minWidth: 0 }}>
       <Space wrap size={[6, 4]}>
         <Typography.Text code>{version}</Typography.Text>
         {badges}
@@ -1036,11 +1036,11 @@ function RuntimeVersionList({
   section?: "protected" | "prune";
 }) {
   return (
-    <Space direction="vertical" size={4} style={{ width: "100%" }}>
+    <Space vertical size={4} style={{ width: "100%" }}>
       <Typography.Text>{title}</Typography.Text>
       {versions?.length ? (
         <Card size="small" styles={{ body: { padding: 10 } }}>
-          <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Space vertical size={8} style={{ width: "100%" }}>
             {versions.map((version) => (
               <RuntimeVersionDisplay
                 key={`${title}:${artifact}:${version}`}
@@ -1073,7 +1073,7 @@ function RuntimeRetentionExplanation({
     <Alert
       type="info"
       showIcon
-      message="Local retention policy"
+      title="Local retention policy"
       description={
         <span>
           Protected versions stay installed because they are current, desired,
@@ -1471,7 +1471,7 @@ const HOST_LOG_ACTIONS: Record<
     status: "standard",
     statusColor: "red",
     description:
-      "Spot was not usable, so CoCalc started the host as a standard on-demand VM to keep it available.",
+      "Spot was not usable, so CoCalc started the host with Standard capacity to keep it available.",
   }),
   spot_restore_retry_scheduled: () => ({
     title: "Scheduled another spot start attempt",
@@ -1783,7 +1783,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
   });
   const softwareHelp = (
     <div style={{ maxWidth: 480 }}>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         <Typography.Text>
           This section compares the versions currently reported by the host with
           the newest versions available from the configured software source and
@@ -1837,7 +1837,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
             : "error"
         }
         showIcon
-        message={
+        title={
           availability.summary.current_event.planned
             ? "This host is intentionally unavailable"
             : availability.summary.current_state === "unobserved"
@@ -2266,7 +2266,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
             <Alert
               type="error"
               showIcon
-              message="Provisioning error"
+              title="Provisioning error"
               description={
                 <HostErrorDetails message={host.last_error} maxHeight={240} />
               }
@@ -2573,7 +2573,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
             <Alert
               type="warning"
               showIcon
-              message="Shared /scratch is visible to every project on this host"
+              title="Shared /scratch is visible to every project on this host"
               description={
                 <>
                   This host has shared <code>/scratch</code> storage. Every
@@ -2978,7 +2978,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
           <Alert
             type="warning"
             showIcon
-            message="Configured software source failed"
+            title="Configured software source failed"
             description={softwareVersions.configuredError}
           />
         ) : null}
@@ -2986,7 +2986,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
           <Alert
             type="warning"
             showIcon
-            message="Hub software source failed"
+            title="Hub software source failed"
             description={softwareVersions.hubError}
           />
         ) : null}
@@ -3240,7 +3240,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                   <Alert
                     type="warning"
                     showIcon
-                    message="Desired version is not installed on this host yet"
+                    title="Desired version is not installed on this host yet"
                     description="Deploying or changing the desired version queues the corresponding host artifact operation automatically."
                   />
                 ) : null}
@@ -3320,7 +3320,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
         <Alert
           type="error"
           showIcon
-          message="Failed to load runtime log"
+          title="Failed to load runtime log"
           description={runtimeLogViewer.error}
         />
       ) : null}
@@ -3525,7 +3525,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                     <Alert
                       type="warning"
                       showIcon
-                      message="Project-host is pinned by a host override"
+                      title="Project-host is pinned by a host override"
                       description={`Desired version ${projectHostComponentDeployment.desired_version ?? "unknown"}. Use detailed controls to resume the cluster default when you are ready.`}
                     />
                   )}
@@ -3551,7 +3551,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                         projectHostObservation.rollout.phase,
                       )}
                       showIcon
-                      message={`Project-host rollout: ${formatProjectHostRolloutPhase(
+                      title={`Project-host rollout: ${formatProjectHostRolloutPhase(
                         projectHostObservation.rollout.phase,
                       )}`}
                       description={
@@ -3778,7 +3778,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                   <Alert
                     type="error"
                     showIcon
-                    message="Failed to load runtime log"
+                    title="Failed to load runtime log"
                     description={runtimeLogViewer.error}
                   />
                 )}
@@ -3824,7 +3824,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
             <Alert
               type="info"
               showIcon
-              message={
+              title={
                 showAdvancedRuntime
                   ? "Detailed runtime controls are visible"
                   : "Detailed runtime controls are hidden by default"
@@ -3855,7 +3855,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                         <Alert
                           type="warning"
                           showIcon
-                          message="Project-host is pinned away from the cluster default"
+                          title="Project-host is pinned away from the cluster default"
                           description={
                             <span>
                               This host currently overrides the cluster default
@@ -3913,7 +3913,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                               .rollout.phase,
                           )}
                           showIcon
-                          message={`Project-host rollout: ${formatProjectHostRolloutPhase(
+                          title={`Project-host rollout: ${formatProjectHostRolloutPhase(
                             deploymentStatus.observed_host_agent.project_host
                               .rollout.phase,
                           )}`}
@@ -4023,7 +4023,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                         <Alert
                           type="info"
                           showIcon
-                          message="Project-host rollout in progress"
+                          title="Project-host rollout in progress"
                           description={
                             <span>
                               Target{" "}
@@ -4076,7 +4076,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                         <Alert
                           type="warning"
                           showIcon
-                          message="Last automatic rollback"
+                          title="Last automatic rollback"
                           description={
                             <span>
                               Target{" "}
@@ -4473,7 +4473,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                                   <Alert
                                     type="warning"
                                     showIcon
-                                    message="Desired version is not installed on this host yet"
+                                    title="Desired version is not installed on this host yet"
                                     description="Setting a desired version queues the corresponding host artifact operation automatically. Use Refresh to watch that operation appear in the host activity panel."
                                   />
                                 )}
@@ -4502,7 +4502,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                                 />
                                 {rollbackTarget && (
                                   <Space
-                                    direction="vertical"
+                                    vertical
                                     size={4}
                                     style={{ width: "100%" }}
                                   >
@@ -4646,7 +4646,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                                   <Alert
                                     type="info"
                                     showIcon
-                                    message="This host is pinned by a host-specific override"
+                                    title="This host is pinned by a host-specific override"
                                     description={`Reason: ${formatRolloutReason(effectiveOverrideReason)}. Use “Resume cluster default” to remove the override and inherit the fleet default again.`}
                                   />
                                 )}
@@ -5032,7 +5032,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                               />
                               {rollbackTarget && (
                                 <Space
-                                  direction="vertical"
+                                  vertical
                                   size={4}
                                   style={{ width: "100%" }}
                                 >
@@ -5171,7 +5171,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                                 <Alert
                                   type="info"
                                   showIcon
-                                  message="This daemon is pinned by a host-specific override"
+                                  title="This daemon is pinned by a host-specific override"
                                   description={`Reason: ${formatRolloutReason(deployment?.rollout_reason)}. Use “Resume cluster default” to remove the override and inherit the fleet default again.`}
                                 />
                               )}
@@ -5179,7 +5179,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                                 <Alert
                                   type="info"
                                   showIcon
-                                  message="This component is using an external endpoint"
+                                  title="This component is using an external endpoint"
                                   description="This host is not running or observing a local daemon for this component, so the current runtime version is not available from host telemetry."
                                 />
                               )}
@@ -5187,7 +5187,7 @@ export const HostDrawer: React.FC<{ vm: HostDrawerViewModel }> = ({ vm }) => {
                                 <Alert
                                   type="warning"
                                   showIcon
-                                  message="Desired daemon version is not installed on this host yet"
+                                  title="Desired daemon version is not installed on this host yet"
                                   description="Setting a desired version queues the corresponding reconcile automatically. Use Refresh to watch the host activity panel for the rollout."
                                 />
                               )}

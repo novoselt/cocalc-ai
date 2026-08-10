@@ -152,9 +152,12 @@ import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
 import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 import {
   acceptProjectVolumeQuotaDesired,
+  claimStoppedScratchVolumePreparations,
   getProjectVolumeQuota,
   invalidateProjectVolumeQuota,
+  listStoppedScratchVolumePreparationBatch,
   markProjectVolumeQuotaFailed,
+  markProjectVolumeQuotaResetComplete,
   projectVolumeQuotaIsApplied,
 } from "../sqlite/volume-quotas";
 import { getRecordedProjectVolumeIdentity } from "../sqlite/project-volumes";
@@ -176,6 +179,22 @@ const LRO_PUBLISH_ATTEMPT_TIMEOUT_MS = 3000;
 const RUNNER_START_PORT_RETRY_LIMIT = 5;
 const RUNNER_START_PORT_RETRY_BASE_DELAY_MS = 250;
 const OCCUPIED_PROJECT_PORT_CACHE_TTL_MS = 250;
+const STOPPED_VOLUME_PREPARATION_SWEEP_MS = Math.max(
+  10_000,
+  Number(process.env.COCALC_STOPPED_VOLUME_PREPARATION_SWEEP_MS) || 60_000,
+);
+const STOPPED_VOLUME_PREPARATION_INITIAL_DELAY_MS = Math.max(
+  1_000,
+  Number(process.env.COCALC_STOPPED_VOLUME_PREPARATION_INITIAL_DELAY_MS) ||
+    10_000,
+);
+const STOPPED_VOLUME_PREPARATION_BATCH_SIZE = Math.max(
+  1,
+  Math.min(
+    32,
+    Number(process.env.COCALC_STOPPED_VOLUME_PREPARATION_BATCH_SIZE) || 8,
+  ),
+);
 const RECENT_FAILED_PROJECT_PORT_OFFSET_TTL_MS =
   PROJECT_PORT_BIND_FAILURE_COOLDOWN_MS;
 const projectOwnerLimitsCache = new TTL<string, MembershipEffectiveLimits>({
@@ -1068,18 +1087,39 @@ function projectQuotaLedgerMode(): "off" | "observe" | "enforce" {
   }
 }
 
+function isMissingProjectHomeVolumeError(err: unknown): boolean {
+  const text = `${(err as any)?.message ?? err ?? ""}`.toLowerCase();
+  return text.includes("project volume does not exist");
+}
+
+async function getOrEnsureProjectHomeVolume(project_id: string) {
+  try {
+    return await getVolume(project_id);
+  } catch (err) {
+    if (!isMissingProjectHomeVolumeError(err)) {
+      throw err;
+    }
+    logger.info("creating missing project volume during start", {
+      project_id,
+    });
+    return await ensureVolume(project_id);
+  }
+}
+
 async function assertStartDiskQuotaAllowed({
   project_id,
   run_quota,
   run_quota_revision,
   reset_scratch = false,
   scratch_lifecycle_generation,
+  record_timing,
 }: {
   project_id: string;
   run_quota?: any;
   run_quota_revision?: number;
   reset_scratch?: boolean;
   scratch_lifecycle_generation?: number;
+  record_timing?: (phase: string, duration_ms: number) => void;
 }): Promise<{
   storage_quota_prepared: boolean;
   scratch_prepared: boolean;
@@ -1090,7 +1130,7 @@ async function assertStartDiskQuotaAllowed({
       project_id,
       logger,
       getQuota: async (id) => {
-        const vol = await getVolume(id);
+        const vol = await getOrEnsureProjectHomeVolume(id);
         return await vol.quota.get();
       },
     });
@@ -1114,9 +1154,14 @@ async function assertStartDiskQuotaAllowed({
     if (ledgerMode === "enforce" && volume_kind === "scratch" && reset) {
       resetVolume =
         scratch_lifecycle_generation == null
-          ? await resetScratchVolume(project_id)
+          ? await resetScratchVolume(project_id, {
+              onTiming: (phase, duration_ms) =>
+                record_timing?.(`scratch_reset.${phase}`, duration_ms),
+            })
           : await resetScratchVolume(project_id, {
               expected_lifecycle_generation: scratch_lifecycle_generation,
+              onTiming: (phase, duration_ms) =>
+                record_timing?.(`scratch_reset.${phase}`, duration_ms),
             });
     }
     const acceptance = acceptProjectVolumeQuotaDesired({
@@ -1154,7 +1199,10 @@ async function assertStartDiskQuotaAllowed({
     }
     try {
       const vol =
-        resetVolume ?? (await getVolume(project_id, volume_kind === "scratch"));
+        resetVolume ??
+        (volume_kind === "home"
+          ? await getOrEnsureProjectHomeVolume(project_id)
+          : await getVolume(project_id, true));
       volumeIdentity = await ensureProjectVolumeIdentity(
         project_id,
         volume_kind === "scratch",
@@ -1250,6 +1298,20 @@ async function assertStartDiskQuotaAllowed({
     desired_bytes: requestedScratchBytes,
     reset: reset_scratch,
   });
+  if (ledgerMode === "enforce" && reset_scratch && scratchPrepared) {
+    const desired = getProjectVolumeQuota(project_id, "scratch");
+    if (
+      desired == null ||
+      !markProjectVolumeQuotaResetComplete({
+        project_id,
+        desired_revision: desired.desired_revision,
+      })
+    ) {
+      throw new Error(
+        `scratch reset attestation changed while preparing project ${project_id}`,
+      );
+    }
+  }
   return {
     storage_quota_prepared: homePrepared && scratchPrepared,
     scratch_prepared:
@@ -1465,7 +1527,14 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         promise: Promise<SyntheticRuntimeProbeResult>;
       }
     | undefined;
-  const stoppedVolumePreparationInFlight = new Map<string, Promise<boolean>>();
+  type StoppedVolumePreparationResult = {
+    prepared: boolean;
+    phase_timings_ms: Record<string, number>;
+  };
+  const stoppedVolumePreparationInFlight = new Map<
+    string,
+    Promise<StoppedVolumePreparationResult>
+  >();
 
   function scratchVolumeQuotaIsPrepared(project_id: string): boolean {
     const row = getProjectVolumeQuota(project_id, "scratch");
@@ -1480,12 +1549,15 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     );
   }
 
-  function scheduleStoppedVolumePreparation(project_id: string): void {
+  function scheduleStoppedVolumePreparation(
+    project_id: string,
+    { invalidate = true }: { invalidate?: boolean } = {},
+  ): Promise<StoppedVolumePreparationResult> | undefined {
     if (
       projectQuotaLedgerMode() !== "enforce" ||
       syntheticRuntimeProbeProjects.has(project_id)
     ) {
-      return;
+      return undefined;
     }
     const project = getProject(project_id);
     if (
@@ -1493,19 +1565,31 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       requestedDiskQuotaBytes(project.run_quota) == null ||
       runnerConfigFromQuota(normalizeRunQuota(project.run_quota)).scratch === 0
     ) {
-      return;
+      if (!invalidate) {
+        markProjectVolumeQuotaFailed({
+          project_id,
+          volume_kind: "scratch",
+          error:
+            "stopped scratch preparation no longer has applicable project quota metadata",
+        });
+      }
+      return undefined;
     }
-    invalidateProjectVolumeQuota({
-      project_id,
-      volume_kind: "scratch",
-      reason: "project stopped; scratch reset pending",
-    });
-    if (stoppedVolumePreparationInFlight.has(project_id)) {
-      return;
+    if (invalidate) {
+      invalidateProjectVolumeQuota({
+        project_id,
+        volume_kind: "scratch",
+        reason: "project stopped; scratch reset pending",
+        reset_required: true,
+      });
     }
+    const existing = stoppedVolumePreparationInFlight.get(project_id);
+    if (existing) return existing;
     const operation_id = `post-stop-volume-prepare:${project_id}:${uuid()}`;
     const scratch_lifecycle_generation =
       currentProjectVolumeLifecycleGeneration(project_id);
+    const phase_timings_ms: Record<string, number> = {};
+    const preparationStarted = Date.now();
     const preparation = withBtrfsMutationContext(
       {
         operation_id,
@@ -1520,10 +1604,16 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           run_quota_revision: project.run_quota_revision,
           reset_scratch: true,
           scratch_lifecycle_generation,
+          record_timing: (phase, duration_ms) => {
+            phase_timings_ms[phase] = duration_ms;
+          },
         });
-        return (
-          prepared.storage_quota_prepared && prepared.scratch_prepared === true
-        );
+        return {
+          prepared:
+            prepared.storage_quota_prepared &&
+            prepared.scratch_prepared === true,
+          phase_timings_ms,
+        };
       },
     )
       .catch((err) => {
@@ -1532,15 +1622,77 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           operation_id,
           err: `${err}`,
         });
-        return false;
+        return { prepared: false, phase_timings_ms };
       })
       .finally(() => {
+        phase_timings_ms.total = Date.now() - preparationStarted;
         if (stoppedVolumePreparationInFlight.get(project_id) === preparation) {
           stoppedVolumePreparationInFlight.delete(project_id);
         }
       });
     stoppedVolumePreparationInFlight.set(project_id, preparation);
     void preparation;
+    return preparation;
+  }
+
+  let stoppedVolumePreparationSweepRunning = false;
+  async function runStoppedVolumePreparationSweep(): Promise<number> {
+    if (
+      stoppedVolumePreparationSweepRunning ||
+      projectQuotaLedgerMode() !== "enforce"
+    ) {
+      return 0;
+    }
+    stoppedVolumePreparationSweepRunning = true;
+    let attempted = 0;
+    try {
+      const claimed = claimStoppedScratchVolumePreparations();
+      if (claimed > 0) {
+        logger.info("claimed legacy stopped scratch preparation backlog", {
+          claimed,
+        });
+      }
+      const rows = listStoppedScratchVolumePreparationBatch({
+        limit: STOPPED_VOLUME_PREPARATION_BATCH_SIZE,
+      });
+      for (const row of rows) {
+        const preparation = scheduleStoppedVolumePreparation(row.project_id, {
+          invalidate: false,
+        });
+        if (!preparation) continue;
+        attempted += 1;
+        await preparation;
+      }
+      if (attempted > 0) {
+        logger.info("stopped project volume preparation sweep finished", {
+          attempted,
+        });
+      }
+      return attempted;
+    } finally {
+      stoppedVolumePreparationSweepRunning = false;
+    }
+  }
+
+  function startStoppedVolumePreparationMaintenance(): () => void {
+    const claimed = claimStoppedScratchVolumePreparations();
+    const initialTimer = setTimeout(() => {
+      void runStoppedVolumePreparationSweep();
+    }, STOPPED_VOLUME_PREPARATION_INITIAL_DELAY_MS);
+    initialTimer.unref?.();
+    const interval = setInterval(() => {
+      void runStoppedVolumePreparationSweep();
+    }, STOPPED_VOLUME_PREPARATION_SWEEP_MS);
+    interval.unref?.();
+    logger.info("started stopped project volume preparation maintenance", {
+      sweep_ms: STOPPED_VOLUME_PREPARATION_SWEEP_MS,
+      batch_size: STOPPED_VOLUME_PREPARATION_BATCH_SIZE,
+      claimed,
+    });
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
   }
 
   async function performSyntheticRuntimeProbe(): Promise<SyntheticRuntimeProbeResult> {
@@ -1916,12 +2068,41 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         message: "checking project disk quota",
       });
       await timings.measure("check_quota", async () => {
+        const measureQuotaDetail = async <T>(
+          phase: string,
+          fn: () => Promise<T>,
+        ): Promise<T> => {
+          const started = Date.now();
+          try {
+            return await fn();
+          } finally {
+            timings.phase_timings_ms[`check_quota.${phase}`] =
+              Date.now() - started;
+          }
+        };
+        // Host registration intentionally does not materialize storage. A
+        // create-immediately-start workflow therefore has no volume identity
+        // yet, while warm starts retain the O(1) SQLite fast path.
+        if (!getRecordedProjectVolumeIdentity(project_id, "home")) {
+          await measureQuotaDetail("ensure_home_volume", async () => {
+            await ensureVolume(project_id);
+          });
+        }
         let scratchPrepared = scratchVolumeQuotaIsPrepared(project_id);
         const stoppedPreparation = scratchPrepared
           ? undefined
           : stoppedVolumePreparationInFlight.get(project_id);
         if (stoppedPreparation != null) {
-          await stoppedPreparation;
+          const stoppedPreparationResult = await measureQuotaDetail(
+            "wait_post_stop_preparation",
+            async () => await stoppedPreparation,
+          );
+          for (const [phase, duration_ms] of Object.entries(
+            stoppedPreparationResult.phase_timings_ms,
+          )) {
+            timings.phase_timings_ms[`check_quota.post_stop.${phase}`] =
+              duration_ms;
+          }
           scratchPrepared = scratchVolumeQuotaIsPrepared(project_id);
         }
         // The authoritative quota ledger settles the normal case without a
@@ -1931,24 +2112,37 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
           !scratchPrepared &&
           projectQuotaLedgerMode() === "enforce" &&
           runnerApi.status
-            ? (await runnerApi.status({ project_id }))?.state
+            ? (
+                await measureQuotaDetail(
+                  "runtime_status",
+                  async () => await runnerApi.status({ project_id }),
+                )
+              )?.state
             : undefined;
         const resetScratch = runtimeState !== "running" && !scratchPrepared;
-        await withBtrfsMutationContext(
-          {
-            operation_id: op_id,
-            project_id,
-            priority: "lifecycle",
-            operation_class: "project_volume_prepare",
-          },
-          async () => {
-            volumePreparation = await assertStartDiskQuotaAllowed({
-              project_id,
-              run_quota: startMetadata.run_quota,
-              run_quota_revision: startMetadata.run_quota_revision,
-              reset_scratch: resetScratch,
-            });
-          },
+        await measureQuotaDetail(
+          "reconcile",
+          async () =>
+            await withBtrfsMutationContext(
+              {
+                operation_id: op_id,
+                project_id,
+                priority: "lifecycle",
+                operation_class: "project_volume_prepare",
+              },
+              async () => {
+                volumePreparation = await assertStartDiskQuotaAllowed({
+                  project_id,
+                  run_quota: startMetadata.run_quota,
+                  run_quota_revision: startMetadata.run_quota_revision,
+                  reset_scratch: resetScratch,
+                  record_timing: (phase, duration_ms) => {
+                    timings.phase_timings_ms[`check_quota.${phase}`] =
+                      duration_ms;
+                  },
+                });
+              },
+            ),
         );
       });
       timings.measureSync("mark_starting_state", () => {
@@ -2142,7 +2336,11 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         }
       }
       timings.phase_timings_ms.total = Object.entries(timings.phase_timings_ms)
-        .filter(([phase]) => !phase.startsWith("runner_start."))
+        .filter(
+          ([phase]) =>
+            !phase.startsWith("runner_start.") &&
+            !phase.startsWith("check_quota."),
+        )
         .reduce((sum, [_phase, value]) => sum + value, 0);
       timings.phase_timings_ms["project_host.wall_total"] =
         Date.now() - projectHostStarted;
@@ -2152,7 +2350,8 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
             phase !== "total" &&
             phase !== "project_host.wall_total" &&
             phase !== "project_host.unattributed" &&
-            !phase.startsWith("runner_start."),
+            !phase.startsWith("runner_start.") &&
+            !phase.startsWith("check_quota."),
         )
         .reduce((sum, [_phase, value]) => sum + value, 0);
       timings.phase_timings_ms["project_host.unattributed"] = Math.max(
@@ -3040,6 +3239,10 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
   hubApi.projects.chatStoreSearch = chatStoreSearch;
   hubApi.projects.chatStoreDelete = chatStoreDelete;
   hubApi.projects.chatStoreVacuum = chatStoreVacuum;
+  return {
+    runStoppedVolumePreparationSweep,
+    startStoppedVolumePreparationMaintenance,
+  };
 }
 
 // Update managed SSH keys for a project without restarting it.

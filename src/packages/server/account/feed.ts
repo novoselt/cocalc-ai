@@ -36,7 +36,11 @@ export async function publishAccountFeedEvent(opts: {
   // an already-open subscriber. The account-scoped broadcast is the live
   // delivery path; the stream remains the bounded replay/repair path.
   conat().publishSync(accountFeedLiveSubject(account_id), event);
-  await stream.publish(event);
+  try {
+    await stream.publish(event);
+  } finally {
+    stream.close();
+  }
 }
 
 export async function publishAccountFeedEventBestEffort(opts: {

@@ -52,11 +52,19 @@ describe("terminal-server init file support", () => {
   });
 
   it("provides project-scoped cocalc cli env for spawned terminals", () => {
+    const previous = process.env.COCALC_SITE_URL;
+    process.env.COCALC_SITE_URL = "https://staging.cocalc.ai/";
     const env = projectScopedCliEnv();
     expect(is_valid_uuid_string(env.COCALC_PROJECT_ID)).toBe(true);
     expect(env.COCALC_API_URL).toMatch(/^https?:\/\//);
+    expect(env.COCALC_SITE_URL).toBe("https://staging.cocalc.ai");
     expect(env.COCALC_SECRET_TOKEN).toMatch(/secret-token$/);
     expect(env[PROJECT_SECRETS_ENV]).toBe(PROJECT_SECRETS_MOUNT_PATH);
+    if (previous == null) {
+      delete process.env.COCALC_SITE_URL;
+    } else {
+      process.env.COCALC_SITE_URL = previous;
+    }
   });
 
   it("maps a canonical terminal cwd to the workspace process home", () => {

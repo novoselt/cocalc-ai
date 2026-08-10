@@ -65,6 +65,7 @@ export interface MultiMarkdownInputProps {
   modeSwitchStyle?: CSSProperties;
   modeSwitchPlacement?: "float" | "toolbar";
   modeSwitchRightContent?: ReactNode;
+  disableModeSwitchShortcuts?: boolean;
   autoFocus?: boolean;
   enableMentions?: boolean;
   enableUpload?: boolean;

@@ -436,20 +436,20 @@ export function FreshAuthModal({
             code.trim().length === 0),
       }}
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        {error ? <Alert type="error" showIcon message={error} /> : undefined}
+      <Space vertical size="middle" style={{ width: "100%" }}>
+        {error ? <Alert type="error" showIcon title={error} /> : undefined}
         {status?.mode === "impersonation_actor" ? (
           <Alert
             type="warning"
             showIcon
-            message={`You are verifying the admin account "${`${status.actor_name ?? ""}`.trim() || `${status.actor_email_address ?? ""}`.trim() || "unknown"}" while acting as this user.`}
+            title={`You are verifying the admin account "${`${status.actor_name ?? ""}`.trim() || `${status.actor_email_address ?? ""}`.trim() || "unknown"}" while acting as this user.`}
           />
         ) : undefined}
         {factorEnabled === false ? (
           <Alert
             type="info"
             showIcon
-            message={
+            title={
               showPassword
                 ? "This account does not have 2FA enabled. Verify with your current password or a linked sign-in provider."
                 : "This account does not have a CoCalc password. Approve by email or use a linked sign-in provider."
@@ -492,7 +492,7 @@ export function FreshAuthModal({
             <Alert
               type="info"
               showIcon
-              message="Approve this action by email"
+              title="Approve this action by email"
               description={
                 emailChallenge
                   ? `We sent a six-digit code and approval link to ${emailChallenge.masked_email}.`
@@ -531,11 +531,7 @@ export function FreshAuthModal({
           <>
             <div>
               <div style={{ marginBottom: "8px" }}>Second factor</div>
-              <Space
-                direction="vertical"
-                size="small"
-                style={{ width: "100%" }}
-              >
+              <Space vertical size="small" style={{ width: "100%" }}>
                 {(status?.methods ?? []).includes("passkey") &&
                 (status?.methods ?? []).some(
                   (method) => method !== "passkey",
@@ -555,7 +551,7 @@ export function FreshAuthModal({
                 <Alert
                   type="info"
                   showIcon
-                  message={
+                  title={
                     usePasskey
                       ? "Use your browser or device passkey prompt to verify this security action."
                       : "Enter either the 6-digit authenticator code or one of your recovery codes."

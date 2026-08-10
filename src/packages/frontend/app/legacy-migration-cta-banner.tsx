@@ -11,6 +11,7 @@ import { useTypedRedux } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components";
 import * as LS from "@cocalc/frontend/misc/local-storage-typed";
 import { markLegacyBillingMigrationReviewRequested } from "@cocalc/frontend/purchases/legacy-billing-migration-review";
+import { activeLegacyMembershipGrantClass } from "@cocalc/frontend/purchases/legacy-billing-migration-state";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type {
   LegacyMigrationFinancialPreviewResponse,
@@ -64,15 +65,16 @@ function financialState(
       financialMembershipClass: null,
     };
   }
+  const activeMembershipClass = activeLegacyMembershipGrantClass(preview);
   const financialApply = preview.can_apply;
   const financialContinue =
     !financialApply &&
-    !!preview.applied_membership_class &&
+    !!activeMembershipClass &&
     !preview.membership_renewal_configured;
   return {
     financialApply,
     financialContinue,
-    financialMembershipClass: preview.applied_membership_class,
+    financialMembershipClass: activeMembershipClass,
   };
 }
 
@@ -182,7 +184,7 @@ export function LegacyMigrationCtaBanner() {
         dismiss(account_id, key);
         setDismissedKey(key);
       }}
-      message={
+      title={
         <div
           style={{
             alignItems: "center",

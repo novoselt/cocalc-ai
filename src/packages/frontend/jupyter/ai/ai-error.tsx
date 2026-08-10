@@ -14,7 +14,6 @@ import {
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
 import { submitNavigatorPromptInWorkspaceChat } from "@cocalc/frontend/project/new/navigator-intents";
 
-const DEFAULT_FIX_WITH_AGENT_MODEL = "gpt-5.4-mini";
 const NOTEBOOK_FIX_VISIBLE_PROMPT =
   "Investigate and fix this Jupyter notebook error.";
 
@@ -86,7 +85,6 @@ export default function AIError({ traceback, input }: Props) {
         title: "Agent",
         tag: "intent:notebook-error",
         forceCodex: true,
-        codexConfig: { model: DEFAULT_FIX_WITH_AGENT_MODEL },
         openFloating: true,
         waitForAgent: false,
         agentSession: agentSessionSelection.selectedAgentSession,
@@ -149,7 +147,7 @@ export default function AIError({ traceback, input }: Props) {
           </Button>,
         ]}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
             The selected agent session will receive this notebook error, the
             traceback, and the cell input. The agent will use the live notebook

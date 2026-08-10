@@ -19,6 +19,9 @@ import { getLogger } from "@cocalc/conat/logger";
 import { once } from "@cocalc/util/async-utils";
 
 const logger = getLogger("socket:client");
+const INITIAL_SERVER_INTEREST_TIMEOUT = 250;
+const MAX_SERVER_INTEREST_TIMEOUT = 1_000;
+const MIN_SERVER_INTEREST_RETRY_INTERVAL = 50;
 
 // DO NOT directly instantiate here -- instead, call the
 // socket.connect method on ConatClient.
@@ -38,7 +41,6 @@ export class ConatSocketClient extends ConatSocketBase {
   private serverId?: string;
   private loadBalancer?: (subject: string) => Promise<string>;
   private loadBalancerTimeout?: number;
-  private lifecycleReporter?: ConatSocketOptions["lifecycleReporter"];
   private nextConnectAttemptId = 0;
   private connectAttempts = new Map<
     number,
@@ -52,7 +54,6 @@ export class ConatSocketClient extends ConatSocketBase {
     super(opts);
     this.loadBalancer = opts.loadBalancer;
     this.loadBalancerTimeout = opts.loadBalancerTimeout;
-    this.lifecycleReporter = opts.lifecycleReporter;
     // logger.silly("creating a client socket connecting to ", this.subject);
     this.initTCP();
     this.on("ready", () => {
@@ -286,7 +287,7 @@ export class ConatSocketClient extends ConatSocketBase {
     }
   };
 
-  private getServerId = async () => {
+  private async getServerId() {
     let id;
     this.lifecycleReporter?.("get_server_id_start");
     try {
@@ -312,7 +313,7 @@ export class ConatSocketClient extends ConatSocketBase {
     }
     this.serverId = id;
     this.lifecycleReporter?.("get_server_id_done", { server_id: id });
-  };
+  }
 
   private withServerIdTimeout = async (
     promise: Promise<string>,
@@ -339,30 +340,43 @@ export class ConatSocketClient extends ConatSocketBase {
     }
   };
 
-  private waitForServerId = async () => {
+  private async waitForServerId() {
     if (this.loadBalancer != null) {
       await this.getServerId();
       return;
     }
-    let delayMs = 50;
+    let timeoutMs = INITIAL_SERVER_INTEREST_TIMEOUT;
     const statusSubject = serverStatusSubject(this.subject);
     while (this.state == "connecting") {
+      const attemptStartedAt = Date.now();
       try {
         await this.client.waitForInterest(statusSubject, {
-          timeout: delayMs,
+          timeout: timeoutMs,
         });
         await this.getServerId();
         return;
       } catch (err) {
         this.lifecycleReporter?.("get_server_id_retry", { error: `${err}` });
       }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delayMs);
-        timer.unref?.();
-      });
-      delayMs = Math.min(500, Math.round(delayMs * 1.3));
+      // waitForInterest already blocks until its timeout. Only pause when an
+      // error returns immediately, which prevents a tight retry loop without
+      // doubling the normal wait between probes.
+      const retryDelay = Math.max(
+        0,
+        MIN_SERVER_INTEREST_RETRY_INTERVAL - (Date.now() - attemptStartedAt),
+      );
+      if (retryDelay > 0) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, retryDelay);
+          timer.unref?.();
+        });
+      }
+      timeoutMs = Math.min(
+        MAX_SERVER_INTEREST_TIMEOUT,
+        Math.round(timeoutMs * 1.5),
+      );
     }
-  };
+  }
 
   protected async run() {
     if (this.state == "closed") {

@@ -1481,7 +1481,7 @@ export default function DiskUsage({
                       style={{ marginBottom: "12px" }}
                       showIcon
                       type="warning"
-                      message="Visible storage breakdown is estimated"
+                      title="Visible storage breakdown is estimated"
                       description={visibleWarnings
                         .map(
                           (bucket) =>

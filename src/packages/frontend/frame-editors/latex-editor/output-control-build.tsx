@@ -141,7 +141,12 @@ export function BuildControls({
   return (
     <>
       <Space.Compact size={size}>
-        <Button type="primary" size={size} onClick={handleBuild}>
+        <Button
+          type="primary"
+          size={size}
+          onClick={handleBuild}
+          data-testid="latex-build"
+        >
           <Icon name="play-circle" />
           {!narrow &&
             intl.formatMessage(editor.build_control_and_log_title_short)}

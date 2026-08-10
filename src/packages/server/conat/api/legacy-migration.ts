@@ -15,6 +15,8 @@ import type {
   LegacyMigrationAdminLinksOptions,
   LegacyMigrationAdminPrepareProjectRemediationOptions,
   LegacyMigrationAdminProjectSearchOptions,
+  LegacyMigrationAdminReplayPublicPathsOptions,
+  LegacyMigrationAdminReplayRestoredPublicPathsOptions,
   LegacyMigrationAdminUnlinkLegacyAccountOptions,
   LegacyMigrationApplyFinancialOptions,
   LegacyMigrationConfigureFinancialRenewalOptions,
@@ -23,6 +25,7 @@ import type {
   LegacyMigrationDismissProjectRemediationOptions,
   LegacyMigrationImportProjectsOptions,
   LegacyMigrationListProjectsOptions,
+  LegacyMigrationListPublicSharesOptions,
   LegacyMigrationPrepareProjectRemediationOptions,
   LegacyMigrationProjectRemediationStatusOptions,
   LegacyMigrationRetryProjectRestoreOptions,
@@ -81,6 +84,16 @@ export async function listProjects(opts?: LegacyMigrationListProjectsOptions) {
   return isSeedBay()
     ? await localLegacyMigration.listProjects(opts ?? {})
     : await getSeedLegacyMigrationClient().legacyMigrationListProjects(
+        opts ?? {},
+      );
+}
+
+export async function listPublicShares(
+  opts?: LegacyMigrationListPublicSharesOptions,
+) {
+  return isSeedBay()
+    ? await localLegacyMigration.listPublicShares(opts ?? {})
+    : await getSeedLegacyMigrationClient().legacyMigrationListPublicShares(
         opts ?? {},
       );
 }
@@ -254,6 +267,42 @@ export async function adminListLinkedLegacyProjects(
   return isSeedBay()
     ? await localLegacyMigration.adminListLinkedLegacyProjects(opts)
     : await getSeedLegacyMigrationClient().legacyMigrationAdminListLinkedLegacyProjects(
+        opts,
+      );
+}
+
+export async function adminReplayPublicPaths(
+  opts: LegacyMigrationAdminReplayPublicPathsOptions,
+) {
+  await requireAdminAccount(opts?.account_id);
+  if (opts.commit === true) {
+    await requireFreshAdminAccount({
+      account_id: opts?.account_id,
+      browser_id: opts?.browser_id,
+      session_hash: opts?.session_hash,
+    });
+  }
+  return isSeedBay()
+    ? await localLegacyMigration.adminReplayPublicPaths(opts)
+    : await getSeedLegacyMigrationClient().legacyMigrationAdminReplayPublicPaths(
+        opts,
+      );
+}
+
+export async function adminReplayRestoredPublicPaths(
+  opts: LegacyMigrationAdminReplayRestoredPublicPathsOptions,
+) {
+  await requireAdminAccount(opts?.account_id);
+  if (opts.commit === true) {
+    await requireFreshAdminAccount({
+      account_id: opts?.account_id,
+      browser_id: opts?.browser_id,
+      session_hash: opts?.session_hash,
+    });
+  }
+  return isSeedBay()
+    ? await localLegacyMigration.adminReplayRestoredPublicPaths(opts)
+    : await getSeedLegacyMigrationClient().legacyMigrationAdminReplayRestoredPublicPaths(
         opts,
       );
 }

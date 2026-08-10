@@ -16,6 +16,7 @@ interface Props {
   has_uncommitted_changes?: boolean;
   read_only?: boolean;
   read_only_reload?: boolean;
+  is_loading?: boolean;
   is_connecting?: boolean;
   is_sync_error?: boolean;
   is_saving?: boolean;
@@ -33,6 +34,7 @@ const STATUS_CHIP_WIDTH = 94;
 const STATUS_DOT_WIDTH = 18;
 
 export type SaveStatus =
+  | "loading"
   | "read-only"
   | "sync-error"
   | "reconnecting"
@@ -45,6 +47,7 @@ export type SaveStatusInput = {
   has_unsaved_changes?: boolean;
   has_uncommitted_changes?: boolean;
   read_only?: boolean;
+  is_loading?: boolean;
   is_connecting?: boolean;
   is_sync_error?: boolean;
   is_saving?: boolean;
@@ -62,10 +65,12 @@ export function saveStatus({
   has_unsaved_changes,
   has_uncommitted_changes,
   read_only,
+  is_loading,
   is_connecting,
   is_sync_error,
   is_saving,
 }: SaveStatusInput): SaveStatus {
+  if (is_loading) return "loading";
   if (read_only) return "read-only";
   if (is_sync_error) return "sync-error";
   if (is_connecting) return "reconnecting";
@@ -91,6 +96,15 @@ function useDebouncedStatus(status: SaveStatus): SaveStatus {
 
 export function statusInfo(status: SaveStatus): SaveStatusInfo {
   switch (status) {
+    case "loading":
+      return {
+        label: "Loading",
+        title:
+          "Loading live collaboration. Editing will be available when this finishes.",
+        background: COLORS.ANTD_BG_BLUE_L,
+        border: COLORS.BLUE_LLL,
+        color: COLORS.BLUE_DD,
+      };
     case "read-only":
       return {
         label: "Read-only",
@@ -173,6 +187,7 @@ export function SaveButton({
   has_uncommitted_changes,
   read_only,
   read_only_reload,
+  is_loading,
   is_connecting,
   is_sync_error,
   is_saving,
@@ -188,6 +203,7 @@ export function SaveButton({
     has_unsaved_changes,
     has_uncommitted_changes,
     read_only,
+    is_loading,
     is_connecting,
     is_sync_error,
     is_saving,
@@ -195,9 +211,13 @@ export function SaveButton({
   const debouncedStatus = useDebouncedStatus(rawStatus);
   const status = useMemo(
     () =>
-      read_only && read_only_reload
+      read_only && read_only_reload && rawStatus !== "loading"
         ? reloadStatusInfo(is_connecting)
-        : statusInfo(rawStatus === "sync-error" ? rawStatus : debouncedStatus),
+        : statusInfo(
+            rawStatus === "sync-error" || rawStatus === "loading"
+              ? rawStatus
+              : debouncedStatus,
+          ),
     [is_connecting, rawStatus, read_only, read_only_reload, debouncedStatus],
   );
 
@@ -214,14 +234,14 @@ export function SaveButton({
 
   const icon = useMemo(
     () =>
-      showConnecting
+      is_loading || showConnecting
         ? "spinner"
         : read_only && read_only_reload
           ? "refresh"
           : is_saving
             ? "arrow-circle-o-left"
             : "save",
-    [showConnecting, is_saving, read_only, read_only_reload],
+    [is_loading, showConnecting, is_saving, read_only, read_only_reload],
   );
 
   function renderStatus() {
@@ -272,7 +292,7 @@ export function SaveButton({
     >
       <Icon
         name={icon}
-        spin={!!showConnecting || !!is_saving}
+        spin={!!is_loading || !!showConnecting || !!is_saving}
         style={{ display: "inline-block" }}
       />
       {renderStatus()}

@@ -633,7 +633,7 @@ function MembershipPurchaseModalInner({
           type="info"
           showIcon={false}
           style={{ width: "100%" }}
-          message={
+          title={
             <Space align="center" vertical>
               {targetSummaryText ? (
                 <Text strong style={{ fontSize: 16 }}>
@@ -664,7 +664,7 @@ function MembershipPurchaseModalInner({
           <Alert
             showIcon
             type="info"
-            message="Processing payment"
+            title="Processing payment"
             description="Creating the invoice and charging your saved payment method. This can take a few seconds."
           />
         )}
@@ -678,7 +678,7 @@ function MembershipPurchaseModalInner({
           <Alert
             showIcon
             type="warning"
-            message="Card billing is not configured on this site."
+            title="Card billing is not configured on this site."
             description="This membership can only be activated if account credit covers the full charge. Contact an administrator to add account credit or enable Stripe billing."
           />
         )}
@@ -740,7 +740,7 @@ function MembershipPurchaseModalInner({
           <Alert
             showIcon
             type="error"
-            message="Membership update not confirmed"
+            title="Membership update not confirmed"
             description={quoteError}
           />
           <Button type="primary" onClick={onClose}>
@@ -753,7 +753,7 @@ function MembershipPurchaseModalInner({
       <Space align="center" vertical size="middle" style={{ width: "100%" }}>
         <Alert
           type="info"
-          message="Finalizing membership change"
+          title="Finalizing membership change"
           description="Payment was submitted. CoCalc is updating your membership and confirming the new state."
         />
         <Spin />
@@ -808,7 +808,7 @@ function MembershipPurchaseModalInner({
           <Alert
             showIcon
             type="info"
-            message="Membership renewal in progress"
+            title="Membership renewal in progress"
             description="Membership changes are temporarily unavailable while the current renewal is being processed."
           />
           <Button type="primary" onClick={onClose}>

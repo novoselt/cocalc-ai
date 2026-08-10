@@ -72,6 +72,13 @@ jest.mock("@cocalc/frontend/chat/recent-agent-sessions", () => ({
     mockUseRecentAgentSessions(...args),
 }));
 
+jest.mock("@cocalc/frontend/chat/use-codex-payment-source", () => ({
+  useCodexPaymentSource: () => ({
+    paymentSource: undefined,
+    loading: false,
+  }),
+}));
+
 describe("AIError", () => {
   beforeEach(() => {
     jest.clearAllMocks();

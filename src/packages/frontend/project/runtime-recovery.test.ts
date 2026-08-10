@@ -14,10 +14,21 @@ import {
   shouldDismissRuntimeRecoveryNotice,
   shouldDisplayRuntimeRecoveryNotice,
   shouldShowProjectRuntimeRecoveryBanner,
+  isFreeTierPressureRecovery,
   shouldRecoverFromProjectRuntimeExit,
 } from "./runtime-recovery";
 
 describe("project runtime recovery", () => {
+  it("identifies priority-zero pressure recovery", () => {
+    expect(
+      isFreeTierPressureRecovery({
+        id: "free-pressure",
+        reason: "project_runtime_lost",
+        occurred_at: 1,
+        runtime_exit_reason: "host_pressure_free",
+      }),
+    ).toBe(true);
+  });
   it("reads valid runtime ids", () => {
     expect(projectRuntimeId({ runtime_id: "runtime-a" })).toBe("runtime-a");
     expect(projectRuntimeId({ runtime_id: "" })).toBeUndefined();

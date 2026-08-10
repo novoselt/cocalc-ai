@@ -788,14 +788,15 @@ export async function heartbeatActiveProjectRuntimeSlotsOnOwningBay(): Promise<{
     project_id: string;
     runtime_sponsor_account_id?: string | null;
     usage_account_id?: string | null;
+    course?: { type?: string; account_id?: string } | null;
     users?: Record<string, { group?: string }> | null;
     owning_bay_id?: string | null;
     host_id?: string | null;
     state?: { state?: string } | null;
   }>(
     `
-      SELECT project_id, runtime_sponsor_account_id, usage_account_id, users,
-             owning_bay_id, host_id, state
+      SELECT project_id, runtime_sponsor_account_id, usage_account_id, course,
+             users, owning_bay_id, host_id, state
         FROM projects
        WHERE COALESCE(state->>'state', '') = ANY($1)
          AND COALESCE(deleted, false) IS NOT TRUE

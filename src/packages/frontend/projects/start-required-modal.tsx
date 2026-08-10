@@ -51,7 +51,7 @@ export function showProjectStartRequiredModal({
     okText,
     cancelText: "Cancel",
     content: (
-      <Space direction="vertical" size={8}>
+      <Space vertical size={8}>
         <Typography.Text>{message}</Typography.Text>
         <Typography.Text type="secondary">{action}</Typography.Text>
       </Space>

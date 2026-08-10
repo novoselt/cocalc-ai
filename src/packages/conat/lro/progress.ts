@@ -72,13 +72,13 @@ export async function lroProgress({
 
   let elapsed = event.elapsed;
   let progress = undefined as number | undefined;
+  const progressKey = `${op_id}-${event.phase}`;
   if (event.progress != null) {
-    const key = `${op_id}-${event.phase}`;
     if (!event.progress) {
-      startTimes[key] = Date.now();
+      startTimes[progressKey] = Date.now();
       elapsed = 0;
-    } else if (startTimes[key]) {
-      elapsed = Date.now() - startTimes[key];
+    } else if (startTimes[progressKey]) {
+      elapsed = Date.now() - startTimes[progressKey];
     }
     progress = shiftProgress({
       progress: event.progress,
@@ -107,6 +107,11 @@ export async function lroProgress({
     await stream.publish(payload, { ttl });
   } catch (err) {
     logger.debug("ERROR publishing lro progress", { op_id, err });
+  } finally {
+    stream.close();
+    if ((event.progress ?? 0) >= 100 || errorMessage != null) {
+      delete startTimes[progressKey];
+    }
   }
 }
 

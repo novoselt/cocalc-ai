@@ -79,7 +79,7 @@ Required:
                               staged into current/runtime/packages before host upgrade
   --build-host-software-bundle
                               build the project-host software bundle before host upgrade
-  --static-only               deploy only frontend/static assets by creating a
+  --static-only               deploy only frontend and CDN assets by creating a
                               new release from the current VM release and
                               flipping the current release symlink without
                               restarting hub workers

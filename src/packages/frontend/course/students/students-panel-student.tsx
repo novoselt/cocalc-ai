@@ -790,7 +790,7 @@ export function Student({
         footer={null}
         onCancel={() => setInviteDetailsOpen(false)}
       >
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        <Space vertical size={8} style={{ width: "100%" }}>
           <div>
             <b>Status:</b> {status === "canceled" ? "revoked" : status}
           </div>
@@ -884,7 +884,7 @@ export function Student({
     }
 
     return (
-      <Space direction="vertical" size={4}>
+      <Space vertical size={4}>
         {render_course_invite_status()}
         <Tooltip placement="bottom" title={inviteButton.when}>
           <Button

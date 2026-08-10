@@ -233,6 +233,9 @@ export type SiteSettingsExtrasKeys =
   | "cryptomining_abuse_heading"
   | "cryptomining_abuse_enforcement_enabled"
   | "cryptomining_abuse_auto_ban_enabled"
+  | "bandwidth_relay_abuse_heading"
+  | "bandwidth_relay_abuse_enforcement_enabled"
+  | "bandwidth_relay_abuse_auto_ban_enabled"
   | "user_search_max_results"
   | "launch_sla_heading"
   | "launch_sla_project_start_warm_p95_ms"
@@ -339,6 +342,20 @@ export type SiteSettingsExtrasKeys =
   | "prometheus_metrics_allowlist"
   | "pay_as_you_go_section"
   | "pay_as_you_go_min_payment"
+  | "compute_vm_mode"
+  | "compute_vm_emergency_stop"
+  | "compute_vm_admin_allowlist"
+  | "compute_vm_gcp_service_account_json"
+  | "compute_vm_gcp_network"
+  | "compute_vm_gcp_network_tag"
+  | "compute_vm_max_active_per_project"
+  | "compute_vm_max_active_total"
+  | "compute_vm_max_ttl_minutes"
+  | "compute_vm_max_boot_disk_gb"
+  | "compute_vm_max_volumes_per_account"
+  | "compute_vm_max_volume_gb"
+  | "compute_vm_unfunded_volume_delete_days"
+  | "compute_vm_unfunded_volume_max_exposure_usd"
   | "lambda_cloud_api_key"
   | "project_hosts_lambda_prefix"
   | "nebius_region_config_json"
@@ -451,7 +468,7 @@ export const EXTRAS: SettingsExtras = {
   },
   cryptomining_abuse_enforcement_enabled: {
     name: "Enable Compute Abuse Enforcement",
-    desc: "When enabled, the hub acts on high-confidence cryptomining or prohibited QEMU execution evidence from project hosts by stopping the affected project. Leave disabled for self-hosted sites that intentionally permit these workloads.",
+    desc: "When enabled, the hub acts on high-confidence cryptomining or prohibited QEMU execution evidence from project hosts by stopping the affected project. Active account entitlement overrides can exempt reviewed legitimate workloads. Leave disabled for self-hosted sites that intentionally permit these workloads.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -461,7 +478,36 @@ export const EXTRAS: SettingsExtras = {
   },
   cryptomining_abuse_auto_ban_enabled: {
     name: "Enable Automatic Compute Abuse Bans",
-    desc: "When enabled together with compute abuse enforcement, new free accounts with high-confidence cryptomining evidence and all free accounts executing QEMU system emulators are automatically banned using the normal account ban path. Paid accounts are stopped but not automatically banned.",
+    desc: "When enabled together with compute abuse enforcement, sole-owner projects belonging to new free accounts with high-confidence cryptomining evidence, and sole-owner projects belonging to free accounts executing QEMU system emulators, are automatically banned using the normal account ban path. Shared projects, paid accounts, and exempt accounts are not automatically banned.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_heading: {
+    name: "Bandwidth Relay Abuse Detection",
+    desc: "Operator controls for detecting high-volume tunnel and explicitly named uploader/streamer-bot workloads on project hosts. Runtime evidence excludes full command lines and credentials. These settings are off by default for self-hosted sites.",
+    default: "",
+    type: "header",
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_enforcement_enabled: {
+    name: "Enable Bandwidth Relay Enforcement",
+    desc: "When enabled, the hub stops projects after a project host reports both live tunneling and an explicitly named uploader/streamer-bot process and the attributed account has at least 1 GiB of raw-network egress in five hours or 3 GiB in seven days. Active account entitlement overrides can exempt reviewed legitimate workloads.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_auto_ban_enabled: {
+    name: "Enable Automatic Bandwidth Relay Bans",
+    desc: "When enabled together with bandwidth relay enforcement, a new free account is automatically banned only when it is the sole user and owner of the affected project and an explicit uploader/streamer-bot process is present. Paid accounts, older free accounts, shared projects, project sponsors, and exempt accounts are not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -539,8 +585,8 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "Launch SLA Thresholds",
   },
   launch_sla_file_open_visible_p95_ms: {
-    name: "File Visible P95 SLA",
-    desc: "Maximum acceptable P95 milliseconds from file-open initiation until contents are visibly rendered. If empty, the default is 10000.",
+    name: "File Content Paint P95 SLA",
+    desc: "Maximum acceptable P95 milliseconds from foreground file-open intent through the loaded editor React commit and following animation frame. If empty, the default is 10000.",
     default: "10000",
     valid: optionalPositiveInteger,
     to_val: to_trimmed_str,
@@ -550,7 +596,7 @@ export const EXTRAS: SettingsExtras = {
   },
   launch_sla_file_open_sync_ready_p95_ms: {
     name: "File Sync Ready P95 SLA",
-    desc: "Maximum acceptable P95 milliseconds from file-open initiation until realtime sync is connected and ready. If empty, the default is 5000.",
+    desc: "Maximum acceptable P95 milliseconds from foreground file-open intent until SyncDoc initialization reports ready. If empty, the default is 5000.",
     default: "5000",
     valid: optionalPositiveInteger,
     to_val: to_trimmed_str,
@@ -738,7 +784,7 @@ export const EXTRAS: SettingsExtras = {
   },
   active_user_map_enabled: {
     name: "Active Users Map: Enabled",
-    desc: "Collect one short-lived approximate Cloudflare location per active account and enable the admin active-users world map. No IP address or location history is stored. Disabled by default.",
+    desc: "Collect one short-lived approximate Cloudflare location per active account, enable the admin active-users world map, and retain consent-gated country aggregates for 24 months. No IP address or account-linked location history is stored. Disabled by default.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -931,9 +977,9 @@ export const EXTRAS: SettingsExtras = {
   },
   site_funded_codex_reasoning: {
     name: "Funded Codex Reasoning",
-    desc: "Reasoning level forced at the backend and provider proxy for site-funded turns.",
-    default: "low",
-    valid: (value) => value === "low",
+    desc: "Reasoning level forced at the backend and provider proxy for site-funded turns. Medium is the default; low remains available as a lower-cost operator override.",
+    default: "medium",
+    valid: (value) => value === "low" || value === "medium",
     to_val: to_trimmed_str,
     tags: ["AI", "OpenAI", "Commercialization"],
     group: "AI & Agents",
@@ -1066,7 +1112,7 @@ export const EXTRAS: SettingsExtras = {
   },
   site_funded_codex_openai_project_id: {
     name: "OpenAI Platform Project ID (proj_...)",
-    desc: "Optional OpenAI Platform project that owns the API key used for included Codex turns. Set this together with the organization admin key to compare OpenAI's reported project costs with CoCalc's ledger.",
+    desc: "Optional OpenAI Platform project that owns the API key used for included Codex turns. Use a dedicated project and API key, and configure that project with an enforced hard spend limit rather than only a notification threshold. Set this ID together with the organization admin key to compare OpenAI's reported project costs with CoCalc's ledger.",
     default: "",
     to_val: to_trimmed_str,
     tags: ["AI", "OpenAI", "Commercialization"],
@@ -1606,6 +1652,173 @@ export const EXTRAS: SettingsExtras = {
     tags: ["Pay as you Go"],
     group: "Payments & Billing",
     subgroup: "Pay as you Go",
+  },
+  compute_vm_mode: {
+    name: "Managed Compute VMs: Mode",
+    desc: "Controls the account-owned VM control plane. `disabled` and `reconcile_only` reject create/start while preserving stop, delete, and hard-TTL cleanup. `admin_canary` permits only allowlisted administrators. `enabled` admits memberships authorized for prepaid or postpaid dedicated-host spending.",
+    default: "auto",
+    to_val: to_trimmed_str,
+    valid: (value) =>
+      [
+        "auto",
+        "disabled",
+        "reconcile_only",
+        "admin_canary",
+        "enabled",
+      ].includes(`${value ?? ""}`.trim().toLowerCase()),
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Admission",
+  },
+  compute_vm_emergency_stop: {
+    name: "Managed Compute VMs: Emergency Stop",
+    desc: "Immediately reject VM create/start and durably request every active managed VM to stop. Deletion and hard-TTL cleanup remain enabled.",
+    default: "no",
+    to_val: to_bool,
+    valid: only_booleans,
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Admission",
+  },
+  compute_vm_admin_allowlist: {
+    name: "Managed Compute VMs: Administrator Allowlist",
+    desc: "Comma- or whitespace-separated account UUIDs permitted while mode is `admin_canary`. Staging `auto` mode permits administrators for development; production `auto` mode is disabled.",
+    default: "",
+    to_val: to_trimmed_str,
+    multiline: 3,
+    valid: () => true,
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Admission",
+  },
+  compute_vm_gcp_service_account_json: {
+    name: "Managed Compute VMs: GCP Service Account JSON",
+    desc: "Dedicated credentials for the isolated hostile-guest compute project. Production VM operations fail closed when this is absent and never fall back to project-host credentials.",
+    default: "",
+    multiline: 5,
+    password: true,
+    wizard: {
+      name: "compute-vm-gcp-service-account-json",
+      label: "Setup isolated GCP project...",
+    },
+    to_val: to_trimmed_str,
+    valid: (value) => {
+      const text = `${value ?? ""}`.trim();
+      if (!text) return true;
+      try {
+        const parsed = JSON.parse(text);
+        return !!parsed?.project_id && !!parsed?.client_email;
+      } catch {
+        return false;
+      }
+    },
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "GCP Isolation",
+    order: 1,
+  },
+  compute_vm_gcp_network: {
+    name: "Managed Compute VMs: GCP Network",
+    desc: "Full global VPC network URI in the dedicated compute project. CoCalc discovers the flow-log-enabled regional subnets on this custom network and selects the subnet matching each VM region.",
+    default: "",
+    to_val: to_trimmed_str,
+    valid: (value) =>
+      !`${value ?? ""}`.trim() ||
+      /^projects\/[^/]+\/global\/networks\/[^/]+$/.test(`${value}`.trim()),
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "GCP Isolation",
+  },
+  compute_vm_gcp_network_tag: {
+    name: "Managed Compute VMs: GCP Network Tag",
+    desc: "Network tag whose dedicated firewall policy permits SSH and denies east-west access.",
+    default: "cocalc-compute-vm",
+    to_val: to_trimmed_str,
+    valid: (value) =>
+      /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/.test(`${value ?? ""}`),
+    tags: ["Cloud", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "GCP Isolation",
+  },
+  compute_vm_max_active_per_project: {
+    name: "Managed Compute VMs: Maximum Active Per Project",
+    desc: "Maximum undeleted VM leases associated with one project.",
+    default: "10",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_active_total: {
+    name: "Managed Compute VMs: Maximum Active Site-wide",
+    desc: "Emergency site-wide ceiling for undeleted VM leases across this bay.",
+    default: "1000",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_ttl_minutes: {
+    name: "Managed Compute VMs: Maximum TTL Minutes",
+    desc: "Hard upper bound for a VM lease. The guest cannot extend this deadline.",
+    default: "1440",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_boot_disk_gb: {
+    name: "Managed Compute VMs: Maximum Boot Disk GB",
+    desc: "Largest persistent root disk allowed for a VM lease.",
+    default: "200",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_volumes_per_account: {
+    name: "Managed Compute VMs: Maximum Volumes Per Account",
+    desc: "Maximum undeleted persistent /work volumes owned by one account.",
+    default: "10",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_unfunded_volume_delete_days: {
+    name: "Managed Compute VMs: Unfunded Volume Deletion Days",
+    desc: "Delete detached /work volumes that remain unfunded for this many days. Admin alerts begin immediately.",
+    default: "30",
+    to_val: toFloat,
+    valid: onlyPosFloat,
+    tags: ["Cloud", "Pay as you Go", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_unfunded_volume_max_exposure_usd: {
+    name: "Managed Compute VMs: Unfunded Volume Maximum Exposure USD",
+    desc: "Delete a detached unfunded /work volume early when its estimated retained-storage exposure reaches this amount.",
+    default: "100",
+    to_val: toFloat,
+    valid: onlyPosFloat,
+    tags: ["Cloud", "Pay as you Go", "Security"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
+  },
+  compute_vm_max_volume_gb: {
+    name: "Managed Compute VMs: Maximum Volume GB",
+    desc: "Largest persistent /work volume allowed. Volumes are retained and billed independently from VMs.",
+    default: "10000",
+    to_val: to_int,
+    valid: only_pos_int,
+    tags: ["Cloud"],
+    group: "Compute / Managed VMs",
+    subgroup: "Limits",
   },
   subscription_maintenance: {
     name: "Subscription Maintenance Parameters",

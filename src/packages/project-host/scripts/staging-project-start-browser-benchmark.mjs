@@ -327,20 +327,26 @@ try {
       });
       const requestedAtMs = Date.now();
       const started = performance.now();
-      const startingButton = page.getByTitle("Project is starting");
-      // Arm the transition observer before dispatch so a fast optimistic
-      // render cannot occur between the click and waiter registration.
-      const startingVisible = startingButton.waitFor({
-        state: "visible",
-        timeout: 5_000,
-      });
       await startButton.click();
-      // Measure the browser's authoritative project state rather than a
-      // generic text label. The title is the frontend's explicit starting
-      // state and remains until the start action accepts terminal state.
+      // Require a transition away from the initial stopped snapshot followed
+      // by the authoritative running state. A sufficiently fast update may
+      // skip the intermediate starting render entirely.
       try {
-        await startingVisible;
-        await startingButton.waitFor({ state: "hidden", timeout: 30_000 });
+        await page.waitForFunction(
+          () => {
+            const transitions =
+              globalThis.__cocalcProjectStartBenchmark?.transitions ?? [];
+            const current = transitions.at(-1);
+            return (
+              transitions.length >= 2 &&
+              current != null &&
+              !current.start_visible &&
+              !current.starting_visible
+            );
+          },
+          undefined,
+          { timeout: 30_000 },
+        );
       } catch (err) {
         const diagnostic = await page.evaluate(() => {
           return {

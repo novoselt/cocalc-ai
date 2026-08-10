@@ -9,6 +9,7 @@ export type HubCallContext = {
     client: ConatClient;
     user?: {
       auth_session_hash?: string | null;
+      project_id?: string | null;
     } | null;
   };
 };
@@ -50,7 +51,8 @@ export async function hubCallByName<T>({
   timeout?: number;
   callHub: (opts: {
     client: ConatClient;
-    account_id: string;
+    account_id?: string;
+    project_id?: string;
     auth_session_hash?: string | null;
     name: string;
     args: any[];
@@ -63,17 +65,20 @@ export async function hubCallByName<T>({
     timeout == null
       ? Math.max(1_000, Math.min(timeoutMs, ctx.rpcTimeoutMs))
       : Math.max(1_000, timeoutMs);
-  debug?.("hubCallAccount", {
+  const projectId = `${ctx.remote.user?.project_id ?? ""}`.trim();
+  debug?.(projectId ? "hubCallProject" : "hubCallAccount", {
     name,
     timeoutMs,
     rpcTimeoutMs,
-    account_id: ctx.accountId,
+    ...(projectId ? { project_id: projectId } : { account_id: ctx.accountId }),
   });
 
   return (await withTimeout(
     callHub({
       client: ctx.remote.client,
-      account_id: ctx.accountId,
+      ...(projectId
+        ? { project_id: projectId }
+        : { account_id: ctx.accountId }),
       auth_session_hash:
         typeof ctx.remote.user?.auth_session_hash === "string"
           ? ctx.remote.user.auth_session_hash
@@ -111,6 +116,7 @@ const HUB_API_GROUPS: HubGroupName[] = [
   "ssh",
   "reflect",
   "legacyMigration",
+  "compute",
 ];
 
 export function createHubApiForContext(

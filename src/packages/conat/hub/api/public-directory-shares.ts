@@ -21,10 +21,13 @@ export type PublicDirectoryShareAvailability =
   | "unavailable"
   | "unknown";
 
+export type PublicDirectorySharePathType = "directory" | "file";
+
 export interface PublicDirectoryShareSummary {
   id: string;
   project_id: string;
   path: string;
+  path_type: PublicDirectorySharePathType;
   slug: string;
   visibility: PublicDirectoryShareVisibility;
   requires_auth: boolean;
@@ -121,6 +124,7 @@ export interface UpsertPublicDirectoryShareOptions {
   id?: string;
   project_id: string;
   path: string;
+  path_type?: PublicDirectorySharePathType;
   slug: string;
   visibility?: PublicDirectoryShareVisibility;
   requires_auth?: boolean;
@@ -219,7 +223,9 @@ export interface GrantTemporaryViewerAccessOptions {
 export interface GrantTemporaryViewerAccessResponse {
   project_id: string;
   share_id: string;
+  legacy_public_path_id?: string | null;
   path: string;
+  path_type: PublicDirectorySharePathType;
   read_policy: ProjectViewerReadPolicy;
   expires_at: Date | string;
   project_url: string;
@@ -273,6 +279,7 @@ export interface ListPublicDirectoryShareDirectoryResponse {
 
 export interface CopyPublicDirectoryShareToProjectResponse {
   destination_project_id: string;
+  destination_path: string;
   op_id: string;
   scope_type: "project";
   scope_id: string;

@@ -206,6 +206,49 @@ Example harness plan:
 }
 ```
 
+For repeatable retention-critical latency sampling against a full signed-in
+site, use the repository UX harness. It creates isolated fixtures in the target
+project and drives a hard refresh, directory listing, text file, Jupyter run,
+LaTeX build, browser upload, and terminal open. A real Codex turn is opt-in
+because it consumes model capacity.
+
+```bash
+node src/scripts/ops/run-ux-latency-harness.mjs \
+  --api https://staging.cocalc.ai \
+  --profile staging \
+  --project <project-id> \
+  --iterations 3 \
+  --include-codex
+```
+
+The script reuses an active signed-in Chromium session by default. Pass
+`--browser <browser-id>` to pin a particular tab. Set the site's
+`ux_latency_success_sample_rate` to `1` while validating so every successful
+workflow is retained, then restore the production sampling rate.
+
+For an isolated run, issue a one-time impersonation link for a disposable test
+account and pass it only through the environment. Direct mode launches
+`/usr/local/bin/chromium-browser` in a fresh Playwright context, records HTTP and
+page errors in the report, uses run-specific project fixture paths, closes the
+measured editor session before removing those fixtures, and destroys the browser
+context at the end:
+
+```bash
+COCALC_UX_HARNESS_SIGN_IN_URL='<one-time URL>' \
+  node src/scripts/ops/run-ux-latency-harness.mjs \
+    --api https://staging.cocalc.ai \
+    --profile staging \
+    --project <project-id> \
+    --direct
+```
+
+Do not put the one-time URL in a plan, report, or command-line argument. The URL
+is a bearer credential until it is consumed or expires. `--include-codex`
+requires the harness account to already have a ChatGPT plan or OpenAI API key
+connected; use an ephemeral browser context for an existing test account rather
+than copying AI credentials into a disposable account. Reports are written
+under `.cocalc-browser-harness/` unless `--report-dir` is specified.
+
 ### Screenshot support (next iterations)
 
 - First pass now exists:

@@ -201,10 +201,17 @@ describe("project-backups.createBackup", () => {
     getManagedProjectEgressPolicyMock.mockResolvedValue({
       allowed: false,
       category: "backup-upload",
+      blocked_by: "7d",
       managed_egress_5h_bytes: 9_000_000,
+      managed_egress_7d_bytes: 12_000_000,
       egress_5h_bytes: 8_000_000,
+      egress_7d_bytes: 10_000_000,
       managed_egress_categories_5h_bytes: {
         "backup-upload": 7_000_000,
+        "raw-network": 2_000_000,
+      },
+      managed_egress_categories_7d_bytes: {
+        "backup-upload": 10_000_000,
         "raw-network": 2_000_000,
       },
     });
@@ -215,7 +222,7 @@ describe("project-backups.createBackup", () => {
         account_id: "acct-1",
         project_id: "proj-1",
       }),
-    ).rejects.toThrow("Managed backup upload limit reached for this account.");
+    ).rejects.toThrow("Limit triggered by the 7-day network usage window.");
 
     expect(getManagedProjectEgressPolicyMock).toHaveBeenCalledWith({
       project_id: "proj-1",

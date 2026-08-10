@@ -111,4 +111,68 @@ describe("browser action-engine contenteditable typing", () => {
 
     expect(clicked).toBe(1);
   });
+
+  it("uploads a bounded in-memory file through a file input", async () => {
+    class TestDataTransfer {
+      private readonly transferredFiles: File[] = [];
+      public readonly items = {
+        add: (file: File) => this.transferredFiles.push(file),
+      };
+      get fileList(): FileList {
+        return this.transferredFiles as unknown as FileList;
+      }
+    }
+    const originalDataTransfer = global.DataTransfer;
+    Object.defineProperty(global, "DataTransfer", {
+      configurable: true,
+      value: class extends TestDataTransfer {
+        get files(): FileList {
+          return this.fileList;
+        }
+      },
+    });
+    try {
+      const input = document.createElement("input");
+      input.type = "file";
+      let files: FileList | null = null;
+      Object.defineProperty(input, "files", {
+        configurable: true,
+        get: () => files,
+        set: (value) => {
+          files = value;
+        },
+      });
+      let changed = false;
+      input.addEventListener("change", () => {
+        changed = true;
+      });
+      document.body.appendChild(input);
+
+      const result = await executeBrowserAction({
+        project_id: "94ee01cf-2d7a-4e56-b8af-76d9a697877b",
+        action: {
+          name: "upload_file",
+          selector: "input[type='file']",
+          filename: "fixture.txt",
+          content_base64: btoa("hello"),
+          mime_type: "text/plain",
+        },
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          name: "upload_file",
+          filename: "fixture.txt",
+          bytes: 5,
+        }),
+      );
+      expect(changed).toBe(true);
+      expect(input.files?.[0]?.name).toBe("fixture.txt");
+    } finally {
+      Object.defineProperty(global, "DataTransfer", {
+        configurable: true,
+        value: originalDataTransfer,
+      });
+    }
+  });
 });

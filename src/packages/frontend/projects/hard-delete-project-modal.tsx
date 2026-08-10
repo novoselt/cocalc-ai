@@ -121,12 +121,12 @@ export function HardDeleteProjectModal({
           </Button>,
         ]}
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Space vertical size="middle" style={{ width: "100%" }}>
           {error ? (
             <Alert
               type="error"
               showIcon
-              message="Unable to delete project"
+              title="Unable to delete project"
               description={error}
             />
           ) : undefined}
@@ -245,7 +245,7 @@ export function InfoSection({
         )}
         {title}
       </div>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space vertical size={8} style={{ width: "100%" }}>
         {children}
       </Space>
     </div>

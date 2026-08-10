@@ -105,7 +105,7 @@ export default function CopyOps({ project_id }: { project_id: string }) {
   );
 }
 
-function CopyOpRow({ op }: { op: CopyLroState }) {
+export function CopyOpRow({ op }: { op: CopyLroState }) {
   const summary = op.summary;
   const title = formatTitle(summary);
   const percent = progressPercent(op);
@@ -118,7 +118,7 @@ function CopyOpRow({ op }: { op: CopyLroState }) {
   }
   const statusText = formatStatusLine(op, detail ?? lastDetailRef.current);
   const progressStatus = progressBarStatus(summary?.status);
-  const canCancel = summary && !LRO_TERMINAL_STATUSES.has(summary.status);
+  const canCancel = !summary || !LRO_TERMINAL_STATUSES.has(summary.status);
 
   return (
     <div style={{ marginBottom: "6px" }}>

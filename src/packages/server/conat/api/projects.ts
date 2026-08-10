@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import createProject from "@cocalc/server/projects/create";
 export { createProject };
 export * from "./project-site-migration";
@@ -76,6 +76,7 @@ import {
   resolvePublicViewerDns,
 } from "@cocalc/util/public-viewer-origin";
 import { isValidUUID } from "@cocalc/util/misc";
+import { membershipPackageCoversCourseProject } from "@cocalc/util/membership-package-product";
 import { projectStartFailureFromError } from "@cocalc/util/project-start-errors";
 import type { CodexUsageStatusInfo } from "@cocalc/conat/hub/api/system";
 import {
@@ -90,8 +91,15 @@ import {
   triggerCourseCollectLroWorker,
 } from "@cocalc/server/projects/course-collect-worker";
 import {
+  COURSE_RECONFIGURE_LRO_KIND,
+  type CourseReconfigureLroInput,
+  courseReconfigureLroResponse,
+  triggerCourseReconfigureLroWorker,
+} from "@cocalc/server/projects/course-reconfigure-worker";
+import {
   createLro,
   createLroDetailed,
+  ensureLroSchema,
   getLro,
   updateLro,
 } from "@cocalc/server/lro/lro-db";
@@ -141,6 +149,8 @@ import type {
   CourseStudentPaymentStatus,
   CourseCollectAssignmentItem,
   CourseCollectAssignmentResult,
+  CourseReconfigureRequest,
+  CourseReconfigureResult,
   ImportPublicUrlResult,
   ImportPublicPathResult,
   PublicPathInspectionResult,
@@ -197,6 +207,8 @@ import type {
   ProjectRunQuota,
   WorkspaceSshConnectionInfo,
 } from "@cocalc/conat/hub/api/projects";
+import { normalizeCoursePath } from "@cocalc/util/course-path";
+import { normalizeStudentProjectFunctionality } from "@cocalc/util/db-schema/projects";
 import { listProjectedProjectsForAccount } from "@cocalc/database/postgres/account-project-index";
 import { validateProjectEnv } from "@cocalc/util/project-secrets";
 import type { ProjectSecretsRuntimeRefreshResult } from "@cocalc/util/project-secrets";
@@ -728,6 +740,496 @@ export async function collectAssignment({
   }
   triggerCourseCollectLroWorker();
   return courseCollectLroResponse(op);
+}
+
+const MAX_COURSE_RECONFIGURE_STUDENTS = 1000;
+
+function stableCourseReconfigureValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableCourseReconfigureValue);
+  }
+  if (value != null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.keys(record)
+      .sort()
+      .reduce(
+        (result, key) => {
+          result[key] = stableCourseReconfigureValue(record[key]);
+          return result;
+        },
+        {} as Record<string, unknown>,
+      );
+  }
+  return value;
+}
+
+function normalizeCourseReconfigureText(
+  value: unknown,
+  name: string,
+  maxLength: number,
+): string {
+  if (typeof value !== "string") {
+    throw new Error(`${name} must be a string`);
+  }
+  if (value.length > maxLength) {
+    throw new Error(`${name} is too long`);
+  }
+  return value;
+}
+
+function normalizeOptionalCourseReconfigureText(
+  value: unknown,
+  name: string,
+  maxLength: number,
+): string | undefined {
+  if (value == null || value === "") return;
+  return normalizeCourseReconfigureText(value, name, maxLength);
+}
+
+function normalizeOptionalCourseReconfigureUuid(
+  value: unknown,
+  name: string,
+): string | undefined {
+  const normalized = `${value ?? ""}`.trim();
+  if (!normalized) return;
+  if (!isValidUUID(normalized)) {
+    throw new Error(`invalid ${name}`);
+  }
+  return normalized;
+}
+
+async function latestCourseReconfigureInput({
+  course_project_id,
+  course_path,
+}: {
+  course_project_id: string;
+  course_path: string;
+}): Promise<CourseReconfigureLroInput | undefined> {
+  await ensureLroSchema();
+  const { rows } = await getPool().query<{ input: CourseReconfigureLroInput }>(
+    `SELECT input
+       FROM long_running_operations
+      WHERE kind=$1
+        AND scope_type='project'
+        AND scope_id=$2
+        AND input ->> 'course_path'=$3
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [COURSE_RECONFIGURE_LRO_KIND, course_project_id, course_path],
+  );
+  return rows[0]?.input;
+}
+
+export async function reconfigureCourseProjectsLocal({
+  account_id,
+  course_project_id,
+  course_path,
+  settings,
+  students,
+}: CourseReconfigureRequest): Promise<CourseReconfigureResult> {
+  if (!account_id) {
+    throw new Error("user must be signed in");
+  }
+  if (!isValidUUID(course_project_id)) {
+    throw new Error("invalid course_project_id");
+  }
+  await assertCollabAllowRemoteProjectAccess({
+    account_id,
+    project_id: course_project_id,
+  });
+  const normalizedCoursePath = normalizeCoursePath(course_path);
+  if (!normalizedCoursePath) {
+    throw new Error("course_path is required");
+  }
+  if (!settings || typeof settings !== "object") {
+    throw new Error("course settings are required");
+  }
+  if (!Array.isArray(students)) {
+    throw new Error("students must be an array");
+  }
+  if (students.length > MAX_COURSE_RECONFIGURE_STUDENTS) {
+    throw new Error(
+      `too many students; maximum is ${MAX_COURSE_RECONFIGURE_STUDENTS}`,
+    );
+  }
+  if (settings.inherited_env !== undefined) {
+    validateProjectEnv(settings.inherited_env);
+  }
+  if (typeof settings.allow_collabs !== "boolean") {
+    throw new Error("allow_collabs must be a boolean");
+  }
+  const datastore = settings.datastore;
+  if (
+    datastore !== undefined &&
+    typeof datastore !== "boolean" &&
+    (!Array.isArray(datastore) ||
+      datastore.length > 100 ||
+      datastore.some((value) => typeof value !== "string"))
+  ) {
+    throw new Error("invalid datastore setting");
+  }
+  const previous = await latestCourseReconfigureInput({
+    course_project_id,
+    course_path: normalizedCoursePath,
+  });
+  const previousProjectIds = new Map(
+    (previous?.students ?? []).map((student) => [
+      student.student_id,
+      student.project_id,
+    ]),
+  );
+  const seenStudentIds = new Set<string>();
+  const seenStudentProjectIds = new Set<string>();
+  const normalizedStudents = students.map((student) => {
+    if (!student || typeof student !== "object") {
+      throw new Error("invalid student");
+    }
+    const student_id = `${student?.student_id ?? ""}`.trim();
+    if (!student_id || student_id.length > 200) {
+      throw new Error("invalid student_id");
+    }
+    if (seenStudentIds.has(student_id)) {
+      throw new Error(`duplicate student_id: ${student_id}`);
+    }
+    seenStudentIds.add(student_id);
+    const suppliedProjectId = `${student.project_id ?? ""}`.trim();
+    const recoveredProjectId = previousProjectIds.get(student_id) ?? "";
+    if (student.deleted && !suppliedProjectId && !recoveredProjectId) {
+      throw new Error(`deleted student ${student_id} has no project`);
+    }
+    const project_id = suppliedProjectId || recoveredProjectId || randomUUID();
+    if (!isValidUUID(project_id)) {
+      throw new Error(`invalid project_id for student ${student_id}`);
+    }
+    if (seenStudentProjectIds.has(project_id)) {
+      throw new Error(`duplicate student project_id: ${project_id}`);
+    }
+    seenStudentProjectIds.add(project_id);
+    const accountId = `${student.account_id ?? ""}`.trim();
+    if (accountId && !isValidUUID(accountId)) {
+      throw new Error(`invalid account_id for student ${student_id}`);
+    }
+    const emailAddress = normalizeOptionalCourseReconfigureText(
+      `${student.email_address ?? ""}`.trim(),
+      "student email address",
+      1000,
+    );
+    return {
+      student_id,
+      project_id,
+      create: !suppliedProjectId && !recoveredProjectId,
+      name: normalizeCourseReconfigureText(
+        student.name ?? "",
+        "student name",
+        1000,
+      ),
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(emailAddress ? { email_address: emailAddress } : {}),
+      ...(student.deleted ? { deleted: true } : {}),
+      ...(student.send_email_invite ? { send_email_invite: true } : {}),
+    };
+  });
+  const graceDays = settings.student_membership_grace_days;
+  if (
+    graceDays !== undefined &&
+    (!Number.isFinite(graceDays) || graceDays < 0 || graceDays > 3650)
+  ) {
+    throw new Error("invalid student membership grace days");
+  }
+  const normalizedSettings: CourseReconfigureLroInput["settings"] = {
+    title: normalizeCourseReconfigureText(settings.title, "course title", 4000),
+    description: normalizeCourseReconfigureText(
+      settings.description,
+      "course description",
+      100_000,
+    ),
+    allow_collabs: settings.allow_collabs,
+    datastore:
+      Array.isArray(datastore) && datastore.length > 0
+        ? [...new Set(datastore)]
+        : datastore,
+    student_pay: !!settings.student_pay,
+    institute_pay: !!settings.institute_pay,
+    site_license_pay: !!settings.site_license_pay,
+    required_membership_class: normalizeOptionalCourseReconfigureText(
+      settings.required_membership_class,
+      "required membership class",
+      100,
+    ),
+    student_membership_required_at: normalizeOptionalCourseReconfigureText(
+      settings.student_membership_required_at,
+      "student membership required at",
+      100,
+    ),
+    student_membership_grace_days: graceDays,
+    course_ends_at: normalizeOptionalCourseReconfigureText(
+      settings.course_ends_at,
+      "course ends at",
+      100,
+    ),
+    student_project_functionality: normalizeStudentProjectFunctionality(
+      settings.student_project_functionality,
+    ),
+    envvars:
+      settings.envvars == null
+        ? undefined
+        : { inherit: settings.envvars.inherit === true },
+    inherited_env: settings.inherited_env,
+    student_project_host_id: normalizeOptionalCourseReconfigureUuid(
+      settings.student_project_host_id,
+      "student project host id",
+    ),
+    student_project_rootfs_image: normalizeOptionalCourseReconfigureText(
+      settings.student_project_rootfs_image,
+      "student project RootFS image",
+      4000,
+    ),
+    student_project_rootfs_image_id: normalizeOptionalCourseReconfigureText(
+      settings.student_project_rootfs_image_id,
+      "student project RootFS image id",
+      4000,
+    ),
+    shared_project_id: normalizeOptionalCourseReconfigureUuid(
+      settings.shared_project_id,
+      "shared project id",
+    ),
+    nbgrader_project_id: normalizeOptionalCourseReconfigureUuid(
+      settings.nbgrader_project_id,
+      "nbgrader project id",
+    ),
+    invite: {
+      subject: normalizeCourseReconfigureText(
+        settings.invite?.subject,
+        "invite subject",
+        2000,
+      ),
+      message: normalizeCourseReconfigureText(
+        settings.invite?.message,
+        "invite message",
+        100_000,
+      ),
+      email_html: normalizeCourseReconfigureText(
+        settings.invite?.email_html,
+        "invite email",
+        500_000,
+      ),
+      reply_to: normalizeOptionalCourseReconfigureText(
+        settings.invite?.reply_to,
+        "invite reply-to",
+        1000,
+      ),
+      reply_to_name: normalizeOptionalCourseReconfigureText(
+        settings.invite?.reply_to_name,
+        "invite reply-to name",
+        1000,
+      ),
+      base_url: normalizeOptionalCourseReconfigureText(
+        settings.invite?.base_url,
+        "invite base URL",
+        4000,
+      ),
+    },
+  };
+  if (
+    normalizedSettings.shared_project_id &&
+    seenStudentProjectIds.has(normalizedSettings.shared_project_id)
+  ) {
+    throw new Error("shared project cannot also be a student project");
+  }
+  if (
+    normalizedSettings.shared_project_id &&
+    normalizedSettings.shared_project_id ===
+      normalizedSettings.nbgrader_project_id
+  ) {
+    throw new Error("shared and nbgrader projects must be different");
+  }
+  const normalizedInputWithoutHash = {
+    course_project_id,
+    course_path: normalizedCoursePath,
+    settings: normalizedSettings,
+    students: normalizedStudents,
+  };
+  // `create` controls execution, but is not part of the desired course state.
+  // Excluding it keeps the snapshot stable after assigned project ids are
+  // replayed into the collaborative .course document.
+  const desiredState = {
+    ...normalizedInputWithoutHash,
+    settings: {
+      ...normalizedSettings,
+      datastore: Array.isArray(normalizedSettings.datastore)
+        ? [...normalizedSettings.datastore].sort()
+        : normalizedSettings.datastore,
+    },
+    students: normalizedStudents
+      .map(({ create: _, ...student }) => student)
+      .sort((a, b) => a.student_id.localeCompare(b.student_id)),
+  };
+  const snapshot_hash = createHash("sha256")
+    .update(JSON.stringify(stableCourseReconfigureValue(desiredState)))
+    .digest("hex");
+  const input: CourseReconfigureLroInput = {
+    ...normalizedInputWithoutHash,
+    snapshot_hash,
+  };
+  const { lro: op, created } = await createLroDetailed({
+    kind: COURSE_RECONFIGURE_LRO_KIND,
+    scope_type: "project",
+    scope_id: course_project_id,
+    created_by: account_id,
+    routing: "hub",
+    input,
+    // One active operation per collaborative course document. A caller with a
+    // newer snapshot joins it and submits a follow-up after it finishes.
+    dedupe_key: `course-reconfigure:${normalizedCoursePath}`,
+    status: "queued",
+  });
+  if (created) {
+    await publishLroSummary({
+      scope_type: op.scope_type,
+      scope_id: op.scope_id,
+      summary: op,
+    }).catch((err) =>
+      log.warn("unable to publish initial course reconfiguration LRO", {
+        op_id: op.op_id,
+        err: `${err}`,
+      }),
+    );
+    triggerCourseReconfigureLroWorker();
+  }
+  return {
+    ...courseReconfigureLroResponse(op),
+    requested_snapshot_hash: snapshot_hash,
+    operation_snapshot_hash: `${op.input?.snapshot_hash ?? ""}`,
+  };
+}
+
+async function resolveCourseReconfigureBay(course_project_id: string) {
+  if (!isValidUUID(course_project_id)) {
+    throw new Error("invalid course_project_id");
+  }
+  const ownership = await resolveProjectBay(course_project_id);
+  if (!ownership) {
+    throw new Error(`course project ${course_project_id} not found`);
+  }
+  return ownership.bay_id;
+}
+
+export async function reconfigureCourseProjects(
+  opts: CourseReconfigureRequest,
+): Promise<CourseReconfigureResult> {
+  if (!opts.account_id) {
+    throw new Error("user must be signed in");
+  }
+  const bayId = await resolveCourseReconfigureBay(opts.course_project_id);
+  if (bayId !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectCollabInvite(bayId, { timeout_ms: 30_000 })
+      .reconfigureCourseProjects({ ...opts, account_id: opts.account_id });
+  }
+  return await reconfigureCourseProjectsLocal(opts);
+}
+
+function assertCourseReconfigureOperation(
+  op: LroSummary,
+  course_project_id: string,
+): void {
+  if (
+    op.kind !== COURSE_RECONFIGURE_LRO_KIND ||
+    op.scope_type !== "project" ||
+    op.scope_id !== course_project_id
+  ) {
+    throw new Error("operation does not belong to this course project");
+  }
+}
+
+export async function getCourseReconfigureOperationLocal({
+  account_id,
+  course_project_id,
+  op_id,
+}: {
+  account_id?: string;
+  course_project_id: string;
+  op_id: string;
+}): Promise<LroSummary | undefined> {
+  if (!account_id) {
+    throw new Error("user must be signed in");
+  }
+  await assertCollabAllowRemoteProjectAccess({
+    account_id,
+    project_id: course_project_id,
+  });
+  const op = await getLro(op_id);
+  if (!op) return;
+  assertCourseReconfigureOperation(op, course_project_id);
+  return op;
+}
+
+export async function getCourseReconfigureOperation(opts: {
+  account_id?: string;
+  course_project_id: string;
+  op_id: string;
+}): Promise<LroSummary | undefined> {
+  if (!opts.account_id) {
+    throw new Error("user must be signed in");
+  }
+  const bayId = await resolveCourseReconfigureBay(opts.course_project_id);
+  if (bayId !== getConfiguredBayId()) {
+    return await getInterBayBridge()
+      .projectCollabInvite(bayId)
+      .getCourseReconfigureOperation({
+        ...opts,
+        account_id: opts.account_id,
+      });
+  }
+  return await getCourseReconfigureOperationLocal(opts);
+}
+
+export async function cancelCourseReconfigureOperationLocal(opts: {
+  account_id?: string;
+  course_project_id: string;
+  op_id: string;
+}): Promise<void> {
+  const op = await getCourseReconfigureOperationLocal(opts);
+  if (
+    !op ||
+    ["succeeded", "failed", "canceled", "expired"].includes(op.status)
+  ) {
+    return;
+  }
+  const updated = await updateLro({
+    op_id: op.op_id,
+    status: "canceled",
+    error: op.error ?? "canceled",
+    if_status: ["queued", "running"],
+  });
+  if (updated) {
+    await publishLroSummary({
+      scope_type: updated.scope_type,
+      scope_id: updated.scope_id,
+      summary: updated,
+    });
+  }
+}
+
+export async function cancelCourseReconfigureOperation(opts: {
+  account_id?: string;
+  course_project_id: string;
+  op_id: string;
+}): Promise<void> {
+  if (!opts.account_id) {
+    throw new Error("user must be signed in");
+  }
+  const bayId = await resolveCourseReconfigureBay(opts.course_project_id);
+  if (bayId !== getConfiguredBayId()) {
+    await getInterBayBridge()
+      .projectCollabInvite(bayId)
+      .cancelCourseReconfigureOperation({
+        ...opts,
+        account_id: opts.account_id,
+      });
+    return;
+  }
+  await cancelCourseReconfigureOperationLocal(opts);
 }
 
 const MAX_COURSE_ASSIGNMENT_PATCH_PATHS = 500;
@@ -3182,8 +3684,10 @@ export async function getCoursePaymentOverview({
           packages: packages.filter(
             (membershipPackage) =>
               membershipPackage.kind === "course" &&
-              membershipPackage.metadata?.course_project_id ===
+              membershipPackageCoversCourseProject(
+                membershipPackage.metadata,
                 course_project_id,
+              ),
           ),
         };
       } catch (err) {

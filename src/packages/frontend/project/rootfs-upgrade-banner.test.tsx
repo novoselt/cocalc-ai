@@ -4,12 +4,16 @@
  */
 
 import { fireEvent, render, screen } from "@testing-library/react";
+import { fromJS } from "immutable";
 
 import type { RootfsImageEntry } from "@cocalc/util/rootfs-images";
 
 import {
   getProjectRootfsUpgrade,
+  isRootfsUpgradeDismissed,
+  normalizeRootfsUpgradeDismissals,
   ProjectRootfsUpgradeAlert,
+  withRootfsUpgradeDismissal,
 } from "./rootfs-upgrade-banner";
 
 jest.mock("@cocalc/frontend/project/settings/root-filesystem-image", () => ({
@@ -60,38 +64,84 @@ describe("getProjectRootfsUpgrade", () => {
   });
 });
 
+describe("RootFS upgrade dismissal settings", () => {
+  it("normalizes server-backed Immutable account settings", () => {
+    expect(
+      normalizeRootfsUpgradeDismissals(
+        fromJS({ "project-1": "basic-1.7", invalid: 17 }),
+      ),
+    ).toEqual({ "project-1": "basic-1.7" });
+  });
+
+  it("preserves other project dismissals when recording a target", () => {
+    expect(
+      withRootfsUpgradeDismissal({
+        dismissals: { "project-1": "basic-1.7" },
+        project_id: "project-2",
+        targetImageId: "sage-10.9",
+      }),
+    ).toEqual({
+      "project-1": "basic-1.7",
+      "project-2": "sage-10.9",
+    });
+  });
+
+  it("dismisses only the recorded target, not a future upgrade", () => {
+    const dismissals = { "project-1": "basic-1.7" };
+    expect(
+      isRootfsUpgradeDismissed({
+        dismissals,
+        project_id: "project-1",
+        targetImageId: "basic-1.7",
+      }),
+    ).toBe(true);
+    expect(
+      isRootfsUpgradeDismissed({
+        dismissals,
+        project_id: "project-1",
+        targetImageId: "basic-1.8",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("ProjectRootfsUpgradeAlert", () => {
-  it("opens the review flow and can be dismissed until a new upgrade appears", () => {
+  it("opens the review flow and explains permanent dismissal", () => {
     const current = image("basic-1.6", "1.6");
     const next = image("basic-1.7", "1.7");
-    const newer = image("basic-1.8", "1.8");
+    const onDismiss = jest.fn();
     const onReview = jest.fn();
-    const { container, rerender } = render(
+    const { rerender } = render(
       <ProjectRootfsUpgradeAlert
         current={current}
+        dismissed={false}
         next={next}
+        onDismiss={onDismiss}
         onReview={onReview}
-        project_id="project-1"
       />,
     );
 
     fireEvent.click(screen.getByText("Review upgrade"));
     expect(onReview).toHaveBeenCalledTimes(1);
-    fireEvent.click(
-      container.querySelector<HTMLButtonElement>(
-        "button.ant-alert-close-icon",
-      )!,
-    );
-    expect(screen.queryByText("A newer project image is available")).toBeNull();
+    fireEvent.click(screen.getByText("Dismiss"));
+    expect(screen.getByText("Stop showing this upgrade?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "You can still upgrade later using the Image button on the left side of the project, or Upgrade in the Projects list.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByText("Dismiss permanently"));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
 
     rerender(
       <ProjectRootfsUpgradeAlert
         current={current}
-        next={newer}
+        dismissed
+        next={next}
+        onDismiss={onDismiss}
         onReview={onReview}
-        project_id="project-1"
       />,
     );
-    expect(screen.getByText("A newer project image is available")).toBeTruthy();
+    expect(screen.queryByText("A newer project image is available")).toBeNull();
   });
 });

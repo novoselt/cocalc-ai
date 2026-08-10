@@ -456,7 +456,7 @@ function getAdminSections({
     {
       key: "active-users",
       title: "Active Users Map",
-      description: "See where recently active users are around the world.",
+      description: "",
       icon: "map",
       group: "operations",
       component: () => <ActiveUsersMapAdmin />,
@@ -534,6 +534,17 @@ function getAdminSections({
       icon: "user",
       group: "commercial",
       component: () => <MembershipTiers />,
+    },
+    {
+      key: "codex-pools",
+      title: "Codex Pools",
+      description:
+        "Monitor and configure site-funded Codex budgets, policy, and OpenAI reconciliation.",
+      icon: "robot",
+      group: "commercial",
+      component: () => (
+        <SiteSettings close={closeSiteSettings} scope="codex-pools" />
+      ),
     },
     {
       key: "membership-analytics",

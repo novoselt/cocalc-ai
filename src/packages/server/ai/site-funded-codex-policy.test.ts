@@ -23,7 +23,7 @@ describe("site-funded Codex policy", () => {
     expect(config.enabled).toBe(true);
     expect(config.policy).toMatchObject({
       model: "gpt-5.6-luna",
-      reasoning: "low",
+      reasoning: "medium",
       serviceTier: "standard",
       maxTurnCostMicrousd: 25_000,
       maxTurnDurationMs: 600_000,
@@ -36,6 +36,13 @@ describe("site-funded Codex policy", () => {
     expect(config.freePoolWeeklyLimitMicrousd).toBe(25_000_000);
     expect(config.paidPoolWeeklyLimitMicrousd).toBe(75_000_000);
     expect(config.globalConcurrency).toBe(12);
+  });
+
+  it("keeps low reasoning available as an explicit override", () => {
+    const config = siteFundedCodexConfigurationFromSettings({
+      site_funded_codex_reasoning: "low",
+    });
+    expect(config.policy.reasoning).toBe("low");
   });
 
   it("fails closed for an unpriced model", () => {

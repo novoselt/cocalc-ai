@@ -21,10 +21,12 @@ import { type AdminSupportApi, adminSupport } from "./admin-support";
 import { type AdminCrashesApi, adminCrashes } from "./admin-crashes";
 import { type AiSessionsApi, aiSessions } from "./ai-sessions";
 import { type LegacyMigration, legacyMigration } from "./legacy-migration";
+import { type ComputeApi, compute } from "./compute";
 import {
   type PublicDirectoryShares,
   publicDirectoryShares,
 } from "./public-directory-shares";
+import { type GrowthAnalyticsApi, growthAnalytics } from "./growth-analytics";
 
 export interface HubApi {
   system: System;
@@ -48,7 +50,9 @@ export interface HubApi {
   adminCrashes: AdminCrashesApi;
   aiSessions: AiSessionsApi;
   legacyMigration: LegacyMigration;
+  compute: ComputeApi;
   publicDirectoryShares: PublicDirectoryShares;
+  growthAnalytics: GrowthAnalyticsApi;
 }
 
 const HubApiStructure = {
@@ -73,7 +77,9 @@ const HubApiStructure = {
   adminCrashes,
   aiSessions,
   legacyMigration,
+  compute,
   publicDirectoryShares,
+  growthAnalytics,
 } as const;
 
 export function transformArgs({
@@ -123,6 +129,20 @@ export function initHubApi(callHubApi): HubApi {
           timeout: args[0]?.timeout,
           project_id: extractProjectId(args),
         });
+        // A failed LRO legitimately returns its operation failure in the
+        // top-level `error` field.  Do not confuse that successful API result
+        // with the legacy `{ error }` RPC failure envelope.
+        if (
+          group === "lro" &&
+          functionName === "get" &&
+          resp != null &&
+          typeof resp === "object" &&
+          typeof resp.op_id === "string" &&
+          typeof resp.scope_type === "string" &&
+          typeof resp.status === "string"
+        ) {
+          return resp;
+        }
         return handleErrorMessage(resp);
       };
     }

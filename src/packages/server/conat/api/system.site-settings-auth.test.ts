@@ -493,7 +493,7 @@ describe("site settings dangerous-session auth", () => {
     });
 
     expect(result.current_bay_id).toBe("seed");
-    expect(bayOpsMock).toHaveBeenCalledWith("seed", { timeout_ms: 15_000 });
+    expect(bayOpsMock).toHaveBeenCalledWith("seed", { timeout_ms: 30_000 });
     expect(getStatusOnSeed).toHaveBeenCalledWith({
       account_id: ACCOUNT_ID,
       scope: "server_settings",

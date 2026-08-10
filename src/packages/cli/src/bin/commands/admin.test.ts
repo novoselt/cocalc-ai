@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -15,6 +15,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
   return {
     withContext: async (_command: unknown, _label: string, fn: any) => {
       const ctx = {
+        accountId: "11111111-1111-4111-8111-111111111111",
         hub: {
           system: {},
           messages: {},
@@ -23,6 +24,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
           adminHost: {},
           adminSupport: {},
           adminCrashes: {},
+          purchases: {},
         },
       };
       Object.assign(ctx.hub.system, overrides.system ?? {});
@@ -32,6 +34,7 @@ function adminDeps(overrides: Record<string, any> = {}) {
       Object.assign(ctx.hub.adminHost, overrides.adminHost ?? {});
       Object.assign(ctx.hub.adminSupport, overrides.adminSupport ?? {});
       Object.assign(ctx.hub.adminCrashes, overrides.adminCrashes ?? {});
+      Object.assign(ctx.hub.purchases, overrides.purchases ?? {});
       return await fn(ctx);
     },
     resolveAccountByIdentifier: async (_ctx: unknown, identifier: string) => ({
@@ -46,6 +49,195 @@ function adminDeps(overrides: Record<string, any> = {}) {
       ),
   };
 }
+
+test("admin user ban resolves the target and forwards the audit reason", async () => {
+  let captured: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        adminBanUser: async (opts: any) => {
+          captured = opts;
+          return { affected_accounts: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "user",
+    "ban",
+    "alice@example.com",
+    "--reason",
+    "confirmed bandwidth relay abuse",
+  ]);
+
+  assert.deepEqual(captured, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    reason: "confirmed bandwidth relay abuse",
+  });
+});
+
+test("admin user unban targets only the resolved account", async () => {
+  let captured: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        adminUnbanUser: async (opts: any) => {
+          captured = opts;
+          return { banned: false };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "user",
+    "unban",
+    "22222222-2222-4222-8222-222222222222",
+    "--reason",
+    "manual review cleared the account",
+  ]);
+
+  assert.deepEqual(captured, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    reason: "manual review cleared the account",
+  });
+});
+
+test("admin membership-package purchase previews before committing", async () => {
+  let quoteArgs: any;
+  let purchaseCalls = 0;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      purchases: {
+        getMembershipPackageQuote: async (opts: any) => {
+          quoteArgs = opts;
+          return {
+            total_price: 900,
+            starts_at: "2026-08-10T00:00:00.000Z",
+            expires_at: "2026-08-22T00:00:00.000Z",
+          };
+        },
+        adminCreateMembershipPackagePurchase: async () => {
+          purchaseCalls += 1;
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "purchase",
+    "membership-package",
+    "alice@example.com",
+    "--kind",
+    "course",
+    "--membership-class",
+    "student",
+    "--seat-count",
+    "100",
+    "--price",
+    "150",
+    "--source",
+    "credit",
+    "--reason",
+    "approved ticket 20443 offer",
+    "--course-project",
+    "44444444-4444-4444-8444-444444444444",
+    "--starts-at",
+    "2026-08-10T00:00:00Z",
+    "--expires-at",
+    "2026-08-22T00:00:00Z",
+  ]);
+
+  assert.equal(purchaseCalls, 0);
+  assert.equal(quoteArgs.account_id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(quoteArgs.seat_count, 100);
+  assert.equal(
+    quoteArgs.course_project_id,
+    "44444444-4444-4444-8444-444444444444",
+  );
+});
+
+test("admin membership-package purchase commits the reviewed custom price", async () => {
+  let purchaseArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      purchases: {
+        getMembershipPackageQuote: async () => ({
+          total_price: 900,
+          starts_at: "2026-08-10T00:00:00.000Z",
+          expires_at: "2026-08-22T00:00:00.000Z",
+        }),
+        adminCreateMembershipPackagePurchase: async (opts: any) => {
+          purchaseArgs = opts;
+          return { package_id: "package-1", purchase_id: 42 };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "purchase",
+    "membership-package",
+    "alice@example.com",
+    "--kind",
+    "team",
+    "--membership-class",
+    "standard",
+    "--seat-count",
+    "100",
+    "--interval",
+    "month",
+    "--price",
+    "150",
+    "--source",
+    "card",
+    "--reason",
+    "approved custom camp package",
+    "--idempotency-key",
+    "ticket-20443",
+    "--commit",
+  ]);
+
+  assert.equal(
+    purchaseArgs.user_account_id,
+    "22222222-2222-4222-8222-222222222222",
+  );
+  assert.equal(purchaseArgs.price, 150);
+  assert.equal(purchaseArgs.source, "card");
+  assert.equal(purchaseArgs.idempotency_key, "ticket-20443");
+  assert.deepEqual(purchaseArgs.product, {
+    type: "membership-package",
+    kind: "team",
+    membership_class: "standard",
+    seat_count: 100,
+    interval: "month",
+    course_project_id: undefined,
+    starts_at: undefined,
+    expires_at: undefined,
+    metadata: undefined,
+  });
+});
 
 test("admin db query forwards audited read-only SQL options", async () => {
   let capturedArgs: any;
@@ -228,6 +420,84 @@ test("admin support show forwards ticket conversation limits", async () => {
   });
 });
 
+test("admin support conventions exposes the shared status workflow", async () => {
+  let output: any;
+  const deps = adminDeps();
+  deps.withContext = async (_command: unknown, _label: string, fn: any) => {
+    output = await fn({ hub: {} });
+    return output;
+  };
+  const program = new Command();
+  registerAdminCommand(program, deps as any);
+
+  await program.parseAsync(["node", "test", "admin", "support", "conventions"]);
+
+  assert.equal(
+    output.statuses.new,
+    "We have not reviewed or acted on the ticket.",
+  );
+  assert.match(output.statuses.open, /actively investigating/);
+  assert.match(output.statuses.pending, /waiting for the requester/);
+  assert.match(output.statuses.solved, /complete and verified/);
+  assert.equal(output.version, 2);
+  assert.match(output.workflow.join("\n"), /multiline comments/);
+  assert.match(output.workflow.join("\n"), /--public-reply-file/);
+});
+
+test("admin support image verifies and writes a Zendesk attachment", async () => {
+  const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const dir = await mkdtemp(join(tmpdir(), "cocalc-support-image-"));
+  const output = join(dir, "screenshot.png");
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        getImage: async (opts: any) => {
+          capturedArgs = opts;
+          return {
+            audit_id: "audit-support-image",
+            ticket_id: 20463,
+            comment_id: 10,
+            attachment_id: 987,
+            filename: "ticket-20463-attachment-987.png",
+            content_type: "image/png",
+            size: image.length,
+            sha256:
+              "0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543",
+            data_base64: image.toString("base64"),
+          };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "image",
+    "20463",
+    "987",
+    "--output",
+    output,
+    "--max-bytes",
+    "4096",
+    "--reason",
+    "inspect screenshot on ticket 20463",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20463,
+    attachment_id: 987,
+    max_bytes: 4096,
+    reason: "inspect screenshot on ticket 20463",
+  });
+  assert.deepEqual(await readFile(output), image);
+});
+
 test("admin support triage forwards deterministic grouping options", async () => {
   let capturedArgs: any;
   const program = new Command();
@@ -263,6 +533,279 @@ test("admin support triage forwards deterministic grouping options", async () =>
     statuses: ["new", "pending"],
     max_bytes: 262144,
     reason: "group active support incidents",
+  });
+});
+
+test("admin support search forwards a bounded Zendesk query", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        search: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-search", tickets: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "search",
+    "--query",
+    "type:ticket status<solved updated>2026-08-01",
+    "--limit",
+    "25",
+    "--reason",
+    "triage current queue",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    query: "type:ticket status<solved updated>2026-08-01",
+    limit: 25,
+    max_bytes: 262144,
+    reason: "triage current queue",
+  });
+});
+
+test("admin support update is dry-run by default", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        planUpdate: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-plan", commit: false };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "update",
+    "20437",
+    "--status",
+    "pending",
+    "--add-tags",
+    "investigating,ssh",
+    "--reason",
+    "approved status update",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20437,
+    status: "pending",
+    add_tags: ["investigating", "ssh"],
+    remove_tags: undefined,
+    expected_updated_at: undefined,
+    reason: "approved status update",
+  });
+});
+
+test("admin support update rejects literal newline escapes in inline comments", async () => {
+  const program = new Command();
+  registerAdminCommand(program, adminDeps() as any);
+
+  await assert.rejects(
+    () =>
+      program.parseAsync([
+        "node",
+        "test",
+        "admin",
+        "support",
+        "update",
+        "20437",
+        "--public-reply",
+        "Hello\\n\\nThis should be multiline.",
+        "--reason",
+        "approved response",
+      ]),
+    /--public-reply contains a literal \\n escape; use --public-reply-file/,
+  );
+});
+
+test("admin support reply commit reads the approved file and supplies idempotency", async () => {
+  let capturedArgs: any;
+  const dir = await mkdtemp(join(tmpdir(), "cocalc-support-reply-"));
+  const replyFile = join(dir, "reply.txt");
+  await writeFile(replyFile, "The issue is now fixed.\n", "utf8");
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        update: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-update", commit: true };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "reply",
+    "20437",
+    "--file",
+    replyFile,
+    "--status",
+    "solved",
+    "--expected-updated-at",
+    "2026-08-05T12:00:00.000Z",
+    "--reason",
+    "approved response",
+    "--commit",
+  ]);
+
+  assert.match(capturedArgs.idempotency_key, /^support-update-[0-9a-f]{40}$/);
+  const { idempotency_key: _idempotencyKey, ...request } = capturedArgs;
+  assert.deepEqual(request, {
+    ticket_id: 20437,
+    public_reply: "The issue is now fixed.",
+    status: "solved",
+    expected_updated_at: "2026-08-05T12:00:00.000Z",
+    reason: "approved response",
+    timeout: 60_000,
+  });
+});
+
+test("admin support merge commit forwards explicit target and source versions", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        merge: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-merge", commit: true };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "merge",
+    "--target",
+    "20431",
+    "--source",
+    "20432",
+    "--target-comment",
+    "Combining duplicate billing requests.",
+    "--target-expected-updated-at",
+    "2026-08-05T12:00:00.000Z",
+    "--source-expected-updated-at",
+    "2026-08-05T12:01:00.000Z",
+    "--idempotency-key",
+    "support-merge-approved-20431-20432",
+    "--reason",
+    "approved duplicate merge",
+    "--commit",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    target_ticket_id: 20431,
+    source_ticket_id: 20432,
+    target_comment: "Combining duplicate billing requests.",
+    source_comment: undefined,
+    target_comment_public: false,
+    source_comment_public: false,
+    target_expected_updated_at: "2026-08-05T12:00:00.000Z",
+    source_expected_updated_at: "2026-08-05T12:01:00.000Z",
+    reason: "approved duplicate merge",
+    idempotency_key: "support-merge-approved-20431-20432",
+    timeout: 120_000,
+  });
+});
+
+test("admin support spam is dry-run by default", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        planSpam: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-spam-plan", commit: false };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "spam",
+    "20455",
+    "--reason",
+    "review obvious unsolicited junk",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20455,
+    expected_updated_at: undefined,
+    reason: "review obvious unsolicited junk",
+  });
+});
+
+test("admin support spam commit forwards the reviewed ticket version", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminSupport: {
+        spam: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-support-spam", commit: true };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "support",
+    "spam",
+    "20455",
+    "--expected-updated-at",
+    "2026-08-06T12:00:00.000Z",
+    "--idempotency-key",
+    "support-spam-approved-20455",
+    "--reason",
+    "approved obvious unsolicited junk",
+    "--commit",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    ticket_id: 20455,
+    expected_updated_at: "2026-08-06T12:00:00.000Z",
+    reason: "approved obvious unsolicited junk",
+    timeout: 60_000,
+    idempotency_key: "support-spam-approved-20455",
   });
 });
 
@@ -872,6 +1415,15 @@ test("admin entitlement-override schema documents usable override payloads", asy
     JSON.stringify(schema),
     /usage_limits\.credit_spend_limit_7d_usd/,
   );
+  assert.match(
+    JSON.stringify(schema),
+    /features\.bandwidth_relay_abuse_exempt/,
+  );
+  assert.match(JSON.stringify(schema), /features\.cryptomining_abuse_exempt/);
+  assert.match(
+    JSON.stringify(schema),
+    /authorizes administrator-managed collection/,
+  );
   assert.equal(
     (schema as any).numeric_rule.modes.minimum,
     "Use the override value only when it is higher than the membership value.",
@@ -902,6 +1454,149 @@ test("admin entitlement-override schema documents usable override payloads", asy
     parsed.set_command,
     "cocalc admin entitlement-override set <user> --file override.json --reason <reason> [--expires-at <iso|none|never>]",
   );
+});
+
+test("admin membership-assignment get resolves a user", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        getAdminAssignedMembership: async (opts: any) => {
+          capturedArgs = opts;
+          return {
+            account_id: opts.user_account_id,
+            membership_class: "member",
+          };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "membership-assignment",
+    "get",
+    "alice@example.com",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+  });
+});
+
+test("admin membership-assignment set validates and stores a temporary tier", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      db: {
+        userQuery: async () => ({
+          membership_tiers: [
+            { id: "free", disabled: false },
+            { id: "member", label: "Standard", disabled: false },
+          ],
+        }),
+      },
+      system: {
+        setAdminAssignedMembership: async (opts: any) => {
+          capturedArgs = opts;
+        },
+        getAdminAssignedMembership: async (opts: any) => ({
+          account_id: opts.user_account_id,
+          membership_class: "member",
+          expires_at: new Date("2099-09-01T00:00:00.000Z"),
+          notes: "support ticket 20435",
+        }),
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "membership-assignment",
+    "set",
+    "alice@example.com",
+    "--tier",
+    "member",
+    "--expires-at",
+    "2099-09-01T00:00:00Z",
+    "--reason",
+    "support ticket 20435",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    membership_class: "member",
+    expires_at: new Date("2099-09-01T00:00:00.000Z"),
+    notes: "support ticket 20435",
+  });
+});
+
+test("admin membership-assignment set rejects an unknown tier", async () => {
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      db: {
+        userQuery: async () => ({
+          membership_tiers: [{ id: "member", disabled: false }],
+        }),
+      },
+    }) as any,
+  );
+
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "admin",
+      "membership-assignment",
+      "set",
+      "alice@example.com",
+      "--tier",
+      "typo",
+      "--expires-at",
+      "never",
+      "--reason",
+      "test",
+    ]),
+    /unknown membership tier 'typo'; enabled tiers: member/,
+  );
+});
+
+test("admin membership-assignment clear uses UUID targets without search", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        clearAdminAssignedMembership: async (opts: any) => {
+          capturedArgs = opts;
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "membership-assignment",
+    "clear",
+    "11111111-1111-4111-8111-111111111111",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    user_account_id: "11111111-1111-4111-8111-111111111111",
+  });
 });
 
 test("admin settings set reads a secret from a file without returning it", async () => {

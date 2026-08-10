@@ -76,7 +76,14 @@ jest.mock("./popup-agent-composer", () => ({
 }));
 
 jest.mock("./create-chat", () => ({
-  DEFAULT_ASSISTANT_CODEX_MODEL: "gpt-5.4-mini",
+  resolveAssistantCodexModel: () => "gpt-5.6-sol",
+}));
+
+jest.mock("@cocalc/frontend/chat/use-codex-payment-source", () => ({
+  useCodexPaymentSource: () => ({
+    paymentSource: undefined,
+    loading: false,
+  }),
 }));
 
 jest.mock("@cocalc/frontend/project/page/agent-chat-font-size", () => ({
