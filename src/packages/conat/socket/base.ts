@@ -269,13 +269,17 @@ export abstract class ConatSocketBase extends EventEmitter {
       // already connected or closed
       return;
     }
+    const client = this.client;
     this.setState("connecting");
     this.lifecycleReporter?.("transport_wait_start", {
-      transport_connected: !!this.client.conn?.connected,
+      transport_connected: !!client.conn?.connected,
     });
-    await this.client.waitUntilConnected();
+    await client.waitUntilConnected();
+    if ((this.state as State) !== "connecting" || this.client !== client) {
+      return;
+    }
     this.lifecycleReporter?.("transport_wait_done", {
-      transport_connected: !!this.client.conn?.connected,
+      transport_connected: !!client.conn?.connected,
     });
     try {
       await this.run();

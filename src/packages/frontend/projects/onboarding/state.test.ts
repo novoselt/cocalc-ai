@@ -1,5 +1,10 @@
 import type { ProjectCollabInviteRow } from "@cocalc/conat/hub/api/projects";
-import { classifyFirstRunOnboarding, isCourseInvitation } from "./state";
+import { validate_client_query } from "@cocalc/util/schema-validate";
+import {
+  classifyFirstRunOnboarding,
+  isCourseInvitation,
+  signUpUsageIntentQuery,
+} from "./state";
 
 const invite = {
   invite_id: "invite-1",
@@ -125,5 +130,17 @@ describe("classifyFirstRunOnboarding", () => {
       true,
     );
     expect(isCourseInvitation(invite)).toBe(false);
+  });
+});
+
+describe("signUpUsageIntentQuery", () => {
+  it("uses the write-only accounts query supported by the user schema", () => {
+    const query = signUpUsageIntentQuery("jupyter-python");
+    expect(query).toEqual({
+      accounts: { sign_up_usage_intent: "jupyter-python" },
+    });
+    expect(
+      validate_client_query(query, "00000000-0000-4000-8000-000000000000"),
+    ).toBeUndefined();
   });
 });

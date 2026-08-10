@@ -259,6 +259,36 @@ ens4\t0100B40A\t00000000\t0005
     ).toEqual([]);
   });
 
+  it("establishes a new baseline when the project namespace pid changes", () => {
+    const project_id = "11111111-1111-4111-8111-111111111111";
+    expect(
+      __test__.summarizeManagedRawNetworkEgressDeltas({
+        previous: new Map([
+          [
+            project_id,
+            {
+              project_id,
+              pid: 1317350,
+              interface_name: "ens4",
+              tx_bytes: 6_375_902,
+            },
+          ],
+        ]),
+        current: new Map([
+          [
+            project_id,
+            {
+              project_id,
+              pid: 1462244,
+              interface_name: "ens4",
+              tx_bytes: 90_841_214_722,
+            },
+          ],
+        ]),
+      }),
+    ).toEqual([]);
+  });
+
   it("summarizes residual samples for bounded logs", () => {
     expect(
       __test__.summarizeResidualSamplesForLog([

@@ -379,6 +379,10 @@ export function summarizeManagedRawNetworkEgressDeltas({
   for (const [project_id, sample] of current) {
     const prev = previous.get(project_id);
     if (!prev) continue;
+    // /proc/<pid>/net/dev counters belong to the network namespace.  A new
+    // project root pid may expose an unrelated namespace with an existing
+    // counter, so establish a fresh baseline instead of charging the jump.
+    if (prev.pid !== sample.pid) continue;
     if (prev.interface_name !== sample.interface_name) continue;
     if (sample.tx_bytes < prev.tx_bytes) continue;
     const bytes = diffCounter(sample.tx_bytes, prev.tx_bytes);
