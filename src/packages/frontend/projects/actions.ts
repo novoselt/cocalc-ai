@@ -3893,22 +3893,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
         | undefined;
     const projectHostId = (): string | undefined =>
       store.getIn(["project_map", project_id, "host_id"]) as string | undefined;
-    const authoritativeProjectState = async (): Promise<
-      ProjectState | undefined
-    > => {
-      try {
-        return (await withTimeout(
-          webapp_client.conat_client.hub.projects.getProjectState({
-            project_id,
-          }),
-          3000,
-        )) as ProjectState | undefined;
-      } catch {
-        // This probe is only to avoid false UX alerts when the project stream
-        // is stale. If the control-plane read fails, preserve existing telemetry.
-        return undefined;
-      }
-    };
     const recordRunning = ({ observed_state }: { observed_state?: string }) => {
       const runningObservedAtMs = Date.now();
       const runningObservedAt = new Date(runningObservedAtMs).toISOString();
@@ -4054,7 +4038,8 @@ export class ProjectsActions extends Actions<ProjectsState> {
     const suppressFalseStuckIfRunning = async (
       observed_state?: string,
     ): Promise<boolean> => {
-      const authoritative = await authoritativeProjectState();
+      const authoritative =
+        await this.reconcile_project_start_state(project_id);
       if (authoritative?.state !== "running") {
         return false;
       }
@@ -4631,6 +4616,54 @@ export class ProjectsActions extends Actions<ProjectsState> {
       }
     }
   };
+
+  // The account project projection normally converges through its stream and
+  // scheduled repairs. This direct routed read is a narrow fallback for a
+  // browser that missed both while displaying startup progress.
+  public reconcile_project_start_state = reuseInFlight(
+    async (project_id: string): Promise<ProjectState | undefined> => {
+      let authoritative: ProjectState | undefined;
+      try {
+        authoritative = (await withTimeout(
+          webapp_client.conat_client.hub.projects.getProjectState({
+            project_id,
+          }),
+          3_000,
+        )) as ProjectState | undefined;
+      } catch {
+        return undefined;
+      }
+      if (authoritative?.state !== "running") {
+        return authoritative;
+      }
+      const project_map = store.get("project_map");
+      const project = project_map?.get(project_id);
+      if (
+        project_map == null ||
+        project == null ||
+        project.getIn(["state", "state"]) === "running"
+      ) {
+        return authoritative;
+      }
+      delete this.projectLifecycleReconcileTokens[project_id];
+      this.setState({
+        project_map: project_map.set(
+          project_id,
+          project.set(
+            "state",
+            fromJS({
+              ...authoritative,
+              state: "running",
+              time:
+                authoritative.time ?? authoritative.started_at ?? new Date(),
+              source: "authoritative-project-state",
+            }),
+          ),
+        ),
+      } as ProjectsState);
+      return authoritative;
+    },
+  );
 
   private projectStartSucceededStateUpdate = (
     project_id: string,

@@ -1301,7 +1301,7 @@ describe("ProjectsActions archive flow", () => {
       mockedWebappClient.conat_client.hub.projects.getProjectState.mockResolvedValue(
         { state: "running" } as any,
       );
-      const { actions } = makeActions();
+      const { actions, redux } = makeActions();
       jest
         .spyOn(actions, "ensure_host_info" as any)
         .mockResolvedValue(undefined as any);
@@ -1333,6 +1333,21 @@ describe("ProjectsActions archive flow", () => {
       expect(
         mockedWebappClient.conat_client.hub.projects.getProjectState,
       ).toHaveBeenCalledWith({ project_id });
+      expect(
+        redux._set_state.mock.calls.some(
+          ([state]) =>
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "state",
+            ]) === "running" &&
+            state.projects?.project_map?.getIn?.([
+              project_id,
+              "state",
+              "source",
+            ]) === "authoritative-project-state",
+        ),
+      ).toBe(true);
     } finally {
       jest.useRealTimers();
     }
