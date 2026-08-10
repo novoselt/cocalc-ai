@@ -203,6 +203,10 @@ export function crossProjectSingleItemDestPath({
   return `${directory}/${sourceName}`;
 }
 
+export function crossProjectCopySourcePath(paths: string[]): string | string[] {
+  return paths.length === 1 ? paths[0] : paths;
+}
+
 type FileAction = undefined | keyof typeof file_actions;
 
 interface Props {
@@ -825,7 +829,7 @@ export function ActionBox({
     ) {
       onUserFilesystemChange?.();
       actions.copyPathBetweenProjects({
-        src: { project_id, path: paths },
+        src: { project_id, path: crossProjectCopySourcePath(paths) },
         dest: {
           project_id: destination_project_id,
           path: crossProjectSingleItemDestPath({
