@@ -2716,6 +2716,7 @@ export const PROVIDER_REGISTRY: Record<HostProvider, HostProviderDescriptor> = {
   "self-host": {
     id: "self-host",
     label: "Self-hosted",
+    featureFlagKey: "project_hosts_self_host_alpha_enabled",
     supports: {
       region: false,
       zone: false,

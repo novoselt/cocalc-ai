@@ -741,14 +741,14 @@ export function Kernel({
         id="jupyter.status.usage_tip"
         defaultMessage={`
         <p>
-          This shows this kernel's resource usage. The memory limit is
-          determined by the remaining "free" memory of this project.
-          Open the "{processes}" tab see all activities of this project.
+          This shows this kernel's resource usage. Memory is measured for the
+          kernel and its child processes relative to the project's RAM limit.
+          Open the "{processes}" tab to see all activities in this project.
         </p>
         <p>
           <secondary>
-            Keep in mind that "shared memory" could compete with other projects
-            on the same machine and hence you might not be able to use all of it.
+            Other processes in the project share the same RAM limit and are not
+            included in this kernel's usage bar.
           </secondary>
         </p>
         <p>

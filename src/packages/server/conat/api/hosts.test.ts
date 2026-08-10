@@ -1510,6 +1510,29 @@ describe("hosts.createHost", () => {
     ).rejects.toThrow("self-hosted hosts are limited to admins");
     expect(queryMock).not.toHaveBeenCalled();
   });
+
+  it("rejects self-hosted host creation when disabled in site settings", async () => {
+    getServerSettingsMock = jest.fn(async () => ({
+      project_hosts_self_host_alpha_enabled: false,
+    }));
+    queryMock = jest.fn(async (sql: string) => {
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const { createHost } = await import("./hosts");
+
+    await expect(
+      createHost({
+        account_id: ACCOUNT_ID,
+        name: "self-hosted",
+        region: "pending",
+        size: "custom",
+        machine: { cloud: "self-host", metadata: {} },
+      }),
+    ).rejects.toThrow(
+      "self-hosted project hosts are disabled in site settings",
+    );
+    expect(queryMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("hosts.getCatalog", () => {
@@ -1661,6 +1684,44 @@ describe("hosts browser fresh auth gating", () => {
         disk_gb: 100,
       }),
     ).rejects.toThrow("self-hosted hosts are limited to admins");
+  });
+
+  it("rejects converting a host to self-hosted when disabled", async () => {
+    isAdminMock = jest.fn(async () => true);
+    getServerSettingsMock = jest.fn(async () => ({
+      project_hosts_self_host_alpha_enabled: false,
+    }));
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return {
+          rows: [
+            {
+              id: HOST_ID,
+              name: "host-name",
+              region: "us-west1",
+              status: "off",
+              metadata: {
+                owner: ACCOUNT_ID,
+                machine: { cloud: "gcp", metadata: {} },
+              },
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { updateHostMachine } = await import("./hosts");
+    await expect(
+      updateHostMachine({
+        account_id: ACCOUNT_ID,
+        id: HOST_ID,
+        session_hash: "session-hash",
+        cloud: "self-host",
+      }),
+    ).rejects.toThrow(
+      "self-hosted project hosts are disabled in site settings",
+    );
   });
 
   it("rejects explicit GCP standard persistent disk updates", async () => {
