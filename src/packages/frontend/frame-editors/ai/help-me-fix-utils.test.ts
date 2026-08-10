@@ -16,6 +16,6 @@ describe("createNavigatorIntentMessage", () => {
     expect(prompt).toContain(
       "Do not rely on the filesystem copy being current; use live document APIs when available.",
     );
-    expect(prompt).toContain('"codex_model": "gpt-5.4-mini"');
+    expect(prompt).not.toContain("codex_model");
   });
 });

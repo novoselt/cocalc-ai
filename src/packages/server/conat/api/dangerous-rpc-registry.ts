@@ -1010,6 +1010,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "admin account creation with password issuance",
   },
+  "system.adminBanUser": {
+    decision: "fresh-auth-required",
+    reason: "admin account ban and security-resource quarantine",
+  },
   "system.adminResetPasswordLink": {
     decision: "fresh-auth-required",
     reason: "admin password reset link generation for another user",
@@ -1029,6 +1033,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "system.adminRevokeAdminRole": {
     decision: "fresh-auth-required",
     reason: "admin removes site-admin privileges from an account",
+  },
+  "system.adminUnbanUser": {
+    decision: "fresh-auth-required",
+    reason: "admin account ban removal",
   },
   "system.adminSalesloftSync": {
     decision: "fresh-auth-not-required",
@@ -1113,11 +1121,13 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   },
   "system.recordManagedProjectEgress": {
     decision: "fresh-auth-not-required",
-    reason: TELEMETRY_ONLY,
+    reason:
+      "project- or host-scoped accounting with canonical project attribution and server-side abuse enforcement",
   },
   "system.recordManagedProjectCpuUsage": {
     decision: "fresh-auth-not-required",
-    reason: TELEMETRY_ONLY,
+    reason:
+      "project- or host-scoped accounting with canonical project attribution and server-side abuse enforcement",
   },
   "system.recordServiceAdmissionDenial": {
     decision: "fresh-auth-not-required",

@@ -35,8 +35,6 @@ interface Props {
   cellType: "code" | "markdown";
 }
 
-const DEFAULT_CELL_TOOL_CODEX_MODEL = "gpt-5.4-mini";
-
 const MODES_CODE = [
   "ask",
   "explain",
@@ -551,7 +549,6 @@ export function AgentCellTool({
         title,
         tag: `intent:jupyter-cell:${mode}`,
         forceCodex: true,
-        codexConfig: { model: DEFAULT_CELL_TOOL_CODEX_MODEL },
         openFloating: true,
         waitForAgent: false,
         agentSession: agentSessionSelection.selectedAgentSession,
@@ -564,7 +561,9 @@ export function AgentCellTool({
       projectActions?.log({
         event: "llm",
         usage: "jupyter-cell-button",
-        model: DEFAULT_CELL_TOOL_CODEX_MODEL,
+        model:
+          agentSessionSelection.selectedAgentSession?.model ??
+          agentSessionSelection.defaultCodexModel,
         mode,
         path,
       });

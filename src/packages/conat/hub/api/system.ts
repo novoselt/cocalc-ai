@@ -101,9 +101,11 @@ export const system = {
   webappError: authFirst,
   manageApiKeys: authFirst,
   createImpersonationGrant: authFirst,
+  adminBanUser: authFirst,
   userSearch: authFirst,
   getNames: requireAccount,
   adminCreateUser: authFirst,
+  adminUnbanUser: authFirst,
   deleteAccount: authFirst,
   rehomeAccount: authFirstRequireAccount,
   getAccountRehomeOperation: authFirstRequireAccount,
@@ -364,6 +366,26 @@ export interface ProjectCryptominingEvidence {
   detector_version?: string;
   detected_at?: string;
   signals: ProjectCryptominingSignal[];
+}
+
+export type ProjectBandwidthRelaySignalKind =
+  | "tunnel_process"
+  | "bulk_transfer_process"
+  | "automated_uploader_process";
+
+export interface ProjectBandwidthRelaySignal {
+  kind: ProjectBandwidthRelaySignalKind;
+  pattern: string;
+  matched: string;
+  pid?: number;
+  executable?: string;
+}
+
+export interface ProjectBandwidthRelayEvidence {
+  confidence: "high";
+  detector_version?: string;
+  detected_at?: string;
+  signals: ProjectBandwidthRelaySignal[];
 }
 
 export interface UxLatencyMetricSummary {
@@ -2272,6 +2294,33 @@ export interface System {
     generated_password?: string;
   }>;
 
+  adminBanUser: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    user_account_id: string;
+    reason: string;
+  }) => Promise<{
+    user_account_id: string;
+    affected_accounts: Array<{
+      account_id: string;
+      home_bay_id: string;
+      banned: true;
+    }>;
+  }>;
+
+  adminUnbanUser: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    user_account_id: string;
+    reason: string;
+  }) => Promise<{
+    user_account_id: string;
+    home_bay_id: string;
+    banned: false;
+  }>;
+
   deleteAccount: (opts: {
     account_id?: string;
     browser_id?: string | null;
@@ -2997,8 +3046,20 @@ export interface System {
     project_id?: string;
     category: ManagedProjectEgressCategory;
     bytes: number;
+    bandwidth_relay_evidence?: ProjectBandwidthRelayEvidence;
     metadata?: Record<string, unknown>;
-  }) => Promise<{ recorded: boolean; account_id?: string }>;
+  }) => Promise<{
+    recorded: boolean;
+    account_id?: string;
+    stop_project?: {
+      reason: "bandwidth_relay_detected";
+      membership_class?: string;
+      membership_source?: string;
+      auto_banned?: boolean;
+      raw_network_bytes_5h?: number;
+      raw_network_bytes_7d?: number;
+    };
+  }>;
 
   recordManagedProjectCpuUsage: (opts: {
     account_id?: string;

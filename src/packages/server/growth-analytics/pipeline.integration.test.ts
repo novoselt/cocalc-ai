@@ -11,6 +11,11 @@ const describePglite =
 const ACCOUNT_ID = "9079221d-9ed0-4f2d-9eac-86c483423536";
 const PROJECT_ID = "1e1bec74-8fd8-48fb-8426-8d7bec13e3e4";
 const EVENT_ID = "fc1f9ee1-e5a2-4474-bb9f-372eeb936f32";
+const BATCH_EVENT_IDS = [
+  "54345816-519c-4e02-a2a1-f71a3a8d4381",
+  "93509158-76d9-42db-93c9-4998a2603f03",
+  "6fdf0268-03b1-49fc-bec2-d061432ce93d",
+] as const;
 const NEW_ACCOUNT_ID = "e22393e6-2d62-42b1-b364-f145aebd41de";
 const ACCOUNT_CREATED_EVENT_ID = "eb827d06-b2d0-4b29-a750-43219d2ef011";
 const IDENTITY_EVENT_ID = "9622da4a-c0ef-4a4d-8804-d95d7f58d4b5";
@@ -182,6 +187,45 @@ describePglite("growth analytics pipeline", () => {
     expect(milestones.rows.map(({ milestone }) => milestone)).toEqual(
       expect.arrayContaining(["account_created", "first_meaningful_work"]),
     );
+
+    for (const [index, event_id] of BATCH_EVENT_IDS.entries()) {
+      await ingestGrowthEvent({
+        account_id: ACCOUNT_ID,
+        event: {
+          event_id,
+          event_name: index === 0 ? "project_work" : "ai_prompt_submitted",
+          project_id: PROJECT_ID,
+          source_component: "browser",
+          properties: {
+            action_category: index === 0 ? "editor_save" : "ai_prompt",
+          },
+        },
+      });
+    }
+    await expect(runGrowthMaterializationOnce()).resolves.toMatchObject({
+      status: "ok",
+      events: BATCH_EVENT_IDS.length,
+    });
+    const repeatedFacts = await getPool().query(
+      `SELECT project_work, ai_engaged
+         FROM growth_account_activity_daily WHERE account_id=$1`,
+      [ACCOUNT_ID],
+    );
+    expect(repeatedFacts.rows).toEqual([
+      { project_work: true, ai_engaged: true },
+    ]);
+    const firstMilestones = await getPool().query(
+      `SELECT milestone, COUNT(*)::int AS count
+         FROM growth_account_milestones
+        WHERE account_id=$1
+          AND milestone IN ('first_meaningful_work', 'first_ai_prompt')
+        GROUP BY milestone ORDER BY milestone`,
+      [ACCOUNT_ID],
+    );
+    expect(firstMilestones.rows).toEqual([
+      { milestone: "first_ai_prompt", count: 1 },
+      { milestone: "first_meaningful_work", count: 1 },
+    ]);
 
     await getPool().query(
       `INSERT INTO accounts

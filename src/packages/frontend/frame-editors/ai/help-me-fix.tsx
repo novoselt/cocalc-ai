@@ -25,8 +25,6 @@ import {
   createNavigatorIntentMessage,
 } from "./help-me-fix-utils";
 
-const DEFAULT_HELP_ME_FIX_AGENT_MODEL = "gpt-5.4-mini";
-
 function getVisibleHelpPrompt(mode: "solution" | "hint"): string {
   return mode === "hint"
     ? "Diagnose this problem and give me a hint."
@@ -165,7 +163,6 @@ export default function HelpMeFix({
         openFloating: true,
         waitForAgent: false,
         agentSession: agentSessionSelection.selectedAgentSession,
-        codexConfig: { model: DEFAULT_HELP_ME_FIX_AGENT_MODEL },
       });
       agentSessionSelection.saveSelectedAgentSession();
       if (!sent) {
@@ -175,7 +172,6 @@ export default function HelpMeFix({
           title: mode === "hint" ? "Get debugging hint" : "Fix problem",
           tag: `intent:error-fix:${tagSuffix}`,
           forceCodex: true,
-          codexConfig: { model: DEFAULT_HELP_ME_FIX_AGENT_MODEL },
         });
       }
     } catch (err) {

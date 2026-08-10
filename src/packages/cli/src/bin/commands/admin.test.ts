@@ -50,6 +50,70 @@ function adminDeps(overrides: Record<string, any> = {}) {
   };
 }
 
+test("admin user ban resolves the target and forwards the audit reason", async () => {
+  let captured: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        adminBanUser: async (opts: any) => {
+          captured = opts;
+          return { affected_accounts: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "user",
+    "ban",
+    "alice@example.com",
+    "--reason",
+    "confirmed bandwidth relay abuse",
+  ]);
+
+  assert.deepEqual(captured, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    reason: "confirmed bandwidth relay abuse",
+  });
+});
+
+test("admin user unban targets only the resolved account", async () => {
+  let captured: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        adminUnbanUser: async (opts: any) => {
+          captured = opts;
+          return { banned: false };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "user",
+    "unban",
+    "22222222-2222-4222-8222-222222222222",
+    "--reason",
+    "manual review cleared the account",
+  ]);
+
+  assert.deepEqual(captured, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    reason: "manual review cleared the account",
+  });
+});
+
 test("admin membership-package purchase previews before committing", async () => {
   let quoteArgs: any;
   let purchaseCalls = 0;
