@@ -52,10 +52,33 @@ export function normalizeJupyterRuntimeCellState(
   if (runtimeCell == null) {
     return;
   }
-  if (runtimeCell.end == null || runtimeCell.state === "done") {
+  if (
+    runtimeCell.end == null ||
+    runtimeCell.state === "done" ||
+    (runtimeCell.start != null && runtimeCell.end < runtimeCell.start)
+  ) {
     return runtimeCell;
   }
   return { ...runtimeCell, state: "done" };
+}
+
+export function recoverJupyterRuntimeCellState(
+  runtimeCell: JupyterRuntimeCellState | undefined,
+  unlistedEnd: unknown,
+): JupyterRuntimeCellState | undefined {
+  if (
+    runtimeCell == null ||
+    runtimeCell.end != null ||
+    typeof unlistedEnd !== "number" ||
+    !Number.isFinite(unlistedEnd) ||
+    (runtimeCell.start != null && unlistedEnd < runtimeCell.start)
+  ) {
+    return normalizeJupyterRuntimeCellState(runtimeCell);
+  }
+  return normalizeJupyterRuntimeCellState({
+    ...runtimeCell,
+    end: unlistedEnd,
+  });
 }
 
 export function isActiveJupyterRuntimeCellState(

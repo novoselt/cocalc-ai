@@ -15,7 +15,6 @@ import { getHistory } from "./history";
 import { useFileContext } from "@cocalc/frontend/lib/file-context";
 import { Icon } from "@cocalc/frontend/components/icon";
 import { IS_TOUCH } from "@cocalc/frontend/feature";
-import CopyButton from "@cocalc/frontend/components/copy-button";
 import { isEqual } from "lodash";
 import Mermaid from "./mermaid";
 import { highlightCodeHtml } from "./prism";
@@ -23,6 +22,7 @@ import { CodeLineElement } from "./code-like";
 import type { JupyterCodeCell } from "../jupyter-code-cell/types";
 import type { CodeBlock } from "./types";
 import { getCodeBlockLineCount, getCodeBlockText, toCodeLines } from "./utils";
+import CodeCopyButton from "./copy-button";
 
 export const CODE_BLOCK_TEXTAREA_STYLE: React.CSSProperties = {
   width: "100%",
@@ -181,12 +181,7 @@ function FloatingActionMenu({
           {collapseToggle.label}
         </Button>
       )}
-      <CopyButton
-        size="small"
-        value={content}
-        noText
-        style={{ color: "#666", background: "transparent" }}
-      />
+      <CodeCopyButton value={content} />
       <Popover
         trigger="click"
         open={open}

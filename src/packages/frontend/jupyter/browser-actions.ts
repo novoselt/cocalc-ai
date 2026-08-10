@@ -2912,7 +2912,7 @@ export class JupyterActions extends JupyterActions0 {
     let wroteFirstVisibleChange = false;
     const writeCell = (): boolean => {
       const { id, state, output, start, end, exec_count } = cell;
-      this.set_runtime_cell_state(id, { state, start, end });
+      this.set_local_runtime_cell_state(id, { state, start, end });
       const patch: { output?: any; exec_count?: number | null } = {};
       if (
         output != null ||
@@ -3004,7 +3004,11 @@ export class JupyterActions extends JupyterActions0 {
       if (state === "busy" || state === "run") {
         continue;
       }
-      this.set_runtime_cell_state(id, { state: "run", start: null, end: null });
+      this.set_local_runtime_cell_state(id, {
+        state: "run",
+        start: null,
+        end: null,
+      });
     }
   };
 
@@ -3017,7 +3021,10 @@ export class JupyterActions extends JupyterActions0 {
       if (cells.getIn([id, "state"]) !== "run") {
         continue;
       }
-      this.set_runtime_cell_state(id, { state: "done", end: Date.now() });
+      this.set_local_runtime_cell_state(id, {
+        state: "done",
+        end: Date.now(),
+      });
     }
   };
 
@@ -3316,7 +3323,10 @@ export class JupyterActions extends JupyterActions0 {
           continue;
         }
         if (!kernel) {
-          this.set_runtime_cell_state(id, { state: "done", end: Date.now() });
+          this.set_local_runtime_cell_state(id, {
+            state: "done",
+            end: Date.now(),
+          });
           this.runDebug("runCells.cell.skip.no_kernel", { runId, id });
           continue;
         }
