@@ -28,39 +28,6 @@
   position: relative;
 }
 
-.cocalc-docs-markdown .cocalc-slate-code-copy-button {
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid var(--cocalc-slate-code-border, #d9d9d9);
-  border-radius: 5px;
-  color: #555;
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.3;
-  opacity: 0;
-  padding: 2px 7px;
-  position: absolute;
-  right: 6px;
-  top: 6px;
-  transition: opacity 120ms ease;
-  z-index: 1;
-}
-
-.cocalc-docs-markdown
-  .cocalc-slate-code-block-wrapper:focus-within
-  .cocalc-slate-code-copy-button,
-.cocalc-docs-markdown
-  .cocalc-slate-code-block-wrapper:hover
-  .cocalc-slate-code-copy-button {
-  opacity: 1;
-}
-
-.cocalc-docs-markdown .cocalc-slate-code-copy-button:focus {
-  opacity: 1;
-  outline: 2px solid #1677ff;
-  outline-offset: 2px;
-}
-
 .cocalc-docs-markdown .cocalc-slate-code-block .token.comment,
 .cocalc-docs-markdown .cocalc-slate-code-block .token.prolog,
 .cocalc-docs-markdown .cocalc-slate-code-block .token.doctype,
