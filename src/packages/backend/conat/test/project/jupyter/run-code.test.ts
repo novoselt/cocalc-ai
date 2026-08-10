@@ -31,7 +31,11 @@ const MIN_EVALS_PER_SECOND = 10;
 beforeAll(before);
 
 async function getKernelStatus(_opts: { path: string }) {
-  return { backend_state: "off" as "off", kernel_state: "idle" as "idle" };
+  return {
+    backend_state: "off" as "off",
+    kernel_state: "idle" as "idle",
+    identity: "mock-kernel",
+  };
 }
 
 function withoutRunId(value: any): any {
@@ -86,6 +90,14 @@ describe("create very simple mocked jupyter runner and test evaluating code", ()
       { path, id: "0" },
       { cells, id: "0" },
     ]);
+  });
+
+  it("reports the kernel generation", async () => {
+    expect(await client.getKernelStatus()).toEqual({
+      backend_state: "off",
+      kernel_state: "idle",
+      identity: "mock-kernel",
+    });
   });
 
   it("start iterating over the output after waiting", async () => {

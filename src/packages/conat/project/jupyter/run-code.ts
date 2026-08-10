@@ -11,6 +11,7 @@ import {
   type ServerSocket,
 } from "@cocalc/conat/socket";
 import { EventIterator } from "@cocalc/util/event-iterator";
+import type { KernelStatus } from "@cocalc/conat/project/api/jupyter";
 import { getLogger } from "@cocalc/conat/logger";
 import { recordServiceAdmissionDenial } from "@cocalc/conat/admission/denials";
 import { Throttle } from "@cocalc/util/throttle";
@@ -253,16 +254,7 @@ export function jupyterServer({
   run: JupyterCodeRunner;
   outputHandler?: CreateOutputHandler;
   mirrorOutputHandler?: boolean;
-  getKernelStatus: (opts: { path: string }) => Promise<{
-    backend_state:
-      | "failed"
-      | "off"
-      | "spawning"
-      | "starting"
-      | "running"
-      | "closed";
-    kernel_state: "idle" | "busy" | "running";
-  }>;
+  getKernelStatus: (opts: { path: string }) => Promise<KernelStatus>;
   maxActiveRuns?: number;
   maxActiveSockets?: number;
 }) {
@@ -779,7 +771,7 @@ export class JupyterClient {
     return data;
   };
 
-  getKernelStatus = async () => {
+  getKernelStatus = async (): Promise<KernelStatus> => {
     const { data } = await this.socket.request({
       cmd: "get-kernel-status",
       path: this.path,

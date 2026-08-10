@@ -721,6 +721,7 @@ export async function getConnectionFile(opts: { path }) {
 export async function signal(opts: { path: string; signal: string }) {
   const kernel = getKernel(opts.path);
   await kernel.signal(opts.signal);
+  return { identity: kernel.identity };
 }
 
 export async function sendCommMessageToKernel({ path, msg }) {

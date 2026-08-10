@@ -6,6 +6,26 @@ import type { RunNotebookOptions } from "@cocalc/util/jupyter/nbgrader-types";
 import type { KernelSpec } from "@cocalc/util/jupyter/types";
 import { type ProjectJupyterApiOptions } from "@cocalc/util/jupyter/api-types";
 
+export type JupyterBackendState =
+  | "failed"
+  | "off"
+  | "spawning"
+  | "starting"
+  | "running"
+  | "closed";
+
+export type JupyterKernelState = "idle" | "busy" | "running";
+
+export interface KernelStatus {
+  backend_state: JupyterBackendState;
+  kernel_state: JupyterKernelState;
+  identity?: string;
+}
+
+export interface KernelSignalResult {
+  identity?: string;
+}
+
 export const jupyter = {
   start: true,
   stop: true,
@@ -43,10 +63,7 @@ export interface Jupyter {
   save: (opts: JupyterSaveOptions) => Promise<void>;
   load: (opts: { path: string }) => Promise<void>;
   set: (opts: { path: string; ipynb: object }) => Promise<void>;
-  getKernelStatus: (opts: { path: string }) => Promise<{
-    backend_state: string;
-    kernel_state: string;
-  }>;
+  getKernelStatus: (opts: { path: string }) => Promise<KernelStatus>;
 
   nbconvert: (opts: NbconvertParams) => Promise<NbconvertResult>;
 
@@ -74,7 +91,10 @@ export interface Jupyter {
 
   getConnectionFile: (opts: { path: string }) => Promise<string>;
 
-  signal: (opts: { path: string; signal: string }) => Promise<void>;
+  signal: (opts: {
+    path: string;
+    signal: string;
+  }) => Promise<KernelSignalResult | undefined>;
 
   apiExecute: (opts: ProjectJupyterApiOptions) => Promise<object[]>;
 

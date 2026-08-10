@@ -77,7 +77,7 @@ export async function signal(opts) {
   if (!control.isRunning(opts.path)) {
     return;
   }
-  await control.signal(opts);
+  return await control.signal(opts);
 }
 
 export async function sendCommMessageToKernel(opts) {
