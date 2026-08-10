@@ -141,9 +141,12 @@ export interface FieldSpec {
   // Use PostgreSQL's normalized spelling (e.g. `now()`), since startup compares
   // this with information_schema.columns.column_default before applying DDL.
   pg_default?: string;
+  // true and false explicitly manage column nullability. Omit this property
+  // when db-schema should leave an existing column's nullability unchanged.
   not_null?: boolean;
   // Used only when adding NOT NULL to an existing nullable column. The
-  // synchronizer updates NULL rows to this expression before the constraint.
+  // synchronizer first guards new writes, then updates legacy NULL rows to
+  // this expression in bounded batches before promoting the column.
   pg_null_backfill?: string;
   pg_check?: string;
   unique?: boolean;

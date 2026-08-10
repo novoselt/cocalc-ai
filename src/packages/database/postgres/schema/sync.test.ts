@@ -9,6 +9,8 @@ import {
   syncSchema,
 } from "./sync";
 import { createIndexesQueries } from "./indexes";
+import { notNullGuardName } from "./column-invariants";
+import { addSchemaIndexMarker, schemaIndexHash } from "./index-metadata";
 import { SCHEMA } from "@cocalc/util/schema";
 import type { DBSchema, TableSchema } from "./types";
 import { getClient } from "@cocalc/database/pool";
@@ -90,9 +92,14 @@ const embeddingColumns: ColumnRow[] = [
   },
 ];
 
-const embeddingIndexRows = createIndexesQueries(embeddingSchemaDef).map(
-  ({ name }) => ({ name }),
-);
+function managedIndexRows(schema: TableSchema) {
+  return createIndexesQueries(schema).map((index) => ({
+    name: index.name,
+    comment: addSchemaIndexMarker(null, schemaIndexHash(index)),
+  }));
+}
+
+const embeddingIndexRows = managedIndexRows(embeddingSchemaDef);
 
 const embeddingPrimaryKeyRows = [{ name: "input_sha1" }];
 
@@ -111,9 +118,9 @@ const registrationTokensColumns: ColumnRow[] = [
   { column_name: "customize", data_type: "jsonb" },
 ];
 
-const registrationTokensIndexRows = createIndexesQueries(
+const registrationTokensIndexRows = managedIndexRows(
   SCHEMA.registration_tokens,
-).map(({ name }) => ({ name }));
+);
 
 const registrationTokensPrimaryKeyRows = [{ name: "token" }];
 
@@ -193,7 +200,7 @@ describe("custom index generation", () => {
 function createMockClient(options: {
   tableName: string;
   columnRows: ColumnRow[];
-  indexRows: Array<{ name: string }>;
+  indexRows: Array<{ name: string; comment?: string | null }>;
   primaryKeyRows: Array<{ name: string }>;
   extraTables?: string[];
   hasLegacyAiUsageLogTable?: boolean;
@@ -257,16 +264,53 @@ function createMockClient(options: {
       }
       return { rows: columnRows };
     }
-    if (text.includes("FROM pg_class AS a JOIN pg_index AS b")) {
-      return { rows: indexRows };
+    if (text.includes("FROM pg_constraint AS constraint_row")) {
+      return { rows: [] };
+    }
+    if (text.includes("FROM pg_index AS index_row")) {
+      return {
+        rows: indexRows.map((row, oid) => ({
+          oid: `${oid + 1}`,
+          comment: null,
+          constraint_name: null,
+          primary: false,
+          ready: true,
+          valid: true,
+          unique: false,
+          exclusion: false,
+          method: "btree",
+          key_count: 1,
+          column_count: 1,
+          nulls_not_distinct: false,
+          columns: ["placeholder"],
+          collations: "0",
+          operator_classes: "0",
+          options: "0",
+          expressions: null,
+          predicate: null,
+          ...row,
+        })),
+      };
     }
     if (text.includes("FROM   pg_index i")) {
       return { rows: primaryKeyRows };
     }
+    if (text.includes("WITH batch AS MATERIALIZED")) {
+      return { rows: [] };
+    }
+    if (
+      text.includes("SELECT EXISTS") &&
+      text.includes('FROM "schema_invariant_test"')
+    ) {
+      return { rows: [{ exists: false }] };
+    }
     if (
       text.startsWith("ALTER TABLE ") ||
       text.startsWith("DROP INDEX ") ||
-      text.startsWith("UPDATE ")
+      text.startsWith("UPDATE ") ||
+      text === "BEGIN" ||
+      text === "COMMIT" ||
+      text === "ROLLBACK"
     ) {
       return { rows: [] };
     }
@@ -330,9 +374,7 @@ describe("schemaNeedsSync column actions", () => {
                 ? "timestamp without time zone"
                 : "text",
         })),
-      indexRows: createIndexesQueries(SCHEMA.compute_resource_work).map(
-        ({ name }) => ({ name }),
-      ),
+      indexRows: managedIndexRows(SCHEMA.compute_resource_work),
       primaryKeyRows: [{ name: "id" }],
     });
     (getClient as jest.Mock).mockReturnValue(client);
@@ -411,13 +453,20 @@ describe("schemaNeedsSync column actions", () => {
     );
   });
 
-  it("drops stale PGlite indexes without CONCURRENTLY", async () => {
+  it("drops stale managed indexes but preserves unknown indexes", async () => {
     const originalDatabase = process.env.COCALC_DB;
     process.env.COCALC_DB = "pglite";
     const client = createMockClient({
       tableName: "embedding_cache",
       columnRows: embeddingColumns,
-      indexRows: [...embeddingIndexRows, { name: "embedding_cache_stale_idx" }],
+      indexRows: [
+        ...embeddingIndexRows,
+        { name: "embedding_cache_unknown_idx" },
+        {
+          name: "embedding_cache_stale_idx",
+          comment: addSchemaIndexMarker(null, "f".repeat(64)),
+        },
+      ],
       primaryKeyRows: embeddingPrimaryKeyRows,
     });
     (getClient as jest.Mock).mockReturnValue(client);
@@ -426,6 +475,9 @@ describe("schemaNeedsSync column actions", () => {
       await syncSchema(embeddingSchema);
       expect(client.query).toHaveBeenCalledWith(
         'DROP INDEX IF EXISTS "embedding_cache_stale_idx"',
+      );
+      expect(client.query).not.toHaveBeenCalledWith(
+        'DROP INDEX IF EXISTS "embedding_cache_unknown_idx"',
       );
     } finally {
       if (originalDatabase == null) {
@@ -466,7 +518,12 @@ describe("schemaNeedsSync column actions", () => {
       `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET DEFAULT '{}'::jsonb`,
     );
     expect(client.query).toHaveBeenCalledWith(
-      `UPDATE "schema_invariant_test" SET "state"='{}'::jsonb WHERE "state" IS NULL`,
+      expect.stringContaining(
+        `ADD CONSTRAINT "${notNullGuardName(
+          "schema_invariant_test",
+          "state",
+        )}" CHECK ("state" IS NOT NULL) NOT VALID`,
+      ),
     );
     expect(client.query).toHaveBeenCalledWith(
       `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET NOT NULL`,

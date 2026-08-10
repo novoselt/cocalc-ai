@@ -2,7 +2,6 @@ import { getClient, Client } from "@cocalc/database/pool";
 import type { DBSchema, TableSchema } from "./types";
 import { quoteField } from "./util";
 import { pgType } from "./pg-type";
-import { createIndexesQueries } from "./indexes";
 import { createTable } from "./table";
 import getLogger from "@cocalc/backend/logger";
 import { SCHEMA } from "@cocalc/util/schema";
@@ -21,6 +20,11 @@ import {
   purchaseCostCentsSchemaNeedsSync,
   withPurchaseCostCentsTriggerSuspended,
 } from "./purchase-cost-cents";
+import {
+  getColumnInvariantActions,
+  syncTableSchemaColumnInvariants,
+} from "./column-invariants";
+import { getIndexActions, syncTableSchemaIndexes } from "./index-convergence";
 
 const log = getLogger("db:schema:sync");
 
@@ -184,102 +188,12 @@ async function alterColumnOfTable(
     if (info.pg_default != null) {
       desc += ` DEFAULT ${info.pg_default}`;
     }
-    if (info.not_null) {
+    if (info.not_null && info.pg_default != null) {
       desc += " NOT NULL";
     }
     await db.query(`ALTER TABLE ${qTable} ADD COLUMN ${col} ${desc}`);
   } else {
     throw Error(`unknown action '${action}`);
-  }
-}
-
-type ColumnInvariantAction =
-  | { action: "set-default"; column: string; expression: string }
-  | {
-      action: "set-not-null";
-      column: string;
-      backfill?: string;
-    };
-
-function normalizeDefaultExpression(expression: string | null | undefined) {
-  // PostgreSQL may normalize whitespace, but quoted literal contents remain
-  // case-sensitive. Declare expressions using PostgreSQL's deparsed spelling
-  // (for example, `now()` rather than `NOW()`).
-  return expression?.trim().replace(/\s+/g, " ");
-}
-
-async function getColumnInvariantActions(
-  db: Client,
-  schema: TableSchema,
-): Promise<ColumnInvariantAction[]> {
-  if (
-    !Object.keys(schema.fields).some((column) => {
-      const info = schema.fields[column];
-      return info.pg_default != null || info.not_null;
-    })
-  ) {
-    return [];
-  }
-  const { rows } = await db.query(
-    `SELECT column_name, column_default, is_nullable
-       FROM information_schema.columns
-      WHERE table_name=$1`,
-    [schema.name],
-  );
-  const current = new Map<
-    string,
-    { column_default?: string | null; is_nullable?: "YES" | "NO" }
-  >(rows.map((row) => [row.column_name, row]));
-  const actions: ColumnInvariantAction[] = [];
-
-  for (const column in schema.fields) {
-    const info = schema.fields[column];
-    const existing = current.get(column);
-    // A missing column is handled by getColumnActions, which includes these
-    // invariants in the ADD COLUMN statement.
-    if (existing == null) continue;
-    if (
-      info.pg_default != null &&
-      normalizeDefaultExpression(existing.column_default) !==
-        normalizeDefaultExpression(info.pg_default)
-    ) {
-      actions.push({
-        action: "set-default",
-        column,
-        expression: info.pg_default,
-      });
-    }
-    if (info.not_null && existing.is_nullable === "YES") {
-      actions.push({
-        action: "set-not-null",
-        column,
-        backfill: info.pg_null_backfill,
-      });
-    }
-  }
-  return actions;
-}
-
-async function syncTableSchemaColumnInvariants(
-  db: Client,
-  schema: TableSchema,
-): Promise<void> {
-  const qTable = quoteField(schema.name);
-  const actions = await getColumnInvariantActions(db, schema);
-  for (const action of actions) {
-    const column = quoteField(action.column);
-    if (action.action === "set-default") {
-      await db.query(
-        `ALTER TABLE ${qTable} ALTER COLUMN ${column} SET DEFAULT ${action.expression}`,
-      );
-      continue;
-    }
-    if (action.backfill != null) {
-      await db.query(
-        `UPDATE ${qTable} SET ${column}=${action.backfill} WHERE ${column} IS NULL`,
-      );
-    }
-    await db.query(`ALTER TABLE ${qTable} ALTER COLUMN ${column} SET NOT NULL`);
   }
 }
 
@@ -338,103 +252,6 @@ async function syncTableSchemaColumns(
   const actions = await getColumnActions(db, schema);
   for (const { action, column } of actions) {
     await alterColumnOfTable(db, schema, action, column);
-  }
-}
-
-async function getCurrentIndexes(
-  db: Client,
-  table: string,
-): Promise<Set<string>> {
-  const { rows } = await db.query(
-    "SELECT c.relname AS name FROM pg_class AS a JOIN pg_index AS b ON (a.oid = b.indrelid) JOIN pg_class AS c ON (c.oid = b.indexrelid) WHERE a.relname=$1",
-    [table],
-  );
-
-  const curIndexes = new Set<string>([]);
-  for (const { name } of rows) {
-    curIndexes.add(name);
-  }
-
-  return curIndexes;
-}
-
-// There is also code in database/postgres/schema/indexes.ts that creates indexes.
-
-async function updateIndex(
-  db: Client,
-  table: string,
-  action: "create" | "delete",
-  name: string,
-  query?: string,
-  unique?: boolean,
-): Promise<void> {
-  log.debug("updateIndex", { table, action, name });
-  if (action == "create") {
-    // ATTN if you consider adding CONCURRENTLY to create index, read the note earlier above about this
-    await db.query(
-      `CREATE ${unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quoteField(
-        name,
-      )} ON ${quoteField(table)} ${query}`,
-    );
-  } else if (action == "delete") {
-    // PGlite does not support PostgreSQL's concurrent index teardown reliably.
-    const concurrently =
-      process.env.COCALC_DB === "pglite" ? "" : " CONCURRENTLY";
-    await db.query(`DROP INDEX${concurrently} IF EXISTS ${quoteField(name)}`);
-  } else {
-    // typescript would catch this, but just in case:
-    throw Error(`BUG: unknown action ${name}`);
-  }
-}
-
-type IndexAction = {
-  action: "create" | "delete";
-  name: string;
-  query?: string;
-  unique?: boolean;
-};
-
-async function getIndexActions(
-  db: Client,
-  schema: TableSchema,
-): Promise<IndexAction[]> {
-  const curIndexes = await getCurrentIndexes(db, schema.name);
-  const goalIndexes = createIndexesQueries(schema);
-  const goalIndexNames = new Set<string>();
-  const actions: IndexAction[] = [];
-
-  for (const x of goalIndexes) {
-    goalIndexNames.add(x.name);
-    if (!curIndexes.has(x.name)) {
-      actions.push({
-        action: "create",
-        name: x.name,
-        query: x.query,
-        unique: x.unique,
-      });
-    }
-  }
-  for (const name of curIndexes) {
-    // only delete indexes that end with _idx; don't want to delete, e.g., pkey primary key indexes.
-    if (name.endsWith("_idx") && !goalIndexNames.has(name)) {
-      actions.push({ action: "delete", name });
-    }
-  }
-
-  return actions;
-}
-
-async function syncTableSchemaIndexes(
-  db: Client,
-  schema: TableSchema,
-): Promise<void> {
-  const dbg = (...args) =>
-    log.debug("syncTableSchemaIndexes", "table = ", schema.name, ...args);
-  dbg();
-  const actions = await getIndexActions(db, schema);
-  dbg("indexActions", actions);
-  for (const { action, name, query, unique } of actions) {
-    await updateIndex(db, schema.name, action, name, query, unique);
   }
 }
 

@@ -17,6 +17,7 @@ export * from "./table-ownership";
 
 // The tables
 import "./active-user-map-history";
+import "./account-managed-egress";
 import "./account-collaborator-index";
 import "./account-ban-audit-log";
 import "./account-admin-audit-log";

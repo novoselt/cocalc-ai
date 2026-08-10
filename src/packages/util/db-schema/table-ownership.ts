@@ -130,6 +130,20 @@ export const TABLE_OWNERSHIP = {
   }),
 
   ...entries(
+    ["account_managed_egress_events", "account_managed_egress_rollups"],
+    {
+      ownership: "account-home",
+      authority: "account_id",
+      portability: "unsupported",
+      secondary_reference_fields: {
+        project_id: "Usage attribution dimension, not placement authority.",
+      },
+      notes:
+        "Account-home managed-egress event and rollup state. Reads and writes must route to the account home bay; account rehome is unsafe until this state has explicit migration support.",
+    },
+  ),
+
+  ...entries(
     [
       "growth_account_activity_daily",
       "growth_account_milestones",
@@ -578,8 +592,6 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     [
       "account_abuse_review_annotations",
       "account_cpu_usage_events",
-      "account_managed_egress_events",
-      "account_managed_egress_rollups",
       "account_revocations",
       "account_security_state",
       "account_usage_windows",
