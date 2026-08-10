@@ -217,6 +217,31 @@ describe("bandwidth relay abuse policy", () => {
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
   });
 
+  it("does not stop an account with an active relay abuse exemption", async () => {
+    resolveMembershipForAccountMock.mockResolvedValueOnce({
+      class: "standard",
+      source: "subscription",
+      entitlements: {
+        features: { bandwidth_relay_abuse_exempt: true },
+      },
+    });
+
+    const decision = await handleProjectBandwidthRelayEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toMatchObject({
+      should_stop_project: false,
+      auto_banned: false,
+      account_exempt: true,
+      membership_class: "standard",
+    });
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
   it("does not auto-ban a sponsor that does not own the project", async () => {
     getProjectOwnerAccountIdMock.mockResolvedValueOnce(
       "33333333-3333-4333-8333-333333333333",
@@ -259,7 +284,7 @@ describe("bandwidth relay abuse policy", () => {
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
   });
 
-  it("does not auto-ban generic tunnel plus bulk-transfer tooling", async () => {
+  it("ignores generic tunnel plus bulk-transfer tooling", async () => {
     const decision = await handleProjectBandwidthRelayEvidence({
       account_id: ACCOUNT_ID,
       project_id: PROJECT_ID,
@@ -278,9 +303,10 @@ describe("bandwidth relay abuse policy", () => {
     });
 
     expect(decision).toMatchObject({
-      should_stop_project: true,
+      should_stop_project: false,
       auto_banned: false,
     });
+    expect(getManagedEgressCategoryUsageForAccountMock).not.toHaveBeenCalled();
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
   });
 

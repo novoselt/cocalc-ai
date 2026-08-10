@@ -25,7 +25,7 @@ describe("project-host bandwidth relay detector", () => {
     expect(buildBandwidthRelayEvidence([...tunnel, ...uploader])).toEqual(
       expect.objectContaining({
         confidence: "high",
-        detector_version: "project-host-bandwidth-relay-v1",
+        detector_version: "project-host-bandwidth-relay-v2",
         signals: expect.arrayContaining([
           expect.objectContaining({
             kind: "tunnel_process",
@@ -74,6 +74,15 @@ describe("project-host bandwidth relay detector", () => {
     },
   );
 
+  it.each([
+    "aria2c https://example.com/data.tar",
+    "rclone sync /home/user remote:backup",
+    "yt-dlp https://example.com/video",
+    "youtube-dl https://example.com/video",
+  ])("ignores legitimate generic transfer tooling: %s", (command) => {
+    expect(detectBandwidthRelayCommand({ pid: 10, command })).toEqual([]);
+  });
+
   it("walks the live process tree to combine independent indicators", async () => {
     const files: Record<string, string> = {
       "/proc/100/cmdline": "bash\0",
@@ -104,9 +113,9 @@ describe("project-host bandwidth relay detector", () => {
       matched: "tunnel",
     }));
     const transfer = {
-      kind: "bulk_transfer_process" as const,
-      pattern: "bulk-transfer",
-      matched: "aria2c",
+      kind: "automated_uploader_process" as const,
+      pattern: "automated-uploader-script",
+      matched: "uploader_bot/bot.py",
     };
 
     const evidence = buildBandwidthRelayEvidence([...tunnels, transfer]);

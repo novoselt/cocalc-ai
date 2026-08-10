@@ -38,6 +38,7 @@ export interface ProjectBandwidthRelayAbuseDecision {
   raw_network_bytes_7d?: number;
   account_owns_project?: boolean;
   account_is_sole_project_user?: boolean;
+  account_exempt?: boolean;
   ban_error?: string;
 }
 
@@ -101,11 +102,7 @@ export function isHighConfidenceBandwidthRelayEvidence(
   const signals = evidence.signals ?? [];
   return (
     signals.some((signal) => signal.kind === "tunnel_process") &&
-    signals.some(
-      (signal) =>
-        signal.kind === "bulk_transfer_process" ||
-        signal.kind === "automated_uploader_process",
-    )
+    signals.some((signal) => signal.kind === "automated_uploader_process")
   );
 }
 
@@ -186,6 +183,28 @@ export async function handleProjectBandwidthRelayEvidence({
   const accountIsSoleProjectUser =
     projectUserAccountIds.length === 1 &&
     projectUserAccountIds[0] === account_id;
+  const accountExempt =
+    membership.entitlements.features?.bandwidth_relay_abuse_exempt === true;
+  if (accountExempt) {
+    logger.info("bandwidth relay enforcement exempted by account override", {
+      account_id,
+      project_id,
+      membership_class: membership.class,
+      membership_source: membership.source,
+      raw_network_bytes_5h: usage.bytes_5h,
+      raw_network_bytes_7d: usage.bytes_7d,
+    });
+    return {
+      should_stop_project: false,
+      auto_banned: false,
+      abuse_kind: "bandwidth_relay",
+      membership_class: membership.class,
+      membership_source: membership.source,
+      raw_network_bytes_5h: usage.bytes_5h,
+      raw_network_bytes_7d: usage.bytes_7d,
+      account_exempt: true,
+    };
+  }
   const shouldAutoBan =
     resolvedSettings.auto_ban_enabled &&
     !account?.banned &&
@@ -232,7 +251,7 @@ export async function handleProjectBandwidthRelayEvidence({
       reason: "automatic high-confidence bandwidth relay detection",
       metadata: {
         automatic: true,
-        detector: "bandwidth-relay-policy-v2",
+        detector: "bandwidth-relay-policy-v3",
         abuse_kind: "bandwidth_relay",
         project_id,
         evidence,

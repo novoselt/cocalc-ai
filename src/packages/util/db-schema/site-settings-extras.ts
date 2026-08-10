@@ -468,7 +468,7 @@ export const EXTRAS: SettingsExtras = {
   },
   cryptomining_abuse_enforcement_enabled: {
     name: "Enable Compute Abuse Enforcement",
-    desc: "When enabled, the hub acts on high-confidence cryptomining or prohibited QEMU execution evidence from project hosts by stopping the affected project. Leave disabled for self-hosted sites that intentionally permit these workloads.",
+    desc: "When enabled, the hub acts on high-confidence cryptomining or prohibited QEMU execution evidence from project hosts by stopping the affected project. Active account entitlement overrides can exempt reviewed legitimate workloads. Leave disabled for self-hosted sites that intentionally permit these workloads.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -478,7 +478,7 @@ export const EXTRAS: SettingsExtras = {
   },
   cryptomining_abuse_auto_ban_enabled: {
     name: "Enable Automatic Compute Abuse Bans",
-    desc: "When enabled together with compute abuse enforcement, sole-owner projects belonging to new free accounts with high-confidence cryptomining evidence, and sole-owner projects belonging to free accounts executing QEMU system emulators, are automatically banned using the normal account ban path. Shared projects and paid accounts are stopped but not automatically banned.",
+    desc: "When enabled together with compute abuse enforcement, sole-owner projects belonging to new free accounts with high-confidence cryptomining evidence, and sole-owner projects belonging to free accounts executing QEMU system emulators, are automatically banned using the normal account ban path. Shared projects, paid accounts, and exempt accounts are not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -488,7 +488,7 @@ export const EXTRAS: SettingsExtras = {
   },
   bandwidth_relay_abuse_heading: {
     name: "Bandwidth Relay Abuse Detection",
-    desc: "Operator controls for detecting high-volume tunnel and automated transfer workloads on project hosts. Runtime evidence excludes full command lines and credentials. These settings are off by default for self-hosted sites.",
+    desc: "Operator controls for detecting high-volume tunnel and explicitly named uploader/streamer-bot workloads on project hosts. Runtime evidence excludes full command lines and credentials. These settings are off by default for self-hosted sites.",
     default: "",
     type: "header",
     tags: ["Security", "Project Hosts"],
@@ -497,7 +497,7 @@ export const EXTRAS: SettingsExtras = {
   },
   bandwidth_relay_abuse_enforcement_enabled: {
     name: "Enable Bandwidth Relay Enforcement",
-    desc: "When enabled, the hub stops projects after a project host reports both live tunneling and automated bulk-transfer indicators and the attributed account has at least 1 GiB of raw-network egress in five hours or 3 GiB in seven days.",
+    desc: "When enabled, the hub stops projects after a project host reports both live tunneling and an explicitly named uploader/streamer-bot process and the attributed account has at least 1 GiB of raw-network egress in five hours or 3 GiB in seven days. Active account entitlement overrides can exempt reviewed legitimate workloads.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -507,7 +507,7 @@ export const EXTRAS: SettingsExtras = {
   },
   bandwidth_relay_abuse_auto_ban_enabled: {
     name: "Enable Automatic Bandwidth Relay Bans",
-    desc: "When enabled together with bandwidth relay enforcement, a new free account is automatically banned only when it is the sole user and owner of the affected project and an explicit uploader/streamer-bot process is present. Paid accounts, older free accounts, shared projects, generic bulk-transfer tools, and project sponsors are stopped but not automatically banned.",
+    desc: "When enabled together with bandwidth relay enforcement, a new free account is automatically banned only when it is the sole user and owner of the affected project and an explicit uploader/streamer-bot process is present. Paid accounts, older free accounts, shared projects, project sponsors, and exempt accounts are not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,

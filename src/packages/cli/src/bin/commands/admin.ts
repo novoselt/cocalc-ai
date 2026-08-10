@@ -323,6 +323,20 @@ export function buildEntitlementOverrideSchemaDoc() {
         description:
           "Whether this account is allowed to create dedicated project hosts.",
       },
+      {
+        path: "features.bandwidth_relay_abuse_exempt",
+        kind: "boolean",
+        label: descriptions.features.bandwidth_relay_abuse_exempt.label,
+        description:
+          descriptions.features.bandwidth_relay_abuse_exempt.adminDescription,
+      },
+      {
+        path: "features.cryptomining_abuse_exempt",
+        kind: "boolean",
+        label: descriptions.features.cryptomining_abuse_exempt.label,
+        description:
+          descriptions.features.cryptomining_abuse_exempt.adminDescription,
+      },
       fieldDoc({
         path: "project_defaults.disk_quota",
         ...descriptions.project_defaults.disk_quota,

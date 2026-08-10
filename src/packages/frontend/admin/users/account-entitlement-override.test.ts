@@ -58,4 +58,21 @@ describe("buildOverride", () => {
       },
     });
   });
+
+  it("serializes independent abuse enforcement exemptions", () => {
+    expect(
+      buildOverride({
+        enabled: true,
+        bandwidth_relay_abuse_exempt: "true",
+        cryptomining_abuse_exempt: "false",
+      }),
+    ).toEqual({
+      enabled: true,
+      expires_at: null,
+      features: {
+        bandwidth_relay_abuse_exempt: true,
+        cryptomining_abuse_exempt: false,
+      },
+    });
+  });
 });

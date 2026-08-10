@@ -226,7 +226,7 @@ describe("cryptomining abuse policy", () => {
         reason: "automatic prohibited QEMU execution detection",
         metadata: expect.objectContaining({
           automatic: true,
-          detector: "project-abuse-policy-v3",
+          detector: "project-abuse-policy-v4",
           abuse_kind: "prohibited_qemu",
           project_id: PROJECT_ID,
           evidence: QEMU_EVIDENCE,
@@ -328,6 +328,31 @@ describe("cryptomining abuse policy", () => {
         membership_source: "subscription",
       }),
     );
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not stop an account with an active compute abuse exemption", async () => {
+    resolveMembershipForAccountMock.mockResolvedValueOnce({
+      class: "standard",
+      source: "subscription",
+      entitlements: {
+        features: { cryptomining_abuse_exempt: true },
+      },
+    });
+
+    const decision = await handleProjectCryptominingEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toMatchObject({
+      should_stop_project: false,
+      auto_banned: false,
+      account_exempt: true,
+      membership_class: "standard",
+    });
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
   });
 

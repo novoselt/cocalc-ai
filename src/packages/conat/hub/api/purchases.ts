@@ -104,6 +104,8 @@ export interface EnumOverride<T extends string> {
 export interface AccountFeatureOverrides {
   create_hosts?: boolean;
   exam_mode?: boolean;
+  bandwidth_relay_abuse_exempt?: boolean;
+  cryptomining_abuse_exempt?: boolean;
 }
 
 export interface ProjectDefaultOverrides {

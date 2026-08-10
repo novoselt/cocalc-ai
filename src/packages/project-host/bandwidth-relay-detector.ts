@@ -10,7 +10,7 @@ import type {
   ProjectBandwidthRelaySignalKind,
 } from "@cocalc/conat/hub/api/system";
 
-const DETECTOR_VERSION = "project-host-bandwidth-relay-v1";
+const DETECTOR_VERSION = "project-host-bandwidth-relay-v2";
 const MAX_COMMAND_LENGTH = 500;
 const MAX_PROCESSES = 256;
 const MAX_SIGNALS = 8;
@@ -92,27 +92,6 @@ const COMMAND_PATTERNS: CommandPattern[] = [
     matched: (_command, executable) => `${executable} local`,
   },
   {
-    id: "aria2-bulk-transfer",
-    kind: "bulk_transfer_process",
-    matches: (_command, executable) => executable === "aria2c",
-    matched: (_command, executable) => executable,
-  },
-  {
-    id: "rclone-bulk-transfer",
-    kind: "bulk_transfer_process",
-    matches: (command, executable) =>
-      executable === "rclone" &&
-      /(?:^|\s)(?:copy|copyto|move|moveto|sync|serve)(?:$|\s)/i.test(command),
-    matched: (_command, executable) => executable,
-  },
-  {
-    id: "media-bulk-downloader",
-    kind: "bulk_transfer_process",
-    matches: (_command, executable) =>
-      executable === "yt-dlp" || executable === "youtube-dl",
-    matched: (_command, executable) => executable,
-  },
-  {
     id: "automated-uploader-script",
     kind: "automated_uploader_process",
     matches: (command) => uploaderScriptIndicator(command) != null,
@@ -150,9 +129,7 @@ export function buildBandwidthRelayEvidence(
 ): ProjectBandwidthRelayEvidence | undefined {
   const tunnel = signals.find((signal) => signal.kind === "tunnel_process");
   const transfer = signals.find(
-    (signal) =>
-      signal.kind === "bulk_transfer_process" ||
-      signal.kind === "automated_uploader_process",
+    (signal) => signal.kind === "automated_uploader_process",
   );
   if (!tunnel || !transfer) return;
   // Keep the conjunctive evidence intact even if one process class produced

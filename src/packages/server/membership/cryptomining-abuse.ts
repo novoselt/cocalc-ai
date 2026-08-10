@@ -33,6 +33,7 @@ export interface ProjectCryptominingAbuseDecision {
   account_age_ms?: number;
   account_owns_project?: boolean;
   account_is_sole_project_user?: boolean;
+  account_exempt?: boolean;
   ban_error?: string;
 }
 
@@ -146,6 +147,25 @@ export async function handleProjectCryptominingEvidence({
   const accountIsSoleProjectUser =
     projectUserAccountIds.length === 1 &&
     projectUserAccountIds[0] === account_id;
+  const accountExempt =
+    membership.entitlements.features?.cryptomining_abuse_exempt === true;
+  if (accountExempt) {
+    logger.info("compute abuse enforcement exempted by account override", {
+      account_id,
+      project_id,
+      abuse_kind: detectedAbuseKind,
+      membership_class: membership.class,
+      membership_source: membership.source,
+    });
+    return {
+      should_stop_project: false,
+      auto_banned: false,
+      abuse_kind: detectedAbuseKind,
+      membership_class: membership.class,
+      membership_source: membership.source,
+      account_exempt: true,
+    };
+  }
   const shouldAutoBan =
     resolvedSettings.auto_ban_enabled &&
     !account?.banned &&
@@ -191,7 +211,7 @@ export async function handleProjectCryptominingEvidence({
       reason: banReason,
       metadata: {
         automatic: true,
-        detector: "project-abuse-policy-v3",
+        detector: "project-abuse-policy-v4",
         abuse_kind: detectedAbuseKind,
         project_id: project_id ?? null,
         evidence,

@@ -1417,6 +1417,11 @@ test("admin entitlement-override schema documents usable override payloads", asy
   );
   assert.match(
     JSON.stringify(schema),
+    /features\.bandwidth_relay_abuse_exempt/,
+  );
+  assert.match(JSON.stringify(schema), /features\.cryptomining_abuse_exempt/);
+  assert.match(
+    JSON.stringify(schema),
     /authorizes administrator-managed collection/,
   );
   assert.equal(
