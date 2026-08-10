@@ -65,17 +65,67 @@
     "theme": {
       "icon": "octave",
       "color": "#ffffff",
-      "accent_color": "#0790c0"
+      "accent_color": "#0790c0",
+      "image_blob": "cae9c762-e284-4d47-aa30-65d7598ac88c"
     },
     "content": {
       "version": 1,
       "title": "GNU Octave",
-      "subtitle": "A current GNU Octave built from source, with the common Octave packages and Jupyter kernels for Octave and Python.",
+      "subtitle": "GNU Octave 11.3, built from source",
+      "description": "A current GNU Octave built from source, with the common Octave packages — statistics, control, signal, image, optim and symbolic — and Jupyter kernels for Octave and Python. JupyterLab is included and can be started from the launcher.",
       "highlights": [
-        "GNU Octave, built from source",
-        "statistics, control, signal, image, optim, symbolic",
-        "Octave and Python Jupyter kernels",
-        "NumPy, SciPy, and Matplotlib"
+        "octave",
+        "jupyter",
+        "symbolic",
+        "statistics",
+        "signal",
+        "control",
+        "image",
+        "optim",
+        "numpy",
+        "scipy",
+        "matplotlib"
+      ],
+      "actions": [
+        {
+          "kind": "project-app",
+          "label": "Launch JupyterLab",
+          "description": "Open JupyterLab on this image's Octave, Python and bash kernels.",
+          "app_spec": {
+            "version": 1,
+            "id": "jupyterlab",
+            "title": "JupyterLab",
+            "kind": "service",
+            "command": {
+              "exec": "bash",
+              "args": [
+                "-lc",
+                "base_url=\"${APP_BASE_URL/\\/proxy\\//\\/port\\/}\"; jupyter lab --allow-root --port-retries=0 --no-browser --NotebookApp.token= --NotebookApp.password= --ServerApp.disable_check_xsrf=True --NotebookApp.allow_remote_access=True --NotebookApp.mathjax_url=/cdn/mathjax/MathJax.js --NotebookApp.base_url=\"${base_url}\" --ServerApp.base_url=\"${base_url}\" --ip=${HOST:-127.0.0.1} --port=${PORT}"
+              ]
+            },
+            "lifecycle": {
+              "mode": "managed"
+            },
+            "network": {
+              "listen_host": "127.0.0.1",
+              "port": 6012,
+              "protocol": "http"
+            },
+            "proxy": {
+              "base_path": "/apps/jupyterlab",
+              "strip_prefix": true,
+              "websocket": true,
+              "open_mode": "port",
+              "health_path": "/lab",
+              "readiness_timeout_s": 45
+            },
+            "wake": {
+              "enabled": true,
+              "keep_warm_s": 1800,
+              "startup_timeout_s": 120
+            }
+          }
+        }
       ]
     }
   }
