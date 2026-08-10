@@ -10,6 +10,10 @@ import {
   banClusterAccountAndEquivalentEmails,
   getClusterAccountById,
 } from "@cocalc/server/inter-bay/accounts";
+import {
+  getProjectOwnerAccountId,
+  getProjectUserAccountIds,
+} from "./project-usage";
 import { resolveMembershipForAccount } from "./resolve";
 
 const logger = getLogger("server:membership:cryptomining-abuse");
@@ -27,6 +31,8 @@ export interface ProjectCryptominingAbuseDecision {
   membership_class?: string;
   membership_source?: string;
   account_age_ms?: number;
+  account_owns_project?: boolean;
+  account_is_sole_project_user?: boolean;
   ban_error?: string;
 }
 
@@ -117,10 +123,13 @@ export async function handleProjectCryptominingEvidence({
     return { should_stop_project: false, auto_banned: false };
   }
 
-  const [account, membership] = await Promise.all([
-    getClusterAccountById(account_id),
-    resolveMembershipForAccount(account_id),
-  ]);
+  const [account, membership, ownerAccountId, projectUserAccountIds] =
+    await Promise.all([
+      getClusterAccountById(account_id),
+      resolveMembershipForAccount(account_id),
+      project_id ? getProjectOwnerAccountId(project_id) : undefined,
+      project_id ? getProjectUserAccountIds(project_id) : [],
+    ]);
   const createdMs = createdTimeMs(account?.created);
   const accountAgeMs =
     createdMs == null ? undefined : Math.max(0, now.getTime() - createdMs);
@@ -133,11 +142,17 @@ export async function handleProjectCryptominingEvidence({
       );
   const isFree = membership.class === "free" && membership.source === "free";
   const detectedAbuseKind = abuseKind(evidence);
+  const accountOwnsProject = ownerAccountId === account_id;
+  const accountIsSoleProjectUser =
+    projectUserAccountIds.length === 1 &&
+    projectUserAccountIds[0] === account_id;
   const shouldAutoBan =
     resolvedSettings.auto_ban_enabled &&
     !account?.banned &&
     isFree &&
-    (isNew || detectedAbuseKind === "prohibited_qemu");
+    (isNew || detectedAbuseKind === "prohibited_qemu") &&
+    accountOwnsProject &&
+    accountIsSoleProjectUser;
 
   if (!shouldAutoBan) {
     logger.warn("high-confidence project abuse detected; stopping project", {
@@ -147,6 +162,8 @@ export async function handleProjectCryptominingEvidence({
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
+      account_owns_project: accountOwnsProject,
+      account_is_sole_project_user: accountIsSoleProjectUser,
       already_banned: account?.banned === true,
       signal_count: evidence?.signals?.length ?? 0,
       auto_banned: false,
@@ -158,6 +175,8 @@ export async function handleProjectCryptominingEvidence({
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
+      account_owns_project: accountOwnsProject,
+      account_is_sole_project_user: accountIsSoleProjectUser,
     };
   }
 
@@ -172,13 +191,15 @@ export async function handleProjectCryptominingEvidence({
       reason: banReason,
       metadata: {
         automatic: true,
-        detector: "project-abuse-policy-v2",
+        detector: "project-abuse-policy-v3",
         abuse_kind: detectedAbuseKind,
         project_id: project_id ?? null,
         evidence,
         membership_class: membership.class,
         membership_source: membership.source,
         account_age_ms: accountAgeMs ?? null,
+        account_owns_project: accountOwnsProject,
+        account_is_sole_project_user: accountIsSoleProjectUser,
       },
     });
     logger.warn("auto-banned free account for high-confidence project abuse", {
@@ -188,6 +209,8 @@ export async function handleProjectCryptominingEvidence({
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
+      account_owns_project: accountOwnsProject,
+      account_is_sole_project_user: accountIsSoleProjectUser,
       signal_count: evidence?.signals?.length ?? 0,
     });
     return {
@@ -212,6 +235,8 @@ export async function handleProjectCryptominingEvidence({
       membership_class: membership.class,
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
+      account_owns_project: accountOwnsProject,
+      account_is_sole_project_user: accountIsSoleProjectUser,
       ban_error: `${err}`,
     };
   }

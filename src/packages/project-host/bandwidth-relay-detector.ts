@@ -148,18 +148,26 @@ export function detectBandwidthRelayCommand({
 export function buildBandwidthRelayEvidence(
   signals: ProjectBandwidthRelaySignal[],
 ): ProjectBandwidthRelayEvidence | undefined {
-  const hasTunnel = signals.some((signal) => signal.kind === "tunnel_process");
-  const hasTransfer = signals.some(
+  const tunnel = signals.find((signal) => signal.kind === "tunnel_process");
+  const transfer = signals.find(
     (signal) =>
       signal.kind === "bulk_transfer_process" ||
       signal.kind === "automated_uploader_process",
   );
-  if (!hasTunnel || !hasTransfer) return;
+  if (!tunnel || !transfer) return;
+  // Keep the conjunctive evidence intact even if one process class produced
+  // enough matches to fill the bounded signal list by itself.
+  const selected = [tunnel, transfer];
+  for (const signal of signals) {
+    if (selected.includes(signal)) continue;
+    selected.push(signal);
+    if (selected.length >= MAX_SIGNALS) break;
+  }
   return {
     confidence: "high",
     detector_version: DETECTOR_VERSION,
     detected_at: new Date().toISOString(),
-    signals: signals.slice(0, MAX_SIGNALS),
+    signals: selected,
   };
 }
 

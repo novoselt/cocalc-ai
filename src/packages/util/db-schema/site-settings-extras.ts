@@ -478,7 +478,7 @@ export const EXTRAS: SettingsExtras = {
   },
   cryptomining_abuse_auto_ban_enabled: {
     name: "Enable Automatic Compute Abuse Bans",
-    desc: "When enabled together with compute abuse enforcement, new free accounts with high-confidence cryptomining evidence and all free accounts executing QEMU system emulators are automatically banned using the normal account ban path. Paid accounts are stopped but not automatically banned.",
+    desc: "When enabled together with compute abuse enforcement, sole-owner projects belonging to new free accounts with high-confidence cryptomining evidence, and sole-owner projects belonging to free accounts executing QEMU system emulators, are automatically banned using the normal account ban path. Shared projects and paid accounts are stopped but not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -507,7 +507,7 @@ export const EXTRAS: SettingsExtras = {
   },
   bandwidth_relay_abuse_auto_ban_enabled: {
     name: "Enable Automatic Bandwidth Relay Bans",
-    desc: "When enabled together with bandwidth relay enforcement, a new free account is automatically banned only when it owns the affected project. Paid accounts, older free accounts, and project sponsors are stopped but not automatically banned.",
+    desc: "When enabled together with bandwidth relay enforcement, a new free account is automatically banned only when it is the sole user and owner of the affected project and an explicit uploader/streamer-bot process is present. Paid accounts, older free accounts, shared projects, generic bulk-transfer tools, and project sponsors are stopped but not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,

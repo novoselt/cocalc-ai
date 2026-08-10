@@ -11,7 +11,10 @@ import {
   getClusterAccountById,
 } from "@cocalc/server/inter-bay/accounts";
 import { getManagedEgressCategoryUsageForAccount } from "./managed-egress";
-import { getProjectOwnerAccountId } from "./project-usage";
+import {
+  getProjectOwnerAccountId,
+  getProjectUserAccountIds,
+} from "./project-usage";
 import { resolveMembershipForAccount } from "./resolve";
 
 const logger = getLogger("server:membership:bandwidth-relay-abuse");
@@ -34,6 +37,7 @@ export interface ProjectBandwidthRelayAbuseDecision {
   raw_network_bytes_5h?: number;
   raw_network_bytes_7d?: number;
   account_owns_project?: boolean;
+  account_is_sole_project_user?: boolean;
   ban_error?: string;
 }
 
@@ -105,6 +109,17 @@ export function isHighConfidenceBandwidthRelayEvidence(
   );
 }
 
+export function isAutoBanEligibleBandwidthRelayEvidence(
+  evidence: ProjectBandwidthRelayEvidence | undefined,
+): evidence is ProjectBandwidthRelayEvidence {
+  return (
+    isHighConfidenceBandwidthRelayEvidence(evidence) &&
+    evidence.signals.some(
+      (signal) => signal.kind === "automated_uploader_process",
+    )
+  );
+}
+
 export async function handleProjectBandwidthRelayEvidence({
   account_id,
   project_id,
@@ -149,11 +164,13 @@ export async function handleProjectBandwidthRelayEvidence({
     };
   }
 
-  const [account, membership, ownerAccountId] = await Promise.all([
-    getClusterAccountById(account_id),
-    resolveMembershipForAccount(account_id),
-    getProjectOwnerAccountId(project_id),
-  ]);
+  const [account, membership, ownerAccountId, projectUserAccountIds] =
+    await Promise.all([
+      getClusterAccountById(account_id),
+      resolveMembershipForAccount(account_id),
+      getProjectOwnerAccountId(project_id),
+      getProjectUserAccountIds(project_id),
+    ]);
   const createdMs = createdTimeMs(account?.created);
   const accountAgeMs =
     createdMs == null ? undefined : Math.max(0, now.getTime() - createdMs);
@@ -166,12 +183,17 @@ export async function handleProjectBandwidthRelayEvidence({
       );
   const isFree = membership.class === "free" && membership.source === "free";
   const accountOwnsProject = ownerAccountId === account_id;
+  const accountIsSoleProjectUser =
+    projectUserAccountIds.length === 1 &&
+    projectUserAccountIds[0] === account_id;
   const shouldAutoBan =
     resolvedSettings.auto_ban_enabled &&
     !account?.banned &&
     isFree &&
     isNew &&
-    accountOwnsProject;
+    accountOwnsProject &&
+    accountIsSoleProjectUser &&
+    isAutoBanEligibleBandwidthRelayEvidence(evidence);
 
   const decision = {
     should_stop_project: true,
@@ -183,6 +205,7 @@ export async function handleProjectBandwidthRelayEvidence({
     raw_network_bytes_5h: usage.bytes_5h,
     raw_network_bytes_7d: usage.bytes_7d,
     account_owns_project: accountOwnsProject,
+    account_is_sole_project_user: accountIsSoleProjectUser,
   };
 
   if (!shouldAutoBan) {
@@ -193,6 +216,7 @@ export async function handleProjectBandwidthRelayEvidence({
       membership_source: membership.source,
       account_age_ms: accountAgeMs,
       account_owns_project: accountOwnsProject,
+      account_is_sole_project_user: accountIsSoleProjectUser,
       raw_network_bytes_5h: usage.bytes_5h,
       raw_network_bytes_7d: usage.bytes_7d,
       signal_count: evidence.signals.length,
@@ -208,7 +232,7 @@ export async function handleProjectBandwidthRelayEvidence({
       reason: "automatic high-confidence bandwidth relay detection",
       metadata: {
         automatic: true,
-        detector: "bandwidth-relay-policy-v1",
+        detector: "bandwidth-relay-policy-v2",
         abuse_kind: "bandwidth_relay",
         project_id,
         evidence,
@@ -217,6 +241,7 @@ export async function handleProjectBandwidthRelayEvidence({
         account_age_ms: accountAgeMs ?? null,
         raw_network_bytes_5h: usage.bytes_5h,
         raw_network_bytes_7d: usage.bytes_7d,
+        account_is_sole_project_user: accountIsSoleProjectUser,
       },
     });
     logger.warn(

@@ -8,6 +8,7 @@ import { uuid } from "@cocalc/util/misc";
 import { createTestAccount } from "@cocalc/server/purchases/test-data";
 import {
   getProjectCollaborationAccountId,
+  getProjectUserAccountIds,
   getProjectUsageAccountId,
   setProjectUsageAccountId,
 } from "./project-usage";
@@ -57,6 +58,29 @@ describe("project usage attribution", () => {
   it("defaults usage attribution to the owner", async () => {
     await expect(getProjectUsageAccountId(project_id)).resolves.toBe(
       owner_account_id,
+    );
+  });
+
+  it("lists every project user for sole-owner abuse attribution", async () => {
+    await expect(getProjectUserAccountIds(project_id)).resolves.toEqual([
+      owner_account_id,
+    ]);
+    await getPool().query(
+      "UPDATE projects SET users=$2::jsonb WHERE project_id=$1",
+      [
+        project_id,
+        JSON.stringify({
+          [owner_account_id]: { group: "owner" },
+          [student_account_id]: { group: "collaborator" },
+        }),
+      ],
+    );
+    await expect(getProjectUserAccountIds(project_id)).resolves.toEqual(
+      [owner_account_id, student_account_id].sort(),
+    );
+    await getPool().query(
+      "UPDATE projects SET users=$2::jsonb WHERE project_id=$1",
+      [project_id, JSON.stringify({ [owner_account_id]: { group: "owner" } })],
     );
   });
 

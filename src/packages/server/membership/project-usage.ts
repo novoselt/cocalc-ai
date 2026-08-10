@@ -102,6 +102,28 @@ export async function getProjectOwnerAccountId(
   return `${rows[0]?.account_id ?? ""}`.trim() || undefined;
 }
 
+export async function getProjectUserAccountIds(
+  project_id: string,
+  client?: PoolClient,
+): Promise<string[]> {
+  const { rows } = await getQueryClient(client).query<{ account_id: string }>(
+    `
+      SELECT user_entry.account_id
+      FROM projects AS p
+      CROSS JOIN LATERAL jsonb_object_keys(
+        COALESCE(p.users, '{}'::jsonb)
+      ) AS user_entry(account_id)
+      WHERE p.project_id = $1
+        AND p.deleted IS NULL
+      ORDER BY user_entry.account_id
+    `,
+    [project_id],
+  );
+  return rows
+    .map(({ account_id }) => `${account_id ?? ""}`.trim())
+    .filter(Boolean);
+}
+
 export async function getProjectCollaborationAccountId(
   project_id: string,
   client?: PoolClient,

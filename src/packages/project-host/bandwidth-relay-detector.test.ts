@@ -96,4 +96,23 @@ describe("project-host bandwidth relay detector", () => {
     expect(evidence?.confidence).toBe("high");
     expect(JSON.stringify(evidence)).not.toContain("secret-value");
   });
+
+  it("preserves both required signal classes when evidence is truncated", () => {
+    const tunnels = Array.from({ length: 12 }, (_, index) => ({
+      kind: "tunnel_process" as const,
+      pattern: `tunnel-${index}`,
+      matched: "tunnel",
+    }));
+    const transfer = {
+      kind: "bulk_transfer_process" as const,
+      pattern: "bulk-transfer",
+      matched: "aria2c",
+    };
+
+    const evidence = buildBandwidthRelayEvidence([...tunnels, transfer]);
+
+    expect(evidence?.signals).toHaveLength(8);
+    expect(evidence?.signals).toEqual(expect.arrayContaining([transfer]));
+    expect(evidence?.signals[0]).toEqual(tunnels[0]);
+  });
 });

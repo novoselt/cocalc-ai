@@ -8,6 +8,7 @@ const banClusterAccountAndEquivalentEmailsMock = jest.fn();
 const resolveMembershipForAccountMock = jest.fn();
 const getManagedEgressCategoryUsageForAccountMock = jest.fn();
 const getProjectOwnerAccountIdMock = jest.fn();
+const getProjectUserAccountIdsMock = jest.fn();
 const getServerSettingsMock = jest.fn();
 
 jest.mock("@cocalc/server/inter-bay/accounts", () => ({
@@ -33,6 +34,8 @@ jest.mock("./project-usage", () => ({
   __esModule: true,
   getProjectOwnerAccountId: (...args: any[]) =>
     getProjectOwnerAccountIdMock(...args),
+  getProjectUserAccountIds: (...args: any[]) =>
+    getProjectUserAccountIdsMock(...args),
 }));
 
 jest.mock("@cocalc/database/settings/server-settings", () => ({
@@ -89,6 +92,7 @@ describe("bandwidth relay abuse policy", () => {
       entitlements: {},
     });
     getProjectOwnerAccountIdMock.mockReset().mockResolvedValue(ACCOUNT_ID);
+    getProjectUserAccountIdsMock.mockReset().mockResolvedValue([ACCOUNT_ID]);
     getManagedEgressCategoryUsageForAccountMock.mockReset().mockResolvedValue({
       bytes_5h: 2 * GIB,
       bytes_7d: 2 * GIB,
@@ -229,6 +233,53 @@ describe("bandwidth relay abuse policy", () => {
       should_stop_project: true,
       auto_banned: false,
       account_owns_project: false,
+    });
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-ban an owner when another collaborator could be responsible", async () => {
+    getProjectUserAccountIdsMock.mockResolvedValueOnce([
+      ACCOUNT_ID,
+      "33333333-3333-4333-8333-333333333333",
+    ]);
+
+    const decision = await handleProjectBandwidthRelayEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: EVIDENCE,
+      now: NOW,
+    });
+
+    expect(decision).toMatchObject({
+      should_stop_project: true,
+      auto_banned: false,
+      account_owns_project: true,
+      account_is_sole_project_user: false,
+    });
+    expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-ban generic tunnel plus bulk-transfer tooling", async () => {
+    const decision = await handleProjectBandwidthRelayEvidence({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      evidence: {
+        ...EVIDENCE,
+        signals: [
+          EVIDENCE.signals[0],
+          {
+            kind: "bulk_transfer_process",
+            pattern: "rclone-bulk-transfer",
+            matched: "rclone",
+          },
+        ],
+      },
+      now: NOW,
+    });
+
+    expect(decision).toMatchObject({
+      should_stop_project: true,
+      auto_banned: false,
     });
     expect(banClusterAccountAndEquivalentEmailsMock).not.toHaveBeenCalled();
   });
