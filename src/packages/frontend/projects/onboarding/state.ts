@@ -47,6 +47,10 @@ export type FirstRunDecision =
   | { kind: "ready-projects"; projects: FirstRunProject[] }
   | { kind: "intent" };
 
+export function signUpUsageIntentQuery(intent: OnboardingIntent) {
+  return { accounts: { sign_up_usage_intent: intent } };
+}
+
 const RECENT_ACCOUNT_MS = 14 * 24 * 60 * 60 * 1000;
 
 export function normalizeStoredFirstRunOnboarding(

@@ -32,6 +32,7 @@ import { submitNavigatorPromptInWorkspaceChat } from "@cocalc/frontend/project/n
 import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 import { useCodexPaymentSource } from "@cocalc/frontend/chat/use-codex-payment-source";
 import { getLogger } from "@cocalc/frontend/logger";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
   applyProjectPreset,
   createInitialProjectDraft,
@@ -48,6 +49,7 @@ import {
   FIRST_RUN_ONBOARDING_SETTING,
   FIRST_RUN_ONBOARDING_VERSION,
   isCourseInvitation,
+  signUpUsageIntentQuery,
   type FirstRunDecision,
   type FirstRunProject,
   type OnboardingIntent,
@@ -413,7 +415,15 @@ export function FirstRunOnboarding({
       });
     }
     if (intent) {
-      actions.set_account_table({ sign_up_usage_intent: intent });
+      void webapp_client
+        .async_query({ query: signUpUsageIntentQuery(intent) })
+        .catch((err) => {
+          // Usage intent is optional telemetry and must not block onboarding.
+          logger.warn("failed to persist sign-up usage intent", {
+            intent,
+            err: `${err}`,
+          });
+        });
     }
   }
 

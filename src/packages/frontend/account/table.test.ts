@@ -6,13 +6,13 @@
 import { AccountTable, applyAccountPatch } from "./table";
 
 describe("AccountTable", () => {
-  it("requests fields that account actions write directly", () => {
+  it("requests readable account bootstrap fields", () => {
     const query = AccountTable.prototype.query.call({});
     expect(query.accounts[0]).toMatchObject({
       account_id: null,
       home_bay_id: null,
-      sign_up_usage_intent: null,
     });
+    expect(query.accounts[0]).not.toHaveProperty("sign_up_usage_intent");
   });
 
   it("uses snapshot-only account bootstrap without a changefeed", () => {
