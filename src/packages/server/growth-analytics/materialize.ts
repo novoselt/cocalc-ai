@@ -303,29 +303,41 @@ async function materializeEvents(
     [eventIds],
   );
   await client.query(
-    `INSERT INTO growth_account_milestones
+    `WITH candidates AS (
+       SELECT event.account_id,
+              CASE
+                WHEN event.event_name IN (
+                  'identity_proved', 'account_created', 'profile_completed',
+                  'first_project_flow_seen', 'project_create_started',
+                  'project_created', 'project_ready', 'project_entered',
+                  'project_surface_visible', 'guided_activation_done',
+                  'first_self_directed_work'
+                ) THEN event.event_name
+                WHEN event.event_name IN ('project_work', 'ai_prompt_submitted')
+                  THEN 'first_meaningful_work'
+                ELSE NULL
+              END AS milestone,
+              event.occurred_at, event.event_id, event.home_bay_id,
+              NULLIF(event.properties->>'metadata_class', '') AS metadata_class
+         FROM growth_event_log AS event
+        WHERE event.event_id = ANY($1::uuid[])
+          AND event.event_name NOT IN (
+            'app_foreground', 'project_engaged', 'guided_activation_abandoned'
+          )
+     ), earliest AS (
+       SELECT DISTINCT ON (account_id, milestone)
+              account_id, milestone, occurred_at, event_id, home_bay_id,
+              metadata_class
+         FROM candidates
+        WHERE milestone IS NOT NULL
+        ORDER BY account_id, milestone, occurred_at, event_id
+     )
+     INSERT INTO growth_account_milestones
        (account_id, milestone, definition_version, occurred_at,
         source_event_id, home_bay_id, metadata_class)
-     SELECT event.account_id,
-            CASE
-              WHEN event.event_name IN (
-                'identity_proved', 'account_created', 'profile_completed',
-                'first_project_flow_seen', 'project_create_started',
-                'project_created', 'project_ready', 'project_entered',
-                'project_surface_visible', 'guided_activation_done',
-                'first_self_directed_work'
-              ) THEN event.event_name
-              WHEN event.event_name IN ('project_work', 'ai_prompt_submitted')
-                THEN 'first_meaningful_work'
-              ELSE NULL
-            END,
-            $2, event.occurred_at, event.event_id, event.home_bay_id,
-            NULLIF(event.properties->>'metadata_class', '')
-       FROM growth_event_log AS event
-      WHERE event.event_id = ANY($1::uuid[])
-        AND event.event_name NOT IN (
-          'app_foreground', 'project_engaged', 'guided_activation_abandoned'
-        )
+     SELECT account_id, milestone, $2, occurred_at, event_id, home_bay_id,
+            metadata_class
+       FROM earliest
      ON CONFLICT (account_id, milestone, definition_version)
      DO UPDATE SET
        occurred_at=LEAST(growth_account_milestones.occurred_at, EXCLUDED.occurred_at),
@@ -341,11 +353,13 @@ async function materializeEvents(
     `INSERT INTO growth_account_milestones
        (account_id, milestone, definition_version, occurred_at,
         source_event_id, home_bay_id, metadata_class)
-     SELECT account_id, 'first_meaningful_work', $2, occurred_at, event_id,
+     SELECT DISTINCT ON (account_id)
+            account_id, 'first_meaningful_work', $2, occurred_at, event_id,
             home_bay_id, 'self_directed'
        FROM growth_event_log
       WHERE event_id=ANY($1::uuid[])
         AND event_name='first_self_directed_work'
+      ORDER BY account_id, occurred_at, event_id
      ON CONFLICT (account_id, milestone, definition_version)
      DO UPDATE SET occurred_at=LEAST(
        growth_account_milestones.occurred_at, EXCLUDED.occurred_at
@@ -356,11 +370,13 @@ async function materializeEvents(
     `INSERT INTO growth_account_milestones
        (account_id, milestone, definition_version, occurred_at,
         source_event_id, home_bay_id, metadata_class)
-     SELECT account_id, 'first_ai_prompt', $2, occurred_at, event_id,
+     SELECT DISTINCT ON (account_id)
+            account_id, 'first_ai_prompt', $2, occurred_at, event_id,
             home_bay_id, 'ai_prompt'
        FROM growth_event_log
       WHERE event_id = ANY($1::uuid[])
         AND event_name = 'ai_prompt_submitted'
+      ORDER BY account_id, occurred_at, event_id
      ON CONFLICT (account_id, milestone, definition_version)
      DO UPDATE SET occurred_at=LEAST(
        growth_account_milestones.occurred_at, EXCLUDED.occurred_at
