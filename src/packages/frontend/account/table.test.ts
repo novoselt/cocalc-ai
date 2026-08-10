@@ -6,11 +6,12 @@
 import { AccountTable, applyAccountPatch } from "./table";
 
 describe("AccountTable", () => {
-  it("requests home_bay_id in the synced account query", () => {
+  it("requests fields that account actions write directly", () => {
     const query = AccountTable.prototype.query.call({});
     expect(query.accounts[0]).toMatchObject({
       account_id: null,
       home_bay_id: null,
+      sign_up_usage_intent: null,
     });
   });
 
