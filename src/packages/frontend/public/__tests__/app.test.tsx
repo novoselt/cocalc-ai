@@ -868,17 +868,21 @@ describe("PublicApp", () => {
     ).not.toBeNull();
 
     const tables = report.getAllByRole("table");
-    expect(tables).toHaveLength(4);
+    expect(tables).toHaveLength(3);
     expect(within(tables[0]).getAllByRole("row")).toHaveLength(4);
     expect(within(tables[1]).getAllByRole("row")).toHaveLength(33);
     expect(within(tables[2]).getAllByRole("row")).toHaveLength(25);
-    expect(within(tables[3]).getAllByRole("row")).toHaveLength(32);
+    expect(within(tables[0]).getAllByText(/Level AAA \(No\)/)).toHaveLength(3);
+    expect(
+      report.queryByRole("heading", {
+        name: "Table 3: Success Criteria, Level AAA",
+      }),
+    ).toBeNull();
     expect(
       within(tables[2]).getByRole("rowheader", {
         name: /2\.5\.7 Dragging Movements/,
       }),
     ).not.toBeNull();
-    expect(report.getByText(/there is no such mechnanism\./)).not.toBeNull();
     expect(reportHtml).toContain("@media screen and (max-width: 50rem)");
     expect(reportHtml).not.toContain("overflow-x");
     expect(reportHtml).not.toContain("@page");
