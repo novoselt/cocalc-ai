@@ -866,6 +866,10 @@ describe("PublicApp", () => {
         name: "SageMath, Inc. Accessibility Conformance Report",
       }),
     ).not.toBeNull();
+    expect(
+      report.getByText("CoCalc.ai web application (continuously delivered)"),
+    ).not.toBeNull();
+    expect(report.getByText(/excludes user-authored content;/)).not.toBeNull();
 
     const tables = report.getAllByRole("table");
     expect(tables).toHaveLength(3);
