@@ -28,7 +28,11 @@ export const accessibilityPolicy: PublicPolicy = {
       </p>
       <p>
         For more specific details, please consult our{" "}
-        <A href="/public/documents/SageMathInc_VPAT2.5Rev_WCAG_February2025_December2025.pdf">
+        <A
+          href="/public/documents/SageMathInc_VPAT2.5Rev_WCAG_February2025_December2025.html"
+          rel="noopener"
+          target="_blank"
+        >
           Voluntary Product Accessibility Template, VPAT®
         </A>{" "}
         (last updated December 2025). This report was prepared for the previous

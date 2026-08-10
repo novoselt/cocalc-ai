@@ -1,5 +1,8 @@
 /** @jest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import {
   act,
   fireEvent,
@@ -814,6 +817,71 @@ describe("PublicApp", () => {
     expect(
       within(policyPages).getByRole("link", { name: "DPA" }),
     ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("links the accessibility statement to the standalone HTML report", async () => {
+    await renderPublicApp(
+      <PublicApp
+        config={{ policy_pages: "sagemathinc", site_name: "Launchpad" }}
+        initialRoute={policiesRoute({
+          policySlug: "accessibility",
+          view: "policies-detail",
+        })}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Accessibility Statement" }),
+    ).not.toBeNull();
+    const reportLink = screen.getByRole("link", {
+      name: "Voluntary Product Accessibility Template, VPAT®",
+    });
+    expect(reportLink).toHaveAttribute(
+      "href",
+      "/public/documents/SageMathInc_VPAT2.5Rev_WCAG_February2025_December2025.html",
+    );
+    expect(reportLink).toHaveAttribute("target", "_blank");
+    expect(reportLink).toHaveAttribute("rel", "noopener");
+  });
+
+  it("provides a responsive semantic HTML conformance report", () => {
+    const reportHtml = readFileSync(
+      join(
+        __dirname,
+        "../../../assets/public/documents/SageMathInc_VPAT2.5Rev_WCAG_February2025_December2025.html",
+      ),
+      "utf8",
+    );
+    const reportDocument = new DOMParser().parseFromString(
+      reportHtml,
+      "text/html",
+    );
+    const reportContainer = document.createElement("div");
+    reportContainer.innerHTML = reportDocument.body.innerHTML;
+
+    expect(reportDocument.documentElement.getAttribute("lang")).toBe("en");
+    const report = within(reportContainer);
+    expect(
+      report.getByRole("heading", {
+        name: "SageMath, Inc. Accessibility Conformance Report",
+      }),
+    ).not.toBeNull();
+
+    const tables = report.getAllByRole("table");
+    expect(tables).toHaveLength(4);
+    expect(within(tables[0]).getAllByRole("row")).toHaveLength(4);
+    expect(within(tables[1]).getAllByRole("row")).toHaveLength(33);
+    expect(within(tables[2]).getAllByRole("row")).toHaveLength(25);
+    expect(within(tables[3]).getAllByRole("row")).toHaveLength(32);
+    expect(
+      within(tables[2]).getByRole("rowheader", {
+        name: /2\.5\.7 Dragging Movements/,
+      }),
+    ).not.toBeNull();
+    expect(report.getByText(/there is no such mechnanism\./)).not.toBeNull();
+    expect(reportHtml).toContain("@media screen and (max-width: 50rem)");
+    expect(reportHtml).not.toContain("overflow-x");
+    expect(reportHtml).not.toContain("@page");
   });
 
   it("renders the built-in terms page", async () => {

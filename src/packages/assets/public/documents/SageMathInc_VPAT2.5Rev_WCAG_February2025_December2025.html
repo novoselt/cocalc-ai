@@ -1,0 +1,1881 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SageMath, Inc. Accessibility Conformance Report</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        font-size: 100%;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: Canvas;
+        color: CanvasText;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      main {
+        margin-inline: auto;
+        max-width: 90rem;
+        padding: clamp(1rem, 3vw, 3rem);
+      }
+
+      h1,
+      h2,
+      h3 {
+        line-height: 1.2;
+      }
+
+      h1 {
+        font-size: clamp(1.8rem, 4vw, 2.75rem);
+        margin-block: 0 1.5rem;
+      }
+
+      h2 {
+        border-block-end: 1px solid GrayText;
+        font-size: 1.6rem;
+        margin-block: 2.5rem 1rem;
+        padding-block-end: 0.35rem;
+      }
+
+      h3 {
+        font-size: 1.25rem;
+        margin-block: 2rem 0.75rem;
+      }
+
+      p,
+      li,
+      dd {
+        line-height: 1.65;
+      }
+
+      main > p,
+      main > dl,
+      section > p,
+      section > ul {
+        max-width: 80ch;
+      }
+
+      a {
+        color: LinkText;
+        overflow-wrap: anywhere;
+        text-underline-offset: 0.15em;
+      }
+
+      a:focus-visible {
+        outline: 0.2rem solid currentColor;
+        outline-offset: 0.2rem;
+      }
+
+      .skip-link {
+        background: Canvas;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        color: CanvasText;
+        height: 1px;
+        inset-block-start: 0.5rem;
+        inset-inline-start: 0.5rem;
+        overflow: hidden;
+        padding: 0.75rem;
+        position: fixed;
+        white-space: nowrap;
+        width: 1px;
+        z-index: 1;
+      }
+
+      .skip-link:focus {
+        clip: auto;
+        clip-path: none;
+        height: auto;
+        overflow: visible;
+        width: auto;
+      }
+
+      .report-metadata {
+        display: grid;
+        gap: 0.75rem 1.5rem;
+        grid-template-columns: max-content minmax(0, 1fr);
+        margin-block: 1.5rem;
+      }
+
+      .report-metadata dt {
+        font-weight: 700;
+      }
+
+      .report-metadata dd {
+        margin: 0;
+      }
+
+      .table-wrapper {
+        margin-block: 1rem 2.5rem;
+        max-width: 100%;
+      }
+
+      .report-table {
+        border-collapse: collapse;
+        table-layout: fixed;
+        width: 100%;
+      }
+
+      .report-table th,
+      .report-table td {
+        border: 1px solid GrayText;
+        overflow-wrap: anywhere;
+        padding: 0.65rem;
+        text-align: start;
+        vertical-align: top;
+      }
+
+      .report-table thead th {
+        font-weight: 700;
+      }
+
+      .report-table:not(.standards-table) th:nth-child(1),
+      .report-table:not(.standards-table) td:nth-child(1) {
+        width: 30%;
+      }
+
+      .report-table:not(.standards-table) th:nth-child(2),
+      .report-table:not(.standards-table) td:nth-child(2) {
+        width: 18%;
+      }
+
+      .standards-table th:nth-child(1),
+      .standards-table td:nth-child(1) {
+        width: 55%;
+      }
+
+      .visually-hidden {
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px;
+      }
+
+      @media screen and (max-width: 50rem) {
+        main {
+          padding: 1rem;
+        }
+
+        .report-metadata {
+          grid-template-columns: 1fr;
+        }
+
+        .report-metadata dd:not(:last-child) {
+          margin-block-end: 0.75rem;
+        }
+
+        .report-table,
+        .report-table tbody,
+        .report-table tr,
+        .report-table th,
+        .report-table td {
+          display: block;
+          width: 100%;
+        }
+
+        .report-table thead {
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          height: 1px;
+          overflow: hidden;
+          position: absolute;
+          white-space: nowrap;
+          width: 1px;
+        }
+
+        .report-table tbody {
+          display: grid;
+          gap: 1rem;
+        }
+
+        .report-table tr {
+          border: 1px solid GrayText;
+          padding: 0.75rem;
+        }
+
+        .report-table th,
+        .report-table td {
+          border: 0;
+          padding: 0.3rem 0;
+        }
+
+        .report-table:not(.standards-table) th:nth-child(1),
+        .report-table:not(.standards-table) td:nth-child(1),
+        .report-table:not(.standards-table) th:nth-child(2),
+        .report-table:not(.standards-table) td:nth-child(2),
+        .standards-table th:nth-child(1),
+        .standards-table td:nth-child(1) {
+          width: 100%;
+        }
+
+        .report-table th[scope="row"] {
+          font-size: 1.05rem;
+        }
+
+        .report-table th[scope="row"]::before,
+        .report-table td::before {
+          color: GrayText;
+          display: block;
+          font-size: 0.75rem;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          margin-block-end: 0.1rem;
+          text-transform: uppercase;
+        }
+
+        .report-table:not(.standards-table) th[scope="row"]::before {
+          content: "Criteria";
+        }
+
+        .report-table:not(.standards-table) td:nth-child(2)::before {
+          content: "Conformance Level";
+        }
+
+        .report-table:not(.standards-table) td:nth-child(3)::before {
+          content: "Remarks and Explanations";
+        }
+
+        .standards-table th[scope="row"]::before {
+          content: "Standard/Guideline";
+        }
+
+        .standards-table td:nth-child(2)::before {
+          content: "Included In Report";
+        }
+      }
+
+      @media print {
+        :root {
+          font-size: 9pt;
+        }
+
+        main {
+          max-width: none;
+          padding: 0;
+        }
+
+        h1,
+        h2,
+        h3 {
+          break-after: avoid;
+          page-break-after: avoid;
+        }
+
+        .report-table {
+          table-layout: auto;
+        }
+
+        .report-table tr {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+
+        a {
+          color: inherit;
+        }
+
+        .skip-link {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#report"
+      >Skip to accessibility conformance report</a
+    >
+    <main id="report">
+      <h1>SageMath, Inc. Accessibility Conformance Report</h1>
+      <p><strong>WCAG Edition</strong><br />(Based on VPAT® Version 2.5Rev)</p>
+      <dl class="report-metadata">
+        <dt>Name of Product/Version:</dt>
+        <dd>CoCalc</dd>
+        <dt>Report Date:</dt>
+        <dd>December 2025</dd>
+        <dt>Product Description:</dt>
+        <dd>Web Application</dd>
+        <dt>Contact Information:</dt>
+        <dd>help@sagemath.com</dd>
+        <dt>Notes:</dt>
+        <dd>
+          We are aware of sufficiently many shortcomings to work on before
+          engaging in more thorough testing.
+        </dd>
+        <dt>Evaluation Methods Used:</dt>
+        <dd>
+          Answers are provided by a user very familiar with the system including
+          some of its internal components, using also a sample of automatic
+          scans of several pages.
+        </dd>
+      </dl>
+      <p>
+        <small
+          >“Voluntary Product Accessibility Template” and “VPAT” are registered
+          service marks of the Information Technology Industry Council
+          (ITI)</small
+        >
+      </p>
+      <section>
+        <h2>Applicable Standards/Guidelines</h2>
+        <p>
+          This report covers the degree of conformance for the following
+          accessibility standard/guidelines:
+        </p>
+        <div class="table-wrapper">
+          <table class="report-table standards-table">
+            <caption class="visually-hidden">
+              Applicable Standards/Guidelines
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Standard/Guideline</th>
+                <th scope="col">Included In Report</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">
+                  <a
+                    href="http://www.w3.org/TR/2008/REC-WCAG20-20081211"
+                    rel="noopener"
+                    target="_blank"
+                    >Web Content Accessibility Guidelines 2.0</a
+                  >
+                </th>
+                <td>Level A (Yes)<br />Level AA (Yes)<br />Level AAA (Yes)</td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <a
+                    href="https://www.w3.org/TR/WCAG21"
+                    rel="noopener"
+                    target="_blank"
+                    >Web Content Accessibility Guidelines 2.1</a
+                  >
+                </th>
+                <td>Level A (Yes)<br />Level AA (Yes)<br />Level AAA (Yes)</td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <a
+                    href="https://www.w3.org/TR/WCAG22/"
+                    rel="noopener"
+                    target="_blank"
+                    >Web Content Accessibility Guidelines 2.2</a
+                  >
+                </th>
+                <td>Level A (Yes)<br />Level AA (Yes)<br />Level AAA (Yes)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section>
+        <h2>Terms</h2>
+        <p>
+          The terms used in the Conformance Level information are defined as
+          follows:
+        </p>
+        <ul>
+          <li>
+            <strong>Supports</strong>: The functionality of the product has at
+            least one method that meets the criterion without known defects or
+            meets with equivalent facilitation.
+          </li>
+          <li>
+            <strong>Partially Supports</strong>: Some functionality of the
+            product does not meet the criterion.
+          </li>
+          <li>
+            <strong>Does Not Support</strong>: The majority of product
+            functionality does not meet the criterion.
+          </li>
+          <li>
+            <strong>Not Applicable</strong>: The criterion is not relevant to
+            the product.
+          </li>
+          <li>
+            <strong>Not Evaluated</strong>: The product has not been evaluated
+            against the criterion. This can only be used in WCAG Level AAA
+            criteria.
+          </li>
+        </ul>
+      </section>
+      <section>
+        <h2>WCAG 2.x Report</h2>
+        <p>
+          Note: When reporting on conformance with the WCAG 2.x Success
+          Criteria, they are scoped for full pages, complete processes, and
+          accessibility-supported ways of using technology as documented in the
+          <a
+            href="https://www.w3.org/TR/WCAG20/#conformance-reqs"
+            rel="noopener"
+            target="_blank"
+            >WCAG 2.0 Conformance Requirements</a
+          >.
+        </p>
+        <section>
+          <h3>Table 1: Success Criteria, Level A</h3>
+          <p>Notes:</p>
+          <div class="table-wrapper">
+            <table class="report-table">
+              <caption class="visually-hidden">
+                Table 1: Success Criteria, Level A
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Criteria</th>
+                  <th scope="col">Conformance Level</th>
+                  <th scope="col">Remarks and Explanations</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#text-equiv-all"
+                      rel="noopener"
+                      target="_blank"
+                      >1.1.1 Non-text Content</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    While we are aware of the need to have alternative text
+                    throughout and have it in some places, the coverage is not
+                    uniform nor complete. We are working on gradually completing
+                    this coverage.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-av-only-alt"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.1 Audio-only and Video-only (Prerecorded)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-captions"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.2 Captions (Prerecorded)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-audio-desc"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.3 Audio Description or Media Alternative
+                      (Prerecorded)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#content-structure-separation-programmatic"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.1 Info and Relationships</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#content-structure-separation-sequence"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.2 Meaningful Sequence</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#content-structure-separation-understanding"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.3 Sensory Characteristics</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Instructions provided for understanding and operating
+                    content do not rely solely on sensory characteristics of
+                    components such as shape, size, visual location,
+                    orientation, or sound.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-without-color"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.1 Use of Color</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Hyperlinks in text may be identified by color only. Active
+                    project/file tabs are mostly indicated by the color of the
+                    tab and slight change in shape.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-dis-audio"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.2 Audio Control</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#keyboard-operation-keyboard-operable"
+                      rel="noopener"
+                      target="_blank"
+                      >2.1.1 Keyboard</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    While some content and functionality are accessible using
+                    keyboard only, some important controls cannot be accessed
+                    and overall keyboard only interaction is likely impossible.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#keyboard-operation-trapping"
+                      rel="noopener"
+                      target="_blank"
+                      >2.1.2 No Keyboard Trap</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>Terminal traps keyboard</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#character-key-shortcuts"
+                      rel="noopener"
+                      target="_blank"
+                      >2.1.4 Character Key Shortcuts</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#time-limits-required-behaviors"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.1 Timing Adjustable</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Some system messages and warnings may disappear without
+                    explicit user interaction and this timing is not adjustable,
+                    hence it is possible that some users won’t be able to read
+                    the message.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#time-limits-pause"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.2 Pause, Stop, Hide</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    There are some progress indicators, in particular for
+                    compute servers, that may change very quickly, but their
+                    purpose is to indicate the current state and relate the step
+                    where the problem occurred if it does not complete
+                    reasonably fast.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#seizure-does-not-violate"
+                      rel="noopener"
+                      target="_blank"
+                      >2.3.1 Three Flashes or Below Threshold</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    It is possible for a rapid stream of error messages to
+                    appear on top of each other in some situations.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-skip"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.1 Bypass Blocks</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>Depends on sensible keyboard navigation.</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-title"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.2 Page Titled</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “In cases such as Single Page Applications (SPAs), where
+                    various distinct pages/views are all nominally served from
+                    the same URI and the content of the page is changed
+                    dynamically, the title of the page should also be changed
+                    dynamically to reflect the content or topic of the current
+                    view. “
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-focus-order"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.3 Focus Order</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>Depends on sensible keyboard navigation.</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-refs"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.4 Link Purpose (In Context)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#pointer-gestures"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.1 Pointer Gestures</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc has no functionality depending on pointer gestures.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#pointer-cancellation"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.2 Pointer Cancellation</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#label-in-name"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.3 Label in Name</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#motion-actuation"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.4 Motion Actuation</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>CoCalc does not use motion actuation</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-doc-lang-id"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.1 Language of Page</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>Some pages do not indicate the main language</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-receive-focus"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.1 On Focus</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “When any user interface component receives focus, it does
+                    not initiate a change of context.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-unpredictable-change"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.2 On Input</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Changing the setting … does not automatically cause a
+                    change of context unless the user has been advised of the
+                    behavior before using the component.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#consistent-help"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.6 Consistent Help</a
+                    >
+                    <span>(Level A 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “help mechanisms ... occur in the same order relative to
+                    other page content”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-identified"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.1 Error Identification</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “If an input error is automatically detected, the item that
+                    is in error is identified and the error is described to the
+                    user in text. “
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-cues"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.2 Labels or Instructions</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#redundant-entry"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.7 Redundant Entry</a
+                    >
+                    <span>(Level A 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#ensure-compat-parses"
+                      rel="noopener"
+                      target="_blank"
+                      >4.1.1 Parsing</a
+                    >
+                    <span>(Level A)</span><br />WCAG 2.0 and 2.1 – Always answer
+                    ‘Supports’<br />WCAG 2.2 (obsolete and removed) - Does not
+                    apply
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    For WCAG 2.0 and 2.1, the September 2023 errata update
+                    indicates this criterion is always supported. See the
+                    <a
+                      href="https://www.w3.org/WAI/WCAG20/errata/#editorial"
+                      rel="noopener"
+                      target="_blank"
+                      >WCAG 2.0 Editorial Errata</a
+                    >
+                    and the
+                    <a
+                      href="https://www.w3.org/WAI/WCAG21/errata/#editorial"
+                      rel="noopener"
+                      target="_blank"
+                      >WCAG 2.1 Editorial Errata</a
+                    >.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#ensure-compat-rsv"
+                      rel="noopener"
+                      target="_blank"
+                      >4.1.2 Name, Role, Value</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>Work in progress to cover more elements.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <h3>Table 2: Success Criteria, Level AA</h3>
+          <p>Notes:</p>
+          <div class="table-wrapper">
+            <table class="report-table">
+              <caption class="visually-hidden">
+                Table 2: Success Criteria, Level AA
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Criteria</th>
+                  <th scope="col">Conformance Level</th>
+                  <th scope="col">Remarks and Explanations</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-real-time-captions"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.4 Captions (Live)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-audio-desc-only"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.5 Audio Description (Prerecorded)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#orientation"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.4 Orientation</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>CoCalc adjusts to the orientation and window size.</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#identify-input-purpose"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.5 Identify Input Purpose</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-contrast"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.3 Contrast (Minimum)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Main elements do satisfy the contrast requirements, some
+                    secondary ones may still be too low.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-scale"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.4 Resize text</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “text can be resized without assistive technology up to 200
+                    percent without loss of content or functionality”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-text-presentation"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.5 Images of Text</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “text is used to convey information rather than images of
+                    text”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#reflow"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.10 Reflow</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    CoCalc&#x27;s default interface contains too many navigation
+                    elements and often several frames to avoid scrolling at
+                    400%, but it is possible to close extra frames and hide many
+                    navigation elements. “Full screen button” does most of that
+                    in one step, but the user can do some fine tuning as well.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#non-text-contrast"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.11 Non-text Contrast</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Some adjustment may be needed using scanners once text
+                    contrast is sufficient. WCAG has a lot of examples for this
+                    section.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#text-spacing"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.12 Text Spacing</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Some text on control elements may get cut off when
+                    increasing text spacing.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#content-on-hover-or-focus"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.13 Content on Hover or Focus</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Tooltips are usually not dismissible and may obscure
+                    surrounding content. However, it is possible to turn off
+                    tooltips for some buttons.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-mult-loc"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.5 Multiple Ways</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    There are alternative ways to reach different pages or
+                    functionality.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-descriptive"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.6 Headings and Labels</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    We strive to “provide descriptive headings and labels,” but
+                    it is difficult to assess the success of it.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-focus-visible"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.7 Focus Visible</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#focus-not-obscured-minimum"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.11 Focus Not Obscured (Minimum)</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#dragging-movements"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.7 Dragging Movements</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “All functionality that uses a dragging movement for
+                    operation can be achieved by a single pointer without
+                    dragging, unless dragging is essential”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#target-size-minimum"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.8 Target Size (Minimum)</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “The size of the target for pointer inputs is at least 24 by
+                    24 CSS pixels”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-other-lang-id"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.2 Language of Parts</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    “The human language of each passage or phrase in the content
+                    can be programmatically determined” It is possible to have
+                    all elements in English. If the user pick an interface
+                    translation, some elements may not be marked appropriately.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-consistent-locations"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.3 Consistent Navigation</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Navigational mechanisms that are repeated on multiple web
+                    pages ... occur in the same relative order”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-consistent-functionality"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.4 Consistent Identification</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Components that have the same functionality … are
+                    identified consistently.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-suggestions"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.3 Error Suggestion</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “If an input error is automatically detected and suggestions
+                    for correction are known, then the suggestions are provided
+                    to the user”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-reversible"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.4 Error Prevention (Legal, Financial, Data)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Provide ways for users to confirm, correct, or reverse
+                    important submissions.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#accessible-authentication-minimum"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.8 Accessible Authentication (Minimum)</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>CoCalc allows the use of password managers or SSO.</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#status-messages"
+                      rel="noopener"
+                      target="_blank"
+                      >4.1.3 Status Messages</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    “Let assistive technology notify users about status changes
+                    that don&#x27;t take focus.” The important changes are
+                    probably losing connection to the server and kernel crashes,
+                    things like RAM gauges should not attract attention on their
+                    own.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <h3>Table 3: Success Criteria, Level AAA</h3>
+          <p>Notes:</p>
+          <div class="table-wrapper">
+            <table class="report-table">
+              <caption class="visually-hidden">
+                Table 3: Success Criteria, Level AAA
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Criteria</th>
+                  <th scope="col">Conformance Level</th>
+                  <th scope="col">Remarks and Explanations</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-sign"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.6 Sign Language (Prerecorded)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-extended-ad"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.7 Extended Audio Description (Prerecorded)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-text-doc"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.8 Media Alternative (Prerecorded)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-live-audio-only"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.9 Audio-only (Live)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#identify-purpose"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.6 Identify Purpose</a
+                    >
+                    <span>(Level AAA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    “In content implemented using markup languages, the purpose
+                    of user interface components, icons, and regions can be
+                    programmatically determined.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast7"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.6 Contrast (Enhanced)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    This is likely feasible only with a dedicated high contrast
+                    color scheme.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-noaudio"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.7 Low or No Background Audio</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-visual-presentation"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.8 Visual Presentation</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    It is possible to use browser and internal zooming. The
+                    width of the window can be changed. Text is not justified.
+                    There is no internal support for user-selected colors,
+                    although there is support for the dark mode.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-text-images"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.9 Images of Text (No Exception)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “text is used to convey information rather than images of
+                    text”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#keyboard-operation-all-funcs"
+                      rel="noopener"
+                      target="_blank"
+                      >2.1.3 Keyboard (No Exception)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#time-limits-no-exceptions"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.3 No Timing</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Timing is not an essential part of the event or activity
+                    presented by the content”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#time-limits-postponed"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.4 Interruptions</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Interruptions can be postponed or suppressed by the user,
+                    except interruptions involving an emergency. “
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#time-limits-server-timeout"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.5 Re-authenticating</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “When an authenticated session expires, the user can
+                    continue the activity without loss of data after
+                    re-authenticating.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#timeouts"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.6 Timeouts</a
+                    >
+                    <span>(Level AAA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>“Users do not lose data due to unknown timeouts.”</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#seizure-three-times"
+                      rel="noopener"
+                      target="_blank"
+                      >2.3.2 Three Flashes</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    It is possible for a rapid stream of error messages to
+                    appear on top of each other in some situations.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#animation-from-interactions"
+                      rel="noopener"
+                      target="_blank"
+                      >2.3.3 Animation from Interactions</a
+                    >
+                    <span>(Level AAA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    There are no controls to disable all interface animations.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-location"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.8 Location</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    The context of the current page is displayed by tabs at the
+                    top or on the left of the page.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-link"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.9 Link Purpose (Link Only)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-headings"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.10 Section Headings</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Where content is organized in sections, provide section
+                    headings.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#focus-not-obscured-enhanced"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.12 Focus Not Obscured (Enhanced)</a
+                    >
+                    <span>(Level AAA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#focus-appearance"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.13 Focus Appearance</a
+                    >
+                    <span>(Level AAA 2.2 only)</span>
+                  </th>
+                  <td>Not evaluated</td>
+                  <td>Difficult to assess, WCAG page has many examples.</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#target-size"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.5 Target Size</a
+                    >
+                    <span>(Level AAA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>“Make custom targets at least 44 by 44 pixels.”</td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#concurrent-input-mechanisms"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.6 Concurrent Input Mechanisms</a
+                    >
+                    <span>(Level AAA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Do not prevent users from switching their mode of input.”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-idioms"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.3 Unusual Words</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    “A mechanism is available for identifying specific
+                    definitions of words or phrases used in an unusual or
+                    restricted way, including idioms and jargon.” – there is no
+                    such mechnanism.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-located"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.4 Abbreviations</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    “A mechanism for identifying the expanded form or meaning of
+                    abbreviations is available. “ - there is no such mechanism.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-supplements"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.5 Reading Level</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    There are no versions of text which are more easily
+                    understood.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-pronunciation"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.6 Pronunciation</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    “A mechanism is available for identifying specific
+                    pronunciation of words where meaning of the words, in
+                    context, is ambiguous without knowing the pronunciation. “ -
+                    there is no such mechanism.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-no-extreme-changes-context"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.5 Change on Request</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Changes of context are initiated only by user request”
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-context-help"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.5 Help</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Various forms have help text that can be shown to describe
+                    the meaning of controls in detail.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-reversible-all"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.6 Error Prevention (All)</a
+                    >
+                    <span>(Level AAA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    “Provide ways for users to confirm, correct, or reverse any
+                    submissions.” – Actions like deleting an account require
+                    confirmations. Edits to files are reversible using
+                    TimeTravel or snapshots.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#accessible-authentication-enhanced"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.9 Accessible Authentication (Enhanced)</a
+                    >
+                    <span>(Level AAA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>CoCalc allows the use of password managers or SSO.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+      <section>
+        <h2>Legal Disclaimer (Sagemath, Inc.)</h2>
+        <p>
+          This document is provided for information purposes only and the
+          contents hereof are subject to change without notice. Sagemath, Inc.
+          does not warrant that this document is error free, nor does it provide
+          any other warranties or conditions, whether expressed orally or
+          implied in law, including implied warranties and conditions of
+          merchantability or fitness for a particular purpose. Sagemath, Inc.
+          specifically disclaims any liability with respect to this document and
+          no contractual obligations are formed either directly or indirectly by
+          this document. Sagemath, Inc. further makes no representation
+          concerning the ability of assistive technologies or other products to
+          interoperate with Sagemath, Inc. products. This document addresses the
+          named product(s) or platforms only.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
