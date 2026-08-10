@@ -14,6 +14,7 @@ import {
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
 import type { SnapshotUsage } from "@cocalc/conat/files/file-server";
+import type { ProjectInfo } from "@cocalc/conat/project/project-info";
 import CopyButton from "@cocalc/frontend/components/copy-button";
 import DiskUsage from "@cocalc/frontend/project/disk-usage/disk-usage";
 import { linearList } from "@cocalc/frontend/project/info/utils";
@@ -116,6 +117,11 @@ export function ProjectSettingsHealthRail({
   const lastBackup = projectLastBackup ?? (project as any).get("last_backup");
   const startTs = projectStatus?.get("start_ts");
   const userCount = (project as any).get("users")?.size;
+  const projectInfo = useProjectInfo({
+    project_id,
+    intervalVisible: 10000,
+    intervalHidden: 60000,
+  });
 
   return (
     <Card
@@ -164,10 +170,15 @@ export function ProjectSettingsHealthRail({
         <RecoveryHealthRow project_id={project_id} lastBackup={lastBackup} />
         <StorageHealthRow project_id={project_id} />
         <MemoryHealthRow
+          info={projectInfo.info}
           project_id={project_id}
           running={rawProjectState === "running"}
         />
-        <ProcessHealthRow project_id={project_id} />
+        <ProcessHealthRow
+          disconnected={projectInfo.disconnected}
+          info={projectInfo.info}
+          project_id={project_id}
+        />
         <NetworkHealthRow project_id={project_id} />
         {typeof userCount === "number" && (
           <RailRow
@@ -383,12 +394,15 @@ function useLatestSnapshot(project_id: string): {
   return { loading, snapshot };
 }
 
-function ProcessHealthRow({ project_id }: { project_id: string }) {
-  const { info, disconnected } = useProjectInfo({
-    project_id,
-    intervalVisible: 10000,
-    intervalHidden: 60000,
-  });
+function ProcessHealthRow({
+  disconnected,
+  info,
+  project_id,
+}: {
+  disconnected: boolean;
+  info: ProjectInfo | null;
+  project_id: string;
+}) {
   const rows = info?.processes == null ? undefined : linearList(info.processes);
 
   if (disconnected && rows == null) {
@@ -467,18 +481,27 @@ function nonNegativeNumber(value: unknown): number | undefined {
 }
 
 function MemoryHealthRow({
+  info,
   project_id,
   running,
 }: {
+  info: ProjectInfo | null;
   project_id: string;
   running: boolean;
 }) {
-  const projectStatus = useTypedRedux({ project_id }, "status");
   const { runQuota } = useProjectRunQuota(project_id);
-  const usedMiB = nonNegativeNumber(projectStatus?.getIn(["usage", "mem_rss"]));
+  const rows = info?.processes == null ? undefined : linearList(info.processes);
+  const processMemoryMiB =
+    rows == null
+      ? undefined
+      : rows.reduce((total, process) => total + process.mem, 0);
+  const cgroupMemoryMiB = nonNegativeNumber(info?.cgroup?.mem_stat.total_rss);
+  const tmpMemoryMiB = nonNegativeNumber(info?.disk_usage?.tmp?.usage) ?? 0;
+  const usedMiB =
+    cgroupMemoryMiB == null ? processMemoryMiB : cgroupMemoryMiB + tmpMemoryMiB;
   const configuredLimitMiB = positiveNumber(runQuota?.memory_limit);
   const runtimeLimitMiB = positiveNumber(
-    projectStatus?.getIn(["usage", "mem_tot"]),
+    info?.cgroup?.mem_stat.hierarchical_memory_limit,
   );
   const limitMiB = running
     ? (runtimeLimitMiB ?? configuredLimitMiB)

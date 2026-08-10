@@ -21,8 +21,13 @@ export const ALERT_COLS: { [key in AlertLevel]: string } = {
 } as const;
 
 export function compute_usage(opts): Usage {
-  const { kernel_usage, backend_state, cpu_runtime, expected_cell_runtime } =
-    opts;
+  const {
+    kernel_usage,
+    backend_state,
+    cpu_runtime,
+    expected_cell_runtime,
+    project_mem_limit,
+  } = opts;
   // not using resources, return sane "zero" defaults
   if (
     kernel_usage == null ||
@@ -59,12 +64,17 @@ export function compute_usage(opts): Usage {
   const reported_mem_limit = kernel_usage.get("mem_limit");
   const mem_free = kernel_usage?.get("mem_free");
   const legacy_mem_limit = mem_free != null ? mem_free + mem : undefined;
+  const configured_mem_limit =
+    typeof project_mem_limit === "number" && project_mem_limit > 0
+      ? project_mem_limit
+      : undefined;
   const mem_limit: number =
-    typeof reported_mem_limit === "number" && reported_mem_limit > 0
+    configured_mem_limit ??
+    (typeof reported_mem_limit === "number" && reported_mem_limit > 0
       ? reported_mem_limit
       : typeof legacy_mem_limit === "number" && legacy_mem_limit > 0
         ? legacy_mem_limit
-        : 1000;
+        : 1000);
 
   const cpu_alert =
     cpu > ALERT_HIGH_PCT * cpu_limit

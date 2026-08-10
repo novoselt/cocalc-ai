@@ -10,11 +10,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ImmutableUsageInfo } from "@cocalc/util/types/project-usage-info";
 import { Usage, BackendState } from "@cocalc/jupyter/types";
 import { Map as immutableMap } from "immutable";
+import { useProjectRunQuota } from "@cocalc/frontend/project/use-project-run-quota";
 import { compute_usage } from "./usage";
 
 const USAGE_TIMER_UPDATE_MS = 750;
 
-export default function useKernelUsage(name: string): {
+export default function useKernelUsage(
+  name: string,
+  project_id: string,
+): {
   usage: Usage;
   expected_cell_runtime: number;
 } {
@@ -27,6 +31,9 @@ export default function useKernelUsage(name: string): {
     name,
     "backend_state",
   ]);
+  const { runQuota } = useProjectRunQuota(project_id, {
+    enabled: !!project_id,
+  });
   // cell timing statistic
   // map from ids to cells
   const cells: undefined | immutableMap<string, any> = useRedux([
@@ -81,8 +88,15 @@ export default function useKernelUsage(name: string): {
         backend_state,
         cpu_runtime,
         expected_cell_runtime,
+        project_mem_limit: runQuota?.memory_limit,
       }),
-    [kernel_usage, backend_state, cpu_runtime, expected_cell_runtime],
+    [
+      kernel_usage,
+      backend_state,
+      cpu_runtime,
+      expected_cell_runtime,
+      runQuota?.memory_limit,
+    ],
   );
 
   return { usage, expected_cell_runtime };
