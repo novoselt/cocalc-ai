@@ -53,13 +53,18 @@ export function compute_usage(opts): Usage {
   const cpu_limit: number = kernel_usage?.get("cpu_limit") ?? 1;
 
   // memory numbers
-  // the main idea here is to show how much more memory the kernel could use
-  // the basis is the remaining free memory + it's memory usage
   const mem_self = kernel_usage.get("mem") ?? 0;
   const mem_chld = kernel_usage.get("mem_chld") ?? 0;
   const mem = mem_self + mem_chld;
+  const reported_mem_limit = kernel_usage.get("mem_limit");
   const mem_free = kernel_usage?.get("mem_free");
-  const mem_limit: number = mem_free != null ? mem_free + mem : 1000;
+  const legacy_mem_limit = mem_free != null ? mem_free + mem : undefined;
+  const mem_limit: number =
+    typeof reported_mem_limit === "number" && reported_mem_limit > 0
+      ? reported_mem_limit
+      : typeof legacy_mem_limit === "number" && legacy_mem_limit > 0
+        ? legacy_mem_limit
+        : 1000;
 
   const cpu_alert =
     cpu > ALERT_HIGH_PCT * cpu_limit

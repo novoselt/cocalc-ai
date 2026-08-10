@@ -19,6 +19,7 @@ import DiskUsage from "@cocalc/frontend/project/disk-usage/disk-usage";
 import { linearList } from "@cocalc/frontend/project/info/utils";
 import useDiskUsage from "@cocalc/frontend/project/disk-usage/use-disk-usage";
 import useProjectInfo from "@cocalc/frontend/project/info/use-project-info";
+import { useProjectRunQuota } from "@cocalc/frontend/project/use-project-run-quota";
 import {
   ManagedEgressHistoryButton,
   ManagedEgressSparkline,
@@ -162,6 +163,10 @@ export function ProjectSettingsHealthRail({
         </RailRow>
         <RecoveryHealthRow project_id={project_id} lastBackup={lastBackup} />
         <StorageHealthRow project_id={project_id} />
+        <MemoryHealthRow
+          project_id={project_id}
+          running={rawProjectState === "running"}
+        />
         <ProcessHealthRow project_id={project_id} />
         <NetworkHealthRow project_id={project_id} />
         {typeof userCount === "number" && (
@@ -438,6 +443,89 @@ function ProcessHealthRow({ project_id }: { project_id: string }) {
           </Text>
         )}
       </Space>
+    </RailRow>
+  );
+}
+
+function formatMemoryMiB(value: number): string {
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(value >= 10 * 1024 ? 0 : 1)} GiB`;
+  }
+  return `${Math.round(value)} MiB`;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function MemoryHealthRow({
+  project_id,
+  running,
+}: {
+  project_id: string;
+  running: boolean;
+}) {
+  const projectStatus = useTypedRedux({ project_id }, "status");
+  const { runQuota } = useProjectRunQuota(project_id);
+  const usedMiB = nonNegativeNumber(projectStatus?.getIn(["usage", "mem_rss"]));
+  const configuredLimitMiB = positiveNumber(runQuota?.memory_limit);
+  const runtimeLimitMiB = positiveNumber(
+    projectStatus?.getIn(["usage", "mem_tot"]),
+  );
+  const limitMiB = running
+    ? (runtimeLimitMiB ?? configuredLimitMiB)
+    : (configuredLimitMiB ?? runtimeLimitMiB);
+  const percent =
+    usedMiB != null && limitMiB != null
+      ? Math.round((100 * usedMiB) / limitMiB)
+      : undefined;
+
+  return (
+    <RailRow
+      icon="microchip"
+      iconColor={COLORS.ANTD_GREEN_D}
+      label="Memory"
+      action={
+        <Button
+          size="small"
+          onClick={() => openInfoPage(project_id)}
+          style={SMALL_ACTION_STYLE}
+        >
+          Monitor
+        </Button>
+      }
+    >
+      {!running ? (
+        <Text type="secondary">
+          {limitMiB == null
+            ? "Start project to monitor"
+            : `${formatMemoryMiB(limitMiB)} limit`}
+        </Text>
+      ) : percent == null || usedMiB == null || limitMiB == null ? (
+        <Text type="secondary">Loading...</Text>
+      ) : (
+        <Space vertical size={3} style={{ width: "100%" }}>
+          <Text style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+            {percent}% used · {formatMemoryMiB(usedMiB)} /{" "}
+            {formatMemoryMiB(limitMiB)}
+          </Text>
+          <Progress
+            aria-label="Project memory usage"
+            percent={Math.min(100, percent)}
+            showInfo={false}
+            size="small"
+            status={percent > 90 ? "exception" : "normal"}
+          />
+        </Space>
+      )}
     </RailRow>
   );
 }
