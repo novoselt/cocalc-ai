@@ -2,7 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Map as ImmutableMap, Set as ImmutableSet } from "immutable";
 import { IntlProvider } from "react-intl";
 
-import { ActionBox, crossProjectSingleItemDestPath } from "./action-box";
+import {
+  ActionBox,
+  crossProjectCopySourcePath,
+  crossProjectSingleItemDestPath,
+} from "./action-box";
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   useTypedRedux: (store: any, key: string) => {
@@ -194,5 +198,18 @@ describe("crossProjectSingleItemDestPath", () => {
         destinationDirectory: "target",
       }),
     ).toBe("target");
+  });
+});
+
+describe("crossProjectCopySourcePath", () => {
+  it("uses string semantics for one selected path", () => {
+    expect(crossProjectCopySourcePath(["/home/user/test.ipynb"])).toBe(
+      "/home/user/test.ipynb",
+    );
+  });
+
+  it("keeps array semantics for multiple selected paths", () => {
+    const paths = ["/home/user/a.txt", "/home/user/b.txt"];
+    expect(crossProjectCopySourcePath(paths)).toEqual(paths);
   });
 });

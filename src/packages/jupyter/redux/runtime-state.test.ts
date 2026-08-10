@@ -1,6 +1,7 @@
 import {
   isActiveJupyterRuntimeCellState,
   normalizeJupyterRuntimeCellState,
+  recoverJupyterRuntimeCellState,
   type JupyterRuntimeCellState,
 } from "./runtime-state";
 
@@ -26,6 +27,25 @@ describe("normalizeJupyterRuntimeCellState", () => {
       start: 10,
       end: 20,
     });
+  });
+
+  it("recovers a terminal end field omitted from the object manifest", () => {
+    expect(
+      recoverJupyterRuntimeCellState({ state: "busy", start: 10 }, 20),
+    ).toEqual({ state: "done", start: 10, end: 20 });
+  });
+
+  it("does not recover an end field belonging to an earlier run", () => {
+    expect(
+      recoverJupyterRuntimeCellState({ state: "busy", start: 20 }, 10),
+    ).toEqual({ state: "busy", start: 20 });
+    expect(
+      normalizeJupyterRuntimeCellState({
+        state: "busy",
+        start: 20,
+        end: 10,
+      }),
+    ).toEqual({ state: "busy", start: 20, end: 10 });
   });
 
   it("identifies only live running states as active", () => {

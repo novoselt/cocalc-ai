@@ -404,7 +404,7 @@ func stopDaemonCmd(args []string) {
 }
 
 func printHelp() {
-	fmt.Println(`Usage:
+	fmt.Print(`Usage:
   cocalc-self-host-connector pair --base-url <url> --token <pairing_token> [--name <name>] [--replace] [--insecure]
   cocalc-self-host-connector pair-ssh --ssh-host <host> --token <pairing_token> [--ssh-user <user>] [--replace]
   cocalc-self-host-connector run [--config <path>] [--daemon]

@@ -9,6 +9,7 @@ import { TimeAgo } from "@cocalc/frontend/components";
 import { useProjectContext } from "@cocalc/frontend/project/context";
 import type { StartLroState } from "@cocalc/frontend/project/start-ops";
 import { useProjectActiveOperation } from "../use-project-active-op";
+import { useProjectStartStateReconcile } from "../use-project-start-state-reconcile";
 import { progressBarStatus } from "@cocalc/frontend/lro/utils";
 import { COLORS } from "@cocalc/util/theme";
 import {
@@ -211,6 +212,10 @@ export default function StartInProgress({
     activeOp,
     restartRequest,
     lifecycleState,
+  });
+  useProjectStartStateReconcile({
+    project_id,
+    enabled: is_active && active,
   });
   const startTsFromLro = toTimestamp(
     startLro?.summary?.started_at ??

@@ -28,7 +28,11 @@ import {
   type BackendState,
   type KernelState,
 } from "@cocalc/jupyter/types";
-import { callback2, once } from "@cocalc/util/async-utils";
+import { callback2, once, withTimeout } from "@cocalc/util/async-utils";
+import type {
+  KernelSignalResult,
+  KernelStatus,
+} from "@cocalc/conat/project/api/jupyter";
 import { bufferToBase64 } from "@cocalc/util/base64";
 import { Config as FormatterConfig, Syntax } from "@cocalc/util/code-formatter";
 import {
@@ -88,6 +92,7 @@ import {
   DELETED_CHECK_INTERVAL,
 } from "@cocalc/sync/editor/generic/sync-doc";
 import { type WatchIterator } from "@cocalc/conat/files/watch";
+import { isKernelStopConfirmed } from "./kernel-stop-confirmation";
 import {
   mark_file_open_v2_phase,
   mark_open_phase,
@@ -2907,7 +2912,7 @@ export class JupyterActions extends JupyterActions0 {
     let wroteFirstVisibleChange = false;
     const writeCell = (): boolean => {
       const { id, state, output, start, end, exec_count } = cell;
-      this.set_runtime_cell_state(id, { state, start, end });
+      this.set_local_runtime_cell_state(id, { state, start, end });
       const patch: { output?: any; exec_count?: number | null } = {};
       if (
         output != null ||
@@ -2999,7 +3004,11 @@ export class JupyterActions extends JupyterActions0 {
       if (state === "busy" || state === "run") {
         continue;
       }
-      this.set_runtime_cell_state(id, { state: "run", start: null, end: null });
+      this.set_local_runtime_cell_state(id, {
+        state: "run",
+        start: null,
+        end: null,
+      });
     }
   };
 
@@ -3012,7 +3021,10 @@ export class JupyterActions extends JupyterActions0 {
       if (cells.getIn([id, "state"]) !== "run") {
         continue;
       }
-      this.set_runtime_cell_state(id, { state: "done", end: Date.now() });
+      this.set_local_runtime_cell_state(id, {
+        state: "done",
+        end: Date.now(),
+      });
     }
   };
 
@@ -3311,7 +3323,10 @@ export class JupyterActions extends JupyterActions0 {
           continue;
         }
         if (!kernel) {
-          this.set_runtime_cell_state(id, { state: "done", end: Date.now() });
+          this.set_local_runtime_cell_state(id, {
+            state: "done",
+            end: Date.now(),
+          });
           this.runDebug("runCells.cell.skip.no_kernel", { runId, id });
           continue;
         }
@@ -3986,12 +4001,34 @@ export class JupyterActions extends JupyterActions0 {
     this.syncdb.set_cursor_locs(locs, side_effect);
   };
 
-  signal = async (signal = "SIGINT"): Promise<void> => {
+  private sendKernelSignal = async (
+    signal = "SIGINT",
+  ): Promise<KernelSignalResult | undefined> => {
     const api = webapp_client.project_client.conatApi(this.project_id);
+    let result: KernelSignalResult | undefined;
     try {
-      await api.jupyter.signal({ path: this.path, signal });
+      result = await api.jupyter.signal({ path: this.path, signal });
     } catch {}
     this.clear_all_cell_run_state();
+    return result;
+  };
+
+  signal = async (signal = "SIGINT"): Promise<void> => {
+    await this.sendKernelSignal(signal);
+  };
+
+  private getAuthoritativeKernelStatus = async (): Promise<
+    KernelStatus | undefined
+  > => {
+    const api = webapp_client.project_client.conatApi(this.project_id);
+    try {
+      return await withTimeout(
+        api.jupyter.getKernelStatus({ path: this.path }),
+        2_000,
+      );
+    } catch {
+      return undefined;
+    }
   };
 
   // Kill the running kernel and does NOT start it up again.
@@ -4001,19 +4038,60 @@ export class JupyterActions extends JupyterActions0 {
       delete this.restartKernelOnClose;
     }
     this.clear_all_cell_run_state();
-    await this.signal("SIGKILL");
+    const signalResult = await this.sendKernelSignal("SIGKILL");
     // Wait a little, since SIGKILL has to really happen on backend,
     // and server has to respond and change state.
     const not_running = (): boolean => {
       if (this._state === "closed") return true;
       return this.get_runtime_setting("backend_state") != "running";
     };
+    let nextAuthoritativeCheck = Date.now() + 1_000;
+    let authoritativeCheckDelay = 1_000;
     try {
-      await this.syncdb.wait(not_running, 30);
+      await until(
+        async () => {
+          if (not_running()) {
+            return true;
+          }
+          if (Date.now() < nextAuthoritativeCheck) {
+            return false;
+          }
+          const status = await this.getAuthoritativeKernelStatus();
+          if (
+            isKernelStopConfirmed({
+              status,
+              targetIdentity: signalResult?.identity,
+            })
+          ) {
+            return true;
+          }
+          authoritativeCheckDelay = Math.min(
+            authoritativeCheckDelay * 2,
+            5_000,
+          );
+          nextAuthoritativeCheck = Date.now() + authoritativeCheckDelay;
+          return false;
+        },
+        { start: 250, decay: 1, min: 250, max: 250, timeout: 30_000 },
+      );
       // worked -- and also no need to show "kernel got killed" message since this was intentional.
       this.set_error("");
     } catch (err) {
-      console.warn("Jupyter kernel stop was not confirmed in time", err);
+      const status = await this.getAuthoritativeKernelStatus();
+      if (
+        isKernelStopConfirmed({
+          status,
+          targetIdentity: signalResult?.identity,
+        })
+      ) {
+        this.set_error("");
+        return;
+      }
+      console.warn("Jupyter kernel stop was not confirmed in time", {
+        err,
+        status,
+        targetIdentity: signalResult?.identity,
+      });
       this.set_error("");
       alert_message({
         type: "warning",

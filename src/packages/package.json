@@ -10,6 +10,7 @@
     "tsc:watch": "tsc --build --watch --pretty --preserveWatchOutput tsconfig.solution.json"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.1",
     "@types/jest": "^30.0.0",
     "check-dependency-version-consistency": "^5.0.0",
     "depcheck": "^1.4.7",

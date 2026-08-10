@@ -63,6 +63,7 @@ import {
   JUPYTER_RUNTIME_USER_KEY,
   normalizeJupyterRuntimeCellState,
   openJupyterRuntimeState,
+  recoverJupyterRuntimeCellState,
   type JupyterRuntimeCellState,
   type JupyterRuntimeLimits,
   type JupyterRuntimeNbconvert,
@@ -324,14 +325,9 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     this.pendingDeletedRuntimeRecords.delete(key);
     if (this.runtimeState != null) {
       this.runtimeState.set(key, value);
-      if (isJupyterRuntimeCellKey(key)) {
-        // Cell state needs to remain optimistic until its exact value echoes.
-        this.pendingRuntimeRecords.set(key, value);
-      } else {
-        // Other runtime records are state machines whose remote transitions
-        // (e.g. nbconvert start -> run -> done) must remain authoritative.
-        this.pendingRuntimeRecords.delete(key);
-      }
+      // DKV already provides optimistic local reads. Keeping another pending
+      // value here can mask a newer transition from a concurrent writer.
+      this.pendingRuntimeRecords.delete(key);
     } else {
       this.pendingRuntimeRecords.set(key, value);
     }
@@ -389,7 +385,9 @@ export class JupyterActions extends Actions<JupyterStoreState> {
       }
     }
     for (const key of keys) {
-      const runtimeCell = this.getRuntimeRecord<JupyterRuntimeCellState>(key);
+      const runtimeCell = this.getRuntimeCell(
+        jupyterRuntimeCellIdFromKey(key) ?? "",
+      );
       if (!isActiveJupyterRuntimeCellState(runtimeCell)) {
         continue;
       }
@@ -404,9 +402,13 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     if (!id) {
       return;
     }
-    return normalizeJupyterRuntimeCellState(
-      this.getRuntimeRecord<JupyterRuntimeCellState>(jupyterRuntimeCellKey(id)),
-    );
+    const key = jupyterRuntimeCellKey(id);
+    const runtimeCell = this.getRuntimeRecord<JupyterRuntimeCellState>(key);
+    const unlistedEnd =
+      runtimeCell?.end == null && !this.pendingRuntimeRecords.has(key)
+        ? this.runtimeState?.getField?.(key, "end")
+        : undefined;
+    return recoverJupyterRuntimeCellState(runtimeCell, unlistedEnd);
   };
 
   private withRuntimeCell = (id: string, cell: immutable.Map<string, any>) => {
@@ -476,9 +478,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     }
     for (const [key, value] of [...this.pendingRuntimeRecords.entries()]) {
       this.runtimeState.set(key, value);
-      if (!isJupyterRuntimeCellKey(key)) {
-        this.pendingRuntimeRecords.delete(key);
-      }
+      this.pendingRuntimeRecords.delete(key);
     }
     for (const key of this.pendingDeletedRuntimeRecords) {
       this.runtimeState.delete(key);
@@ -654,22 +654,54 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     }
     const key = jupyterRuntimeCellKey(id);
     const cur = this.getRuntimeRecord<JupyterRuntimeCellState>(key) ?? {};
-    const next: JupyterRuntimeCellState = { ...cur, ...patch };
-    for (const key of ["state", "start", "end"] as const) {
-      if (next[key] == null) {
-        delete next[key];
-      }
-    }
+    const merged: JupyterRuntimeCellState = { ...cur, ...patch };
     const isEmpty =
-      next.state === undefined &&
-      next.start === undefined &&
-      next.end === undefined;
+      merged.state == null && merged.start == null && merged.end == null;
     if (isEmpty) {
       this.deleteRuntimeRecord(key);
     } else {
+      // A fixed manifest prevents concurrent busy/done writers from hiding
+      // the terminal end field. Nulls also clear values from an earlier run.
+      const next: JupyterRuntimeCellState = {
+        state: merged.state ?? null,
+        start: merged.start ?? null,
+        end: merged.end ?? null,
+      };
       this.setRuntimeRecord(key, next);
     }
     this.applyRuntimeCellToStore(id);
+  };
+
+  // Frontend output handlers use this for immediate rendering. The project
+  // controller is the sole writer of shared runtime cell state.
+  protected set_local_runtime_cell_state = (
+    id: string,
+    patch: JupyterRuntimeCellState,
+  ): void => {
+    if (!id || this.is_closed()) {
+      return;
+    }
+    const cells: immutable.Map<
+      string,
+      immutable.Map<string, any>
+    > = this.store.get("cells");
+    const cell = cells?.get(id);
+    if (cell == null) {
+      return;
+    }
+    let next = cell;
+    for (const key of ["state", "start", "end"] as const) {
+      if (!Object.prototype.hasOwnProperty.call(patch, key)) {
+        continue;
+      }
+      const value = patch[key];
+      next = value == null ? next.remove(key) : next.set(key, value);
+    }
+    if (next.equals(cell)) {
+      return;
+    }
+    this.setState({ cells: cells.set(id, next) });
+    this.store.emit("cell_change", id, next, cell);
   };
 
   public clear_runtime_cell_state = (id: string): void => {
