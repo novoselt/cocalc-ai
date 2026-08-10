@@ -220,6 +220,71 @@ describe("site-funded Codex provider proxy", () => {
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   });
 
+  it("bounds overlapping provider requests within a funded turn", async () => {
+    let releaseUpstream!: () => void;
+    let noteUpstreamStarted!: () => void;
+    const upstreamStarted = new Promise<void>((resolve) => {
+      noteUpstreamStarted = resolve;
+    });
+    const upstreamRelease = new Promise<void>((resolve) => {
+      releaseUpstream = resolve;
+    });
+    const upstream = createServer(async (_request, response) => {
+      noteUpstreamStarted();
+      await upstreamRelease;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: "resp-bounded",
+          usage: { input_tokens: 10, output_tokens: 1 },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const session = await startSiteFundedCodexProxySession({
+      reservation: reservation(),
+      apiKey: "real-site-key",
+      upstreamBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      onUsage: async () => {},
+    });
+    const localUrl = session.baseUrl.replace(
+      "host.containers.internal",
+      "127.0.0.1",
+    );
+    const request = () =>
+      fetch(`${localUrl}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ input: "hello" }),
+      });
+
+    const accepted = [request()];
+    await upstreamStarted;
+    for (let i = 1; i < 8; i += 1) accepted.push(request());
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    const rejected = await request();
+    expect(rejected.status).toBe(429);
+    await expect(rejected.json()).resolves.toMatchObject({
+      error: {
+        message: expect.stringContaining("too many overlapping"),
+      },
+    });
+
+    releaseUpstream();
+    expect(
+      await Promise.all(accepted.map(async (result) => (await result).status)),
+    ).toEqual(new Array(8).fill(200));
+    session.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
   it("queues a follow-on request while completed usage is settling", async () => {
     let upstreamRequests = 0;
     const upstream = createServer(async (_request, response) => {

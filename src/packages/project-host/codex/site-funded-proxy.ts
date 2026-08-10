@@ -20,6 +20,7 @@ import {
 
 const logger = getLogger("project-host:codex:site-funded-proxy");
 const DEFAULT_UPSTREAM_BASE_URL = "https://api.openai.com/v1";
+const MAX_PROVIDER_REQUEST_QUEUE_DEPTH = 8;
 const UNBILLED_PROVIDER_TOOL_TYPES = new Set([
   "custom",
   "function",
@@ -508,20 +509,16 @@ class SiteFundedCodexProxy {
       jsonResponse(response, 404, "only POST /v1/responses is supported");
       return;
     }
-    const startedAt = Date.now();
-    let bodyBuffer: Buffer;
-    let requestedBody: any;
-    try {
-      bodyBuffer = await readBody(
-        request,
-        siteFundedCodexMaxRequestBodyBytes(turn.policy),
+    if (turn.requestQueueDepth >= MAX_PROVIDER_REQUEST_QUEUE_DEPTH) {
+      jsonResponse(
+        response,
+        429,
+        "too many overlapping provider requests for this funded turn",
       );
-      requestedBody = JSON.parse(bodyBuffer.toString("utf8"));
-    } catch (err: any) {
-      jsonResponse(response, err?.statusCode ?? 400, `${err?.message ?? err}`);
       return;
     }
 
+    const startedAt = Date.now();
     let releaseRequest!: () => void;
     const previousRequest = turn.requestQueueTail;
     const currentRequest = new Promise<void>((resolve) => {
@@ -541,6 +538,21 @@ class SiteFundedCodexProxy {
       });
     }
     try {
+      let requestedBody: any;
+      try {
+        const bodyBuffer = await readBody(
+          request,
+          siteFundedCodexMaxRequestBodyBytes(turn.policy),
+        );
+        requestedBody = JSON.parse(bodyBuffer.toString("utf8"));
+      } catch (err: any) {
+        jsonResponse(
+          response,
+          err?.statusCode ?? 400,
+          `${err?.message ?? err}`,
+        );
+        return;
+      }
       let body: any;
       try {
         // Recheck turn limits after waiting because the preceding request may
