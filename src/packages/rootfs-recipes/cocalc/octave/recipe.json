@@ -33,6 +33,7 @@
       "default": [
         "struct",
         "io",
+        "datatypes",
         "statistics",
         "control",
         "signal",
@@ -85,47 +86,6 @@
         "numpy",
         "scipy",
         "matplotlib"
-      ],
-      "actions": [
-        {
-          "kind": "project-app",
-          "label": "Launch JupyterLab",
-          "description": "Open JupyterLab on this image's Octave, Python and bash kernels.",
-          "app_spec": {
-            "version": 1,
-            "id": "jupyterlab",
-            "title": "JupyterLab",
-            "kind": "service",
-            "command": {
-              "exec": "bash",
-              "args": [
-                "-lc",
-                "base_url=\"${APP_BASE_URL/\\/proxy\\//\\/port\\/}\"; jupyter lab --allow-root --port-retries=0 --no-browser --NotebookApp.token= --NotebookApp.password= --ServerApp.disable_check_xsrf=True --NotebookApp.allow_remote_access=True --NotebookApp.mathjax_url=/cdn/mathjax/MathJax.js --NotebookApp.base_url=\"${base_url}\" --ServerApp.base_url=\"${base_url}\" --ip=${HOST:-127.0.0.1} --port=${PORT}"
-              ]
-            },
-            "lifecycle": {
-              "mode": "managed"
-            },
-            "network": {
-              "listen_host": "127.0.0.1",
-              "port": 6012,
-              "protocol": "http"
-            },
-            "proxy": {
-              "base_path": "/apps/jupyterlab",
-              "strip_prefix": true,
-              "websocket": true,
-              "open_mode": "port",
-              "health_path": "/lab",
-              "readiness_timeout_s": 45
-            },
-            "wake": {
-              "enabled": true,
-              "keep_warm_s": 1800,
-              "startup_timeout_s": 120
-            }
-          }
-        }
       ]
     }
   }
