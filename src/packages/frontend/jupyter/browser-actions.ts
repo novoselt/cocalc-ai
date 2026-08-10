@@ -3028,6 +3028,27 @@ export class JupyterActions extends JupyterActions0 {
     }
   };
 
+  private finishPendingCells = (ids: string[]) => {
+    const pending = this.store?.get("pendingCells");
+    if (pending == null || pending.size === 0) {
+      return;
+    }
+    const queuedIds = new Set<string>();
+    for (const [nextIds] of this.getMutableRunQueue()) {
+      for (const id of nextIds) {
+        queuedIds.add(id);
+      }
+    }
+    const pendingIds = ids.filter(
+      (id) => pending.has(id) && !queuedIds.has(id),
+    );
+    if (pendingIds.length === 0) {
+      return;
+    }
+    this.clearQueuedCellState(pendingIds);
+    this.deletePendingCells(pendingIds);
+  };
+
   private hasLocalRunInProgress = (): boolean => {
     if (this.runningNow) {
       return true;
@@ -3631,6 +3652,7 @@ export class JupyterActions extends JupyterActions0 {
         });
       }
       if (this.isClosed()) return;
+      this.finishPendingCells(ids);
       this.rememberIgnoredLiveRunId(runId);
       this.runningNow = false;
       const runQueue = this.getMutableRunQueue();
