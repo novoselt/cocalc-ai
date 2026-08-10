@@ -6006,6 +6006,12 @@ export async function createHost({
     if (!(await isAdmin(owner))) {
       throw new Error("self-hosted hosts are limited to admins");
     }
+    const settings = await getServerSettings();
+    if (settings.project_hosts_self_host_alpha_enabled !== true) {
+      throw new Error(
+        "self-hosted project hosts are disabled in site settings",
+      );
+    }
   }
   const auth = await maybeRequireFreshAuthForInteractiveHostAction({
     account_id,
@@ -6991,6 +6997,14 @@ export async function updateHostMachine({
     !(await isAdmin(actor))
   ) {
     throw new Error("self-hosted hosts are limited to admins");
+  }
+  if (requestedCloud === "self-host" && machineCloud !== "self-host") {
+    const settings = await getServerSettings();
+    if (settings.project_hosts_self_host_alpha_enabled !== true) {
+      throw new Error(
+        "self-hosted project hosts are disabled in site settings",
+      );
+    }
   }
   const currentFundingMode = currentHostFundingMode(metadata);
   await assertRequestedHostFundingModeAllowed({

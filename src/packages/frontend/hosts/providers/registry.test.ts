@@ -52,6 +52,22 @@ describe("provider enablement", () => {
       getProviderOptionsList(flags).map((option) => option.value),
     ).toContain("self-host");
   });
+
+  it("hides self-hosted providers from admins when the flag is disabled", () => {
+    const flags = getProviderEnablement({
+      customize: {
+        get: (key: string) => key !== "project_hosts_self_host_alpha_enabled",
+      },
+      showLocal: false,
+      isAdmin: true,
+    });
+
+    const providers = getProviderOptionsList(flags).map(
+      (option) => option.value,
+    );
+    expect(providers).not.toContain("self-host");
+    expect(providers).toContain("gcp");
+  });
 });
 
 describe("buildCreateHostPayload", () => {
