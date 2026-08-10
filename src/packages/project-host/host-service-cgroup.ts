@@ -54,6 +54,69 @@ export function attachCurrentProcessToHostServiceCgroup({
   return false;
 }
 
+function runBackupBrowserCgroupCommand({
+  command,
+  pid,
+  spawn,
+  logFailure,
+}: {
+  command: "attach-backup-browser-cgroup" | "remove-backup-browser-cgroup";
+  pid: number;
+  spawn: SpawnSyncLike;
+  logFailure: boolean;
+}): boolean {
+  const result = spawn("sudo", ["-n", STORAGE_WRAPPER, command, String(pid)], {
+    encoding: "utf8",
+    timeout: COMMAND_TIMEOUT_MS,
+    stdio: "pipe",
+  });
+  if (result.status === 0) return true;
+  const details = {
+    command,
+    pid,
+    exitCode: result.status,
+    error: result.error?.message,
+    stderr: `${result.stderr ?? ""}`.trim(),
+    stdout: `${result.stdout ?? ""}`.trim(),
+  };
+  if (logFailure) {
+    logger.error("backup browser cgroup command failed", details);
+  } else {
+    logger.debug("backup browser cgroup cleanup failed", details);
+  }
+  return false;
+}
+
+export function attachBackupBrowserProcessToCgroup({
+  pid,
+  spawn = spawnSync as SpawnSyncLike,
+}: {
+  pid: number;
+  spawn?: SpawnSyncLike;
+}): boolean {
+  return runBackupBrowserCgroupCommand({
+    command: "attach-backup-browser-cgroup",
+    pid,
+    spawn,
+    logFailure: true,
+  });
+}
+
+export function removeBackupBrowserProcessCgroup({
+  pid,
+  spawn = spawnSync as SpawnSyncLike,
+}: {
+  pid: number;
+  spawn?: SpawnSyncLike;
+}): boolean {
+  return runBackupBrowserCgroupCommand({
+    command: "remove-backup-browser-cgroup",
+    pid,
+    spawn,
+    logFailure: false,
+  });
+}
+
 export const __test__ = {
   COMMAND_TIMEOUT_MS,
   STORAGE_WRAPPER,

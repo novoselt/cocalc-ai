@@ -29,11 +29,6 @@ import { DEFAULT_BACKUP_COUNTS } from "@cocalc/util/consts/snapshots";
 import { field_cmp } from "@cocalc/util/misc";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import {
-  backupIndexFilePath,
-  buildBackupIndex,
-  uploadBackupIndex,
-} from "./backup-index";
-import {
   TEMP_RUSTIC_SNAPSHOT_PREFIX,
   type SnapshotCounts,
   updateRollingSnapshots,
@@ -72,8 +67,6 @@ interface Snapshot {
   id: string;
   time: Date;
   summary: { [key: string]: string | number };
-  index_snapshot_id?: string;
-  index_path?: string;
 }
 
 function flattenSnapshotGroups(groups: any): any[] {
@@ -157,11 +150,6 @@ type RusticBackupOptions = {
   tags?: string[];
   parent?: string;
   progress?: (update: RusticProgressUpdate) => void;
-  index?: {
-    project_id: string;
-    enabled?: boolean;
-    upload?: "rustic" | "local-only";
-  };
   runner?: RusticBackupRunner;
 };
 
@@ -243,7 +231,6 @@ export class SubvolumeRustic {
     tags,
     parent,
     progress,
-    index,
     runner,
   }: RusticBackupOptions = {}): Promise<Snapshot> => {
     if (limit != null && (await this.snapshots()).length >= limit) {
@@ -307,41 +294,10 @@ export class SubvolumeRustic {
           );
       const { time, id, summary } = backupResult;
       const backupTime = time instanceof Date ? time : new Date(time);
-      let indexSnapshotId: string | undefined;
-      let indexPath: string | undefined;
-      if (index?.project_id && index.enabled !== false) {
-        try {
-          const outputPath = backupIndexFilePath(index.project_id, id);
-          indexPath = outputPath;
-          await buildBackupIndex({
-            snapshotPath,
-            outputPath,
-            meta: { backupId: id, backupTime, snapshotId: id },
-          });
-          if (index.upload !== "local-only") {
-            const uploaded = await uploadBackupIndex({
-              projectId: index.project_id,
-              backupId: id,
-              repo: this.subvolume.fs.rusticRepo,
-              timeout,
-            });
-            indexSnapshotId = uploaded.snapshot_id;
-          }
-        } catch (err) {
-          logger.warn("backup: index build failed", {
-            project_id: index.project_id,
-            err: `${err}`,
-          });
-        }
-      } else {
-        logger.debug("backup: skipping indexing", index);
-      }
       return {
         time: backupTime,
         id,
         summary,
-        index_snapshot_id: indexSnapshotId,
-        index_path: indexPath,
       };
     } finally {
       this.snapshotsCache = null;
@@ -494,22 +450,16 @@ export class SubvolumeRustic {
       timeout,
       tags,
       progress,
-      index,
       existingSnapshotNames: _existingSnapshotNames,
     }: {
       timeout?: number;
       limit?: number;
       tags?: string[];
       progress?: (update: RusticProgressUpdate) => void;
-      index?: {
-        project_id: string;
-        enabled?: boolean;
-        upload?: "rustic" | "local-only";
-      };
       existingSnapshotNames?: string[];
     } = {},
   ) => {
-    return await this.backup({ limit, timeout, tags, progress, index });
+    return await this.backup({ limit, timeout, tags, progress });
   };
 
   readdir = async (): Promise<string[]> => {
