@@ -229,6 +229,7 @@ import {
   upsertAcpWorker,
 } from "../sqlite/acp-workers";
 import type { AcpWorkerState } from "../sqlite/acp-workers";
+import { beginAcpWorkerDrain } from "./worker-drain";
 import type { AcpTurnLeaseRow } from "../sqlite/acp-turns";
 import { throttle } from "lodash";
 import { akv, type AKV } from "@cocalc/conat/sync/akv";
@@ -5908,6 +5909,7 @@ export function shouldStopDetachedWorkerForDrain({
   isDraining,
   runningJobs,
   runningTurnLeases,
+  activeTurns = 0,
   backgroundTerminalProcesses = 0,
   exitRequestedAt,
   quiesceMs,
@@ -5916,6 +5918,7 @@ export function shouldStopDetachedWorkerForDrain({
   isDraining: boolean;
   runningJobs: number;
   runningTurnLeases: number;
+  activeTurns?: number;
   backgroundTerminalProcesses?: number;
   exitRequestedAt?: number | null;
   quiesceMs?: number | null;
@@ -5925,6 +5928,7 @@ export function shouldStopDetachedWorkerForDrain({
   if (
     runningJobs > 0 ||
     runningTurnLeases > 0 ||
+    activeTurns > 0 ||
     backgroundTerminalProcesses > 0
   ) {
     return false;
@@ -6273,13 +6277,13 @@ export async function runDetachedAcpQueueWorker(
       workerContext.worker_id,
     );
     const runtimeStatus = getAcpAgentRuntimeStatus();
-    if (
+    const hasLiveWork =
       runningJobs > 0 ||
       runningTurnLeases > 0 ||
       runtimeStatus.activeTurns > 0 ||
-      runtimeStatus.backgroundTerminalProcesses > 0
-    ) {
-      logger.info("deferring ACP worker drain while Codex work is active", {
+      runtimeStatus.backgroundTerminalProcesses > 0;
+    if (hasLiveWork) {
+      logger.info("draining ACP worker while its existing work continues", {
         worker_id: workerContext.worker_id,
         running_jobs: runningJobs,
         running_turn_leases: runningTurnLeases,
@@ -6288,17 +6292,11 @@ export async function runDetachedAcpQueueWorker(
           runtimeStatus.backgroundTerminalProcesses,
         reason,
       });
-      const status = snapshotDetachedWorkerState();
-      if (status == null) {
-        throw new Error("detached ACP worker status unavailable");
-      }
-      return status;
     }
-    currentDetachedWorkerContext.state = "draining";
-    currentDetachedWorkerContext.exit_requested_at ??= Date.now();
-    if (`${reason ?? ""}`.trim()) {
-      currentDetachedWorkerContext.stop_reason = reason ?? null;
-    }
+    beginAcpWorkerDrain({
+      context: currentDetachedWorkerContext,
+      reason,
+    });
     syncDetachedWorkerState();
     const status = snapshotDetachedWorkerState();
     if (status == null) {
@@ -6340,6 +6338,7 @@ export async function runDetachedAcpQueueWorker(
         isDraining: nextState === "draining",
         runningJobs,
         runningTurnLeases,
+        activeTurns: runtimeStatus.activeTurns,
         backgroundTerminalProcesses: runtimeStatus.backgroundTerminalProcesses,
         exitRequestedAt: currentDetachedWorkerContext.exit_requested_at ?? null,
         quiesceMs: ACP_WORKER_DRAIN_QUIESCE_MS,
@@ -8696,6 +8695,11 @@ async function pumpQueuedAcpJobsForThread({
       path,
       thread_id,
     });
+    // Drain can be requested while admission lookup is in flight. Recheck at
+    // the claim boundary so an old worker cannot take one final new job.
+    if (!detachedWorkerCanClaimQueuedJobs()) {
+      return;
+    }
     const executionDecision = admitAcpJobExecution(nextQueued, admissionLimits);
     if (!executionDecision.ok) {
       recordAcpAdmissionDenial(executionDecision, "claim");
