@@ -334,6 +334,15 @@ export function FirstRunOnboarding({
   const codexAvailable = codexAvailableForOnboarding(codexPaymentSource);
   const codexFundingDescription =
     codexOnboardingFundingDescription(codexPaymentSource);
+  const configurationVisible =
+    selectedPath != null && (step === "project" || step === "codex");
+  const configurationReady =
+    configurationVisible &&
+    !createDisabled &&
+    !!projectTitle.trim() &&
+    !rootfsLoading &&
+    (selectedPath?.kind !== "codex" ||
+      (!!codexPrompt.trim() && codexAvailable));
 
   useEffect(() => {
     if (
@@ -349,6 +358,30 @@ export function FirstRunOnboarding({
       properties: { onboarding_path: onboardingPathLabel(decision) },
     });
   }, [decision]);
+
+  useEffect(() => {
+    if (!configurationVisible || !selectedPath) return;
+    recordProductActivity({
+      event_name: "onboarding_configuration_seen",
+      properties: {
+        onboarding_path: selectedPath.kind,
+        outcome: "visible",
+      },
+      dedupe_key: selectedPath.kind,
+    });
+  }, [configurationVisible, selectedPath?.kind]);
+
+  useEffect(() => {
+    if (!configurationReady || !selectedPath) return;
+    recordProductActivity({
+      event_name: "onboarding_configuration_ready",
+      properties: {
+        onboarding_path: selectedPath.kind,
+        outcome: "create-enabled",
+      },
+      dedupe_key: selectedPath.kind,
+    });
+  }, [configurationReady, selectedPath?.kind]);
 
   async function persist(
     status: StoredFirstRunOnboarding["status"],
@@ -391,10 +424,24 @@ export function FirstRunOnboarding({
 
   function chooseProject(kind: OnboardingProjectKind, next?: WizardStep) {
     const path = PROJECT_PATHS[kind];
+    recordProductActivity({
+      event_name: "onboarding_path_selected",
+      properties: { onboarding_path: kind, outcome: "project-path" },
+      dedupe_key: kind,
+    });
     setSelectedPath(path);
     setProjectTitle(path.title);
     setError("");
     setStep(next ?? (kind === "codex" ? "codex" : "project"));
+  }
+
+  function chooseSection(path: "jupyter" | "license", next: WizardStep) {
+    recordProductActivity({
+      event_name: "onboarding_path_selected",
+      properties: { onboarding_path: path, outcome: "section" },
+      dedupe_key: path,
+    });
+    setStep(next);
   }
 
   async function openProject(
@@ -883,12 +930,7 @@ export function FirstRunOnboarding({
               type="primary"
               onClick={() => void createProject()}
               loading={busy === "create"}
-              disabled={
-                createDisabled ||
-                !projectTitle.trim() ||
-                rootfsLoading ||
-                (selectedPath.kind === "codex" && !codexPrompt.trim())
-              }
+              disabled={!configurationReady}
             >
               Create project and continue
             </Button>
@@ -1031,7 +1073,7 @@ export function FirstRunOnboarding({
             description="Use Python, SageMath, R, Julia, and other kernels."
             icon="jupyter"
             featured
-            onClick={() => setStep("notebook")}
+            onClick={() => chooseSection("jupyter", "notebook")}
           />
         </Col>
         {(["sage", "code", "latex", "teaching"] as const).map((kind) => (
@@ -1048,7 +1090,7 @@ export function FirstRunOnboarding({
             title="Buy or manage access"
             description="Personal memberships, team seats, and institutional licenses."
             icon="key"
-            onClick={() => setStep("license")}
+            onClick={() => chooseSection("license", "license")}
           />
         </Col>
         {showLegacyProjects ? (
