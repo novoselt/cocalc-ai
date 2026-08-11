@@ -1021,6 +1021,23 @@ describe("PublicApp", () => {
         /remain in stable relative locations and order/,
       ),
     ).not.toBeNull();
+    const consistentIdentificationRow = within(tables[2])
+      .getByRole("rowheader", { name: /3\.2\.4 Consistent Identification/ })
+      .closest("tr");
+    expect(consistentIdentificationRow).not.toBeNull();
+    expect(
+      within(consistentIdentificationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(consistentIdentificationRow!).getByText(
+        /repeated functions such as close, search, and add/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(consistentIdentificationRow!).getByText(
+        /different functions reuse a card icon/,
+      ),
+    ).not.toBeNull();
     const statusMessagesRow = within(tables[2])
       .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
       .closest("tr");
