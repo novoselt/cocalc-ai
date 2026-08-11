@@ -1113,6 +1113,24 @@ describe("PublicApp", () => {
     expect(
       within(errorSuggestionRow!).getByText(/without a suggested next step/),
     ).not.toBeNull();
+    const errorPreventionRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /3\.3\.4 Error Prevention \(Legal, Financial, Data\)/,
+      })
+      .closest("tr");
+    expect(errorPreventionRow).not.toBeNull();
+    expect(within(errorPreventionRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(errorPreventionRow!).getByText(/backups provide a recovery path/),
+    ).not.toBeNull();
+    expect(
+      within(errorPreventionRow!).getByText(
+        /purchase modal offers one-click purchase/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(errorPreventionRow!).getByText(/type a confirmation word/),
+    ).not.toBeNull();
     const statusMessagesRow = within(tables[2])
       .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
       .closest("tr");
