@@ -64,4 +64,50 @@ describe("managed RootFS catalog URL", () => {
       webapp_client.conat_client.hub.system.getRootfsCatalogPage,
     ).toHaveBeenCalledWith({ limit: 200, query: undefined });
   });
+
+  it("loads every managed catalog page when requested", async () => {
+    const getPage = jest.mocked(
+      webapp_client.conat_client.hub.system.getRootfsCatalogPage,
+    );
+    getPage
+      .mockResolvedValueOnce({
+        images: [
+          {
+            id: "image-1",
+            image: "registry.example.com/image-1",
+            label: "Image 1",
+          },
+        ],
+        next_cursor: "page-2",
+        version: 1,
+      } as any)
+      .mockResolvedValueOnce({
+        images: [
+          {
+            id: "image-2",
+            image: "registry.example.com/image-2",
+            label: "Image 2",
+          },
+        ],
+        version: 1,
+      } as any);
+
+    await expect(
+      loadRootfsImages([managedRootfsCatalogUrl()], "account:all-pages-test", {
+        allPages: true,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "image-1" }),
+      expect.objectContaining({ id: "image-2" }),
+    ]);
+    expect(getPage).toHaveBeenNthCalledWith(1, {
+      limit: 200,
+      query: undefined,
+    });
+    expect(getPage).toHaveBeenNthCalledWith(2, {
+      cursor: "page-2",
+      limit: 200,
+      query: undefined,
+    });
+  });
 });

@@ -9,6 +9,23 @@ few personal/dev convenience scripts that used to live at `src/scripts/`:
 - `runoo`: quick repeated/flakiness command runner.
 - `upgrade-all.sh`: local hub rebuild/restart/host-upgrade helper.
 
+## Public RootFS catalog fixtures
+
+To populate `/rootfs` with disposable image families and tags modeled on the
+public CoCalc catalog, run:
+
+```bash
+scripts/dev/seed-rootfs-family.sh
+```
+
+The script discovers the running hub's PostgreSQL connection, is idempotent,
+and refuses to write through a non-local database connection. Remove only its
+fixtures with:
+
+```bash
+scripts/dev/seed-rootfs-family.sh clean
+```
+
 ## Named workspace development sites
 
 The workspace-site commands run a complete Launchpad development site directly

@@ -103,20 +103,22 @@ const VERSION_COLLATOR = new Intl.Collator(undefined, {
   sensitivity: "base",
 });
 
-function rootfsSeriesKey(entry: RootfsImageEntry): string | undefined {
-  if (!entry.family || !entry.version) return;
+function rootfsSeriesScopeKey(entry: RootfsImageEntry): string {
   const arch = Array.isArray(entry.arch)
-    ? entry.arch.join(",")
+    ? [...entry.arch].sort().join(",")
     : (entry.arch ?? "any");
   return [
     (entry.owner_id ?? "").trim().toLowerCase(),
     entry.official ? "official" : "user",
-    entry.label.trim().toLowerCase(),
-    entry.family.trim().toLowerCase(),
     (entry.channel ?? "").trim().toLowerCase(),
     entry.gpu ? "gpu" : "cpu",
-    arch,
+    arch.toLowerCase(),
   ].join("|");
+}
+
+function rootfsSeriesKey(entry: RootfsImageEntry): string | undefined {
+  if (!entry.family || !entry.version) return;
+  return `${rootfsSeriesScopeKey(entry)}|${entry.family.trim().toLowerCase()}`;
 }
 
 function compareVersionRecency(
@@ -131,6 +133,78 @@ function compareVersionRecency(
   return a.id.localeCompare(b.id);
 }
 
+export type RootfsVersionGroup = {
+  latest: RootfsImageEntry;
+  older: RootfsImageEntry[];
+};
+
+/**
+ * Group catalog entries using the same series rules as
+ * latestRootfsVersionEntries, while retaining every older release.  Groups
+ * remain in catalog order and older releases are listed newest first.
+ */
+export function groupRootfsVersionEntries(
+  images: RootfsImageEntry[],
+): RootfsVersionGroup[] {
+  const entriesById = new Map(images.map((entry) => [entry.id, entry]));
+  const parent = new Map(images.map((entry) => [entry.id, entry.id]));
+  const find = (id: string): string => {
+    const current = parent.get(id) ?? id;
+    if (current === id) return id;
+    const root = find(current);
+    parent.set(id, root);
+    return root;
+  };
+  const union = (left: string, right: string) => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+  };
+
+  const firstBySeries = new Map<string, string>();
+  for (const entry of images) {
+    const key = rootfsSeriesKey(entry);
+    if (!key) continue;
+    const first = firstBySeries.get(key);
+    if (first) {
+      union(first, entry.id);
+    } else {
+      firstBySeries.set(key, entry.id);
+    }
+  }
+  for (const entry of images) {
+    const predecessor = entriesById.get(
+      entry.supersedes_image_id?.trim() ?? "",
+    );
+    if (
+      predecessor &&
+      rootfsSeriesScopeKey(predecessor) === rootfsSeriesScopeKey(entry)
+    ) {
+      union(predecessor.id, entry.id);
+    }
+  }
+
+  const grouped = new Map<string, RootfsImageEntry[]>();
+  for (const entry of images) {
+    const root = find(entry.id);
+    const entries = grouped.get(root) ?? [];
+    entries.push(entry);
+    grouped.set(root, entries);
+  }
+  const inputIndex = new Map(images.map((entry, index) => [entry.id, index]));
+  return Array.from(grouped.values())
+    .map((entries) => {
+      const [latest, ...older] = entries.sort((a, b) =>
+        compareVersionRecency(b, a),
+      );
+      return { latest, older };
+    })
+    .sort(
+      (a, b) =>
+        (inputIndex.get(a.latest.id) ?? 0) - (inputIndex.get(b.latest.id) ?? 0),
+    );
+}
+
 export function latestRootfsVersionEntries(
   images: RootfsImageEntry[],
   opts?: {
@@ -139,36 +213,32 @@ export function latestRootfsVersionEntries(
   },
 ): RootfsImageEntry[] {
   if (opts?.showOlderVersions) return images;
-  const preserveIds = new Set(
-    (opts?.preserveIds ?? []).map((id) => `${id ?? ""}`.trim()).filter(Boolean),
+  const visibleIds = new Set(
+    groupRootfsVersionEntries(images).map(({ latest }) => latest.id),
   );
-  const latestBySeries = new Map<string, RootfsImageEntry>();
-  for (const entry of images) {
-    const key = rootfsSeriesKey(entry);
-    if (!key) continue;
-    const current = latestBySeries.get(key);
-    if (!current || compareVersionRecency(entry, current) > 0) {
-      latestBySeries.set(key, entry);
-    }
+  for (const id of opts?.preserveIds ?? []) {
+    const value = `${id ?? ""}`.trim();
+    if (value) visibleIds.add(value);
   }
-  return images.filter((entry) => {
-    if (preserveIds.has(entry.id)) return true;
-    const key = rootfsSeriesKey(entry);
-    if (!key) return true;
-    return latestBySeries.get(key)?.id === entry.id;
-  });
+  return images.filter((entry) => visibleIds.has(entry.id));
 }
 
-function compareRootfsVersionEntries(
-  a: RootfsImageEntry,
-  b: RootfsImageEntry,
-): number {
-  const versionCmp = VERSION_COLLATOR.compare(a.version ?? "", b.version ?? "");
-  if (versionCmp !== 0) return versionCmp;
-  const aTime = Date.parse(a.created ?? "") || 0;
-  const bTime = Date.parse(b.created ?? "") || 0;
-  if (aTime !== bTime) return aTime - bTime;
-  return a.id.localeCompare(b.id);
+export function latestRootfsVersionForEntry({
+  current,
+  images,
+}: {
+  current: RootfsImageEntry;
+  images: RootfsImageEntry[];
+}): RootfsImageEntry {
+  const entries = images.some((entry) => entry.id === current.id)
+    ? images
+    : [...images, current];
+  const group = groupRootfsVersionEntries(entries).find(
+    ({ latest, older }) =>
+      latest.id === current.id ||
+      older.some((entry) => entry.id === current.id),
+  );
+  return group?.latest ?? current;
 }
 
 export function latestRootfsUpgradeEntry({
@@ -196,7 +266,7 @@ export function latestRootfsUpgradeEntry({
   const seen = new Set<string>([current.id]);
   while (true) {
     const candidates = (bySupersededId.get(cursor.id) ?? []).sort((a, b) =>
-      compareRootfsVersionEntries(b, a),
+      compareVersionRecency(b, a),
     );
     const next = candidates.find((entry) => !seen.has(entry.id));
     if (!next) break;
@@ -206,7 +276,7 @@ export function latestRootfsUpgradeEntry({
   }
 
   const latestExplicit = reachableExplicit.sort((a, b) =>
-    compareRootfsVersionEntries(b, a),
+    compareVersionRecency(b, a),
   )[0];
   const currentSeriesKey = rootfsSeriesKey(current);
   if (!currentSeriesKey) return latestExplicit;
@@ -217,12 +287,12 @@ export function latestRootfsUpgradeEntry({
         !!entry.version &&
         VERSION_COLLATOR.compare(entry.version, current.version!) > 0,
     )
-    .sort((a, b) => compareRootfsVersionEntries(b, a));
+    .sort((a, b) => compareVersionRecency(b, a));
   const latestRelated = related[0];
   if (!latestExplicit) return latestRelated;
   if (
     latestRelated &&
-    compareRootfsVersionEntries(latestRelated, latestExplicit) > 0
+    compareVersionRecency(latestRelated, latestExplicit) > 0
   ) {
     return latestRelated;
   }
