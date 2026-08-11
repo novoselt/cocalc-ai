@@ -1009,6 +1009,18 @@ describe("PublicApp", () => {
     expect(
       within(draggingRow!).getByText(/reordering starred projects/),
     ).not.toBeNull();
+    const consistentNavigationRow = within(tables[2])
+      .getByRole("rowheader", { name: /3\.2\.3 Consistent Navigation/ })
+      .closest("tr");
+    expect(consistentNavigationRow).not.toBeNull();
+    expect(
+      within(consistentNavigationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(consistentNavigationRow!).getByText(
+        /remain in stable relative locations and order/,
+      ),
+    ).not.toBeNull();
     const statusMessagesRow = within(tables[2])
       .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
       .closest("tr");
