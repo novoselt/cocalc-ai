@@ -958,6 +958,20 @@ describe("PublicApp", () => {
     expect(
       within(onInputRow!).getByText(/submit an unrelated action/),
     ).not.toBeNull();
+    const nameRoleValueRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /4\.1\.2 Name, Role, Value/,
+      })
+      .closest("tr");
+    expect(nameRoleValueRow).not.toBeNull();
+    expect(
+      within(nameRoleValueRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(nameRoleValueRow!).getByText(
+        /compact menu destinations without accessible names/,
+      ),
+    ).not.toBeNull();
     expect(
       report.queryByRole("heading", {
         name: "Table 3: Success Criteria, Level AAA",
