@@ -925,6 +925,16 @@ describe("PublicApp", () => {
         /did not move focus out of the chat editor/,
       ),
     ).not.toBeNull();
+    const focusOrderRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.4\.3 Focus Order/,
+      })
+      .closest("tr");
+    expect(focusOrderRow).not.toBeNull();
+    expect(within(focusOrderRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(focusOrderRow!).getByText(/left to right, then top to bottom/),
+    ).not.toBeNull();
     expect(
       report.queryByRole("heading", {
         name: "Table 3: Success Criteria, Level AAA",
