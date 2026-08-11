@@ -391,18 +391,19 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     summary:
       "Use GNU Octave for MATLAB-style numerical computing in collaborative projects with notebooks, .m files, terminals, plots, and teaching workflows.",
     metadataSummary:
-      "Run GNU Octave online in a CoCalc Linux project: use it in Jupyter notebooks and terminals, edit .m files collaboratively, with TimeTravel history and snapshots.",
+      "Run GNU Octave online in a CoCalc Linux project: start on the Octave image with Octave 11.3 and its common packages, use Octave as the default Jupyter kernel, edit .m files collaboratively, and keep TimeTravel history and snapshots.",
     image: "/public/features/cocalc-octave-jupyter-20200511.png",
     index: true,
     sections: [
       {
         title: "Run GNU Octave online",
         paragraphs: [
-          "GNU Octave is the free numerical computing language that is largely compatible with MATLAB. In CoCalc it runs inside a full Linux project, so collaboration, history, and backups come with it.",
-          "Use Octave in Jupyter notebooks after a documented kernel setup, edit .m files with Octave syntax highlighting, and run scripts in a terminal that survives disconnects.",
+          "GNU Octave is the free numerical computing language that is largely compatible with MATLAB. Start a project on the Octave image and it is ready to use, inside a full Linux project where collaboration, history, and backups come with it.",
+          "Octave is the default Jupyter kernel on that image, .m files open in the collaborative editor with Octave syntax highlighting, and scripts run in a terminal that survives disconnects.",
         ],
         bullets: [
-          "Step-by-step guide for setting up Octave and its Jupyter kernel",
+          "Octave 11.3 built from source with the statistics, control, signal, image, optim, and symbolic packages",
+          "Jupyter kernels for Octave and Python, plus JupyterLab from the project's Apps panel",
           ".m files open in the collaborative editor with a one-click octave shell",
           "Real-time collaboration, TimeTravel history, and snapshots in every project",
         ],

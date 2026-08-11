@@ -26,6 +26,7 @@ import { FeatureFinalBand, IconBadge } from "./feature-visuals";
 const { Paragraph, Text, Title } = Typography;
 
 const OCTAVE_KERNEL_GUIDE = "docs/jupyter/install-octave-kernel";
+const OCTAVE_IMAGE = "rootfs/octave-11-3";
 
 function OctaveProjectMock() {
   const projectItems = [
@@ -116,16 +117,16 @@ export default function OctaveFeaturePage({
               </Title>
               <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
                 Octave is the free numerical computing language that is largely
-                compatible with MATLAB. In CoCalc it runs in a full Linux
-                project: work in notebooks, terminals, and <code>.m</code> files
-                with your team.
+                compatible with MATLAB. Start a project on the Octave image and
+                it is ready: Octave 11.3 with the common packages, a Jupyter
+                kernel, and a full Linux system around it.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryHref}>
                   {primaryLabel}
                 </Button>
-                <LinkButton href={appPath(OCTAVE_KERNEL_GUIDE)}>
-                  Octave setup guide
+                <LinkButton href={appPath(OCTAVE_IMAGE)}>
+                  See the Octave image
                 </LinkButton>
               </Flex>
             </Flex>
@@ -141,13 +142,38 @@ export default function OctaveFeaturePage({
           anchor="a-overview"
           description={
             <>
-              Octave lives inside a full CoCalc project, so collaboration,
-              history, and backups come with it.
+              Octave is preinstalled in its own image, and it lives inside a
+              full CoCalc project, so collaboration, history, and backups come
+              with it.
             </>
           }
         >
           Octave, with a real project around it
         </FeatureInfoHeading>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent={COLORS.FEATURE_TEAL}
+          anchor="a-image"
+          icon="cube"
+          title="Octave 11.3, with the packages you expect"
+        >
+          <Paragraph>
+            The <a href={appPath(OCTAVE_IMAGE)}>Octave image</a> is{" "}
+            <strong>built from source</strong> and ships the common Octave
+            packages: statistics, control, signal, image, optim, and symbolic.
+            Jupyter kernels for Octave and Python come with it, and JupyterLab
+            starts from the project's Apps panel.
+          </Paragraph>
+          <Paragraph>
+            Pick it when you create a project, or switch an existing project to
+            it later. Anything you add on top, from <code>pkg install</code> to{" "}
+            <code>apt-get</code>, <strong>persists with the project</strong>. To
+            add Octave to a different image instead, follow the{" "}
+            <a href={appPath(OCTAVE_KERNEL_GUIDE)}>kernel setup guide</a>.
+          </Paragraph>
+        </FeatureInfo>
       </PublicSection>
 
       <PublicSection>
@@ -160,10 +186,10 @@ export default function OctaveFeaturePage({
           title="Octave in Jupyter notebooks"
         >
           <Paragraph>
-            With the Octave Jupyter kernel in place, following the{" "}
-            <a href={appPath(OCTAVE_KERNEL_GUIDE)}>setup guide</a>, notebooks
-            gain <strong>Octave as a selectable kernel</strong>: run cells,
-            render plots inline, and keep narrative text next to the code.
+            On the Octave image, <strong>Octave is the default kernel</strong>{" "}
+            for new notebooks: run cells, render plots inline, and keep
+            narrative text next to the code. A Python kernel is there too, for
+            the parts that are easier in Python.
           </Paragraph>
           <Paragraph>
             The notebook itself is a collaborative CoCalc document:{" "}
@@ -203,9 +229,14 @@ export default function OctaveFeaturePage({
             title: "Start in a project",
           }}
           relatedLinks={[
+            { href: appPath(OCTAVE_IMAGE), label: "Octave image" },
             {
               href: appPath(OCTAVE_KERNEL_GUIDE),
               label: "Octave setup guide",
+            },
+            {
+              href: appPath("features/software-environment"),
+              label: "Software environments",
             },
             { href: appPath("features/linux"), label: "Linux environment" },
             {

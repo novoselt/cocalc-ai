@@ -41,8 +41,11 @@ const HELD_FEATURE_SLUGS = [
   "project-hosts",
   "dedicated-compute",
 ];
+// "default Octave kernel" used to live here: no Octave image existed, so the
+// claim was false. The octave-11-3 image ships Octave as its default Jupyter
+// kernel, so the octave page may say so now.
 const UNSUPPORTED_CAPABILITY_TERMS =
-  /built-in scheduler|recurring runs?|preinstalled (language stack|C\+\+|Fortran|Rust)|default Octave kernel/i;
+  /built-in scheduler|recurring runs?|preinstalled (language stack|C\+\+|Fortran|Rust)/i;
 const DOLLAR_AMOUNT = /\$\s*\d/;
 
 const originalFetch = global.fetch;
