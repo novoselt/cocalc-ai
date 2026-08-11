@@ -900,10 +900,13 @@ describe("PublicApp", () => {
         name: "Table 3: Success Criteria, Level AAA",
       }),
     ).toBeNull();
+    const draggingRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.5\.7 Dragging Movements/ })
+      .closest("tr");
+    expect(draggingRow).not.toBeNull();
+    expect(within(draggingRow!).getByText("Partially supports")).not.toBeNull();
     expect(
-      within(tables[2]).getByRole("rowheader", {
-        name: /2\.5\.7 Dragging Movements/,
-      }),
+      within(draggingRow!).getByText(/reordering starred projects/),
     ).not.toBeNull();
     const statusMessagesRow = within(tables[2])
       .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
