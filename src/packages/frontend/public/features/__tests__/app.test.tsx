@@ -464,12 +464,15 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("Python that moves from notebook to script to paper."),
+      screen.getByText(
+        "A full Python environment online, set up the way you want.",
+      ),
     ).not.toBeNull();
     expect(
-      screen.getByText("The right interface at each stage"),
+      screen.getByText("Install the packages you want, at any layer"),
     ).not.toBeNull();
-    expect(screen.getByText("Project context")).not.toBeNull();
+    expect(screen.getByText("Heavy computations and GPUs")).not.toBeNull();
+    expect(screen.getByText("Python online")).not.toBeNull();
   });
 
   it("uses projects as the python CTA for authenticated users", () => {

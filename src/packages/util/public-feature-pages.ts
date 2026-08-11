@@ -288,11 +288,30 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "python",
     title: "Python",
     navLabel: "Python",
-    tagline: "A broad scientific Python stack ready in the browser.",
+    metadataTitle: "Online Python Environment",
+    tagline: "A scientific Python environment you can shape yourself.",
     summary:
-      "Use Python for technical computing, data science, and machine learning with a large preinstalled package set and collaborative tooling around it.",
-    image: "/public/features/frame-editor-python.png",
+      "Use Python in Jupyter notebooks, scripts, terminals, JupyterLab, and VS Code, with package installs that persist and larger machines or GPUs when a computation gets heavy.",
+    metadataSummary:
+      "Use a full Python environment online in your browser: the scientific stack in Jupyter notebooks, .py files and terminals, uv, pip, conda, and apt installs that persist, JupyterLab and VS Code, GPU images for PyTorch and TensorFlow, and Python web apps behind an authenticated URL.",
+    image: "/public/features/jupyter-regular-20260730.png",
     index: true,
+    sections: [
+      {
+        title: "A full Python environment online",
+        paragraphs: [
+          "Run Python online in your browser: every CoCalc project is a Linux machine with the scientific Python stack, so you open a Jupyter notebook, type code, run it, and see the output, with nothing to install on your own computer.",
+          "The environment is yours to shape: passwordless sudo, apt-get, uv, pip, and conda all work, and everything you install persists with the project instead of disappearing at the end of a session.",
+        ],
+        bullets: [
+          "Python images ship NumPy, pandas, SciPy, scikit-learn, SymPy, matplotlib, and JupyterLab",
+          ".py files with a terminal pane next to the source, Jupyter notebooks, and real Linux terminals",
+          "JupyterLab and VS Code launch in the browser from the project's Apps panel",
+          "Larger machines and GPUs with CUDA-ready PyTorch and TensorFlow images for heavy runs",
+          "Flask, FastAPI, and other Python web apps run behind an authenticated project URL",
+        ],
+      },
+    ],
   },
   {
     slug: "r-statistical-software",
