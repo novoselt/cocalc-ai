@@ -132,7 +132,7 @@ export interface ProjectQuotaRepairRow {
   run_quota_revision?: number;
 }
 
-function ensureProjectsTable() {
+export function ensureProjectsTable() {
   const db = initDatabase();
   // Intentionally no `users` column here; collaborator state lives in the
   // generic `data` table mirror (see upsertProject).

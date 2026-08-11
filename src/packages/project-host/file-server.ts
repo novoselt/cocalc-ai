@@ -18,7 +18,6 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { executeCode } from "@cocalc/backend/execute-code";
 import {
   server as createFileServer,
@@ -47,7 +46,6 @@ import {
 } from "@cocalc/conat/core/client";
 import type {
   ProjectBackupConfig,
-  ProjectBackupIndexRecord,
   ProjectBackupIndexStoreConfig,
 } from "@cocalc/conat/hub/api/hosts";
 import { hubApi } from "@cocalc/lite/hub/api";
@@ -64,11 +62,9 @@ import {
 import { filesystem, type Filesystem } from "@cocalc/file-server/btrfs";
 import {
   BACKUP_INDEX_LABEL_PREFIX,
-  backupIndexFilePath,
   backupIndexDir,
   backupIndexFileName,
   backupIndexHost,
-  buildBackupIndex,
 } from "@cocalc/file-server/btrfs/backup-index";
 import {
   beginRestoreStaging as beginRestoreStagingBtrfs,
@@ -121,8 +117,10 @@ import {
 } from "@cocalc/conat/files/fs";
 import { SandboxedFilesystem } from "@cocalc/backend/sandbox";
 import cpExec from "@cocalc/backend/sandbox/cp";
-import execSandbox, { parseOutput } from "@cocalc/backend/sandbox/exec";
-import rustic from "@cocalc/backend/sandbox/rustic";
+import execSandbox from "@cocalc/backend/sandbox/exec";
+import rustic, {
+  getHost as getRusticSnapshotHost,
+} from "@cocalc/backend/sandbox/rustic";
 import { envToInt } from "@cocalc/backend/misc/env-to-number";
 import { isValidUUID } from "@cocalc/util/misc";
 import { getProject } from "./sqlite/projects";
@@ -212,12 +210,12 @@ import {
   projectRuntimeRootfsContractLabelsForCurrentHost,
   readCurrentProjectRuntimeUsernsMapFingerprint,
 } from "./rootfs-runtime-contract";
-import { isMissingRusticRepositoryError } from "./backup-index-errors";
 import {
   ProjectRusticUnsupportedError,
   projectRusticBackup,
   projectRusticRestore,
 } from "./project-rustic";
+import { isMissingRusticRepositoryError } from "./backup-index-errors";
 import {
   checkManagedBackupAllowedBestEffort,
   recordManagedBackupEgressBestEffort,
@@ -234,12 +232,13 @@ import {
 } from "@cocalc/file-server/btrfs/operation-cache";
 import { subvolume } from "@cocalc/file-server/btrfs/subvolume";
 import { ensureRootfsRusticRepoProfile } from "./rootfs-rustic";
-import {
-  downloadBackupIndexObject,
-  uploadBackupIndexObject,
-} from "./backup-index-object-store";
 import { createLegacyProjectArchiveHandlers } from "./legacy-migration/project-archive";
 import { ProjectVolumeQuotaManager } from "./project-volume-quota-manager";
+import {
+  rusticBackupBrowser,
+  type BackupBrowserSearchResponse,
+  type BackupBrowserSearchResult,
+} from "./rustic-backup-browser";
 
 type SshTarget = { type: "project"; project_id: string };
 
@@ -256,6 +255,7 @@ const PATH_COPY_ARCHIVE_LIMIT_PREFIX = "PATH_COPY_ARCHIVE_LIMIT:";
 const PATH_COPY_ARCHIVE_TIMEOUT_MS = 5 * 60 * 1000;
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const PROJECT_RUSTIC_TIMEOUT_MS = 30 * 60 * 1000;
+const BACKUP_SNAPSHOT_LOOKUP_TIMEOUT_MS = 5 * 60 * 1000;
 const PROJECT_ROOTS_CACHE = join(data, "cache", "project-roots");
 const PROJECT_SITE_MIGRATION_STAGING_DIR = ".project-site-migration-staging";
 const PROJECT_SITE_MIGRATION_ROOTFS_STATE_PATH = ".local/share/cocalc/rootfs";
@@ -1656,22 +1656,13 @@ async function assertBackupSnapshotExists({
   project_id: string;
   id: string;
 }): Promise<void> {
-  try {
-    await syncBackupIndexCache(project_id);
-    const manifest = await loadBackupIndexManifest(project_id);
-    if (manifest.entries[id] != null) {
-      return;
-    }
-  } catch (err) {
-    logger.debug("backup index existence check failed", {
-      project_id,
-      id,
-      err: `${err}`,
-    });
-  }
-  const vol = await getVolumeForBackup(project_id);
-  const snapshots = await vol.rustic.snapshots();
-  if (!snapshots.some((snapshot) => snapshot.id === id)) {
+  const profilePath = await resolveRusticRepo(project_id);
+  const snapshotHost = await getRusticSnapshotHost({
+    id,
+    repo: profilePath,
+    timeout: BACKUP_SNAPSHOT_LOOKUP_TIMEOUT_MS,
+  });
+  if (snapshotHost !== `project-${project_id}` && snapshotHost !== project_id) {
     throw new Error(`backup ${id} not found for project ${project_id}`);
   }
 }
@@ -1817,123 +1808,11 @@ async function reportBackupSuccess(
   });
 }
 
-async function reportProjectBackupIndex({
-  project_id,
-  backup_id,
-  backup_time,
-  status,
-  object_key,
-  compression,
-  sqlite_bytes,
-  object_bytes,
-  sha256,
-  error,
-}: {
-  project_id: string;
-  backup_id: string;
-  backup_time: Date | string;
-  status: "complete" | "failed";
-  object_key?: string | null;
-  compression?: string | null;
-  sqlite_bytes?: number | null;
-  object_bytes?: number | null;
-  sha256?: string | null;
-  error?: string | null;
-}): Promise<void> {
-  const client = getMasterConatClient();
-  if (!client) {
-    logger.warn("backup index manifest not reported: master missing", {
-      project_id,
-      backup_id,
-      status,
-    });
-    return;
-  }
-  const hostId = getLocalHostId();
-  if (!hostId) return;
-  await callHub({
-    client,
-    host_id: hostId,
-    name: "hosts.recordProjectBackupIndex",
-    args: [
-      {
-        project_id,
-        backup_id,
-        backup_time,
-        status,
-        storage_backend: "r2-object-store",
-        object_key,
-        compression,
-        sqlite_bytes,
-        object_bytes,
-        sha256,
-        error,
-      },
-    ],
-    timeout: 30000,
-  });
-}
-
-async function getRemoteProjectBackupIndexes(
-  project_id: string,
-): Promise<ProjectBackupIndexRecord[]> {
-  const client = getMasterConatClient();
-  if (!client) {
-    throw new Error("master conat client missing");
-  }
-  const hostId = getLocalHostId();
-  if (!hostId) {
-    throw new Error("local host_id missing");
-  }
-  return await callHub({
-    client,
-    host_id: hostId,
-    name: "hosts.getProjectBackupIndexes",
-    args: [{ project_id }],
-    timeout: 30000,
-  });
-}
-
 async function getLatestKnownBackupId(
   project_id: string,
 ): Promise<string | undefined> {
-  const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
-    () => null,
-  );
-  if (!directIndexStore) {
-    return undefined;
-  }
-  const records = await getRemoteProjectBackupIndexes(project_id);
-  for (let i = records.length - 1; i >= 0; i--) {
-    if (records[i].status === "complete" && records[i].backup_id) {
-      return records[i].backup_id;
-    }
-  }
-  return undefined;
-}
-
-async function syncRemoteProjectBackupIndexes({
-  project_id,
-  backup_ids,
-}: {
-  project_id: string;
-  backup_ids: string[];
-}): Promise<void> {
-  const client = getMasterConatClient();
-  if (!client) {
-    throw new Error("master conat client missing");
-  }
-  const hostId = getLocalHostId();
-  if (!hostId) {
-    throw new Error("local host_id missing");
-  }
-  await callHub({
-    client,
-    host_id: hostId,
-    name: "hosts.syncProjectBackupIndexes",
-    args: [{ project_id, backup_ids }],
-    timeout: 30000,
-  });
+  const backups = await getBackups({ project_id, indexed_only: true });
+  return backups.at(-1)?.id;
 }
 
 async function deleteRemoteProjectBackupIndex({
@@ -3802,692 +3681,17 @@ function createLroRusticReporter(
   };
 }
 
-const BACKUP_INDEX_SYNC_TTL_MS = 30_000;
-
-interface BackupIndexManifest {
-  updated_at?: string;
-  entries: Record<
-    string,
-    {
-      snapshot_id: string;
-      file: string;
-      remote_snapshot_id?: string;
-      status?: "complete" | "failed";
-      object_key?: string;
-      compression?: string;
-      sha256?: string;
-      sqlite_bytes?: number;
-      object_bytes?: number;
-      backup_time?: string;
-      error?: string;
-    }
-  >;
-}
-
-const backupIndexSyncState = new Map<
-  string,
-  { inFlight?: Promise<BackupIndexManifest>; lastSync?: number }
->();
-
-function backupIndexManifestPath(project_id: string) {
-  return join(backupIndexDir(project_id), "index-cache.json");
-}
-
-async function loadBackupIndexManifest(
-  project_id: string,
-): Promise<BackupIndexManifest> {
-  const manifestPath = backupIndexManifestPath(project_id);
-  if (!(await exists(manifestPath))) {
-    return { entries: {} };
-  }
-  try {
-    const raw = await readFile(manifestPath, "utf8");
-    const parsed = JSON.parse(raw);
-    if (parsed?.entries && typeof parsed.entries === "object") {
-      return parsed;
-    }
-  } catch (err) {
-    logger.warn("backup index manifest parse failed", { project_id, err });
-  }
-  return { entries: {} };
-}
-
-async function saveBackupIndexManifest(
-  project_id: string,
-  manifest: BackupIndexManifest,
-): Promise<void> {
-  const manifestPath = backupIndexManifestPath(project_id);
-  manifest.updated_at = new Date().toISOString();
-  await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
-}
-
-async function recordBackupIndexLocal({
-  project_id,
-  backup_id,
-  snapshot_id,
-  status,
-  object_key,
-  compression,
-  sha256,
-  sqlite_bytes,
-  object_bytes,
-  backup_time,
-  error,
-}: {
-  project_id: string;
-  backup_id: string;
-  snapshot_id?: string;
-  status?: "complete" | "failed";
-  object_key?: string;
-  compression?: string;
-  sha256?: string;
-  sqlite_bytes?: number;
-  object_bytes?: number;
-  backup_time?: string;
-  error?: string;
-}): Promise<void> {
-  const file = backupIndexFileName(backup_id);
-  const filePath = join(backupIndexDir(project_id), file);
-  if (!(await exists(filePath)) && !object_key) {
-    return;
-  }
-  const manifest = await loadBackupIndexManifest(project_id);
-  manifest.entries[backup_id] = {
-    snapshot_id: "local",
-    file,
-    remote_snapshot_id: snapshot_id,
-    status,
-    object_key,
-    compression,
-    sha256,
-    sqlite_bytes,
-    object_bytes,
-    backup_time,
-    error,
-  };
-  await saveBackupIndexManifest(project_id, manifest);
-}
-
-async function loadLocalBackupIndexEntries(
-  project_id: string,
-): Promise<BackupIndexManifest["entries"]> {
-  const dir = backupIndexDir(project_id);
-  const entries: BackupIndexManifest["entries"] = {};
-  const files = await readdir(dir).catch(() => []);
-  for (const file of files) {
-    if (!file.endsWith(".sqlite")) continue;
-    const dbPath = join(dir, file);
-    let db: DatabaseSync | undefined;
-    try {
-      db = new DatabaseSync(dbPath);
-      const metaRows = db.prepare("SELECT key, value FROM meta").all();
-      const meta = Object.fromEntries(
-        metaRows.map((row: { key: string; value: string }) => [
-          row.key,
-          row.value,
-        ]),
-      );
-      const backupId = meta.backup_id;
-      if (!backupId) continue;
-      entries[backupId] = {
-        snapshot_id: "local",
-        file,
-        remote_snapshot_id:
-          typeof meta.snapshot_id === "string" && meta.snapshot_id.length > 0
-            ? meta.snapshot_id
-            : undefined,
-      };
-    } catch (err) {
-      logger.warn("backup index local metadata scan failed", {
-        project_id,
-        file,
-        err,
-      });
-    } finally {
-      db?.close();
-    }
-  }
-  return entries;
-}
-
-function parseBackupIdFromLabel(label?: string): string | null {
-  if (!label) return null;
-  const match = label.match(/backup-id=([0-9a-f-]+)/i);
-  return match?.[1] ?? null;
-}
-
-function manifestEntryFromRemoteBackupIndex(
-  record: ProjectBackupIndexRecord,
-): BackupIndexManifest["entries"][string] {
-  return {
-    snapshot_id: "local",
-    file: backupIndexFileName(record.backup_id),
-    status: record.status,
-    object_key: record.object_key ?? undefined,
-    compression: record.compression ?? undefined,
-    sha256: record.sha256 ?? undefined,
-    sqlite_bytes:
-      record.sqlite_bytes == null ? undefined : Number(record.sqlite_bytes),
-    object_bytes:
-      record.object_bytes == null ? undefined : Number(record.object_bytes),
-    backup_time: record.backup_time,
-    error: record.error ?? undefined,
-  };
-}
-
-async function materializeDirectBackupIndexEntry({
-  project_id,
-  config,
-  record,
-}: {
-  project_id: string;
-  config: ProjectBackupIndexStoreConfig;
-  record: ProjectBackupIndexRecord;
-}): Promise<void> {
-  if (
-    record.status !== "complete" ||
-    !record.object_key ||
-    record.compression !== "gzip"
-  ) {
-    return;
-  }
-  const filePath = join(
-    backupIndexDir(project_id),
-    backupIndexFileName(record.backup_id),
-  );
-  if (await exists(filePath)) {
-    return;
-  }
-  await downloadBackupIndexObject({
-    config,
-    object_key: record.object_key,
-    sha256: record.sha256,
-    output_path: filePath,
-  });
-}
-
-async function syncDirectBackupIndexCache(
-  project_id: string,
-  manifest: BackupIndexManifest,
-  opts?: { backupIds?: Set<string>; materialize?: boolean },
-): Promise<BackupIndexManifest> {
-  const config = await getBackupIndexStoreConfig(project_id);
-  if (!config) {
-    return manifest;
-  }
-  if (opts?.backupIds) {
-    await syncRemoteProjectBackupIndexes({
-      project_id,
-      backup_ids: Array.from(opts.backupIds),
-    });
-  }
-  const remote = await getRemoteProjectBackupIndexes(project_id);
-  const allowed = opts?.backupIds;
-  const remoteEntries = allowed
-    ? remote.filter((entry) => allowed.has(entry.backup_id))
-    : remote;
-  for (const record of remoteEntries) {
-    manifest.entries[record.backup_id] = {
-      ...(manifest.entries[record.backup_id] ?? {}),
-      ...manifestEntryFromRemoteBackupIndex(record),
-    };
-    if (opts?.materialize) {
-      try {
-        await materializeDirectBackupIndexEntry({
-          project_id,
-          config,
-          record,
-        });
-      } catch (err) {
-        logger.warn("backup index object materialization failed", {
-          project_id,
-          backup_id: record.backup_id,
-          err,
-        });
-      }
-    }
-  }
-  const remoteIds = new Set(remoteEntries.map((entry) => entry.backup_id));
-  for (const backup_id of Object.keys(manifest.entries)) {
-    const entry = manifest.entries[backup_id];
-    if (!entry) continue;
-    const isLegacyOnly =
-      !entry.object_key && (!!entry.remote_snapshot_id || entry.status == null);
-    const shouldKeep = allowed
-      ? allowed.has(backup_id)
-      : remoteIds.has(backup_id) || isLegacyOnly;
-    if (shouldKeep) continue;
-    if (entry.file) {
-      await rm(join(backupIndexDir(project_id), entry.file), {
-        force: true,
-      }).catch(() => undefined);
-    }
-    delete manifest.entries[backup_id];
-  }
-  await saveBackupIndexManifest(project_id, manifest);
-  return manifest;
-}
-
-async function listBackupIndexSnapshots(project_id: string): Promise<
-  {
-    backup_id: string;
-    snapshot_id: string;
-    time: Date;
-  }[]
-> {
-  const repo = await resolveRusticRepo(project_id);
-  const { stdout } = parseOutput(
-    await rustic(["snapshots", "--json"], {
-      repo,
-      host: backupIndexHost(project_id),
-    }),
-  );
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return [];
-  }
-  let raw;
-  try {
-    raw = JSON.parse(trimmed);
-  } catch (err) {
-    logger.warn("backup index snapshots JSON parse failed", {
-      project_id,
-      err,
-      stdout: trimmed.slice(0, 500),
-    });
-    return [];
-  }
-  const groups = Array.isArray(raw) ? raw : [];
-  const snapshots: any[] = [];
-  for (const group of groups) {
-    const groupSnapshots = group?.snapshots ?? group?.[1] ?? [];
-    if (Array.isArray(groupSnapshots)) {
-      snapshots.push(...groupSnapshots);
-    }
-  }
-  return snapshots
-    .map((snap) => {
-      const backup_id = parseBackupIdFromLabel(snap.label);
-      if (!backup_id || !snap.id || !snap.time) return null;
-      return {
-        backup_id,
-        snapshot_id: snap.id,
-        time: new Date(snap.time),
-      };
-    })
-    .filter(
-      (snap): snap is { backup_id: string; snapshot_id: string; time: Date } =>
-        snap != null,
-    );
-}
-
-async function restoreBackupIndexSnapshot(
-  project_id: string,
-  snapshot_id: string,
-): Promise<void> {
-  const repo = await resolveRusticRepo(project_id);
-  const dir = backupIndexDir(project_id);
-  await mkdir(dir, { recursive: true });
-  const indexFs = new SandboxedFilesystem(dir, {
-    host: backupIndexHost(project_id),
-    rusticRepo: repo,
-  });
-  await indexFs.rustic(["restore", snapshot_id, "."], {
-    timeout: 30 * 60 * 1000,
-    cwd: ".",
-  });
-}
-
-async function forgetBackupIndexSnapshot(
-  project_id: string,
-  snapshot_id: string,
-): Promise<void> {
-  const repo = await resolveRusticRepo(project_id);
-  await rustic(["forget", snapshot_id], {
-    repo,
-    host: backupIndexHost(project_id),
-    timeout: 30 * 60 * 1000,
-  });
-}
-
-async function syncBackupIndexCache(
-  project_id: string,
-  opts?: { backupIds?: Set<string>; force?: boolean; materialize?: boolean },
-): Promise<BackupIndexManifest> {
-  const state = backupIndexSyncState.get(project_id) ?? {};
-  if (!opts?.force && state.lastSync) {
-    const age = Date.now() - state.lastSync;
-    if (age < BACKUP_INDEX_SYNC_TTL_MS) {
-      return await loadBackupIndexManifest(project_id);
-    }
-  }
-  if (state.inFlight) {
-    return await state.inFlight;
-  }
-  const task = (async () => {
-    await mkdir(backupIndexDir(project_id), { recursive: true });
-    let manifest = await loadBackupIndexManifest(project_id);
-    const localEntries = await loadLocalBackupIndexEntries(project_id);
-    for (const [backup_id, entry] of Object.entries(localEntries)) {
-      manifest.entries[backup_id] = {
-        ...entry,
-        ...(manifest.entries[backup_id] ?? {}),
-      };
-    }
-    try {
-      const directConfig = await getBackupIndexStoreConfig(project_id);
-      if (directConfig) {
-        manifest = await syncDirectBackupIndexCache(project_id, manifest, {
-          backupIds: opts?.backupIds,
-          materialize: opts?.materialize,
-        });
-        // Continue below to merge legacy rustic index snapshots. Projects can
-        // have both when they span the direct-index rollout.
-      }
-    } catch (err) {
-      logger.warn("direct backup index sync failed; falling back to rustic", {
-        project_id,
-        err,
-      });
-    }
-    let remote: {
-      backup_id: string;
-      snapshot_id: string;
-      time: Date;
-    }[] = [];
-    try {
-      remote = await listBackupIndexSnapshots(project_id);
-    } catch (err) {
-      if (isMissingRusticRepositoryError(err)) {
-        logger.debug("backup index repo not initialized yet", { project_id });
-        return manifest;
-      }
-      logger.warn("backup index snapshot listing failed", { project_id, err });
-      return manifest;
-    }
-    if (opts?.backupIds) {
-      const allowed = opts.backupIds;
-      const filtered: typeof remote = [];
-      for (const entry of remote) {
-        if (allowed.has(entry.backup_id)) {
-          filtered.push(entry);
-          continue;
-        }
-        try {
-          await forgetBackupIndexSnapshot(project_id, entry.snapshot_id);
-        } catch (err) {
-          logger.warn("backup index snapshot cleanup failed", {
-            project_id,
-            snapshot_id: entry.snapshot_id,
-            err,
-          });
-        }
-      }
-      remote = filtered;
-    }
-    const remoteByBackup = new Map<string, (typeof remote)[number]>();
-    for (const entry of remote) {
-      remoteByBackup.set(entry.backup_id, entry);
-    }
-
-    for (const [backup_id, entry] of remoteByBackup.entries()) {
-      const file = backupIndexFileName(backup_id);
-      const filePath = join(backupIndexDir(project_id), file);
-      const manifestEntry = manifest.entries[backup_id];
-      if (
-        manifestEntry?.snapshot_id === entry.snapshot_id &&
-        (await exists(filePath))
-      ) {
-        continue;
-      }
-      await restoreBackupIndexSnapshot(project_id, entry.snapshot_id);
-      manifest.entries[backup_id] = {
-        snapshot_id: entry.snapshot_id,
-        file,
-        remote_snapshot_id: entry.snapshot_id,
-      };
-    }
-
-    if (opts?.backupIds) {
-      for (const backup_id of Object.keys(manifest.entries)) {
-        if (opts.backupIds.has(backup_id)) continue;
-        const entry = manifest.entries[backup_id];
-        if (!entry) continue;
-        if (entry.file) {
-          await rm(join(backupIndexDir(project_id), entry.file), {
-            force: true,
-          });
-        }
-        delete manifest.entries[backup_id];
-      }
-    } else if (
-      remote.length === 0 &&
-      Object.keys(manifest.entries).length > 0
-    ) {
-      logger.warn(
-        "backup index remote snapshot list empty; preserving local index cache",
-        {
-          project_id,
-          local_entries: Object.keys(manifest.entries).length,
-        },
-      );
-    }
-
-    await saveBackupIndexManifest(project_id, manifest);
-    return manifest;
-  })();
-  state.inFlight = task;
-  backupIndexSyncState.set(project_id, state);
-  try {
-    const result = await task;
-    state.lastSync = Date.now();
-    return result;
-  } finally {
-    state.inFlight = undefined;
-  }
-}
-
-async function ensureBackupIndexEntryAvailable({
-  project_id,
-  backup_id,
-}: {
-  project_id: string;
-  backup_id: string;
-}): Promise<{
-  snapshot_id: string;
-  file: string;
-  remote_snapshot_id?: string;
-} | null> {
-  await syncBackupIndexCache(project_id);
-  const dir = backupIndexDir(project_id);
-  const manifest = await loadBackupIndexManifest(project_id);
-  const existing = manifest.entries[backup_id];
-  const existingPath = existing?.file ? join(dir, existing.file) : undefined;
-  if (existing && existingPath && (await exists(existingPath))) {
-    return existing;
-  }
-  const directConfig = await getBackupIndexStoreConfig(project_id).catch(
-    () => null,
-  );
-  if (directConfig && existing?.object_key && existing.status === "complete") {
-    await downloadBackupIndexObject({
-      config: directConfig,
-      object_key: existing.object_key,
-      sha256: existing.sha256,
-      output_path: join(dir, existing.file),
-    });
-    return existing;
-  }
-  const remote = await listBackupIndexSnapshots(project_id);
-  const match = remote.find((entry) => entry.backup_id === backup_id);
-  if (!match) return null;
-  await restoreBackupIndexSnapshot(project_id, match.snapshot_id);
-  const entry = {
-    snapshot_id: match.snapshot_id,
-    file: backupIndexFileName(backup_id),
-    remote_snapshot_id: match.snapshot_id,
-  };
-  manifest.entries[backup_id] = entry;
-  await saveBackupIndexManifest(project_id, manifest);
-  return entry;
-}
-
 async function removeBackupIndexLocal(
   project_id: string,
   backup_id: string,
 ): Promise<void> {
-  const manifest = await loadBackupIndexManifest(project_id);
-  const entry = manifest.entries[backup_id];
-  if (entry?.file) {
-    await rm(join(backupIndexDir(project_id), entry.file), { force: true });
-  }
-  if (backup_id in manifest.entries) {
-    delete manifest.entries[backup_id];
-    await saveBackupIndexManifest(project_id, manifest);
-  }
+  await rm(join(backupIndexDir(project_id), backupIndexFileName(backup_id)), {
+    force: true,
+  });
 }
 
 export async function deleteBackupIndexCache(project_id: string) {
   await rm(backupIndexDir(project_id), { recursive: true, force: true });
-  backupIndexSyncState.delete(project_id);
-}
-
-async function findBackupFilesIndexed({
-  project_id,
-  glob,
-  iglob,
-  path: scopePath,
-  ids,
-}: {
-  project_id: string;
-  glob?: string[];
-  iglob?: string[];
-  path?: string;
-  ids?: string[];
-}): Promise<
-  {
-    id: string;
-    time: Date;
-    path: string;
-    isDir: boolean;
-    mtime: number;
-    size: number;
-  }[]
-> {
-  await syncBackupIndexCache(project_id, { materialize: true });
-  const dir = backupIndexDir(project_id);
-  const files = (await readdir(dir).catch(() => []))
-    .filter((name) => name.endsWith(".sqlite"))
-    .map((name) => join(dir, name));
-  if (!files.length) return [];
-
-  const scope = scopePath ? normalizeArchivePath(scopePath) : "";
-  const scoped = (entryPath: string) => {
-    if (!scope) return true;
-    if (entryPath === scope) return true;
-    return entryPath.startsWith(`${scope}/`);
-  };
-
-  const allowedIds = ids?.length ? new Set(ids) : null;
-  const results: {
-    id: string;
-    time: Date;
-    path: string;
-    isDir: boolean;
-    mtime: number;
-    size: number;
-  }[] = [];
-
-  for (const dbPath of files) {
-    const db = new DatabaseSync(dbPath);
-    const metaRows = db.prepare("SELECT key, value FROM meta").all();
-    const meta = Object.fromEntries(
-      metaRows.map((row: { key: string; value: string }) => [
-        row.key,
-        row.value,
-      ]),
-    );
-    const backupId = meta.backup_id;
-    const backupTime = meta.backup_time ? new Date(meta.backup_time) : null;
-    if (!backupId || !backupTime || (allowedIds && !allowedIds.has(backupId))) {
-      db.close();
-      continue;
-    }
-    const seen = new Set<string>();
-    const addRows = (rows: any[]) => {
-      for (const row of rows) {
-        if (!row?.path || seen.has(row.path) || !scoped(row.path)) continue;
-        seen.add(row.path);
-        results.push({
-          id: backupId,
-          time: backupTime,
-          path: row.path,
-          isDir: row.type === "d",
-          mtime: row.mtime ?? 0,
-          size: row.size ?? 0,
-        });
-      }
-    };
-    const pathExpr =
-      "CASE WHEN parent = '' THEN name ELSE parent || '/' || name END";
-    if (glob?.length) {
-      const clauses = glob.map(() => `${pathExpr} GLOB ?`).join(" OR ");
-      const stmt = db.prepare(
-        `SELECT ${pathExpr} AS path, type, size, mtime FROM files WHERE ${clauses}`,
-      );
-      addRows(stmt.all(...glob.map(normalizeArchivePath)));
-    }
-    if (iglob?.length) {
-      const clauses = iglob.map(() => `LOWER(${pathExpr}) GLOB ?`).join(" OR ");
-      const stmt = db.prepare(
-        `SELECT ${pathExpr} AS path, type, size, mtime FROM files WHERE ${clauses}`,
-      );
-      addRows(
-        stmt.all(
-          ...iglob.map((pattern) =>
-            normalizeArchivePath(pattern).toLowerCase(),
-          ),
-        ),
-      );
-    }
-    db.close();
-  }
-  return results;
-}
-
-async function getBackupFilesIndexed({
-  project_id,
-  id,
-  path: subpath,
-}: {
-  project_id: string;
-  id: string;
-  path?: string;
-}): Promise<{ name: string; isDir: boolean; mtime: number; size: number }[]> {
-  const entry = await ensureBackupIndexEntryAvailable({
-    project_id,
-    backup_id: id,
-  });
-  if (!entry) return [];
-  const dbPath = join(backupIndexDir(project_id), entry.file);
-  if (!(await exists(dbPath))) return [];
-  const parent = subpath ? normalizeArchivePath(subpath) : "";
-  const db = new DatabaseSync(dbPath);
-  try {
-    const rows = db
-      .prepare(
-        "SELECT name, type, size, mtime FROM files WHERE parent = ? ORDER BY name",
-      )
-      .all(parent);
-    return rows.map((row: any) => ({
-      name: row.name,
-      isDir: row.type === "d",
-      mtime: row.mtime ?? 0,
-      size: row.size ?? 0,
-    }));
-  } finally {
-    db.close();
-  }
 }
 
 function normalizePreviewPath(input: string): string {
@@ -4552,48 +3756,6 @@ async function readTextPreview({
     };
   } finally {
     await fd.close();
-  }
-}
-
-async function getBackupIndexEntry({
-  project_id,
-  backup_id,
-  path: entryPath,
-}: {
-  project_id: string;
-  backup_id: string;
-  path: string;
-}): Promise<{ type: string; size: number; mtime: number } | null> {
-  const entry = await ensureBackupIndexEntryAvailable({
-    project_id,
-    backup_id,
-  });
-  if (!entry) return null;
-  const dbPath = join(backupIndexDir(project_id), entry.file);
-  if (!(await exists(dbPath))) return null;
-  const parent = entryPath.includes("/")
-    ? path.posix.dirname(entryPath).replace(/^\.$/, "")
-    : "";
-  const name = path.posix.basename(entryPath);
-  const db = new DatabaseSync(dbPath);
-  try {
-    const row = db
-      .prepare(
-        "SELECT type, size, mtime FROM files WHERE parent = ? AND name = ?",
-      )
-      .get(parent, name);
-    if (!row) return null;
-    const type =
-      typeof row.type === "string" ? row.type : String(row.type ?? "");
-    const size = Number(row.size ?? 0);
-    const mtime = Number(row.mtime ?? 0);
-    return {
-      type,
-      size: Number.isFinite(size) ? size : 0,
-      mtime: Number.isFinite(mtime) ? mtime : 0,
-    };
-  } finally {
-    db.close();
   }
 }
 
@@ -4666,7 +3828,6 @@ async function backupProjectToExternalRepository({
   destination_project_id,
   migration_id,
   rustic_repo_toml,
-  backup_index_store,
   tags,
   lro,
   managed_egress_override,
@@ -4746,33 +3907,10 @@ async function backupProjectToExternalRepository({
             tags,
             progress,
           });
-          let index: ExternalProjectBackupResult["index"] | undefined;
-          if (backup_index_store) {
-            const outputPath = backupIndexFilePath(
-              destination_project_id,
-              backup.id,
-            );
-            await buildBackupIndex({
-              snapshotPath,
-              outputPath,
-              meta: {
-                backupId: backup.id,
-                backupTime: backup.time,
-                snapshotId: backup.id,
-              },
-            });
-            index = await uploadBackupIndexObject({
-              config: backup_index_store,
-              project_id: destination_project_id,
-              backup_id: backup.id,
-              input_path: outputPath,
-            });
-          }
           return {
             time: backup.time,
             id: backup.id,
             summary: backup.summary,
-            ...(index ? { index } : {}),
           };
         } finally {
           try {
@@ -4844,16 +3982,13 @@ async function createBackup({
         project_id,
         op: "createBackup",
         run: async () => {
-          const directIndexStore = await getBackupIndexStoreConfig(project_id);
           if (limit != null) {
-            const backupCount = directIndexStore
-              ? (await getRemoteProjectBackupIndexes(project_id)).length
-              : (
-                  await getBackups({
-                    project_id,
-                    indexed_only: true,
-                  })
-                ).length;
+            const backupCount = (
+              await getBackups({
+                project_id,
+                indexed_only: true,
+              })
+            ).length;
             if (backupCount >= limit) {
               throw new ConatError(`there is a limit of ${limit} backups`, {
                 code: 507,
@@ -4868,10 +4003,6 @@ async function createBackup({
               tags,
               parent,
               progress,
-              index: {
-                project_id,
-                upload: directIndexStore ? "local-only" : "rustic",
-              },
               runner: async ({ src, host, timeout, tags, progress }) =>
                 await projectRusticBackup({
                   src,
@@ -4898,94 +4029,12 @@ async function createBackup({
               tags,
               parent,
               progress,
-              index: {
-                project_id,
-                upload: directIndexStore ? "local-only" : "rustic",
-              },
             });
           }
         },
       }),
   });
-  if (result.index_path) {
-    const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
-      () => null,
-    );
-    if (directIndexStore) {
-      try {
-        const uploaded = await uploadBackupIndexObject({
-          config: directIndexStore,
-          project_id,
-          backup_id: result.id,
-          input_path: result.index_path,
-        });
-        await reportProjectBackupIndex({
-          project_id,
-          backup_id: result.id,
-          backup_time: result.time,
-          status: "complete",
-          object_key: uploaded.object_key,
-          compression: uploaded.compression,
-          sqlite_bytes: uploaded.sqlite_bytes,
-          object_bytes: uploaded.object_bytes,
-          sha256: uploaded.sha256,
-        });
-        await recordBackupIndexLocal({
-          project_id,
-          backup_id: result.id,
-          status: "complete",
-          object_key: uploaded.object_key,
-          compression: uploaded.compression,
-          sha256: uploaded.sha256,
-          sqlite_bytes: uploaded.sqlite_bytes,
-          object_bytes: uploaded.object_bytes,
-          backup_time: result.time.toISOString(),
-        });
-      } catch (err) {
-        logger.warn("backup index object upload failed", { project_id, err });
-        try {
-          await reportProjectBackupIndex({
-            project_id,
-            backup_id: result.id,
-            backup_time: result.time,
-            status: "failed",
-            error: `${err}`,
-          });
-        } catch (reportErr) {
-          logger.warn("backup index failure report failed", {
-            project_id,
-            backup_id: result.id,
-            err: reportErr,
-          });
-        }
-        try {
-          await recordBackupIndexLocal({
-            project_id,
-            backup_id: result.id,
-            status: "failed",
-            backup_time: result.time.toISOString(),
-            error: `${err}`,
-          });
-        } catch (cacheErr) {
-          logger.warn("backup index failure cache update failed", {
-            project_id,
-            backup_id: result.id,
-            err: cacheErr,
-          });
-        }
-      }
-    } else {
-      try {
-        await recordBackupIndexLocal({
-          project_id,
-          backup_id: result.id,
-          snapshot_id: result.index_snapshot_id,
-        });
-      } catch (err) {
-        logger.warn("backup index manifest update failed", { project_id, err });
-      }
-    }
-  }
+  await rusticBackupBrowser.markStale(await resolveRusticRepo(project_id));
   await recordManagedBackupEgressBestEffort({
     project_id,
     backup_id: result.id,
@@ -5206,6 +4255,7 @@ async function deleteBackup({
 }): Promise<void> {
   const vol = await getVolumeForBackup(project_id);
   await vol.rustic.forget({ id });
+  await rusticBackupBrowser.markStale(vol.fs.rusticRepo);
   const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
     () => null,
   );
@@ -5269,7 +4319,6 @@ async function updateBackups({
           legacyInitialBackupOverride == null
             ? undefined
             : LEGACY_MIGRATION_INITIAL_BACKUP_TAGS,
-        index: { project_id },
         beforeCreate: async () => {
           const managedBackupPolicy = await checkManagedBackupAllowedBestEffort(
             {
@@ -5305,6 +4354,7 @@ async function updateBackups({
           }
         },
       });
+      await rusticBackupBrowser.markStale(refreshed.fs.rusticRepo);
       return refreshed;
     },
   });
@@ -5316,21 +4366,8 @@ async function updateBackups({
       backupIds: createdBackupIds,
       fallback: reportTime,
     });
-    const directIndexStore = await getBackupIndexStoreConfig(project_id).catch(
-      () => null,
-    );
-    if (directIndexStore) {
-      await syncRemoteProjectBackupIndexes({
-        project_id,
-        backup_ids: backups.map((backup) => backup.id),
-      });
-    }
-    await syncBackupIndexCache(project_id, {
-      backupIds: new Set(backups.map((backup) => backup.id)),
-      force: true,
-    });
   } catch (err) {
-    logger.warn("backup index update failed", { project_id, err });
+    logger.warn("backup snapshot refresh failed", { project_id, err });
   }
   if (createdBackupIds.size > 0 && legacyInitialBackupOverride != null) {
     legacyProjectInitialBackupEgressExempt.delete(project_id);
@@ -5385,70 +4422,19 @@ export async function getBackups({
     summary: { [key: string]: string | number };
   }[]
 > {
-  if (indexed_only) {
-    try {
-      const backupsById = new Map<
-        string,
-        {
-          id: string;
-          time: Date;
-          summary: { [key: string]: string | number };
-        }
-      >();
-      const directIndexStore = await getBackupIndexStoreConfig(
-        project_id,
-      ).catch(() => null);
-      if (directIndexStore) {
-        const records = await getRemoteProjectBackupIndexes(project_id);
-        for (const backup of records
-          .filter((record) => record.status === "complete")
-          .map((record) => ({
-            id: record.backup_id,
-            time: new Date(record.backup_time),
-            summary: {},
-          }))) {
-          backupsById.set(backup.id, backup);
-        }
-      }
-      await syncBackupIndexCache(project_id);
-      const manifest = await loadBackupIndexManifest(project_id);
-      for (const entry of Object.values(manifest.entries)) {
-        if (!entry?.file) continue;
-        const dbPath = join(backupIndexDir(project_id), entry.file);
-        if (!(await exists(dbPath))) continue;
-        const db = new DatabaseSync(dbPath);
-        try {
-          const metaRows = db.prepare("SELECT key, value FROM meta").all();
-          const meta = Object.fromEntries(
-            metaRows.map((row: { key: string; value: string }) => [
-              row.key,
-              row.value,
-            ]),
-          );
-          const backupId = meta.backup_id;
-          const backupTime = meta.backup_time
-            ? new Date(meta.backup_time)
-            : null;
-          if (!backupId || !backupTime) continue;
-          backupsById.set(backupId, {
-            id: backupId,
-            time: backupTime,
-            summary: {},
-          });
-        } finally {
-          db.close();
-        }
-      }
-      const backups = Array.from(backupsById.values());
-      backups.sort((a, b) => a.time.valueOf() - b.time.valueOf());
-      return backups;
-    } catch (err) {
-      logger.warn("backup index list failed", { project_id, err });
+  void indexed_only;
+  const profilePath = await resolveRusticRepo(project_id);
+  try {
+    return await rusticBackupBrowser.listBackups({
+      profilePath,
+      projectId: project_id,
+    });
+  } catch (err) {
+    if (isMissingRusticRepositoryError(err)) {
       return [];
     }
+    throw err;
   }
-  const vol = await getVolumeForBackup(project_id);
-  return await vol.rustic.snapshots();
 }
 
 async function getBackupFiles({
@@ -5460,12 +4446,12 @@ async function getBackupFiles({
   id: string;
   path?: string;
 }): Promise<{ name: string; isDir: boolean; mtime: number; size: number }[]> {
-  try {
-    return await getBackupFilesIndexed({ project_id, id, path });
-  } catch (err) {
-    logger.warn("backup index listing failed", { project_id, id, err });
-    return [];
-  }
+  return await rusticBackupBrowser.listDirectory({
+    profilePath: await resolveRusticRepo(project_id),
+    projectId: project_id,
+    id,
+    path,
+  });
 }
 
 async function findBackupFiles({
@@ -5474,35 +4460,28 @@ async function findBackupFiles({
   iglob,
   path,
   ids,
+  preview,
+  recursive,
 }: {
   project_id: string;
   glob?: string[];
   iglob?: string[];
   path?: string;
   ids?: string[];
-}): Promise<
-  {
-    id: string;
-    time: Date;
-    path: string;
-    isDir: boolean;
-    mtime: number;
-    size: number;
-  }[]
-> {
-  try {
-    const indexed = await findBackupFilesIndexed({
-      project_id,
-      glob,
-      iglob,
-      path,
-      ids,
-    });
-    return indexed;
-  } catch (err) {
-    logger.warn("backup index search failed", { project_id, err });
-    return [];
-  }
+  preview?: boolean;
+  recursive?: boolean;
+}): Promise<BackupBrowserSearchResult[] | BackupBrowserSearchResponse> {
+  const response = await rusticBackupBrowser.find({
+    profilePath: await resolveRusticRepo(project_id),
+    projectId: project_id,
+    glob,
+    iglob,
+    path,
+    ids,
+    preview,
+    recursive,
+  });
+  return preview ? response : response.results;
 }
 
 async function getBackupFileText({
@@ -5522,15 +4501,16 @@ async function getBackupFileText({
   mtime: number;
 }> {
   const cleanedPath = normalizePreviewPath(previewPath);
-  const entry = await getBackupIndexEntry({
-    project_id,
-    backup_id: id,
+  const entry = await rusticBackupBrowser.getEntry({
+    profilePath: await resolveRusticRepo(project_id),
+    projectId: project_id,
+    id,
     path: cleanedPath,
   });
   if (!entry) {
-    throw new Error("backup file is not indexed on this host");
+    throw new Error("backup file does not exist");
   }
-  if (entry.type === "d") {
+  if (entry.isDir) {
     throw new Error("path is a directory");
   }
   const maxBytes = max_bytes ?? MAX_TEXT_PREVIEW_BYTES;
@@ -6344,7 +5324,13 @@ export function closeFileServer() {
 }
 
 let cachedClient: null | Fileserver = null;
-export function fileServerClient(client: ConatClient): Fileserver {
+export function fileServerClient(
+  client: ConatClient,
+  timeout?: number,
+): Fileserver {
+  if (timeout != null) {
+    return createFileClient({ client, timeout });
+  }
   cachedClient ??= createFileClient({ client });
   return cachedClient!;
 }

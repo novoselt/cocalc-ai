@@ -598,7 +598,8 @@ export class TimeTravelActions extends CodeEditorActions<TimeTravelState> {
   updateBackupVersions = async (): Promise<List<string>> => {
     try {
       const archiveDocpath = this.archiveDocpath();
-      // Use indexed backup search in one RPC with exact path match.
+      // Rustic can resolve this exact path across backups without recursively
+      // walking unrelated directories.
       const raw = await findBackupFiles({
         project_id: this.project_id,
         glob: [archiveDocpath],
@@ -634,7 +635,8 @@ export class TimeTravelActions extends CodeEditorActions<TimeTravelState> {
       this.backupTimeById = backup_times;
       this.setState({ backup_versions });
       return backup_versions;
-    } catch (_err) {
+    } catch (err) {
+      this.set_error(`Unable to list backup versions: ${err}`);
       const backup_versions = List<string>([]);
       this.backupTimeById = {};
       this.setState({ backup_versions });

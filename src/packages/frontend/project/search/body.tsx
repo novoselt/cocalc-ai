@@ -98,7 +98,7 @@ export const ProjectSearchBody: React.FC<{
               type={subdirectories ? "primary" : "default"}
               onClick={() => toggle("subdirectories")}
             >
-              <Icon name="folder-open" /> Subdirs
+              <Icon name="folder-open" /> Subdirectories
             </Button>
             <Button
               size="small"
@@ -160,7 +160,7 @@ export const ProjectSearchBody: React.FC<{
             type={subdirectories ? "primary" : "default"}
             onClick={() => toggle("subdirectories")}
           >
-            <Icon name="folder-open" /> Subdirs
+            <Icon name="folder-open" /> Subdirectories
           </Button>
           <Button
             size="small"

@@ -582,7 +582,7 @@ export async function findBackupFiles({
   ids?: string[];
 }) {
   await assertCollab({ account_id, project_id });
-  return await (
+  const response = await (
     await projectClient(project_id, account_id)
   ).findBackupFiles({
     project_id,
@@ -591,6 +591,7 @@ export async function findBackupFiles({
     path,
     ids,
   });
+  return Array.isArray(response) ? response : response.results;
 }
 
 export async function getBackupFileText({

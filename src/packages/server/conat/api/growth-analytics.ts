@@ -16,6 +16,9 @@ import * as queries from "@cocalc/server/growth-analytics/queries";
 
 const BROWSER_EVENT_NAMES = new Set([
   "first_project_flow_seen",
+  "onboarding_path_selected",
+  "onboarding_configuration_seen",
+  "onboarding_configuration_ready",
   "project_create_started",
   "project_ready",
   "project_entered",
@@ -50,17 +53,30 @@ export function browserGrowthEventId({
   accountId,
   eventName,
   actionCategory,
+  onboardingPath,
+  outcome,
   now,
 }: {
   accountId: string;
   eventName: GrowthEventName;
   actionCategory?: GrowthActionCategory;
+  onboardingPath?: string;
+  outcome?: string;
   now: Date;
 }): string {
   const bucket = Math.floor(now.getTime() / browserEventWindowMs(eventName));
   const bytes = Buffer.from(
     createHash("sha256")
-      .update(`${accountId}:${eventName}:${actionCategory ?? ""}:${bucket}`)
+      .update(
+        [
+          accountId,
+          eventName,
+          actionCategory ?? "",
+          onboardingPath ?? "",
+          outcome ?? "",
+          bucket,
+        ].join(":"),
+      )
       .digest()
       .subarray(0, 16),
   );
@@ -106,6 +122,8 @@ export async function recordEvent({
         accountId: account_id,
         eventName: event.event_name,
         actionCategory,
+        onboardingPath: event.properties?.onboarding_path,
+        outcome: event.properties?.outcome,
         now,
       }),
       occurred_at: now.toISOString(),

@@ -50,6 +50,28 @@ describe("growth event validation", () => {
     });
   });
 
+  it("accepts onboarding stage diagnostics without user content", () => {
+    expect(
+      validateGrowthEvent(
+        {
+          event_id: EVENT_ID,
+          event_name: "onboarding_configuration_ready",
+          properties: {
+            onboarding_path: "latex",
+            outcome: "create-enabled",
+          },
+        },
+        NOW,
+      ),
+    ).toMatchObject({
+      event_name: "onboarding_configuration_ready",
+      properties: {
+        onboarding_path: "latex",
+        outcome: "create-enabled",
+      },
+    });
+  });
+
   it("rejects unknown payload fields so content cannot leak into analytics", () => {
     expect(() =>
       validateGrowthEvent(

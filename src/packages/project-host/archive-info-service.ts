@@ -8,6 +8,7 @@ import type { Client } from "@cocalc/conat/core/client";
 import { extractProjectSubject } from "@cocalc/conat/auth/subject-policy";
 import type {
   BackupFileEntry,
+  BackupFindPreview,
   BackupFindResult,
   BackupSummary,
 } from "@cocalc/conat/project/archive-info";
@@ -15,6 +16,7 @@ import type { FileTextPreview } from "@cocalc/conat/files/file-server";
 import { fileServerClient } from "./file-server";
 
 const logger = getLogger("project-host:archive-info");
+const BACKUP_SEARCH_TIMEOUT_MS = 2 * 60_000;
 
 export const PROJECT_ARCHIVE_INFO_SUBJECT = "project.*.archive-info.-";
 
@@ -73,6 +75,8 @@ async function findBackupFilesImpl({
   iglob,
   path,
   ids,
+  preview,
+  recursive,
 }: {
   client: Client;
   project_id: string;
@@ -80,13 +84,20 @@ async function findBackupFilesImpl({
   iglob?: string[];
   path?: string;
   ids?: string[];
-}): Promise<BackupFindResult[]> {
-  return await fileServerClient(client).findBackupFiles({
+  preview?: boolean;
+  recursive?: boolean;
+}): Promise<BackupFindResult[] | BackupFindPreview> {
+  return await fileServerClient(
+    client,
+    BACKUP_SEARCH_TIMEOUT_MS,
+  ).findBackupFiles({
     project_id,
     glob,
     iglob,
     path,
     ids,
+    preview,
+    recursive,
   });
 }
 
@@ -164,9 +175,11 @@ export async function handleProjectFindBackupFilesRequest(
     iglob?: string[];
     path?: string;
     ids?: string[];
+    preview?: boolean;
+    recursive?: boolean;
   },
   client?: Client,
-): Promise<BackupFindResult[]> {
+): Promise<BackupFindResult[] | BackupFindPreview> {
   return await findBackupFilesImpl({
     client: requireClient(client),
     project_id: extractProjectId(this?.subject),
@@ -174,6 +187,8 @@ export async function handleProjectFindBackupFilesRequest(
     iglob: opts?.iglob,
     path: opts?.path,
     ids: opts?.ids,
+    preview: opts?.preview,
+    recursive: opts?.recursive,
   });
 }
 
@@ -221,6 +236,8 @@ export async function initProjectArchiveInfoService(client: Client) {
       iglob?: string[];
       path?: string;
       ids?: string[];
+      preview?: boolean;
+      recursive?: boolean;
     }) {
       return handleProjectFindBackupFilesRequest.call(this, opts, client);
     },

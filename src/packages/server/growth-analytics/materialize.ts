@@ -308,7 +308,9 @@ async function materializeEvents(
               CASE
                 WHEN event.event_name IN (
                   'identity_proved', 'account_created', 'profile_completed',
-                  'first_project_flow_seen', 'project_create_started',
+                  'first_project_flow_seen', 'onboarding_path_selected',
+                  'onboarding_configuration_seen',
+                  'onboarding_configuration_ready', 'project_create_started',
                   'project_created', 'project_ready', 'project_entered',
                   'project_surface_visible', 'guided_activation_done',
                   'first_self_directed_work'

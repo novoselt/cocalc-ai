@@ -118,6 +118,7 @@ import {
 import { ensureProjectHostKernelSysctls } from "./host-sysctl";
 import { startRuntimePostureMonitor } from "./runtime-posture";
 import { startProjectSnapshotBackupMaintenance } from "./snapshot-backup-maintenance";
+import { rusticBackupBrowser } from "./rustic-backup-browser";
 import { startStorageAdmissionController } from "./storage-admission";
 import {
   assertLocalBindOrInsecure,
@@ -1659,6 +1660,7 @@ export async function main(
     stopRuntimeConformanceMonitor?.();
     stopRuntimePostureMonitor?.();
     stopSnapshotBackupMaintenance?.();
+    rusticBackupBrowser.close();
     stopStorageAdmissionController?.();
     stopRawNetworkEgressLoop?.();
     stopCpuUsageLoop?.();

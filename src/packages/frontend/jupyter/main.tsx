@@ -312,7 +312,7 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
     };
   }, [actions]);
 
-  const { usage, expected_cell_runtime } = useKernelUsage(name);
+  const { usage, expected_cell_runtime } = useKernelUsage(name, project_id);
 
   const frameActions = useNotebookFrameActions();
   const handleLayoutChange = useCallback((layout: MinimalLayout) => {

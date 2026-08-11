@@ -31,6 +31,7 @@ export async function search({
     case_sensitive?: boolean;
     git_grep?: boolean;
     subdirectories?: boolean;
+    max_depth?: number;
     hidden_files?: boolean;
     regexp?: boolean;
   };
@@ -41,7 +42,7 @@ export async function search({
 
   const rgOptions = ["--json"]; // note that -M doesn't seem to combine with --json, so can't do -M {MAX_LINE_LENGTH}
   if (!options.subdirectories) {
-    rgOptions.push("-d", "1");
+    rgOptions.push("-d", `${options.max_depth ?? 1}`);
   }
   if (!options.case_sensitive) {
     rgOptions.push("-i");

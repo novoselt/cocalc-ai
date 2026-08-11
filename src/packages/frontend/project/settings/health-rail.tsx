@@ -14,11 +14,13 @@ import {
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
 import type { SnapshotUsage } from "@cocalc/conat/files/file-server";
+import type { ProjectInfo } from "@cocalc/conat/project/project-info";
 import CopyButton from "@cocalc/frontend/components/copy-button";
 import DiskUsage from "@cocalc/frontend/project/disk-usage/disk-usage";
 import { linearList } from "@cocalc/frontend/project/info/utils";
 import useDiskUsage from "@cocalc/frontend/project/disk-usage/use-disk-usage";
 import useProjectInfo from "@cocalc/frontend/project/info/use-project-info";
+import { useProjectRunQuota } from "@cocalc/frontend/project/use-project-run-quota";
 import {
   ManagedEgressHistoryButton,
   ManagedEgressSparkline,
@@ -115,6 +117,11 @@ export function ProjectSettingsHealthRail({
   const lastBackup = projectLastBackup ?? (project as any).get("last_backup");
   const startTs = projectStatus?.get("start_ts");
   const userCount = (project as any).get("users")?.size;
+  const projectInfo = useProjectInfo({
+    project_id,
+    intervalVisible: 10000,
+    intervalHidden: 60000,
+  });
 
   return (
     <Card
@@ -162,7 +169,16 @@ export function ProjectSettingsHealthRail({
         </RailRow>
         <RecoveryHealthRow project_id={project_id} lastBackup={lastBackup} />
         <StorageHealthRow project_id={project_id} />
-        <ProcessHealthRow project_id={project_id} />
+        <MemoryHealthRow
+          info={projectInfo.info}
+          project_id={project_id}
+          running={rawProjectState === "running"}
+        />
+        <ProcessHealthRow
+          disconnected={projectInfo.disconnected}
+          info={projectInfo.info}
+          project_id={project_id}
+        />
         <NetworkHealthRow project_id={project_id} />
         {typeof userCount === "number" && (
           <RailRow
@@ -378,12 +394,15 @@ function useLatestSnapshot(project_id: string): {
   return { loading, snapshot };
 }
 
-function ProcessHealthRow({ project_id }: { project_id: string }) {
-  const { info, disconnected } = useProjectInfo({
-    project_id,
-    intervalVisible: 10000,
-    intervalHidden: 60000,
-  });
+function ProcessHealthRow({
+  disconnected,
+  info,
+  project_id,
+}: {
+  disconnected: boolean;
+  info: ProjectInfo | null;
+  project_id: string;
+}) {
   const rows = info?.processes == null ? undefined : linearList(info.processes);
 
   if (disconnected && rows == null) {
@@ -438,6 +457,98 @@ function ProcessHealthRow({ project_id }: { project_id: string }) {
           </Text>
         )}
       </Space>
+    </RailRow>
+  );
+}
+
+function formatMemoryMiB(value: number): string {
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(value >= 10 * 1024 ? 0 : 1)} GiB`;
+  }
+  return `${Math.round(value)} MiB`;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function MemoryHealthRow({
+  info,
+  project_id,
+  running,
+}: {
+  info: ProjectInfo | null;
+  project_id: string;
+  running: boolean;
+}) {
+  const { runQuota } = useProjectRunQuota(project_id);
+  const rows = info?.processes == null ? undefined : linearList(info.processes);
+  const processMemoryMiB =
+    rows == null
+      ? undefined
+      : rows.reduce((total, process) => total + process.mem, 0);
+  const cgroupMemoryMiB = nonNegativeNumber(info?.cgroup?.mem_stat.total_rss);
+  const tmpMemoryMiB = nonNegativeNumber(info?.disk_usage?.tmp?.usage) ?? 0;
+  const usedMiB =
+    cgroupMemoryMiB == null ? processMemoryMiB : cgroupMemoryMiB + tmpMemoryMiB;
+  const configuredLimitMiB = positiveNumber(runQuota?.memory_limit);
+  const runtimeLimitMiB = positiveNumber(
+    info?.cgroup?.mem_stat.hierarchical_memory_limit,
+  );
+  const limitMiB = running
+    ? (runtimeLimitMiB ?? configuredLimitMiB)
+    : (configuredLimitMiB ?? runtimeLimitMiB);
+  const percent =
+    usedMiB != null && limitMiB != null
+      ? Math.round((100 * usedMiB) / limitMiB)
+      : undefined;
+
+  return (
+    <RailRow
+      icon="microchip"
+      iconColor={COLORS.ANTD_GREEN_D}
+      label="Memory"
+      action={
+        <Button
+          size="small"
+          onClick={() => openInfoPage(project_id)}
+          style={SMALL_ACTION_STYLE}
+        >
+          Monitor
+        </Button>
+      }
+    >
+      {!running ? (
+        <Text type="secondary">
+          {limitMiB == null
+            ? "Start project to monitor"
+            : `${formatMemoryMiB(limitMiB)} limit`}
+        </Text>
+      ) : percent == null || usedMiB == null || limitMiB == null ? (
+        <Text type="secondary">Loading...</Text>
+      ) : (
+        <Space vertical size={3} style={{ width: "100%" }}>
+          <Text style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+            {percent}% used · {formatMemoryMiB(usedMiB)} /{" "}
+            {formatMemoryMiB(limitMiB)}
+          </Text>
+          <Progress
+            aria-label="Project memory usage"
+            percent={Math.min(100, percent)}
+            showInfo={false}
+            size="small"
+            status={percent > 90 ? "exception" : "normal"}
+          />
+        </Space>
+      )}
     </RailRow>
   );
 }

@@ -439,16 +439,21 @@ const hostCache = new LRU<string, string>({
   max: 10000,
 });
 
-export async function getHost(opts) {
-  if (hostCache.has(opts.id)) {
-    return hostCache.get(opts.id);
+export async function getHost(opts: {
+  id: string;
+  repo?: string;
+  timeout?: number;
+}) {
+  const cacheKey = `${opts.repo ?? rusticRepo}\0${opts.id}`;
+  if (hostCache.has(cacheKey)) {
+    return hostCache.get(cacheKey);
   }
   const snapshot = await getSnapshot(opts);
   const hostname = snapshot?.hostname;
   if (!hostname) {
     throw new Error(`snapshot ${opts.id} not found or missing hostname`);
   }
-  hostCache.set(opts.id, hostname);
+  hostCache.set(cacheKey, hostname);
   return hostname;
 }
 
@@ -472,14 +477,17 @@ function flattenSnapshotGroups(groups: any): any[] {
 export async function getSnapshot({
   id,
   repo = rusticRepo,
+  timeout,
 }: {
   id: string;
   repo?: string;
+  timeout?: number;
 }) {
   const common = getCommonArgs(repo);
   const { stdout } = await exec({
     cmd: rusticPath,
     safety: [...common, "snapshots", "--json", id],
+    timeout,
   });
   if (!stdout) {
     throw Error(`no snapshot with id ${id}`);

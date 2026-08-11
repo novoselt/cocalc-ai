@@ -5,9 +5,11 @@ import {
 } from "@cocalc/lite/hub/sqlite/database";
 import { account_id } from "@cocalc/backend/data";
 import { clearActiveStorageReservations } from "../storage-reservations";
+import { ensureProjectsTable } from "./projects";
 
 export function initSqlite() {
   initDatabase();
+  ensureProjectsTable();
   clearActiveStorageReservations();
   ensureAccountRow();
 }

@@ -5,9 +5,16 @@
 
 import { projectSubject } from "@cocalc/conat/names";
 import type { Client as ConatClient } from "@cocalc/conat/core/client";
-import type { FileTextPreview } from "@cocalc/conat/files/file-server";
+import type {
+  BackupFindPreview,
+  BackupFindResult,
+  FileTextPreview,
+} from "@cocalc/conat/files/file-server";
+
+export type { BackupFindPreview, BackupFindResult };
 
 const SERVICE_NAME = "archive-info";
+const BACKUP_SEARCH_TIMEOUT_MS = 2 * 60_000;
 
 export interface BackupSummary {
   id: string;
@@ -17,15 +24,6 @@ export interface BackupSummary {
 
 export interface BackupFileEntry {
   name: string;
-  isDir: boolean;
-  mtime: number;
-  size: number;
-}
-
-export interface BackupFindResult {
-  id: string;
-  time: Date;
-  path: string;
   isDir: boolean;
   mtime: number;
   size: number;
@@ -42,7 +40,9 @@ interface Api {
     iglob?: string[];
     path?: string;
     ids?: string[];
-  }) => Promise<BackupFindResult[]>;
+    preview?: boolean;
+    recursive?: boolean;
+  }) => Promise<BackupFindResult[] | BackupFindPreview>;
   getBackupFileText: (opts: {
     id: string;
     path: string;
@@ -99,6 +99,22 @@ export async function getBackupFiles({
     .getBackupFiles({ id, path });
 }
 
+type FindBackupFilesOptions = {
+  client?: ConatClient;
+  project_id: string;
+  glob?: string[];
+  iglob?: string[];
+  path?: string;
+  ids?: string[];
+  recursive?: boolean;
+};
+
+export async function findBackupFiles(
+  opts: FindBackupFilesOptions & { preview: true },
+): Promise<BackupFindPreview>;
+export async function findBackupFiles(
+  opts: FindBackupFilesOptions & { preview?: false },
+): Promise<BackupFindResult[]>;
 export async function findBackupFiles({
   client,
   project_id,
@@ -106,17 +122,25 @@ export async function findBackupFiles({
   iglob,
   path,
   ids,
-}: {
-  client?: ConatClient;
-  project_id: string;
-  glob?: string[];
-  iglob?: string[];
-  path?: string;
-  ids?: string[];
-}): Promise<BackupFindResult[]> {
-  return await requireExplicitConatClient(client)
-    .call<Api>(getSubject({ project_id }))
-    .findBackupFiles({ glob, iglob, path, ids });
+  preview,
+  recursive,
+}: FindBackupFilesOptions & {
+  preview?: boolean;
+}): Promise<BackupFindResult[] | BackupFindPreview> {
+  const response = await requireExplicitConatClient(client)
+    .call<Api>(getSubject({ project_id }), {
+      timeout: BACKUP_SEARCH_TIMEOUT_MS,
+    })
+    .findBackupFiles({ glob, iglob, path, ids, preview, recursive });
+  if (preview) {
+    if (!Array.isArray(response)) return response;
+    return {
+      results: response.slice(0, 100),
+      truncated: response.length > 100,
+      truncationReason: response.length > 100 ? "results" : undefined,
+    };
+  }
+  return Array.isArray(response) ? response : response.results;
 }
 
 export async function getBackupFileText({

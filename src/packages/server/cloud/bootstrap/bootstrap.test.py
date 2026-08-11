@@ -2350,6 +2350,24 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn(
+                'BACKUP_BROWSER_POOL_MEMORY_HIGH="$((3 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            self.assertIn(
+                'BACKUP_BROWSER_POOL_MEMORY_MAX="$((4 * 1024 * 1024 * 1024))"',
+                script,
+            )
+            self.assertIn(
+                '"${BACKUP_BROWSER_CGROUP_DEFAULT}/cpu.max"',
+                script,
+            )
+            self.assertIn(
+                '"${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.max"',
+                script,
+            )
+            self.assertEqual(script.count("$BACKUP_BROWSER_POOL_CPU_MAX"), 1)
+            self.assertEqual(script.count("$BACKUP_BROWSER_POOL_MEMORY_MAX"), 1)
+            self.assertIn(
                 '> "${parent}/cgroup.subtree_control"',
                 script,
             )
@@ -2411,8 +2429,22 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
             self.assertIn("attach-host-service-cgroup)", script)
             self.assertIn("verify-host-service-cgroup)", script)
             self.assertIn("reconcile-host-service-cgroup)", script)
+            self.assertIn("attach-backup-browser-cgroup)", script)
+            self.assertIn("remove-backup-browser-cgroup)", script)
             self.assertIn(
                 'HOST_SERVICE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-host-services"',
+                script,
+            )
+            self.assertIn(
+                'BACKUP_BROWSER_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-backup-browsers"',
+                script,
+            )
+            self.assertIn(
+                'BACKUP_BROWSER_CGROUP_MEMORY_HIGH="$((1280 * 1024 * 1024))"',
+                script,
+            )
+            self.assertIn(
+                'BACKUP_BROWSER_CGROUP_MEMORY_MAX="$((2 * 1024 * 1024 * 1024))"',
                 script,
             )
             self.assertIn(
