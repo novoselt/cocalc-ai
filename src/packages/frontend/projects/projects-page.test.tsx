@@ -268,19 +268,16 @@ test("project creation modal does not auto-open for an empty project list", () =
 
   render(<ProjectsPage />);
 
-  expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
-    "data-open",
-    "false",
-  );
+  expect(screen.queryByTestId("new-project-creator")).toBeNull();
   expect(screen.getByRole("button", { name: /create/i })).toBeInTheDocument();
 });
 
-test("project creation modal opens from the explicit create button", () => {
+test("project creation modal opens from the explicit create button", async () => {
   render(<ProjectsPage />);
 
   fireEvent.click(screen.getByRole("button", { name: /create/i }));
 
-  expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
+  expect(await screen.findByTestId("new-project-creator")).toHaveAttribute(
     "data-open",
     "true",
   );

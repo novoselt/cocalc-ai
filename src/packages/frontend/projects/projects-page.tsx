@@ -5,7 +5,7 @@
 
 import { Button, Grid, Layout } from "antd";
 import { Map, Set as ImmutableSet } from "immutable";
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { Suspense, useLayoutEffect, useRef, type RefObject } from "react";
 import { useIntl } from "react-intl";
 
 // ensure redux stuff (actions and store) are initialized:
@@ -30,7 +30,6 @@ import {
 } from "@cocalc/frontend/collaborators";
 import { capitalize } from "@cocalc/util/misc";
 
-import { NewProjectCreator } from "./create-project";
 import { ProjectsOperations } from "./projects-operations";
 import { StarredProjectsBar } from "./projects-starred";
 import { ProjectsTable } from "./projects-table";
@@ -58,13 +57,28 @@ import {
 import { projectRootfsEntryLabel } from "./project-rootfs-badge";
 import { openAccountSettings } from "@cocalc/frontend/account/settings-routing";
 import { OTHER_SETTINGS_LEGACY_MIGRATION_PROJECTS_BUTTON } from "@cocalc/util/legacy-migration";
-import { FirstRunOnboarding } from "./onboarding/first-run-onboarding";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import {
   classifyFirstRunOnboarding,
   FIRST_RUN_ONBOARDING_SETTING,
   normalizeStoredFirstRunOnboarding,
   type FirstRunProject,
 } from "./onboarding/state";
+
+const FirstRunOnboarding = lazyWithRetry(
+  async () => ({
+    default: (await import("./onboarding/first-run-onboarding"))
+      .FirstRunOnboarding,
+  }),
+  "first-run onboarding",
+);
+
+const NewProjectCreator = lazyWithRetry(
+  async () => ({
+    default: (await import("./create-project")).NewProjectCreator,
+  }),
+  "create project dialog",
+);
 
 const LOADING_STYLE: CSS = {
   fontSize: "40px",
@@ -205,6 +219,8 @@ export const ProjectsPage: React.FC = () => {
   const filenameSearchRef = useRef<any>(null);
 
   const [createPanelOpen, setCreatePanelOpen] = useState(false);
+  const createPanelMounted = useRef(false);
+  if (createPanelOpen) createPanelMounted.current = true;
 
   const tableHeight = useProjectTableBodyHeight(
     projectListRef,
@@ -492,12 +508,19 @@ export const ProjectsPage: React.FC = () => {
           minHeight: 0,
         }}
       >
-        {!createProjectDisabled && (
-          <NewProjectCreator
-            default_value={search}
-            open={createPanelOpen}
-            onClose={() => setCreatePanelOpen(false)}
-          />
+        {!createProjectDisabled && createPanelMounted.current && (
+          <CocalcErrorBoundary
+            scope="projects.create-project"
+            resetKeys={[createPanelOpen]}
+          >
+            <Suspense fallback={null}>
+              <NewProjectCreator
+                default_value={search}
+                open={createPanelOpen}
+                onClose={() => setCreatePanelOpen(false)}
+              />
+            </Suspense>
+          </CocalcErrorBoundary>
         )}
         <Layout.Content
           style={{
@@ -536,13 +559,15 @@ export const ProjectsPage: React.FC = () => {
                 scope="projects.first-run-onboarding"
                 resetKeys={[firstRunDecision.kind]}
               >
-                <FirstRunOnboarding
-                  decision={firstRunDecision}
-                  inviteState={inviteState}
-                  createDisabled={createProjectDisabled}
-                  showLegacyProjects={showLegacyProjectsButton}
-                  onOpenAdvanced={handleCreateProject}
-                />
+                <Suspense fallback={<Loading theme="medium" />}>
+                  <FirstRunOnboarding
+                    decision={firstRunDecision}
+                    inviteState={inviteState}
+                    createDisabled={createProjectDisabled}
+                    showLegacyProjects={showLegacyProjectsButton}
+                    onOpenAdvanced={handleCreateProject}
+                  />
+                </Suspense>
               </CocalcErrorBoundary>
             ) : (
               <div style={contentStyle}>
