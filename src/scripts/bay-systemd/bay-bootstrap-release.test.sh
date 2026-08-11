@@ -104,6 +104,7 @@ STATIC_BUNDLE_PATH=""
 for required_file in \
   scripts/bay-systemd/install-scaffold.sh \
   scripts/bay-systemd/env/bay-rocket-bundle-overlay.env.example \
+  scripts/bay-systemd/needrestart/cocalc-bay.conf \
   runtime/project-host/index.js \
   runtime/control-plane/bundle/index.js \
   runtime/control-plane/http-api-dist/pages/api/v2/index.js \
@@ -118,6 +119,13 @@ for required_file in \
   touch "${VALIDATION_RELEASE}/${required_file}"
 done
 chmod +x "${VALIDATION_RELEASE}/scripts/bay-systemd/install-scaffold.sh"
+
+rm "${VALIDATION_RELEASE}/scripts/bay-systemd/needrestart/cocalc-bay.conf"
+if (validate_release >/dev/null 2>&1); then
+  echo "release unexpectedly passed without the needrestart policy" >&2
+  exit 1
+fi
+touch "${VALIDATION_RELEASE}/scripts/bay-systemd/needrestart/cocalc-bay.conf"
 
 # Hub-only releases must remain deployable over static releases that predate
 # the bundled CDN. Static and full releases still fail closed without it.

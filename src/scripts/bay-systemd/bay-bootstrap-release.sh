@@ -401,6 +401,7 @@ stage_hub_bundle_release() {
     "${extract_dir}/runtime/control-plane/http-api-dist/pages/api/v2/index.js" \
     "${extract_dir}/runtime/migrate-schema/index.js" \
     "${extract_dir}/scripts/bay-systemd/install-scaffold.sh" \
+    "${extract_dir}/scripts/bay-systemd/needrestart/cocalc-bay.conf" \
     "${extract_dir}/scripts/bay-systemd/systemd/cocalc-bay-hub@.service"; do
     if [[ ! -f "$required_file" ]]; then
       echo "hub bundle is missing required file: $required_file" >&2
@@ -502,6 +503,10 @@ NODE
 validate_release() {
   if [[ ! -x "${TARGET_RELEASE}/scripts/bay-systemd/install-scaffold.sh" ]]; then
     echo "release is missing scripts/bay-systemd/install-scaffold.sh" >&2
+    exit 1
+  fi
+  if [[ ! -f "${TARGET_RELEASE}/scripts/bay-systemd/needrestart/cocalc-bay.conf" ]]; then
+    echo "release is missing scripts/bay-systemd/needrestart/cocalc-bay.conf" >&2
     exit 1
   fi
   if [[ "$OVERLAY_MODE" != "none" && ! -f "${TARGET_RELEASE}/scripts/bay-systemd/env/bay-${OVERLAY_MODE}-overlay.env.example" ]]; then
