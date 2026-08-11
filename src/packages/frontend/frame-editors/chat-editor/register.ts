@@ -8,17 +8,15 @@ Register the chatroom editor
 */
 
 import { register_file_editor } from "../frame-tree/register";
-import { Actions } from "./actions";
-import { Editor } from "./editor";
 
 register_file_editor({
   ext: "sage-chat",
-  component: Editor,
-  Actions,
+  editor: async () => await import("./editor"),
+  actions: async () => await import("./actions"),
 });
 
 register_file_editor({
   ext: "chat",
-  component: Editor,
-  Actions,
+  editor: async () => await import("./editor"),
+  actions: async () => await import("./actions"),
 });
