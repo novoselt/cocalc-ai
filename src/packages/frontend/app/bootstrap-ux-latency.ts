@@ -189,7 +189,6 @@ export function recordSignedInAppBootstrapReady(): () => void {
         paint_observer: "react_commit_next_animation_frame",
       },
     });
-    preAppTrace()?.complete("signed_in_app_ready");
   });
 }
 
@@ -210,6 +209,7 @@ export function recordSignedInSurfaceReady(segment: string): () => void {
       },
     });
     markSignedInSurfaceReady(segment);
+    preAppTrace()?.complete("signed_in_surface_ready");
   });
 }
 
@@ -223,4 +223,5 @@ export function recordAppBootstrapFailed(
     surface_visible: true,
     details: { phase, error_name: errorName },
   });
+  preAppTrace()?.complete("app_bootstrap_failed");
 }

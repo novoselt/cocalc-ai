@@ -36,20 +36,34 @@ import { init as initCustomize } from "./customize";
 import { init as initLast } from "./last";
 
 import { render } from "./app/render";
+import { markAppBootstrapPhase } from "./app/bootstrap-ux-latency";
+
+function runInitializer(name: string, initializer: () => void): void {
+  markAppBootstrapPhase(`${name}_started`);
+  try {
+    initializer();
+    markAppBootstrapPhase(`${name}_finished`);
+  } catch (err) {
+    markAppBootstrapPhase(`${name}_failed`);
+    throw err;
+  }
+}
 
 export async function init() {
-  initJqueryPlugins();
-  initAccount(redux);
-  initApp();
-  initProjects();
-  initFileUse();
-  initWebHooks();
-  initCustomize();
+  markAppBootstrapPhase("global_initializers_started");
+  runInitializer("jquery_plugins", initJqueryPlugins);
+  runInitializer("account", () => initAccount(redux));
+  runInitializer("app", initApp);
+  runInitializer("projects", initProjects);
+  runInitializer("file_use", initFileUse);
+  runInitializer("webapp_hooks", initWebHooks);
+  runInitializer("customize", () => void initCustomize());
   if (COCALC_MINIMAL) {
-    initIframeComm();
+    runInitializer("iframe_communication", initIframeComm);
   }
   $(window).on("beforeunload", redux.getActions("page").check_unload);
-  initLast();
+  runInitializer("last", initLast);
+  markAppBootstrapPhase("global_initializers_finished");
   try {
     await render();
   } finally {
