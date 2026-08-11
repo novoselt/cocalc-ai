@@ -336,13 +336,14 @@
           against six representative interactive states, with programmatic
           keyboard activation and focus assertions for selected states. Manual
           production testing covered representative public and authenticated
-          screens in portrait and landscape responsive viewports and at 200%
-          browser zoom. All 16 public production pages and 13 of the 15
-          authenticated pages received Lighthouse accessibility scores of 100.
-          Five of the six interactive states had no axe violations; the sixth
-          reported the same unnamed switch found by Lighthouse. Automated
-          testing does not establish complete WCAG conformance. No screen-reader
-          or other assistive-technology testing was performed.
+          screens in portrait and landscape responsive viewports, at 200%
+          browser zoom, and with keyboard focus navigation. All 16 public
+          production pages and 13 of the 15 authenticated pages received
+          Lighthouse accessibility scores of 100. Five of the six interactive
+          states had no axe violations; the sixth reported the same unnamed
+          switch found by Lighthouse. Automated testing does not establish
+          complete WCAG conformance. No screen-reader or other
+          assistive-technology testing was performed.
         </dd>
       </dl>
       <p>
@@ -1237,8 +1238,13 @@
                     >
                     <span>(Level AA)</span>
                   </th>
-                  <td>Supports</td>
-                  <td></td>
+                  <td>Partially supports</td>
+                  <td>
+                    Manual keyboard review found visible focus indicators on
+                    many sampled controls, although some were subtle. The
+                    project-page star control received keyboard focus without a
+                    visible indicator.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">

@@ -929,6 +929,18 @@ describe("PublicApp", () => {
     expect(
       within(reflowRow!).getByText(/settings required horizontal scrolling/),
     ).not.toBeNull();
+    const focusVisibleRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.4\.7 Focus Visible/ })
+      .closest("tr");
+    expect(focusVisibleRow).not.toBeNull();
+    expect(
+      within(focusVisibleRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(focusVisibleRow!).getByText(
+        /star control received keyboard focus/,
+      ),
+    ).not.toBeNull();
     const draggingRow = within(tables[2])
       .getByRole("rowheader", { name: /2\.5\.7 Dragging Movements/ })
       .closest("tr");
