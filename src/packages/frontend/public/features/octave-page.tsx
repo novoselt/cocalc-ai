@@ -118,8 +118,8 @@ export default function OctaveFeaturePage({
               <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
                 Octave is the free numerical computing language that is largely
                 compatible with MATLAB. Start a project on the Octave image and
-                it is ready: Octave 11.3 with the common packages, a Jupyter
-                kernel, and a full Linux system around it.
+                it is ready: Octave with the common packages, a Jupyter kernel,
+                and a full Linux system around it.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryHref}>
@@ -157,7 +157,7 @@ export default function OctaveFeaturePage({
           accent={COLORS.FEATURE_TEAL}
           anchor="a-image"
           icon="cube"
-          title="Octave 11.3, with the packages you expect"
+          title="Octave, with the packages you expect"
         >
           <Paragraph>
             The <a href={appPath(OCTAVE_IMAGE)}>Octave image</a> is{" "}

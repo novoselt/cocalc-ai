@@ -346,13 +346,30 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "julia",
     title: "Julia",
     navLabel: "Julia",
+    metadataTitle: "Run Julia Online",
     tagline: "Use Julia in notebooks, terminals, Pluto, and source files.",
     summary:
       "Run Julia in Jupyter notebooks, Pluto, package environments, source files, and terminals.",
     metadataSummary:
-      "Run Julia in a collaborative project with Jupyter notebooks, Pluto, package environments, source files, terminals, and course workflows.",
+      "Run Julia online in a collaborative CoCalc project: the Julia image with its Jupyter kernel, Pluto reactive notebooks, VS Code in the browser, package environments that live with your files, and .jl scripts in a real Linux terminal.",
     image: "/public/features/julia-jupyter.png",
     index: true,
+    sections: [
+      {
+        title: "Run Julia online",
+        paragraphs: [
+          "Run Julia in your browser without installing anything: start a project on the Julia image and it comes with the Julia Jupyter kernel, Pluto for reactive notebooks, and VS Code in the browser.",
+          "Everything sits in one shared project, so data, package environments, notebooks, and their full edit history stay together and collaborators re-run the same code instead of a copy.",
+        ],
+        bullets: [
+          "Julia notebooks with real-time collaboration, cell chat, and TimeTravel history",
+          "Pluto reactive notebooks start from the project's Apps panel, with bundled examples",
+          "Package environments defined by a Project.toml that lives with your files",
+          ".jl files open in the collaborative editor with a one-click julia REPL",
+          "Long simulations keep running in a terminal after you close the browser",
+        ],
+      },
+    ],
   },
   {
     slug: "sage",
@@ -392,7 +409,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     summary:
       "Use GNU Octave for MATLAB-style numerical computing in collaborative projects with notebooks, .m files, terminals, plots, and teaching workflows.",
     metadataSummary:
-      "Run GNU Octave online in a CoCalc Linux project: start on the Octave image with Octave 11.3 and its common packages, use Octave as the default Jupyter kernel, edit .m files collaboratively, and keep TimeTravel history and snapshots.",
+      "Run GNU Octave online in a CoCalc Linux project: start on the Octave image with its common packages, use Octave as the default Jupyter kernel, edit .m files collaboratively, and keep TimeTravel history and snapshots.",
     image: "/public/features/cocalc-octave-jupyter-20200511.png",
     index: true,
     sections: [
@@ -403,7 +420,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
           "Octave is the default Jupyter kernel on that image, .m files open in the collaborative editor with Octave syntax highlighting, and scripts run in a terminal that survives disconnects.",
         ],
         bullets: [
-          "Octave 11.3 built from source with the statistics, control, signal, image, optim, and symbolic packages",
+          "Octave built from source with the statistics, control, signal, image, optim, and symbolic packages",
           "Jupyter kernels for Octave and Python, plus JupyterLab from the project's Apps panel",
           ".m files open in the collaborative editor with a one-click octave shell",
           "Real-time collaboration, TimeTravel history, and snapshots in every project",
