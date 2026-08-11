@@ -9,8 +9,10 @@ import Manifest from "./manifest";
 import Meta from "./meta";
 import PreflightCheck from "./preflight-checks";
 import StartupBanner from "./startup-banner";
+import { initializeStartupTrace } from "./startup-trace";
 import initError from "./webapp-error";
 
+initializeStartupTrace();
 initError();
 
 const loadContainer = document.getElementById("cocalc-load-container");

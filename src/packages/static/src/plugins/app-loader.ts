@@ -3,7 +3,6 @@ import { PUBLIC_STATIC_BASE_PLACEHOLDER } from "@cocalc/util/public-site-metadat
 import { renderAppTemplate } from "./app-template";
 
 export default function appLoaderPlugin(registerPlugin, PRODMODE: boolean) {
-  const templateContent = renderAppTemplate();
   const htmlPages: {
     chunks: string[];
     desc: string;
@@ -59,7 +58,7 @@ export default function appLoaderPlugin(registerPlugin, PRODMODE: boolean) {
       `HTML -- generates the ${page.filename} file`,
       new rspack.HtmlRspackPlugin({
         filename: page.filename,
-        templateContent,
+        templateContent: renderAppTemplate(page.desc),
         hash: PRODMODE,
         chunks: page.chunks,
         ...(page.publicPath != null ? { publicPath: page.publicPath } : {}),

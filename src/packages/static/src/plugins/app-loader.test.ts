@@ -5,9 +5,17 @@ import {
 import { renderAppTemplate } from "./app-template";
 
 test("renders the shared public head placeholder into the app template", () => {
-  const html = renderAppTemplate();
+  const html = renderAppTemplate("app");
   expect(html.split(PUBLIC_HEAD_PLACEHOLDER)).toHaveLength(2);
   expect(html.split(PUBLIC_BODY_PLACEHOLDER)).toHaveLength(2);
+  expect(html).toContain('data-cocalc-entry="app"');
   expect(html).not.toContain("cocalc-public-head-placeholder");
   expect(html).not.toContain("cocalc-public-body-placeholder -->");
+  expect(html).not.toContain("cocalc-entry-placeholder");
+});
+
+test("identifies each generated shell independently", () => {
+  expect(renderAppTemplate("public-viewer")).toContain(
+    'data-cocalc-entry="public-viewer"',
+  );
 });

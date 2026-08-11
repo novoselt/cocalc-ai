@@ -114,6 +114,7 @@ import {
   isFreeTierPressureRecovery,
   shouldShowProjectRuntimeRecoveryBanner,
 } from "@cocalc/frontend/project/runtime-recovery";
+import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
 
 const START_BANNER = false;
 
@@ -271,6 +272,11 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const [homePageButtonWidth, setHomePageButtonWidth] =
     React.useState<number>(80);
   const [checkingHost, setCheckingHost] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!is_active || project == null || open_files_order == null) return;
+    return recordSignedInSurfaceReady("project");
+  }, [is_active, open_files_order, project]);
 
   useEffect(() => {
     if (!actions) return;

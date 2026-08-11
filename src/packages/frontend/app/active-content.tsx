@@ -33,6 +33,7 @@ import SiteLicenseClaimPage from "@cocalc/frontend/claim/site-license-page";
 import { ManagedEgressBlockedScreen } from "./managed-egress-blocked-screen";
 import { joinUrlPath } from "@cocalc/util/url-path";
 import { CocalcErrorBoundary } from "./error-boundary";
+import { recordSignedInSurfaceReady } from "./bootstrap-ux-latency";
 
 const CONNECTIVITY_DOCS_SLUG = "troubleshooting/connectivity";
 
@@ -72,6 +73,11 @@ const STACK_LAYER_INACTIVE_STYLE: CSS = {
   visibility: "hidden",
   zIndex: 0,
 } as const;
+
+function SurfaceReady({ segment }: { segment: string }) {
+  React.useEffect(() => recordSignedInSurfaceReady(segment), [segment]);
+  return null;
+}
 
 export const ActiveContent: React.FC = React.memo(() => {
   const page_actions = useActions("page");
@@ -134,6 +140,20 @@ export const ActiveContent: React.FC = React.memo(() => {
           {content}
         </CocalcErrorBoundary>
       </div>
+    );
+  }
+
+  function renderSurfaceLayer(
+    key: string,
+    content: React.ReactNode,
+  ): React.JSX.Element {
+    return renderLayer(
+      key,
+      true,
+      <>
+        <SurfaceReady segment={key} />
+        {content}
+      </>,
     );
   }
 
@@ -204,44 +224,41 @@ export const ActiveContent: React.FC = React.memo(() => {
         overlay = renderLayer("projects", true, <ProjectsPage />);
         break;
       case "account":
-        overlay = renderLayer("account", true, <AccountPage />);
+        overlay = renderSurfaceLayer("account", <AccountPage />);
         break;
       case "file-use":
-        overlay = renderLayer("file-use", true, <FileUsePage />);
+        overlay = renderSurfaceLayer("file-use", <FileUsePage />);
         break;
       case "docs":
-        overlay = renderLayer(
+        overlay = renderSurfaceLayer(
           "docs",
-          true,
           <DocsPage print={docs_print} slug={docs_slug} />,
         );
         break;
       case "hosts":
-        overlay = renderLayer("hosts", true, <HostsPage />);
+        overlay = renderSurfaceLayer("hosts", <HostsPage />);
         break;
       case "share":
-        overlay = renderLayer(
+        overlay = renderSurfaceLayer(
           "share",
-          true,
           <PublicDirectorySharePage slug={share_slug} />,
         );
         break;
       case "ssh":
-        overlay = renderLayer("ssh", true, <SshPage />);
+        overlay = renderSurfaceLayer("ssh", <SshPage />);
         break;
       case "auth":
-        overlay = renderLayer("auth", true, <AuthPage />);
+        overlay = renderSurfaceLayer("auth", <AuthPage />);
         break;
       case "claim":
-        overlay = renderLayer("claim", true, <SiteLicenseClaimPage />);
+        overlay = renderSurfaceLayer("claim", <SiteLicenseClaimPage />);
         break;
       case "notifications":
-        overlay = renderLayer("notifications", true, <NotificationPage />);
+        overlay = renderSurfaceLayer("notifications", <NotificationPage />);
         break;
       case "admin":
-        overlay = renderLayer(
+        overlay = renderSurfaceLayer(
           "admin",
-          true,
           <AdminPage route={normalizeAdminRoute(admin_route)} />,
         );
         break;

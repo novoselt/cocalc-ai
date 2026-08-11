@@ -261,6 +261,7 @@ function Root({ Page }) {
         <AntdApp>
           <AntdNotificationBridge />
           <CocalcApp>
+            <StartupCommit />
             <CocalcErrorBoundary scope="app.page">
               <Page />
             </CocalcErrorBoundary>
@@ -271,9 +272,20 @@ function Root({ Page }) {
   );
 }
 
+function StartupCommit() {
+  useEffect(() => {
+    markAppBootstrapPhase("react_root_committed");
+    const frame = window.requestAnimationFrame(() => {
+      finishedLoading();
+      markAppBootstrapPhase("startup_banner_removed");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  return null;
+}
+
 export async function render(): Promise<void> {
   markAppBootstrapPhase("render_called");
-  finishedLoading(); // comment this out to leave the loading/startup banner visible so you can use the Chrome dev tools with it.
   const container = document.getElementById("cocalc-webapp-container");
   enableManagedReactErrorHandling();
   const root = createRoot(container!, reactRootErrorHandlers);
