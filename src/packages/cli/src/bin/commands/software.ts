@@ -49,6 +49,7 @@ import {
   publishHostBootstrapArtifact,
   publishHostCompatibilityArtifact,
   publishReleaseInstaller,
+  publishReleasePowerShellInstaller,
   publishReleaseChannelArtifact,
   readDeploymentIndex,
   readRemoteIndex,
@@ -1338,7 +1339,7 @@ function rocketBuildInfo(component: SoftwareBuildComponent):
 }
 
 function seaPlatformSuffix(): { machine: string; os: string } {
-  const os = process.platform;
+  const os = process.platform === "win32" ? "windows" : process.platform;
   const machine =
     process.arch === "x64"
       ? "x86_64"
@@ -1352,6 +1353,7 @@ const CLI_RELEASE_FILE_SUFFIXES = [
   "x86_64-linux.tar.gz",
   "aarch64-linux.tar.gz",
   "arm64-darwin",
+  "x86_64-windows.exe",
 ] as const;
 
 function cliReleaseSourceFiles({
@@ -1463,7 +1465,7 @@ function packageBuildInfo(
   if (component === "cli") {
     const { machine, os } = seaPlatformSuffix();
     const artifactName = `cocalc-cli-${artifactId}-${machine}-${os}${
-      os === "linux" ? ".tar.gz" : ""
+      os === "linux" ? ".tar.gz" : os === "windows" ? ".exe" : ""
     }`;
     return {
       packageFilter: "@cocalc/cli",
@@ -2022,11 +2024,14 @@ async function smokeHostSoftwareChecks({
 function releaseSmokeTargetForComponent(component: SoftwareDeployComponent):
   | {
       artifactComponent: "cli" | "launchpad" | "plus";
-      binaryName: "cocalc" | "cocalc-launchpad" | "cocalc-plus";
+      binaryName: "cocalc" | "cocalc.exe" | "cocalc-launchpad" | "cocalc-plus";
     }
   | undefined {
   if (component === "cli") {
-    return { artifactComponent: "cli", binaryName: "cocalc" };
+    return {
+      artifactComponent: "cli",
+      binaryName: process.platform === "win32" ? "cocalc.exe" : "cocalc",
+    };
   }
   if (component === "launchpad") {
     return { artifactComponent: "launchpad", binaryName: "cocalc-launchpad" };
@@ -2047,17 +2052,20 @@ function softwarePublicBaseUrl(deps: SoftwareCommandDeps): string {
 }
 
 function currentReleasePlatform(): {
-  os: "linux" | "darwin";
+  os: "linux" | "darwin" | "windows";
   arch: "amd64" | "arm64";
 } {
-  const os = process.platform;
-  if (os !== "linux" && os !== "darwin") {
-    throw new Error(`unsupported release smoke OS: ${os}`);
+  const os = process.platform === "win32" ? "windows" : process.platform;
+  if (os !== "linux" && os !== "darwin" && os !== "windows") {
+    throw new Error(`unsupported release smoke OS: ${process.platform}`);
   }
   const arch =
     process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : "";
   if (arch !== "amd64" && arch !== "arm64") {
     throw new Error(`unsupported release smoke architecture: ${process.arch}`);
+  }
+  if (os === "windows" && arch !== "amd64") {
+    throw new Error("Windows CLI release smoke currently supports amd64 only");
   }
   return { os, arch };
 }
@@ -2126,7 +2134,10 @@ function validateReleaseChannelManifest({
   manifest: any;
   component: "cli" | "launchpad" | "plus";
   channel: string;
-  platform: { os: "linux" | "darwin"; arch: "amd64" | "arm64" };
+  platform: {
+    os: "linux" | "darwin" | "windows";
+    arch: "amd64" | "arm64";
+  };
 }): void {
   if (manifest?.schema !== "cocalc-software-release-channel-v1") {
     throw new Error("invalid release channel manifest schema");
@@ -2214,7 +2225,7 @@ async function materializeReleaseExecutable({
   } else {
     await copyFile(artifactPath, executablePath);
   }
-  await chmod(executablePath, 0o755);
+  if (process.platform !== "win32") await chmod(executablePath, 0o755);
   return executablePath;
 }
 
@@ -2231,7 +2242,7 @@ async function findExecutableByName(
       continue;
     }
     if (entry.isFile() && entry.name === name) {
-      await chmod(path, 0o755);
+      if (process.platform !== "win32") await chmod(path, 0o755);
       return path;
     }
   }
@@ -3481,15 +3492,24 @@ function releaseInstallInfo({
   install_url: string;
   install_channel_env: string;
   install_command: string;
+  windows_install_url?: string;
+  windows_install_command?: string;
   available_channels: string[];
 } {
   const product = releaseProductForArtifactComponent(component);
   const envName = releaseChannelEnvForArtifactComponent(component);
   const installUrl = `${publicBaseUrl}/software/${product}/install.sh`;
+  const windowsInstallUrl = `${publicBaseUrl}/software/${product}/install.ps1`;
   return {
     install_url: installUrl,
     install_channel_env: `${envName}=${channel}`,
     install_command: `curl -fsSL ${installUrl} | ${envName}=${channel} bash`,
+    ...(component === "cli"
+      ? {
+          windows_install_url: windowsInstallUrl,
+          windows_install_command: `$env:COCALC_CLI_CHANNEL='${channel}'; irm ${windowsInstallUrl} | iex`,
+        }
+      : {}),
     available_channels: ["dev", "candidate", "stable"],
   };
 }
@@ -4162,6 +4182,9 @@ Supported deploy/smoke components:
             let releaseInstallerPublication:
               | Awaited<ReturnType<typeof publishReleaseInstaller>>
               | undefined;
+            let releasePowerShellInstallerPublication:
+              | Awaited<ReturnType<typeof publishReleasePowerShellInstaller>>
+              | undefined;
             let toolsMinimalArtifact:
               | Awaited<ReturnType<typeof resolveDeployArtifact>>
               | undefined;
@@ -4496,6 +4519,15 @@ Supported deploy/smoke components:
                         ),
                       },
                     );
+                    releasePowerShellInstallerPublication =
+                      await publishReleasePowerShellInstaller({
+                        client,
+                        config,
+                        product: "cocalc",
+                        body: await readFile(
+                          join(srcRoot, "packages", "cli", "install.ps1"),
+                        ),
+                      });
                   }
                   if (toolsMinimalArtifact) {
                     const publishedToolsMinimal =
@@ -4530,6 +4562,12 @@ Supported deploy/smoke components:
                     ...(releaseInstallerPublication
                       ? {
                           installer: releaseInstallerPublication,
+                        }
+                      : {}),
+                    ...(releasePowerShellInstallerPublication
+                      ? {
+                          powershell_installer:
+                            releasePowerShellInstallerPublication,
                         }
                       : {}),
                     ...(toolsMinimalChannelManifestUrls

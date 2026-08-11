@@ -106,3 +106,26 @@ test("release verifier accepts an arm64 Mach-O header", () => {
   ]);
   assert.equal(result.status, 0, result.stderr);
 });
+
+test("release verifier accepts an amd64 Windows PE32+ header", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cli-release-verifier-windows-"));
+  const artifact = join(dir, `cocalc-cli-${releaseId}-x86_64-windows.exe`);
+  const header = Buffer.alloc(256);
+  header.writeUInt16LE(0x5a4d, 0);
+  header.writeUInt32LE(128, 0x3c);
+  header.writeUInt32LE(0x00004550, 128);
+  header.writeUInt16LE(0x8664, 132);
+  header.writeUInt16LE(0x20b, 152);
+  writeFileSync(artifact, header);
+  const result = verify([
+    "--file",
+    artifact,
+    "--os",
+    "windows",
+    "--arch",
+    "amd64",
+    "--release-id",
+    releaseId,
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+});

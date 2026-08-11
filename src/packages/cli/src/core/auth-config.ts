@@ -1,12 +1,7 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+
+import { applyPrivateMode, cocalcCliConfigDir } from "./platform-paths";
 
 export type AuthProfile = {
   api?: string;
@@ -70,11 +65,7 @@ function normalizeApiScope(value: string | undefined): string | undefined {
 export function authConfigPath(env = process.env): string {
   const explicit = env.COCALC_CLI_CONFIG?.trim();
   if (explicit) return explicit;
-  return join(
-    env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"),
-    "cocalc",
-    "config.json",
-  );
+  return join(cocalcCliConfigDir({ env }), "config.json");
 }
 
 export function sanitizeProfileName(name: string | undefined): string {
@@ -139,7 +130,7 @@ export function saveAuthConfig(
     encoding: "utf8",
     mode: CONFIG_FILE_MODE,
   });
-  chmodSync(path, CONFIG_FILE_MODE);
+  applyPrivateMode(path, CONFIG_FILE_MODE);
 }
 
 export function selectedProfileName(

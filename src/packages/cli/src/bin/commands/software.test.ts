@@ -55,7 +55,7 @@ function testSeaSuffix(): { machine: string; os: string } {
         : process.arch === "arm64" && process.platform === "linux"
           ? "aarch64"
           : process.arch,
-    os: process.platform,
+    os: process.platform === "win32" ? "windows" : process.platform,
   };
 }
 
@@ -66,6 +66,10 @@ function makeRepoRoot(prefix = "software-repo-"): string {
   writeFileSync(
     join(cliDir, "install.sh"),
     "#!/usr/bin/env bash\necho test CLI installer\n",
+  );
+  writeFileSync(
+    join(cliDir, "install.ps1"),
+    '[CmdletBinding()]\nparam()\nWrite-Output "test CLI installer"\n',
   );
   return root;
 }
@@ -2712,6 +2716,7 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
     "x86_64-linux.tar.gz",
     "aarch64-linux.tar.gz",
     "arm64-darwin",
+    "x86_64-windows.exe",
   ]) {
     writeFileSync(
       join(source, `cocalc-cli-${artifactId}-${suffix}`),
@@ -2787,6 +2792,14 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
   assert.equal(
     JSON.parse(
       r2.objects
+        .get("software/cocalc/candidate-windows-amd64.json")!
+        .toString("utf8"),
+    ).artifact_id,
+    artifactId,
+  );
+  assert.equal(
+    JSON.parse(
+      r2.objects
         .get("software/cocalc/candidate-darwin-arm64.json")!
         .toString("utf8"),
     ).artifact_id,
@@ -2794,6 +2807,10 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
   );
   assert.match(
     r2.objects.get("software/cocalc/install.sh")!.toString("utf8"),
+    /test CLI installer/,
+  );
+  assert.match(
+    r2.objects.get("software/cocalc/install.ps1")!.toString("utf8"),
     /test CLI installer/,
   );
   const history = JSON.parse(
@@ -2815,14 +2832,19 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
     "https://software.example.test/software/cocalc/candidate-linux-amd64.json",
     "https://software.example.test/software/cocalc/candidate-linux-arm64.json",
     "https://software.example.test/software/cocalc/candidate-darwin-arm64.json",
+    "https://software.example.test/software/cocalc/candidate-windows-amd64.json",
   ]);
   assert.equal(
     record.details.installer.url,
     "https://software.example.test/software/cocalc/install.sh",
   );
+  assert.equal(
+    record.details.powershell_installer.url,
+    "https://software.example.test/software/cocalc/install.ps1",
+  );
   const payload = JSON.parse(logs.at(-1) ?? "{}");
-  assert.equal(payload.data.size_bytes, 30);
-  assert.equal(payload.data.size, "30 bytes");
+  assert.equal(payload.data.size_bytes, 40);
+  assert.equal(payload.data.size, "40 bytes");
   assert.equal(
     payload.data.install_url,
     "https://software.example.test/software/cocalc/install.sh",
@@ -2834,6 +2856,10 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
   assert.equal(
     payload.data.install_command,
     "curl -fsSL https://software.example.test/software/cocalc/install.sh | COCALC_CLI_CHANNEL=candidate bash",
+  );
+  assert.equal(
+    payload.data.windows_install_command,
+    "$env:COCALC_CLI_CHANNEL='candidate'; irm https://software.example.test/software/cocalc/install.ps1 | iex",
   );
   assert.deepEqual(payload.data.available_channels, [
     "dev",
@@ -2875,7 +2901,7 @@ test("software deploy cli rejects an incomplete platform set", async () => {
       "--env-file",
       join(dir, "missing.env"),
     ]),
-    /must contain exactly linux\/amd64, linux\/arm64, and darwin\/arm64/,
+    /must contain exactly linux\/amd64, linux\/arm64, darwin\/arm64, and windows\/amd64/,
   );
 });
 

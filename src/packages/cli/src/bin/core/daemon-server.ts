@@ -18,6 +18,7 @@ import {
   daemonRequestWithAutoStart,
   daemonSocketPath,
   ensurePrivateDaemonRuntimeDir,
+  isWindowsNamedPipe,
   type DaemonRequest,
   type DaemonResponse,
 } from "./daemon-transport";
@@ -91,7 +92,12 @@ export function createDaemonServerOps<Ctx>(deps: DaemonServerDeps<Ctx>) {
       // ignore
     }
     try {
-      if (existsSync(state.socketPath)) unlinkSync(state.socketPath);
+      if (
+        !isWindowsNamedPipe(state.socketPath) &&
+        existsSync(state.socketPath)
+      ) {
+        unlinkSync(state.socketPath);
+      }
     } catch {
       // ignore
     }
@@ -436,7 +442,9 @@ export function createDaemonServerOps<Ctx>(deps: DaemonServerDeps<Ctx>) {
   async function serveDaemon(socketPath = daemonSocketPath()): Promise<void> {
     ensurePrivateDaemonRuntimeDir(socketPath);
     try {
-      if (existsSync(socketPath)) unlinkSync(socketPath);
+      if (!isWindowsNamedPipe(socketPath) && existsSync(socketPath)) {
+        unlinkSync(socketPath);
+      }
     } catch {
       // ignore
     }
@@ -451,7 +459,9 @@ export function createDaemonServerOps<Ctx>(deps: DaemonServerDeps<Ctx>) {
       encoding: "utf8",
       mode: DAEMON_PRIVATE_FILE_MODE,
     });
-    chmodSync(state.pidPath, DAEMON_PRIVATE_FILE_MODE);
+    if (process.platform !== "win32") {
+      chmodSync(state.pidPath, DAEMON_PRIVATE_FILE_MODE);
+    }
 
     const server = createNetServer((socket) => {
       let buffer = "";
@@ -488,7 +498,9 @@ export function createDaemonServerOps<Ctx>(deps: DaemonServerDeps<Ctx>) {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(socketPath, () => {
-        chmodSync(socketPath, DAEMON_PRIVATE_FILE_MODE);
+        if (!isWindowsNamedPipe(socketPath)) {
+          chmodSync(socketPath, DAEMON_PRIVATE_FILE_MODE);
+        }
         server.off("error", reject);
         resolve();
       });

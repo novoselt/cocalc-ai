@@ -108,7 +108,7 @@ export type SoftwareReleaseChannelManifest = {
     short: string;
     dirty: boolean;
   };
-  os: "linux" | "darwin";
+  os: "linux" | "darwin" | "windows";
   arch: "amd64" | "arm64";
   filename: string;
   size_bytes: number;
@@ -121,6 +121,7 @@ const REQUIRED_CLI_RELEASE_PLATFORMS = [
   "linux/amd64",
   "linux/arm64",
   "darwin/arm64",
+  "windows/amd64",
 ] as const;
 
 type HostCompatibilityArtifact =
@@ -914,13 +915,16 @@ function releaseFilePlatform({
       `release channel file for ${component} must start with ${prefix}: ${fileName}`,
     );
   }
-  const withoutArchive = fileName.replace(/\.tar\.(?:gz|xz)$|\.(?:gz|xz)$/, "");
+  const withoutArchive = fileName.replace(
+    /\.tar\.(?:gz|xz)$|\.(?:gz|xz|exe)$/,
+    "",
+  );
   const parts = withoutArchive.slice(prefix.length).split("-");
   const os = component === "tools-minimal" ? parts.at(-2) : parts.at(-1);
   const arch = normalizeReleaseMachine(
     component === "tools-minimal" ? (parts.at(-1) ?? "") : (parts.at(-2) ?? ""),
   );
-  if ((os !== "linux" && os !== "darwin") || !arch) {
+  if ((os !== "linux" && os !== "darwin" && os !== "windows") || !arch) {
     throw new Error(
       `release channel file for ${component} must end in ${
         component === "tools-minimal" ? "<os>-<arch>" : "<machine>-<os>"
@@ -1028,7 +1032,7 @@ function validateReleaseChannelFileSet({
     unique.size !== files.length
   ) {
     throw new Error(
-      `CLI release must contain exactly linux/amd64, linux/arm64, and darwin/arm64 artifacts; got ${platforms.join(", ") || "none"}`,
+      `CLI release must contain exactly linux/amd64, linux/arm64, darwin/arm64, and windows/amd64 artifacts; got ${platforms.join(", ") || "none"}`,
     );
   }
 }
@@ -1053,6 +1057,35 @@ export async function publishReleaseInstaller({
     key,
     body,
     contentType: "text/x-shellscript; charset=utf-8",
+    cacheControl: config.indexCacheControl,
+  });
+  return {
+    key,
+    url: publicUrl(config, key),
+    sha256: createHash("sha256").update(body).digest("hex"),
+  };
+}
+
+export async function publishReleasePowerShellInstaller({
+  client,
+  config,
+  product,
+  body,
+}: {
+  client: SoftwareR2Client;
+  config: SoftwareRemoteConfig;
+  product: "cocalc";
+  body: Buffer;
+}): Promise<{ key: string; url: string; sha256: string }> {
+  if (!body.toString("utf8", 0, 256).includes("[CmdletBinding()]")) {
+    throw new Error("CLI PowerShell installer must be an advanced script");
+  }
+  const key = `software/${product}/install.ps1`;
+  await client.putR2ObjectFromBuffer({
+    auth: config.auth,
+    key,
+    body,
+    contentType: "text/plain; charset=utf-8",
     cacheControl: config.indexCacheControl,
   });
   return {
