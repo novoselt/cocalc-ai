@@ -977,6 +977,21 @@ describe("PublicApp", () => {
         /Error: Unable to start email sign-in/,
       ),
     ).not.toBeNull();
+    const redundantEntryRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.3\.7 Redundant Entry/,
+      })
+      .closest("tr");
+    expect(redundantEntryRow).not.toBeNull();
+    expect(within(redundantEntryRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(redundantEntryRow!).getByText(
+        /did not identify a first-party multi-step process/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(redundantEntryRow!).getByText(/rather than to collect duplicate/),
+    ).not.toBeNull();
     const nameRoleValueRow = within(tables[1])
       .getByRole("rowheader", {
         name: /4\.1\.2 Name, Role, Value/,
