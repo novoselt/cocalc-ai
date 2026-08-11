@@ -1098,6 +1098,21 @@ describe("PublicApp", () => {
         /different functions reuse a card icon/,
       ),
     ).not.toBeNull();
+    const errorSuggestionRow = within(tables[2])
+      .getByRole("rowheader", { name: /3\.3\.3 Error Suggestion/ })
+      .closest("tr");
+    expect(errorSuggestionRow).not.toBeNull();
+    expect(
+      within(errorSuggestionRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(errorSuggestionRow!).getByText(
+        /disabled without known correction guidance/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(errorSuggestionRow!).getByText(/without a suggested next step/),
+    ).not.toBeNull();
     const statusMessagesRow = within(tables[2])
       .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
       .closest("tr");

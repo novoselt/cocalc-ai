@@ -1400,11 +1400,15 @@
                     >
                     <span>(Level AA)</span>
                   </th>
-                  <td>Supports</td>
+                  <td>Partially supports</td>
                   <td>
-                    “If an input error is automatically detected and suggestions
-                    for correction are known, then the suggestions are provided
-                    to the user”
+                    Manual production testing of email sign-in found that blank
+                    and clearly malformed input left “Continue with email”
+                    disabled without known correction guidance such as entering
+                    a complete email address. The input <code>not@an</code>
+                    produced only “Error: Unable to start email sign-in,”
+                    without a suggested next step. Other form error paths were
+                    not exhaustively reviewed.
                   </td>
                 </tr>
                 <tr>
