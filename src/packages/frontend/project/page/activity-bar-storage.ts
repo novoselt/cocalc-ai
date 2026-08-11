@@ -19,7 +19,7 @@ import {
   normalizeFixedTabOrder,
   normalizeHiddenFixedTabs,
 } from "./activity-bar-preferences";
-import type { FixedTab } from "./file-tab";
+import type { FixedTab } from "./fixed-tab-ids";
 
 const STORAGE_KEYS = {
   collapsed: new LS.CustomKey(ACTIVITY_BAR_COLLAPSED),

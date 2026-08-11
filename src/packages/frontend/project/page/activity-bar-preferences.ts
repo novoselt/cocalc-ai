@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { FIXED_PROJECT_TABS, type FixedTab } from "./file-tab";
+import { type FixedTab, isFixedTabAvailableInLite } from "./fixed-tab-ids";
 
 const DEFAULT_ORDER: readonly FixedTab[] = [
   "files",
@@ -59,7 +59,7 @@ function filterAvailable(
   tabs: readonly FixedTab[],
   liteMode: boolean,
 ): FixedTab[] {
-  return tabs.filter((name) => !(liteMode && FIXED_PROJECT_TABS[name].noLite));
+  return tabs.filter((name) => !liteMode || isFixedTabAvailableInLite(name));
 }
 
 function normalizeRawTabs(

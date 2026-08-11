@@ -52,7 +52,7 @@ import {
 import {
   type FixedTab,
   isFixedTab,
-} from "@cocalc/frontend/project/page/file-tab";
+} from "@cocalc/frontend/project/page/fixed-tab-ids";
 import {
   FlyoutActiveMode,
   FlyoutLogDeduplicate,

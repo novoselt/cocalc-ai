@@ -51,6 +51,10 @@ import {
   shouldOpenFileInNewWindow,
 } from "./utils";
 import { file_options } from "@cocalc/frontend/editor-tmp";
+import type { FixedTab } from "./fixed-tab-ids";
+
+export { isFixedTab } from "./fixed-tab-ids";
+export type { FixedTab } from "./fixed-tab-ids";
 
 const AgentsFlyout = lazyWithRetry(
   async () => ({ default: (await import("./flyouts/agents")).AgentsFlyout }),
@@ -100,26 +104,6 @@ const WorkspacesFlyout = lazyWithRetry(
   }),
   "project workspaces flyout",
 );
-
-export type FixedTab =
-  | "workspaces"
-  | "active"
-  | "agents"
-  | "docs"
-  | "files"
-  | "new"
-  | "rootfs"
-  | "log"
-  | "search"
-  | "servers"
-  | "settings"
-  | "vms"
-  | "info"
-  | "users";
-
-export function isFixedTab(tab?: any): tab is FixedTab {
-  return typeof tab === "string" && tab in FIXED_PROJECT_TABS;
-}
 
 interface FlyoutProps {
   project_id: string;
