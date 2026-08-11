@@ -4,6 +4,12 @@ Date: 2026-08-11
 
 Status: operational plan. No deletion has been performed by this document.
 
+Update 2026-08-11T23:18Z: William applied delete-all lifecycle rules to
+`kucalc-prod2-storage-streams` and `kucalc-prod2-archived-projects`. Both
+buckets now have Object Versioning disabled, Soft Delete retention set to 0,
+and a lifecycle rule deleting objects with `age: 0`. Cloud Storage lifecycle
+deletion is now expected to proceed asynchronously.
+
 ## Goal
 
 Reduce ongoing costs from old `cocalc.com` infrastructure after the July 2026
