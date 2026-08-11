@@ -11,10 +11,9 @@ import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
-  featureAsset,
   LinkButton,
 } from "./page-components";
-import { FeatureInfo, FeatureInfoHeading, ZoomableImage } from "./feature-info";
+import { FeatureInfo, FeatureInfoHeading } from "./feature-info";
 import { FeatureFinalBand } from "./feature-visuals";
 
 const { Paragraph, Title } = Typography;
@@ -39,12 +38,16 @@ export default function OctaveFeaturePage({
     <Flex vertical gap={36}>
       <PublicSection>
         <Row align="top" gutter={[28, 28]}>
-          <Col xs={24} lg={11}>
+          {/* TODO: split back to lg={11} + a terminal screenshot column once
+              the Octave terminal capture lands. */}
+          <Col xs={24}>
             <Flex vertical gap={14}>
-              <Title level={2} style={{ margin: 0 }}>
+              <Title level={2} style={{ margin: 0, maxWidth: 760 }}>
                 Run GNU Octave online in a project you control.
               </Title>
-              <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
+              <Paragraph
+                style={{ fontSize: PUBLIC_TYPE.lead, margin: 0, maxWidth: 720 }}
+              >
                 Octave is the free numerical computing language that is largely
                 compatible with MATLAB. Start a project on the Octave image and
                 it is ready: Octave with the common packages, a Jupyter kernel,
@@ -59,13 +62,6 @@ export default function OctaveFeaturePage({
                 </LinkButton>
               </Flex>
             </Flex>
-          </Col>
-          <Col xs={24} lg={13}>
-            <ZoomableImage
-              alt="A 3D sombrero surface plotted by Octave in a CoCalc Jupyter notebook"
-              priority
-              src={featureAsset("cocalc-octave-sombrero-20260811.png")}
-            />
           </Col>
         </Row>
       </PublicSection>
@@ -83,6 +79,34 @@ export default function OctaveFeaturePage({
         >
           Octave, with a real project around it
         </FeatureInfoHeading>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent={COLORS.FEATURE_OCTAVE_BLUE}
+          alt="A 3D sombrero surface plotted by Octave in a CoCalc Jupyter notebook"
+          anchor="a-notebooks"
+          icon="jupyter"
+          image="cocalc-octave-sombrero-20260811.png"
+          title="Octave in Jupyter notebooks"
+        >
+          <Paragraph>
+            On the Octave image, <strong>Octave is the default kernel</strong>{" "}
+            for new notebooks: run cells, render plots inline, and keep
+            narrative text next to the code. A Python kernel is there too, for
+            the parts that are easier in Python.
+          </Paragraph>
+          <Paragraph>
+            The notebook itself is a collaborative CoCalc document:{" "}
+            <strong>real-time editing with visible cursors</strong>, chat
+            threads anchored to cells, and TimeTravel recording every change.
+            The{" "}
+            <a href={appPath("features/jupyter-notebook")}>
+              Jupyter notebooks page
+            </a>{" "}
+            covers the editor in detail.
+          </Paragraph>
+        </FeatureInfo>
       </PublicSection>
 
       <PublicSection>
@@ -107,32 +131,6 @@ export default function OctaveFeaturePage({
             <code>apt-get</code>, <strong>persists with the project</strong>. To
             add Octave to a different image instead, follow the{" "}
             <a href={appPath(OCTAVE_KERNEL_GUIDE)}>kernel setup guide</a>.
-          </Paragraph>
-        </FeatureInfo>
-      </PublicSection>
-
-      <PublicSection>
-        <FeatureInfo
-          accent={COLORS.FEATURE_OCTAVE_BLUE}
-          anchor="a-notebooks"
-          icon="jupyter"
-          title="Octave in Jupyter notebooks"
-        >
-          <Paragraph>
-            On the Octave image, <strong>Octave is the default kernel</strong>{" "}
-            for new notebooks: run cells, render plots inline, and keep
-            narrative text next to the code. A Python kernel is there too, for
-            the parts that are easier in Python.
-          </Paragraph>
-          <Paragraph>
-            The notebook itself is a collaborative CoCalc document:{" "}
-            <strong>real-time editing with visible cursors</strong>, chat
-            threads anchored to cells, and TimeTravel recording every change.
-            The{" "}
-            <a href={appPath("features/jupyter-notebook")}>
-              Jupyter notebooks page
-            </a>{" "}
-            covers the editor in detail.
           </Paragraph>
         </FeatureInfo>
       </PublicSection>
