@@ -43,7 +43,9 @@ const initialProjectSurfaceForbidden = [
 ];
 
 const signedInStartupRouteForbidden = [
-  "frontend/app/post-surface-ui.tsx",
+  "frontend/app/post-surface-banners.tsx",
+  "frontend/app/post-surface-modals.tsx",
+  "frontend/app/post-surface-right-nav.tsx",
   "frontend/app/automatic-update-notice.tsx",
   "frontend/app/import-public-url-modal.tsx",
   "frontend/app/onboarding-email-prompt.tsx",

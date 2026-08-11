@@ -9,6 +9,7 @@ import {
   type UxTraceStart,
 } from "@cocalc/frontend/monitoring/ux-latency-trace";
 import { markSignedInSurfaceReady } from "./surface-ready-state";
+import { getStartupPerformancePolicy } from "./startup-performance-policy";
 
 let trace: UxLatencyTrace | undefined;
 let appReadyRecorded = false;
@@ -128,6 +129,7 @@ function connectionDetails(): Record<string, unknown> {
     hardware_concurrency: Number.isFinite(navigator?.hardwareConcurrency)
       ? navigator.hardwareConcurrency
       : undefined,
+    startup_performance_policy: getStartupPerformancePolicy(),
   };
 }
 

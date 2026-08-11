@@ -52,25 +52,27 @@ import { ScratchpadSessionControls } from "./scratchpad-session-controls";
 import { recordSignedInAppBootstrapReady } from "./bootstrap-ux-latency";
 import { configureUxLatency } from "@cocalc/frontend/monitoring/ux-latency";
 import { lazyWithRetry } from "./lazy-with-retry";
+import usePostSurfaceWork from "./use-post-surface-work";
 import useSignedInSurfaceReady from "./use-signed-in-surface-ready";
+import useStartupPerformancePolicy from "./use-startup-performance-policy";
 
 const PostSurfaceRightNav = lazyWithRetry(async () => {
   const [{ ensureNotificationsInitialized }, postSurface] = await Promise.all([
     import("@cocalc/frontend/notifications/ensure-init"),
-    import("./post-surface-ui"),
+    import("./post-surface-right-nav"),
   ]);
   await ensureNotificationsInitialized();
   return { default: postSurface.PostSurfaceRightNav };
 }, "post-surface navigation");
 const PostSurfaceBanners = lazyWithRetry(
   async () => ({
-    default: (await import("./post-surface-ui")).PostSurfaceBanners,
+    default: (await import("./post-surface-banners")).PostSurfaceBanners,
   }),
   "post-surface banners",
 );
 const PostSurfaceModals = lazyWithRetry(
   async () => ({
-    default: (await import("./post-surface-ui")).PostSurfaceModals,
+    default: (await import("./post-surface-modals")).PostSurfaceModals,
   }),
   "post-surface modals",
 );
@@ -152,6 +154,22 @@ export const Page: React.FC = () => {
   const page_actions = useActions("page");
   const androidViewportBottom = useVisibleViewportBottom(IS_ANDROID);
   const surfaceReady = useSignedInSurfaceReady();
+  const startupPerformance = useStartupPerformancePolicy();
+  const showPostSurfaceNavigation = usePostSurfaceWork({
+    mode: startupPerformance.mode,
+    surfaceReady,
+    work: "navigation",
+  });
+  const showPostSurfaceModals = usePostSurfaceWork({
+    mode: startupPerformance.mode,
+    surfaceReady,
+    work: "modals",
+  });
+  const showPostSurfaceBanners = usePostSurfaceWork({
+    mode: startupPerformance.mode,
+    surfaceReady,
+    work: "banners",
+  });
 
   const { pageStyle } = useAppContext();
   const { isNarrow, topBarStyle, projectsNavStyle } = pageStyle;
@@ -388,7 +406,7 @@ export const Page: React.FC = () => {
         {render_sign_in_tab()}
         {is_logged_in ? render_account_tab() : undefined}
         {render_support()}
-        {surfaceReady ? (
+        {showPostSurfaceNavigation ? (
           <PostSurfaceSlot scope="app.post-surface-right-nav">
             <PostSurfaceRightNav
               isLoggedIn={is_logged_in}
@@ -458,7 +476,7 @@ export const Page: React.FC = () => {
     >
       {show_connection && <ConnectionInfo />}
       <VersionWarning />
-      {surfaceReady ? (
+      {showPostSurfaceBanners ? (
         <PostSurfaceSlot scope="app.post-surface-banners">
           <PostSurfaceBanners
             cookieWarning={!!cookie_warning}
@@ -499,7 +517,7 @@ export const Page: React.FC = () => {
       >
         <ActiveContent />
       </CocalcErrorBoundary>
-      {surfaceReady && !examMode ? (
+      {showPostSurfaceModals && !examMode ? (
         <PostSurfaceSlot scope="app.post-surface-modals">
           <PostSurfaceModals />
         </PostSurfaceSlot>
