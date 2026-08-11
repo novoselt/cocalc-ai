@@ -5,7 +5,7 @@ import { Avatar } from "@cocalc/frontend/account/avatar/avatar";
 import ProgressEstimate from "@cocalc/frontend/components/progress-estimate";
 import type { ChatActions } from "./actions";
 import { field } from "./access";
-import { getUserName } from "./chat-log";
+import { getUserName } from "./user-name";
 import { deriveThreadLabel } from "./threads";
 import type { ChatMessageTyped } from "./types";
 

@@ -22,10 +22,8 @@ import {
 import { Button } from "antd";
 import { VirtuosoHandle } from "react-virtuoso";
 import StatefulVirtuoso from "@cocalc/frontend/components/stateful-virtuoso";
-import { chatBotName, isChatBot } from "@cocalc/frontend/account/chatbot";
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
 import { DivTempHeight } from "@cocalc/frontend/jupyter/div-temp-height";
-import { displayNameFromUserRecord } from "@cocalc/frontend/users/display-name";
 import { cmp } from "@cocalc/util/misc";
 import type { ChatActions } from "./actions";
 import { type AttachedSteerMessage } from "./agent-message-status";
@@ -40,11 +38,7 @@ import type {
 } from "./types";
 import { useAnyChatOverlayOpen } from "./drawer-overlay-state";
 import type { ThreadIndexEntry } from "./message-cache";
-import {
-  getMessageAtDate,
-  newest_content,
-  orderLinearThreadMessages,
-} from "./utils";
+import { getMessageAtDate, newest_content } from "./utils";
 import {
   dateValue,
   field,
@@ -58,6 +52,10 @@ import {
   restoreChatViewportAnchorOffset,
   saveChatViewportAnchor,
 } from "./chat-scroll-anchor";
+import { getUserName } from "./user-name";
+import { getSortedDates } from "./sorted-dates";
+
+export { getSortedDates } from "./sorted-dates";
 
 // you can use this to quickly disabled virtuoso, but rendering large chatrooms will
 // become basically impossible.
@@ -713,95 +711,6 @@ function acpReplyParentMessageIds(messages: ChatMessages): Set<string> {
     }
   }
   return parentMessageIds;
-}
-
-// Messages are sorted using each message record's `date` value.
-// We avoid relying on Map key shape, since cache internals are migrating
-// away from date-keyed storage.
-export function getSortedDates(
-  messages: ChatMessages,
-  _account_id: string,
-  visibleKeys?: Set<string>,
-): {
-  dates: string[];
-  numChildren: NumChildren;
-} {
-  let m = messages;
-  if (m == null) {
-    return {
-      dates: [],
-      numChildren: {},
-    };
-  }
-
-  const visibleMessages: ChatMessageTyped[] = [];
-  const visibleById = new Map<string, ChatMessageTyped>();
-  const numChildren: NumChildren = {};
-  for (const [, message] of m) {
-    if (message == null) continue;
-    const messageDate = dateValue(message);
-    if (!messageDate) continue;
-    const messageKey = `${messageDate.valueOf()}`;
-    if (visibleKeys && !visibleKeys.has(messageKey)) continue;
-    const messageId = `${field<string>(message, "message_id") ?? ""}`.trim();
-    if (isImmediateAcpSteerMessage(message)) {
-      continue;
-    }
-    visibleMessages.push(message);
-    if (messageId) visibleById.set(messageId, message);
-  }
-
-  for (const message of visibleMessages) {
-    const parentId = parentMessageId(message);
-    if (parentId) {
-      const parent = visibleById.get(parentId);
-      const d = dateValue(parent)?.valueOf();
-      if (d != null) {
-        numChildren[d] = (numChildren[d] ?? 0) + 1;
-        continue;
-      }
-    }
-  }
-
-  const groups = new Map<string, ChatMessageTyped[]>();
-  for (const message of visibleMessages) {
-    const threadId = `${field<string>(message, "thread_id") ?? ""}`.trim();
-    const groupKey =
-      threadId ||
-      `${field<string>(message, "message_id") ?? dateValue(message)?.valueOf() ?? Math.random()}`;
-    const bucket = groups.get(groupKey) ?? [];
-    bucket.push(message);
-    groups.set(groupKey, bucket);
-  }
-
-  const orderedGroups = Array.from(groups.values())
-    .map((group) => orderLinearThreadMessages(group))
-    .sort((a, b) => {
-      const aTime = dateValue(a[0])?.valueOf() ?? Number.POSITIVE_INFINITY;
-      const bTime = dateValue(b[0])?.valueOf() ?? Number.POSITIVE_INFINITY;
-      return cmp(aTime, bTime);
-    });
-
-  const dates: string[] = [];
-  for (const group of orderedGroups) {
-    for (const message of group) {
-      const messageDate = dateValue(message);
-      if (!messageDate) continue;
-      const date = messageDate.valueOf();
-      dates.push(`${date}`);
-    }
-  }
-  return { dates, numChildren };
-}
-
-export function getUserName(userMap, accountId: string): string {
-  if (isChatBot(accountId)) {
-    return chatBotName(accountId);
-  }
-  if (userMap == null) return "Unknown";
-  const account = userMap.get(accountId);
-  if (account == null) return "Unknown";
-  return displayNameFromUserRecord(account) || "Unknown";
 }
 
 export function MessageList({

@@ -3,15 +3,24 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import type { ChatActions } from "@cocalc/frontend/chat/actions";
 import { getChatActions, initChat } from "@cocalc/frontend/chat/register";
-import SideChat from "@cocalc/frontend/chat/side-chat";
+import { Loading } from "@cocalc/frontend/components/loading";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
 import { labels } from "@cocalc/frontend/i18n";
 import { chatMetaFile } from "@cocalc/frontend/chat/paths";
 import { EditorComponentProps, EditorDescription } from "../frame-tree/types";
-import { chatroom } from "@cocalc/frontend/frame-editors/chat-editor/editor";
+import { CHATROOM_COMMANDS } from "@cocalc/frontend/frame-editors/chat-editor/commands";
+
+const SideChat = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/chat/side-chat")).default,
+  }),
+  "side chat editor",
+);
 
 export function chatFile(path: string): string {
   return chatMetaFile(path);
@@ -73,18 +82,25 @@ function Chat({ font_size, desc }: EditorComponentProps) {
     return null;
   }
   return (
-    <SideChat
-      actions={sideChatActions}
-      project_id={project_id}
-      path={path}
-      fontSize={font_size}
-      desc={desc}
-    />
+    <CocalcErrorBoundary
+      scope="frame-editor.side-chat"
+      resetKeys={[project_id, path]}
+    >
+      <Suspense fallback={<Loading theme="medium" />}>
+        <SideChat
+          actions={sideChatActions}
+          project_id={project_id}
+          path={path}
+          fontSize={font_size}
+          desc={desc}
+        />
+      </Suspense>
+    </CocalcErrorBoundary>
   );
 }
 
 const commands: any = {};
-for (const x in chatroom.commands) {
+for (const x of CHATROOM_COMMANDS) {
   if (x == "time_travel" || x == "show_search") {
     continue;
   }

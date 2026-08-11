@@ -19,13 +19,7 @@ import {
 import { CSSProperties, ReactNode, useEffect, useLayoutEffect } from "react";
 import { useIntl } from "react-intl";
 import { Avatar } from "@cocalc/frontend/account/avatar/avatar";
-import {
-  CSS,
-  redux,
-  useMemo,
-  useRef,
-  useState,
-} from "@cocalc/frontend/app-framework";
+import { CSS, useMemo, useRef, useState } from "@cocalc/frontend/app-framework";
 import {
   DropdownMenu,
   Gap,
@@ -60,7 +54,7 @@ import {
   type InlineCodeLink,
 } from "@cocalc/chat";
 import { ChatActions } from "./actions";
-import { getUserName } from "./chat-log";
+import { messageToMarkdown } from "./message-to-markdown";
 import { codexEventsToMarkdown } from "./codex-activity";
 import {
   cancelQueuedAcpTurn,
@@ -2854,24 +2848,12 @@ export function message_to_markdown(
   message,
   options?: { includeLog?: boolean; includeHeader?: boolean },
 ): string {
-  const includeLog = options?.includeLog ?? false;
-  const includeHeader = options?.includeHeader ?? true;
-  let value = newest_content(message);
-  const user_map = redux.getStore("users").get("user_map");
-  const sender = getUserName(
-    user_map,
-    field<string>(message, "sender_id") ?? "",
-  );
-  const date = dateValue(message)?.toString() ?? "";
-
-  if (includeLog) {
-    const logMarkdown = message_codex_log_to_markdown(message);
-    if (logMarkdown) {
-      value = `${value}\n\n**Log**\n\n${logMarkdown}`;
-    }
-  }
-  if (!includeHeader) return value;
-  return `*From:* ${sender}  \n*Date:* ${date}  \n\n${value}`;
+  return messageToMarkdown(message, {
+    includeHeader: options?.includeHeader,
+    logMarkdown: options?.includeLog
+      ? message_codex_log_to_markdown(message)
+      : undefined,
+  });
 }
 
 function message_codex_log_to_markdown(message): string {

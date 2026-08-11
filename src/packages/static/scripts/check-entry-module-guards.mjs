@@ -9,7 +9,7 @@ const OUTPUT_DIR = resolve(
 );
 const STATS_PATH = resolve(OUTPUT_DIR, "chunk-stats.json");
 
-const { chunks } = JSON.parse(readFileSync(STATS_PATH, "utf8"));
+const { chunks, groups } = JSON.parse(readFileSync(STATS_PATH, "utf8"));
 
 const loadAndAppForbidden = [
   "pdfjs-dist/",
@@ -29,6 +29,15 @@ const initialProjectSurfaceForbidden = [
   "frontend/project/new/new-file-page.tsx",
   "frontend/project/page/flyouts/agents.tsx",
   "frontend/project/page/flyouts/workspaces.tsx",
+];
+
+const signedInStartupRouteForbidden = [
+  "frontend/chat/chat-log.tsx",
+  "frontend/chat/chatroom.tsx",
+  "frontend/chat/codex-activity.tsx",
+  "frontend/chat/git-commit-drawer.tsx",
+  "frontend/chat/message.tsx",
+  "frontend/chat/side-chat.tsx",
 ];
 
 const publicViewerForbidden = [
@@ -60,6 +69,32 @@ const publicNotebookForbidden = [
   "frontend/jupyter/codemirror-component.tsx",
 ];
 
+function findGroup(moduleSuffix, request) {
+  const matches = groups.filter((group) =>
+    group.origins?.some(
+      (origin) =>
+        origin.module?.endsWith(moduleSuffix) && origin.request === request,
+    ),
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      `expected one chunk group for ${moduleSuffix} -> ${request}; found ${matches.length}`,
+    );
+  }
+  return matches[0];
+}
+
+const signedInStartupChunks = [
+  ...findGroup(
+    "frontend/app/route-components.ts",
+    "@cocalc/frontend/projects/projects-page",
+  ).chunks,
+  ...findGroup(
+    "frontend/app/route-components.ts",
+    "@cocalc/frontend/project/page/page",
+  ).chunks,
+];
+
 const rules = [
   {
     label: "shared/load and main app chunks",
@@ -70,6 +105,11 @@ const rules = [
     label: "initial project surface chunks",
     chunks: ["app", "embed"],
     forbidden: initialProjectSurfaceForbidden,
+  },
+  {
+    label: "signed-in startup route chunks",
+    chunks: [...new Set(signedInStartupChunks)],
+    forbidden: signedInStartupRouteForbidden,
   },
   {
     label: "public viewer and public site chunks",
