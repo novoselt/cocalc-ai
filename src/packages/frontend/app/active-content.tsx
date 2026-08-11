@@ -3,8 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { AccountPage } from "@cocalc/frontend/account/account-page";
-import { AdminPage } from "@cocalc/frontend/admin";
+import { Alert as AntAlert, Button } from "antd";
 import { Alert } from "@cocalc/frontend/antd-bootstrap";
 import { normalizeAdminRoute } from "@cocalc/frontend/admin/routing";
 import {
@@ -14,26 +13,32 @@ import {
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components/icon";
+import { Loading } from "@cocalc/frontend/components/loading";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { SiteName } from "@cocalc/frontend/customize";
 import { DocsLink } from "@cocalc/frontend/docs/link";
-import { DocsPage } from "@cocalc/frontend/docs/page";
-import { FileUsePage } from "@cocalc/frontend/file-use/page";
 import { Connecting } from "@cocalc/frontend/landing-page/connecting";
-import { NotificationPage } from "@cocalc/frontend/notifications";
-import { ProjectPage } from "@cocalc/frontend/project/page/page";
-import { ProjectsPage } from "@cocalc/frontend/projects/projects-page";
 import { parseManagedEgressBlockedError } from "@cocalc/frontend/purchases/managed-egress-blocked";
-import { PublicDirectorySharePage } from "@cocalc/frontend/share/public-directory-share-page";
-import { SshPage } from "@cocalc/frontend/ssh";
 import { KioskModeBanner } from "./kiosk-mode-banner";
-import { HostsPage } from "@cocalc/frontend/hosts/hosts-page";
-import { AuthPage } from "@cocalc/frontend/auth";
-import SiteLicenseClaimPage from "@cocalc/frontend/claim/site-license-page";
 import { ManagedEgressBlockedScreen } from "./managed-egress-blocked-screen";
 import { joinUrlPath } from "@cocalc/util/url-path";
 import { CocalcErrorBoundary } from "./error-boundary";
 import { recordSignedInSurfaceReady } from "./bootstrap-ux-latency";
+import { updateMountedProjectIds } from "./mounted-projects";
+import {
+  AccountPage,
+  AdminPage,
+  AuthPage,
+  DocsPage,
+  FileUsePage,
+  HostsPage,
+  NotificationPage,
+  ProjectPage,
+  ProjectsPage,
+  PublicDirectorySharePage,
+  SiteLicenseClaimPage,
+  SshPage,
+} from "./route-components";
 
 const CONNECTIVITY_DOCS_SLUG = "troubleshooting/connectivity";
 
@@ -77,6 +82,37 @@ const STACK_LAYER_INACTIVE_STYLE: CSS = {
 function SurfaceReady({ segment }: { segment: string }) {
   React.useEffect(() => recordSignedInSurfaceReady(segment), [segment]);
   return null;
+}
+
+function RouteChunk({
+  children,
+  route,
+}: {
+  children: React.ReactNode;
+  route: string;
+}) {
+  return (
+    <CocalcErrorBoundary
+      fallback={
+        <AntAlert
+          action={
+            <Button onClick={() => window.location.reload()}>
+              Reload CoCalc
+            </Button>
+          }
+          description="The page assets could not be loaded. The error was reported automatically; reload CoCalc to try again."
+          showIcon
+          title="This page could not be displayed"
+          type="warning"
+        />
+      }
+      scope={`app.route.${route}`}
+    >
+      <React.Suspense fallback={<Loading theme="medium" />}>
+        {children}
+      </React.Suspense>
+    </CocalcErrorBoundary>
+  );
 }
 
 export const ActiveContent: React.FC = React.memo(() => {
@@ -150,23 +186,42 @@ export const ActiveContent: React.FC = React.memo(() => {
     return renderLayer(
       key,
       true,
-      <>
+      <RouteChunk route={key}>
         <SurfaceReady segment={key} />
         {content}
-      </>,
+      </RouteChunk>,
     );
   }
 
+  // Persist editor/terminal DOM only for projects that have actually been
+  // activated during this browser session. Persisted tab state must not force
+  // every project page into the signed-in startup dependency path.
+  const mountedProjectIds = React.useRef(new Set<string>());
+  updateMountedProjectIds(
+    mountedProjectIds.current,
+    active_top_tab,
+    open_projects ?? [],
+  );
+
   const project_layers: React.JSX.Element[] = [];
   open_projects?.forEach((project_id: string) => {
+    if (!mountedProjectIds.current.has(project_id)) return;
     const is_active = project_id === active_top_tab;
-    const x = <ProjectPage project_id={project_id} is_active={is_active} />;
+    const x = (
+      <RouteChunk route="project">
+        <ProjectPage project_id={project_id} is_active={is_active} />
+      </RouteChunk>
+    );
     project_layers.push(renderLayer(project_id, is_active, x, "app.project"));
   });
 
   if (get_api_key) {
     // Only render the account page which has the message for allowing api access:
-    return <AccountPage key={"account"} />;
+    return (
+      <RouteChunk route="account">
+        <AccountPage key="account" />
+      </RouteChunk>
+    );
   }
 
   function renderProjectLoading(): React.ReactNode {
@@ -221,7 +276,13 @@ export const ActiveContent: React.FC = React.memo(() => {
   } else {
     switch (active_top_tab) {
       case "projects":
-        overlay = renderLayer("projects", true, <ProjectsPage />);
+        overlay = renderLayer(
+          "projects",
+          true,
+          <RouteChunk route="projects">
+            <ProjectsPage />
+          </RouteChunk>,
+        );
         break;
       case "account":
         overlay = renderSurfaceLayer("account", <AccountPage />);
