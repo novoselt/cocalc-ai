@@ -310,7 +310,7 @@
         <dt>Name of Product/Version:</dt>
         <dd>CoCalc.ai web application (continuously delivered)</dd>
         <dt>Report Date:</dt>
-        <dd>August 10, 2026</dd>
+        <dd>August 11, 2026</dd>
         <dt>Product Description:</dt>
         <dd>
           Browser-based collaborative computing and development application
@@ -334,13 +334,15 @@
           CSS-pixel viewport against 16 public production pages and 15
           authenticated pages in a development build. axe-core 4.12.1 was run
           against six representative interactive states, with programmatic
-          keyboard activation and focus assertions for selected states. All 16
-          public production pages and 13 of the 15 authenticated pages received
-          Lighthouse accessibility scores of 100. Five of the six interactive
-          states had no axe violations; the sixth reported the same unnamed
-          switch found by Lighthouse. Automated testing does not establish
-          complete WCAG conformance. No screen-reader or other
-          assistive-technology testing was performed.
+          keyboard activation and focus assertions for selected states. Manual
+          production testing covered representative public and authenticated
+          screens in portrait and landscape responsive viewports and at 200%
+          browser zoom. All 16 public production pages and 13 of the 15
+          authenticated pages received Lighthouse accessibility scores of 100.
+          Five of the six interactive states had no axe violations; the sixth
+          reported the same unnamed switch found by Lighthouse. Automated
+          testing does not establish complete WCAG conformance. No screen-reader
+          or other assistive-technology testing was performed.
         </dd>
       </dl>
       <p>
@@ -1102,8 +1104,9 @@
                   </th>
                   <td>Supports</td>
                   <td>
-                    “text can be resized without assistive technology up to 200
-                    percent without loss of content or functionality”
+                    Representative public and authenticated production screens
+                    remained usable at 200% browser zoom. No loss of text
+                    content or functionality was observed in the tested screens.
                   </td>
                 </tr>
                 <tr>

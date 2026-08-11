@@ -869,8 +869,11 @@ describe("PublicApp", () => {
     expect(
       report.getByText("CoCalc.ai web application (continuously delivered)"),
     ).not.toBeNull();
-    expect(report.getByText("August 10, 2026")).not.toBeNull();
+    expect(report.getByText("August 11, 2026")).not.toBeNull();
     expect(report.getByText(/excludes user-authored content;/)).not.toBeNull();
+    expect(
+      report.getByText(/Manual production testing covered/),
+    ).not.toBeNull();
     expect(
       report.getByText(
         /No screen-reader or other assistive-technology testing/,
@@ -909,6 +912,14 @@ describe("PublicApp", () => {
     ).not.toBeNull();
     expect(
       within(orientationRow!).getByText(/390 CSS-pixel portrait viewport/),
+    ).not.toBeNull();
+    const resizeTextRow = within(tables[2])
+      .getByRole("rowheader", { name: /1\.4\.4 Resize text/ })
+      .closest("tr");
+    expect(resizeTextRow).not.toBeNull();
+    expect(within(resizeTextRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(resizeTextRow!).getByText(/remained usable at 200% browser zoom/),
     ).not.toBeNull();
     const draggingRow = within(tables[2])
       .getByRole("rowheader", { name: /2\.5\.7 Dragging Movements/ })
