@@ -546,11 +546,6 @@ function autoformatListAtStart(editor: Editor): boolean {
   }
 
   const marker = markerMatch[1];
-  const paragraphText = Editor.string(editor, paragraphPath);
-  const fullMarkerMatch = paragraphText.match(/^([-*+]|\d+[.)])(?:\s|$)/);
-  if (!fullMarkerMatch || fullMarkerMatch[1] !== marker) {
-    return false;
-  }
 
   Editor.withoutNormalizing(editor, () => {
     Transforms.delete(editor, {

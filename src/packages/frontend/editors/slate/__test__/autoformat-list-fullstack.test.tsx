@@ -1,6 +1,6 @@
 import "../elements/types";
 
-import { createEditor, Descendant, Transforms } from "slate";
+import { createEditor, Descendant, Element, Transforms } from "slate";
 
 import { withReact } from "../slate-react";
 import { withAutoFormat } from "../format";
@@ -195,4 +195,33 @@ test("full stack: unsafe paragraph selection still preserves top-level trailing 
 
   const md = slate_to_markdown(editor.children, { preserveBlankLines: false });
   expect(md).toContain("- foo");
+});
+
+test("full stack: list autoformat preserves existing inline math", () => {
+  const editor = makeProdLikeEditor();
+  editor.children = [
+    { type: "paragraph", children: [{ text: "foo $x$" }] },
+  ] as Descendant[];
+  editor.selection = null;
+
+  Transforms.select(editor, { path: [0, 0], offset: "foo $x$".length });
+  // @ts-ignore custom second arg is supported by withAutoFormat
+  editor.insertText(" ", true);
+  expect(
+    Array.from(
+      editor.nodes({
+        at: [],
+        match: (node) => Element.isElement(node) && node.type === "math_inline",
+      }),
+    ),
+  ).toHaveLength(1);
+
+  Transforms.select(editor, { path: [0, 0], offset: 0 });
+  // @ts-ignore custom second arg is supported by withAutoFormat
+  editor.insertText("-", true);
+  // @ts-ignore custom second arg is supported by withAutoFormat
+  editor.insertText(" ", true);
+
+  const md = slate_to_markdown(editor.children, { preserveBlankLines: false });
+  expect(md).toContain("- foo $x$");
 });
