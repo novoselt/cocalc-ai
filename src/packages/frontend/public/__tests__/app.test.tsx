@@ -989,6 +989,23 @@ describe("PublicApp", () => {
     expect(
       within(reflowRow!).getByText(/settings required horizontal scrolling/),
     ).not.toBeNull();
+    const headingsAndLabelsRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.4\.6 Headings and Labels/ })
+      .closest("tr");
+    expect(headingsAndLabelsRow).not.toBeNull();
+    expect(
+      within(headingsAndLabelsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(headingsAndLabelsRow!).getByText(
+        /Billing and Purchases share one card icon/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(headingsAndLabelsRow!).getByText(
+        /cannot be distinguished from their displayed icons alone/,
+      ),
+    ).not.toBeNull();
     const focusVisibleRow = within(tables[2])
       .getByRole("rowheader", { name: /2\.4\.7 Focus Visible/ })
       .closest("tr");
