@@ -33,6 +33,7 @@ const DEFAULT_STATE: FindSnapshotsState = {
   query: "",
   filter: "",
   mode: "files",
+  subdirs: true,
   hidden: false,
   caseSensitive: false,
   gitGrep: true,
@@ -218,10 +219,13 @@ export function SnapshotsTab({
         }
         if (activeMode === "files") {
           const normalized = normalizeGlobQuery(q);
+          const currentDirectoryDepth =
+            2 + (archiveScopePath?.split("/").filter(Boolean).length ?? 0);
           const { stdout, stderr } = await fs.fd(SNAPSHOTS, {
             pattern: normalized,
             options: [
               "-g",
+              ...(state.subdirs ? [] : ["-d", `${currentDirectoryDepth}`]),
               ...(state.hidden ? ["-H"] : []),
               ...(state.caseSensitive ? ["-s"] : ["-i"]),
             ],
@@ -244,7 +248,9 @@ export function SnapshotsTab({
             options: {
               case_sensitive: state.caseSensitive,
               git_grep: state.gitGrep,
-              subdirectories: true,
+              subdirectories: state.subdirs,
+              max_depth:
+                2 + (archiveScopePath?.split("/").filter(Boolean).length ?? 0),
               hidden_files: state.hidden,
               regexp: state.regexp,
             },
@@ -622,6 +628,13 @@ export function SnapshotsTab({
   );
   const optionsRow = (
     <Space wrap style={{ marginTop: "8px" }}>
+      <Button
+        size="small"
+        type={state.subdirs ? "primary" : "default"}
+        onClick={() => setState({ subdirs: !state.subdirs })}
+      >
+        Subdirectories
+      </Button>
       <Button
         size="small"
         type={state.hidden ? "primary" : "default"}

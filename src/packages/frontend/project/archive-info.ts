@@ -11,6 +11,10 @@ import {
   getBackups as getProjectBackups,
   getSnapshotFileText as getProjectSnapshotFileText,
 } from "@cocalc/conat/project/archive-info";
+import type {
+  BackupFindPreview,
+  BackupFindResult,
+} from "@cocalc/conat/project/archive-info";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 
 async function getClient({
@@ -68,25 +72,40 @@ export async function getBackupFiles({
   });
 }
 
-export async function findBackupFiles({
-  client,
-  ...opts
-}: {
+type FindBackupFilesOptions = {
   client?: ConatClient;
   project_id: string;
   glob?: string[];
   iglob?: string[];
   path?: string;
   ids?: string[];
-}) {
-  return await findProjectBackupFiles({
+  recursive?: boolean;
+};
+
+export async function findBackupFiles(
+  opts: FindBackupFilesOptions & { preview: true },
+): Promise<BackupFindPreview>;
+export async function findBackupFiles(
+  opts: FindBackupFilesOptions & { preview?: false },
+): Promise<BackupFindResult[]>;
+export async function findBackupFiles({
+  client,
+  ...opts
+}: FindBackupFilesOptions & { preview?: boolean }): Promise<
+  BackupFindResult[] | BackupFindPreview
+> {
+  const request = {
     client: await getClient({
       client,
       project_id: opts.project_id,
       caller: "findBackupFiles",
     }),
     ...opts,
-  });
+  };
+  if (opts.preview) {
+    return await findProjectBackupFiles({ ...request, preview: true });
+  }
+  return await findProjectBackupFiles({ ...request, preview: false });
 }
 
 export async function getBackupFileText({

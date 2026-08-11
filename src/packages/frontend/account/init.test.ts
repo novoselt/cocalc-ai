@@ -14,6 +14,7 @@ const mockGetControlPlaneAuthBootstrap = jest.fn();
 const mockAlertMessage = jest.fn();
 const mockLogWarn = jest.fn();
 const mockWaitForExamModeConfiguration = jest.fn(async () => false);
+const mockLiteState = { lite: false };
 
 jest.mock("../webapp-client", () => ({ webapp_client: mockWebappClient }));
 jest.mock("@cocalc/frontend/client/handle-target", () => ({
@@ -55,6 +56,7 @@ jest.mock("@cocalc/frontend/alerts", () => ({
 jest.mock("@cocalc/frontend/logger", () => ({
   getLogger: () => ({ warn: (...args: any[]) => mockLogWarn(...args) }),
 }));
+jest.mock("@cocalc/frontend/lite", () => mockLiteState);
 
 import { init } from "./init";
 
@@ -96,6 +98,7 @@ describe("account initialization", () => {
     mockAlertMessage.mockReset();
     mockLogWarn.mockReset();
     mockWaitForExamModeConfiguration.mockClear();
+    mockLiteState.lite = false;
   });
 
   it("loads routing metadata before exposing signed-in state", async () => {
@@ -178,6 +181,28 @@ describe("account initialization", () => {
         ),
       }),
     );
+    expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
+  });
+
+  it("does not show the routing warning in lite mode", async () => {
+    mockLiteState.lite = true;
+    mockGetControlPlaneAuthBootstrap.mockRejectedValue(
+      new Error("bootstrap unavailable"),
+    );
+    const { actions, redux } = createRedux();
+    init(redux);
+    const signedIn = mockWebappClient.listeners("signed_in")[0] as (message: {
+      account_id: string;
+    }) => Promise<void>;
+
+    await signedIn({ account_id: "account-1" });
+    await Promise.resolve();
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      "failed to load account routing information",
+      expect.any(Error),
+    );
+    expect(mockAlertMessage).not.toHaveBeenCalled();
     expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
   });
 

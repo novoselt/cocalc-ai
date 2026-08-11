@@ -46,6 +46,21 @@ const SUBJECT = "file-server";
 export type RestoreMode = "none" | "auto" | "required";
 export type SnapshotRestoreMode = "home" | "rootfs" | "both";
 
+export interface BackupFindResult {
+  id: string;
+  time: Date;
+  path: string;
+  isDir: boolean;
+  mtime: number;
+  size: number;
+}
+
+export interface BackupFindPreview {
+  results: BackupFindResult[];
+  truncated: boolean;
+  truncationReason?: "results" | "time" | "limits";
+}
+
 export interface RestoreStagingHandle {
   project_id: string;
   home: string;
@@ -383,16 +398,9 @@ export interface Fileserver {
     iglob?: string[];
     path?: string;
     ids?: string[];
-  }) => Promise<
-    {
-      id: string;
-      time: Date;
-      path: string;
-      isDir: boolean;
-      mtime: number;
-      size: number;
-    }[]
-  >;
+    preview?: boolean;
+    recursive?: boolean;
+  }) => Promise<BackupFindResult[] | BackupFindPreview>;
   getBackupFileText: (opts: {
     project_id: string;
     id: string;

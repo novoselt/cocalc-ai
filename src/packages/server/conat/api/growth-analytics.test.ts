@@ -81,6 +81,35 @@ describe("growth analytics browser API", () => {
     ).not.toBe(first);
   });
 
+  it("does not collapse distinct onboarding choices", () => {
+    const now = new Date("2026-08-09T12:01:00.000Z");
+    const jupyter = browserGrowthEventId({
+      accountId: ACCOUNT_ID,
+      eventName: "onboarding_path_selected",
+      onboardingPath: "jupyter",
+      outcome: "section",
+      now,
+    });
+    expect(
+      browserGrowthEventId({
+        accountId: ACCOUNT_ID,
+        eventName: "onboarding_path_selected",
+        onboardingPath: "jupyter-python",
+        outcome: "project-path",
+        now,
+      }),
+    ).not.toBe(jupyter);
+    expect(
+      browserGrowthEventId({
+        accountId: ACCOUNT_ID,
+        eventName: "onboarding_path_selected",
+        onboardingPath: "jupyter",
+        outcome: "section",
+        now,
+      }),
+    ).toBe(jupyter);
+  });
+
   it("rejects unknown browser action categories", async () => {
     await expect(
       recordEvent({
@@ -126,6 +155,36 @@ describe("growth analytics browser API", () => {
         properties: {
           onboarding_path: "codex",
           outcome: "started",
+          source_confidence: "browser",
+        },
+      }),
+    });
+  });
+
+  it.each([
+    "onboarding_path_selected",
+    "onboarding_configuration_seen",
+    "onboarding_configuration_ready",
+  ] as const)("accepts the %s diagnostic event", async (event_name) => {
+    await recordEvent({
+      account_id: ACCOUNT_ID,
+      event: {
+        event_id: EVENT_ID,
+        event_name,
+        properties: {
+          onboarding_path: "jupyter-python",
+          outcome: "visible",
+        },
+      },
+    });
+
+    expect(ingestGrowthEvent).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      event: expect.objectContaining({
+        event_name,
+        properties: {
+          onboarding_path: "jupyter-python",
+          outcome: "visible",
           source_confidence: "browser",
         },
       }),

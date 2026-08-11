@@ -25,6 +25,16 @@ describe("project archive info service", () => {
   });
 
   it("routes backup and snapshot read requests to the local file server", async () => {
+    const findBackupFiles = jest.fn(async () => [
+      {
+        id: "backup-1",
+        time: new Date("2026-04-12T20:00:00.000Z"),
+        path: "file.txt",
+        isDir: false,
+        mtime: 1,
+        size: 2,
+      },
+    ]);
     fileServerClientMock.mockReturnValue({
       getBackups: jest.fn(async () => [
         {
@@ -36,16 +46,7 @@ describe("project archive info service", () => {
       getBackupFiles: jest.fn(async () => [
         { name: "file.txt", isDir: false, mtime: 1, size: 2 },
       ]),
-      findBackupFiles: jest.fn(async () => [
-        {
-          id: "backup-1",
-          time: new Date("2026-04-12T20:00:00.000Z"),
-          path: "file.txt",
-          isDir: false,
-          mtime: 1,
-          size: 2,
-        },
-      ]),
+      findBackupFiles,
       getBackupFileText: jest.fn(async () => ({
         content: "backup",
         truncated: false,
@@ -87,10 +88,17 @@ describe("project archive info service", () => {
     await expect(
       handleProjectFindBackupFilesRequest.call(
         { subject },
-        { glob: ["file.txt"] },
+        { glob: ["file.txt"], preview: true, recursive: true },
         {} as any,
       ),
     ).resolves.toHaveLength(1);
+    expect(fileServerClientMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      2 * 60_000,
+    );
+    expect(findBackupFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ preview: true, recursive: true }),
+    );
     await expect(
       handleProjectGetBackupFileTextRequest.call(
         { subject },

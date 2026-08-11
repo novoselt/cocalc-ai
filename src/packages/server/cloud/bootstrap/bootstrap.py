@@ -3610,6 +3610,17 @@ MAINTENANCE_CGROUP_PIDS_MAX="256"
 HOST_SERVICE_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-host-services"
 HOST_SERVICE_CGROUP_CPU_WEIGHT="10000"
 HOST_SERVICE_CGROUP_IO_WEIGHT="10000"
+BACKUP_BROWSER_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-backup-browsers"
+BACKUP_BROWSER_POOL_CPU_MAX="200000 100000"
+BACKUP_BROWSER_POOL_MEMORY_HIGH="$((3 * 1024 * 1024 * 1024))"
+BACKUP_BROWSER_POOL_MEMORY_MAX="$((4 * 1024 * 1024 * 1024))"
+BACKUP_BROWSER_POOL_PIDS_MAX="512"
+BACKUP_BROWSER_CGROUP_CPU_MAX="200000 100000"
+BACKUP_BROWSER_CGROUP_CPU_WEIGHT="100"
+BACKUP_BROWSER_CGROUP_IO_WEIGHT="100"
+BACKUP_BROWSER_CGROUP_MEMORY_HIGH="$((1280 * 1024 * 1024))"
+BACKUP_BROWSER_CGROUP_MEMORY_MAX="$((2 * 1024 * 1024 * 1024))"
+BACKUP_BROWSER_CGROUP_PIDS_MAX="128"
 PROJECT_STARTUP_CGROUP_DEFAULT="/sys/fs/cgroup/cocalc-project-startup"
 PROJECT_STARTUP_CREATE_CGROUP_DEFAULT="${PROJECT_STARTUP_CGROUP_DEFAULT}/create"
 PROJECT_STARTUP_CGROUP_CPU_MAX="200000 100000"
@@ -4105,6 +4116,79 @@ attach_host_service_pid() {
   actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
   [ "$actual" = "${HOST_SERVICE_CGROUP_DEFAULT#/sys/fs/cgroup}" ] ||
     deny "host-service-cgroup-attachment-failed" "pid=${pid},actual=${actual:-missing}"
+}
+
+backup_browser_cgroup_for_pid() {
+  local pid="$1"
+  echo "$pid" | grep -Eq '^[0-9]+$' || deny "backup-browser-pid-invalid" "$pid"
+  [ "$pid" -gt 1 ] || deny "backup-browser-pid-invalid" "$pid"
+  printf '%s/browser-%s\n' "$BACKUP_BROWSER_CGROUP_DEFAULT" "$pid"
+}
+
+configure_backup_browser_cgroup_parent() {
+  local leaf
+  enable_cgroup_controllers /sys/fs/cgroup
+  mkdir -p "$BACKUP_BROWSER_CGROUP_DEFAULT"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/cpu.max" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_POOL_CPU_MAX" > "${BACKUP_BROWSER_CGROUP_DEFAULT}/cpu.max"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/cpu.weight" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_CGROUP_CPU_WEIGHT" > "${BACKUP_BROWSER_CGROUP_DEFAULT}/cpu.weight"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/io.weight" ] &&
+    printf 'default %s\n' "$BACKUP_BROWSER_CGROUP_IO_WEIGHT" > "${BACKUP_BROWSER_CGROUP_DEFAULT}/io.weight"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.high" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_POOL_MEMORY_HIGH" > "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.high"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.max" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_POOL_MEMORY_MAX" > "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.max"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.swap.max" ] &&
+    printf '0\n' > "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.swap.max"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.oom.group" ] &&
+    printf '1\n' > "${BACKUP_BROWSER_CGROUP_DEFAULT}/memory.oom.group"
+  [ -w "${BACKUP_BROWSER_CGROUP_DEFAULT}/pids.max" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_POOL_PIDS_MAX" > "${BACKUP_BROWSER_CGROUP_DEFAULT}/pids.max"
+  enable_cgroup_controllers "$BACKUP_BROWSER_CGROUP_DEFAULT"
+  for leaf in "${BACKUP_BROWSER_CGROUP_DEFAULT}"/browser-*; do
+    [ -d "$leaf" ] || continue
+    if [ -z "$(cat "${leaf}/cgroup.procs" 2>/dev/null || true)" ]; then
+      rmdir "$leaf" 2>/dev/null || true
+    fi
+  done
+}
+
+attach_backup_browser_pid() {
+  local pid="$1" leaf actual
+  require_runtime_owned_pid "$pid"
+  configure_backup_browser_cgroup_parent
+  leaf="$(backup_browser_cgroup_for_pid "$pid")"
+  mkdir -p "$leaf"
+  [ -w "${leaf}/cpu.max" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_CGROUP_CPU_MAX" > "${leaf}/cpu.max"
+  [ -w "${leaf}/cpu.weight" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_CGROUP_CPU_WEIGHT" > "${leaf}/cpu.weight"
+  [ -w "${leaf}/io.weight" ] &&
+    printf 'default %s\n' "$BACKUP_BROWSER_CGROUP_IO_WEIGHT" > "${leaf}/io.weight"
+  [ -w "${leaf}/memory.high" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_CGROUP_MEMORY_HIGH" > "${leaf}/memory.high"
+  [ -w "${leaf}/memory.max" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_CGROUP_MEMORY_MAX" > "${leaf}/memory.max"
+  [ -w "${leaf}/memory.swap.max" ] &&
+    printf '0\n' > "${leaf}/memory.swap.max"
+  [ -w "${leaf}/memory.oom.group" ] &&
+    printf '1\n' > "${leaf}/memory.oom.group"
+  [ -w "${leaf}/pids.max" ] &&
+    printf '%s\n' "$BACKUP_BROWSER_CGROUP_PIDS_MAX" > "${leaf}/pids.max"
+  printf '%s\n' "$pid" > "${leaf}/cgroup.procs"
+  actual="$(awk -F: '$1 == "0" {print $3}' "/proc/${pid}/cgroup" 2>/dev/null || true)"
+  [ "$actual" = "${leaf#/sys/fs/cgroup}" ] ||
+    deny "backup-browser-cgroup-attachment-failed" "pid=${pid},actual=${actual:-missing}"
+}
+
+remove_backup_browser_cgroup() {
+  local pid="$1" leaf
+  leaf="$(backup_browser_cgroup_for_pid "$pid")"
+  [ -d "$leaf" ] || return 0
+  [ -z "$(cat "${leaf}/cgroup.procs" 2>/dev/null || true)" ] ||
+    deny "backup-browser-cgroup-not-empty" "pid=${pid}"
+  rmdir "$leaf" 2>/dev/null || true
 }
 
 reconcile_host_service_cgroup() {
@@ -5400,6 +5484,24 @@ escape_overlay_path() {
 }
 
 case "$cmd" in
+  attach-backup-browser-cgroup)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage attach-backup-browser-cgroup <pid>" >&2
+      exit 2
+    fi
+    acquire_project_cgroup_lock
+    attach_backup_browser_pid "$1"
+    release_project_lock
+    ;;
+  remove-backup-browser-cgroup)
+    if [ "$#" -ne 1 ]; then
+      echo "usage: cocalc-runtime-storage remove-backup-browser-cgroup <pid>" >&2
+      exit 2
+    fi
+    acquire_project_cgroup_lock
+    remove_backup_browser_cgroup "$1"
+    release_project_lock
+    ;;
   attach-host-service-cgroup)
     if [ "$#" -ne 1 ]; then
       echo "usage: cocalc-runtime-storage attach-host-service-cgroup <pid>" >&2
