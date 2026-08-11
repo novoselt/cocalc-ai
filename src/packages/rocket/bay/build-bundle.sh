@@ -253,6 +253,7 @@ validate_file "$OUT/runtime/control-plane/bundle/nebius/nebius-setup.sh"
 validate_file "$OUT/scripts/bay-systemd/install-scaffold.sh"
 validate_file "$OUT/scripts/bay-systemd/bay-bootstrap-release.sh"
 validate_file "$OUT/scripts/bay-systemd/env/bay-rocket-bundle-overlay.env.example"
+validate_file "$OUT/scripts/bay-systemd/needrestart/cocalc-bay.conf"
 validate_file "$OUT/bay-runtime-manifest.json"
 
 echo "- Publish output directory"

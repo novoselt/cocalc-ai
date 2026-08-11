@@ -29,8 +29,13 @@ fi
 TARGET_ROOT="${TMP_ROOT}/rootfs"
 bash "${SCRIPT_DIR}/install-scaffold.sh" --root "$TARGET_ROOT" >/dev/null
 LOCAL_ENV="${TARGET_ROOT}/etc/cocalc/bay-local.env"
+NEEDRESTART_CONFIG="${TARGET_ROOT}/etc/needrestart/conf.d/cocalc-bay.conf"
 [[ -f "$LOCAL_ENV" ]]
 [[ "$(stat -c '%a' "$LOCAL_ENV")" == "644" ]]
+[[ -f "$NEEDRESTART_CONFIG" ]]
+[[ "$(stat -c '%a' "$NEEDRESTART_CONFIG")" == "644" ]]
+grep -Fqx '$nrconf{override_rc}{qr(^cocalc-bay-.*\.service$)} = 0;' \
+  "$NEEDRESTART_CONFIG"
 printf '%s\n' 'COCALC_BAY_FRONTDOOR_HOST=0.0.0.0' > "$LOCAL_ENV"
 
 bash "${SCRIPT_DIR}/install-scaffold.sh" --root "$TARGET_ROOT" >/dev/null

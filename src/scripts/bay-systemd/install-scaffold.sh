@@ -8,6 +8,7 @@ ENV_DIR="/etc/cocalc"
 SYSTEMD_DIR="/etc/systemd/system"
 SBIN_DIR="/usr/local/sbin"
 SUDOERS_DIR="/etc/sudoers.d"
+NEEDRESTART_DIR="/etc/needrestart/conf.d"
 OVERLAY_MODE="none"
 DAEMON_RELOAD=0
 
@@ -97,14 +98,17 @@ TARGET_ENV_DIR="$(prefix_path "$ENV_DIR")"
 TARGET_SYSTEMD_DIR="$(prefix_path "$SYSTEMD_DIR")"
 TARGET_SBIN_DIR="$(prefix_path "$SBIN_DIR")"
 TARGET_SUDOERS_DIR="$(prefix_path "$SUDOERS_DIR")"
+TARGET_NEEDRESTART_DIR="$(prefix_path "$NEEDRESTART_DIR")"
 
 mkdir -p "$TARGET_BIN_DIR" "$TARGET_ENV_DIR" "$TARGET_SYSTEMD_DIR" \
-  "$TARGET_SBIN_DIR" "$TARGET_SUDOERS_DIR"
+  "$TARGET_SBIN_DIR" "$TARGET_SUDOERS_DIR" "$TARGET_NEEDRESTART_DIR"
 
 install -m 0755 "${SCRIPT_DIR}/bin/"* "$TARGET_BIN_DIR/"
 install -m 0644 "${SCRIPT_DIR}/systemd/"* "$TARGET_SYSTEMD_DIR/"
 install -m 0755 "${SCRIPT_DIR}/sbin/"* "$TARGET_SBIN_DIR/"
 install -m 0440 "${SCRIPT_DIR}/sudoers/"* "$TARGET_SUDOERS_DIR/"
+install -m 0644 "${SCRIPT_DIR}/needrestart/cocalc-bay.conf" \
+  "${TARGET_NEEDRESTART_DIR}/cocalc-bay.conf"
 
 if command -v visudo >/dev/null 2>&1; then
   visudo -cf "${TARGET_SUDOERS_DIR}/cocalc-bay-cloudflared" >/dev/null
@@ -183,6 +187,7 @@ Installed bay scaffold:
   systemd dir:  ${TARGET_SYSTEMD_DIR}
   sbin dir:     ${TARGET_SBIN_DIR}
   sudoers dir:  ${TARGET_SUDOERS_DIR}
+  needrestart:  ${TARGET_NEEDRESTART_DIR}/cocalc-bay.conf
   overlay:      ${OVERLAY_MODE}
 
 Next steps:
