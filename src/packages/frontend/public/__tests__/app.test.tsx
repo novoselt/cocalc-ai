@@ -945,6 +945,19 @@ describe("PublicApp", () => {
     expect(
       within(onFocusRow!).getByText(/No change of context on focus/),
     ).not.toBeNull();
+    const onInputRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.2\.2 On Input/,
+      })
+      .closest("tr");
+    expect(onInputRow).not.toBeNull();
+    expect(within(onInputRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(onInputRow!).getByText(/long-term use have not identified/),
+    ).not.toBeNull();
+    expect(
+      within(onInputRow!).getByText(/submit an unrelated action/),
+    ).not.toBeNull();
     expect(
       report.queryByRole("heading", {
         name: "Table 3: Success Criteria, Level AAA",
