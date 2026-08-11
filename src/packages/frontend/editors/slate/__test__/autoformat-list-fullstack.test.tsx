@@ -225,3 +225,25 @@ test("full stack: list autoformat preserves existing inline math", () => {
   const md = slate_to_markdown(editor.children, { preserveBlankLines: false });
   expect(md).toContain("- foo $x$");
 });
+
+test("full stack: list autoformat preserves an existing heading", () => {
+  const editor = makeProdLikeEditor();
+  editor.children = [
+    { type: "paragraph", children: [{ text: "#header" }] },
+  ] as Descendant[];
+  editor.selection = null;
+
+  Transforms.select(editor, { path: [0, 0], offset: 1 });
+  // @ts-ignore custom second arg is supported by withAutoFormat
+  editor.insertText(" ", true);
+  expect((editor.children[0] as Element).type).toBe("heading");
+
+  Transforms.select(editor, { path: [0, 0], offset: 0 });
+  // @ts-ignore custom second arg is supported by withAutoFormat
+  editor.insertText("-", true);
+  // @ts-ignore custom second arg is supported by withAutoFormat
+  editor.insertText(" ", true);
+
+  const md = slate_to_markdown(editor.children, { preserveBlankLines: false });
+  expect(md).toContain("- # header");
+});

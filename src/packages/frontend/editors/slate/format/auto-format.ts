@@ -508,14 +508,16 @@ function autoformatListAtStart(editor: Editor): boolean {
     return false;
   }
 
-  const paragraphEntry = Editor.above(editor, {
+  const blockEntry = Editor.above(editor, {
     at: selection.focus,
-    match: (node) => Element.isElement(node) && node.type === "paragraph",
+    match: (node) =>
+      Element.isElement(node) &&
+      (node.type === "paragraph" || node.type === "heading"),
   }) as [Element, Path] | undefined;
-  if (!paragraphEntry) {
+  if (!blockEntry) {
     return false;
   }
-  const [, paragraphPath] = paragraphEntry;
+  const [, blockPath] = blockEntry;
 
   const listAncestor = Editor.above(editor, {
     at: selection.focus,
@@ -529,11 +531,11 @@ function autoformatListAtStart(editor: Editor): boolean {
     return false;
   }
 
-  const paragraphStart = Editor.start(editor, paragraphPath);
+  const blockStart = Editor.start(editor, blockPath);
   let typedPrefix = "";
   try {
     typedPrefix = Editor.string(editor, {
-      anchor: paragraphStart,
+      anchor: blockStart,
       focus: selection.focus,
     });
   } catch {
@@ -550,12 +552,12 @@ function autoformatListAtStart(editor: Editor): boolean {
   Editor.withoutNormalizing(editor, () => {
     Transforms.delete(editor, {
       at: {
-        anchor: paragraphStart,
+        anchor: blockStart,
         focus: selection.focus,
       },
     });
     Transforms.wrapNodes(editor, { type: "list_item" } as Element, {
-      at: paragraphPath,
+      at: blockPath,
     });
     const isOrdered = /^\d/.test(marker);
     Transforms.wrapNodes(
@@ -565,12 +567,12 @@ function autoformatListAtStart(editor: Editor): boolean {
         ...(isOrdered ? { start: parseInt(marker, 10) || 1 } : null),
         tight: true,
       } as Element,
-      { at: paragraphPath },
+      { at: blockPath },
     );
   });
 
   const listEntry = Editor.above(editor, {
-    at: editor.selection ?? paragraphPath,
+    at: editor.selection ?? blockPath,
     match: (node) =>
       Element.isElement(node) &&
       (node.type === "bullet_list" || node.type === "ordered_list"),
@@ -618,14 +620,14 @@ function autoformatListAtStart(editor: Editor): boolean {
         // ignore invalid path
       }
     };
-    tryPath(paragraphPath);
-    tryPath(Path.next(paragraphPath));
-    if (paragraphPath[paragraphPath.length - 1] > 0) {
-      tryPath(Path.previous(paragraphPath));
+    tryPath(blockPath);
+    tryPath(Path.next(blockPath));
+    if (blockPath[blockPath.length - 1] > 0) {
+      tryPath(Path.previous(blockPath));
     }
   }
   if (!listPath) {
-    listPath = paragraphPath;
+    listPath = blockPath;
   }
   const listItemEntry = Editor.nodes(editor, {
     at: listPath,
@@ -655,7 +657,7 @@ function autoformatListAtStart(editor: Editor): boolean {
     (editor as any).__autoformatDidBlock = true;
     (editor as any).__autoformatSelection = { anchor: focus, focus };
     slateDebug("autoformat:list:focus", {
-      blockPath: paragraphPath,
+      blockPath,
       listItemPath,
       listPath,
       focus,
