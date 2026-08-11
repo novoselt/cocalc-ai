@@ -15,14 +15,14 @@ const routes = [
   {
     label: "signed-in projects",
     request: "@cocalc/frontend/projects/projects-page",
-    maxRawBytes: 7.9 * MiB,
-    maxGzipBytes: 2170 * KiB,
+    maxRawBytes: 7.4 * MiB,
+    maxGzipBytes: 2048 * KiB,
   },
   {
     label: "signed-in project",
     request: "@cocalc/frontend/project/page/page",
-    maxRawBytes: 9.9 * MiB,
-    maxGzipBytes: 2740 * KiB,
+    maxRawBytes: 9.5 * MiB,
+    maxGzipBytes: 2640 * KiB,
   },
 ];
 

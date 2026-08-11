@@ -8,14 +8,11 @@ discover and target a specific live browser session.
 
 import { redux } from "@cocalc/frontend/app-framework";
 import { alert_message } from "@cocalc/frontend/alerts";
+import { loadWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import type { WebappClient } from "@cocalc/frontend/client/client";
 import type { HubApi } from "@cocalc/conat/hub/api";
-import {
-  listDocsAppActions,
-  revealDocsAction,
-} from "@cocalc/frontend/project/docs-actions";
-import { BrowserExtensionsRuntime } from "../extensions-runtime";
-import { executeBrowserAction } from "./action-engine";
+import type { BrowserExtensionsRuntime } from "../extensions-runtime";
+import type { executeBrowserAction } from "./action-engine";
 import {
   asFiniteNonNegative,
   asFinitePositive,
@@ -31,7 +28,6 @@ import {
   toNotifyMessage,
   toSerializableValue,
 } from "./common-utils";
-import { BROWSER_EXEC_API_DECLARATION } from "./exec-api-declaration";
 import { buildSessionSnapshot, flattenOpenFiles } from "./snapshot";
 import {
   asPlain,
@@ -55,12 +51,6 @@ import {
 } from "./exec-utils";
 import { formatQuickJSErrorDump } from "./quickjs-error";
 import {
-  closeFileInProject,
-  getEditorActionsForPath,
-  getJupyterActionsForPath,
-  openFileInProject,
-} from "./project-open-helpers";
-import {
   findBackupFiles as getProjectBackupVersions,
   getBackupFileText as getProjectBackupFileText,
   getSnapshotFileText as getProjectSnapshotFileText,
@@ -71,7 +61,7 @@ import {
   createBrowserAutomationAuditBuffer,
   type BrowserAutomationAuditRecord,
 } from "./automation-audit";
-import { createBrowserExecOperations } from "./exec-operations";
+import type { createBrowserExecOperations } from "./exec-operations";
 import {
   browserSessionSyncSpreadMs,
   createBrowserSessionHeartbeat,
@@ -132,7 +122,6 @@ import {
 } from "@cocalc/frontend/project/workspaces/selection-runtime";
 import { openProjectWorkspaceStore } from "@cocalc/frontend/project/workspaces/store";
 import { getBrowserTimeTravelProviders } from "./timetravel-providers";
-import { createBrowserExecFsApi } from "./fs-api";
 
 const SESSION_SYNC_DEBOUNCE_MS = 250;
 const HEARTBEAT_PERIODIC_MS = 60_000;
@@ -149,6 +138,42 @@ const MAX_ACTIVE_ACTIONS = 8;
 const EXEC_OP_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_SANDBOX_ACTIONS = 512;
 const MAX_SANDBOX_ACTION_JSON_LENGTH = 100_000;
+
+const loadDocsActions = async () =>
+  await loadWithRetry(
+    async () => await import("@cocalc/frontend/project/docs-actions"),
+    { name: "browser docs actions" },
+  );
+
+const loadBrowserActionEngine = async () =>
+  await loadWithRetry(async () => await import("./action-engine"), {
+    name: "browser action engine",
+  });
+
+const loadBrowserExtensionsRuntime = async () =>
+  await loadWithRetry(async () => await import("../extensions-runtime"), {
+    name: "browser extensions runtime",
+  });
+
+const loadBrowserExecApiDeclaration = async () =>
+  await loadWithRetry(async () => await import("./exec-api-declaration"), {
+    name: "browser exec API declaration",
+  });
+
+const loadBrowserExecOperations = async () =>
+  await loadWithRetry(async () => await import("./exec-operations"), {
+    name: "browser exec operations",
+  });
+
+const loadBrowserExecFsApi = async () =>
+  await loadWithRetry(async () => await import("./fs-api"), {
+    name: "browser exec filesystem API",
+  });
+
+const loadBrowserProjectOpenHelpers = async () =>
+  await loadWithRetry(async () => await import("./project-open-helpers"), {
+    name: "browser project-open helpers",
+  });
 
 const getQuickJSAsyncifyModule = memoizePromiseFactory(async () => {
   return await newQuickJSAsyncWASMModuleFromVariant(quickjsAsyncifyVariant);
@@ -180,7 +205,18 @@ export function createBrowserSessionAutomation({
   const runtimeObservability = createBrowserRuntimeObservability();
   const automationAudit = createBrowserAutomationAuditBuffer();
   const syncDocLeases = createManagedSyncDocLeases({ projectConat });
-  const extensionsRuntime = new BrowserExtensionsRuntime();
+  let extensionsRuntime: BrowserExtensionsRuntime | undefined;
+  const getExtensionsRuntime = async (): Promise<BrowserExtensionsRuntime> => {
+    if (extensionsRuntime == null) {
+      const { BrowserExtensionsRuntime } = await loadBrowserExtensionsRuntime();
+      extensionsRuntime = new BrowserExtensionsRuntime();
+    }
+    return extensionsRuntime;
+  };
+  const clearExtensionsRuntime = (): void => {
+    extensionsRuntime?.clear();
+    extensionsRuntime = undefined;
+  };
   let activeExecOps = 0;
   let activeActions = 0;
   let staleHeartbeatProbe: Promise<void> | undefined;
@@ -377,10 +413,18 @@ export function createBrowserSessionAutomation({
     }
   };
 
-  const createExecApi = (
+  const createExecApi = async (
     project_id: string,
     isCanceled?: () => boolean,
-  ): { api: BrowserExecApi; cleanup: () => Promise<void> } => {
+  ): Promise<{ api: BrowserExecApi; cleanup: () => Promise<void> }> => {
+    const extensionsRuntime = await getExtensionsRuntime();
+    const { createBrowserExecFsApi } = await loadBrowserExecFsApi();
+    const {
+      closeFileInProject,
+      getEditorActionsForPath,
+      getJupyterActionsForPath,
+      openFileInProject,
+    } = await loadBrowserProjectOpenHelpers();
     const fsApi = createBrowserExecFsApi({
       loadFsClient: () =>
         client.conat_client.projectFs({
@@ -861,12 +905,13 @@ export function createBrowserSessionAutomation({
 
     const api: BrowserExecApi = {
       projectId: project_id,
-      docsAction: (
+      docsAction: async (
         id: string,
         opts?: { parameters?: Record<string, string> },
       ) => {
         assertExecNotCanceled(isCanceled);
-        return revealDocsAction({
+        const { revealDocsAction } = await loadDocsActions();
+        return await revealDocsAction({
           actionId: id,
           includeAdmin: isBrowserRawExecAdmin(),
           parameters: opts?.parameters,
@@ -2031,7 +2076,7 @@ export function createBrowserSessionAutomation({
       );
     }
     assertExecNotCanceled(isCanceled);
-    const { api, cleanup } = createExecApi(project_id, isCanceled);
+    const { api, cleanup } = await createExecApi(project_id, isCanceled);
     const evaluator = new Function(
       "api",
       `"use strict"; return (async () => { ${script}\n})();`,
@@ -2089,6 +2134,7 @@ export function createBrowserSessionAutomation({
       action_name: args.action.name,
     });
     try {
+      const { executeBrowserAction } = await loadBrowserActionEngine();
       return await executeBrowserAction(args);
     } finally {
       release();
@@ -2146,6 +2192,7 @@ export function createBrowserSessionAutomation({
                 .filter(([key, value]) => key && value),
             )
           : undefined;
+      const { revealDocsAction } = await loadDocsActions();
       const result = await revealDocsAction({
         actionId: id,
         includeAdmin: isBrowserRawExecAdmin(),
@@ -2372,28 +2419,61 @@ export function createBrowserSessionAutomation({
     };
   };
 
-  const execOperations = createBrowserExecOperations({
-    maxExecOps: MAX_EXEC_OPS,
-    execOpTtlMs: EXEC_OP_TTL_MS,
-    maxExecCodeLength: MAX_EXEC_CODE_LENGTH,
-    createExecId,
-    resolveExecMode: resolveExecModeForSession,
-    executeBrowserScript,
-    claimExecutionSlot: claimExecSlot,
-    onAudit: (event) =>
-      recordAutomationAudit({
-        kind: event.kind ?? "start_exec",
-        decision: event.decision,
-        project_id: event.project_id,
-        posture: event.posture,
-        mode: event.mode,
-        reason: event.reason,
-        requested_raw_exec: event.requested_raw_exec,
-      }),
-  });
+  type BrowserExecOperations = ReturnType<typeof createBrowserExecOperations>;
+  let execOperationsEpoch = 0;
+  let execOperationsPromise: Promise<BrowserExecOperations> | undefined;
+  const getExecOperations = (): Promise<BrowserExecOperations> => {
+    if (execOperationsPromise == null) {
+      const epoch = execOperationsEpoch;
+      execOperationsPromise = loadBrowserExecOperations().then(
+        ({ createBrowserExecOperations }) => {
+          if (epoch !== execOperationsEpoch) {
+            throw Error(
+              "browser session changed while loading exec operations",
+            );
+          }
+          return createBrowserExecOperations({
+            maxExecOps: MAX_EXEC_OPS,
+            execOpTtlMs: EXEC_OP_TTL_MS,
+            maxExecCodeLength: MAX_EXEC_CODE_LENGTH,
+            createExecId,
+            resolveExecMode: resolveExecModeForSession,
+            executeBrowserScript,
+            claimExecutionSlot: claimExecSlot,
+            onAudit: (event) =>
+              recordAutomationAudit({
+                kind: event.kind ?? "start_exec",
+                decision: event.decision,
+                project_id: event.project_id,
+                posture: event.posture,
+                mode: event.mode,
+                reason: event.reason,
+                requested_raw_exec: event.requested_raw_exec,
+              }),
+          });
+        },
+      );
+    }
+    return execOperationsPromise;
+  };
+  const clearExecOperations = async (): Promise<void> => {
+    execOperationsEpoch += 1;
+    const current = execOperationsPromise;
+    execOperationsPromise = undefined;
+    if (current == null) return;
+    try {
+      (await current).clearExecs();
+    } catch {
+      // A session reset intentionally invalidates an in-flight module load.
+    }
+  };
 
   const impl: BrowserSessionServiceApi = {
-    getExecApiDeclaration: async () => BROWSER_EXEC_API_DECLARATION,
+    getExecApiDeclaration: async () => {
+      const { BROWSER_EXEC_API_DECLARATION } =
+        await loadBrowserExecApiDeclaration();
+      return BROWSER_EXEC_API_DECLARATION;
+    },
     getAutomationPolicyInfo: async () => ({
       raw_exec_policy: getBrowserRawExecPolicy(),
       raw_exec_admin: isBrowserRawExecAdmin(),
@@ -2404,23 +2484,26 @@ export function createBrowserSessionAutomation({
       max_sandbox_actions: MAX_SANDBOX_ACTIONS,
     }),
     getSessionInfo: async () => buildSessionSnapshot(client),
-    listDocsActions: async ({ project_id }) => ({
-      actions: listDocsAppActions({
-        includeAdmin: isBrowserRawExecAdmin(),
-        projectId: project_id,
-      }).map((action) => ({
-        id: action.id,
-        label: action.label,
-        description: action.description,
-        executable: action.executable === true,
-        implemented: action.implemented,
-        available: action.available,
-        ...(action.reason ? { reason: action.reason } : {}),
-        entry_id: action.entryId,
-        entry_slug: action.entrySlug,
-        entry_title: action.entryTitle,
-      })),
-    }),
+    listDocsActions: async ({ project_id }) => {
+      const { listDocsAppActions } = await loadDocsActions();
+      return {
+        actions: listDocsAppActions({
+          includeAdmin: isBrowserRawExecAdmin(),
+          projectId: project_id,
+        }).map((action) => ({
+          id: action.id,
+          label: action.label,
+          description: action.description,
+          executable: action.executable === true,
+          implemented: action.implemented,
+          available: action.available,
+          ...(action.reason ? { reason: action.reason } : {}),
+          entry_id: action.entryId,
+          entry_slug: action.entrySlug,
+          entry_title: action.entryTitle,
+        })),
+      };
+    },
     configureNetworkTrace: async (opts) =>
       runtimeObservability.configureNetworkTrace(opts),
     listNetworkTrace: async (opts) =>
@@ -2441,15 +2524,19 @@ export function createBrowserSessionAutomation({
       path,
       foreground = true,
       foreground_project = true,
-    }) =>
-      await openFileInProject({
+    }) => {
+      const { openFileInProject } = await loadBrowserProjectOpenHelpers();
+      return await openFileInProject({
         project_id,
         path,
         foreground,
         foreground_project,
-      }),
-    closeFile: async ({ project_id, path }) =>
-      await closeFileInProject({ project_id, path }),
+      });
+    },
+    closeFile: async ({ project_id, path }) => {
+      const { closeFileInProject } = await loadBrowserProjectOpenHelpers();
+      return await closeFileInProject({ project_id, path });
+    },
     exec: async ({ project_id, code, posture, policy }) => {
       let enforced: ReturnType<typeof resolveExecModeForSession>;
       let release: (() => void) | undefined;
@@ -2572,9 +2659,16 @@ export function createBrowserSessionAutomation({
       };
     },
     startExec: async ({ project_id, code, posture, policy }) =>
-      execOperations.startExec({ project_id, code, posture, policy }),
-    getExec: async ({ exec_id }) => execOperations.getExec({ exec_id }),
-    cancelExec: async ({ exec_id }) => execOperations.cancelExec({ exec_id }),
+      (await getExecOperations()).startExec({
+        project_id,
+        code,
+        posture,
+        policy,
+      }),
+    getExec: async ({ exec_id }) =>
+      (await getExecOperations()).getExec({ exec_id }),
+    cancelExec: async ({ exec_id }) =>
+      (await getExecOperations()).cancelExec({ exec_id }),
   };
 
   return {
@@ -2587,13 +2681,13 @@ export function createBrowserSessionAutomation({
       }
       await Promise.resolve().then(async () => {
         await syncDocLeases.closeAllManagedSyncDocs();
-        extensionsRuntime.clear();
+        clearExtensionsRuntime();
         if (service) {
           service.close();
           service = undefined;
         }
       });
-      execOperations.clearExecs();
+      await clearExecOperations();
       automationAudit.reset();
       resetAdmissionCounters();
       runtimeObservability.reset();
@@ -2610,13 +2704,13 @@ export function createBrowserSessionAutomation({
 
     stop: async () => {
       const currentAccountId = heartbeatController.deactivate();
-      execOperations.clearExecs();
+      await clearExecOperations();
       automationAudit.reset();
       resetAdmissionCounters();
       runtimeObservability.reset();
       runtimeObservability.stop();
       await syncDocLeases.closeAllManagedSyncDocs();
-      extensionsRuntime.clear();
+      clearExtensionsRuntime();
       if (service) {
         service.close();
         service = undefined;

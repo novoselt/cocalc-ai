@@ -56,7 +56,7 @@ import {
   parseOfflineMoveConfirmationError,
 } from "./offline-move-confirmation";
 import { recommendProjectHosts } from "@cocalc/frontend/hosts/project-host-recommendations";
-import { selectHostForProjectStart } from "@cocalc/frontend/hosts/select-host-for-project-start";
+import { loadWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import type { DStream } from "@cocalc/conat/sync/dstream";
 import { isTerminal } from "@cocalc/frontend/lro/utils";
 import { extractRuntimeSponsorDenial } from "@cocalc/util/runtime-sponsor-denial";
@@ -4487,6 +4487,11 @@ export class ProjectsActions extends Actions<ProjectsState> {
       redux.getProjectActions(project_id)?.setState({ control_error: message });
       return false;
     }
+    const { selectHostForProjectStart } = await loadWithRetry(
+      async () =>
+        await import("@cocalc/frontend/hosts/select-host-for-project-start"),
+      { name: "project host selection" },
+    );
     const selected = await selectHostForProjectStart({ projectRegion });
     if (!selected?.host_id) {
       return false;
