@@ -928,11 +928,17 @@
                     >
                     <span>(Level A)</span>
                   </th>
-                  <td>Supports</td>
+                  <td>Partially supports</td>
                   <td>
-                    “If an input error is automatically detected, the item that
-                    is in error is identified and the error is described to the
-                    user in text. “
+                    Manual production testing of email sign-in found that
+                    “Continue with email” remained disabled for blank and
+                    clearly malformed input without displaying a text error that
+                    identified or described the input problem. The input
+                    <code>not@an</code> enabled continuation but produced only
+                    “Error: Unable to start email sign-in,” which did not
+                    identify whether the address or another condition caused the
+                    failure. Other form error paths were not exhaustively
+                    reviewed.
                   </td>
                 </tr>
                 <tr>

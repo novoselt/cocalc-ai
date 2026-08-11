@@ -958,6 +958,25 @@ describe("PublicApp", () => {
     expect(
       within(onInputRow!).getByText(/submit an unrelated action/),
     ).not.toBeNull();
+    const errorIdentificationRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.3\.1 Error Identification/,
+      })
+      .closest("tr");
+    expect(errorIdentificationRow).not.toBeNull();
+    expect(
+      within(errorIdentificationRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(errorIdentificationRow!).getByText(
+        /remained disabled for blank and clearly malformed input/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(errorIdentificationRow!).getByText(
+        /Error: Unable to start email sign-in/,
+      ),
+    ).not.toBeNull();
     const nameRoleValueRow = within(tables[1])
       .getByRole("rowheader", {
         name: /4\.1\.2 Name, Role, Value/,
