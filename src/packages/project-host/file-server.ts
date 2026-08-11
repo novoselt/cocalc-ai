@@ -118,7 +118,9 @@ import {
 import { SandboxedFilesystem } from "@cocalc/backend/sandbox";
 import cpExec from "@cocalc/backend/sandbox/cp";
 import execSandbox from "@cocalc/backend/sandbox/exec";
-import rustic from "@cocalc/backend/sandbox/rustic";
+import rustic, {
+  getHost as getRusticSnapshotHost,
+} from "@cocalc/backend/sandbox/rustic";
 import { envToInt } from "@cocalc/backend/misc/env-to-number";
 import { isValidUUID } from "@cocalc/util/misc";
 import { getProject } from "./sqlite/projects";
@@ -253,6 +255,7 @@ const PATH_COPY_ARCHIVE_LIMIT_PREFIX = "PATH_COPY_ARCHIVE_LIMIT:";
 const PATH_COPY_ARCHIVE_TIMEOUT_MS = 5 * 60 * 1000;
 const STORAGE_WRAPPER = "/usr/local/sbin/cocalc-runtime-storage";
 const PROJECT_RUSTIC_TIMEOUT_MS = 30 * 60 * 1000;
+const BACKUP_SNAPSHOT_LOOKUP_TIMEOUT_MS = 5 * 60 * 1000;
 const PROJECT_ROOTS_CACHE = join(data, "cache", "project-roots");
 const PROJECT_SITE_MIGRATION_STAGING_DIR = ".project-site-migration-staging";
 const PROJECT_SITE_MIGRATION_ROOTFS_STATE_PATH = ".local/share/cocalc/rootfs";
@@ -1654,11 +1657,12 @@ async function assertBackupSnapshotExists({
   id: string;
 }): Promise<void> {
   const profilePath = await resolveRusticRepo(project_id);
-  const snapshots = await rusticBackupBrowser.listBackups({
-    profilePath,
-    projectId: project_id,
+  const snapshotHost = await getRusticSnapshotHost({
+    id,
+    repo: profilePath,
+    timeout: BACKUP_SNAPSHOT_LOOKUP_TIMEOUT_MS,
   });
-  if (!snapshots.some((snapshot) => snapshot.id === id)) {
+  if (snapshotHost !== `project-${project_id}` && snapshotHost !== project_id) {
     throw new Error(`backup ${id} not found for project ${project_id}`);
   }
 }

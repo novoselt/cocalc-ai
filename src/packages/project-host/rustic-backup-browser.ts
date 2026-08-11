@@ -20,7 +20,7 @@ import {
 const logger = getLogger("project-host:rustic-backup-browser");
 
 const DAV_HOST = "127.0.0.1";
-const START_TIMEOUT_MS = 2 * 60 * 1000;
+const START_TIMEOUT_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30 * 1000;
 const MAX_DAV_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES = 50_000;
@@ -1106,7 +1106,13 @@ async function startBrowserProcess(
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
-  child.kill("SIGKILL");
+  child.kill("SIGTERM");
+  const killTimer = setTimeout(() => {
+    if (child.exitCode == null && child.signalCode == null) {
+      child.kill("SIGKILL");
+    }
+  }, 5_000);
+  killTimer.unref();
   throw new Error(
     `Rustic repository browser did not become ready within ${START_TIMEOUT_MS / 1000} seconds${log() ? `: ${log()}` : ""}`,
   );
