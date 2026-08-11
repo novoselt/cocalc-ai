@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -115,6 +116,12 @@ export type SoftwareReleaseChannelManifest = {
   url: string;
   version: string;
 };
+
+const REQUIRED_CLI_RELEASE_PLATFORMS = [
+  "linux/amd64",
+  "linux/arm64",
+  "darwin/arm64",
+] as const;
 
 type HostCompatibilityArtifact =
   | "project-host"
@@ -386,6 +393,25 @@ export async function uploadSoftwareArtifact({
     (entry) => entry.artifact_id === manifest.artifact_id,
   );
   if (existingEntry && allowExisting) {
+    const expectedEntry = manifestRemoteEntry({ manifest, config });
+    const comparable = (entry: SoftwareRemoteIndexEntry) => ({
+      artifact_id: entry.artifact_id,
+      tag: entry.tag,
+      git: entry.git,
+      files: entry.files.map((file) => ({
+        name: file.name,
+        size_bytes: file.size_bytes,
+        sha256: file.sha256,
+      })),
+    });
+    if (
+      JSON.stringify(comparable(existingEntry)) !==
+      JSON.stringify(comparable(expectedEntry))
+    ) {
+      throw new Error(
+        `remote software artifact ${manifest.component}/${manifest.artifact_id} exists with different metadata or file hashes`,
+      );
+    }
     return current;
   }
   if (existingEntry) {
@@ -971,6 +997,71 @@ function releaseChannelManifest({
   };
 }
 
+function validateReleaseChannelFileSet({
+  component,
+  files,
+}: {
+  component: SoftwareReleaseChannelManifest["component"];
+  files: SoftwareRemoteIndexEntry["files"];
+}): void {
+  if (component !== "cli") return;
+  const platforms = files.map((file) => {
+    const { os, arch } = releaseFilePlatform({
+      component,
+      fileName: file.name,
+    });
+    return `${os}/${arch}`;
+  });
+  const unique = new Set(platforms);
+  const missing = REQUIRED_CLI_RELEASE_PLATFORMS.filter(
+    (platform) => !unique.has(platform),
+  );
+  const unexpected = [...unique].filter(
+    (platform) =>
+      !REQUIRED_CLI_RELEASE_PLATFORMS.includes(
+        platform as (typeof REQUIRED_CLI_RELEASE_PLATFORMS)[number],
+      ),
+  );
+  if (
+    missing.length > 0 ||
+    unexpected.length > 0 ||
+    unique.size !== files.length
+  ) {
+    throw new Error(
+      `CLI release must contain exactly linux/amd64, linux/arm64, and darwin/arm64 artifacts; got ${platforms.join(", ") || "none"}`,
+    );
+  }
+}
+
+export async function publishReleaseInstaller({
+  client,
+  config,
+  product,
+  body,
+}: {
+  client: SoftwareR2Client;
+  config: SoftwareRemoteConfig;
+  product: "cocalc";
+  body: Buffer;
+}): Promise<{ key: string; url: string; sha256: string }> {
+  if (!body.toString("utf8", 0, 32).startsWith("#!/usr/bin/env bash")) {
+    throw new Error("CLI release installer must be a bash script");
+  }
+  const key = `software/${product}/install.sh`;
+  await client.putR2ObjectFromBuffer({
+    auth: config.auth,
+    key,
+    body,
+    contentType: "text/x-shellscript; charset=utf-8",
+    cacheControl: config.indexCacheControl,
+  });
+  return {
+    key,
+    url: publicUrl(config, key),
+    sha256: createHash("sha256").update(body).digest("hex"),
+  };
+}
+
 export async function publishReleaseChannelArtifact({
   client,
   config,
@@ -1004,6 +1095,7 @@ export async function publishReleaseChannelArtifact({
       `software release channel publish expected at least one file in ${entry.artifact_id}`,
     );
   }
+  validateReleaseChannelFileSet({ component, files: entry.files });
   const aliases: Array<SoftwareReleaseChannel | "latest"> =
     channel === "stable" ? ["stable", "latest"] : [channel];
   const published: Array<{

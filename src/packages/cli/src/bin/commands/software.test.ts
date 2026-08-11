@@ -60,7 +60,14 @@ function testSeaSuffix(): { machine: string; os: string } {
 }
 
 function makeRepoRoot(prefix = "software-repo-"): string {
-  return mkdtempSync(join(tmpdir(), prefix));
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  const cliDir = join(root, "src", "packages", "cli");
+  mkdirSync(cliDir, { recursive: true });
+  writeFileSync(
+    join(cliDir, "install.sh"),
+    "#!/usr/bin/env bash\necho test CLI installer\n",
+  );
+  return root;
 }
 
 function makeDeps({
@@ -2698,8 +2705,19 @@ test("software deploy records failed history when subprocess fails", async () =>
 test("software deploy cli promotes an immutable artifact to a release channel", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-cli-channel-"));
   const localStore = join(dir, "store");
-  const source = join(dir, "cocalc-cli-bin");
-  writeFileSync(source, "cli binary");
+  const source = join(dir, "release");
+  mkdirSync(source);
+  const artifactId = "20260614T235912Z-e882d124-cli-channel";
+  for (const suffix of [
+    "x86_64-linux.tar.gz",
+    "aarch64-linux.tar.gz",
+    "arm64-darwin",
+  ]) {
+    writeFileSync(
+      join(source, `cocalc-cli-${artifactId}-${suffix}`),
+      "cli binary",
+    );
+  }
   const r2 = makeR2Client();
   const program = createProgram(
     makeDeps({ localStore, env: r2Env, r2Client: r2.client }),
@@ -2711,12 +2729,11 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
     "--quiet",
     "software",
     "build",
-    "cli",
-    "cli-channel",
-    "--from-file",
+    "cli:cli-channel",
+    "--from-directory",
     source,
-    "--artifact-name",
-    "cocalc-cli-20260614T235912Z-e882d124-cli-channel-x86_64-linux",
+    "--artifact-id",
+    artifactId,
   ]);
   const logs: string[] = [];
   const originalLog = console.log;
@@ -2749,7 +2766,7 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
   assert.equal(manifest.product, "cocalc");
   assert.equal(manifest.component, "cli");
   assert.equal(manifest.channel, "candidate");
-  assert.equal(manifest.artifact_id, "20260614T235912Z-e882d124-cli-channel");
+  assert.equal(manifest.artifact_id, artifactId);
   assert.equal(manifest.version, manifest.artifact_id);
   assert.match(
     manifest.url,
@@ -2758,6 +2775,26 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
   assert.equal(
     r2.objects.has("software/cocalc/latest-linux-amd64.json"),
     false,
+  );
+  assert.equal(
+    JSON.parse(
+      r2.objects
+        .get("software/cocalc/candidate-linux-arm64.json")!
+        .toString("utf8"),
+    ).artifact_id,
+    artifactId,
+  );
+  assert.equal(
+    JSON.parse(
+      r2.objects
+        .get("software/cocalc/candidate-darwin-arm64.json")!
+        .toString("utf8"),
+    ).artifact_id,
+    artifactId,
+  );
+  assert.match(
+    r2.objects.get("software/cocalc/install.sh")!.toString("utf8"),
+    /test CLI installer/,
   );
   const history = JSON.parse(
     r2.objects
@@ -2776,10 +2813,16 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
   );
   assert.deepEqual(record.details.channel_manifests, [
     "https://software.example.test/software/cocalc/candidate-linux-amd64.json",
+    "https://software.example.test/software/cocalc/candidate-linux-arm64.json",
+    "https://software.example.test/software/cocalc/candidate-darwin-arm64.json",
   ]);
+  assert.equal(
+    record.details.installer.url,
+    "https://software.example.test/software/cocalc/install.sh",
+  );
   const payload = JSON.parse(logs.at(-1) ?? "{}");
-  assert.equal(payload.data.size_bytes, 10);
-  assert.equal(payload.data.size, "10 bytes");
+  assert.equal(payload.data.size_bytes, 30);
+  assert.equal(payload.data.size, "30 bytes");
   assert.equal(
     payload.data.install_url,
     "https://software.example.test/software/cocalc/install.sh",
@@ -2797,6 +2840,43 @@ test("software deploy cli promotes an immutable artifact to a release channel", 
     "candidate",
     "stable",
   ]);
+});
+
+test("software deploy cli rejects an incomplete platform set", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "software-deploy-cli-partial-"));
+  const localStore = join(dir, "store");
+  const source = join(dir, "cocalc-cli-bin");
+  writeFileSync(source, "cli binary");
+  const r2 = makeR2Client();
+  const program = createProgram(
+    makeDeps({ localStore, env: r2Env, r2Client: r2.client }),
+  );
+  await program.parseAsync([
+    "node",
+    "test",
+    "--quiet",
+    "software",
+    "build",
+    "cli:partial",
+    "--from-file",
+    source,
+    "--artifact-name",
+    "cocalc-cli-partial-x86_64-linux.tar.gz",
+  ]);
+  await assert.rejects(
+    program.parseAsync([
+      "node",
+      "test",
+      "--quiet",
+      "software",
+      "deploy",
+      "cli:partial",
+      "candidate",
+      "--env-file",
+      join(dir, "missing.env"),
+    ]),
+    /must contain exactly linux\/amd64, linux\/arm64, and darwin\/arm64/,
+  );
 });
 
 test("software deploy plus stable also updates the legacy latest manifest", async () => {

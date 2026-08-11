@@ -6,6 +6,7 @@ import {
 } from "./types";
 
 const TAG_RE = /^[A-Za-z0-9._-]+$/;
+const ARTIFACT_ID_RE = /^\d{8}T\d{6}Z-[A-Za-z0-9]{1,64}-[A-Za-z0-9._-]+$/;
 export const SOFTWARE_LATEST_SELECTOR = "latest";
 
 export function parseSoftwareBuildComponent(
@@ -51,6 +52,16 @@ export function validateSoftwareTag(tag: string): string {
   if (!TAG_RE.test(trimmed)) {
     throw new Error(
       "software tag must contain only letters, numbers, dot, underscore, or dash",
+    );
+  }
+  return trimmed;
+}
+
+export function validateSoftwareArtifactId(artifactId: string): string {
+  const trimmed = `${artifactId ?? ""}`.trim();
+  if (!ARTIFACT_ID_RE.test(trimmed)) {
+    throw new Error(
+      "software artifact id must have the form YYYYMMDDTHHMMSSZ-<git>-<tag>",
     );
   }
   return trimmed;

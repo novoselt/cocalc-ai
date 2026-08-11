@@ -29,6 +29,62 @@ pnpm --dir src/packages/cli publish:sea:signed
 pnpm --dir src/packages/cli publish:site
 ```
 
+The manual publishers remain useful for development, but production CLI
+releases should use the **Release CoCalc CLI** GitHub Actions workflow. It builds
+and verifies these native artifacts under one immutable release ID:
+
+- Linux amd64 on `blacksmith-8vcpu-ubuntu-2404`
+- Linux arm64 on `blacksmith-8vcpu-ubuntu-2404-arm`
+- macOS arm64 on `blacksmith-6vcpu-macos-15`
+
+The workflow defaults to the `candidate` channel. Choose `none` to build,
+sign, notarize, and retain the workflow artifacts without publishing them.
+Choose `stable` only after candidate testing; stable promotion also updates the
+legacy `latest` manifests.
+
+### GitHub release credentials
+
+In the GitHub repository, open **Settings → Environments** and create these two
+protected environments. Configure required reviewers for both environments.
+
+`cocalc-cli-signing` contains only Apple credentials:
+
+- `APPLE_DEVELOPER_ID_P12_BASE64`: base64 of a Developer ID Application
+  certificate and its private key exported as a password-protected `.p12`
+- `APPLE_DEVELOPER_ID_P12_PASSWORD`: password used when exporting the `.p12`
+- `APPLE_NOTARY_KEY_P8_BASE64`: base64 of an App Store Connect API key `.p8`
+- `APPLE_NOTARY_KEY_ID`: App Store Connect API key ID
+- `APPLE_NOTARY_ISSUER_ID`: App Store Connect API issuer UUID
+
+`cocalc-cli-release` contains only the R2 software publishing credentials:
+
+- `COCALC_R2_ACCOUNT_ID`
+- `COCALC_R2_ACCESS_KEY_ID`
+- `COCALC_R2_SECRET_ACCESS_KEY`
+- `COCALC_R2_BUCKET`
+- `COCALC_R2_PUBLIC_BASE_URL`
+
+Use `openssl` to produce single-line values for the two binary credential
+files, without committing either file:
+
+```bash
+openssl base64 -A -in developer-id-application.p12
+openssl base64 -A -in AuthKey_XXXXXXXXXX.p8
+```
+
+The Blacksmith GitHub App must have access to this repository. The workflow
+uses only official GitHub actions on ephemeral Blacksmith runners.
+
+The macOS build requires a timestamped Developer ID signature and submits a ZIP
+containing the standalone binary to Apple's notary service. Apple publishes an
+online ticket for a standalone executable but does not support stapling that
+ticket directly to the executable.
+
+Native Windows is intentionally not part of this workflow yet. The release
+model is already platform-oriented, so Windows support can add a Windows build
+job, PE/architecture verification, and Authenticode signing while retaining the
+same immutable artifact and channel-promotion machinery.
+
 macOS dev signing (optional):
 
 ```bash

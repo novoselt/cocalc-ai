@@ -6,6 +6,7 @@ import {
   copyFile,
   mkdir,
   readdir,
+  readFile,
   rm,
   mkdtemp,
   writeFile,
@@ -28,6 +29,7 @@ import {
   isSoftwareLatestSelector,
   parseSoftwareBuildComponent,
   parseSoftwareDeployComponent,
+  validateSoftwareArtifactId,
   validateSoftwareTag,
 } from "../core/software/artifact-id";
 import {
@@ -46,6 +48,7 @@ import {
   manifestRemoteEntry,
   publishHostBootstrapArtifact,
   publishHostCompatibilityArtifact,
+  publishReleaseInstaller,
   publishReleaseChannelArtifact,
   readDeploymentIndex,
   readRemoteIndex,
@@ -102,7 +105,9 @@ export type SoftwareCommandDeps = {
 type BuildOptions = {
   localStore?: string;
   fromFile?: string;
+  fromDirectory?: string;
   artifactName?: string;
+  artifactId?: string;
   keepBuildDir?: boolean;
 };
 
@@ -1341,6 +1346,25 @@ function seaPlatformSuffix(): { machine: string; os: string } {
         ? "aarch64"
         : process.arch;
   return { machine, os };
+}
+
+const CLI_RELEASE_FILE_SUFFIXES = [
+  "x86_64-linux.tar.gz",
+  "aarch64-linux.tar.gz",
+  "arm64-darwin",
+] as const;
+
+function cliReleaseSourceFiles({
+  directory,
+  artifactId,
+}: {
+  directory: string;
+  artifactId: string;
+}): Array<{ source: string; name: string }> {
+  return CLI_RELEASE_FILE_SUFFIXES.map((suffix) => {
+    const name = `cocalc-cli-${artifactId}-${suffix}`;
+    return { source: join(resolve(directory), name), name };
+  });
 }
 
 function packageBuildInfo(
@@ -2611,11 +2635,23 @@ async function buildFromFile({
     throw new Error(`generated software tag already exists locally: ${tag}`);
   }
   const startedAt = createdAt;
-  const artifactId = createSoftwareArtifactId({
+  const generatedArtifactId = createSoftwareArtifactId({
     createdAt,
     git,
     tag,
   });
+  const artifactId = opts.artifactId
+    ? validateSoftwareArtifactId(opts.artifactId)
+    : generatedArtifactId;
+  if (opts.artifactId) {
+    const git8 = git.short.slice(0, 8) || git.commit.slice(0, 8);
+    const expectedSuffix = `-${git8}-${tag}${git.dirty ? "-dirty" : ""}`;
+    if (!artifactId.endsWith(expectedSuffix)) {
+      throw new Error(
+        `explicit software artifact id must end with ${expectedSuffix}`,
+      );
+    }
+  }
   if (
     localArtifactIdExists({
       manifests: existingManifests,
@@ -2638,10 +2674,35 @@ async function buildFromFile({
   let commandText = `cocalc software build ${component}${
     tagArg ? `:${tagArg}` : ""
   }`;
+  if (opts.fromFile && opts.fromDirectory) {
+    throw new Error(
+      "software build accepts only one of --from-file or --from-directory",
+    );
+  }
+  if (opts.fromDirectory) {
+    if (component !== "cli") {
+      throw new Error(
+        "--from-directory is currently supported only for cli releases",
+      );
+    }
+    if (!opts.artifactId) {
+      throw new Error(
+        "software build cli --from-directory requires --artifact-id",
+      );
+    }
+    if (opts.artifactName) {
+      throw new Error("--artifact-name cannot be used with --from-directory");
+    }
+    sourceFiles = cliReleaseSourceFiles({
+      directory: opts.fromDirectory,
+      artifactId,
+    });
+    commandText = `record CLI release directory ${resolve(opts.fromDirectory)}`;
+  }
   if (sourceFile) {
     sourceFiles = [{ source: sourceFile, name: artifactName }];
   }
-  if (!sourceFile) {
+  if (!sourceFile && !sourceFiles) {
     const info = rocketBuildInfo(component);
     const packageInfo = packageBuildInfo(component, artifactId);
     const bootstrapInfo = hostBootstrapBuildInfo(component);
@@ -3679,7 +3740,15 @@ Supported deploy/smoke components:
       "--from-file <path>",
       "record an existing artifact file in the local software store",
     )
+    .option(
+      "--from-directory <path>",
+      "record a complete multi-platform CLI release directory",
+    )
     .option("--artifact-name <name>", "override stored artifact file name")
+    .option(
+      "--artifact-id <id>",
+      "use a precomputed immutable artifact id (CI release assembly)",
+    )
     .option("--keep-build-dir", "keep temporary component build directory")
     .action(
       async (
@@ -4090,6 +4159,9 @@ Supported deploy/smoke components:
               | ReturnType<typeof releaseInstallInfo>
               | undefined;
             let releaseChannelManifestUrls: string[] | undefined;
+            let releaseInstallerPublication:
+              | Awaited<ReturnType<typeof publishReleaseInstaller>>
+              | undefined;
             let toolsMinimalArtifact:
               | Awaited<ReturnType<typeof resolveDeployArtifact>>
               | undefined;
@@ -4411,6 +4483,20 @@ Supported deploy/smoke components:
               deps,
               run: async () => {
                 if (releaseTarget) {
+                  if (releaseTarget.artifactComponent === "cli") {
+                    const cwd = resolve(deps.cwd ?? process.cwd());
+                    const { srcRoot } = resolveRepoLayout({ cwd, deps });
+                    releaseInstallerPublication = await publishReleaseInstaller(
+                      {
+                        client,
+                        config,
+                        product: "cocalc",
+                        body: await readFile(
+                          join(srcRoot, "packages", "cli", "install.sh"),
+                        ),
+                      },
+                    );
+                  }
                   if (toolsMinimalArtifact) {
                     const publishedToolsMinimal =
                       await publishReleaseChannelArtifact({
@@ -4441,6 +4527,11 @@ Supported deploy/smoke components:
                     release_product: published.product,
                     release_channel: published.channel,
                     channel_manifests: releaseChannelManifestUrls,
+                    ...(releaseInstallerPublication
+                      ? {
+                          installer: releaseInstallerPublication,
+                        }
+                      : {}),
                     ...(toolsMinimalChannelManifestUrls
                       ? {
                           tools_minimal_channel_manifests:

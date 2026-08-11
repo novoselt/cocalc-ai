@@ -7,6 +7,7 @@ import {
   compactTimestamp,
   createSoftwareArtifactId,
   parseSoftwareBuildComponent,
+  validateSoftwareArtifactId,
   validateSoftwareTag,
 } from "./artifact-id";
 
@@ -51,6 +52,21 @@ test("software artifact id includes timestamp git tag and dirty suffix", () => {
       tag: "fix-bug",
     }),
     "20260614T235912Z-e882d124-fix-bug-dirty",
+  );
+});
+
+test("software artifact id validation rejects unsafe release paths", () => {
+  assert.equal(
+    validateSoftwareArtifactId("20260811T120000Z-e882d124-cli-release"),
+    "20260811T120000Z-e882d124-cli-release",
+  );
+  assert.throws(
+    () => validateSoftwareArtifactId("../../cli-release"),
+    /must have the form/,
+  );
+  assert.throws(
+    () => validateSoftwareArtifactId("20260811-e882d124-cli-release"),
+    /must have the form/,
   );
 });
 

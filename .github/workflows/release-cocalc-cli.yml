@@ -1,0 +1,323 @@
+name: Release CoCalc CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag suffix; blank uses github-<run number>"
+        required: false
+        type: string
+      channel:
+        description: "Channel to promote after all native checks pass"
+        required: true
+        default: candidate
+        type: choice
+        options:
+          - none
+          - dev
+          - candidate
+          - stable
+      notarize:
+        description: "Submit the Developer ID-signed macOS binary to Apple"
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: cocalc-cli-release-${{ inputs.channel }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create immutable release identity
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          tag="${REQUESTED_TAG:-github-${GITHUB_RUN_NUMBER}}"
+          if [[ ! "$tag" =~ ^[A-Za-z0-9._-]+$ || "$tag" == "latest" ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          release_id="${timestamp}-${GITHUB_SHA:0:8}-${tag}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+          printf 'Release ID: %s\n' "$release_id"
+
+  build-linux:
+    needs: plan
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: blacksmith-8vcpu-ubuntu-2404
+            arch: amd64
+            machine: x86_64
+          - runner: blacksmith-8vcpu-ubuntu-2404-arm
+            arch: arm64
+            machine: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: pnpm
+          cache-dependency-path: src/packages/pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        run: pnpm -C src/packages install --frozen-lockfile
+
+      - name: Build and verify native Linux SEA
+        env:
+          COCALC_SOFTWARE_ARTIFACT_ID: ${{ needs.plan.outputs.release_id }}
+        run: pnpm --dir src/packages/cli sea
+
+      - name: Test installer in clean Ubuntu releases
+        env:
+          RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          set -Eeuo pipefail
+          artifact="src/packages/cli/build/sea/cocalc-cli-${RELEASE_ID}-${MACHINE}-linux.tar.gz"
+          src/packages/cli/scripts/smoke-install-linux-container.sh "$artifact" ubuntu:24.04
+          src/packages/cli/scripts/smoke-install-linux-container.sh "$artifact" ubuntu:26.04
+
+      - name: Stage Linux artifact
+        env:
+          RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          mkdir -p release-assets
+          cp "src/packages/cli/build/sea/cocalc-cli-${RELEASE_ID}-${MACHINE}-linux.tar.gz" release-assets/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cocalc-cli-linux-${{ matrix.arch }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+  build-macos:
+    needs: plan
+    timeout-minutes: 60
+    runs-on: blacksmith-6vcpu-macos-15
+    environment: cocalc-cli-signing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: pnpm
+          cache-dependency-path: src/packages/pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        run: pnpm -C src/packages install --frozen-lockfile
+
+      - name: Import Developer ID certificate
+        id: signing
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          : "${APPLE_DEVELOPER_ID_P12_BASE64:?missing APPLE_DEVELOPER_ID_P12_BASE64}"
+          : "${APPLE_DEVELOPER_ID_P12_PASSWORD:?missing APPLE_DEVELOPER_ID_P12_PASSWORD}"
+          keychain="$RUNNER_TEMP/cocalc-cli-signing.keychain-db"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '%s' "$APPLE_DEVELOPER_ID_P12_BASE64" | openssl base64 -d -A > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" \
+            -P "$APPLE_DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          sign_id="$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application/ { print $2; exit }')"
+          if [[ -z "$sign_id" ]]; then
+            echo "Developer ID Application identity was not imported" >&2
+            exit 1
+          fi
+          echo "sign_id=$sign_id" >> "$GITHUB_OUTPUT"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+
+      - name: Build and verify signed native macOS SEA
+        env:
+          COCALC_SOFTWARE_ARTIFACT_ID: ${{ needs.plan.outputs.release_id }}
+          COCALC_CLI_REQUIRE_DEVELOPER_ID: "1"
+          COCALC_CLI_SIGN_ID: ${{ steps.signing.outputs.sign_id }}
+          COCALC_CLI_ENTITLEMENTS: ${{ github.workspace }}/src/packages/cli/sea/entitlements.plist
+        run: pnpm --dir src/packages/cli sea
+
+      - name: Notarize macOS SEA
+        if: inputs.notarize
+        env:
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+        run: |
+          src/packages/cli/sea/notarize-macos-artifact.sh \
+            "src/packages/cli/build/sea/cocalc-cli-${RELEASE_ID}-arm64-darwin" \
+            "$RUNNER_TEMP/cocalc-cli-notary-log.json"
+
+      - name: Stage macOS artifact and notarization log
+        env:
+          RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+        run: |
+          mkdir -p release-assets
+          cp "src/packages/cli/build/sea/cocalc-cli-${RELEASE_ID}-arm64-darwin" release-assets/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cocalc-cli-macos-arm64
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload notarization log
+        if: inputs.notarize
+        uses: actions/upload-artifact@v4
+        with:
+          name: cocalc-cli-notary-log
+          path: ${{ runner.temp }}/cocalc-cli-notary-log.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary signing keychain
+        if: always() && steps.signing.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+        run: security delete-keychain "$KEYCHAIN" || true
+
+  publish:
+    if: inputs.channel != 'none'
+    needs:
+      - plan
+      - build-linux
+      - build-macos
+    timeout-minutes: 45
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    environment: cocalc-cli-release
+    env:
+      RELEASE_DIR: ${{ runner.temp }}/release-assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: pnpm
+          cache-dependency-path: src/packages/pnpm-lock.yaml
+
+      - name: Install workspace dependencies and build CLI command
+        run: |
+          pnpm -C src/packages install --frozen-lockfile
+          pnpm --dir src/packages/cli build
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cocalc-cli-macos-arm64
+          path: ${{ runner.temp }}/release-assets
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cocalc-cli-linux-*
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+
+      - name: Verify complete downloaded release set
+        env:
+          RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+        run: |
+          set -Eeuo pipefail
+          verifier=src/packages/cli/sea/verify-release-artifact.mjs
+          node "$verifier" --file "$RELEASE_DIR/cocalc-cli-${RELEASE_ID}-x86_64-linux.tar.gz" --os linux --arch amd64 --release-id "$RELEASE_ID"
+          node "$verifier" --file "$RELEASE_DIR/cocalc-cli-${RELEASE_ID}-aarch64-linux.tar.gz" --os linux --arch arm64 --release-id "$RELEASE_ID"
+          node "$verifier" --file "$RELEASE_DIR/cocalc-cli-${RELEASE_ID}-arm64-darwin" --os darwin --arch arm64 --release-id "$RELEASE_ID"
+
+      - name: Upload immutable release and promote channel
+        env:
+          RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          COCALC_SOFTWARE_LOCAL_STORE: ${{ runner.temp }}/cocalc-software
+          COCALC_R2_ACCOUNT_ID: ${{ secrets.COCALC_R2_ACCOUNT_ID }}
+          COCALC_R2_ACCESS_KEY_ID: ${{ secrets.COCALC_R2_ACCESS_KEY_ID }}
+          COCALC_R2_SECRET_ACCESS_KEY: ${{ secrets.COCALC_R2_SECRET_ACCESS_KEY }}
+          COCALC_R2_BUCKET: ${{ secrets.COCALC_R2_BUCKET }}
+          COCALC_R2_PUBLIC_BASE_URL: ${{ secrets.COCALC_R2_PUBLIC_BASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          cli=(node src/packages/cli/dist/bin/cocalc.js)
+          "${cli[@]}" software build "cli:${RELEASE_TAG}" \
+            --artifact-id "$RELEASE_ID" \
+            --from-directory "$RELEASE_DIR"
+          "${cli[@]}" software push "cli:${RELEASE_ID}" --env-file /dev/null
+          "${cli[@]}" software deploy "cli:${RELEASE_ID}" "$RELEASE_CHANNEL" --env-file /dev/null
+          "${cli[@]}" software smoke cli "$RELEASE_CHANNEL"
+
+      - name: Verify public installer in clean Ubuntu
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          COCALC_R2_PUBLIC_BASE_URL: ${{ secrets.COCALC_R2_PUBLIC_BASE_URL }}
+        run: |
+          docker run --rm --platform linux/amd64 ubuntu:26.04 bash -s <<EOF
+          set -Eeuo pipefail
+          apt-get update >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates >/dev/null
+          if command -v xz >/dev/null 2>&1; then
+            echo "clean installer test unexpectedly has xz" >&2
+            exit 1
+          fi
+          curl -fsSL '${COCALC_R2_PUBLIC_BASE_URL}/software/cocalc/install.sh?release=${{ needs.plan.outputs.release_id }}' | COCALC_CLI_CHANNEL='${RELEASE_CHANNEL}' bash
+          cocalc --version | grep -F '${{ needs.plan.outputs.release_id }}'
+          EOF
+
+      - name: Release summary
+        env:
+          RELEASE_ID: ${{ needs.plan.outputs.release_id }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          {
+            echo "### CoCalc CLI release"
+            echo ""
+            echo "- Artifact: \`$RELEASE_ID\`"
+            echo "- Channel: \`$RELEASE_CHANNEL\`"
+            echo "- Platforms: Linux amd64, Linux arm64, macOS arm64"
+          } >> "$GITHUB_STEP_SUMMARY"
