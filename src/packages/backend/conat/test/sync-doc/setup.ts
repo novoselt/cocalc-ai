@@ -4,6 +4,7 @@ import {
   client as client0,
   wait,
 } from "@cocalc/backend/conat/test/setup";
+import "@cocalc/conat/sync-doc/install";
 export { connect, wait, once, delay } from "@cocalc/backend/conat/test/setup";
 import {
   createPathFileserver,

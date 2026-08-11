@@ -77,6 +77,12 @@ const signedInStartupRouteForbidden = [
 ];
 
 const projectsStartupForbidden = [
+  "conat/dist/sync-doc/install.js",
+  "conat/dist/sync-doc/immer-db.js",
+  "conat/dist/sync-doc/syncdb.js",
+  "conat/dist/sync-doc/syncstring.js",
+  "sync/dist/editor/generic/ipywidgets-state.js",
+  "sync/dist/editor/generic/sync-doc.js",
   "frontend/project/redux/store.ts",
   "frontend/project/redux/actions.ts",
   "frontend/chat/actions.ts",

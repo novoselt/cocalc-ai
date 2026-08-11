@@ -1,4 +1,5 @@
 import { uuid } from "@cocalc/util/misc";
+import "@cocalc/conat/sync-doc/install";
 import createAccount from "@cocalc/server/accounts/create-account";
 import createProject from "@cocalc/server/projects/create";
 import { getProject } from "@cocalc/server/projects/control";

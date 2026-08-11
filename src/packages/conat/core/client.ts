@@ -250,21 +250,16 @@ import {
 } from "@cocalc/conat/sync/dstream";
 import { akv, type AKV } from "@cocalc/conat/sync/akv";
 import { astream, type AStream } from "@cocalc/conat/sync/astream";
-import {
-  syncstring,
-  type SyncString,
-  type SyncStringOptions,
+import type {
+  SyncString,
+  SyncStringOptions,
 } from "@cocalc/conat/sync-doc/syncstring";
+import type { SyncDB, SyncDBOptions } from "@cocalc/conat/sync-doc/syncdb";
+import type { ImmerDB, ImmerDBOptions } from "@cocalc/conat/sync-doc/immer-db";
 import {
-  syncdb,
-  type SyncDB,
-  type SyncDBOptions,
-} from "@cocalc/conat/sync-doc/syncdb";
-import {
-  immerdb,
-  type ImmerDB,
-  type ImmerDBOptions,
-} from "@cocalc/conat/sync-doc/immer-db";
+  ensureSyncDocFactories,
+  getSyncDocFactories,
+} from "@cocalc/conat/sync-doc/factories";
 import {
   fsClient,
   fsSubject,
@@ -2568,6 +2563,7 @@ export class Client extends EventEmitter {
   };
 
   sync = {
+    ensure: ensureSyncDocFactories,
     dkv: async <T>(opts: DKVOptions): Promise<DKV<T>> =>
       await dkv<T>({ ...opts, client: this }),
     akv: <T>(opts: DKVOptions): AKV<T> => akv<T>({ ...opts, client: this }),
@@ -2580,11 +2576,11 @@ export class Client extends EventEmitter {
     synctable: async (opts: SyncTableOptions): Promise<ConatSyncTable> =>
       await createSyncTable({ ...opts, client: this }),
     string: (opts: Omit<Omit<SyncStringOptions, "client">, "fs">): SyncString =>
-      syncstring({ ...opts, client: this }),
+      getSyncDocFactories().string({ ...opts, client: this }),
     db: (opts: Omit<Omit<SyncDBOptions, "client">, "fs">): SyncDB =>
-      syncdb({ ...opts, client: this }),
+      getSyncDocFactories().db({ ...opts, client: this }),
     immer: (opts: Omit<Omit<ImmerDBOptions, "client">, "fs">): ImmerDB =>
-      immerdb({ ...opts, client: this }),
+      getSyncDocFactories().immer({ ...opts, client: this }),
   };
 
   socket = {
