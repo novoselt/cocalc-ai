@@ -12,6 +12,7 @@ import { register_file_editor } from "../frame-tree/register";
 ["md", "markdown"].map((ext) =>
   register_file_editor({
     ext,
+    codemirror: true,
     editor: async () => await import("./editor"),
     actions: async () => await import("./actions"),
   }),

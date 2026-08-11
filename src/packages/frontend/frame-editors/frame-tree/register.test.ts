@@ -51,4 +51,35 @@ describe("frame editor registration cleanup", () => {
       "project-1:/home/user/test.txt",
     );
   });
+
+  it("shares one retrying load between async component and initialization", async () => {
+    const Editor = () => null;
+    class Actions {}
+    const editor = jest.fn(async () => ({ Editor }));
+    const actions = jest.fn(async () => ({ Actions }));
+    register_file_editor({
+      ext: `async-${Date.now()}-${Math.random()}`,
+      codemirror: true,
+      editor,
+      actions,
+    });
+    const registration = generalRegisterFileEditor.mock.calls[0][0];
+    const initializedActions = { _init: jest.fn() };
+    const redux = {
+      getActions: jest.fn(() => undefined),
+      createStore: jest.fn(() => ({})),
+      createActions: jest.fn(() => initializedActions),
+    };
+
+    const [component, name] = await Promise.all([
+      registration.componentAsync(),
+      registration.initAsync("test.py", redux, "project-1"),
+    ]);
+
+    expect(component).toBe(Editor);
+    expect(name).toBe("project-1:test.py");
+    expect(editor).toHaveBeenCalledTimes(1);
+    expect(actions).toHaveBeenCalledTimes(1);
+    expect(initializedActions._init).toHaveBeenCalledTimes(1);
+  });
 });

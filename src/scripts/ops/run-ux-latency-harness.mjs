@@ -22,11 +22,44 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const srcRoot = resolve(scriptDir, "../..");
 const cli = resolve(srcRoot, "packages/cli/dist/bin/cocalc.js");
 
+const NETWORK_PROFILES = {
+  native: undefined,
+  "fast-4g": {
+    latency: 20,
+    downloadThroughput: (20 * 1_000_000) / 8,
+    uploadThroughput: (8 * 1_000_000) / 8,
+    connectionType: "wifi",
+  },
+  "slow-4g": {
+    latency: 150,
+    downloadThroughput: (1.6 * 1_000_000) / 8,
+    uploadThroughput: (750 * 1_000) / 8,
+    connectionType: "cellular4g",
+  },
+  "1mbps": {
+    latency: 150,
+    downloadThroughput: 1_000_000 / 8,
+    uploadThroughput: 500_000 / 8,
+    connectionType: "cellular4g",
+  },
+  "3g": {
+    latency: 200,
+    downloadThroughput: 750_000 / 8,
+    uploadThroughput: 250_000 / 8,
+    connectionType: "cellular3g",
+  },
+};
+
 function usage(exitCode = 0) {
   console.log(`Usage:
   node src/scripts/ops/run-ux-latency-harness.mjs \\
     --api https://staging.cocalc.ai --profile staging \\
     --project <uuid> [--browser <id>] [--iterations 3] [--include-codex]
+
+Direct Chromium qualification options:
+  --network <native|fast-4g|slow-4g|1mbps|3g>
+  --cpu-throttle <1-20>  --cache <warm|cold>  --mobile
+  --startup-only
 
 For an isolated test account, set COCALC_UX_HARNESS_SIGN_IN_URL to a one-time
 sign-in URL and pass --direct. This launches a clean Chromium process directly,
@@ -47,6 +80,11 @@ function parseArgs(argv) {
     reportDir: undefined,
     direct: false,
     chromium: "/usr/local/bin/chromium-browser",
+    network: "native",
+    cpuThrottle: 1,
+    cache: "warm",
+    mobile: false,
+    startupOnly: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -64,6 +102,11 @@ function parseArgs(argv) {
     else if (arg === "--include-codex") options.includeCodex = true;
     else if (arg === "--direct") options.direct = true;
     else if (arg === "--chromium") options.chromium = value();
+    else if (arg === "--network") options.network = value();
+    else if (arg === "--cpu-throttle") options.cpuThrottle = Number(value());
+    else if (arg === "--cache") options.cache = value();
+    else if (arg === "--mobile") options.mobile = true;
+    else if (arg === "--startup-only") options.startupOnly = true;
     else if (arg === "--help" || arg === "-h") usage();
     else throw Error(`unknown option '${arg}'`);
   }
@@ -83,6 +126,31 @@ function parseArgs(argv) {
   }
   if (options.direct && !options.signInUrl) {
     throw Error("COCALC_UX_HARNESS_SIGN_IN_URL is required with --direct");
+  }
+  if (!(options.network in NETWORK_PROFILES)) {
+    throw Error(`unknown --network profile '${options.network}'`);
+  }
+  if (
+    !Number.isFinite(options.cpuThrottle) ||
+    options.cpuThrottle < 1 ||
+    options.cpuThrottle > 20
+  ) {
+    throw Error("--cpu-throttle must be a number from 1 through 20");
+  }
+  if (!new Set(["warm", "cold"]).has(options.cache)) {
+    throw Error("--cache must be warm or cold");
+  }
+  if (
+    !options.direct &&
+    (options.network !== "native" ||
+      options.cpuThrottle !== 1 ||
+      options.cache !== "warm" ||
+      options.mobile ||
+      options.startupOnly)
+  ) {
+    throw Error(
+      "network, CPU, cache, mobile, and startup-only controls require --direct",
+    );
   }
   return options;
 }
@@ -386,9 +454,15 @@ async function runDirectHarness(plan) {
   });
   const context = await browser.newContext({
     ignoreHTTPSErrors: false,
-    viewport: { width: 1440, height: 1000 },
+    viewport: options.mobile
+      ? { width: 390, height: 844 }
+      : { width: 1440, height: 1000 },
+    deviceScaleFactor: options.mobile ? 3 : 1,
+    hasTouch: options.mobile,
+    isMobile: options.mobile,
   });
   const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
   const browserLogs = [];
   page.on("console", (message) => {
     browserLogs.push({
@@ -417,6 +491,20 @@ async function runDirectHarness(plan) {
 
   const steps = [];
   const startedAt = new Date().toISOString();
+
+  async function applyQualificationProfile() {
+    await cdp.send("Network.enable");
+    const network = NETWORK_PROFILES[options.network];
+    if (network != null) {
+      await cdp.send("Network.emulateNetworkConditions", {
+        offline: false,
+        ...network,
+      });
+    }
+    await cdp.send("Emulation.setCPUThrottlingRate", {
+      rate: options.cpuThrottle,
+    });
+  }
 
   async function createDirectFixtures() {
     await page.goto(projectFileUrl(`ux-harness-setup-${runId}.term`), {
@@ -493,6 +581,9 @@ async function runDirectHarness(plan) {
         });
         break;
       case "reload":
+        if (options.cache === "cold") {
+          await cdp.send("Network.clearBrowserCache");
+        }
         await page.reload({ waitUntil: "domcontentloaded", timeout });
         break;
       case "wait_for_text":
@@ -628,6 +719,7 @@ async function runDirectHarness(plan) {
       { timeout: 60_000 },
     );
     await createDirectFixtures();
+    await applyQualificationProfile();
     for (const step of [
       ...(plan.before_all ?? []),
       ...(plan.steps ?? []),
@@ -672,6 +764,13 @@ async function runDirectHarness(plan) {
           status: failure ? "failed" : "passed",
           failure,
           project_id: options.project,
+          qualification_profile: {
+            network: options.network,
+            cpu_throttle: options.cpuThrottle,
+            cache: options.cache,
+            mobile: options.mobile,
+            startup_only: options.startupOnly,
+          },
           steps,
           browser_logs: browserLogs,
         },
@@ -709,9 +808,11 @@ try {
       },
       ...enterHarnessDirectorySteps("application and project ready"),
     ],
-    steps: Array.from({ length: options.iterations }, (_, index) =>
-      iterationSteps(index + 1),
-    ).flat(),
+    steps: options.startupOnly
+      ? []
+      : Array.from({ length: options.iterations }, (_, index) =>
+          iterationSteps(index + 1),
+        ).flat(),
     after_all: enterHarnessDirectorySteps("finish"),
   };
   const planPath = join(fixtureDir, "plan.json");

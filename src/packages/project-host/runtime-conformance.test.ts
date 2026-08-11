@@ -29,6 +29,12 @@ describe("runtime conformance", () => {
     expect(__test__.requiredProjectCgroupCommands()).toContain(
       "attach-host-service-cgroup",
     );
+    expect(__test__.requiredProjectCgroupCommands()).toContain(
+      "attach-backup-browser-cgroup",
+    );
+    expect(__test__.requiredProjectCgroupCommands()).toContain(
+      "remove-backup-browser-cgroup",
+    );
   });
 
   it("distinguishes supported helper usage from an old helper", () => {

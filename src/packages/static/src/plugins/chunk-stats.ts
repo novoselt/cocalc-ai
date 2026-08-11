@@ -1,6 +1,36 @@
 import type { WebpackPluginInstance } from "@rspack/core";
 import { writeFileSync } from "fs";
 import { resolve } from "path";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "zlib";
+
+const CENSUS_BROTLI_QUALITY = 5;
+
+interface AssetStats {
+  brotliBytes: number;
+  file: string;
+  gzipBytes: number;
+  rawBytes: number;
+}
+
+interface ChunkStats {
+  assets: AssetStats[];
+  files: string[];
+  importers: Record<string, string[]>;
+  initial: boolean;
+  name?: string;
+  modules: string[];
+}
+
+interface ChunkGroupStats {
+  chunks: string[];
+  initial: boolean;
+  name?: string;
+  origins: Array<{
+    module?: string;
+    request?: string;
+  }>;
+  parents: number[];
+}
 
 function normalizeModuleName(value: string): string {
   const normalized = value.replace(/\\/g, "/");
@@ -32,6 +62,15 @@ function getModuleName(module: any): string | null {
   return normalizeModuleName(candidate);
 }
 
+function getChunkFiles(chunk: any): string[] {
+  return Array.from(chunk.files ?? [])
+    .filter(
+      (file): file is string =>
+        typeof file === "string" && /\.(?:js|css)$/.test(file),
+    )
+    .sort();
+}
+
 class ChunkStatsPlugin implements WebpackPluginInstance {
   name = "ChunkStatsPlugin";
 
@@ -43,20 +82,25 @@ class ChunkStatsPlugin implements WebpackPluginInstance {
         return;
       }
 
-      const chunks: Record<string, { files: string[]; modules: string[] }> = {};
+      const chunkKeys = new Map<any, string>();
       for (const chunk of compilation.chunks ?? []) {
-        if (typeof chunk?.name !== "string" || !chunk.name) {
-          continue;
-        }
+        const files = getChunkFiles(chunk);
+        const name =
+          typeof chunk?.name === "string" && chunk.name ? chunk.name : null;
+        if (name == null && files.length === 0) continue;
+        chunkKeys.set(chunk, name ?? `async:${files.join("+")}`);
+      }
 
-        const files = Array.from(chunk.files ?? [])
-          .filter(
-            (file): file is string =>
-              typeof file === "string" && /\.(?:js|css)$/.test(file),
-          )
-          .sort();
+      const chunks: Record<string, ChunkStats> = {};
+      for (const chunk of compilation.chunks ?? []) {
+        const key = chunkKeys.get(chunk);
+        if (key == null) continue;
+        const files = getChunkFiles(chunk);
+        const name =
+          typeof chunk?.name === "string" && chunk.name ? chunk.name : null;
 
         const modules = new Set<string>();
+        const importers: Record<string, string[]> = {};
         const chunkModules =
           compilation.chunkGraph?.getChunkModulesIterable?.(chunk);
         if (chunkModules != null) {
@@ -64,19 +108,87 @@ class ChunkStatsPlugin implements WebpackPluginInstance {
             const name = getModuleName(module);
             if (name != null) {
               modules.add(name);
+              const incoming =
+                compilation.moduleGraph?.getIncomingConnections?.(module);
+              if (incoming != null) {
+                const names = new Set<string>();
+                for (const connection of incoming) {
+                  const importer = getModuleName(connection?.originModule);
+                  if (importer != null && importer !== name) {
+                    names.add(importer);
+                  }
+                }
+                if (names.size > 0) {
+                  importers[name] = [...names].sort();
+                }
+              }
             }
           }
         }
 
-        chunks[chunk.name] = {
+        const assets: AssetStats[] = [];
+        for (const file of files) {
+          const asset = compilation.getAsset?.(file);
+          const source = asset?.source?.source?.();
+          if (source == null) continue;
+          const bytes = Buffer.isBuffer(source)
+            ? source
+            : Buffer.from(source.toString());
+          assets.push({
+            brotliBytes: brotliCompressSync(bytes, {
+              params: {
+                [zlibConstants.BROTLI_PARAM_QUALITY]: CENSUS_BROTLI_QUALITY,
+              },
+            }).length,
+            file,
+            gzipBytes: gzipSync(bytes).length,
+            rawBytes: bytes.length,
+          });
+        }
+
+        chunks[key] = {
+          assets,
           files,
+          importers,
+          initial: chunk.canBeInitial?.() === true,
+          ...(name == null ? {} : { name }),
           modules: [...modules].sort(),
         };
       }
 
+      const groupIndexes = new Map<any, number>();
+      const rawGroups = Array.from(compilation.chunkGroups ?? []);
+      rawGroups.forEach((group, index) => groupIndexes.set(group, index));
+      const groups: ChunkGroupStats[] = rawGroups.map((group: any) => {
+        const parents = Array.from(group.parentsIterable ?? group.parents ?? [])
+          .map((parent) => groupIndexes.get(parent))
+          .filter((index): index is number => index != null)
+          .sort((a, b) => a - b);
+        const origins = Array.from(group.origins ?? []).map((origin: any) => {
+          const module = getModuleName(origin?.module);
+          const request =
+            typeof origin?.request === "string" ? origin.request : null;
+          return {
+            ...(module == null ? {} : { module }),
+            ...(request == null ? {} : { request }),
+          };
+        });
+        return {
+          chunks: Array.from(group.chunks ?? [])
+            .map((chunk) => chunkKeys.get(chunk))
+            .filter((key): key is string => key != null),
+          initial: group.isInitial?.() === true,
+          ...(typeof group.name === "string" && group.name
+            ? { name: group.name }
+            : {}),
+          origins,
+          parents,
+        };
+      });
+
       writeFileSync(
         resolve(outputPath, "chunk-stats.json"),
-        JSON.stringify({ chunks }, null, 2),
+        JSON.stringify({ chunks, groups }, null, 2),
       );
     });
   }

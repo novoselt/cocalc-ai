@@ -10,7 +10,9 @@ import {
 } from "@cocalc/frontend/monitoring/ux-latency-trace";
 
 let trace: UxLatencyTrace | undefined;
-let recorded = false;
+let appReadyRecorded = false;
+let failed = false;
+let surfaceRecorded = false;
 const entrySurface =
   typeof window !== "undefined" && window.location.pathname.includes("/auth/")
     ? "auth"
@@ -35,17 +37,37 @@ function navigationStart(): UxTraceStart | undefined {
   };
 }
 
+interface PreAppStartupTrace {
+  mark: (phase: string) => void;
+  complete: (phase?: string) => void;
+  snapshot: () => {
+    id: string;
+    started_at: string;
+    marks: Record<string, number>;
+    details: Record<string, unknown>;
+  };
+}
+
+function preAppTrace(): PreAppStartupTrace | undefined {
+  return (globalThis as any).__COCALC_STARTUP_TRACE__;
+}
+
 function getTrace(): UxLatencyTrace {
   if (trace != null) return trace;
   const navigation = navigationEntry();
+  const early = preAppTrace()?.snapshot();
   trace = new UxLatencyTrace({
     event_type: "app_bootstrap",
+    client_event_id: early?.id,
     source: "document_navigation",
     surface_visible: true,
     stale_after_ms: 120_000,
     start: navigationStart(),
   });
   markNavigationPhases(trace, navigation);
+  for (const [phase, elapsed] of Object.entries(early?.marks ?? {})) {
+    trace.markAt(phase, elapsed);
+  }
   trace.mark("bootstrap_module_loaded");
   return trace;
 }
@@ -81,7 +103,8 @@ function markNavigationPhases(
 }
 
 export function markAppBootstrapPhase(phase: string): void {
-  if (recorded) return;
+  if (failed) return;
+  preAppTrace()?.mark(phase);
   getTrace().mark(phase);
 }
 
@@ -142,6 +165,7 @@ function timingDetails(): Record<string, unknown> {
     decoded_body_size: navigation?.decodedBodySize,
     redirect_count: navigation?.redirectCount,
     entry_surface: entrySurface,
+    pre_app: preAppTrace()?.snapshot().details,
     scripts: resourceSummary("script"),
     stylesheets: resourceSummary("link"),
     ...connectionDetails(),
@@ -149,12 +173,12 @@ function timingDetails(): Record<string, unknown> {
 }
 
 export function recordSignedInAppBootstrapReady(): () => void {
-  if (recorded) return () => {};
+  if (appReadyRecorded || failed) return () => {};
   const current = getTrace();
   current.mark("account_and_site_ready");
   return afterNextPaint(() => {
-    if (recorded) return;
-    recorded = true;
+    if (appReadyRecorded || failed) return;
+    appReadyRecorded = true;
     markNavigationPhases(current);
     current.record("signed_in_app_ready_v2", {
       segment: `${navigationEntry()?.type ?? "unknown"}:${entrySurface}`,
@@ -164,6 +188,26 @@ export function recordSignedInAppBootstrapReady(): () => void {
         paint_observer: "react_commit_next_animation_frame",
       },
     });
+    preAppTrace()?.complete("signed_in_app_ready");
+  });
+}
+
+export function recordSignedInSurfaceReady(segment: string): () => void {
+  if (surfaceRecorded || failed) return () => {};
+  const current = getTrace();
+  current.mark("requested_surface_committed", { segment });
+  return afterNextPaint(() => {
+    if (surfaceRecorded || failed) return;
+    surfaceRecorded = true;
+    current.record("signed_in_surface_ready_v1", {
+      segment,
+      surface_visible: true,
+      details: {
+        ...timingDetails(),
+        useful_surface: segment,
+        paint_observer: "route_data_ready_next_animation_frame",
+      },
+    });
   });
 }
 
@@ -171,8 +215,8 @@ export function recordAppBootstrapFailed(
   phase: string,
   errorName: string,
 ): void {
-  if (recorded) return;
-  recorded = true;
+  if (appReadyRecorded || failed) return;
+  failed = true;
   getTrace().record("app_bootstrap_failed_v2", {
     surface_visible: true,
     details: { phase, error_name: errorName },

@@ -4,7 +4,7 @@
  */
 
 import * as LS from "@cocalc/frontend/misc/local-storage-typed";
-import { FixedTab, isFixedTab } from "../file-tab";
+import { type FixedTab, isFixedTab } from "../fixed-tab-ids";
 import { FLYOUT_DEFAULT_WIDTH_PX } from "./consts";
 import {
   FLYOUT_ACTIVE_DEFAULT_MODE,

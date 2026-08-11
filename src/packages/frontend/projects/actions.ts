@@ -5135,7 +5135,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
       }
     }
 
-    let latestBackupTime: Date | undefined;
+    let latestBackupTime = lastBackup instanceof Date ? lastBackup : undefined;
     try {
       const backups = await getProjectBackups({
         project_id,
@@ -5154,7 +5154,8 @@ export class ProjectsActions extends Actions<ProjectsState> {
         }
       }
     } catch {
-      latestBackupTime = undefined;
+      // The project row is authoritative enough for archive freshness. Backup
+      // browsing may be temporarily unavailable during host maintenance.
     }
 
     const backupCoversLatestEdits =

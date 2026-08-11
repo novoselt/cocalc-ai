@@ -24,7 +24,6 @@ import {
   useRedux,
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
-import useAppContext from "@cocalc/frontend/app/use-context";
 import { AddCollaborators } from "@cocalc/frontend/collaborators";
 import {
   CopyToClipBoard,
@@ -33,7 +32,6 @@ import {
   TimeAgo,
 } from "@cocalc/frontend/components";
 import { labels } from "@cocalc/frontend/i18n";
-import { FIXED_PROJECT_TABS } from "@cocalc/frontend/project/page/file-tab";
 import { useStarredFilesManager } from "@cocalc/frontend/project/page/flyouts/store";
 import { RestartProject } from "@cocalc/frontend/project/settings/restart-project";
 import { StopProject } from "@cocalc/frontend/project/settings/stop-project";
@@ -53,7 +51,6 @@ interface Props {
 }
 
 export function ProjectRowExpandedContent({ project_id }: Props) {
-  const { displayI18N } = useAppContext();
   const [show_add_collab, set_show_add_collab] = useState<boolean>(false);
   const intl = useIntl();
   const projectLabel = intl.formatMessage(labels.project);
@@ -176,7 +173,7 @@ export function ProjectRowExpandedContent({ project_id }: Props) {
               type="text"
               size="small"
               onClick={() => openProjectTab("files")}
-              icon={<Icon name={FIXED_PROJECT_TABS.files.icon} />}
+              icon={<Icon name="folder-open" />}
             >
               {intl.formatMessage(labels.explorer)}
             </Button>
@@ -235,7 +232,7 @@ export function ProjectRowExpandedContent({ project_id }: Props) {
               type="text"
               size="small"
               onClick={() => openProjectTab("new")}
-              icon={<Icon name={FIXED_PROJECT_TABS.new.icon} />}
+              icon={<Icon name="plus-circle" />}
             >
               {intl.formatMessage(labels.new)}
             </Button>
@@ -243,17 +240,17 @@ export function ProjectRowExpandedContent({ project_id }: Props) {
               type="text"
               size="small"
               onClick={() => openProjectTab("log")}
-              icon={<Icon name={FIXED_PROJECT_TABS.log.icon} />}
+              icon={<Icon name="history" />}
             >
-              {displayI18N(FIXED_PROJECT_TABS.log.label)}
+              {intl.formatMessage(labels.log)}
             </Button>
             <Button
               type="text"
               size="small"
               onClick={openProjectSettings}
-              icon={<Icon name={FIXED_PROJECT_TABS.settings.icon} />}
+              icon={<Icon name="wrench" />}
             >
-              {displayI18N(FIXED_PROJECT_TABS.settings.label)}
+              {intl.formatMessage(labels.settings)}
             </Button>
           </Space>
         </Descriptions.Item>

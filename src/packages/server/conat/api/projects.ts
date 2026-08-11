@@ -106,7 +106,6 @@ import {
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
 import { lroStreamName } from "@cocalc/conat/lro/names";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
-import { getBackups } from "@cocalc/conat/project/archive-info";
 import {
   makeOfflineMoveConfirmationPayload,
   offlineMoveConfirmationError,
@@ -5573,45 +5572,10 @@ export async function archiveProject({
     !hostStatus || hostStatus === "active" || hostStatus === "running";
 
   if (!hostDeprovisioned) {
-    const routedClient = await getExplicitProjectRoutedClient({
-      project_id,
-      fresh: true,
-      account_id: account_id!,
-    });
-    try {
-      try {
-        const backups = await getBackups({
-          client: routedClient,
-          project_id,
-          indexed_only: true,
-        });
-        if (!backups.length) {
-          throw new Error(
-            "project must have at least one backup before it can be archived",
-          );
-        }
-      } catch (err) {
-        if (
-          !isArchiveInfoUnavailableError(err) ||
-          !(
-            (await hasIndexedProjectBackup(project_id)) ||
-            row.last_backup != null
-          )
-        ) {
-          throw err;
-        }
-        log.warn("archiveProject: verified backup via database metadata", {
-          project_id,
-          last_backup: row.last_backup,
-          error: `${err}`,
-        });
-      }
-    } finally {
-      try {
-        routedClient.close();
-      } catch {
-        // ignore close errors
-      }
+    if (row.last_backup == null) {
+      throw new Error(
+        "project must have at least one backup before it can be archived",
+      );
     }
   } else {
     log.info(
@@ -5700,35 +5664,6 @@ export async function archiveProject({
     project_id,
     default_bay_id: getConfiguredBayId(),
   });
-}
-
-function isArchiveInfoUnavailableError(err: unknown): boolean {
-  const message = `${err}`;
-  return (
-    message.includes("no subscribers matching") &&
-    message.includes(".archive-info.")
-  );
-}
-
-async function hasIndexedProjectBackup(project_id: string): Promise<boolean> {
-  try {
-    const { rows } = await getPool().query(
-      `
-        SELECT 1
-        FROM project_backup_indexes
-        WHERE project_id = $1
-          AND status = 'complete'
-        LIMIT 1
-      `,
-      [project_id],
-    );
-    return rows.length > 0;
-  } catch (err) {
-    if (`${err}`.includes("project_backup_indexes")) {
-      return false;
-    }
-    throw err;
-  }
 }
 
 export async function getProjectState({

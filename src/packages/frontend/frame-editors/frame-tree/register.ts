@@ -21,6 +21,7 @@ interface AsyncRegister {
   ext: string | string[];
   editor: () => Promise<any>;
   actions: () => Promise<any>;
+  codemirror?: boolean;
 }
 
 interface Register {
@@ -49,6 +50,9 @@ export function register_file_editor(opts: Register | AsyncRegister) {
       icon: opts.icon,
       ext: opts.ext,
       asyncData: async () => {
+        if (opts.codemirror) {
+          await import("@cocalc/frontend/codemirror/init");
+        }
         const component = (await opts.editor()).Editor;
         const Actions = (await opts.actions()).Actions;
         return { component, Actions };

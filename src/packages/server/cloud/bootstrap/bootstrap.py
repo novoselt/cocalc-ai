@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_SCHEMA_VERSION = 1
-HELPER_SCHEMA_VERSION = "20260805-v41"
+HELPER_SCHEMA_VERSION = "20260811-v43"
 RUNTIME_WRAPPER_VERSION = "20260724-v15"
 NVM_VERSION = "0.40.4"
 CLOUDFLARED_VERSION = "2026.7.2"
@@ -9667,8 +9667,9 @@ WantedBy=timers.target
     prepare_service = f"""[Unit]
 Description=Prepare CoCalc Podman runtime after boot
 After=mnt-cocalc.mount
-Before=cocalc-project-host-start.service
+Before=cocalc-project-host-start.service podman-restart.service
 Before=google-startup-scripts.service
+Conflicts=podman-restart.service
 RequiresMountsFor=/mnt/cocalc
 
 [Service]
@@ -9744,6 +9745,28 @@ WantedBy=multi-user.target
     os.chmod("/etc/systemd/system/cocalc-project-host-start.service", 0o644)
     os.chmod("/etc/systemd/system/cocalc-project-host-shutdown.service", 0o644)
     run_best_effort(cfg, ["systemctl", "daemon-reload"], "reload systemd")
+    # The distribution unit manages rootful containers and races with CoCalc's
+    # dedicated rootless runtime during boot. Managed hosts must never use it.
+    run_best_effort(
+        cfg,
+        ["systemctl", "disable", "podman-restart.service"],
+        "disable system Podman container restart service",
+    )
+    run_best_effort(
+        cfg,
+        ["systemctl", "mask", "podman-restart.service"],
+        "mask system Podman container restart service",
+    )
+    run_best_effort(
+        cfg,
+        [
+            "systemctl",
+            "reset-failed",
+            "podman-restart.service",
+            "cocalc-project-host-prepare.service",
+        ],
+        "clear stale Podman boot preparation failures",
+    )
     run_best_effort(
         cfg,
         ["systemctl", "enable", "cocalc-project-host-prepare.service"],

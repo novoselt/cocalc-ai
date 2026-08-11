@@ -45,6 +45,10 @@ function defaultRange(): { start: string; end: string } {
   };
 }
 
+function inclusiveUtcEnd(end: string): string {
+  return new Date(new Date(end).getTime() - 1).toISOString().slice(0, 10);
+}
+
 function sumMetric(dashboard: GrowthDashboard, name: string): number {
   return (
     dashboard.summary.series
@@ -110,13 +114,13 @@ function HeadlineCards({ dashboard }: { dashboard: GrowthDashboard }) {
     <Row gutter={[12, 12]}>
       <Col xs={12} lg={6}>
         <Card size="small">
-          <Statistic title="Eligible signups" value={signups} />
+          <Statistic title="Eligible signups (range total)" value={signups} />
         </Card>
       </Col>
       <Col xs={12} lg={6}>
         <Card size="small">
           <Statistic
-            title="Verified"
+            title="Verified signups (range)"
             value={ratio(verified, signups)}
             suffix="%"
           />
@@ -125,7 +129,7 @@ function HeadlineCards({ dashboard }: { dashboard: GrowthDashboard }) {
       <Col xs={12} lg={6}>
         <Card size="small">
           <Statistic
-            title="Activated in 24h"
+            title="Activated in 24h (range)"
             value={ratio(activated, signups)}
             suffix="%"
           />
@@ -133,7 +137,7 @@ function HeadlineCards({ dashboard }: { dashboard: GrowthDashboard }) {
       </Col>
       <Col xs={12} lg={6}>
         <Card size="small">
-          <Statistic title="Latest daily active" value={active} />
+          <Statistic title="Latest UTC-day active" value={active} />
         </Card>
       </Col>
     </Row>
@@ -236,7 +240,9 @@ function RetentionMatrix({ dashboard }: { dashboard: GrowthDashboard }) {
       <table style={{ borderCollapse: "collapse", minWidth: "100%" }}>
         <thead>
           <tr>
-            <th style={{ padding: 6, textAlign: "left" }}>Cohort</th>
+            <th style={{ padding: 6, textAlign: "left" }}>
+              UTC {dashboard.retention.cohort_grain} cohort start
+            </th>
             <th style={{ padding: 6, textAlign: "right" }}>Size</th>
             {Array.from({ length: periodCount }, (_, index) => (
               <th key={index} style={{ padding: 6, textAlign: "right" }}>
@@ -409,6 +415,13 @@ export function RetentionAdminOverview() {
             <Tag>{dashboard.summary.metric_version}</Tag>
             <Tag>{dashboard.summary.activity_signal}</Tag>
             <Tag>UTC calendar periods</Tag>
+            <Tag>
+              Range total {dashboard.summary.start.slice(0, 10)} through{" "}
+              {inclusiveUtcEnd(dashboard.summary.end)}
+            </Tag>
+            {grain === "week" ? (
+              <Tag>Weekly cohorts are labeled by Monday start</Tag>
+            ) : null}
             <Text type="secondary">
               Current periods are partial; unavailable history is not filled
               with zeroes.

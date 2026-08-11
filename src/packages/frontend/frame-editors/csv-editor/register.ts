@@ -12,6 +12,7 @@ import { register_file_editor } from "../frame-tree/register";
 register_file_editor({
   ext: "csv",
   icon: "csv",
+  codemirror: true,
   editor: async () => await import("./editor"),
   actions: async () => await import("./actions"),
 });

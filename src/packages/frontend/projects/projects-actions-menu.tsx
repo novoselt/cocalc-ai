@@ -31,7 +31,6 @@ import {
 } from "@cocalc/frontend/auth/fresh-auth";
 import { Icon } from "@cocalc/frontend/components";
 import { labels } from "@cocalc/frontend/i18n";
-import { FIXED_PROJECT_TABS } from "@cocalc/frontend/project/page/file-tab";
 import { useStarredFilesManager } from "@cocalc/frontend/project/page/flyouts/store";
 import {
   OpenedFile,
@@ -326,7 +325,7 @@ function HydratedProjectActionsMenu({
     {
       key: "explorer",
       label: intl.formatMessage(labels.explorer),
-      icon: <Icon name={FIXED_PROJECT_TABS.files.icon} />,
+      icon: <Icon name="folder-open" />,
       disabled: deletionBlocked,
     },
     {
@@ -362,19 +361,19 @@ function HydratedProjectActionsMenu({
     {
       key: "new",
       label: intl.formatMessage(labels.new),
-      icon: <Icon name={FIXED_PROJECT_TABS.new.icon} />,
+      icon: <Icon name="plus-circle" />,
       disabled: deletionBlocked,
     },
     {
       key: "log",
       label: "Log",
-      icon: <Icon name={FIXED_PROJECT_TABS.log.icon} />,
+      icon: <Icon name="history" />,
       disabled: deletionBlocked,
     },
     {
       key: "settings",
       label: "Settings",
-      icon: <Icon name={FIXED_PROJECT_TABS.settings.icon} />,
+      icon: <Icon name="wrench" />,
       disabled: deletionBlocked,
     },
     {

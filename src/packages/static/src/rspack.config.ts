@@ -50,6 +50,7 @@ import bannerPlugin from "./plugins/banner";
 import chunkStatsPlugin from "./plugins/chunk-stats";
 import cleanPlugin from "./plugins/clean";
 import defineConstantsPlugin from "./plugins/define-constants";
+import { javascriptOutputFilenames } from "./output-filenames";
 
 const logger = getLogger("rspack.config");
 
@@ -242,14 +243,13 @@ export default function getConfig(): Configuration {
         dependOn: "load",
       },
     },
-    /* Why chunkhash below, rather than contenthash? This says contenthash is a special
-     thing for css and other text files only (??):
-        https://medium.com/@sahilkkrazy/hash-vs-chunkhash-vs-contenthash-e94d38a32208
-  */
+    // The filename must include the final emitted bytes, including numeric
+    // module ids assigned late in the build. chunkhash can remain unchanged
+    // when those ids change, causing browsers to reuse an incompatible async
+    // chunk and fail in __webpack_require__ with a missing module.
     output: {
       path: OUTPUT,
-      filename: PRODMODE ? "[name]-[chunkhash].js" : "[id]-[chunkhash].js",
-      chunkFilename: PRODMODE ? "[chunkhash].js" : "[id]-[chunkhash].js",
+      ...javascriptOutputFilenames(PRODMODE),
     },
     module: moduleRules(),
     resolve: {

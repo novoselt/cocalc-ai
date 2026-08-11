@@ -265,7 +265,8 @@ export function registerProjectLifecycleCommands(
             backups = [];
           }
 
-          let latestBackup = latestBackupTime(backups);
+          let latestBackup =
+            latestBackupTime(backups) ?? normalizeDate(ws.last_backup);
           const lastEdited = normalizeDate(ws.last_edited);
           const backupFresh =
             latestBackup != null &&

@@ -4,7 +4,7 @@
  */
 
 import { redux } from "@cocalc/frontend/app-framework";
-import type { FixedTab } from "@cocalc/frontend/project/page/file-tab";
+import type { FixedTab } from "@cocalc/frontend/project/page/fixed-tab-ids";
 
 export const APP_DOCS_SELECTED_STORAGE_KEY = "cocalc-app-docs-selected-slug";
 export const PROJECT_DOCS_SELECTED_STORAGE_PREFIX =

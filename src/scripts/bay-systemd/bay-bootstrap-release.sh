@@ -28,6 +28,7 @@ SITE_MASTER_KEY_PATH="/etc/cocalc/site-master-key"
 NODE_VERSION="26.2.0"
 NVM_DIR="/opt/cocalc/nvm"
 RETAIN_RELEASES="${COCALC_BAY_RETAIN_RELEASES:-3}"
+NEEDRESTART_POLICY_PATH="${COCALC_BAY_NEEDRESTART_POLICY_PATH:-/etc/needrestart/conf.d/cocalc-bay.conf}"
 
 usage() {
   cat <<'EOF'
@@ -92,6 +93,12 @@ find_node() {
 make_target_release_accessible() {
   run chown "${BAY_USER}:${BAY_GROUP}" "$TARGET_RELEASE"
   run chmod 0755 "$TARGET_RELEASE"
+}
+
+install_needrestart_policy() {
+  run install -D -m 0644 \
+    "${TARGET_RELEASE}/scripts/bay-systemd/needrestart/cocalc-bay.conf" \
+    "$NEEDRESTART_POLICY_PATH"
 }
 
 require_root() {
@@ -827,6 +834,9 @@ main() {
     stage_source_release
   fi
   validate_release
+  if [[ -n "$STATIC_BUNDLE_PATH" ]]; then
+    install_needrestart_policy
+  fi
   set_current_release
 
   if [[ -n "$STATIC_BUNDLE_PATH" ]]; then

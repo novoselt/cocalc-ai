@@ -53,6 +53,55 @@ describe("project volume quota ledger", () => {
     ).toThrow("conflicting home quota");
   });
 
+  it("repairs a same-revision conflict only when explicitly authoritative", async () => {
+    const ledger = await import("./volume-quotas");
+    ledger.acceptProjectVolumeQuotaDesired({
+      project_id: "project-1",
+      volume_kind: "scratch",
+      desired_bytes: 50,
+      desired_revision: 2,
+    });
+    const repaired = ledger.acceptProjectVolumeQuotaDesired({
+      project_id: "project-1",
+      volume_kind: "scratch",
+      desired_bytes: 100,
+      desired_revision: 2,
+      repair_same_revision: true,
+    });
+    expect(repaired).toEqual({
+      status: "accepted",
+      row: expect.objectContaining({
+        desired_bytes: 100,
+        desired_revision: 2,
+        state: "pending",
+      }),
+    });
+  });
+
+  it("bootstraps versioned run_quota instead of stale legacy columns", async () => {
+    const projects = await import("./projects");
+    const ledger = await import("./volume-quotas");
+    const { getDatabase } = await import("@cocalc/lite/hub/sqlite/database");
+    projects.ensureProjectsTable();
+    getDatabase()
+      .prepare(
+        `INSERT INTO projects(
+           project_id, state, disk, scratch, run_quota, run_quota_revision
+         ) VALUES ('project-bootstrap', 'opened', 50, 50, ?, 2)`,
+      )
+      .run(JSON.stringify({ disk_quota: 0.0001 }));
+
+    expect(ledger.bootstrapProjectVolumeQuotaLedger()).toBe(2);
+    expect(ledger.getProjectVolumeQuota("project-bootstrap", "home")).toEqual(
+      expect.objectContaining({ desired_bytes: 100, desired_revision: 2 }),
+    );
+    expect(
+      ledger.getProjectVolumeQuota("project-bootstrap", "scratch"),
+    ).toEqual(
+      expect.objectContaining({ desired_bytes: 100, desired_revision: 2 }),
+    );
+  });
+
   it("allows legacy revision-zero desired state to advance until versioned state arrives", async () => {
     const ledger = await import("./volume-quotas");
     ledger.acceptProjectVolumeQuotaDesired({

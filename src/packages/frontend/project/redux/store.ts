@@ -27,7 +27,7 @@ import {
   ProjectConfiguration,
 } from "@cocalc/frontend/project_configuration";
 import { deep_copy } from "@cocalc/util/misc";
-import { FixedTab } from "../page/file-tab";
+import type { FixedTab } from "../page/fixed-tab-ids";
 import {
   FlyoutActiveMode,
   FlyoutLogDeduplicate,

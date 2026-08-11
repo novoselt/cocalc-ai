@@ -1140,6 +1140,14 @@ async function assertStartDiskQuotaAllowed({
     };
   }
 
+  // Persist versioned desired state before consulting the durable ledger.
+  // This repairs ledgers bootstrapped from stale legacy disk/scratch columns,
+  // while upsertProject still rejects genuinely different run_quota JSON at
+  // the same revision.
+  if (run_quota_revision != null) {
+    upsertProject({ project_id, run_quota, run_quota_revision });
+  }
+
   const ledgerMode = projectQuotaLedgerMode();
   const reconcile = async ({
     volume_kind,

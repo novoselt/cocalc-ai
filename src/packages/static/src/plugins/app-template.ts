@@ -7,6 +7,7 @@ import {
 
 const PUBLIC_HEAD_TEMPLATE_TOKEN = "<!-- cocalc-public-head-placeholder -->";
 const PUBLIC_BODY_TEMPLATE_TOKEN = "<!-- cocalc-public-body-placeholder -->";
+const ENTRY_TEMPLATE_TOKEN = "<!-- cocalc-entry-placeholder -->";
 
 function replaceExactlyOnce(
   template: string,
@@ -24,11 +25,11 @@ function replaceExactlyOnce(
   );
 }
 
-export function renderAppTemplate(): string {
+export function renderAppTemplate(entry = "unknown"): string {
   const template = readFileSync(resolve(__dirname, "../app.html"), "utf8");
   return replaceExactlyOnce(
     replaceExactlyOnce(
-      template,
+      replaceExactlyOnce(template, ENTRY_TEMPLATE_TOKEN, entry),
       PUBLIC_HEAD_TEMPLATE_TOKEN,
       PUBLIC_HEAD_PLACEHOLDER,
     ),

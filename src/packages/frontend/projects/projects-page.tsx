@@ -38,6 +38,7 @@ import { ProjectsTableControls } from "./projects-table-controls";
 import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
 import { ProjectDrawer } from "./project-drawer";
 import ProjectsPageTour from "./tour";
+import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
 import { getVisibleProjects } from "./util";
 import { FilenameSearch } from "./filename-search";
 import { MobileProjectsList } from "./mobile-projects-list";
@@ -443,6 +444,11 @@ export const ProjectsPage: React.FC = () => {
       actions.ensure_host_info(hostId);
     });
   }, [project_map]);
+
+  useEffect(() => {
+    if (activeTopTab !== "projects" || project_map == null) return;
+    return recordSignedInSurfaceReady("projects");
+  }, [activeTopTab, project_map]);
 
   function handleCreateProject() {
     if (createProjectDisabled) return;

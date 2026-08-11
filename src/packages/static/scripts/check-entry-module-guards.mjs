@@ -24,6 +24,13 @@ const loadAndAppForbidden = [
   "@uiw/react-textarea-code-editor/",
 ];
 
+const initialProjectSurfaceForbidden = [
+  "frontend/project/compute-vms.tsx",
+  "frontend/project/new/new-file-page.tsx",
+  "frontend/project/page/flyouts/agents.tsx",
+  "frontend/project/page/flyouts/workspaces.tsx",
+];
+
 const publicViewerForbidden = [
   "frontend/chat/chatroom.tsx",
   "frontend/project_actions.ts",
@@ -58,6 +65,11 @@ const rules = [
     label: "shared/load and main app chunks",
     chunks: ["load", "app", "embed"],
     forbidden: loadAndAppForbidden,
+  },
+  {
+    label: "initial project surface chunks",
+    chunks: ["app", "embed"],
+    forbidden: initialProjectSurfaceForbidden,
   },
   {
     label: "public viewer and public site chunks",
@@ -110,6 +122,30 @@ function ensureChunk(name) {
   return chunk;
 }
 
+function findImporterPath(chunk, target, maxDepth = 12) {
+  const importers = chunk?.importers ?? {};
+  const queue = [[target]];
+  const visited = new Set([target]);
+  let longest = [target];
+
+  while (queue.length > 0) {
+    const path = queue.shift();
+    if (path.length > longest.length) longest = path;
+    const current = path[path.length - 1];
+    const incoming = importers[current] ?? [];
+    if (incoming.length === 0 || path.length >= maxDepth) {
+      return [...path].reverse();
+    }
+    for (const importer of incoming) {
+      if (visited.has(importer)) continue;
+      visited.add(importer);
+      queue.push([...path, importer]);
+    }
+  }
+
+  return [...longest].reverse();
+}
+
 for (const rule of rules) {
   for (const chunkName of rule.chunks) {
     const chunk = ensureChunk(chunkName);
@@ -124,6 +160,10 @@ for (const rule of rules) {
           `${chunkName}: matched forbidden module pattern "${pattern}" in ${rule.label}`,
         );
         console.error(`  ${match}`);
+        const importPath = findImporterPath(chunk, match);
+        if (importPath.length > 1) {
+          console.error(`  import path: ${importPath.join(" -> ")}`);
+        }
       }
     }
   }
