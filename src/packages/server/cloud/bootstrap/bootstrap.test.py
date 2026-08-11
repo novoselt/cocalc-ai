@@ -3764,7 +3764,13 @@ reserve_project_startup_io_capacity
                 ],
             )
             self.assertIn(
-                "Before=cocalc-project-host-start.service",
+                "Before=cocalc-project-host-start.service podman-restart.service",
+                written[
+                    "/etc/systemd/system/cocalc-project-host-prepare.service"
+                ],
+            )
+            self.assertIn(
+                "Conflicts=podman-restart.service",
                 written[
                     "/etc/systemd/system/cocalc-project-host-prepare.service"
                 ],
@@ -3811,6 +3817,32 @@ reserve_project_startup_io_capacity
                 (
                     ["systemctl", "daemon-reload"],
                     "reload systemd",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    ["systemctl", "disable", "podman-restart.service"],
+                    "disable system Podman container restart service",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    ["systemctl", "mask", "podman-restart.service"],
+                    "mask system Podman container restart service",
+                ),
+                recorded,
+            )
+            self.assertIn(
+                (
+                    [
+                        "systemctl",
+                        "reset-failed",
+                        "podman-restart.service",
+                        "cocalc-project-host-prepare.service",
+                    ],
+                    "clear stale Podman boot preparation failures",
                 ),
                 recorded,
             )
