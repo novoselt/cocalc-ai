@@ -900,6 +900,16 @@ describe("PublicApp", () => {
         name: "Table 3: Success Criteria, Level AAA",
       }),
     ).toBeNull();
+    const orientationRow = within(tables[2])
+      .getByRole("rowheader", { name: /1\.3\.4 Orientation/ })
+      .closest("tr");
+    expect(orientationRow).not.toBeNull();
+    expect(
+      within(orientationRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(orientationRow!).getByText(/390 CSS-pixel portrait viewport/),
+    ).not.toBeNull();
     const draggingRow = within(tables[2])
       .getByRole("rowheader", { name: /2\.5\.7 Dragging Movements/ })
       .closest("tr");
