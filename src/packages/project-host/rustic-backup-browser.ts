@@ -6,6 +6,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 
 import getPort from "@cocalc/backend/get-port";
 import getLogger from "@cocalc/backend/logger";
@@ -23,10 +24,9 @@ const START_TIMEOUT_MS = 2 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30 * 1000;
 const MAX_DAV_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES = 50_000;
-const MAX_SEARCH_DIRECTORIES = 10_000;
-const MAX_SEARCH_ENTRIES = 100_000;
 const MAX_SEARCH_RESULTS = 10_000;
-const MAX_SEARCH_TIME_MS = 30 * 1000;
+const MAX_SEARCH_OUTPUT_BYTES = 64 * 1024 * 1024;
+const MAX_SEARCH_TIME_MS = 45 * 1000;
 const MAX_HELPER_AGE_MS = 30 * 60 * 1000;
 const HELPER_IDLE_MS = 15 * 60 * 1000;
 const IDLE_SWEEP_MS = 60 * 1000;
@@ -86,6 +86,7 @@ interface ManagerOptions {
   ) => Promise<Omit<BrowserInstance, "lastUsed" | "stale" | "stopping">>;
   now?: () => number;
   idleSweep?: boolean;
+  find?: typeof runRusticFind;
 }
 
 export class BackupBrowserHttpError extends Error {
@@ -448,118 +449,6 @@ export class RusticWebDavClient {
       (entry) => entry.name === name,
     );
   }
-
-  async find({
-    projectId,
-    glob,
-    iglob,
-    path,
-    ids,
-  }: {
-    projectId: string;
-    glob?: string[];
-    iglob?: string[];
-    path?: string;
-    ids?: string[];
-  }): Promise<BackupBrowserSearchResult[]> {
-    if (!glob?.length && !iglob?.length) return [];
-    const exactMatchers = (glob ?? []).map(globMatcher);
-    const insensitiveMatchers = (iglob ?? []).map((pattern) =>
-      globMatcher(pattern.toLowerCase()),
-    );
-    const allowedIds = ids?.length ? new Set(ids) : undefined;
-    const snapshots = (await this.listBackups(projectId)).filter(
-      ({ id }) => !allowedIds || allowedIds.has(id),
-    );
-    const scope = normalizeBackupPath(path);
-    const deadline = Date.now() + MAX_SEARCH_TIME_MS;
-    const results: BackupBrowserSearchResult[] = [];
-    let directories = 0;
-    let entriesSeen = 0;
-
-    for (const snapshot of snapshots) {
-      const queue = [scope];
-      while (queue.length) {
-        if (Date.now() > deadline) {
-          throw new BackupBrowserLimitError(
-            "backup search exceeded 30 seconds; narrow the path or snapshots",
-          );
-        }
-        if (++directories > MAX_SEARCH_DIRECTORIES) {
-          throw new BackupBrowserLimitError(
-            `backup search exceeded ${MAX_SEARCH_DIRECTORIES.toLocaleString()} directories; narrow the path or snapshots`,
-          );
-        }
-        const parent = queue.shift()!;
-        const entries = await this.listDirectory({
-          projectId,
-          id: snapshot.id,
-          path: parent,
-        });
-        entriesSeen += entries.length;
-        if (entriesSeen > MAX_SEARCH_ENTRIES) {
-          throw new BackupBrowserLimitError(
-            `backup search exceeded ${MAX_SEARCH_ENTRIES.toLocaleString()} entries; narrow the path or snapshots`,
-          );
-        }
-        for (const entry of entries) {
-          const entryPath = parent ? `${parent}/${entry.name}` : entry.name;
-          if (entry.isDir) queue.push(entryPath);
-          const matches =
-            exactMatchers.some((match) => match.test(entryPath)) ||
-            insensitiveMatchers.some((match) =>
-              match.test(entryPath.toLowerCase()),
-            );
-          if (!matches) continue;
-          results.push({
-            ...entry,
-            id: snapshot.id,
-            time: snapshot.time,
-            path: entryPath,
-          });
-          if (results.length > MAX_SEARCH_RESULTS) {
-            throw new BackupBrowserLimitError(
-              `backup search found more than ${MAX_SEARCH_RESULTS.toLocaleString()} results; use a narrower pattern`,
-            );
-          }
-        }
-      }
-    }
-    return results;
-  }
-}
-
-function normalizeGlob(pattern: string): string {
-  return `${pattern ?? ""}`
-    .replace(/\\/g, "/")
-    .replace(/^\/+/, "")
-    .replace(/^\.\/+/, "");
-}
-
-function globMatcher(pattern: string): RegExp {
-  const input = normalizeGlob(pattern);
-  let source = "^";
-  for (let i = 0; i < input.length; i++) {
-    const char = input[i];
-    if (char === "*") {
-      source += ".*";
-    } else if (char === "?") {
-      source += ".";
-    } else if (char === "[") {
-      const end = input.indexOf("]", i + 1);
-      if (end < 0) {
-        source += "\\[";
-      } else {
-        let content = input.slice(i + 1, end);
-        if (content.startsWith("!")) content = `^${content.slice(1)}`;
-        source += `[${content.replace(/\\/g, "\\\\")}]`;
-        i = end;
-      }
-    } else {
-      source += char.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
-    }
-  }
-  return new RegExp(`${source}$`);
 }
 
 function captureProcessLog(child: ChildProcess): () => string {
@@ -576,6 +465,330 @@ function profileArgument(profilePath: string): string {
   return profilePath.endsWith(".toml")
     ? profilePath.slice(0, -".toml".length)
     : profilePath;
+}
+
+function normalizeGlob(pattern: string): string {
+  return `${pattern ?? ""}`
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/^\.\/+/, "");
+}
+
+function hasGlobMeta(pattern: string): boolean {
+  return /[*?[]/.test(pattern);
+}
+
+const MONTHS: Record<string, number> = {
+  Jan: 0,
+  Feb: 1,
+  Mar: 2,
+  Apr: 3,
+  May: 4,
+  Jun: 5,
+  Jul: 6,
+  Aug: 7,
+  Sep: 8,
+  Oct: 9,
+  Nov: 10,
+  Dec: 11,
+};
+
+function parseRusticFindEntry(line: string):
+  | (BackupBrowserEntry & {
+      path: string;
+    })
+  | null {
+  const match = line.match(
+    /^(\S{10})\s+\S+\s+\S+\s+(\d+)\s+(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{2}):(\d{2})\s+("(?:\\.|[^"\\])*")(?:\s+->.*)?\s*$/,
+  );
+  if (!match) return null;
+  const [, mode, rawSize, rawDay, monthName, rawYear, rawHour, rawMinute] =
+    match;
+  const month = MONTHS[monthName];
+  if (month == null) return null;
+  let path: string;
+  try {
+    path = normalizeBackupPath(JSON.parse(match[8]));
+  } catch {
+    return null;
+  }
+  if (!path) return null;
+  const mtime = Date.UTC(
+    Number(rawYear),
+    month,
+    Number(rawDay),
+    Number(rawHour),
+    Number(rawMinute),
+  );
+  return {
+    name: path.slice(path.lastIndexOf("/") + 1),
+    path,
+    isDir: mode.startsWith("d"),
+    mtime,
+    size: Number(rawSize),
+  };
+}
+
+export class RusticFindOutputParser {
+  private readonly decoder = new StringDecoder("utf8");
+  private readonly snapshotById: Map<string, BackupBrowserSnapshot>;
+  private readonly scope: string;
+  private readonly seen = new Set<string>();
+  private buffer = "";
+  private group: BackupBrowserSnapshot[] = [];
+  private groupHasEntries = false;
+  readonly results: BackupBrowserSearchResult[] = [];
+
+  constructor(snapshots: BackupBrowserSnapshot[], scope?: string) {
+    this.snapshotById = new Map(
+      snapshots.map((snapshot) => [snapshot.id, snapshot]),
+    );
+    this.scope = normalizeBackupPath(scope);
+  }
+
+  push(chunk: Buffer): void {
+    this.buffer += this.decoder.write(chunk);
+    this.consumeLines();
+  }
+
+  finish(): BackupBrowserSearchResult[] {
+    this.buffer += this.decoder.end();
+    this.consumeLines(true);
+    return this.results;
+  }
+
+  private consumeLines(final = false): void {
+    while (true) {
+      const index = this.buffer.indexOf("\n");
+      if (index < 0) break;
+      const line = this.buffer.slice(0, index).replace(/\r$/, "");
+      this.buffer = this.buffer.slice(index + 1);
+      this.consumeLine(line);
+    }
+    if (final && this.buffer) {
+      this.consumeLine(this.buffer.replace(/\r$/, ""));
+      this.buffer = "";
+    }
+  }
+
+  private snapshotForPrefix(prefix: string): BackupBrowserSnapshot {
+    const matches = [...this.snapshotById.values()].filter(({ id }) =>
+      id.startsWith(prefix),
+    );
+    if (matches.length !== 1) {
+      throw new Error(
+        `Rustic search returned ambiguous snapshot prefix ${prefix}`,
+      );
+    }
+    return matches[0];
+  }
+
+  private consumeLine(line: string): void {
+    const header = line.match(/^found in ([0-9a-f]{8,64}) from /);
+    if (header) {
+      if (this.groupHasEntries) this.group = [];
+      this.groupHasEntries = false;
+      this.group.push(this.snapshotForPrefix(header[1]));
+      return;
+    }
+    const entry = parseRusticFindEntry(line);
+    if (!entry) {
+      if (/^[bcdlps-][rwxStTs-]{9}\s/.test(line)) {
+        throw new Error(`unable to parse Rustic search result: ${line}`);
+      }
+      return;
+    }
+    if (!this.group.length) {
+      throw new Error("Rustic search returned a file without a snapshot");
+    }
+    this.groupHasEntries = true;
+    if (
+      this.scope &&
+      entry.path !== this.scope &&
+      !entry.path.startsWith(`${this.scope}/`)
+    ) {
+      return;
+    }
+    for (const snapshot of this.group) {
+      const key = `${snapshot.id}\0${entry.path}`;
+      if (this.seen.has(key)) continue;
+      this.seen.add(key);
+      this.results.push({
+        ...entry,
+        id: snapshot.id,
+        time: snapshot.time,
+      });
+      if (this.results.length > MAX_SEARCH_RESULTS) {
+        throw new BackupBrowserLimitError(
+          `backup search found more than ${MAX_SEARCH_RESULTS.toLocaleString()} results; use a narrower pattern`,
+        );
+      }
+    }
+  }
+}
+
+function rusticFindArgs({
+  profilePath,
+  snapshots,
+  glob,
+  iglob,
+}: {
+  profilePath: string;
+  snapshots: BackupBrowserSnapshot[];
+  glob?: string[];
+  iglob?: string[];
+}): string[] {
+  const exactPatterns = (glob ?? []).map(normalizeGlob).filter(Boolean);
+  const insensitivePatterns = (iglob ?? []).map(normalizeGlob).filter(Boolean);
+  const args = [
+    "--no-progress",
+    "--show-time-offset",
+    "-P",
+    profileArgument(profilePath),
+    "find",
+    "--all",
+  ];
+  if (
+    exactPatterns.length === 1 &&
+    !insensitivePatterns.length &&
+    !hasGlobMeta(exactPatterns[0])
+  ) {
+    args.push(`--path=${exactPatterns[0]}`);
+  } else {
+    for (const pattern of exactPatterns) args.push(`--glob=${pattern}`);
+    for (const pattern of insensitivePatterns) args.push(`--iglob=${pattern}`);
+  }
+  args.push(...snapshots.map(({ id }) => id));
+  return args;
+}
+
+async function runRusticFind({
+  profilePath,
+  snapshots,
+  glob,
+  iglob,
+  path,
+}: {
+  profilePath: string;
+  snapshots: BackupBrowserSnapshot[];
+  glob?: string[];
+  iglob?: string[];
+  path?: string;
+}): Promise<BackupBrowserSearchResult[]> {
+  if (!snapshots.length || (!glob?.length && !iglob?.length)) return [];
+  const parser = new RusticFindOutputParser(snapshots, path);
+  const args = rusticFindArgs({ profilePath, snapshots, glob, iglob });
+  const supervisor = [
+    "read -r _ <&3 || exit 125",
+    'parent_pid="$1"',
+    "shift",
+    '"$@" &',
+    'rustic_pid="$!"',
+    "trap 'kill -TERM \"$rustic_pid\" 2>/dev/null || true' TERM INT EXIT",
+    'while kill -0 "$rustic_pid" 2>/dev/null; do',
+    '  if ! kill -0 "$parent_pid" 2>/dev/null; then',
+    '    kill -TERM "$rustic_pid" 2>/dev/null || true',
+    "    break",
+    "  fi",
+    "  sleep 2",
+    "done",
+    'wait "$rustic_pid"',
+  ].join("\n");
+  const child = spawn(
+    "/bin/bash",
+    [
+      "-c",
+      supervisor,
+      "cocalc-rustic-find",
+      `${process.pid}`,
+      rusticPath,
+      ...args,
+    ],
+    {
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
+      env: process.env,
+    },
+  );
+  const gate = child.stdio[3];
+  if (!child.pid || !gate || typeof (gate as any).write !== "function") {
+    child.kill("SIGKILL");
+    throw new Error("unable to create gated Rustic backup search");
+  }
+  if (!attachBackupBrowserProcessToCgroup({ pid: child.pid })) {
+    child.kill("SIGKILL");
+    throw new Error(
+      "unable to isolate Rustic backup search; reconcile the project host bootstrap",
+    );
+  }
+  child.once("close", () => {
+    removeBackupBrowserProcessCgroup({ pid: child.pid! });
+  });
+  (gate as NodeJS.WritableStream).write("start\n");
+  (gate as NodeJS.WritableStream).end();
+
+  return await new Promise<BackupBrowserSearchResult[]>((resolve, reject) => {
+    let outputBytes = 0;
+    let stderr = "";
+    let fatal: Error | undefined;
+    const stop = (err: Error) => {
+      if (fatal) return;
+      fatal = err;
+      child.kill("SIGTERM");
+      const killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      killTimer.unref();
+    };
+    const timer = setTimeout(
+      () =>
+        stop(
+          new BackupBrowserLimitError(
+            `backup search exceeded ${MAX_SEARCH_TIME_MS / 1000} seconds; narrow the pattern or search path`,
+          ),
+        ),
+      MAX_SEARCH_TIME_MS,
+    );
+    timer.unref();
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (fatal) return;
+      outputBytes += chunk.length;
+      if (outputBytes > MAX_SEARCH_OUTPUT_BYTES) {
+        stop(
+          new BackupBrowserLimitError(
+            `backup search output exceeded ${MAX_SEARCH_OUTPUT_BYTES / 1024 / 1024} MiB; narrow the pattern`,
+          ),
+        );
+        return;
+      }
+      try {
+        parser.push(chunk);
+      } catch (err) {
+        stop(err instanceof Error ? err : new Error(`${err}`));
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr = `${stderr}${chunk}`.slice(-16_000);
+    });
+    child.once("error", (err) => stop(err));
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      if (fatal) {
+        reject(fatal);
+        return;
+      }
+      if (code !== 0) {
+        reject(
+          new Error(
+            `Rustic backup search exited with ${signal ? `signal ${signal}` : `code ${code}`}${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
+          ),
+        );
+        return;
+      }
+      try {
+        resolve(parser.finish());
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
 }
 
 async function startBrowserProcess(
@@ -691,14 +904,17 @@ export class RusticBackupBrowserManager {
   private readonly instances = new Map<string, BrowserInstance>();
   private readonly starts = new Map<string, Promise<BrowserInstance>>();
   private startTail: Promise<unknown> = Promise.resolve();
+  private searchTail: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly start: NonNullable<ManagerOptions["start"]>;
+  private readonly findNative: NonNullable<ManagerOptions["find"]>;
   private readonly idleTimer?: NodeJS.Timeout;
   private closed = false;
 
   constructor(options: ManagerOptions = {}) {
     this.now = options.now ?? Date.now;
     this.start = options.start ?? startBrowserProcess;
+    this.findNative = options.find ?? runRusticFind;
     if (options.idleSweep !== false) {
       this.idleTimer = setInterval(() => this.stopIdle(), IDLE_SWEEP_MS);
       this.idleTimer.unref();
@@ -751,6 +967,20 @@ export class RusticBackupBrowserManager {
         throw new Error("Rustic repository browser is closed");
       }
       return instance;
+    } finally {
+      release();
+    }
+  }
+
+  private async searchSerialized<T>(run: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    const previous = this.searchTail;
+    this.searchTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => undefined);
+    try {
+      return await run();
     } finally {
       release();
     }
@@ -854,7 +1084,20 @@ export class RusticBackupBrowserManager {
   }): Promise<BackupBrowserSearchResult[]> {
     const instance = await this.get(profilePath);
     instance.lastUsed = this.now();
-    return await instance.client.find({ projectId, glob, iglob, path, ids });
+    const allowedIds = ids?.length ? new Set(ids) : undefined;
+    const snapshots = (await instance.client.listBackups(projectId)).filter(
+      ({ id }) => !allowedIds || allowedIds.has(id),
+    );
+    return await this.searchSerialized(
+      async () =>
+        await this.findNative({
+          profilePath,
+          snapshots,
+          glob,
+          iglob,
+          path,
+        }),
+    );
   }
 
   close(): void {
@@ -870,9 +1113,11 @@ export const rusticBackupBrowser = new RusticBackupBrowserManager();
 
 export const __test__ = {
   childEntries,
-  globMatcher,
+  hasGlobMeta,
   normalizeBackupPath,
+  parseRusticFindEntry,
   parseSnapshotSegment,
+  rusticFindArgs,
   MAX_DAV_RESPONSE_BYTES,
   MAX_DIRECTORY_ENTRIES,
   SNAPSHOT_PATH_TEMPLATE,

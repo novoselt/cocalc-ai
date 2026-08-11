@@ -8,6 +8,7 @@ import type { Client as ConatClient } from "@cocalc/conat/core/client";
 import type { FileTextPreview } from "@cocalc/conat/files/file-server";
 
 const SERVICE_NAME = "archive-info";
+const BACKUP_SEARCH_TIMEOUT_MS = 2 * 60_000;
 
 export interface BackupSummary {
   id: string;
@@ -115,7 +116,9 @@ export async function findBackupFiles({
   ids?: string[];
 }): Promise<BackupFindResult[]> {
   return await requireExplicitConatClient(client)
-    .call<Api>(getSubject({ project_id }))
+    .call<Api>(getSubject({ project_id }), {
+      timeout: BACKUP_SEARCH_TIMEOUT_MS,
+    })
     .findBackupFiles({ glob, iglob, path, ids });
 }
 

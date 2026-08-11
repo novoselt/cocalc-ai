@@ -253,6 +253,7 @@ export function BackupsTab({
           project_id,
           glob: state.caseSensitive ? [normalized] : undefined,
           iglob: state.caseSensitive ? undefined : [normalized],
+          path: backupScopePath || undefined,
           ids: backupIds && backupIds.length ? backupIds : undefined,
         };
         const raw = await findBackupFiles(payload);

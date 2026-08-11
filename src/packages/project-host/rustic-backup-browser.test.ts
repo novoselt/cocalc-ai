@@ -6,6 +6,7 @@ import {
   __test__,
   parseDavEntries,
   repositoryIdentityFromProfile,
+  RusticFindOutputParser,
   RusticWebDavClient,
 } from "./rustic-backup-browser";
 
@@ -80,7 +81,7 @@ secret_access_key = "first-secret"
     ]);
   });
 
-  it("parses stable snapshot paths and SQLite-style glob patterns", () => {
+  it("parses stable snapshot paths", () => {
     expect(
       __test__.parseSnapshotSegment(
         "20260810T053214+0000--SnapshotId(85b85e9688da026e4951c68d01b6edaac83068e3c85470f0728ec932272bf9b9)",
@@ -100,12 +101,98 @@ secret_access_key = "first-secret"
         id: "85b85e9688da026e4951c68d01b6edaac83068e3c85470f0728ec932272bf9b9",
       }),
     );
-    expect(__test__.globMatcher("docs/*.md").test("docs/a/b.md")).toBe(true);
-    expect(__test__.globMatcher("src/file?.[tj]s").test("src/file1.ts")).toBe(
-      true,
+  });
+
+  it("parses native Rustic find groups and preserves changed metadata", () => {
+    const first = {
+      id: "a".repeat(64),
+      time: new Date("2026-08-01T00:00:00Z"),
+      summary: {},
+    };
+    const second = {
+      id: "b".repeat(64),
+      time: new Date("2026-08-02T00:00:00Z"),
+      summary: {},
+    };
+    const third = {
+      id: "c".repeat(64),
+      time: new Date("2026-08-03T00:00:00Z"),
+      summary: {},
+    };
+    const parser = new RusticFindOutputParser([first, second, third]);
+    parser.push(
+      Buffer.from(
+        [
+          "searching in snapshots group (...)...",
+          `found in ${first.id.slice(0, 8)} from 2026-08-01 00:00:00+0000`,
+          '-rw-r--r-- user group        49 23 Jul 2026 16:23 "docs/a file.txt" ',
+          `found in ${second.id.slice(0, 8)} from 2026-08-02 00:00:00+0000`,
+          `found in ${third.id.slice(0, 8)} from 2026-08-03 00:00:00+0000`,
+          '-rw-r--r-- user group        72 24 Jul 2026 17:24 "docs/a file.txt" ',
+          "",
+        ].join("\n"),
+      ),
     );
-    expect(__test__.globMatcher("src/file?.[tj]s").test("src/file10.ts")).toBe(
-      false,
+    expect(parser.finish()).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        path: "docs/a file.txt",
+        size: 49,
+        mtime: Date.UTC(2026, 6, 23, 16, 23),
+      }),
+      expect.objectContaining({
+        id: second.id,
+        path: "docs/a file.txt",
+        size: 72,
+      }),
+      expect.objectContaining({
+        id: third.id,
+        path: "docs/a file.txt",
+        size: 72,
+      }),
+    ]);
+  });
+
+  it("uses Rustic exact-path lookup when the glob has no metacharacters", () => {
+    const snapshots = [
+      {
+        id: "d".repeat(64),
+        time: new Date("2026-08-01T00:00:00Z"),
+        summary: {},
+      },
+    ];
+    expect(
+      __test__.rusticFindArgs({
+        profilePath: "/tmp/repo.toml",
+        snapshots,
+        glob: ["docs/file.tex"],
+      }),
+    ).toContain("--path=docs/file.tex");
+    expect(
+      __test__.rusticFindArgs({
+        profilePath: "/tmp/repo.toml",
+        snapshots,
+        iglob: ["*file*"],
+      }),
+    ).toContain("--iglob=*file*");
+  });
+
+  it("parses directories and symlinks from Rustic find output", () => {
+    expect(
+      __test__.parseRusticFindEntry(
+        'drwxr-xr-x user group         0 10 Aug 2026 05:10 "docs" ',
+      ),
+    ).toEqual(expect.objectContaining({ path: "docs", isDir: true, size: 0 }));
+    expect(
+      __test__.parseRusticFindEntry(
+        'lrwxrwxrwx user group        15 10 Aug 2026 05:10 "latest notes" -> docs/notes.txt',
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        path: "latest notes",
+        isDir: false,
+        size: 15,
+      }),
     );
   });
 });
@@ -122,7 +209,7 @@ describe("RusticWebDavClient", () => {
       }),
   );
 
-  it("lists snapshots, browses directories, and performs bounded search", async () => {
+  it("lists snapshots and browses directories", async () => {
     const projectId = "11111111-1111-4111-8111-111111111111";
     const host = `project-${projectId}`;
     const id = "a".repeat(64);
@@ -188,14 +275,5 @@ describe("RusticWebDavClient", () => {
     expect(
       await client.getEntry({ projectId, id, path: "docs/guide.md" }),
     ).toEqual(expect.objectContaining({ name: "guide.md", size: 99 }));
-    expect(
-      await client.find({ projectId, ids: [id], glob: ["docs/*.md"] }),
-    ).toEqual([
-      expect.objectContaining({
-        id,
-        path: "docs/guide.md",
-        size: 99,
-      }),
-    ]);
   });
 });
