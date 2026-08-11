@@ -155,8 +155,10 @@ export default function OctaveFeaturePage({
       <PublicSection>
         <FeatureInfo
           accent={COLORS.FEATURE_TEAL}
+          alt="An Octave notebook integrating a function symbolically and plotting it with its antiderivative"
           anchor="a-image"
           icon="cube"
+          image="cocalc-octave-symbolic-20260811.png"
           title="Octave, with the packages you expect"
         >
           <Paragraph>
@@ -179,10 +181,10 @@ export default function OctaveFeaturePage({
       <PublicSection>
         <FeatureInfo
           accent={COLORS.FEATURE_OCTAVE_BLUE}
-          alt="A Jupyter notebook running the GNU Octave kernel in CoCalc"
+          alt="A 3D sombrero surface plotted by Octave in a CoCalc Jupyter notebook"
           anchor="a-notebooks"
           icon="jupyter"
-          image="cocalc-octave-jupyter-20200511.png"
+          image="cocalc-octave-sombrero-20260811.png"
           title="Octave in Jupyter notebooks"
         >
           <Paragraph>

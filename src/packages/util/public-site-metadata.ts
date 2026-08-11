@@ -127,9 +127,9 @@ const PUBLIC_IMAGE_DIMENSIONS: Record<string, PublicImageDimensions> = {
     height: 908,
     width: 1605,
   },
-  "/public/features/cocalc-octave-jupyter-20200511.png": {
-    height: 672,
-    width: 1065,
+  "/public/features/cocalc-octave-sombrero-20260811.png": {
+    height: 728,
+    width: 996,
   },
   "/public/features/cocalc-r-hero-ggplot2-20260731.png": {
     height: 817,

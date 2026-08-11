@@ -410,7 +410,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
       "Use GNU Octave for MATLAB-style numerical computing in collaborative projects with notebooks, .m files, terminals, plots, and teaching workflows.",
     metadataSummary:
       "Run GNU Octave online in a CoCalc Linux project: start on the Octave image with its common packages, use Octave as the default Jupyter kernel, edit .m files collaboratively, and keep TimeTravel history and snapshots.",
-    image: "/public/features/cocalc-octave-jupyter-20200511.png",
+    image: "/public/features/cocalc-octave-sombrero-20260811.png",
     index: true,
     sections: [
       {
