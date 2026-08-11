@@ -15,7 +15,11 @@ obsolete VM disks. The old legacy blob sources are not deletion targets yet.
 
 ## Current Cost Signal
 
-Input: August 2026 billing CSV uploaded under `/home/user/scratch`.
+Inputs:
+
+- August 2026 billing CSV uploaded under `/home/user/scratch`.
+- Cloud Monitoring bucket metrics queried after authenticating as
+  `wstein@sagemath.com` against GCP project `sage-math-inc`.
 
 The report appears to contain mainly the first 10 days of August. The SKU-level
 Cloud Storage subtotal is 266.95 USD for the report window.
@@ -41,9 +45,25 @@ Assuming this is approximately 10 days of a 31-day month:
 - Combined old project bucket monthly equivalent: about 790 USD/month.
 - Implied stored size: roughly 50 TiB Nearline plus 67 TiB Coldline, about 117 TiB total.
 
-If the report window is closer to 11 days, the combined monthly equivalent is
-about 715 USD/month. The correct conclusion is not sensitive to that ambiguity:
-the old project buckets are burning roughly 25 USD/day.
+After resolving the exact current bucket metrics from Cloud Monitoring:
+
+| Bucket                            | Class    | Current size | Object count |
+| --------------------------------- | -------- | -----------: | -----------: |
+| `kucalc-prod2-storage-streams`    | Coldline |    74.69 TiB |   36,758,197 |
+| `kucalc-prod2-archived-projects`  | Nearline |    55.66 TiB |    4,202,162 |
+| combined old project bucket total | mixed    |   130.35 TiB |   40,960,359 |
+
+Using the observed SKU rates in the billing report:
+
+- Coldline South Carolina is exactly about 0.004 USD/GiB-month.
+- Nearline South Carolina is exactly about 0.010 USD/GiB-month.
+- `kucalc-prod2-storage-streams` is about 306 USD/month.
+- `kucalc-prod2-archived-projects` is about 570 USD/month.
+- Combined old project bucket storage is about 876 USD/month, or about
+  29 USD/day.
+
+The billing CSV usage divided by current bucket size implies the report covers
+about 9 days of storage, which explains the earlier rough 10-day extrapolation.
 
 Other visible report costs:
 
@@ -60,9 +80,22 @@ Recommended decision:
 2. Delete `kucalc-prod2-archived-projects`.
 3. Keep the old blob sources until the R2 blob plan reaches its own cleanup
    gate:
-   - old `smc-blobs` bucket;
-   - old database VM/disk or a verified export sufficient to recover blob
-     bytes and metadata.
+
+- old `smc-blobs` bucket;
+- old database VM/disk or a verified export sufficient to recover blob
+  bytes and metadata.
+
+Current `smc-blobs` metrics:
+
+| Storage class                | Current size | Object count |
+| ---------------------------- | -----------: | -----------: |
+| Durable Reduced Availability |    29.47 GiB |      496,075 |
+| Multi-Regional               |   178.51 GiB |    4,017,503 |
+| Nearline                     |     1.24 TiB |   19,192,273 |
+| `smc-blobs` total            |     1.45 TiB |   23,705,851 |
+
+This confirms `smc-blobs` is much smaller than the old project buckets, but it
+contains the unresolved legacy blob corpus and should not be deleted yet.
 
 Rationale:
 
@@ -106,6 +139,21 @@ gcloud storage du --summarize --readable-sizes --all-versions \
 
 6. Verify and update `gcloud` auth. The current local config was observed to
    fail refreshing `cocalc-rocket-bootstrap@projecthosts.iam.gserviceaccount.com`.
+
+On 2026-08-11, `gcloud auth login --no-launch-browser` restored access as
+`wstein@sagemath.com`. The bucket-owning project is `sage-math-inc`, not
+`projecthosts`.
+
+Current bucket protection state:
+
+| Bucket                           | Versioning | Soft Delete | Lifecycle state                         |
+| -------------------------------- | ---------- | ----------- | --------------------------------------- |
+| `kucalc-prod2-storage-streams`   | enabled    | 30 days     | deletes noncurrent versions after 1 day |
+| `kucalc-prod2-archived-projects` | enabled    | 30 days     | deletes older noncurrent versions       |
+| `smc-blobs`                      | enabled    | 30 days     | deletes older noncurrent versions       |
+
+There is no retention policy shown in the bucket metadata for the two project
+cleanup buckets.
 
 ## Efficient GCS Bucket Deletion Strategy
 
@@ -167,10 +215,112 @@ Important billing caveats:
 Inventory before deleting:
 
 ```sh
-gcloud compute instances list
-gcloud compute disks list --sort-by=~sizeGb
+gcloud compute instances list --project=sage-math-inc
+gcloud compute disks list --project=sage-math-inc --sort-by=~sizeGb
 gcloud compute snapshots list --sort-by=~creationTimestamp
 ```
+
+Current visible VM/disk inventory in `sage-math-inc`:
+
+| Instance                | Zone         | Status     | Machine type    | Notes                                                    |
+| ----------------------- | ------------ | ---------- | --------------- | -------------------------------------------------------- |
+| `m1-sagemath-org`       | `us-west1-b` | running    | `f1-micro`      | likely unrelated small host                              |
+| `kucalc-prod3-ctl-hsy`  | `us-east1-d` | running    | `e2-standard-4` | legacy recovery host; attached to blob/db recovery disks |
+| `kucalc-prod3-ctl`      | `us-east1-d` | terminated | `n2-highmem-2`  | old control VM                                           |
+| `kucalc-prod3-ctl-ws-3` | `us-east1-d` | terminated | `n2d-highmem-4` | old worker/control VM                                    |
+| `kucalc-prod3-master`   | `us-east1-d` | terminated | `n1-standard-4` | old master VM                                            |
+
+Largest disks:
+
+| Disk                    |   Size | Type          | Attached to            |
+| ----------------------- | -----: | ------------- | ---------------------- |
+| `shares-recovery`       | 675 GB | `pd-standard` | `kucalc-prod3-ctl-hsy` |
+| `prod3-db-archive`      | 300 GB | `pd-standard` | `kucalc-prod3-ctl-hsy` |
+| `kucalc-prod3-ctl-ws-3` | 300 GB | `pd-standard` | terminated VM          |
+| `kucalc-prod3-master`   | 133 GB | `pd-standard` | terminated VM          |
+| `kucalc-prod3-ctl`      | 100 GB | `pd-standard` | terminated VM          |
+| `kucalc-prod3-ctl-hsy`  | 100 GB | `pd-balanced` | running recovery VM    |
+| `m1-sagemath-org`       |  10 GB | `pd-balanced` | running small VM       |
+
+## Old Compute Servers Project
+
+The old "compute servers" product used a separate GCP project:
+
+```text
+cocalccomputeservers-398318
+```
+
+Current decision from William: preserve exactly one running VM and its disk.
+Everything else in that project is a cleanup candidate.
+
+Current VM/disk state:
+
+| Resource                              | State                             |
+| ------------------------------------- | --------------------------------- |
+| VM `prod-5155` in `us-east5-a`        | running, preserve                 |
+| Disk `prod-5155`, 60 GB `pd-standard` | attached to `prod-5155`, preserve |
+| Other VM instances                    | none found                        |
+| Other persistent disks                | none found                        |
+| Static external addresses             | none found                        |
+
+Current bucket state:
+
+- 25 buckets, all named `prod-*`.
+- All have 7-day Soft Delete.
+- Object Versioning is not shown as enabled.
+- Total size: 949,723,934,059 bytes, about 884.50 GiB.
+- Total object count: 2,730,303.
+
+Storage class breakdown from Cloud Monitoring:
+
+| Storage class     | Current size |
+| ----------------- | -----------: |
+| Archive           |   773.03 GiB |
+| Coldline          |    63.28 GiB |
+| Nearline          |    24.26 GiB |
+| Regional/Standard |    23.93 GiB |
+
+Rough bucket storage cost is only a few dollars per month because most bytes
+are Archive class. The buckets are still cleanup targets because they are
+legacy product data and add operational clutter.
+
+Largest buckets:
+
+| Bucket                                               |       Size |   Objects |
+| ---------------------------------------------------- | ---------: | --------: |
+| `prod-00000025-23737b24-400f-4efd-b70e-c8e89f727b82` | 388.07 GiB | 2,289,857 |
+| `prod-00000031-512830d0-db19-49fc-a608-f5309c6273da` | 214.02 GiB |   322,241 |
+| `prod-00000048-ad02f7dc-e805-442e-bb3b-a00f36708f45` | 105.85 GiB |    22,638 |
+| `prod-00000040-b9ae3b32-5283-4fb1-96a2-32fc4c44313b` |  55.53 GiB |     4,871 |
+| `prod-00000022-28966641-26ac-44ee-88f5-ccab279c668a` |  39.77 GiB |     8,303 |
+
+Current snapshot state:
+
+- 61 snapshots, all `READY`.
+- All named `prod-*-shutdown`.
+- Created on 2026-07-01 around 04:45-05:07 Pacific.
+- Total source disk size: 4,335 GB.
+- Total snapshot storage bytes: 1,601,109,997,504 bytes, about 1.46 TiB.
+
+Largest snapshots:
+
+| Snapshot              | Source disk size | Snapshot storage |
+| --------------------- | ---------------: | ---------------: |
+| `prod-3214-shutdown`  |           500 GB |       276.64 GiB |
+| `prod-9916-shutdown`  |           125 GB |        56.39 GiB |
+| `prod-11063-shutdown` |           125 GB |        52.44 GiB |
+| `prod-9935-shutdown`  |           125 GB |        48.26 GiB |
+| `prod-10925-shutdown` |           100 GB |        43.35 GiB |
+
+Recommended compute-server cleanup sequence:
+
+1. Verify `prod-5155` is the only VM to preserve.
+2. Delete all 25 `prod-*` buckets except there is no `prod-5155` bucket in the
+   current bucket list. Use server-side lifecycle deletion or bucket deletion
+   after disabling Soft Delete if immediate cost/clutter cleanup is desired.
+3. Delete all 61 `prod-*-shutdown` snapshots.
+4. Re-run inventory and confirm only VM `prod-5155` and disk `prod-5155`
+   remain.
 
 Recommended policy:
 
