@@ -26,6 +26,7 @@ import { waitForAccountTableConnectedForSignIn } from "./wait-for-account-table-
 import { waitForExamModeConfiguration } from "@cocalc/frontend/customize/exam-mode";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { getLogger } from "@cocalc/frontend/logger";
+import { lite } from "@cocalc/frontend/lite";
 
 const log = getLogger("account:bootstrap");
 const AUTH_BOOTSTRAP_WARNING =
@@ -106,11 +107,13 @@ export function init(redux) {
       }
       authBootstrapLoadedFor = account_id;
       log.warn("failed to load account routing information", err);
-      alert_message({
-        type: "warning",
-        message: AUTH_BOOTSTRAP_WARNING,
-        timeout: 20,
-      });
+      if (!lite) {
+        alert_message({
+          type: "warning",
+          message: AUTH_BOOTSTRAP_WARNING,
+          timeout: 20,
+        });
+      }
       return true;
     } finally {
       if (
