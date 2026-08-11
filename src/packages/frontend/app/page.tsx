@@ -54,12 +54,14 @@ import { configureUxLatency } from "@cocalc/frontend/monitoring/ux-latency";
 import { lazyWithRetry } from "./lazy-with-retry";
 import useSignedInSurfaceReady from "./use-signed-in-surface-ready";
 
-const PostSurfaceRightNav = lazyWithRetry(
-  async () => ({
-    default: (await import("./post-surface-ui")).PostSurfaceRightNav,
-  }),
-  "post-surface navigation",
-);
+const PostSurfaceRightNav = lazyWithRetry(async () => {
+  const [{ ensureNotificationsInitialized }, postSurface] = await Promise.all([
+    import("@cocalc/frontend/notifications/ensure-init"),
+    import("./post-surface-ui"),
+  ]);
+  await ensureNotificationsInitialized();
+  return { default: postSurface.PostSurfaceRightNav };
+}, "post-surface navigation");
 const PostSurfaceBanners = lazyWithRetry(
   async () => ({
     default: (await import("./post-surface-ui")).PostSurfaceBanners,

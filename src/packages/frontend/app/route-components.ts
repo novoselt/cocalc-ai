@@ -48,12 +48,16 @@ export const HostsPage = lazyWithRetry(
   "hosts route",
 );
 
-export const NotificationPage = lazyWithRetry(
-  async () => ({
-    default: (await import("@cocalc/frontend/notifications")).NotificationPage,
-  }),
-  "notifications route",
-);
+export const NotificationPage = lazyWithRetry(async () => {
+  const [{ ensureNotificationsInitialized }, notifications] = await Promise.all(
+    [
+      import("@cocalc/frontend/notifications/ensure-init"),
+      import("@cocalc/frontend/notifications"),
+    ],
+  );
+  await ensureNotificationsInitialized();
+  return { default: notifications.NotificationPage };
+}, "notifications route");
 
 interface ProjectPageProps {
   is_active: boolean;

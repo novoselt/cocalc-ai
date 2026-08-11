@@ -290,8 +290,20 @@ export const ProjectsPage: React.FC = () => {
   const project_list_window = useTypedRedux("projects", "project_list_window");
 
   function openInvitations() {
-    redux.getActions("mentions").set_filter("unread");
     redux.getActions("page").set_active_tab("notifications");
+    const mentions = redux.getActions("mentions");
+    if (mentions != null) {
+      mentions.set_filter("unread");
+      return;
+    }
+    void import("@cocalc/frontend/notifications/ensure-init")
+      .then(({ ensureNotificationsInitialized }) =>
+        ensureNotificationsInitialized(),
+      )
+      .then(() => redux.getActions("mentions")?.set_filter("unread"))
+      .catch(() => {
+        // The route loader owns visible error recovery.
+      });
   }
 
   const local_visible_projects: string[] = useMemo(() => {

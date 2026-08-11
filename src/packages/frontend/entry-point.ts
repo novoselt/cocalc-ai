@@ -15,9 +15,6 @@ import { COCALC_MINIMAL } from "./fullscreen";
 // Load/initialize Redux-based react functionality
 import { redux } from "./app-framework";
 
-// News about the platform, features, etc. – also shown at https://$DNS/news
-import { init as initNews } from "./notifications/news/init";
-
 import "./launch/actions";
 
 // Various jquery plugins:
@@ -30,7 +27,6 @@ import { init as initApp } from "./app/init";
 import { init as initProjects } from "./projects";
 import { init as initFileUse } from "./file-use/init";
 import { init as initWebHooks } from "./webapp-hooks";
-import { init as initNotifications } from "./notifications/init";
 import { init as initMarkdown } from "./markdown/markdown-input/init";
 // only enable iframe comms in minimal kiosk mode
 import { init as initIframeComm } from "./iframe-communication";
@@ -45,14 +41,10 @@ import { render } from "./app/render";
 export async function init() {
   initJqueryPlugins();
   initAccount(redux);
-  initNews();
   initApp();
   initProjects();
   initFileUse();
   initWebHooks();
-  if (!COCALC_MINIMAL) {
-    initNotifications(redux);
-  }
   initMarkdown();
   initCustomize();
   if (COCALC_MINIMAL) {
