@@ -1,5 +1,6 @@
 import { SCHEMA } from "./types";
 import "./site-settings";
+import { site_settings_conf } from "./site-defaults";
 
 const queryMock = jest.fn();
 
@@ -43,5 +44,16 @@ describe("site_settings admin masking", () => {
     expect(byName.help_email.is_set).toBe(false);
     expect(byName.conat_password.value).toBe("");
     expect(byName.conat_password.is_set).toBe(false);
+  });
+});
+
+describe("dangerous project-host provider settings", () => {
+  it("keeps self-host creation visibly opt-in", () => {
+    const setting = site_settings_conf.project_hosts_self_host_alpha_enabled;
+
+    expect(setting.default).toBe("no");
+    expect(setting.hidden).not.toBe(true);
+    expect(setting.group).toBe("Compute / Project Hosts");
+    expect(setting.subgroup).toBe("Enable Providers");
   });
 });

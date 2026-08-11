@@ -1095,15 +1095,14 @@ export const site_settings_conf: SiteSettings = {
     hidden: true,
   },
   project_hosts_self_host_alpha_enabled: {
-    name: "Enable Project Hosts - Self-Host (Experimental/Insecure)",
-    desc: "Enable self-host options. Hidden by default because this is not safe for normal multi-user servers yet: self-host connectors can receive cluster-level backup secrets after setup.",
+    name: "Enable Project Hosts - Self-Hosted (Experimental/Insecure)",
+    desc: "Allow admins to create self-hosted project hosts. Keep this disabled on production sites: self-host connectors are experimental and can receive cluster-level backup secrets after setup. Disabling this blocks new self-hosted hosts without preventing cleanup or management of existing ones.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
     tags: ["Project Hosts", "On-Prem"],
     group: "Compute / Project Hosts",
     subgroup: "Enable Providers",
-    hidden: true,
   },
   project_hosts_funding_mode: {
     name: "Project Hosts: Funding Mode",
