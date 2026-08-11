@@ -935,6 +935,16 @@ describe("PublicApp", () => {
     expect(
       within(focusOrderRow!).getByText(/left to right, then top to bottom/),
     ).not.toBeNull();
+    const onFocusRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.2\.1 On Focus/,
+      })
+      .closest("tr");
+    expect(onFocusRow).not.toBeNull();
+    expect(within(onFocusRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(onFocusRow!).getByText(/No change of context on focus/),
+    ).not.toBeNull();
     expect(
       report.queryByRole("heading", {
         name: "Table 3: Success Criteria, Level AAA",
