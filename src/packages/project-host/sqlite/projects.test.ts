@@ -1,5 +1,6 @@
 import { closeDatabase, getDatabase } from "@cocalc/lite/hub/sqlite/database";
 import {
+  ensureProjectsTable,
   getProject,
   getProjectsUsingRootfsImage,
   listProjectQuotaRepairBatch,
@@ -8,6 +9,10 @@ import {
   markProjectStateReported,
   upsertProject,
 } from "./projects";
+import {
+  acceptProjectVolumeQuotaDesired,
+  getProjectVolumeQuota,
+} from "./volume-quotas";
 
 describe("project sqlite runtime ports", () => {
   const prevFilename = process.env.COCALC_LITE_SQLITE_FILENAME;
@@ -233,5 +238,65 @@ describe("project sqlite runtime ports", () => {
     });
 
     expect(getProject(project_id)?.users).toEqual(users);
+  });
+
+  it("repairs legacy quota columns and ledgers from versioned run_quota", () => {
+    const run_quota = { disk_quota: 100_000, memory_limit: 16_000 };
+    ensureProjectsTable();
+    getDatabase()
+      .prepare(
+        `INSERT INTO projects(
+           project_id, state, disk, scratch, run_quota, run_quota_revision
+         ) VALUES (?, 'opened', ?, ?, ?, ?)`,
+      )
+      .run(
+        project_id,
+        50_000_000_000,
+        50_000_000_000,
+        JSON.stringify(run_quota),
+        2,
+      );
+    for (const volume_kind of ["home", "scratch"] as const) {
+      acceptProjectVolumeQuotaDesired({
+        project_id,
+        volume_kind,
+        desired_bytes: 50_000_000_000,
+        desired_revision: 2,
+      });
+    }
+
+    upsertProject({ project_id, run_quota, run_quota_revision: 2 });
+
+    expect(getProject(project_id)).toEqual(
+      expect.objectContaining({
+        disk: 100_000_000_000,
+        scratch: 100_000_000_000,
+        run_quota_revision: 2,
+      }),
+    );
+    for (const volume_kind of ["home", "scratch"] as const) {
+      expect(getProjectVolumeQuota(project_id, volume_kind)).toEqual(
+        expect.objectContaining({
+          desired_bytes: 100_000_000_000,
+          desired_revision: 2,
+          state: "pending",
+        }),
+      );
+    }
+  });
+
+  it("still rejects different run_quota JSON at one revision", () => {
+    upsertProject({
+      project_id,
+      run_quota: { disk_quota: 50_000 },
+      run_quota_revision: 2,
+    });
+    expect(() =>
+      upsertProject({
+        project_id,
+        run_quota: { disk_quota: 100_000 },
+        run_quota_revision: 2,
+      }),
+    ).toThrow("conflicting run_quota");
   });
 });

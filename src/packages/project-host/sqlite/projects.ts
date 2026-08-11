@@ -299,8 +299,13 @@ export function upsertProject(row: ProjectRow) {
     run_quota?.disk_quota != null
       ? Math.floor(run_quota.disk_quota * 1_000_000)
       : undefined;
-  const disk = row.disk ?? diskFromQuota ?? existing.disk_quota ?? null;
-  const scratch = row.scratch ?? diskFromQuota ?? existing.scratch ?? null;
+  const hasVersionedDiskQuota = run_quota_revision > 0 && diskFromQuota != null;
+  const disk = hasVersionedDiskQuota
+    ? diskFromQuota
+    : (row.disk ?? diskFromQuota ?? existing.disk_quota ?? null);
+  const scratch = hasVersionedDiskQuota
+    ? diskFromQuota
+    : (row.scratch ?? diskFromQuota ?? existing.scratch ?? null);
   const last_seen = row.last_seen ?? (existing as any).last_seen ?? now;
   const updated_at = row.updated_at ?? now;
   const users =
@@ -452,6 +457,7 @@ export function upsertProject(row: ProjectRow) {
       volume_kind: "home",
       desired_bytes: Number(disk),
       desired_revision: ledgerRevision,
+      repair_same_revision: hasVersionedDiskQuota,
     });
   }
   if (
@@ -464,6 +470,7 @@ export function upsertProject(row: ProjectRow) {
       volume_kind: "scratch",
       desired_bytes: Number(scratch),
       desired_revision: ledgerRevision,
+      repair_same_revision: hasVersionedDiskQuota,
     });
   }
 

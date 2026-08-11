@@ -4,6 +4,7 @@
  */
 
 import { getDatabase, initDatabase } from "@cocalc/lite/hub/sqlite/database";
+import getLogger from "@cocalc/backend/logger";
 import { currentProjectVolumeQuotaEpoch } from "./filesystem-quota-state";
 
 export type ProjectVolumeKind = "home" | "scratch";
@@ -41,6 +42,7 @@ export type DesiredQuotaAcceptance =
 const TABLE = "project_volume_quotas";
 const DEFAULT_AUDIT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_RETRY_INTERVAL_MS = 5 * 60 * 1000;
+const logger = getLogger("project-host:sqlite:volume-quotas");
 let initialized = false;
 
 function positiveDurationMs(name: string, fallback: number): number {
@@ -63,7 +65,15 @@ function stableAuditJitterMs(
 export { currentProjectVolumeQuotaEpoch };
 
 function ensureTable(): void {
-  if (initialized) return;
+  if (initialized) {
+    const tableStillExists = getDatabase()
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+      )
+      .get(TABLE);
+    if (tableStillExists) return;
+    initialized = false;
+  }
   const db = initDatabase();
   db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
@@ -143,11 +153,13 @@ export function acceptProjectVolumeQuotaDesired({
   volume_kind,
   desired_bytes,
   desired_revision,
+  repair_same_revision = false,
 }: {
   project_id: string;
   volume_kind: ProjectVolumeKind;
   desired_bytes: number;
   desired_revision?: number;
+  repair_same_revision?: boolean;
 }): DesiredQuotaAcceptance {
   ensureTable();
   const bytes = Math.max(0, Math.floor(desired_bytes));
@@ -168,9 +180,18 @@ export function acceptProjectVolumeQuotaDesired({
       revision === existing.desired_revision &&
       bytes !== existing.desired_bytes
     ) {
-      throw new Error(
-        `conflicting ${volume_kind} quota for project ${project_id} at revision ${revision}`,
-      );
+      if (!repair_same_revision) {
+        throw new Error(
+          `conflicting ${volume_kind} quota for project ${project_id} at revision ${revision}`,
+        );
+      }
+      logger.warn("repairing conflicting versioned project volume quota", {
+        project_id,
+        volume_kind,
+        desired_revision: revision,
+        previous_desired_bytes: existing.desired_bytes,
+        desired_bytes: bytes,
+      });
     }
     if (
       desired_revision != null &&
@@ -423,38 +444,64 @@ export function bootstrapProjectVolumeQuotaLedger(): number {
     .get();
   if (!projectsTable) return 0;
   const now = Date.now();
-  let changes = 0;
-  changes += Number(
-    db
-      .prepare(
-        `INSERT OR IGNORE INTO ${TABLE} (
+  const bootstrapKind = (
+    volume_kind: ProjectVolumeKind,
+    legacyDesiredSql: string,
+  ): number => {
+    // A versioned run_quota is authoritative. Legacy disk/scratch columns can
+    // lag it across upgrades, and assigning their bytes the newer revision
+    // creates an impossible same-revision conflict that blocks project start.
+    const desiredBytesSql = `CASE
+      WHEN COALESCE(run_quota_revision, 0) > 0
+       AND CASE WHEN json_valid(run_quota) THEN
+         json_type(run_quota, '$.disk_quota') IN ('integer', 'real')
+         AND CAST(json_extract(run_quota, '$.disk_quota') AS REAL) > 0
+       ELSE FALSE END
+      THEN CAST(
+        CAST(json_extract(run_quota, '$.disk_quota') AS REAL) * 1000000
+        AS INTEGER
+      )
+      ELSE CAST(${legacyDesiredSql} AS INTEGER)
+    END`;
+    return Number(
+      db
+        .prepare(
+          `WITH desired AS (
+             SELECT project_id,
+                    ${desiredBytesSql} AS desired_bytes,
+                    MAX(0, COALESCE(run_quota_revision, 0)) AS desired_revision
+               FROM projects
+           )
+           INSERT INTO ${TABLE} (
              project_id, volume_kind, desired_bytes, desired_revision,
              state, desired_updated_at, next_audit_at, updated_at
            )
-           SELECT project_id, 'home', CAST(disk AS INTEGER),
-                  MAX(0, COALESCE(run_quota_revision, 0)),
+           SELECT project_id, ?, desired_bytes, desired_revision,
                   'pending', ?, ?, ?
-             FROM projects
-            WHERE disk > 0`,
-      )
-      .run(now, now, now).changes,
+             FROM desired
+            WHERE desired_bytes > 0
+           ON CONFLICT(project_id, volume_kind) DO UPDATE SET
+             desired_bytes=excluded.desired_bytes,
+             desired_revision=excluded.desired_revision,
+             state=CASE
+               WHEN ${TABLE}.applied_revision=excluded.desired_revision
+                AND ${TABLE}.applied_bytes=excluded.desired_bytes
+               THEN ${TABLE}.state
+               ELSE 'pending'
+             END,
+             last_error=NULL,
+             desired_updated_at=excluded.desired_updated_at,
+             next_audit_at=excluded.next_audit_at,
+             updated_at=excluded.updated_at
+           WHERE excluded.desired_revision > ${TABLE}.desired_revision`,
+        )
+        .run(volume_kind, now, now, now).changes,
+    );
+  };
+  return (
+    bootstrapKind("home", "disk") +
+    bootstrapKind("scratch", "COALESCE(scratch, disk)")
   );
-  changes += Number(
-    db
-      .prepare(
-        `INSERT OR IGNORE INTO ${TABLE} (
-             project_id, volume_kind, desired_bytes, desired_revision,
-             state, desired_updated_at, next_audit_at, updated_at
-           )
-           SELECT project_id, 'scratch', CAST(COALESCE(scratch, disk) AS INTEGER),
-                  MAX(0, COALESCE(run_quota_revision, 0)),
-                  'pending', ?, ?, ?
-             FROM projects
-            WHERE COALESCE(scratch, disk) > 0`,
-      )
-      .run(now, now, now).changes,
-  );
-  return changes;
 }
 
 export function listProjectVolumeQuotaAuditBatch({
