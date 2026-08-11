@@ -1131,6 +1131,25 @@ describe("PublicApp", () => {
     expect(
       within(errorPreventionRow!).getByText(/type a confirmation word/),
     ).not.toBeNull();
+    const accessibleAuthenticationRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /3\.3\.8 Accessible Authentication \(Minimum\)/,
+      })
+      .closest("tr");
+    expect(accessibleAuthenticationRow).not.toBeNull();
+    expect(
+      within(accessibleAuthenticationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(accessibleAuthenticationRow!).getByText(
+        /passwordless email sign-in and SSO/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(accessibleAuthenticationRow!).getByText(
+        /no deliberate restrictions on paste or password-manager use/,
+      ),
+    ).not.toBeNull();
     const statusMessagesRow = within(tables[2])
       .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
       .closest("tr");
