@@ -48,7 +48,7 @@ export default function OctaveFeaturePage({
                 Octave is the free numerical computing language that is largely
                 compatible with MATLAB. Start a project on the Octave image and
                 it is ready: Octave with the common packages, a Jupyter kernel,
-                and a full Linux system around it.
+                and a full Linux system for scripts, plots, and data.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryHref}>
@@ -75,13 +75,13 @@ export default function OctaveFeaturePage({
           anchor="a-overview"
           description={
             <>
-              Octave is preinstalled in its own image, and it lives inside a
-              full CoCalc project, so collaboration, history, and backups come
-              with it.
+              The image brings Octave. The project brings passwordless sudo, a
+              persistent home directory, snapshots, TimeTravel history, and
+              collaborators editing the same files.
             </>
           }
         >
-          Octave, with a real project around it
+          Octave in a full Linux environment
         </FeatureInfoHeading>
       </PublicSection>
 

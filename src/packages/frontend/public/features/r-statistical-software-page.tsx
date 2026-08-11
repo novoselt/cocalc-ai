@@ -210,7 +210,7 @@ export default function RStatisticalSoftwareFeaturePage({
               <code>Rscript analysis.R</code> in a real Linux terminal
             </strong>
             , with the project's filesystem, Git, and automatic backups and
-            snapshots around it.
+            snapshots.
           </Paragraph>
           <Paragraph>
             Long-running model fits{" "}

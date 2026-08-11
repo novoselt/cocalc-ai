@@ -416,7 +416,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
       {
         title: "Run GNU Octave online",
         paragraphs: [
-          "GNU Octave is the free numerical computing language that is largely compatible with MATLAB. Start a project on the Octave image and it is ready to use, inside a full Linux project where collaboration, history, and backups come with it.",
+          "GNU Octave is the free numerical computing language that is largely compatible with MATLAB. Start a project on the Octave image and it is ready to use, in a full Linux environment with passwordless sudo, real-time collaboration, TimeTravel history, and snapshots.",
           "Octave is the default Jupyter kernel on that image, .m files open in the collaborative editor with Octave syntax highlighting, and scripts run in a terminal that survives disconnects.",
         ],
         bullets: [
