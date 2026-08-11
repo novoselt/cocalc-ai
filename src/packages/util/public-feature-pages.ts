@@ -145,6 +145,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "software-environment",
     title: "Software Environments",
     navLabel: "Software",
+    metadataTitle: "Online Software Environments",
     tagline: "Pick the software image your project runs on.",
     summary:
       "Choose a software image per project — from lean base systems to full scientific stacks — and customize it from there.",
