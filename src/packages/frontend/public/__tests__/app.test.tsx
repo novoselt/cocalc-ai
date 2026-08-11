@@ -921,6 +921,14 @@ describe("PublicApp", () => {
     expect(
       within(resizeTextRow!).getByText(/remained usable at 200% browser zoom/),
     ).not.toBeNull();
+    const reflowRow = within(tables[2])
+      .getByRole("rowheader", { name: /1\.4\.10 Reflow/ })
+      .closest("tr");
+    expect(reflowRow).not.toBeNull();
+    expect(within(reflowRow!).getByText("Partially supports")).not.toBeNull();
+    expect(
+      within(reflowRow!).getByText(/settings required horizontal scrolling/),
+    ).not.toBeNull();
     const draggingRow = within(tables[2])
       .getByRole("rowheader", { name: /2\.5\.7 Dragging Movements/ })
       .closest("tr");
