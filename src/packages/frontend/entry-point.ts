@@ -27,7 +27,6 @@ import { init as initApp } from "./app/init";
 import { init as initProjects } from "./projects";
 import { init as initFileUse } from "./file-use/init";
 import { init as initWebHooks } from "./webapp-hooks";
-import { init as initMarkdown } from "./markdown/markdown-input/init";
 // only enable iframe comms in minimal kiosk mode
 import { init as initIframeComm } from "./iframe-communication";
 import { init as initCrashBanner } from "./crash-banner";
@@ -45,7 +44,6 @@ export async function init() {
   initProjects();
   initFileUse();
   initWebHooks();
-  initMarkdown();
   initCustomize();
   if (COCALC_MINIMAL) {
     initIframeComm();

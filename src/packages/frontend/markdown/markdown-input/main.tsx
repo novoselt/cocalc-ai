@@ -25,8 +25,9 @@ import { COLORS } from "@cocalc/util/theme";
 import { markdown_to_html } from "../index";
 import type { MarkdownWidgetActions } from "./actions";
 import * as info from "./info";
+import { init } from "./init";
 import type { MarkdownWidgetStoreState } from "./store";
-export { init } from "./init";
+export { init };
 
 interface MarkdownInputProps {
   autoFocus?: boolean;
@@ -65,6 +66,7 @@ export function MarkdownInput({
   rendered_style,
   hide_edit_button,
 }: MarkdownInputProps) {
+  init();
   const intl = useIntl();
 
   const open_inputs = useRedux([info.REDUX_NAME, "open_inputs"]);

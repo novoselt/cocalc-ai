@@ -26,6 +26,7 @@ const loadAndAppForbidden = [
   "node_modules/.pnpm/slate@",
   "node_modules/.pnpm/slate-react@",
   "frontend/components/markdown.tsx",
+  "frontend/markdown/markdown-input/init.ts",
   "frontend/editors/slate/editable-markdown.tsx",
   "frontend/editors/slate/static-markdown.tsx",
   "frontend/editors/stopwatch/stopwatch.tsx",
