@@ -11,9 +11,10 @@ import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureAsset,
   LinkButton,
 } from "./page-components";
-import { FeatureInfo, FeatureInfoHeading } from "./feature-info";
+import { FeatureInfo, FeatureInfoHeading, ZoomableImage } from "./feature-info";
 import { FeatureFinalBand } from "./feature-visuals";
 
 const { Paragraph, Title } = Typography;
@@ -38,16 +39,12 @@ export default function OctaveFeaturePage({
     <Flex vertical gap={36}>
       <PublicSection>
         <Row align="top" gutter={[28, 28]}>
-          {/* TODO: split back to lg={11} + a terminal screenshot column once
-              the Octave terminal capture lands. */}
-          <Col xs={24}>
+          <Col xs={24} lg={11}>
             <Flex vertical gap={14}>
-              <Title level={2} style={{ margin: 0, maxWidth: 760 }}>
+              <Title level={2} style={{ margin: 0 }}>
                 Run GNU Octave online in a project you control.
               </Title>
-              <Paragraph
-                style={{ fontSize: PUBLIC_TYPE.lead, margin: 0, maxWidth: 720 }}
-              >
+              <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
                 Octave is the free numerical computing language that is largely
                 compatible with MATLAB. Start a project on the Octave image and
                 it is ready: Octave with the common packages, a Jupyter kernel,
@@ -62,6 +59,13 @@ export default function OctaveFeaturePage({
                 </LinkButton>
               </Flex>
             </Flex>
+          </Col>
+          <Col xs={24} lg={13}>
+            <ZoomableImage
+              alt="An Octave session in a CoCalc terminal: matrix work and a plot drawn as text"
+              priority
+              src={featureAsset("cocalc-octave-terminal-20260811.png")}
+            />
           </Col>
         </Row>
       </PublicSection>
