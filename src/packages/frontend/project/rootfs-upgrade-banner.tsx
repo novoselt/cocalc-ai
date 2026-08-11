@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 
 import { redux, useAccountOtherSetting } from "@cocalc/frontend/app-framework";
 import { useProjectContext } from "@cocalc/frontend/project/context";
-import { RootFilesystemImageModal } from "@cocalc/frontend/project/settings/root-filesystem-image";
+import { LazyRootFilesystemImageModal } from "@cocalc/frontend/project/settings/lazy-root-filesystem-image-modal";
 import { latestRootfsUpgradeEntry } from "@cocalc/frontend/rootfs/catalog-ui";
 import {
   managedRootfsCatalogUrl,
@@ -203,7 +203,7 @@ export function ProjectRootfsUpgradeBanner({
         onDismiss={dismissUpgrade}
         onReview={() => setReviewOpen(true)}
       />
-      <RootFilesystemImageModal
+      <LazyRootFilesystemImageModal
         onClose={() => setReviewOpen(false)}
         open={reviewOpen}
       />

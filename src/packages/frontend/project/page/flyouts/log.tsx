@@ -31,6 +31,7 @@ import {
 import StatefulVirtuoso from "@cocalc/frontend/components/stateful-virtuoso";
 import { labels } from "@cocalc/frontend/i18n";
 import { useProjectContext } from "@cocalc/frontend/project/context";
+import { projectLogTimeValue } from "@cocalc/frontend/project/log-state";
 import { get_local_storage, set_local_storage } from "@cocalc/frontend/misc";
 import { LogEntry } from "@cocalc/frontend/project/history/log-entry";
 import {
@@ -93,14 +94,6 @@ function saveWorkspaceOnly(project_id: string, enabled: boolean): void {
   );
 }
 
-export function getTime(a): number {
-  try {
-    return a?.get("time")?.getTime() ?? 0;
-  } catch (_err) {
-    return 0;
-  }
-}
-
 function deriveFiles(
   project_log,
   searchTerm: string,
@@ -118,7 +111,7 @@ function deriveFiles(
         entry.getIn(["event", "filename"]) &&
         entry.getIn(["event", "event"]) === "open",
     )
-    .sort((a, b) => getTime(b) - getTime(a))
+    .sort((a, b) => projectLogTimeValue(b) - projectLogTimeValue(a))
     .filter((entry: EventRecordMap) => {
       const path = entry.getIn(["event", "filename"]) as unknown;
       if (typeof path !== "string" || path.length === 0) return false;
@@ -248,7 +241,7 @@ function deriveHistory(
       const searchStr = to_search_string(entry.toJS());
       return search_match(searchStr, searchWords);
     })
-    .sort((a, b) => getTime(b) - getTime(a))
+    .sort((a, b) => projectLogTimeValue(b) - projectLogTimeValue(a))
     .slice(0, max)
     .toJS() as any;
 }

@@ -48,6 +48,8 @@ const signedInStartupRouteForbidden = [
   "frontend/chat/git-commit-drawer.tsx",
   "frontend/chat/message.tsx",
   "frontend/chat/side-chat.tsx",
+  "frontend/project/page/flyouts/log.tsx",
+  "frontend/project/settings/root-filesystem-image.tsx",
 ];
 
 const publicViewerForbidden = [

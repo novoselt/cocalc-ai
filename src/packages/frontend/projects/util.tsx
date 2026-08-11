@@ -13,11 +13,11 @@ import { useStudentProjectFunctionality } from "@cocalc/frontend/course";
 import { file_options } from "@cocalc/frontend/editor-tmp";
 import { isIntlMessage, labels } from "@cocalc/frontend/i18n";
 import { EventRecordMap } from "@cocalc/frontend/project/history/types";
+import { projectLogTimeValue } from "@cocalc/frontend/project/log-state";
 import {
   SPEC as SERVER_SPEC,
   serverURL,
 } from "@cocalc/frontend/project/named-server-panel";
-import { getTime } from "@cocalc/frontend/project/page/flyouts/log";
 import { useAvailableFeatures } from "@cocalc/frontend/project/use-available-features";
 
 import { webapp_client } from "@cocalc/frontend/webapp-client";
@@ -311,7 +311,7 @@ export function useRecentFiles(
           entry.getIn(["event", "filename"]) &&
           entry.getIn(["event", "event"]) === "open",
       )
-      .sort((a, b) => getTime(b) - getTime(a))
+      .sort((a, b) => projectLogTimeValue(b) - projectLogTimeValue(a))
       .filter((entry: EventRecordMap) => {
         const fn = entry.getIn(["event", "filename"]);
         if (dedupe.includes(fn)) return false;
