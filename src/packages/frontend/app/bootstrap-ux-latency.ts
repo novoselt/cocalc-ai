@@ -8,6 +8,7 @@ import {
   UxLatencyTrace,
   type UxTraceStart,
 } from "@cocalc/frontend/monitoring/ux-latency-trace";
+import { markSignedInSurfaceReady } from "./surface-ready-state";
 
 let trace: UxLatencyTrace | undefined;
 let appReadyRecorded = false;
@@ -208,6 +209,7 @@ export function recordSignedInSurfaceReady(segment: string): () => void {
         paint_observer: "route_data_ready_next_animation_frame",
       },
     });
+    markSignedInSurfaceReady(segment);
   });
 }
 

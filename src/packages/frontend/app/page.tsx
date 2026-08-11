@@ -31,11 +31,6 @@ import { Icon } from "@cocalc/frontend/components/icon";
 import Next from "@cocalc/frontend/components/next";
 import { labels } from "@cocalc/frontend/i18n";
 import { ProjectsNav } from "@cocalc/frontend/projects/projects-nav";
-import BalanceButton from "@cocalc/frontend/purchases/balance-button";
-import { AIUsageWarning } from "@cocalc/frontend/purchases/ai-usage-warning";
-import { ManagedEgressWarning } from "@cocalc/frontend/purchases/managed-egress-warning";
-import { AccountStorageWarning } from "@cocalc/frontend/purchases/account-storage-warning";
-import { AccountCpuWarning } from "@cocalc/frontend/purchases/account-cpu-warning";
 import openSupportTab from "@cocalc/frontend/support/open";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
@@ -46,27 +41,37 @@ import { ConnectionInfo } from "./connection-info";
 import { useAppContext } from "./context";
 import { CocalcErrorBoundary } from "./error-boundary";
 import { FullscreenButton } from "./fullscreen-button";
-import { I18NBanner, useShowI18NBanner } from "./i18n-banner";
 import { AppLogo } from "./logo";
 import { NavTab } from "./nav-tab";
-import { Notification } from "./notifications";
-import PopconfirmModal from "./popconfirm-modal";
-import SettingsModal from "./settings-modal";
 import { HIDE_LABEL_THRESHOLD, NAV_CLASS } from "./top-nav-consts";
-import { VerifyEmail } from "./verify-email-banner";
 import VersionWarning from "./version-warning";
-import { CookieWarning, LocalStorageWarning } from "./warnings";
-import { ImportPublicUrlModal } from "./import-public-url-modal";
 import { lite } from "@cocalc/frontend/lite";
 import { ImpersonationBanner } from "./impersonation-banner";
-import { LegacyMigrationCtaBanner } from "./legacy-migration-cta-banner";
-import { TeamLicenseWarningBanner } from "./team-license-warning-banner";
-import AutomaticUpdateNotice from "./automatic-update-notice";
 import { useVisibleViewportBottom } from "./visible-viewport";
-import { OnboardingEmailPrompt } from "./onboarding-email-prompt";
 import { ScratchpadSessionControls } from "./scratchpad-session-controls";
 import { recordSignedInAppBootstrapReady } from "./bootstrap-ux-latency";
 import { configureUxLatency } from "@cocalc/frontend/monitoring/ux-latency";
+import { lazyWithRetry } from "./lazy-with-retry";
+import useSignedInSurfaceReady from "./use-signed-in-surface-ready";
+
+const PostSurfaceRightNav = lazyWithRetry(
+  async () => ({
+    default: (await import("./post-surface-ui")).PostSurfaceRightNav,
+  }),
+  "post-surface navigation",
+);
+const PostSurfaceBanners = lazyWithRetry(
+  async () => ({
+    default: (await import("./post-surface-ui")).PostSurfaceBanners,
+  }),
+  "post-surface banners",
+);
+const PostSurfaceModals = lazyWithRetry(
+  async () => ({
+    default: (await import("./post-surface-ui")).PostSurfaceModals,
+  }),
+  "post-surface modals",
+);
 
 // ipad and ios have a weird trick where they make the screen
 // actually smaller than 100vh and have it be scrollable, even
@@ -94,6 +99,20 @@ const PAGE_STYLE: CSS = {
   overflow: "hidden",
   background: "white",
 } as const;
+
+function PostSurfaceSlot({
+  children,
+  scope,
+}: {
+  children: React.ReactNode;
+  scope: string;
+}) {
+  return (
+    <CocalcErrorBoundary fallback={null} scope={scope}>
+      <React.Suspense fallback={null}>{children}</React.Suspense>
+    </CocalcErrorBoundary>
+  );
+}
 
 function signInHrefWithCurrentTarget(): string {
   if (typeof window === "undefined") {
@@ -130,6 +149,7 @@ function useClientSignedIn(): boolean {
 export const Page: React.FC = () => {
   const page_actions = useActions("page");
   const androidViewportBottom = useVisibleViewportBottom(IS_ANDROID);
+  const surfaceReady = useSignedInSurfaceReady();
 
   const { pageStyle } = useAppContext();
   const { isNarrow, topBarStyle, projectsNavStyle } = pageStyle;
@@ -189,7 +209,6 @@ export const Page: React.FC = () => {
   const clientSignedIn = useClientSignedIn();
   const effectivelySignedIn = is_logged_in || clientSignedIn;
   const groups = useTypedRedux("account", "groups");
-  const show_i18n = useShowI18NBanner();
   const zendesk = !!useTypedRedux("customize", "zendesk");
 
   useEffect(() => {
@@ -252,10 +271,6 @@ export const Page: React.FC = () => {
         tooltip={intl.formatMessage(labels.account)}
       />
     );
-  }
-
-  function render_balance() {
-    return <BalanceButton minimal topBar />;
   }
 
   function render_admin_tab(): React.JSX.Element | undefined {
@@ -347,17 +362,6 @@ export const Page: React.FC = () => {
     );
   }
 
-  function render_notification(): React.JSX.Element | undefined {
-    if (!is_logged_in) return;
-    return (
-      <Notification
-        type="notifications"
-        active={show_mentions}
-        pageStyle={pageStyle}
-      />
-    );
-  }
-
   function render_fullscreen(): React.JSX.Element | undefined {
     if (isNarrow) return;
 
@@ -382,12 +386,15 @@ export const Page: React.FC = () => {
         {render_sign_in_tab()}
         {is_logged_in ? render_account_tab() : undefined}
         {render_support()}
-        {render_balance()}
-        <AIUsageWarning pageStyle={pageStyle} />
-        <AccountCpuWarning pageStyle={pageStyle} />
-        <AccountStorageWarning pageStyle={pageStyle} />
-        <ManagedEgressWarning pageStyle={pageStyle} />
-        {render_notification()}
+        {surfaceReady ? (
+          <PostSurfaceSlot scope="app.post-surface-right-nav">
+            <PostSurfaceRightNav
+              isLoggedIn={is_logged_in}
+              pageStyle={pageStyle}
+              showMentions={show_mentions}
+            />
+          </PostSurfaceSlot>
+        ) : undefined}
         <ConnectionIndicator height={pageStyle.height} pageStyle={pageStyle} />
         {render_fullscreen()}
       </div>
@@ -449,17 +456,19 @@ export const Page: React.FC = () => {
     >
       {show_connection && <ConnectionInfo />}
       <VersionWarning />
-      <AutomaticUpdateNotice />
-      {cookie_warning && <CookieWarning />}
-      {local_storage_warning && <LocalStorageWarning />}
+      {surfaceReady ? (
+        <PostSurfaceSlot scope="app.post-surface-banners">
+          <PostSurfaceBanners
+            cookieWarning={!!cookie_warning}
+            fullscreen={!!fullscreen}
+            localStorageWarning={!!local_storage_warning}
+          />
+        </PostSurfaceSlot>
+      ) : undefined}
       {configurationLoadError && (
         <Alert banner showIcon type="error" title={configurationLoadError} />
       )}
-      {show_i18n && <I18NBanner />}
       <ImpersonationBanner />
-      <TeamLicenseWarningBanner />
-      <VerifyEmail />
-      {!fullscreen && <LegacyMigrationCtaBanner />}
       {!lite && !examMode && !fullscreen && !isAuthView && (
         <nav className="smc-top-bar" style={topBarStyle}>
           <AppLogo size={pageStyle.height} />
@@ -488,10 +497,11 @@ export const Page: React.FC = () => {
       >
         <ActiveContent />
       </CocalcErrorBoundary>
-      {!examMode && <ImportPublicUrlModal />}
-      {!examMode && <PopconfirmModal />}
-      {!examMode && <SettingsModal />}
-      {!examMode && <OnboardingEmailPrompt />}
+      {surfaceReady && !examMode ? (
+        <PostSurfaceSlot scope="app.post-surface-modals">
+          <PostSurfaceModals />
+        </PostSurfaceSlot>
+      ) : undefined}
     </div>
   );
   return (

@@ -42,6 +42,11 @@ const initialProjectSurfaceForbidden = [
 ];
 
 const signedInStartupRouteForbidden = [
+  "frontend/app/post-surface-ui.tsx",
+  "frontend/app/automatic-update-notice.tsx",
+  "frontend/app/import-public-url-modal.tsx",
+  "frontend/app/onboarding-email-prompt.tsx",
+  "frontend/app/settings-modal.tsx",
   "frontend/chat/chat-log.tsx",
   "frontend/chat/chatroom.tsx",
   "frontend/chat/codex-activity.tsx",
@@ -50,6 +55,7 @@ const signedInStartupRouteForbidden = [
   "frontend/chat/side-chat.tsx",
   "frontend/project/page/flyouts/log.tsx",
   "frontend/project/settings/root-filesystem-image.tsx",
+  "frontend/purchases/balance-button.tsx",
 ];
 
 const publicViewerForbidden = [
