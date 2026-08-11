@@ -54,6 +54,7 @@ describe("project archive-info explicit routing", () => {
         project_id: "00000000-1000-4000-8000-000000000000",
         iglob: ["*pdf*"],
         preview: true,
+        recursive: true,
       }),
     ).resolves.toMatchObject({
       results: expect.any(Array),
@@ -65,10 +66,11 @@ describe("project archive-info explicit routing", () => {
       project_id: "00000000-1000-4000-8000-000000000000",
       iglob: ["*pdf*"],
       preview: true,
+      recursive: true,
     });
     expect(response.results).toHaveLength(100);
     expect(find).toHaveBeenCalledWith(
-      expect.objectContaining({ preview: true }),
+      expect.objectContaining({ preview: true, recursive: true }),
     );
   });
 });

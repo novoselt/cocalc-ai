@@ -153,7 +153,7 @@ secret_access_key = "first-secret"
     ]);
   });
 
-  it("stops a preview parser before retaining more than its result limit", () => {
+  it("stops a parser before retaining more than its result limit", () => {
     const snapshot = {
       id: "f".repeat(64),
       time: new Date("2026-08-01T00:00:00Z"),
@@ -299,5 +299,173 @@ describe("RusticWebDavClient", () => {
     expect(
       await client.getEntry({ projectId, id, path: "docs/guide.md" }),
     ).toEqual(expect.objectContaining({ name: "guide.md", size: 99 }));
+  });
+
+  it("searches every current backup directory before optional descent", async () => {
+    const projectId = "22222222-2222-4222-8222-222222222222";
+    const host = `project-${projectId}`;
+    const oldId = "a".repeat(64);
+    const newId = "b".repeat(64);
+    const oldSegment = `20260809T053214+0000--SnapshotId(${oldId})`;
+    const newSegment = `20260810T053214+0000--SnapshotId(${newId})`;
+    const oldRoot = `/${host}/${encodeURIComponent(oldSegment)}/`;
+    const newRoot = `/${host}/${encodeURIComponent(newSegment)}/`;
+    const requests: string[] = [];
+    const responses = new Map<string, string>([
+      [
+        `/${host}/`,
+        multistatus(
+          response({ href: `/${host}/`, directory: true }),
+          response({ href: oldRoot, directory: true }),
+          response({ href: newRoot, directory: true }),
+        ),
+      ],
+      [
+        oldRoot,
+        multistatus(
+          response({ href: oldRoot, directory: true }),
+          response({ href: `${oldRoot}docs/`, directory: true }),
+          response({ href: `${oldRoot}old.pdf`, size: 10 }),
+        ),
+      ],
+      [
+        newRoot,
+        multistatus(
+          response({ href: newRoot, directory: true }),
+          response({ href: `${newRoot}docs/`, directory: true }),
+          response({ href: `${newRoot}new.pdf`, size: 20 }),
+        ),
+      ],
+      [
+        `${oldRoot}docs/`,
+        multistatus(
+          response({ href: `${oldRoot}docs/`, directory: true }),
+          response({ href: `${oldRoot}docs/guide.pdf`, size: 30 }),
+        ),
+      ],
+      [
+        `${newRoot}docs/`,
+        multistatus(
+          response({ href: `${newRoot}docs/`, directory: true }),
+          response({ href: `${newRoot}docs/guide.pdf`, size: 40 }),
+        ),
+      ],
+    ]);
+    server = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      const body = responses.get(req.url ?? "");
+      if (!body) {
+        res.statusCode = 404;
+        res.end("missing");
+        return;
+      }
+      res.statusCode = 207;
+      res.setHeader("content-type", "application/xml");
+      res.end(body);
+    });
+    await new Promise<void>((resolve) =>
+      server!.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const client = new RusticWebDavClient(`http://127.0.0.1:${address.port}`);
+    const snapshots = (await client.listBackups(projectId)).sort(
+      (a, b) => b.time.getTime() - a.time.getTime(),
+    );
+
+    await expect(
+      __test__.findDirectoryPreview({
+        client,
+        projectId,
+        snapshots,
+        iglob: ["*pdf*"],
+        recursive: false,
+      }),
+    ).resolves.toMatchObject({
+      truncated: false,
+      results: [
+        expect.objectContaining({ id: newId, path: "new.pdf" }),
+        expect.objectContaining({ id: oldId, path: "old.pdf" }),
+      ],
+    });
+    expect(requests).not.toContain(`${newRoot}docs/`);
+    expect(requests).not.toContain(`${oldRoot}docs/`);
+
+    const recursive = await __test__.findDirectoryPreview({
+      client,
+      projectId,
+      snapshots,
+      iglob: ["*guide*"],
+      recursive: true,
+    });
+    expect(recursive).toMatchObject({
+      truncated: false,
+      results: [
+        expect.objectContaining({ id: newId, path: "docs/guide.pdf" }),
+        expect.objectContaining({ id: oldId, path: "docs/guide.pdf" }),
+      ],
+    });
+    const firstNested = Math.min(
+      requests.indexOf(`${newRoot}docs/`),
+      requests.indexOf(`${oldRoot}docs/`),
+    );
+    expect(requests.indexOf(newRoot)).toBeLessThan(firstNested);
+    expect(requests.indexOf(oldRoot)).toBeLessThan(firstNested);
+  });
+
+  it("caps directory search previews at 100 results", async () => {
+    const projectId = "33333333-3333-4333-8333-333333333333";
+    const host = `project-${projectId}`;
+    const id = "c".repeat(64);
+    const segment = `20260810T053214+0000--SnapshotId(${id})`;
+    const snapshotRoot = `/${host}/${encodeURIComponent(segment)}/`;
+    const responses = new Map<string, string>([
+      [
+        `/${host}/`,
+        multistatus(
+          response({ href: `/${host}/`, directory: true }),
+          response({ href: snapshotRoot, directory: true }),
+        ),
+      ],
+      [
+        snapshotRoot,
+        multistatus(
+          response({ href: snapshotRoot, directory: true }),
+          ...Array.from({ length: 101 }, (_, index) =>
+            response({ href: `${snapshotRoot}file-${index}.pdf`, size: index }),
+          ),
+        ),
+      ],
+    ]);
+    server = createServer((req, res) => {
+      const body = responses.get(req.url ?? "");
+      if (!body) {
+        res.statusCode = 404;
+        res.end("missing");
+        return;
+      }
+      res.statusCode = 207;
+      res.setHeader("content-type", "application/xml");
+      res.end(body);
+    });
+    await new Promise<void>((resolve) =>
+      server!.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const client = new RusticWebDavClient(`http://127.0.0.1:${address.port}`);
+    const snapshots = await client.listBackups(projectId);
+
+    const result = await __test__.findDirectoryPreview({
+      client,
+      projectId,
+      snapshots,
+      iglob: ["*pdf*"],
+    });
+    expect(result.results).toHaveLength(100);
+    expect(result).toMatchObject({
+      truncated: true,
+      truncationReason: "results",
+    });
   });
 });

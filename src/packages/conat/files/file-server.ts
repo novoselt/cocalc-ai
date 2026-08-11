@@ -58,7 +58,7 @@ export interface BackupFindResult {
 export interface BackupFindPreview {
   results: BackupFindResult[];
   truncated: boolean;
-  truncationReason?: "results" | "time";
+  truncationReason?: "results" | "time" | "limits";
 }
 
 export interface RestoreStagingHandle {
@@ -399,6 +399,7 @@ export interface Fileserver {
     path?: string;
     ids?: string[];
     preview?: boolean;
+    recursive?: boolean;
   }) => Promise<BackupFindResult[] | BackupFindPreview>;
   getBackupFileText: (opts: {
     project_id: string;

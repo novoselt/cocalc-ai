@@ -76,6 +76,7 @@ async function findBackupFilesImpl({
   path,
   ids,
   preview,
+  recursive,
 }: {
   client: Client;
   project_id: string;
@@ -84,6 +85,7 @@ async function findBackupFilesImpl({
   path?: string;
   ids?: string[];
   preview?: boolean;
+  recursive?: boolean;
 }): Promise<BackupFindResult[] | BackupFindPreview> {
   return await fileServerClient(
     client,
@@ -95,6 +97,7 @@ async function findBackupFilesImpl({
     path,
     ids,
     preview,
+    recursive,
   });
 }
 
@@ -173,6 +176,7 @@ export async function handleProjectFindBackupFilesRequest(
     path?: string;
     ids?: string[];
     preview?: boolean;
+    recursive?: boolean;
   },
   client?: Client,
 ): Promise<BackupFindResult[] | BackupFindPreview> {
@@ -184,6 +188,7 @@ export async function handleProjectFindBackupFilesRequest(
     path: opts?.path,
     ids: opts?.ids,
     preview: opts?.preview,
+    recursive: opts?.recursive,
   });
 }
 
@@ -232,6 +237,7 @@ export async function initProjectArchiveInfoService(client: Client) {
       path?: string;
       ids?: string[];
       preview?: boolean;
+      recursive?: boolean;
     }) {
       return handleProjectFindBackupFilesRequest.call(this, opts, client);
     },

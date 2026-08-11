@@ -41,6 +41,7 @@ interface Api {
     path?: string;
     ids?: string[];
     preview?: boolean;
+    recursive?: boolean;
   }) => Promise<BackupFindResult[] | BackupFindPreview>;
   getBackupFileText: (opts: {
     id: string;
@@ -105,6 +106,7 @@ type FindBackupFilesOptions = {
   iglob?: string[];
   path?: string;
   ids?: string[];
+  recursive?: boolean;
 };
 
 export async function findBackupFiles(
@@ -121,6 +123,7 @@ export async function findBackupFiles({
   path,
   ids,
   preview,
+  recursive,
 }: FindBackupFilesOptions & {
   preview?: boolean;
 }): Promise<BackupFindResult[] | BackupFindPreview> {
@@ -128,7 +131,7 @@ export async function findBackupFiles({
     .call<Api>(getSubject({ project_id }), {
       timeout: BACKUP_SEARCH_TIMEOUT_MS,
     })
-    .findBackupFiles({ glob, iglob, path, ids, preview });
+    .findBackupFiles({ glob, iglob, path, ids, preview, recursive });
   if (preview) {
     if (!Array.isArray(response)) return response;
     return {

@@ -24,6 +24,7 @@ export type FindSnapshotsState = {
   query: string;
   filter: string;
   mode: SnapshotSearchMode;
+  subdirs: boolean;
   hidden: boolean;
   caseSensitive: boolean;
   gitGrep: boolean;
@@ -34,6 +35,7 @@ export type FindBackupsState = {
   query: string;
   filter: string;
   mode: SnapshotSearchMode;
+  subdirs: boolean;
   hidden: boolean;
   caseSensitive: boolean;
 };

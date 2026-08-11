@@ -31,6 +31,7 @@ const DEFAULT_STATE: FindBackupsState = {
   query: "",
   filter: "",
   mode: "files",
+  subdirs: false,
   hidden: false,
   caseSensitive: false,
 };
@@ -128,7 +129,7 @@ export function BackupsTab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [truncationReason, setTruncationReason] = useState<
-    "results" | "time" | null
+    "results" | "time" | "limits" | null
   >(null);
   const [results, setResults] = useState<BackupResult[]>([]);
   const [backupIds, setBackupIds] = useState<string[] | undefined>();
@@ -262,6 +263,7 @@ export function BackupsTab({
           path: backupScopePath || undefined,
           ids: backupIds && backupIds.length ? backupIds : undefined,
           preview: true as const,
+          recursive: state.subdirs,
         };
         const response = await findBackupFiles(payload);
         const raw = response.results;
@@ -301,6 +303,7 @@ export function BackupsTab({
     [
       state.query,
       state.caseSensitive,
+      state.subdirs,
       backupIds,
       backupName,
       project_id,
@@ -574,6 +577,13 @@ export function BackupsTab({
     <Space wrap style={{ marginTop: "8px" }}>
       <Button
         size="small"
+        type={state.subdirs ? "primary" : "default"}
+        onClick={() => setState({ subdirs: !state.subdirs })}
+      >
+        Subdirectories
+      </Button>
+      <Button
+        size="small"
         type={state.hidden ? "primary" : "default"}
         onClick={() => setState({ hidden: !state.hidden })}
       >
@@ -621,14 +631,23 @@ export function BackupsTab({
           <Loading />
         </div>
       ) : null}
+      {state.subdirs ? (
+        <Alert
+          style={{ marginTop: "10px" }}
+          type="warning"
+          title="Recursive backup search can be slower. The current directory is searched first, then subdirectories breadth-first."
+        />
+      ) : null}
       {!loading && truncationReason ? (
         <Alert
           style={{ marginTop: "10px" }}
           type="warning"
           title={
             truncationReason === "results"
-              ? "Showing the first 100 matches. Some results were omitted; tighten the search to find a specific file."
-              : `Showing ${results.length} matches found in the first 5 seconds. The search is incomplete; tighten it for more specific results.`
+              ? "Showing up to 100 matches. Some results were omitted; tighten the search to find a specific file."
+              : truncationReason === "time"
+                ? `Showing ${results.length} matches found in the first 5 seconds. The search is incomplete; tighten it or turn off Subdirectories.`
+                : `Showing ${results.length} matches from a bounded search. Tighten it or turn off Subdirectories.`
           }
         />
       ) : null}

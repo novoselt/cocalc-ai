@@ -4457,6 +4457,7 @@ async function findBackupFiles({
   path,
   ids,
   preview,
+  recursive,
 }: {
   project_id: string;
   glob?: string[];
@@ -4464,6 +4465,7 @@ async function findBackupFiles({
   path?: string;
   ids?: string[];
   preview?: boolean;
+  recursive?: boolean;
 }): Promise<BackupBrowserSearchResult[] | BackupBrowserSearchResponse> {
   const response = await rusticBackupBrowser.find({
     profilePath: await resolveRusticRepo(project_id),
@@ -4473,6 +4475,7 @@ async function findBackupFiles({
     path,
     ids,
     preview,
+    recursive,
   });
   return preview ? response : response.results;
 }

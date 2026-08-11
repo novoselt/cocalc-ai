@@ -79,6 +79,7 @@ type FindBackupFilesOptions = {
   iglob?: string[];
   path?: string;
   ids?: string[];
+  recursive?: boolean;
 };
 
 export async function findBackupFiles(
