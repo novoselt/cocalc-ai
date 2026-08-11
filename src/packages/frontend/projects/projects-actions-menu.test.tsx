@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { fromJS } from "immutable";
 
-import { ProjectActionsMenu } from "./projects-actions-menu";
+import { ProjectActionsMenuContent } from "./projects-actions-menu-content";
 
 const moveProjectToHost = jest.fn();
 const refreshProjectRegion = jest.fn(async () => undefined);
@@ -170,7 +170,7 @@ jest.mock("./util", () => ({
 
 function renderMenu() {
   return render(
-    <ProjectActionsMenu
+    <ProjectActionsMenuContent
       record={
         {
           project_id: "project-1",
@@ -204,7 +204,6 @@ describe("ProjectActionsMenu", () => {
     );
 
     renderMenu();
-    fireEvent.click(screen.getByText("ellipsis"));
     fireEvent.click(screen.getByRole("button", { name: "Hide project" }));
 
     await waitFor(() =>
@@ -215,7 +214,6 @@ describe("ProjectActionsMenu", () => {
   it("runs project moves through fresh authentication", async () => {
     renderMenu();
 
-    fireEvent.click(screen.getByText("ellipsis"));
     fireEvent.click(screen.getByText("Move to host…"));
     await waitFor(() => expect(refreshProjectRegion).toHaveBeenCalledTimes(1));
 
