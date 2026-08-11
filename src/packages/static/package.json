@@ -23,6 +23,7 @@
     "check-entry-module-guards": "pnpm run analyze && node ./scripts/check-entry-module-guards.mjs",
     "check-startup-route-budgets": "pnpm run analyze && node ./scripts/check-startup-route-budgets.mjs",
     "check-bundle-guards": "pnpm run check-entry-budgets && pnpm run analyze && node ./scripts/check-entry-module-guards.mjs && node ./scripts/check-startup-route-budgets.mjs",
+    "report-startup-modules": "node ./scripts/report-startup-modules.mjs",
     "report-startup-routes": "node ./scripts/check-startup-route-budgets.mjs --report-only",
     "watch": "NODE_ENV=development pnpm rspack build -w",
     "watch:low-mem": "node ./scripts/watch-low-memory-rspack.mjs",

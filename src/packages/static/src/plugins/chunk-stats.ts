@@ -17,6 +17,7 @@ interface ChunkStats {
   files: string[];
   importers: Record<string, string[]>;
   initial: boolean;
+  moduleRawBytes: Record<string, number>;
   name?: string;
   modules: string[];
 }
@@ -71,6 +72,17 @@ function getChunkFiles(chunk: any): string[] {
     .sort();
 }
 
+function getLeafModules(module: any): any[] {
+  const nested = Array.from(module?.modules ?? []);
+  if (nested.length === 0) return [module];
+  return nested.flatMap(getLeafModules);
+}
+
+function getModuleSize(module: any): number {
+  const size = module?.size?.();
+  return typeof size === "number" && Number.isFinite(size) ? size : 0;
+}
+
 class ChunkStatsPlugin implements WebpackPluginInstance {
   name = "ChunkStatsPlugin";
 
@@ -100,27 +112,37 @@ class ChunkStatsPlugin implements WebpackPluginInstance {
           typeof chunk?.name === "string" && chunk.name ? chunk.name : null;
 
         const modules = new Set<string>();
+        const moduleRawBytes: Record<string, number> = {};
         const importers: Record<string, string[]> = {};
+        const chunkModuleNames = new Map<any, string>();
         const chunkModules =
           compilation.chunkGraph?.getChunkModulesIterable?.(chunk);
         if (chunkModules != null) {
-          for (const module of chunkModules) {
-            const name = getModuleName(module);
-            if (name != null) {
+          for (const rootModule of chunkModules) {
+            for (const module of getLeafModules(rootModule)) {
+              const name = getModuleName(module);
+              if (name == null) continue;
               modules.add(name);
-              const incoming =
-                compilation.moduleGraph?.getIncomingConnections?.(module);
-              if (incoming != null) {
-                const names = new Set<string>();
-                for (const connection of incoming) {
-                  const importer = getModuleName(connection?.originModule);
-                  if (importer != null && importer !== name) {
-                    names.add(importer);
-                  }
+              chunkModuleNames.set(module, name);
+              moduleRawBytes[name] = Math.max(
+                moduleRawBytes[name] ?? 0,
+                getModuleSize(module),
+              );
+            }
+          }
+          for (const [module, name] of chunkModuleNames) {
+            const incoming =
+              compilation.moduleGraph?.getIncomingConnections?.(module);
+            if (incoming != null) {
+              const names = new Set<string>();
+              for (const connection of incoming) {
+                const importer = chunkModuleNames.get(connection?.originModule);
+                if (importer != null && importer !== name) {
+                  names.add(importer);
                 }
-                if (names.size > 0) {
-                  importers[name] = [...names].sort();
-                }
+              }
+              if (names.size > 0) {
+                importers[name] = [...names].sort();
               }
             }
           }
@@ -151,6 +173,7 @@ class ChunkStatsPlugin implements WebpackPluginInstance {
           files,
           importers,
           initial: chunk.canBeInitial?.() === true,
+          moduleRawBytes,
           ...(name == null ? {} : { name }),
           modules: [...modules].sort(),
         };
