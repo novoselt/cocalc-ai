@@ -17,6 +17,7 @@ function sameResourceUri(observed: unknown, expected: string) {
 export function assertComputeVmSecurity(
   instance: RemoteInstance,
   config: ComputeVmConfig,
+  expectedSubnetwork?: string,
 ): void {
   const observed = instance.metadata?.gcp_security ?? {};
   const violations: string[] = [];
@@ -47,8 +48,8 @@ export function assertComputeVmSecurity(
     violations.push("external IPv6 is enabled");
   }
   if (
-    config.gcp_subnetwork &&
-    !sameResourceUri(observed.subnetwork, config.gcp_subnetwork)
+    expectedSubnetwork &&
+    !sameResourceUri(observed.subnetwork, expectedSubnetwork)
   ) {
     violations.push("instance is not attached to the configured subnetwork");
   }

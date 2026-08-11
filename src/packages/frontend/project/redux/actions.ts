@@ -81,6 +81,7 @@ import {
   VIEWER_FILE_EDITOR_EXTENSION,
 } from "@cocalc/frontend/project/viewer-file-editor-consts";
 import { publicDirectoryShareUrlForLocalUrl } from "@cocalc/frontend/project/public-directory-share-url";
+import { startDirectoryNavigationTrace } from "@cocalc/frontend/project/listing/ux-latency";
 import { API } from "@cocalc/frontend/project/websocket/api";
 import { disconnect_from_project } from "@cocalc/frontend/project/websocket/connect";
 import {
@@ -778,6 +779,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     this.closeExpensive();
     this.open_files?.close();
     delete this.open_files;
+    this.canonicalSyncIdentityPaths.clear();
     this.state = "closed";
     this.filesystem = undefined;
   };
@@ -1571,7 +1573,10 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   // Open the given file in this project.
   open_file = async (opts: OpenFileOpts): Promise<void> => {
     // Log that we *started* opening the file.
-    log_file_open(this.project_id, opts.path);
+    log_file_open(this.project_id, opts.path, undefined, {
+      surface_visible:
+        (opts.foreground ?? true) && opts.new_browser_window !== true,
+    });
     if (this.state == "closed") return;
     await open_file(this, opts);
   };
@@ -1675,9 +1680,17 @@ export class ProjectActions extends Actions<ProjectStoreState> {
         const ext = this.open_files?.get(path, "ext");
         const isViewer = this.isViewerProjectUser();
         const editorExt = isViewer ? viewerEditorExtension(ext) : ext;
+        const syncIdentityPathIsCanonical =
+          this.canonicalSyncIdentityPaths.has(syncPath);
+        const readOnlyPreview =
+          isViewer && shouldUseFrameEditorReadOnlyPreview(syncPath, editorExt);
         const initOptions =
-          isViewer && shouldUseFrameEditorReadOnlyPreview(syncPath, editorExt)
-            ? { readOnlyPreview: true }
+          readOnlyPreview || syncIdentityPathIsCanonical
+            ? {
+                readOnlyPreview: readOnlyPreview || undefined,
+                syncIdentityPathIsCanonical:
+                  syncIdentityPathIsCanonical || undefined,
+              }
             : undefined;
         const { name, Editor } = await this.init_file_react_redux(
           syncPath,
@@ -1737,6 +1750,11 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     string,
     Promise<void>
   >();
+  private canonicalSyncIdentityPaths = new Set<string>();
+
+  public markSyncIdentityPathCanonical(path: string): void {
+    this.canonicalSyncIdentityPaths.add(path);
+  }
 
   private openFileComponentRuntimeIsUsable(info: any, isViewer: boolean) {
     return openFileComponentRuntimeIsUsable({
@@ -2192,6 +2210,14 @@ export class ProjectActions extends Actions<ProjectStoreState> {
       path = path.slice(0, -1);
     }
     const nextPathAbs = this.toAbsoluteCurrentPath(path);
+    startDirectoryNavigationTrace({
+      project_id: this.project_id,
+      host_id: this.redux
+        .getStore("projects")
+        ?.getIn(["project_map", this.project_id, "host_id"]),
+      path: nextPathAbs,
+      surface_visible: foreground_project,
+    });
     if (foreground_project) {
       this.foreground_project(change_history);
     }

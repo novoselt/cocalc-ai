@@ -12,6 +12,7 @@ import {
   displayNameFromParts,
   normalizeDisplayName,
 } from "@cocalc/util/accounts/display-name";
+import { recordServerGrowthEvent } from "@cocalc/server/growth-analytics/server-events";
 
 const log = getLogger("server:accounts:create");
 
@@ -104,6 +105,23 @@ export default async function createAccount({
           : null,
       ],
     );
+    recordServerGrowthEvent({
+      account_id,
+      event_name: "account_created",
+      source_component: "auth",
+      properties: {
+        auth_method: password ? "password" : "email_code_or_link",
+      },
+    });
+    if (verified_email) {
+      recordServerGrowthEvent({
+        account_id,
+        event_name: "identity_proved",
+        occurred_at: verified_email.verified_at,
+        source_component: "auth",
+        properties: { auth_method: "email_code_or_link" },
+      });
+    }
   } catch (error) {
     log.error("Error creating account", error);
     throw error; // re-throw to bubble up to higher layers if needed

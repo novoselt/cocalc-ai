@@ -4,6 +4,22 @@
  */
 
 export const MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS = {
+  features: {
+    bandwidth_relay_abuse_exempt: {
+      label: "Bandwidth relay enforcement exemption",
+      adminDescription:
+        "Exempts this account from automatic bandwidth-relay project stops and bans. Raw-network egress remains metered and visible. Use only for reviewed legitimate workloads, preferably with an expiration.",
+      userDescription:
+        "Your account has an administrator-approved bandwidth-relay enforcement exemption.",
+    },
+    cryptomining_abuse_exempt: {
+      label: "Compute abuse enforcement exemption",
+      adminDescription:
+        "Exempts this account from automatic cryptomining and prohibited-QEMU project stops and bans. Use only for reviewed legitimate workloads, preferably with an expiration.",
+      userDescription:
+        "Your account has an administrator-approved compute abuse enforcement exemption.",
+    },
+  },
   project_defaults: {
     disk_quota: {
       label: "Per-project disk quota",

@@ -22,9 +22,14 @@ import { getLogger } from "@cocalc/backend/logger";
 import { KUCALC_COCALC_COM } from "@cocalc/util/db-schema/site-defaults";
 import { AllSiteSettingsCached } from "@cocalc/util/db-schema/types";
 // sendgrid API: https://sendgrid.com/docs/API_Reference/Web_API/mail.html
-import { contains_url } from "@cocalc/backend/misc";
 import { site_settings_conf } from "@cocalc/util/db-schema/site-defaults";
-import { defaults, required, split, to_json } from "@cocalc/util/misc";
+import {
+  defaults,
+  required,
+  sanitize_urls,
+  split,
+  to_json,
+} from "@cocalc/util/misc";
 import { appendUrlPath } from "@cocalc/util/url-path";
 import {
   COMPANY_EMAIL,
@@ -329,9 +334,8 @@ export function create_email_body(
   let email_body = "";
   if (body) {
     email_body = escape_email_body(body, allow_urls_in_emails);
-    // we check if there are plain URLs, which can be used to send SPAM
-    if (!allow_urls_in_emails && contains_url(email_body)) {
-      throw new Error("Sorry, links to specific websites are not allowed!");
+    if (!allow_urls_in_emails) {
+      email_body = sanitize_urls(email_body);
     }
   } else {
     email_body = subject;

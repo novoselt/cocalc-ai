@@ -440,7 +440,12 @@ describe("public/docs", () => {
     expect(
       markdown.querySelector(".cocalc-slate-code-block .token"),
     ).not.toBeNull();
-    expect(markdown.querySelector("button")).not.toBeNull();
+    const copyButton = markdown.querySelector(
+      ".cocalc-code-copy-button--overlay",
+    );
+    expect(copyButton).not.toBeNull();
+    expect(copyButton).toHaveAccessibleName("Copy to clipboard");
+    expect(copyButton).toHaveTextContent("");
   });
 
   it("renders a docs detail page with action metadata", () => {

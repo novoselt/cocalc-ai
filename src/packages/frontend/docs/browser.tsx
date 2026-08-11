@@ -51,6 +51,7 @@ import { Icon, Tooltip } from "@cocalc/frontend/components";
 import { COLORS } from "@cocalc/util/theme";
 import type { Host } from "@cocalc/conat/hub/api/hosts";
 import { useProjectHostLatencies } from "@cocalc/frontend/hosts/use-project-host-latencies";
+import { SelectProject } from "@cocalc/frontend/projects/select-project";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown-public";
 import type {
   DocsPrivateEntrySummary,
@@ -1122,57 +1123,6 @@ function useProjectHostParameterOptions(enabled: boolean): {
   return { error, loading, options };
 }
 
-function useProjectParameterOptions(enabled: boolean): {
-  options: { label: string; value: string }[];
-} {
-  const [options, setOptions] = useState<{ label: string; value: string }[]>(
-    [],
-  );
-  useEffect(() => {
-    let canceled = false;
-    let cleanup: (() => void) | undefined;
-    if (!enabled) {
-      setOptions([]);
-      return;
-    }
-    void import("@cocalc/frontend/app-framework").then(({ redux }) => {
-      if (canceled) return;
-      const store = redux.getStore("projects");
-      if (store == null) {
-        setOptions([]);
-        return;
-      }
-      const readOptions = () => {
-        const projectMap = store.get("project_map");
-        if (projectMap == null) return [];
-        const values: { label: string; title: string; value: string }[] = [];
-        for (const [projectId, project] of projectMap) {
-          const title = `${project?.get?.("title") ?? "No Title"}`.trim();
-          const state = `${project?.getIn?.(["state", "state"]) ?? ""}`.trim();
-          values.push({
-            label: state
-              ? `${title || "No Title"} (${state})`
-              : title || "No Title",
-            title: title || "No Title",
-            value: projectId,
-          });
-        }
-        values.sort((a, b) => a.title.localeCompare(b.title));
-        return values.map(({ label, value }) => ({ label, value }));
-      };
-      const updateOptions = () => setOptions(readOptions());
-      store.on("change", updateOptions);
-      updateOptions();
-      cleanup = () => store.removeListener("change", updateOptions);
-    });
-    return () => {
-      canceled = true;
-      cleanup?.();
-    };
-  }, [enabled]);
-  return { options };
-}
-
 export function DocsActions({
   actions,
   defaultActionParameters,
@@ -1193,13 +1143,7 @@ export function DocsActions({
     visibleActions.some((action) =>
       action.parameters?.some((parameter) => parameter.type === "project-host"),
     );
-  const needsProjectSelector =
-    onRunAction != null &&
-    visibleActions.some((action) =>
-      action.parameters?.some((parameter) => parameter.type === "project"),
-    );
   const hostOptions = useProjectHostParameterOptions(needsProjectHostSelector);
-  const projectOptions = useProjectParameterOptions(needsProjectSelector);
   const [parameterValues, setParameterValues] = useState<
     Record<string, DocsBrowserActionParameters>
   >({});
@@ -1274,23 +1218,29 @@ export function DocsActions({
                     }}
                     value={values[parameter.name]}
                   />
-                ) : parameter.type === "project" ? (
-                  <Select
-                    allowClear
-                    disabled={state.disabled || onRunAction == null}
+                ) : parameter.type === "project" && onRunAction != null ? (
+                  <SelectProject
+                    disabled={state.disabled}
+                    fullCollaboratorOnly
                     key={parameter.name}
-                    notFoundContent="No projects"
                     onChange={(value) =>
                       setActionParameter(action, parameter.name, value)
                     }
-                    optionFilterProp="label"
-                    options={projectOptions.options}
+                    style={{
+                      minWidth: layout === "flyout" ? 0 : 220,
+                      width: layout === "flyout" ? "100%" : 360,
+                    }}
+                    value={values[parameter.name]}
+                  />
+                ) : parameter.type === "project" ? (
+                  <Select
+                    disabled
+                    key={parameter.name}
                     placeholder={parameter.placeholder ?? parameter.label}
-                    showSearch
                     size={layout === "flyout" ? "small" : "middle"}
                     style={{
                       minWidth: layout === "flyout" ? 0 : 220,
-                      width: layout === "flyout" ? "60%" : 240,
+                      width: layout === "flyout" ? "100%" : 360,
                     }}
                     value={values[parameter.name]}
                   />

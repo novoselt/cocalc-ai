@@ -32,6 +32,7 @@ import type {
 } from "@cocalc/conat/hub/api/hosts";
 import type {
   HostAgentStatus,
+  HostManagedComponentRolloutResult,
   HostManagedComponentRolloutRequest,
   HostManagedComponentRolloutResponse,
   HostManagedComponentStatus,
@@ -374,9 +375,19 @@ function managedComponentAlignmentFailures({
   desiredVersion?: string;
   row: any;
 }): string[] {
-  const expectedVersion =
-    normalizeObservedVersion(observedInstalledProjectHostBuildIdFromRow(row)) ??
-    normalizeObservedVersion(desiredVersion);
+  const normalizedDesiredVersion = normalizeObservedVersion(desiredVersion);
+  const currentArtifactVersion =
+    normalizeObservedVersion(observedInstalledProjectHostVersionFromRow(row)) ??
+    normalizeObservedVersion(row?.metadata?.software?.project_host) ??
+    normalizeObservedVersion(row?.version);
+  const stagedAuxiliaryVersion =
+    normalizedDesiredVersion != null &&
+    currentArtifactVersion !== normalizedDesiredVersion;
+  const expectedVersion = stagedAuxiliaryVersion
+    ? normalizedDesiredVersion
+    : (normalizeObservedVersion(
+        observedInstalledProjectHostBuildIdFromRow(row),
+      ) ?? normalizedDesiredVersion);
   const failures: string[] = [];
   for (const component of components) {
     const status = (statuses ?? []).find(
@@ -393,7 +404,10 @@ function managedComponentAlignmentFailures({
       failures.push(`${component}: runtime_state=${status.runtime_state}`);
       continue;
     }
-    if (status.version_state !== "aligned") {
+    if (
+      status.version_state !== "aligned" &&
+      !(stagedAuxiliaryVersion && component !== "acp-worker")
+    ) {
       failures.push(
         `${component}: version_state=${status.version_state}, running=${(status.running_versions ?? []).join(",") || "none"}, desired=${status.desired_version ?? "unknown"}`,
       );
@@ -408,7 +422,7 @@ function managedComponentAlignmentFailures({
             .filter((version): version is string => version != null),
         ),
       ];
-      if (desired && desired !== expectedVersion) {
+      if (!stagedAuxiliaryVersion && desired && desired !== expectedVersion) {
         failures.push(
           `${component}: desired=${desired}, expected=${expectedVersion}`,
         );
@@ -1142,6 +1156,10 @@ export async function rolloutHostManagedComponentsInternalHelper({
     requestedProjectHostRollout &&
     desiredProjectHostVersion != null &&
     installedProjectHostVersion === desiredProjectHostVersion;
+  const hostAgentOwnsProjectHostTransition =
+    requestedProjectHostRollout &&
+    desiredProjectHostVersion != null &&
+    installedProjectHostVersion !== desiredProjectHostVersion;
   if (
     desiredProjectHostVersion &&
     installedProjectHostVersion !== desiredProjectHostVersion
@@ -1206,6 +1224,20 @@ export async function rolloutHostManagedComponentsInternalHelper({
       row = await loadHostForStartStop(id, account_id);
     }
   }
+  const directlyRolledOutComponents = hostAgentOwnsProjectHostTransition
+    ? components.filter((component) => component !== "project-host")
+    : components;
+  const hostAgentResults: HostManagedComponentRolloutResult[] =
+    hostAgentOwnsProjectHostTransition
+      ? [
+          {
+            component: "project-host",
+            action: "restart_scheduled",
+            message:
+              "activated project-host candidate; host agent owns the version transition",
+          },
+        ]
+      : [];
   let baselineProjectHostPids: number[] = [];
   if (requiresProjectHostProcessReplacement) {
     if (typeof client.getManagedComponentStatus !== "function") {
@@ -1228,29 +1260,41 @@ export async function rolloutHostManagedComponentsInternalHelper({
   const rolloutStartedAt = Date.now();
   let response: HostManagedComponentRolloutResponse;
   let rolloutRequestError: unknown;
-  try {
-    response = await withTimeout({
-      promise: client.rolloutManagedComponents({
-        components,
-        reason,
-        desired_version: desiredProjectHostVersion,
-      }),
-      timeoutMs: managedComponentRolloutRpcTimeoutMs,
-    });
-  } catch (err) {
-    rolloutRequestError = err;
-    const timedOut = err instanceof ManagedComponentRolloutRpcTimeoutError;
-    await onProgress?.({
-      rollout_phase: timedOut
-        ? "managed_components.rpc_timeout"
-        : "managed_components.rpc_interrupted",
-      rollout_phase_label: timedOut
-        ? "Managed component rollout request timed out; verifying host state"
-        : "Managed component rollout request was interrupted; verifying host state",
-      rollout_phase_owner: "managed component alignment",
-      rollout_target_version: desiredProjectHostVersion,
-    });
-    response = assumedManagedComponentRolloutResponse(components);
+  if (directlyRolledOutComponents.length === 0) {
+    response = { results: hostAgentResults };
+  } else {
+    try {
+      const directResponse = await withTimeout({
+        promise: client.rolloutManagedComponents({
+          components: directlyRolledOutComponents,
+          reason,
+          desired_version: desiredProjectHostVersion,
+        }),
+        timeoutMs: managedComponentRolloutRpcTimeoutMs,
+      });
+      response = {
+        results: [...hostAgentResults, ...(directResponse.results ?? [])],
+      };
+    } catch (err) {
+      rolloutRequestError = err;
+      const timedOut = err instanceof ManagedComponentRolloutRpcTimeoutError;
+      await onProgress?.({
+        rollout_phase: timedOut
+          ? "managed_components.rpc_timeout"
+          : "managed_components.rpc_interrupted",
+        rollout_phase_label: timedOut
+          ? "Managed component rollout request timed out; verifying host state"
+          : "Managed component rollout request was interrupted; verifying host state",
+        rollout_phase_owner: "managed component alignment",
+        rollout_target_version: desiredProjectHostVersion,
+      });
+      const assumed = assumedManagedComponentRolloutResponse(
+        directlyRolledOutComponents,
+      );
+      response = {
+        results: [...hostAgentResults, ...assumed.results],
+      };
+    }
   }
   let refreshedRow = row;
   if (requestedProjectHostRollout) {

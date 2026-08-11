@@ -3,8 +3,14 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { schemaNeedsSync, syncSchema } from "./sync";
+import {
+  columnTypeFromInformationSchema,
+  schemaNeedsSync,
+  syncSchema,
+} from "./sync";
 import { createIndexesQueries } from "./indexes";
+import { notNullGuardName } from "./column-invariants";
+import { addSchemaIndexMarker, schemaIndexHash } from "./index-metadata";
 import { SCHEMA } from "@cocalc/util/schema";
 import type { DBSchema, TableSchema } from "./types";
 import { getClient } from "@cocalc/database/pool";
@@ -23,6 +29,10 @@ jest.mock("./table", () => ({
         return ["input_sha1"];
       case "registration_tokens":
         return ["token"];
+      case "compute_resource_work":
+        return ["id"];
+      case "schema_invariant_test":
+        return ["id"];
       default:
         return [];
     }
@@ -31,8 +41,12 @@ jest.mock("./table", () => ({
 
 type ColumnRow = {
   column_name: string;
+  column_default?: string | null;
   data_type: string;
   character_maximum_length?: number | null;
+  is_nullable?: "YES" | "NO";
+  numeric_precision?: number | null;
+  numeric_scale?: number | null;
 };
 
 type QueryResult = { rows: Array<Record<string, any>> };
@@ -78,9 +92,14 @@ const embeddingColumns: ColumnRow[] = [
   },
 ];
 
-const embeddingIndexRows = createIndexesQueries(embeddingSchemaDef).map(
-  ({ name }) => ({ name }),
-);
+function managedIndexRows(schema: TableSchema) {
+  return createIndexesQueries(schema).map((index) => ({
+    name: index.name,
+    comment: addSchemaIndexMarker(null, schemaIndexHash(index)),
+  }));
+}
+
+const embeddingIndexRows = managedIndexRows(embeddingSchemaDef);
 
 const embeddingPrimaryKeyRows = [{ name: "input_sha1" }];
 
@@ -99,11 +118,72 @@ const registrationTokensColumns: ColumnRow[] = [
   { column_name: "customize", data_type: "jsonb" },
 ];
 
-const registrationTokensIndexRows = createIndexesQueries(
+const registrationTokensIndexRows = managedIndexRows(
   SCHEMA.registration_tokens,
-).map(({ name }) => ({ name }));
+);
 
 const registrationTokensPrimaryKeyRows = [{ name: "token" }];
+
+const computeWorkSchema: DBSchema = {
+  compute_resource_work: SCHEMA.compute_resource_work,
+};
+
+const invariantSchemaDef: TableSchema = {
+  name: "schema_invariant_test",
+  primary_key: "id",
+  fields: {
+    id: { type: "uuid" },
+    state: {
+      type: "map",
+      pg_default: "'{}'::jsonb",
+      not_null: true,
+      pg_null_backfill: "'{}'::jsonb",
+    },
+    started_at: {
+      type: "timestamp",
+      pg_default: "now()",
+      not_null: true,
+      pg_null_backfill: "now()",
+    },
+  },
+};
+
+const invariantSchema: DBSchema = {
+  schema_invariant_test: invariantSchemaDef,
+};
+
+const invariantPrimaryKeyRows = [{ name: "id" }];
+
+describe("schema column type introspection", () => {
+  it("preserves numeric precision and scale", () => {
+    expect(
+      columnTypeFromInformationSchema({
+        column_name: "cost",
+        data_type: "numeric",
+        numeric_precision: 20,
+        numeric_scale: 10,
+      }),
+    ).toBe("numeric(20,10)");
+  });
+
+  it("preserves unconstrained numeric and varchar types", () => {
+    expect(
+      columnTypeFromInformationSchema({
+        column_name: "amount",
+        data_type: "numeric",
+        numeric_precision: null,
+        numeric_scale: null,
+      }),
+    ).toBe("numeric");
+    expect(
+      columnTypeFromInformationSchema({
+        column_name: "name",
+        data_type: "character varying",
+        character_maximum_length: 127,
+      }),
+    ).toBe("varchar(127)");
+  });
+});
 
 describe("custom index generation", () => {
   it("wraps non-function expression indexes in expression parentheses", () => {
@@ -120,7 +200,7 @@ describe("custom index generation", () => {
 function createMockClient(options: {
   tableName: string;
   columnRows: ColumnRow[];
-  indexRows: Array<{ name: string }>;
+  indexRows: Array<{ name: string; comment?: string | null }>;
   primaryKeyRows: Array<{ name: string }>;
   extraTables?: string[];
   hasLegacyAiUsageLogTable?: boolean;
@@ -184,13 +264,54 @@ function createMockClient(options: {
       }
       return { rows: columnRows };
     }
-    if (text.includes("FROM pg_class AS a JOIN pg_index AS b")) {
-      return { rows: indexRows };
+    if (text.includes("FROM pg_constraint AS constraint_row")) {
+      return { rows: [] };
+    }
+    if (text.includes("FROM pg_index AS index_row")) {
+      return {
+        rows: indexRows.map((row, oid) => ({
+          oid: `${oid + 1}`,
+          comment: null,
+          constraint_name: null,
+          primary: false,
+          ready: true,
+          valid: true,
+          unique: false,
+          exclusion: false,
+          method: "btree",
+          key_count: 1,
+          column_count: 1,
+          nulls_not_distinct: false,
+          columns: ["placeholder"],
+          collations: "0",
+          operator_classes: "0",
+          options: "0",
+          expressions: null,
+          predicate: null,
+          ...row,
+        })),
+      };
     }
     if (text.includes("FROM   pg_index i")) {
       return { rows: primaryKeyRows };
     }
-    if (text.startsWith("ALTER TABLE ") || text.startsWith("DROP INDEX ")) {
+    if (text.includes("WITH batch AS MATERIALIZED")) {
+      return { rows: [] };
+    }
+    if (
+      text.includes("SELECT EXISTS") &&
+      text.includes('FROM "schema_invariant_test"')
+    ) {
+      return { rows: [{ exists: false }] };
+    }
+    if (
+      text.startsWith("ALTER TABLE ") ||
+      text.startsWith("DROP INDEX ") ||
+      text.startsWith("UPDATE ") ||
+      text === "BEGIN" ||
+      text === "COMMIT" ||
+      text === "ROLLBACK"
+    ) {
       return { rows: [] };
     }
     throw new Error(`Unexpected query: ${text}`);
@@ -237,6 +358,32 @@ describe("schemaNeedsSync column actions", () => {
     const result = await schemaNeedsSync(embeddingSchema);
 
     expect(result).toBe(true);
+  });
+
+  it("adds a missing BIGSERIAL column with its unique constraint", async () => {
+    const client = createMockClient({
+      tableName: "compute_resource_work",
+      columnRows: Object.entries(SCHEMA.compute_resource_work.fields)
+        .filter(([name]) => name !== "queue_order")
+        .map(([column_name, field]) => ({
+          column_name,
+          data_type:
+            field.pg_type === "UUID"
+              ? "uuid"
+              : field.type === "timestamp"
+                ? "timestamp without time zone"
+                : "text",
+        })),
+      indexRows: managedIndexRows(SCHEMA.compute_resource_work),
+      primaryKeyRows: [{ name: "id" }],
+    });
+    (getClient as jest.Mock).mockReturnValue(client);
+
+    await syncSchema(computeWorkSchema);
+
+    expect(client.query).toHaveBeenCalledWith(
+      'ALTER TABLE "compute_resource_work" ADD COLUMN "queue_order" BIGSERIAL UNIQUE',
+    );
   });
 
   it("returns false when double precision types match number fields", async () => {
@@ -306,13 +453,20 @@ describe("schemaNeedsSync column actions", () => {
     );
   });
 
-  it("drops stale PGlite indexes without CONCURRENTLY", async () => {
+  it("drops stale managed indexes but preserves unknown indexes", async () => {
     const originalDatabase = process.env.COCALC_DB;
     process.env.COCALC_DB = "pglite";
     const client = createMockClient({
       tableName: "embedding_cache",
       columnRows: embeddingColumns,
-      indexRows: [...embeddingIndexRows, { name: "embedding_cache_stale_idx" }],
+      indexRows: [
+        ...embeddingIndexRows,
+        { name: "embedding_cache_unknown_idx" },
+        {
+          name: "embedding_cache_stale_idx",
+          comment: addSchemaIndexMarker(null, "f".repeat(64)),
+        },
+      ],
       primaryKeyRows: embeddingPrimaryKeyRows,
     });
     (getClient as jest.Mock).mockReturnValue(client);
@@ -322,6 +476,9 @@ describe("schemaNeedsSync column actions", () => {
       expect(client.query).toHaveBeenCalledWith(
         'DROP INDEX IF EXISTS "embedding_cache_stale_idx"',
       );
+      expect(client.query).not.toHaveBeenCalledWith(
+        'DROP INDEX IF EXISTS "embedding_cache_unknown_idx"',
+      );
     } finally {
       if (originalDatabase == null) {
         delete process.env.COCALC_DB;
@@ -329,5 +486,76 @@ describe("schemaNeedsSync column actions", () => {
         process.env.COCALC_DB = originalDatabase;
       }
     }
+  });
+
+  it("detects and repairs declared defaults and nullability", async () => {
+    const client = createMockClient({
+      tableName: "schema_invariant_test",
+      columnRows: [
+        { column_name: "id", data_type: "uuid", is_nullable: "NO" },
+        {
+          column_name: "state",
+          data_type: "jsonb",
+          column_default: null,
+          is_nullable: "YES",
+        },
+        {
+          column_name: "started_at",
+          data_type: "timestamp without time zone",
+          column_default: null,
+          is_nullable: "YES",
+        },
+      ],
+      indexRows: [],
+      primaryKeyRows: invariantPrimaryKeyRows,
+    });
+    (getClient as jest.Mock).mockReturnValue(client);
+
+    expect(await schemaNeedsSync(invariantSchema)).toBe(true);
+    await syncSchema(invariantSchema);
+
+    expect(client.query).toHaveBeenCalledWith(
+      `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET DEFAULT '{}'::jsonb`,
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `ADD CONSTRAINT "${notNullGuardName(
+          "schema_invariant_test",
+          "state",
+        )}" CHECK ("state" IS NOT NULL) NOT VALID`,
+      ),
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      `ALTER TABLE "schema_invariant_test" ALTER COLUMN "state" SET NOT NULL`,
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      `ALTER TABLE "schema_invariant_test" ALTER COLUMN "started_at" SET DEFAULT now()`,
+    );
+  });
+
+  it("accepts PostgreSQL-normalized declared invariants", async () => {
+    const client = createMockClient({
+      tableName: "schema_invariant_test",
+      columnRows: [
+        { column_name: "id", data_type: "uuid", is_nullable: "NO" },
+        {
+          column_name: "state",
+          data_type: "jsonb",
+          column_default: "'{}'::jsonb",
+          is_nullable: "NO",
+        },
+        {
+          column_name: "started_at",
+          data_type: "timestamp without time zone",
+          column_default: "now()",
+          is_nullable: "NO",
+        },
+      ],
+      indexRows: [],
+      primaryKeyRows: invariantPrimaryKeyRows,
+    });
+    (getClient as jest.Mock).mockReturnValue(client);
+
+    expect(await schemaNeedsSync(invariantSchema)).toBe(false);
   });
 });

@@ -653,6 +653,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       ensureDaemon(index, {
         quietHealthy: true,
         preserveManagedAuxiliaryDaemons: true,
+        preserveAcpWorkers: true,
       });
       await reconcileProjectHostRollback({
         index,

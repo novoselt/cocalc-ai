@@ -109,6 +109,7 @@ describe("project-host backup managed egress", () => {
     getManagedProjectEgressPolicyMock.mockResolvedValue({
       allowed: false,
       category: MANAGED_BACKUP_EGRESS_CATEGORY,
+      blocked_by: "7d",
       managed_egress_5h_bytes: 9_000_000,
       managed_egress_7d_bytes: 12_000_000,
       egress_5h_bytes: 8_000_000,
@@ -117,13 +118,17 @@ describe("project-host backup managed egress", () => {
         "backup-upload": 7_000_000,
         "raw-network": 2_000_000,
       },
+      managed_egress_categories_7d_bytes: {
+        "backup-upload": 10_000_000,
+        "raw-network": 2_000_000,
+      },
     });
     await expect(
       checkManagedBackupAllowedBestEffort({ project_id: "proj-1" }),
     ).resolves.toEqual({
       allowed: false,
       message: expect.stringContaining(
-        "Managed backup upload limit reached for this account.",
+        "Limit triggered by the 7-day network usage window.",
       ),
     });
     expect(getManagedProjectEgressPolicyMock).toHaveBeenCalledWith({

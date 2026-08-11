@@ -50,6 +50,7 @@ import {
   stopProviderComputeVm,
 } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
+import { ensureComputeWorkQueueSchema } from "./schema";
 import {
   closeDedicatedHostPurchaseSessionForAccount,
   recordDedicatedHostMeteredUsageForAccount,
@@ -1302,10 +1303,16 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
   let lastReconcile = 0;
   let lastEgressMeter = 0;
   let lastProviderInventory = 0;
+  let queueSchemaReady = false;
   const tick = async () => {
     if (running || stopped) return;
     running = true;
     try {
+      if (!queueSchemaReady) {
+        await ensureComputeWorkQueueSchema();
+        queueSchemaReady = true;
+        logger.info("managed compute work queue schema is ready");
+      }
       await enqueueExpiredComputeVms();
       if (Date.now() - lastReconcile >= 15_000) {
         lastReconcile = Date.now();

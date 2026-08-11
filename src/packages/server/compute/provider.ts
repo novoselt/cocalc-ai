@@ -18,9 +18,18 @@ import {
 import { getComputeVmConfig, type ComputeVmConfig } from "./config";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 import { assertComputeVmSecurity } from "./security";
+import { regionFromComputeZone } from "./placement";
 
 const provider = new GcpProvider();
 let networkSecurityCheck: { key: string; checked_at: number } | undefined;
+let subnetInventoryCache:
+  | {
+      key: string;
+      checked_at: number;
+      subnets: Map<string, string>;
+    }
+  | undefined;
+const NETWORK_CACHE_MS = 60_000;
 const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
   "0.0.0.0/8",
   "10.0.0.0/8",
@@ -59,44 +68,134 @@ function deniesAll(rule: any): boolean {
   );
 }
 
-async function assertProviderComputeNetworkSecurity(config: ComputeVmConfig) {
-  if (config.environment !== "production") return;
+function normalizeResourceUri(value: unknown): string {
+  return `${value ?? ""}`.replace(/^https:\/\/[^/]+\/compute\/v1\//, "");
+}
+
+function configuredNetworkName(config: ComputeVmConfig): string | undefined {
+  return config.gcp_network?.match(
+    /^projects\/[^/]+\/global\/networks\/([^/]+)$/,
+  )?.[1];
+}
+
+export function regionalComputeSubnetworks(
+  config: ComputeVmConfig,
+  observed: Array<{ regionPath?: string; subnet: any }>,
+): Map<string, string> {
+  if (!config.gcp_project_id || !config.gcp_network) {
+    throw new Error("managed compute dedicated GCP network is not configured");
+  }
+  const networkName = configuredNetworkName(config);
+  if (!networkName) {
+    throw new Error("managed compute GCP network URI is invalid");
+  }
+  const subnets = new Map<string, string>();
+  for (const { regionPath, subnet } of observed) {
+    if (normalizeResourceUri(subnet.network) !== config.gcp_network) continue;
+    if (subnet.purpose && subnet.purpose !== "PRIVATE") continue;
+    const region =
+      normalizeResourceUri(subnet.region).split("/").pop() ||
+      `${regionPath ?? ""}`.split("/").pop();
+    if (!region || subnet.name !== `${networkName}-${region}`) continue;
+    if (subnet.enableFlowLogs !== true && subnet.logConfig?.enable !== true) {
+      throw new Error(
+        `managed compute subnetwork '${subnet.name}' must have VPC Flow Logs enabled`,
+      );
+    }
+    if (subnets.has(region)) {
+      throw new Error(
+        `managed compute has multiple configured subnetworks in ${region}`,
+      );
+    }
+    subnets.set(
+      region,
+      `projects/${config.gcp_project_id}/regions/${region}/subnetworks/${subnet.name}`,
+    );
+  }
+  if (!subnets.size) {
+    throw new Error(
+      `managed compute network '${networkName}' has no flow-log-enabled regional subnetworks`,
+    );
+  }
+  return subnets;
+}
+
+async function discoverProviderComputeSubnetworks(
+  config: ComputeVmConfig,
+): Promise<Map<string, string> | undefined> {
+  if (config.staging_legacy_provider) return undefined;
   if (
     !config.gcp_service_account_json ||
     !config.gcp_project_id ||
-    !config.gcp_subnetwork
+    !config.gcp_network
   ) {
-    throw new Error("managed compute production network is not configured");
+    throw new Error("managed compute dedicated GCP network is not configured");
   }
-  const key = `${config.gcp_project_id}:${config.gcp_subnetwork}:${config.gcp_network_tag}`;
+  if (!configuredNetworkName(config)) {
+    throw new Error("managed compute GCP network URI is invalid");
+  }
+  const key = `${config.gcp_project_id}:${config.gcp_network}`;
+  if (
+    subnetInventoryCache?.key === key &&
+    Date.now() - subnetInventoryCache.checked_at < NETWORK_CACHE_MS
+  ) {
+    return new Map(subnetInventoryCache.subnets);
+  }
+  const client = new SubnetworksClient({
+    credentials: JSON.parse(config.gcp_service_account_json),
+  });
+  const observed: Array<{ regionPath?: string; subnet: any }> = [];
+  for await (const [regionPath, scoped] of client.aggregatedListAsync({
+    project: config.gcp_project_id,
+  })) {
+    for (const subnet of scoped.subnetworks ?? []) {
+      observed.push({ regionPath, subnet });
+    }
+  }
+  const subnets = regionalComputeSubnetworks(config, observed);
+  subnetInventoryCache = { key, checked_at: Date.now(), subnets };
+  return new Map(subnets);
+}
+
+export async function getProviderComputeRegions(): Promise<
+  Set<string> | undefined
+> {
+  const config = await getComputeVmConfig();
+  const subnets = await discoverProviderComputeSubnetworks(config);
+  return subnets == null ? undefined : new Set(subnets.keys());
+}
+
+export async function requireProviderComputeSubnetwork(
+  zone: string,
+): Promise<string | undefined> {
+  const config = await getComputeVmConfig();
+  const subnets = await discoverProviderComputeSubnetworks(config);
+  if (subnets == null) return undefined;
+  const region = regionFromComputeZone(zone);
+  const subnet = subnets.get(region);
+  if (!subnet) {
+    throw new Error(
+      `managed compute has no configured regional subnetwork for zone '${zone}'`,
+    );
+  }
+  return subnet;
+}
+
+async function assertProviderComputeNetworkSecurity(config: ComputeVmConfig) {
+  if (config.staging_legacy_provider) return;
+  if (
+    !config.gcp_service_account_json ||
+    !config.gcp_project_id ||
+    !config.gcp_network
+  ) {
+    throw new Error("managed compute dedicated GCP network is not configured");
+  }
+  const key = `${config.gcp_project_id}:${config.gcp_network}:${config.gcp_network_tag}`;
   if (
     networkSecurityCheck?.key === key &&
     Date.now() - networkSecurityCheck.checked_at < 5 * 60_000
   ) {
     return;
-  }
-  const subnetMatch = config.gcp_subnetwork.match(
-    /^projects\/[^/]+\/regions\/([^/]+)\/subnetworks\/(.+)$/,
-  );
-  if (!subnetMatch)
-    throw new Error("managed compute subnetwork URI is invalid");
-  const [, subnetRegion, subnetName] = subnetMatch;
-  const subnetClient = new SubnetworksClient({
-    credentials: JSON.parse(config.gcp_service_account_json),
-  });
-  const [subnet] = await subnetClient.get({
-    project: config.gcp_project_id,
-    region: subnetRegion,
-    subnetwork: subnetName,
-  });
-  if (
-    !subnet.network ||
-    (subnet.enableFlowLogs !== true &&
-      (subnet as any).logConfig?.enable !== true)
-  ) {
-    throw new Error(
-      "managed compute subnetwork must have VPC Flow Logs enabled",
-    );
   }
   const client = new FirewallsClient({
     credentials: JSON.parse(config.gcp_service_account_json),
@@ -125,7 +224,7 @@ async function assertProviderComputeNetworkSecurity(config: ComputeVmConfig) {
         `managed compute firewall rule '${name}' has the wrong target tag`,
       );
     }
-    if (`${rule.network ?? ""}` !== `${subnet.network}`) {
+    if (normalizeResourceUri(rule.network) !== config.gcp_network) {
       throw new Error(
         `managed compute firewall rule '${name}' is on the wrong network`,
       );
@@ -171,6 +270,7 @@ async function assertProviderComputeNetworkSecurity(config: ComputeVmConfig) {
 function specFor(
   vm: ComputeVmRow,
   config: ComputeVmConfig,
+  subnetwork: string | undefined,
   pricingModel = vm.effective_pricing_model,
   volume?: ComputeVolumeRow,
 ): HostSpec {
@@ -211,7 +311,7 @@ function specFor(
       ssh_public_keys: vm.metadata?.ssh_public_keys,
       block_project_ssh_keys: true,
       disable_service_account: true,
-      subnetwork_uri: config.gcp_subnetwork,
+      subnetwork_uri: subnetwork,
       labels: {
         "managed-by": "cocalc-compute",
         "logical-vm": vm.id.replaceAll("-", "").slice(0, 40),
@@ -433,9 +533,10 @@ export async function createProviderComputeVm(
   volume?: ComputeVolumeRow,
 ) {
   const { config, creds } = await context();
+  const subnetwork = await requireProviderComputeSubnetwork(vm.zone);
   await assertProviderComputeNetworkSecurity(config);
   return await provider.createHost(
-    specFor(vm, config, undefined, volume),
+    specFor(vm, config, subnetwork, undefined, volume),
     creds,
   );
 }
@@ -472,12 +573,13 @@ export async function deleteProviderComputeVm(vm: ComputeVmRow) {
 export async function inspectProviderComputeVm(vm: ComputeVmRow) {
   const { config, creds } = await context();
   try {
+    const subnetwork = await requireProviderComputeSubnetwork(vm.zone);
     const runtime = runtimeFor(vm);
     const [status, instance] = await Promise.all([
       provider.getStatus(runtime, creds),
       provider.getInstance(runtime, creds),
     ]);
-    if (instance) assertComputeVmSecurity(instance, config);
+    if (instance) assertComputeVmSecurity(instance, config, subnetwork);
     return { status, instance };
   } catch (err) {
     if (/not found|was not found|code.?5/i.test(`${err}`)) {
@@ -497,8 +599,9 @@ export async function setProviderComputePricing(
 
 export async function probeProviderComputeSpot(vm: ComputeVmRow) {
   const { config, creds } = await context();
+  const subnetwork = await requireProviderComputeSubnetwork(vm.zone);
   return await provider.probeSpotAvailability(
-    specFor(vm, config, "spot"),
+    specFor(vm, config, subnetwork, "spot"),
     creds,
     {
       stableForMs: 10_000,

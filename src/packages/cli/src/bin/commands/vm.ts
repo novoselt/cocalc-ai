@@ -12,6 +12,7 @@ import { Command } from "commander";
 
 export type VmCommandDeps = {
   withContext: any;
+  progress?: (message: string) => void;
   runSsh?: (args: string[]) => void;
   runRsync?: (args: string[]) => void;
   resolvePublicKey?: (path?: string) => { path?: string; key: string };
@@ -140,7 +141,7 @@ export function parseTtlMinutes(value: string) {
 }
 
 async function waitForState(
-  hub: any,
+  getVm: (idOrName: string) => Promise<any>,
   idOrName: string,
   desired: Set<string>,
   timeoutMs: number,
@@ -149,7 +150,7 @@ async function waitForState(
   let last: any;
   let lastProgress = "";
   while (Date.now() < deadline) {
-    last = await hub.compute.getVm({ id_or_name: idOrName });
+    last = await getVm(idOrName);
     if (desired.has(last.state)) return last;
     if (last.state === "failed") {
       throw new Error(last.error || `compute VM '${idOrName}' failed`);
@@ -164,6 +165,34 @@ async function waitForState(
   throw new Error(
     `timed out waiting for compute VM '${idOrName}'; last state=${last?.state ?? "unknown"}`,
   );
+}
+
+function projectScopedAuthId(ctx: any): string | undefined {
+  const projectId = `${ctx?.remote?.user?.project_id ?? ""}`.trim();
+  return projectId || undefined;
+}
+
+function requireAccountAuth(ctx: any, action: string) {
+  if (projectScopedAuthId(ctx)) {
+    throw Object.assign(
+      new Error(
+        `${action} requires account authentication instead of the ambient project credential`,
+      ),
+      { code: "account_auth_required" },
+    );
+  }
+}
+
+async function getVmForContext(ctx: any, idOrName: string) {
+  return projectScopedAuthId(ctx)
+    ? await ctx.hub.compute.getProjectVm({ id_or_name: idOrName })
+    : await ctx.hub.compute.getVm({ id_or_name: idOrName });
+}
+
+async function getVolumeForContext(ctx: any, idOrName: string) {
+  return projectScopedAuthId(ctx)
+    ? await ctx.hub.compute.getProjectVolume({ id_or_name: idOrName })
+    : await ctx.hub.compute.getVolume({ id_or_name: idOrName });
 }
 
 export function vmWaitProgress(vm: any): string | undefined {
@@ -317,6 +346,7 @@ export function volumeListSummary(rows: any[]) {
 export function registerVmCommand(program: Command, deps: VmCommandDeps) {
   const {
     withContext,
+    progress = (message) => process.stderr.write(`${message}\n`),
     runSsh = defaultRunSsh,
     runRsync = defaultRunRsync,
     resolvePublicKey = readPublicKey,
@@ -331,7 +361,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       opts.sshPublicKey ??
       (opts.identity ? `${expandHome(opts.identity)}.pub` : undefined);
     const key = resolvePublicKey(publicKeyPath);
-    const projectId = resolveProjectId();
+    const projectId = projectScopedAuthId(ctx);
     const authorize = projectId
       ? ctx.hub.compute.authorizeProjectSshKey
       : ctx.hub.compute.authorizeSshKey;
@@ -347,9 +377,10 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("account-owned managed compute VMs");
 
   vm.command("list")
-    .description("list compute VMs owned by the current account")
+    .description("list managed compute VMs in project or account scope")
     .option("--project <project_id>", "filter by attached project")
     .option("--include-deleted", "include deleted lease records", false)
+    .option("--all", "list all VMs owned by the authenticated account", false)
     .option("--long", "show the full durable VM records", false)
     .action(
       async (
@@ -357,14 +388,37 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           project?: string;
           includeDeleted?: boolean;
           long?: boolean;
+          all?: boolean;
         },
         command: Command,
       ) => {
         await withContext(command, "vm list", async (ctx) => {
-          const rows = await ctx.hub.compute.listVms({
-            project_id: opts.project,
-            include_deleted: opts.includeDeleted === true,
-          });
+          const ambientProjectId = resolveProjectId();
+          const authProjectId = projectScopedAuthId(ctx);
+          if (opts.all && opts.project) {
+            throw new Error("use only one of --all or --project");
+          }
+          if (opts.all) requireAccountAuth(ctx, "vm list --all");
+          const requestedProjectId = opts.all
+            ? undefined
+            : (opts.project ?? ambientProjectId);
+          if (
+            authProjectId &&
+            requestedProjectId &&
+            requestedProjectId !== authProjectId
+          ) {
+            throw new Error(
+              `project-scoped authentication can only list VMs for ${authProjectId}`,
+            );
+          }
+          const rows = authProjectId
+            ? await ctx.hub.compute.listProjectVms({
+                include_deleted: opts.includeDeleted === true,
+              })
+            : await ctx.hub.compute.listVms({
+                project_id: requestedProjectId,
+                include_deleted: opts.includeDeleted === true,
+              });
           return opts.long ? rows : vmListSummary(rows);
         });
       },
@@ -374,7 +428,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("inspect an owned compute VM")
     .action(async (idOrName: string, command: Command) => {
       await withContext(command, "vm get", async (ctx) => {
-        return await ctx.hub.compute.getVm({ id_or_name: idOrName });
+        return await getVmForContext(ctx, idOrName);
       });
     });
 
@@ -409,6 +463,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .option("--wait", "wait until SSH-ready", false)
     .action(async (name: string, opts: any, command: Command) => {
       await withContext(command, "vm create", async (ctx) => {
+        requireAccountAuth(ctx, "vm create");
         const keySources = [
           opts.sshPublicKey ? "path" : "",
           opts.sshPublicKeyValue ? "value" : "",
@@ -425,6 +480,9 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             : opts.sshPublicKeyValue
               ? { key: `${opts.sshPublicKeyValue}`.trim(), path: undefined }
               : resolvePublicKey(opts.sshPublicKey);
+        progress(
+          `[vm create] Submitting '${name}' (${opts.machine}, ${opts.zone})...`,
+        );
         const created = await ctx.hub.compute.createVm({
           project_id: opts.project,
           name,
@@ -439,15 +497,19 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           ssh_public_key: key.key,
           idempotency_key: randomUUID(),
         });
+        progress(
+          `[vm create] Provider provisioning queued for '${name}' (id ${created.id}).`,
+        );
         if (!opts.wait) {
           return {
             ...created,
             ...(key.path ? { ssh_public_key_path: key.path } : {}),
           };
         }
+        progress(`[vm create] Waiting for '${name}' to become SSH-ready...`);
         return {
           ...(await waitForState(
-            ctx.hub,
+            (vm) => getVmForContext(ctx, vm),
             created.id,
             new Set(["ready"]),
             5 * 60_000,
@@ -464,7 +526,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       async (idOrName: string, opts: { timeout: string }, command: Command) => {
         await withContext(command, "vm wait", async (ctx) => {
           return await waitForState(
-            ctx.hub,
+            (vm) => getVmForContext(ctx, vm),
             idOrName,
             new Set(["ready"]),
             Number(opts.timeout) * 1000,
@@ -486,9 +548,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           opts.clear,
         ].filter(Boolean).length;
         if (selected === 0) {
-          const current = await ctx.hub.compute.getVm({
-            id_or_name: idOrName,
-          });
+          const current = await getVmForContext(ctx, idOrName);
           return {
             id: current.id,
             name: current.name,
@@ -498,6 +558,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         if (selected !== 1) {
           throw new Error("specify exactly one of --set, --extend, or --clear");
         }
+        requireAccountAuth(ctx, "changing a VM deletion deadline");
         return await ctx.hub.compute.setVmTtl({
           id_or_name: idOrName,
           ...(opts.extend != null
@@ -526,13 +587,14 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           command: Command,
         ) => {
           await withContext(command, `vm ${action}`, async (ctx) => {
+            requireAccountAuth(ctx, `vm ${action}`);
             const result = await ctx.hub.compute[`${action}Vm`]({
               id_or_name: idOrName,
               idempotency_key: randomUUID(),
             });
             if (!opts.wait) return result;
             return await waitForState(
-              ctx.hub,
+              (vm) => getVmForContext(ctx, vm),
               result.id,
               new Set([action === "start" ? "ready" : "stopped"]),
               5 * 60_000,
@@ -548,13 +610,14 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .action(
       async (idOrName: string, opts: { wait?: boolean }, command: Command) => {
         await withContext(command, "vm delete", async (ctx) => {
+          requireAccountAuth(ctx, "vm delete");
           const result = await ctx.hub.compute.deleteVm({
             id_or_name: idOrName,
             idempotency_key: randomUUID(),
           });
           if (!opts.wait) return result;
           return await waitForState(
-            ctx.hub,
+            (vm) => getVmForContext(ctx, vm),
             result.id,
             new Set(["deleted"]),
             5 * 60_000,
@@ -631,12 +694,25 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .command("list")
     .description("list persistent compute volumes")
     .option("--include-deleted", "include deleted volume records", false)
+    .option(
+      "--all",
+      "list all volumes owned by the authenticated account",
+      false,
+    )
     .option("--long", "show full durable volume records", false)
     .action(async (opts: any, command: Command) => {
       await withContext(command, "vm volume list", async (ctx) => {
-        const rows = await ctx.hub.compute.listVolumes({
-          include_deleted: opts.includeDeleted === true,
-        });
+        const ambientProjectId = resolveProjectId();
+        const authProjectId = projectScopedAuthId(ctx);
+        if (opts.all) requireAccountAuth(ctx, "vm volume list --all");
+        const rows = authProjectId
+          ? await ctx.hub.compute.listProjectVolumes({
+              include_deleted: opts.includeDeleted === true,
+            })
+          : await ctx.hub.compute.listVolumes({
+              project_id: opts.all ? undefined : ambientProjectId,
+              include_deleted: opts.includeDeleted === true,
+            });
         return opts.long ? rows : volumeListSummary(rows);
       });
     });
@@ -646,7 +722,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("inspect a persistent compute volume")
     .action(async (idOrName: string, command: Command) => {
       await withContext(command, "vm volume get", async (ctx) => {
-        return await ctx.hub.compute.getVolume({ id_or_name: idOrName });
+        return await getVolumeForContext(ctx, idOrName);
       });
     });
 
@@ -663,6 +739,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .option("--wait", "wait until the volume is ready", false)
     .action(async (name: string, opts: any, command: Command) => {
       await withContext(command, "vm volume create", async (ctx) => {
+        requireAccountAuth(ctx, "vm volume create");
         const created = await ctx.hub.compute.createVolume({
           project_id: opts.project,
           name,
@@ -692,6 +769,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .option("--wait", "wait until provider resize completes", false)
     .action(async (idOrName: string, opts: any, command: Command) => {
       await withContext(command, "vm volume resize", async (ctx) => {
+        requireAccountAuth(ctx, "vm volume resize");
         const resized = await ctx.hub.compute.resizeVolume({
           id_or_name: idOrName,
           size_gb: Number(opts.sizeGb),
@@ -715,6 +793,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .option("--wait", "wait for provider deletion", false)
     .action(async (idOrName: string, opts: any, command: Command) => {
       await withContext(command, "vm volume delete", async (ctx) => {
+        requireAccountAuth(ctx, "vm volume delete");
         const deleted = await ctx.hub.compute.deleteVolume({
           id_or_name: idOrName,
           confirm_name: opts.confirm,

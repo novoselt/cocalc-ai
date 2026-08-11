@@ -5,7 +5,8 @@ This provides access to the same data as dstream, except it doesn't download any
 data to the client until you actually call get.   The calls to get and
 set are thus async.
 
-There is no need to close this because it is stateless.
+This handle owns a reference-counted persistence client. Call close() when a
+request-scoped handle is no longer needed.
 
 [ ] TODO: efficiently get or set many values at once in a single call. This will be
 very useful, e.g., for jupyter notebook timetravel browsing.

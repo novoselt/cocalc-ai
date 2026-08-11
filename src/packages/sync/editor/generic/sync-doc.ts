@@ -140,6 +140,9 @@ export interface SyncOpts0 {
   document_activity_interval?: number;
 
   string_id?: string;
+  // The caller already resolved path with canonicalSyncIdentityPath. This is
+  // only a latency optimization; callers that cannot prove this must omit it.
+  syncIdentityPathIsCanonical?: boolean;
   cursors?: boolean;
   change_throttle?: number;
 
@@ -481,17 +484,32 @@ export class SyncDoc extends EventEmitter {
     // const start = Date.now();
     this.assert_not_closed("init");
     const log = this.dbg("init");
+    let attempt = 0;
     await until(
       async () => {
         if (this.state != "init") {
           return true;
         }
+        attempt += 1;
+        this.emitOpenPhase("init_attempt_start", { attempt });
         try {
           log("initializing all tables...");
           await this.initAll();
           log("initAll succeeded");
+          this.emitOpenPhase("init_attempt_done", { attempt });
           return true;
         } catch (err) {
+          this.emitOpenPhase("init_attempt_failed", {
+            attempt,
+            error_code:
+              typeof (err as any)?.code === "string"
+                ? (err as any).code.slice(0, 80)
+                : undefined,
+            error_name:
+              typeof (err as any)?.name === "string"
+                ? (err as any).name.slice(0, 80)
+                : undefined,
+          });
           if (this.isClosed()) {
             return true;
           }
@@ -548,7 +566,10 @@ export class SyncDoc extends EventEmitter {
   };
 
   private canonicalizeFsIdentity = reuseInFlight(async (): Promise<void> => {
-    if (this.opts.string_id !== undefined) {
+    if (
+      this.opts.string_id !== undefined ||
+      this.opts.syncIdentityPathIsCanonical
+    ) {
       return;
     }
     const canonicalPath = await this.resolveCanonicalSyncIdentityPath(
@@ -1636,7 +1657,10 @@ export class SyncDoc extends EventEmitter {
     );
     this.emitOpenPhase("canonicalize_identity_start");
     await this.canonicalizeFsIdentity();
-    this.emitOpenPhase("canonicalize_identity_done");
+    this.emitOpenPhase("canonicalize_identity_done", {
+      prevalidated: this.opts.syncIdentityPathIsCanonical === true,
+      string_id_provided: this.opts.string_id !== undefined,
+    });
     if (!this.useConat) {
       this.emitOpenPhase("syncstring_table_start");
       await this.init_syncstring_table();

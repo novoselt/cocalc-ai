@@ -99,6 +99,7 @@ import {
   type AttachedSteerMessage,
 } from "./agent-message-status";
 import { useCodexLog } from "./use-codex-log";
+import { recordCodexFirstResponseVisible } from "./codex-ux-latency";
 import { GitCommitDrawer } from "./git-commit-drawer";
 import { findInChatAndOpenFirstResult } from "./find-in-chat";
 import { sendGitCommitAgentTurn } from "./git-commit-agent-turn";
@@ -909,6 +910,17 @@ export default function Message({
       }),
     [acpInterrupted, codexBodyValue, effectiveGenerating, rowMessageValue],
   );
+  const responseParentMessageId = parentMessageId(message);
+  useEffect(() => {
+    if (
+      !isCodexThread ||
+      !responseParentMessageId ||
+      !renderedMessageValue.trim()
+    ) {
+      return;
+    }
+    return recordCodexFirstResponseVisible(responseParentMessageId);
+  }, [isCodexThread, renderedMessageValue, responseParentMessageId]);
   const renderedMessageMarkdown = useMemo(
     () =>
       is_viewers_message

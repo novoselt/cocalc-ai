@@ -824,6 +824,14 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     const setLastKnownGoodArtifactVersionInternal = jest.fn(
       async () => undefined,
     );
+    const rolloutManagedComponents = jest.fn(async () => ({
+      results: [
+        {
+          component: "project-host" as const,
+          action: "restart_scheduled" as const,
+        },
+      ],
+    }));
     const getManagedComponentStatus = jest
       .fn()
       .mockResolvedValueOnce([projectHostStatus({ desiredVersion, pid: 123 })])
@@ -843,14 +851,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
             lines: 25,
             text: "",
           }),
-          rolloutManagedComponents: async () => ({
-            results: [
-              {
-                component: "project-host",
-                action: "restart_scheduled",
-              },
-            ],
-          }),
+          rolloutManagedComponents,
           getManagedComponentStatus,
           getHostAgentStatus: async () => ({
             project_host: {
@@ -885,6 +886,11 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     });
 
     expect(recordProjectHostLocalRollbackInternal).not.toHaveBeenCalled();
+    expect(rolloutManagedComponents).toHaveBeenCalledWith({
+      components: ["project-host"],
+      reason: "host_software_upgrade",
+      desired_version: desiredVersion,
+    });
     expect(setLastKnownGoodArtifactVersionInternal).toHaveBeenCalledWith({
       host_id: "host-1",
       row,
@@ -2081,6 +2087,14 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
     const setLastKnownGoodArtifactVersionInternal = jest.fn(
       async () => undefined,
     );
+    const rolloutManagedComponents = jest.fn(async () => ({
+      results: [
+        {
+          component: "project-host" as const,
+          action: "restart_scheduled" as const,
+        },
+      ],
+    }));
     await expect(
       rolloutHostManagedComponentsInternalHelper({
         account_id: "account-1",
@@ -2133,14 +2147,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
             lines: 25,
             text: "",
           }),
-          rolloutManagedComponents: async () => ({
-            results: [
-              {
-                component: "project-host",
-                action: "restart_scheduled",
-              },
-            ],
-          }),
+          rolloutManagedComponents,
           upgradeSoftware,
           getManagedComponentStatus: async () => [
             projectHostStatus({ desiredVersion: "ph-v2", pid: 123 }),
@@ -2171,6 +2178,8 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
         {
           component: "project-host",
           action: "restart_scheduled",
+          message:
+            "activated project-host candidate; host agent owns the version transition",
         },
       ],
     });
@@ -2182,6 +2191,7 @@ describe("rolloutHostManagedComponentsInternalHelper", () => {
       activate_project_host: true,
       retention_policy: expect.any(Object),
     });
+    expect(rolloutManagedComponents).not.toHaveBeenCalled();
     expect(updateProjectHostSoftwareRecord).toHaveBeenCalledWith(
       expect.objectContaining({
         results: [

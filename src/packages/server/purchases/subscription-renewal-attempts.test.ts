@@ -206,6 +206,49 @@ describe("durable subscription renewal attempts", () => {
       { last_error: null, state: "scheduled" },
     ]);
   });
+
+  it("enables split funding only for predeployment attempts never processed", async () => {
+    const safeAccount = uuid();
+    const attemptedAccount = uuid();
+    await createTestAccount(safeAccount);
+    await createTestAccount(attemptedAccount);
+    const safe = await createTestMembershipSubscription(safeAccount);
+    const attempted = await createTestMembershipSubscription(attemptedAccount);
+    await getPool().query(
+      `UPDATE subscription_renewal_attempts
+          SET funding_version=NULL
+        WHERE subscription_id IN ($1,$2)`,
+      [safe.subscription_id, attempted.subscription_id],
+    );
+    await getPool().query(
+      `UPDATE subscription_renewal_attempts
+          SET attempt_count=1,
+              last_attempt_at=NOW() - INTERVAL '5 minutes'
+        WHERE subscription_id=$1`,
+      [attempted.subscription_id],
+    );
+
+    await scheduleMissingSubscriptionRenewalAttempts();
+
+    const { rows } = await getPool().query(
+      `SELECT subscription_id, funding_version
+         FROM subscription_renewal_attempts
+        WHERE subscription_id IN ($1,$2)
+        ORDER BY subscription_id`,
+      [safe.subscription_id, attempted.subscription_id],
+    );
+    expect(
+      Object.fromEntries(
+        rows.map(({ subscription_id, funding_version }) => [
+          subscription_id,
+          funding_version,
+        ]),
+      ),
+    ).toEqual({
+      [safe.subscription_id]: 1,
+      [attempted.subscription_id]: null,
+    });
+  });
 });
 
 describe("personal membership uniqueness", () => {

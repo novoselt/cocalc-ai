@@ -21,7 +21,7 @@ import {
   isNewAgentThreadSelection,
   usePersistentAgentSessionSelection,
 } from "./agent-session-selector";
-import { DEFAULT_ASSISTANT_CODEX_MODEL, Options } from "./create-chat";
+import { resolveAssistantCodexModel, Options } from "./create-chat";
 import { PopupAgentComposer } from "./popup-agent-composer";
 import { useAgentChatFontSize } from "@cocalc/frontend/project/page/agent-chat-font-size";
 
@@ -174,7 +174,7 @@ export default function AgentTitleBarButton({
         command: resolvedCommand,
         codegen: false,
         allowEmpty: true,
-        model: DEFAULT_ASSISTANT_CODEX_MODEL,
+        model: resolveAssistantCodexModel(),
         tag: "custom",
         agentSession: createNewThread ? undefined : selectedAgentSession,
         createNewThread,

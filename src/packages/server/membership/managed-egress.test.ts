@@ -45,18 +45,6 @@ jest.mock("./usage-counters", () => ({
     recordAccountUsageCounterDeltaMock(...args),
 }));
 
-function isSchemaQuery(sql: string): boolean {
-  return (
-    sql.includes("CREATE TABLE IF NOT EXISTS account_managed_egress_events") ||
-    sql.includes(
-      "ALTER TABLE account_managed_egress_events ALTER COLUMN project_id DROP NOT NULL",
-    ) ||
-    sql.includes("CREATE INDEX IF NOT EXISTS account_managed_egress_events_") ||
-    sql.includes("CREATE TABLE IF NOT EXISTS account_managed_egress_rollups") ||
-    sql.includes("CREATE INDEX IF NOT EXISTS account_managed_egress_rollups_")
-  );
-}
-
 describe("managed egress history", () => {
   beforeEach(() => {
     jest.resetModules();
@@ -90,18 +78,12 @@ describe("managed egress history", () => {
     ensureAccountUsageWindowsForEventMock.mockResolvedValue(windows);
     getActiveAccountUsageWindowsMock.mockResolvedValue(windows);
     queryMock.mockImplementation(async (sql: string) => {
-      if (isSchemaQuery(sql)) {
-        return { rows: [] };
-      }
       throw new Error(`unhandled query: ${sql}`);
     });
   });
 
   it("aggregates account history into bounded time buckets", async () => {
     queryMock.mockImplementation(async (sql: string, params?: any[]) => {
-      if (isSchemaQuery(sql)) {
-        return { rows: [] };
-      }
       const reportingExclusions = sql.includes(
         "ORDER BY events.last_occurred_at DESC",
       )
@@ -346,9 +328,6 @@ describe("managed egress history", () => {
   it("computes a dedicated rolling category usage window", async () => {
     const now = new Date("2026-04-28T12:00:00.000Z");
     queryMock.mockImplementation(async (sql: string, params?: any[]) => {
-      if (isSchemaQuery(sql)) {
-        return { rows: [] };
-      }
       if (
         sql.includes("category = $2") &&
         sql.includes("SUM(CASE WHEN bucket_start >= $3")
@@ -386,9 +365,6 @@ describe("managed egress history", () => {
 
   it("aggregates admin-wide top accounts and projects", async () => {
     queryMock.mockImplementation(async (sql: string) => {
-      if (isSchemaQuery(sql)) {
-        return { rows: [] };
-      }
       if (
         sql.includes(
           "SELECT events.category, COALESCE(SUM(events.bytes), 0) AS bytes",
@@ -559,9 +535,6 @@ describe("managed egress history", () => {
 
   it("aggregates admin-wide history into bounded time buckets", async () => {
     queryMock.mockImplementation(async (sql: string) => {
-      if (isSchemaQuery(sql)) {
-        return { rows: [] };
-      }
       if (
         sql.includes(
           "SELECT events.category, COALESCE(SUM(events.bytes), 0) AS bytes",

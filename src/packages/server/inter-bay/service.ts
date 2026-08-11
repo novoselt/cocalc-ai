@@ -162,6 +162,11 @@ import {
 } from "@cocalc/server/membership/analytics";
 import { getActiveUserMapOverview } from "@cocalc/server/account-presence-locations";
 import {
+  getActiveUserMapHistorySeries,
+  getActiveUserMapHistorySnapshot,
+  getActiveUserMapHistoryReport,
+} from "@cocalc/server/active-user-map-history";
+import {
   readWebappCrashesLocal,
   setWebappCrashResolutionLocal,
 } from "@cocalc/server/webapp-crashes";
@@ -454,6 +459,10 @@ import {
   unblockProjectAccessRequester,
 } from "@cocalc/server/projects/collaborators";
 import { ensureCourseManagerAccessLocal } from "@cocalc/server/projects/course/ensure-manager-access";
+import {
+  getCourseManagedProjectStatesLocal,
+  reconcileCourseManagedProjectLocal,
+} from "@cocalc/server/projects/course/reconcile-managed-project";
 import { getProjectCollaboratorInviteUsage } from "@cocalc/server/membership/project-limits";
 import { leaveOrDeleteProjectsForAccount } from "@cocalc/server/projects/ownership";
 import {
@@ -470,6 +479,9 @@ import {
   syncSiteSettingsToBays,
 } from "@cocalc/server/conat/api/system";
 import {
+  cancelCourseReconfigureOperationLocal,
+  getCourseReconfigureOperationLocal,
+  reconfigureCourseProjectsLocal,
   setLocalProjectDeletionProtection,
   setLocalProjectManageUsersOwnerOnly,
   setLocalProjectMetadata,
@@ -639,6 +651,20 @@ async function startBayOpsService(): Promise<void> {
     }),
     getActiveUserMap: async ({ active_minutes }) =>
       await getActiveUserMapOverview({ active_minutes }),
+    getActiveUserMapHistoryReport: async (opts) =>
+      await getActiveUserMapHistoryReport(opts),
+    getActiveUserMapHistorySeries: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("active user map history is authoritative on the seed bay");
+      }
+      return await getActiveUserMapHistorySeries(opts);
+    },
+    getActiveUserMapHistorySnapshot: async (opts) => {
+      if (bay_id !== getConfiguredClusterSeedBayId()) {
+        throw Error("active user map history is authoritative on the seed bay");
+      }
+      return await getActiveUserMapHistorySnapshot(opts);
+    },
     getMembershipAnalyticsEvents: async (opts) =>
       await getMembershipAnalyticsEventsLocal({ query: opts }),
     backfillMembershipAnalyticsPurchases: async (opts) =>
@@ -2090,6 +2116,16 @@ async function startProjectCollabInviteService(): Promise<void> {
         ...opts,
         trustedCourseAccess: true,
       }),
+    reconcileCourseManagedProject: async (opts) =>
+      await reconcileCourseManagedProjectLocal(opts),
+    getCourseManagedProjectStates: async (opts) =>
+      await getCourseManagedProjectStatesLocal(opts),
+    reconfigureCourseProjects: async (opts) =>
+      await reconfigureCourseProjectsLocal(opts),
+    getCourseReconfigureOperation: async (opts) =>
+      await getCourseReconfigureOperationLocal(opts),
+    cancelCourseReconfigureOperation: async (opts) =>
+      await cancelCourseReconfigureOperationLocal(opts),
     getProjectAccessLandingInfo: async (opts) =>
       await getProjectAccessLandingInfo(opts),
     requestProjectAccess: async (opts) => await requestProjectAccess(opts),

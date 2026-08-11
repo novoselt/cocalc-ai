@@ -233,6 +233,9 @@ export type SiteSettingsExtrasKeys =
   | "cryptomining_abuse_heading"
   | "cryptomining_abuse_enforcement_enabled"
   | "cryptomining_abuse_auto_ban_enabled"
+  | "bandwidth_relay_abuse_heading"
+  | "bandwidth_relay_abuse_enforcement_enabled"
+  | "bandwidth_relay_abuse_auto_ban_enabled"
   | "user_search_max_results"
   | "launch_sla_heading"
   | "launch_sla_project_start_warm_p95_ms"
@@ -343,7 +346,7 @@ export type SiteSettingsExtrasKeys =
   | "compute_vm_emergency_stop"
   | "compute_vm_admin_allowlist"
   | "compute_vm_gcp_service_account_json"
-  | "compute_vm_gcp_subnetwork"
+  | "compute_vm_gcp_network"
   | "compute_vm_gcp_network_tag"
   | "compute_vm_max_active_per_project"
   | "compute_vm_max_active_total"
@@ -465,7 +468,7 @@ export const EXTRAS: SettingsExtras = {
   },
   cryptomining_abuse_enforcement_enabled: {
     name: "Enable Compute Abuse Enforcement",
-    desc: "When enabled, the hub acts on high-confidence cryptomining or prohibited QEMU execution evidence from project hosts by stopping the affected project. Leave disabled for self-hosted sites that intentionally permit these workloads.",
+    desc: "When enabled, the hub acts on high-confidence cryptomining or prohibited QEMU execution evidence from project hosts by stopping the affected project. Active account entitlement overrides can exempt reviewed legitimate workloads. Leave disabled for self-hosted sites that intentionally permit these workloads.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -475,7 +478,36 @@ export const EXTRAS: SettingsExtras = {
   },
   cryptomining_abuse_auto_ban_enabled: {
     name: "Enable Automatic Compute Abuse Bans",
-    desc: "When enabled together with compute abuse enforcement, new free accounts with high-confidence cryptomining evidence and all free accounts executing QEMU system emulators are automatically banned using the normal account ban path. Paid accounts are stopped but not automatically banned.",
+    desc: "When enabled together with compute abuse enforcement, sole-owner projects belonging to new free accounts with high-confidence cryptomining evidence, and sole-owner projects belonging to free accounts executing QEMU system emulators, are automatically banned using the normal account ban path. Shared projects, paid accounts, and exempt accounts are not automatically banned.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_heading: {
+    name: "Bandwidth Relay Abuse Detection",
+    desc: "Operator controls for detecting high-volume tunnel and explicitly named uploader/streamer-bot workloads on project hosts. Runtime evidence excludes full command lines and credentials. These settings are off by default for self-hosted sites.",
+    default: "",
+    type: "header",
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_enforcement_enabled: {
+    name: "Enable Bandwidth Relay Enforcement",
+    desc: "When enabled, the hub stops projects after a project host reports both live tunneling and an explicitly named uploader/streamer-bot process and the attributed account has at least 1 GiB of raw-network egress in five hours or 3 GiB in seven days. Active account entitlement overrides can exempt reviewed legitimate workloads.",
+    default: "no",
+    valid: only_booleans,
+    to_val: to_bool,
+    tags: ["Security", "Project Hosts"],
+    group: "System / Advanced",
+    subgroup: "Abuse Detection",
+  },
+  bandwidth_relay_abuse_auto_ban_enabled: {
+    name: "Enable Automatic Bandwidth Relay Bans",
+    desc: "When enabled together with bandwidth relay enforcement, a new free account is automatically banned only when it is the sole user and owner of the affected project and an explicit uploader/streamer-bot process is present. Paid accounts, older free accounts, shared projects, project sponsors, and exempt accounts are not automatically banned.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -553,8 +585,8 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "Launch SLA Thresholds",
   },
   launch_sla_file_open_visible_p95_ms: {
-    name: "File Visible P95 SLA",
-    desc: "Maximum acceptable P95 milliseconds from file-open initiation until contents are visibly rendered. If empty, the default is 10000.",
+    name: "File Content Paint P95 SLA",
+    desc: "Maximum acceptable P95 milliseconds from foreground file-open intent through the loaded editor React commit and following animation frame. If empty, the default is 10000.",
     default: "10000",
     valid: optionalPositiveInteger,
     to_val: to_trimmed_str,
@@ -564,7 +596,7 @@ export const EXTRAS: SettingsExtras = {
   },
   launch_sla_file_open_sync_ready_p95_ms: {
     name: "File Sync Ready P95 SLA",
-    desc: "Maximum acceptable P95 milliseconds from file-open initiation until realtime sync is connected and ready. If empty, the default is 5000.",
+    desc: "Maximum acceptable P95 milliseconds from foreground file-open intent until SyncDoc initialization reports ready. If empty, the default is 5000.",
     default: "5000",
     valid: optionalPositiveInteger,
     to_val: to_trimmed_str,
@@ -752,7 +784,7 @@ export const EXTRAS: SettingsExtras = {
   },
   active_user_map_enabled: {
     name: "Active Users Map: Enabled",
-    desc: "Collect one short-lived approximate Cloudflare location per active account and enable the admin active-users world map. No IP address or location history is stored. Disabled by default.",
+    desc: "Collect one short-lived approximate Cloudflare location per active account, enable the admin active-users world map, and retain consent-gated country aggregates for 24 months. No IP address or account-linked location history is stored. Disabled by default.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -1683,13 +1715,16 @@ export const EXTRAS: SettingsExtras = {
     tags: ["Cloud", "Security"],
     group: "Compute / Managed VMs",
     subgroup: "GCP Isolation",
+    order: 1,
   },
-  compute_vm_gcp_subnetwork: {
-    name: "Managed Compute VMs: GCP Subnetwork",
-    desc: "Full subnetwork URI in the dedicated compute project. Production creation fails closed unless this is configured.",
+  compute_vm_gcp_network: {
+    name: "Managed Compute VMs: GCP Network",
+    desc: "Full global VPC network URI in the dedicated compute project. CoCalc discovers the flow-log-enabled regional subnets on this custom network and selects the subnet matching each VM region.",
     default: "",
     to_val: to_trimmed_str,
-    valid: () => true,
+    valid: (value) =>
+      !`${value ?? ""}`.trim() ||
+      /^projects\/[^/]+\/global\/networks\/[^/]+$/.test(`${value}`.trim()),
     tags: ["Cloud", "Security"],
     group: "Compute / Managed VMs",
     subgroup: "GCP Isolation",
@@ -1747,8 +1782,8 @@ export const EXTRAS: SettingsExtras = {
   },
   compute_vm_max_volumes_per_account: {
     name: "Managed Compute VMs: Maximum Volumes Per Account",
-    desc: "Maximum undeleted persistent /work volumes owned by one canary account.",
-    default: "2",
+    desc: "Maximum undeleted persistent /work volumes owned by one account.",
+    default: "10",
     to_val: to_int,
     valid: only_pos_int,
     tags: ["Cloud"],

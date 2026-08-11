@@ -103,6 +103,8 @@ import {
   getUserFacingListingError,
   shouldShowWrongAccountListingError,
 } from "./listing-error";
+import { afterNextPaint } from "@cocalc/frontend/monitoring/ux-latency-trace";
+import { recordDirectoryListingPaint } from "@cocalc/frontend/project/listing/ux-latency";
 
 type ActiveFileSort = ReturnType<typeof normalizeActiveFileSort>;
 
@@ -317,12 +319,17 @@ export function Explorer({ isVisible = true }: { isVisible?: boolean }) {
     refresh,
     listing: rawListing,
     error: listingError,
+    telemetry: listingTelemetry,
   } = useListing({
     fs: inBackupsPath ? null : fs,
     path: filesystemListingPath,
     watch: !readOnlyViewer,
     refreshFs,
     debugContext: publicShareListingDebugContext,
+    uxContext:
+      publicDirectoryShare || !isVisible
+        ? undefined
+        : { project_id, host_id, surface_visible: isVisible },
   });
   const {
     listing: backupsListing,
@@ -447,23 +454,48 @@ export function Explorer({ isVisible = true }: { isVisible?: boolean }) {
     fingerprint: fileListingFingerprint,
   });
   const visibleListing = displayListing ?? listing;
+  useEffect(() => {
+    if (!isVisible || visibleListing == null || listingTelemetry == null) {
+      return;
+    }
+    return afterNextPaint(() => {
+      recordDirectoryListingPaint({
+        project_id,
+        path: filesystemListingPath,
+        telemetry: listingTelemetry,
+        rendered_entries: visibleListing.length,
+        surface_visible: isVisible,
+      });
+    });
+  }, [
+    filesystemListingPath,
+    isVisible,
+    listingTelemetry,
+    project_id,
+    visibleListing,
+  ]);
   const visibleRef = useRef(false);
   const [activeUploadCount, setActiveUploadCount] = useState(0);
   const uploadInProgress = activeUploadCount > 0;
-  const refreshAfterUploadActivity = useCallback(() => {
+  const refreshAfterUploadFinished = useCallback(() => {
     refreshListingAfterUserAction({
       allowUpdatesFor: allowListingUpdatesFor,
       refresh,
     });
   }, [allowListingUpdatesFor, refresh]);
+  const allowUpdatesDuringUpload = useCallback(() => {
+    // The listing watcher reports partial file sizes during chunked uploads.
+    // Do not restart the listing for every Dropzone `sending` event.
+    allowListingUpdatesFor();
+  }, [allowListingUpdatesFor]);
   const handleUploadStarted = useCallback(() => {
     setActiveUploadCount((count) => count + 1);
-    refreshAfterUploadActivity();
-  }, [refreshAfterUploadActivity]);
+    allowUpdatesDuringUpload();
+  }, [allowUpdatesDuringUpload]);
   const handleUploadFinished = useCallback(() => {
     setActiveUploadCount((count) => Math.max(0, count - 1));
-    refreshAfterUploadActivity();
-  }, [refreshAfterUploadActivity]);
+    refreshAfterUploadFinished();
+  }, [refreshAfterUploadFinished]);
   useEffect(() => {
     return registerUserFilesystemChangeHandler(() =>
       refreshListingAfterUserAction({
@@ -1321,12 +1353,7 @@ Wait for this host to become available again, then refresh.`}
                   enabled={canWriteProjectFiles}
                   project_id={project_id}
                   dest_path={effective_current_path}
-                  onUploadActivity={() =>
-                    refreshListingAfterUserAction({
-                      allowUpdatesFor: allowListingUpdatesFor,
-                      refresh,
-                    })
-                  }
+                  onUploadActivity={allowUpdatesDuringUpload}
                   onUploadStarted={handleUploadStarted}
                   onUploadFinished={handleUploadFinished}
                 >

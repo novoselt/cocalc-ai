@@ -50,6 +50,70 @@ function adminDeps(overrides: Record<string, any> = {}) {
   };
 }
 
+test("admin user ban resolves the target and forwards the audit reason", async () => {
+  let captured: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        adminBanUser: async (opts: any) => {
+          captured = opts;
+          return { affected_accounts: [] };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "user",
+    "ban",
+    "alice@example.com",
+    "--reason",
+    "confirmed bandwidth relay abuse",
+  ]);
+
+  assert.deepEqual(captured, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    reason: "confirmed bandwidth relay abuse",
+  });
+});
+
+test("admin user unban targets only the resolved account", async () => {
+  let captured: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      system: {
+        adminUnbanUser: async (opts: any) => {
+          captured = opts;
+          return { banned: false };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "user",
+    "unban",
+    "22222222-2222-4222-8222-222222222222",
+    "--reason",
+    "manual review cleared the account",
+  ]);
+
+  assert.deepEqual(captured, {
+    user_account_id: "22222222-2222-4222-8222-222222222222",
+    reason: "manual review cleared the account",
+  });
+});
+
 test("admin membership-package purchase previews before committing", async () => {
   let quoteArgs: any;
   let purchaseCalls = 0;
@@ -375,6 +439,9 @@ test("admin support conventions exposes the shared status workflow", async () =>
   assert.match(output.statuses.open, /actively investigating/);
   assert.match(output.statuses.pending, /waiting for the requester/);
   assert.match(output.statuses.solved, /complete and verified/);
+  assert.equal(output.version, 2);
+  assert.match(output.workflow.join("\n"), /multiline comments/);
+  assert.match(output.workflow.join("\n"), /--public-reply-file/);
 });
 
 test("admin support image verifies and writes a Zendesk attachment", async () => {
@@ -544,6 +611,28 @@ test("admin support update is dry-run by default", async () => {
     expected_updated_at: undefined,
     reason: "approved status update",
   });
+});
+
+test("admin support update rejects literal newline escapes in inline comments", async () => {
+  const program = new Command();
+  registerAdminCommand(program, adminDeps() as any);
+
+  await assert.rejects(
+    () =>
+      program.parseAsync([
+        "node",
+        "test",
+        "admin",
+        "support",
+        "update",
+        "20437",
+        "--public-reply",
+        "Hello\\n\\nThis should be multiline.",
+        "--reason",
+        "approved response",
+      ]),
+    /--public-reply contains a literal \\n escape; use --public-reply-file/,
+  );
 });
 
 test("admin support reply commit reads the approved file and supplies idempotency", async () => {
@@ -1326,6 +1415,11 @@ test("admin entitlement-override schema documents usable override payloads", asy
     JSON.stringify(schema),
     /usage_limits\.credit_spend_limit_7d_usd/,
   );
+  assert.match(
+    JSON.stringify(schema),
+    /features\.bandwidth_relay_abuse_exempt/,
+  );
+  assert.match(JSON.stringify(schema), /features\.cryptomining_abuse_exempt/);
   assert.match(
     JSON.stringify(schema),
     /authorizes administrator-managed collection/,

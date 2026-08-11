@@ -248,6 +248,7 @@ PDFJS_VERSION="$(node -e 'console.log(require(process.argv[1]).versions["pdfjs-d
 validate_file "$OUT/runtime/control-plane/cdn/pdfjs-dist-${PDFJS_VERSION}/cmaps/UniJIS-UTF16-H.bcmap"
 validate_file "$OUT/runtime/control-plane/webapp/favicon.ico"
 validate_file "$OUT/runtime/control-plane/bundle/gcp/gcp-setup.sh"
+validate_file "$OUT/runtime/control-plane/bundle/gcp/compute-vm-setup.sh"
 validate_file "$OUT/runtime/control-plane/bundle/nebius/nebius-setup.sh"
 validate_file "$OUT/scripts/bay-systemd/install-scaffold.sh"
 validate_file "$OUT/scripts/bay-systemd/bay-bootstrap-release.sh"

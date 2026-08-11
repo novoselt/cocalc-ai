@@ -12,7 +12,10 @@ import {
   agentSessionTitle,
   useRecentAgentSessions,
 } from "@cocalc/frontend/chat/recent-agent-sessions";
+import { useCodexPaymentSource } from "@cocalc/frontend/chat/use-codex-payment-source";
+import type { CodexPaymentSourceInfo } from "@cocalc/conat/hub/api/system";
 import * as LS from "@cocalc/frontend/misc/local-storage-typed";
+import { DEFAULT_CODEX_MODEL_NAME } from "@cocalc/util/ai/codex";
 import { COLORS } from "@cocalc/util/theme";
 
 const ASSISTANT_SESSION_LS_PREFIX = "AI-CODEX-ASSISTANT-SESSION:v1";
@@ -25,6 +28,8 @@ export interface AgentSessionSelection {
   setSelectedSessionId: (sessionId: string) => void;
   saveSelectedAgentSession: () => void;
   loading: boolean;
+  effectiveModelLoading: boolean;
+  defaultCodexModel: string;
   error: string;
 }
 
@@ -45,10 +50,33 @@ export function usePersistentAgentSessionSelection({
 }): AgentSessionSelection {
   const storageKey = `${ASSISTANT_SESSION_LS_PREFIX}:${project_id}:${path}:${cacheContext}`;
   const [selectedSessionId, setSelectedSessionIdState] = useState<string>();
-  const { sessions, loading, error } = useRecentAgentSessions({
+  const {
+    sessions: rawSessions,
+    loading,
+    error,
+  } = useRecentAgentSessions({
     project_id,
     enabled,
   });
+  const { paymentSource, loading: effectiveModelLoading } =
+    useCodexPaymentSource({
+      projectId: project_id,
+      enabled,
+      pollMs: 90_000,
+    });
+  const sessions = useMemo(
+    () =>
+      rawSessions.map((session) =>
+        applyEffectiveCodexPolicyToAgentSession(session, paymentSource),
+      ),
+    [paymentSource, rawSessions],
+  );
+  const defaultCodexModel =
+    paymentSource?.source === "site-api-key" &&
+    paymentSource.siteFundedCodex?.enabled
+      ? (paymentSource.siteFundedCodex.policy?.model ??
+        DEFAULT_CODEX_MODEL_NAME)
+      : DEFAULT_CODEX_MODEL_NAME;
 
   useEffect(() => {
     if (!enabled) return;
@@ -109,7 +137,30 @@ export function usePersistentAgentSessionSelection({
     setSelectedSessionId,
     saveSelectedAgentSession,
     loading,
+    effectiveModelLoading,
+    defaultCodexModel,
     error,
+  };
+}
+
+export function applyEffectiveCodexPolicyToAgentSession(
+  session: AgentSessionRecord,
+  paymentSource?: CodexPaymentSourceInfo,
+): AgentSessionRecord {
+  const policy = paymentSource?.siteFundedCodex?.enabled
+    ? paymentSource.siteFundedCodex.policy
+    : undefined;
+  const preference = session.paymentSource ?? "auto";
+  const usesMembershipPolicy =
+    policy != null &&
+    (preference === "site-api-key" ||
+      (preference === "auto" && paymentSource?.source === "site-api-key"));
+  if (!usesMembershipPolicy) return session;
+  return {
+    ...session,
+    model: policy.model,
+    reasoning: policy.reasoning,
+    serviceTier: policy.serviceTier,
   };
 }
 
@@ -139,10 +190,15 @@ export function AgentSessionSelect({
       : []),
     ...selection.sessions.map((session) => ({
       value: session.session_id,
-      title: `${agentSessionTitle(session)} · ${agentSessionCostSummary(
-        session,
-      )}`,
-      label: <AgentSessionOption session={session} />,
+      title: selection.effectiveModelLoading
+        ? `${agentSessionTitle(session)} · Checking effective model...`
+        : `${agentSessionTitle(session)} · ${agentSessionCostSummary(session)}`,
+      label: (
+        <AgentSessionOption
+          session={session}
+          effectiveModelLoading={selection.effectiveModelLoading}
+        />
+      ),
     })),
   ];
   return (
@@ -183,13 +239,17 @@ export function AgentSessionError({
 
 function AgentSessionOption({
   session,
+  effectiveModelLoading,
 }: {
   session: AgentSessionRecord;
+  effectiveModelLoading: boolean;
 }): ReactElement {
   const title = agentSessionTitle(session);
   const context =
     session.working_directory?.trim() || session.chat_path?.trim() || "";
-  const tags = agentSessionTags(session);
+  const tags: ReturnType<typeof agentSessionTags> = effectiveModelLoading
+    ? [{ key: "model-loading", label: "Checking model..." }]
+    : agentSessionTags(session);
   return (
     <div style={{ minWidth: 0 }}>
       <div

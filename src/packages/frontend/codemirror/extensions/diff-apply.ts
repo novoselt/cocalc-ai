@@ -37,6 +37,11 @@ export function cm_define_diffApply_extension(cm) {
     for (let chunk of diff) {
       const op = chunk[0]; // 0 = stay same; -1 = delete; +1 = add
       const val = chunk[1]; // the actual text to leave same, delete, or add
+      if (val == null || val.length === 0) {
+        // Deadline-limited diff cleanup can leave an empty chunk. Passing it
+        // through can create an invalid empty CodeMirror history change.
+        continue;
+      }
       const pos1 = next_pos(val, pos);
 
       switch (op) {

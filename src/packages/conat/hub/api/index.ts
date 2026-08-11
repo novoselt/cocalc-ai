@@ -26,6 +26,7 @@ import {
   type PublicDirectoryShares,
   publicDirectoryShares,
 } from "./public-directory-shares";
+import { type GrowthAnalyticsApi, growthAnalytics } from "./growth-analytics";
 
 export interface HubApi {
   system: System;
@@ -51,6 +52,7 @@ export interface HubApi {
   legacyMigration: LegacyMigration;
   compute: ComputeApi;
   publicDirectoryShares: PublicDirectoryShares;
+  growthAnalytics: GrowthAnalyticsApi;
 }
 
 const HubApiStructure = {
@@ -77,6 +79,7 @@ const HubApiStructure = {
   legacyMigration,
   compute,
   publicDirectoryShares,
+  growthAnalytics,
 } as const;
 
 export function transformArgs({

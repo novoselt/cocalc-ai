@@ -42,6 +42,7 @@ import { JupyterActions } from "@cocalc/jupyter/redux/project-actions";
 import { JupyterStore } from "@cocalc/jupyter/redux/store";
 import type { SyncDB } from "@cocalc/sync/editor/db/sync";
 import { until } from "@cocalc/util/async-utils";
+import type { KernelStatus } from "@cocalc/conat/project/api/jupyter";
 import createChdirCommand from "@cocalc/util/jupyter-api/chdir-commands";
 import { key_value_store } from "@cocalc/util/key-value-store";
 import {
@@ -396,13 +397,11 @@ export class JupyterKernel
     return this._state;
   };
 
-  getStatus = (): {
-    backend_state: BackendState;
-    kernel_state: KernelState;
-  } => {
+  getStatus = (): KernelStatus => {
     return {
       backend_state: this._state ?? "init",
       kernel_state: this.kernel_state ?? "idle",
+      identity: this.identity,
     };
   };
 

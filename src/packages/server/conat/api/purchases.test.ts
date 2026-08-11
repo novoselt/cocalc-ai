@@ -202,6 +202,14 @@ jest.mock("@cocalc/server/membership/resolve", () => ({
 }));
 
 jest.mock("@cocalc/server/membership/packages", () => ({
+  getEffectiveSiteLicensePoolDomains: (...args: any[]) =>
+    jest
+      .requireActual("@cocalc/server/membership/packages")
+      .getEffectiveSiteLicensePoolDomains(...args),
+  getSiteLicensePoolDomains: (...args: any[]) =>
+    jest
+      .requireActual("@cocalc/server/membership/packages")
+      .getSiteLicensePoolDomains(...args),
   getMembershipPackage: (...args: any[]) => getMembershipPackageMock(...args),
   listMembershipPackageDetailsForOwner: (...args: any[]) =>
     listMembershipPackageDetailsForOwnerMock(...args),
@@ -1288,16 +1296,17 @@ describe("purchases membership packages", () => {
     expect(result.site_license.id).toBe("license-remote-1");
   });
 
-  it("merges collaborator and verified-domain results for site-license managers", async () => {
-    getSiteLicenseOverviewMock.mockResolvedValue({
+  it("uses seed overview domains when managers search site-license accounts", async () => {
+    getConfiguredClusterSeedBayIdMock.mockReturnValue("bay-2");
+    interBayGetSiteLicenseOverviewMock.mockResolvedValue({
       site_license: {
         id: "license-1",
-        allowed_domains: ["example.edu"],
+        allowed_domains: ["campus.example.edu"],
       },
       pools: [
         {
           id: "pool-1",
-          metadata: { allowed_domains: ["example.edu"] },
+          metadata: { allowed_domains: ["department.example.edu"] },
         },
       ],
       managers: [],
@@ -1340,8 +1349,13 @@ describe("purchases membership packages", () => {
     expect(searchClusterAccountsMock).toHaveBeenCalledWith({
       query: "user",
       limit: 20,
-      verified_email_domains: ["example.edu"],
+      verified_email_domains: ["campus.example.edu", "department.example.edu"],
     });
+    expect(interBayGetSiteLicenseOverviewMock).toHaveBeenCalledWith({
+      account_id: "manager-1",
+      site_license_id: "license-1",
+    });
+    expect(getSiteLicenseOverviewMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       accounts: [
         {

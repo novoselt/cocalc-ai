@@ -7,6 +7,14 @@ import { ProjectsPage } from "./projects-page";
 
 const useTypedReduxMock = jest.fn();
 const mockEmptyMap = ImmutableMap();
+const mockCompletedOnboardingSettings = ImmutableMap({
+  first_run_onboarding_v1: {
+    version: 1,
+    status: "completed",
+    intent: "license-team",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  },
+});
 const mockVisibleProjects: string[] = [];
 const mockScheduledDeleteProjectIds: string[] = [];
 let mockProjectListWindow: any;
@@ -99,13 +107,17 @@ jest.mock("@cocalc/frontend/i18n", () => ({
 
 jest.mock("@cocalc/frontend/collaborators", () => ({
   IncomingInviteBanner: () => <div data-testid="invite-banner" />,
-  useInviteInboxState: () => ({}),
+  useInviteInboxState: () => ({ incoming: [], loading: false }),
 }));
 
 jest.mock("./create-project", () => ({
   NewProjectCreator: ({ open }: any) => (
     <div data-testid="new-project-creator" data-open={String(open)} />
   ),
+}));
+
+jest.mock("./onboarding/first-run-onboarding", () => ({
+  FirstRunOnboarding: () => <div data-testid="first-run-onboarding" />,
 }));
 
 jest.mock("./projects-operations", () => ({
@@ -225,6 +237,8 @@ beforeEach(() => {
     if (store === "projects" && key === "project_list_window")
       return mockProjectListWindow;
     if (store === "page" && key === "active_top_tab") return mockActiveTopTab;
+    if (store === "account" && key === "other_settings")
+      return mockCompletedOnboardingSettings;
     return undefined;
   });
 });

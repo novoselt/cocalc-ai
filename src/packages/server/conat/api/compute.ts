@@ -22,13 +22,18 @@ import {
   enqueueComputeWork,
   insertComputeVm,
   listOwnedComputeVms,
+  listProjectComputeVms,
   resolveProjectComputeVm,
   resolveOwnedComputeVm,
   updateComputeVm,
 } from "@cocalc/server/compute/db";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
-import { ensureProviderComputeSshAccess } from "@cocalc/server/compute/provider";
+import {
+  ensureProviderComputeSshAccess,
+  getProviderComputeRegions,
+  requireProviderComputeSubnetwork,
+} from "@cocalc/server/compute/provider";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
 import {
   getComputeVmConfig,
@@ -39,6 +44,8 @@ import {
   appendComputeVolumeEvent,
   insertComputeVolume,
   listOwnedComputeVolumes,
+  listProjectComputeVolumes,
+  resolveProjectComputeVolume,
   resolveOwnedComputeVolume,
   updateComputeVolume,
 } from "@cocalc/server/compute/volume-db";
@@ -46,6 +53,12 @@ import { assertDedicatedHostAdmissionForAccount } from "@cocalc/server/project-h
 import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
 import { isSupportedCatalogGcpMachineType } from "@cocalc/util/project-host-pricing";
 import { getCatalog as getHostCatalog } from "./hosts";
+import {
+  defaultComputeZone,
+  regionFromComputeZone,
+  requireComputeZoneInRegions,
+  restrictHostCatalogToRegions,
+} from "@cocalc/server/compute/placement";
 
 const MIN_BOOT_DISK_GB = 10;
 const MIN_VOLUME_GB = 10;
@@ -85,10 +98,6 @@ function normalizeZone(value: string) {
     throw new Error(`invalid GCP zone '${value}'`);
   }
   return zone;
-}
-
-function regionFromZone(zone: string) {
-  return zone.replace(/-[a-z]$/, "");
 }
 
 function normalizeSshPublicKey(value: string) {
@@ -260,11 +269,15 @@ export async function getCatalog(opts: {
 }): Promise<ComputeCatalog> {
   const accountId = requireAccount(opts.account_id);
   const config = await getComputeVmConfig();
-  const zone = "us-central1-a";
-  const catalog = await getHostCatalog({
-    account_id: accountId,
-    provider: "gcp",
-  });
+  const configuredRegions = await getProviderComputeRegions();
+  const catalog = restrictHostCatalogToRegions(
+    await getHostCatalog({
+      account_id: accountId,
+      provider: "gcp",
+    }),
+    configuredRegions,
+  );
+  const zone = defaultComputeZone(catalog);
   return {
     host_catalog: catalog,
     defaults: {
@@ -301,6 +314,9 @@ export async function createVm(opts: CreateComputeVmRequest) {
 
   const name = normalizeName(opts.name);
   const zone = normalizeZone(opts.zone);
+  const configuredRegions = await getProviderComputeRegions();
+  requireComputeZoneInRegions(zone, configuredRegions);
+  await requireProviderComputeSubnetwork(zone);
   let attachedVolume = opts.volume
     ? await resolveOwnedVolume(accountId, opts.volume)
     : undefined;
@@ -364,7 +380,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
   }
   const rateInput = {
     provider: "gcp",
-    region: regionFromZone(zone),
+    region: regionFromComputeZone(zone),
     zone,
     machine_type: machine.machine_type,
     disk_gb: bootDiskGb,
@@ -389,7 +405,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
   ]);
   if (!spotRate || !onDemandRate || !stoppedRate) {
     throw new Error(
-      `pricing is unavailable for ${machine.machine_type} in ${regionFromZone(zone)}`,
+      `pricing is unavailable for ${machine.machine_type} in ${regionFromComputeZone(zone)}`,
     );
   }
   const allowOnDemandFallback =
@@ -406,7 +422,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       owning_bay_id: getConfiguredBayId(),
       project_id: opts.project_id,
       provider: "gcp",
-      region: regionFromZone(zone),
+      region: regionFromComputeZone(zone),
       zone,
       architecture: machine.architecture,
       machine_type: machine.machine_type,
@@ -503,13 +519,16 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
   });
   const name = normalizeVolumeName(opts.name);
   const zone = normalizeZone(opts.zone);
+  const configuredRegions = await getProviderComputeRegions();
+  requireComputeZoneInRegions(zone, configuredRegions);
+  await requireProviderComputeSubnetwork(zone);
   const sizeGb = volumeAuthorization({
     size_gb: opts.size_gb,
     max_volume_gb: config.max_volume_gb,
   });
   const volumeRate = await estimateDedicatedHostRate({
     provider: "gcp",
-    region: regionFromZone(zone),
+    region: regionFromComputeZone(zone),
     zone,
     machine_type: "e2-standard-2",
     pricing_model: "on_demand",
@@ -519,7 +538,7 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
   });
   if (!volumeRate) {
     throw new Error(
-      `storage pricing is unavailable in ${regionFromZone(zone)}`,
+      `storage pricing is unavailable in ${regionFromComputeZone(zone)}`,
     );
   }
   const monthlyCost = Number(volumeRate.hourly_cost_usd) * HOURS_PER_MONTH;
@@ -532,7 +551,7 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
       owning_bay_id: getConfiguredBayId(),
       project_id: opts.project_id,
       provider: "gcp",
-      region: regionFromZone(zone),
+      region: regionFromComputeZone(zone),
       zone,
       disk_type: "balanced",
       filesystem: "ext4",
@@ -743,9 +762,84 @@ export async function listVms(opts: {
   return rows.map(publicVm);
 }
 
+export async function listProjectVms(opts: {
+  host_id?: string;
+  project_id?: string;
+  include_deleted?: boolean;
+}) {
+  const projectId = await requireComputeProjectReadIdentity(opts);
+  return (
+    await listProjectComputeVms({
+      project_id: projectId,
+      include_deleted: opts.include_deleted,
+    })
+  ).map(publicVm);
+}
+
 export async function getVm(opts: { account_id?: string; id_or_name: string }) {
   const accountId = requireAccount(opts.account_id);
   return publicVm(await resolveOwned(accountId, opts.id_or_name, true));
+}
+
+export async function getProjectVm(opts: {
+  host_id?: string;
+  project_id?: string;
+  id_or_name: string;
+}) {
+  const projectId = await requireComputeProjectReadIdentity(opts);
+  const vm = await resolveProjectComputeVm({
+    project_id: projectId,
+    id_or_name: `${opts.id_or_name ?? ""}`.trim(),
+    include_deleted: true,
+  });
+  if (!vm) throw new Error(`compute VM '${opts.id_or_name}' not found`);
+  return publicVm(vm);
+}
+
+export async function listProjectVolumes(opts: {
+  host_id?: string;
+  project_id?: string;
+  include_deleted?: boolean;
+}) {
+  const projectId = await requireComputeProjectReadIdentity(opts);
+  return (
+    await listProjectComputeVolumes({
+      project_id: projectId,
+      include_deleted: opts.include_deleted,
+    })
+  ).map(publicVolume);
+}
+
+export async function getProjectVolume(opts: {
+  host_id?: string;
+  project_id?: string;
+  id_or_name: string;
+}) {
+  const projectId = await requireComputeProjectReadIdentity(opts);
+  const volume = await resolveProjectComputeVolume({
+    project_id: projectId,
+    id_or_name: `${opts.id_or_name ?? ""}`.trim(),
+    include_deleted: true,
+  });
+  if (!volume) throw new Error(`compute volume '${opts.id_or_name}' not found`);
+  return publicVolume(volume);
+}
+
+async function requireComputeProjectReadIdentity(opts: {
+  host_id?: string;
+  project_id?: string;
+}): Promise<string> {
+  const projectId = `${opts.project_id ?? ""}`.trim();
+  if (!projectId) throw new Error("must be a project");
+  const hostId = `${opts.host_id ?? ""}`.trim();
+  if (hostId) {
+    await assertComputeProjectAssignedToHost({
+      project_id: projectId,
+      host_id: hostId,
+      bay_id: getConfiguredBayId(),
+    });
+  }
+  return projectId;
 }
 
 export async function authorizeSshKey(opts: {

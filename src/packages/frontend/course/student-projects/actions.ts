@@ -13,9 +13,12 @@ import { markdown_to_html } from "@cocalc/frontend/markdown";
 import { setProjectRootfsImage } from "@cocalc/frontend/rootfs/manifest";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type {
+  CourseReconfigureItemResult,
+  CourseReconfigureRequest,
   ProjectCollabInviteRow,
   ProjectCollabInviteStatus,
 } from "@cocalc/conat/hub/api/projects";
+import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type { ProjectEmailInviteDeliveryResult } from "@cocalc/frontend/client/project-collaborators";
 import { RESEND_INVITE_INTERVAL_DAYS } from "@cocalc/util/consts/invites";
 import {
@@ -32,7 +35,6 @@ import { CourseActions } from "../actions";
 import { CourseStore } from "../store";
 import { Result, run_in_all_projects } from "./run-in-all-projects";
 import type { StudentRecord } from "../store";
-import { getEmailInviteValidationError } from "../configuration/email-invite-validation";
 import { configureNewCourseSshTarget } from "../configuration/course-ssh-service";
 import {
   courseConfigurationErrorMessage,
@@ -56,6 +58,9 @@ function courseInviteTitle(title?: string): string {
 
 export class StudentProjectsActions {
   private course_actions: CourseActions;
+  private configuringAllProjects = false;
+  private configureAgain = false;
+  private configureAgainForce = false;
 
   constructor(course_actions: CourseActions) {
     this.course_actions = course_actions;
@@ -361,10 +366,6 @@ export class StudentProjectsActions {
       const subject = `${site_name} course invitation: ${title}`;
       let body = store.get_email_invite();
       body = body.replace(/{title}/g, title).replace(/{name}/g, name);
-      const inviteError = getEmailInviteValidationError(body);
-      if (inviteError) {
-        throw new Error(inviteError);
-      }
       const message = body;
       const email = markdown_to_html(body);
       const result = await webapp_client.project_collaborators.invite_noncloud({
@@ -395,6 +396,13 @@ export class StudentProjectsActions {
       await webapp_client.project_collaborators.invite({
         project_id: student_project_id,
         account_id: student,
+        invite_context: {
+          course_path: this.get_store()?.get("course_filename"),
+          course_project_id: this.get_store()?.get("course_project_id"),
+          student_id,
+          student_project_id,
+        },
+        invite_scope: "course_student",
       });
     }
   };
@@ -452,7 +460,13 @@ export class StudentProjectsActions {
       });
     }
 
-    // Make sure all collaborators on course project are on the student's project:
+    // Use the authoritative course repair path rather than generic invites.
+    // The latter can apply child-project limits using stale Redux state.
+    await this.ensure_course_manager_access({
+      project_ids: [student_project_id],
+      quiet: false,
+    });
+
     const course_collaborators = redux
       .getStore("projects")
       .get_users(s.get("course_project_id"));
@@ -460,15 +474,6 @@ export class StudentProjectsActions {
       // console.log("projects store isn't sufficiently initialized yet...");
       return;
     }
-    for (const account_id of course_collaborators.keys()) {
-      if (!users.has(account_id)) {
-        await webapp_client.project_collaborators.invite({
-          project_id: student_project_id,
-          account_id,
-        });
-      }
-    }
-
     // Regarding student_account_id !== undefined below, see https://github.com/sagemathinc/cocalc/pull/3259
     // The problem is that student_account_id might not yet be known to the .course, even though
     // the student has been added and the account_id exists, and is known to the account opening
@@ -741,11 +746,13 @@ export class StudentProjectsActions {
     if (student_project_id == null) {
       await this.create_student_project(student_id);
     } else {
+      // The course link authorizes manager repair and must exist before the
+      // other configuration operations run.
+      await this.set_student_project_course_info({
+        student_id,
+        student_project_id,
+      });
       await Promise.all([
-        this.set_student_project_course_info({
-          student_id,
-          student_project_id,
-        }),
         this.configure_project_users({
           student_project_id,
           student_id,
@@ -1078,109 +1085,252 @@ export class StudentProjectsActions {
     );
   };
 
+  private build_course_reconfigure_request = async ({
+    force_send_invite_by_email,
+  }: {
+    force_send_invite_by_email: boolean;
+  }): Promise<CourseReconfigureRequest> => {
+    const store = this.get_store();
+    const settings = store.get("settings");
+    const courseRootfs = await this.get_student_project_rootfs();
+    const envvars = store.get_envvars();
+    const inherited_env = envvars?.inherit
+      ? Object.fromEntries(
+          Object.entries(
+            (await webapp_client.conat_client.hub.projects.getProjectEnv({
+              project_id: store.get("course_project_id"),
+            })) ?? {},
+          ).map(([key, value]) => [key, `${value}`]),
+        )
+      : undefined;
+
+    const accountStore = redux.getStore("account");
+    const replyToName = accountStore.get_fullname() || "Your instructor";
+    const replyTo = accountStore.get_email_address();
+    const inviteTitle = courseInviteTitle(settings.get("title"));
+    const siteName = redux.getStore("customize").get("site_name") ?? SITE_NAME;
+    let inviteMessage = store.get_email_invite();
+    inviteMessage = inviteMessage
+      .replace(/{title}/g, inviteTitle)
+      .replace(/{name}/g, replyToName);
+
+    const students = store
+      .get_students()
+      .valueSeq()
+      .toArray()
+      .filter((student) => !student.get("deleted") || student.get("project_id"))
+      .map((student) => {
+        const deleted = !!student.get("deleted");
+        const account_id = student.get("account_id");
+        const email_address = student.get("email_address");
+        return {
+          student_id: student.get("student_id"),
+          name: store.get_student_name(student.get("student_id")),
+          project_id: student.get("project_id"),
+          account_id,
+          email_address,
+          deleted,
+          send_email_invite:
+            !deleted &&
+            !account_id &&
+            !!email_address &&
+            (force_send_invite_by_email || !student.get("last_email_invite")),
+        };
+      });
+
+    return {
+      course_project_id: store.get("course_project_id"),
+      course_path: store.get("course_filename"),
+      settings: {
+        title: settings.get("title") ?? "",
+        description: settings.get("description") ?? "",
+        allow_collabs: store.get_allow_collabs(),
+        datastore: store.get_datastore(),
+        student_pay: !!settings.get("student_pay"),
+        institute_pay: !!settings.get("institute_pay"),
+        site_license_pay: !!settings.get("site_license_pay"),
+        required_membership_class:
+          settings.get("required_membership_class") || undefined,
+        student_membership_required_at:
+          settings.get("student_membership_required_at") || undefined,
+        student_membership_grace_days: settings.get(
+          "student_membership_grace_days",
+        ),
+        course_ends_at: settings.get("course_ends_at") || undefined,
+        student_project_functionality: normalizeStudentProjectFunctionality(
+          settings.get("student_project_functionality")?.toJS(),
+        ),
+        envvars,
+        inherited_env,
+        student_project_host_id: store.get_student_project_host_id(),
+        student_project_rootfs_image: courseRootfs?.image,
+        student_project_rootfs_image_id: courseRootfs?.image_id,
+        shared_project_id: store.get_shared_project_id(),
+        nbgrader_project_id:
+          `${settings.get("nbgrader_grade_project") ?? ""}`.trim() || undefined,
+        invite: {
+          subject: `${siteName} course invitation: ${inviteTitle}`,
+          message: inviteMessage,
+          email_html: markdown_to_html(inviteMessage),
+          reply_to: replyTo,
+          reply_to_name: replyToName,
+          base_url:
+            typeof window === "undefined" ? undefined : window.location.origin,
+        },
+      },
+      students,
+    };
+  };
+
+  private apply_course_reconfigure_result = (summary: LroSummary): void => {
+    if (this.course_actions.is_closed()) return;
+    const items = Array.isArray(summary.result?.items)
+      ? (summary.result.items as CourseReconfigureItemResult[])
+      : [];
+    for (const item of items) {
+      if (
+        item.type !== "student" ||
+        item.status !== "done" ||
+        !item.student_id
+      ) {
+        continue;
+      }
+      const student = this.get_store().get_student(item.student_id);
+      if (!student) continue;
+      this.course_actions.set({
+        table: "students",
+        student_id: item.student_id,
+        project_id: item.project_id,
+        create_project: null,
+        ...(item.email_invited_at
+          ? { last_email_invite: new Date(item.email_invited_at).valueOf() }
+          : undefined),
+      });
+    }
+  };
+
+  cancel_configure_all_projects = async (): Promise<void> => {
+    const store = this.get_store();
+    const op_id = store.get("configuring_projects_op_id");
+    if (!op_id) return;
+    await webapp_client.project_client.cancelCourseReconfigureOperation({
+      course_project_id: store.get("course_project_id"),
+      op_id,
+    });
+  };
+
   configure_all_projects = async (force: boolean = false): Promise<void> => {
     const store = this.get_store();
     if (store == null) {
       return;
     }
-    if (store.get("configuring_projects")) {
-      // currently running already.
+    if (this.configuringAllProjects) {
+      this.configureAgain = true;
+      this.configureAgainForce ||= force;
       return;
     }
 
     let id: number = -1;
     try {
-      this.course_actions.setState({ configuring_projects: true });
+      this.configuringAllProjects = true;
+      this.course_actions.setState({
+        configuring_projects: true,
+        configuring_projects_progress: undefined,
+      });
       id = this.course_actions.set_activity({
         desc: "Ensuring all projects are configured...",
       });
-      const ids = store.get_student_ids({ deleted: false });
-      if (ids == undefined) {
-        return;
-      }
-      let i = 0;
-
-      let project_map = redux.getStore("projects").get("project_map");
-      if (project_map == null || webapp_client.account_id == null) {
-        throw Error(
-          "BUG -- project_map must be initialized and you must be signed in; try again later.",
-        );
-      }
-
-      // Make sure we're a collaborator on every student project.
-      await this.ensure_course_manager_access();
-      let changed = false;
-      for (const student_id of ids) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
         if (this.course_actions.is_closed()) return;
-        const project_id = store.getIn(["students", student_id, "project_id"]);
-        if (project_id && !project_map.get(project_id)) {
-          await webapp_client.project_collaborators.add_collaborator({
-            account_id: webapp_client.account_id,
-            project_id,
-          });
-          changed = true;
-        }
-      }
-
-      if (changed) {
-        // wait hopefully long enough for info about licenses to be
-        // available in the project_map.  This is not 100% bullet proof,
-        // but that is FINE because we only really depend on this to
-        // slightly reduce doing extra work that is unlikely to be a problem.
-        await delay(3000);
-        project_map = redux.getStore("projects").get("project_map");
-      }
-
-      // we make sure no leftover licenses are used by deleted student's projects
-      const deletedIDs = store.get_student_ids({ deleted: true });
-      for (const deleted_student_id of deletedIDs) {
-        i += 1;
-        const idDel: number = this.course_actions.set_activity({
-          desc: `Configuring deleted student project ${i} of ${deletedIDs.length}`,
+        const request = await this.build_course_reconfigure_request({
+          force_send_invite_by_email: attempt === 0 && force,
         });
-        try {
-          await this.configure_project({
-            student_id: deleted_student_id,
-            student_project_id: undefined,
-            force_send_invite_by_email: false,
-          });
-        } finally {
-          this.course_actions.set_activity({ id: idDel });
-        }
-        await delay(0); // give UI, etc. a solid chance to render
-      }
+        const op =
+          await webapp_client.project_client.reconfigureCourseProjects(request);
 
-      i = 0;
-      for (const student_id of ids) {
-        if (this.course_actions.is_closed()) return;
-        i += 1;
-        const id1: number = this.course_actions.set_activity({
-          desc: `Configuring student project ${i} of ${ids.length}`,
+        this.course_actions.setState({
+          configuring_projects_op_id: op.op_id,
         });
-
-        try {
-          await this.configure_project({
-            student_id,
-            student_project_id: undefined,
-            force_send_invite_by_email: force,
-          });
-        } finally {
-          this.course_actions.set_activity({ id: id1 });
+        const summary = await webapp_client.conat_client.lroWait({
+          op_id: op.op_id,
+          scope_type: op.scope_type,
+          scope_id: op.scope_id,
+          timeout_ms: 2 * 60 * 60 * 1000,
+          getSummary: async () => {
+            try {
+              const local = await webapp_client.conat_client.hub.lro.get({
+                op_id: op.op_id,
+              });
+              if (local) return local;
+            } catch {
+              // The operation may be owned by another bay.
+            }
+            return await webapp_client.project_client.getCourseReconfigureOperation(
+              {
+                course_project_id: request.course_project_id,
+                op_id: op.op_id,
+              },
+            );
+          },
+          onSummary: (current) => {
+            if (this.course_actions.is_closed()) return;
+            const progress = current.progress_summary;
+            this.course_actions.setState({
+              configuring_projects_progress: progress,
+            });
+            if (progress?.total) {
+              this.course_actions.set_activity({
+                id,
+                desc: `Configuring projects (${progress.done ?? 0}/${progress.total} done)`,
+              });
+            }
+          },
+        });
+        this.apply_course_reconfigure_result(summary);
+        if (summary.status !== "succeeded") {
+          const staleOperation =
+            op.requested_snapshot_hash !== op.operation_snapshot_hash;
+          if (staleOperation && attempt < 4) {
+            continue;
+          }
+          const itemErrors = (summary.result?.items ?? [])
+            .filter((item) => item?.error)
+            .slice(0, 3)
+            .map((item) => `${item.project_id}: ${item.error}`)
+            .join("; ");
+          throw new Error(
+            itemErrors || summary.error || `operation ${summary.status}`,
+          );
         }
-        await delay(0); // give UI, etc. a solid chance to render
+        if (op.requested_snapshot_hash === op.operation_snapshot_hash) {
+          break;
+        }
+        if (attempt === 4) {
+          throw new Error(
+            "course configuration kept changing while it was running; please retry",
+          );
+        }
       }
-
-      // always re-invite students on running this.
-      await this.course_actions.shared_project.configure();
-      await this.set_all_student_project_course_info();
-      await this.ensure_course_manager_access();
     } catch (err) {
       console.warn(err);
       this.course_actions.set_error(courseConfigurationErrorMessage(err));
     } finally {
-      if (this.course_actions.is_closed()) return;
-      this.course_actions.setState({ configuring_projects: false });
-      this.course_actions.set_activity({ id });
+      this.configuringAllProjects = false;
+      const configureAgain = this.configureAgain;
+      const configureAgainForce = this.configureAgainForce;
+      this.configureAgain = false;
+      this.configureAgainForce = false;
+      if (!this.course_actions.is_closed()) {
+        this.course_actions.setState({
+          configuring_projects: false,
+          configuring_projects_op_id: undefined,
+          configuring_projects_progress: undefined,
+        });
+        this.course_actions.set_activity({ id });
+        if (configureAgain) {
+          void this.configure_all_projects(configureAgainForce);
+        }
+      }
     }
   };
 

@@ -489,6 +489,35 @@ describe("admin support API", () => {
     expect(mockRequireDangerousSessionAuth).not.toHaveBeenCalled();
   });
 
+  it("rejects comments containing repeated literal newline escapes", async () => {
+    await expect(
+      planUpdate({
+        account_id: "admin-account",
+        ticket_id: 123,
+        public_reply: "Hello\\n\\nThis should have real line breaks.",
+        reason: "response approved in support review",
+      }),
+    ).rejects.toThrow("multiple literal \\n escapes");
+  });
+
+  it("accepts comments containing real multiline text", async () => {
+    const current = ticket({ updated_at: "2026-08-05T12:00:00.000Z" });
+    mockGetZendeskClient.mockResolvedValue({
+      tickets: {
+        show: jest.fn(async () => ({ result: current, response: {} })),
+      },
+    } as any);
+
+    const result = await planUpdate({
+      account_id: "admin-account",
+      ticket_id: 123,
+      public_reply: "Hello\n\nThis has real line breaks.",
+      reason: "response approved in support review",
+    });
+
+    expect(result.changes.comment_preview).toContain("Hello\n\nThis has");
+  });
+
   it("atomically updates a ticket and safely replays the request key", async () => {
     const before = ticket({
       updated_at: "2026-08-05T12:00:00.000Z",

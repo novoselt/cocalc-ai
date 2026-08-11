@@ -32,6 +32,7 @@ export function create_jupyter_actions(
   );
   const syncdb_path = syncdbPath(path);
   actions.noteOpenInitStart({
+    project_id,
     syncdbPath: syncdb_path,
   });
   // Ensure meta_file isn't marked as deleted, which would block

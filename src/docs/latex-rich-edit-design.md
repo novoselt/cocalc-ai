@@ -20,7 +20,7 @@ Give users of the existing LaTeX frame editor a way to author and edit
 `.tex` content with rendered, WYSIWYG-style affordances **without** moving
 away from the source-editor paradigm. The CodeMirror frame stays the
 canonical view; rendered widgets are a non-destructive overlay the user
-can toggle on or off per frame.
+can toggle on or off for every LaTeX editor on their current device.
 
 The non-goal is a separate WYSIWYG editor frame. The same buffer, the
 same cursor, the same SyncTeX positions — just decorated. The widget DOM
@@ -37,15 +37,15 @@ files:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ [ Source | Rich ] │ Section▾ Math▾ List▾ │ B I U Size▾ │ 🔗 ⟨/⟩ ⊞   │
+│ Section▾ Math▾ List▾ │ B I U Size▾ │ 🔗 ⟨/⟩ ⊞ │ [ Rich Text | LaTeX ] │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Far left:** an antd `Segmented` ("pill") — the master toggle for
-  rendering inline widgets. Default is **Rich**. State is per-frame (each
-  side of a split can differ) and per-user — stored in `local_view_state`
-  (localStorage), never synced to collaborators via syncdb.
-- **Right of the Segmented control:** format-action buttons that operate
+- **Far right:** an antd button-style `Radio.Group`, visually matching the
+  Markdown editor mode control, switches between **Rich Text** and
+  **LaTeX**. Default is **LaTeX**. The device-wide preference is stored
+  directly in localStorage and never synced to collaborators via syncdb.
+- **Left of the mode control:** format-action buttons that operate
   on the current selection / cursor regardless of view mode, grouped as
   structure → inline style → insert:
   - **Section▾** — Section / Subsection / Subsubsection / Plain. Wraps
@@ -70,7 +70,7 @@ files:
   comparing the bar's natural content width to its available width (with
   a dead-zone so it doesn't oscillate at the threshold).
 
-### Widget behavior (when Rich is selected)
+### Widget behavior (when Rich Text is selected)
 
 - Each recognized construct is replaced inline by a rendered DOM node via
   CodeMirror's `markText({replacedWith, clearOnEnter})`.
@@ -181,17 +181,17 @@ widgets, not as separate text-mode widgets.
 │ LatexCodemirrorEditor (wrapper — index.tsx)                       │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ <RichEditToolbar />  (toolbar.tsx)                          │  │
-│  │   - antd Segmented bound to frame-data "richEditMode"       │  │
+│  │   - antd Radio.Group bound to device-wide localStorage mode  │  │
 │  │   - format-action buttons via actions.format_action        │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ <CodemirrorEditor … />  (unchanged, standard component)     │  │
-│  │  + WidgetManager subscription when Rich is on:              │  │
+│  │  + WidgetManager subscription when Rich Text is on:         │  │
 │  │     - wait for actions._cm[id] (CM ready, via polling)      │  │
 │  │     - cm.on("change", debounced rescan)                     │  │
 │  │     - cm.on("viewportChange", rescan)                       │  │
 │  │     - cm.on("cursorActivity", edit-zone + popover)          │  │
-│  │     on Rich-off / unmount: clear all marks, unmount all     │  │
+│  │     on Rich-Text-off / unmount: clear marks, unmount roots  │  │
 │  │       React roots (deferred), detach handlers               │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
@@ -291,7 +291,7 @@ a new object identity on every parent render (the provider value is built
 inline). Including it in the widget-attach `useEffect` deps caused
 per-render teardown + re-attach, wiping the reconciler's live-marker
 registry. Capture `frameContext` / `editor_actions` via `useRef` and
-depend only on `[richEditMode, props.id]`.
+depend only on `[richEditMode, props.id, props.path]`.
 
 ## File layout
 
@@ -300,7 +300,8 @@ Code under `src/packages/frontend/frame-editors/latex-editor/rich-edit/`:
 ```
 rich-edit/
 ├── index.tsx              LatexCodemirrorEditor wrapper
-├── toolbar.tsx            Top-bar: Segmented + format buttons
+├── mode.ts                Device-wide localStorage mode + subscriptions
+├── toolbar.tsx            Top-bar: format buttons + mode control
 ├── types.ts               WidgetType, WidgetDescriptor, WidgetProps
 ├── parser.ts              parseLines / viewport scanner
 ├── widget-manager.tsx     Live registry + reconcile + CM hooks + macro scan
@@ -340,12 +341,10 @@ replacedWith, clearOnEnter, handleMouseEvents, … })` replaces a range
    ([sagews.coffee:791](../packages/frontend/sagews/sagews.coffee)) — it
    does **not** combine `clearOnEnter` + React + viewport rescans, which
    is why this engine had to validate that combination from scratch.
-2. **Frame-local state.** `CodeEditorActions.set_frame_data` /
-   `_get_frame_data` store per-frame `data-` keys in
-   `local_view_state.frame_tree[id]` (localStorage). Gotchas: invalid id
-   → `undefined` (always pass a default); setting `undefined` deletes the
-   field; `reset_frame_tree()` wipes; same-type split clones the leaf, so
-   a split inherits the parent's `richEditMode` initially.
+2. **Device-wide mode.** `mode.ts` stores `latex` or `rich` under the
+   `latex-editor-mode` localStorage key. A same-window event updates every
+   mounted LaTeX frame immediately, and the browser `storage` event carries
+   changes between tabs. Missing or invalid values default to raw LaTeX.
 3. **Accessing the live cm.** `CodemirrorEditor` keeps `cmRef` private and
    stores the instance at `actions._cm[id]`; it _detaches and reuses_ the
    CM DOM across re-renders rather than destroying it, so the wrapper

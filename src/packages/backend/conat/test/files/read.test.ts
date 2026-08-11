@@ -50,6 +50,22 @@ describe("do a basic test that the file read service works", () => {
     }
   });
 
+  it("preserves filesystem error codes across the streamed read service", async () => {
+    const consumeMissingFile = async () => {
+      for await (const _chunk of await readFile({
+        project_id,
+        path: `${source}-missing`,
+        client: testClient,
+      })) {
+        // The missing file must fail before yielding data.
+      }
+    };
+
+    await expect(consumeMissingFile()).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("closes the write server", async () => {
     close({ project_id });
     for (const f of cleanups) {

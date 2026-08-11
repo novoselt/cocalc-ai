@@ -137,12 +137,21 @@ function runtimeObservationIsStable({
   const observedComponents = new Map(
     (status.observed_components ?? []).map((entry) => [entry.component, entry]),
   );
+  const expectedAuxiliaryVersion =
+    artifact?.current_version === version
+      ? (artifact.current_build_id ?? version)
+      : version;
   const requiredComponents = new Set<ManagedComponentKind>(components);
   const componentsStable = Array.from(requiredComponents).every((component) => {
     const observed = observedComponents.get(component);
+    if (observed?.runtime_state !== "running") return false;
+    if (component === "project-host" || component === "acp-worker") {
+      return observed.version_state === "aligned";
+    }
+    const runningVersions = [...new Set(observed.running_versions ?? [])];
     return (
-      observed?.runtime_state === "running" &&
-      observed.version_state === "aligned"
+      runningVersions.length === 1 &&
+      runningVersions[0] === expectedAuxiliaryVersion
     );
   });
   if (!components.includes("project-host")) {

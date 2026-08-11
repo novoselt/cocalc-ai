@@ -72,6 +72,7 @@ import {
   isWorkspaceProjectRuntime,
 } from "@cocalc/server/launchpad/project-runtime";
 import { normalizeCoursePath } from "@cocalc/util/course-path";
+import { recordServerGrowthEvent } from "@cocalc/server/growth-analytics/server-events";
 
 const log = getLogger("server:projects:create");
 // Project placement must react quickly to dead hosts; do not use UI heartbeat
@@ -619,6 +620,13 @@ async function createProjectImpl(
     throw err;
   } finally {
     client.release();
+  }
+  if (account_id) {
+    recordServerGrowthEvent({
+      account_id,
+      event_name: "project_created",
+      project_id,
+    });
   }
   await publishProjectAccountFeedEventsBestEffort({
     project_id,

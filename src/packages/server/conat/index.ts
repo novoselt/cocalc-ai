@@ -16,6 +16,7 @@ import { initHostStatusService } from "./host-status";
 import { startBackupLroWorker } from "@cocalc/server/projects/backup-worker";
 import { startCopyLroWorker } from "@cocalc/server/projects/copy-worker";
 import { startCourseCollectLroWorker } from "@cocalc/server/projects/course-collect-worker";
+import { startCourseReconfigureLroWorker } from "@cocalc/server/projects/course-reconfigure-worker";
 import { startProjectHardDeleteWorker } from "@cocalc/server/projects/hard-delete-worker";
 import { startMoveLroWorker } from "@cocalc/server/projects/move-worker";
 import { startRootfsPublishLroWorker } from "@cocalc/server/projects/rootfs-publish-worker";
@@ -55,6 +56,8 @@ import { startSiteFundedCodexMaintenance } from "@cocalc/server/ai/site-funded-c
 import startPurchasesMaintenanceLoop from "@cocalc/server/purchases/maintenance";
 import { startLroExpirationMaintenance } from "@cocalc/server/lro/expiration-maintenance";
 import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-retention-maintenance";
+import { startActiveUserMapHistoryMaintenance } from "@cocalc/server/active-user-map-history";
+import { startGrowthAnalyticsMaintenance } from "@cocalc/server/growth-analytics/maintenance";
 
 export { loadConatConfiguration };
 
@@ -104,6 +107,7 @@ export function startConatApiBackgroundWorkers(): void {
   startBackupLroWorker();
   startCopyLroWorker();
   startCourseCollectLroWorker();
+  startCourseReconfigureLroWorker();
   startProjectHardDeleteWorker();
   startMoveLroWorker();
   startBackgroundAutoGrowMaintenance();
@@ -126,6 +130,8 @@ export function startConatApiBackgroundWorkers(): void {
     startComputeVmWorker();
     startLroExpirationMaintenance();
     startUsageRetentionMaintenance();
+    startActiveUserMapHistoryMaintenance();
+    startGrowthAnalyticsMaintenance();
     startHostRuntimeFleetRolloutWorker();
     startExamHostMaintenance();
   }

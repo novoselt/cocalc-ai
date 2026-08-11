@@ -1488,9 +1488,7 @@ export default function SiteSettings({
             <GcpServiceAccountWizard
               open={activeWizard === "gcp-service-account-json"}
               onClose={closeWizard}
-              onApplyJson={(json) =>
-                onJsonEntryChange("google_cloud_service_account_json", json)
-              }
+              onSave={applyWizardSettings}
               currentJson={data?.google_cloud_service_account_json}
               domainName={data?.dns}
             />
@@ -1498,10 +1496,7 @@ export default function SiteSettings({
               open={activeWizard === "compute-vm-gcp-service-account-json"}
               onClose={closeWizard}
               computeVm
-              onApplyJson={(json) =>
-                onJsonEntryChange("compute_vm_gcp_service_account_json", json)
-              }
-              onApplySettings={applyWizardSettings}
+              onSave={applyWizardSettings}
               currentJson={data?.compute_vm_gcp_service_account_json}
               domainName={data?.dns}
             />

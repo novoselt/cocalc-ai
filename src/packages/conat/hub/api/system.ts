@@ -34,6 +34,10 @@ import type { NewsItemWebapp } from "@cocalc/util/types/news";
 import type {
   AccountRehomeOperationSummary,
   AccountRehomeResponse,
+  ActiveUserMapHistorySeries,
+  ActiveUserMapHistorySeriesRequest,
+  ActiveUserMapHistorySnapshot,
+  ActiveUserMapHistorySnapshotRequest,
 } from "@cocalc/conat/inter-bay/api";
 import type {
   BrowserAutomationCentralAuditEvent,
@@ -57,6 +61,8 @@ export const system = {
   setBayProjectOwnershipAdmission: authFirstRequireAccount,
   getBayLoad: authFirst,
   getActiveUserMap: authFirst,
+  getActiveUserMapHistorySeries: authFirst,
+  getActiveUserMapHistorySnapshot: authFirst,
   recordUxLatencyEvent: authFirst,
   getUxLatencySummary: authFirstRequireAccount,
   getLaunchHealth: authFirstRequireAccount,
@@ -95,9 +101,11 @@ export const system = {
   webappError: authFirst,
   manageApiKeys: authFirst,
   createImpersonationGrant: authFirst,
+  adminBanUser: authFirst,
   userSearch: authFirst,
   getNames: requireAccount,
   adminCreateUser: authFirst,
+  adminUnbanUser: authFirst,
   deleteAccount: authFirst,
   rehomeAccount: authFirstRequireAccount,
   getAccountRehomeOperation: authFirstRequireAccount,
@@ -360,11 +368,33 @@ export interface ProjectCryptominingEvidence {
   signals: ProjectCryptominingSignal[];
 }
 
+export type ProjectBandwidthRelaySignalKind =
+  | "tunnel_process"
+  | "bulk_transfer_process"
+  | "automated_uploader_process";
+
+export interface ProjectBandwidthRelaySignal {
+  kind: ProjectBandwidthRelaySignalKind;
+  pattern: string;
+  matched: string;
+  pid?: number;
+  executable?: string;
+}
+
+export interface ProjectBandwidthRelayEvidence {
+  confidence: "high";
+  detector_version?: string;
+  detected_at?: string;
+  signals: ProjectBandwidthRelaySignal[];
+}
+
 export interface UxLatencyMetricSummary {
   metric: string;
   event_type: string;
   segment?: string;
   count: number;
+  account_count: number;
+  project_count: number;
   avg_ms: number;
   p50_ms: number;
   p95_ms: number;
@@ -388,6 +418,7 @@ export interface UxLatencyRecentEvent {
   path_ext?: string;
   editor?: string;
   details?: Record<string, unknown>;
+  saturation?: Record<string, unknown>;
 }
 
 export interface UxLatencySummary {
@@ -398,6 +429,11 @@ export interface UxLatencySummary {
   segments: UxLatencyMetricSummary[];
   recent_slow_events: UxLatencyRecentEvent[];
 }
+
+export const UX_LATENCY_HEALTH_METRICS = {
+  fileVisible: "file_content_paint_v2",
+  fileSyncReady: "file_sync_ready_v2",
+} as const;
 
 export type LaunchHealthLevel = "healthy" | "warning" | "critical" | "unknown";
 
@@ -2005,6 +2041,14 @@ export interface System {
     opts: ActiveUserMapQuery,
   ) => Promise<ActiveUserMapOverview>;
 
+  getActiveUserMapHistorySeries: (
+    opts: ActiveUserMapHistorySeriesRequest,
+  ) => Promise<ActiveUserMapHistorySeries>;
+
+  getActiveUserMapHistorySnapshot: (
+    opts: ActiveUserMapHistorySnapshotRequest,
+  ) => Promise<ActiveUserMapHistorySnapshot | null>;
+
   recordUxLatencyEvent: (opts: {
     account_id?: string;
     event: UxLatencyEventInput;
@@ -2248,6 +2292,33 @@ export interface System {
     created_by: string;
     password_generated: boolean;
     generated_password?: string;
+  }>;
+
+  adminBanUser: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    user_account_id: string;
+    reason: string;
+  }) => Promise<{
+    user_account_id: string;
+    affected_accounts: Array<{
+      account_id: string;
+      home_bay_id: string;
+      banned: true;
+    }>;
+  }>;
+
+  adminUnbanUser: (opts: {
+    account_id?: string;
+    browser_id?: string | null;
+    session_hash?: string | null;
+    user_account_id: string;
+    reason: string;
+  }) => Promise<{
+    user_account_id: string;
+    home_bay_id: string;
+    banned: false;
   }>;
 
   deleteAccount: (opts: {
@@ -2743,6 +2814,8 @@ export interface System {
 
   getPublicSiteUrl: (opts?: {
     account_id?: string;
+    project_id?: string;
+    host_id?: string;
   }) => Promise<{ url: string }>;
 
   testR2Credentials: (opts: {
@@ -2973,8 +3046,20 @@ export interface System {
     project_id?: string;
     category: ManagedProjectEgressCategory;
     bytes: number;
+    bandwidth_relay_evidence?: ProjectBandwidthRelayEvidence;
     metadata?: Record<string, unknown>;
-  }) => Promise<{ recorded: boolean; account_id?: string }>;
+  }) => Promise<{
+    recorded: boolean;
+    account_id?: string;
+    stop_project?: {
+      reason: "bandwidth_relay_detected";
+      membership_class?: string;
+      membership_source?: string;
+      auto_banned?: boolean;
+      raw_network_bytes_5h?: number;
+      raw_network_bytes_7d?: number;
+    };
+  }>;
 
   recordManagedProjectCpuUsage: (opts: {
     account_id?: string;

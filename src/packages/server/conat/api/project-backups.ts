@@ -25,7 +25,7 @@ import {
   assertProjectOwnerCanIncreaseAccountStorage,
   getProjectBackupLimit,
 } from "@cocalc/server/membership/project-limits";
-import { capitalize, humanSize } from "@cocalc/util/misc";
+import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 import { requireDangerousProjectMutationAuth } from "./project-dangerous-auth";
 import { assertCanPerformDestructiveStorageAction } from "@cocalc/server/projects/destructive-storage-actions";
 import { assertProjectRuntimeCapability } from "@cocalc/server/launchpad/project-runtime";
@@ -106,24 +106,6 @@ async function publishLroSummarySafe({
   }
 }
 
-function formatManagedEgressCategory(category: string): string {
-  if (category === "file-download") return "File downloads";
-  if (category === "http-proxy") return "App server HTTP traffic";
-  if (category === "ws-proxy") return "App server WebSocket traffic";
-  if (category === "ssh") return "SSH traffic";
-  if (category === "interactive-conat") return "Interactive session traffic";
-  if (category === "raw-network") return "Project outbound network traffic";
-  if (category === "backup-upload") return "Project backup uploads";
-  return capitalize(category.replace(/[-_]/g, " "));
-}
-
-function formatByteCount(bytes?: number): string {
-  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
-    return "unknown";
-  }
-  return humanSize(bytes);
-}
-
 async function assertManagedBackupAllowed({
   project_id,
   managed_egress_override,
@@ -145,36 +127,11 @@ async function assertManagedBackupAllowed({
   if (policy.allowed) {
     return;
   }
-  const breakdown = Object.entries(
-    policy.managed_egress_categories_5h_bytes ?? {},
-  )
-    .filter(
-      ([, bytes]) =>
-        typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-    )
-    .map(
-      ([category, bytes]) =>
-        `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-    );
   const lines = [
     "Managed backup upload limit reached for this account.",
     "New backups, including scheduled backups and moves that require a backup, are temporarily blocked until the egress usage window resets.",
+    ...formatManagedEgressPolicyDetails(policy),
   ];
-  if (policy.egress_5h_bytes != null) {
-    lines.push(
-      `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-    );
-  }
-  if (policy.egress_7d_bytes != null) {
-    lines.push(
-      `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-    );
-  }
-  if (breakdown.length > 0) {
-    lines.push(
-      `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-    );
-  }
   throw new Error(lines.join("\n"));
 }
 

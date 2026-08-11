@@ -112,6 +112,7 @@ for required_file in \
   runtime/control-plane/public/cocalc-content.css \
   runtime/control-plane/webapp/favicon.ico \
   runtime/control-plane/bundle/gcp/gcp-setup.sh \
+  runtime/control-plane/bundle/gcp/compute-vm-setup.sh \
   runtime/control-plane/bundle/nebius/nebius-setup.sh; do
   mkdir -p "${VALIDATION_RELEASE}/$(dirname "$required_file")"
   touch "${VALIDATION_RELEASE}/${required_file}"

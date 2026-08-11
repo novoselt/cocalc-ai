@@ -164,6 +164,42 @@ describe("createLroDetailed", () => {
   });
 });
 
+describe("updateLro", () => {
+  beforeEach(() => {
+    jest.resetModules();
+    connectQueryMock = jest.fn(async () => ({ rows: [] }));
+    queryMock = jest.fn(async (sql: string, values: unknown[]) => ({
+      rows: [
+        {
+          op_id: values[0],
+          status: "canceled",
+        },
+      ],
+    }));
+  });
+
+  it("can make a terminal transition conditional on the active statuses", async () => {
+    const { updateLro } = await import("./lro-db");
+
+    await updateLro({
+      op_id: "11111111-1111-4111-8111-111111111111",
+      status: "canceled",
+      error: "canceled",
+      if_status: ["queued", "running"],
+    });
+
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining("status=ANY($4::text[])"),
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "canceled",
+        "canceled",
+        ["queued", "running"],
+      ],
+    );
+  });
+});
+
 describe("claimLroOps", () => {
   beforeEach(() => {
     jest.resetModules();

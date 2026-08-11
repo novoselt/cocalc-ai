@@ -129,6 +129,74 @@ export const TABLE_OWNERSHIP = {
       "Bay-local daily membership count snapshots. These are derived from account-home membership state and aggregated across bays for admin analytics.",
   }),
 
+  ...entries(
+    ["account_managed_egress_events", "account_managed_egress_rollups"],
+    {
+      ownership: "account-home",
+      authority: "account_id",
+      portability: "unsupported",
+      secondary_reference_fields: {
+        project_id: "Usage attribution dimension, not placement authority.",
+      },
+      notes:
+        "Account-home managed-egress event and rollup state. Reads and writes must route to the account home bay; account rehome is unsafe until this state has explicit migration support.",
+    },
+  ),
+
+  ...entries(
+    [
+      "growth_account_activity_daily",
+      "growth_account_milestones",
+      "growth_account_profiles",
+    ],
+    {
+      ownership: "account-home",
+      authority: "account_id",
+      portability: "unsupported",
+      notes:
+        "Canonical account growth facts. Writes must route to the account home bay; global dashboards consume aggregate projections rather than these account rows.",
+    },
+  ),
+
+  ...entries(["growth_event_log"], {
+    ownership: "audit-local",
+    authority: "local",
+    portability: "unsupported",
+    secondary_reference_fields: {
+      account_id:
+        "Authenticated account reference; the row is retained only in the bay-local diagnostic ledger.",
+      project_id:
+        "Optional project context for the event, not project placement authority.",
+    },
+    notes:
+      "Short-lived validated product-event ledger. The materializer converts these rows into account-home facts and bay-local aggregate projections before bounded retention cleanup.",
+  }),
+
+  ...entries(
+    [
+      "growth_dirty_periods",
+      "growth_materialization_state",
+      "growth_metric_series",
+      "growth_retention_cells",
+      "growth_weekly_accounting",
+    ],
+    {
+      ownership: "projection",
+      authority: "local",
+      portability: "rebuildable",
+      notes:
+        "Bay-scoped growth materialization state and compact serving projections. These tables are restart-safe and rebuildable from account-home facts and the short-lived event log.",
+    },
+  ),
+
+  ...entries(["growth_annotations"], {
+    ownership: "stable-bay",
+    authority: "local",
+    portability: "stable",
+    notes:
+      "Admin-authored growth timeline annotations retained on the bay where they are created.",
+  }),
+
   ...entries(["purchases"], {
     ownership: "account-home",
     authority: "account_id",
@@ -262,6 +330,8 @@ export const TABLE_OWNERSHIP = {
 
   ...entries(
     [
+      "active_user_map_history_countries",
+      "active_user_map_history_snapshots",
       "buckets",
       "crm_leads",
       "crm_organizations",
@@ -522,8 +592,6 @@ export const AD_HOC_POSTGRES_TABLE_OWNERSHIP = {
     [
       "account_abuse_review_annotations",
       "account_cpu_usage_events",
-      "account_managed_egress_events",
-      "account_managed_egress_rollups",
       "account_revocations",
       "account_security_state",
       "account_usage_windows",

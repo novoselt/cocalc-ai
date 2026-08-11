@@ -25,6 +25,11 @@ import { is_different } from "@cocalc/util/misc";
 import { isChatPath } from "@cocalc/frontend/chat/paths";
 import { effectiveImmutableEditorSettings } from "@cocalc/frontend/project/workspaces/editor-theme";
 import { useWorkspaceRecordForPath } from "@cocalc/frontend/project/workspaces/use-workspace-record";
+import { afterNextPaint } from "@cocalc/frontend/monitoring/ux-latency-trace";
+import {
+  record_file_content_paint_v2,
+  record_file_edit_ready_v2,
+} from "@cocalc/frontend/project/open-file";
 import { chat } from "../generic/chat";
 import { FrameDndProvider } from "./dnd/frame-dnd-provider";
 import FormatError from "./format-error";
@@ -38,6 +43,7 @@ interface FrameTreeEditorProps {
   path: string;
   project_id: string;
   editor_spec: any;
+  editor_name: string;
   tab_is_visible: boolean; // if the editor tab is active -- page/page.tsx
   format_bar?: boolean;
   format_bar_exclude?: SetMap;
@@ -59,7 +65,8 @@ function shouldMemoize(prev, next): boolean {
 
 const FrameTreeEditor: React.FC<FrameTreeEditorProps> = React.memo(
   (props: Readonly<FrameTreeEditorProps>) => {
-    const { name, actions, path, project_id, tab_is_visible } = props;
+    const { name, actions, path, project_id, tab_is_visible, editor_name } =
+      props;
 
     const frameRootRef = useRef<HTMLDivElement>(null);
 
@@ -90,7 +97,9 @@ const FrameTreeEditor: React.FC<FrameTreeEditorProps> = React.memo(
       "has_uncommitted_changes",
     );
     const read_only: boolean = useRedux(name, "read_only");
+    const read_only_preview: boolean = useRedux(name, "read_only_preview");
     const is_loaded: boolean = useRedux(name, "is_loaded");
+    const rtc_status: string | undefined = useRedux(name, "rtc_status");
     const local_view_state: Map<string, any> = useRedux(
       name,
       "local_view_state",
@@ -118,6 +127,58 @@ const FrameTreeEditor: React.FC<FrameTreeEditorProps> = React.memo(
       "derived_file_types",
     );
     const visible: boolean | undefined = useRedux(name, "visible");
+
+    useEffect(() => {
+      if (!is_loaded || !tab_is_visible || editor_name === "TerminalEditor") {
+        return;
+      }
+      return afterNextPaint(() => {
+        record_file_content_paint_v2({
+          project_id,
+          path,
+          editor: editor_name,
+          read_only: !!read_only,
+          read_only_preview: !!read_only_preview,
+          surface_visible: tab_is_visible,
+        });
+      });
+    }, [
+      editor_name,
+      is_loaded,
+      path,
+      project_id,
+      read_only,
+      read_only_preview,
+      tab_is_visible,
+    ]);
+
+    useEffect(() => {
+      if (
+        !is_loaded ||
+        !tab_is_visible ||
+        read_only ||
+        rtc_status !== "live" ||
+        editor_name === "TerminalEditor"
+      ) {
+        return;
+      }
+      return afterNextPaint(() => {
+        record_file_edit_ready_v2({
+          project_id,
+          path,
+          editor: editor_name,
+          surface_visible: tab_is_visible,
+        });
+      });
+    }, [
+      editor_name,
+      is_loaded,
+      path,
+      project_id,
+      read_only,
+      rtc_status,
+      tab_is_visible,
+    ]);
 
     // if frameRootRef resizes, call actions.set_resize()
     useEffect(() => {
@@ -262,6 +323,7 @@ export function createEditor<T = EditorSpec>(
         editor_spec={
           isChatPath(path) ? opts.editor_spec : { ...opts.editor_spec, chat }
         }
+        editor_name={opts.display_name}
         tab_is_visible={is_visible}
       />
     );

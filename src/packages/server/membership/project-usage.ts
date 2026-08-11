@@ -21,7 +21,11 @@ const PROJECT_OWNER_ACCOUNT_EXPR = "owner.account_id";
 
 type ProjectUsageAttributionRow = ProjectUsageRow & {
   usage_account_id?: string | null;
-  course?: { type?: string; account_id?: string } | null;
+  course?: {
+    type?: string;
+    account_id?: string;
+    project_id?: string;
+  } | null;
   owner_account_id?: string | null;
 };
 
@@ -96,6 +100,71 @@ export async function getProjectOwnerAccountId(
     [project_id],
   );
   return `${rows[0]?.account_id ?? ""}`.trim() || undefined;
+}
+
+export async function getProjectUserAccountIds(
+  project_id: string,
+  client?: PoolClient,
+): Promise<string[]> {
+  const { rows } = await getQueryClient(client).query<{ account_id: string }>(
+    `
+      SELECT user_entry.account_id
+      FROM projects AS p
+      CROSS JOIN LATERAL jsonb_object_keys(
+        COALESCE(p.users, '{}'::jsonb)
+      ) AS user_entry(account_id)
+      WHERE p.project_id = $1
+        AND p.deleted IS NULL
+      ORDER BY user_entry.account_id
+    `,
+    [project_id],
+  );
+  return rows
+    .map(({ account_id }) => `${account_id ?? ""}`.trim())
+    .filter(Boolean);
+}
+
+export async function getProjectCollaborationAccountId(
+  project_id: string,
+  client?: PoolClient,
+): Promise<string | undefined> {
+  const { rows } = await getQueryClient(
+    client,
+  ).query<ProjectUsageAttributionRow>(
+    `
+      SELECT
+        p.course,
+        owner.account_id AS owner_account_id
+      FROM projects AS p
+      LEFT JOIN LATERAL (
+        SELECT u.account_id_text::text AS account_id
+        FROM jsonb_each(COALESCE(p.users, '{}'::jsonb)) AS u(account_id_text, user_data)
+        WHERE COALESCE(u.user_data ->> 'group', '') = 'owner'
+        ORDER BY u.account_id_text
+        LIMIT 1
+      ) AS owner ON TRUE
+      WHERE p.project_id = $1
+        AND p.deleted IS NULL
+      LIMIT 1
+    `,
+    [project_id],
+  );
+  const row = rows[0];
+  const courseProjectId = `${row?.course?.project_id ?? ""}`.trim();
+  if (
+    courseProjectId &&
+    courseProjectId !== project_id &&
+    ["student", "shared", "nbgrader"].includes(`${row?.course?.type ?? ""}`)
+  ) {
+    const courseAccountId = await getProjectUsageAccountId(
+      courseProjectId,
+      client,
+    );
+    if (courseAccountId) {
+      return courseAccountId;
+    }
+  }
+  return `${row?.owner_account_id ?? ""}`.trim() || undefined;
 }
 
 export async function getUsageProjectCountForAccount(

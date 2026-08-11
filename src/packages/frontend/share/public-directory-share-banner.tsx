@@ -25,6 +25,7 @@ import { getProjectHomeDirectory } from "@cocalc/frontend/project/home-directory
 import { toUrlPath } from "@cocalc/frontend/project/redux/path-routing";
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import { decodeLegacyPublicPathDescriptionEscapes } from "@cocalc/util/legacy-migration";
 import { COLORS, DOMAIN_URL } from "@cocalc/util/theme";
 
 const { Text } = Typography;
@@ -122,13 +123,10 @@ export function normalizeShareDescriptionMarkdown(value: string): string {
   // Some legacy public_paths descriptions were imported with doubled LaTeX
   // escapes, e.g. "\\(" instead of "\(". Collapse only LaTeX-looking
   // sequences so ordinary markdown backslashes are not broadly rewritten.
-  return value
-    .replace(/\\r\\n/g, "\n")
-    .replace(/\\n\\n/g, "\n\n")
-    .replace(/\\n(?![A-Za-z])/g, "\n")
-    .replace(/\\r(?![A-Za-z])/g, "\n")
-    .replace(/\\t(?![A-Za-z])/g, "\t")
-    .replace(/\\\\(?=(?:[()[\]]|[A-Za-z]+))/g, "\\");
+  return decodeLegacyPublicPathDescriptionEscapes(value).replace(
+    /\\\\(?=(?:[()[\]]|[A-Za-z]+))/g,
+    "\\",
+  );
 }
 
 function ShareDescription({ value }: { value: string }) {

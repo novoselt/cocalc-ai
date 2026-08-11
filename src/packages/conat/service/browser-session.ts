@@ -44,6 +44,7 @@ export type BrowserActionName =
   | "click_at"
   | "drag"
   | "type"
+  | "upload_file"
   | "press"
   | "reload"
   | "navigate"
@@ -135,6 +136,14 @@ export type BrowserAtomicActionRequest =
       append?: boolean;
       clear?: boolean;
       submit?: boolean;
+      timeout_ms?: number;
+    }
+  | {
+      name: "upload_file";
+      selector: string;
+      filename: string;
+      content_base64: string;
+      mime_type?: string;
       timeout_ms?: number;
     }
   | {

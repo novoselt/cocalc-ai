@@ -277,7 +277,6 @@ describe("KernelSelector", () => {
           title: "Install Bash Jupyter kernel",
           tag: "intent:jupyter-install-kernel:bash",
           forceCodex: true,
-          codexConfig: { model: "gpt-5.4-mini" },
           openFloating: true,
           waitForAgent: false,
           createNewThread: false,

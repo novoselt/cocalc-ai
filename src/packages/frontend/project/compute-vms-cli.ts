@@ -46,8 +46,6 @@ export function vmCreateCli(opts: {
     : values.volume;
   const args = [
     "cocalc",
-    "--api",
-    shellQuote(opts.api),
     "vm",
     "create",
     "--project",
@@ -96,8 +94,6 @@ export function volumeCreateCli(opts: {
 }): string {
   return [
     "cocalc",
-    "--api",
-    shellQuote(opts.api),
     "vm",
     "volume",
     "create",

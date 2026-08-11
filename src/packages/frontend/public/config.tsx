@@ -34,6 +34,7 @@ export interface PublicConfig {
   account_creation_email_instructions?: string;
   account_id?: string;
   cocalc_product?: string;
+  compute_vm_enabled?: boolean;
   cookie_banner_enabled?: boolean;
   cookie_banner_text?: string;
   dns?: string;
@@ -154,6 +155,7 @@ export function isCocalcAiPublicSite(config?: PublicConfig): boolean {
 
 export function getPublicDocsAccess(config?: PublicConfig): DocsAccess {
   return {
+    features: config?.compute_vm_enabled === true ? ["compute-vms"] : [],
     includeAdmin: config?.is_admin === true,
     includeSignedIn:
       config?.is_authenticated === true || config?.is_admin === true,

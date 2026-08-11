@@ -39,6 +39,9 @@ export async function createTable(
     if (info.unique) {
       s += " UNIQUE";
     }
+    if (info.pg_default != null) {
+      s += ` DEFAULT ${info.pg_default}`;
+    }
     if (info.not_null) {
       s += " NOT NULL";
     }

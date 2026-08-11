@@ -203,6 +203,28 @@ describe("Admin Data Explorer SQL validation", () => {
     });
   });
 
+  it("allows auditing both purchase statement links", async () => {
+    const { validateSql } = await import("./admin-data-explorer");
+
+    await expect(
+      validateSql({
+        account_id: ACCOUNT_ID,
+        session_hash: "fresh",
+        sql: `select purchases.account_id,
+                     purchases.day_statement_id,
+                     purchases.month_statement_id,
+                     statements.id
+                from purchases
+                join statements
+                  on statements.account_id = purchases.account_id
+               limit 10`,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      errors: [],
+    });
+  });
+
   it("validates all bundled starter SQL views", async () => {
     const { validateSql } = await import("./admin-data-explorer");
     const { ADMIN_DATA_EXPLORER_STARTER_VIEWS } =

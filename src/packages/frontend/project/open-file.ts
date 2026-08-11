@@ -45,6 +45,11 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
+import {
+  capturePageVisibility,
+  UxLatencyTrace,
+  type UxTracePhaseDetails,
+} from "@cocalc/frontend/monitoring/ux-latency-trace";
 import { parsePathWithOptionalLineSuffix } from "./parse-path-line";
 
 // if true, PRELOAD_BACKGROUND_TABS makes it so all tabs have their file editing
@@ -294,7 +299,10 @@ export async function open_file(
   // console.log("open_file: ", opts);
 
   const foreground = opts.foreground ?? true;
-  const foreground_project = opts.foreground_project ?? foreground;
+  // Opening a background tab must not foreground or otherwise navigate the
+  // project, even when a caller passes a stale foreground-project hint.
+  const foreground_project =
+    foreground && (opts.foreground_project ?? foreground);
   const wait_for_ready = opts.wait_for_ready ?? foreground;
   opts = defaults(opts, {
     path: required,
@@ -312,6 +320,7 @@ export async function open_file(
     explicit: false,
     workspaceSelection: undefined,
   });
+  opts.foreground_project = foreground_project;
   if (opts.line == null && opts.fragmentId?.line == null) {
     const parsed = parsePathWithOptionalLineSuffix(opts.path);
     if (parsed.line != null) {
@@ -328,6 +337,15 @@ export async function open_file(
   }
   opts.path = normalize(opts.path);
   const displayPath = opts.path;
+  mark_file_open_v2_phase(
+    actions.project_id,
+    displayPath,
+    "open_action_enter",
+    {
+      already_foreground: opts.foreground,
+      explicit: opts.explicit,
+    },
+  );
   const publicDirectoryShareOpen = isPublicDirectoryShareOpen(actions);
   if (publicDirectoryShareOpen) {
     // Share routes are aliases for path-scoped viewer access. Never let a
@@ -407,6 +425,11 @@ export async function open_file(
     if (opts.foreground || opts.wait_for_ready || PRELOAD_BACKGROUND_TABS) {
       actions.open_files.set(displayPath, "component", {});
     }
+    mark_file_open_v2_phase(
+      actions.project_id,
+      displayPath,
+      "tab_shell_created",
+    );
   }
 
   if (!opts.foreground && !opts.wait_for_ready && !PRELOAD_BACKGROUND_TABS) {
@@ -452,12 +475,25 @@ export async function open_file(
     const ext = opts.ext ?? filename_extension(displayPath).toLowerCase();
     let syncPath = displayPath;
     try {
+      mark_file_open_v2_phase(
+        actions.project_id,
+        displayPath,
+        "canonical_identity_start",
+      );
       syncPath = await resolveSyncPathWithRetry(
         actions.fs() as SyncIdentityFs,
         displayPath,
         projectHome,
         { isOpen: tabIsOpened },
       );
+      mark_file_open_v2_phase(
+        actions.project_id,
+        displayPath,
+        "canonical_identity_done",
+        { path_changed: syncPath !== displayPath },
+      );
+      bindFileOpenV2TraceAlias(actions.project_id, displayPath, syncPath);
+      actions.markSyncIdentityPathCanonical?.(syncPath);
     } catch (err) {
       if (isCancelledSyncIdentityResolutionError(err)) {
         return;
@@ -490,6 +526,11 @@ export async function open_file(
   const continueOpen = async (): Promise<void> => {
     let syncPath: string;
     try {
+      mark_file_open_v2_phase(
+        actions.project_id,
+        displayPath,
+        "canonical_identity_start",
+      );
       syncPath = await resolveSyncPathWithRetry(
         actions.fs() as SyncIdentityFs,
         displayPath,
@@ -498,6 +539,13 @@ export async function open_file(
           isOpen: tabIsOpened,
         },
       );
+      mark_file_open_v2_phase(
+        actions.project_id,
+        displayPath,
+        "canonical_identity_done",
+        { path_changed: syncPath !== displayPath },
+      );
+      bindFileOpenV2TraceAlias(actions.project_id, displayPath, syncPath);
     } catch (err) {
       if (isCancelledSyncIdentityResolutionError(err)) {
         return;
@@ -521,6 +569,7 @@ export async function open_file(
     }
     if (actions.open_files != null) {
       actions.open_files.set(displayPath, "sync_path", syncPath);
+      actions.markSyncIdentityPathCanonical?.(syncPath);
       actions.open_files.set(displayPath, "display_path", displayPath);
     }
     // If this path resolves to a sync identity that is already open in this browser,
@@ -565,10 +614,20 @@ export async function open_file(
 
     // Wait for the project to start opening.
     try {
+      mark_file_open_v2_phase(
+        actions.project_id,
+        displayPath,
+        "project_ui_open_start",
+      );
       await ensureProjectIsOpenWithRetry(actions, {
         foreground_project: opts.foreground_project,
         isOpen: tabIsOpened,
       });
+      mark_file_open_v2_phase(
+        actions.project_id,
+        displayPath,
+        "project_ui_open_done",
+      );
       if (!tabIsOpened()) {
         return;
       }
@@ -632,8 +691,15 @@ export async function open_file(
       actions.set_active_tab(tab, {
         change_history: opts.change_history,
       });
+      mark_file_open_v2_phase(
+        actions.project_id,
+        displayPath,
+        "editor_tab_activated",
+      );
     } else if (PRELOAD_BACKGROUND_TABS) {
-      await actions.initFileRedux(syncPath);
+      await actions.initFileRedux(syncPath, undefined, {
+        syncIdentityPathIsCanonical: true,
+      });
     }
 
     if (alreadyOpened && opts.chat) {
@@ -811,28 +877,226 @@ interface OpenTiming {
 const log_open_time: { [path: string]: OpenTiming } = {};
 const FILE_OPEN_STALE_AFTER_MS = 60_000;
 const FILE_OPEN_WALL_CLOCK_SKEW_MS = 10_000;
-let visibilityEpoch = 0;
-let visibilityListenerInstalled = false;
+const FILE_OPEN_INCOMPLETE_AFTER_MS = 45_000;
+const FILE_OPEN_TRACE_CLEANUP_DELAY_MS = 10_000;
 
-function getVisibilityEpoch(): number {
-  if (typeof document === "undefined") return visibilityEpoch;
-  if (!visibilityListenerInstalled) {
-    visibilityListenerInstalled = true;
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
-        visibilityEpoch += 1;
-      }
-    });
-  }
-  return visibilityEpoch;
+interface FileOpenV2Trace {
+  trace: UxLatencyTrace;
+  projectId: string;
+  path: string;
+  keys: Set<string>;
+  contentPainted: boolean;
+  syncReady: boolean;
+  editReady: boolean;
+  readOnly: boolean;
+  incompleteTimer: ReturnType<typeof setTimeout>;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
 }
 
-function isDocumentHidden(): boolean {
-  return typeof document !== "undefined" && document.hidden;
+const fileOpenV2Traces = new Map<string, FileOpenV2Trace>();
+
+function deleteFileOpenV2Trace(entry: FileOpenV2Trace): void {
+  for (const key of entry.keys) {
+    if (fileOpenV2Traces.get(key) === entry) {
+      fileOpenV2Traces.delete(key);
+    }
+  }
 }
 
 function openTimingKey(project_id: string, path: string): string {
   return `${project_id}-${normalize(path)}`;
+}
+
+function fileOpenPathExt(path: string): string | undefined {
+  const ext = filename_extension(path).toLowerCase();
+  return ext ? `.${ext}` : undefined;
+}
+
+function fileEditorSurfaceVisible(project_id: string, path: string): boolean {
+  return (
+    redux.getProjectStore(project_id)?.get("active_project_tab") ===
+    path_to_tab(path)
+  );
+}
+
+function recordIncompleteFileOpen(
+  entry: FileOpenV2Trace,
+  reason: "superseded" | "endpoint_timeout",
+): void {
+  entry.trace.record("file_open_incomplete_v2", {
+    path_ext: fileOpenPathExt(entry.path),
+    segment: fileOpenSegment({ path: entry.path }),
+    surface_visible: fileEditorSurfaceVisible(entry.projectId, entry.path),
+    details: {
+      reason,
+      content_painted: entry.contentPainted,
+      sync_ready: entry.syncReady,
+      edit_ready: entry.editReady,
+      read_only: entry.readOnly,
+    },
+  });
+}
+
+function startFileOpenV2Trace({
+  project_id,
+  path,
+  client_event_id,
+}: {
+  project_id: string;
+  path: string;
+  client_event_id?: string;
+}): void {
+  const key = openTimingKey(project_id, path);
+  const previous = fileOpenV2Traces.get(key);
+  if (previous != null) {
+    clearTimeout(previous.incompleteTimer);
+    if (previous.cleanupTimer != null) clearTimeout(previous.cleanupTimer);
+    recordIncompleteFileOpen(previous, "superseded");
+    deleteFileOpenV2Trace(previous);
+  }
+  const entry = {
+    trace: new UxLatencyTrace({
+      event_type: "file_open",
+      project_id,
+      host_id: redux
+        .getProjectsStore?.()
+        ?.getIn?.(["project_map", project_id, "host_id"]),
+      client_event_id,
+      source: "user_intent",
+      surface_visible: true,
+    }),
+    projectId: project_id,
+    path,
+    keys: new Set([key]),
+    contentPainted: false,
+    syncReady: false,
+    editReady: false,
+    readOnly: false,
+    incompleteTimer: undefined as unknown as ReturnType<typeof setTimeout>,
+  };
+  entry.incompleteTimer = setTimeout(() => {
+    if (fileOpenV2Traces.get(key) !== entry) return;
+    recordIncompleteFileOpen(entry, "endpoint_timeout");
+    deleteFileOpenV2Trace(entry);
+  }, FILE_OPEN_INCOMPLETE_AFTER_MS);
+  fileOpenV2Traces.set(key, entry);
+}
+
+function maybeCleanupFileOpenV2Trace(
+  project_id: string,
+  path: string,
+  entry: FileOpenV2Trace,
+): void {
+  if (!entry.contentPainted || (!entry.syncReady && !entry.readOnly)) return;
+  if (entry.cleanupTimer != null) return;
+  clearTimeout(entry.incompleteTimer);
+  const key = openTimingKey(project_id, path);
+  entry.cleanupTimer = setTimeout(() => {
+    if (fileOpenV2Traces.get(key) === entry) deleteFileOpenV2Trace(entry);
+  }, FILE_OPEN_TRACE_CLEANUP_DELAY_MS);
+}
+
+function bindFileOpenV2TraceAlias(
+  project_id: string,
+  displayPath: string,
+  syncPath: string,
+): void {
+  const entry = fileOpenV2Traces.get(openTimingKey(project_id, displayPath));
+  if (entry == null) return;
+  const aliasKey = openTimingKey(project_id, syncPath);
+  const previous = fileOpenV2Traces.get(aliasKey);
+  if (previous != null && previous !== entry) {
+    clearTimeout(previous.incompleteTimer);
+    if (previous.cleanupTimer != null) clearTimeout(previous.cleanupTimer);
+    recordIncompleteFileOpen(previous, "superseded");
+    deleteFileOpenV2Trace(previous);
+  }
+  entry.keys.add(aliasKey);
+  fileOpenV2Traces.set(aliasKey, entry);
+}
+
+export function mark_file_open_v2_phase(
+  project_id: string,
+  path: string,
+  phase: string,
+  details?: UxTracePhaseDetails,
+): void {
+  fileOpenV2Traces
+    .get(openTimingKey(project_id, path))
+    ?.trace.mark(phase, details);
+}
+
+function recordFileSyncReadyV2(
+  project_id: string,
+  path: string,
+  phase: "sync_ready" | "handoff_done",
+): void {
+  const entry = fileOpenV2Traces.get(openTimingKey(project_id, path));
+  if (entry == null) return;
+  entry.syncReady = true;
+  entry.trace.record("file_sync_ready_v2", {
+    path_ext: fileOpenPathExt(entry.path),
+    segment: fileOpenSegment({ path: entry.path }),
+    surface_visible: fileEditorSurfaceVisible(entry.projectId, entry.path),
+    details: { readiness_phase: phase },
+  });
+  maybeCleanupFileOpenV2Trace(project_id, path, entry);
+}
+
+export function record_file_content_paint_v2({
+  project_id,
+  path,
+  editor,
+  read_only,
+  read_only_preview,
+  surface_visible,
+}: {
+  project_id: string;
+  path: string;
+  editor?: string;
+  read_only: boolean;
+  read_only_preview: boolean;
+  surface_visible: boolean;
+}): void {
+  const entry = fileOpenV2Traces.get(openTimingKey(project_id, path));
+  if (entry == null) return;
+  entry.contentPainted = true;
+  entry.readOnly = read_only && read_only_preview;
+  entry.trace.record("file_content_paint_v2", {
+    path_ext: fileOpenPathExt(path),
+    editor,
+    segment: fileOpenSegment({ path }),
+    surface_visible,
+    details: {
+      read_only,
+      read_only_preview,
+      paint_observer: "react_commit_next_animation_frame",
+    },
+  });
+  maybeCleanupFileOpenV2Trace(project_id, path, entry);
+}
+
+export function record_file_edit_ready_v2({
+  project_id,
+  path,
+  editor,
+  surface_visible,
+}: {
+  project_id: string;
+  path: string;
+  editor?: string;
+  surface_visible: boolean;
+}): void {
+  const entry = fileOpenV2Traces.get(openTimingKey(project_id, path));
+  if (entry == null || entry.readOnly) return;
+  entry.editReady = true;
+  entry.trace.record("file_edit_ready_v2", {
+    path_ext: fileOpenPathExt(path),
+    editor,
+    segment: fileOpenSegment({ path }),
+    surface_visible,
+    details: { readiness_observer: "loaded_writable_live_commit" },
+  });
 }
 
 function getOpenTiming(
@@ -897,7 +1161,7 @@ function buildOpenUpdateEvent(
   return event;
 }
 
-function fileOpenSegment(data: OpenTiming): string {
+function fileOpenSegment(data: Pick<OpenTiming, "path">): string {
   const ext = filename_extension(data.path).toLowerCase();
   return ext ? `.${ext}` : "no-extension";
 }
@@ -913,10 +1177,11 @@ function recordFileOpenUxLatency(
   if (data.ux_latency_logged[flag]) return;
   data.ux_latency_logged[flag] = true;
   const wallElapsedMs = Date.now() - data.wallStart;
+  const visibility = capturePageVisibility();
   const hiddenDuringOpen =
     data.startedHidden ||
-    isDocumentHidden() ||
-    getVisibilityEpoch() !== data.visibilityEpoch;
+    visibility.page_hidden ||
+    visibility.visibility_epoch !== data.visibilityEpoch;
   const wallClockSkewMs = wallElapsedMs - elapsed_ms;
   const staleReason =
     elapsed_ms > FILE_OPEN_STALE_AFTER_MS
@@ -956,12 +1221,14 @@ export function restart_open_timer(
   path: string,
   details?: OpenPhaseDetails,
 ): void {
+  mark_file_open_v2_phase(project_id, path, "sync_init_start", details);
   const data = getOpenTiming(project_id, path);
   if (data == null) return;
   data.wallStart = Date.now();
   data.uxStart = startUxTimer();
-  data.visibilityEpoch = getVisibilityEpoch();
-  data.startedHidden = isDocumentHidden();
+  const visibility = capturePageVisibility();
+  data.visibilityEpoch = visibility.visibility_epoch;
+  data.startedHidden = visibility.page_hidden;
   data.marks = {};
   data.lastPhase = undefined;
   data.lastPhaseDetails = details;
@@ -977,6 +1244,10 @@ export function mark_open_phase(
   details?: OpenPhaseDetails,
 ): void {
   path = normalize(path);
+  mark_file_open_v2_phase(project_id, path, phase, details);
+  if (phase === "sync_ready" || phase === "handoff_done") {
+    recordFileSyncReadyV2(project_id, path, phase);
+  }
   const data = getOpenTiming(project_id, path);
   if (data == null) return;
   const elapsed_ms = elapsedUxMs(data.uxStart);
@@ -1000,6 +1271,7 @@ export function log_file_open(
   project_id: string,
   path: string,
   deleted?: number,
+  instrumentation?: { surface_visible?: boolean },
 ): void {
   path = normalize(path);
   // Only do this if the file isn't
@@ -1018,6 +1290,16 @@ export function log_file_open(
     filename: path,
     deleted,
   });
+  if (
+    fileOpenPathExt(path) !== ".term" &&
+    instrumentation?.surface_visible !== false
+  ) {
+    startFileOpenV2Trace({
+      project_id,
+      path,
+      client_event_id: id ?? uuid(),
+    });
+  }
 
   // Save the log entry id, so it is possible to optionally
   // record how long it took for the file to open.  This
@@ -1026,14 +1308,15 @@ export function log_file_open(
   // not simple to define.
   if (id !== undefined) {
     const key = openTimingKey(project_id, path);
+    const visibility = capturePageVisibility();
     log_open_time[key] = {
       id,
       project_id,
       path,
       wallStart: Date.now(),
       uxStart: startUxTimer(),
-      visibilityEpoch: getVisibilityEpoch(),
-      startedHidden: isDocumentHidden(),
+      visibilityEpoch: visibility.visibility_epoch,
+      startedHidden: visibility.page_hidden,
       marks: { open_start: 0 },
       lastPhaseDetails: undefined,
       lastPhase: undefined,

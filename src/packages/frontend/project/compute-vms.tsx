@@ -38,6 +38,7 @@ import {
   useFreshAuthAction,
 } from "@cocalc/frontend/auth/fresh-auth";
 import { CopyToClipBoard, Icon, TimeAgo } from "@cocalc/frontend/components";
+import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { mapCountryRegionToR2Region } from "@cocalc/util/consts";
 import {
@@ -186,6 +187,7 @@ function VmCreateModal({
   sshKeys,
   saving,
   error,
+  preferredR2Region,
   onGenerateProjectSshKey,
   onCancel,
   onCreate,
@@ -199,12 +201,14 @@ function VmCreateModal({
   sshKeys: Array<{ label: string; value: string }>;
   saving: boolean;
   error?: string;
+  preferredR2Region: ReturnType<typeof mapCountryRegionToR2Region>;
   onGenerateProjectSshKey: () => Promise<string | undefined>;
   onCancel: () => void;
   onCreate: (values: VmDraft) => Promise<void>;
 }) {
   const [form] = Form.useForm<VmDraft>();
   const [draft, setDraft] = useState<Partial<VmDraft>>(initial);
+  const [sortRegionsByPrice, setSortRegionsByPrice] = useState(false);
   const [sortMachinesByPrice, setSortMachinesByPrice] = useState(false);
   const [sshKeyError, setSshKeyError] = useState<string>();
   const pricingSettings = useHostPricingSettings();
@@ -213,6 +217,7 @@ function VmCreateModal({
     if (!open) return;
     form.setFieldsValue(initial);
     setDraft(initial);
+    setSortRegionsByPrice(false);
     setSortMachinesByPrice(false);
     setSshKeyError(undefined);
   }, [form, initial, open]);
@@ -234,9 +239,13 @@ function VmCreateModal({
     price_display: "hourly",
     pricing_settings: pricingSettings,
   };
-  const regionOptions = compatibleOptions(
-    getGcpRegionOptions(catalog.host_catalog, selection),
-  );
+  const regionOptions = sortRegionOptionsByPreference({
+    options: compatibleOptions(
+      getGcpRegionOptions(catalog.host_catalog, selection),
+    ),
+    preference: sortRegionsByPrice ? "cheapest" : "closest",
+    preferredRegion: preferredR2Region,
+  });
   const zoneOptions = compatibleOptions(
     getGcpZoneOptions(catalog.host_catalog, selection),
   );
@@ -345,7 +354,21 @@ function VmCreateModal({
         <Flex gap={12} wrap>
           <Form.Item
             name="region"
-            label="Region"
+            label={
+              <Flex align="center" justify="space-between" gap={12}>
+                <span>Region</span>
+                <Space size={6}>
+                  <Text type="secondary" style={{ fontWeight: 400 }}>
+                    Sort by price
+                  </Text>
+                  <Switch
+                    size="small"
+                    checked={sortRegionsByPrice}
+                    onChange={setSortRegionsByPrice}
+                  />
+                </Space>
+              </Flex>
+            }
             rules={[{ required: true }]}
             style={{ flex: "1 1 280px" }}
           >
@@ -1255,7 +1278,6 @@ export function ProjectComputeVms({
           if (!values.new_volume_name || !values.new_volume_size_gb) {
             throw new Error("A new volume name and size are required.");
           }
-          createdVolumeName = values.new_volume_name;
           const createdVolume =
             await webapp_client.conat_client.hub.compute.createVolume({
               project_id,
@@ -1265,6 +1287,7 @@ export function ProjectComputeVms({
               idempotency_key: uuid(),
               browser_id: webapp_client.browser_id,
             });
+          createdVolumeName = createdVolume.name;
           await waitForVolumeReady(createdVolume.id);
           volume = createdVolume.name;
         }
@@ -1442,7 +1465,7 @@ export function ProjectComputeVms({
       title: "VM",
       dataIndex: "name",
       fixed: "left",
-      width: 190,
+      width: 180,
       render: (name: string, vm) => (
         <Space direction="vertical" size={0}>
           <Text strong>{name}</Text>
@@ -1455,26 +1478,22 @@ export function ProjectComputeVms({
     {
       title: "Status",
       dataIndex: "state",
-      width: 170,
+      width: 160,
       render: (state: string, vm) => (
-        <Space direction="vertical" size={1}>
-          <Space size={4}>
-            <Tag
-              color={state === "ready" ? "green" : undefined}
-              style={{ marginInlineEnd: 0 }}
-            >
-              {state}
-            </Tag>
-            {vm.expires_at && (
-              <Text type="secondary" style={{ whiteSpace: "nowrap" }}>
-                Deletes <TimeAgo date={new Date(vm.expires_at)} />
-              </Text>
-            )}
-          </Space>
-          {state === "recovering" && (
-            <Text type="secondary" style={{ whiteSpace: "nowrap" }}>
-              Spot unavailable; retrying
+        <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
+          <Tag
+            color={state === "ready" ? "green" : undefined}
+            style={{ marginInlineEnd: 0, width: "fit-content" }}
+          >
+            {state}
+          </Tag>
+          {vm.expires_at && (
+            <Text type="secondary">
+              Deletes <TimeAgo date={new Date(vm.expires_at)} />
             </Text>
+          )}
+          {state === "recovering" && (
+            <Text type="secondary">Spot unavailable; retrying</Text>
           )}
           {state === "failed" && vm.error && (
             <Text type="danger" title={vm.error}>
@@ -1487,11 +1506,10 @@ export function ProjectComputeVms({
     },
     {
       title: "Configuration",
-      width: 250,
+      width: 175,
       render: (_, vm) => (
-        <Space size={5} wrap>
+        <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
           <Text strong>{vm.machine_type}</Text>
-          <Text type="secondary">·</Text>
           <Text type="secondary">{vm.zone}</Text>
         </Space>
       ),
@@ -1703,9 +1721,44 @@ export function ProjectComputeVms({
     >
       <Flex align="center" justify="space-between" gap={12} wrap>
         <div>
-          <Title level={compact ? 5 : 3} style={{ marginBottom: 0 }}>
-            <Icon name="server" /> Virtual machines
-          </Title>
+          <Flex align="center" gap={4}>
+            <Title level={compact ? 5 : 3} style={{ marginBottom: 0 }}>
+              <Icon name="server" /> Virtual machines
+            </Title>
+            <Popover
+              trigger="click"
+              title="VMs use your membership's dedicated-host spending limits"
+              content={
+                <Space direction="vertical" size={10} style={{ maxWidth: 430 }}>
+                  <Paragraph style={{ marginBottom: 0 }}>
+                    VMs run a minimal Ubuntu 24.04 LTS image; CoCalc and other
+                    special software are not installed. Compute, boot disks, and
+                    retained <Text code>/work</Text> volumes appear in
+                    Purchases.
+                  </Paragraph>
+                  <Paragraph style={{ marginBottom: 0 }}>
+                    Public Internet egress costs $0.10/GB and appears as one
+                    accumulating purchase per VM per calendar month, not a new
+                    line item for every meter sample. Usage can take about five
+                    minutes to appear.
+                  </Paragraph>
+                  <Paragraph style={{ marginBottom: 0 }}>
+                    Running VMs stop when funding is unavailable. After
+                    authorizing an SSH key, connect with the CoCalc CLI or
+                    directly as <Text code>ubuntu</Text> at the public IP.
+                  </Paragraph>
+                </Space>
+              }
+            >
+              <Button
+                aria-label="Virtual machine help"
+                icon={<Icon name="question-circle" />}
+                shape="circle"
+                size="small"
+                type="text"
+              />
+            </Popover>
+          </Flex>
           {!compact && (
             <Paragraph type="secondary" style={{ marginBottom: 12 }}>
               Short-lived machines owned by you and attached to project{" "}
@@ -1714,6 +1767,17 @@ export function ProjectComputeVms({
           )}
         </div>
         <Space>
+          <Button
+            icon={<Icon name="book" />}
+            onClick={() =>
+              openProjectDocs({
+                projectId: project_id,
+                slug: "projects/virtual-machines",
+              })
+            }
+          >
+            Documentation
+          </Button>
           <Button
             type="primary"
             icon={<Icon name="plus" />}
@@ -1757,13 +1821,6 @@ export function ProjectComputeVms({
           style={{ marginBottom: 12 }}
         />
       )}
-      <Alert
-        showIcon
-        type="info"
-        title="VMs use your membership's dedicated-host spending limits."
-        description="VMs run a minimal Ubuntu 24.04 LTS image; CoCalc and other special software are not installed. Compute, boot disks, and retained /work volumes appear in Purchases. Public Internet egress costs $0.10/GB and appears as one accumulating purchase per VM per calendar month, not a new line item for every meter sample. Usage can take about five minutes to appear. Running VMs stop when funding is unavailable. After authorizing an SSH key, connect with the CoCalc CLI or directly as ubuntu at the public IP."
-        style={{ marginBottom: 12 }}
-      />
       <Table<ComputeVm>
         columns={vmColumns}
         dataSource={rows}
@@ -1773,21 +1830,37 @@ export function ProjectComputeVms({
         }}
         pagination={false}
         rowKey="id"
-        scroll={{ x: 1200 }}
+        scroll={{ x: 920 }}
         size="small"
       />
 
       <Flex align="center" justify="space-between" style={{ marginTop: 28 }}>
         <div>
-          <Title level={4} style={{ marginBottom: 0 }}>
-            Persistent /work volumes
-          </Title>
-          <Text type="secondary">
-            Retained independently from virtual machines. A volume can only be
-            attached to a VM in the same zone. Select an existing volume or
-            create a new one when creating the VM; changing attachments later is
-            not yet supported.
-          </Text>
+          <Flex align="center" gap={4}>
+            <Title level={4} style={{ marginBottom: 0 }}>
+              Persistent /work volumes
+            </Title>
+            <Popover
+              trigger="click"
+              title="About persistent /work volumes"
+              content={
+                <Paragraph style={{ marginBottom: 0, maxWidth: 400 }}>
+                  Retained independently from virtual machines. A volume can
+                  only be attached to a VM in the same zone. Select an existing
+                  volume or create a new one when creating the VM; changing
+                  attachments later is not yet supported.
+                </Paragraph>
+              }
+            >
+              <Button
+                aria-label="Persistent volume help"
+                icon={<Icon name="question-circle" />}
+                shape="circle"
+                size="small"
+                type="text"
+              />
+            </Popover>
+          </Flex>
         </div>
         <Button
           icon={<Icon name="plus" />}
@@ -1838,6 +1911,7 @@ export function ProjectComputeVms({
           sshKeys={sshKeys}
           saving={saving}
           error={vmCreateError}
+          preferredR2Region={preferredR2Region}
           onGenerateProjectSshKey={generateProjectSshKey}
           onCancel={() => {
             setVmModalOpen(false);

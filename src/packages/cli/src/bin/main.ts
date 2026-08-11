@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import {
   mkdir as mkdirLocal,
@@ -10,6 +18,7 @@ import {
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { URL } from "node:url";
 import { Command } from "commander";
 
@@ -103,6 +112,8 @@ import {
 } from "./core/cli-output";
 import {
   canOfferInteractiveAuthLogin,
+  canOfferInteractiveFreshAuth,
+  canOfferInteractiveProjectAccountBootstrap,
   interactiveAuthLoginArgs,
   interactiveAuthLoginEntrypoint,
   isCoCalcProjectEnvironment,
@@ -458,6 +469,11 @@ function defaultApiBaseUrl(): string {
   }
   const raw = `http://127.0.0.1:${process.env.HUB_PORT ?? process.env.PORT ?? "9100"}`;
   return normalizeUrl(raw);
+}
+
+function defaultAccountApiBaseUrl(): string {
+  const siteUrl = `${process.env.COCALC_SITE_URL ?? ""}`.trim();
+  return siteUrl ? normalizeUrl(siteUrl) : defaultApiBaseUrl();
 }
 
 function defaultConatAddress(apiBaseUrl: string): string {
@@ -1567,6 +1583,101 @@ async function contextForGlobals(
   return ctx;
 }
 
+function childCliArgs(args: string[]): string[] {
+  const entrypoint = interactiveAuthLoginEntrypoint();
+  return entrypoint ? [entrypoint, ...args] : args;
+}
+
+function runCliAuthChild(args: string[], env = process.env): void {
+  const child = spawnSync(process.execPath, childCliArgs(args), {
+    stdio: "inherit",
+    env,
+  });
+  if (child.error) throw child.error;
+  if (child.status !== 0) {
+    throw new Error(
+      `interactive CoCalc CLI authorization failed with exit code ${child.status ?? "unknown"}`,
+    );
+  }
+}
+
+async function createEphemeralProjectAccountContext(
+  globals: GlobalOptions,
+  siteUrl: string,
+): Promise<CommandContext> {
+  const dir = mkdtempSync(join(tmpdir(), "cocalc-cli-account-auth-"));
+  chmodSync(dir, 0o700);
+  const configPath = join(dir, "config.json");
+  const profile = "ephemeral-project-session";
+  const previousConfig = process.env.COCALC_CLI_CONFIG;
+  process.env.COCALC_CLI_CONFIG = configPath;
+  try {
+    process.stderr.write(
+      "This VM action needs temporary account approval; starting one short browser authorization.\n",
+    );
+    runCliAuthChild(
+      [
+        "--quiet",
+        "--profile",
+        profile,
+        "--api",
+        siteUrl,
+        "--disable-env-auth-defaults",
+        "auth",
+        "bootstrap",
+        "--short",
+        "--no-set-current",
+      ],
+      { ...process.env, COCALC_CLI_CONFIG: configPath },
+    );
+    const ctx = await contextForGlobals({
+      ...globals,
+      api: siteUrl,
+      profile,
+      disableEnvAuthDefaults: true,
+    });
+    process.stderr.write(
+      "Temporary account authorization approved. Continuing VM action...\n",
+    );
+    return ctx;
+  } finally {
+    if (previousConfig == null) {
+      delete process.env.COCALC_CLI_CONFIG;
+    } else {
+      process.env.COCALC_CLI_CONFIG = previousConfig;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function resolveProjectAccountSiteUrl(
+  ctx: CommandContext,
+): Promise<string> {
+  const fromEnv = `${process.env.COCALC_SITE_URL ?? ""}`.trim();
+  if (fromEnv) return normalizeUrl(fromEnv);
+  const project_id = `${ctx.remote.user?.project_id ?? ""}`.trim();
+  const { url } = await ctx.hub.system.getPublicSiteUrl({
+    ...(project_id ? { project_id } : {}),
+  });
+  return normalizeUrl(url);
+}
+
+function runInteractiveFreshAuth(
+  globals: GlobalOptions,
+  apiBaseUrl: string,
+): void {
+  const args = ["--quiet"];
+  if (globals.profile) args.push("--profile", globals.profile);
+  args.push("--api", apiBaseUrl, "auth", "elevate", "--short");
+  process.stderr.write(
+    "This action needs fresh account approval; starting browser elevation.\n",
+  );
+  runCliAuthChild(args);
+  process.stderr.write(
+    "Fresh account authorization approved. Retrying action...\n",
+  );
+}
+
 function closeCommandContext(ctx: CommandContext | undefined): void {
   if (!ctx) return;
   for (const host_id of Object.keys(ctx.routedProjectHostClients)) {
@@ -1630,7 +1741,30 @@ async function withContext(
         throw error;
       }
     }
-    const data = await fn(ctx);
+    let data: unknown;
+    try {
+      data = await fn(ctx);
+    } catch (error) {
+      if (
+        canOfferInteractiveProjectAccountBootstrap({
+          error,
+        })
+      ) {
+        const siteUrl = await resolveProjectAccountSiteUrl(ctx);
+        closeCommandContext(ctx);
+        ctx = await createEphemeralProjectAccountContext(globals, siteUrl);
+        data = await fn(ctx);
+      } else if (canOfferInteractiveFreshAuth({ error })) {
+        const apiBaseUrl = ctx.apiBaseUrl;
+        closeCommandContext(ctx);
+        ctx = undefined;
+        runInteractiveFreshAuth(globals, apiBaseUrl);
+        ctx = await contextForGlobals(globals);
+        data = await fn(ctx);
+      } else {
+        throw error;
+      }
+    }
     emitSuccess(ctx, commandName, data);
   } catch (error) {
     emitError(
@@ -2755,7 +2889,7 @@ const authCommandDeps = {
   selectedProfileName,
   applyAuthProfile,
   normalizeUrl,
-  defaultApiBaseUrl,
+  defaultApiBaseUrl: defaultAccountApiBaseUrl,
   getExplicitAccountId,
   durationToMs,
   connectRemote,

@@ -58,4 +58,20 @@ describe("create_email_body", () => {
     expect(body).toContain('href="https://cocalc.ai/app"');
     expect(body).not.toContain("cocalc.com");
   });
+
+  it("redacts websites but preserves email addresses when URLs are disabled", () => {
+    const body = create_email_body(
+      "Course invite",
+      "<p>Contact a+4@example.edu or visit https://spam.example/path.</p>",
+      "student@example.com",
+      "Course",
+      "",
+      false,
+      "https://cocalc.ai",
+    );
+
+    expect(body).toContain("a+4@example.edu");
+    expect(body).toContain("[link removed]");
+    expect(body).not.toContain("spam.example");
+  });
 });

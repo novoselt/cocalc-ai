@@ -14,12 +14,15 @@ import { ADMIN_UX_LATENCY_ALERTS_ENABLED_KEY } from "@cocalc/util/admin-alerts";
 import { isProjectDiskQuotaError } from "@cocalc/util/project-start-errors";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type {
+  LaunchHealthLevel,
   UxLatencyEventInput,
   UxLatencyMetricSummary,
   UxLatencyRecentEvent,
   UxLatencySummary,
 } from "@cocalc/conat/hub/api/system";
+import { UX_LATENCY_HEALTH_METRICS } from "@cocalc/conat/hub/api/system";
 import { v4 as uuid } from "uuid";
+import { getUxSaturationContext } from "./ux-saturation";
 
 const logger = getLogger("server:monitoring:ux-latency");
 
@@ -56,6 +59,30 @@ export const DEFAULT_UX_LATENCY_SLA_THRESHOLDS: UxLatencySlaThresholds = {
   file_open_visible_p95_ms: 10_000,
   file_open_sync_ready_p95_ms: 5000,
 };
+
+export function classifyLatencyP95Health({
+  p95,
+  sample_count,
+  min_samples = 1,
+  warning_ms,
+  critical_ms,
+}: {
+  p95: number | null;
+  sample_count?: number;
+  min_samples?: number;
+  warning_ms: number;
+  critical_ms: number;
+}): LaunchHealthLevel {
+  if (
+    p95 == null ||
+    (sample_count != null && sample_count < Math.max(1, min_samples))
+  ) {
+    return "unknown";
+  }
+  if (p95 >= critical_ms) return "critical";
+  if (p95 >= warning_ms) return "warning";
+  return "healthy";
+}
 
 let schemaReady: Promise<void> | undefined;
 let alertMaintenanceStarted = false;
@@ -134,9 +161,13 @@ export async function ensureUxLatencySchema(): Promise<void> {
         path_ext TEXT,
         editor TEXT,
         segment TEXT,
-        details JSONB NOT NULL DEFAULT '{}'::jsonb
+        details JSONB NOT NULL DEFAULT '{}'::jsonb,
+        saturation JSONB
       )
     `);
+    await getPool().query(
+      `ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS saturation JSONB`,
+    );
     await getPool().query(
       `CREATE INDEX IF NOT EXISTS ${TABLE}_received_idx
          ON ${TABLE} (received_at DESC)`,
@@ -265,24 +296,42 @@ export async function recordUxLatencyEvent({
     throw Error("event_type and metric must be specified");
   }
   await ensureUxLatencySchema();
-  const details = cleanDetails(event.details);
-  const hostId = cleanUuid(event.host_id) ?? cleanUuid(details.host_id);
+  const originalDetails = cleanDetails(event.details);
+  const projectId = cleanUuid(event.project_id);
+  const eventHostId =
+    cleanUuid(event.host_id) ?? cleanUuid(originalDetails.host_id);
+  let hostId = eventHostId;
+  let saturation: Record<string, unknown> | undefined;
+  try {
+    const result = await getUxSaturationContext({
+      host_id: eventHostId,
+      project_id: projectId,
+    });
+    hostId = cleanUuid(result.host_id) ?? hostId;
+    saturation = result.context;
+  } catch (err) {
+    logger.debug("unable to correlate ux latency with saturation", {
+      project_id: projectId,
+      host_id: eventHostId,
+      err: `${err}`,
+    });
+  }
   await getPool().query(
     `
     INSERT INTO ${TABLE}
       (id, event_type, metric, account_id, project_id, host_id, bay_id,
        client_event_id, duration_ms, started_at, sample_rate, path_ext,
-       editor, segment, details)
+       editor, segment, details, saturation)
     VALUES
       ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-       $10::TIMESTAMPTZ, $11, $12, $13, $14, $15::jsonb)
+       $10::TIMESTAMPTZ, $11, $12, $13, $14, $15::jsonb, $16::jsonb)
     `,
     [
       uuid(),
       eventType,
       metric,
       cleanUuid(account_id),
-      cleanUuid(event.project_id),
+      projectId,
       hostId,
       cleanText(event.bay_id, 80) ?? getConfiguredBayId(),
       cleanText(event.client_event_id, 120),
@@ -292,7 +341,8 @@ export async function recordUxLatencyEvent({
       cleanText(event.path_ext, 40),
       cleanText(event.editor, 80),
       cleanText(event.segment, 120),
-      JSON.stringify(details),
+      JSON.stringify(originalDetails),
+      saturation == null ? null : JSON.stringify(saturation),
     ],
   );
 }
@@ -309,6 +359,8 @@ function metricSummaryFromRow(row: any): UxLatencyMetricSummary {
     event_type: `${row.event_type}`,
     segment: row.segment ?? undefined,
     count: Number(row.count) || 0,
+    account_count: Number(row.account_count) || 0,
+    project_count: Number(row.project_count) || 0,
     avg_ms: Math.round(Number(row.avg_ms) || 0),
     p50_ms: Math.round(Number(row.p50_ms) || 0),
     p95_ms: Math.round(Number(row.p95_ms) || 0),
@@ -330,6 +382,8 @@ export async function getUxLatencySummary({
       `
       SELECT metric, event_type, NULL::TEXT AS segment,
              COUNT(*)::INT AS count,
+             COUNT(DISTINCT account_id)::INT AS account_count,
+             COUNT(DISTINCT project_id)::INT AS project_count,
              AVG(duration_ms)::DOUBLE PRECISION AS avg_ms,
              percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p50_ms,
              percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p95_ms,
@@ -346,6 +400,8 @@ export async function getUxLatencySummary({
       `
       SELECT metric, event_type, segment,
              COUNT(*)::INT AS count,
+             COUNT(DISTINCT account_id)::INT AS account_count,
+             COUNT(DISTINCT project_id)::INT AS project_count,
              AVG(duration_ms)::DOUBLE PRECISION AS avg_ms,
              percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p50_ms,
              percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::DOUBLE PRECISION AS p95_ms,
@@ -365,7 +421,7 @@ export async function getUxLatencySummary({
              e.duration_ms, e.account_id, e.project_id, p.title AS project_title,
              COALESCE(e.host_id::text, e.details->>'host_id') AS host_id,
              e.bay_id, e.client_event_id, e.path_ext, e.editor,
-             e.details
+             e.details, e.saturation
         FROM ${TABLE} e
         LEFT JOIN projects p ON p.project_id = e.project_id
        WHERE e.received_at >= $1
@@ -401,6 +457,7 @@ export async function getUxLatencySummary({
         path_ext: row.path_ext ?? undefined,
         editor: row.editor ?? undefined,
         details: row.details ?? {},
+        saturation: row.saturation ?? undefined,
       }),
     ),
   };
@@ -675,7 +732,10 @@ export function alertCandidates(
     });
   }
 
-  const visible = rowByMetric(summary.metrics, "file_open_visible");
+  const visible = rowByMetric(
+    summary.metrics,
+    UX_LATENCY_HEALTH_METRICS.fileVisible,
+  );
   const visibleAlert = shouldAlertOnLatencySla({
     summary,
     row: visible,
@@ -684,19 +744,22 @@ export function alertCandidates(
   });
   if (visibleAlert.alert && visible) {
     alerts.push({
-      subject: "file open visible latency is high",
+      subject: "file content paint latency is high",
       body: actionableLatencyBody({
         summary,
         row: visible,
         expectation:
-          "File-open visible latency violated the configured P95 SLA.",
+          "Foreground file-open content paint latency violated the configured P95 SLA.",
         thresholdMs: sla.file_open_visible_p95_ms,
         slowSamples: visibleAlert.slowSamples,
       }),
     });
   }
 
-  const syncReady = rowByMetric(summary.metrics, "file_open_sync_ready");
+  const syncReady = rowByMetric(
+    summary.metrics,
+    UX_LATENCY_HEALTH_METRICS.fileSyncReady,
+  );
   const syncReadyAlert = shouldAlertOnLatencySla({
     summary,
     row: syncReady,
@@ -710,7 +773,7 @@ export function alertCandidates(
         summary,
         row: syncReady,
         expectation:
-          "File-open sync-ready latency violated the configured P95 SLA.",
+          "Foreground file-open SyncDoc readiness latency violated the configured P95 SLA.",
         thresholdMs: sla.file_open_sync_ready_p95_ms,
         slowSamples: syncReadyAlert.slowSamples,
       }),

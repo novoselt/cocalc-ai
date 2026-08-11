@@ -65,6 +65,8 @@ import AutomaticUpdateNotice from "./automatic-update-notice";
 import { useVisibleViewportBottom } from "./visible-viewport";
 import { OnboardingEmailPrompt } from "./onboarding-email-prompt";
 import { ScratchpadSessionControls } from "./scratchpad-session-controls";
+import { recordSignedInAppBootstrapReady } from "./bootstrap-ux-latency";
+import { configureUxLatency } from "@cocalc/frontend/monitoring/ux-latency";
 
 // ipad and ios have a weird trick where they make the screen
 // actually smaller than 100vh and have it be scrollable, even
@@ -163,6 +165,15 @@ export const Page: React.FC = () => {
   const local_storage_warning = useTypedRedux("page", "local_storage_warning");
   const cookie_warning = useTypedRedux("page", "cookie_warning");
   const accountIsReady = useTypedRedux("account", "is_ready");
+  const customizeReady = useTypedRedux("customize", "_is_configured");
+  const uxLatencyTelemetryEnabled = useTypedRedux(
+    "customize",
+    "ux_latency_telemetry_enabled",
+  );
+  const uxLatencySuccessSampleRate = useTypedRedux(
+    "customize",
+    "ux_latency_success_sample_rate",
+  );
   const account_id = useTypedRedux("account", "account_id");
   const is_logged_in = useTypedRedux("account", "is_logged_in");
   const examMode = useTypedRedux("customize", "exam_mode") === true;
@@ -180,6 +191,21 @@ export const Page: React.FC = () => {
   const groups = useTypedRedux("account", "groups");
   const show_i18n = useShowI18NBanner();
   const zendesk = !!useTypedRedux("customize", "zendesk");
+
+  useEffect(() => {
+    if (!accountIsReady || !customizeReady || !effectivelySignedIn) return;
+    configureUxLatency({
+      telemetry_enabled: uxLatencyTelemetryEnabled,
+      success_sample_rate: uxLatencySuccessSampleRate,
+    });
+    return recordSignedInAppBootstrapReady();
+  }, [
+    accountIsReady,
+    customizeReady,
+    effectivelySignedIn,
+    uxLatencySuccessSampleRate,
+    uxLatencyTelemetryEnabled,
+  ]);
 
   useEffect(() => {
     if (!examMode || !examProjectId || active_top_tab === examProjectId) return;

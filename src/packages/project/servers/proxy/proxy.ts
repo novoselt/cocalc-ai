@@ -34,7 +34,7 @@ import httpProxy from "http-proxy-3";
 import { getLogger } from "@cocalc/project/logger";
 import { project_id } from "@cocalc/project/data";
 import { secretToken } from "@cocalc/project/data";
-import { humanSize } from "@cocalc/util/misc";
+import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 import {
   managedServiceAppForPort,
   resolveAppProxyTarget,
@@ -272,18 +272,6 @@ function isExplicitDownloadRequest(req: http.IncomingMessage): boolean {
   }
 }
 
-function formatManagedEgressCategory(category: string): string {
-  if (category === "file-download") return "File downloads";
-  return category.replace(/[-_]/g, " ");
-}
-
-function formatByteCount(bytes?: number): string {
-  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
-    return "unknown";
-  }
-  return humanSize(bytes);
-}
-
 function encodeDownloadErrorHeader(message: string): string {
   return encodeURIComponent(message);
 }
@@ -311,36 +299,11 @@ async function checkManagedFileDownloadAllowedBestEffort(
     if (policy.allowed) {
       return { allowed: true };
     }
-    const breakdown = Object.entries(
-      policy.managed_egress_categories_5h_bytes ?? {},
-    )
-      .filter(
-        ([, bytes]) =>
-          typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-      )
-      .map(
-        ([category, bytes]) =>
-          `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-      );
     const lines = [
       "Managed download limit reached for this account.",
       "New file downloads are temporarily blocked until the egress usage window resets.",
+      ...formatManagedEgressPolicyDetails(policy),
     ];
-    if (policy.egress_5h_bytes != null) {
-      lines.push(
-        `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-      );
-    }
-    if (policy.egress_7d_bytes != null) {
-      lines.push(
-        `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-      );
-    }
-    if (breakdown.length > 0) {
-      lines.push(
-        `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-      );
-    }
     return {
       allowed: false,
       message: lines.join("\n"),

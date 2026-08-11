@@ -3,6 +3,12 @@ import type {
   LroStatus,
   LroSummary,
 } from "@cocalc/conat/hub/api/lro";
+import {
+  isLroTerminalStatus,
+  LRO_TERMINAL_STATUSES,
+} from "@cocalc/conat/lro/status";
+
+export { LRO_TERMINAL_STATUSES } from "@cocalc/conat/lro/status";
 
 export type LroOpState = {
   op_id: string;
@@ -12,22 +18,10 @@ export type LroOpState = {
   progress_events?: Extract<LroEvent, { type: "progress" }>[];
 };
 
-export const LRO_TERMINAL_STATUSES = new Set<LroStatus>([
-  "succeeded",
-  "failed",
-  "canceled",
-  "expired",
-]);
-
-export const LRO_DISMISSABLE_STATUSES = new Set<LroStatus>([
-  "succeeded",
-  "failed",
-  "canceled",
-  "expired",
-]);
+export const LRO_DISMISSABLE_STATUSES = LRO_TERMINAL_STATUSES;
 
 export function isTerminal(status?: LroStatus): boolean {
-  return !!status && LRO_TERMINAL_STATUSES.has(status);
+  return isLroTerminalStatus(status);
 }
 
 export function isDismissed(summary?: LroSummary): boolean {

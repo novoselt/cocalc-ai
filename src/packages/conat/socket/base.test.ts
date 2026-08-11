@@ -45,4 +45,62 @@ describe("ConatSocketBase.waitUntilReady", () => {
     });
     socket.close();
   });
+
+  it("reports time spent waiting for the underlying transport", async () => {
+    const lifecycleReporter = jest.fn();
+    const client = new EventEmitter() as any;
+    client.conn = { connected: false };
+    client.waitUntilConnected = jest.fn(async () => {
+      client.conn.connected = true;
+    });
+
+    const socket = new TestSocket({
+      subject: "test.socket",
+      client,
+      role: "client",
+      id: "socket-1",
+      reconnection: false,
+      lifecycleReporter,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lifecycleReporter.mock.calls).toEqual([
+      ["transport_wait_start", { transport_connected: false }],
+      ["transport_wait_done", { transport_connected: true }],
+    ]);
+    socket.close();
+  });
+
+  it("does not resume a pending connection after socket teardown", async () => {
+    const lifecycleReporter = jest.fn();
+    const client = new EventEmitter() as any;
+    client.conn = { connected: false };
+    let resolveTransport!: () => void;
+    client.waitUntilConnected = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveTransport = resolve;
+        }),
+    );
+
+    const socket = new TestSocket({
+      subject: "test.socket",
+      client,
+      role: "client",
+      id: "socket-1",
+      reconnection: false,
+      lifecycleReporter,
+    });
+    expect(lifecycleReporter).toHaveBeenCalledWith("transport_wait_start", {
+      transport_connected: false,
+    });
+
+    socket.close();
+    resolveTransport();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lifecycleReporter).toHaveBeenCalledTimes(1);
+  });
 });

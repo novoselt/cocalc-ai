@@ -26,11 +26,26 @@ export function wireComputeApi(): void {
     (hubApi as any).compute = {};
   }
   hubApi.compute.authorizeProjectSshKey = async (opts) => {
-    return await callHub({
-      client: requireMasterClient(),
-      host_id: requireHostId(),
-      name: "compute.authorizeProjectSshKeyFromHost",
-      args: [opts],
-    });
+    return await callCentralCompute(
+      "compute.authorizeProjectSshKeyFromHost",
+      opts,
+    );
   };
+  hubApi.compute.listProjectVms = async (opts) =>
+    await callCentralCompute("compute.listProjectVms", opts);
+  hubApi.compute.getProjectVm = async (opts) =>
+    await callCentralCompute("compute.getProjectVm", opts);
+  hubApi.compute.listProjectVolumes = async (opts) =>
+    await callCentralCompute("compute.listProjectVolumes", opts);
+  hubApi.compute.getProjectVolume = async (opts) =>
+    await callCentralCompute("compute.getProjectVolume", opts);
+}
+
+async function callCentralCompute(name: string, opts: unknown) {
+  return await callHub({
+    client: requireMasterClient(),
+    host_id: requireHostId(),
+    name,
+    args: [opts],
+  });
 }

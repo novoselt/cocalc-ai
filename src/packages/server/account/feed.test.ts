@@ -5,7 +5,11 @@
 
 const publishMock = jest.fn();
 const publishSyncMock = jest.fn();
-const astreamMock = jest.fn(() => ({ publish: publishMock }));
+const closeMock = jest.fn();
+const astreamMock = jest.fn(() => ({
+  publish: publishMock,
+  close: closeMock,
+}));
 
 jest.mock("@cocalc/backend/conat", () => ({
   conat: () => ({
@@ -31,6 +35,7 @@ describe("publishAccountFeedEvent", () => {
     publishMock.mockReset();
     publishMock.mockResolvedValue(undefined);
     publishSyncMock.mockReset();
+    closeMock.mockReset();
     astreamMock.mockClear();
   });
 
@@ -50,5 +55,22 @@ describe("publishAccountFeedEvent", () => {
       expected,
     );
     expect(publishMock).toHaveBeenCalledWith(expected);
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the stream when replay persistence fails", async () => {
+    publishMock.mockRejectedValueOnce(new Error("publish failed"));
+
+    await expect(
+      publishAccountFeedEvent({
+        account_id: "ce1bf12d-b902-4ad6-81ff-791af37dea59",
+        event: {
+          type: "news.refresh",
+          ts: 123,
+          account_id: "ce1bf12d-b902-4ad6-81ff-791af37dea59",
+        },
+      }),
+    ).rejects.toThrow("publish failed");
+    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 });

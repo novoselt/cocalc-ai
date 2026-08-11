@@ -79,8 +79,6 @@ const ALL_LANGS_LABEL_STYLE: CSS = {
   color: COLORS.GRAY_D,
 } as const;
 
-const DEFAULT_JUPYTER_KERNEL_AGENT_MODEL = "gpt-5.4-mini";
-
 interface KernelSelectorProps {
   actions: JupyterActions;
   embedded?: boolean;
@@ -250,7 +248,6 @@ export function KernelSelector({
         title,
         tag,
         forceCodex: true,
-        codexConfig: { model: DEFAULT_JUPYTER_KERNEL_AGENT_MODEL },
         openFloating: true,
         waitForAgent: false,
         agentSession: createNewThread

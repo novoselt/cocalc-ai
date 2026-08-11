@@ -57,6 +57,7 @@ import {
   createMembershipPackage,
   getMembershipPackage,
   listMembershipPackageAssignments,
+  resolveSiteLicensePoolEmailEligibility,
   revokeOtherActiveSiteLicenseAssignmentsForAccount,
   revokeMembershipPackageSeat,
   updateMembershipPackage as updateMembershipPackageRecord,
@@ -1423,6 +1424,7 @@ async function notifySiteLicensePoolRequestReviewedBestEffort({
 }): Promise<void> {
   const poolName = getPackagePoolName(pkg);
   const approved = request.state === "approved";
+  const canceled = request.state === "canceled";
   await createSiteLicenseAccountNoticeBestEffort({
     action_label: SITE_LICENSE_MEMBERSHIP_NOTIFICATION_ACTION_LABEL,
     action_link: SITE_LICENSE_MEMBERSHIP_NOTIFICATION_ACTION_LINK,
@@ -1430,11 +1432,15 @@ async function notifySiteLicensePoolRequestReviewedBestEffort({
     target_account_ids: [request.account_id],
     title: approved
       ? `${siteLicense.name} request approved`
-      : `${siteLicense.name} request rejected`,
+      : canceled
+        ? `${siteLicense.name} request canceled`
+        : `${siteLicense.name} request rejected`,
     body_markdown: [
       approved
         ? `Your request for **${poolName}** at ${siteLicense.organization_name} was approved.`
-        : `Your request for **${poolName}** at ${siteLicense.organization_name} was rejected.`,
+        : canceled
+          ? `Your request for **${poolName}** at ${siteLicense.organization_name} was canceled because your current verified email is no longer eligible.`
+          : `Your request for **${poolName}** at ${siteLicense.organization_name} was rejected.`,
       request.review_note ? `Review note: ${request.review_note}` : undefined,
     ]
       .filter(Boolean)
@@ -1726,34 +1732,20 @@ export async function getVerifiedEmailAddressesForAccount(
   return emailAddress == null ? [] : [emailAddress];
 }
 
-function findMatchingVerifiedEmail({
-  verified_email_addresses,
-  allowed_domains,
-}: {
-  verified_email_addresses: string[];
-  allowed_domains: string[];
-}): string {
-  const domains = new Set(allowed_domains);
-  const match = verified_email_addresses.find((email) =>
-    domains.has(email.split("@")[1] ?? ""),
-  );
-  if (!match) {
-    throw Error("no verified email matches this site license");
+async function getCurrentClusterVerifiedEmailAddress(
+  account_id: string,
+): Promise<string | undefined> {
+  const [account] = await getClusterAccountsByIdsDirect([account_id]);
+  if (account?.account_id !== account_id || !account.email_address) {
+    return;
   }
-  return match;
-}
-
-function findOptionalMatchingVerifiedEmail({
-  verified_email_addresses,
-  allowed_domains,
-}: {
-  verified_email_addresses: string[];
-  allowed_domains: string[];
-}): string | undefined {
-  const domains = new Set(allowed_domains);
-  return verified_email_addresses.find((email) =>
-    domains.has(email.split("@")[1] ?? ""),
-  );
+  if (account.home_bay_id === getConfiguredBayId()) {
+    return await getVerifiedEmailAddressForAccount({ account_id });
+  }
+  if (account.email_address_verified !== true) {
+    return;
+  }
+  return normalizeEmailAddress(account.email_address);
 }
 
 async function getSiteLicense(
@@ -2362,10 +2354,12 @@ export async function refreshSiteLicenseAffiliationVerificationWithVerifiedEmail
       client: dbClient,
     });
     for (const pool of pools) {
-      const matchedEmailAddress = findOptionalMatchingVerifiedEmail({
-        verified_email_addresses: verifiedEmailAddresses,
-        allowed_domains: getPackageAllowedDomains(pool.metadata),
+      const eligibility = await resolveSiteLicensePoolEmailEligibility({
+        package_id: pool.id,
+        verified_email_address: verifiedEmailAddresses[0],
+        client: dbClient,
       });
+      const matchedEmailAddress = eligibility.matched_email_address;
       if (matchedEmailAddress == null) {
         continue;
       }
@@ -3166,7 +3160,7 @@ export async function adminProvisionSiteLicense({
       ? actorAccountId
       : normalizeAccountId(owner_account_id, "owner_account_id");
   const normalizedDomains = normalizeAllowedDomains(allowed_domains);
-  const normalizedPools = normalizePools(pools, normalizedDomains);
+  const normalizedPools = normalizePools(pools);
   const indexedDomains = collectSiteLicenseDomains({
     allowed_domains: normalizedDomains,
     pools: normalizedPools,
@@ -3492,10 +3486,7 @@ export async function addSiteLicensePool({
   return await withLocalSiteLicenseTransaction(async (client) => {
     const siteLicense = await getSiteLicense(siteLicenseId, client);
     await assertSiteLicenseAdmin({ account_id: actorAccountId });
-    const [normalizedPool] = normalizePools(
-      [pool],
-      siteLicense.allowed_domains,
-    );
+    const [normalizedPool] = normalizePools([pool]);
     await assertSiteLicensePoolMembershipClassesAvailable(
       [normalizedPool],
       client,
@@ -3865,10 +3856,7 @@ export async function removeSiteLicenseManager({
   });
 }
 
-function normalizePools(
-  pools: SiteLicensePoolConfig[] | undefined,
-  defaultAllowedDomains: string[],
-): Array<
+function normalizePools(pools: SiteLicensePoolConfig[] | undefined): Array<
   SiteLicensePoolConfig & {
     allowed_domains: string[];
     pool_description: string | null;
@@ -3910,10 +3898,7 @@ function normalizePools(
       affiliation_reverification_grace_days: normalizeOptionalPositiveInt(
         pool.affiliation_reverification_grace_days,
       ),
-      allowed_domains:
-        pool.allowed_domains == null
-          ? defaultAllowedDomains
-          : normalizeAllowedDomains(pool.allowed_domains),
+      allowed_domains: normalizeAllowedDomains(pool.allowed_domains),
     };
   });
 }
@@ -3997,10 +3982,15 @@ export async function requestSiteLicensePoolWithVerifiedEmailsOnLocalBay({
   if (pkg.metadata?.requires_approval !== true) {
     throw Error("this site-license pool does not require approval");
   }
-  const matchedEmailAddress = findMatchingVerifiedEmail({
-    verified_email_addresses,
-    allowed_domains: getPackageAllowedDomains(pkg.metadata),
+  const eligibility = await resolveSiteLicensePoolEmailEligibility({
+    package_id: packageId,
+    verified_email_address: verified_email_addresses[0],
+    client,
   });
+  const matchedEmailAddress = eligibility.matched_email_address;
+  if (matchedEmailAddress == null) {
+    throw Error("no verified email matches this site license");
+  }
   const canonicalIdentity =
     canonicalizeInstitutionalClaimEmail(matchedEmailAddress);
   const exclusiveGroup = getPackageExclusiveGroup(pkg);
@@ -4159,6 +4149,14 @@ export async function reviewSiteLicensePoolRequest({
   if (action !== "approve" && action !== "reject") {
     throw Error("action must be approve or reject");
   }
+  const initialRequest = await getRequestById(requestId);
+  // Account authority may be on another bay. Resolve it before locking the
+  // seed-owned request rather than holding a database transaction across the
+  // cross-bay account lookup.
+  const currentVerifiedEmailAddress =
+    action === "approve"
+      ? await getCurrentClusterVerifiedEmailAddress(initialRequest.account_id)
+      : undefined;
   let reservedInstitutionalClaim:
     | {
         scope_key: string;
@@ -4173,6 +4171,7 @@ export async function reviewSiteLicensePoolRequest({
   try {
     const reviewed = await withSiteLicenseRequestTransaction({
       request_id: requestId,
+      initial_request: initialRequest,
       action: "review site-license pool request",
       fn: async ({ client, request, siteLicense, pkg }) => {
         await assertSiteLicenseManager({
@@ -4205,6 +4204,36 @@ export async function reviewSiteLicensePoolRequest({
             client,
           });
           return rejected;
+        }
+        const eligibility = await resolveSiteLicensePoolEmailEligibility({
+          package_id: pkg.id,
+          verified_email_address: currentVerifiedEmailAddress,
+          client,
+        });
+        if (
+          eligibility.matched_email_address == null ||
+          eligibility.matched_email_address !== request.matched_email_address
+        ) {
+          const eligibilityChangeNote =
+            "Canceled because the account's current verified email is no longer eligible for this pool.";
+          const canceled = await updateRequestState({
+            request_id: request.id,
+            state: "canceled",
+            reviewer_account_id: actorAccountId,
+            review_note: eligibilityChangeNote,
+            client,
+          });
+          await recordSiteLicenseAuditEvent({
+            site_license_id: siteLicense.id,
+            action: "pool-request-canceled",
+            actor_account_id: actorAccountId,
+            target_account_id: request.account_id,
+            package_id: request.package_id,
+            request_id: request.id,
+            metadata: { reason: "eligibility-changed" },
+            client,
+          });
+          return canceled;
         }
         const claimedDomain = request.matched_email_address.split("@")[1] ?? "";
         const exclusiveGroup = getPackageExclusiveGroup(pkg);
@@ -4462,9 +4491,11 @@ async function recordReleasedSeatsForSwitch({
 
 async function withSiteLicenseRequestTransaction<T>({
   request_id,
+  initial_request,
   fn,
 }: {
   request_id: string;
+  initial_request: SiteLicensePoolRequest;
   action: string;
   fn: (opts: {
     client: PoolClient;
@@ -4473,9 +4504,8 @@ async function withSiteLicenseRequestTransaction<T>({
     pkg: NonNullable<Awaited<ReturnType<typeof getMembershipPackage>>>;
   }) => Promise<T>;
 }): Promise<T> {
-  const initialRequest = await getRequestById(request_id);
   const { siteLicense } = await getSiteLicenseForPackage(
-    initialRequest.package_id,
+    initial_request.package_id,
   );
   return await withLocalSiteLicenseTransaction(async (client) => {
     const { rows } = await client.query<RawSiteLicensePoolRequest>(

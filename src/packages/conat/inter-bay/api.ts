@@ -158,6 +158,9 @@ import type {
   ProjectAccessRequestStatus,
   ProjectBackupSchedule,
   CourseManagerAccessResult,
+  CourseReconfigureManagedProjectType,
+  CourseReconfigureRequest,
+  CourseReconfigureResult,
   CourseStudentInviteAccountRepairInput,
   CourseStudentInviteAccountRepairRow,
   ProjectCollabInviteAction,
@@ -1903,6 +1906,69 @@ export interface BayOpsMembershipTierUsageReportRequest {
   account_id?: string;
 }
 
+export interface ActiveUserMapHistoryReportRequest {
+  usage_metrics_consent_required: boolean;
+  captured_at: string;
+}
+
+export interface ActiveUserMapHistoryAccount {
+  account_id: string;
+  last_active: string;
+  country_code: string | null;
+  usage_metrics_enabled: boolean;
+}
+
+export interface ActiveUserMapHistoryReport {
+  bay_id: string;
+  accounts: ActiveUserMapHistoryAccount[];
+}
+
+export type ActiveUserMapHistoryWindowMinutes = 60 | 1440;
+
+export interface ActiveUserMapHistorySeriesRequest {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  days?: number;
+  country_code?: string;
+}
+
+export interface ActiveUserMapHistoryPoint {
+  snapshot_hour: string;
+  captured_at: string;
+  total_active: number;
+  mapped_active: number;
+  unknown_location: number;
+  usage_metrics_not_enabled: number;
+  bay_count: number;
+  active_count: number;
+}
+
+export interface ActiveUserMapHistorySeries {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  days: number;
+  country_code: string | null;
+  country_codes: string[];
+  points: ActiveUserMapHistoryPoint[];
+}
+
+export interface ActiveUserMapHistorySnapshotRequest {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  snapshot_hour?: string;
+  direction?: "backward" | "forward" | "nearest";
+}
+
+export interface ActiveUserMapHistorySnapshotCountry {
+  country_code: string;
+  count: number;
+}
+
+export interface ActiveUserMapHistorySnapshot extends Omit<
+  ActiveUserMapHistoryPoint,
+  "active_count"
+> {
+  active_minutes: ActiveUserMapHistoryWindowMinutes;
+  countries: ActiveUserMapHistorySnapshotCountry[];
+}
+
 export interface BayOpsSetServerSettingRequest {
   name: string;
   value: string;
@@ -2197,6 +2263,63 @@ export interface ProjectEnsureCourseManagerAccessRequest {
   course_path?: string;
   project_ids: string[];
   manager_account_ids: string[];
+}
+
+export interface ProjectReconcileCourseManagedProjectRequest {
+  account_id: string;
+  course_project_id: string;
+  course_path: string;
+  manager_account_ids: string[];
+  project_id: string;
+  type: CourseReconfigureManagedProjectType;
+  course: NonNullable<ProjectCourseInfo>;
+  title?: string;
+  description?: string;
+  env?: ProjectEnv;
+  allow_collabs: boolean;
+  desired_account_ids: string[];
+  student_id?: string;
+  student_email_address?: string;
+  send_email_invite?: boolean;
+  invite?: {
+    subject: string;
+    message: string;
+    email_html: string;
+    reply_to?: string;
+    reply_to_name?: string;
+    base_url?: string;
+  };
+}
+
+export interface ProjectReconcileCourseManagedProjectResult {
+  project_id: string;
+  email_invited_at?: string;
+}
+
+export interface ProjectCourseManagedProjectStatesRequest {
+  project_ids: string[];
+}
+
+export interface ProjectCourseManagedProjectState {
+  project_id: string;
+  users: Record<
+    string,
+    {
+      group?: "owner" | "collaborator" | "viewer";
+      hide?: boolean;
+      [key: string]: unknown;
+    }
+  > | null;
+  course: Record<string, unknown> | null;
+  title: string | null;
+  description: string | null;
+  env: ProjectEnv | null;
+}
+
+export interface ProjectCourseReconfigureOperationRequest {
+  account_id: string;
+  course_project_id: string;
+  op_id: string;
 }
 
 export interface ProjectRemoveCollaboratorRequest {
@@ -2580,6 +2703,9 @@ export type BayOpsMethod =
   | "get-membership-tier-usage-report"
   | "get-membership-analytics-overview"
   | "get-active-user-map"
+  | "get-active-user-map-history-report"
+  | "get-active-user-map-history-series"
+  | "get-active-user-map-history-snapshot"
   | "get-membership-analytics-events"
   | "backfill-membership-analytics-purchases"
   | "get-webapp-crashes"
@@ -2600,6 +2726,11 @@ export type ProjectCollabInviteMethod =
   | "list"
   | "repair-accepted-course-student-invite-accounts"
   | "ensure-course-manager-access"
+  | "reconcile-course-managed-project"
+  | "get-course-managed-project-states"
+  | "reconfigure-course-projects"
+  | "get-course-reconfigure-operation"
+  | "cancel-course-reconfigure-operation"
   | "access-landing-info"
   | "request-access"
   | "list-access-requests"
@@ -4202,6 +4333,15 @@ export interface InterBayBayOpsApi {
   getActiveUserMap: (
     opts: ActiveUserMapQuery,
   ) => Promise<ActiveUserMapOverview>;
+  getActiveUserMapHistoryReport: (
+    opts: ActiveUserMapHistoryReportRequest,
+  ) => Promise<ActiveUserMapHistoryReport>;
+  getActiveUserMapHistorySeries: (
+    opts: ActiveUserMapHistorySeriesRequest,
+  ) => Promise<ActiveUserMapHistorySeries>;
+  getActiveUserMapHistorySnapshot: (
+    opts: ActiveUserMapHistorySnapshotRequest,
+  ) => Promise<ActiveUserMapHistorySnapshot | null>;
   getMembershipAnalyticsEvents: (
     opts: MembershipAnalyticsEventsQuery,
   ) => Promise<MembershipAnalyticsEventRow[]>;
@@ -4268,6 +4408,21 @@ export interface InterBayProjectCollabInviteApi {
   ensureCourseManagerAccess: (
     opts: ProjectEnsureCourseManagerAccessRequest,
   ) => Promise<CourseManagerAccessResult[]>;
+  reconcileCourseManagedProject: (
+    opts: ProjectReconcileCourseManagedProjectRequest,
+  ) => Promise<ProjectReconcileCourseManagedProjectResult>;
+  getCourseManagedProjectStates: (
+    opts: ProjectCourseManagedProjectStatesRequest,
+  ) => Promise<ProjectCourseManagedProjectState[]>;
+  reconfigureCourseProjects: (
+    opts: CourseReconfigureRequest & { account_id: string },
+  ) => Promise<CourseReconfigureResult>;
+  getCourseReconfigureOperation: (
+    opts: ProjectCourseReconfigureOperationRequest,
+  ) => Promise<LroSummary | undefined>;
+  cancelCourseReconfigureOperation: (
+    opts: ProjectCourseReconfigureOperationRequest,
+  ) => Promise<void>;
   getProjectAccessLandingInfo: (
     opts: ProjectAccessLandingInfoRequest,
   ) => Promise<ProjectAccessLandingInfo>;
@@ -9664,6 +9819,33 @@ export function createInterBayBayOpsClient({
       method: "get-active-user-map",
     }),
   });
+  const activeUserMapHistoryReportClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistoryReport">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-report",
+    }),
+  });
+  const activeUserMapHistorySeriesClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistorySeries">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-series",
+    }),
+  });
+  const activeUserMapHistorySnapshotClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getActiveUserMapHistorySnapshot">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-active-user-map-history-snapshot",
+    }),
+  });
   const membershipAnalyticsEventsClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getMembershipAnalyticsEvents">
   >({
@@ -9727,6 +9909,18 @@ export function createInterBayBayOpsClient({
       ),
     getActiveUserMap: async (opts) =>
       await activeUserMapClient.getActiveUserMap(opts),
+    getActiveUserMapHistoryReport: async (opts) =>
+      await activeUserMapHistoryReportClient.getActiveUserMapHistoryReport(
+        opts,
+      ),
+    getActiveUserMapHistorySeries: async (opts) =>
+      await activeUserMapHistorySeriesClient.getActiveUserMapHistorySeries(
+        opts,
+      ),
+    getActiveUserMapHistorySnapshot: async (opts) =>
+      await activeUserMapHistorySnapshotClient.getActiveUserMapHistorySnapshot(
+        opts,
+      ),
     getMembershipAnalyticsEvents: async (opts) =>
       await membershipAnalyticsEventsClient.getMembershipAnalyticsEvents(opts),
     backfillMembershipAnalyticsPurchases: async (opts) =>
@@ -9998,6 +10192,48 @@ export function createInterBayBayOpsHandlers({
       }),
       impl: {
         getActiveUserMap: async (opts) => await impl.getActiveUserMap(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistoryReport">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-report",
+      }),
+      impl: {
+        getActiveUserMapHistoryReport: async (opts) =>
+          await impl.getActiveUserMapHistoryReport(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistorySeries">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-series",
+      }),
+      impl: {
+        getActiveUserMapHistorySeries: async (opts) =>
+          await impl.getActiveUserMapHistorySeries(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getActiveUserMapHistorySnapshot">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-active-user-map-history-snapshot",
+      }),
+      impl: {
+        getActiveUserMapHistorySnapshot: async (opts) =>
+          await impl.getActiveUserMapHistorySnapshot(opts),
       },
     }),
     createServiceHandler<
@@ -10304,6 +10540,51 @@ export function createInterBayProjectCollabInviteClient({
       method: "ensure-course-manager-access",
     }),
   });
+  const reconcileCourseManagedProjectClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "reconcileCourseManagedProject">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "reconcile-course-managed-project",
+    }),
+  });
+  const getCourseManagedProjectStatesClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "get-course-managed-project-states",
+    }),
+  });
+  const reconfigureCourseProjectsClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "reconfigureCourseProjects">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "reconfigure-course-projects",
+    }),
+  });
+  const getCourseReconfigureOperationClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "getCourseReconfigureOperation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "get-course-reconfigure-operation",
+    }),
+  });
+  const cancelCourseReconfigureOperationClient = createServiceClient<
+    Pick<InterBayProjectCollabInviteApi, "cancelCourseReconfigureOperation">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: projectCollabInviteSubject({
+      dest_bay,
+      method: "cancel-course-reconfigure-operation",
+    }),
+  });
   const accessLandingInfoClient = createServiceClient<
     Pick<InterBayProjectCollabInviteApi, "getProjectAccessLandingInfo">
   >({
@@ -10443,6 +10724,24 @@ export function createInterBayProjectCollabInviteClient({
       ),
     ensureCourseManagerAccess: async (opts) =>
       await ensureCourseManagerAccessClient.ensureCourseManagerAccess(opts),
+    reconcileCourseManagedProject: async (opts) =>
+      await reconcileCourseManagedProjectClient.reconcileCourseManagedProject(
+        opts,
+      ),
+    getCourseManagedProjectStates: async (opts) =>
+      await getCourseManagedProjectStatesClient.getCourseManagedProjectStates(
+        opts,
+      ),
+    reconfigureCourseProjects: async (opts) =>
+      await reconfigureCourseProjectsClient.reconfigureCourseProjects(opts),
+    getCourseReconfigureOperation: async (opts) =>
+      await getCourseReconfigureOperationClient.getCourseReconfigureOperation(
+        opts,
+      ),
+    cancelCourseReconfigureOperation: async (opts) =>
+      await cancelCourseReconfigureOperationClient.cancelCourseReconfigureOperation(
+        opts,
+      ),
     removeCollaborator: async (opts) =>
       await removeCollaboratorClient.removeCollaborator(opts),
     setProjectUserRole: async (opts) =>
@@ -10686,6 +10985,76 @@ export function createInterBayProjectCollabInviteHandlers({
       impl: {
         ensureCourseManagerAccess: async (opts) =>
           await impl.ensureCourseManagerAccess(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "reconcileCourseManagedProject">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "reconcile-course-managed-project",
+      }),
+      impl: {
+        reconcileCourseManagedProject: async (opts) =>
+          await impl.reconcileCourseManagedProject(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "getCourseManagedProjectStates">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "get-course-managed-project-states",
+      }),
+      impl: {
+        getCourseManagedProjectStates: async (opts) =>
+          await impl.getCourseManagedProjectStates(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "reconfigureCourseProjects">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "reconfigure-course-projects",
+      }),
+      impl: {
+        reconfigureCourseProjects: async (opts) =>
+          await impl.reconfigureCourseProjects(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "getCourseReconfigureOperation">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "get-course-reconfigure-operation",
+      }),
+      impl: {
+        getCourseReconfigureOperation: async (opts) =>
+          await impl.getCourseReconfigureOperation(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayProjectCollabInviteApi, "cancelCourseReconfigureOperation">
+    >({
+      ...options,
+      service: "inter-bay-project-collab-invite",
+      subject: projectCollabInviteSubject({
+        dest_bay: bay_id,
+        method: "cancel-course-reconfigure-operation",
+      }),
+      impl: {
+        cancelCourseReconfigureOperation: async (opts) =>
+          await impl.cancelCourseReconfigureOperation(opts),
       },
     }),
     createServiceHandler<

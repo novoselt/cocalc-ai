@@ -32,14 +32,12 @@ import {
   recordAccountUsageCounterDelta,
   type AccountUsageWindows,
 } from "./usage-counters";
-import { createIndexConcurrentlyBestEffort } from "../database/concurrent-index";
 
 export {
   getProjectOwnerAccountId,
   getProjectUsageAccountId,
 } from "./project-usage";
 
-const TABLE = "account_managed_egress_events";
 const ROLLUP_TABLE = "account_managed_egress_rollups";
 const NO_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
 const ROLLUP_FLUSH_INTERVAL_MS = 60_000;
@@ -89,9 +87,6 @@ const ADMIN_OVERVIEW_CACHE_TTL_MS = 60_000;
 
 const logger = getLogger("server:membership:managed-egress");
 
-let ensuredSchema: Promise<void> | undefined;
-let adminTimeIndexReady: Promise<void> | undefined;
-let policyIndexReady: Promise<void> | undefined;
 let rollupFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let rollupFlushPromise: Promise<void> | undefined;
 
@@ -124,30 +119,6 @@ const adminOverviewCache = new LRU<
   max: 100,
   ttl: ADMIN_OVERVIEW_CACHE_TTL_MS,
 });
-
-function ensureAdminTimeIndexBestEffort(): void {
-  adminTimeIndexReady ??= createIndexConcurrentlyBestEffort({
-    name: `${TABLE}_time_admin_idx`,
-    sql: `
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS ${TABLE}_time_admin_idx
-      ON ${TABLE}(occurred_at DESC, id DESC)
-      INCLUDE (account_id, project_id, category, bytes)
-    `,
-  });
-  adminTimeIndexReady.catch(() => undefined);
-}
-
-function ensurePolicyIndexBestEffort(): void {
-  policyIndexReady ??= createIndexConcurrentlyBestEffort({
-    name: `${ROLLUP_TABLE}_account_category_time_cover_idx`,
-    sql: `
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS ${ROLLUP_TABLE}_account_category_time_cover_idx
-      ON ${ROLLUP_TABLE}(account_id, category, bucket_start DESC)
-      INCLUDE (bytes)
-    `,
-  });
-  policyIndexReady.catch(() => undefined);
-}
 
 function rollupProjectIdSql(alias = "events"): string {
   return `NULLIF(${alias}.project_id, '${NO_PROJECT_ID}'::uuid)`;
@@ -233,70 +204,6 @@ async function flushManagedEgressRollups(): Promise<void> {
       }
     });
   return await rollupFlushPromise;
-}
-
-async function ensureSchema(): Promise<void> {
-  if (!ensuredSchema) {
-    ensuredSchema = (async () => {
-      await getPool().query(`
-        CREATE TABLE IF NOT EXISTS ${TABLE} (
-          id UUID PRIMARY KEY,
-          account_id UUID NOT NULL,
-          project_id UUID,
-          category TEXT NOT NULL,
-          bytes BIGINT NOT NULL,
-          metadata JSONB,
-          occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-      `);
-      try {
-        await getPool().query(
-          `ALTER TABLE ${TABLE} ALTER COLUMN project_id DROP NOT NULL`,
-        );
-      } catch {}
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${TABLE}_account_time_idx ON ${TABLE}(account_id, occurred_at DESC)`,
-      );
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${TABLE}_project_time_idx ON ${TABLE}(project_id, occurred_at DESC)`,
-      );
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${TABLE}_category_time_idx ON ${TABLE}(category, occurred_at DESC)`,
-      );
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${TABLE}_account_project_time_idx ON ${TABLE}(account_id, project_id, occurred_at DESC)`,
-      );
-      await getPool().query(`
-        CREATE TABLE IF NOT EXISTS ${ROLLUP_TABLE} (
-          bucket_start TIMESTAMPTZ NOT NULL,
-          account_id UUID NOT NULL,
-          project_id UUID NOT NULL DEFAULT '${NO_PROJECT_ID}'::uuid,
-          category TEXT NOT NULL,
-          bytes BIGINT NOT NULL DEFAULT 0,
-          event_count INTEGER NOT NULL DEFAULT 0,
-          first_occurred_at TIMESTAMPTZ NOT NULL,
-          last_occurred_at TIMESTAMPTZ NOT NULL,
-          metadata_sample JSONB,
-          PRIMARY KEY (bucket_start, account_id, project_id, category)
-        )
-      `);
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${ROLLUP_TABLE}_account_time_idx ON ${ROLLUP_TABLE}(account_id, bucket_start DESC)`,
-      );
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${ROLLUP_TABLE}_project_time_idx ON ${ROLLUP_TABLE}(project_id, bucket_start DESC)`,
-      );
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${ROLLUP_TABLE}_category_time_idx ON ${ROLLUP_TABLE}(category, bucket_start DESC)`,
-      );
-      await getPool().query(
-        `CREATE INDEX IF NOT EXISTS ${ROLLUP_TABLE}_time_idx ON ${ROLLUP_TABLE}(bucket_start DESC)`,
-      );
-      ensureAdminTimeIndexBestEffort();
-      ensurePolicyIndexBestEffort();
-    })();
-  }
-  await ensuredSchema;
 }
 
 async function recordManagedProjectEgressRollup({
@@ -492,7 +399,6 @@ export async function recordManagedProjectEgress(opts: {
   if (bytes <= 0) {
     return { recorded: false };
   }
-  await ensureSchema();
   const account_id =
     `${opts.account_id ?? ""}`.trim() ||
     (`${opts.project_id ?? ""}`.trim()
@@ -530,7 +436,6 @@ export async function getManagedEgressUsageForAccount(opts: {
   limit5h?: number;
   limit7d?: number;
 }): Promise<ManagedEgressUsage> {
-  await ensureSchema();
   const windows = await getActiveAccountUsageWindows({
     account_id: opts.account_id,
   });
@@ -607,7 +512,6 @@ export async function getManagedEgressCategoryUsageForAccount(opts: {
   category: ManagedProjectEgressCategory;
   now?: Date;
 }): Promise<{ bytes_5h: number; bytes_7d: number }> {
-  await ensureSchema();
   const end = opts.now ?? new Date();
   const start5h = new Date(end.getTime() - 5 * 60 * 60 * 1000);
   const start7d = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -674,7 +578,6 @@ export async function getRecentManagedEgressEventsForAccount(opts: {
   end?: string | Date;
   limit?: number;
 }): Promise<ManagedEgressEventSummary[]> {
-  await ensureSchema();
   const limit =
     typeof opts.limit === "number" && Number.isFinite(opts.limit)
       ? Math.max(1, Math.min(50, Math.floor(opts.limit)))
@@ -922,7 +825,6 @@ export async function getManagedEgressAdminOverview(opts: {
   top_account_limit?: number;
   top_project_limit?: number;
 }): Promise<ManagedEgressAdminOverview> {
-  await ensureSchema();
   const query = normalizeOverviewQuery(opts);
   const base = await getManagedEgressAdminOverviewBase(query);
   const top_accounts = base.top_accounts.map((account) => ({ ...account }));
@@ -967,7 +869,6 @@ export async function getManagedEgressAdminHistory(opts: {
   top_account_limit?: number;
   top_project_limit?: number;
 }): Promise<ManagedEgressAdminHistory> {
-  await ensureSchema();
   const query = normalizeAdminHistoryQuery(opts);
   const whereSql =
     "events.bucket_start >= $1 AND events.bucket_start < $2 AND events.category <> ALL($3::text[])";
@@ -1199,7 +1100,6 @@ export async function getManagedEgressHistoryForAccount(opts: {
   recent_event_limit?: number;
   top_project_limit?: number;
 }): Promise<ManagedEgressHistory> {
-  await ensureSchema();
   const query = normalizeHistoryQuery(opts);
   const where: string[] = [
     "events.account_id = $1",

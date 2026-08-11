@@ -234,6 +234,16 @@ export class DKO<T = any> extends EventEmitter {
     }
   };
 
+  // Read a field directly, including fields omitted from an object's manifest
+  // by a concurrent sparse write. Callers must decide whether such a field is
+  // still semantically valid for the current object state.
+  getField = (key: string, field: string): any => {
+    if (this.dkv == null) {
+      throw Error("closed");
+    }
+    return this.dkv.get(this.toPath(key, field));
+  };
+
   has = (key: string): boolean => {
     if (this.dkv == null) {
       throw Error("closed");

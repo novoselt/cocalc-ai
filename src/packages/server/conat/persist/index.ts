@@ -20,6 +20,7 @@ import {
   getPersistentStreamDiagnostics,
   getPersistentStreamSqliteDiagnostics,
 } from "@cocalc/conat/persist/storage";
+import { getPersistStreamReleaseQueueDiagnostics } from "@cocalc/conat/persist/server";
 
 const logger = getLogger("server:conat:persist");
 
@@ -29,6 +30,7 @@ export function getConatPersistDiagnostics(): {
   child_processes: number;
   local_open_streams: number;
   local_streams: ReturnType<typeof getPersistentStreamDiagnostics>;
+  stream_releases: ReturnType<typeof getPersistStreamReleaseQueueDiagnostics>;
 } {
   const configured_servers = Math.max(1, conatPersistCount || 1);
   const local_streams = getPersistentStreamDiagnostics();
@@ -38,6 +40,7 @@ export function getConatPersistDiagnostics(): {
     child_processes: getForkedPersistServerCount(),
     local_open_streams: local_streams.open_total,
     local_streams,
+    stream_releases: getPersistStreamReleaseQueueDiagnostics(),
   };
 }
 

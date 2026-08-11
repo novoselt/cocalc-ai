@@ -98,6 +98,63 @@ describe("admin maintenance dangerous-session auth", () => {
     });
   });
 
+  it("requires centralized recent 2FA fresh auth before banning an account", async () => {
+    const { adminBanUser } = await import("./system");
+
+    await expect(
+      adminBanUser({
+        account_id: ACCOUNT_ID,
+        browser_id: "browser-1",
+        user_account_id: SUBJECT_ACCOUNT_ID,
+        reason: "confirmed abuse",
+      }),
+    ).rejects.toThrow("fresh auth is required");
+
+    expect(requireDangerousSessionAuthMock).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      browser_id: "browser-1",
+      session_hash: undefined,
+      require_second_factor: true,
+      allow_actor_impersonation: false,
+    });
+  });
+
+  it("rejects self-ban attempts before fresh auth, including uppercase UUIDs", async () => {
+    const { adminBanUser } = await import("./system");
+
+    await expect(
+      adminBanUser({
+        account_id: ACCOUNT_ID,
+        browser_id: "browser-1",
+        user_account_id: ACCOUNT_ID.toUpperCase(),
+        reason: "mistaken target",
+      }),
+    ).rejects.toThrow("cannot ban their current account");
+
+    expect(requireDangerousSessionAuthMock).not.toHaveBeenCalled();
+  });
+
+  it("requires centralized recent 2FA fresh auth before unbanning an account", async () => {
+    const { adminUnbanUser } = await import("./system");
+
+    await expect(
+      adminUnbanUser({
+        account_id: ACCOUNT_ID,
+        browser_id: "browser-1",
+        user_account_id: SUBJECT_ACCOUNT_ID,
+        reason: "manual review cleared the account",
+      }),
+    ).rejects.toThrow("fresh auth is required");
+
+    expect(requireDangerousSessionAuthMock).toHaveBeenCalledWith({
+      account_id: ACCOUNT_ID,
+      browser_id: "browser-1",
+      session_hash: undefined,
+      require_second_factor: true,
+      allow_actor_impersonation: false,
+    });
+  });
+
   it("requires centralized recent 2FA fresh auth before granting site admin role", async () => {
     const { adminGrantAdminRole } = await import("./system");
 

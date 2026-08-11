@@ -111,6 +111,36 @@ function emitWithAckTimeoutValue(
     });
   });
 }
+
+export async function waitForAnyTrue(
+  promises: Array<Promise<boolean>>,
+): Promise<boolean> {
+  if (promises.length === 0) {
+    return false;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let remaining = promises.length;
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const finishFalse = () => {
+      remaining -= 1;
+      if (remaining === 0) {
+        finish(false);
+      }
+    };
+    for (const promise of promises) {
+      promise.then(
+        (value) => (value ? finish(true) : finishFalse()),
+        finishFalse,
+      );
+    }
+  });
+}
+
 function socketIoCompressionEnabled(): boolean {
   const value = `${process.env.COCALC_CONAT_SOCKET_IO_COMPRESSION ?? ""}`
     .trim()
@@ -2924,13 +2954,16 @@ export class ConatServer extends EventEmitter {
       return false;
     }
 
-    signal?.addEventListener("abort", () => {
+    const handleAbort = () => controller.abort();
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    try {
+      // A negative answer from one cluster link says nothing about the other
+      // links. Only return false once every candidate has answered false.
+      return await waitForAnyTrue(v);
+    } finally {
+      signal?.removeEventListener("abort", handleAbort);
       controller.abort();
-    });
-    const w = await Promise.race(v);
-    // cancel all the others.
-    controller.abort();
-    return w;
+    }
   };
 
   private waitForInterestOnThisNode = async (

@@ -7,7 +7,7 @@ import getLogger from "@cocalc/backend/logger";
 import type { ManagedBackupEgressOverride } from "@cocalc/conat/files/file-server";
 import type { ManagedProjectEgressCategory } from "@cocalc/conat/hub/api/system";
 import { hubApi } from "@cocalc/lite/hub/api";
-import { capitalize, humanSize } from "@cocalc/util/misc";
+import { formatManagedEgressPolicyDetails } from "@cocalc/util/managed-egress-message";
 
 import {
   isProjectHostManagedEgressEnforced,
@@ -21,25 +21,6 @@ export const MANAGED_BACKUP_EGRESS_CATEGORY: ManagedProjectEgressCategory =
 const LEGACY_MIGRATION_INITIAL_BACKUP_OVERRIDE =
   "legacy-migration-initial-backup";
 const ADMIN_SITE_MIGRATION_BACKUP_OVERRIDE = "admin-site-migration";
-
-function formatManagedEgressCategory(category: string): string {
-  if (category === "file-download") return "File downloads";
-  if (category === "http-proxy") return "App server HTTP traffic";
-  if (category === "ws-proxy") return "App server WebSocket traffic";
-  if (category === "ssh") return "SSH traffic";
-  if (category === "interactive-conat") return "Interactive session traffic";
-  if (category === "raw-network") return "Project outbound network traffic";
-  if (category === MANAGED_BACKUP_EGRESS_CATEGORY)
-    return "Project backup uploads";
-  return capitalize(category.replace(/[-_]/g, " "));
-}
-
-function formatByteCount(bytes?: number): string {
-  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
-    return "unknown";
-  }
-  return humanSize(bytes);
-}
 
 function numericSummaryValue(
   summary: Record<string, string | number> | undefined,
@@ -94,36 +75,11 @@ export async function checkManagedBackupAllowedBestEffort({
     if (policy.allowed) {
       return { allowed: true };
     }
-    const breakdown = Object.entries(
-      policy.managed_egress_categories_5h_bytes ?? {},
-    )
-      .filter(
-        ([, bytes]) =>
-          typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0,
-      )
-      .map(
-        ([category, bytes]) =>
-          `${formatManagedEgressCategory(category)}: ${formatByteCount(bytes)}`,
-      );
     const lines = [
       "Managed backup upload limit reached for this account.",
       "New backups, including scheduled backups and moves that require a backup, are temporarily blocked until the egress usage window resets.",
+      ...formatManagedEgressPolicyDetails(policy),
     ];
-    if (policy.egress_5h_bytes != null) {
-      lines.push(
-        `5-hour usage: ${formatByteCount(policy.managed_egress_5h_bytes)} / ${formatByteCount(policy.egress_5h_bytes)}.`,
-      );
-    }
-    if (policy.egress_7d_bytes != null) {
-      lines.push(
-        `7-day usage: ${formatByteCount(policy.managed_egress_7d_bytes)} / ${formatByteCount(policy.egress_7d_bytes)}.`,
-      );
-    }
-    if (breakdown.length > 0) {
-      lines.push(
-        `Current managed egress categories (5 hours): ${breakdown.join(", ")}.`,
-      );
-    }
     return {
       allowed: false,
       message: lines.join("\n"),

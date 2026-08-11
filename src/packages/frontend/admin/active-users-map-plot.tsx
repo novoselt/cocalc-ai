@@ -5,7 +5,6 @@
 
 import { Button, Space, Typography } from "antd";
 
-import type { ActiveUserMapCountry } from "@cocalc/conat/hub/api/system";
 import { Icon, Tooltip } from "@cocalc/frontend/components";
 import { COLORS } from "@cocalc/util/theme";
 import { ACTIVE_USERS_MAP_COUNTRY_LABELS } from "./active-users-map-country-labels";
@@ -19,15 +18,15 @@ import {
   type ActiveUsersMapViewportTransform,
   useActiveUsersMapZoom,
 } from "./active-users-map-zoom";
+import { activeUsersMapCountryName } from "./active-users-map-country";
 
 const { Text } = Typography;
 
-export function activeUsersMapCountryName(code: string): string {
-  try {
-    return new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code;
-  } catch {
-    return code;
-  }
+export interface ActiveUsersMapCountryCount {
+  country_code: string;
+  count: number;
+  latitude?: number;
+  longitude?: number;
 }
 
 function bubbleSize(count: number): number {
@@ -49,13 +48,15 @@ export function transformActiveUsersMapPosition(
   };
 }
 
-export function activeUsersMapCountryPosition(country: ActiveUserMapCountry): {
+export function activeUsersMapCountryPosition(
+  country: ActiveUsersMapCountryCount,
+): {
   left: number;
   top: number;
 } {
   const [longitude, latitude] = ACTIVE_USERS_MAP_COUNTRY_LABELS[
     country.country_code
-  ] ?? [country.longitude, country.latitude];
+  ] ?? [country.longitude ?? 0, country.latitude ?? 0];
   return projectActiveUserMapPosition({ latitude, longitude });
 }
 
@@ -64,7 +65,7 @@ export function ActiveUsersMapPlot({
   selectedCountryCode,
   onSelect,
 }: {
-  countries: ActiveUserMapCountry[];
+  countries: ActiveUsersMapCountryCount[];
   selectedCountryCode?: string;
   onSelect: (countryCode: string) => void;
 }) {

@@ -13,6 +13,7 @@ import isValidAccount from "@cocalc/server/accounts/is-valid-account";
 import getLogger from "@cocalc/backend/logger";
 import getBalance from "./get-balance";
 import {
+  moneyRoundToCents,
   moneyToDbString,
   toDecimal,
   type MoneyValue,
@@ -49,6 +50,7 @@ export default async function createCredit({
   if (amountValue.lte(0)) {
     throw Error(`credit amount (=${amount}) must be positive`);
   }
+  const postedAmount = moneyRoundToCents(amountValue);
   const pool = client ?? getPool();
 
   if (invoice_id) {
@@ -71,7 +73,7 @@ export default async function createCredit({
     "INSERT INTO purchases (service, time, account_id, cost, description, invoice_id, notes, tag) VALUES($7, CURRENT_TIMESTAMP, $1, $2, $3, $4, $5, $6) RETURNING id",
     [
       account_id,
-      moneyToDbString(amountValue.neg()),
+      moneyToDbString(postedAmount.neg()),
       { type: "credit", ...description } as Credit,
       invoice_id,
       notes,

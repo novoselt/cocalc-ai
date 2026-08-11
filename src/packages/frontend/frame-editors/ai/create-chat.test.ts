@@ -15,8 +15,8 @@ describe("createChat", () => {
     jest.clearAllMocks();
   });
 
-  it("defaults legacy assistant models to gpt-5.4-mini for Codex routing", () => {
-    expect(resolveAssistantCodexModel("gpt-4o")).toBe("gpt-5.4-mini");
+  it("defaults legacy assistant models to the current Codex default", () => {
+    expect(resolveAssistantCodexModel("gpt-4o")).toBe("gpt-5.6-sol");
     expect(resolveAssistantCodexModel("gpt-5.4")).toBe("gpt-5.4");
   });
 
@@ -63,7 +63,6 @@ describe("createChat", () => {
         forceCodex: true,
         openFloating: true,
         waitForAgent: false,
-        codexConfig: { model: "gpt-5.4-mini" },
         agentSession: expect.objectContaining({
           session_id: "session-1",
           chat_path: "/home/user/agent.chat",
@@ -107,7 +106,6 @@ describe("createChat", () => {
         title: "List large files",
         tag: "intent:terminal-assistant",
         forceCodex: true,
-        codexConfig: { model: "gpt-5.4-mini" },
       }),
     );
     expect(dispatchNavigatorPromptIntent).toHaveBeenCalledWith(

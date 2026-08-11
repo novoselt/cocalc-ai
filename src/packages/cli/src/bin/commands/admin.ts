@@ -323,6 +323,20 @@ export function buildEntitlementOverrideSchemaDoc() {
         description:
           "Whether this account is allowed to create dedicated project hosts.",
       },
+      {
+        path: "features.bandwidth_relay_abuse_exempt",
+        kind: "boolean",
+        label: descriptions.features.bandwidth_relay_abuse_exempt.label,
+        description:
+          descriptions.features.bandwidth_relay_abuse_exempt.adminDescription,
+      },
+      {
+        path: "features.cryptomining_abuse_exempt",
+        kind: "boolean",
+        label: descriptions.features.cryptomining_abuse_exempt.label,
+        description:
+          descriptions.features.cryptomining_abuse_exempt.adminDescription,
+      },
       fieldDoc({
         path: "project_defaults.disk_quota",
         ...descriptions.project_defaults.disk_quota,
@@ -1418,6 +1432,11 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     }
     const value = file != null ? await readFile(file, "utf8") : text;
     if (value == null) return undefined;
+    if (text != null && /(?:\\r\\n|\\n)/.test(value)) {
+      throw new Error(
+        `${textOption} contains a literal \\n escape; use ${fileOption} for multiline text`,
+      );
+    }
     const normalized = value.replace(/\r\n/g, "\n").trim();
     if (!normalized) throw new Error("support comment must be non-empty");
     return normalized;
@@ -1446,9 +1465,15 @@ Merge comments are private unless their corresponding --*-comment-public flag is
 
   function adminSupportUpdateOptions(command: Command): Command {
     return command
-      .option("--public-reply <text>", "public reply body")
+      .option(
+        "--public-reply <text>",
+        "single-line public reply body; use --public-reply-file for multiline text",
+      )
       .option("--public-reply-file <path>", "read public reply from a file")
-      .option("--private-note <text>", "private internal note body")
+      .option(
+        "--private-note <text>",
+        "single-line private note body; use --private-note-file for multiline text",
+      )
       .option("--private-note-file <path>", "read private note from a file")
       .option(
         "--status <status>",
@@ -3733,6 +3758,42 @@ Merge comments are private unless their corresponding --*-comment-public flag is
           });
 
           return created;
+        });
+      },
+    );
+
+  adminUser
+    .command("ban <user>")
+    .description(
+      "ban an account and equivalent email identities (account id, email, or name query)",
+    )
+    .requiredOption("--reason <reason>", "audit reason for the account ban")
+    .action(
+      async (user: string, opts: { reason: string }, command: Command) => {
+        await withContext(command, "admin user ban", async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          return await ctx.hub.system.adminBanUser({
+            user_account_id: userAccountId,
+            reason: opts.reason,
+          });
+        });
+      },
+    );
+
+  adminUser
+    .command("unban <user>")
+    .description(
+      "remove one account ban; quarantined billing/resources require separate review",
+    )
+    .requiredOption("--reason <reason>", "audit reason for removing the ban")
+    .action(
+      async (user: string, opts: { reason: string }, command: Command) => {
+        await withContext(command, "admin user unban", async (ctx) => {
+          const userAccountId = await resolveTargetAccountId(ctx, user);
+          return await ctx.hub.system.adminUnbanUser({
+            user_account_id: userAccountId,
+            reason: opts.reason,
+          });
         });
       },
     );

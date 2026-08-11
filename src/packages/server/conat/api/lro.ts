@@ -151,6 +151,7 @@ export async function cancel({
     op_id,
     status: "canceled",
     error: row.error ?? "canceled",
+    if_status: ["queued", "running"],
   });
   if (updated) {
     await publishLroSummary({

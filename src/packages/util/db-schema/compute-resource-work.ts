@@ -13,6 +13,13 @@ Table({
   },
   fields: {
     id: { type: "uuid", desc: "Durable work identifier." },
+    queue_order: {
+      type: "integer",
+      pg_type: "BIGSERIAL",
+      unique: true,
+      noCoerce: true,
+      desc: "Database-assigned FIFO order for durable work.",
+    },
     resource_kind: { type: "string", desc: "vm or volume." },
     resource_id: { type: "uuid", desc: "Logical resource identifier." },
     action: { type: "string", desc: "Idempotent provider action." },

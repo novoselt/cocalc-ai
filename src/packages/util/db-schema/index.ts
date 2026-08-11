@@ -16,6 +16,8 @@ export { retentionModels } from "./retention";
 export * from "./table-ownership";
 
 // The tables
+import "./active-user-map-history";
+import "./account-managed-egress";
 import "./account-collaborator-index";
 import "./account-ban-audit-log";
 import "./account-admin-audit-log";
@@ -51,6 +53,7 @@ import "./email-counter";
 import "./email-auth";
 import "./external-credentials";
 import "./global-config";
+import "./growth-analytics";
 import "./hub-servers";
 import "./instances"; // probably deprecated
 import "./listings";

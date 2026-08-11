@@ -153,6 +153,7 @@ import type { SyncString } from "@cocalc/sync/editor/string/sync";
 interface SyncstringOpts2 {
   project_id: string;
   path: string;
+  syncIdentityPathIsCanonical?: boolean;
   cursors?: boolean;
   save_interval?: number; // amount to debounce saves (in ms)
   patch_interval?: number;
@@ -169,6 +170,7 @@ export function syncstring2(opts: SyncstringOpts2): SyncString {
 export interface SyncDBOpts {
   project_id: string;
   path: string;
+  syncIdentityPathIsCanonical?: boolean;
   primary_keys: string[];
   string_cols?: string[];
   cursors?: boolean;

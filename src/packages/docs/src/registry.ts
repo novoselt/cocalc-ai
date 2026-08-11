@@ -34,6 +34,13 @@ export function isDocsEntryVisible(
   entry: DocsEntry,
   access: DocsAccess = {},
 ): boolean {
+  if (
+    entry.requiredFeatures?.some(
+      (feature) => !access.features?.includes(feature),
+    )
+  ) {
+    return false;
+  }
   if (access.product === "plus" && !isPlusDocsEntryId(entry.id)) {
     return false;
   }

@@ -546,6 +546,10 @@ validate_release() {
       echo "release is missing GCP provider setup script" >&2
       exit 1
     fi
+    if [[ ! -f "${TARGET_RELEASE}/runtime/control-plane/bundle/gcp/compute-vm-setup.sh" ]]; then
+      echo "release is missing managed compute VM setup script" >&2
+      exit 1
+    fi
     if [[ ! -f "${TARGET_RELEASE}/runtime/control-plane/bundle/nebius/nebius-setup.sh" ]]; then
       echo "release is missing Nebius provider setup script" >&2
       exit 1

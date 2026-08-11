@@ -6,8 +6,10 @@ import getPool, {
 import { SUBSCRIPTION_RENEWAL } from "@cocalc/util/db-schema/purchases";
 import {
   moneyRound2Down,
+  moneyRoundToCents,
   moneyToCurrency,
   toDecimal,
+  type MoneyValue,
 } from "@cocalc/util/money";
 import dayjs from "dayjs";
 import type { Subscription } from "@cocalc/util/db-schema/subscriptions";
@@ -45,6 +47,145 @@ const SUBSCRIPTION_PAYMENT_SLACK = 0.01;
 const MAX_LEGACY_PAYMENT_PERIOD_DRIFT_MS = 15 * 60 * 1000;
 
 const logger = getLogger("purchases:stripe:create-subscription-payment");
+
+type RenewalFunding = {
+  balanceApplied: number;
+  payNow: boolean;
+};
+
+function validatedBalanceApplied({
+  balanceApplied,
+  renewalAmount,
+}: {
+  balanceApplied: MoneyValue | null | undefined;
+  renewalAmount: ReturnType<typeof toDecimal>;
+}): ReturnType<typeof toDecimal> {
+  const value = toDecimal(balanceApplied ?? 0);
+  if (
+    value.lt(0) ||
+    (value.gt(0) && value.gte(renewalAmount)) ||
+    !moneyRoundToCents(value).eq(value)
+  ) {
+    throw Error("invalid account balance allocation for subscription renewal");
+  }
+  return value;
+}
+
+export async function hasOpenPaygPurchases({
+  account_id,
+  client,
+}: {
+  account_id: string;
+  client: PoolClient;
+}): Promise<boolean> {
+  const { rows } = await client.query<{ open: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM purchases
+        WHERE account_id=$1
+          AND cost IS NULL
+          AND (cost_per_hour IS NOT NULL OR cost_so_far IS NOT NULL)
+     ) AS open`,
+    [account_id],
+  );
+  return rows[0]?.open === true;
+}
+
+async function prepareRenewalFunding({
+  account_id,
+  amount,
+  attempt_id,
+}: {
+  account_id: string;
+  amount: number;
+  attempt_id: string;
+}): Promise<RenewalFunding> {
+  const amountValue = toDecimal(amount);
+  if (amountValue.lte(MIN_SUBSCRIPTION_AMOUNT)) {
+    return { balanceApplied: 0, payNow: true };
+  }
+
+  const useBalance = await useBalanceTowardSubscriptions(account_id);
+  const client = await getTransactionClient();
+  try {
+    await lockMembershipSubscriptionAccount({ account_id, client });
+    const { rows } = await client.query<SubscriptionRenewalAttempt>(
+      `SELECT *
+         FROM subscription_renewal_attempts
+        WHERE id=$1 AND account_id=$2
+        FOR UPDATE`,
+      [attempt_id, account_id],
+    );
+    const attempt = rows[0];
+    if (!attempt || !["scheduled", "processing"].includes(attempt.state)) {
+      throw Error("subscription does not have an active renewal attempt");
+    }
+
+    if (attempt.balance_applied != null) {
+      const balanceApplied = validatedBalanceApplied({
+        balanceApplied: attempt.balance_applied,
+        renewalAmount: amountValue,
+      });
+      await client.query("COMMIT");
+      return {
+        balanceApplied: balanceApplied.toNumber(),
+        payNow: false,
+      };
+    }
+
+    // Never change the funding split after Stripe state may exist.
+    if (attempt.payment_intent_id) {
+      await client.query(
+        `UPDATE subscription_renewal_attempts
+            SET balance_applied=0, updated_at=NOW()
+          WHERE id=$1`,
+        [attempt_id],
+      );
+      await client.query("COMMIT");
+      return { balanceApplied: 0, payNow: false };
+    }
+
+    let balanceApplied = toDecimal(0);
+    if (useBalance) {
+      const balance = toDecimal(
+        await getBalance({ account_id, client, noSave: true }),
+      );
+      if (balance.gte(amountValue)) {
+        await client.query("COMMIT");
+        return { balanceApplied: 0, payNow: true };
+      }
+      if (
+        balance.gt(0) &&
+        attempt.funding_version === 1 &&
+        !(await hasOpenPaygPurchases({ account_id, client }))
+      ) {
+        balanceApplied = moneyRoundToCents(balance);
+      }
+    }
+
+    const cardAmount = amountValue.sub(balanceApplied);
+    if (balanceApplied.gt(0) && cardAmount.lte(MIN_SUBSCRIPTION_AMOUNT)) {
+      // Stripe cannot reliably collect tiny invoice remainders. Preserve the
+      // existing behavior that permits a very small negative balance instead.
+      await client.query("COMMIT");
+      return { balanceApplied: 0, payNow: true };
+    }
+
+    await client.query(
+      `UPDATE subscription_renewal_attempts
+          SET balance_applied=$2, updated_at=NOW()
+        WHERE id=$1`,
+      [attempt_id, balanceApplied.toString()],
+    );
+    await client.query("COMMIT");
+    return { balanceApplied: balanceApplied.toNumber(), payNow: false };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 function cleanString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -271,27 +412,29 @@ export default async function createSubscriptionPayment({
     interval: renewalTerms.interval,
   });
 
+  const funding = await prepareRenewalFunding({
+    account_id,
+    amount: amountValue.toNumber(),
+    attempt_id: attempt.id,
+  });
+  const balanceAppliedValue = toDecimal(funding.balanceApplied);
+  const cardAmountValue = amountValue.sub(balanceAppliedValue);
   const lineItems = [
     {
       description: `${renewalDescription} (subscription Id=${subscription_id})`,
       amount: amountValue.toNumber(),
     },
   ];
-
-  let payNow = false;
-  if (amountValue.lte(MIN_SUBSCRIPTION_AMOUNT)) {
-    payNow = true;
-  } else if (await useBalanceTowardSubscriptions(account_id)) {
-    // The user has "Use Balance Toward Subscriptions" enabled.
-    const balance = toDecimal(await getBalance({ account_id }));
-    if (balance.gte(amountValue)) {
-      payNow = true;
-    }
+  if (balanceAppliedValue.gt(0)) {
+    lineItems.push({
+      description: "Account balance applied to subscription renewal",
+      amount: balanceAppliedValue.neg().toNumber(),
+    });
   }
 
   const { site_name } = await getServerSettings();
 
-  if (payNow) {
+  if (funding.payNow) {
     // Instead of trying to charge their credit card (etc.), we just
     // directly extend their subscription for another period using credit
     // on their account, possibly going negative (in case of MIN_SUBSCRIPTION_AMOUNT).
@@ -345,6 +488,8 @@ export default async function createSubscriptionPayment({
       metadata: {
         subscription_id: `${subscription_id}`,
         renewal_attempt_id: attempt.id,
+        balance_applied_usd: balanceAppliedValue.toFixed(2),
+        renewal_total_usd: amountValue.toFixed(2),
       },
       force: true,
       processImmediately: false,
@@ -356,6 +501,8 @@ export default async function createSubscriptionPayment({
     subject: `${site_name} Subscription Renewal: Id ${subscription_id}`,
     body: `
 ${site_name} has started renewing your ${moneyToCurrency(amountValue)}/${interval} subscription (id=${subscription_id}).
+
+${moneyToCurrency(balanceAppliedValue)} will be paid from your account balance and ${moneyToCurrency(cardAmountValue)} will be collected from your payment method.
 
 - [Membership Status](${await url(`/settings/membership`)})
 
@@ -599,11 +746,34 @@ export async function processSubscriptionRenewal({
       return;
     }
     const expectedAmount = attempt ? toDecimal(attempt.amount) : costValue;
-    if (amountValue.add(SUBSCRIPTION_PAYMENT_SLACK).lt(expectedAmount)) {
+    const balanceApplied = validatedBalanceApplied({
+      balanceApplied: attempt?.balance_applied,
+      renewalAmount: expectedAmount,
+    });
+    if (
+      amountValue
+        .add(balanceApplied)
+        .add(SUBSCRIPTION_PAYMENT_SLACK)
+        .lt(expectedAmount)
+    ) {
       logger.debug("processSubscriptionRenewal: SUSPICIOUS! -- not doing it.");
       throw Error(
         `subscription costs a lot more than payment -- contact support.`,
       );
+    }
+    if (balanceApplied.gt(0)) {
+      const availableBalance = toDecimal(
+        await getBalance({
+          account_id,
+          client: transaction,
+          noSave: true,
+        }),
+      );
+      if (availableBalance.add(SUBSCRIPTION_PAYMENT_SLACK).lt(expectedAmount)) {
+        throw Error(
+          "account balance allocated to this subscription renewal is no longer available",
+        );
+      }
     }
 
     if (payment == null || (payment?.new_expires_ms ?? 0) < Date.now()) {

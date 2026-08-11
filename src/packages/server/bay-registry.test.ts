@@ -273,6 +273,16 @@ describe("bay-registry", () => {
     expect(listMock).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects an empty authoritative multi-bay registry", async () => {
+    const { listAuthoritativeClusterBayInfos, listClusterBayInfos } =
+      await import("./bay-registry");
+
+    await expect(listClusterBayInfos()).resolves.toHaveLength(1);
+    await expect(listAuthoritativeClusterBayInfos()).rejects.toThrow(
+      "authoritative multi-bay registry is empty",
+    );
+  });
+
   it("sets and reports project ownership admission", async () => {
     rowsById.set("bay-2", {
       bay_id: "bay-2",

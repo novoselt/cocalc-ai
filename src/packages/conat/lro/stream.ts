@@ -48,7 +48,11 @@ export async function publishLroEvent({
     name: lroStreamName(op_id),
     ephemeral: true,
   });
-  await stream.publish(event, { ttl });
+  try {
+    await stream.publish(event, { ttl });
+  } finally {
+    stream.close();
+  }
 }
 
 export async function publishLroSummary({

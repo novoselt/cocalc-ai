@@ -120,6 +120,7 @@ describe("project-host conat router managed egress", () => {
   it("formats the interactive session block message", () => {
     expect(
       __test__.buildBlockedMessage({
+        blocked_by: "7d",
         managed_egress_5h_bytes: 373_000_000,
         managed_egress_7d_bytes: 500_000_000,
         egress_5h_bytes: 200_000_000,
@@ -127,7 +128,10 @@ describe("project-host conat router managed egress", () => {
         managed_egress_categories_5h_bytes: {
           "interactive-conat": 373_000_000,
         },
+        managed_egress_categories_7d_bytes: {
+          "interactive-conat": 500_000_000,
+        },
       }),
-    ).toContain("Interactive session traffic limit reached for this account.");
+    ).toContain("Limit triggered by the 7-day network usage window.");
   });
 });

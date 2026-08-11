@@ -18,14 +18,17 @@ import {
   volumeListSummary,
 } from "./vm";
 
-function harness(opts: { projectId?: string } = {}) {
+function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
   const sshCalls: string[][] = [];
   const rsyncCalls: string[][] = [];
   const callbackResults: unknown[] = [];
   const ttlCalls: any[] = [];
   const createCalls: any[] = [];
+  const progressMessages: string[] = [];
   const sshAuthorizationCalls: any[] = [];
   const projectSshAuthorizationCalls: any[] = [];
+  const listCalls: any[] = [];
+  const projectListCalls: any[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -33,8 +36,19 @@ function harness(opts: { projectId?: string } = {}) {
     withContext: async (_command, _name, callback) => {
       const result = await callback({
         globals: {},
+        remote: {
+          user: opts.projectAuth ? { project_id: opts.projectId } : {},
+        },
         hub: {
           compute: {
+            listVms: async (callOpts: any) => {
+              listCalls.push(callOpts);
+              return [];
+            },
+            listProjectVms: async (callOpts: any) => {
+              projectListCalls.push(callOpts);
+              return [];
+            },
             getVm: async () => ({
               id: "vm-id",
               name: "build-vm",
@@ -76,6 +90,7 @@ function harness(opts: { projectId?: string } = {}) {
       callbackResults.push(result);
       return result;
     },
+    progress: (message) => progressMessages.push(message),
     runSsh: (args) => sshCalls.push(args),
     runRsync: (args) => rsyncCalls.push(args),
     resolvePublicKey: (path) => ({
@@ -91,10 +106,37 @@ function harness(opts: { projectId?: string } = {}) {
     callbackResults,
     ttlCalls,
     createCalls,
+    progressMessages,
     sshAuthorizationCalls,
     projectSshAuthorizationCalls,
+    listCalls,
+    projectListCalls,
   };
 }
+
+describe("vm list scope", () => {
+  it("defaults project authentication to the current project", async () => {
+    const { program, listCalls, projectListCalls } = harness({
+      projectId: "project-id",
+      projectAuth: true,
+    });
+    await program.parseAsync(["node", "cocalc", "vm", "list"]);
+    assert.equal(projectListCalls.length, 1);
+    assert.equal(listCalls.length, 0);
+  });
+
+  it("uses COCALC_PROJECT_ID as the account-authenticated default filter", async () => {
+    const { program, listCalls } = harness({ projectId: "project-id" });
+    await program.parseAsync(["node", "cocalc", "vm", "list"]);
+    assert.equal(listCalls[0]?.project_id, "project-id");
+  });
+
+  it("lists the whole account only when account authentication is available", async () => {
+    const { program, listCalls } = harness({ projectId: "project-id" });
+    await program.parseAsync(["node", "cocalc", "vm", "list", "--all"]);
+    assert.equal(listCalls[0]?.project_id, undefined);
+  });
+});
 
 describe("vm create", () => {
   it("can deliberately create without an initial SSH key", async () => {
@@ -129,6 +171,28 @@ describe("vm create", () => {
       createCalls[0]?.ssh_public_key,
       "ssh-ed25519 AAAAUSER user@example.com",
     );
+  });
+
+  it("reports when provider provisioning is queued", async () => {
+    const { program, progressMessages } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "status-vm",
+      "--project",
+      "project-id",
+      "--zone",
+      "us-west1-a",
+      "--machine",
+      "e2-standard-2",
+      "--no-ssh-key",
+    ]);
+    assert.deepEqual(progressMessages, [
+      "[vm create] Submitting 'status-vm' (e2-standard-2, us-west1-a)...",
+      "[vm create] Provider provisioning queued for 'status-vm' (id vm-id).",
+    ]);
   });
 });
 
@@ -180,7 +244,7 @@ describe("vm ssh", () => {
   it("authorizes SSH through the current project identity", async () => {
     const projectId = "af027aca-e308-41c2-b528-a3e73de50996";
     const { program, projectSshAuthorizationCalls, sshAuthorizationCalls } =
-      harness({ projectId });
+      harness({ projectId, projectAuth: true });
     await program.parseAsync(["node", "cocalc", "vm", "ssh", "build-vm"]);
     assert.equal(projectSshAuthorizationCalls[0]?.project_id, projectId);
     assert.equal(

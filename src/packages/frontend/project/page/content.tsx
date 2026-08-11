@@ -20,8 +20,10 @@ import { debounce } from "lodash";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import Draggable from "react-draggable";
 import { React, redux, useTypedRedux } from "@cocalc/frontend/app-framework";
+import { alert_message } from "@cocalc/frontend/alerts";
 import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
 import { KioskModeBanner } from "@cocalc/frontend/app/kiosk-mode-banner";
+import { isReactDomMutationError } from "@cocalc/frontend/app/react-dom-mutation";
 import { getExternalSideChatDesc } from "@cocalc/frontend/chat/external-side-chat-selection";
 import { chatMetaFile } from "@cocalc/frontend/chat/paths";
 import type { ChatState } from "@cocalc/frontend/chat/chat-indicator";
@@ -343,9 +345,10 @@ const Editor: React.FC<EditorProps> = (props: EditorProps) => {
 
   return (
     <div
-      className={"smc-vfill"}
+      className="smc-vfill notranslate"
       id={editor_id(project_id, path)}
       style={{ height: "100%" }}
+      translate="no"
     >
       <EditorComponent
         name={actions?.name}
@@ -393,18 +396,38 @@ const EditorContent: React.FC<EditorContentProps> = ({
   // Render this here, since it is used in multiple places below.
   const editor = (
     <CocalcErrorBoundary
-      autoRetry={false}
+      autoRetry={({ error, retryCount }) =>
+        retryCount === 0 && isReactDomMutationError(error)
+      }
+      onAutoRetry={() =>
+        alert_message({
+          type: "info",
+          title: "Editor recovered",
+          message: "CoCalc automatically reloaded the affected editor.",
+          timeout: 4,
+        })
+      }
       resetKeys={[component.redux_name, component.runtime_generation]}
       scope="project.editor"
-      fallback={({ retry }) => (
-        <Alert
-          action={<Button onClick={retry}>Reload editor</Button>}
-          description="The error was reported automatically. Other project tools remain available."
-          title="This editor could not be displayed"
-          showIcon
-          type="warning"
-        />
-      )}
+      fallback={({ error, retry }) =>
+        isReactDomMutationError(error) ? (
+          <Alert
+            action={<Button onClick={retry}>Reload editor</Button>}
+            description="Page translation or a browser extension may be modifying CoCalc's editor content. Disable translation and page-modifying extensions for cocalc.ai, then reload the editor. The error was reported automatically; other project tools remain available."
+            title="The editor could not recover from a browser page change"
+            showIcon
+            type="warning"
+          />
+        ) : (
+          <Alert
+            action={<Button onClick={retry}>Reload editor</Button>}
+            description="The error was reported automatically. Other project tools remain available."
+            title="This editor could not be displayed"
+            showIcon
+            type="warning"
+          />
+        )
+      }
     >
       <Editor
         key={`${component.redux_name ?? "loading"}:${

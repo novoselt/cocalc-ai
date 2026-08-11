@@ -29,6 +29,8 @@ const NUMERIC_RULE_MODES = new Set(["minimum", "maximum", "set"]);
 const FEATURE_KEYS = new Set<keyof AccountFeatureOverrides>([
   "create_hosts",
   "exam_mode",
+  "bandwidth_relay_abuse_exempt",
+  "cryptomining_abuse_exempt",
 ]);
 const PROJECT_DEFAULT_KEYS = [
   "disk_quota",
@@ -409,6 +411,18 @@ function normalizeFeatures(
     }
     features.exam_mode = value.exam_mode;
   }
+  if (value.bandwidth_relay_abuse_exempt != null) {
+    if (typeof value.bandwidth_relay_abuse_exempt !== "boolean") {
+      throw Error("features.bandwidth_relay_abuse_exempt must be a boolean");
+    }
+    features.bandwidth_relay_abuse_exempt = value.bandwidth_relay_abuse_exempt;
+  }
+  if (value.cryptomining_abuse_exempt != null) {
+    if (typeof value.cryptomining_abuse_exempt !== "boolean") {
+      throw Error("features.cryptomining_abuse_exempt must be a boolean");
+    }
+    features.cryptomining_abuse_exempt = value.cryptomining_abuse_exempt;
+  }
   return features;
 }
 
@@ -766,6 +780,20 @@ export function describeAccountEntitlementOverride(
     effects.push(
       `Exam scratchpad hosts: ${
         override.features.exam_mode ? "allow" : "block"
+      }`,
+    );
+  }
+  if (override.features?.bandwidth_relay_abuse_exempt != null) {
+    effects.push(
+      `Bandwidth relay enforcement: ${
+        override.features.bandwidth_relay_abuse_exempt ? "exempt" : "enforce"
+      }`,
+    );
+  }
+  if (override.features?.cryptomining_abuse_exempt != null) {
+    effects.push(
+      `Compute abuse enforcement: ${
+        override.features.cryptomining_abuse_exempt ? "exempt" : "enforce"
       }`,
     );
   }

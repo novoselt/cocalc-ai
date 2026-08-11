@@ -28,7 +28,11 @@ import {
   type BackendState,
   type KernelState,
 } from "@cocalc/jupyter/types";
-import { callback2, once } from "@cocalc/util/async-utils";
+import { callback2, once, withTimeout } from "@cocalc/util/async-utils";
+import type {
+  KernelSignalResult,
+  KernelStatus,
+} from "@cocalc/conat/project/api/jupyter";
 import { bufferToBase64 } from "@cocalc/util/base64";
 import { Config as FormatterConfig, Syntax } from "@cocalc/util/code-formatter";
 import {
@@ -88,8 +92,13 @@ import {
   DELETED_CHECK_INTERVAL,
 } from "@cocalc/sync/editor/generic/sync-doc";
 import { type WatchIterator } from "@cocalc/conat/files/watch";
-import { mark_open_phase } from "@cocalc/frontend/project/open-file";
+import { isKernelStopConfirmed } from "./kernel-stop-confirmation";
+import {
+  mark_file_open_v2_phase,
+  mark_open_phase,
+} from "@cocalc/frontend/project/open-file";
 import { effectivePlainEditorSettings } from "@cocalc/frontend/project/workspaces/editor-theme";
+import { subscribeAccountSettingsStore } from "./account-settings-watcher";
 import {
   resolveRuntimeWorkspaceForPath,
   WORKSPACE_RECORDS_EVENT,
@@ -121,11 +130,17 @@ import {
   recordUxLatencyEvent,
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
+import {
+  afterNextPaint,
+  UxLatencyTrace,
+} from "@cocalc/frontend/monitoring/ux-latency-trace";
+import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 
 const OUTPUT_FPS = 29;
 const DEFAULT_OUTPUT_MESSAGE_LIMIT = 500;
 const STALE_LIVE_RUN_IDLE_CHECK_MS = 10_000;
 const WATCH_RECREATE_WAIT = 3000;
+const JUPYTER_OPEN_INCOMPLETE_AFTER_MS = 45_000;
 
 type LiveRunRenderContext = {
   handlers: globalThis.Map<string, OutputHandler>;
@@ -213,6 +228,10 @@ export class JupyterActions extends JupyterActions0 {
   private openInitMarks: Record<string, number> = {};
   private openInitSummaryLogged = false;
   private openInitFirstVisibleLogged = false;
+  private openUxTrace?: UxLatencyTrace;
+  private openUxIncompleteTimer?: ReturnType<typeof setTimeout>;
+  private openUxDocumentReady = false;
+  private openUxSyncReady = false;
   private runDebugCounter: number = 0;
   private runDebugMode: "off" | "on" | "json" | undefined;
   private workspaceRecordsChange?: EventListener;
@@ -464,12 +483,28 @@ export class JupyterActions extends JupyterActions0 {
     };
   };
 
-  public noteOpenInitStart = (data: Record<string, any> = {}): void => {
+  public noteOpenInitStart = (
+    data: Record<string, any> & { project_id?: string } = {},
+  ): void => {
     if (this.openInitStartedAt == null) {
       this.openInitStartedAt = Date.now();
       this.openInitMarks = { open_start: 0 };
       this.openInitSummaryLogged = false;
       this.openInitFirstVisibleLogged = false;
+      this.openUxTrace = new UxLatencyTrace({
+        event_type: "jupyter_open",
+        // create_jupyter_actions starts this trace before _init assigns the
+        // inherited project_id field.
+        project_id: data.project_id ?? this.project_id,
+        source: "editor_actions_init",
+        surface_visible: true,
+        stale_after_ms: JUPYTER_OPEN_INCOMPLETE_AFTER_MS,
+        sample_successes: true,
+      });
+      this.openUxIncompleteTimer = setTimeout(() => {
+        this.recordJupyterOpenIncomplete("endpoint_timeout");
+      }, JUPYTER_OPEN_INCOMPLETE_AFTER_MS);
+      (this.openUxIncompleteTimer as any).unref?.();
     }
     this.runDebug("open.init.start", data);
   };
@@ -486,10 +521,71 @@ export class JupyterActions extends JupyterActions0 {
       Date.now() - (this.openInitStartedAt as number),
     );
     this.openInitMarks[phase] = elapsedMs;
+    this.openUxTrace?.markAt(phase, elapsedMs, {
+      source: typeof data.source === "string" ? data.source : undefined,
+      mode: typeof data.mode === "string" ? data.mode : undefined,
+      reason: typeof data.reason === "string" ? data.reason : undefined,
+    });
+    if (phase === "optimistic_ready" || phase === "initial_load_done") {
+      this.recordJupyterDocumentReady(phase);
+    } else if (phase === "initial_load_skipped") {
+      this.recordJupyterDocumentReady("rtc");
+    } else if (phase === "sync_ready") {
+      this.openUxSyncReady = true;
+      this.openUxTrace?.record("jupyter_sync_ready_v2", {
+        path_ext: filename_extension(this.path ?? ""),
+        editor: "jupyter",
+        segment: this.optimisticFastOpenApplied ? "optimistic" : "syncdb",
+        surface_visible: true,
+      });
+      this.maybeFinishJupyterOpenTrace();
+    }
     this.runDebug(`open.${phase}`, {
       elapsedMs,
       ...data,
     });
+  };
+
+  private recordJupyterDocumentReady = (source: string): void => {
+    if (this.openUxDocumentReady) return;
+    this.openUxDocumentReady = true;
+    this.openUxTrace?.record("jupyter_document_ready_v2", {
+      path_ext: filename_extension(this.path ?? ""),
+      editor: "jupyter",
+      segment: source,
+      surface_visible: true,
+      details: {
+        optimistic: this.optimisticFastOpenApplied,
+      },
+    });
+    this.maybeFinishJupyterOpenTrace();
+  };
+
+  private maybeFinishJupyterOpenTrace = (): void => {
+    if (!this.openUxDocumentReady || !this.openUxSyncReady) return;
+    if (this.openUxIncompleteTimer != null) {
+      clearTimeout(this.openUxIncompleteTimer);
+      this.openUxIncompleteTimer = undefined;
+    }
+  };
+
+  private recordJupyterOpenIncomplete = (reason: string): void => {
+    if (this.openUxTrace == null) return;
+    if (this.openUxDocumentReady && this.openUxSyncReady) return;
+    this.openUxTrace.record("jupyter_open_incomplete_v2", {
+      path_ext: filename_extension(this.path ?? ""),
+      editor: "jupyter",
+      surface_visible: true,
+      details: {
+        reason,
+        document_ready: this.openUxDocumentReady,
+        sync_ready: this.openUxSyncReady,
+      },
+    });
+    if (this.openUxIncompleteTimer != null) {
+      clearTimeout(this.openUxIncompleteTimer);
+      this.openUxIncompleteTimer = undefined;
+    }
   };
 
   private handleSyncdbOpenPhase = (payload: {
@@ -504,6 +600,30 @@ export class JupyterActions extends JupyterActions0 {
     if (phase == null) {
       return;
     }
+    mark_file_open_v2_phase(this.project_id, this.path, `syncdoc.${phase}`, {
+      syncdoc_elapsed_ms: Number.isFinite(Number(payload.elapsed_ms))
+        ? Number(payload.elapsed_ms)
+        : undefined,
+      attempt: Number.isFinite(Number(payload.attempt))
+        ? Number(payload.attempt)
+        : undefined,
+      error_code:
+        typeof payload.error_code === "string"
+          ? payload.error_code.slice(0, 80)
+          : undefined,
+      error_name:
+        typeof payload.error_name === "string"
+          ? payload.error_name.slice(0, 80)
+          : undefined,
+      prevalidated:
+        typeof payload.prevalidated === "boolean"
+          ? payload.prevalidated
+          : undefined,
+      string_id_provided:
+        typeof payload.string_id_provided === "boolean"
+          ? payload.string_id_provided
+          : undefined,
+    });
     this.runDebug("open.syncdoc_phase", payload);
     this.noteOpenInitPhase(`syncdoc.${phase}`, payload);
   };
@@ -536,6 +656,17 @@ export class JupyterActions extends JupyterActions0 {
       cellCount,
     });
     this.maybeLogOpenInitSummary(`first_cell_visible:${source}`);
+    afterNextPaint(() => {
+      this.openUxTrace?.record("jupyter_first_cell_visible_v2", {
+        path_ext: filename_extension(this.path ?? ""),
+        editor: "jupyter",
+        segment: source,
+        surface_visible: true,
+        details: {
+          paint_observer: "state_update_next_animation_frame",
+        },
+      });
+    });
   };
 
   private rememberIgnoredLiveRunId = (runId: string) => {
@@ -1255,6 +1386,9 @@ export class JupyterActions extends JupyterActions0 {
   };
 
   protected init2(): void {
+    if (this.isClosed() || this.syncdb == null || this.store == null) {
+      return;
+    }
     this.noteOpenInitPhase("init2.start");
     this.initReconnectResource();
     this.initProjectRuntimeWatcher();
@@ -1378,11 +1512,7 @@ export class JupyterActions extends JupyterActions0 {
       this.set_jupyter_kernels(); // must be after setting project_id above.
 
       // set codemirror editor options whenever account editor_settings change.
-      const account_store = this.redux.getStore("account") as any; // TODO: check if ever is undefined
-      this.account_change = this.account_change.bind(this);
-      account_store.on("change", this.account_change);
-      this.account_change_editor_settings =
-        account_store.get("editor_settings");
+      this.initAccountSettingsWatcher();
       this.workspaceRecordsChange = ((event: Event) => {
         const detail = (
           event as CustomEvent<{
@@ -1399,6 +1529,21 @@ export class JupyterActions extends JupyterActions0 {
         this.workspaceRecordsChange,
       );
     }
+  }
+
+  private initAccountSettingsWatcher(): void {
+    if (this.isClosed()) {
+      return;
+    }
+    const accountStore = this.redux?.getStore?.("account") as any;
+    if (accountStore == null) {
+      return;
+    }
+    this.account_change = this.account_change.bind(this);
+    this.account_change_editor_settings = subscribeAccountSettingsStore(
+      accountStore,
+      this.account_change,
+    );
   }
 
   initOpenLog = () => {
@@ -1538,6 +1683,7 @@ export class JupyterActions extends JupyterActions0 {
   public async close(): Promise<void> {
     try {
       if (this.isClosed()) return;
+      this.recordJupyterOpenIncomplete("editor_closed");
       this.reconnectResource?.close();
       this.reconnectResource = undefined;
       this.projectStore?.removeListener?.(
@@ -2766,7 +2912,7 @@ export class JupyterActions extends JupyterActions0 {
     let wroteFirstVisibleChange = false;
     const writeCell = (): boolean => {
       const { id, state, output, start, end, exec_count } = cell;
-      this.set_runtime_cell_state(id, { state, start, end });
+      this.set_local_runtime_cell_state(id, { state, start, end });
       const patch: { output?: any; exec_count?: number | null } = {};
       if (
         output != null ||
@@ -2858,7 +3004,11 @@ export class JupyterActions extends JupyterActions0 {
       if (state === "busy" || state === "run") {
         continue;
       }
-      this.set_runtime_cell_state(id, { state: "run", start: null, end: null });
+      this.set_local_runtime_cell_state(id, {
+        state: "run",
+        start: null,
+        end: null,
+      });
     }
   };
 
@@ -2871,7 +3021,10 @@ export class JupyterActions extends JupyterActions0 {
       if (cells.getIn([id, "state"]) !== "run") {
         continue;
       }
-      this.set_runtime_cell_state(id, { state: "done", end: Date.now() });
+      this.set_local_runtime_cell_state(id, {
+        state: "done",
+        end: Date.now(),
+      });
     }
   };
 
@@ -3085,6 +3238,8 @@ export class JupyterActions extends JupyterActions0 {
     let totalChunks = 0;
     let totalMesgs = 0;
     let runError: string | undefined;
+    let runAbortReason: string | undefined;
+    let runCompleted = false;
     const readyTimer = startUxTimer();
     const initialProjectState = this.getProjectRuntimeState();
     const readiness = classifyProjectReadinessUxSegment(
@@ -3096,6 +3251,13 @@ export class JupyterActions extends JupyterActions0 {
       this.runDebug("runCells.skip.read_only", { runId });
       return;
     }
+    if (ids.length) {
+      recordProductActivity({
+        event_name: "project_work",
+        project_id: this.project_id,
+        properties: { action_category: "jupyter_execute" },
+      });
+    }
     if (this.runningNow) {
       const runQueue = this.getMutableRunQueue();
       runQueue.push([ids, opts]);
@@ -3106,23 +3268,36 @@ export class JupyterActions extends JupyterActions0 {
       });
       return;
     }
+    const runUxTrace = new UxLatencyTrace({
+      event_type: "jupyter_run",
+      project_id: this.project_id,
+      source: "run_cells",
+      surface_visible: true,
+      stale_after_ms: 10 * 60_000,
+      sample_successes: true,
+    });
+    runUxTrace.mark("run_accepted", { cells_requested: ids.length });
     let client: null | JupyterClient = null;
     try {
       this.runningNow = true;
       this.runDebug("runCells.start", { runId });
       await this.waitUntilProjectIsRunning();
+      runUxTrace.mark("project_running");
       if (this.isClosed()) {
+        runAbortReason = "editor_closed_after_project_start";
         return;
       }
       const cells: InputCell[] = [];
       const kernel = await this.ensureKernelForRun(runId);
       if (!kernel) {
+        runAbortReason = "kernel_unavailable";
         this.runDebug("runCells.abort.no_kernel_ready", {
           runId,
           ids,
         });
         return;
       }
+      runUxTrace.mark("kernel_ready", { kernel });
 
       this.clearMoreOutput(ids);
       for (const id of ids) {
@@ -3148,7 +3323,10 @@ export class JupyterActions extends JupyterActions0 {
           continue;
         }
         if (!kernel) {
-          this.set_runtime_cell_state(id, { state: "done", end: Date.now() });
+          this.set_local_runtime_cell_state(id, {
+            state: "done",
+            end: Date.now(),
+          });
           this.runDebug("runCells.cell.skip.no_kernel", { runId, id });
           continue;
         }
@@ -3172,6 +3350,7 @@ export class JupyterActions extends JupyterActions0 {
         ids: cells.map((x) => x.id),
       });
       if (cells.length === 0) {
+        runAbortReason = "no_runnable_cells";
         this.runDebug("runCells.abort.no_runnable_cells", {
           runId,
           requestedIds: ids,
@@ -3186,6 +3365,8 @@ export class JupyterActions extends JupyterActions0 {
       const limit = opts.limit ?? this.getMessageLimit();
       client = await this.getJupyterClient();
       if (client == null || this.isClosed()) {
+        runAbortReason =
+          client == null ? "client_unavailable" : "editor_closed";
         this.runDebug("runCells.abort.no_client_or_closed", {
           runId,
           hasClient: client != null,
@@ -3205,6 +3386,7 @@ export class JupyterActions extends JupyterActions0 {
         },
       });
       runnerStartedAt = Date.now();
+      runUxTrace.mark("runner_started", { kernel });
       recordUxLatencyEvent({
         event_type: "project_ready",
         metric: "project_jupyter_ready",
@@ -3248,6 +3430,19 @@ export class JupyterActions extends JupyterActions0 {
           onFirstWrite: () => {
             if (firstWriteAt == null) {
               firstWriteAt = Date.now();
+              afterNextPaint(() => {
+                runUxTrace.record("jupyter_first_output_v2", {
+                  path_ext: filename_extension(this.path ?? ""),
+                  editor: "jupyter",
+                  segment: readiness.segment,
+                  surface_visible: true,
+                  details: {
+                    cells: cells.length,
+                    kernel,
+                    paint_observer: "state_update_next_animation_frame",
+                  },
+                });
+              });
             }
           },
         });
@@ -3381,6 +3576,7 @@ export class JupyterActions extends JupyterActions0 {
         chunkNo: totalChunks,
         totalMesgs,
       });
+      runCompleted = true;
       if (this.isClosed()) {
         return;
       }
@@ -3393,6 +3589,16 @@ export class JupyterActions extends JupyterActions0 {
       }, 1000);
     } catch (err) {
       runError = `${err}`;
+      runUxTrace.record("jupyter_run_failed_v2", {
+        path_ext: filename_extension(this.path ?? ""),
+        editor: "jupyter",
+        segment: readiness.segment,
+        surface_visible: true,
+        details: {
+          error_name: err instanceof Error ? err.name : "unknown",
+          runner_started: runnerStartedAt != null,
+        },
+      });
       this.runDebug("runCells.error", {
         runId,
         err: `${err}`,
@@ -3405,6 +3611,25 @@ export class JupyterActions extends JupyterActions0 {
         this.set_error(err);
       }
     } finally {
+      if (runError == null) {
+        const endpoint = runCompleted
+          ? "jupyter_run_complete_v2"
+          : runAbortReason === "no_runnable_cells"
+            ? "jupyter_run_noop_v2"
+            : "jupyter_run_incomplete_v2";
+        runUxTrace.record(endpoint, {
+          path_ext: filename_extension(this.path ?? ""),
+          editor: "jupyter",
+          segment: readiness.segment,
+          surface_visible: true,
+          details: {
+            reason: runCompleted ? "stream_complete" : runAbortReason,
+            cells: cellsPrepared,
+            runner_started: runnerStartedAt != null,
+            first_output: firstWriteAt != null,
+          },
+        });
+      }
       if (this.isClosed()) return;
       this.rememberIgnoredLiveRunId(runId);
       this.runningNow = false;
@@ -3776,12 +4001,34 @@ export class JupyterActions extends JupyterActions0 {
     this.syncdb.set_cursor_locs(locs, side_effect);
   };
 
-  signal = async (signal = "SIGINT"): Promise<void> => {
+  private sendKernelSignal = async (
+    signal = "SIGINT",
+  ): Promise<KernelSignalResult | undefined> => {
     const api = webapp_client.project_client.conatApi(this.project_id);
+    let result: KernelSignalResult | undefined;
     try {
-      await api.jupyter.signal({ path: this.path, signal });
+      result = await api.jupyter.signal({ path: this.path, signal });
     } catch {}
     this.clear_all_cell_run_state();
+    return result;
+  };
+
+  signal = async (signal = "SIGINT"): Promise<void> => {
+    await this.sendKernelSignal(signal);
+  };
+
+  private getAuthoritativeKernelStatus = async (): Promise<
+    KernelStatus | undefined
+  > => {
+    const api = webapp_client.project_client.conatApi(this.project_id);
+    try {
+      return await withTimeout(
+        api.jupyter.getKernelStatus({ path: this.path }),
+        2_000,
+      );
+    } catch {
+      return undefined;
+    }
   };
 
   // Kill the running kernel and does NOT start it up again.
@@ -3791,19 +4038,60 @@ export class JupyterActions extends JupyterActions0 {
       delete this.restartKernelOnClose;
     }
     this.clear_all_cell_run_state();
-    await this.signal("SIGKILL");
+    const signalResult = await this.sendKernelSignal("SIGKILL");
     // Wait a little, since SIGKILL has to really happen on backend,
     // and server has to respond and change state.
     const not_running = (): boolean => {
       if (this._state === "closed") return true;
       return this.get_runtime_setting("backend_state") != "running";
     };
+    let nextAuthoritativeCheck = Date.now() + 1_000;
+    let authoritativeCheckDelay = 1_000;
     try {
-      await this.syncdb.wait(not_running, 30);
+      await until(
+        async () => {
+          if (not_running()) {
+            return true;
+          }
+          if (Date.now() < nextAuthoritativeCheck) {
+            return false;
+          }
+          const status = await this.getAuthoritativeKernelStatus();
+          if (
+            isKernelStopConfirmed({
+              status,
+              targetIdentity: signalResult?.identity,
+            })
+          ) {
+            return true;
+          }
+          authoritativeCheckDelay = Math.min(
+            authoritativeCheckDelay * 2,
+            5_000,
+          );
+          nextAuthoritativeCheck = Date.now() + authoritativeCheckDelay;
+          return false;
+        },
+        { start: 250, decay: 1, min: 250, max: 250, timeout: 30_000 },
+      );
       // worked -- and also no need to show "kernel got killed" message since this was intentional.
       this.set_error("");
     } catch (err) {
-      console.warn("Jupyter kernel stop was not confirmed in time", err);
+      const status = await this.getAuthoritativeKernelStatus();
+      if (
+        isKernelStopConfirmed({
+          status,
+          targetIdentity: signalResult?.identity,
+        })
+      ) {
+        this.set_error("");
+        return;
+      }
+      console.warn("Jupyter kernel stop was not confirmed in time", {
+        err,
+        status,
+        targetIdentity: signalResult?.identity,
+      });
       this.set_error("");
       alert_message({
         type: "warning",

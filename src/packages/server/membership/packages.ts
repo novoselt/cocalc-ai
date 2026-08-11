@@ -120,10 +120,23 @@ interface RawSiteLicenseTerms {
   name?: string | null;
   organization_name?: string | null;
   owner_account_id?: string | null;
+  allowed_domains?: string[] | null;
   custom_terms_url?: string | null;
   custom_policy_url?: string | null;
   terms_version_label?: string | null;
 }
+
+export type SiteLicensePoolDomainPolicy = {
+  site_license_id?: string;
+  license_domains: string[];
+  pool_domains: string[];
+  effective_domains: string[];
+};
+
+export type SiteLicensePoolEmailEligibility = SiteLicensePoolDomainPolicy & {
+  matched_email_address?: string;
+  action: "claim" | "request" | "ineligible";
+};
 
 const MEMBERSHIP_PACKAGE_KINDS = new Set<MembershipPackageKind>([
   "course",
@@ -440,6 +453,25 @@ function normalizeSitePackageDomains(allowed_domains?: string[]): string[] {
   ).sort();
 }
 
+export function getEffectiveSiteLicensePoolDomains({
+  license_domains,
+  pool_domains,
+}: {
+  license_domains?: string[] | null;
+  pool_domains?: string[] | null;
+}): string[] {
+  return normalizeSitePackageDomains([
+    ...(license_domains ?? []),
+    ...(pool_domains ?? []),
+  ]);
+}
+
+export function getSiteLicensePoolDomains(
+  metadata?: Record<string, unknown> | null,
+): string[] {
+  return normalizeSitePackageDomains(getPackageDomains(metadata));
+}
+
 function sitePackageDomainsOverlap(left: string, right: string): boolean {
   return (
     left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`)
@@ -550,12 +582,15 @@ export async function assertNoActiveSiteLicenseDomainOverlap({
 
 function getInstitutionalClaimScopeKey(
   metadata?: Record<string, unknown> | null,
+  effective_domains?: string[],
 ): string | undefined {
   const explicit = `${metadata?.claim_scope_key ?? ""}`.trim().toLowerCase();
   if (explicit) {
     return explicit;
   }
-  const domains = Array.from(new Set(getPackageDomains(metadata))).sort();
+  const domains = Array.from(
+    new Set(effective_domains ?? getPackageDomains(metadata)),
+  ).sort();
   if (domains.length === 0) {
     return;
   }
@@ -754,12 +789,85 @@ async function getSiteLicenseTermsForPackage({
   }
   const { rows } = await getQueryClient(client).query<RawSiteLicenseTerms>(
     `SELECT id, name, organization_name, owner_account_id,
-            custom_terms_url, custom_policy_url, terms_version_label
+            allowed_domains, custom_terms_url, custom_policy_url,
+            terms_version_label
        FROM site_licenses
        WHERE id=$1`,
     [siteLicenseId],
   );
   return rows[0] ?? {};
+}
+
+async function resolveSiteLicensePoolEmailEligibilityForPackage({
+  pkg,
+  verified_email_address,
+  client,
+}: {
+  pkg: MembershipPackageRecord;
+  verified_email_address?: string | null;
+  client?: PoolClient;
+}): Promise<SiteLicensePoolEmailEligibility & { terms: RawSiteLicenseTerms }> {
+  if (pkg.kind !== "site") {
+    throw Error("site-license pool not found");
+  }
+  const terms = await getSiteLicenseTermsForPackage({ pkg, client });
+  const license_domains = normalizeSitePackageDomains(
+    terms.allowed_domains ?? [],
+  );
+  const pool_domains = getSiteLicensePoolDomains(pkg.metadata);
+  const effective_domains = getEffectiveSiteLicensePoolDomains({
+    license_domains,
+    pool_domains,
+  });
+  const verificationPolicy = `${
+    pkg.metadata?.verification_policy ?? "email-domain"
+  }`;
+  const emailAddress = verified_email_address
+    ? normalizeEmailAddress(verified_email_address)
+    : undefined;
+  const emailDomain = emailAddress?.split("@")[1] ?? "";
+  const matched_email_address =
+    verificationPolicy !== "external-claim" &&
+    emailAddress != null &&
+    effective_domains.includes(emailDomain)
+      ? emailAddress
+      : undefined;
+  return {
+    site_license_id: terms.id ?? getSiteLicenseId(pkg.metadata),
+    license_domains,
+    pool_domains,
+    effective_domains,
+    matched_email_address,
+    action:
+      matched_email_address == null
+        ? "ineligible"
+        : packageRequiresApproval(pkg)
+          ? "request"
+          : "claim",
+    terms,
+  };
+}
+
+export async function resolveSiteLicensePoolEmailEligibility({
+  package_id,
+  verified_email_address,
+  client,
+}: {
+  package_id: string;
+  verified_email_address?: string | null;
+  client?: PoolClient;
+}): Promise<SiteLicensePoolEmailEligibility> {
+  const pkg = await getMembershipPackage({ package_id, client });
+  if (pkg == null || pkg.kind !== "site") {
+    throw Error("site-license pool not found");
+  }
+  const { terms: _terms, ...eligibility } =
+    await resolveSiteLicensePoolEmailEligibilityForPackage({
+      pkg,
+      verified_email_address,
+      client,
+    });
+  return eligibility;
 }
 
 function requiresTermsAcceptance(terms: RawSiteLicenseTerms): boolean {
@@ -835,9 +943,11 @@ function getSiteLicenseAffiliationMetadata({
 function getInstitutionalClaimDescriptorForEmail({
   pkg,
   matched_email_address,
+  effective_domains,
 }: {
   pkg: MembershipPackageRecord;
   matched_email_address: string;
+  effective_domains?: string[];
 }): InstitutionalClaimDescriptor | undefined {
   if (pkg.kind !== "site") {
     return;
@@ -846,7 +956,10 @@ function getInstitutionalClaimDescriptorForEmail({
   if (!normalizedEmail) {
     return;
   }
-  const scope_key = getInstitutionalClaimScopeKey(pkg.metadata);
+  const scope_key = getInstitutionalClaimScopeKey(
+    pkg.metadata,
+    effective_domains,
+  );
   if (!scope_key) {
     return;
   }
@@ -2582,17 +2695,21 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
       available_seat_count > 0 &&
       pkg.kind === "site"
     ) {
-      const allowedDomains = new Set(getPackageDomains(pkg.metadata));
-      if (allowedDomains.size === 0) {
+      const eligibility =
+        await resolveSiteLicensePoolEmailEligibilityForPackage({
+          pkg,
+          verified_email_address: verifiedEmailAddresses[0],
+          client,
+        });
+      if (eligibility.matched_email_address == null) {
         continue;
       }
-      const matchedEmailAddress = verifiedEmailAddresses.find((email) =>
-        allowedDomains.has(email.split("@")[1] ?? ""),
-      );
+      const matchedEmailAddress = eligibility.matched_email_address;
       if (matchedEmailAddress) {
         const claimDescriptor = getInstitutionalClaimDescriptorForEmail({
           pkg,
           matched_email_address: matchedEmailAddress,
+          effective_domains: eligibility.effective_domains,
         });
         const claimIdentityKey =
           claimDescriptor == null
@@ -2625,7 +2742,7 @@ export async function listLocalClaimableMembershipPackagesForVerifiedEmails({
                 client,
               })
             : undefined;
-        const terms = await getSiteLicenseTermsForPackage({ pkg, client });
+        const terms = eligibility.terms;
         claimables.set(pkg.id, {
           package_id: pkg.id,
           kind: pkg.kind,
@@ -2840,10 +2957,20 @@ export async function claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay({
         if (packageRequiresApproval(pkg)) {
           throw Error("this site-license pool requires manager approval");
         }
-        const terms = await getSiteLicenseTermsForPackage({
-          pkg,
-          client: dbClient,
-        });
+        const siteLicenseEligibility =
+          pkg.kind === "site"
+            ? await resolveSiteLicensePoolEmailEligibilityForPackage({
+                pkg,
+                verified_email_address: verified_email_addresses[0],
+                client: dbClient,
+              })
+            : undefined;
+        const terms =
+          siteLicenseEligibility?.terms ??
+          (await getSiteLicenseTermsForPackage({
+            pkg,
+            client: dbClient,
+          }));
         assertTermsAccepted({ terms, accepted_terms });
         const verifiedEmailAddresses = Array.from(
           new Set(
@@ -3021,16 +3148,15 @@ export async function claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay({
         if (pkg.kind !== "site") {
           throw Error("no claimable seat found for this account");
         }
-        const allowedDomains = new Set(getPackageDomains(pkg.metadata));
-        const matchedEmailAddress = verifiedEmailAddresses.find((email) =>
-          allowedDomains.has(email.split("@")[1] ?? ""),
-        );
+        const matchedEmailAddress =
+          siteLicenseEligibility?.matched_email_address;
         if (!matchedEmailAddress) {
           throw Error("no verified email matches this package");
         }
         const institutionalClaim = getInstitutionalClaimDescriptorForEmail({
           pkg,
           matched_email_address: matchedEmailAddress,
+          effective_domains: siteLicenseEligibility.effective_domains,
         });
         if (institutionalClaim == null) {
           throw Error("no claimable seat found for this account");

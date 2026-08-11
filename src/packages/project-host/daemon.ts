@@ -67,6 +67,8 @@ const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 const healthFailureStreaks = new Map<string, number>();
 const DEFAULT_BTRFS_MOUNTPOINT = "/mnt/cocalc";
+const DAEMON_CONTROL_LOCK_DIR = "project-host-daemon-control-js.lock";
+const DAEMON_CONTROL_LOCK_POLL_MS = 50;
 
 function timestampedConsole(
   method: "log" | "warn" | "error",
@@ -1112,6 +1114,62 @@ function sleepMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function withDaemonControlLock<T>(index: number, fn: () => T): T {
+  const { dataDir } = resolveEnv(index);
+  const lockDir = path.join(dataDir, "tmp", DAEMON_CONTROL_LOCK_DIR);
+  const ownerPath = path.join(lockDir, "owner.json");
+  const waitMs =
+    getPositiveIntEnv("COCALC_PROJECT_HOST_CONTROL_LOCK_WAIT_SECONDS", 30) *
+    1_000;
+  const deadline = Date.now() + waitMs;
+  fs.mkdirSync(path.dirname(lockDir), { recursive: true, mode: 0o700 });
+
+  while (true) {
+    try {
+      fs.mkdirSync(lockDir, { mode: 0o700 });
+      fs.writeFileSync(
+        ownerPath,
+        JSON.stringify({
+          pid: process.pid,
+          acquired_at: new Date().toISOString(),
+        }),
+        { mode: 0o600 },
+      );
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw err;
+      }
+      let ownerPid: number | undefined;
+      try {
+        ownerPid = Number(JSON.parse(fs.readFileSync(ownerPath, "utf8")).pid);
+      } catch {
+        // The owner may still be writing its metadata.
+      }
+      const staleOwner =
+        ownerPid != null && Number.isInteger(ownerPid) && !isRunning(ownerPid);
+      const staleUnownedLock =
+        ownerPid == null && (pidFileAgeMs(lockDir) ?? 0) > waitMs;
+      if (staleOwner || staleUnownedLock) {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `timed out waiting for project-host daemon control lock${ownerPid ? ` held by pid ${ownerPid}` : ""}`,
+        );
+      }
+      sleepMs(DAEMON_CONTROL_LOCK_POLL_MS);
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
 function pidFileAgeMs(pidPath: string): number | undefined {
   try {
     const stats = fs.statSync(pidPath);
@@ -1252,6 +1310,43 @@ function projectHostRuntimeRoot(env: Record<string, string>): string {
     return fs.realpathSync(projectHostCurrentLinkPath(env));
   } catch {
     return packageRoot();
+  }
+}
+
+function projectHostRuntimeRootForVersion(
+  env: Record<string, string>,
+  desiredVersion?: string,
+): string {
+  const version = `${desiredVersion ?? ""}`.trim();
+  if (!version) {
+    return projectHostRuntimeRoot(env);
+  }
+  if (
+    path.basename(version) !== version ||
+    version === "." ||
+    version === ".."
+  ) {
+    throw new Error(`invalid project-host runtime version: ${version}`);
+  }
+  let currentRoot: string;
+  try {
+    currentRoot = fs.realpathSync(projectHostCurrentLinkPath(env));
+  } catch {
+    throw new Error(
+      `cannot resolve current project-host runtime while selecting ${version}`,
+    );
+  }
+  const versionRoot = path.join(path.dirname(currentRoot), version);
+  try {
+    const resolved = fs.realpathSync(versionRoot);
+    if (!fs.statSync(resolved).isDirectory()) {
+      throw new Error("not a directory");
+    }
+    return resolved;
+  } catch {
+    throw new Error(
+      `project-host runtime version is not installed: ${version}`,
+    );
   }
 }
 
@@ -1676,6 +1771,7 @@ function startManagedConatRouter(opts: {
   routerIngressPort?: number;
   projectHostHost: string;
   projectHostPort?: number;
+  runtimeRoot?: string;
 }): void {
   const {
     dataDir,
@@ -1723,7 +1819,7 @@ function startManagedConatRouter(opts: {
   } catch {
     // best effort
   }
-  const root = projectHostRuntimeRoot(env);
+  const root = opts.runtimeRoot ?? projectHostRuntimeRoot(env);
   const { command, args } = resolveExec(root);
   const childEnv = withoutHostAgentEnv(env);
   const child = processRuntime.spawn(command, args, {
@@ -2010,6 +2106,8 @@ function startManagedConatPersist(opts: {
   persistLogPath: string;
   persistHealthHost: string;
   persistHealthPort?: number;
+  runtimeRoot?: string;
+  runtimeVersion?: string;
 }): void {
   const {
     dataDir,
@@ -2059,8 +2157,9 @@ function startManagedConatPersist(opts: {
   } catch {
     // best effort
   }
-  const root = projectHostRuntimeRoot(env);
-  const selectedVersion = selectedProjectHostVersion(env);
+  const root = opts.runtimeRoot ?? projectHostRuntimeRoot(env);
+  const selectedVersion =
+    opts.runtimeVersion ?? selectedProjectHostVersion(env);
   const persistExec = resolveExec(root);
   const { command, args, supervised } = resolveSupervisedProjectHostExec({
     root,
@@ -2339,7 +2438,10 @@ function stopManagedConatPersist({
   );
 }
 
-export function restartManagedLocalConatRouter(index = 0): void {
+export function restartManagedLocalConatRouter(
+  index = 0,
+  options?: { desiredVersion?: string },
+): void {
   const {
     env,
     dataDir,
@@ -2358,6 +2460,10 @@ export function restartManagedLocalConatRouter(index = 0): void {
       "project-host conat router is not using managed local mode",
     );
   }
+  const runtimeRoot = projectHostRuntimeRootForVersion(
+    env,
+    options?.desiredVersion,
+  );
   stopManagedConatRouter({
     dataDir,
     routerPidPath,
@@ -2374,10 +2480,14 @@ export function restartManagedLocalConatRouter(index = 0): void {
     routerIngressPort,
     projectHostHost,
     projectHostPort,
+    runtimeRoot,
   });
 }
 
-export function restartManagedLocalConatPersist(index = 0): void {
+export function restartManagedLocalConatPersist(
+  index = 0,
+  options?: { desiredVersion?: string },
+): void {
   const {
     env,
     dataDir,
@@ -2392,6 +2502,10 @@ export function restartManagedLocalConatPersist(index = 0): void {
       "project-host conat persist is not using managed local mode",
     );
   }
+  const runtimeRoot = projectHostRuntimeRootForVersion(
+    env,
+    options?.desiredVersion,
+  );
   stopManagedConatPersist({
     dataDir,
     persistPidPath,
@@ -2404,6 +2518,8 @@ export function restartManagedLocalConatPersist(index = 0): void {
     persistLogPath,
     persistHealthHost,
     persistHealthPort,
+    runtimeRoot,
+    runtimeVersion: options?.desiredVersion,
   });
 }
 
@@ -2433,8 +2549,10 @@ export function inspectProjectHostRuntime(
 }
 
 export function restartProjectHost(index = 0, options?: StopOptions): void {
-  stopDaemonWithOptions(index, options);
-  startDaemon(index);
+  withDaemonControlLock(index, () => {
+    stopDaemonWithOptions(index, options);
+    startDaemon(index);
+  });
 }
 
 export function startDaemon(index = 0): void {
@@ -2587,7 +2705,7 @@ export function startDaemon(index = 0): void {
 }
 
 export function ensureDaemon(index = 0, options?: EnsureOptions): void {
-  ensureDaemonWithOptions(index, options);
+  withDaemonControlLock(index, () => ensureDaemonWithOptions(index, options));
 }
 
 function ensureDaemonWithOptions(index = 0, options?: EnsureOptions): void {
@@ -2758,6 +2876,7 @@ function ensureDaemonWithOptions(index = 0, options?: EnsureOptions): void {
     resetHealthFailureStreak(dataDir, "project-host");
     stopDaemonWithOptions(index, {
       preserveManagedAuxiliaryDaemons: options?.preserveManagedAuxiliaryDaemons,
+      preserveAcpWorkers: options?.preserveAcpWorkers !== false,
     });
     startDaemon(index);
     return;
@@ -2791,7 +2910,7 @@ function ensureDaemonWithOptions(index = 0, options?: EnsureOptions): void {
       !managedRouter || !options?.preserveManagedAuxiliaryDaemons,
     includeManagedPersist:
       !managedPersist || !options?.preserveManagedAuxiliaryDaemons,
-    includeAcpWorkers: !options?.preserveAcpWorkers,
+    includeAcpWorkers: options?.preserveAcpWorkers === false,
   });
   if (cleaned > 0) {
     console.warn(
@@ -3169,6 +3288,7 @@ export const __test__ = {
   matchingProjectHostPids,
   matchingSshpiperdPids,
   parsePort,
+  projectHostRuntimeRootForVersion,
   processRuntime,
   resolveSupervisedProjectHostExec,
   resetHealthFailureStreaks: () => healthFailureStreaks.clear(),

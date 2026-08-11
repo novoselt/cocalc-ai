@@ -717,9 +717,8 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
         }
         read_only={read_only}
         read_only_reload={read_only_preview}
-        is_connecting={
-          rtc_status === "loading" || rtc_status === "reconnecting"
-        }
+        is_loading={rtc_status === "loading"}
+        is_connecting={rtc_status === "reconnecting"}
         is_sync_error={rtc_status === "error"}
         is_saving={is_saving}
         no_labels={noLabel}

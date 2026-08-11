@@ -99,7 +99,8 @@ describe("changed-only SQLite mirror", () => {
     await refresh();
     const catalogPath = join(mirrorDir, ".cocalc-sqlite-mirror.json");
     const before = await readFile(catalogPath, "utf8");
-    await writeFile(database, "v2");
+    // Changing the size avoids relying on sub-second mtime precision in CI.
+    await writeFile(database, "v2-longer");
 
     await expect(
       refreshSqliteMirror({

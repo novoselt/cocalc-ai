@@ -82,9 +82,12 @@ import { User } from "@cocalc/frontend/users/user";
 import {
   AGENT_PANEL_INLINE_CHAT_INSTANCE_KEY as AGENTS_INLINE_CHAT_INSTANCE_KEY,
   AGENT_PANEL_PIN_CHAT_INSTANCE_KEY as AGENTS_PIN_CHAT_INSTANCE_KEY,
+  AGENT_PANEL_LAUNCH_EVENT,
   AGENT_PANEL_REVEAL_EVENT,
+  loadPendingAgentSessionLaunch,
   loadOpenedAgentSessionSelection,
   saveOpenedAgentSessionSelection,
+  type AgentPanelLaunchState,
   type AgentPanelRevealDetail,
   type OpenedAgentSessionSelection,
 } from "@cocalc/frontend/project/page/agent-panel-state";
@@ -263,6 +266,37 @@ interface AgentsPanelProps {
   layout?: "flyout" | "page";
 }
 
+function PendingAgentLaunch({
+  launch,
+}: {
+  launch: AgentPanelLaunchState;
+}): React.JSX.Element {
+  return (
+    <div
+      style={{
+        alignItems: "center",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        justifyContent: "center",
+        minHeight: 220,
+        padding: 24,
+        textAlign: "center",
+      }}
+    >
+      <Loading theme="medium" />
+      <div>
+        <Typography.Text strong style={{ display: "block" }}>
+          {launch.title}
+        </Typography.Text>
+        <Typography.Text type="secondary">
+          Preparing your agent session…
+        </Typography.Text>
+      </div>
+    </div>
+  );
+}
+
 export function AgentsPanel({ project_id, layout = "page" }: AgentsPanelProps) {
   const { active_project_tab, workspaces } = useProjectContext();
   const actions = useActions({ project_id }) as ProjectActions;
@@ -285,6 +319,10 @@ export function AgentsPanel({ project_id, layout = "page" }: AgentsPanelProps) {
   );
   const [error, setError] = useState<string>("");
   const [creatingAgent, setCreatingAgent] = useState(false);
+  const [pendingLaunch, setPendingLaunch] =
+    useState<AgentPanelLaunchState | null>(() =>
+      loadPendingAgentSessionLaunch(project_id),
+    );
   const [automationControlBusyKey, setAutomationControlBusyKey] =
     useState<string>("");
   const [openedSelection, setOpenedSelection] =
@@ -625,9 +663,15 @@ export function AgentsPanel({ project_id, layout = "page" }: AgentsPanelProps) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const onLaunch = (evt: Event) => {
+      const detail = (evt as CustomEvent<AgentPanelLaunchState | null>).detail;
+      if (detail != null && detail.projectId !== project_id) return;
+      setPendingLaunch(detail ?? loadPendingAgentSessionLaunch(project_id));
+    };
     const onReveal = (evt: Event) => {
       const detail = (evt as CustomEvent<AgentPanelRevealDetail>).detail;
       if (!detail || detail.projectId !== project_id) return;
+      setPendingLaunch(null);
       const selection = {
         session_id: `${detail.session.session_id ?? ""}`.trim(),
         chat_path: `${detail.session.chat_path ?? ""}`.trim(),
@@ -648,10 +692,18 @@ export function AgentsPanel({ project_id, layout = "page" }: AgentsPanelProps) {
       setInlineError("");
     };
     window.addEventListener(
+      AGENT_PANEL_LAUNCH_EVENT,
+      onLaunch as EventListener,
+    );
+    window.addEventListener(
       AGENT_PANEL_REVEAL_EVENT,
       onReveal as EventListener,
     );
     return () => {
+      window.removeEventListener(
+        AGENT_PANEL_LAUNCH_EVENT,
+        onLaunch as EventListener,
+      );
       window.removeEventListener(
         AGENT_PANEL_REVEAL_EVENT,
         onReveal as EventListener,
@@ -2009,7 +2061,14 @@ export function AgentsPanel({ project_id, layout = "page" }: AgentsPanelProps) {
   }
 
   if (loading) {
+    if (pendingLaunch) {
+      return <PendingAgentLaunch launch={pendingLaunch} />;
+    }
     return <Loading theme="medium" />;
+  }
+
+  if (pendingLaunch && !inlineSession) {
+    return <PendingAgentLaunch launch={pendingLaunch} />;
   }
 
   if (inlineSession) {

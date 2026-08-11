@@ -40,11 +40,11 @@ export const HOSTS_ENTRIES: DocsEntry[] = [
       "/public/docs/exam-scratchpad-301d1929.webp",
       "A locked computational exam project with a notebook, timer, and disabled Internet access",
     ),
-    lastReviewed: "2026-07-31",
+    lastReviewed: "2026-08-07",
     slug: "hosts/exam-scratchpads",
     status: "ready",
     summary:
-      "Run ephemeral, network-isolated notebook scratchpads for in-person exams on an on-demand private host.",
+      "Run ephemeral, network-isolated notebook scratchpads for in-person exams on a private project host.",
     title: "Use an exam scratchpad host",
   },
   {

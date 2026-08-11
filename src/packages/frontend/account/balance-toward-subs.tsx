@@ -11,11 +11,13 @@ const { Text } = Typography;
 
 interface UseBalanceForRenewalsProps {
   defaultValue: boolean;
+  enabledDescription?: string;
   settingKey: string;
 }
 
 export function UseBalanceForRenewals({
   defaultValue,
+  enabledDescription = "Renewals use your account balance only when it covers the full renewal amount; otherwise CoCalc charges your payment method in full.",
   settingKey,
 }: UseBalanceForRenewalsProps) {
   const storedSetting = useTypedRedux("account", "other_settings")?.get(
@@ -37,9 +39,7 @@ export function UseBalanceForRenewals({
         <Text>Use account balance for renewals</Text>
       </Space>
       <Text>
-        {checked
-          ? "Renewals use your account balance only when it covers the full renewal amount; otherwise CoCalc charges your payment method in full."
-          : "Renewals charge your payment method."}
+        {checked ? enabledDescription : "Renewals charge your payment method."}
       </Text>
     </Space>
   );
@@ -49,6 +49,7 @@ export function UseBalance() {
   return (
     <UseBalanceForRenewals
       defaultValue={USE_BALANCE_TOWARD_SUBSCRIPTIONS_DEFAULT}
+      enabledDescription="Renewals use your available account balance first and charge your payment method only for the remainder. If you have an open pay-as-you-go purchase, CoCalc preserves your balance and charges the payment method in full unless the balance covers the entire renewal."
       settingKey={USE_BALANCE_TOWARD_SUBSCRIPTIONS}
     />
   );

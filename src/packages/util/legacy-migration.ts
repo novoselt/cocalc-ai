@@ -15,6 +15,17 @@ export const LEGACY_RESTORE_ERROR_LABEL = "legacy.cocalc.com/restore_error";
 
 export const LEGACY_RESTORE_FILE_FAILURE_REPORT_LIMIT = 50;
 
+export function decodeLegacyPublicPathDescriptionEscapes(
+  value: string,
+): string {
+  return value
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n\\n/g, "\n\n")
+    .replace(/\\n(?![A-Za-z])/g, "\n")
+    .replace(/\\r(?![A-Za-z])/g, "\n")
+    .replace(/\\t(?![A-Za-z])/g, "\t");
+}
+
 function cleanTarPath(path: string): string {
   return path.replace(/^\.\//, "").trim();
 }

@@ -298,6 +298,7 @@ export interface StorageOptions {
 
 export const EPHEMERAL_SQLITE_CACHE_KIB_ENV =
   "CONAT_PERSIST_EPHEMERAL_SQLITE_CACHE_KIB";
+export const DEFAULT_EPHEMERAL_SQLITE_CACHE_KIB = 256;
 
 type StreamStorageKind = "ephemeral" | "disk";
 
@@ -323,7 +324,39 @@ const openCacheSizes = {
   disk: new Map<number, number>(),
 };
 
-const openStreams = new Map<PersistentStream, StreamStorageKind>();
+type OpenStreamDiagnostic = {
+  kind: StreamStorageKind;
+  family: string;
+  openedAt: number;
+};
+
+const openStreams = new Map<PersistentStream, OpenStreamDiagnostic>();
+
+function streamNameFamily(name: string): string {
+  const first = name.split("/")[0] ?? "";
+  if (/^lro\./.test(first)) return "lro";
+  if (first === "account-feed") return "account-feed";
+  if (/^acp-(?:live|preview)-log(?:$|:)/.test(first)) return "acp-log";
+  if (/^__dko__/.test(first)) return "dko";
+  if (/^__/.test(first)) return "internal";
+  return "other";
+}
+
+export function classifyPersistentStreamPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const scoped = normalized.match(
+    /(?:^|\/)(accounts|projects|hosts)\/[^/]+\/(.+)$/,
+  );
+  if (scoped) {
+    const scope = scoped[1].slice(0, -1);
+    return `${scope}:${streamNameFamily(scoped[2])}`;
+  }
+  const hub = normalized.match(/(?:^|\/)hub\/(.+)$/);
+  if (hub) {
+    return `hub:${streamNameFamily(hub[1])}`;
+  }
+  return `other:${streamNameFamily(normalized.split("/").at(-1) ?? "")}`;
+}
 
 export function resolveEphemeralSqliteCacheKiB(
   env: NodeJS.ProcessEnv = process.env,
@@ -342,6 +375,14 @@ export function resolveEphemeralSqliteCacheKiB(
     );
   }
   return value;
+}
+
+export function effectiveEphemeralSqliteCacheKiB(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return (
+    resolveEphemeralSqliteCacheKiB(env) ?? DEFAULT_EPHEMERAL_SQLITE_CACHE_KIB
+  );
 }
 
 function updateCacheSizeCount(
@@ -384,6 +425,39 @@ function summarizeCacheSizes(kind: StreamStorageKind): CacheSizeSummary {
   return { streams, min_kib, max_kib };
 }
 
+function summarizeOpenStreams(now: number) {
+  const byFamily: Record<string, number> = {};
+  const byAge = {
+    under_1m: 0,
+    from_1m_to_5m: 0,
+    from_5m_to_15m: 0,
+    from_15m_to_1h: 0,
+    from_1h_to_6h: 0,
+    over_6h: 0,
+  };
+  let oldestAgeSeconds = 0;
+  for (const { family, openedAt } of openStreams.values()) {
+    byFamily[family] = (byFamily[family] ?? 0) + 1;
+    const ageMs = Math.max(0, now - openedAt);
+    oldestAgeSeconds = Math.max(oldestAgeSeconds, Math.floor(ageMs / 1000));
+    if (ageMs < 60_000) byAge.under_1m += 1;
+    else if (ageMs < 5 * 60_000) byAge.from_1m_to_5m += 1;
+    else if (ageMs < 15 * 60_000) byAge.from_5m_to_15m += 1;
+    else if (ageMs < 60 * 60_000) byAge.from_15m_to_1h += 1;
+    else if (ageMs < 6 * 60 * 60_000) byAge.from_1h_to_6h += 1;
+    else byAge.over_6h += 1;
+  }
+  return {
+    by_family: Object.fromEntries(
+      Object.entries(byFamily).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+    by_age: byAge,
+    oldest_age_seconds: oldestAgeSeconds,
+  };
+}
+
 // persistence for stream of messages with subject
 export class PersistentStream extends EventEmitter {
   private readonly options: StorageOptions;
@@ -420,7 +494,7 @@ export class PersistentStream extends EventEmitter {
       this.initArchive();
       this.db = createDatabase(location);
       const configuredCacheKiB = this.options.ephemeral
-        ? resolveEphemeralSqliteCacheKiB()
+        ? effectiveEphemeralSqliteCacheKiB()
         : undefined;
       if (configuredCacheKiB != null) {
         this.db.exec(`PRAGMA cache_size=-${configuredCacheKiB}`);
@@ -429,7 +503,11 @@ export class PersistentStream extends EventEmitter {
       this.initSchema();
       this.maintenanceDirty = false;
       recordStreamOpen(this.storageKind, this.sqliteCacheKiB);
-      openStreams.set(this, this.storageKind);
+      openStreams.set(this, {
+        kind: this.storageKind,
+        family: classifyPersistentStreamPath(this.options.path),
+        openedAt: Date.now(),
+      });
       this.diagnosticsRegistered = true;
     } catch (err) {
       openPaths.delete(options.path);
@@ -1595,8 +1673,11 @@ export function getPersistentStreamDiagnostics() {
     sqlite_cache: {
       ephemeral: summarizeCacheSizes("ephemeral"),
       disk: summarizeCacheSizes("disk"),
+      ephemeral_default_kib: DEFAULT_EPHEMERAL_SQLITE_CACHE_KIB,
+      ephemeral_effective_kib: effectiveEphemeralSqliteCacheKiB(),
       ephemeral_override_kib: resolveEphemeralSqliteCacheKiB(),
     },
+    open_stream_inventory: summarizeOpenStreams(Date.now()),
   };
 }
 
@@ -1635,7 +1716,7 @@ export function getPersistentStreamSqliteDiagnostics() {
     disk: emptySqliteFootprintSummary(),
     duration_ms: 0,
   };
-  for (const [stream, kind] of openStreams) {
+  for (const [stream, { kind }] of openStreams) {
     try {
       const footprint = stream.diagnosticSqliteFootprint();
       const summary = result[footprint.kind];

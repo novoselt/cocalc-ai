@@ -1509,6 +1509,52 @@ test("host get can return a deleted host via the admin list surface", async () =
   assert.equal(capture.data.bay_id, "bay-0");
 });
 
+test("host get route health uses the lightweight admin list surface", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const deps = makeDeps(capture, {
+    listHosts: async (_ctx, opts) => {
+      assert.equal(opts?.include_deleted, true);
+      assert.equal(opts?.admin_view, true);
+      assert.equal(opts?.route_health, true);
+      return [
+        {
+          id: "55555555-5555-4555-8555-555555555555",
+          name: "route-canary",
+          status: "running",
+          bay_id: "bay-0",
+          region: "us-west3",
+        },
+      ];
+    },
+    resolveHost: async () => {
+      throw new Error("resolveHost should not be called");
+    },
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "get",
+    "--route-health",
+    "55555555-5555-4555-8555-555555555555",
+  ]);
+
+  assert.equal(capture.data.name, "route-canary");
+  assert.deepEqual(capture.runtimeDeploymentStatusRequests, [
+    "55555555-5555-4555-8555-555555555555",
+  ]);
+});
+
 test("host get includes runtime summary in json output", async () => {
   const capture: Capture = {
     upgrades: [],

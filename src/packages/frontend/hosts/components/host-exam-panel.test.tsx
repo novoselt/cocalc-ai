@@ -19,6 +19,7 @@ const mockGetHostExamState = jest.fn(async () => ({ eligible: true }));
 const mockSetHostExamConfig = jest.fn();
 const mockCreateHostExamRun = jest.fn();
 const mockIncreaseHostExamCapacity = jest.fn();
+let mockRootfsCatalog = { images: [] as any[], loading: false };
 const mockRunFreshAuthAction = jest.fn(
   async (action: () => Promise<unknown>) => {
     await action();
@@ -32,7 +33,7 @@ jest.mock("@cocalc/frontend/docs/navigation", () => ({
 
 jest.mock("@cocalc/frontend/rootfs/manifest", () => ({
   managedRootfsCatalogUrl: () => "/rootfs/manifest.json",
-  useRootfsImages: () => ({ images: [], loading: false }),
+  useRootfsImages: () => mockRootfsCatalog,
 }));
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
@@ -86,6 +87,7 @@ describe("HostExamPanel", () => {
     mockSetHostExamConfig.mockReset();
     mockCreateHostExamRun.mockReset();
     mockIncreaseHostExamCapacity.mockReset();
+    mockRootfsCatalog = { images: [], loading: false };
     mockRunFreshAuthAction.mockReset();
     mockRunFreshAuthAction.mockImplementation(
       async (action: () => Promise<unknown>) => {
@@ -154,6 +156,28 @@ describe("HostExamPanel", () => {
     ]);
   });
 
+  it("includes managed catalog images that are not cached yet", () => {
+    expect(
+      examRootfsCatalogEntries({
+        cachedImages: [],
+        catalogImages: [
+          {
+            id: "sage",
+            label: "SageMath",
+            image: "cocalc.local/rootfs/sage",
+            description: "Computational mathematics",
+          },
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        id: "sage",
+        label: "SageMath",
+        image: "cocalc.local/rootfs/sage",
+      }),
+    ]);
+  });
+
   it("opens the exam scratchpad documentation entry", () => {
     render(
       <HostExamPanel
@@ -192,6 +216,81 @@ describe("HostExamPanel", () => {
     expect(
       screen.getByText(/For 100 simultaneous students.*54 GB RAM/),
     ).toBeInTheDocument();
+  });
+
+  it("warns without blocking when the exam host uses Spot capacity", () => {
+    render(
+      <HostExamPanel
+        host={
+          {
+            id: "host-1",
+            status: "running",
+            pricing_model: "spot",
+          } as any
+        }
+        rootfsImages={[]}
+      />,
+    );
+
+    expect(
+      screen.getByText("Spot capacity can be interrupted during an exam"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/use Standard\/on-demand capacity/i)).toBeVisible();
+  });
+
+  it("selects an uncached managed catalog image for preparation", async () => {
+    mockRootfsCatalog = {
+      loading: false,
+      images: [
+        {
+          id: "sage",
+          release_id: "release-sage",
+          label: "SageMath",
+          image: "cocalc.local/rootfs/sage",
+          tags: ["preset:standard"],
+        },
+        {
+          id: "teaching",
+          release_id: "release-teaching",
+          label: "Teaching Python",
+          image: "cocalc.local/rootfs/teaching",
+          tags: ["preset:teaching"],
+        },
+      ],
+    };
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      config: savedConfig,
+    });
+    mockCreateHostExamRun.mockResolvedValue({
+      eligible: true,
+      config: savedConfig,
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[]}
+      />,
+    );
+
+    expect(await screen.findByText("SageMath")).toBeVisible();
+    expect(screen.queryByText("Teaching Python")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Teaching" }));
+    expect(await screen.findByText("Teaching Python")).toBeVisible();
+    fireEvent.click(screen.getByText("Teaching Python"));
+
+    const prepare = screen.getByRole("button", {
+      name: "Prepare and test run",
+    });
+    await waitFor(() => expect(prepare).toBeEnabled());
+    fireEvent.click(prepare);
+    await waitFor(() =>
+      expect(mockCreateHostExamRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rootfs_image: "cocalc.local/rootfs/teaching",
+        }),
+      ),
+    );
   });
 
   it("only enables configuration saving after a field changes", async () => {
@@ -356,18 +455,18 @@ describe("HostExamPanel", () => {
     fireEvent.click(prepare);
 
     expect(
-      await screen.findByText(/Creating a smoke-test project/),
+      await screen.findByText(/creating a smoke-test project/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/This usually takes about one minute/),
-    ).toBeInTheDocument();
+      screen.getAllByText(/A first download may take several minutes/),
+    ).toHaveLength(2);
 
     await act(async () => {
       finishPreparation({ eligible: true, config: savedConfig });
     });
     await waitFor(() =>
       expect(
-        screen.queryByText(/Creating a smoke-test project/),
+        screen.queryByText(/creating a smoke-test project/i),
       ).not.toBeInTheDocument(),
     );
   });

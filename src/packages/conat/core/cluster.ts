@@ -7,6 +7,7 @@ const CREATE_LINK_TIMEOUT = 45_000;
 const INTEREST_SNAPSHOT_INTERVAL = 30_000;
 const MAX_RECENT_INTEREST_UPDATES = 100_000;
 const CLUSTER_INTEREST_RPC_TIMEOUT = 15_000;
+const INTEREST_CHANGE_WAIT_MS = 250;
 
 const logger = getLogger("conat:core:cluster");
 
@@ -128,9 +129,7 @@ export function replaceInterest(
   interest.deserialize(next.serialize());
 }
 
-export { type ClusterLink };
-
-class ClusterLink {
+export class ClusterLink {
   public interest: Interest = new Patterns();
   private state: "init" | "ready" | "closed" = "init";
   private clientStateChanged = Date.now(); // when client status last changed
@@ -451,16 +450,29 @@ class ClusterLink {
     }
     const start = Date.now();
     while (this.state != "closed" && !signal?.aborted) {
-      if (Date.now() - start >= timeout) {
+      const remaining = timeout - (Date.now() - start);
+      if (remaining <= 0) {
         throw Error("timeout");
       }
-      await this.interest.waitForChange();
+      try {
+        // The shared change waiter must be bounded: an idle link may never
+        // publish another update, even though this operation has a timeout.
+        await this.interest.waitForChange(
+          Math.min(INTEREST_CHANGE_WAIT_MS, remaining),
+        );
+      } catch {
+        // A slice timeout only wakes this loop to recheck its deadline and
+        // abort signal. An actual interest update is checked below.
+      }
       if ((this.state as any) == "closed" || signal?.aborted) {
         return false;
       }
       const hasMatch = this.interest.hasMatch(subject);
       if (hasMatch) {
         return true;
+      }
+      if (Date.now() - start >= timeout) {
+        throw Error("timeout");
       }
     }
 

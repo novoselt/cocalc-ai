@@ -37,6 +37,13 @@ import {
   enableManagedReactErrorHandling,
   reactRootErrorHandlers,
 } from "./react-error-reporting";
+import { configureUxLatency } from "@cocalc/frontend/monitoring/ux-latency";
+import {
+  markAppBootstrapPhase,
+  recordAppBootstrapFailed,
+} from "./bootstrap-ux-latency";
+
+markAppBootstrapPhase("render_module_evaluated");
 
 // App uses the context provided by Redux (for the locale, etc.) and Localize.
 function CocalcApp({ children }) {
@@ -54,6 +61,21 @@ function CocalcApp({ children }) {
   );
   const cookieBannerText = useTypedRedux("customize", "cookie_banner_text");
   const isLoggedIn = useTypedRedux("account", "is_logged_in");
+  const uxLatencyTelemetryEnabled = useTypedRedux(
+    "customize",
+    "ux_latency_telemetry_enabled",
+  );
+  const uxLatencySuccessSampleRate = useTypedRedux(
+    "customize",
+    "ux_latency_success_sample_rate",
+  );
+
+  useEffect(() => {
+    configureUxLatency({
+      telemetry_enabled: uxLatencyTelemetryEnabled,
+      success_sample_rate: uxLatencySuccessSampleRate,
+    });
+  }, [uxLatencySuccessSampleRate, uxLatencyTelemetryEnabled]);
 
   useEffect(() => {
     if (!customizeReady) return;
@@ -250,12 +272,24 @@ function Root({ Page }) {
 }
 
 export async function render(): Promise<void> {
+  markAppBootstrapPhase("render_called");
   finishedLoading(); // comment this out to leave the loading/startup banner visible so you can use the Chrome dev tools with it.
   const container = document.getElementById("cocalc-webapp-container");
   enableManagedReactErrorHandling();
   const root = createRoot(container!, reactRootErrorHandlers);
-  const { Page } = await import("./page");
+  let Page;
+  try {
+    ({ Page } = await import("./page"));
+  } catch (err) {
+    recordAppBootstrapFailed(
+      "page_chunk_load",
+      err instanceof Error ? err.name : "unknown",
+    );
+    throw err;
+  }
+  markAppBootstrapPhase("page_chunk_loaded");
   root.render(<Root Page={Page} />);
+  markAppBootstrapPhase("react_root_render_called");
 }
 
 // When loading is done, remove any visible artifacts.

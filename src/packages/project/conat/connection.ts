@@ -8,6 +8,7 @@ import {
   connect,
   type Client as ConatClient,
   type ClientOptions,
+  type InitialConnectionPolicy,
 } from "@cocalc/conat/core/client";
 import {
   API_COOKIE_NAME,
@@ -21,6 +22,14 @@ import { getLogger } from "@cocalc/project/logger";
 import { is_valid_uuid_string } from "@cocalc/util/misc";
 
 const logger = getLogger("conat:connection");
+
+export const INITIAL_PROJECT_CONAT_CONNECTION_POLICY = {
+  timeout: 250,
+  reconnectionDelay: 50,
+  reconnectionDelayMax: 250,
+  randomizationFactor: 0,
+  restoreAfterMs: 5_000,
+} satisfies InitialConnectionPolicy;
 
 function normalizeProjectId(candidate?: string): string | undefined {
   if (!candidate) return;
@@ -66,6 +75,11 @@ export function connectToConat(
   // NOTE: read mutable backendData.conatServer at call-time (not module init),
   // so lite can override with setConatServer(...) after boot.
   const address = options?.address ?? backendData.conatServer;
+  const initialConnectionPolicy =
+    options?.initialConnectionPolicy ??
+    (process.env.COCALC_PROJECT_CONAT_FAST_STARTUP_RETRY === "0"
+      ? undefined
+      : INITIAL_PROJECT_CONAT_CONNECTION_POLICY);
 
   let Cookie;
   if (apiKey) {
@@ -81,6 +95,7 @@ export function connectToConat(
     systemAccountPassword,
     extraHeaders: { Cookie },
     ...options,
+    initialConnectionPolicy,
   });
   if (apiKey) {
     // we don't know the project_id that this apiKey provides access to. That

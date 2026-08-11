@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { delay } from "awaiting";
 import getLogger from "@cocalc/backend/logger";
-import type { LroStatus, LroSummary } from "@cocalc/conat/hub/api/lro";
+import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type { CourseCollectAssignmentItem } from "@cocalc/conat/hub/api/projects";
 import { lroStreamName } from "@cocalc/conat/lro/names";
+import { isLroTerminalStatus } from "@cocalc/conat/lro/status";
 import { SERVICE as PERSIST_SERVICE } from "@cocalc/conat/persist/util";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getExplicitProjectRoutedClient } from "@cocalc/server/conat/route-client";
@@ -35,13 +36,6 @@ const TICK_MS = 5_000;
 const DEFAULT_MAX_PARALLEL = 2;
 const DEFAULT_ITEM_PARALLEL = 4;
 const CHILD_COPY_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-
-const TERMINAL_STATUSES = new Set<LroStatus>([
-  "succeeded",
-  "failed",
-  "canceled",
-  "expired",
-]);
 
 type CourseCollectItemResult = {
   student_id: string;
@@ -94,10 +88,6 @@ async function publishSummarySafe(
   }
 }
 
-function isTerminal(status?: string | null): status is LroStatus {
-  return TERMINAL_STATUSES.has(status as LroStatus);
-}
-
 async function updateParentProgress({
   op,
   results,
@@ -106,7 +96,7 @@ async function updateParentProgress({
   results: CourseCollectItemResult[];
 }): Promise<LroSummary | undefined> {
   const current = await getLro(op.op_id);
-  if (isTerminal(current?.status)) {
+  if (isLroTerminalStatus(current?.status)) {
     return current;
   }
   const input = op.input ?? {};
@@ -168,7 +158,7 @@ export async function cancelCourseCollectChildren({
   await Promise.all(
     children
       .filter((child) => child.kind === "copy-path-between-projects")
-      .filter((child) => !isTerminal(child.status))
+      .filter((child) => !isLroTerminalStatus(child.status))
       .map((child) => cancelChildCopy(child.op_id)),
   );
 }
@@ -189,7 +179,7 @@ async function waitForChildCopy({
       throw new Error("parent collection canceled");
     }
     const summary = await getLro(child_op_id);
-    if (summary && TERMINAL_STATUSES.has(summary.status)) {
+    if (summary && isLroTerminalStatus(summary.status)) {
       return summary;
     }
     await delay(1000);

@@ -15,6 +15,8 @@ import {
 } from "@cocalc/frontend/project/home-directory";
 import {
   AGENT_PANEL_INLINE_CHAT_INSTANCE_KEY,
+  beginAgentSessionLaunch,
+  clearAgentSessionLaunch,
   loadOpenedAgentSessionSelection,
   revealAgentSession,
 } from "@cocalc/frontend/project/page/agent-panel-state";
@@ -86,6 +88,7 @@ export type NavigatorAgentSessionTarget = Pick<
   | "model"
   | "reasoning"
   | "serviceTier"
+  | "paymentSource"
   | "thread_color"
   | "thread_accent_color"
   | "thread_icon"
@@ -651,6 +654,7 @@ async function writeNavigatorPromptInWorkspaceChat(
       model: requestedModel ?? selectedAgentSession?.model,
       reasoning: selectedAgentSession?.reasoning,
       serviceTier: selectedAgentSession?.serviceTier,
+      paymentSource: selectedAgentSession?.paymentSource,
       mode: selectedAgentSession?.mode,
       working_directory: fallbackWorkingDirectory,
       thread_color:
@@ -731,6 +735,7 @@ async function writeNavigatorPromptInWorkspaceChat(
             defaultCodexConfig.sessionMode) as any,
           serviceTier: (openedSession.serviceTier ??
             defaultCodexConfig.serviceTier) as any,
+          paymentSource: openedSession.paymentSource,
           workingDirectory:
             openedSession.working_directory ?? fallbackWorkingDirectory,
           ...(opts.codexConfig ?? {}),
@@ -912,6 +917,7 @@ async function writeNavigatorPromptInWorkspaceChat(
             defaultCodexConfig.sessionMode) as any,
           serviceTier: (openedSession.serviceTier ??
             defaultCodexConfig.serviceTier) as any,
+          paymentSource: openedSession.paymentSource,
           workingDirectory:
             openedSession.working_directory ?? fallbackWorkingDirectory,
           ...(opts.codexConfig ?? {}),
@@ -1183,6 +1189,7 @@ async function writeNavigatorPromptInWorkspaceChat(
       sessionMode: (session.mode ?? defaultCodexConfig.sessionMode) as any,
       serviceTier: (session.serviceTier ??
         defaultCodexConfig.serviceTier) as any,
+      paymentSource: session.paymentSource,
       workingDirectory: session.working_directory,
       ...(opts.codexConfig ?? {}),
     };
@@ -1377,7 +1384,17 @@ export async function stageNavigatorPromptInWorkspaceChat(opts: {
   createNewThread?: boolean;
   stageInComposer?: boolean;
 }): Promise<boolean> {
-  return await writeNavigatorPromptInWorkspaceChat(opts, false);
+  const launch =
+    opts.openFloating === true
+      ? beginAgentSessionLaunch(opts.project_id, opts.title)
+      : undefined;
+  try {
+    return await writeNavigatorPromptInWorkspaceChat(opts, false);
+  } finally {
+    if (launch) {
+      clearAgentSessionLaunch(opts.project_id, launch.launchId);
+    }
+  }
 }
 
 export async function submitNavigatorPromptInWorkspaceChat(opts: {
@@ -1396,13 +1413,23 @@ export async function submitNavigatorPromptInWorkspaceChat(opts: {
   submitToAgent?: boolean;
 }): Promise<boolean> {
   const submitToAgent = opts.submitToAgent !== false;
-  return await writeNavigatorPromptInWorkspaceChat(
-    {
-      ...opts,
-      stageInComposer: !submitToAgent,
-    },
-    submitToAgent,
-  );
+  const launch =
+    opts.openFloating === true
+      ? beginAgentSessionLaunch(opts.project_id, opts.title)
+      : undefined;
+  try {
+    return await writeNavigatorPromptInWorkspaceChat(
+      {
+        ...opts,
+        stageInComposer: !submitToAgent,
+      },
+      submitToAgent,
+    );
+  } finally {
+    if (launch) {
+      clearAgentSessionLaunch(opts.project_id, launch.launchId);
+    }
+  }
 }
 
 export async function submitNavigatorPromptToCurrentThread(opts: {
@@ -1594,6 +1621,9 @@ export async function submitNavigatorPromptToCurrentThread(opts: {
       model,
       reasoning: (session.reasoning ?? defaultCodexConfig.reasoning) as any,
       sessionMode: (session.mode ?? defaultCodexConfig.sessionMode) as any,
+      serviceTier: (session.serviceTier ??
+        defaultCodexConfig.serviceTier) as any,
+      paymentSource: session.paymentSource,
       workingDirectory: session.working_directory,
       ...(opts.codexConfig ?? {}),
     };

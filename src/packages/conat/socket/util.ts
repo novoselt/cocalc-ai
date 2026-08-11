@@ -47,6 +47,24 @@ export type Command = "connect" | "close" | "ping" | "socket";
 
 import { type Client } from "@cocalc/conat/core/client";
 
+export type SocketLifecyclePhase =
+  | "transport_wait_start"
+  | "transport_wait_done"
+  | "get_server_id_start"
+  | "get_server_id_done"
+  | "get_server_id_error"
+  | "get_server_id_retry"
+  | "subscribe_start"
+  | "subscribe_done"
+  | "connect_command_start"
+  | "connect_command_done"
+  | "ready";
+
+export type SocketLifecycleReporter = (
+  phase: SocketLifecyclePhase,
+  details?: { [key: string]: string | number | boolean | undefined },
+) => void;
+
 export interface SocketConfiguration {
   maxQueueSize?: number;
   // (Default: true) Whether reconnection is enabled or not.
@@ -67,19 +85,7 @@ export interface SocketConfiguration {
   // by the persist server.
   loadBalancer?: (subject: string) => Promise<string>;
   loadBalancerTimeout?: number;
-  lifecycleReporter?: (
-    phase:
-      | "get_server_id_start"
-      | "get_server_id_done"
-      | "get_server_id_error"
-      | "get_server_id_retry"
-      | "subscribe_start"
-      | "subscribe_done"
-      | "connect_command_start"
-      | "connect_command_done"
-      | "ready",
-    details?: { [key: string]: string | number | boolean | undefined },
-  ) => void;
+  lifecycleReporter?: SocketLifecycleReporter;
 }
 
 export interface ConatSocketOptions extends SocketConfiguration {

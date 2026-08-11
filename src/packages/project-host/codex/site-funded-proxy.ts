@@ -20,6 +20,7 @@ import {
 
 const logger = getLogger("project-host:codex:site-funded-proxy");
 const DEFAULT_UPSTREAM_BASE_URL = "https://api.openai.com/v1";
+const MAX_PROVIDER_REQUEST_QUEUE_DEPTH = 8;
 const UNBILLED_PROVIDER_TOOL_TYPES = new Set([
   "custom",
   "function",
@@ -49,7 +50,8 @@ type ActiveTurn = {
   startedAt: number;
   requestSequence: number;
   costMicrousd: number;
-  requestInFlight: boolean;
+  requestQueueTail: Promise<void>;
+  requestQueueDepth: number;
   closed: boolean;
   blockedReason?: string;
   onUsage: (event: SiteFundedCodexUsageEvent) => Promise<void>;
@@ -354,7 +356,8 @@ class SiteFundedCodexProxy {
       startedAt: Date.now(),
       requestSequence: 0,
       costMicrousd: 0,
-      requestInFlight: false,
+      requestQueueTail: Promise.resolve(),
+      requestQueueDepth: 0,
       closed: false,
       onUsage,
     });
@@ -506,33 +509,63 @@ class SiteFundedCodexProxy {
       jsonResponse(response, 404, "only POST /v1/responses is supported");
       return;
     }
-    const startedAt = Date.now();
-    let bodyBuffer: Buffer;
-    let body: any;
-    try {
-      bodyBuffer = await readBody(
-        request,
-        siteFundedCodexMaxRequestBodyBytes(turn.policy),
-      );
-      body = boundedProviderRequest({
-        body: JSON.parse(bodyBuffer.toString("utf8")),
-        turn,
-      });
-    } catch (err: any) {
-      jsonResponse(response, err?.statusCode ?? 400, `${err?.message ?? err}`);
-      return;
-    }
-
-    if (turn.requestInFlight) {
+    if (turn.requestQueueDepth >= MAX_PROVIDER_REQUEST_QUEUE_DEPTH) {
       jsonResponse(
         response,
         429,
-        "a site-funded Codex provider request is already in progress",
+        "too many overlapping provider requests for this funded turn",
       );
       return;
     }
-    turn.requestInFlight = true;
+
+    const startedAt = Date.now();
+    let releaseRequest!: () => void;
+    const previousRequest = turn.requestQueueTail;
+    const currentRequest = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    turn.requestQueueTail = previousRequest.then(() => currentRequest);
+    turn.requestQueueDepth += 1;
+    const queueDepth = turn.requestQueueDepth;
+    const queuedAt = Date.now();
+    await previousRequest;
+    const queueWaitMs = Date.now() - queuedAt;
+    if (queueDepth > 1) {
+      logger.info("serialized overlapping site-funded Codex request", {
+        reservationId: turn.reservation.reservationId,
+        queueDepth,
+        queueWaitMs,
+      });
+    }
     try {
+      let requestedBody: any;
+      try {
+        const bodyBuffer = await readBody(
+          request,
+          siteFundedCodexMaxRequestBodyBytes(turn.policy),
+        );
+        requestedBody = JSON.parse(bodyBuffer.toString("utf8"));
+      } catch (err: any) {
+        jsonResponse(
+          response,
+          err?.statusCode ?? 400,
+          `${err?.message ?? err}`,
+        );
+        return;
+      }
+      let body: any;
+      try {
+        // Recheck turn limits after waiting because the preceding request may
+        // have closed or exhausted this turn while persisting its usage.
+        body = boundedProviderRequest({ body: requestedBody, turn });
+      } catch (err: any) {
+        jsonResponse(
+          response,
+          err?.statusCode ?? 400,
+          `${err?.message ?? err}`,
+        );
+        return;
+      }
       turn.requestSequence += 1;
       const requestSequence = turn.requestSequence;
       // Do not forward project-controlled OpenAI organization, project, or
@@ -678,7 +711,8 @@ class SiteFundedCodexProxy {
         });
       }
     } finally {
-      turn.requestInFlight = false;
+      turn.requestQueueDepth -= 1;
+      releaseRequest();
     }
   }
 }

@@ -108,6 +108,7 @@ import {
   rootfsThemeFromPublishDraft,
   type PublishDraft,
 } from "./rootfs-publish-assist";
+import { buildRootfsPublishTagOptions } from "./rootfs-publish-tags";
 import { RuntimeAction, RuntimePanel } from "./rootfs-runtime-panel";
 import type {
   RootfsConfigExport,
@@ -483,17 +484,11 @@ export default function RootFilesystemImage({
   );
   const publishTagOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          [
-            ...catalogRootfsImages.flatMap((entry) => entry.tags ?? []),
-            ...Object.values(ROOTFS_PROJECT_PRESET_TAGS).flat(),
-          ].filter(Boolean),
-        ),
-      )
-        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
-        .map((tag) => ({ label: tag, value: tag })),
-    [catalogRootfsImages],
+      buildRootfsPublishTagOptions({
+        catalogTags: catalogRootfsImages.flatMap((entry) => entry.tags ?? []),
+        isAdmin,
+      }),
+    [catalogRootfsImages, isAdmin],
   );
   const publishFamilyOptions = useMemo(
     () =>

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   createReadStream,
@@ -12,6 +12,7 @@ import https from "node:https";
 import { homedir } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { Command } from "commander";
+import { mapParallelLimit } from "@cocalc/util/async-utils";
 
 import { buildCookieHeader } from "../../core/auth-cookies";
 import { applyAuthProfile, loadAuthConfig } from "../../core/auth-config";
@@ -115,7 +116,10 @@ type HealthHostRoutesOptions = {
   cli?: string;
   workers?: string;
   hostLimit?: string;
+  hostId?: string;
+  siteFundedOnly?: boolean;
   allHosts?: boolean;
+  probeConcurrency?: string;
   rpcTimeout?: string;
   requestTimeoutMs?: string;
 };
@@ -163,6 +167,13 @@ type HostRouteHealthResult = {
   workers: number[];
   hosts: Array<{ host_id: string; name?: string; status?: string }>;
   probes: HostRouteProbe[];
+  timings_ms: {
+    discover_workers: number;
+    collect_affinity: number;
+    list_hosts: number;
+    probes: number;
+    total: number;
+  };
 };
 
 export type RocketCommandDeps = {
@@ -256,10 +267,16 @@ export function registerRocketCommand(
       "comma-separated frontdoor worker ids; default: discover from frontdoor health",
     )
     .option("--host-limit <n>", "maximum hosts to probe", "100")
+    .option("--host-id <uuid>", "probe one explicit project host")
+    .option(
+      "--site-funded-only",
+      "probe deterministic site-funded hosts instead of customer hosts",
+    )
     .option(
       "--all-hosts",
       "probe all listed hosts instead of only online hosts",
     )
+    .option("--probe-concurrency <n>", "maximum concurrent probes", "8")
     .option("--rpc-timeout <duration>", "per host CLI RPC timeout", "10s")
     .option("--request-timeout-ms <n>", "HTTP/CLI probe timeout in ms", "30000")
     .action(
@@ -481,6 +498,7 @@ async function runHostRouteHealth({
   globals: Record<string, any>;
   deps: RocketCommandDeps;
 }): Promise<HostRouteHealthResult> {
+  const totalStarted = Date.now();
   const env = deps.env ?? process.env;
   const configPath = resolveConfigPath(opts.config, env);
   const config = configPath ? readRocketConfig(configPath) : {};
@@ -515,29 +533,43 @@ async function runHostRouteHealth({
     30_000;
   const hostLimit =
     parsePositiveIntegerOption(opts.hostLimit, "--host-limit") ?? 100;
+  const probeConcurrency =
+    parsePositiveIntegerOption(opts.probeConcurrency, "--probe-concurrency") ??
+    8;
   const authCookie = resolveAuthCookieForHealth({
     api,
     opts,
     globals,
     env,
   });
+  const workersStarted = Date.now();
+  const configuredWorkers = parseWorkerIds(opts.workers);
   const workers =
-    parseWorkerIds(opts.workers) ??
+    configuredWorkers ??
     (await discoverFrontdoorWorkerIds({ api, requestTimeoutMs }));
+  const discoverWorkersMs = Date.now() - workersStarted;
+  const affinityStarted = Date.now();
   const affinityCookies = await collectFrontdoorAffinityCookies({
     api,
     workers,
     requestTimeoutMs,
   });
+  const collectAffinityMs = Date.now() - affinityStarted;
+  const hostsStarted = Date.now();
   const hosts = await listHostsForRouteHealth({
     cliPath,
     api,
     authCookie,
     hostLimit,
+    hostId: stringOption(opts.hostId),
+    siteFundedOnly: opts.siteFundedOnly === true,
     allHosts: opts.allHosts === true,
     requestTimeoutMs,
   });
+  const listHostsMs = Date.now() - hostsStarted;
+  const probesStarted = Date.now();
   const probes: HostRouteProbe[] = [];
+  const probeTasks: Array<() => Promise<HostRouteProbe>> = [];
   for (const workerId of workers) {
     const affinityCookie = affinityCookies.get(workerId);
     if (!affinityCookie) {
@@ -554,27 +586,44 @@ async function runHostRouteHealth({
       continue;
     }
     for (const host of hosts) {
-      probes.push(
-        runHostRouteProbe({
-          cliPath,
-          api,
-          authCookie,
-          affinityCookie,
-          workerId,
-          host,
-          rpcTimeout: stringOption(opts.rpcTimeout) ?? "10s",
-          requestTimeoutMs,
-        }),
+      probeTasks.push(
+        async () =>
+          await runHostRouteProbe({
+            cliPath,
+            api,
+            authCookie,
+            affinityCookie,
+            workerId,
+            host,
+            rpcTimeout: stringOption(opts.rpcTimeout) ?? "10s",
+            requestTimeoutMs,
+          }),
       );
     }
   }
+  const resolvedProbes = [
+    ...probes,
+    ...(await mapParallelLimit(
+      probeTasks,
+      async (probe) => await probe(),
+      probeConcurrency,
+    )),
+  ];
+  const probesMs = Date.now() - probesStarted;
   return {
-    ok: probes.every((probe) => probe.ok),
+    ok: resolvedProbes.every((probe) => probe.ok),
     api,
     checked_at: new Date().toISOString(),
     workers,
     hosts,
-    probes,
+    probes: resolvedProbes,
+    timings_ms: {
+      discover_workers: discoverWorkersMs,
+      collect_affinity: collectAffinityMs,
+      list_hosts: listHostsMs,
+      probes: probesMs,
+      total: Date.now() - totalStarted,
+    },
   };
 }
 
@@ -705,6 +754,8 @@ async function listHostsForRouteHealth({
   api,
   authCookie,
   hostLimit,
+  hostId,
+  siteFundedOnly,
   allHosts,
   requestTimeoutMs,
 }: {
@@ -712,6 +763,8 @@ async function listHostsForRouteHealth({
   api: string;
   authCookie: string;
   hostLimit: number;
+  hostId?: string;
+  siteFundedOnly: boolean;
   allHosts: boolean;
   requestTimeoutMs: number;
 }): Promise<Array<{ host_id: string; name?: string; status?: string }>> {
@@ -728,8 +781,9 @@ async function listHostsForRouteHealth({
       "host",
       "list",
       "--admin-view",
+      "--route-health",
       "--limit",
-      `${hostLimit}`,
+      "10000",
     ],
     {
       encoding: "utf8",
@@ -742,20 +796,38 @@ async function listHostsForRouteHealth({
     );
   }
   const rows = normalizeCliDataArray(result.stdout, "host list");
-  return rows
+  const candidates = rows
     .map((row) => ({
       host_id: `${row.host_id ?? row.id ?? ""}`.trim(),
       name: stringOption(row.name),
       status: stringOption(row.status),
+      funding_mode: stringOption(row.funding_mode),
     }))
     .filter(
       (row) =>
         row.host_id &&
-        (allHosts || row.status === "online" || row.status === "running"),
-    );
+        (allHosts || row.status === "online" || row.status === "running") &&
+        (!hostId || row.host_id === hostId) &&
+        (!siteFundedOnly || row.funding_mode === "site-funded"),
+    )
+    .sort((left, right) => {
+      const byName = (left.name ?? "").localeCompare(right.name ?? "");
+      return byName || left.host_id.localeCompare(right.host_id);
+    })
+    .slice(0, hostLimit)
+    .map(({ funding_mode: _fundingMode, ...host }) => host);
+  if (candidates.length === 0) {
+    const target = hostId
+      ? `host ${hostId}`
+      : siteFundedOnly
+        ? "an online site-funded host"
+        : "an eligible host";
+    throw new Error(`host list did not return ${target}`);
+  }
+  return candidates;
 }
 
-function runHostRouteProbe({
+async function runHostRouteProbe({
   cliPath,
   api,
   authCookie,
@@ -773,10 +845,10 @@ function runHostRouteProbe({
   host: { host_id: string; name?: string };
   rpcTimeout: string;
   requestTimeoutMs: number;
-}): HostRouteProbe {
+}): Promise<HostRouteProbe> {
   const started = Date.now();
   const cookie = appendCookieHeader(authCookie, affinityCookie);
-  const result = spawnSync(
+  const result = await execFileResult(
     cliPath,
     [
       "--api",
@@ -792,12 +864,10 @@ function runHostRouteProbe({
       "json",
       "host",
       "get",
+      "--route-health",
       host.host_id,
     ],
-    {
-      encoding: "utf8",
-      timeout: requestTimeoutMs + 2_000,
-    },
+    requestTimeoutMs + 2_000,
   );
   const ms = Date.now() - started;
   const output = trimCommandOutput(result.stderr || result.stdout);
@@ -844,6 +914,40 @@ function runHostRouteProbe({
     ok: true,
     ms,
   };
+}
+
+function execFileResult(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<{
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+}> {
+  return new Promise((resolveResult) => {
+    execFile(
+      command,
+      args,
+      {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        const errorCode = (error as { code?: unknown } | null)?.code;
+        const status =
+          typeof errorCode === "number" ? errorCode : error ? null : 0;
+        resolveResult({
+          status,
+          stdout,
+          stderr,
+          error: error ?? undefined,
+        });
+      },
+    );
+  });
 }
 
 function appendCookieHeader(base: string, extra: string): string {
@@ -1648,6 +1752,9 @@ function printHostRouteHealthResult(
   console.log(`workers: ${result.workers.join(", ") || "(none)"}`);
   console.log(`hosts: ${result.hosts.length}`);
   console.log(`ok: ${result.ok ? "yes" : "no"}`);
+  console.log(
+    `timings: workers=${result.timings_ms.discover_workers}ms affinity=${result.timings_ms.collect_affinity}ms hosts=${result.timings_ms.list_hosts}ms probes=${result.timings_ms.probes}ms total=${result.timings_ms.total}ms`,
+  );
   console.log("");
   for (const probe of result.probes) {
     const host = probe.host_name

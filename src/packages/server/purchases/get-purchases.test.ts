@@ -137,6 +137,28 @@ describe("creates and get purchases using various options", () => {
     expect(rows[0].project_id).toBeUndefined();
     expect((rows[0] as any).count).toBe(3);
   });
+
+  it("groups precise active estimates as whole-cent ledger amounts", async () => {
+    const account_id = uuid();
+    await createPurchase({
+      account_id,
+      service: "dedicated-host",
+      description: {} as any,
+      client: null,
+      cost_so_far: "0.006",
+      period_start: new Date(),
+    });
+
+    const { balance, purchases } = await getPurchases({
+      account_id,
+      group: true,
+    });
+
+    expect(balance).toBe("-0.0100000000");
+    expect(purchases).toMatchObject([
+      { service: "dedicated-host", cost: "0.01", count: 1 },
+    ]);
+  });
 });
 
 describe("purchase history balances", () => {
