@@ -898,6 +898,20 @@ describe("PublicApp", () => {
     expect(
       within(videoOnlyRow!).getByText(/supplemental previews/),
     ).not.toBeNull();
+    const keyboardTrapRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.1\.2 No Keyboard Trap/,
+      })
+      .closest("tr");
+    expect(keyboardTrapRow).not.toBeNull();
+    expect(
+      within(keyboardTrapRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(keyboardTrapRow!).getByText(
+        /did not move focus out of the chat editor/,
+      ),
+    ).not.toBeNull();
     expect(
       report.queryByRole("heading", {
         name: "Table 3: Success Criteria, Level AAA",
