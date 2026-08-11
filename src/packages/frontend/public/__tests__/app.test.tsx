@@ -834,7 +834,7 @@ describe("PublicApp", () => {
       await screen.findByRole("heading", { name: "Accessibility Statement" }),
     ).not.toBeNull();
     const reportLink = screen.getByRole("link", {
-      name: "Voluntary Product Accessibility Template, VPAT®",
+      name: "Accessibility Conformance Report (based on VPAT® Version 2.5Rev)",
     });
     expect(reportLink).toHaveAttribute(
       "href",
@@ -883,6 +883,18 @@ describe("PublicApp", () => {
     expect(within(tables[1]).getAllByRole("row")).toHaveLength(33);
     expect(within(tables[2]).getAllByRole("row")).toHaveLength(25);
     expect(within(tables[0]).getAllByText(/Level AAA \(No\)/)).toHaveLength(3);
+    const videoOnlyRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.2\.1 Audio-only and Video-only \(Prerecorded\)/,
+      })
+      .closest("tr");
+    expect(videoOnlyRow).not.toBeNull();
+    expect(
+      within(videoOnlyRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(videoOnlyRow!).getByText(/supplemental previews/),
+    ).not.toBeNull();
     expect(
       report.queryByRole("heading", {
         name: "Table 3: Success Criteria, Level AAA",

@@ -33,7 +33,7 @@ export const accessibilityPolicy: PublicPolicy = {
           rel="noopener"
           target="_blank"
         >
-          Voluntary Product Accessibility Template, VPAT®
+          Accessibility Conformance Report (based on VPAT® Version 2.5Rev)
         </A>{" "}
         (last updated August 2026). This report evaluates a representative
         sample of the current CoCalc.ai web application. Its scope, exclusions,
