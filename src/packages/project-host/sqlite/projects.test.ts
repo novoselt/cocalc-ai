@@ -299,4 +299,33 @@ describe("project sqlite runtime ports", () => {
       }),
     ).toThrow("conflicting run_quota");
   });
+
+  it("accepts semantically identical reordered run_quota JSON", () => {
+    upsertProject({
+      project_id,
+      run_quota: {
+        network: true,
+        disk_quota: 100_000,
+        scheduling: { priority: 5, io_class: "premium" },
+      },
+      run_quota_revision: 7,
+    });
+
+    expect(() =>
+      upsertProject({
+        project_id,
+        run_quota: {
+          scheduling: { io_class: "premium", priority: 5 },
+          disk_quota: 100_000,
+          network: true,
+        },
+        run_quota_revision: 7,
+      }),
+    ).not.toThrow();
+    expect(getProject(project_id)?.run_quota).toEqual({
+      disk_quota: 100_000,
+      network: true,
+      scheduling: { io_class: "premium", priority: 5 },
+    });
+  });
 });
