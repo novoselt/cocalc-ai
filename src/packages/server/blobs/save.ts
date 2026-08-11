@@ -4,11 +4,11 @@
  */
 
 import { uuidsha1 } from "@cocalc/backend/misc_node";
-import { db } from "@cocalc/database";
 import { assertCanSaveBlobForAccount } from "@cocalc/server/membership/blob-limits";
-import { callback2 } from "@cocalc/util/async-utils";
 import { MAX_BLOB_SIZE } from "@cocalc/util/db-schema/blobs";
 import { human_readable_size } from "@cocalc/util/misc";
+
+import { getBlobByteStore } from "./store";
 
 export interface SaveBlobToDatabaseOptions {
   uuid?: string;
@@ -66,8 +66,7 @@ export async function saveBlobToDatabase({
     blobSize: buffer.length,
   });
 
-  const database = db();
-  await callback2(database.save_blob.bind(database), {
+  await getBlobByteStore().put({
     uuid,
     blob: buffer,
     ttl: normalizedTtl(ttl),
