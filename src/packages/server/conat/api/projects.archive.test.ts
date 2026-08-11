@@ -4,7 +4,6 @@ let isAdminMock: jest.Mock;
 let poolQueryMock: jest.Mock;
 let poolConnectQueryMock: jest.Mock;
 let poolConnectReleaseMock: jest.Mock;
-let getBackupsMock: jest.Mock;
 let resolveProjectBayMock: jest.Mock;
 let interBayStopMock: jest.Mock;
 let deleteProjectDataOnHostMock: jest.Mock;
@@ -81,11 +80,6 @@ jest.mock("@cocalc/server/conat/route-client", () => ({
   conatWithProjectRoutingForAccount: jest.fn(() => ({
     close: (...args: any[]) => routedClientCloseMock(...args),
   })),
-}));
-
-jest.mock("@cocalc/conat/project/archive-info", () => ({
-  __esModule: true,
-  getBackups: (...args: any[]) => getBackupsMock(...args),
 }));
 
 jest.mock("@cocalc/server/inter-bay/directory", () => ({
@@ -188,9 +182,6 @@ describe("projects.archiveProject", () => {
       return { rowCount: 1, rows: [] };
     });
     poolConnectReleaseMock = jest.fn();
-    getBackupsMock = jest.fn(async () => [
-      { id: "backup-1", time: new Date(), summary: {} },
-    ]);
     resolveProjectBayMock = jest.fn(async () => ({
       bay_id: "bay-1",
       epoch: 7,
@@ -211,7 +202,7 @@ describe("projects.archiveProject", () => {
     );
   });
 
-  it("archives a provisioned project after confirming backups exist", async () => {
+  it("archives a provisioned project with durable backup metadata", async () => {
     poolQueryMock.mockResolvedValueOnce({
       rows: [
         {
@@ -220,6 +211,7 @@ describe("projects.archiveProject", () => {
           provisioned: true,
           state: { state: "running" },
           host_status: "running",
+          last_backup: new Date("2026-06-15T04:32:34.102Z"),
         },
       ],
     });
@@ -237,16 +229,7 @@ describe("projects.archiveProject", () => {
       project_id: "proj-1",
       action: "archive this project",
     });
-    expect(getBackupsMock).toHaveBeenCalledWith({
-      client: expect.any(Object),
-      project_id: "proj-1",
-      indexed_only: true,
-    });
-    expect(getExplicitProjectRoutedClientMock).toHaveBeenCalledWith({
-      project_id: "proj-1",
-      fresh: true,
-      account_id: "owner-1",
-    });
+    expect(getExplicitProjectRoutedClientMock).not.toHaveBeenCalled();
     expect(resolveProjectBayMock).toHaveBeenCalledWith("proj-1");
     expect(interBayStopMock).toHaveBeenCalledWith({
       project_id: "proj-1",
@@ -271,7 +254,7 @@ describe("projects.archiveProject", () => {
       project_id: "proj-1",
       default_bay_id: expect.any(String),
     });
-    expect(routedClientCloseMock).toHaveBeenCalled();
+    expect(routedClientCloseMock).not.toHaveBeenCalled();
   });
 
   it("refuses to archive when no backups exist yet", async () => {
@@ -286,8 +269,6 @@ describe("projects.archiveProject", () => {
         },
       ],
     });
-    getBackupsMock = jest.fn(async () => []);
-
     const { archiveProject } = await import("./projects");
     await expect(
       archiveProject({
@@ -305,88 +286,7 @@ describe("projects.archiveProject", () => {
     );
   });
 
-  it("continues when archive-info is temporarily unavailable", async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({
-        rows: [
-          {
-            host_id: "host-1",
-            backup_repo_id: "repo-1",
-            provisioned: true,
-            state: { state: "opened" },
-            host_status: "running",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        rows: [{ "?column?": 1 }],
-      });
-    getBackupsMock = jest.fn(async () => {
-      throw new Error(
-        "request -- no subscribers matching 'project.proj-1.archive-info.-'",
-      );
-    });
-
-    const { archiveProject } = await import("./projects");
-    await expect(
-      archiveProject({
-        account_id: "owner-1",
-        project_id: "proj-1",
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(deleteProjectDataOnHostMock).toHaveBeenCalledWith({
-      project_id: "proj-1",
-      host_id: "host-1",
-    });
-    expect(poolConnectQueryMock).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE projects"),
-      expect.anything(),
-    );
-  });
-
-  it("continues when archive-info is unavailable and only last_backup is recorded", async () => {
-    poolQueryMock
-      .mockResolvedValueOnce({
-        rows: [
-          {
-            host_id: "host-1",
-            backup_repo_id: "repo-1",
-            provisioned: true,
-            state: { state: "opened" },
-            host_status: "running",
-            last_backup: new Date("2026-06-15T04:32:34.102Z"),
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        rows: [],
-      });
-    getBackupsMock = jest.fn(async () => {
-      throw new Error(
-        "request -- no subscribers matching 'project.proj-1.archive-info.-' - callHub: subject='hub.account.owner-1.api', name='projects.archiveProject', code='503'",
-      );
-    });
-
-    const { archiveProject } = await import("./projects");
-    await expect(
-      archiveProject({
-        account_id: "owner-1",
-        project_id: "proj-1",
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(deleteProjectDataOnHostMock).toHaveBeenCalledWith({
-      project_id: "proj-1",
-      host_id: "host-1",
-    });
-    expect(poolConnectQueryMock).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE projects"),
-      expect.anything(),
-    );
-  });
-
-  it("archives a deprovisioned host without contacting archive-info or deleting host data", async () => {
+  it("archives a deprovisioned host without reading backups or deleting host data", async () => {
     poolQueryMock.mockResolvedValueOnce({
       rows: [
         {
@@ -407,7 +307,7 @@ describe("projects.archiveProject", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(getBackupsMock).not.toHaveBeenCalled();
+    expect(getExplicitProjectRoutedClientMock).not.toHaveBeenCalled();
     expect(interBayStopMock).not.toHaveBeenCalled();
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
     expect(poolConnectQueryMock).toHaveBeenCalledWith(
@@ -425,6 +325,7 @@ describe("projects.archiveProject", () => {
           provisioned: true,
           state: { state: "opened" },
           host_status: "off",
+          last_backup: new Date("2026-06-15T04:32:34.102Z"),
         },
       ],
     });
@@ -437,11 +338,7 @@ describe("projects.archiveProject", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(getBackupsMock).toHaveBeenCalledWith({
-      client: expect.any(Object),
-      project_id: "proj-1",
-      indexed_only: true,
-    });
+    expect(getExplicitProjectRoutedClientMock).not.toHaveBeenCalled();
     expect(interBayStopMock).not.toHaveBeenCalled();
     expect(deleteProjectDataOnHostMock).not.toHaveBeenCalled();
     expect(poolConnectQueryMock).toHaveBeenCalledWith(

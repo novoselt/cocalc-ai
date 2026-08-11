@@ -512,6 +512,28 @@ describe("ProjectsActions archive flow", () => {
     });
   });
 
+  it("uses durable backup metadata when repository browsing is unavailable", async () => {
+    configureProject({
+      state: "opened",
+      lastEdited: new Date("2026-04-25T15:00:00.000Z"),
+      lastBackup: new Date("2026-04-25T15:10:00.000Z"),
+    });
+    getBackupsMock.mockRejectedValue(new Error("repository browser offline"));
+    const { actions } = makeActions();
+
+    await actions.archive_project(project_id);
+
+    expect(
+      mockedWebappClient.conat_client.hub.projects.createBackup,
+    ).not.toHaveBeenCalled();
+    expect(
+      mockedWebappClient.conat_client.hub.projects.archiveProject,
+    ).toHaveBeenCalledWith({
+      project_id,
+      timeout: 30000,
+    });
+  });
+
   it("waits for the projected archived state after archive RPC succeeds", async () => {
     configureProject({
       state: "opened",

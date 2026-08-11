@@ -33,6 +33,8 @@ const REQUIRED_PROJECT_CGROUP_COMMANDS = [
   "prepare-project-startup-cgroup",
   "prepare-project-startup-runtime-cgroup",
   "attach-host-service-cgroup",
+  "attach-backup-browser-cgroup",
+  "remove-backup-browser-cgroup",
   "verify-host-service-cgroup",
   "verify-project-io-limits",
   "verify-project-network-limits",
