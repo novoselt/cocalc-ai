@@ -898,6 +898,19 @@ describe("PublicApp", () => {
     expect(
       within(videoOnlyRow!).getByText(/supplemental previews/),
     ).not.toBeNull();
+    const keyboardRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.1\.1 Keyboard/,
+      })
+      .closest("tr");
+    expect(keyboardRow).not.toBeNull();
+    expect(within(keyboardRow!).getByText("Partially supports")).not.toBeNull();
+    expect(
+      within(keyboardRow!).getByText(/can be navigated using Tab/),
+    ).not.toBeNull();
+    expect(
+      within(keyboardRow!).getByText(/mouse-only controls elsewhere/),
+    ).not.toBeNull();
     const keyboardTrapRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.1\.2 No Keyboard Trap/,
