@@ -24,7 +24,10 @@ describe("signed-in bootstrap terminal outcome", () => {
     mockMarkAt.mockReset();
   });
 
-  function installPreAppTrace() {
+  function installPreAppTrace(opts?: {
+    marks?: Record<string, number>;
+    phaseDetails?: Record<string, Record<string, number>>;
+  }) {
     const complete = jest.fn();
     (globalThis as any).__COCALC_STARTUP_TRACE__ = {
       complete,
@@ -32,8 +35,8 @@ describe("signed-in bootstrap terminal outcome", () => {
       snapshot: () => ({
         id: "startup-test",
         started_at: new Date(0).toISOString(),
-        marks: {},
-        details: {},
+        marks: opts?.marks ?? {},
+        details: { phase_details: opts?.phaseDetails ?? {} },
       }),
     };
     return complete;
@@ -61,6 +64,25 @@ describe("signed-in bootstrap terminal outcome", () => {
     recordSignedInSurfaceReady("projects");
 
     expect(complete).toHaveBeenCalledWith("signed_in_surface_ready");
+  });
+
+  it("merges lifecycle phases recorded after the app trace was created", async () => {
+    const marks = { account_snapshot_applied: 125 };
+    installPreAppTrace({
+      marks,
+      phaseDetails: { account_snapshot_applied: { field_count: 4 } },
+    });
+    const { markAppBootstrapPhase, recordSignedInSurfaceReady } =
+      await import("./bootstrap-ux-latency");
+    markAppBootstrapPhase("render_called");
+    marks.customize_ready = 250;
+
+    recordSignedInSurfaceReady("projects");
+
+    expect(mockMarkAt).toHaveBeenCalledWith("customize_ready", 250, undefined);
+    expect(mockMarkAt).toHaveBeenCalledWith("account_snapshot_applied", 125, {
+      field_count: 4,
+    });
   });
 
   it("terminates incomplete monitoring after a reported failure", async () => {

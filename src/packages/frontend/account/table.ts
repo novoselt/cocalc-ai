@@ -23,6 +23,7 @@ import {
   recordProjectionRepair,
   recordProjectionRepairFailure,
 } from "@cocalc/frontend/projection-diagnostics";
+import { markStartupPhaseOnce } from "@cocalc/frontend/app/startup-phase";
 
 export type AccountProjectionRepairReason =
   | "write-ack"
@@ -54,6 +55,9 @@ export function applyAccountPatch(opts: {
   const next = normalizeAccountPatch(opts.redux, opts.patch);
   actions.setState(next);
   if (opts.first_set) {
+    markStartupPhaseOnce("account_snapshot_applied", {
+      field_count: Object.keys(opts.patch).length,
+    });
     actions.setState({ is_ready: true });
     opts.redux.getStore("account").emit("is_ready");
   }

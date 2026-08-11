@@ -26,6 +26,10 @@ import { waitForAccountTableConnectedForSignIn } from "./wait-for-account-table-
 import { waitForExamModeConfiguration } from "@cocalc/frontend/customize/exam-mode";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { getLogger } from "@cocalc/frontend/logger";
+import {
+  markStartupPhase,
+  markStartupPhaseOnce,
+} from "@cocalc/frontend/app/startup-phase";
 
 const log = getLogger("account:bootstrap");
 const AUTH_BOOTSTRAP_WARNING =
@@ -86,6 +90,7 @@ export function init(redux) {
     }
     authBootstrapLoadingFor = account_id;
     const requestRevision = ++authBootstrapRequestRevision;
+    markStartupPhaseOnce("account_routing_requested");
     try {
       const bootstrap = await getControlPlaneAuthBootstrap();
       if (requestRevision !== authBootstrapRequestRevision) {
@@ -99,12 +104,17 @@ export function init(redux) {
         impersonation: bootstrap.impersonation ?? null,
       });
       authBootstrapLoadedFor = account_id;
+      markStartupPhaseOnce("account_routing_ready", {
+        has_home_bay: bootstrap.home_bay_id != null,
+        impersonating: bootstrap.impersonation != null,
+      });
       return true;
     } catch (err) {
       if (requestRevision !== authBootstrapRequestRevision) {
         return false;
       }
       authBootstrapLoadedFor = account_id;
+      markStartupPhaseOnce("account_routing_failed");
       log.warn("failed to load account routing information", err);
       alert_message({
         type: "warning",
@@ -124,6 +134,7 @@ export function init(redux) {
 
   // Login status
   webapp_client.on("signed_in", async (mesg) => {
+    markStartupPhaseOnce("signed_in_event_received");
     const sessionRevision = ++authSessionRevision;
     const actions = redux.getActions("account");
     actions.setState({ managed_egress_blocked_error: undefined });
@@ -142,7 +153,9 @@ export function init(redux) {
       // not fully signed in until the account table is connected, so that we know
       // email address, etc. If we don't set this, the UI briefly shows the
       // pre-sign-in state.
+      markStartupPhaseOnce("account_snapshot_wait_started");
       await waitForAccountTableConnectedForSignIn(table);
+      markStartupPhaseOnce("account_snapshot_wait_finished");
       if (sessionRevision !== authSessionRevision) {
         return;
       }
@@ -155,6 +168,7 @@ export function init(redux) {
       sessionRevision === authSessionRevision
     ) {
       actions.set_user_type("signed_in");
+      markStartupPhase("signed_in_account_ready");
     }
   });
 

@@ -7,7 +7,7 @@ import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
 const INCOMPLETE_AFTER_MS = 30_000;
-const MAX_MARKS = 48;
+const MAX_MARKS = 80;
 
 export interface PreAppStartupTraceSnapshot {
   id: string;
@@ -17,7 +17,10 @@ export interface PreAppStartupTraceSnapshot {
 }
 
 export interface PreAppStartupTrace {
-  mark: (phase: string) => void;
+  mark: (
+    phase: string,
+    details?: Record<string, string | number | boolean | null | undefined>,
+  ) => void;
   complete: (phase?: string) => void;
   snapshot: () => PreAppStartupTraceSnapshot;
 }
@@ -164,6 +167,10 @@ export function initializeStartupTrace(): PreAppStartupTrace | undefined {
     : Date.now() - performance.now();
   const started_at = new Date(timeOrigin).toISOString();
   const marks = navigationMarks();
+  const phaseDetails: Record<
+    string,
+    Record<string, string | number | boolean | null | undefined>
+  > = {};
   let completed = false;
   let diagnosticSent = false;
   let longTaskCount = 0;
@@ -193,6 +200,7 @@ export function initializeStartupTrace(): PreAppStartupTrace | undefined {
       details: {
         trace_version: 3,
         marks: currentMarks,
+        phase_details: { ...phaseDetails },
         long_task_count: longTaskCount,
         long_task_total_ms: Math.round(longTaskTotalMs),
         longest_task_ms: Math.round(longestTaskMs),
@@ -201,9 +209,16 @@ export function initializeStartupTrace(): PreAppStartupTrace | undefined {
     };
   };
 
-  const mark = (phase: string) => {
+  const mark = (
+    phase: string,
+    details?: Record<string, string | number | boolean | null | undefined>,
+  ) => {
     if (!phase || Object.keys(marks).length >= MAX_MARKS) return;
-    marks[phase.slice(0, 80)] = elapsedMs();
+    const safePhase = phase.slice(0, 80);
+    marks[safePhase] = elapsedMs();
+    if (details != null) {
+      phaseDetails[safePhase] = details;
+    }
   };
 
   const timeout = window.setTimeout(() => {

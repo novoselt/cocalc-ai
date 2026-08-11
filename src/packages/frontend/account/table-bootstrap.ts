@@ -4,8 +4,10 @@
  */
 
 import { AccountTable, initAccountRealtime } from "./table";
+import { markStartupPhaseOnce } from "@cocalc/frontend/app/startup-phase";
 
 export function initAccountTable(redux) {
+  markStartupPhaseOnce("account_snapshot_requested");
   redux.createTable("account", AccountTable);
   redux.getTable("account")._table.on("error", (tableError) => {
     redux.getActions("account").setState({ tableError });

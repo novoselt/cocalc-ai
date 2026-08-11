@@ -48,6 +48,10 @@ import {
 } from "./customize/exam-bootstrap";
 import { fetchCustomize } from "./customize/fetch-customize";
 import { getLogger } from "@cocalc/frontend/logger";
+import {
+  markStartupPhase,
+  markStartupPhaseOnce,
+} from "@cocalc/frontend/app/startup-phase";
 
 // update every 2 minutes.
 const UPDATE_INTERVAL = 2 * 60000;
@@ -252,11 +256,16 @@ async function loadCustomizeState() {
   await retry_until_success({
     f: async () => {
       const url = join(appBasePath, "customize");
+      markStartupPhaseOnce("customize_request_started");
       try {
         const customize = await fetchCustomize({ url });
+        markStartupPhase("customize_response_received", {
+          top_level_field_count: Object.keys(customize).length,
+        });
         applyCustomizeState(customize);
         actions.setState({ configuration_load_error: undefined });
       } catch (err) {
+        markStartupPhaseOnce("customize_request_failed");
         log.warn("failed to load site configuration; retrying", err);
         actions.setState({
           configuration_load_error: CONFIGURATION_LOAD_ERROR,
@@ -294,6 +303,9 @@ function applyCustomizeState(customize: Record<string, any>): void {
   actions.setState({ strategies });
   // Set whether or not a registration token is required when creating account.
   actions.setState({ token: !!registration });
+  markStartupPhase("customize_ready", {
+    configuration_field_count: Object.keys(configuration ?? {}).length,
+  });
 }
 
 export async function init() {

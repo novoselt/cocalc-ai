@@ -10,6 +10,7 @@ import {
 } from "@cocalc/frontend/monitoring/ux-latency-trace";
 import { markSignedInSurfaceReady } from "./surface-ready-state";
 import { getStartupPerformancePolicy } from "./startup-performance-policy";
+import { markStartupPhase, type StartupPhaseDetails } from "./startup-phase";
 
 let trace: UxLatencyTrace | undefined;
 let appReadyRecorded = false;
@@ -40,7 +41,7 @@ function navigationStart(): UxTraceStart | undefined {
 }
 
 interface PreAppStartupTrace {
-  mark: (phase: string) => void;
+  mark: (phase: string, details?: StartupPhaseDetails) => void;
   complete: (phase?: string) => void;
   snapshot: () => {
     id: string;
@@ -67,11 +68,21 @@ function getTrace(): UxLatencyTrace {
     start: navigationStart(),
   });
   markNavigationPhases(trace, navigation);
-  for (const [phase, elapsed] of Object.entries(early?.marks ?? {})) {
-    trace.markAt(phase, elapsed);
-  }
+  mergePreAppMarks(trace, early);
   trace.mark("bootstrap_module_loaded");
   return trace;
+}
+
+function mergePreAppMarks(
+  target: UxLatencyTrace,
+  snapshot = preAppTrace()?.snapshot(),
+): void {
+  const details = snapshot?.details?.phase_details as
+    | Record<string, StartupPhaseDetails>
+    | undefined;
+  for (const [phase, elapsed] of Object.entries(snapshot?.marks ?? {})) {
+    target.markAt(phase, elapsed, details?.[phase]);
+  }
 }
 
 function markNavigationPhases(
@@ -104,10 +115,13 @@ function markNavigationPhases(
   }
 }
 
-export function markAppBootstrapPhase(phase: string): void {
+export function markAppBootstrapPhase(
+  phase: string,
+  details?: StartupPhaseDetails,
+): void {
   if (failed) return;
-  preAppTrace()?.mark(phase);
-  getTrace().mark(phase);
+  markStartupPhase(phase, details);
+  getTrace().mark(phase, details);
 }
 
 function connectionDetails(): Record<string, unknown> {
@@ -182,6 +196,7 @@ export function recordSignedInAppBootstrapReady(): () => void {
   return afterNextPaint(() => {
     if (appReadyRecorded || failed) return;
     appReadyRecorded = true;
+    mergePreAppMarks(current);
     markNavigationPhases(current);
     current.record("signed_in_app_ready_v2", {
       segment: `${navigationEntry()?.type ?? "unknown"}:${entrySurface}`,
@@ -201,6 +216,7 @@ export function recordSignedInSurfaceReady(segment: string): () => void {
   return afterNextPaint(() => {
     if (surfaceRecorded || failed) return;
     surfaceRecorded = true;
+    mergePreAppMarks(current);
     current.record("signed_in_surface_ready_v1", {
       segment,
       surface_visible: true,
@@ -221,7 +237,9 @@ export function recordAppBootstrapFailed(
 ): void {
   if (appReadyRecorded || failed) return;
   failed = true;
-  getTrace().record("app_bootstrap_failed_v2", {
+  const current = getTrace();
+  mergePreAppMarks(current);
+  current.record("app_bootstrap_failed_v2", {
     surface_visible: true,
     details: { phase, error_name: errorName },
   });
