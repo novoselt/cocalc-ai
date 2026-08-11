@@ -5,93 +5,22 @@
 
 import { Button, Col, Flex, Row, Typography } from "antd";
 
-import type { IconName } from "@cocalc/frontend/components/icon";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
 import { COLORS } from "@cocalc/util/theme";
-import {
-  PUBLIC_ELEVATION,
-  PUBLIC_COLORS,
-  PUBLIC_RADIUS,
-  PUBLIC_TYPE,
-} from "@cocalc/frontend/public/theme";
+import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureAsset,
   LinkButton,
 } from "./page-components";
-import { FEATURE_ACCENTS } from "./feature-accents";
-import { FeatureInfo, FeatureInfoHeading } from "./feature-info";
-import { FeatureFinalBand, IconBadge } from "./feature-visuals";
+import { FeatureInfo, FeatureInfoHeading, ZoomableImage } from "./feature-info";
+import { FeatureFinalBand } from "./feature-visuals";
 
-const { Paragraph, Text, Title } = Typography;
+const { Paragraph, Title } = Typography;
 
 const OCTAVE_KERNEL_GUIDE = "docs/jupyter/install-octave-kernel";
 const OCTAVE_IMAGE = "rootfs/octave-11-3";
-
-function OctaveProjectMock() {
-  const projectItems = [
-    ["file-code", "solver.m", "source file"],
-    ["jupyter", "analysis.ipynb", "interactive notebook"],
-    ["terminal", "terminal run", "plots and output"],
-  ] satisfies [IconName, string, string][];
-
-  return (
-    <div
-      aria-label="Illustration of Octave scripts, notebooks, and terminal workflows in CoCalc"
-      role="img"
-      style={{
-        background:
-          "linear-gradient(145deg, #ffffff 0%, #fff7f1 52%, #f4f9ff 100%)",
-        border: `1px solid ${PUBLIC_COLORS.border}`,
-        borderRadius: PUBLIC_RADIUS.panel,
-        boxShadow: PUBLIC_ELEVATION.lg,
-        padding: 20,
-      }}
-    >
-      <Flex vertical gap={16}>
-        <Flex align="center" justify="space-between" wrap gap={10}>
-          <Flex align="center" gap={10}>
-            <IconBadge accent={FEATURE_ACCENTS.octave} icon="octave" />
-            <div>
-              <Text strong>Octave project</Text>
-              <div style={{ color: PUBLIC_COLORS.mutedText }}>
-                notebooks, .m files, plots, terminal runs, and TimeTravel
-                history
-              </div>
-            </div>
-          </Flex>
-        </Flex>
-
-        <Flex wrap gap={10}>
-          {projectItems.map(([icon, title, body]) => (
-            <div
-              key={title}
-              style={{
-                background: PUBLIC_COLORS.surface,
-                border: `1px solid ${PUBLIC_COLORS.border}`,
-                borderRadius: PUBLIC_RADIUS.panel,
-                flex: "1 1 160px",
-                padding: "10px 12px",
-              }}
-            >
-              <Flex align="center" gap={10}>
-                <IconBadge
-                  accent={FEATURE_ACCENTS.octave}
-                  icon={icon}
-                  size="sm"
-                />
-                <div>
-                  <Text strong>{title}</Text>
-                  <div style={{ color: PUBLIC_COLORS.mutedText }}>{body}</div>
-                </div>
-              </Flex>
-            </div>
-          ))}
-        </Flex>
-      </Flex>
-    </div>
-  );
-}
 
 export default function OctaveFeaturePage({
   helpEmail,
@@ -132,7 +61,11 @@ export default function OctaveFeaturePage({
             </Flex>
           </Col>
           <Col xs={24} lg={13}>
-            <OctaveProjectMock />
+            <ZoomableImage
+              alt="A 3D sombrero surface plotted by Octave in a CoCalc Jupyter notebook"
+              priority
+              src={featureAsset("cocalc-octave-sombrero-20260811.png")}
+            />
           </Col>
         </Row>
       </PublicSection>
@@ -181,10 +114,8 @@ export default function OctaveFeaturePage({
       <PublicSection>
         <FeatureInfo
           accent={COLORS.FEATURE_OCTAVE_BLUE}
-          alt="A 3D sombrero surface plotted by Octave in a CoCalc Jupyter notebook"
           anchor="a-notebooks"
           icon="jupyter"
-          image="cocalc-octave-sombrero-20260811.png"
           title="Octave in Jupyter notebooks"
         >
           <Paragraph>
@@ -197,6 +128,11 @@ export default function OctaveFeaturePage({
             The notebook itself is a collaborative CoCalc document:{" "}
             <strong>real-time editing with visible cursors</strong>, chat
             threads anchored to cells, and TimeTravel recording every change.
+            The{" "}
+            <a href={appPath("features/jupyter-notebook")}>
+              Jupyter notebooks page
+            </a>{" "}
+            covers the editor in detail.
           </Paragraph>
         </FeatureInfo>
       </PublicSection>
