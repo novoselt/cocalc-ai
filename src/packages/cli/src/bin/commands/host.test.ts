@@ -668,6 +668,7 @@ function makeDeps(
                 machine: {
                   cloud: "nebius",
                   machine_type: request.machine_type,
+                  disk_gb: request.disk_gb,
                   shared_disk_gb: request.delete_shared_scratch
                     ? undefined
                     : request.shared_disk_gb,
@@ -988,6 +989,43 @@ test("host machine-type updates a resolved host through the validated API", asyn
   });
   assert.equal(capture.data.host_id, "host-id");
   assert.equal(capture.data.machine_type, "t2d-standard-16");
+});
+
+test("host disk-size grows a resolved host through the validated API", async () => {
+  const capture: Capture = {
+    upgrades: [],
+    reconciles: [],
+    rollouts: [],
+    runtimeDeploymentReconciles: [],
+    runtimeDeploymentStatusRequests: [],
+    runtimeDeploymentSetRequests: [],
+  };
+  const deps = makeDeps(capture, {
+    resolveHost: async () => ({
+      id: "host-id",
+      name: "asia-3",
+      status: "running",
+      machine: { disk_gb: 250 },
+    }),
+  });
+  const program = new Command();
+  registerHostCommand(program, deps);
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "host",
+    "disk-size",
+    "asia-3",
+    "310",
+  ]);
+
+  assert.deepEqual(capture.hostMachineUpdates?.[0], {
+    id: "host-id",
+    disk_gb: 310,
+  });
+  assert.equal(capture.data.host_id, "host-id");
+  assert.equal(capture.data.disk_gb, 310);
 });
 
 test("host funding-mode updates a resolved stopped host", async () => {

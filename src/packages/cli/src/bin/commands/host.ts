@@ -1837,6 +1837,36 @@ export function registerHostCommand(
     );
 
   host
+    .command("disk-size <host> <disk-gb>")
+    .description("grow a managed host's main disk and online filesystem")
+    .action(
+      async (hostIdentifier: string, diskGb: string, command: Command) => {
+        await withContext(command, "host disk-size", async (ctx) => {
+          const h = await resolveHost(ctx, hostIdentifier, {
+            admin_view: true,
+          });
+          const requestedDiskGb = parseOptionalPositiveInteger(
+            diskGb,
+            "disk-gb",
+          );
+          if (requestedDiskGb == null) {
+            throw new Error("disk size must be a positive integer");
+          }
+          const updated = await ctx.hub.hosts.updateHostMachine({
+            id: h.id,
+            disk_gb: requestedDiskGb,
+          });
+          return {
+            host_id: updated.id,
+            name: updated.name ?? h.name ?? null,
+            status: updated.status ?? null,
+            disk_gb: updated.machine?.disk_gb ?? requestedDiskGb,
+          };
+        });
+      },
+    );
+
+  host
     .command("funding-mode <host> <funding-mode>")
     .description(
       "change host funding (only live site-funded corrections may run without stopping)",
