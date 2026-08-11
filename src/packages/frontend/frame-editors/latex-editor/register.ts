@@ -12,6 +12,7 @@ import { register_file_editor } from "../frame-tree/register";
 for (const ext of KNITR_EXTS.concat(["tex"])) {
   register_file_editor({
     ext: ext,
+    codemirror: true,
     editor: async () => await import("./editor"),
     actions: async () => {
       // Load plugin so that codemirror can automatically close latex environments.

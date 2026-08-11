@@ -11,6 +11,7 @@ import { register_file_editor } from "../frame-tree/register";
 
 register_file_editor({
   ext: "qmd",
+  codemirror: true,
   editor: async () => await import("./editor"),
   actions: async () => await import("./actions"),
 });

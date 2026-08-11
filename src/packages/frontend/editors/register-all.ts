@@ -25,6 +25,3 @@ import "../frame-editors/register";
 
 // Unknown files
 import "./unknown/register";
-
-// Ensure that we load all the codemirror plugins, modes, etc.
-import "@cocalc/frontend/codemirror/init";

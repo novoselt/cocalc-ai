@@ -19,6 +19,7 @@ for (const ext in file_associations) {
 
 register_file_editor({
   ext: extensions,
+  codemirror: true,
   editor: async () => await import("./editor"),
   actions: async () => await import("./actions"),
 });
