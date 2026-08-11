@@ -838,7 +838,7 @@ describe("PublicApp", () => {
     });
     expect(reportLink).toHaveAttribute(
       "href",
-      "/public/documents/SageMathInc_VPAT2.5Rev_WCAG_February2025_December2025.html",
+      "/public/documents/SageMathInc_ACR_VPAT2.5Rev_WCAG_August2026.html",
     );
     expect(reportLink).toHaveAttribute("target", "_blank");
     expect(reportLink).toHaveAttribute("rel", "noopener");
@@ -848,7 +848,7 @@ describe("PublicApp", () => {
     const reportHtml = readFileSync(
       join(
         __dirname,
-        "../../../assets/public/documents/SageMathInc_VPAT2.5Rev_WCAG_February2025_December2025.html",
+        "../../../assets/public/documents/SageMathInc_ACR_VPAT2.5Rev_WCAG_August2026.html",
       ),
       "utf8",
     );
@@ -869,7 +869,13 @@ describe("PublicApp", () => {
     expect(
       report.getByText("CoCalc.ai web application (continuously delivered)"),
     ).not.toBeNull();
+    expect(report.getByText("August 10, 2026")).not.toBeNull();
     expect(report.getByText(/excludes user-authored content;/)).not.toBeNull();
+    expect(
+      report.getByText(
+        /No screen-reader or other assistive-technology testing/,
+      ),
+    ).not.toBeNull();
 
     const tables = report.getAllByRole("table");
     expect(tables).toHaveLength(3);
@@ -886,6 +892,16 @@ describe("PublicApp", () => {
       within(tables[2]).getByRole("rowheader", {
         name: /2\.5\.7 Dragging Movements/,
       }),
+    ).not.toBeNull();
+    const statusMessagesRow = within(tables[2])
+      .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
+      .closest("tr");
+    expect(statusMessagesRow).not.toBeNull();
+    expect(
+      within(statusMessagesRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(statusMessagesRow!).getByText(/main connection-status indicator/),
     ).not.toBeNull();
     expect(reportHtml).toContain("@media screen and (max-width: 50rem)");
     expect(reportHtml).not.toContain("overflow-x");

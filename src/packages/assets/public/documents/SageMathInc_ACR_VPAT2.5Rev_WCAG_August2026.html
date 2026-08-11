@@ -310,7 +310,7 @@
         <dt>Name of Product/Version:</dt>
         <dd>CoCalc.ai web application (continuously delivered)</dd>
         <dt>Report Date:</dt>
-        <dd>December 2025</dd>
+        <dd>August 10, 2026</dd>
         <dt>Product Description:</dt>
         <dd>
           Browser-based collaborative computing and development application
@@ -329,9 +329,18 @@
         </dd>
         <dt>Evaluation Methods Used:</dt>
         <dd>
-          Answers are provided by a user very familiar with the system including
-          some of its internal components, using also a sample of automatic
-          scans of several pages.
+          Evaluation included source-code review and automated testing in Google
+          Chrome 151.0.7922.108. Lighthouse 13.4.1 was run at a 1440 by 1000
+          CSS-pixel viewport against 16 public production pages and 15
+          authenticated pages in a development build. axe-core 4.12.1 was run
+          against six representative interactive states, with programmatic
+          keyboard activation and focus assertions for selected states. All 16
+          public production pages and 13 of the 15 authenticated pages received
+          Lighthouse accessibility scores of 100. Five of the six interactive
+          states had no axe violations; the sixth reported the same unnamed
+          switch found by Lighthouse. Automated testing does not establish
+          complete WCAG conformance. No screen-reader or other
+          assistive-technology testing was performed.
         </dd>
       </dl>
       <p>
@@ -468,10 +477,10 @@
                   </th>
                   <td>Partially supports</td>
                   <td>
-                    While we are aware of the need to have alternative text
-                    throughout and have it in some places, the coverage is not
-                    uniform nor complete. We are working on gradually completing
-                    this coverage.
+                    Automated testing found an account avatar image without
+                    alternative text. Other image alternative-text checks passed
+                    in the sampled pages, but the sample does not cover every
+                    non-text element.
                   </td>
                 </tr>
                 <tr>
@@ -612,9 +621,10 @@
                   </th>
                   <td>Does not support</td>
                   <td>
-                    While some content and functionality are accessible using
-                    keyboard only, some important controls cannot be accessed
-                    and overall keyboard only interaction is likely impossible.
+                    Selected dialogs and controls passed programmatic keyboard
+                    activation and focus checks. Source review still found
+                    mouse-only controls, and representative keyboard-only
+                    operation of the application was not established.
                   </td>
                 </tr>
                 <tr>
@@ -655,10 +665,10 @@
                   </th>
                   <td>Partially supports</td>
                   <td>
-                    Some system messages and warnings may disappear without
-                    explicit user interaction and this timing is not adjustable,
-                    hence it is possible that some users won’t be able to read
-                    the message.
+                    Some notifications close automatically after fixed
+                    durations. Pointer users can pause them by hovering, but the
+                    duration is not user-adjustable and equivalent keyboard
+                    pause behavior was not established.
                   </td>
                 </tr>
                 <tr>
@@ -707,7 +717,11 @@
                     <span>(Level A)</span>
                   </th>
                   <td>Does not support</td>
-                  <td>Depends on sensible keyboard navigation.</td>
+                  <td>
+                    Source review did not identify a general skip link or
+                    equivalent bypass mechanism in the first-party application
+                    shell.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -721,12 +735,10 @@
                   </th>
                   <td>Supports</td>
                   <td>
-                    “In cases such as Single Page Applications (SPAs), where
-                    various distinct pages/views are all nominally served from
-                    the same URI and the content of the page is changed
-                    dynamically, the title of the page should also be changed
-                    dynamically to reflect the content or topic of the current
-                    view. “
+                    All 31 sampled page states passed Lighthouse’s
+                    document-title check. Title accuracy across every
+                    single-page application transition was not manually
+                    reviewed.
                   </td>
                 </tr>
                 <tr>
@@ -807,7 +819,10 @@
                     <span>(Level A 2.1 and 2.2)</span>
                   </th>
                   <td>Not applicable</td>
-                  <td>CoCalc does not use motion actuation</td>
+                  <td>
+                    Source review found no use of the DeviceMotion or
+                    DeviceOrientation APIs in first-party interfaces.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -820,7 +835,12 @@
                     <span>(Level A)</span>
                   </th>
                   <td>Partially supports</td>
-                  <td>Some pages do not indicate the main language</td>
+                  <td>
+                    All 31 sampled English page states passed automated
+                    document-language checks. The application shell declares
+                    English, but changing the interface locale does not update
+                    the document language.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -899,7 +919,11 @@
                     <span>(Level A)</span>
                   </th>
                   <td>Partially supports</td>
-                  <td></td>
+                  <td>
+                    Automated testing found a visible “Help” label that was not
+                    programmatically associated with its switch and an avatar
+                    upload control without an accessible name.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -956,7 +980,11 @@
                     <span>(Level A)</span>
                   </th>
                   <td>Partially supports</td>
-                  <td>Work in progress to cover more elements.</td>
+                  <td>
+                    Automated testing found an avatar upload control and a
+                    project-settings switch without accessible names. Other
+                    sampled automated name, role, and value checks passed.
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -1240,8 +1268,9 @@
                   </th>
                   <td>Supports</td>
                   <td>
-                    “The size of the target for pointer inputs is at least 24 by
-                    24 CSS pixels”
+                    All 31 sampled wide-viewport page states passed Lighthouse’s
+                    automated target-size check. This does not cover every
+                    control or viewport.
                   </td>
                 </tr>
                 <tr>
@@ -1350,13 +1379,14 @@
                     >
                     <span>(Level AA 2.1 and 2.2)</span>
                   </th>
-                  <td>Does not support</td>
+                  <td>Partially supports</td>
                   <td>
-                    “Let assistive technology notify users about status changes
-                    that don&#x27;t take focus.” The important changes are
-                    probably losing connection to the server and kernel crashes,
-                    things like RAM gauges should not attract attention on their
-                    own.
+                    Some first-party status messages use <code>aria-live</code>,
+                    <code>role="alert"</code>, or Ant Design notifications whose
+                    default role is <code>alert</code>. Other important changes,
+                    including the main connection-status indicator, are not
+                    exposed as status or alert regions. No assistive-technology
+                    testing was performed.
                   </td>
                 </tr>
               </tbody>
