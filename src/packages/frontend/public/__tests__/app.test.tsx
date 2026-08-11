@@ -1003,6 +1003,16 @@ describe("PublicApp", () => {
     expect(
       within(reflowRow!).getByText(/settings required horizontal scrolling/),
     ).not.toBeNull();
+    const multipleWaysRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.4\.5 Multiple Ways/ })
+      .closest("tr");
+    expect(multipleWaysRow).not.toBeNull();
+    expect(within(multipleWaysRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(multipleWaysRow!).getByText(
+        /same destinations as the persistent Settings navigation/,
+      ),
+    ).not.toBeNull();
     const headingsAndLabelsRow = within(tables[2])
       .getByRole("rowheader", { name: /2\.4\.6 Headings and Labels/ })
       .closest("tr");
