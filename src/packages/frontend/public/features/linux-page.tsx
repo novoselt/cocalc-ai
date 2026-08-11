@@ -311,18 +311,20 @@ kill $SERVER_PID`}
           title="Run web apps and services"
         >
           <Paragraph>
-            Start a development server on any port and CoCalc{" "}
-            <strong>detects the listening port</strong> and offers a project URL
-            for it, proxied behind your login with websocket support. That
-            covers Flask and Node dev servers, dashboards, documentation
-            previews, and anything else that speaks HTTP.
+            Start a development server on any port and the project's Apps panel{" "}
+            <strong>lists it as a detected running HTTP app</strong>: turn it
+            into an app entry with one click and open it through a project URL,
+            proxied behind your login with websocket support. That covers Flask
+            and Node dev servers, dashboards, documentation previews, and
+            anything else that speaks HTTP.
           </Paragraph>
           <Paragraph>
-            The Apps panel also launches{" "}
-            <strong>JupyterLab, VS Code, Pluto, and an R IDE</strong> with one
-            click, running on your project's Linux system with your files and
-            software. A managed app can optionally be exposed on a public
-            subdomain when you want to share a running service.
+            An app can also be <strong>defined up front</strong>, with its
+            command and port, so CoCalc starts it and wakes it when someone
+            opens the URL. The Apps panel launches JupyterLab, VS Code, Pluto,
+            and an R IDE the same way, and a managed app can optionally be
+            exposed on a public subdomain when you want to share a running
+            service.
           </Paragraph>
         </FeatureInfo>
       </PublicSection>
