@@ -22,6 +22,16 @@ const loadAndAppForbidden = [
   "frontend/codemirror/static.js",
   "cheerio/",
   "@uiw/react-textarea-code-editor/",
+  "node_modules/.pnpm/katex@",
+  "node_modules/.pnpm/slate@",
+  "node_modules/.pnpm/slate-react@",
+  "frontend/components/markdown.tsx",
+  "frontend/editors/slate/editable-markdown.tsx",
+  "frontend/editors/slate/static-markdown.tsx",
+  "frontend/editors/stopwatch/stopwatch.tsx",
+  "frontend/markdown/component.tsx",
+  "frontend/markdown/markdown-input/main.tsx",
+  "dropzone/",
 ];
 
 const initialProjectSurfaceForbidden = [
@@ -67,6 +77,19 @@ const publicNotebookForbidden = [
   "frontend/jupyter/cell-list.tsx",
   "frontend/jupyter/browser-actions.ts",
   "frontend/jupyter/codemirror-component.tsx",
+];
+
+const grandfatheredMatches = [
+  {
+    chunk: "public-viewer-md",
+    pattern: "frontend/conat/client.ts",
+    reason: "existing public Markdown viewer control-plane dependency",
+  },
+  {
+    chunk: "public",
+    pattern: "frontend/components/iconfont.cn/",
+    reason: "existing public-site icon bundle",
+  },
 ];
 
 function findGroup(moduleSuffix, request) {
@@ -151,6 +174,7 @@ const rules = [
 ];
 
 let failed = false;
+let grandfatheredCount = 0;
 
 function ensureChunk(name) {
   const chunk = chunks?.[name];
@@ -195,6 +219,13 @@ for (const rule of rules) {
     for (const pattern of rule.forbidden) {
       const match = modules.find((moduleName) => moduleName.includes(pattern));
       if (match != null) {
+        const grandfathered = grandfatheredMatches.find(
+          (entry) => entry.chunk === chunkName && entry.pattern === pattern,
+        );
+        if (grandfathered != null) {
+          grandfatheredCount += 1;
+          continue;
+        }
         failed = true;
         console.error(
           `${chunkName}: matched forbidden module pattern "${pattern}" in ${rule.label}`,
@@ -211,7 +242,7 @@ for (const rule of rules) {
 
 if (!failed) {
   console.log(
-    `checked ${Object.keys(chunks ?? {}).length} named chunks against module guards`,
+    `checked ${Object.keys(chunks ?? {}).length} named chunks against module guards (${grandfatheredCount} grandfathered matches)`,
   );
 }
 

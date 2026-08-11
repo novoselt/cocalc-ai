@@ -8,7 +8,7 @@ import { useMemo } from "react";
 
 import { CSS, TypedMap } from "@cocalc/frontend/app-framework";
 import { Icon, IconName, Loading } from "./index";
-import { Markdown } from "./markdown";
+import Markdown from "./lazy-markdown";
 
 export interface TableOfContentsEntry {
   id: string; // id that is jumped to when entry is clicked -- must be unique across the table of contents

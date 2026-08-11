@@ -1,7 +1,7 @@
 import { CSS } from "@cocalc/frontend/app-framework";
 import { useBottomScroller } from "@cocalc/frontend/app-framework/use-bottom-scroller";
 import { Paragraph } from "@cocalc/frontend/components";
-import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
+import StaticMarkdown from "./lazy-static-markdown";
 import { COLORS } from "@cocalc/util/theme";
 import type { RefObject } from "react";
 

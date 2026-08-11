@@ -8,7 +8,7 @@ jQuery plugin to use KaTeX when possible to typeset all the math in a
 jQuery DOM tree.
 */
 
-import { stripMathEnvironment } from "@cocalc/frontend/editors/slate/elements/math/index";
+import { stripMathEnvironment } from "@cocalc/frontend/editors/slate/elements/math/strip-math-environment";
 import $ from "jquery";
 import { tex2jax } from "./tex2jax";
 import { macros } from "./math-katex";

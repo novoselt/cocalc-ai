@@ -29,7 +29,7 @@ import { getExternalSideChatDesc } from "@cocalc/frontend/chat/external-side-cha
 import { chatMetaFile } from "@cocalc/frontend/chat/paths";
 import type { ChatState } from "@cocalc/frontend/chat/chat-indicator";
 import { Loading } from "@cocalc/frontend/components";
-import KaTeX from "@cocalc/frontend/components/math/katex";
+import KaTeX from "@cocalc/frontend/components/math/lazy-katex";
 import getMermaid from "@cocalc/frontend/editors/slate/elements/code-block/get-mermaid";
 import { IS_MOBILE, IS_TOUCH } from "@cocalc/frontend/feature";
 import { lite } from "@cocalc/frontend/lite";

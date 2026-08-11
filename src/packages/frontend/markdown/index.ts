@@ -22,8 +22,6 @@ import { mentionPlugin } from "./mentions-plugin";
 import mathPlugin from "./math-plugin";
 import { blankLinesPlugin } from "./blank-lines-plugin";
 export { parseHeader } from "./header";
-import Markdown from "./component";
-export { Markdown };
 
 const MarkdownItFrontMatter = require("markdown-it-front-matter");
 

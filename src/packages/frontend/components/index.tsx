@@ -11,7 +11,6 @@ import Delay from "./delay";
 
 export type { MenuItems } from "./dropdown-menu";
 
-export { MarkdownInput } from "../markdown/markdown-input/main";
 export { A } from "./A";
 export { ActivityDisplay } from "./activity-display";
 export { CloseX } from "./close-x";
@@ -30,7 +29,7 @@ export { AIModelLink } from "./ai-model-link";
 export { Loading, Estimate as LoadingEstimate } from "./loading";
 export { LoginLink } from "./login-link";
 export { MarkAll } from "./mark-all";
-export { Markdown } from "./markdown";
+export { default as Markdown } from "./lazy-markdown";
 export { NoWrap } from "./nowrap";
 export { NumberInput } from "./number-input";
 export { PathLink } from "./path-link";

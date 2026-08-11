@@ -7,11 +7,8 @@
 Panel for configuring peer grading.
 */
 
-import {
-  DateTimePicker,
-  Icon,
-  MarkdownInput,
-} from "@cocalc/frontend/components";
+import { DateTimePicker, Icon } from "@cocalc/frontend/components";
+import { MarkdownInput } from "@cocalc/frontend/markdown/markdown-input/main";
 import { server_days_ago } from "@cocalc/util/misc";
 import { Button, Card, Col, InputNumber, Row, Switch, Typography } from "antd";
 import { CourseActions } from "../actions";

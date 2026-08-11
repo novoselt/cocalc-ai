@@ -28,7 +28,7 @@ import {
   recordProjectionHistoryGap,
   recordProjectionRepair,
 } from "@cocalc/frontend/projection-diagnostics";
-import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
+import StaticMarkdown from "@cocalc/frontend/components/lazy-static-markdown";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { NewsItemWebapp, SYSTEM_CHANNEL } from "@cocalc/util/types/news";
 import { isExamMode } from "@cocalc/frontend/customize/exam-mode";

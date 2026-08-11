@@ -19,7 +19,7 @@ import "../jquery-plugins";
 import { init as initAccount } from "../account";
 import { init as initApp } from "../app/init";
 import { init as initProjects } from "../projects";
-import { init as initMarkdown } from "../markdown/markdown-input/main";
+import { init as initMarkdown } from "../markdown/markdown-input/init";
 import { init as initCrashBanner } from "../crash-banner";
 import { init as initCustomize } from "../customize";
 
