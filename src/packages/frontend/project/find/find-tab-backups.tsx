@@ -127,6 +127,9 @@ export function BackupsTab({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [truncationReason, setTruncationReason] = useState<
+    "results" | "time" | null
+  >(null);
   const [results, setResults] = useState<BackupResult[]>([]);
   const [backupIds, setBackupIds] = useState<string[] | undefined>();
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -228,11 +231,13 @@ export function BackupsTab({
       if (!q) {
         setResults([]);
         setError(null);
+        setTruncationReason(null);
         return;
       }
       if (scopeOutsideHome) {
         setResults([]);
         setError("Backups only include files under HOME.");
+        setTruncationReason(null);
         return;
       }
       if (backupName && backupIds === undefined) {
@@ -247,6 +252,7 @@ export function BackupsTab({
       }
       setLoading(true);
       setError(null);
+      setTruncationReason(null);
       try {
         const normalized = normalizeGlobQuery(q);
         const payload = {
@@ -255,8 +261,10 @@ export function BackupsTab({
           iglob: state.caseSensitive ? undefined : [normalized],
           path: backupScopePath || undefined,
           ids: backupIds && backupIds.length ? backupIds : undefined,
+          preview: true as const,
         };
-        const raw = await findBackupFiles(payload);
+        const response = await findBackupFiles(payload);
+        const raw = response.results;
         const filtered = raw
           .map((item) => {
             const time = coerceDate(item.time);
@@ -281,6 +289,9 @@ export function BackupsTab({
         const deduped =
           state.mode === "files" ? dedupeBackupResults(filtered) : filtered;
         setResults(deduped);
+        setTruncationReason(
+          response.truncated ? (response.truncationReason ?? "results") : null,
+        );
       } catch (err) {
         setError(`${err}`);
       } finally {
@@ -526,6 +537,7 @@ export function BackupsTab({
           setState({ query: "", filter: "" });
           setResults([]);
           setError(null);
+          setTruncationReason(null);
         }}
         on_down={() => moveSelection(1)}
         on_up={() => moveSelection(-1)}
@@ -609,7 +621,21 @@ export function BackupsTab({
           <Loading />
         </div>
       ) : null}
-      {!loading && state.query.trim() && filteredResults.length === 0 ? (
+      {!loading && truncationReason ? (
+        <Alert
+          style={{ marginTop: "10px" }}
+          type="warning"
+          title={
+            truncationReason === "results"
+              ? "Showing the first 100 matches. Some results were omitted; tighten the search to find a specific file."
+              : `Showing ${results.length} matches found in the first 5 seconds. The search is incomplete; tighten it for more specific results.`
+          }
+        />
+      ) : null}
+      {!loading &&
+      !truncationReason &&
+      state.query.trim() &&
+      filteredResults.length === 0 ? (
         <Alert
           style={{ marginTop: "10px" }}
           type="warning"

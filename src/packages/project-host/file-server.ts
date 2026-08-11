@@ -232,7 +232,11 @@ import { subvolume } from "@cocalc/file-server/btrfs/subvolume";
 import { ensureRootfsRusticRepoProfile } from "./rootfs-rustic";
 import { createLegacyProjectArchiveHandlers } from "./legacy-migration/project-archive";
 import { ProjectVolumeQuotaManager } from "./project-volume-quota-manager";
-import { rusticBackupBrowser } from "./rustic-backup-browser";
+import {
+  rusticBackupBrowser,
+  type BackupBrowserSearchResponse,
+  type BackupBrowserSearchResult,
+} from "./rustic-backup-browser";
 
 type SshTarget = { type: "project"; project_id: string };
 
@@ -4452,30 +4456,25 @@ async function findBackupFiles({
   iglob,
   path,
   ids,
+  preview,
 }: {
   project_id: string;
   glob?: string[];
   iglob?: string[];
   path?: string;
   ids?: string[];
-}): Promise<
-  {
-    id: string;
-    time: Date;
-    path: string;
-    isDir: boolean;
-    mtime: number;
-    size: number;
-  }[]
-> {
-  return await rusticBackupBrowser.find({
+  preview?: boolean;
+}): Promise<BackupBrowserSearchResult[] | BackupBrowserSearchResponse> {
+  const response = await rusticBackupBrowser.find({
     profilePath: await resolveRusticRepo(project_id),
     projectId: project_id,
     glob,
     iglob,
     path,
     ids,
+    preview,
   });
+  return preview ? response : response.results;
 }
 
 async function getBackupFileText({
@@ -5318,7 +5317,13 @@ export function closeFileServer() {
 }
 
 let cachedClient: null | Fileserver = null;
-export function fileServerClient(client: ConatClient): Fileserver {
+export function fileServerClient(
+  client: ConatClient,
+  timeout?: number,
+): Fileserver {
+  if (timeout != null) {
+    return createFileClient({ client, timeout });
+  }
   cachedClient ??= createFileClient({ client });
   return cachedClient!;
 }

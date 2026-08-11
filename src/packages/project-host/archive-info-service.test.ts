@@ -91,6 +91,10 @@ describe("project archive info service", () => {
         {} as any,
       ),
     ).resolves.toHaveLength(1);
+    expect(fileServerClientMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      2 * 60_000,
+    );
     await expect(
       handleProjectGetBackupFileTextRequest.call(
         { subject },

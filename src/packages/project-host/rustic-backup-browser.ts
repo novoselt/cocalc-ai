@@ -25,6 +25,8 @@ const REQUEST_TIMEOUT_MS = 30 * 1000;
 const MAX_DAV_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES = 50_000;
 const MAX_SEARCH_RESULTS = 10_000;
+const MAX_SEARCH_PREVIEW_RESULTS = 100;
+const MAX_SEARCH_PREVIEW_TIME_MS = 5_000;
 const MAX_SEARCH_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_SEARCH_TIME_MS = 45 * 1000;
 const MAX_HELPER_AGE_MS = 30 * 60 * 1000;
@@ -50,6 +52,14 @@ export interface BackupBrowserSearchResult extends BackupBrowserEntry {
   id: string;
   time: Date;
   path: string;
+}
+
+export type BackupBrowserSearchTruncationReason = "results" | "time";
+
+export interface BackupBrowserSearchResponse {
+  results: BackupBrowserSearchResult[];
+  truncated: boolean;
+  truncationReason?: BackupBrowserSearchTruncationReason;
 }
 
 interface DavEntry {
@@ -103,6 +113,13 @@ export class BackupBrowserLimitError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "BackupBrowserLimitError";
+  }
+}
+
+class BackupBrowserSearchComplete extends Error {
+  constructor(public readonly reason: BackupBrowserSearchTruncationReason) {
+    super(`backup search preview stopped after reaching the ${reason} limit`);
+    this.name = "BackupBrowserSearchComplete";
   }
 }
 
@@ -539,7 +556,11 @@ export class RusticFindOutputParser {
   private groupHasEntries = false;
   readonly results: BackupBrowserSearchResult[] = [];
 
-  constructor(snapshots: BackupBrowserSnapshot[], scope?: string) {
+  constructor(
+    snapshots: BackupBrowserSnapshot[],
+    scope?: string,
+    private readonly maxResults = MAX_SEARCH_RESULTS,
+  ) {
     this.snapshotById = new Map(
       snapshots.map((snapshot) => [snapshot.id, snapshot]),
     );
@@ -613,16 +634,14 @@ export class RusticFindOutputParser {
       const key = `${snapshot.id}\0${entry.path}`;
       if (this.seen.has(key)) continue;
       this.seen.add(key);
+      if (this.results.length >= this.maxResults) {
+        throw new BackupBrowserSearchComplete("results");
+      }
       this.results.push({
         ...entry,
         id: snapshot.id,
         time: snapshot.time,
       });
-      if (this.results.length > MAX_SEARCH_RESULTS) {
-        throw new BackupBrowserLimitError(
-          `backup search found more than ${MAX_SEARCH_RESULTS.toLocaleString()} results; use a narrower pattern`,
-        );
-      }
     }
   }
 }
@@ -668,15 +687,23 @@ async function runRusticFind({
   glob,
   iglob,
   path,
+  preview,
 }: {
   profilePath: string;
   snapshots: BackupBrowserSnapshot[];
   glob?: string[];
   iglob?: string[];
   path?: string;
-}): Promise<BackupBrowserSearchResult[]> {
-  if (!snapshots.length || (!glob?.length && !iglob?.length)) return [];
-  const parser = new RusticFindOutputParser(snapshots, path);
+  preview?: boolean;
+}): Promise<BackupBrowserSearchResponse> {
+  if (!snapshots.length || (!glob?.length && !iglob?.length)) {
+    return { results: [], truncated: false };
+  }
+  const parser = new RusticFindOutputParser(
+    snapshots,
+    path,
+    preview ? MAX_SEARCH_PREVIEW_RESULTS : MAX_SEARCH_RESULTS,
+  );
   const args = rusticFindArgs({ profilePath, snapshots, glob, iglob });
   const supervisor = [
     "read -r _ <&3 || exit 125",
@@ -726,10 +753,11 @@ async function runRusticFind({
   (gate as NodeJS.WritableStream).write("start\n");
   (gate as NodeJS.WritableStream).end();
 
-  return await new Promise<BackupBrowserSearchResult[]>((resolve, reject) => {
+  return await new Promise<BackupBrowserSearchResponse>((resolve, reject) => {
     let outputBytes = 0;
     let stderr = "";
     let fatal: Error | undefined;
+    let completedEarly: BackupBrowserSearchTruncationReason | undefined;
     const stop = (err: Error) => {
       if (fatal) return;
       fatal = err;
@@ -737,18 +765,30 @@ async function runRusticFind({
       const killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
       killTimer.unref();
     };
+    const completeEarly = (reason: BackupBrowserSearchTruncationReason) => {
+      if (fatal || completedEarly) return;
+      completedEarly = reason;
+      child.kill("SIGTERM");
+      const killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      killTimer.unref();
+    };
     const timer = setTimeout(
-      () =>
-        stop(
-          new BackupBrowserLimitError(
-            `backup search exceeded ${MAX_SEARCH_TIME_MS / 1000} seconds; narrow the pattern or search path`,
-          ),
-        ),
-      MAX_SEARCH_TIME_MS,
+      () => {
+        if (preview) {
+          completeEarly("time");
+        } else {
+          stop(
+            new BackupBrowserLimitError(
+              `backup search exceeded ${MAX_SEARCH_TIME_MS / 1000} seconds; narrow the pattern or search path`,
+            ),
+          );
+        }
+      },
+      preview ? MAX_SEARCH_PREVIEW_TIME_MS : MAX_SEARCH_TIME_MS,
     );
     timer.unref();
     child.stdout?.on("data", (chunk: Buffer) => {
-      if (fatal) return;
+      if (fatal || completedEarly) return;
       outputBytes += chunk.length;
       if (outputBytes > MAX_SEARCH_OUTPUT_BYTES) {
         stop(
@@ -761,7 +801,11 @@ async function runRusticFind({
       try {
         parser.push(chunk);
       } catch (err) {
-        stop(err instanceof Error ? err : new Error(`${err}`));
+        if (err instanceof BackupBrowserSearchComplete) {
+          completeEarly(err.reason);
+        } else {
+          stop(err instanceof Error ? err : new Error(`${err}`));
+        }
       }
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
@@ -774,6 +818,14 @@ async function runRusticFind({
         reject(fatal);
         return;
       }
+      if (completedEarly) {
+        resolve({
+          results: parser.results,
+          truncated: true,
+          truncationReason: completedEarly,
+        });
+        return;
+      }
       if (code !== 0) {
         reject(
           new Error(
@@ -783,7 +835,7 @@ async function runRusticFind({
         return;
       }
       try {
-        resolve(parser.finish());
+        resolve({ results: parser.finish(), truncated: false });
       } catch (err) {
         reject(err);
       }
@@ -1074,6 +1126,7 @@ export class RusticBackupBrowserManager {
     iglob,
     path,
     ids,
+    preview,
   }: {
     profilePath: string;
     projectId: string;
@@ -1081,13 +1134,17 @@ export class RusticBackupBrowserManager {
     iglob?: string[];
     path?: string;
     ids?: string[];
-  }): Promise<BackupBrowserSearchResult[]> {
+    preview?: boolean;
+  }): Promise<BackupBrowserSearchResponse> {
     const instance = await this.get(profilePath);
     instance.lastUsed = this.now();
     const allowedIds = ids?.length ? new Set(ids) : undefined;
     const snapshots = (await instance.client.listBackups(projectId)).filter(
       ({ id }) => !allowedIds || allowedIds.has(id),
     );
+    if (preview) {
+      snapshots.sort((a, b) => b.time.getTime() - a.time.getTime());
+    }
     return await this.searchSerialized(
       async () =>
         await this.findNative({
@@ -1096,6 +1153,7 @@ export class RusticBackupBrowserManager {
           glob,
           iglob,
           path,
+          preview,
         }),
     );
   }

@@ -153,6 +153,30 @@ secret_access_key = "first-secret"
     ]);
   });
 
+  it("stops a preview parser before retaining more than its result limit", () => {
+    const snapshot = {
+      id: "f".repeat(64),
+      time: new Date("2026-08-01T00:00:00Z"),
+      summary: {},
+    };
+    const parser = new RusticFindOutputParser([snapshot], undefined, 1);
+    expect(() =>
+      parser.push(
+        Buffer.from(
+          [
+            `found in ${snapshot.id.slice(0, 8)} from 2026-08-01 00:00:00+0000`,
+            '-rw-r--r-- user group         1 10 Aug 2026 05:10 "first.pdf" ',
+            '-rw-r--r-- user group         2 10 Aug 2026 05:10 "second.pdf" ',
+            "",
+          ].join("\n"),
+        ),
+      ),
+    ).toThrow("results limit");
+    expect(parser.results).toEqual([
+      expect.objectContaining({ path: "first.pdf" }),
+    ]);
+  });
+
   it("uses Rustic exact-path lookup when the glob has no metacharacters", () => {
     const snapshots = [
       {
