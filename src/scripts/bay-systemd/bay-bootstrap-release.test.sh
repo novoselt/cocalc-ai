@@ -127,6 +127,15 @@ if (validate_release >/dev/null 2>&1); then
 fi
 touch "${VALIDATION_RELEASE}/scripts/bay-systemd/needrestart/cocalc-bay.conf"
 
+NEEDRESTART_POLICY_PATH="${TMP_ROOT}/etc/needrestart/conf.d/cocalc-bay.conf"
+printf '%s\n' 'test needrestart policy' \
+  >"${VALIDATION_RELEASE}/scripts/bay-systemd/needrestart/cocalc-bay.conf"
+install_needrestart_policy >/dev/null
+if [[ "$(cat "$NEEDRESTART_POLICY_PATH")" != "test needrestart policy" ]]; then
+  echo "static release needrestart policy was not installed" >&2
+  exit 1
+fi
+
 # Hub-only releases must remain deployable over static releases that predate
 # the bundled CDN. Static and full releases still fail closed without it.
 validate_release

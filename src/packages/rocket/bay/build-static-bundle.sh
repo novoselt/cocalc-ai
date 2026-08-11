@@ -111,6 +111,14 @@ copy_provider_setup_scripts() {
   fi
 }
 
+copy_needrestart_policy() {
+  local dest="$1"
+  echo "- Copy bay needrestart policy"
+  mkdir -p "$dest/scripts/bay-systemd/needrestart"
+  cp "scripts/bay-systemd/needrestart/cocalc-bay.conf" \
+    "$dest/scripts/bay-systemd/needrestart/"
+}
+
 mkdir -p "$OUT_PARENT"
 trap cleanup EXIT
 
@@ -154,6 +162,8 @@ copy_webapp_assets "$OUT"
 
 copy_provider_setup_scripts "$OUT"
 
+copy_needrestart_policy "$OUT"
+
 echo "- Write static manifest"
 node - "$OUT/bay-static-manifest.json" "$ROOT" <<'NODE'
 const fs = require("node:fs");
@@ -189,6 +199,7 @@ const manifest = {
     gcpSetup: "runtime/control-plane/bundle/gcp/gcp-setup.sh",
     computeVmSetup: "runtime/control-plane/bundle/gcp/compute-vm-setup.sh",
     nebiusSetup: "runtime/control-plane/bundle/nebius/nebius-setup.sh",
+    needrestartPolicy: "scripts/bay-systemd/needrestart/cocalc-bay.conf",
   },
 };
 
@@ -206,6 +217,7 @@ validate_file "$OUT/runtime/control-plane/webapp/favicon.ico"
 validate_file "$OUT/runtime/control-plane/bundle/gcp/gcp-setup.sh"
 validate_file "$OUT/runtime/control-plane/bundle/gcp/compute-vm-setup.sh"
 validate_file "$OUT/runtime/control-plane/bundle/nebius/nebius-setup.sh"
+validate_file "$OUT/scripts/bay-systemd/needrestart/cocalc-bay.conf"
 validate_file "$OUT/bay-static-manifest.json"
 
 echo "- Publish output directory"
