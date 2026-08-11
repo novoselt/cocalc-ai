@@ -24,6 +24,13 @@ const loadAndAppForbidden = [
   "@uiw/react-textarea-code-editor/",
 ];
 
+const initialProjectSurfaceForbidden = [
+  "frontend/project/compute-vms.tsx",
+  "frontend/project/new/new-file-page.tsx",
+  "frontend/project/page/flyouts/agents.tsx",
+  "frontend/project/page/flyouts/workspaces.tsx",
+];
+
 const publicViewerForbidden = [
   "frontend/chat/chatroom.tsx",
   "frontend/project_actions.ts",
@@ -58,6 +65,11 @@ const rules = [
     label: "shared/load and main app chunks",
     chunks: ["load", "app", "embed"],
     forbidden: loadAndAppForbidden,
+  },
+  {
+    label: "initial project surface chunks",
+    chunks: ["app", "embed"],
+    forbidden: initialProjectSurfaceForbidden,
   },
   {
     label: "public viewer and public site chunks",

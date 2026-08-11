@@ -3,8 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { Alert, Button } from "antd";
 import { debounce } from "lodash";
+import { Suspense } from "react";
 import { CSS, useEffect, useState } from "@cocalc/frontend/app-framework";
+import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
 import { Loading } from "@cocalc/frontend/components";
 import { useKeyboardBoundary } from "@cocalc/frontend/keyboard/boundary";
 import { lite } from "@cocalc/frontend/lite";
@@ -107,12 +110,32 @@ export function FlyoutBody({
           <Loading />
         </div>
       ) : (
-        <Body
-          project_id={project_id}
-          wrap={wrap}
-          flyoutWidth={flyoutWidth}
-          isVisible={isVisible}
-        />
+        <CocalcErrorBoundary
+          fallback={
+            <Alert
+              action={
+                <Button onClick={() => window.location.reload()}>
+                  Reload CoCalc
+                </Button>
+              }
+              description="The panel assets could not be loaded. The error was reported automatically; reload CoCalc to use this panel."
+              showIcon
+              title="This project panel could not be displayed"
+              type="warning"
+            />
+          }
+          resetKeys={[flyout]}
+          scope={`project.flyout.${flyout}`}
+        >
+          <Suspense fallback={<Loading theme="medium" />}>
+            <Body
+              project_id={project_id}
+              wrap={wrap}
+              flyoutWidth={flyoutWidth}
+              isVisible={isVisible}
+            />
+          </Suspense>
+        </CocalcErrorBoundary>
       )}
     </div>
   );

@@ -108,17 +108,8 @@ jest.mock("@cocalc/frontend/project/workspaces/chat-display", () => ({
   generatedWorkspaceChatLabel: () => null,
 }));
 
-jest.mock("./flyouts", () => ({
-  AgentsFlyout: () => null,
-  DocsFlyout: () => null,
+jest.mock("./flyouts/files", () => ({
   FilesFlyout: () => null,
-  LogFlyout: () => null,
-  NewFlyout: () => null,
-  ProjectInfoFlyout: () => null,
-  SearchFlyout: () => null,
-  ServersFlyout: () => null,
-  SettingsFlyout: () => null,
-  WorkspacesFlyout: () => null,
 }));
 
 jest.mock("./flyouts/active", () => ({

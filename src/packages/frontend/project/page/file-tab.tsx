@@ -36,26 +36,14 @@ import {
 
 import { filename_extension, path_split, path_to_tab } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import { useProjectContext } from "../context";
 import { generatedWorkspaceChatLabel } from "../workspaces/chat-display";
 import {
   getActivityBarPanelMode,
   setActivityBarPanelMode,
 } from "./activity-bar-storage";
-import {
-  AgentsFlyout,
-  DocsFlyout,
-  FilesFlyout,
-  LogFlyout,
-  NewFlyout,
-  ProjectInfoFlyout,
-  RootfsFlyout,
-  SearchFlyout,
-  ServersFlyout,
-  SettingsFlyout,
-  VmsFlyout,
-  WorkspacesFlyout,
-} from "./flyouts";
+import { FilesFlyout } from "./flyouts/files";
 import { ActiveFlyout } from "./flyouts/active";
 import {
   shouldForceFixedTabFlyout,
@@ -63,6 +51,55 @@ import {
   shouldOpenFileInNewWindow,
 } from "./utils";
 import { file_options } from "@cocalc/frontend/editor-tmp";
+
+const AgentsFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/agents")).AgentsFlyout }),
+  "project agents flyout",
+);
+const DocsFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/docs")).DocsFlyout }),
+  "project docs flyout",
+);
+const LogFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/log")).LogFlyout }),
+  "project log flyout",
+);
+const NewFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/new")).NewFlyout }),
+  "project new-file flyout",
+);
+const ProjectInfoFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/info")).ProjectInfoFlyout }),
+  "project information flyout",
+);
+const RootfsFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/rootfs")).RootfsFlyout }),
+  "project image flyout",
+);
+const SearchFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/search")).SearchFlyout }),
+  "project search flyout",
+);
+const ServersFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/servers")).ServersFlyout }),
+  "project app servers flyout",
+);
+const SettingsFlyout = lazyWithRetry(
+  async () => ({
+    default: (await import("./flyouts/settings")).SettingsFlyout,
+  }),
+  "project settings flyout",
+);
+const VmsFlyout = lazyWithRetry(
+  async () => ({ default: (await import("./flyouts/vms")).VmsFlyout }),
+  "project virtual machines flyout",
+);
+const WorkspacesFlyout = lazyWithRetry(
+  async () => ({
+    default: (await import("./flyouts/workspaces")).WorkspacesFlyout,
+  }),
+  "project workspaces flyout",
+);
 
 export type FixedTab =
   | "workspaces"
@@ -84,16 +121,18 @@ export function isFixedTab(tab?: any): tab is FixedTab {
   return typeof tab === "string" && tab in FIXED_PROJECT_TABS;
 }
 
+interface FlyoutProps {
+  project_id: string;
+  wrap: (content: React.JSX.Element, style?: CSS) => React.JSX.Element;
+  flyoutWidth: number;
+  isVisible?: boolean;
+}
+
 type FixedTabs = {
   [name in FixedTab]: {
     label: string | ReactNode | IntlMessage;
     icon: IconName;
-    flyout: (props: {
-      project_id: string;
-      wrap: (content: React.JSX.Element, style?: CSS) => React.JSX.Element;
-      flyoutWidth: number;
-      isVisible?: boolean;
-    }) => React.JSX.Element;
+    flyout: React.ElementType<FlyoutProps>;
     flyoutTitle?: string | ReactNode | IntlMessage;
     iconRotate?: IconRotation;
     noAnonymous?: boolean;

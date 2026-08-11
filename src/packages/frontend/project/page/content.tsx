@@ -17,12 +17,13 @@ or Loading... if the file is still being loaded.
 import { Alert, Button } from "antd";
 import { Map } from "immutable";
 import { debounce } from "lodash";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import Draggable from "react-draggable";
 import { React, redux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
 import { KioskModeBanner } from "@cocalc/frontend/app/kiosk-mode-banner";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import { isReactDomMutationError } from "@cocalc/frontend/app/react-dom-mutation";
 import { getExternalSideChatDesc } from "@cocalc/frontend/chat/external-side-chat-selection";
 import { chatMetaFile } from "@cocalc/frontend/chat/paths";
@@ -40,28 +41,87 @@ import {
 } from "@cocalc/frontend/misc";
 import DeletedFile from "@cocalc/frontend/project/deleted-file";
 import { Explorer } from "@cocalc/frontend/project/explorer";
-import { ProjectLog } from "@cocalc/frontend/project/history";
-import { ProjectInfo } from "@cocalc/frontend/project/info";
-import { ProjectComputeVms } from "@cocalc/frontend/project/compute-vms";
-import { ProjectNew } from "@cocalc/frontend/project/new";
-import { ProjectSearch } from "@cocalc/frontend/project/search/search";
-import { ProjectServers } from "@cocalc/frontend/project/servers";
-import { ProjectSettings } from "@cocalc/frontend/project/settings";
 import {
   isFixedTab,
   type FixedTab,
 } from "@cocalc/frontend/project/page/file-tab";
-import { WorkspacesPanel } from "@cocalc/frontend/project/page/flyouts/workspaces";
-import { ProjectDocsPanel } from "@cocalc/frontend/project/page/flyouts/docs";
 import { openFileComponentRuntimeIsUsable } from "@cocalc/frontend/project/redux/open-file-runtime";
 import { editor_id } from "@cocalc/frontend/project/utils";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { unreachable } from "@cocalc/util/misc";
 import { useProjectContext } from "../context";
-import { AgentsPanel } from "./flyouts/agents";
-import { RootfsPanel } from "./flyouts/rootfs";
 import getAnchorTagComponent from "./anchor-tag-component";
 import getUrlTransform from "./url-transform";
+
+const AgentsPanel = lazyWithRetry(
+  async () => ({
+    default: (await import("./flyouts/agents")).AgentsPanel,
+  }),
+  "project agents panel",
+);
+const ProjectComputeVms = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/project/compute-vms"))
+      .ProjectComputeVms,
+  }),
+  "project virtual machines panel",
+);
+const ProjectDocsPanel = lazyWithRetry(
+  async () => ({
+    default: (await import("./flyouts/docs")).ProjectDocsPanel,
+  }),
+  "project docs panel",
+);
+const ProjectInfo = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/project/info")).ProjectInfo,
+  }),
+  "project process information panel",
+);
+const ProjectLog = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/project/history")).ProjectLog,
+  }),
+  "project log panel",
+);
+const ProjectNew = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/project/new")).ProjectNew,
+  }),
+  "project new-file panel",
+);
+const ProjectSearch = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/project/search/search"))
+      .ProjectSearch,
+  }),
+  "project search panel",
+);
+const ProjectServers = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/project/servers")).ProjectServers,
+  }),
+  "project app servers panel",
+);
+const ProjectSettings = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/project/settings"))
+      .ProjectSettings,
+  }),
+  "project settings panel",
+);
+const RootfsPanel = lazyWithRetry(
+  async () => ({
+    default: (await import("./flyouts/rootfs")).RootfsPanel,
+  }),
+  "project image panel",
+);
+const WorkspacesPanel = lazyWithRetry(
+  async () => ({
+    default: (await import("./flyouts/workspaces")).WorkspacesPanel,
+  }),
+  "project workspaces panel",
+);
 
 // Default width of chat window as a fraction of the
 // entire window.
@@ -219,7 +279,29 @@ const TabContent: React.FC<TabContentProps> = (props: TabContentProps) => {
   }
 
   if (isFixedTab(tab_name)) {
-    return renderFixedTabContent(tab_name);
+    return (
+      <CocalcErrorBoundary
+        fallback={
+          <Alert
+            action={
+              <Button onClick={() => window.location.reload()}>
+                Reload CoCalc
+              </Button>
+            }
+            description="The panel assets could not be loaded. The error was reported automatically; reload CoCalc to use this panel."
+            showIcon
+            title="This project panel could not be displayed"
+            type="warning"
+          />
+        }
+        resetKeys={[tab_name]}
+        scope={`project.panel.${tab_name}`}
+      >
+        <Suspense fallback={<Loading theme="medium" />}>
+          {renderFixedTabContent(tab_name)}
+        </Suspense>
+      </CocalcErrorBoundary>
+    );
   }
 
   // check for "editor-[filename]"
