@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { closeDatabase } from "@cocalc/lite/hub/sqlite/database";
+import { closeDatabase, getDatabase } from "@cocalc/lite/hub/sqlite/database";
 import {
   acquireStorageReservation,
   getActiveStorageReservationSummary,
 } from "../storage-reservations";
 import { initSqlite } from "./init";
+import { claimStoppedScratchVolumePreparations } from "./volume-quotas";
 
 describe("project-host sqlite init", () => {
   let dbPath: string;
@@ -42,5 +43,18 @@ describe("project-host sqlite init", () => {
 
     initSqlite();
     expect(getActiveStorageReservationSummary().count).toBe(0);
+  });
+
+  it("creates the projects table before background quota maintenance", () => {
+    initSqlite();
+
+    expect(
+      getDatabase()
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='projects'",
+        )
+        .get(),
+    ).toEqual({ name: "projects" });
+    expect(claimStoppedScratchVolumePreparations()).toBe(0);
   });
 });
