@@ -4,6 +4,7 @@
  */
 
 import { lazyWithRetry } from "./lazy-with-retry";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 
 export const AccountPage = lazyWithRetry(
   async () => ({
@@ -64,12 +65,13 @@ interface ProjectPageProps {
   project_id: string;
 }
 
-export const ProjectPage = lazyWithRetry<ProjectPageProps>(
-  async () => ({
-    default: (await import("@cocalc/frontend/project/page/page")).ProjectPage,
-  }),
-  "project route",
-);
+export const ProjectPage = lazyWithRetry<ProjectPageProps>(async () => {
+  const [, page] = await Promise.all([
+    ensureProjectReduxRuntime(),
+    import("@cocalc/frontend/project/page/page"),
+  ]);
+  return { default: page.ProjectPage };
+}, "project route");
 
 export const ProjectsPage = lazyWithRetry(
   async () => ({

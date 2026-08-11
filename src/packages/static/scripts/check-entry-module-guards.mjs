@@ -76,6 +76,13 @@ const signedInStartupRouteForbidden = [
   "frontend/purchases/balance-button.tsx",
 ];
 
+const projectsStartupForbidden = [
+  "frontend/project/redux/store.ts",
+  "frontend/project/redux/actions.ts",
+  "frontend/chat/actions.ts",
+  "frontend/frame-editors/base-editor/actions-base.ts",
+];
+
 const publicViewerForbidden = [
   "frontend/chat/chatroom.tsx",
   "frontend/project_actions.ts",
@@ -133,11 +140,13 @@ function findGroup(moduleSuffix, request) {
   return matches[0];
 }
 
+const signedInProjectsStartupChunks = findGroup(
+  "frontend/app/route-components.ts",
+  "@cocalc/frontend/projects/projects-page",
+).chunks;
+
 const signedInStartupChunks = [
-  ...findGroup(
-    "frontend/app/route-components.ts",
-    "@cocalc/frontend/projects/projects-page",
-  ).chunks,
+  ...signedInProjectsStartupChunks,
   ...findGroup(
     "frontend/app/route-components.ts",
     "@cocalc/frontend/project/page/page",
@@ -159,6 +168,11 @@ const rules = [
     label: "signed-in startup route chunks",
     chunks: [...new Set(signedInStartupChunks)],
     forbidden: signedInStartupRouteForbidden,
+  },
+  {
+    label: "signed-in Projects startup chunks",
+    chunks: ["app", ...signedInProjectsStartupChunks],
+    forbidden: projectsStartupForbidden,
   },
   {
     label: "public viewer and public site chunks",

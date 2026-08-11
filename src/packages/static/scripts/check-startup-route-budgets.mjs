@@ -15,8 +15,8 @@ const routes = [
   {
     label: "signed-in projects",
     request: "@cocalc/frontend/projects/projects-page",
-    maxRawBytes: 7.4 * MiB,
-    maxGzipBytes: 2048 * KiB,
+    maxRawBytes: 7.0 * MiB,
+    maxGzipBytes: 1984 * KiB,
   },
   {
     label: "signed-in project",

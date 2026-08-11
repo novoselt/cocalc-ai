@@ -41,6 +41,7 @@ import { NEWS } from "@cocalc/frontend/notifications/news/init";
 import * as types from "./actions-and-stores";
 import type { ProjectActions } from "../project/redux/actions";
 import type { ProjectStore } from "../project/redux/store";
+import { initializeProjectStore } from "./project-runtime";
 export type { ProjectStore, ProjectActions };
 
 export class AppRedux extends AppReduxBase {
@@ -142,7 +143,7 @@ export class AppRedux extends AppReduxBase {
       throw Error(`getProjectStore: INVALID project_id -- "${project_id}"`);
     }
     if (!this.hasProjectStore(project_id)) {
-      return require("../project/redux/store").init(project_id, this);
+      return initializeProjectStore(project_id, this);
     } else {
       return this.getStore(project_redux_name(project_id)) as any;
     }
@@ -155,7 +156,7 @@ export class AppRedux extends AppReduxBase {
       throw Error(`getProjectActions: INVALID project_id -- "${project_id}"`);
     }
     if (!this.hasProjectStore(project_id)) {
-      require("../project/redux/store").init(project_id, this);
+      initializeProjectStore(project_id, this);
     }
     return this.getActions(project_redux_name(project_id)) as any;
   }
@@ -165,7 +166,7 @@ export class AppRedux extends AppReduxBase {
       throw Error(`getProjectTable: INVALID project_id -- "${project_id}"`);
     }
     if (!this.hasProjectStore(project_id)) {
-      require("../project/redux/store").init(project_id, this);
+      initializeProjectStore(project_id, this);
     }
     return this.getTable(project_redux_name(project_id, name));
   }

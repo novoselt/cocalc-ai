@@ -58,6 +58,7 @@ import { projectRootfsEntryLabel } from "./project-rootfs-badge";
 import { openAccountSettings } from "@cocalc/frontend/account/settings-routing";
 import { OTHER_SETTINGS_LEGACY_MIGRATION_PROJECTS_BUTTON } from "@cocalc/util/legacy-migration";
 import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import {
   classifyFirstRunOnboarding,
   FIRST_RUN_ONBOARDING_SETTING,
@@ -65,13 +66,13 @@ import {
   type FirstRunProject,
 } from "./onboarding/state";
 
-const FirstRunOnboarding = lazyWithRetry(
-  async () => ({
-    default: (await import("./onboarding/first-run-onboarding"))
-      .FirstRunOnboarding,
-  }),
-  "first-run onboarding",
-);
+const FirstRunOnboarding = lazyWithRetry(async () => {
+  const [, onboarding] = await Promise.all([
+    ensureProjectReduxRuntime(),
+    import("./onboarding/first-run-onboarding"),
+  ]);
+  return { default: onboarding.FirstRunOnboarding };
+}, "first-run onboarding");
 
 const NewProjectCreator = lazyWithRetry(
   async () => ({

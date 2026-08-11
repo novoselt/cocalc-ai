@@ -11,12 +11,16 @@ import { Loading } from "@cocalc/frontend/components/loading";
 import { labels } from "@cocalc/frontend/i18n";
 import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 
 const ProjectRowExpandedContent = lazyWithRetry<{ project_id: string }>(
-  async () => ({
-    default: (await import("./project-row-expanded-content"))
-      .ProjectRowExpandedContent,
-  }),
+  async () => {
+    const [, content] = await Promise.all([
+      ensureProjectReduxRuntime(),
+      import("./project-row-expanded-content"),
+    ]);
+    return { default: content.ProjectRowExpandedContent };
+  },
   "project details drawer",
 );
 

@@ -4,6 +4,7 @@
  */
 
 import { Actions, redux } from "@cocalc/frontend/app-framework";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { set_window_title } from "@cocalc/frontend/browser";
 import { set_url, update_params } from "@cocalc/frontend/history";
 import { labels } from "@cocalc/frontend/i18n";
@@ -170,6 +171,9 @@ export class PageActions extends Actions<PageState> {
     }
 
     const prev_key = this.redux.getStore("page").get("active_top_tab");
+    if (prev_key?.length === 36 || key?.length === 36) {
+      await ensureProjectReduxRuntime();
+    }
     this.setState({ active_top_tab: key });
 
     if (prev_key !== key && prev_key?.length == 36) {

@@ -53,6 +53,7 @@ import type {
   FindScopeMode,
   FindSnapshotsState,
 } from "@cocalc/frontend/project/find/types";
+import { registerProjectStoreInitializer } from "@cocalc/frontend/app-framework/project-runtime";
 
 export type ModalInfo = TypedMap<{
   title: string | React.JSX.Element;
@@ -522,3 +523,5 @@ export function init(project_id: string, redux: AppRedux): ProjectStore {
 
   return store;
 }
+
+registerProjectStoreInitializer(init);

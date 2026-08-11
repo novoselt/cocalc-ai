@@ -83,6 +83,7 @@ import {
   startUxTimer,
 } from "@cocalc/frontend/monitoring/ux-latency";
 import { getLogger } from "@cocalc/frontend/logger";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import {
   cancelProjectDirectoryOpenTrace,
   markProjectDirectoryOpenPhase,
@@ -2758,9 +2759,8 @@ export class ProjectsActions extends Actions<ProjectsState> {
   };
 
   private logProjectMetadataUpdate(project_id: string, event: any): void {
-    this.redux
-      .getProjectActions(project_id)
-      ?.async_log(event)
+    void ensureProjectReduxRuntime()
+      .then(() => this.redux.getProjectActions(project_id)?.async_log(event))
       .catch((err) => {
         console.warn("error recording project metadata log entry", {
           project_id,
@@ -3303,6 +3303,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     if (!is_valid_uuid_string(opts.project_id)) {
       throw Error(`invalid project_id - ${opts.project_id}`);
     }
+    await ensureProjectReduxRuntime();
     if (!store.getIn(["project_map", opts.project_id])) {
       if (COCALC_MINIMAL) {
         await switch_to_project(opts.project_id);
@@ -3603,6 +3604,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     project_id: string,
     account_id: string,
   ): Promise<void> {
+    await ensureProjectReduxRuntime();
     const removed_name = redux.getStore("users").get_name(account_id);
     try {
       try {
@@ -3714,6 +3716,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     invite_role: "collaborator" | "viewer" = "collaborator",
     read_policy?: ProjectViewerReadPolicy | null,
   ): Promise<ProjectInviteDeliveryResult | void> {
+    await ensureProjectReduxRuntime();
     await this.redux.getProjectActions(project_id).async_log({
       event: "invite_user",
       invitee_account_id: account_id,
@@ -3762,6 +3765,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     invite_role: "collaborator" | "viewer" = "collaborator",
     read_policy?: ProjectViewerReadPolicy | null,
   ): Promise<any> {
+    await ensureProjectReduxRuntime();
     await this.redux.getProjectActions(project_id).async_log({
       event: "invite_nonuser",
       invitee_email: to,
@@ -3828,6 +3832,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
 
   public async project_log(project_id: string, entry): Promise<void> {
     try {
+      await ensureProjectReduxRuntime();
       await this.redux.getProjectActions(project_id)?.log?.(entry);
     } catch (err) {
       // Project logs are audit/UX telemetry. A project may disappear while a
@@ -4202,6 +4207,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
       if (!store.getIn(["project_map", project_id])) {
         return false;
       }
+      await ensureProjectReduxRuntime();
       if (isProjectHardDeleting(store.getIn(["project_map", project_id]))) {
         const message = projectHardDeletingMessage();
         redux.getProjectActions(project_id)?.setState({
@@ -4999,6 +5005,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
   // returns true, if it actually stopped the project
   stop_project = reuseInFlight(
     async (project_id: string, _force?: boolean): Promise<boolean> => {
+      await ensureProjectReduxRuntime();
       const t0 = webapp_client.server_time().getTime();
       this.project_log(project_id, {
         event: "project_stop_requested",
@@ -5220,6 +5227,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
   }
 
   archive_project = reuseInFlight(async (project_id: string): Promise<void> => {
+    await ensureProjectReduxRuntime();
     this.project_log(project_id, {
       event: "project_archive_requested",
     });
@@ -5284,6 +5292,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
   });
 
   move_project = reuseInFlight(async (project_id: string): Promise<boolean> => {
+    await ensureProjectReduxRuntime();
     const actions = redux.getProjectActions(project_id);
     try {
       const resp = await this.requestMoveProject({ project_id });
@@ -5318,6 +5327,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     ): Promise<boolean> => {
       const current_host = store.getIn(["project_map", project_id, "host_id"]);
       if (dest_host_id === current_host) return true;
+      await ensureProjectReduxRuntime();
       const actions = redux.getProjectActions(project_id);
       try {
         const resp = await this.requestMoveProject({
@@ -5352,6 +5362,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     async (project_id: string, dest_host_id: string): Promise<boolean> => {
       const current_host = store.getIn(["project_map", project_id, "host_id"]);
       if (dest_host_id === current_host) return true;
+      await ensureProjectReduxRuntime();
       if (current_host) {
         return await this.move_project_to_host(project_id, dest_host_id);
       }
@@ -5420,6 +5431,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
 
   restart_project = reuseInFlight(
     async (project_id: string, _options?): Promise<void> => {
+      await ensureProjectReduxRuntime();
       if (isProjectHardDeleting(store.getIn(["project_map", project_id]))) {
         const message = projectHardDeletingMessage();
         redux.getProjectActions(project_id)?.setState({
