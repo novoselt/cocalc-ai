@@ -340,6 +340,71 @@ export function getAgentMessageTexts(events: AcpStreamMessage[]): string[] {
   return getAgentMessageBlocks(events).map(({ text }) => text);
 }
 
+const PROGRESSIVE_SNAPSHOT_COMPACTION_MIN = 16;
+
+function compactProgressiveProjectionEvents(
+  events: AcpStreamMessage[],
+  guidance?: Array<{ date: number }>,
+): AcpStreamMessage[] {
+  const guidanceTimes = (guidance ?? [])
+    .map(({ date }) => date)
+    .filter((date) => Number.isFinite(date))
+    .sort((a, b) => a - b);
+  const compacted: AcpStreamMessage[] = [];
+  let run: AcpStreamMessage[] = [];
+  let guidanceIndex = 0;
+
+  const flushRun = () => {
+    if (run.length < PROGRESSIVE_SNAPSHOT_COMPACTION_MIN) {
+      compacted.push(...run);
+      run = [];
+      return;
+    }
+    const first = run[0];
+    const last = run[run.length - 1];
+    const firstText =
+      first.type === "event" && first.event.type === "message"
+        ? first.event.text
+        : "";
+    const lastText =
+      last.type === "event" && last.event.type === "message"
+        ? last.event.text
+        : "";
+    const relation = compareNormalizedProgressiveText(firstText, lastText);
+    if (relation === "previous-prefix" || relation === "equal") {
+      compacted.push(last);
+    } else {
+      compacted.push(...run);
+    }
+    run = [];
+  };
+
+  for (const evt of events ?? []) {
+    const time = typeof evt?.time === "number" ? evt.time : undefined;
+    if (time != null) {
+      while (
+        guidanceIndex < guidanceTimes.length &&
+        guidanceTimes[guidanceIndex] < time
+      ) {
+        flushRun();
+        guidanceIndex += 1;
+      }
+    }
+    if (
+      evt?.type === "event" &&
+      evt.event?.type === "message" &&
+      evt.event.delta !== true
+    ) {
+      run.push(evt);
+      continue;
+    }
+    flushRun();
+    compacted.push(evt);
+  }
+  flushRun();
+  return compacted;
+}
+
 export function getAgentMessageBlocks(
   events: AcpStreamMessage[],
 ): Array<{ text: string; time?: number }> {
@@ -349,7 +414,7 @@ export function getAgentMessageBlocks(
     hasDelta: boolean;
     sourceEvent?: object;
   }> = [];
-  for (const evt of events ?? []) {
+  for (const evt of compactProgressiveProjectionEvents(events)) {
     if (evt?.type !== "event" || evt.event?.type !== "message") continue;
     const text = evt.event.text;
     if (typeof text !== "string" || text.trim().length === 0) continue;
@@ -423,7 +488,10 @@ export function getLiveResponseBlocks(
       };
 
   const timeline: TimelineItem[] = [
-    ...(events ?? []).flatMap<TimelineItem>((evt) => {
+    ...compactProgressiveProjectionEvents(
+      events,
+      guidance,
+    ).flatMap<TimelineItem>((evt) => {
       if (
         evt?.type === "event" &&
         evt.event?.type === "message" &&

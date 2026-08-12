@@ -120,6 +120,53 @@ describe("appendStreamMessage", () => {
     }
   });
 
+  test("compacts long progressive runs without losing guidance chronology", () => {
+    const words = Array.from({ length: 40 }, (_, index) => `word${index}`);
+    const events = words.map((_, index) => ({
+      type: "event",
+      event: {
+        type: "message",
+        text: words.slice(0, index + 1).join(" "),
+      },
+      seq: index + 1,
+      time: (index + 1) * 1_000,
+    })) as AcpStreamMessage[];
+
+    expect(
+      getLiveResponseBlocks(events, [
+        { date: 19_500, text: "check this too", state: "sent" },
+      ]),
+    ).toEqual([
+      {
+        kind: "agent",
+        text: words.slice(0, 19).join(" "),
+        time: 19_000,
+        state: undefined,
+      },
+      {
+        kind: "guidance",
+        text: "check this too",
+        time: 19_500,
+        state: "sent",
+      },
+      {
+        kind: "agent",
+        text: words.slice(19).join(" "),
+        time: 40_000,
+        state: undefined,
+      },
+    ]);
+  });
+
+  test("does not compact long runs of independent agent messages", () => {
+    const events = Array.from({ length: 20 }, (_, index) =>
+      textEvent("message", `independent block ${index}`, index + 1),
+    );
+    expect(getAgentMessageTexts(events)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `independent block ${index}`),
+    );
+  });
+
   test("adds a separating space between adjacent markdown bold blocks", () => {
     const events = [textEvent("thinking", "**First block**", 1)];
     const merged = appendStreamMessage(
