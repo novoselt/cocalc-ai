@@ -1,7 +1,7 @@
 // Any non-absolute path is assumed to be relative to the user's home directory.
 // This function converts such a path to an absolute path.
 
-import path from "node:path";
+import path from "path";
 
 export function abspathForPlatform(
   value: string,

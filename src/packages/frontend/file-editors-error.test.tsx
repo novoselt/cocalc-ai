@@ -12,11 +12,13 @@ jest.mock("antd", () => ({
   Button: ({ children, onClick }: any) => (
     <button onClick={onClick}>{children}</button>
   ),
+  Typography: {
+    Paragraph: ({ children }: any) => <p>{children}</p>,
+  },
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({
   Icon: ({ name }: any) => <span>{name}</span>,
-  Paragraph: ({ children }: any) => <p>{children}</p>,
 }));
 
 import { EditorLoadError } from "./file-editors-error";
