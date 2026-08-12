@@ -1,6 +1,6 @@
 import { SERVICE } from "./util";
 import { ConatError } from "@cocalc/conat/core/client";
-import { posix } from "node:path";
+import { posix } from "path";
 
 export const MAX_PATH_LENGTH = 4000;
 

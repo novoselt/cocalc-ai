@@ -47,7 +47,7 @@ import type {
 } from "@cocalc/conat/persist/storage";
 import type { Changefeed } from "@cocalc/conat/persist/client";
 export type { Configuration };
-import { posix } from "node:path";
+import { posix } from "path";
 import {
   type StorageOptions,
   type PersistStreamClient,

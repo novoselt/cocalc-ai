@@ -1,6 +1,6 @@
 import { constants as fsc, accessSync, mkdirSync } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname } from "path";
 
 import abspath from "./abspath";
 
