@@ -445,21 +445,24 @@ function iterationSteps(iteration) {
 
 async function runDirectHarness(plan) {
   const require = createRequire(import.meta.url);
-  const { chromium } = require(
+  const { chromium, devices } = require(
     resolve(srcRoot, "packages/cli/node_modules/playwright-core"),
   );
+  const mobileDevice = devices["iPhone 15 Pro"];
   const browser = await chromium.launch({
     executablePath: options.chromium,
     headless: true,
   });
   const context = await browser.newContext({
     ignoreHTTPSErrors: false,
-    viewport: options.mobile
-      ? { width: 390, height: 844 }
-      : { width: 1440, height: 1000 },
-    deviceScaleFactor: options.mobile ? 3 : 1,
-    hasTouch: options.mobile,
-    isMobile: options.mobile,
+    ...(options.mobile
+      ? mobileDevice
+      : {
+          viewport: { width: 1440, height: 1000 },
+          deviceScaleFactor: 1,
+          hasTouch: false,
+          isMobile: false,
+        }),
   });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
@@ -769,6 +772,7 @@ async function runDirectHarness(plan) {
             cpu_throttle: options.cpuThrottle,
             cache: options.cache,
             mobile: options.mobile,
+            mobile_device: options.mobile ? "iPhone 15 Pro" : undefined,
             startup_only: options.startupOnly,
           },
           steps,
