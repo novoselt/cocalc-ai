@@ -30,7 +30,6 @@ import { ClientContext } from "@cocalc/frontend/client/context";
 import { Icon } from "@cocalc/frontend/components/icon";
 import Next from "@cocalc/frontend/components/next";
 import { labels } from "@cocalc/frontend/i18n";
-import { ProjectsNav } from "@cocalc/frontend/projects/projects-nav";
 import openSupportTab from "@cocalc/frontend/support/open";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
@@ -64,6 +63,13 @@ const PostSurfaceRightNav = lazyWithRetry(async () => {
   await ensureNotificationsInitialized();
   return { default: postSurface.PostSurfaceRightNav };
 }, "post-surface navigation");
+const PostSurfaceProjectsNav = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/projects/projects-nav"))
+      .ProjectsNav,
+  }),
+  "post-surface project navigation",
+);
 const PostSurfaceBanners = lazyWithRetry(
   async () => ({
     default: (await import("./post-surface-banners")).PostSurfaceBanners,
@@ -495,7 +501,16 @@ export const Page: React.FC = () => {
           {is_logged_in && render_project_nav_button()}
           {render_hosts_tab()}
           {!isNarrow ? (
-            <ProjectsNav height={pageStyle.height} style={projectsNavStyle} />
+            showPostSurfaceNavigation ? (
+              <PostSurfaceSlot scope="app.post-surface-project-navigation">
+                <PostSurfaceProjectsNav
+                  height={pageStyle.height}
+                  style={projectsNavStyle}
+                />
+              </PostSurfaceSlot>
+            ) : (
+              <div style={{ ...projectsNavStyle, flex: "1 1 auto" }} />
+            )
           ) : (
             // we need an expandable placeholder, otherwise the right-nav-buttons won't align to the right
             <div style={{ flex: "1 1 auto" }} />
@@ -505,7 +520,18 @@ export const Page: React.FC = () => {
       )}
       {fullscreen && !isAuthView && render_fullscreen()}
       {!lite && !examMode && isNarrow && !isAuthView && (
-        <ProjectsNav height={pageStyle.height} style={projectsNavStyle} />
+        <>
+          {showPostSurfaceNavigation ? (
+            <PostSurfaceSlot scope="app.post-surface-project-navigation-narrow">
+              <PostSurfaceProjectsNav
+                height={pageStyle.height}
+                style={projectsNavStyle}
+              />
+            </PostSurfaceSlot>
+          ) : (
+            <div style={{ ...projectsNavStyle, height: pageStyle.height }} />
+          )}
+        </>
       )}
       {examMode && !isAuthView && (
         <ScratchpadSessionControls deleteAt={scratchpadDeleteAt} />
