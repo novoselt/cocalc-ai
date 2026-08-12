@@ -10,6 +10,14 @@ buckets now have Object Versioning disabled, Soft Delete retention set to 0,
 and a lifecycle rule deleting objects with `age: 0`. Cloud Storage lifecycle
 deletion is now expected to proceed asynchronously.
 
+Update 2026-08-12T19:40Z: rechecked both bucket configs and Cloud Monitoring
+metrics. The delete-all lifecycle rules remain installed, Object Versioning
+remains disabled, and Soft Delete retention remains 0. Monitoring still shows
+no change in `total_bytes` or `object_count` from the 2026-08-11 baseline:
+`kucalc-prod2-storage-streams` remains 82,119,017,933,760 bytes and
+36,758,197 objects; `kucalc-prod2-archived-projects` remains
+61,197,462,829,175 bytes and 4,202,162 objects.
+
 ## Goal
 
 Reduce ongoing costs from old `cocalc.com` infrastructure after the July 2026
