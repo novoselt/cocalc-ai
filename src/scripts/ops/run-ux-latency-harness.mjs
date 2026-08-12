@@ -50,6 +50,17 @@ const NETWORK_PROFILES = {
   },
 };
 
+const STARTUP_TARGETS = new Set([
+  "projects",
+  "project",
+  "file",
+  "jupyter",
+  "terminal",
+  "account",
+  "docs",
+  "admin",
+]);
+
 function usage(exitCode = 0) {
   console.log(`Usage:
   node src/scripts/ops/run-ux-latency-harness.mjs \\
@@ -59,7 +70,7 @@ function usage(exitCode = 0) {
 Direct Chromium qualification options:
   --network <native|fast-4g|slow-4g|1mbps|3g>
   --cpu-throttle <1-20>  --cache <warm|cold>  --mobile
-  --startup-only
+  --startup-only [--startup-target <projects|project|file|jupyter|terminal|account|docs|admin>]
 
 For an isolated test account, set COCALC_UX_HARNESS_SIGN_IN_URL to a one-time
 sign-in URL and pass --direct. This launches a clean Chromium process directly,
@@ -85,6 +96,7 @@ function parseArgs(argv) {
     cache: "warm",
     mobile: false,
     startupOnly: false,
+    startupTarget: "project",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -107,6 +119,7 @@ function parseArgs(argv) {
     else if (arg === "--cache") options.cache = value();
     else if (arg === "--mobile") options.mobile = true;
     else if (arg === "--startup-only") options.startupOnly = true;
+    else if (arg === "--startup-target") options.startupTarget = value();
     else if (arg === "--help" || arg === "-h") usage();
     else throw Error(`unknown option '${arg}'`);
   }
@@ -139,6 +152,9 @@ function parseArgs(argv) {
   }
   if (!new Set(["warm", "cold"]).has(options.cache)) {
     throw Error("--cache must be warm or cold");
+  }
+  if (!STARTUP_TARGETS.has(options.startupTarget)) {
+    throw Error(`unknown --startup-target '${options.startupTarget}'`);
   }
   if (
     !options.direct &&
@@ -224,6 +240,13 @@ function navigate(name, path) {
   };
 }
 
+function navigateUrl(name, url) {
+  return {
+    name,
+    action: { name: "navigate", url, wait_for_url_ms: 20_000 },
+  };
+}
+
 function navigateProjectHome(name) {
   return {
     name,
@@ -249,6 +272,88 @@ function enterHarnessDirectorySteps(prefix) {
     },
     waitForText(`${prefix}: directory listing`, "visible.md"),
   ];
+}
+
+function startupQualificationSteps() {
+  const reload = {
+    name: `hard refresh ${options.startupTarget} surface`,
+    action: { name: "reload", hard: true },
+    pause_ms: 2_500,
+    retries: 2,
+  };
+  switch (options.startupTarget) {
+    case "projects":
+      return [
+        navigateUrl("load Projects before hard refresh", `${origin}/projects`),
+        reload,
+        waitForText("Projects useful surface", "Create"),
+      ];
+    case "project":
+      return [
+        navigateProjectHome("load project before hard refresh"),
+        reload,
+        ...enterHarnessDirectorySteps("application and project ready"),
+      ];
+    case "file":
+      return [
+        navigate("load text file before hard refresh", "visible.md"),
+        reload,
+        waitForText("text useful surface", `Visible marker ${runId}`),
+      ];
+    case "jupyter":
+      return [
+        navigate("load Jupyter before hard refresh", "notebook.ipynb"),
+        reload,
+        {
+          name: "Jupyter useful surface",
+          action: {
+            name: "wait_for_selector",
+            selector: ".CodeMirror",
+            timeout_ms: 90_000,
+          },
+        },
+      ];
+    case "terminal":
+      return [
+        navigate("load terminal before hard refresh", "terminal.term"),
+        reload,
+        {
+          name: "terminal useful surface",
+          action: {
+            name: "wait_for_selector",
+            selector: ".xterm-helper-textarea",
+            state: "attached",
+            timeout_ms: 90_000,
+          },
+        },
+      ];
+    case "account":
+      return [
+        navigateUrl("load Account before hard refresh", `${origin}/settings`),
+        reload,
+        waitForText("Account useful surface", "Settings"),
+      ];
+    case "docs":
+      return [
+        navigateUrl("load Docs before hard refresh", `${origin}/docs`),
+        reload,
+        {
+          name: "Docs useful surface",
+          action: {
+            name: "wait_for_selector",
+            selector: "[data-testid='docs-markdown']",
+            timeout_ms: 90_000,
+          },
+        },
+      ];
+    case "admin":
+      return [
+        navigateUrl("load Admin before hard refresh", `${origin}/admin`),
+        reload,
+        waitForText("Admin useful surface", "Administration", 90_000),
+      ];
+  }
+  throw Error(`unsupported startup target '${options.startupTarget}'`);
 }
 
 function createFixtures() {
@@ -774,6 +879,7 @@ async function runDirectHarness(plan) {
             mobile: options.mobile,
             mobile_device: options.mobile ? "iPhone 15 Pro" : undefined,
             startup_only: options.startupOnly,
+            startup_target: options.startupTarget,
           },
           steps,
           browser_logs: browserLogs,
@@ -802,16 +908,7 @@ try {
       logs_on_fail: 160,
       network_on_fail: 160,
     },
-    before_all: [
-      navigateProjectHome("load project before hard refresh"),
-      {
-        name: "hard refresh application",
-        action: { name: "reload", hard: true },
-        pause_ms: 2_500,
-        retries: 2,
-      },
-      ...enterHarnessDirectorySteps("application and project ready"),
-    ],
+    before_all: startupQualificationSteps(),
     steps: options.startupOnly
       ? []
       : Array.from({ length: options.iterations }, (_, index) =>
