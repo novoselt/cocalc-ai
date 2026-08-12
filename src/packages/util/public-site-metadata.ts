@@ -127,9 +127,9 @@ const PUBLIC_IMAGE_DIMENSIONS: Record<string, PublicImageDimensions> = {
     height: 908,
     width: 1605,
   },
-  "/public/features/cocalc-octave-jupyter-20200511.png": {
-    height: 672,
-    width: 1065,
+  "/public/features/cocalc-octave-sombrero-20260811.png": {
+    height: 728,
+    width: 996,
   },
   "/public/features/cocalc-r-hero-ggplot2-20260731.png": {
     height: 817,
@@ -139,8 +139,11 @@ const PUBLIC_IMAGE_DIMENSIONS: Record<string, PublicImageDimensions> = {
     height: 742,
     width: 1312,
   },
-  "/public/features/frame-editor-python.png": { height: 779, width: 1599 },
   "/public/features/julia-jupyter.png": { height: 802, width: 1400 },
+  "/public/features/jupyter-regular-20260730.png": {
+    height: 1063,
+    width: 1305,
+  },
   "/public/features/latex-editor-main-20251003.png": {
     height: 1020,
     width: 1740,

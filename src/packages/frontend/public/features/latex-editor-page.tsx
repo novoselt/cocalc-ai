@@ -248,8 +248,8 @@ export default function LatexEditorFeaturePage({
           anchor="a-overview"
           description={
             <>
-              Everything you expect from a full online LaTeX editor, with the
-              computational environment of a CoCalc project around it.
+              Everything you expect from a full online LaTeX editor, inside a
+              project that can also run the computations your document uses.
             </>
           }
         >

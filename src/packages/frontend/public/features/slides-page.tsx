@@ -226,7 +226,7 @@ export default function SlidesFeaturePage({
             items={[
               "Present technical walkthroughs from the same editable canvas where the material was built.",
               "Use math, diagrams, markdown, and code in technical talks.",
-              "Collaborate on the deck and keep TimeTravel history around it.",
+              "Collaborate on the deck, with TimeTravel history of every change.",
             ]}
           />
         </FeatureFinalBand>

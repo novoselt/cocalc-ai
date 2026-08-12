@@ -5,92 +5,22 @@
 
 import { Button, Col, Flex, Row, Typography } from "antd";
 
-import type { IconName } from "@cocalc/frontend/components/icon";
 import { PublicSection } from "@cocalc/frontend/public/layout/shell";
 import { COLORS } from "@cocalc/util/theme";
-import {
-  PUBLIC_ELEVATION,
-  PUBLIC_COLORS,
-  PUBLIC_RADIUS,
-  PUBLIC_TYPE,
-} from "@cocalc/frontend/public/theme";
+import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureAsset,
   LinkButton,
 } from "./page-components";
-import { FEATURE_ACCENTS } from "./feature-accents";
-import { FeatureInfo, FeatureInfoHeading } from "./feature-info";
-import { FeatureFinalBand, IconBadge } from "./feature-visuals";
+import { FeatureInfo, FeatureInfoHeading, ZoomableImage } from "./feature-info";
+import { FeatureFinalBand } from "./feature-visuals";
 
-const { Paragraph, Text, Title } = Typography;
+const { Paragraph, Title } = Typography;
 
 const OCTAVE_KERNEL_GUIDE = "docs/jupyter/install-octave-kernel";
-
-function OctaveProjectMock() {
-  const projectItems = [
-    ["file-code", "solver.m", "source file"],
-    ["jupyter", "analysis.ipynb", "interactive notebook"],
-    ["terminal", "terminal run", "plots and output"],
-  ] satisfies [IconName, string, string][];
-
-  return (
-    <div
-      aria-label="Illustration of Octave scripts, notebooks, and terminal workflows in CoCalc"
-      role="img"
-      style={{
-        background:
-          "linear-gradient(145deg, #ffffff 0%, #fff7f1 52%, #f4f9ff 100%)",
-        border: `1px solid ${PUBLIC_COLORS.border}`,
-        borderRadius: PUBLIC_RADIUS.panel,
-        boxShadow: PUBLIC_ELEVATION.lg,
-        padding: 20,
-      }}
-    >
-      <Flex vertical gap={16}>
-        <Flex align="center" justify="space-between" wrap gap={10}>
-          <Flex align="center" gap={10}>
-            <IconBadge accent={FEATURE_ACCENTS.octave} icon="octave" />
-            <div>
-              <Text strong>Octave project</Text>
-              <div style={{ color: PUBLIC_COLORS.mutedText }}>
-                notebooks, .m files, plots, terminal runs, and TimeTravel
-                history
-              </div>
-            </div>
-          </Flex>
-        </Flex>
-
-        <Flex wrap gap={10}>
-          {projectItems.map(([icon, title, body]) => (
-            <div
-              key={title}
-              style={{
-                background: PUBLIC_COLORS.surface,
-                border: `1px solid ${PUBLIC_COLORS.border}`,
-                borderRadius: PUBLIC_RADIUS.panel,
-                flex: "1 1 160px",
-                padding: "10px 12px",
-              }}
-            >
-              <Flex align="center" gap={10}>
-                <IconBadge
-                  accent={FEATURE_ACCENTS.octave}
-                  icon={icon}
-                  size="sm"
-                />
-                <div>
-                  <Text strong>{title}</Text>
-                  <div style={{ color: PUBLIC_COLORS.mutedText }}>{body}</div>
-                </div>
-              </Flex>
-            </div>
-          ))}
-        </Flex>
-      </Flex>
-    </div>
-  );
-}
+const OCTAVE_IMAGE = "rootfs/octave-11-3";
 
 export default function OctaveFeaturePage({
   helpEmail,
@@ -116,22 +46,26 @@ export default function OctaveFeaturePage({
               </Title>
               <Paragraph style={{ fontSize: PUBLIC_TYPE.lead, margin: 0 }}>
                 Octave is the free numerical computing language that is largely
-                compatible with MATLAB. In CoCalc it runs in a full Linux
-                project: work in notebooks, terminals, and <code>.m</code> files
-                with your team.
+                compatible with MATLAB. Start a project on the Octave image and
+                it is ready: Octave with the common packages, a Jupyter kernel,
+                and a full Linux system for scripts, plots, and data.
               </Paragraph>
               <Flex wrap gap={12}>
                 <Button type="primary" href={primaryHref}>
                   {primaryLabel}
                 </Button>
-                <LinkButton href={appPath(OCTAVE_KERNEL_GUIDE)}>
-                  Octave setup guide
+                <LinkButton href={appPath(OCTAVE_IMAGE)}>
+                  See the Octave image
                 </LinkButton>
               </Flex>
             </Flex>
           </Col>
           <Col xs={24} lg={13}>
-            <OctaveProjectMock />
+            <ZoomableImage
+              alt="An Octave session in a CoCalc terminal: matrix work and a plot drawn as text"
+              priority
+              src={featureAsset("cocalc-octave-terminal-20260811.png")}
+            />
           </Col>
         </Row>
       </PublicSection>
@@ -141,34 +75,66 @@ export default function OctaveFeaturePage({
           anchor="a-overview"
           description={
             <>
-              Octave lives inside a full CoCalc project, so collaboration,
-              history, and backups come with it.
+              The image brings Octave. The project brings passwordless sudo, a
+              persistent home directory, snapshots, TimeTravel history, and
+              collaborators editing the same files.
             </>
           }
         >
-          Octave, with a real project around it
+          Octave in a full Linux environment
         </FeatureInfoHeading>
       </PublicSection>
 
       <PublicSection>
         <FeatureInfo
           accent={COLORS.FEATURE_OCTAVE_BLUE}
-          alt="A Jupyter notebook running the GNU Octave kernel in CoCalc"
+          alt="A 3D sombrero surface plotted by Octave in a CoCalc Jupyter notebook"
           anchor="a-notebooks"
           icon="jupyter"
-          image="cocalc-octave-jupyter-20200511.png"
+          image="cocalc-octave-sombrero-20260811.png"
           title="Octave in Jupyter notebooks"
         >
           <Paragraph>
-            With the Octave Jupyter kernel in place, following the{" "}
-            <a href={appPath(OCTAVE_KERNEL_GUIDE)}>setup guide</a>, notebooks
-            gain <strong>Octave as a selectable kernel</strong>: run cells,
-            render plots inline, and keep narrative text next to the code.
+            On the Octave image, <strong>Octave is the default kernel</strong>{" "}
+            for new notebooks: run cells, render plots inline, and keep
+            narrative text next to the code. A Python kernel is there too, for
+            the parts that are easier in Python.
           </Paragraph>
           <Paragraph>
             The notebook itself is a collaborative CoCalc document:{" "}
             <strong>real-time editing with visible cursors</strong>, chat
             threads anchored to cells, and TimeTravel recording every change.
+            The{" "}
+            <a href={appPath("features/jupyter-notebook")}>
+              Jupyter notebooks page
+            </a>{" "}
+            covers the editor in detail.
+          </Paragraph>
+        </FeatureInfo>
+      </PublicSection>
+
+      <PublicSection>
+        <FeatureInfo
+          accent={COLORS.FEATURE_TEAL}
+          alt="An Octave notebook integrating a function symbolically and plotting it with its antiderivative"
+          anchor="a-image"
+          icon="cube"
+          image="cocalc-octave-symbolic-20260811.png"
+          title="Octave, with the packages you expect"
+        >
+          <Paragraph>
+            The <a href={appPath(OCTAVE_IMAGE)}>Octave image</a> is{" "}
+            <strong>built from source</strong> and ships the common Octave
+            packages: statistics, control, signal, image, optim, and symbolic.
+            Jupyter kernels for Octave and Python come with it, and JupyterLab
+            starts from the project's Apps panel.
+          </Paragraph>
+          <Paragraph>
+            Pick it when you create a project, or switch an existing project to
+            it later. Anything you add on top, from <code>pkg install</code> to{" "}
+            <code>apt-get</code>, <strong>persists with the project</strong>. To
+            add Octave to a different image instead, follow the{" "}
+            <a href={appPath(OCTAVE_KERNEL_GUIDE)}>kernel setup guide</a>.
           </Paragraph>
         </FeatureInfo>
       </PublicSection>
@@ -203,9 +169,14 @@ export default function OctaveFeaturePage({
             title: "Start in a project",
           }}
           relatedLinks={[
+            { href: appPath(OCTAVE_IMAGE), label: "Octave image" },
             {
               href: appPath(OCTAVE_KERNEL_GUIDE),
               label: "Octave setup guide",
+            },
+            {
+              href: appPath("features/software-environment"),
+              label: "Software environments",
             },
             { href: appPath("features/linux"), label: "Linux environment" },
             {

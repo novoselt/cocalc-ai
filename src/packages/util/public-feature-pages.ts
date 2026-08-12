@@ -145,6 +145,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "software-environment",
     title: "Software Environments",
     navLabel: "Software",
+    metadataTitle: "Online Software Environments",
     tagline: "Pick the software image your project runs on.",
     summary:
       "Choose a software image per project — from lean base systems to full scientific stacks — and customize it from there.",
@@ -288,11 +289,30 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "python",
     title: "Python",
     navLabel: "Python",
-    tagline: "A broad scientific Python stack ready in the browser.",
+    metadataTitle: "Online Python Environment",
+    tagline: "A scientific Python environment you can shape yourself.",
     summary:
-      "Use Python for technical computing, data science, and machine learning with a large preinstalled package set and collaborative tooling around it.",
-    image: "/public/features/frame-editor-python.png",
+      "Use Python in Jupyter notebooks, scripts, terminals, JupyterLab, and VS Code, with package installs that persist and larger machines or GPUs when a computation gets heavy.",
+    metadataSummary:
+      "Use a full Python environment online in your browser: the scientific stack in Jupyter notebooks, .py files and terminals, uv, pip, conda, and apt installs that persist, JupyterLab and VS Code, GPU images for PyTorch and TensorFlow, and Python web apps behind an authenticated URL.",
+    image: "/public/features/jupyter-regular-20260730.png",
     index: true,
+    sections: [
+      {
+        title: "A full Python environment online",
+        paragraphs: [
+          "Run Python online in your browser: every CoCalc project is a Linux machine with the scientific Python stack, so you open a Jupyter notebook, type code, run it, and see the output, with nothing to install on your own computer.",
+          "The environment is yours to shape: passwordless sudo, apt-get, uv, pip, and conda all work, and everything you install persists with the project instead of disappearing at the end of a session.",
+        ],
+        bullets: [
+          "Python images ship NumPy, pandas, SciPy, scikit-learn, SymPy, matplotlib, and JupyterLab",
+          ".py files with a terminal pane next to the source, Jupyter notebooks, and real Linux terminals",
+          "JupyterLab and VS Code launch in the browser from the project's Apps panel",
+          "Larger machines and GPUs with CUDA-ready PyTorch and TensorFlow images for heavy runs",
+          "Flask, FastAPI, and other Python web apps run behind an authenticated project URL",
+        ],
+      },
+    ],
   },
   {
     slug: "r-statistical-software",
@@ -326,13 +346,30 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     slug: "julia",
     title: "Julia",
     navLabel: "Julia",
+    metadataTitle: "Run Julia Online",
     tagline: "Use Julia in notebooks, terminals, Pluto, and source files.",
     summary:
       "Run Julia in Jupyter notebooks, Pluto, package environments, source files, and terminals.",
     metadataSummary:
-      "Run Julia in a collaborative project with Jupyter notebooks, Pluto, package environments, source files, terminals, and course workflows.",
+      "Run Julia online in a collaborative CoCalc project: the Julia image with its Jupyter kernel, Pluto reactive notebooks, VS Code in the browser, package environments that live with your files, and .jl scripts in a real Linux terminal.",
     image: "/public/features/julia-jupyter.png",
     index: true,
+    sections: [
+      {
+        title: "Run Julia online",
+        paragraphs: [
+          "Run Julia in your browser without installing anything: start a project on the Julia image and it comes with the Julia Jupyter kernel, Pluto for reactive notebooks, and VS Code in the browser.",
+          "Everything sits in one shared project, so data, package environments, notebooks, and their full edit history stay together and collaborators re-run the same code instead of a copy.",
+        ],
+        bullets: [
+          "Julia notebooks with real-time collaboration, cell chat, and TimeTravel history",
+          "Pluto reactive notebooks start from the project's Apps panel, with bundled examples",
+          "Package environments defined by a Project.toml that lives with your files",
+          ".jl files open in the collaborative editor with a one-click julia REPL",
+          "Long simulations keep running in a terminal after you close the browser",
+        ],
+      },
+    ],
   },
   {
     slug: "sage",
@@ -372,18 +409,19 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
     summary:
       "Use GNU Octave for MATLAB-style numerical computing in collaborative projects with notebooks, .m files, terminals, plots, and teaching workflows.",
     metadataSummary:
-      "Run GNU Octave online in a CoCalc Linux project: use it in Jupyter notebooks and terminals, edit .m files collaboratively, with TimeTravel history and snapshots.",
-    image: "/public/features/cocalc-octave-jupyter-20200511.png",
+      "Run GNU Octave online in a CoCalc Linux project: start on the Octave image with its common packages, use Octave as the default Jupyter kernel, edit .m files collaboratively, and keep TimeTravel history and snapshots.",
+    image: "/public/features/cocalc-octave-sombrero-20260811.png",
     index: true,
     sections: [
       {
         title: "Run GNU Octave online",
         paragraphs: [
-          "GNU Octave is the free numerical computing language that is largely compatible with MATLAB. In CoCalc it runs inside a full Linux project, so collaboration, history, and backups come with it.",
-          "Use Octave in Jupyter notebooks after a documented kernel setup, edit .m files with Octave syntax highlighting, and run scripts in a terminal that survives disconnects.",
+          "GNU Octave is the free numerical computing language that is largely compatible with MATLAB. Start a project on the Octave image and it is ready to use, in a full Linux environment with passwordless sudo, real-time collaboration, TimeTravel history, and snapshots.",
+          "Octave is the default Jupyter kernel on that image, .m files open in the collaborative editor with Octave syntax highlighting, and scripts run in a terminal that survives disconnects.",
         ],
         bullets: [
-          "Step-by-step guide for setting up Octave and its Jupyter kernel",
+          "Octave built from source with the statistics, control, signal, image, optim, and symbolic packages",
+          "Jupyter kernels for Octave and Python, plus JupyterLab from the project's Apps panel",
           ".m files open in the collaborative editor with a one-click octave shell",
           "Real-time collaboration, TimeTravel history, and snapshots in every project",
         ],

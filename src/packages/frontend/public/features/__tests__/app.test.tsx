@@ -464,12 +464,15 @@ describe("PublicFeaturesApp", () => {
     );
 
     expect(
-      screen.getByText("Python that moves from notebook to script to paper."),
+      screen.getByText(
+        "A full Python environment online, set up the way you want.",
+      ),
     ).not.toBeNull();
     expect(
-      screen.getByText("The right interface at each stage"),
+      screen.getByText("Install the packages you want, at any layer"),
     ).not.toBeNull();
-    expect(screen.getByText("Project context")).not.toBeNull();
+    expect(screen.getByText("Heavy computations and GPUs")).not.toBeNull();
+    expect(screen.getByText("Python online")).not.toBeNull();
   });
 
   it("uses projects as the python CTA for authenticated users", () => {
@@ -537,8 +540,8 @@ describe("PublicFeaturesApp", () => {
     },
     {
       slug: "julia",
-      title: "Use Julia in Pluto, Jupyter, and shared modeling projects.",
-      section: "Keep Julia close to the rest of the research.",
+      title: "Run Julia online, in notebooks, Pluto, and the terminal.",
+      section: "Package environments that stay with the project",
     },
     {
       slug: "r-statistical-software",
@@ -548,7 +551,7 @@ describe("PublicFeaturesApp", () => {
     {
       slug: "octave",
       title: "Run GNU Octave online in a project you control.",
-      section: "Octave in Jupyter notebooks",
+      section: "Octave, with the packages you expect",
     },
     {
       slug: "slides",
