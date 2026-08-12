@@ -15,7 +15,7 @@ run_noninteractive() {
 }
 
 repo_url="${REPO_URL:-https://github.com/sagemathinc/overleaf}"
-ref="${REF:-main}"
+ref="${REF:?ref input is required}"
 prefix="${PREFIX:-/opt/overleaf}"
 frontend_port="${FRONTEND_PORT:-6020}"
 web_port="${WEB_PORT:-6021}"
@@ -39,10 +39,14 @@ $SUDO env PATH="/usr/local/bin:/usr/bin:/bin:$PATH" "$npm_bin" install -g "npm@$
 
 if [ -d "$prefix/.git" ]; then
   $SUDO git -C "$prefix" fetch --depth=1 origin "$ref"
-  $SUDO git -C "$prefix" checkout FETCH_HEAD
+  $SUDO git -C "$prefix" checkout --detach FETCH_HEAD
 else
   $SUDO rm -rf "$prefix"
-  $SUDO git clone --depth=1 --branch "$ref" "$repo_url" "$prefix"
+  $SUDO mkdir -p "$prefix"
+  $SUDO git -C "$prefix" init -q
+  $SUDO git -C "$prefix" remote add origin "$repo_url"
+  $SUDO git -C "$prefix" fetch --depth=1 origin "$ref"
+  $SUDO git -C "$prefix" checkout --detach FETCH_HEAD
 fi
 
 $SUDO chown -R "$(id -u):$(id -g)" "$prefix"

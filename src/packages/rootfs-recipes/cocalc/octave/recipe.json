@@ -8,7 +8,10 @@
       "type": "string",
       "default": "https://github.com/sagemathinc/octave-installer.git"
     },
-    "repo_ref": { "type": "string", "default": "main" },
+    "repo_ref": {
+      "type": "string",
+      "default": "0d817e68c2358fec33ae878f36e8d0b63c8f3a19"
+    },
     "script": { "type": "string", "default": "install.sh" },
 
     "version": { "type": "string", "default": "11.3.0" },

@@ -16,9 +16,9 @@ builder:
     # is a fraction of it once the sources and debug symbols are gone.
     disk_quota: 30000
 
-# Every step runs a script from the octave-installer repository, pinned by
-# `repo_ref`. Pin a tag rather than a branch for anything published, so that
-# rebuilding reproduces the same image.
+# Every step inherits the same immutable octave-installer revision from the
+# module's `repo_ref` default. Update that SHA deliberately when publishing a
+# new image so one build cannot mix revisions between steps.
 steps:
   - name: Build and install GNU Octave
     uses: cocalc/octave

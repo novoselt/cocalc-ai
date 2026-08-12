@@ -8,7 +8,10 @@
       "type": "string",
       "default": "https://github.com/sagemathinc/texlive-installer.git"
     },
-    "repo_ref": { "type": "string", "default": "main" },
+    "repo_ref": {
+      "type": "string",
+      "default": "53c044b384dd738d3dc917311b20b1df3eb2cec3"
+    },
     "script": { "type": "string", "default": "install.sh" },
 
     "mode": { "type": "string", "default": "install" },

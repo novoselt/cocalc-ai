@@ -7,7 +7,10 @@
       "type": "string",
       "default": "https://github.com/sagemathinc/overleaf"
     },
-    "ref": { "type": "string", "default": "main" },
+    "ref": {
+      "type": "string",
+      "default": "e305fffd70248920936e6b651bfad728e02fe3e8"
+    },
     "prefix": { "type": "string", "default": "/opt/overleaf" },
     "frontend_port": { "type": "string", "default": "6020" },
     "web_port": { "type": "string", "default": "6021" },
