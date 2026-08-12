@@ -129,6 +129,13 @@ export async function initApp({ app, conatClient, AUTH_TOKEN, isHttps }) {
   if (isApiV2Enabled()) {
     const { createApiV2Router } = await import("@cocalc/http-api");
     app.use("/api/v2", createApiV2Router({ browserCors: "request-origin" }));
+  } else {
+    // Lite/Plus has one built-in local account and does not need the control
+    // plane auth API. Answer the frontend bootstrap probe directly so startup
+    // does not generate retries and expected 404 errors.
+    app.post("/api/v2/auth/bootstrap", (_req, res) => {
+      res.json({ signed_in: true, account_id });
+    });
   }
 
   let pathToStaticAssets;
@@ -226,7 +233,7 @@ function resolvePublicAssetsPath(): string | undefined {
   }
 }
 
-function mapLiteTarget(rawUrl: string): string {
+export function mapLiteTarget(rawUrl: string): string {
   const parsed = new URL(
     `http://host${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`,
   );
@@ -256,7 +263,9 @@ function mapLiteTarget(rawUrl: string): string {
   } else {
     targetPath = pathname.startsWith("/") ? pathname.slice(1) : pathname;
   }
-  if (!targetPath || targetPath === "static/app.html") {
+  if (!targetPath) {
+    targetPath = `projects/${project_id}/files/`;
+  } else if (targetPath === "static/app.html") {
     return "";
   }
   return `${targetPath}${parsed.search || ""}`;

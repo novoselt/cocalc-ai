@@ -1,4 +1,7 @@
-import { SandboxedFilesystem } from "@cocalc/backend/sandbox";
+import {
+  relativePathWithin,
+  SandboxedFilesystem,
+} from "@cocalc/backend/sandbox";
 import {
   mkdtemp,
   mkdir,
@@ -13,7 +16,7 @@ import {
 import { rmSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "path";
+import path, { join } from "node:path";
 import { make_patch } from "@cocalc/util/dmp";
 import { delay } from "awaiting";
 
@@ -35,6 +38,29 @@ async function expectRejectsWithError(
 }
 
 const describeIfLinux = process.platform === "linux" ? describe : describe.skip;
+
+describe("sandbox path containment", () => {
+  it("recognizes Windows descendants without treating siblings as contained", () => {
+    const base = "C:\\Users\\user\\CoCalc";
+    expect(
+      relativePathWithin(
+        "C:\\Users\\user\\CoCalc\\docs\\a.md",
+        base,
+        path.win32,
+      ),
+    ).toBe("docs\\a.md");
+    expect(
+      relativePathWithin(
+        "C:\\Users\\user\\CoCalc-other\\a.md",
+        base,
+        path.win32,
+      ),
+    ).toBeUndefined();
+    expect(
+      relativePathWithin("D:\\Users\\user\\CoCalc\\a.md", base, path.win32),
+    ).toBeUndefined();
+  });
+});
 
 describeIfLinux(
   "test using the filesystem sandbox to do a few standard things",

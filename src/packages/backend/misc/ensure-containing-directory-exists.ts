@@ -1,7 +1,7 @@
 import { constants as fsc, accessSync, mkdirSync } from "node:fs";
 import { access, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 
-import { path_split } from "@cocalc/util/misc";
 import abspath from "./abspath";
 
 // Make sure that that the directory containing the file indicated by
@@ -10,8 +10,8 @@ export default async function ensureContainingDirectoryExists(
   path: string,
 ): Promise<void> {
   path = abspath(path);
-  const containingDirectory = path_split(path).head; // containing path
-  if (!containingDirectory) return;
+  const containingDirectory = dirname(path);
+  if (!containingDirectory || containingDirectory === ".") return;
   await ensureDirectoryExists(containingDirectory);
 }
 
@@ -37,8 +37,8 @@ export async function ensureDirectoryExists(path: string): Promise<void> {
 
 export function ensureContainingDirectoryExistsSync(path: string) {
   path = abspath(path);
-  const containingDirectory = path_split(path).head; // containing path
-  if (!containingDirectory) return;
+  const containingDirectory = dirname(path);
+  if (!containingDirectory || containingDirectory === ".") return;
   ensureDirectoryExistsSync(containingDirectory);
 }
 

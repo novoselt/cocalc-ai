@@ -21,6 +21,28 @@ async function waitFor(
   throw new Error(`Windows runtime smoke test timed out after ${timeoutMs}ms`);
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  description: string,
+  timeoutMs = 20_000,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error(`${description} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer != null) clearTimeout(timer);
+  }
+}
+
 async function fetchWithTimeout(
   url: string,
   init?: RequestInit,
@@ -33,6 +55,21 @@ async function fetchWithTimeout(
 
 async function smokeHttp(port: number): Promise<void> {
   const rootUrl = `http://localhost:${port}/`;
+  const bootstrap = await fetchWithTimeout(
+    new URL("api/v2/auth/bootstrap", rootUrl).href,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  if (!bootstrap.ok) {
+    throw new Error(`auth bootstrap smoke failed with ${bootstrap.status}`);
+  }
+  const auth = await bootstrap.json();
+  if (!auth.signed_in) {
+    throw new Error("auth bootstrap smoke did not report a signed-in user");
+  }
   const redirect = await fetchWithTimeout(rootUrl, { redirect: "manual" });
   if (redirect.status !== 302) {
     throw new Error(
@@ -43,6 +80,10 @@ async function smokeHttp(port: number): Promise<void> {
   await redirect.body?.cancel();
   if (!location) {
     throw new Error("HTTP smoke redirect did not include a location");
+  }
+  const target = new URL(location, rootUrl).searchParams.get("target");
+  if (target !== `projects/${FALLBACK_PROJECT_UUID}/files/`) {
+    throw new Error(`HTTP smoke redirected to an unexpected target: ${target}`);
   }
 
   const app = await fetchWithTimeout(new URL(location, rootUrl).href);
@@ -81,6 +122,7 @@ export async function runWindowsRuntimeSmoke(port: number): Promise<void> {
   const renamedFilename = `/home/user/.cocalc-plus-windows-smoke-renamed.txt`;
   const destinationDirectory = `/home/user/.cocalc-plus-windows-smoke-dir`;
   const movedFilename = `${destinationDirectory}/.cocalc-plus-windows-smoke-renamed.txt`;
+  const syncedFilename = `/home/user/.cocalc-plus-windows-editor-smoke.md`;
   await projectApi.system.writeTextFileToProject({
     path: canonicalFilename,
     content: marker,
@@ -118,6 +160,26 @@ export async function runWindowsRuntimeSmoke(port: number): Promise<void> {
     throw new Error("moved project file smoke mismatch");
   }
 
+  const synced = client.sync.string({
+    project_id,
+    path: syncedFilename,
+    cursors: false,
+    document_activity_interval: 0,
+  });
+  try {
+    await withTimeout(synced.wait_until_ready(), "collaborative editor open");
+    synced.from_str(`# Native Windows editor smoke\n\n${marker}\n`);
+    await withTimeout(synced.save_to_disk(), "collaborative editor save");
+    const saved = await projectApi.system.readTextFileFromProject({
+      path: syncedFilename,
+    });
+    if (!saved.includes(marker)) {
+      throw new Error("collaborative editor did not persist its content");
+    }
+  } finally {
+    await synced.close().catch(() => {});
+  }
+
   const terminal = terminalClient({
     client,
     project_id,
@@ -145,11 +207,12 @@ export async function runWindowsRuntimeSmoke(port: number): Promise<void> {
     await fs.rm(canonicalFilename, { force: true }).catch(() => {});
     await fs.rm(renamedFilename, { force: true }).catch(() => {});
     await fs.rm(movedFilename, { force: true }).catch(() => {});
+    await fs.rm(syncedFilename, { force: true }).catch(() => {});
     await fs
       .rm(destinationDirectory, { recursive: true, force: true })
       .catch(() => {});
   }
   process.stdout.write(
-    `${JSON.stringify({ ok: true, http: true, files: true, powershell_terminal: true })}\n`,
+    `${JSON.stringify({ ok: true, http: true, files: true, collaborative_editor: true, powershell_terminal: true })}\n`,
   );
 }
