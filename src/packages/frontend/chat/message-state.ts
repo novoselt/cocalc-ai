@@ -19,6 +19,23 @@ export type InlineCodexActivityBlock = {
   state?: "sending" | "sent" | "queued" | "not-sent";
 };
 
+export const DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT = 100;
+
+export function limitCodexActivityBlocks(
+  blocks: InlineCodexActivityBlock[],
+  visibleLimit: number,
+): {
+  visibleBlocks: InlineCodexActivityBlock[];
+  hiddenCount: number;
+} {
+  const limit = Math.max(1, Math.floor(visibleLimit));
+  const hiddenCount = Math.max(0, blocks.length - limit);
+  return {
+    visibleBlocks: hiddenCount > 0 ? blocks.slice(hiddenCount) : blocks,
+    hiddenCount,
+  };
+}
+
 export function computeAcpStateToRender({
   acpState,
   latestThreadInterrupted,

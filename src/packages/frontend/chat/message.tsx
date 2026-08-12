@@ -111,7 +111,9 @@ import {
 import {
   canUseCompletedCachedCodexActivity,
   computeAcpStateToRender,
+  DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT,
   getQueuedMessageEditHelpText,
+  limitCodexActivityBlocks,
   resolveCodexShowActivityButtonState,
   resolveEditedMessageForSave,
   resolveEffectiveGenerating,
@@ -382,6 +384,10 @@ export default function Message({
   const edited_message_ref = useRef(edited_message);
 
   const [show_history, set_show_history] = useState(false);
+  const [codexActivityVisibleLimit, setCodexActivityVisibleLimit] = useState(
+    DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT,
+  );
+  const [selectCodexActivityText, setSelectCodexActivityText] = useState(false);
 
   const historyEntries = useMemo(() => historyArray(message), [message]);
   const firstHistoryEntry = useMemo(
@@ -1908,7 +1914,11 @@ export default function Message({
     onHideActivity?: () => void;
     showQuotaHelp?: boolean;
   }) {
-    const combinedAgentText = blocks
+    const { visibleBlocks, hiddenCount } = limitCodexActivityBlocks(
+      blocks,
+      codexActivityVisibleLimit,
+    );
+    const combinedAgentText = visibleBlocks
       .filter((block) => block.kind === "agent")
       .map((block) => block.text)
       .join("\n\n");
@@ -1921,7 +1931,51 @@ export default function Message({
             gap: 8,
           }}
         >
-          {blocks.map((block, index) =>
+          {hiddenCount > 0 || messageBodyMode !== "select" ? (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                gap: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              {messageBodyMode !== "select" ? (
+                <Button
+                  size="small"
+                  type={selectCodexActivityText ? "primary" : "default"}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSelectCodexActivityText((current) => !current);
+                  }}
+                >
+                  <Icon name="copy" />
+                  {selectCodexActivityText ? "Done selecting" : "Select & copy"}
+                </Button>
+              ) : null}
+              {hiddenCount > 0 ? (
+                <Button
+                  size="small"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setCodexActivityVisibleLimit((current) =>
+                      Math.min(
+                        blocks.length,
+                        current + DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT,
+                      ),
+                    );
+                  }}
+                >
+                  Show{" "}
+                  {Math.min(hiddenCount, DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT)}
+                  {" earlier activity items"}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {visibleBlocks.map((block, index) =>
             block.kind === "guidance" ? (
               <div
                 key={`guidance-${index}-${block.time ?? index}`}
@@ -1941,7 +1995,7 @@ export default function Message({
                   />
                 </div>
               </div>
-            ) : messageBodyMode === "select" ? (
+            ) : messageBodyMode === "select" || selectCodexActivityText ? (
               <div key={`agent-${index}-${block.time ?? index}`}>
                 {renderSelectableMarkdownBody({
                   value: linkifyCommitHashes(block.text),
