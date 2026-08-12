@@ -992,6 +992,23 @@ describe("PublicApp", () => {
     expect(
       within(onInputRow!).getByText(/submit an unrelated action/),
     ).not.toBeNull();
+    const consistentHelpRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.2\.6 Consistent Help/,
+      })
+      .closest("tr");
+    expect(consistentHelpRow).not.toBeNull();
+    expect(within(consistentHelpRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(consistentHelpRow!).getByText(
+        /Support and Docs icons remain in the top-right area/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(consistentHelpRow!).getByText(
+        /without changing those global help mechanisms/,
+      ),
+    ).not.toBeNull();
     const errorIdentificationRow = within(tables[1])
       .getByRole("rowheader", {
         name: /3\.3\.1 Error Identification/,
