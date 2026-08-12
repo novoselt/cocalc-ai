@@ -1110,6 +1110,23 @@ describe("PublicApp", () => {
         /star control received keyboard focus/,
       ),
     ).not.toBeNull();
+    const focusNotObscuredRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /2\.4\.11 Focus Not Obscured \(Minimum\)/,
+      })
+      .closest("tr");
+    expect(focusNotObscuredRow).not.toBeNull();
+    expect(within(focusNotObscuredRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(focusNotObscuredRow!).getByText(
+        /did not identify focused controls completely obscured/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(focusNotObscuredRow!).getByText(
+        /focus remains within the active dialog/,
+      ),
+    ).not.toBeNull();
     const draggingRow = within(tables[2])
       .getByRole("rowheader", { name: /2\.5\.7 Dragging Movements/ })
       .closest("tr");
