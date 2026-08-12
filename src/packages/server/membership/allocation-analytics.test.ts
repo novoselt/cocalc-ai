@@ -8,6 +8,7 @@ import {
   allocateWholeCentsByDay,
   projectMembershipAllocationFact,
   recordMembershipAllocationFact,
+  recordMembershipAllocationRefund,
 } from "./allocation-analytics";
 
 describe("membership allocation analytics", () => {
@@ -116,6 +117,72 @@ describe("membership allocation analytics", () => {
           client,
         }),
       ).rejects.toThrow("whole cents");
+    });
+
+    it("records exact compensating facts without rewriting the originals", async () => {
+      for (const [suffix, memberships, revenue] of [
+        ["target", 1, 20],
+        ["credit", -1, -8],
+      ] as const) {
+        await recordMembershipAllocationFact({
+          fact_key: `test:upgrade:${suffix}`,
+          account_id: "00000000-0000-4000-8000-000000000001",
+          channel: "personal",
+          source_kind:
+            suffix === "target" ? "plan-change" : "plan-change-credit",
+          membership_class: suffix,
+          billing_interval: "month",
+          lifecycle: "plan_change",
+          tier_change: "upgrade",
+          allocation_start: "2026-08-03",
+          allocation_end: "2026-09-03",
+          active_memberships: memberships,
+          revenue,
+          purchase_id: 123,
+          subscription_id: 456,
+          client,
+        });
+      }
+
+      expect(
+        await recordMembershipAllocationRefund({
+          original_purchase_id: 123,
+          refund_purchase_id: 124,
+          client,
+        }),
+      ).toBe(2);
+      expect(
+        await recordMembershipAllocationRefund({
+          original_purchase_id: 123,
+          refund_purchase_id: 124,
+          client,
+        }),
+      ).toBe(0);
+
+      const { rows } = await client.query(
+        `SELECT membership_class,
+                SUM(active_memberships)::int AS active_memberships,
+                SUM(revenue_cents)::int AS revenue_cents,
+                COUNT(*)::int AS fact_count
+           FROM membership_allocation_facts
+          WHERE purchase_id IN (123,124)
+          GROUP BY membership_class
+          ORDER BY membership_class`,
+      );
+      expect(rows).toEqual([
+        {
+          membership_class: "credit",
+          active_memberships: 0,
+          revenue_cents: 0,
+          fact_count: 2,
+        },
+        {
+          membership_class: "target",
+          active_memberships: 0,
+          revenue_cents: 0,
+          fact_count: 2,
+        },
+      ]);
     });
   });
 });

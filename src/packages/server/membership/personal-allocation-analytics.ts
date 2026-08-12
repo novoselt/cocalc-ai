@@ -43,7 +43,7 @@ export interface PersonalMembershipPeriodOptions {
   previous_membership_class?: string | null;
   previous_billing_interval?: MembershipAllocationBillingInterval | null;
   tier_change?: MembershipAllocationTierChange;
-  client: PoolClient;
+  client: Queryable;
 }
 
 function factIdentity({
@@ -186,7 +186,7 @@ export async function recordPersonalMembershipUpgradeCredit({
   allocation_start: Date;
   allocation_end: Date;
   credit: MoneyValue;
-  client: PoolClient;
+  client: Queryable;
 }): Promise<boolean> {
   return await recordMembershipAllocationFact({
     fact_key: `personal:subscription:${new_subscription_id}:upgrade-credit:${old_subscription_id}`,

@@ -7,6 +7,7 @@ import getPool, {
   getTransactionClient,
   type PoolClient,
 } from "@cocalc/database/pool";
+import { createHash } from "node:crypto";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import {
   moneyRoundToCents,
@@ -89,7 +90,7 @@ export interface RecordMembershipAllocationFactOptions extends Omit<
   active_memberships?: number;
   purchased_capacity?: number;
   revenue?: MoneyValue;
-  client?: PoolClient;
+  client?: Queryable;
 }
 
 export interface DailyCentAllocation {
@@ -252,6 +253,66 @@ export async function recordMembershipAllocationFact({
     ],
   );
   return result.rowCount === 1;
+}
+
+function refundFactKey(refundPurchaseId: number, factKey: string): string {
+  const digest = createHash("sha256").update(factKey).digest("hex");
+  return `membership:refund:${refundPurchaseId}:${digest}`;
+}
+
+export async function recordMembershipAllocationRefund({
+  original_purchase_id,
+  refund_purchase_id,
+  occurred_at = new Date(),
+  client,
+}: {
+  original_purchase_id: number;
+  refund_purchase_id: number;
+  occurred_at?: Date;
+  client: PoolClient;
+}): Promise<number> {
+  const { rows } = await client.query<MembershipAllocationFact>(
+    `SELECT fact_key, bay_id, account_id, channel, source_kind,
+            membership_class, billing_interval, lifecycle,
+            previous_membership_class, previous_billing_interval, tier_change,
+            allocation_start, allocation_end, active_memberships,
+            purchased_capacity, revenue_cents, subscription_id
+       FROM membership_allocation_facts
+      WHERE purchase_id=$1
+      ORDER BY fact_key`,
+    [original_purchase_id],
+  );
+  let recorded = 0;
+  for (const fact of rows) {
+    if (
+      await recordMembershipAllocationFact({
+        fact_key: refundFactKey(refund_purchase_id, fact.fact_key),
+        occurred_at,
+        bay_id: fact.bay_id,
+        account_id: fact.account_id,
+        channel: fact.channel,
+        source_kind: "refund",
+        membership_class: fact.membership_class,
+        billing_interval: fact.billing_interval,
+        lifecycle: fact.lifecycle,
+        previous_membership_class: fact.previous_membership_class,
+        previous_billing_interval: fact.previous_billing_interval,
+        tier_change: fact.tier_change,
+        allocation_start: fact.allocation_start,
+        allocation_end: fact.allocation_end,
+        active_memberships: -Number(fact.active_memberships),
+        purchased_capacity: -Number(fact.purchased_capacity),
+        revenue: toDecimal(fact.revenue_cents).div(100).neg(),
+        purchase_id: refund_purchase_id,
+        subscription_id: fact.subscription_id,
+        reverses_fact_key: fact.fact_key,
+        client,
+      })
+    ) {
+      recorded += 1;
+    }
+  }
+  return recorded;
 }
 
 export async function projectMembershipAllocationFact({
