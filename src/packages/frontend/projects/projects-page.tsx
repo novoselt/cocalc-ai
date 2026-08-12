@@ -5,7 +5,7 @@
 
 import { Button, Grid, Layout } from "antd";
 import { Map, Set as ImmutableSet } from "immutable";
-import { Suspense, useLayoutEffect, useRef, type RefObject } from "react";
+import { Suspense, useLayoutEffect, useRef } from "react";
 import { useIntl } from "react-intl";
 
 // ensure redux stuff (actions and store) are initialized:
@@ -95,7 +95,7 @@ const VISIBLE_WINDOW_REPAIR_LIMIT = 200;
 const VISIBLE_WINDOW_REPAIR_DELAY_MS = 500;
 
 function useProjectTableBodyHeight(
-  projectListRef: RefObject<HTMLDivElement | null>,
+  element: HTMLDivElement | null,
   enabled: boolean,
 ): number {
   const [height, setHeight] = useState(PROJECTS_TABLE_INITIAL_BODY_HEIGHT);
@@ -104,7 +104,6 @@ function useProjectTableBodyHeight(
     if (!enabled) {
       return;
     }
-    const element = projectListRef.current;
     if (element == null) {
       return;
     }
@@ -130,7 +129,7 @@ function useProjectTableBodyHeight(
     const resizeObserver = new ResizeObserver(updateHeight);
     resizeObserver.observe(element);
     return () => resizeObserver.disconnect();
-  }, [enabled, projectListRef]);
+  }, [enabled, element]);
 
   return height;
 }
@@ -217,6 +216,15 @@ export const ProjectsPage: React.FC = () => {
   const filtersRef = useRef<any>(null);
   const createNewRef = useRef<any>(null);
   const projectListRef = useRef<HTMLDivElement>(null);
+  const [projectListElement, setProjectListElement] =
+    useState<HTMLDivElement | null>(null);
+  const attachProjectListRef = React.useCallback(
+    (element: HTMLDivElement | null) => {
+      projectListRef.current = element;
+      setProjectListElement(element);
+    },
+    [],
+  );
   const filenameSearchRef = useRef<any>(null);
 
   const [createPanelOpen, setCreatePanelOpen] = useState(false);
@@ -224,7 +232,7 @@ export const ProjectsPage: React.FC = () => {
   if (createPanelOpen) createPanelMounted.current = true;
 
   const tableHeight = useProjectTableBodyHeight(
-    projectListRef,
+    projectListElement,
     !mobileProjectsList,
   );
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
@@ -739,7 +747,7 @@ export const ProjectsPage: React.FC = () => {
                   </div>
 
                   <div
-                    ref={projectListRef}
+                    ref={attachProjectListRef}
                     style={{
                       flex: mobileProjectsList ? "0 0 auto" : "1 1 0",
                       height: mobileProjectsList ? undefined : "100%",
