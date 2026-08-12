@@ -1,8 +1,32 @@
 import { SERVICE } from "./util";
 import { ConatError } from "@cocalc/conat/core/client";
-import { posix } from "node:path";
+import { posix } from "path";
 
 export const MAX_PATH_LENGTH = 4000;
+
+type StoragePlatform = NodeJS.Platform | "browser";
+
+function runtimeStoragePlatform(): StoragePlatform {
+  return typeof process === "undefined" || process.platform == null
+    ? "browser"
+    : process.platform;
+}
+
+export function isNormalizedStoragePath(
+  path: string,
+  platform: StoragePlatform = runtimeStoragePlatform(),
+): boolean {
+  // Storage paths are slash-delimited logical paths, but their final
+  // components are also used as SQLite filenames. A backslash is a valid
+  // filename character on Unix and part of existing persistence identities;
+  // on Windows it is a native path separator and must be rejected. Browser
+  // preflight cannot know the persistence server's OS; the server repeats this
+  // authorization check and applies its authoritative platform rule.
+  return (
+    path === posix.normalize(path) &&
+    (platform !== "win32" || !path.includes("\\"))
+  );
+}
 
 export function getUserId(subject: string, service = SERVICE): string {
   if (
@@ -51,9 +75,7 @@ export function assertHasWritePermission({
   path: string;
   service?: string;
 }) {
-  // Persistence paths are protocol identifiers, not host filesystem paths.
-  // Keep their normalization stable when clients run natively on Windows.
-  if (path.includes("\\") || path != posix.normalize(path)) {
+  if (!isNormalizedStoragePath(path)) {
     throw Error(`permission denied: path '${path}' is not normalized`);
   }
   if (path.length > MAX_PATH_LENGTH) {
