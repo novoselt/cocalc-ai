@@ -28,6 +28,7 @@ import { writeFile } from "jsonfile";
 import mkdirp from "mkdirp";
 import shellEscape from "shell-escape";
 import { envForSpawn } from "@cocalc/backend/misc";
+import { projectRuntimePathForProcess } from "@cocalc/util/project-runtime";
 import { getLogger } from "@cocalc/backend/logger";
 import { getPorts } from "@cocalc/backend/get-port";
 
@@ -166,6 +167,17 @@ async function launchKernelSpec(
   };
 
   let running_kernel;
+
+  // Workspace projects advertise the canonical runtime home (/home/user) to
+  // clients while the project process itself runs under its own HOME, so the
+  // cwd arriving from the browser has to be mapped before we create it or
+  // spawn into it -- same treatment the terminal and execute-code paths get.
+  // This deliberately uses process.env rather than full_spawn_options.env:
+  // envForSpawn() strips every COCALC_* variable, so the spawn env no longer
+  // carries COCALC_RUNTIME_HOME.  Outside workspace mode this is a no-op.
+  full_spawn_options.cwd = projectRuntimePathForProcess(
+    full_spawn_options.cwd,
+  );
 
   if (full_spawn_options.cwd != null) {
     await ensureDirectoryExists(full_spawn_options.cwd);

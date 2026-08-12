@@ -8672,7 +8672,7 @@ podman_ps_once() {
 }
 
 podman_runtime_namespace_error() {
-  grep -qiE 'cannot re-exec process to join the existing user namespace|cannot join.*user namespace|invalid internal status' <<< "$1"
+  grep -qiE 'cannot re-exec process to join the existing user namespace|cannot join.*user namespace|failed to reexec|invalid internal status' <<< "$1"
 }
 
 project_host_app_running() {
@@ -8799,6 +8799,7 @@ require_podman_boot_preparation_not_failed() {
 prepare_podman_boot() {
   local home config_dir storage_conf desired_runroot legacy_runroot current_runroot
   local runtime_dir cgroup_manager tmp graphroot db_path reported_runroot
+  local status _attempt probe_errors
   if ! mountpoint -q /mnt/cocalc; then
     echo "/mnt/cocalc is not mounted; refusing Podman boot preparation" >&2
     return 1
@@ -8855,10 +8856,35 @@ EOF
     cgroup_manager="cgroupfs"
   fi
   run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" system migrate
-  reported_runroot="$(
-    run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" \
-      info --format '{{.Store.RunRoot}}'
-  )"
+  # `system migrate` tears down the rootless pause process, and on Ubuntu the
+  # next Podman invocation is transitioned into the unprivileged_userns
+  # AppArmor profile, where re-executing /proc/self/exe is denied.  The
+  # following attempt always succeeds, so retry once before giving up.
+  # Keep stderr out of the captured value: a successful `podman info` may still
+  # warn (rootless storage, cgroups), and merging that into stdout would corrupt
+  # the runroot comparison below.
+  reported_runroot=""
+  status=0
+  probe_errors="$(mktemp)"
+  for _attempt in 1 2; do
+    set +e
+    reported_runroot="$(
+      run_podman_as_runtime 60s "${runtime_dir}" "${cgroup_manager}" \
+        info --format '{{.Store.RunRoot}}' 2>"${probe_errors}"
+    )"
+    status="$?"
+    set -e
+    if [ "${status}" -eq 0 ]; then
+      break
+    fi
+    podman_runtime_namespace_error "$(cat "${probe_errors}")" || break
+  done
+  if [ "${status}" -ne 0 ]; then
+    cat "${probe_errors}" >&2
+    rm -f "${probe_errors}"
+    return "${status}"
+  fi
+  rm -f "${probe_errors}"
   if [ "${reported_runroot}" != "${desired_runroot}" ]; then
     echo "Podman runroot validation failed: expected=${desired_runroot} reported=${reported_runroot}" >&2
     return 1
