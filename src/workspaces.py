@@ -55,13 +55,15 @@ def set_package_test_tmpdir(path: str) -> tuple[str, dict[str, Optional[str]]]:
 
 
 def restore_package_test_tmpdir(tmpdir: str,
-                                old: dict[str, Optional[str]]) -> None:
+                                old: dict[str, Optional[str]],
+                                cleanup: bool = True) -> None:
     for key, value in old.items():
         if value is None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    if cleanup:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def is_jest_backed_package(package_json: dict[str, Any], path: str) -> bool:
@@ -552,7 +554,6 @@ def test(args) -> None:
                              f" --json --outputFile "
                              f"{shlex.quote(report_path)}")
             cmd(test_cmd, package_path)
-            success.append(path)
             return report_path
 
         worked = False
@@ -566,6 +567,10 @@ def test(args) -> None:
                 try:
                     f(i, retry_paths)
                     worked = True
+                    if i == 0:
+                        success.append(path)
+                    else:
+                        flaky.append(path)
                     break
                 except KeyboardInterrupt:
                     print("SIGINT -- ending test suite")
@@ -573,8 +578,6 @@ def test(args) -> None:
                     return
                 except Exception as err:
                     print(err)
-                    if path not in flaky:
-                        flaky.append(path)
                     retry_paths = (failed_jest_test_paths(report_path)
                                    if jest_backed else [])
                     print(f"ERROR testing {path}")
@@ -586,9 +589,10 @@ def test(args) -> None:
                             f"Trying {path} again at most {args.retries - i} more times"
                         )
         finally:
-            restore_package_test_tmpdir(tmpdir, old_tmp_env)
+            restore_package_test_tmpdir(tmpdir, old_tmp_env, cleanup=worked)
             restore_scrubbed_env(scrubbed)
         if not worked:
+            print(f"Preserved failed test results in: {tmpdir}")
             fails.append(path)
 
     status()
