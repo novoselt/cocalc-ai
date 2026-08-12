@@ -33,6 +33,11 @@ describe("UX latency configuration", () => {
     expect(getLightweightUxSuccessSampleRate()).toBe(0);
   });
 
+  it("keeps the default when the site setting is unset", () => {
+    configureUxLatency({ success_sample_rate: null });
+    expect(getLightweightUxSuccessSampleRate()).toBe(0.25);
+  });
+
   it("drops events when the site-wide switch is disabled", () => {
     configureUxLatency({ telemetry_enabled: false });
     recordUxLatencyEvent({
