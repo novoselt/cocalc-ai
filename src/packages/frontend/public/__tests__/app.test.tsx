@@ -925,6 +925,25 @@ describe("PublicApp", () => {
         /did not move focus out of the chat editor/,
       ),
     ).not.toBeNull();
+    const characterKeyShortcutsRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.1\.4 Character Key Shortcuts/,
+      })
+      .closest("tr");
+    expect(characterKeyShortcutsRow).not.toBeNull();
+    expect(
+      within(characterKeyShortcutsRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(characterKeyShortcutsRow!).getByText(
+        /did not activate commands on the Files or Profile pages/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(characterKeyShortcutsRow!).getByText(
+        /active only while focus is within the notebook editor/,
+      ),
+    ).not.toBeNull();
     const focusOrderRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.4\.3 Focus Order/,
