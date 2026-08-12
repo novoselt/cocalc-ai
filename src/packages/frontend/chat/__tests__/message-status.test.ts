@@ -1,10 +1,32 @@
 /** @jest-environment jsdom */
 
 import {
+  codexActivityBlocksToSelectableMarkdown,
   computeAcpStateToRender,
   limitCodexActivityBlocks,
   shouldShowAcpResubmitToAgentButton,
 } from "../message-state";
+
+describe("codexActivityBlocksToSelectableMarkdown", () => {
+  it("combines the visible activity window into one chronological document", () => {
+    expect(
+      codexActivityBlocksToSelectableMarkdown([
+        { kind: "agent", text: "Inspecting the project." },
+        {
+          kind: "guidance",
+          text: "Also check the tests.\nDo not deploy yet.",
+          state: "sent",
+        },
+        { kind: "agent", text: "The focused tests pass." },
+      ]),
+    ).toBe(
+      "Inspecting the project.\n\n" +
+        "> **Guidance sent**\n>\n" +
+        "> Also check the tests.\n> Do not deploy yet.\n\n" +
+        "The focused tests pass.",
+    );
+  });
+});
 
 describe("limitCodexActivityBlocks", () => {
   const blocks = Array.from({ length: 250 }, (_, index) => ({
