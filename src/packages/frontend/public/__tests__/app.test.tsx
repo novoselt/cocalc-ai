@@ -1,5 +1,8 @@
 /** @jest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import {
   act,
   fireEvent,
@@ -814,6 +817,651 @@ describe("PublicApp", () => {
     expect(
       within(policyPages).getByRole("link", { name: "DPA" }),
     ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("links the accessibility statement to the standalone HTML report", async () => {
+    await renderPublicApp(
+      <PublicApp
+        config={{ policy_pages: "sagemathinc", site_name: "Launchpad" }}
+        initialRoute={policiesRoute({
+          policySlug: "accessibility",
+          view: "policies-detail",
+        })}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Accessibility Statement" }),
+    ).not.toBeNull();
+    const reportLink = screen.getByRole("link", {
+      name: "Accessibility Conformance Report (based on VPAT® Version 2.5Rev)",
+    });
+    expect(reportLink).toHaveAttribute(
+      "href",
+      "/public/documents/SageMathInc_ACR_VPAT2.5Rev_WCAG_August2026.html",
+    );
+    expect(reportLink).toHaveAttribute("target", "_blank");
+    expect(reportLink).toHaveAttribute("rel", "noopener");
+  });
+
+  it("provides a responsive semantic HTML conformance report", () => {
+    const reportHtml = readFileSync(
+      join(
+        __dirname,
+        "../../../assets/public/documents/SageMathInc_ACR_VPAT2.5Rev_WCAG_August2026.html",
+      ),
+      "utf8",
+    );
+    const reportDocument = new DOMParser().parseFromString(
+      reportHtml,
+      "text/html",
+    );
+    const reportContainer = document.createElement("div");
+    reportContainer.innerHTML = reportDocument.body.innerHTML;
+
+    expect(reportDocument.documentElement.getAttribute("lang")).toBe("en");
+    const report = within(reportContainer);
+    expect(
+      report.getByRole("heading", {
+        name: "SageMath, Inc. Accessibility Conformance Report",
+      }),
+    ).not.toBeNull();
+    expect(
+      report.getByText("CoCalc.ai web application (continuously delivered)"),
+    ).not.toBeNull();
+    expect(report.getByText("August 11, 2026")).not.toBeNull();
+    expect(report.getByText(/excludes user-authored content;/)).not.toBeNull();
+    expect(
+      report.getByText(/Manual production testing covered/),
+    ).not.toBeNull();
+    expect(
+      report.getByText(
+        /No screen-reader or other assistive-technology testing/,
+      ),
+    ).not.toBeNull();
+
+    const tables = report.getAllByRole("table");
+    expect(tables).toHaveLength(3);
+    expect(within(tables[0]).getAllByRole("row")).toHaveLength(4);
+    expect(within(tables[1]).getAllByRole("row")).toHaveLength(33);
+    expect(within(tables[2]).getAllByRole("row")).toHaveLength(25);
+    expect(within(tables[0]).getAllByText(/Level AAA \(No\)/)).toHaveLength(3);
+    const videoOnlyRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.2\.1 Audio-only and Video-only \(Prerecorded\)/,
+      })
+      .closest("tr");
+    expect(videoOnlyRow).not.toBeNull();
+    expect(
+      within(videoOnlyRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(videoOnlyRow!).getByText(/supplemental previews/),
+    ).not.toBeNull();
+    const infoRelationshipsRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.3\.1 Info and Relationships/,
+      })
+      .closest("tr");
+    expect(infoRelationshipsRow).not.toBeNull();
+    expect(
+      within(infoRelationshipsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(infoRelationshipsRow!).getByText(
+        /visible labels are rendered separately from their controls/,
+      ),
+    ).not.toBeNull();
+    const useOfColorRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.4\.1 Use of Color/,
+      })
+      .closest("tr");
+    expect(useOfColorRow).not.toBeNull();
+    expect(
+      within(useOfColorRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(useOfColorRow!).getByText(/removes text decoration/),
+    ).not.toBeNull();
+    expect(
+      within(useOfColorRow!).getByText(/distinguished.*primarily by color/),
+    ).not.toBeNull();
+    const meaningfulSequenceRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.3\.2 Meaningful Sequence/,
+      })
+      .closest("tr");
+    expect(meaningfulSequenceRow).not.toBeNull();
+    expect(within(meaningfulSequenceRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(meaningfulSequenceRow!).getByText(
+        /no layout reordering that changed the meaning/,
+      ),
+    ).not.toBeNull();
+    const sensoryCharacteristicsRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.3\.3 Sensory Characteristics/,
+      })
+      .closest("tr");
+    expect(sensoryCharacteristicsRow).not.toBeNull();
+    expect(
+      within(sensoryCharacteristicsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(sensoryCharacteristicsRow!).getByText(/rely on visual position/),
+    ).not.toBeNull();
+    expect(
+      within(sensoryCharacteristicsRow!).getByText(/Fix the error above/),
+    ).not.toBeNull();
+    const pauseStopHideRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.2\.2 Pause, Stop, Hide/,
+      })
+      .closest("tr");
+    expect(pauseStopHideRow).not.toBeNull();
+    expect(
+      within(pauseStopHideRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(pauseStopHideRow!).getByText(/repeat on ten-second cycles/),
+    ).not.toBeNull();
+    expect(
+      within(pauseStopHideRow!).getByText("prefers-reduced-motion"),
+    ).not.toBeNull();
+    const threeFlashesRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.3\.1 Three Flashes or Below Threshold/,
+      })
+      .closest("tr");
+    expect(threeFlashesRow).not.toBeNull();
+    expect(within(threeFlashesRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(threeFlashesRow!).getByText(
+        /cycle no faster than once per second/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(threeFlashesRow!).getByText(/frame-by-frame flash analysis/),
+    ).not.toBeNull();
+    const keyboardRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.1\.1 Keyboard/,
+      })
+      .closest("tr");
+    expect(keyboardRow).not.toBeNull();
+    expect(within(keyboardRow!).getByText("Partially supports")).not.toBeNull();
+    expect(
+      within(keyboardRow!).getByText(/can be navigated using Tab/),
+    ).not.toBeNull();
+    expect(
+      within(keyboardRow!).getByText(/mouse-only controls elsewhere/),
+    ).not.toBeNull();
+    const keyboardTrapRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.1\.2 No Keyboard Trap/,
+      })
+      .closest("tr");
+    expect(keyboardTrapRow).not.toBeNull();
+    expect(
+      within(keyboardTrapRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(keyboardTrapRow!).getByText(
+        /did not move focus out of the chat editor/,
+      ),
+    ).not.toBeNull();
+    const characterKeyShortcutsRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.1\.4 Character Key Shortcuts/,
+      })
+      .closest("tr");
+    expect(characterKeyShortcutsRow).not.toBeNull();
+    expect(
+      within(characterKeyShortcutsRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(characterKeyShortcutsRow!).getByText(
+        /did not activate commands on the Files or Profile pages/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(characterKeyShortcutsRow!).getByText(
+        /active only while focus is within the notebook editor/,
+      ),
+    ).not.toBeNull();
+    const focusOrderRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.4\.3 Focus Order/,
+      })
+      .closest("tr");
+    expect(focusOrderRow).not.toBeNull();
+    expect(within(focusOrderRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(focusOrderRow!).getByText(/left to right, then top to bottom/),
+    ).not.toBeNull();
+    const linkPurposeRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.4\.4 Link Purpose \(In Context\)/,
+      })
+      .closest("tr");
+    expect(linkPurposeRow).not.toBeNull();
+    expect(within(linkPurposeRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(linkPurposeRow!).getByText(
+        /surrounding text that describes the destination or action/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(linkPurposeRow!).getByText(/use explanatory tooltips/),
+    ).not.toBeNull();
+    const onFocusRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.2\.1 On Focus/,
+      })
+      .closest("tr");
+    expect(onFocusRow).not.toBeNull();
+    expect(within(onFocusRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(onFocusRow!).getByText(/No change of context on focus/),
+    ).not.toBeNull();
+    const onInputRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.2\.2 On Input/,
+      })
+      .closest("tr");
+    expect(onInputRow).not.toBeNull();
+    expect(within(onInputRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(onInputRow!).getByText(/long-term use have not identified/),
+    ).not.toBeNull();
+    expect(
+      within(onInputRow!).getByText(/submit an unrelated action/),
+    ).not.toBeNull();
+    const consistentHelpRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.2\.6 Consistent Help/,
+      })
+      .closest("tr");
+    expect(consistentHelpRow).not.toBeNull();
+    expect(within(consistentHelpRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(consistentHelpRow!).getByText(
+        /Support and Docs icons remain in the top-right area/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(consistentHelpRow!).getByText(
+        /without changing those global help mechanisms/,
+      ),
+    ).not.toBeNull();
+    const pointerGesturesRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.5\.1 Pointer Gestures/,
+      })
+      .closest("tr");
+    expect(pointerGesturesRow).not.toBeNull();
+    expect(within(pointerGesturesRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(pointerGesturesRow!).getByText(/support pinch-to-zoom/),
+    ).not.toBeNull();
+    expect(
+      within(pointerGesturesRow!).getByText(/single-pointer controls/),
+    ).not.toBeNull();
+    const pointerCancellationRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.5\.2 Pointer Cancellation/,
+      })
+      .closest("tr");
+    expect(pointerCancellationRow).not.toBeNull();
+    expect(
+      within(pointerCancellationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(pointerCancellationRow!).getByText(
+        /No destructive or otherwise irreversible action/,
+      ),
+    ).not.toBeNull();
+    const labelInNameRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.5\.3 Label in Name/,
+      })
+      .closest("tr");
+    expect(labelInNameRow).not.toBeNull();
+    expect(
+      within(labelInNameRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(labelInNameRow!).getByText(
+        /accessible name is absent or derived from placeholder text/,
+      ),
+    ).not.toBeNull();
+    const identifyInputPurposeRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.3\.5 Identify Input Purpose/,
+      })
+      .closest("tr");
+    expect(identifyInputPurposeRow).not.toBeNull();
+    expect(
+      within(identifyInputPurposeRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(identifyInputPurposeRow!).getByText("one-time-code"),
+    ).not.toBeNull();
+    expect(
+      within(identifyInputPurposeRow!).getByText(
+        /Profile display-name field disables autocomplete/,
+      ),
+    ).not.toBeNull();
+    const contrastRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.3 Contrast \(Minimum\)/,
+      })
+      .closest("tr");
+    expect(contrastRow).not.toBeNull();
+    expect(within(contrastRow!).getByText("Partially supports")).not.toBeNull();
+    expect(within(contrastRow!).getByText("#c0c0c0")).not.toBeNull();
+    expect(
+      within(contrastRow!).getByText(/approximately 1\.82:1/),
+    ).not.toBeNull();
+    const imagesOfTextRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.5 Images of Text/,
+      })
+      .closest("tr");
+    expect(imagesOfTextRow).not.toBeNull();
+    expect(within(imagesOfTextRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(imagesOfTextRow!).getByText(/substantial visual content/),
+    ).not.toBeNull();
+    const languageOfPartsRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /3\.1\.2 Language of Parts/,
+      })
+      .closest("tr");
+    expect(languageOfPartsRow).not.toBeNull();
+    expect(
+      within(languageOfPartsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(languageOfPartsRow!).getByText(/no systematic use of/),
+    ).not.toBeNull();
+    const nonTextContrastRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.11 Non-text Contrast/,
+      })
+      .closest("tr");
+    expect(nonTextContrastRow).not.toBeNull();
+    expect(
+      within(nonTextContrastRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(within(nonTextContrastRow!).getByText("#c0c0c0")).not.toBeNull();
+    expect(
+      within(nonTextContrastRow!).getByText(/required 3:1/),
+    ).not.toBeNull();
+    const textSpacingRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.12 Text Spacing/,
+      })
+      .closest("tr");
+    expect(textSpacingRow).not.toBeNull();
+    expect(
+      within(textSpacingRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(textSpacingRow!).getByText(
+        /wrapping disabled and overflow hidden/,
+      ),
+    ).not.toBeNull();
+    const hoverContentRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.13 Content on Hover or Focus/,
+      })
+      .closest("tr");
+    expect(hoverContentRow).not.toBeNull();
+    expect(
+      within(hoverContentRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(hoverContentRow!).getByText(/without adding Escape-key dismissal/),
+    ).not.toBeNull();
+    const errorIdentificationRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.3\.1 Error Identification/,
+      })
+      .closest("tr");
+    expect(errorIdentificationRow).not.toBeNull();
+    expect(
+      within(errorIdentificationRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(errorIdentificationRow!).getByText(
+        /remained disabled for blank and clearly malformed input/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(errorIdentificationRow!).getByText(
+        /Error: Unable to start email sign-in/,
+      ),
+    ).not.toBeNull();
+    const redundantEntryRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /3\.3\.7 Redundant Entry/,
+      })
+      .closest("tr");
+    expect(redundantEntryRow).not.toBeNull();
+    expect(within(redundantEntryRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(redundantEntryRow!).getByText(
+        /did not identify a first-party multi-step process/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(redundantEntryRow!).getByText(/rather than to collect duplicate/),
+    ).not.toBeNull();
+    const nameRoleValueRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /4\.1\.2 Name, Role, Value/,
+      })
+      .closest("tr");
+    expect(nameRoleValueRow).not.toBeNull();
+    expect(
+      within(nameRoleValueRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(nameRoleValueRow!).getByText(
+        /compact menu destinations without accessible names/,
+      ),
+    ).not.toBeNull();
+    expect(
+      report.queryByRole("heading", {
+        name: "Table 3: Success Criteria, Level AAA",
+      }),
+    ).toBeNull();
+    const orientationRow = within(tables[2])
+      .getByRole("rowheader", { name: /1\.3\.4 Orientation/ })
+      .closest("tr");
+    expect(orientationRow).not.toBeNull();
+    expect(
+      within(orientationRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(orientationRow!).getByText(/390 CSS-pixel portrait viewport/),
+    ).not.toBeNull();
+    const resizeTextRow = within(tables[2])
+      .getByRole("rowheader", { name: /1\.4\.4 Resize text/ })
+      .closest("tr");
+    expect(resizeTextRow).not.toBeNull();
+    expect(within(resizeTextRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(resizeTextRow!).getByText(/remained usable at 200% browser zoom/),
+    ).not.toBeNull();
+    const reflowRow = within(tables[2])
+      .getByRole("rowheader", { name: /1\.4\.10 Reflow/ })
+      .closest("tr");
+    expect(reflowRow).not.toBeNull();
+    expect(within(reflowRow!).getByText("Partially supports")).not.toBeNull();
+    expect(
+      within(reflowRow!).getByText(/settings required horizontal scrolling/),
+    ).not.toBeNull();
+    const multipleWaysRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.4\.5 Multiple Ways/ })
+      .closest("tr");
+    expect(multipleWaysRow).not.toBeNull();
+    expect(within(multipleWaysRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(multipleWaysRow!).getByText(
+        /same destinations as the persistent Settings navigation/,
+      ),
+    ).not.toBeNull();
+    const headingsAndLabelsRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.4\.6 Headings and Labels/ })
+      .closest("tr");
+    expect(headingsAndLabelsRow).not.toBeNull();
+    expect(
+      within(headingsAndLabelsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(headingsAndLabelsRow!).getByText(
+        /Billing and Purchases share one card icon/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(headingsAndLabelsRow!).getByText(
+        /cannot be distinguished from their displayed icons alone/,
+      ),
+    ).not.toBeNull();
+    const focusVisibleRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.4\.7 Focus Visible/ })
+      .closest("tr");
+    expect(focusVisibleRow).not.toBeNull();
+    expect(
+      within(focusVisibleRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(focusVisibleRow!).getByText(
+        /star control received keyboard focus/,
+      ),
+    ).not.toBeNull();
+    const focusNotObscuredRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /2\.4\.11 Focus Not Obscured \(Minimum\)/,
+      })
+      .closest("tr");
+    expect(focusNotObscuredRow).not.toBeNull();
+    expect(within(focusNotObscuredRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(focusNotObscuredRow!).getByText(
+        /did not identify focused controls completely obscured/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(focusNotObscuredRow!).getByText(
+        /focus remains within the active dialog/,
+      ),
+    ).not.toBeNull();
+    const draggingRow = within(tables[2])
+      .getByRole("rowheader", { name: /2\.5\.7 Dragging Movements/ })
+      .closest("tr");
+    expect(draggingRow).not.toBeNull();
+    expect(within(draggingRow!).getByText("Partially supports")).not.toBeNull();
+    expect(
+      within(draggingRow!).getByText(/reordering starred projects/),
+    ).not.toBeNull();
+    const consistentNavigationRow = within(tables[2])
+      .getByRole("rowheader", { name: /3\.2\.3 Consistent Navigation/ })
+      .closest("tr");
+    expect(consistentNavigationRow).not.toBeNull();
+    expect(
+      within(consistentNavigationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(consistentNavigationRow!).getByText(
+        /remain in stable relative locations and order/,
+      ),
+    ).not.toBeNull();
+    const consistentIdentificationRow = within(tables[2])
+      .getByRole("rowheader", { name: /3\.2\.4 Consistent Identification/ })
+      .closest("tr");
+    expect(consistentIdentificationRow).not.toBeNull();
+    expect(
+      within(consistentIdentificationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(consistentIdentificationRow!).getByText(
+        /repeated functions such as close, search, and add/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(consistentIdentificationRow!).getByText(
+        /different functions reuse a card icon/,
+      ),
+    ).not.toBeNull();
+    const errorSuggestionRow = within(tables[2])
+      .getByRole("rowheader", { name: /3\.3\.3 Error Suggestion/ })
+      .closest("tr");
+    expect(errorSuggestionRow).not.toBeNull();
+    expect(
+      within(errorSuggestionRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(errorSuggestionRow!).getByText(
+        /disabled without known correction guidance/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(errorSuggestionRow!).getByText(/without a suggested next step/),
+    ).not.toBeNull();
+    const errorPreventionRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /3\.3\.4 Error Prevention \(Legal, Financial, Data\)/,
+      })
+      .closest("tr");
+    expect(errorPreventionRow).not.toBeNull();
+    expect(within(errorPreventionRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(errorPreventionRow!).getByText(/backups provide a recovery path/),
+    ).not.toBeNull();
+    expect(
+      within(errorPreventionRow!).getByText(
+        /purchase modal offers one-click purchase/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(errorPreventionRow!).getByText(/type a confirmation word/),
+    ).not.toBeNull();
+    const accessibleAuthenticationRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /3\.3\.8 Accessible Authentication \(Minimum\)/,
+      })
+      .closest("tr");
+    expect(accessibleAuthenticationRow).not.toBeNull();
+    expect(
+      within(accessibleAuthenticationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(accessibleAuthenticationRow!).getByText(
+        /passwordless email sign-in and SSO/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(accessibleAuthenticationRow!).getByText(
+        /no deliberate restrictions on paste or password-manager use/,
+      ),
+    ).not.toBeNull();
+    const statusMessagesRow = within(tables[2])
+      .getByRole("rowheader", { name: /4\.1\.3 Status Messages/ })
+      .closest("tr");
+    expect(statusMessagesRow).not.toBeNull();
+    expect(
+      within(statusMessagesRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(statusMessagesRow!).getByText(/main connection-status indicator/),
+    ).not.toBeNull();
+    expect(reportHtml).toContain("@media screen and (max-width: 50rem)");
+    expect(reportHtml).not.toContain("overflow-x");
+    expect(reportHtml).not.toContain("@page");
   });
 
   it("renders the built-in terms page", async () => {

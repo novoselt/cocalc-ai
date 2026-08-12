@@ -5,7 +5,7 @@ export const accessibilityPolicy: PublicPolicy = {
   navLabel: "Accessibility",
   slug: "accessibility",
   title: "Accessibility Statement",
-  updated: "June 9, 2026",
+  updated: "August 11, 2026",
   content: (
     <>
       <p>
@@ -28,14 +28,16 @@ export const accessibilityPolicy: PublicPolicy = {
       </p>
       <p>
         For more specific details, please consult our{" "}
-        <A href="/public/documents/SageMathInc_VPAT2.5Rev_WCAG_February2025_December2025.pdf">
-          Voluntary Product Accessibility Template, VPAT®
+        <A
+          href="/public/documents/SageMathInc_ACR_VPAT2.5Rev_WCAG_August2026.html"
+          rel="noopener"
+          target="_blank"
+        >
+          Accessibility Conformance Report (based on VPAT® Version 2.5Rev)
         </A>{" "}
-        (last updated December 2025). This report was prepared for the previous
-        version of the CoCalc platform. The current platform retains many of the
-        same product concepts and accessibility constraints, so the report
-        remains useful as a general reference, but it should not be read as a
-        complete assessment of every current interface.
+        (last updated August 2026). This report evaluates a representative
+        sample of the current CoCalc.ai web application. Its scope, exclusions,
+        evaluation methods, and limitations are described in the report.
       </p>
     </>
   ),

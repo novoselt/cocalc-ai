@@ -1,0 +1,1605 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SageMath, Inc. Accessibility Conformance Report</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        font-size: 100%;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: Canvas;
+        color: CanvasText;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      main {
+        margin-inline: auto;
+        max-width: 90rem;
+        padding: clamp(1rem, 3vw, 3rem);
+      }
+
+      h1,
+      h2,
+      h3 {
+        line-height: 1.2;
+      }
+
+      h1 {
+        font-size: clamp(1.8rem, 4vw, 2.75rem);
+        margin-block: 0 1.5rem;
+      }
+
+      h2 {
+        border-block-end: 1px solid GrayText;
+        font-size: 1.6rem;
+        margin-block: 2.5rem 1rem;
+        padding-block-end: 0.35rem;
+      }
+
+      h3 {
+        font-size: 1.25rem;
+        margin-block: 2rem 0.75rem;
+      }
+
+      p,
+      li,
+      dd {
+        line-height: 1.65;
+      }
+
+      main > p,
+      main > dl,
+      section > p,
+      section > ul {
+        max-width: 80ch;
+      }
+
+      a {
+        color: LinkText;
+        overflow-wrap: anywhere;
+        text-underline-offset: 0.15em;
+      }
+
+      a:focus-visible {
+        outline: 0.2rem solid currentColor;
+        outline-offset: 0.2rem;
+      }
+
+      .skip-link {
+        background: Canvas;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        color: CanvasText;
+        height: 1px;
+        inset-block-start: 0.5rem;
+        inset-inline-start: 0.5rem;
+        overflow: hidden;
+        padding: 0.75rem;
+        position: fixed;
+        white-space: nowrap;
+        width: 1px;
+        z-index: 1;
+      }
+
+      .skip-link:focus {
+        clip: auto;
+        clip-path: none;
+        height: auto;
+        overflow: visible;
+        width: auto;
+      }
+
+      .report-metadata {
+        display: grid;
+        gap: 0.75rem 1.5rem;
+        grid-template-columns: max-content minmax(0, 1fr);
+        margin-block: 1.5rem;
+      }
+
+      .report-metadata dt {
+        font-weight: 700;
+      }
+
+      .report-metadata dd {
+        margin: 0;
+      }
+
+      .table-wrapper {
+        margin-block: 1rem 2.5rem;
+        max-width: 100%;
+      }
+
+      .report-table {
+        border-collapse: collapse;
+        table-layout: fixed;
+        width: 100%;
+      }
+
+      .report-table th,
+      .report-table td {
+        border: 1px solid GrayText;
+        overflow-wrap: anywhere;
+        padding: 0.65rem;
+        text-align: start;
+        vertical-align: top;
+      }
+
+      .report-table thead th {
+        font-weight: 700;
+      }
+
+      .report-table:not(.standards-table) th:nth-child(1),
+      .report-table:not(.standards-table) td:nth-child(1) {
+        width: 30%;
+      }
+
+      .report-table:not(.standards-table) th:nth-child(2),
+      .report-table:not(.standards-table) td:nth-child(2) {
+        width: 18%;
+      }
+
+      .standards-table th:nth-child(1),
+      .standards-table td:nth-child(1) {
+        width: 55%;
+      }
+
+      .visually-hidden {
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px;
+      }
+
+      @media screen and (max-width: 50rem) {
+        main {
+          padding: 1rem;
+        }
+
+        .report-metadata {
+          grid-template-columns: 1fr;
+        }
+
+        .report-metadata dd:not(:last-child) {
+          margin-block-end: 0.75rem;
+        }
+
+        .report-table,
+        .report-table tbody,
+        .report-table tr,
+        .report-table th,
+        .report-table td {
+          display: block;
+          width: 100%;
+        }
+
+        .report-table thead {
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          height: 1px;
+          overflow: hidden;
+          position: absolute;
+          white-space: nowrap;
+          width: 1px;
+        }
+
+        .report-table tbody {
+          display: grid;
+          gap: 1rem;
+        }
+
+        .report-table tr {
+          border: 1px solid GrayText;
+          padding: 0.75rem;
+        }
+
+        .report-table th,
+        .report-table td {
+          border: 0;
+          padding: 0.3rem 0;
+        }
+
+        .report-table:not(.standards-table) th:nth-child(1),
+        .report-table:not(.standards-table) td:nth-child(1),
+        .report-table:not(.standards-table) th:nth-child(2),
+        .report-table:not(.standards-table) td:nth-child(2),
+        .standards-table th:nth-child(1),
+        .standards-table td:nth-child(1) {
+          width: 100%;
+        }
+
+        .report-table th[scope="row"] {
+          font-size: 1.05rem;
+        }
+
+        .report-table th[scope="row"]::before,
+        .report-table td::before {
+          color: GrayText;
+          display: block;
+          font-size: 0.75rem;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          margin-block-end: 0.1rem;
+          text-transform: uppercase;
+        }
+
+        .report-table:not(.standards-table) th[scope="row"]::before {
+          content: "Criteria";
+        }
+
+        .report-table:not(.standards-table) td:nth-child(2)::before {
+          content: "Conformance Level";
+        }
+
+        .report-table:not(.standards-table) td:nth-child(3)::before {
+          content: "Remarks and Explanations";
+        }
+
+        .standards-table th[scope="row"]::before {
+          content: "Standard/Guideline";
+        }
+
+        .standards-table td:nth-child(2)::before {
+          content: "Included In Report";
+        }
+      }
+
+      @media print {
+        :root {
+          font-size: 9pt;
+        }
+
+        main {
+          max-width: none;
+          padding: 0;
+        }
+
+        h1,
+        h2,
+        h3 {
+          break-after: avoid;
+          page-break-after: avoid;
+        }
+
+        .report-table {
+          table-layout: auto;
+        }
+
+        .report-table tr {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+
+        a {
+          color: inherit;
+        }
+
+        .skip-link {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#report"
+      >Skip to accessibility conformance report</a
+    >
+    <main id="report">
+      <h1>SageMath, Inc. Accessibility Conformance Report</h1>
+      <p><strong>WCAG Edition</strong><br />(Based on VPAT® Version 2.5Rev)</p>
+      <dl class="report-metadata">
+        <dt>Name of Product/Version:</dt>
+        <dd>CoCalc.ai web application (continuously delivered)</dd>
+        <dt>Report Date:</dt>
+        <dd>August 11, 2026</dd>
+        <dt>Product Description:</dt>
+        <dd>
+          Browser-based collaborative computing and development application
+        </dd>
+        <dt>Contact Information:</dt>
+        <dd>help@sagemath.com</dd>
+        <dt>Notes:</dt>
+        <dd>
+          This report evaluates first-party CoCalc.ai web interfaces using a
+          representative sample of public, authentication, account, project,
+          file, CoCalc-native editor, and settings workflows in Google Chrome on
+          desktop at representative wide and narrow viewport sizes. It excludes
+          user-authored content; arbitrary installed software, packages, and
+          terminal output; separately launched third-party applications such as
+          JupyterLab and Jupyter Classic; and externally embedded content.
+        </dd>
+        <dt>Evaluation Methods Used:</dt>
+        <dd>
+          Evaluation included source-code review and automated testing in Google
+          Chrome 151.0.7922.108. Lighthouse 13.4.1 was run at a 1440 by 1000
+          CSS-pixel viewport against 16 public production pages and 15
+          authenticated pages in a development build. axe-core 4.12.1 was run
+          against six representative interactive states, with programmatic
+          keyboard activation and focus assertions for selected states. Manual
+          production testing covered representative public and authenticated
+          screens in portrait and landscape responsive viewports, at 200%
+          browser zoom, and with keyboard focus navigation. All 16 public
+          production pages and 13 of the 15 authenticated pages received
+          Lighthouse accessibility scores of 100. Five of the six interactive
+          states had no axe violations; the sixth reported the same unnamed
+          switch found by Lighthouse. Automated testing does not establish
+          complete WCAG conformance. No screen-reader or other
+          assistive-technology testing was performed.
+        </dd>
+      </dl>
+      <p>
+        <small
+          >“Voluntary Product Accessibility Template” and “VPAT” are registered
+          service marks of the Information Technology Industry Council
+          (ITI)</small
+        >
+      </p>
+      <section>
+        <h2>Applicable Standards/Guidelines</h2>
+        <p>
+          This report covers the degree of conformance for the following
+          accessibility standard/guidelines:
+        </p>
+        <div class="table-wrapper">
+          <table class="report-table standards-table">
+            <caption class="visually-hidden">
+              Applicable Standards/Guidelines
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Standard/Guideline</th>
+                <th scope="col">Included In Report</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">
+                  <a
+                    href="http://www.w3.org/TR/2008/REC-WCAG20-20081211"
+                    rel="noopener"
+                    target="_blank"
+                    >Web Content Accessibility Guidelines 2.0</a
+                  >
+                </th>
+                <td>Level A (Yes)<br />Level AA (Yes)<br />Level AAA (No)</td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <a
+                    href="https://www.w3.org/TR/WCAG21"
+                    rel="noopener"
+                    target="_blank"
+                    >Web Content Accessibility Guidelines 2.1</a
+                  >
+                </th>
+                <td>Level A (Yes)<br />Level AA (Yes)<br />Level AAA (No)</td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <a
+                    href="https://www.w3.org/TR/WCAG22/"
+                    rel="noopener"
+                    target="_blank"
+                    >Web Content Accessibility Guidelines 2.2</a
+                  >
+                </th>
+                <td>Level A (Yes)<br />Level AA (Yes)<br />Level AAA (No)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section>
+        <h2>Terms</h2>
+        <p>
+          The terms used in the Conformance Level information are defined as
+          follows:
+        </p>
+        <ul>
+          <li>
+            <strong>Supports</strong>: The functionality of the product has at
+            least one method that meets the criterion without known defects or
+            meets with equivalent facilitation.
+          </li>
+          <li>
+            <strong>Partially Supports</strong>: Some functionality of the
+            product does not meet the criterion.
+          </li>
+          <li>
+            <strong>Does Not Support</strong>: The majority of product
+            functionality does not meet the criterion.
+          </li>
+          <li>
+            <strong>Not Applicable</strong>: The criterion is not relevant to
+            the product.
+          </li>
+          <li>
+            <strong>Not Evaluated</strong>: The product has not been evaluated
+            against the criterion. This can only be used in WCAG Level AAA
+            criteria.
+          </li>
+        </ul>
+      </section>
+      <section>
+        <h2>WCAG 2.x Report</h2>
+        <p>
+          Note: When reporting on conformance with the WCAG 2.x Success
+          Criteria, they are scoped for full pages, complete processes, and
+          accessibility-supported ways of using technology as documented in the
+          <a
+            href="https://www.w3.org/TR/WCAG20/#conformance-reqs"
+            rel="noopener"
+            target="_blank"
+            >WCAG 2.0 Conformance Requirements</a
+          >.
+        </p>
+        <section>
+          <h3>Table 1: Success Criteria, Level A</h3>
+          <p>Notes:</p>
+          <div class="table-wrapper">
+            <table class="report-table">
+              <caption class="visually-hidden">
+                Table 1: Success Criteria, Level A
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Criteria</th>
+                  <th scope="col">Conformance Level</th>
+                  <th scope="col">Remarks and Explanations</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#text-equiv-all"
+                      rel="noopener"
+                      target="_blank"
+                      >1.1.1 Non-text Content</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Automated testing found an account avatar image without
+                    alternative text. Other image alternative-text checks passed
+                    in the sampled pages, but the sample does not cover every
+                    non-text element.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-av-only-alt"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.1 Audio-only and Video-only (Prerecorded)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    First-party feature pages include silent prerecorded
+                    demonstration videos. They are supplemental previews rather
+                    than instructions required to use CoCalc, and they have
+                    accessible names and nearby feature descriptions, but they
+                    do not have equivalent time-based media alternatives.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-captions"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.2 Captions (Prerecorded)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-audio-desc"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.3 Audio Description or Media Alternative
+                      (Prerecorded)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#content-structure-separation-programmatic"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.1 Info and Relationships</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Most sampled screens use semantic headings, tables, and
+                    controls, and automated checks did not identify relationship
+                    failures in most tested states. However, source review found
+                    authentication and account-setting fields whose visible
+                    labels are rendered separately from their controls without a
+                    programmatic label association. Automated testing also found
+                    a visible Help label that was not programmatically
+                    associated with its switch.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#content-structure-separation-sequence"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.2 Meaningful Sequence</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    On the manually reviewed Profile and Files pages, visual
+                    presentation and keyboard order followed a logical sequence.
+                    Source review found no layout reordering that changed the
+                    meaning of those sampled screens.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#content-structure-separation-understanding"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.3 Sensory Characteristics</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Most reviewed instructions name the relevant control or
+                    action. Source review found exceptions that rely on visual
+                    position, including “Copy the command manually from the box
+                    below,” “Fix the error above,” and “Reply to the above
+                    message.” These phrases do not independently identify their
+                    target without its surrounding visual layout.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-without-color"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.1 Use of Color</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Ant Design's base link styling removes text decoration in
+                    normal, hover, and focus states. Inline links such as the
+                    Terms of Service and Privacy Policy links in authentication
+                    notices are therefore distinguished from surrounding prose
+                    primarily by color. Navigation cards and many controls also
+                    provide layout, borders, icons, or text labels as non-color
+                    cues.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-dis-audio"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.2 Audio Control</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#keyboard-operation-keyboard-operable"
+                      rel="noopener"
+                      target="_blank"
+                      >2.1.1 Keyboard</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Manual production testing confirmed that the Profile
+                    settings page, including its language selector, sign-out
+                    button, and page controls, can be navigated using Tab in the
+                    expected order. Selected dialogs and controls also passed
+                    programmatic keyboard activation and focus checks. Source
+                    review found mouse-only controls elsewhere, so not all
+                    functionality is keyboard operable.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#keyboard-operation-trapping"
+                      rel="noopener"
+                      target="_blank"
+                      >2.1.2 No Keyboard Trap</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Terminal and chat editors capture Tab for editing. Manual
+                    production testing found that Escape followed by Tab or
+                    Shift+Tab did not move focus out of the chat editor. Other
+                    sampled dialogs allowed keyboard exit and restored focus.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#character-key-shortcuts"
+                      rel="noopener"
+                      target="_blank"
+                      >2.1.4 Character Key Shortcuts</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual production testing found that ordinary character keys
+                    did not activate commands on the Files or Profile pages when
+                    focus was outside an input or editor. Integrated Jupyter
+                    notebook single-character shortcuts follow command mode and
+                    are active only while focus is within the notebook editor.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#time-limits-required-behaviors"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.1 Timing Adjustable</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Some notifications close automatically after fixed
+                    durations. Pointer users can pause them by hovering, but the
+                    duration is not user-adjustable and equivalent keyboard
+                    pause behavior was not established.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#time-limits-pause"
+                      rel="noopener"
+                      target="_blank"
+                      >2.2.2 Pause, Stop, Hide</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Unread notification and chat indicators use animations that
+                    start automatically and repeat on ten-second cycles while
+                    presented alongside other content. Source review found no
+                    control to pause those animations and no
+                    <code>prefers-reduced-motion</code> override. Progress and
+                    execution indicators stop when the associated activity ends,
+                    and prerecorded videos provide playback controls.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#seizure-does-not-violate"
+                      rel="noopener"
+                      target="_blank"
+                      >2.3.1 Three Flashes or Below Threshold</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Source review found that production cursor and execution
+                    animations cycle no faster than once per second, while
+                    notification motion cycles more slowly. Rapidly stacked
+                    error messages are separate content updates rather than
+                    flashes. No content known to flash more than three times per
+                    second was identified; prerecorded feature clips were not
+                    subjected to frame-by-frame flash analysis.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-skip"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.1 Bypass Blocks</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Does not support</td>
+                  <td>
+                    Source review did not identify a general skip link or
+                    equivalent bypass mechanism in the first-party application
+                    shell.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-title"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.2 Page Titled</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    All 31 sampled page states passed Lighthouse’s
+                    document-title check. Title accuracy across every
+                    single-page application transition was not manually
+                    reviewed.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-focus-order"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.3 Focus Order</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual production testing found logical sequential focus on
+                    the Profile settings and project Files pages. Focus moved
+                    through sampled Files-page controls in visual and
+                    operational order—left to right, then top to bottom—and
+                    sampled dialogs restored focus when closed. No focus-order
+                    defects were identified in the tested scope.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-refs"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.4 Link Purpose (In Context)</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual review and long-term production use did not identify
+                    links whose purpose was indeterminate from their text or
+                    context. Short text such as “click here” appears within
+                    surrounding text that describes the destination or action,
+                    rather than standing alone. Icon-only links use explanatory
+                    tooltips in sampled interfaces.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#pointer-gestures"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.1 Pointer Gestures</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Whiteboard and PDF views support pinch-to-zoom. Equivalent
+                    single-pointer controls are available: the whiteboard
+                    Navigation panel provides zoom buttons and a slider, and the
+                    PDF viewer provides zoom buttons, percentage selection, and
+                    fit controls. Freehand drawing paths are essential to the
+                    drawing function.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#pointer-cancellation"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.2 Pointer Cancellation</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Reviewed standard controls activate on the click up-event.
+                    Pointer-down handlers found in source initiate dragging or
+                    resizing, preserve editor focus or selection, or perform
+                    reversible navigation or selection. No destructive or
+                    otherwise irreversible action executed solely on the pointer
+                    down-event was identified.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#label-in-name"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.3 Label in Name</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Automated checks passed for most sampled controls. Source
+                    review found visible labels such as “Email address” and “New
+                    email address” rendered separately from their inputs without
+                    a programmatic association. In these cases, the accessible
+                    name is absent or derived from placeholder text and does not
+                    contain the visible label.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#motion-actuation"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.4 Motion Actuation</a
+                    >
+                    <span>(Level A 2.1 and 2.2)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    Source review found no use of the DeviceMotion or
+                    DeviceOrientation APIs in first-party interfaces.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-doc-lang-id"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.1 Language of Page</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    All 31 sampled English page states passed automated
+                    document-language checks. The application shell declares
+                    English, but changing the interface locale does not update
+                    the document language.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-receive-focus"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.1 On Focus</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual production testing on the Profile settings and
+                    project Files pages found that moving keyboard focus through
+                    sampled controls did not open files or dialogs, submit
+                    actions, or navigate to another page. No change of context
+                    on focus was identified in the tested scope.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-unpredictable-change"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.2 On Input</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual production review and long-term use have not
+                    identified unexpected changes of context when settings or
+                    other sampled inputs are changed. Controls may apply their
+                    intended setting immediately, but sampled inputs did not
+                    unexpectedly navigate, open another page or dialog, submit
+                    an unrelated action, or move focus.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#consistent-help"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.6 Consistent Help</a
+                    >
+                    <span>(Level A 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual production review and long-term use found that the
+                    repeated Support and Docs icons remain in the top-right area
+                    in a consistent relative location and order across related
+                    pages. Individual controls may provide additional nearby
+                    information without changing those global help mechanisms.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-identified"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.1 Error Identification</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Manual production testing of email sign-in found that
+                    “Continue with email” remained disabled for blank and
+                    clearly malformed input without displaying a text error that
+                    identified or described the input problem. The input
+                    <code>not@an</code> enabled continuation but produced only
+                    “Error: Unable to start email sign-in,” which did not
+                    identify whether the address or another condition caused the
+                    failure. Other form error paths were not exhaustively
+                    reviewed.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-cues"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.2 Labels or Instructions</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Automated testing found a visible “Help” label that was not
+                    programmatically associated with its switch and an avatar
+                    upload control without an accessible name.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#redundant-entry"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.7 Redundant Entry</a
+                    >
+                    <span>(Level A 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual review and long-term production use did not identify
+                    a first-party multi-step process that requires users to
+                    re-enter information already supplied in that process.
+                    Password re-entry and typed confirmation for destructive
+                    actions are used only for security or confirmation, rather
+                    than to collect duplicate information.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#ensure-compat-parses"
+                      rel="noopener"
+                      target="_blank"
+                      >4.1.1 Parsing</a
+                    >
+                    <span>(Level A)</span><br />WCAG 2.0 and 2.1 – Always answer
+                    ‘Supports’<br />WCAG 2.2 (obsolete and removed) - Does not
+                    apply
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    For WCAG 2.0 and 2.1, the September 2023 errata update
+                    indicates this criterion is always supported. See the
+                    <a
+                      href="https://www.w3.org/WAI/WCAG20/errata/#editorial"
+                      rel="noopener"
+                      target="_blank"
+                      >WCAG 2.0 Editorial Errata</a
+                    >
+                    and the
+                    <a
+                      href="https://www.w3.org/WAI/WCAG21/errata/#editorial"
+                      rel="noopener"
+                      target="_blank"
+                      >WCAG 2.1 Editorial Errata</a
+                    >.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#ensure-compat-rsv"
+                      rel="noopener"
+                      target="_blank"
+                      >4.1.2 Name, Role, Value</a
+                    >
+                    <span>(Level A)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Automated testing found an avatar upload control and a
+                    project-settings switch without accessible names. Source
+                    review also found that icon-only Settings navigation removes
+                    item text and marks the remaining icons aria-hidden, leaving
+                    compact menu destinations without accessible names. Other
+                    sampled automated name, role, and value checks passed.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <h3>Table 2: Success Criteria, Level AA</h3>
+          <p>Notes:</p>
+          <div class="table-wrapper">
+            <table class="report-table">
+              <caption class="visually-hidden">
+                Table 2: Success Criteria, Level AA
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Criteria</th>
+                  <th scope="col">Conformance Level</th>
+                  <th scope="col">Remarks and Explanations</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-real-time-captions"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.4 Captions (Live)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#media-equiv-audio-desc-only"
+                      rel="noopener"
+                      target="_blank"
+                      >1.2.5 Audio Description (Prerecorded)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Not applicable</td>
+                  <td>
+                    CoCalc platform itself does not include audio or video
+                    materials necessary for interaction.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#orientation"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.4 Orientation</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    CoCalc does not lock the display orientation or request that
+                    users reorient their device. Public pages and some
+                    authenticated screens remain usable in both orientations. At
+                    a 390 CSS-pixel portrait viewport, however, file names were
+                    not visible in the project file explorer and chat content
+                    could be compressed to an unusable width.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#identify-input-purpose"
+                      rel="noopener"
+                      target="_blank"
+                      >1.3.5 Identify Input Purpose</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Public authentication fields use input-purpose tokens such
+                    as <code>name</code>, <code>email</code>,
+                    <code>username</code>, <code>current-password</code>,
+                    <code>new-password</code>, and <code>one-time-code</code>.
+                    Source review found that the Profile display-name field
+                    disables autocomplete and that account email and password
+                    edit fields omit applicable input-purpose tokens.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-contrast"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.3 Contrast (Minimum)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Automated testing of the 31 sampled page states did not
+                    identify text-contrast failures. Source review nevertheless
+                    found lower-contrast secondary text in authenticated states.
+                    For example, project-not-running quota and process-status
+                    displays can render <code>#c0c0c0</code> text on a white
+                    background, a contrast ratio of approximately 1.82:1.
+                    Automated sampling did not exercise every dynamic state.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-scale"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.4 Resize text</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Representative public and authenticated production screens
+                    remained usable at 200% browser zoom. No loss of text
+                    content or functionality was observed in the tested screens.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#visual-audio-contrast-text-presentation"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.5 Images of Text</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Interface labels and instructions are rendered as text.
+                    First-party feature pages also use screenshots containing
+                    interface text to illustrate the visual product experience;
+                    these contain substantial visual content and are accompanied
+                    by HTML headings and descriptions. Logos retain their
+                    essential visual form.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#reflow"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.10 Reflow</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Representative public pages and some authenticated screens
+                    reflow at narrow widths. At a 390 CSS-pixel portrait
+                    viewport, settings required horizontal scrolling, file names
+                    disappeared from the project file explorer, and chat
+                    navigation could compress conversation content to an
+                    unusable width.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#non-text-contrast"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.11 Non-text Contrast</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Source review found controls and states that use
+                    lower-contrast graphics. For example, the unstarred project
+                    control can render a <code>#c0c0c0</code> star on a white
+                    background, a contrast ratio of approximately 1.82:1 rather
+                    than the required 3:1. Automated text-contrast results do
+                    not establish non-text contrast conformance.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#text-spacing"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.12 Text Spacing</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Source review found project-tab and file-list labels
+                    constrained to a single line with wrapping disabled and
+                    overflow hidden. Increasing letter or word spacing can
+                    further truncate these labels. Complete workflows were not
+                    manually tested with the WCAG text-spacing overrides.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#content-on-hover-or-focus"
+                      rel="noopener"
+                      target="_blank"
+                      >1.4.13 Content on Hover or Focus</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    The shared first-party tooltip components use custom Ant
+                    Design overlays without adding Escape-key dismissal. Where a
+                    tooltip obscures other content, users generally must move
+                    pointer hover or keyboard focus to dismiss it. An account
+                    preference can disable many button tooltips globally but is
+                    not a per-occurrence dismissal mechanism.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-mult-loc"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.5 Multiple Ways</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    The Settings overview intentionally presents the same
+                    destinations as the persistent Settings navigation, with
+                    descriptions added to the overview tiles. Sampled
+                    destinations, including Profile and Appearance, can be
+                    located through either mechanism.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-descriptive"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.6 Headings and Labels</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Sampled page headings and navigation labels described their
+                    purpose when text labels were shown. In icon-only Settings
+                    navigation, text labels are hidden: Billing and Purchases
+                    share one card icon, while Payments and Payment Methods
+                    share another. Those destinations cannot be distinguished
+                    from their displayed icons alone.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#navigation-mechanisms-focus-visible"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.7 Focus Visible</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Manual keyboard review found visible focus indicators on
+                    many sampled controls, although some were subtle. The
+                    project-page star control received keyboard focus without a
+                    visible indicator.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#focus-not-obscured-minimum"
+                      rel="noopener"
+                      target="_blank"
+                      >2.4.11 Focus Not Obscured (Minimum)</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual keyboard review on the Profile and Files pages and
+                    long-term production use did not identify focused controls
+                    completely obscured by author-created content. Modals
+                    intentionally cover background content while focus remains
+                    within the active dialog. Narrow-screen usability
+                    limitations are reported under Orientation and Reflow; no
+                    separate focus-obscuration defect was identified.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#dragging-movements"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.7 Dragging Movements</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Several first-party interfaces use dragging. Jupyter
+                    notebook cells can also be moved with menu commands, but
+                    source review found no click or tap alternative for
+                    reordering starred projects, Quick Create buttons, or
+                    left-rail buttons.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#target-size-minimum"
+                      rel="noopener"
+                      target="_blank"
+                      >2.5.8 Target Size (Minimum)</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    All 31 sampled wide-viewport page states passed Lighthouse’s
+                    automated target-size check. This does not cover every
+                    control or viewport.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#meaning-other-lang-id"
+                      rel="noopener"
+                      target="_blank"
+                      >3.1.2 Language of Parts</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    The sampled pages were English, and automated checks do not
+                    evaluate language changes within content. Source review
+                    found no systematic use of <code>lang</code> attributes on
+                    localized interface phrases. A translated interface can
+                    combine localized strings with untranslated English while
+                    the document continues to declare English, so language
+                    changes are not programmatically identified.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-consistent-locations"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.3 Consistent Navigation</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual production review across related Settings and project
+                    pages found that global navigation and navigation repeated
+                    within each area remain in stable relative locations and
+                    order. Context-specific controls may appear or disappear
+                    without reordering shared navigation.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#consistent-behavior-consistent-functionality"
+                      rel="noopener"
+                      target="_blank"
+                      >3.2.4 Consistent Identification</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Manual production review and long-term use found that
+                    repeated functions such as close, search, and add use
+                    consistent icons and labels across related pages. Some
+                    Settings destinations with different functions reuse a card
+                    icon; that reuse is outside this criterion's same-function
+                    consistency requirement. Their text labels distinguish the
+                    destinations when labels are shown.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-suggestions"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.3 Error Suggestion</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Manual production testing of email sign-in found that blank
+                    and clearly malformed input left “Continue with email”
+                    disabled without known correction guidance such as entering
+                    a complete email address. The input <code>not@an</code>
+                    produced only “Error: Unable to start email sign-in,”
+                    without a suggested next step. Other form error paths were
+                    not exhaustively reviewed.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="http://www.w3.org/TR/WCAG20/#minimize-error-reversible"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.4 Error Prevention (Legal, Financial, Data)</a
+                    >
+                    <span>(Level AA)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    Long-term production use found safeguards for stored data
+                    and financial commitments. File deletions require
+                    confirmation, and backups provide a recovery path; deleting
+                    backups requires additional deliberate actions. Where a
+                    configured purchase modal offers one-click purchase, it
+                    states what will happen before activation. Particularly
+                    destructive actions require users to type a confirmation
+                    word.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG22/#accessible-authentication-minimum"
+                      rel="noopener"
+                      target="_blank"
+                      >3.3.8 Accessible Authentication (Minimum)</a
+                    >
+                    <span>(Level AA 2.2 only)</span>
+                  </th>
+                  <td>Supports</td>
+                  <td>
+                    CoCalc supports passwordless email sign-in and SSO,
+                    providing authentication methods that do not require users
+                    to memorize a password. Password fields are designed for
+                    password-manager compatibility, and no deliberate
+                    restrictions on paste or password-manager use are known.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <a
+                      href="https://www.w3.org/TR/WCAG21/#status-messages"
+                      rel="noopener"
+                      target="_blank"
+                      >4.1.3 Status Messages</a
+                    >
+                    <span>(Level AA 2.1 and 2.2)</span>
+                  </th>
+                  <td>Partially supports</td>
+                  <td>
+                    Some first-party status messages use <code>aria-live</code>,
+                    <code>role="alert"</code>, or Ant Design notifications whose
+                    default role is <code>alert</code>. Other important changes,
+                    including the main connection-status indicator, are not
+                    exposed as status or alert regions. No assistive-technology
+                    testing was performed.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+      <section>
+        <h2>Legal Disclaimer (Sagemath, Inc.)</h2>
+        <p>
+          This document is provided for information purposes only and the
+          contents hereof are subject to change without notice. Sagemath, Inc.
+          does not warrant that this document is error free, nor does it provide
+          any other warranties or conditions, whether expressed orally or
+          implied in law, including implied warranties and conditions of
+          merchantability or fitness for a particular purpose. Sagemath, Inc.
+          specifically disclaims any liability with respect to this document and
+          no contractual obligations are formed either directly or indirectly by
+          this document. Sagemath, Inc. further makes no representation
+          concerning the ability of assistive technologies or other products to
+          interoperate with Sagemath, Inc. products. This document addresses the
+          named product(s) or platforms only.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
