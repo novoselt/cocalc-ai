@@ -924,6 +924,21 @@ describe("PublicApp", () => {
         /no layout reordering that changed the meaning/,
       ),
     ).not.toBeNull();
+    const threeFlashesRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.3\.1 Three Flashes or Below Threshold/,
+      })
+      .closest("tr");
+    expect(threeFlashesRow).not.toBeNull();
+    expect(within(threeFlashesRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(threeFlashesRow!).getByText(
+        /cycle no faster than once per second/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(threeFlashesRow!).getByText(/frame-by-frame flash analysis/),
+    ).not.toBeNull();
     const keyboardRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.1\.1 Keyboard/,
