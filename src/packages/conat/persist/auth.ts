@@ -4,14 +4,24 @@ import { posix } from "node:path";
 
 export const MAX_PATH_LENGTH = 4000;
 
+type StoragePlatform = NodeJS.Platform | "browser";
+
+function runtimeStoragePlatform(): StoragePlatform {
+  return typeof process === "undefined" || process.platform == null
+    ? "browser"
+    : process.platform;
+}
+
 export function isNormalizedStoragePath(
   path: string,
-  platform: NodeJS.Platform = process.platform,
+  platform: StoragePlatform = runtimeStoragePlatform(),
 ): boolean {
   // Storage paths are slash-delimited logical paths, but their final
   // components are also used as SQLite filenames. A backslash is a valid
   // filename character on Unix and part of existing persistence identities;
-  // on Windows it is a native path separator and must be rejected.
+  // on Windows it is a native path separator and must be rejected. Browser
+  // preflight cannot know the persistence server's OS; the server repeats this
+  // authorization check and applies its authoritative platform rule.
   return (
     path === posix.normalize(path) &&
     (platform !== "win32" || !path.includes("\\"))

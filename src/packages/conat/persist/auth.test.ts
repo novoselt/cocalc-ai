@@ -34,6 +34,7 @@ describe("persistent storage protocol paths", () => {
     const path = `accounts/${ACCOUNT_ID}/dko-[weird\\name]`;
     expect(isNormalizedStoragePath(path, "linux")).toBe(true);
     expect(isNormalizedStoragePath(path, "darwin")).toBe(true);
+    expect(isNormalizedStoragePath(path, "browser")).toBe(true);
     expect(isNormalizedStoragePath(path, "win32")).toBe(false);
   });
 });
