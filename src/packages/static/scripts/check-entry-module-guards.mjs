@@ -36,9 +36,15 @@ const loadAndAppForbidden = [
 ];
 
 const appOnlyForbidden = [
+  "frontend/hosts/project-host-recommendations.ts",
+  "frontend/project/archive-info.ts",
+  "frontend/project/use-project-course.ts",
+  "frontend/projects/offline-move-confirmation.tsx",
   "node_modules/.pnpm/jquery@",
   "node_modules/.pnpm/jquery-tooltip@",
   "node_modules/.pnpm/jquery.scrollintoview@",
+  "node_modules/.pnpm/markdown-it@",
+  "node_modules/.pnpm/markdown-it-emoji@",
   "node_modules/.pnpm/timeago@",
 ];
 

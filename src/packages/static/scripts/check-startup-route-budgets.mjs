@@ -30,8 +30,8 @@ const entryBudgets = [
   {
     chunk: "app",
     label: "signed-in app bootstrap",
-    maxRawBytes: 3.8 * MiB,
-    maxGzipBytes: 1020 * KiB,
+    maxRawBytes: 3.6 * MiB,
+    maxGzipBytes: 940 * KiB,
   },
 ];
 

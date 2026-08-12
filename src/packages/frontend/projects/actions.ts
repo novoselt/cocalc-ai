@@ -4,7 +4,6 @@
  */
 
 import { Map, Set, fromJS } from "immutable";
-import { Modal } from "antd";
 import { isEqual } from "lodash";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { Actions, redux } from "@cocalc/frontend/app-framework";
@@ -13,7 +12,6 @@ import api from "@cocalc/frontend/client/api";
 import type { ProjectInviteDeliveryResult } from "@cocalc/frontend/client/project-collaborators";
 import { getSharedAccountDStream } from "@cocalc/frontend/conat/account-dstream";
 import { COCALC_MINIMAL } from "@cocalc/frontend/fullscreen";
-import { markdown_to_html } from "@cocalc/frontend/markdown";
 import { notifyCollabInvitesChanged } from "@cocalc/frontend/collaborators/invite-events";
 import type { FragmentId } from "@cocalc/frontend/misc/fragment-id";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
@@ -48,14 +46,7 @@ import {
   invalidateProjectFields,
   publishProjectDetailInvalidation,
 } from "@cocalc/frontend/project/use-project-field";
-import { ensureProjectCourseInfo } from "@cocalc/frontend/project/use-project-course";
 import { getProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
-import { getBackups as getProjectBackups } from "@cocalc/frontend/project/archive-info";
-import {
-  buildOfflineMoveConfirmationDialog,
-  parseOfflineMoveConfirmationError,
-} from "./offline-move-confirmation";
-import { recommendProjectHosts } from "@cocalc/frontend/hosts/project-host-recommendations";
 import { loadWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 import type { DStream } from "@cocalc/conat/sync/dstream";
 import { isTerminal } from "@cocalc/frontend/lro/utils";
@@ -3147,6 +3138,10 @@ export class ProjectsActions extends Actions<ProjectsState> {
       console.warn(msg);
       throw new Error(msg);
     }
+    const { ensureProjectCourseInfo } = await loadWithRetry(
+      async () => await import("@cocalc/frontend/project/use-project-course"),
+      { name: "project course metadata" },
+    );
     const course_info = (await ensureProjectCourseInfo(project_id))?.toJS();
     const course: CourseInfo = {
       project_id: course_project_id,
@@ -3725,7 +3720,15 @@ export class ProjectsActions extends Actions<ProjectsState> {
     const title = store.get_title(project_id);
     const link2proj = `${window.location.origin}${getProjectUrlPath(project_id, undefined)}/`;
     // convert body from markdown to html, which is what the backend expects
-    const email = body != null ? markdown_to_html(body) : undefined;
+    const email =
+      body != null
+        ? (
+            await loadWithRetry(
+              async () => await import("@cocalc/frontend/markdown"),
+              { name: "invitation Markdown renderer" },
+            )
+          ).markdown_to_html(body)
+        : undefined;
 
     try {
       const result = await webapp_client.project_collaborators.invite({
@@ -3777,6 +3780,10 @@ export class ProjectsActions extends Actions<ProjectsState> {
       body = `Please collaborate with me using CoCalc on '${title}'.\n\n\n--\n${name}`;
     }
     const link2proj = `${window.location.origin}${getProjectUrlPath(project_id, undefined)}/`;
+    const { markdown_to_html } = await loadWithRetry(
+      async () => await import("@cocalc/frontend/markdown"),
+      { name: "invitation Markdown renderer" },
+    );
     const email = markdown_to_html(body);
 
     try {
@@ -4471,6 +4478,11 @@ export class ProjectsActions extends Actions<ProjectsState> {
       alert_message({ type: "error", message, timeout: 20 });
       return false;
     }
+    const { recommendProjectHosts } = await loadWithRetry(
+      async () =>
+        await import("@cocalc/frontend/hosts/project-host-recommendations"),
+      { name: "project host recommendations" },
+    );
     const recommendations = recommendProjectHosts({
       hosts,
       projectRegion,
@@ -4860,24 +4872,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
       });
   };
 
-  private confirmOfflineMove = async (
-    payload: ReturnType<typeof parseOfflineMoveConfirmationError>,
-  ): Promise<boolean> => {
-    if (payload == null) return false;
-    const dialog = buildOfflineMoveConfirmationDialog(payload);
-    return await new Promise((resolve) => {
-      Modal.confirm({
-        title: dialog.title,
-        content: dialog.content,
-        okText: dialog.okText,
-        okButtonProps: dialog.okButtonProps,
-        cancelText: "Cancel",
-        onOk: () => resolve(true),
-        onCancel: () => resolve(false),
-      });
-    });
-  };
-
   private requestMoveProject = async ({
     project_id,
     dest_host_id,
@@ -4903,9 +4897,14 @@ export class ProjectsActions extends Actions<ProjectsState> {
       });
     } catch (err) {
       if (!allow_offline) {
+        const { confirmOfflineMove, parseOfflineMoveConfirmationError } =
+          await loadWithRetry(
+            async () => await import("./offline-move-confirmation"),
+            { name: "offline project move confirmation" },
+          );
         const payload = parseOfflineMoveConfirmationError(err);
         if (payload != null) {
-          const proceed = await this.confirmOfflineMove(payload);
+          const proceed = await confirmOfflineMove(payload);
           if (!proceed) {
             return null;
           }
@@ -5149,7 +5148,11 @@ export class ProjectsActions extends Actions<ProjectsState> {
 
     let latestBackupTime = lastBackup instanceof Date ? lastBackup : undefined;
     try {
-      const backups = await getProjectBackups({
+      const { getBackups } = await loadWithRetry(
+        async () => await import("@cocalc/frontend/project/archive-info"),
+        { name: "project archive information" },
+      );
+      const backups = await getBackups({
         project_id,
         indexed_only: true,
       });
@@ -5206,7 +5209,11 @@ export class ProjectsActions extends Actions<ProjectsState> {
     project_id: string,
   ): Promise<Date | undefined> {
     try {
-      const backups = await getProjectBackups({ project_id });
+      const { getBackups } = await loadWithRetry(
+        async () => await import("@cocalc/frontend/project/archive-info"),
+        { name: "project archive information" },
+      );
+      const backups = await getBackups({ project_id });
       let latestBackupTime: Date | undefined;
       for (const backup of backups) {
         const time =

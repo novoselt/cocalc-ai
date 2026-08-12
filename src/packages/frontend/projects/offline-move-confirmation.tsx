@@ -1,4 +1,4 @@
-import { Alert, Space, Tag, Timeline, Typography } from "antd";
+import { Alert, Modal, Space, Tag, Timeline, Typography } from "antd";
 import type { ReactNode } from "react";
 
 const OFFLINE_MOVE_CONFIRM_CODE = "MOVE_OFFLINE_CONFIRMATION_REQUIRED";
@@ -192,4 +192,21 @@ export function buildOfflineMoveConfirmationDialog(
       </Space>
     ),
   };
+}
+
+export async function confirmOfflineMove(
+  payload: OfflineMoveConfirmationPayload,
+): Promise<boolean> {
+  const dialog = buildOfflineMoveConfirmationDialog(payload);
+  return await new Promise((resolve) => {
+    Modal.confirm({
+      title: dialog.title,
+      content: dialog.content,
+      okText: dialog.okText,
+      okButtonProps: dialog.okButtonProps,
+      cancelText: "Cancel",
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
 }

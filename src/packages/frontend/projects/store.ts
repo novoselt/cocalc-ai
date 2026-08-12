@@ -7,7 +7,7 @@ import { List, Map, Set } from "immutable";
 import LRU from "lru-cache";
 import { redux, Store, TypedMap } from "@cocalc/frontend/app-framework";
 import { StudentProjectFunctionality } from "@cocalc/frontend/course/configuration/customize-student-project-functionality";
-import { getCachedProjectCourseInfo } from "@cocalc/frontend/project/use-project-course";
+import { getCachedProjectCourseInfo } from "@cocalc/frontend/project/course-info-state";
 import { WebsocketState } from "@cocalc/frontend/project/websocket/websocket-state";
 import { getCachedProjectRunQuota } from "@cocalc/frontend/project/use-project-run-quota";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
