@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import {
   Alert,
@@ -35,7 +35,11 @@ import {
   PublicSection,
 } from "@cocalc/frontend/public/layout/shell";
 import { PUBLIC_COLORS } from "@cocalc/frontend/public/theme";
-import { rootfsThemeImageUrl } from "@cocalc/frontend/rootfs/catalog-ui";
+import {
+  groupRootfsVersionEntries,
+  latestRootfsVersionForEntry,
+  rootfsThemeImageUrl,
+} from "@cocalc/frontend/rootfs/catalog-ui";
 import {
   managedRootfsCatalogUrl,
   useRootfsImages,
@@ -50,6 +54,7 @@ import {
 import { appPath, type PublicConfig } from "../common";
 import type { PublicRootfsRoute } from "./routes";
 import { rootfsEntryMatchesImageTarget, rootfsPath } from "./routes";
+import { publicRootfsTags, RootfsTagFilter, RootfsTagPill } from "./tag-filter";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -172,77 +177,237 @@ function RootfsHighlights({ entry }: { entry: RootfsImageEntry }) {
   );
 }
 
-function RootfsCatalogCard({ entry }: { entry: RootfsImageEntry }) {
+function olderVersionLabel(entry: RootfsImageEntry): string {
+  const version = trim(entry.version);
+  return version ? `Version ${version}` : displayTitle(entry);
+}
+
+function olderVersionDate(entry: RootfsImageEntry): string | undefined {
+  const date = new Date(entry.created ?? "");
+  if (Number.isNaN(date.valueOf())) return;
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function RootfsCatalogCard({
+  entry,
+  olderEntries,
+  onTagToggle,
+  selectedTags,
+}: {
+  entry: RootfsImageEntry;
+  olderEntries: RootfsImageEntry[];
+  onTagToggle: (tag: string) => void;
+  selectedTags: Set<string>;
+}) {
   const { token } = theme.useToken();
+  const [showOlder, setShowOlder] = useState(false);
+  const olderListId = useId();
   const imageUrl = rootfsThemeImageUrl(entry.theme);
   const title = displayTitle(entry);
   const description = displayDescription(entry);
+  const hasOlder = olderEntries.length > 0;
+  const tags = publicRootfsTags(entry);
 
   return (
-    <a
-      href={rootfsPath(entry)}
-      style={{ color: "inherit", display: "block", textDecoration: "none" }}
+    <div
+      style={{
+        paddingBottom: 8,
+        position: "relative",
+      }}
     >
-      <Card
-        hoverable
-        style={{
-          height: "100%",
-        }}
-      >
-        <Flex gap="middle">
-          {imageUrl ? (
-            <img
-              alt=""
-              src={imageUrl}
-              style={{
-                borderRadius: token.borderRadiusLG,
-                height: 72,
-                objectFit: "cover",
-                width: 72,
-              }}
-            />
-          ) : (
-            <Flex
-              align="center"
-              justify="center"
+      {hasOlder ? (
+        <>
+          <div
+            aria-hidden="true"
+            style={{
+              background: token.colorFillAlter,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: token.borderRadiusLG,
+              bottom: 0,
+              height: 20,
+              left: 12,
+              position: "absolute",
+              right: 12,
+            }}
+          />
+          {olderEntries.length > 1 ? (
+            <div
+              aria-hidden="true"
               style={{
                 background: token.colorFillAlter,
+                border: `1px solid ${token.colorBorderSecondary}`,
                 borderRadius: token.borderRadiusLG,
-                color: token.colorTextSecondary,
-                flex: "0 0 auto",
-                height: 72,
-                width: 72,
+                bottom: 4,
+                height: 20,
+                left: 6,
+                position: "absolute",
+                right: 6,
               }}
-            >
-              <Icon name={rootfsIconName(entry)} />
-            </Flex>
-          )}
-          <Flex vertical gap={4} style={{ minWidth: 0 }}>
-            <Text ellipsis strong>
-              {title}
-            </Text>
-            {description ? (
-              <Text ellipsis type="secondary">
-                {description}
-              </Text>
-            ) : null}
-            <Space wrap size={[4, 4]}>
-              {metadataItems(entry)
-                .slice(0, 3)
-                .map((item) => (
-                  <Tag key={item} style={{ marginInlineEnd: 0 }}>
-                    {item}
+            />
+          ) : null}
+        </>
+      ) : null}
+      <Card style={{ position: "relative" }}>
+        <a
+          href={rootfsPath(entry)}
+          style={{ color: "inherit", display: "block", textDecoration: "none" }}
+        >
+          <Flex gap="middle">
+            {imageUrl ? (
+              <img
+                alt=""
+                src={imageUrl}
+                style={{
+                  borderRadius: token.borderRadiusLG,
+                  height: 72,
+                  objectFit: "cover",
+                  width: 72,
+                }}
+              />
+            ) : (
+              <Flex
+                align="center"
+                justify="center"
+                style={{
+                  background: token.colorFillAlter,
+                  borderRadius: token.borderRadiusLG,
+                  color: token.colorTextSecondary,
+                  flex: "0 0 auto",
+                  height: 72,
+                  width: 72,
+                }}
+              >
+                <Icon name={rootfsIconName(entry)} />
+              </Flex>
+            )}
+            <Flex vertical gap={4} style={{ minWidth: 0 }}>
+              <Flex align="center" gap={6} style={{ minWidth: 0 }}>
+                <Text ellipsis strong style={{ minWidth: 0 }} title={title}>
+                  {title}
+                </Text>
+                {hasOlder ? (
+                  <Tag
+                    color="green"
+                    style={{ flex: "0 0 auto", marginInlineEnd: 0 }}
+                  >
+                    Latest
                   </Tag>
-                ))}
-            </Space>
+                ) : null}
+              </Flex>
+              {description ? (
+                <Text ellipsis type="secondary">
+                  {description}
+                </Text>
+              ) : null}
+              <Space wrap size={[4, 4]}>
+                {metadataItems(entry)
+                  .slice(0, 3)
+                  .map((item) => (
+                    <Tag key={item} style={{ marginInlineEnd: 0 }}>
+                      {item}
+                    </Tag>
+                  ))}
+              </Space>
+            </Flex>
           </Flex>
-        </Flex>
+        </a>
+        {tags.length ? (
+          <Flex
+            aria-label={`Tags for ${title}`}
+            gap={6}
+            role="group"
+            style={{ marginTop: token.marginSM }}
+            wrap="wrap"
+          >
+            {tags.map((tag) => (
+              <RootfsTagPill
+                key={tag}
+                onToggle={onTagToggle}
+                selected={selectedTags.has(tag)}
+                tag={tag}
+              />
+            ))}
+          </Flex>
+        ) : null}
+        {hasOlder ? (
+          <div
+            style={{
+              borderTop: `1px solid ${token.colorBorderSecondary}`,
+              marginTop: token.margin,
+              paddingTop: token.paddingXS,
+            }}
+          >
+            <Button
+              aria-controls={olderListId}
+              aria-expanded={showOlder}
+              block
+              icon={<Icon name={showOlder ? "chevron-up" : "chevron-down"} />}
+              onClick={() => setShowOlder((value) => !value)}
+              size="small"
+              type="text"
+            >
+              {showOlder ? "Hide" : "View"} {olderEntries.length} previous{" "}
+              {olderEntries.length === 1 ? "version" : "versions"}
+            </Button>
+            {showOlder ? (
+              <ul
+                aria-label={`Previous versions of ${title}`}
+                id={olderListId}
+                style={{
+                  listStyle: "none",
+                  margin: `${token.marginXS}px 0 0`,
+                  padding: 0,
+                }}
+              >
+                {olderEntries.map((older) => {
+                  const date = olderVersionDate(older);
+                  return (
+                    <li key={older.id}>
+                      <a
+                        href={rootfsPath(older)}
+                        style={{
+                          borderRadius: token.borderRadius,
+                          color: "inherit",
+                          display: "block",
+                          padding: `${token.paddingXS}px ${token.paddingSM}px`,
+                          textDecoration: "none",
+                        }}
+                      >
+                        <Flex
+                          align="center"
+                          justify="space-between"
+                          gap="small"
+                        >
+                          <Text>{olderVersionLabel(older)}</Text>
+                          <Space size="small">
+                            {date ? <Text type="secondary">{date}</Text> : null}
+                            <Icon
+                              name="chevron-right"
+                              style={{ color: token.colorTextSecondary }}
+                            />
+                          </Space>
+                        </Flex>
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </Card>
-    </a>
+    </div>
   );
 }
 
 function useSelectedRootfsImage(route: PublicRootfsRoute) {
+  const catalog = useRootfsImages([managedRootfsCatalogUrl()], {
+    allPages: true,
+  });
   const query =
     route.view === "slug"
       ? route.slug
@@ -250,14 +415,21 @@ function useSelectedRootfsImage(route: PublicRootfsRoute) {
         ? route.imageId
         : undefined;
   const imageIds = route.view === "image-id" ? [route.imageId] : undefined;
-  const { images, loading, error } = useRootfsImages(
-    [managedRootfsCatalogUrl()],
+  const exact = useRootfsImages(
+    route.view === "index" ? [] : [managedRootfsCatalogUrl()],
     {
       imageIds,
       limit: route.view === "index" ? 200 : 20,
       query,
     },
   );
+  const images = useMemo(() => {
+    if (route.view === "index") return catalog.images;
+    const merged = new Map(
+      [...catalog.images, ...exact.images].map((entry) => [entry.id, entry]),
+    );
+    return Array.from(merged.values());
+  }, [catalog.images, exact.images, route.view]);
   const selected = useMemo(() => {
     if (route.view === "slug") {
       return images.find((entry) => entry.slug === route.slug);
@@ -268,7 +440,13 @@ function useSelectedRootfsImage(route: PublicRootfsRoute) {
       );
     }
   }, [images, route]);
-  return { error, images, loading, selected };
+  if (route.view === "index") return { ...catalog, selected };
+  return {
+    error: exact.error ?? catalog.error,
+    images,
+    loading: exact.loading && !selected,
+    selected,
+  };
 }
 
 function RootfsCreateProject({
@@ -340,9 +518,11 @@ function RootfsCreateProject({
 function RootfsLandingPage({
   config,
   entry,
+  images,
 }: {
   config?: PublicConfig;
   entry: RootfsImageEntry;
+  images: RootfsImageEntry[];
 }) {
   const { token } = theme.useToken();
   const title = displayTitle(entry);
@@ -351,10 +531,30 @@ function RootfsLandingPage({
   const metadata = metadataItems(entry);
   const publisher = entry.content?.publisher;
   const license = entry.content?.license;
+  const latest = latestRootfsVersionForEntry({ current: entry, images });
+  const newerEntry = latest.id === entry.id ? undefined : latest;
 
   return (
     <PublicPage config={config}>
       <section>
+        {newerEntry ? (
+          <Alert
+            action={
+              <Button href={rootfsPath(newerEntry)} type="primary">
+                View latest version
+              </Button>
+            }
+            description={`${displayTitle(newerEntry)} ${
+              trim(newerEntry.version)
+                ? `version ${trim(newerEntry.version)}`
+                : ""
+            } is the current release.`}
+            showIcon
+            style={{ marginBottom: token.marginXL }}
+            title="A newer version of this image is available"
+            type="warning"
+          />
+        ) : null}
         <Row gutter={[token.marginXL, token.marginXL]} align="middle">
           <Col lg={14} xs={24}>
             <Flex vertical gap="middle">
@@ -490,6 +690,60 @@ function RootfsIndexPage({
   images: RootfsImageEntry[];
   loading: boolean;
 }) {
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const selectedTagSet = useMemo(() => new Set(selectedTags), [selectedTags]);
+  const imageGroups = useMemo(
+    () => groupRootfsVersionEntries(images),
+    [images],
+  );
+  const taggedGroups = useMemo(
+    () =>
+      imageGroups.map((group) => ({
+        ...group,
+        tags: new Set(publicRootfsTags(group.latest)),
+      })),
+    [imageGroups],
+  );
+  const tagOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const { tags } of taggedGroups) {
+      for (const tag of tags) {
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts, ([tag, count]) => ({ tag, count })).sort(
+      (a, b) => b.count - a.count || a.tag.localeCompare(b.tag),
+    );
+  }, [taggedGroups]);
+  const visibleGroups = useMemo(
+    () =>
+      selectedTags.length
+        ? taggedGroups.filter(({ tags }) =>
+            selectedTags.every((tag) => tags.has(tag)),
+          )
+        : taggedGroups,
+    [selectedTags, taggedGroups],
+  );
+  const disabledTags = useMemo(() => {
+    const disabled = new Set<string>();
+    for (const { tag } of tagOptions) {
+      if (selectedTagSet.has(tag)) continue;
+      const hasMatch = taggedGroups.some(({ tags }) =>
+        [...selectedTags, tag].every((candidate) => tags.has(candidate)),
+      );
+      if (!hasMatch) disabled.add(tag);
+    }
+    return disabled;
+  }, [selectedTags, selectedTagSet, taggedGroups, tagOptions]);
+  const toggleTag = (tag: string) => {
+    setSelectedTags((current) =>
+      current.includes(tag)
+        ? current.filter((candidate) => candidate !== tag)
+        : [...current, tag],
+    );
+  };
+  const selectedTagLabel = selectedTags.map((tag) => `#${tag}`).join(" + ");
+
   useEffect(() => {
     document.title = "Runtime images";
   }, []);
@@ -503,11 +757,59 @@ function RootfsIndexPage({
             <Text>Loading runtime images...</Text>
           </Flex>
         ) : images.length ? (
-          <PublicGrid columns={3}>
-            {images.map((entry) => (
-              <RootfsCatalogCard key={entry.id} entry={entry} />
-            ))}
-          </PublicGrid>
+          <Flex vertical gap="large">
+            <RootfsTagFilter
+              disabledTags={disabledTags}
+              onToggle={toggleTag}
+              options={tagOptions}
+              selectedTags={selectedTagSet}
+            />
+            {selectedTags.length ? (
+              <Alert
+                action={
+                  <Button onClick={() => setSelectedTags([])}>
+                    Clear filters
+                  </Button>
+                }
+                description={
+                  selectedTags.length === 1
+                    ? `Showing ${visibleGroups.length} ${
+                        visibleGroups.length === 1 ? "image" : "images"
+                      } tagged ${selectedTagLabel}.`
+                    : `Showing ${visibleGroups.length} ${
+                        visibleGroups.length === 1 ? "image" : "images"
+                      } matching all ${selectedTags.length} selected tags.`
+                }
+                showIcon
+                title={`Filtered by ${selectedTagLabel}`}
+                type="info"
+              />
+            ) : null}
+            {visibleGroups.length ? (
+              <PublicGrid columns={3}>
+                {visibleGroups.map(({ latest, older }) => (
+                  <RootfsCatalogCard
+                    key={latest.id}
+                    entry={latest}
+                    olderEntries={older}
+                    onTagToggle={toggleTag}
+                    selectedTags={selectedTagSet}
+                  />
+                ))}
+              </PublicGrid>
+            ) : (
+              <Alert
+                action={
+                  <Button onClick={() => setSelectedTags([])}>
+                    Clear filters
+                  </Button>
+                }
+                showIcon
+                title="No runtime images have this tag."
+                type="info"
+              />
+            )}
+          </Flex>
         ) : (
           <Alert
             title="No runtime images are available."
@@ -588,6 +890,7 @@ export default function PublicRootfsApp({
       return;
     }
     const description = stripMarkdownSummary(displayDescription(selected));
+    const latest = latestRootfsVersionForEntry({ current: selected, images });
     const title = pageTitle(
       displayTitle(selected),
       getPublicMarketingSiteName(metadataConfig),
@@ -595,11 +898,11 @@ export default function PublicRootfsApp({
     document.title = title;
     applyPublicRouteMetadata({
       ...metadata,
-      canonicalPath: rootfsPath(selected),
+      canonicalPath: rootfsPath(latest),
       ...(description ? { description } : {}),
       title,
     });
-  }, [config, initialRoute, loading, selected]);
+  }, [config, images, initialRoute, loading, selected]);
 
   if (initialRoute.view === "index") {
     return (
@@ -608,7 +911,9 @@ export default function PublicRootfsApp({
   }
 
   if (selected) {
-    return <RootfsLandingPage config={config} entry={selected} />;
+    return (
+      <RootfsLandingPage config={config} entry={selected} images={images} />
+    );
   }
 
   return <RootfsNotFoundPage config={config} loading={loading && !error} />;

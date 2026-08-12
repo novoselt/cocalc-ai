@@ -30,6 +30,7 @@ type RootfsImageLoadOptions = {
   query?: string;
   limit?: number;
   imageIds?: string[];
+  allPages?: boolean;
 };
 
 const manifestCache = new Map<string, Promise<RootfsImageEntry[]>>();
@@ -139,9 +140,10 @@ async function loadManagedCatalogManifest(
     webapp_client.conat_client.is_signed_in();
   if (hasAccountContext) {
     try {
+      const pageLimit = opts.allPages ? 200 : (opts.limit ?? 200);
       const page = await withTimeout(
         webapp_client.conat_client.hub.system.getRootfsCatalogPage({
-          limit: opts.limit ?? 200,
+          limit: pageLimit,
           query: opts.query?.trim() || undefined,
         }),
         MANAGED_CATALOG_RPC_TIMEOUT_MS,
@@ -153,6 +155,24 @@ async function loadManagedCatalogManifest(
         source: page.source,
         images: page.images,
       };
+      if (opts.allPages) {
+        const seenCursors = new Set<string>();
+        let cursor = page.next_cursor;
+        while (cursor && !seenCursors.has(cursor)) {
+          seenCursors.add(cursor);
+          const next = await withTimeout(
+            webapp_client.conat_client.hub.system.getRootfsCatalogPage({
+              cursor,
+              limit: pageLimit,
+              query: opts.query?.trim() || undefined,
+            }),
+            MANAGED_CATALOG_RPC_TIMEOUT_MS,
+            "RootFS catalog RPC timed out",
+          );
+          manifest.images.push(...next.images);
+          cursor = next.next_cursor;
+        }
+      }
       const requestedImageIds = Array.from(
         new Set(
           (opts.imageIds ?? [])
@@ -214,7 +234,7 @@ export async function loadRootfsImages(
   )
     .sort()
     .join(",");
-  const key = `${scopeKey}|${opts.query ?? ""}|${opts.limit ?? ""}|${imageIdsKey}|${urls.join("|")}`;
+  const key = `${scopeKey}|${opts.query ?? ""}|${opts.limit ?? ""}|${opts.allPages ? "all" : "page"}|${imageIdsKey}|${urls.join("|")}`;
   const cached = manifestCache.get(key);
   if (cached) {
     return cached;
@@ -246,6 +266,7 @@ export function useRootfsImages(
   const scopeKey = rootfsCatalogScopeKey();
   const query = opts.query?.trim() ?? "";
   const limit = opts.limit;
+  const allPages = opts.allPages;
   const imageIdsKey = useMemo(
     () =>
       Array.from(
@@ -275,7 +296,7 @@ export function useRootfsImages(
     }
     setState((prev) => ({ ...prev, loading: true, error: undefined }));
     const imageIds = imageIdsKey ? imageIdsKey.split(",") : [];
-    loadRootfsImages(urls, scopeKey, { query, limit, imageIds })
+    loadRootfsImages(urls, scopeKey, { query, limit, imageIds, allPages })
       .then((images) => {
         if (!active) return;
         setState({ images, loading: false });
@@ -291,7 +312,7 @@ export function useRootfsImages(
     return () => {
       active = false;
     };
-  }, [imageIdsKey, limit, query, revision, scopeKey, urls.join("|")]);
+  }, [allPages, imageIdsKey, limit, query, revision, scopeKey, urls.join("|")]);
 
   return state;
 }
