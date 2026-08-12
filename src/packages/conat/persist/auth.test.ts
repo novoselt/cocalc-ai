@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { assertHasWritePermission } from "./auth";
+import { assertHasWritePermission, isNormalizedStoragePath } from "./auth";
 
 const ACCOUNT_ID = "00000000-1000-4000-8000-000000000001";
 const SERVICE = "persist-test";
@@ -20,14 +20,21 @@ describe("persistent storage protocol paths", () => {
     ).not.toThrow();
   });
 
-  it("rejects traversal and Windows-native separators", () => {
-    for (const path of [
-      `accounts/${ACCOUNT_ID}/folder/../account-feed`,
-      `accounts\\${ACCOUNT_ID}\\account-feed`,
-    ]) {
-      expect(() =>
-        assertHasWritePermission({ subject: SUBJECT, path, service: SERVICE }),
-      ).toThrow("is not normalized");
-    }
+  it("rejects traversal", () => {
+    expect(() =>
+      assertHasWritePermission({
+        subject: SUBJECT,
+        path: `accounts/${ACCOUNT_ID}/folder/../account-feed`,
+        service: SERVICE,
+      }),
+    ).toThrow("is not normalized");
+  });
+
+  it("treats backslashes according to host filename semantics", () => {
+    const path = `accounts/${ACCOUNT_ID}/dko-[weird\\name]`;
+    expect(isNormalizedStoragePath(path, "linux")).toBe(true);
+    expect(isNormalizedStoragePath(path, "darwin")).toBe(true);
+    expect(isNormalizedStoragePath(path, "browser")).toBe(true);
+    expect(isNormalizedStoragePath(path, "win32")).toBe(false);
   });
 });
