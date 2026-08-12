@@ -1035,6 +1035,19 @@ describe("PublicApp", () => {
         /without changing those global help mechanisms/,
       ),
     ).not.toBeNull();
+    const pointerGesturesRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.5\.1 Pointer Gestures/,
+      })
+      .closest("tr");
+    expect(pointerGesturesRow).not.toBeNull();
+    expect(within(pointerGesturesRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(pointerGesturesRow!).getByText(/support pinch-to-zoom/),
+    ).not.toBeNull();
+    expect(
+      within(pointerGesturesRow!).getByText(/single-pointer controls/),
+    ).not.toBeNull();
     const pointerCancellationRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.5\.2 Pointer Cancellation/,
