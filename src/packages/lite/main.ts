@@ -56,6 +56,8 @@ const PRESERVED_COCALC_ENV_KEYS = [
   "COCALC_CODEX_HOME",
   "COCALC_CLI_BIN",
   "COCALC_CLI_CMD",
+  "COCALC_ENABLE_PROJECT_INFO",
+  "COCALC_WINDOWS_TERMINAL_SHELL",
 ] as const;
 
 function captureEnv(keys: readonly string[]): Record<string, string> {
@@ -252,7 +254,11 @@ export async function main(opts?: {
     httpServer?.close();
   });
 
-  ["SIGINT", "SIGTERM", "SIGQUIT"].forEach((sig) => {
+  const signals =
+    process.platform === "win32"
+      ? (["SIGINT", "SIGTERM"] as const)
+      : (["SIGINT", "SIGTERM", "SIGQUIT"] as const);
+  signals.forEach((sig) => {
     process.once(sig, () => {
       process.exit();
     });

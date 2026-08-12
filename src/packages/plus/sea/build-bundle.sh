@@ -17,25 +17,41 @@
 set -euo pipefail
 
 ROOT="$(realpath "$(dirname "$0")/../../..")"
-OUT="${1:-$ROOT/packages/plus/build/bundle}"
+OUT="$(node -e 'console.log(require("node:path").resolve(process.argv[1]))' "${1:-$ROOT/packages/plus/build/bundle}")"
 
-case "${OSTYPE}" in
-  linux*) TARGET_OS="linux" ;;
-  darwin*) TARGET_OS="darwin" ;;
-  *)
-    echo "unsupported platform: ${OSTYPE}" >&2
-    exit 1
-    ;;
-esac
-
-case "$(uname -m)" in
-  x86_64) TARGET_ARCH="x64" ;;
-  aarch64|arm64) TARGET_ARCH="arm64" ;;
-  *)
-    echo "unsupported architecture: $(uname -m)" >&2
-    exit 1
-    ;;
-esac
+TARGET_OS="${COCALC_PLUS_TARGET_OS:-}"
+TARGET_ARCH="${COCALC_PLUS_TARGET_ARCH:-}"
+if [ -z "$TARGET_OS" ]; then
+  case "${OSTYPE}" in
+    linux*) TARGET_OS="linux" ;;
+    darwin*) TARGET_OS="darwin" ;;
+    *)
+      echo "unsupported platform: ${OSTYPE}" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [ "$TARGET_OS" = "windows" ]; then
+  TARGET_OS="win32"
+fi
+if [ -z "$TARGET_ARCH" ]; then
+  case "$(uname -m)" in
+    x86_64) TARGET_ARCH="x64" ;;
+    aarch64|arm64) TARGET_ARCH="arm64" ;;
+    *)
+      echo "unsupported architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+fi
+if [[ ! "$TARGET_OS" =~ ^(linux|darwin|win32)$ ]]; then
+  echo "unsupported target OS: $TARGET_OS" >&2
+  exit 1
+fi
+if [[ ! "$TARGET_ARCH" =~ ^(x64|arm64)$ ]]; then
+  echo "unsupported target architecture: $TARGET_ARCH" >&2
+  exit 1
+fi
 
 TARGET_PREBUILDS_DIR="${TARGET_OS}-${TARGET_ARCH}"
 
@@ -66,7 +82,14 @@ echo "- Bundle entry point with @vercel/ncc"
 # zeromq expects its build manifest next to the native addon; ncc copies the
 # compiled .node file but not the manifest.json, so copy it manually.
 # Ensure zeromq native addon files are available where the loader expects them.
-ZEROMQ_BUILD=$(find packages -path "*node_modules/zeromq/build" -type d -print -quit || true)
+ZEROMQ_BUILD=""
+for base in plus jupyter project backend conat; do
+  candidate="$ROOT/packages/$base/node_modules/zeromq/build"
+  if [ -d "$candidate" ]; then
+    ZEROMQ_BUILD="$candidate"
+    break
+  fi
+done
 if [ -n "$ZEROMQ_BUILD" ]; then
   mkdir -p "$OUT"/bundle/build
   cp -r "$ZEROMQ_BUILD/"* "$OUT"/bundle/build/
@@ -81,10 +104,14 @@ if [ -n "$ZEROMQ_BUILD" ]; then
     # SEA target is glibc-based; drop musl payloads.
     rm -rf "$OUT"/bundle/build/linux/"$TARGET_ARCH"/node/musl-* || true
   fi
-  # zeromq looks for ../build relative to the bundle root; use a symlink
-  # so we don't duplicate payloads in the tarball.
+  # Keep the legacy sibling build path available. Windows archives cannot
+  # reliably preserve symlinks, so materialize it there.
   rm -rf "$OUT"/build
-  ln -s "bundle/build" "$OUT/build"
+  if [ "$TARGET_OS" = "win32" ]; then
+    cp -r "$OUT"/bundle/build "$OUT/build"
+  else
+    ln -s "bundle/build" "$OUT/build"
+  fi
 else
   echo "zeromq build directory not found; skipping copy"
 fi
@@ -92,12 +119,14 @@ fi
 copy_native_pkg() {
   local pkg="$1"
   local dir=""
-  if [ -d "$ROOT/packages/plus/node_modules/$pkg" ]; then
-    dir="$ROOT/packages/plus/node_modules/$pkg"
-  elif [ -d "$ROOT/packages/node_modules/$pkg" ]; then
+  for base in plus project jupyter backend conat lite; do
+    if [ -d "$ROOT/packages/$base/node_modules/$pkg" ]; then
+      dir="$ROOT/packages/$base/node_modules/$pkg"
+      break
+    fi
+  done
+  if [ -z "$dir" ] && [ -d "$ROOT/packages/node_modules/$pkg" ]; then
     dir="$ROOT/packages/node_modules/$pkg"
-  else
-    dir=$(find packages -path "*node_modules/${pkg}" -type d -print -quit || true)
   fi
   if [ -n "$dir" ]; then
     echo "- Copy native module ${pkg}"
@@ -251,5 +280,16 @@ echo "- Copy public assets"
 mkdir -p "$OUT"/public
 rsync -a --delete \
   packages/assets/public/ "$OUT/public/"
+
+echo "- Verify target native addons"
+if [ ! -f "$OUT/bundle/node_modules/node-pty/prebuilds/$TARGET_PREBUILDS_DIR/conpty.node" ] &&
+   [ ! -f "$OUT/bundle/node_modules/node-pty/prebuilds/$TARGET_PREBUILDS_DIR/pty.node" ]; then
+  echo "ERROR: missing node-pty prebuild for $TARGET_PREBUILDS_DIR" >&2
+  exit 1
+fi
+if ! find "$OUT/bundle/build/$TARGET_OS/$TARGET_ARCH" -name addon.node -print -quit | grep -q .; then
+  echo "ERROR: missing zeromq addon for $TARGET_OS/$TARGET_ARCH" >&2
+  exit 1
+fi
 
 echo "- Bundle created at $OUT"

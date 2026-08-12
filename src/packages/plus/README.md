@@ -69,4 +69,33 @@ Notes:
 - **SEA binary**: `pnpm --filter @cocalc/plus sea` (produces compressed SEA artifact under `packages/plus/build/sea`).
 - **Electron**: `pnpm --filter @cocalc/plus app-electron` for desktop runs; adjust signing/notarization via `sea/Makefile` on macOS.
 
+### Native Windows preview
+
+The native Windows build runs the Lite/Plus server directly on Windows; it
+does not use WSL. Its default locations are:
+
+- workspace: `%USERPROFILE%\CoCalc`
+- application data: `%LOCALAPPDATA%\CoCalc\Plus`
+- command launcher: `%LOCALAPPDATA%\CoCalc\bin\cocalc-plus.cmd`
+
+Set `COCALC_PLUS_WORKSPACE`, `COCALC_PLUS_HOME`, or `COCALC_DATA_DIR` before
+launching to override these paths. Terminals use PowerShell through Windows
+ConPTY. The release smoke test starts the installed application and exercises
+the HTTP app, project file service, and a real PowerShell terminal.
+
+Run the **Build CoCalc Plus for Windows** workflow to create a tested portable
+ZIP. For a locally built ZIP:
+
+```powershell
+.\src\packages\plus\install.ps1 `
+  -ArchivePath .\cocalc-plus-<release>-x86_64-windows.zip `
+  -AddToPath
+
+cocalc-plus
+```
+
+The installer keeps application versions separate from the workspace and
+supports `-Rollback` and `-Uninstall`. Uninstalling never deletes workspace
+files.
+
 Packaging artifacts are intended for redistribution; keep core runtime changes in Lite so Plus remains a thin product wrapper. The CLI `cocalc-plus` delegates to `@cocalc/lite/bin/start` (no extra build required), and Electron uses `electron.js` as the main entry.

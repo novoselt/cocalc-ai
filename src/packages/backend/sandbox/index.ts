@@ -66,7 +66,7 @@ import {
 import { createHash } from "node:crypto";
 import { move } from "fs-extra";
 import { exists } from "@cocalc/backend/misc/async-utils-node";
-import { basename, dirname, join, resolve } from "path";
+import { basename, dirname, join, posix } from "path";
 import { replace_all } from "@cocalc/util/misc";
 import find, { type FindOptions } from "./find";
 import ripgrep, { type RipgrepOptions } from "./ripgrep";
@@ -288,7 +288,7 @@ function normalizeHomeAliases(homeAliases?: string[]): string[] {
     if (typeof alias !== "string") continue;
     const trimmed = alias.trim();
     if (!trimmed.startsWith("/")) continue;
-    normalized.add(resolve("/", trimmed));
+    normalized.add(posix.resolve("/", trimmed));
   }
   return [...normalized];
 }
@@ -944,7 +944,9 @@ export class SandboxedFilesystem {
     absoluteHomeAlias?: string;
     absoluteTempAlias?: "tmp" | "scratch";
   }> {
-    const resolvedInput = resolve("/", path);
+    // Filesystem RPC paths are POSIX-style project-visible paths on every
+    // host OS. Only the final mapping to this.path uses native path joins.
+    const resolvedInput = posix.resolve("/", path);
     const isAbsoluteInput = path.startsWith("/");
     const absoluteHomeAlias = isAbsoluteInput
       ? this.resolveHomeAlias(resolvedInput)

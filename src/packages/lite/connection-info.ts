@@ -1,3 +1,4 @@
+import os from "node:os";
 import { join } from "node:path";
 
 const CONNECTION_INFO_FILENAME = "connection-info.json";
@@ -10,6 +11,12 @@ function liteDataDirSuffix(): string[] {
 }
 
 function defaultLiteDataDir(): string {
+  if (process.platform === "win32") {
+    const localAppData =
+      process.env.LOCALAPPDATA?.trim() ||
+      join(os.homedir(), "AppData", "Local");
+    return join(localAppData, "CoCalc", "Lite");
+  }
   const home = process.env.HOME?.trim();
   const base = home && home.length > 0 ? home : process.cwd();
   return join(base, ...liteDataDirSuffix());

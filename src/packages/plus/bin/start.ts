@@ -7,9 +7,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { reflectVersion } from "../reflect/manager";
-import { main as sshMain } from "./ssh";
-import { main as starMain } from "./star";
+import { configurePlusRuntime, plusRuntimePaths } from "../platform";
 
 const dynamicImport = new Function("p", "return import(p);") as (
   p: string,
@@ -93,6 +91,13 @@ function daemonize(
   logfile?: string | null,
 ) {
   const childArgs = args.concat(["--daemon-child"]);
+  const executableName = path.basename(process.execPath).toLowerCase();
+  const nodeRuntime =
+    executableName === "node" || executableName === "node.exe";
+  const spawnArgs =
+    nodeRuntime && process.argv[1]
+      ? [process.argv[1], ...childArgs]
+      : childArgs;
   let stdoutFd: "ignore" | number = "ignore";
   let stderrFd: "ignore" | number = "ignore";
   if (logfile) {
@@ -101,7 +106,7 @@ function daemonize(
     stdoutFd = fd;
     stderrFd = fd;
   }
-  const child = spawn(process.execPath, childArgs, {
+  const child = spawn(process.execPath, spawnArgs, {
     detached: true,
     stdio: ["ignore", stdoutFd, stderrFd],
     env: { ...process.env, COCALC_DAEMON_CHILD: "1" },
@@ -143,19 +148,11 @@ function normalizeOsArch() {
 }
 
 function defaultPlusRootDir() {
-  if (process.platform === "darwin") {
-    return path.join(
-      os.homedir(),
-      "Library",
-      "Application Support",
-      "cocalc-plus",
-    );
-  }
-  return path.join(os.homedir(), ".local", "share", "cocalc-plus");
+  return plusRuntimePaths().root;
 }
 
 function defaultPlusDataDir() {
-  return path.join(defaultPlusRootDir(), "data");
+  return plusRuntimePaths().data;
 }
 
 function defaultReflectHome() {
@@ -458,10 +455,12 @@ async function runCli() {
     }
   }
   if (argv[0] === "ssh") {
+    const { main: sshMain } = await import("./ssh");
     await sshMain(argv.slice(1));
     return;
   }
   if (argv[0] === "star") {
+    const { main: starMain } = await import("./star");
     await starMain(argv.slice(1));
     return;
   }
@@ -480,6 +479,7 @@ async function runCli() {
       return;
     }
     if (reflectArgs.includes("--version") || reflectArgs.includes("-v")) {
+      const { reflectVersion } = await import("../reflect/manager");
       console.log(await reflectVersion());
       return;
     }
@@ -511,6 +511,7 @@ async function runCli() {
   const daemonStatus = hasFlag(argv, "--daemon-status");
   const daemon = hasFlag(argv, "--daemon");
   const daemonChild = hasFlag(argv, "--daemon-child");
+  const internalWindowsSmoke = hasFlag(argv, "--internal-windows-smoke");
   const pidfile =
     pickArg(argv, "--pidfile") || process.env.COCALC_DAEMON_PIDFILE;
   const logfile = pickArg(argv, "--log") || process.env.COCALC_DAEMON_LOG;
@@ -570,9 +571,7 @@ async function runCli() {
     return;
   }
 
-  if (!process.env.COCALC_DATA_DIR) {
-    process.env.COCALC_DATA_DIR = defaultPlusDataDir();
-  }
+  configurePlusRuntime();
   await ensureLitePort();
 
   writeVersionInfo();
@@ -597,7 +596,12 @@ async function runCli() {
   } catch {
     // ignore
   }
-  await liteMain.main({ sshUi, reflectUi });
+  const port = await liteMain.main({ sshUi, reflectUi });
+  if (internalWindowsSmoke) {
+    const { runWindowsRuntimeSmoke } = await import("../windows-runtime-smoke");
+    await runWindowsRuntimeSmoke(port);
+    process.exit(0);
+  }
 }
 
 if (require.main === module) {

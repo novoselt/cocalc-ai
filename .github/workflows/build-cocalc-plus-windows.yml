@@ -1,0 +1,111 @@
+name: Build CoCalc Plus for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: "Artifact id; blank uses github-<run number>-<short sha>"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    timeout-minutes: 90
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+          cache: pnpm
+          cache-dependency-path: src/packages/pnpm-lock.yaml
+
+      - name: Choose immutable artifact id
+        id: release
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.release_id }}
+        run: |
+          set -Eeuo pipefail
+          release_id="${REQUESTED:-github-${GITHUB_RUN_NUMBER}-$(git rev-parse --short=10 HEAD)}"
+          [[ "$release_id" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid release id" >&2; exit 1; }
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Install workspace dependencies
+        run: pnpm -C src install --frozen-lockfile
+
+      - name: Build production frontend assets
+        run: pnpm -C src --filter @cocalc/static build
+
+      - name: Build Windows-targeted Plus bundle
+        env:
+          COCALC_PLUS_TARGET_OS: windows
+          COCALC_PLUS_TARGET_ARCH: x64
+        run: src/packages/plus/sea/build-bundle.sh src/packages/plus/build/bundle-windows
+
+      - name: Archive portable application bundle
+        run: tar -C src/packages/plus/build -czf "$RUNNER_TEMP/cocalc-plus-bundle-windows.tar.gz" bundle-windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cocalc-plus-bundle-windows
+          path: ${{ runner.temp }}/cocalc-plus-bundle-windows.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  package-windows:
+    needs: bundle
+    timeout-minutes: 60
+    runs-on: blacksmith-4vcpu-windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cocalc-plus-bundle-windows
+          path: ${{ runner.temp }}\cocalc-plus-bundle
+
+      - name: Extract application bundle
+        shell: pwsh
+        run: |
+          tar -xzf "$env:RUNNER_TEMP\cocalc-plus-bundle\cocalc-plus-bundle-windows.tar.gz" `
+            -C "$env:RUNNER_TEMP\cocalc-plus-bundle"
+
+      - name: Package native Node runtime and application
+        shell: pwsh
+        run: |
+          src/packages/plus/scripts/package-windows.ps1 `
+            -BundlePath "$env:RUNNER_TEMP\cocalc-plus-bundle\bundle-windows" `
+            -ReleaseId "${{ needs.bundle.outputs.release_id }}" `
+            -OutputDir "$env:RUNNER_TEMP\cocalc-plus-artifacts"
+
+      - name: Test installer, HTTP app, files, and PowerShell terminal
+        shell: pwsh
+        run: |
+          src/packages/plus/scripts/smoke-install-windows.ps1 `
+            -Archive "$env:RUNNER_TEMP\cocalc-plus-artifacts\cocalc-plus-${{ needs.bundle.outputs.release_id }}-x86_64-windows.zip" `
+            -ReleaseId "${{ needs.bundle.outputs.release_id }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cocalc-plus-windows-amd64
+          path: |
+            ${{ runner.temp }}\cocalc-plus-artifacts\*.zip
+            ${{ runner.temp }}\cocalc-plus-artifacts\*.sha256
+          if-no-files-found: error
+          retention-days: 14

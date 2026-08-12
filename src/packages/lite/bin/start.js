@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const { dirname, join } = require("path");
+const { delimiter, dirname, join } = require("path");
+const os = require("os");
 const {
   FALLBACK_PROJECT_UUID,
   FALLBACK_ACCOUNT_UUID,
@@ -7,6 +8,11 @@ const {
 
 function defaultLiteDataDir() {
   const home = process.env.HOME ?? process.cwd();
+  if (process.platform === "win32") {
+    const localAppData =
+      process.env.LOCALAPPDATA ?? join(os.homedir(), "AppData", "Local");
+    return join(localAppData, "CoCalc", "Lite");
+  }
   if (process.platform === "darwin") {
     return join(home, "Library", "Application Support", "cocalc-lite");
   }
@@ -42,7 +48,9 @@ function configureProcessMaxListeners() {
 
   // put path to special node binaries:
   const { bin } = require("@cocalc/backend/data");
-  process.env.PATH = `${bin}:${dirname(process.execPath)}:${process.env.PATH}`;
+  process.env.PATH = [bin, dirname(process.execPath), process.env.PATH]
+    .filter(Boolean)
+    .join(delimiter);
 
   require("@cocalc/lite/main").main();
 })();
