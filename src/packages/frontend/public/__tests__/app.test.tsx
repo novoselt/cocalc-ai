@@ -954,6 +954,21 @@ describe("PublicApp", () => {
     expect(
       within(focusOrderRow!).getByText(/left to right, then top to bottom/),
     ).not.toBeNull();
+    const linkPurposeRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.4\.4 Link Purpose \(In Context\)/,
+      })
+      .closest("tr");
+    expect(linkPurposeRow).not.toBeNull();
+    expect(within(linkPurposeRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(linkPurposeRow!).getByText(
+        /surrounding text that describes the destination or action/,
+      ),
+    ).not.toBeNull();
+    expect(
+      within(linkPurposeRow!).getByText(/use explanatory tooltips/),
+    ).not.toBeNull();
     const onFocusRow = within(tables[1])
       .getByRole("rowheader", {
         name: /3\.2\.1 On Focus/,
