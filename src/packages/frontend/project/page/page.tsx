@@ -973,6 +973,29 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
                 ).
               </span>
             ) : null}
+            <div
+              aria-label="Project reconnection is in progress"
+              role="progressbar"
+              style={{
+                background: COLORS.ANTD_BG_BLUE_L,
+                borderRadius: 4,
+                height: 6,
+                minWidth: 200,
+                maxWidth: 360,
+                overflow: "hidden",
+                width: "100%",
+              }}
+            >
+              <div
+                className="cocalc-indeterminate-progress"
+                style={{
+                  background: COLORS.ANTD_LINK_BLUE,
+                  borderRadius: 4,
+                  height: "100%",
+                  width: "45%",
+                }}
+              />
+            </div>
             {!hostRecovery.active ? (
               <details style={{ maxWidth: 600 }}>
                 <summary>Technical details</summary>
