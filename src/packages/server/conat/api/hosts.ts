@@ -52,6 +52,7 @@ import type {
   HostAvailabilityReport,
   HostAvailabilityEvent,
   HostAvailabilityCategory,
+  HostExamCleanupMode,
   HostExamConfigInput,
   HostExamState,
 } from "@cocalc/conat/hub/api/hosts";
@@ -5515,6 +5516,7 @@ export async function createHostExamRun({
   internalAuth,
   id,
   rootfs_image,
+  cleanup_mode,
   scheduled_stop_at,
   stop_host_at_deadline,
   idempotency_key,
@@ -5525,7 +5527,8 @@ export async function createHostExamRun({
   internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   rootfs_image: string;
-  scheduled_stop_at: string;
+  cleanup_mode?: HostExamCleanupMode;
+  scheduled_stop_at?: string;
   stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<HostExamState & { token: string }> {
@@ -5545,6 +5548,7 @@ export async function createHostExamRun({
         session_hash: freshSessionHash,
         id,
         rootfs_image,
+        cleanup_mode,
         scheduled_stop_at,
         stop_host_at_deadline,
         idempotency_key,
@@ -5559,6 +5563,7 @@ export async function createHostExamRun({
     host: row,
     actor_account_id: requireAccount(account_id),
     rootfs_image,
+    cleanup_mode,
     scheduled_stop_at,
     stop_host_at_deadline,
     idempotency_key,
@@ -5577,6 +5582,7 @@ export async function rotateHostExamToken({
   id,
   run_id,
   idempotency_key,
+  token: requestedToken,
 }: {
   account_id?: string;
   browser_id?: string | null;
@@ -5585,6 +5591,7 @@ export async function rotateHostExamToken({
   id: string;
   run_id: string;
   idempotency_key: string;
+  token?: string;
 }): Promise<HostExamState & { token: string }> {
   const freshSessionHash = await requireFreshExamMutation({
     account_id,
@@ -5603,6 +5610,7 @@ export async function rotateHostExamToken({
         id,
         run_id,
         idempotency_key,
+        token: requestedToken,
       });
   }
   const { row } = await loadHostForExam({
@@ -5614,6 +5622,7 @@ export async function rotateHostExamToken({
     host: row,
     run_id,
     idempotency_key,
+    token: requestedToken,
   });
   return {
     ...(await getExamStateLocal({ host: row, eligible: true })),
@@ -5671,6 +5680,7 @@ export async function updateHostExamDeadline({
   internalAuth,
   id,
   run_id,
+  cleanup_mode,
   scheduled_stop_at,
   stop_host_at_deadline,
   idempotency_key,
@@ -5681,7 +5691,8 @@ export async function updateHostExamDeadline({
   internalAuth?: typeof HOST_DANGEROUS_INTERNAL_AUTH;
   id: string;
   run_id: string;
-  scheduled_stop_at: string;
+  cleanup_mode?: HostExamCleanupMode;
+  scheduled_stop_at?: string;
   stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<HostExamState> {
@@ -5701,6 +5712,7 @@ export async function updateHostExamDeadline({
         session_hash: freshSessionHash,
         id,
         run_id,
+        cleanup_mode,
         scheduled_stop_at,
         stop_host_at_deadline,
         idempotency_key,
@@ -5714,6 +5726,7 @@ export async function updateHostExamDeadline({
   await updateExamDeadlineLocal({
     host: row,
     run_id,
+    cleanup_mode,
     scheduled_stop_at,
     stop_host_at_deadline,
   });

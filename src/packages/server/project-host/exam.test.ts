@@ -209,6 +209,13 @@ describe("project-host exam configuration", () => {
     expect(encoded).not.toContain("do-not-store-this-token");
   });
 
+  it("accepts an instructor-selected stable admission token", () => {
+    expect(__test__.normalizeAdmissionToken("  UCL-practice-2026  ")).toBe(
+      "UCL-practice-2026",
+    );
+    expect(() => __test__.normalizeAdmissionToken("short")).toThrow("8 to 200");
+  });
+
   it("recovers the current instructor token without storing plaintext", () => {
     const row = {
       run_id: "00000000-2000-4000-8000-000000000002",

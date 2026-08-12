@@ -80,9 +80,13 @@ Table({
       type: "string",
       desc: "Per-project network policy frozen into this run.",
     },
+    cleanup_mode: {
+      type: "string",
+      desc: "Whether cleanup is scheduled automatically or explicitly by the instructor.",
+    },
     scheduled_stop_at: {
       type: "timestamp",
-      desc: "Mandatory deadline for admission closure and project cleanup.",
+      desc: "Deadline for scheduled admission closure and project cleanup.",
     },
     stop_host_at_deadline: {
       type: "boolean",

@@ -8,7 +8,12 @@ import { isIP } from "node:net";
 import getLogger from "@cocalc/backend/logger";
 import { conatPassword } from "@cocalc/backend/data";
 import getPool, { type PoolClient } from "@cocalc/database/pool";
+import {
+  decryptSecretStorageValue,
+  encryptSecretStorageValue,
+} from "@cocalc/database/settings/secret-settings";
 import type {
+  HostExamCleanupMode,
   HostExamConfig,
   HostExamConfigInput,
   HostExamRun,
@@ -37,6 +42,8 @@ const ACTIVE_RUN_STATUSES: HostExamRunStatus[] = [
   "error",
 ];
 const PROJECT_HOST_RPC_TIMEOUT_MS = 10 * 60_000;
+const MANUAL_CLEANUP_DEADLINE = "9999-12-31T23:59:59.000Z";
+const STABLE_TOKEN_MARKER = "stable:";
 const DEFAULT_EXAM_CONFIG: Omit<HostExamConfigInput, "enabled"> = {
   title: "Exam Scratchpad",
   max_projects: 100,
@@ -106,6 +113,7 @@ function mapRun(row: any): HostExamRun {
     max_projects: Number(row.max_projects),
     terminal_enabled: row.terminal_enabled === true,
     network_mode: "disabled",
+    cleanup_mode: row.cleanup_mode === "manual" ? "manual" : "scheduled",
     scheduled_stop_at: dateString(row.scheduled_stop_at)!,
     stop_host_at_deadline: row.stop_host_at_deadline !== false,
     owner_account_id: row.owner_account_id,
@@ -175,6 +183,8 @@ async function ensureSchema(): Promise<void> {
           cleanup_grace_minutes INTEGER NOT NULL,
           terminal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
           network_mode TEXT NOT NULL DEFAULT 'disabled',
+          token_hash TEXT,
+          token_ciphertext TEXT,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           created_by UUID NOT NULL,
@@ -196,6 +206,7 @@ async function ensureSchema(): Promise<void> {
           max_projects INTEGER NOT NULL,
           terminal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
           network_mode TEXT NOT NULL DEFAULT 'disabled',
+          cleanup_mode TEXT NOT NULL DEFAULT 'scheduled',
           scheduled_stop_at TIMESTAMPTZ NOT NULL,
           stop_host_at_deadline BOOLEAN NOT NULL DEFAULT TRUE,
           owner_account_id UUID NOT NULL,
@@ -240,6 +251,25 @@ async function ensureSchema(): Promise<void> {
       await getPool().query(`
         ALTER TABLE ${RUN_TABLE}
           ADD COLUMN IF NOT EXISTS stop_host_at_deadline BOOLEAN DEFAULT TRUE
+      `);
+      await getPool().query(`
+        ALTER TABLE ${CONFIG_TABLE}
+          ADD COLUMN IF NOT EXISTS token_hash TEXT,
+          ADD COLUMN IF NOT EXISTS token_ciphertext TEXT
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ADD COLUMN IF NOT EXISTS cleanup_mode TEXT DEFAULT 'scheduled'
+      `);
+      await getPool().query(`
+        UPDATE ${RUN_TABLE}
+        SET cleanup_mode='scheduled'
+        WHERE cleanup_mode IS NULL
+      `);
+      await getPool().query(`
+        ALTER TABLE ${RUN_TABLE}
+          ALTER COLUMN cleanup_mode SET DEFAULT 'scheduled',
+          ALTER COLUMN cleanup_mode SET NOT NULL
       `);
       await getPool().query(`
         UPDATE ${RUN_TABLE}
@@ -383,7 +413,68 @@ function normalizeConfig(input: HostExamConfigInput): HostExamConfigInput {
     }),
     terminal_enabled: input.terminal_enabled === true,
     network_mode: "disabled",
+    admission_token:
+      input.admission_token == null
+        ? undefined
+        : normalizeAdmissionToken(input.admission_token),
   };
+}
+
+function normalizeAdmissionToken(value: unknown): string {
+  const token = `${value ?? ""}`.trim();
+  if (token.length < 8 || token.length > 200 || !/^[\x20-\x7e]+$/.test(token)) {
+    throw new Error(
+      "admission_token must contain 8 to 200 printable characters",
+    );
+  }
+  return token;
+}
+
+function generateAdmissionToken(): string {
+  return randomBytes(24).toString("base64url");
+}
+
+function tokenSecretName(host_id: string): string {
+  return `project-host-exam-token:${host_id}`;
+}
+
+async function decryptExamToken(
+  host_id: string,
+  ciphertext: string,
+): Promise<string> {
+  return (await decryptSecretStorageValue(tokenSecretName(host_id), ciphertext))
+    .value;
+}
+
+async function loadStableExamToken({
+  host_id,
+  create = false,
+}: {
+  host_id: string;
+  create?: boolean;
+}): Promise<string | undefined> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT token_ciphertext FROM ${CONFIG_TABLE} WHERE host_id=$1`,
+    [host_id],
+  );
+  const ciphertext = rows[0]?.token_ciphertext;
+  if (ciphertext) return await decryptExamToken(host_id, ciphertext);
+  if (!create || !rows[0]) return;
+  const token = generateAdmissionToken();
+  const encrypted = await encryptSecretStorageValue(
+    tokenSecretName(host_id),
+    token,
+  );
+  const updated = await getPool().query(
+    `UPDATE ${CONFIG_TABLE}
+     SET token_hash=$2, token_ciphertext=$3, updated_at=NOW()
+     WHERE host_id=$1 AND token_ciphertext IS NULL
+     RETURNING token_ciphertext`,
+    [host_id, hashToken(token), encrypted],
+  );
+  if (updated.rows[0]) return token;
+  return await loadStableExamToken({ host_id });
 }
 
 function normalizeScratchpadTitle(value: unknown): string {
@@ -614,6 +705,9 @@ async function loadRunToken({
     [host_id, run_id],
   );
   const row = rows[0];
+  if (`${row?.token_idempotency_key ?? ""}`.startsWith(STABLE_TOKEN_MARKER)) {
+    return await loadStableExamToken({ host_id, create: true });
+  }
   return tokenForRunRecord(row);
 }
 
@@ -704,9 +798,12 @@ export async function getExamStateLocal({
       });
     }
   }
-  const token = run
-    ? await loadRunToken({ host_id: host.id, run_id: run.run_id })
-    : undefined;
+  const token =
+    run && run.status !== "stopped"
+      ? await loadRunToken({ host_id: host.id, run_id: run.run_id })
+      : config
+        ? await loadStableExamToken({ host_id: host.id, create: true })
+        : undefined;
   return {
     eligible,
     eligibility_reason,
@@ -782,16 +879,26 @@ export async function setExamConfigLocal({
     );
   }
   const hostname = examHostnameForHost(host);
+  const token =
+    config.admission_token ??
+    (await loadStableExamToken({ host_id: host.id })) ??
+    generateAdmissionToken();
+  const token_hash = hashToken(token);
+  const token_ciphertext = await encryptSecretStorageValue(
+    tokenSecretName(host.id),
+    token,
+  );
   const { rows } = await getPool().query(
     `
       INSERT INTO ${CONFIG_TABLE} (
         host_id, enabled, title, hostname, generation, max_projects,
         project_cpu, project_memory_mb, project_disk_mb,
         project_ttl_minutes, cleanup_grace_minutes, terminal_enabled,
-        network_mode, created_by, updated_by
+        network_mode, token_hash, token_ciphertext, created_by, updated_by
       )
       VALUES (
-        $1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11, 'disabled', $12, $12
+        $1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11, 'disabled',
+        $12, $13, $14, $14
       )
       ON CONFLICT (host_id) DO UPDATE SET
         enabled=EXCLUDED.enabled,
@@ -804,6 +911,8 @@ export async function setExamConfigLocal({
         cleanup_grace_minutes=EXCLUDED.cleanup_grace_minutes,
         terminal_enabled=EXCLUDED.terminal_enabled,
         network_mode='disabled',
+        token_hash=EXCLUDED.token_hash,
+        token_ciphertext=EXCLUDED.token_ciphertext,
         generation=${CONFIG_TABLE}.generation + 1,
         updated_by=EXCLUDED.updated_by,
         updated_at=NOW()
@@ -821,6 +930,8 @@ export async function setExamConfigLocal({
       config.project_ttl_minutes,
       config.cleanup_grace_minutes,
       config.terminal_enabled,
+      token_hash,
+      token_ciphertext,
       actor_account_id,
     ],
   );
@@ -871,6 +982,7 @@ export async function createExamRunLocal({
   host,
   actor_account_id,
   rootfs_image,
+  cleanup_mode = "scheduled",
   scheduled_stop_at,
   stop_host_at_deadline = true,
   idempotency_key,
@@ -878,7 +990,8 @@ export async function createExamRunLocal({
   host: ExamHostRow;
   actor_account_id: string;
   rootfs_image: string;
-  scheduled_stop_at: string;
+  cleanup_mode?: HostExamCleanupMode;
+  scheduled_stop_at?: string;
   stop_host_at_deadline?: boolean;
   idempotency_key: string;
 }): Promise<{ run: HostExamRun; token: string }> {
@@ -893,10 +1006,17 @@ export async function createExamRunLocal({
     throw new Error("exam mode is not enabled for this project host");
   }
   const key = validateIdempotencyKey(idempotency_key);
-  const deadline = validateDeadline(
-    scheduled_stop_at,
-    config.project_ttl_minutes,
-  );
+  const nextCleanupMode: HostExamCleanupMode =
+    cleanup_mode === "manual" ? "manual" : "scheduled";
+  const deadline =
+    nextCleanupMode === "manual"
+      ? MANUAL_CLEANUP_DEADLINE
+      : validateDeadline(
+          `${scheduled_stop_at ?? ""}`,
+          config.project_ttl_minutes,
+        );
+  const token = await loadStableExamToken({ host_id: host.id, create: true });
+  if (!token) throw new Error("exam admission token is not configured");
   const control = await getRoutedHostControlClient({
     host_id: host.id,
     timeout: PROJECT_HOST_RPC_TIMEOUT_MS,
@@ -909,7 +1029,6 @@ export async function createExamRunLocal({
   });
 
   const run_id = randomUUID();
-  const token = deterministicToken({ run_id, idempotency_key: key });
   const token_hash = hashToken(token);
   const run_quota = {
     cpu_limit: config.project_cpu,
@@ -942,10 +1061,15 @@ export async function createExamRunLocal({
       transactionOpen = false;
       return {
         run,
-        token: deterministicToken({
-          run_id: run.run_id,
-          idempotency_key: key,
-        }),
+        token:
+          `${existingByKey.rows[0].token_idempotency_key ?? ""}`.startsWith(
+            STABLE_TOKEN_MARKER,
+          )
+            ? token
+            : deterministicToken({
+                run_id: run.run_id,
+                idempotency_key: key,
+              }),
       };
     }
     const active = await db.query(
@@ -967,12 +1091,12 @@ export async function createExamRunLocal({
           run_id, host_id, config_generation, status, token_hash,
           create_idempotency_key, token_idempotency_key, rootfs_image,
           rootfs_digest, run_quota, max_projects, terminal_enabled,
-          network_mode, scheduled_stop_at, stop_host_at_deadline,
+          network_mode, cleanup_mode, scheduled_stop_at, stop_host_at_deadline,
           owner_account_id, created_by
         )
         VALUES (
-          $1, $2, $3, 'preparing', $4, $5, $5, $6, $7, $8::JSONB,
-          $9, $10, 'disabled', $11, $12, $13, $14
+          $1, $2, $3, 'preparing', $4, $5, $6, $7, $8, $9::JSONB,
+          $10, $11, 'disabled', $12, $13, $14, $15, $16
         )
         RETURNING *
       `,
@@ -982,13 +1106,15 @@ export async function createExamRunLocal({
         config.generation,
         token_hash,
         key,
+        `${STABLE_TOKEN_MARKER}${key}`,
         selected.image,
         selected.digest,
         JSON.stringify(run_quota),
         config.max_projects,
         config.terminal_enabled,
+        nextCleanupMode,
         deadline,
-        stop_host_at_deadline !== false,
+        nextCleanupMode === "scheduled" && stop_host_at_deadline !== false,
         ownerAccountId(host),
         actor_account_id,
       ],
@@ -1066,10 +1192,12 @@ export async function rotateExamTokenLocal({
   host,
   run_id,
   idempotency_key,
+  token: requestedToken,
 }: {
   host: ExamHostRow;
   run_id: string;
   idempotency_key: string;
+  token?: string;
 }): Promise<{ run: HostExamRun; token: string }> {
   const run = await requireRunForMutation({ host_id: host.id, run_id });
   if (
@@ -1080,7 +1208,10 @@ export async function rotateExamTokenLocal({
     throw new Error("cannot rotate the token after exam cleanup has started");
   }
   const key = validateIdempotencyKey(idempotency_key);
-  const token = deterministicToken({ run_id, idempotency_key: key });
+  const token =
+    requestedToken == null
+      ? deterministicToken({ run_id, idempotency_key: key })
+      : normalizeAdmissionToken(requestedToken);
   const token_hash = hashToken(token);
   const control = await getRoutedHostControlClient({
     host_id: host.id,
@@ -1092,19 +1223,40 @@ export async function rotateExamTokenLocal({
     config_generation: run.config_generation,
     token_hash,
   });
-  const { rows } = await getPool().query(
-    `
-      UPDATE ${RUN_TABLE}
-      SET token_hash=$2, token_idempotency_key=$3, updated_at=NOW()
-      WHERE run_id=$1
-      RETURNING *
-    `,
-    [run_id, token_hash, key],
-  );
   if (runtime.last_error) {
     throw new Error(runtime.last_error);
   }
-  return { run: mapRun(rows[0]), token };
+  const token_ciphertext = await encryptSecretStorageValue(
+    tokenSecretName(host.id),
+    token,
+  );
+  const db = await getPool().connect();
+  try {
+    await db.query("BEGIN");
+    const { rows } = await db.query(
+      `UPDATE ${RUN_TABLE}
+       SET token_hash=$2, token_idempotency_key=$3, updated_at=NOW()
+       WHERE run_id=$1
+       RETURNING *`,
+      [run_id, token_hash, `${STABLE_TOKEN_MARKER}${key}`],
+    );
+    if (!rows[0]) {
+      throw new Error("exam run not found while saving rotated token");
+    }
+    await db.query(
+      `UPDATE ${CONFIG_TABLE}
+       SET token_hash=$2, token_ciphertext=$3, updated_at=NOW()
+       WHERE host_id=$1`,
+      [host.id, token_hash, token_ciphertext],
+    );
+    await db.query("COMMIT");
+    return { run: mapRun(rows[0]), token };
+  } catch (err) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    db.release();
+  }
 }
 
 export async function openExamRunLocal({
@@ -1115,7 +1267,10 @@ export async function openExamRunLocal({
   run_id: string;
 }): Promise<HostExamRun> {
   const run = await requireRunForMutation({ host_id: host.id, run_id });
-  if (new Date(run.scheduled_stop_at).valueOf() <= Date.now()) {
+  if (
+    run.cleanup_mode === "scheduled" &&
+    new Date(run.scheduled_stop_at).valueOf() <= Date.now()
+  ) {
     throw new Error("the exam deadline has already passed");
   }
   const control = await getRoutedHostControlClient({
@@ -1133,12 +1288,14 @@ export async function openExamRunLocal({
 export async function updateExamDeadlineLocal({
   host,
   run_id,
+  cleanup_mode,
   scheduled_stop_at,
   stop_host_at_deadline,
 }: {
   host: ExamHostRow;
   run_id: string;
-  scheduled_stop_at: string;
+  cleanup_mode?: HostExamCleanupMode;
+  scheduled_stop_at?: string;
   stop_host_at_deadline?: boolean;
 }): Promise<HostExamRun> {
   const [run, config] = await Promise.all([
@@ -1153,10 +1310,19 @@ export async function updateExamDeadlineLocal({
   ) {
     throw new Error("cannot change the deadline after cleanup has started");
   }
-  const deadline = validateDeadline(
-    scheduled_stop_at,
-    config.project_ttl_minutes,
-  );
+  const nextCleanupMode: HostExamCleanupMode =
+    cleanup_mode == null
+      ? run.cleanup_mode
+      : cleanup_mode === "manual"
+        ? "manual"
+        : "scheduled";
+  const deadline =
+    nextCleanupMode === "manual"
+      ? MANUAL_CLEANUP_DEADLINE
+      : validateDeadline(
+          `${scheduled_stop_at ?? ""}`,
+          config.project_ttl_minutes,
+        );
   const control = await getRoutedHostControlClient({
     host_id: host.id,
     timeout: 30_000,
@@ -1165,17 +1331,27 @@ export async function updateExamDeadlineLocal({
   await control.updateExamRunDeadline({
     run_id,
     config_generation: run.config_generation,
+    cleanup_mode: nextCleanupMode,
     scheduled_stop_at: deadline,
-    stop_host_at_deadline: stop_host_at_deadline ?? run.stop_host_at_deadline,
+    stop_host_at_deadline:
+      nextCleanupMode === "scheduled" &&
+      (stop_host_at_deadline ?? run.stop_host_at_deadline),
   });
   const { rows } = await getPool().query(
     `
       UPDATE ${RUN_TABLE}
-      SET scheduled_stop_at=$2, stop_host_at_deadline=$3, updated_at=NOW()
+      SET cleanup_mode=$2, scheduled_stop_at=$3, stop_host_at_deadline=$4,
+          updated_at=NOW()
       WHERE run_id=$1
       RETURNING *
     `,
-    [run_id, deadline, stop_host_at_deadline ?? run.stop_host_at_deadline],
+    [
+      run_id,
+      nextCleanupMode,
+      deadline,
+      nextCleanupMode === "scheduled" &&
+        (stop_host_at_deadline ?? run.stop_host_at_deadline),
+    ],
   );
   return mapRun(rows[0]);
 }
@@ -1329,6 +1505,7 @@ export async function reconcileDueExamRunsOnce(): Promise<void> {
       FROM ${RUN_TABLE} r
       JOIN project_hosts h ON h.id=r.host_id
       WHERE r.status = ANY($1::TEXT[])
+        AND r.cleanup_mode = 'scheduled'
         AND r.scheduled_stop_at <= NOW()
       ORDER BY r.scheduled_stop_at
       LIMIT 16
@@ -1446,6 +1623,7 @@ export const __test__ = {
   examDnsRoute,
   ensureExamRootfsCached,
   hashToken,
+  normalizeAdmissionToken,
   normalizeConfig,
   publicIp,
   assertExamHostRunningForCleanup,

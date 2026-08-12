@@ -88,6 +88,7 @@ function makeHarness() {
             max_projects: state.config!.max_projects,
             terminal_enabled: state.config!.terminal_enabled,
             network_mode: "disabled",
+            cleanup_mode: opts.cleanup_mode ?? "scheduled",
             scheduled_stop_at: opts.scheduled_stop_at,
             stop_host_at_deadline: opts.stop_host_at_deadline,
             owner_account_id: "account-1",
@@ -260,10 +261,13 @@ describe("host exam commands", () => {
     );
     assert.equal((await harness.run(["open", "exam-test"])).run.status, "open");
     assert.equal(harness.calls.open.at(-1).timeout, 120_000);
-    await assert.rejects(
-      harness.run(["rotate-token", "exam-test"]),
-      /before admission opens/,
-    );
+    await harness.run([
+      "rotate-token",
+      "exam-test",
+      "--token",
+      "replacement-token",
+    ]);
+    assert.equal(harness.calls.rotate.at(-1).token, "replacement-token");
 
     const newDeleteAt = "2026-07-31T23:30:00.000Z";
     await harness.run([
@@ -277,6 +281,11 @@ describe("host exam commands", () => {
     assert.equal(deadlineCall.scheduled_stop_at, newDeleteAt);
     assert.equal(deadlineCall.stop_host_at_deadline, false);
     assert.equal(deadlineCall.timeout, 120_000);
+
+    await harness.run(["deadline", "exam-test", "--manual-cleanup"]);
+    const manualCleanupCall = harness.calls.deadline.at(-1);
+    assert.equal(manualCleanupCall.cleanup_mode, "manual");
+    assert.equal(manualCleanupCall.scheduled_stop_at, undefined);
 
     const expanded = await harness.run([
       "capacity",

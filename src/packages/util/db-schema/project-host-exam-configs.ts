@@ -72,6 +72,14 @@ Table({
       type: "string",
       desc: "Frozen network policy; the MVP supports only disabled.",
     },
+    token_hash: {
+      type: "string",
+      desc: "Scrypt hash of the stable admission token.",
+    },
+    token_ciphertext: {
+      type: "string",
+      desc: "Encrypted stable admission token, readable only by the owning bay.",
+    },
     created_at: {
       type: "timestamp",
       desc: "When exam mode was first configured.",

@@ -239,6 +239,10 @@ export function registerHostExamCommands({
     .option("--enable", "enable exam mode")
     .option("--disable", "disable exam mode")
     .option("--title <title>", "public scratchpad title")
+    .option(
+      "--admission-token <token>",
+      "stable admission token; preserved across restarts and runs",
+    )
     .option("--max-projects <count>", "maximum simultaneous student projects")
     .option("--project-cpu <cores>", "CPU limit for each student project")
     .option("--project-memory-mb <mb>", "memory limit for each student project")
@@ -256,6 +260,7 @@ export function registerHostExamCommands({
           enable?: boolean;
           disable?: boolean;
           title?: string;
+          admissionToken?: string;
           maxProjects?: string;
           projectCpu?: string;
           projectMemoryMb?: string;
@@ -331,6 +336,7 @@ export function registerHostExamCommands({
                 ? false
                 : current.terminal_enabled,
             network_mode: "disabled",
+            admission_token: opts.admissionToken,
           };
           const state = await ctx.hub.hosts.setHostExamConfig({
             id: host.id,
@@ -347,9 +353,13 @@ export function registerHostExamCommands({
     .command("prepare <host>")
     .description("prepare and smoke-test a new exam run")
     .requiredOption("--rootfs <image>", "cached RootFS image")
-    .requiredOption(
+    .option(
       "--delete-at <timestamp>",
       "when all exam projects must be deleted (ISO timestamp)",
+    )
+    .option(
+      "--manual-cleanup",
+      "practice mode: no automatic timeout; instructor erases projects manually",
     )
     .option("--stop-host", "shut down the project host after cleanup")
     .option("--keep-host-running", "leave the project host running afterward")
@@ -361,7 +371,8 @@ export function registerHostExamCommands({
         hostIdentifier: string,
         opts: ExamCommandOptions & {
           rootfs: string;
-          deleteAt: string;
+          deleteAt?: string;
+          manualCleanup?: boolean;
           stopHost?: boolean;
           keepHostRunning?: boolean;
         },
@@ -374,6 +385,14 @@ export function registerHostExamCommands({
             positiveFlag: "--stop-host",
             negativeFlag: "--keep-host-running",
           });
+          if (!opts.manualCleanup && !opts.deleteAt) {
+            throw new Error(
+              "--delete-at is required unless --manual-cleanup is used",
+            );
+          }
+          if (opts.manualCleanup && opts.stopHost) {
+            throw new Error("--stop-host cannot be used with --manual-cleanup");
+          }
           const host = await resolveHost(ctx, hostIdentifier);
           const before = await getState(ctx, host.id);
           if (before.run && before.run.status !== "stopped") {
@@ -385,8 +404,11 @@ export function registerHostExamCommands({
           const prepared = await ctx.hub.hosts.createHostExamRun({
             id: host.id,
             rootfs_image: opts.rootfs,
-            scheduled_stop_at: parseDeleteAt(opts.deleteAt),
-            stop_host_at_deadline: !opts.keepHostRunning,
+            cleanup_mode: opts.manualCleanup ? "manual" : "scheduled",
+            scheduled_stop_at: opts.manualCleanup
+              ? undefined
+              : parseDeleteAt(opts.deleteAt!),
+            stop_host_at_deadline: !opts.manualCleanup && !opts.keepHostRunning,
             idempotency_key: operationKey("exam-prepare", opts.idempotencyKey),
             ...mutationAuth(opts),
             timeout,
@@ -440,24 +462,25 @@ export function registerHostExamCommands({
 
   exam
     .command("rotate-token <host>")
-    .description("rotate and display the token before admission opens")
+    .description("explicitly replace and display the stable admission token")
     .option("--run <run_id>", "exam run id; defaults to the active run")
+    .option("--token <token>", "set a specific new stable token")
     .option("--idempotency-key <key>", "reuse a previous logical request key")
     .option("--browser-id <id>", "browser session id for fresh-auth checks")
     .option("--wait-timeout <duration>", "RPC timeout", "2m")
     .action(
       async (
         hostIdentifier: string,
-        opts: ExamCommandOptions & { run?: string },
+        opts: ExamCommandOptions & { run?: string; token?: string },
         command: Command,
       ) => {
         await withContext(command, "host exam rotate-token", async (ctx) => {
           const host = await resolveHost(ctx, hostIdentifier);
           const current = await getState(ctx, host.id);
           const run = activeRun(current);
-          if (run.status !== "ready") {
+          if (run.status !== "ready" && run.status !== "open") {
             throw new Error(
-              "the exam token can only be rotated while the run is ready, before admission opens",
+              "the exam token can only be rotated while the run is ready or open",
             );
           }
           const run_id = `${opts.run ?? ""}`.trim() || run.run_id;
@@ -465,6 +488,7 @@ export function registerHostExamCommands({
             id: host.id,
             run_id,
             idempotency_key: operationKey("exam-token", opts.idempotencyKey),
+            token: opts.token,
             ...mutationAuth(opts),
             timeout: operationTimeout(opts, MUTATION_TIMEOUT_MS),
           });
@@ -476,7 +500,11 @@ export function registerHostExamCommands({
   exam
     .command("deadline <host>")
     .description("change project deletion time and post-cleanup host policy")
-    .requiredOption("--delete-at <timestamp>", "new ISO project deletion time")
+    .option("--delete-at <timestamp>", "new ISO project deletion time")
+    .option(
+      "--manual-cleanup",
+      "disable automatic cleanup until the instructor ends the run",
+    )
     .option("--run <run_id>", "exam run id; defaults to the active run")
     .option("--stop-host", "shut down the project host after cleanup")
     .option("--keep-host-running", "leave the project host running afterward")
@@ -488,7 +516,8 @@ export function registerHostExamCommands({
         hostIdentifier: string,
         opts: ExamCommandOptions & {
           run?: string;
-          deleteAt: string;
+          deleteAt?: string;
+          manualCleanup?: boolean;
           stopHost?: boolean;
           keepHostRunning?: boolean;
         },
@@ -501,13 +530,24 @@ export function registerHostExamCommands({
             positiveFlag: "--stop-host",
             negativeFlag: "--keep-host-running",
           });
+          if (!opts.manualCleanup && !opts.deleteAt) {
+            throw new Error(
+              "--delete-at is required unless --manual-cleanup is used",
+            );
+          }
+          if (opts.manualCleanup && opts.stopHost) {
+            throw new Error("--stop-host cannot be used with --manual-cleanup");
+          }
           const host = await resolveHost(ctx, hostIdentifier);
           const current = await getState(ctx, host.id);
           const run = activeRun(current);
           const state = await ctx.hub.hosts.updateHostExamDeadline({
             id: host.id,
             run_id: `${opts.run ?? ""}`.trim() || run.run_id,
-            scheduled_stop_at: parseDeleteAt(opts.deleteAt),
+            cleanup_mode: opts.manualCleanup ? "manual" : "scheduled",
+            scheduled_stop_at: opts.manualCleanup
+              ? undefined
+              : parseDeleteAt(opts.deleteAt!),
             stop_host_at_deadline: opts.stopHost
               ? true
               : opts.keepHostRunning
