@@ -1266,9 +1266,12 @@
                   </th>
                   <td>Partially supports</td>
                   <td>
-                    Some adjustment may be needed using scanners once text
-                    contrast is sufficient. WCAG has a lot of examples for this
-                    section.
+                    Source review found controls and states that use
+                    lower-contrast graphics. For example, the unstarred project
+                    control can render a <code>#c0c0c0</code> star on a white
+                    background, a contrast ratio of approximately 1.82:1 rather
+                    than the required 3:1. Automated text-contrast results do
+                    not establish non-text contrast conformance.
                   </td>
                 </tr>
                 <tr>
@@ -1283,8 +1286,11 @@
                   </th>
                   <td>Partially supports</td>
                   <td>
-                    Some text on control elements may get cut off when
-                    increasing text spacing.
+                    Source review found project-tab and file-list labels
+                    constrained to a single line with wrapping disabled and
+                    overflow hidden. Increasing letter or word spacing can
+                    further truncate these labels. Complete workflows were not
+                    manually tested with the WCAG text-spacing overrides.
                   </td>
                 </tr>
                 <tr>
@@ -1299,9 +1305,12 @@
                   </th>
                   <td>Partially supports</td>
                   <td>
-                    Tooltips are usually not dismissible and may obscure
-                    surrounding content. However, it is possible to turn off
-                    tooltips for some buttons.
+                    The shared first-party tooltip components use custom Ant
+                    Design overlays without adding Escape-key dismissal. Where a
+                    tooltip obscures other content, users generally must move
+                    pointer hover or keyboard focus to dismiss it. An account
+                    preference can disable many button tooltips globally but is
+                    not a per-occurrence dismissal mechanism.
                   </td>
                 </tr>
                 <tr>

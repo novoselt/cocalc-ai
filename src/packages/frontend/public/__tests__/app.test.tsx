@@ -1141,6 +1141,45 @@ describe("PublicApp", () => {
     expect(
       within(languageOfPartsRow!).getByText(/no systematic use of/),
     ).not.toBeNull();
+    const nonTextContrastRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.11 Non-text Contrast/,
+      })
+      .closest("tr");
+    expect(nonTextContrastRow).not.toBeNull();
+    expect(
+      within(nonTextContrastRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(within(nonTextContrastRow!).getByText("#c0c0c0")).not.toBeNull();
+    expect(
+      within(nonTextContrastRow!).getByText(/required 3:1/),
+    ).not.toBeNull();
+    const textSpacingRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.12 Text Spacing/,
+      })
+      .closest("tr");
+    expect(textSpacingRow).not.toBeNull();
+    expect(
+      within(textSpacingRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(textSpacingRow!).getByText(
+        /wrapping disabled and overflow hidden/,
+      ),
+    ).not.toBeNull();
+    const hoverContentRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.13 Content on Hover or Focus/,
+      })
+      .closest("tr");
+    expect(hoverContentRow).not.toBeNull();
+    expect(
+      within(hoverContentRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(hoverContentRow!).getByText(/without adding Escape-key dismissal/),
+    ).not.toBeNull();
     const errorIdentificationRow = within(tables[1])
       .getByRole("rowheader", {
         name: /3\.3\.1 Error Identification/,
