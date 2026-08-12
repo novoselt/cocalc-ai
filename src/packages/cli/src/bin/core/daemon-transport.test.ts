@@ -7,6 +7,10 @@ import path from "node:path";
 import {
   currentDaemonFingerprint,
   daemonFingerprintMatches,
+  daemonLogPath,
+  daemonPidPath,
+  daemonSpawnTarget,
+  daemonSocketPath,
   ensurePrivateDaemonRuntimeDir,
 } from "./daemon-transport";
 
@@ -35,4 +39,34 @@ test("ensurePrivateDaemonRuntimeDir creates a private runtime directory", () => 
   const socket = path.join(dir, "runtime", "cli-daemon.sock");
   ensurePrivateDaemonRuntimeDir(socket);
   assert.equal(statSync(path.dirname(socket)).mode & 0o777, 0o700);
+});
+
+test("uses a stable per-user Windows named pipe and native state paths", () => {
+  const env = {
+    LOCALAPPDATA: "C:\\Users\\Ada Lovelace\\AppData\\Local",
+    USERDOMAIN: "EXAMPLE",
+    USERNAME: "ada",
+  } as NodeJS.ProcessEnv;
+  const socket = daemonSocketPath(env, "win32");
+  assert.match(socket, /^\\\\\.\\pipe\\cocalc-cli-[a-f0-9]{16}$/);
+  assert.equal(socket, daemonSocketPath(env, "win32"));
+  assert.match(
+    daemonPidPath(env, "win32"),
+    /^C:\\Users\\Ada Lovelace\\AppData\\Local\\CoCalc\\CLI\\cache\\runtime\\cli-daemon-[a-f0-9]{16}\.pid$/,
+  );
+  assert.match(
+    daemonLogPath(env, "win32"),
+    /^C:\\Users\\Ada Lovelace\\AppData\\Local\\CoCalc\\CLI\\cache\\runtime\\cli-daemon-[a-f0-9]{16}\.log$/,
+  );
+});
+
+test("standalone daemon self-reexecution does not pass the executable as a script", () => {
+  assert.deepEqual(
+    daemonSpawnTarget({
+      argv: ["C:\\CoCalc\\cocalc.exe", "C:\\CoCalc\\cocalc.exe"],
+      execPath: "C:\\CoCalc\\cocalc.exe",
+      sea: true,
+    }),
+    { cmd: "C:\\CoCalc\\cocalc.exe", args: [] },
+  );
 });

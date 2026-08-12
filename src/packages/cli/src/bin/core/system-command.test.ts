@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  commandPathCandidates,
   cocalcCliDataDir,
   getCloudflaredDownloadSpec,
   localCloudflaredBinaryPath,
@@ -53,8 +54,29 @@ test("cloudflared download spec supports macOS arm64", () => {
 
 test("cloudflared download spec rejects unsupported platforms", () => {
   assert.equal(
-    getCloudflaredDownloadSpec({ platform: "win32", arch: "x64" }),
+    getCloudflaredDownloadSpec({ platform: "freebsd", arch: "x64" }),
     undefined,
+  );
+});
+
+test("cloudflared download spec supports Windows x64", () => {
+  assert.deepEqual(
+    getCloudflaredDownloadSpec({ platform: "win32", arch: "x64" }),
+    {
+      filename: "cloudflared-windows-amd64.exe",
+      kind: "binary",
+      url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe",
+    },
+  );
+});
+
+test("builds Windows command candidates with PATH and PATHEXT", () => {
+  assert.deepEqual(
+    commandPathCandidates("ssh", {
+      env: { PATH: "C:\\Tools", PATHEXT: ".EXE;.CMD" },
+      platform: "win32",
+    }),
+    ["C:\\Tools\\ssh.EXE", "C:\\Tools\\ssh.CMD"],
   );
 });
 

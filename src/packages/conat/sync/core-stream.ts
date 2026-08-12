@@ -47,7 +47,7 @@ import type {
 } from "@cocalc/conat/persist/storage";
 import type { Changefeed } from "@cocalc/conat/persist/client";
 export type { Configuration };
-import { join } from "path";
+import { posix } from "node:path";
 import {
   type StorageOptions,
   type PersistStreamClient,
@@ -225,7 +225,8 @@ export function storagePath({
   } else {
     userPath = "hub";
   }
-  return join(userPath, name);
+  // This is a persistence protocol key, not a host filesystem path.
+  return posix.join(userPath, name);
 }
 
 const stats = {

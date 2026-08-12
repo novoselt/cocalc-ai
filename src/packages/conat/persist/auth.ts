@@ -1,6 +1,6 @@
 import { SERVICE } from "./util";
 import { ConatError } from "@cocalc/conat/core/client";
-import { normalize } from "path";
+import { posix } from "node:path";
 
 export const MAX_PATH_LENGTH = 4000;
 
@@ -51,7 +51,9 @@ export function assertHasWritePermission({
   path: string;
   service?: string;
 }) {
-  if (path != normalize(path)) {
+  // Persistence paths are protocol identifiers, not host filesystem paths.
+  // Keep their normalization stable when clients run natively on Windows.
+  if (path.includes("\\") || path != posix.normalize(path)) {
     throw Error(`permission denied: path '${path}' is not normalized`);
   }
   if (path.length > MAX_PATH_LENGTH) {

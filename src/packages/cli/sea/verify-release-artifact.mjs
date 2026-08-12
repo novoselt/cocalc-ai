@@ -21,7 +21,11 @@ function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--execute" || arg === "--require-developer-id") {
+    if (
+      arg === "--execute" ||
+      arg === "--require-developer-id" ||
+      arg === "--require-authenticode"
+    ) {
       args[arg.slice(2)] = true;
       continue;
     }
@@ -61,25 +65,29 @@ function expectedFilename({ os, arch, releaseId }) {
         ? "aarch64"
         : os === "darwin" && arch === "arm64"
           ? "arm64"
-          : undefined;
+          : os === "windows" && arch === "amd64"
+            ? "x86_64"
+            : undefined;
   if (!machine) fail(`unsupported release platform: ${os}/${arch}`);
-  return `cocalc-cli-${releaseId}-${machine}-${os}${os === "linux" ? ".tar.gz" : ""}`;
+  return `cocalc-cli-${releaseId}-${machine}-${os}${
+    os === "linux" ? ".tar.gz" : os === "windows" ? ".exe" : ""
+  }`;
 }
 
-function readHeader(path) {
+function readBytes(path, length, position = 0) {
   const fd = openSync(path, "r");
   try {
-    const header = Buffer.alloc(64);
-    const length = readSync(fd, header, 0, header.length, 0);
-    if (length < 24) fail(`release executable is too short: ${path}`);
-    return header;
+    const buffer = Buffer.alloc(length);
+    const count = readSync(fd, buffer, 0, buffer.length, position);
+    if (count < length) fail(`release executable is too short: ${path}`);
+    return buffer;
   } finally {
     closeSync(fd);
   }
 }
 
 function verifyBinaryHeader({ binary, os, arch }) {
-  const header = readHeader(binary);
+  const header = readBytes(binary, 64);
   if (os === "linux") {
     if (!header.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
       fail(`Linux release is not an ELF executable: ${binary}`);
@@ -110,11 +118,31 @@ function verifyBinaryHeader({ binary, os, arch }) {
     }
     return;
   }
+  if (os === "windows") {
+    if (header.readUInt16LE(0) !== 0x5a4d) {
+      fail(`Windows release is not a PE executable: ${binary}`);
+    }
+    const peOffset = header.readUInt32LE(0x3c);
+    const pe = readBytes(binary, 26, peOffset);
+    if (pe.readUInt32LE(0) !== 0x00004550) {
+      fail(`Windows release has an invalid PE signature: ${binary}`);
+    }
+    const machine = pe.readUInt16LE(4);
+    if (arch !== "amd64" || machine !== 0x8664) {
+      fail(
+        `Windows release architecture mismatch: expected amd64, got PE machine 0x${machine.toString(16)}`,
+      );
+    }
+    if (pe.readUInt16LE(24) !== 0x20b) {
+      fail("Windows release must be a 64-bit PE32+ executable");
+    }
+    return;
+  }
   fail(`unsupported release OS: ${os}`);
 }
 
 function materializeArtifact({ file, os, workDir }) {
-  if (os === "darwin") return file;
+  if (os === "darwin" || os === "windows") return file;
   const listing = run("tar", ["-tzf", file]).stdout.trim();
   if (listing !== "cocalc\nlib/libatomic.so.1") {
     fail(`unexpected Linux runtime bundle contents:\n${listing}`);
@@ -147,14 +175,35 @@ function verifyDeveloperId(binary) {
   }
 }
 
+function verifyAuthenticode(binary) {
+  if (process.platform !== "win32") {
+    fail("Authenticode verification requires a native Windows runner");
+  }
+  const script = [
+    "$signature = Get-AuthenticodeSignature -LiteralPath $env:COCALC_VERIFY_BINARY",
+    "if ($signature.Status -ne 'Valid') {",
+    '  throw "Authenticode signature is $($signature.Status): $($signature.StatusMessage)"',
+    "}",
+    "$signature.SignerCertificate.Subject",
+  ].join("; ");
+  return run(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      env: { ...process.env, COCALC_VERIFY_BINARY: binary },
+    },
+  ).stdout.trim();
+}
+
 function verifyNativeExecution({ binary, os, arch, releaseId }) {
   const nativeArch = process.arch === "x64" ? "amd64" : process.arch;
-  if (process.platform !== os || nativeArch !== arch) {
+  const nativeOs = process.platform === "win32" ? "windows" : process.platform;
+  if (nativeOs !== os || nativeArch !== arch) {
     fail(
-      `native execution requested for ${os}/${arch} on ${process.platform}/${nativeArch}`,
+      `native execution requested for ${os}/${arch} on ${nativeOs}/${nativeArch}`,
     );
   }
-  chmodSync(binary, 0o755);
+  if (os !== "windows") chmodSync(binary, 0o755);
   const env = {
     ...process.env,
     COCALC_CLI_ARTIFACT_ID: releaseId,
@@ -195,11 +244,14 @@ try {
     if (os !== "darwin") fail("--require-developer-id is only valid for macOS");
     verifyDeveloperId(binary);
   }
+  const authenticode = args["require-authenticode"]
+    ? verifyAuthenticode(binary)
+    : undefined;
   const version = args.execute
     ? verifyNativeExecution({ binary, os, arch, releaseId })
     : undefined;
   process.stdout.write(
-    `${JSON.stringify({ ok: true, file, os, arch, release_id: releaseId, version })}\n`,
+    `${JSON.stringify({ ok: true, file, os, arch, release_id: releaseId, version, authenticode })}\n`,
   );
 } finally {
   rmSync(workDir, { recursive: true, force: true });

@@ -5,6 +5,7 @@ import { is_valid_uuid_string } from "@cocalc/util/misc";
 import {
   applyTerminalInitFile,
   applyTerminalRuntimeCwd,
+  normalizeTerminalCommand,
   projectScopedCliEnv,
 } from "./terminal-server";
 import {
@@ -83,5 +84,20 @@ describe("terminal-server init file support", () => {
       HOME: "/srv/workspaces/project-id",
     });
     expect(options.cwd).toBe("/tmp/session");
+  });
+
+  it("maps the default bash terminal to PowerShell on Windows", () => {
+    const hook = { command: "bash", args: [] as string[] };
+    normalizeTerminalCommand(hook, {
+      platform: "win32",
+      env: { COCALC_WINDOWS_TERMINAL_SHELL: "pwsh.exe" },
+    });
+    expect(hook).toEqual({ command: "pwsh.exe", args: ["-NoLogo"] });
+  });
+
+  it("does not rewrite an explicit bash command on Windows", () => {
+    const hook = { command: "bash", args: ["-lc", "echo hi"] };
+    normalizeTerminalCommand(hook, { platform: "win32" });
+    expect(hook).toEqual({ command: "bash", args: ["-lc", "echo hi"] });
   });
 });

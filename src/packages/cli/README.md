@@ -18,8 +18,22 @@ pnpm --dir src/packages/cli sea:signed
 
 SEA output binary:
 
-- `src/packages/cli/build/sea/cocalc-cli-<version>-<arch>-<os>`
-- symlink: `src/packages/cli/build/sea/cocalc-cli`
+- Linux: `src/packages/cli/build/sea/cocalc-cli-<version>-<arch>-linux.tar.gz`
+- macOS: `src/packages/cli/build/sea/cocalc-cli-<version>-arm64-darwin`
+- Windows: `src/packages/cli/build/sea/cocalc-cli-<version>-x86_64-windows.exe`
+
+The native builder requires an official Node.js 26 distribution with SEA
+enabled. In particular, Homebrew's Node.js build currently disables SEA. To
+build from a bundle produced on another machine:
+
+```bash
+node src/packages/cli/sea/build-sea.mjs \
+  --bundle /path/to/index.js \
+  --release-id my-candidate
+```
+
+The same NCC bundle is intentionally used by all native builders. Each output
+is still constructed and executed on its target operating system and CPU.
 
 Publish commands:
 
@@ -36,6 +50,7 @@ and verifies these native artifacts under one immutable release ID:
 - Linux amd64 on `blacksmith-8vcpu-ubuntu-2404`
 - Linux arm64 on `blacksmith-8vcpu-ubuntu-2404-arm`
 - macOS arm64 on `blacksmith-6vcpu-macos-15`
+- Windows amd64 on `blacksmith-4vcpu-windows-2025`
 
 The workflow defaults to the `candidate` channel. Choose `none` to build,
 sign, notarize, and retain the workflow artifacts without publishing them.
@@ -47,7 +62,7 @@ legacy `latest` manifests.
 In the GitHub repository, open **Settings → Environments** and create these two
 protected environments. Configure required reviewers for both environments.
 
-`cocalc-cli-signing` contains only Apple credentials:
+`cocalc-cli-signing` contains the Apple credentials:
 
 - `APPLE_DEVELOPER_ID_P12_BASE64`: base64 of a Developer ID Application
   certificate and its private key exported as a password-protected `.p12`
@@ -55,6 +70,38 @@ protected environments. Configure required reviewers for both environments.
 - `APPLE_NOTARY_KEY_P8_BASE64`: base64 of an App Store Connect API key `.p8`
 - `APPLE_NOTARY_KEY_ID`: App Store Connect API key ID
 - `APPLE_NOTARY_ISSUER_ID`: App Store Connect API issuer UUID
+
+It also contains the Azure/Microsoft Artifact Signing configuration. The first
+three values identify the OIDC-enabled Azure application; no Azure client
+secret or code-signing private key is stored in GitHub:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `AZURE_ARTIFACT_SIGNING_ENDPOINT`
+- `AZURE_ARTIFACT_SIGNING_ACCOUNT`
+- `AZURE_ARTIFACT_SIGNING_PROFILE`
+
+Create an Artifact Signing account and a **Public Trust** certificate profile,
+grant the Azure application's service principal the **Artifact Signing
+Certificate Profile Signer** role on that profile, and add a federated
+credential to the application with this GitHub environment subject:
+
+```text
+repo:sagemathinc/cocalc-ai:environment:cocalc-cli-signing
+```
+
+Use GitHub's Azure Login action issuer and audience values:
+
+```text
+issuer:   https://token.actions.githubusercontent.com
+audience: api://AzureADTokenExchange
+```
+
+Store all six values as environment secrets under **Settings -> Environments
+-> cocalc-cli-signing**, not as repository variables. The workflow requests an
+OIDC token only inside the protected signing environment and Microsoft holds
+the signing key.
 
 `cocalc-cli-release` contains only the R2 software publishing credentials:
 
@@ -73,17 +120,51 @@ openssl base64 -A -in AuthKey_XXXXXXXXXX.p8
 ```
 
 The Blacksmith GitHub App must have access to this repository. The workflow
-uses only official GitHub actions on ephemeral Blacksmith runners.
+uses GitHub, Azure, and Blacksmith-supported actions on ephemeral Blacksmith
+runners.
 
 The macOS build requires a timestamped Developer ID signature and submits a ZIP
 containing the standalone binary to Apple's notary service. Apple publishes an
 online ticket for a standalone executable but does not support stapling that
 ticket directly to the executable.
 
-Native Windows is intentionally not part of this workflow yet. The release
-model is already platform-oriented, so Windows support can add a Windows build
-job, PE/architecture verification, and Authenticode signing while retaining the
-same immutable artifact and channel-promotion machinery.
+The Windows job creates a native x64 SEA, signs and timestamps it with Microsoft
+Artifact Signing, verifies the PE architecture and Authenticode signature, and
+runs an install/uninstall smoke test before publication. Publishing is rejected
+when Windows signing is disabled.
+
+## Install
+
+Linux and macOS:
+
+```bash
+curl -fsSL https://software.cocalc.ai/software/cocalc/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://software.cocalc.ai/software/cocalc/install.ps1 | iex
+```
+
+The Windows installer verifies SHA-256 and requires a valid Authenticode
+signature for the stable channel. It installs versioned executables under
+`%LOCALAPPDATA%\CoCalc\CLI` and does not alter PATH unless it is saved to a
+file and run with `-AddToPath`:
+
+```powershell
+irm https://software.cocalc.ai/software/cocalc/install.ps1 -OutFile install-cocalc.ps1
+.\install-cocalc.ps1 -AddToPath
+```
+
+Rollback and uninstall use the same saved script with `-Rollback` or
+`-Uninstall -RemoveFromPath`.
+
+Native Windows supports authentication, profiles, hub/project control-plane
+commands, OpenSSH integration, cloudflared download, and the per-user named-pipe
+CLI daemon without Node.js, WSL, or a Unix shell. Commands that are already
+unsupported in every standalone SEA, notably local Playwright browser-session
+spawning, retain their explicit SEA capability error.
 
 macOS dev signing (optional):
 

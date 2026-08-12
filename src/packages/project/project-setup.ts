@@ -9,6 +9,7 @@ This configures the project hub based on an environment variable or other data.
 
 import { existsSync } from "node:fs";
 import { setPriority } from "node:os";
+import { delimiter } from "node:path";
 
 import { PROJECT_SECRETS_ENV } from "@cocalc/util/project-secrets";
 import { getLogger } from "@cocalc/project/logger";
@@ -77,7 +78,7 @@ function set_sanitized_envvar(key: string, value: string): string {
     if (value.indexOf("$PATH") !== -1) {
       value = value.replace(/\$PATH/g, process.env.PATH || "");
     } else {
-      value = `${value}:${process.env.PATH}`;
+      value = `${value}${delimiter}${process.env.PATH}`;
     }
   }
   process.env[key] = value;
@@ -124,9 +125,9 @@ export function set_extra_env(): { [key: string]: string } | undefined {
 export function cleanup(): void {
   // clean/sanitize environment to get rid of nvm and other variables
   if (process.env.PATH == null) return;
-  process.env.PATH = process.env.PATH.split(":")
+  process.env.PATH = process.env.PATH.split(delimiter)
     .filter((x) => !x.startsWith("/cocalc/nvm"))
-    .join(":");
+    .join(delimiter);
   // don't delete NODE_ENV below, since it's potentially confusing to have the value of NODE_ENV change
   // during a running program.
   // Also, don't delete DEBUG, since doing that in some cases breaks the debug library actually working,

@@ -5,6 +5,7 @@
  * cloudflared utility probes used by host and project command handlers.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { accessSync, constants, statSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -15,8 +16,18 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, win32 } from "node:path";
+
+import { cocalcCliDataDir as nativeCliDataDir } from "../../core/platform-paths";
+
+function terminateChild(child: ReturnType<typeof spawn>, force = false): void {
+  if (process.platform === "win32") {
+    child.kill();
+    return;
+  }
+  child.kill(force ? "SIGKILL" : "SIGTERM");
+}
 
 export async function runSsh(args: string[]): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -47,8 +58,8 @@ export async function runCommand(
     if (timeoutMs != null && timeoutMs > 0) {
       timeout = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGTERM");
-        killTimeout = setTimeout(() => child.kill("SIGKILL"), 5000);
+        terminateChild(child);
+        killTimeout = setTimeout(() => terminateChild(child, true), 5000);
       }, timeoutMs);
     }
     child.on("error", reject);
@@ -60,15 +71,70 @@ export async function runCommand(
   });
 }
 
-export function commandExists(command: string): boolean {
-  const probe = spawnSync(
-    "bash",
-    ["-lc", `command -v ${JSON.stringify(command)}`],
-    {
-      stdio: "ignore",
-    },
+function isExecutableFile(path: string, platform: NodeJS.Platform): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+    if (platform !== "win32") accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function commandPathCandidates(
+  command: string,
+  {
+    env = process.env,
+    platform = process.platform,
+  }: {
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+  } = {},
+): string[] {
+  const value = command.trim();
+  if (!value) return [];
+  const pathImpl = platform === "win32" ? win32 : { isAbsolute, join };
+  const hasDirectory =
+    pathImpl.isAbsolute(value) || value.includes("/") || value.includes("\\");
+  const extensions =
+    platform === "win32" && !win32.extname(value)
+      ? (`${env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD"}`
+          .split(";")
+          .map((ext) => ext.trim())
+          .filter(Boolean) as string[])
+      : [""];
+  const directories = hasDirectory
+    ? [""]
+    : `${env.PATH ?? ""}`
+        .split(platform === "win32" ? ";" : ":")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+  const candidates: string[] = [];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const name = `${value}${extension}`;
+      const candidate = directory ? pathImpl.join(directory, name) : name;
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+export function resolveCommandPath(
+  command: string,
+  input?: {
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+  },
+): string | undefined {
+  const platform = input?.platform ?? process.platform;
+  return commandPathCandidates(command, input).find((candidate) =>
+    isExecutableFile(candidate, platform),
   );
-  return probe.status === 0;
+}
+
+export function commandExists(command: string): boolean {
+  return resolveCommandPath(command) != null;
 }
 
 function cloudflaredInstallHint(): string {
@@ -130,28 +196,37 @@ export function getCloudflaredDownloadSpec(opts?: {
       };
     }
   }
+  if (platform === "win32" && arch === "x64") {
+    return {
+      filename: "cloudflared-windows-amd64.exe",
+      kind: "binary",
+      url: `${CLOUDFLARED_DOWNLOAD_BASE}/cloudflared-windows-amd64.exe`,
+    };
+  }
   return undefined;
 }
 
 export function cocalcCliDataDir(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = `${env.COCALC_CLI_DATA_DIR ?? ""}`.trim();
-  if (explicit) {
-    return explicit;
-  }
-  const xdgData = `${env.XDG_DATA_HOME ?? ""}`.trim();
-  return join(xdgData || join(homedir(), ".local", "share"), "cocalc");
+  return nativeCliDataDir({ env });
 }
 
 export function localCloudflaredBinaryPath(
   dataDir = cocalcCliDataDir(),
 ): string {
-  return join(dataDir, "bin", "cloudflared");
+  return join(
+    dataDir,
+    "bin",
+    process.platform === "win32" ? "cloudflared.exe" : "cloudflared",
+  );
 }
 
 async function isExecutable(path: string): Promise<boolean> {
   try {
     const info = await stat(path);
-    return info.isFile() && (info.mode & 0o111) !== 0;
+    return (
+      info.isFile() &&
+      (process.platform === "win32" || (info.mode & 0o111) !== 0)
+    );
   } catch {
     return false;
   }
@@ -206,7 +281,7 @@ export async function ensureCloudflaredBinary(): Promise<string> {
     const buffer = Buffer.from(await response.arrayBuffer());
     await writeFile(tempPath, buffer, { mode: 0o755 });
     if (spec.kind === "binary") {
-      await chmod(tempPath, 0o755);
+      if (process.platform !== "win32") await chmod(tempPath, 0o755);
       await rename(tempPath, destination);
     } else {
       const extractDir = await mkdtemp(join(tmpdir(), "cocalc-cloudflared-"));
@@ -224,7 +299,7 @@ export async function ensureCloudflaredBinary(): Promise<string> {
         await rm(extractDir, { recursive: true, force: true });
       }
     }
-    await chmod(destination, 0o755);
+    if (process.platform !== "win32") await chmod(destination, 0o755);
     return destination;
   } catch (err) {
     try {
@@ -277,7 +352,7 @@ export async function runSshCheck(
     const timer = setTimeout(() => {
       if (done) return;
       try {
-        child.kill("SIGKILL");
+        terminateChild(child, true);
       } catch {
         // ignore
       }

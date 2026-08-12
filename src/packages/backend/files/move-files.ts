@@ -2,8 +2,7 @@ import { getHome } from "./util";
 import { move, pathExists } from "fs-extra";
 import { stat } from "node:fs/promises";
 import { move_file_variations } from "@cocalc/util/delete-files";
-import { path_split } from "@cocalc/util/misc";
-import { join } from "path";
+import { basename, isAbsolute, join } from "path";
 import getLogger from "@cocalc/backend/logger";
 
 const log = getLogger("move-files");
@@ -18,18 +17,15 @@ export async function move_files(
   log.debug({ paths, dest });
   if (dest == "") {
     dest = HOME;
-  } else if (!dest.startsWith("/")) {
+  } else if (!isAbsolute(dest)) {
     dest = join(HOME, dest);
-  }
-  if (!dest.endsWith("/")) {
-    dest += "/";
   }
   const to_move: { src: string; dest: string }[] = [];
   for (let path of paths) {
-    if (!path.startsWith("/")) {
+    if (!isAbsolute(path)) {
       path = join(HOME, path);
     }
-    const target = dest + path_split(path).tail;
+    const target = join(dest, basename(path));
     log.debug({ path, target });
     await set_deleted(path);
     to_move.push({ src: path, dest: target });

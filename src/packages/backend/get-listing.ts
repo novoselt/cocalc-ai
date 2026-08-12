@@ -24,7 +24,7 @@ import type { Dirent, Stats } from "node:fs";
 import { lstat, opendir, readdir, readlink, stat } from "node:fs/promises";
 import { getLogger } from "./logger";
 import { DirectoryListingEntry } from "@cocalc/util/types";
-import { join } from "path";
+import { isAbsolute, join } from "path";
 
 const logger = getLogger("backend:directory-listing");
 
@@ -37,7 +37,7 @@ const getListing = reuseInFlight(
     hidden: boolean = false,
     { home = HOME, limit }: { home?: string; limit?: number } = {},
   ): Promise<DirectoryListingEntry[]> => {
-    const dir = join(home, path);
+    const dir = isAbsolute(path) ? path : join(home, path);
     logger.debug(dir);
     const files: DirectoryListingEntry[] = [];
     let file: Dirent;

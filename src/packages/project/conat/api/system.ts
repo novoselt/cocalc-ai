@@ -5,7 +5,7 @@ export async function ping() {
 import { handleExecShellCode } from "@cocalc/project/exec_shell_code";
 export { handleExecShellCode as exec };
 
-export { realpath } from "@cocalc/project/browser-websocket/realpath";
+import { realpath as legacyRealpath } from "@cocalc/project/browser-websocket/realpath";
 
 import { version as versionNumber } from "@cocalc/util/smc-version";
 export async function version() {
@@ -13,14 +13,27 @@ export async function version() {
 }
 
 import getListing from "@cocalc/backend/get-listing";
+import {
+  projectRuntimePathForClient,
+  projectRuntimePathForProcess,
+} from "@cocalc/util/project-runtime";
+
+function processPath(path: string): string {
+  return projectRuntimePathForProcess(path) ?? path;
+}
+
+function clientPath(path: string): string {
+  return projectRuntimePathForClient(path) ?? path;
+}
+
 export async function listing({ path, hidden }) {
-  return await getListing(path, hidden);
+  return await getListing(processPath(path), hidden);
 }
 
 import { getClient } from "@cocalc/project/client";
 async function setDeleted(path) {
   const client = getClient();
-  await client.set_deleted(path);
+  await client.set_deleted(clientPath(path));
 }
 
 import { move_files } from "@cocalc/backend/files/move-files";
@@ -31,12 +44,12 @@ export async function moveFiles({
   paths: string[];
   dest: string;
 }) {
-  await move_files(paths, dest, setDeleted);
+  await move_files(paths.map(processPath), processPath(dest), setDeleted);
 }
 
 import { rename_file } from "@cocalc/backend/files/rename-file";
 export async function renameFile({ src, dest }: { src: string; dest: string }) {
-  await rename_file(src, dest, setDeleted);
+  await rename_file(processPath(src), processPath(dest), setDeleted);
 }
 
 import { get_configuration } from "@cocalc/project/configuration";
@@ -44,8 +57,16 @@ export { get_configuration as configuration };
 
 import ensureContainingDirectoryExists from "@cocalc/backend/misc/ensure-containing-directory-exists";
 import { constants as fsConstants } from "node:fs";
-import { access, open, readFile, readdir, stat, writeFile } from "fs/promises";
-import { join } from "node:path";
+import {
+  access,
+  open,
+  readFile,
+  readdir,
+  realpath as fsRealpath,
+  stat,
+  writeFile,
+} from "fs/promises";
+import { isAbsolute, join, posix } from "node:path";
 import type {
   HostRootfsBuildLogResponse,
   HostRootfsBuildStatusResponse,
@@ -64,8 +85,9 @@ export async function writeTextFileToProject({
   path: string;
   content: string;
 }): Promise<void> {
-  await ensureContainingDirectoryExists(path);
-  await writeFile(path, content);
+  const nativePath = processPath(path);
+  await ensureContainingDirectoryExists(nativePath);
+  await writeFile(nativePath, content);
 }
 
 export async function readTextFileFromProject({
@@ -73,7 +95,24 @@ export async function readTextFileFromProject({
 }: {
   path: string;
 }): Promise<string> {
-  return (await readFile(path)).toString();
+  return (await readFile(processPath(path))).toString();
+}
+
+export async function realpath(path: string): Promise<string> {
+  if (!process.env.COCALC_RUNTIME_HOME) {
+    return await legacyRealpath(path);
+  }
+  const processVisiblePath = processPath(path);
+  const fullPath = isAbsolute(processVisiblePath)
+    ? processVisiblePath
+    : join(process.env.HOME ?? "/home/user", processVisiblePath);
+  const resolved = await fsRealpath(fullPath);
+  const visible = clientPath(resolved);
+  if (visible === resolved) return path;
+  const home = posix.resolve(process.env.COCALC_RUNTIME_HOME ?? "/home/user");
+  if (visible !== home && !visible.startsWith(`${home}/`)) return path;
+  if (path.startsWith("/")) return visible;
+  return visible === home ? "" : posix.relative(home, visible);
 }
 
 async function readRootfsBuildTextFile({

@@ -323,6 +323,9 @@ function openUrlIfRequested(url: string) {
   const args = [url];
   if (platform === "darwin") {
     cmd = fs.existsSync("/usr/bin/open") ? "/usr/bin/open" : "open";
+  } else if (platform === "win32") {
+    cmd = process.env.COMSPEC || "cmd.exe";
+    args.unshift("/d", "/s", "/c", "start", "");
   } else {
     cmd = "xdg-open";
   }

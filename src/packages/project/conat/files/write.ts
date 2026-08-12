@@ -20,7 +20,6 @@ import "@cocalc/project/conat/env"; // ensure conat env available
 import ensureContainingDirectoryExists from "@cocalc/backend/misc/ensure-containing-directory-exists";
 import { createWriteStream as fs_createWriteStream } from "fs";
 import { rename } from "fs/promises";
-import { join } from "path";
 import {
   createServer,
   close as closeWriteServer,
@@ -28,12 +27,11 @@ import {
 import { randomId } from "@cocalc/conat/names";
 import { rimraf } from "rimraf";
 import { getIdentity } from "../connection";
+import { projectFilePath } from "./path";
 
 async function createWriteStream(path: string) {
   // console.log("createWriteStream", { path });
-  if (path[0] != "/" && process.env.HOME) {
-    path = join(process.env.HOME, path);
-  }
+  path = projectFilePath(path);
   await ensureContainingDirectoryExists(path);
   const partial = path + `.partialupload-${randomId()}`;
   const stream = fs_createWriteStream(partial);

@@ -5,17 +5,18 @@
  * helpers (ping, auto-start, RPC send) used by CLI command handlers.
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   statSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { createConnection as createNetConnection } from "node:net";
+
+import { applyPrivateMode, cocalcCliCacheDir } from "../../core/platform-paths";
 
 export const DAEMON_CONNECT_TIMEOUT_MS = 3_000;
 export const DAEMON_RPC_TIMEOUT_MS = 30_000;
@@ -57,17 +58,46 @@ export type DaemonResponse = {
   };
 };
 
+function isSeaRuntime(): boolean {
+  try {
+    const sea = require("node:sea") as { isSea?: () => boolean };
+    return typeof sea?.isSea === "function" ? !!sea.isSea() : false;
+  } catch {
+    return false;
+  }
+}
+
+function daemonScriptPath(
+  argv = process.argv,
+  execPath = process.execPath,
+  sea = isSeaRuntime(),
+): string | undefined {
+  if (sea) return undefined;
+  const scriptPath = argv[1];
+  if (!scriptPath || !existsSync(scriptPath)) return undefined;
+  try {
+    if (realpathSync(scriptPath) === realpathSync(execPath)) return undefined;
+  } catch {
+    // The normal JS entrypoint and executable need not share a filesystem.
+  }
+  return scriptPath;
+}
+
 export function currentDaemonFingerprint(
   argv = process.argv,
   execPath = process.execPath,
 ): string {
-  const scriptPath = argv[1];
-  if (scriptPath && existsSync(scriptPath)) {
+  const scriptPath = daemonScriptPath(argv, execPath);
+  if (scriptPath) {
     const resolved = realpathSync(scriptPath);
     const stats = statSync(resolved);
     return `${execPath}:${resolved}:${Math.trunc(stats.mtimeMs)}`;
   }
-  return `${execPath}:no-script`;
+  if (existsSync(execPath)) {
+    const stats = statSync(execPath);
+    return `${execPath}:sea:${stats.size}:${Math.trunc(stats.mtimeMs)}`;
+  }
+  return `${execPath}:sea`;
 }
 
 export function daemonFingerprintMatches(
@@ -77,45 +107,96 @@ export function daemonFingerprintMatches(
   return !!actual && actual === expected;
 }
 
-function daemonRuntimeDir(env = process.env): string {
+function daemonRuntimeDir(
+  env = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    return win32.join(cocalcCliCacheDir({ env, platform }), "runtime");
+  }
   const runtime = env.XDG_RUNTIME_DIR?.trim();
   if (runtime) {
     return join(runtime, "cocalc");
   }
-  const cache = env.XDG_CACHE_HOME?.trim() || join(homedir(), ".cache");
-  return join(cache, "cocalc");
+  return cocalcCliCacheDir({ env, platform });
 }
 
-export function daemonSocketPath(env = process.env): string {
-  const uid =
-    typeof process.getuid === "function" ? String(process.getuid()) : "user";
+function daemonUserToken(
+  env = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32" && typeof process.getuid === "function") {
+    return String(process.getuid());
+  }
+  const identity = [env.USERDOMAIN, env.USERNAME, env.USER, env.HOME]
+    .map((value) => `${value ?? ""}`.trim().toLowerCase())
+    .filter(Boolean)
+    .join("\\");
+  return createHash("sha256")
+    .update(identity || "user")
+    .digest("hex")
+    .slice(0, 16);
+}
+
+export function daemonSocketPath(
+  env = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const uid = daemonUserToken(env, platform);
+  if (platform === "win32") {
+    return `\\\\.\\pipe\\cocalc-cli-${uid}`;
+  }
   return join(daemonRuntimeDir(env), `cli-daemon-${uid}.sock`);
 }
 
-export function daemonPidPath(env = process.env): string {
-  const uid =
-    typeof process.getuid === "function" ? String(process.getuid()) : "user";
-  return join(daemonRuntimeDir(env), `cli-daemon-${uid}.pid`);
+export function daemonPidPath(
+  env = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const uid = daemonUserToken(env, platform);
+  const runtime = daemonRuntimeDir(env, platform);
+  return platform === "win32"
+    ? win32.join(runtime, `cli-daemon-${uid}.pid`)
+    : join(runtime, `cli-daemon-${uid}.pid`);
 }
 
-export function daemonLogPath(env = process.env): string {
-  const uid =
-    typeof process.getuid === "function" ? String(process.getuid()) : "user";
-  return join(daemonRuntimeDir(env), `cli-daemon-${uid}.log`);
+export function daemonLogPath(
+  env = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const uid = daemonUserToken(env, platform);
+  const runtime = daemonRuntimeDir(env, platform);
+  return platform === "win32"
+    ? win32.join(runtime, `cli-daemon-${uid}.log`)
+    : join(runtime, `cli-daemon-${uid}.log`);
+}
+
+export function isWindowsNamedPipe(path: string): boolean {
+  return path.toLowerCase().startsWith("\\\\.\\pipe\\");
 }
 
 export function ensurePrivateDaemonRuntimeDir(path: string): void {
-  const dir = dirname(path);
+  const dir = isWindowsNamedPipe(path)
+    ? dirname(daemonPidPath())
+    : dirname(path);
   mkdirSync(dir, { recursive: true, mode: DAEMON_RUNTIME_DIR_MODE });
-  chmodSync(dir, DAEMON_RUNTIME_DIR_MODE);
+  applyPrivateMode(dir, DAEMON_RUNTIME_DIR_MODE);
 }
 
-function daemonSpawnTarget(): { cmd: string; args: string[] } {
-  const scriptPath = process.argv[1];
-  if (scriptPath && existsSync(scriptPath)) {
-    return { cmd: process.execPath, args: [scriptPath] };
+export function daemonSpawnTarget({
+  argv = process.argv,
+  execPath = process.execPath,
+  sea = isSeaRuntime(),
+}: {
+  argv?: string[];
+  execPath?: string;
+  sea?: boolean;
+} = {}): { cmd: string; args: string[] } {
+  const scriptPath = daemonScriptPath(argv, execPath, sea);
+  if (scriptPath) {
+    return { cmd: execPath, args: [scriptPath] };
   }
-  return { cmd: process.execPath, args: [] };
+  return { cmd: execPath, args: [] };
 }
 
 export function daemonRequestId(): string {

@@ -37,6 +37,28 @@ function supportsTerminalInitFile(command?: string): boolean {
   return typeof command === "string" && command.endsWith("bash");
 }
 
+export function normalizeTerminalCommand(
+  hook: { command?: string; args?: string[] },
+  {
+    platform = process.platform,
+    env = process.env,
+  }: {
+    platform?: NodeJS.Platform;
+    env?: Readonly<Record<string, string | undefined>>;
+  } = {},
+): void {
+  if (platform !== "win32") return;
+  const command = `${hook.command ?? ""}`.trim();
+  const isDefaultBash =
+    command === "" ||
+    ((command === "bash" || command.endsWith("/bash")) &&
+      (hook.args?.length ?? 0) === 0);
+  if (!isDefaultBash) return;
+  hook.command =
+    `${env.COCALC_WINDOWS_TERMINAL_SHELL ?? ""}`.trim() || "powershell.exe";
+  hook.args = ["-NoLogo"];
+}
+
 export function projectScopedCliEnv(): Record<string, string> {
   const env = {
     COCALC_API_URL: conatServer,
@@ -145,6 +167,7 @@ async function preHook(hook: {
   args?: string[];
   options: Options;
 }) {
+  normalizeTerminalCommand(hook);
   const { command, args, options } = hook;
   applyTerminalRuntimeCwd(options);
   await requestProjectSiteUrl();

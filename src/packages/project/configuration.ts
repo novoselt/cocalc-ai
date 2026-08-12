@@ -18,7 +18,7 @@ import {
 } from "@cocalc/comm/project-configuration";
 import { syntax2tool, Tool as FormatTool } from "@cocalc/util/code-formatter";
 import { copy } from "@cocalc/util/misc";
-import { basename, isAbsolute, resolve } from "path";
+import { basename, delimiter, join, posix } from "path";
 import { exec as child_process_exec } from "child_process";
 import { realpath, stat } from "fs/promises";
 import { promisify } from "util";
@@ -33,18 +33,20 @@ const logger = getLogger("configuration");
 function construct_path(): string {
   const env = process.env;
   // we can safely assume that PATH is defined
-  const entries = env.PATH!.split(":");
+  const entries = env.PATH!.split(delimiter);
   const home = env.HOME ?? "/home/user";
   const xdgBinHome = env.XDG_BIN_HOME?.trim();
   if (xdgBinHome) {
     entries.unshift(xdgBinHome);
   }
   if (process.platform === "darwin") {
-    entries.unshift(`${home}/Library/Application Support/cocalc-plus/bin`);
+    entries.unshift(
+      join(home, "Library", "Application Support", "cocalc-plus", "bin"),
+    );
   }
-  entries.unshift(`${home}/.local/bin`);
-  entries.unshift(`${home}/bin`);
-  return entries.join(":");
+  entries.unshift(join(home, ".local", "bin"));
+  entries.unshift(join(home, "bin"));
+  return entries.join(delimiter);
 }
 
 const PATH = construct_path();
@@ -284,12 +286,12 @@ export async function get_homeDirectory(): Promise<string | null> {
   // clients must continue to address files through the canonical project home.
   const runtimeHome = `${process.env.COCALC_RUNTIME_HOME ?? ""}`.trim();
   if (runtimeHome) {
-    if (!isAbsolute(runtimeHome)) {
+    if (!posix.isAbsolute(runtimeHome)) {
       throw new Error(
         `COCALC_RUNTIME_HOME must be an absolute path; got '${runtimeHome}'`,
       );
     }
-    return resolve(runtimeHome);
+    return posix.resolve(runtimeHome);
   }
   // realpath is necessary, because in some circumstances the home dir is a symlink
   const home = process.env.HOME;

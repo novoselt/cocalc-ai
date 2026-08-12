@@ -91,13 +91,22 @@ export async function localPathFileserver({
     project_id,
     fs: async (subject: string) => {
       const project_id = getProjectId(subject);
-      return new SandboxedFilesystem(await getPath(project_id), {
+      const projectPath = await getPath(project_id);
+      return new SandboxedFilesystem(projectPath, {
         unsafeMode,
         host: project_id,
         // In unsafe mode (e.g. lite / local dev), default to true absolute
         // path resolution from filesystem root unless explicitly overridden.
-        rootfs: rootfs ?? (unsafeMode ? "/" : undefined),
-        homeAliases,
+        rootfs:
+          rootfs ??
+          (unsafeMode
+            ? process.platform === "win32"
+              ? projectPath
+              : "/"
+            : undefined),
+        homeAliases:
+          homeAliases ??
+          (process.platform === "win32" ? ["/home/user"] : undefined),
         allowSafeModeHardlink,
         allowSafeModeSymlink,
         disableOpenAt2,

@@ -19,18 +19,15 @@ DEVELOPMENT:
 import "@cocalc/project/conat/env"; // ensure conat env available
 
 import { createReadStream as fs_createReadStream } from "fs";
-import { join } from "path";
 import {
   createServer,
   close as closeReadServer,
 } from "@cocalc/conat/files/read";
 import { getIdentity } from "../connection";
+import { projectFilePath } from "./path";
 
 function createReadStream(path: string) {
-  if (path[0] != "/" && process.env.HOME) {
-    path = join(process.env.HOME, path);
-  }
-  return fs_createReadStream(path);
+  return fs_createReadStream(projectFilePath(path));
 }
 
 // the project should call this on startup:
