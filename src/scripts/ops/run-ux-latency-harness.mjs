@@ -30,6 +30,24 @@ const NETWORK_PROFILES = {
     uploadThroughput: (8 * 1_000_000) / 8,
     connectionType: "wifi",
   },
+  "5mbps": {
+    latency: 50,
+    downloadThroughput: (5 * 1_000_000) / 8,
+    uploadThroughput: (2 * 1_000_000) / 8,
+    connectionType: "wifi",
+  },
+  "10mbps": {
+    latency: 50,
+    downloadThroughput: (10 * 1_000_000) / 8,
+    uploadThroughput: (4 * 1_000_000) / 8,
+    connectionType: "wifi",
+  },
+  "10mbps-high-latency": {
+    latency: 300,
+    downloadThroughput: (10 * 1_000_000) / 8,
+    uploadThroughput: (4 * 1_000_000) / 8,
+    connectionType: "wifi",
+  },
   "slow-4g": {
     latency: 150,
     downloadThroughput: (1.6 * 1_000_000) / 8,
@@ -68,7 +86,7 @@ function usage(exitCode = 0) {
     --project <uuid> [--browser <id>] [--iterations 3] [--include-codex]
 
 Direct Chromium qualification options:
-  --network <native|fast-4g|slow-4g|1mbps|3g>
+  --network <native|fast-4g|5mbps|10mbps|10mbps-high-latency|slow-4g|1mbps|3g>
   --cpu-throttle <1-20>  --cache <warm|cold>  --mobile
   --startup-only [--startup-target <projects|project|file|jupyter|terminal|account|docs|admin>]
 
