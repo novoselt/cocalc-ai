@@ -841,7 +841,14 @@
                     <span>(Level A 2.1 and 2.2)</span>
                   </th>
                   <td>Supports</td>
-                  <td></td>
+                  <td>
+                    Reviewed standard controls activate on the click up-event.
+                    Pointer-down handlers found in source initiate dragging or
+                    resizing, preserve editor focus or selection, or perform
+                    reversible navigation or selection. No destructive or
+                    otherwise irreversible action executed solely on the pointer
+                    down-event was identified.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -1171,8 +1178,13 @@
                   </th>
                   <td>Partially supports</td>
                   <td>
-                    Main elements do satisfy the contrast requirements, some
-                    secondary ones may still be too low.
+                    Automated testing of the 31 sampled page states did not
+                    identify text-contrast failures. Source review nevertheless
+                    found lower-contrast secondary text in authenticated states.
+                    For example, project-not-running quota and process-status
+                    displays can render <code>#c0c0c0</code> text on a white
+                    background, a contrast ratio of approximately 1.82:1.
+                    Automated sampling did not exercise every dynamic state.
                   </td>
                 </tr>
                 <tr>
@@ -1204,8 +1216,12 @@
                   </th>
                   <td>Supports</td>
                   <td>
-                    “text is used to convey information rather than images of
-                    text”
+                    Interface labels and instructions are rendered as text.
+                    First-party feature pages also use screenshots containing
+                    interface text to illustrate the visual product experience;
+                    these contain substantial visual content and are accompanied
+                    by HTML headings and descriptions. Logos retain their
+                    essential visual form.
                   </td>
                 </tr>
                 <tr>
@@ -1404,10 +1420,13 @@
                   </th>
                   <td>Partially supports</td>
                   <td>
-                    “The human language of each passage or phrase in the content
-                    can be programmatically determined” It is possible to have
-                    all elements in English. If the user pick an interface
-                    translation, some elements may not be marked appropriately.
+                    The sampled pages were English, and automated checks do not
+                    evaluate language changes within content. Source review
+                    found no systematic use of <code>lang</code> attributes on
+                    localized interface phrases. A translated interface can
+                    combine localized strings with untranslated English while
+                    the document continues to declare English, so language
+                    changes are not programmatically identified.
                   </td>
                 </tr>
                 <tr>

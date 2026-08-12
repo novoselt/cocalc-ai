@@ -1035,6 +1035,20 @@ describe("PublicApp", () => {
         /without changing those global help mechanisms/,
       ),
     ).not.toBeNull();
+    const pointerCancellationRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.5\.2 Pointer Cancellation/,
+      })
+      .closest("tr");
+    expect(pointerCancellationRow).not.toBeNull();
+    expect(
+      within(pointerCancellationRow!).getByText("Supports"),
+    ).not.toBeNull();
+    expect(
+      within(pointerCancellationRow!).getByText(
+        /No destructive or otherwise irreversible action/,
+      ),
+    ).not.toBeNull();
     const labelInNameRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.5\.3 Label in Name/,
@@ -1065,6 +1079,39 @@ describe("PublicApp", () => {
       within(identifyInputPurposeRow!).getByText(
         /Profile display-name field disables autocomplete/,
       ),
+    ).not.toBeNull();
+    const contrastRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.3 Contrast \(Minimum\)/,
+      })
+      .closest("tr");
+    expect(contrastRow).not.toBeNull();
+    expect(within(contrastRow!).getByText("Partially supports")).not.toBeNull();
+    expect(within(contrastRow!).getByText("#c0c0c0")).not.toBeNull();
+    expect(
+      within(contrastRow!).getByText(/approximately 1\.82:1/),
+    ).not.toBeNull();
+    const imagesOfTextRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.4\.5 Images of Text/,
+      })
+      .closest("tr");
+    expect(imagesOfTextRow).not.toBeNull();
+    expect(within(imagesOfTextRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(imagesOfTextRow!).getByText(/substantial visual content/),
+    ).not.toBeNull();
+    const languageOfPartsRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /3\.1\.2 Language of Parts/,
+      })
+      .closest("tr");
+    expect(languageOfPartsRow).not.toBeNull();
+    expect(
+      within(languageOfPartsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(languageOfPartsRow!).getByText(/no systematic use of/),
     ).not.toBeNull();
     const errorIdentificationRow = within(tables[1])
       .getByRole("rowheader", {
