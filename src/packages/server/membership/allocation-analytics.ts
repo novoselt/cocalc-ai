@@ -27,6 +27,7 @@ export type MembershipAllocationSourceKind =
   | "purchase"
   | "refund"
   | "trial"
+  | "plan-change"
   | "plan-change-credit"
   | "assignment"
   | "correction"

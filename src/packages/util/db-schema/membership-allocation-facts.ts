@@ -54,10 +54,10 @@ Table({
     source_kind: {
       type: "string",
       pg_type: "VARCHAR(32)",
-      desc: "Source operation such as purchase, refund, trial, plan-change-credit, assignment, correction, or external-import.",
+      desc: "Source operation such as purchase, refund, trial, plan-change, plan-change-credit, assignment, correction, or external-import.",
       not_null: true,
       pg_check:
-        "CHECK (source_kind IN ('purchase','refund','trial','plan-change-credit','assignment','correction','external-import'))",
+        "CHECK (source_kind IN ('purchase','refund','trial','plan-change','plan-change-credit','assignment','correction','external-import'))",
     },
     membership_class: {
       type: "string",
