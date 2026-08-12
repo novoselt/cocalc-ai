@@ -25,3 +25,8 @@ import "../frame-editors/register";
 
 // Unknown files
 import "./unknown/register";
+
+// CodeMirror and its frame editor must initialize together. Deferring this
+// import can leave shared frame descriptions partially initialized when a
+// code editor chunk is evaluated.
+import "@cocalc/frontend/codemirror/init";

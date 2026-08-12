@@ -8,6 +8,8 @@ Register the code editor
 */
 
 import { file_associations } from "@cocalc/frontend/file-associations";
+import { Editor } from "./editor";
+import { Actions } from "./actions";
 import { register_file_editor } from "../frame-tree/register";
 
 const extensions: string[] = [];
@@ -19,7 +21,6 @@ for (const ext in file_associations) {
 
 register_file_editor({
   ext: extensions,
-  codemirror: true,
-  editor: async () => await import("./editor"),
-  actions: async () => await import("./actions"),
+  component: Editor,
+  Actions,
 });
