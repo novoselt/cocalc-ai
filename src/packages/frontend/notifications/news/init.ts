@@ -241,6 +241,8 @@ function markSystemNewsSeen(id: string, seenAt: number): void {
 }
 
 export class NewsActions extends Actions<NewsState> {
+  private refreshInFlight?: Promise<void>;
+
   public getStore(): NewsStore {
     return store;
   }
@@ -272,6 +274,17 @@ export class NewsActions extends Actions<NewsState> {
   }
 
   public refresh = async (): Promise<void> => {
+    if (this.refreshInFlight != null) return await this.refreshInFlight;
+    const refresh = this.refreshOnce().finally(() => {
+      if (this.refreshInFlight === refresh) {
+        this.refreshInFlight = undefined;
+      }
+    });
+    this.refreshInFlight = refresh;
+    return await refresh;
+  };
+
+  private refreshOnce = async (): Promise<void> => {
     if (isExamMode()) {
       closeSystemNewsSeenState();
       this.setState({

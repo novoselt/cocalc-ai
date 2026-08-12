@@ -107,6 +107,34 @@ const logger = getLogger("server:conat:api");
 
 let activeApiRequests = 0;
 const activeApiRequestsByAccount = new Map<string, number>();
+type ActiveAccountApiRequest = { name: string; startedAt: number };
+const activeApiRequestDetailsByAccount = new Map<
+  string,
+  Set<ActiveAccountApiRequest>
+>();
+
+function summarizeActiveAccountApiRequests(account_id?: string): {
+  active_methods?: string;
+  oldest_ms?: number;
+} {
+  if (!account_id) return {};
+  const requests = activeApiRequestDetailsByAccount.get(account_id);
+  if (!requests?.size) return {};
+  const counts = new Map<string, number>();
+  let oldestAt = Date.now();
+  for (const request of requests) {
+    counts.set(request.name, (counts.get(request.name) ?? 0) + 1);
+    oldestAt = Math.min(oldestAt, request.startedAt);
+  }
+  return {
+    active_methods: [...counts]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 8)
+      .map(([name, count]) => `${name}=${count}`)
+      .join(","),
+    oldest_ms: Math.max(0, Date.now() - oldestAt),
+  };
+}
 
 export function initAPI() {
   mainLoop();
@@ -183,7 +211,11 @@ async function handleMessage({ mesg }) {
     key: request?.name,
   });
   if (!admission.allowed) {
-    const accountLimited = admission.source === "hub-api-account";
+    const accountLimited = admission.source.startsWith("hub-api-account");
+    const activeSummary = summarizeActiveAccountApiRequests(account_id);
+    const recordedReason = activeSummary.active_methods
+      ? `${admission.reason}; active=${activeSummary.active_methods}; oldest_ms=${activeSummary.oldest_ms}`
+      : admission.reason;
     void recordServiceAdmissionDenialLocal({
       surface: "hub-conat-api",
       source: admission.source,
@@ -192,7 +224,7 @@ async function handleMessage({ mesg }) {
         ? (activeAccountApiRequests ?? 0)
         : activeApiRequests,
       maximum: admission.maximum,
-      reason: admission.reason,
+      reason: recordedReason,
       subject: mesg.subject,
       account_id,
       key: request?.name,
@@ -204,6 +236,7 @@ async function handleMessage({ mesg }) {
       max: admission.maximum,
       name: request?.name,
       source: admission.source,
+      ...activeSummary,
     });
     mesg.respond(null, {
       noThrow: true,
@@ -225,8 +258,20 @@ async function handleMessage({ mesg }) {
     key: request?.name,
   });
   activeApiRequests += 1;
+  const activeRequest: ActiveAccountApiRequest | undefined = account_id
+    ? {
+        name: `${request?.name ?? "unknown"}`,
+        startedAt: Date.now(),
+      }
+    : undefined;
   if (account_id) {
     activeApiRequestsByAccount.set(account_id, activeAccountApiRequests! + 1);
+    let requests = activeApiRequestDetailsByAccount.get(account_id);
+    if (!requests) {
+      requests = new Set();
+      activeApiRequestDetailsByAccount.set(account_id, requests);
+    }
+    requests.add(activeRequest!);
   }
   void handleApiRequest({ request, mesg }).finally(() => {
     activeApiRequests -= 1;
@@ -237,6 +282,9 @@ async function handleMessage({ mesg }) {
       } else {
         activeApiRequestsByAccount.set(account_id, next);
       }
+      const requests = activeApiRequestDetailsByAccount.get(account_id);
+      if (activeRequest) requests?.delete(activeRequest);
+      if (!requests?.size) activeApiRequestDetailsByAccount.delete(account_id);
     }
   });
 }

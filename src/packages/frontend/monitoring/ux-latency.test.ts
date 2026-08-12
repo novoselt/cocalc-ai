@@ -83,4 +83,34 @@ describe("UX latency configuration", () => {
       event: expect.objectContaining({ metric: "test_ready" }),
     });
   });
+
+  it("serializes telemetry instead of flooding a slow hub", async () => {
+    let releaseFirst!: () => void;
+    recordUxLatencyEventMock
+      .mockImplementationOnce(
+        () => new Promise<void>((resolve) => (releaseFirst = resolve)),
+      )
+      .mockResolvedValue(undefined);
+    configureUxLatency({ telemetry_enabled: true });
+
+    recordUxLatencyEvent({
+      event_type: "test",
+      metric: "first",
+      duration_ms: 1,
+    });
+    recordUxLatencyEvent({
+      event_type: "test",
+      metric: "second",
+      duration_ms: 2,
+    });
+
+    expect(recordUxLatencyEventMock).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(recordUxLatencyEventMock).toHaveBeenCalledTimes(2);
+    expect(recordUxLatencyEventMock).toHaveBeenLastCalledWith({
+      event: expect.objectContaining({ metric: "second" }),
+    });
+  });
 });
