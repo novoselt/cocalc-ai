@@ -21,13 +21,19 @@ import { initCookieConsent } from "./init";
 import { isBannerReady } from "./state";
 
 it("centers the consent dialog and becomes ready after initialization", async () => {
+  Object.defineProperty(navigator, "webdriver", {
+    configurable: true,
+    value: true,
+  });
   initCookieConsent({ enabled: true });
 
   expect(run).toHaveBeenCalledTimes(1);
   const config = run.mock.calls[0][0] as {
     guiOptions: { consentModal: { position: string } };
+    hideFromBots: boolean;
   };
   expect(config.guiOptions.consentModal.position).toBe("middle center");
+  expect(config.hideFromBots).toBe(false);
   expect(isBannerReady()).toBe(false);
 
   resolveRun?.();
