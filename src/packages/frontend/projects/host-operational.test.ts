@@ -6,11 +6,47 @@
 import {
   getHostRecoveryDisplay,
   getProjectLifecycleView,
+  hostUnavailableBannerDelay,
   isHostRecoveryTransient,
   normalizeProjectStateForDisplay,
 } from "./host-operational";
 
 describe("projects host operational display state", () => {
+  it("suppresses brief unconfirmed project-host disconnects", () => {
+    const now = new Date("2026-08-12T19:00:05.000Z").getTime();
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: true,
+        recoveryActive: false,
+        unavailableSince: "2026-08-12T19:00:03.000Z",
+        now,
+      }),
+    ).toBe(3_000);
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: true,
+        recoveryActive: false,
+        unavailableSince: "2026-08-12T19:00:00.000Z",
+        now,
+      }),
+    ).toBe(0);
+  });
+
+  it("shows confirmed recovery immediately and hides on reconnection", () => {
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: true,
+        recoveryActive: true,
+      }),
+    ).toBe(0);
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: false,
+        recoveryActive: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("describes automatic spot recovery with an alternate machine type", () => {
     expect(
       getHostRecoveryDisplay({

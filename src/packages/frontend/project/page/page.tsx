@@ -81,6 +81,7 @@ import {
   evaluateHostOperational,
   getHostRecoveryDisplay,
   getProjectLifecycleView,
+  hostUnavailableBannerDelay,
   hostLabel,
 } from "@cocalc/frontend/projects/host-operational";
 import { projectThemeColor } from "@cocalc/frontend/projects/theme";
@@ -244,7 +245,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     startLro: startLroRecord,
   });
   const moveStatusVisible = shouldRenderMoveStatus(moveLro, moveReopenRequired);
-  const hostUnavailable =
+  const hostUnavailableCandidate =
     !!host_id &&
     (hostOperational.state === "unavailable" ||
       (projectHostConnection.observed && !projectHostConnected)) &&
@@ -265,6 +266,42 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     hostOperational.reason ?? "Assigned host is unavailable.";
   const assignedHostLabel = hostLabel(hostInfo, host_id);
   const [hostRecoveryNow, setHostRecoveryNow] = useState(Date.now());
+  const hostRecovery = useMemo(
+    () =>
+      getHostRecoveryDisplay(
+        hostInfo,
+        hostRecoveryNow,
+        projectHostConnection.unavailableSince,
+      ),
+    [hostInfo, hostRecoveryNow, projectHostConnection.unavailableSince],
+  );
+  const [hostUnavailableConfirmed, setHostUnavailableConfirmed] =
+    useState(false);
+  useEffect(() => {
+    const delay = hostUnavailableBannerDelay({
+      candidate: hostUnavailableCandidate,
+      recoveryActive: hostRecovery.active,
+      unavailableSince: projectHostConnection.unavailableSince,
+    });
+    if (delay == null) {
+      setHostUnavailableConfirmed(false);
+      return;
+    }
+    if (delay === 0) {
+      setHostUnavailableConfirmed(true);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setHostUnavailableConfirmed(true),
+      delay,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    hostRecovery.active,
+    hostUnavailableCandidate,
+    projectHostConnection.unavailableSince,
+  ]);
+  const hostUnavailable = hostUnavailableCandidate && hostUnavailableConfirmed;
   useEffect(() => {
     if (!hostUnavailable) return;
     const refresh = () =>
@@ -277,15 +314,6 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     }, 15_000);
     return () => window.clearInterval(timer);
   }, [hostUnavailable, host_id]);
-  const hostRecovery = useMemo(
-    () =>
-      getHostRecoveryDisplay(
-        hostInfo,
-        hostRecoveryNow,
-        projectHostConnection.unavailableSince,
-      ),
-    [hostInfo, hostRecoveryNow, projectHostConnection.unavailableSince],
-  );
   const fullscreen = useTypedRedux("page", "fullscreen");
   const active_top_tab = useTypedRedux("page", "active_top_tab");
   const modal = useTypedRedux({ project_id }, "modal");

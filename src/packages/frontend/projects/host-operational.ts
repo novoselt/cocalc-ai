@@ -2,6 +2,7 @@ import { COMPUTE_STATES } from "@cocalc/util/compute-states";
 
 const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_RECOVERY_ESTIMATE_MS = 3 * 60 * 1000;
+export const HOST_UNAVAILABLE_BANNER_GRACE_MS = 5_000;
 
 type HostInfoLike = {
   get?: (key: string) => any;
@@ -54,6 +55,26 @@ function futureTimestamp(value: unknown, now = Date.now()): number | undefined {
 function timestamp(value: unknown): number | undefined {
   const parsed = Date.parse(`${value ?? ""}`);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function hostUnavailableBannerDelay({
+  candidate,
+  recoveryActive,
+  unavailableSince,
+  now = Date.now(),
+  graceMs = HOST_UNAVAILABLE_BANNER_GRACE_MS,
+}: {
+  candidate: boolean;
+  recoveryActive: boolean;
+  unavailableSince?: string;
+  now?: number;
+  graceMs?: number;
+}): number | undefined {
+  if (!candidate) return;
+  if (recoveryActive) return 0;
+  const unavailableAt = timestamp(unavailableSince);
+  const elapsed = unavailableAt == null ? 0 : Math.max(0, now - unavailableAt);
+  return Math.max(0, graceMs - elapsed);
 }
 
 export function getHostRecoveryDisplay(
