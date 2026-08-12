@@ -4,6 +4,20 @@ import { posix } from "node:path";
 
 export const MAX_PATH_LENGTH = 4000;
 
+export function isNormalizedStoragePath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  // Storage paths are slash-delimited logical paths, but their final
+  // components are also used as SQLite filenames. A backslash is a valid
+  // filename character on Unix and part of existing persistence identities;
+  // on Windows it is a native path separator and must be rejected.
+  return (
+    path === posix.normalize(path) &&
+    (platform !== "win32" || !path.includes("\\"))
+  );
+}
+
 export function getUserId(subject: string, service = SERVICE): string {
   if (
     subject.startsWith(`${service}.account-`) ||
@@ -51,9 +65,7 @@ export function assertHasWritePermission({
   path: string;
   service?: string;
 }) {
-  // Persistence paths are protocol identifiers, not host filesystem paths.
-  // Keep their normalization stable when clients run natively on Windows.
-  if (path.includes("\\") || path != posix.normalize(path)) {
+  if (!isNormalizedStoragePath(path)) {
     throw Error(`permission denied: path '${path}' is not normalized`);
   }
   if (path.length > MAX_PATH_LENGTH) {
