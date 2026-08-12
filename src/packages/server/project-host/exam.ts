@@ -538,6 +538,23 @@ function examDnsRoute(
   return { type: "CNAME", target: `${tunnelId}.cfargotunnel.com` };
 }
 
+async function ensureExamPublicIngress({
+  host,
+  route,
+  ensureDirectIngress = async (host) => {
+    const { ensureDirectCloudflareIngressForHost } =
+      await import("@cocalc/server/cloud/public-route");
+    await ensureDirectCloudflareIngressForHost(host);
+  },
+}: {
+  host: ExamHostRow;
+  route: ReturnType<typeof examDnsRoute>;
+  ensureDirectIngress?: (host: ExamHostRow) => Promise<void>;
+}): Promise<void> {
+  if (route.type !== "A") return;
+  await ensureDirectIngress(host);
+}
+
 function ownerAccountId(host: ExamHostRow): string {
   const owner = `${
     host.metadata?.owner ?? host.metadata?.owner_account_id ?? ""
@@ -836,6 +853,7 @@ async function ensureExamDns({
   config: HostExamConfig;
 }): Promise<HostExamConfig> {
   const route = examDnsRoute(host);
+  await ensureExamPublicIngress({ host, route });
   const { record_id } =
     route.type === "A"
       ? await ensureProxiedAddressDns({
@@ -1621,6 +1639,7 @@ export const __test__ = {
   ensureSchema,
   examHostnameForHost,
   examDnsRoute,
+  ensureExamPublicIngress,
   ensureExamRootfsCached,
   hashToken,
   normalizeAdmissionToken,

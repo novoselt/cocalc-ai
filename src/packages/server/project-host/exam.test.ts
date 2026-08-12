@@ -160,6 +160,41 @@ describe("project-host exam configuration", () => {
     ).toThrow("active direct route or Cloudflare tunnel");
   });
 
+  it("repairs direct HTTPS ingress while reconciling exam DNS", async () => {
+    const host = {
+      id: "00000000-1000-4000-8000-000000000001",
+      metadata: {
+        public_route: { active_mode: "cloudflare-proxy" },
+        runtime: { public_ip: "34.0.129.201" },
+      },
+    };
+    const ensureDirectIngress = jest.fn(async () => {});
+    await __test__.ensureExamPublicIngress({
+      host,
+      route: __test__.examDnsRoute(host),
+      ensureDirectIngress,
+    });
+    expect(ensureDirectIngress).toHaveBeenCalledWith(host);
+  });
+
+  it("does not add direct ingress to tunnel-routed exam hosts", async () => {
+    const host = {
+      id: "00000000-1000-4000-8000-000000000001",
+      metadata: {
+        cloudflare_tunnel: {
+          id: "00000000-2000-4000-8000-000000000002",
+        },
+      },
+    };
+    const ensureDirectIngress = jest.fn(async () => {});
+    await __test__.ensureExamPublicIngress({
+      host,
+      route: __test__.examDnsRoute(host),
+      ensureDirectIngress,
+    });
+    expect(ensureDirectIngress).not.toHaveBeenCalled();
+  });
+
   it("keeps terminal access disabled unless explicitly enabled", () => {
     const base = {
       enabled: true,
