@@ -542,6 +542,11 @@ async function refundMembershipPackage({
       client,
     });
     await markPurchaseRefunded({ client, purchase, refundPurchaseId });
+    await recordMembershipAllocationRefund({
+      original_purchase_id: purchase.id,
+      refund_purchase_id: refundPurchaseId,
+      client,
+    });
     await client.query("COMMIT");
     await refreshAccountBalanceAndPublishBestEffort({
       account_id: purchase.account_id,
