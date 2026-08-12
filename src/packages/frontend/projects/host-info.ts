@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import type { Map as ImmutableMap } from "immutable";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
 
 export function isPublicDirectoryShareHost(
   host_id?: string,
@@ -47,6 +48,27 @@ export function useHostInfo(
     redux.getActions("projects")?.ensure_host_info(host_id);
   }, [enabled, host_id, publicDirectoryShareHost]);
   return hostInfo;
+}
+
+export function useProjectHostConnected(host_id?: string): boolean {
+  const client = webapp_client.conat_client;
+  const [connected, setConnected] = useState(() =>
+    client?.isProjectHostConnected?.(host_id),
+  );
+  useEffect(() => {
+    const update = (changedHostId?: string) => {
+      if (changedHostId != null && changedHostId !== host_id) return;
+      setConnected(!!client?.isProjectHostConnected?.(host_id));
+    };
+    update();
+    client?.on?.("project-host-connected", update);
+    client?.on?.("project-host-disconnected", update);
+    return () => {
+      client?.removeListener?.("project-host-connected", update);
+      client?.removeListener?.("project-host-disconnected", update);
+    };
+  }, [client, host_id]);
+  return connected;
 }
 
 export function getHostName(host_id?: string): string | undefined {

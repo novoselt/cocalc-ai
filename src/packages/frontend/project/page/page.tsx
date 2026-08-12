@@ -14,6 +14,7 @@ import {
   Space,
   Tag,
   Typography,
+  Progress,
 } from "antd";
 import {
   React,
@@ -27,7 +28,7 @@ import {
   useState,
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
-import { Icon, Loading } from "@cocalc/frontend/components";
+import { Icon, Loading, TimeAgo } from "@cocalc/frontend/components";
 import { useAppContext } from "@cocalc/frontend/app/context";
 import {
   FrameContext,
@@ -73,7 +74,10 @@ import {
 } from "./activity-bar-storage";
 import { throttle } from "lodash";
 import { StartButton } from "@cocalc/frontend/project/start-button";
-import { useHostInfo } from "@cocalc/frontend/projects/host-info";
+import {
+  useHostInfo,
+  useProjectHostConnected,
+} from "@cocalc/frontend/projects/host-info";
 import {
   evaluateHostOperational,
   getHostRecoveryDisplay,
@@ -216,6 +220,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const hostInfo = useHostInfo(host_id, {
     enabled: !props.publicDirectoryShare,
   });
+  const projectHostConnected = useProjectHostConnected(host_id);
   const hostOperational = useMemo(
     () => evaluateHostOperational(hostInfo),
     [hostInfo],
@@ -238,7 +243,10 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     startLro: startLroRecord,
   });
   const moveStatusVisible = shouldRenderMoveStatus(moveLro, moveReopenRequired);
-  const hostUnavailable = !!host_id && hostOperational.state === "unavailable";
+  const hostUnavailable =
+    !!host_id &&
+    hostOperational.state === "unavailable" &&
+    !projectHostConnected;
   const lifecycle = useMemo(
     () =>
       getProjectLifecycleView({
@@ -254,9 +262,19 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const hostUnavailableReason =
     hostOperational.reason ?? "Assigned host is unavailable.";
   const assignedHostLabel = hostLabel(hostInfo, host_id);
+  const [hostRecoveryNow, setHostRecoveryNow] = useState(Date.now());
+  useEffect(() => {
+    if (!hostUnavailable) return;
+    setHostRecoveryNow(Date.now());
+    const timer = window.setInterval(
+      () => setHostRecoveryNow(Date.now()),
+      10_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [hostUnavailable]);
   const hostRecovery = useMemo(
-    () => getHostRecoveryDisplay(hostInfo),
-    [hostInfo],
+    () => getHostRecoveryDisplay(hostInfo, hostRecoveryNow),
+    [hostInfo, hostRecoveryNow],
   );
   const fullscreen = useTypedRedux("page", "fullscreen");
   const active_top_tab = useTypedRedux("page", "active_top_tab");
@@ -921,11 +939,9 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
             <span>
               {hostRecovery.active ? (
                 <>
-                  {hostRecovery.description} Expected recovery is within about{" "}
-                  {hostRecovery.etaMinutes ?? 2} minute
-                  {(hostRecovery.etaMinutes ?? 2) === 1 ? "" : "s"}. Saved
-                  project data remains safe; file, terminal, and notebook access
-                  resumes when the host reconnects.
+                  {hostRecovery.description} {hostRecovery.timingDescription}{" "}
+                  Saved project data remains safe; file, terminal, and notebook
+                  access resumes when the host reconnects.
                 </>
               ) : (
                 <>
@@ -936,6 +952,26 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
                 </>
               )}
             </span>
+            {hostRecovery.startedAt ? (
+              <span>
+                Offline since{" "}
+                {new Date(hostRecovery.startedAt).toLocaleString()} ({""}
+                <TimeAgo
+                  date={new Date(hostRecovery.startedAt)}
+                  live
+                  click_to_toggle={false}
+                />
+                ).
+              </span>
+            ) : null}
+            {hostRecovery.progressPercent != null ? (
+              <Progress
+                percent={hostRecovery.progressPercent}
+                size="small"
+                status="active"
+                style={{ minWidth: 180, maxWidth: 300 }}
+              />
+            ) : null}
             {!hostRecovery.active ? (
               <Button
                 size="small"

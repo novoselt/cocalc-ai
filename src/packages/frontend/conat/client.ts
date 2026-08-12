@@ -1182,6 +1182,17 @@ export class ConatClient extends EventEmitter {
     );
   };
 
+  public isProjectHostConnected = (host_id?: string): boolean => {
+    if (!host_id) return false;
+    const state = this.findRoutedHubClientForHost(host_id);
+    const error = `${state?.client?.info?.user?.error ?? ""}`.trim();
+    return !!(
+      state?.client?.conn?.connected &&
+      state.client.info?.user &&
+      !error
+    );
+  };
+
   private getHostRoutingInfo(host_id: string): HostRoutingInfo | undefined {
     const hostInfo = this.getHostInfo(host_id);
     const routedState = this.findRoutedHubClientForHost(host_id);
@@ -2697,7 +2708,11 @@ export class ConatClient extends EventEmitter {
         host_id_from_info: info?.user?.host_id,
         error: error || undefined,
       });
-      if (!error || !this.isProjectHostAuthError({ message: error })) {
+      if (!error) {
+        this.emit("project-host-connected", host_id);
+        return;
+      }
+      if (!this.isProjectHostAuthError({ message: error })) {
         return;
       }
       console.warn(`routed host sign-in auth failure ${host_id}`, {
@@ -2720,6 +2735,7 @@ export class ConatClient extends EventEmitter {
         host_session_id: state.host_session_id,
         public_directory_share_id: state.public_directory_share_id,
       });
+      this.emit("project-host-disconnected", host_id);
       this.scheduleRoutedHostReconnect({ routing_key, state, project_id });
     });
     state.client.conn.on("connect_error", (err) => {

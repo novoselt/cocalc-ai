@@ -26,7 +26,29 @@ describe("projects host operational display state", () => {
     ).toMatchObject({
       active: true,
       title: "Project host is restarting on alternate Spot capacity",
-      etaMinutes: 2,
+      etaMinutes: 3,
+    });
+  });
+
+  it("shows elapsed recovery progress using host history", () => {
+    expect(
+      getHostRecoveryDisplay(
+        {
+          desired_state: "running",
+          desired_pricing_model: "spot",
+          effective_pricing_model: "spot",
+          recovery_phase: "retrying_spot",
+          unavailable_since: "2026-08-12T11:59:00.000Z",
+          recovery_duration_estimate_ms: 4 * 60_000,
+          spot_recovery_state: { phase: "retrying_spot" },
+        },
+        new Date("2026-08-12T12:00:00.000Z").getTime(),
+      ),
+    ).toMatchObject({
+      active: true,
+      startedAt: "2026-08-12T11:59:00.000Z",
+      progressPercent: 25,
+      timingDescription: expect.stringContaining("3 minutes"),
     });
   });
 

@@ -19,6 +19,9 @@ export type HostRecoveryDisplay = {
   title?: string;
   description?: string;
   etaMinutes?: number;
+  startedAt?: string;
+  progressPercent?: number;
+  timingDescription?: string;
 };
 
 function read(hostInfo: HostInfoLike | undefined, key: string): any {
@@ -43,15 +46,19 @@ function normalizeStatus(value: unknown): string | undefined {
   return status === "active" ? "running" : status;
 }
 
-function futureTimestamp(value: unknown): number | undefined {
+function futureTimestamp(value: unknown, now = Date.now()): number | undefined {
   const timestamp = Date.parse(`${value ?? ""}`);
-  return Number.isFinite(timestamp) && timestamp > Date.now()
-    ? timestamp
-    : undefined;
+  return Number.isFinite(timestamp) && timestamp > now ? timestamp : undefined;
+}
+
+function timestamp(value: unknown): number | undefined {
+  const parsed = Date.parse(`${value ?? ""}`);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export function getHostRecoveryDisplay(
   hostInfo: HostInfoLike | undefined,
+  now = Date.now(),
 ): HostRecoveryDisplay {
   const recovery = read(hostInfo, "spot_recovery_state");
   const phase = `${
@@ -75,10 +82,56 @@ export function getHostRecoveryDisplay(
   const activeMachineType = `${
     read(recovery, "active_machine_type") ?? desiredMachineType
   }`.trim();
-  const nextRetry = futureTimestamp(read(recovery, "next_retry_at"));
+  const nextRetry = futureTimestamp(read(recovery, "next_retry_at"), now);
   const etaMinutes = nextRetry
-    ? Math.max(2, Math.ceil((nextRetry - Date.now()) / 60_000) + 2)
-    : 2;
+    ? Math.max(2, Math.ceil((nextRetry - now) / 60_000) + 2)
+    : 3;
+  const startedAt = `${
+    read(hostInfo, "unavailable_since") ??
+    read(recovery, "outage_started_at") ??
+    ""
+  }`.trim();
+  const startedAtMs = timestamp(startedAt);
+  const historicalEstimate = Number(
+    read(hostInfo, "recovery_duration_estimate_ms"),
+  );
+  const estimatedDurationMs =
+    Number.isFinite(historicalEstimate) && historicalEstimate > 0
+      ? historicalEstimate
+      : etaMinutes * 60_000;
+  const elapsedMs =
+    startedAtMs == null ? undefined : Math.max(0, now - startedAtMs);
+  const estimatedMinutes = Math.max(
+    1,
+    Math.round(estimatedDurationMs / 60_000),
+  );
+  const remainingMinutes =
+    elapsedMs == null
+      ? undefined
+      : Math.max(0, Math.ceil((estimatedDurationMs - elapsedMs) / 60_000));
+  const progressPercent =
+    elapsedMs == null
+      ? undefined
+      : Math.max(
+          5,
+          Math.min(95, Math.round((elapsedMs / estimatedDurationMs) * 100)),
+        );
+  const timingDescription =
+    remainingMinutes == null
+      ? `Expected recovery is within about ${etaMinutes} minutes.`
+      : remainingMinutes > 0
+        ? `Similar recoveries usually finish within about ${estimatedMinutes} minutes; estimated time remaining is ${remainingMinutes} minute${remainingMinutes === 1 ? "" : "s"}.`
+        : `This has taken longer than the usual ${estimatedMinutes} minute${estimatedMinutes === 1 ? "" : "s"}; recovery is still in progress.`;
+  const timing = {
+    etaMinutes,
+    ...(startedAtMs == null
+      ? {}
+      : {
+          startedAt: new Date(startedAtMs).toISOString(),
+          progressPercent,
+        }),
+    timingDescription,
+  };
 
   if (
     effectivePricing === "on_demand" ||
@@ -89,7 +142,7 @@ export function getHostRecoveryDisplay(
       title: "Project host is restarting on guaranteed capacity",
       description:
         "Spot capacity was not available, so CoCalc switched this host to Standard capacity and is reconnecting projects automatically.",
-      etaMinutes,
+      ...timing,
     };
   }
   if (
@@ -101,7 +154,7 @@ export function getHostRecoveryDisplay(
       active: true,
       title: "Project host is restarting on alternate Spot capacity",
       description: `The cloud provider interrupted this Spot VM. CoCalc is now trying ${activeMachineType} after ${desiredMachineType} was unavailable.`,
-      etaMinutes,
+      ...timing,
     };
   }
   return {
@@ -109,7 +162,7 @@ export function getHostRecoveryDisplay(
     title: "Project host is restarting automatically",
     description:
       "The cloud provider interrupted this Spot VM. CoCalc detected the shutdown and is restarting the host and its projects automatically.",
-    etaMinutes,
+    ...timing,
   };
 }
 

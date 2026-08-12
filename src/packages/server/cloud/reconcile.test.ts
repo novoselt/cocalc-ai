@@ -1,5 +1,6 @@
 import {
   classifyCloudOrphanInstances,
+  closeStaleObservedSpotRecovery,
   ensureHostReadyVerificationWork,
   hasPendingRestoreBlockingWork,
   runtimeSshServerForProviderReconcile,
@@ -166,6 +167,66 @@ describe("cloud runtime endpoint reconciliation", () => {
         { metadata: { machine: { cloud: "nebius" } } },
         { public_ip: "203.0.113.10" },
       ),
+    ).toBeUndefined();
+  });
+});
+
+describe("stale spot recovery reconciliation", () => {
+  const now = new Date("2026-08-12T12:00:00.000Z");
+  const row = {
+    id: "host-1",
+    status: "running",
+    last_seen: "2026-08-12T11:59:30.000Z",
+    metadata: {
+      pricing_model: "spot",
+      effective_pricing_model: "spot",
+      desired_pricing_model: "spot",
+      interruption_restore_policy: "immediate",
+      spot_recovery_state: {
+        phase: "retrying_spot",
+        outage_started_at: "2026-08-12T10:00:00.000Z",
+        last_preempted_at: "2026-08-12T10:00:00.000Z",
+      },
+    },
+  };
+
+  it("closes an old active phase when provider and heartbeat prove recovery", () => {
+    expect(
+      closeStaleObservedSpotRecovery({
+        row,
+        provider_status: "running",
+        now,
+      }),
+    ).toMatchObject({
+      phase: "idle",
+      outage_started_at: "2026-08-12T10:00:00.000Z",
+      last_recovered_at: now.toISOString(),
+    });
+  });
+
+  it("does not close recent or unconfirmed recovery", () => {
+    expect(
+      closeStaleObservedSpotRecovery({
+        row: {
+          ...row,
+          metadata: {
+            ...row.metadata,
+            spot_recovery_state: {
+              phase: "retrying_spot",
+              outage_started_at: "2026-08-12T11:55:00.000Z",
+            },
+          },
+        },
+        provider_status: "running",
+        now,
+      }),
+    ).toBeUndefined();
+    expect(
+      closeStaleObservedSpotRecovery({
+        row: { ...row, last_seen: "2026-08-12T11:00:00.000Z" },
+        provider_status: "running",
+        now,
+      }),
     ).toBeUndefined();
   });
 });

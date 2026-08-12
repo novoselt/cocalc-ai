@@ -1276,11 +1276,17 @@ export interface HostConnectionInfo {
   status?: HostStatus | null;
   tier?: number | null;
   pricing_model?: HostPricingModel;
+  desired_pricing_model?: HostPricingModel;
+  effective_pricing_model?: HostPricingModel;
   interruption_restore_policy?: HostInterruptionRestorePolicy;
+  spot_recovery_state?: HostSpotRecoveryState;
+  recovery_phase?: HostSpotRecoveryPhase;
   desired_state?: "running" | "stopped";
   last_seen?: string;
   online?: boolean;
   reason_unavailable?: string;
+  unavailable_since?: string;
+  recovery_duration_estimate_ms?: number;
 }
 
 export interface HostLogEntry {
