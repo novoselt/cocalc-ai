@@ -10,12 +10,21 @@ LOCAL_BIN_ROOT="${COCALC_CODEX_LOCAL_BIN_DIR:-${REPO_ROOT}/src/.cache/codex-bina
 MANIFEST_PATH="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/manifest.json"
 X64_SOURCE="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/linux-x64/codex"
 ARM64_SOURCE="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/linux-arm64/codex"
+X64_HOST_SOURCE="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/linux-x64/codex-code-mode-host"
+ARM64_HOST_SOURCE="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/linux-arm64/codex-code-mode-host"
 X64_ASSET="codex-v${CODEX_VERSION}-linux-x64.xz"
 ARM64_ASSET="codex-v${CODEX_VERSION}-linux-arm64.xz"
+X64_HOST_ASSET="codex-code-mode-host-v${CODEX_VERSION}-linux-x64.xz"
+ARM64_HOST_ASSET="codex-code-mode-host-v${CODEX_VERSION}-linux-arm64.xz"
 MANIFEST_ASSET="codex-v${CODEX_VERSION}-manifest.json"
 CHECKSUM_ASSET="codex-v${CODEX_VERSION}-SHA256SUMS"
 
-for path in "${MANIFEST_PATH}" "${X64_SOURCE}" "${ARM64_SOURCE}"; do
+for path in \
+  "${MANIFEST_PATH}" \
+  "${X64_SOURCE}" \
+  "${ARM64_SOURCE}" \
+  "${X64_HOST_SOURCE}" \
+  "${ARM64_HOST_SOURCE}"; do
   if [[ ! -f "${path}" ]]; then
     echo "Missing build artifact at ${path}" >&2
     exit 1
@@ -66,11 +75,18 @@ trap 'rm -rf "${STAGING_DIR}"' EXIT
 
 xz -T0 -9 -c "${X64_SOURCE}" > "${STAGING_DIR}/${X64_ASSET}"
 xz -T0 -9 -c "${ARM64_SOURCE}" > "${STAGING_DIR}/${ARM64_ASSET}"
+xz -T0 -9 -c "${X64_HOST_SOURCE}" > "${STAGING_DIR}/${X64_HOST_ASSET}"
+xz -T0 -9 -c "${ARM64_HOST_SOURCE}" > "${STAGING_DIR}/${ARM64_HOST_ASSET}"
 cp "${MANIFEST_PATH}" "${STAGING_DIR}/${MANIFEST_ASSET}"
 
 (
   cd "${STAGING_DIR}"
-  sha256_cmd "${X64_ASSET}" "${ARM64_ASSET}" "${MANIFEST_ASSET}" > "${CHECKSUM_ASSET}"
+  sha256_cmd \
+    "${X64_ASSET}" \
+    "${ARM64_ASSET}" \
+    "${X64_HOST_ASSET}" \
+    "${ARM64_HOST_ASSET}" \
+    "${MANIFEST_ASSET}" > "${CHECKSUM_ASSET}"
 )
 
 RELEASE_NOTES="${STAGING_DIR}/release-notes.md"
@@ -83,6 +99,8 @@ Built from upstream commit \`${UPSTREAM_HEAD}\` with CoCalc patches:
 Assets:
 - \`${X64_ASSET}\`
 - \`${ARM64_ASSET}\`
+- \`${X64_HOST_ASSET}\`
+- \`${ARM64_HOST_ASSET}\`
 - \`${MANIFEST_ASSET}\`
 - \`${CHECKSUM_ASSET}\`
 
@@ -92,6 +110,8 @@ EOF
 ASSETS=(
   "${STAGING_DIR}/${X64_ASSET}"
   "${STAGING_DIR}/${ARM64_ASSET}"
+  "${STAGING_DIR}/${X64_HOST_ASSET}"
+  "${STAGING_DIR}/${ARM64_HOST_ASSET}"
   "${STAGING_DIR}/${MANIFEST_ASSET}"
   "${STAGING_DIR}/${CHECKSUM_ASSET}"
 )

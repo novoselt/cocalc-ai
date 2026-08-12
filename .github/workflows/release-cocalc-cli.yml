@@ -350,7 +350,7 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     environment: cocalc-cli-release
     env:
-      RELEASE_DIR: ${{ github.workspace }}/release-assets
+      RELEASE_DIR: release-assets
     steps:
       - uses: actions/checkout@v4
 
@@ -373,18 +373,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: cocalc-cli-macos-arm64
-          path: ${{ runner.temp }}/release-assets
+          path: release-assets
 
       - uses: actions/download-artifact@v4
         with:
           pattern: cocalc-cli-linux-*
-          path: ${{ runner.temp }}/release-assets
+          path: release-assets
           merge-multiple: true
 
       - uses: actions/download-artifact@v4
         with:
           name: cocalc-cli-windows-amd64
-          path: ${{ runner.temp }}/release-assets
+          path: release-assets
 
       - name: Verify complete downloaded release set
         env:

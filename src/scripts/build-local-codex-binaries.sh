@@ -104,6 +104,31 @@ strip_binary_if_available() {
   echo "Skipping extra strip for ${label}; no usable strip tool found among: $*"
 }
 
+configure_rusty_v8() {
+  local target="$1"
+  local -a paths
+  mapfile -t paths < <(
+    cd "${UPSTREAM_DIR}"
+    python3 - "${target}" <<'PY'
+import sys
+
+from scripts.codex_package.targets import TARGET_SPECS
+from scripts.codex_package.v8 import resolve_codex_v8_cargo_env
+
+env = resolve_codex_v8_cargo_env(TARGET_SPECS[sys.argv[1]])
+print(env["RUSTY_V8_ARCHIVE"])
+print(env["RUSTY_V8_SRC_BINDING_PATH"])
+PY
+  )
+  if [[ "${#paths[@]}" != "2" ]]; then
+    echo "Unable to resolve Codex rusty_v8 artifacts for ${target}" >&2
+    exit 1
+  fi
+  export RUSTY_V8_ARCHIVE="${paths[0]}"
+  export RUSTY_V8_SRC_BINDING_PATH="${paths[1]}"
+  echo "Using Codex rusty_v8 artifacts for ${target}"
+}
+
 echo "Using upstream checkout: ${UPSTREAM_DIR}"
 echo "Using upstream source: ${CODEX_UPSTREAM_REPO}"
 echo "Using output directory: ${LOCAL_BIN_ROOT}/${CODEX_VERSION}"
@@ -127,10 +152,15 @@ cargo fmt --manifest-path "${CARGO_MANIFEST}" --all >/dev/null
 git -C "${UPSTREAM_DIR}" restore codex-rs/Cargo.lock
 cargo metadata --format-version 1 --manifest-path "${CARGO_MANIFEST}" >/dev/null
 
+configure_rusty_v8 "x86_64-unknown-linux-gnu"
 CARGO_PROFILE_RELEASE_LTO="${RELEASE_LTO}" \
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${RELEASE_CODEGEN_UNITS}" \
   CARGO_PROFILE_RELEASE_STRIP="${RELEASE_STRIP}" \
-  cargo build --release --locked --jobs "${BUILD_JOBS}" -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+  cargo build --release --locked --jobs "${BUILD_JOBS}" \
+    -p codex-cli \
+    -p codex-code-mode-host \
+    --manifest-path "${CARGO_MANIFEST}"
+configure_rusty_v8 "aarch64-unknown-linux-gnu"
 case "${ARM64_BUILD_TOOL}" in
   auto)
     if [[ -f "${ARM64_PKG_CONFIG_PATH}/openssl.pc" ]]; then
@@ -141,12 +171,18 @@ case "${ARM64_BUILD_TOOL}" in
         CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
         CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-        cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+        cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu \
+          -p codex-cli \
+          -p codex-code-mode-host \
+          --manifest-path "${CARGO_MANIFEST}"
     elif command -v cross >/dev/null 2>&1; then
       CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
         CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-        cross build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+        cross build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu \
+          -p codex-cli \
+          -p codex-code-mode-host \
+          --manifest-path "${CARGO_MANIFEST}"
     else
       require_arm64_cross_libs
       PKG_CONFIG_ALLOW_CROSS=1 \
@@ -155,14 +191,20 @@ case "${ARM64_BUILD_TOOL}" in
         CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
         CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-        cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+        cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu \
+          -p codex-cli \
+          -p codex-code-mode-host \
+          --manifest-path "${CARGO_MANIFEST}"
     fi
     ;;
   cross)
     CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
       CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-      cross build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+      cross build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu \
+        -p codex-cli \
+        -p codex-code-mode-host \
+        --manifest-path "${CARGO_MANIFEST}"
     ;;
   cargo)
     require_arm64_cross_libs
@@ -172,7 +214,10 @@ case "${ARM64_BUILD_TOOL}" in
       CARGO_PROFILE_RELEASE_LTO="${ARM64_RELEASE_LTO}" \
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${ARM64_RELEASE_CODEGEN_UNITS}" \
       CARGO_PROFILE_RELEASE_STRIP="${ARM64_RELEASE_STRIP}" \
-      cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu -p codex-cli --manifest-path "${CARGO_MANIFEST}"
+      cargo build --release --locked --jobs "${BUILD_JOBS}" --target aarch64-unknown-linux-gnu \
+        -p codex-cli \
+        -p codex-code-mode-host \
+        --manifest-path "${CARGO_MANIFEST}"
     ;;
   *)
     echo "Unsupported CODEX_ARM64_BUILD_TOOL=${ARM64_BUILD_TOOL}" >&2
@@ -185,13 +230,23 @@ ARM64_DEST="${LOCAL_BIN_ROOT}/${CODEX_VERSION}/linux-arm64"
 mkdir -p "${X64_DEST}" "${ARM64_DEST}"
 
 install -m 755 "${UPSTREAM_DIR}/codex-rs/target/release/codex" "${X64_DEST}/codex"
+install -m 755 "${UPSTREAM_DIR}/codex-rs/target/release/codex-code-mode-host" "${X64_DEST}/codex-code-mode-host"
 install -m 755 "${UPSTREAM_DIR}/codex-rs/target/aarch64-unknown-linux-gnu/release/codex" "${ARM64_DEST}/codex"
+install -m 755 "${UPSTREAM_DIR}/codex-rs/target/aarch64-unknown-linux-gnu/release/codex-code-mode-host" "${ARM64_DEST}/codex-code-mode-host"
 
 strip_binary_if_available "${X64_DEST}/codex" "linux-x64 codex" \
   "${CODEX_X64_STRIP_TOOL:-}" \
   strip \
   llvm-strip
+strip_binary_if_available "${X64_DEST}/codex-code-mode-host" "linux-x64 codex-code-mode-host" \
+  "${CODEX_X64_STRIP_TOOL:-}" \
+  strip \
+  llvm-strip
 strip_binary_if_available "${ARM64_DEST}/codex" "linux-arm64 codex" \
+  "${CODEX_ARM64_STRIP_TOOL:-}" \
+  aarch64-linux-gnu-strip \
+  llvm-strip
+strip_binary_if_available "${ARM64_DEST}/codex-code-mode-host" "linux-arm64 codex-code-mode-host" \
   "${CODEX_ARM64_STRIP_TOOL:-}" \
   aarch64-linux-gnu-strip \
   llvm-strip
@@ -204,7 +259,9 @@ cat > "${LOCAL_BIN_ROOT}/${CODEX_VERSION}/manifest.json" <<EOF
   "branch": "${CODEX_BRANCH}",
   "upstream_head": "${UPSTREAM_HEAD}",
   "x64_binary": "${X64_DEST}/codex",
+  "x64_code_mode_host_binary": "${X64_DEST}/codex-code-mode-host",
   "arm64_binary": "${ARM64_DEST}/codex",
+  "arm64_code_mode_host_binary": "${ARM64_DEST}/codex-code-mode-host",
   "strip_binaries": "${STRIP_BINARIES}",
   "release_strip": "${RELEASE_STRIP}",
   "arm64_release_strip": "${ARM64_RELEASE_STRIP}",
@@ -215,7 +272,9 @@ EOF
 echo
 echo "Built patched codex binaries:"
 echo "  x64:   ${X64_DEST}/codex"
+echo "  x64 host:   ${X64_DEST}/codex-code-mode-host"
 echo "  arm64: ${ARM64_DEST}/codex"
+echo "  arm64 host: ${ARM64_DEST}/codex-code-mode-host"
 echo "Manifest:"
 echo "  ${LOCAL_BIN_ROOT}/${CODEX_VERSION}/manifest.json"
 

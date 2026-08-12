@@ -32,11 +32,13 @@ import {
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import { createProjectWithInternalProjectId } from "@cocalc/server/projects/create";
+import { getProjectUsageAccountId } from "@cocalc/server/membership/project-usage";
 import {
   courseManagedProjectNeedsReconcile,
   getCourseManagedProjectStatesLocal,
   reconcileCourseManagedProjectLocal,
 } from "./course/reconcile-managed-project";
+import { shouldCreateCourseStudentProject } from "./course-reconfigure-plan";
 import type { CourseInfo } from "@cocalc/util/db-schema/projects";
 
 const logger = getLogger("server:projects:course-reconfigure-worker");
@@ -246,7 +248,12 @@ async function ensureStudentProject({
   creatorAccountId: string;
   knownBayId?: string;
 }): Promise<{ created: boolean; bay_id?: string }> {
-  if (!student.create || knownBayId) {
+  if (
+    !shouldCreateCourseStudentProject({
+      knownBayId,
+      admissionCreate: student.create,
+    })
+  ) {
     return { created: false, bay_id: knownBayId };
   }
   const course = studentCourseInfo({ input, student });
@@ -398,19 +405,19 @@ async function getCourseManagedProjectStatesByBay(
 }
 
 async function reconcileOne({
-  op,
   input,
   result,
   studentsById,
   request,
   knownBayId,
+  creatorAccountId,
 }: {
-  op: LroSummary;
   input: CourseReconfigureLroInput;
   result: CourseReconfigureItemResult;
   studentsById: Map<string, NormalizedStudentItem>;
   request: ReconcileRequest;
   knownBayId?: string;
+  creatorAccountId: string;
 }): Promise<CourseReconfigureItemResult> {
   if (result.type === "student") {
     const student = studentsById.get(result.student_id ?? "");
@@ -418,7 +425,7 @@ async function reconcileOne({
     const ensured = await ensureStudentProject({
       input,
       student,
-      creatorAccountId: op.created_by!,
+      creatorAccountId,
       knownBayId,
     });
     const response = await reconcileOnOwningBay(request, ensured.bay_id);
@@ -504,6 +511,12 @@ async function handleCourseReconfigureOpUnlocked(
   if (managerAccountIds.length === 0) {
     throw new Error("course project has no managers");
   }
+  const creatorAccountId = await getProjectUsageAccountId(
+    input.course_project_id,
+  );
+  if (!creatorAccountId) {
+    throw new Error("course project has no usage owner");
+  }
   const activeStudentAccountIds = input.students
     .filter((student) => !student.deleted && student.account_id)
     .map((student) => student.account_id!);
@@ -569,12 +582,12 @@ async function handleCourseReconfigureOpUnlocked(
         Object.assign(
           result,
           await reconcileOne({
-            op,
             input,
             result,
             studentsById,
             request,
             knownBayId: projectBays.get(request.project_id),
+            creatorAccountId,
           }),
         );
       } catch (err) {
