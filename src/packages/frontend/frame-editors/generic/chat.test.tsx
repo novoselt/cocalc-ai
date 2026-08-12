@@ -19,6 +19,10 @@ jest.mock("@cocalc/frontend/chat/register", () => ({
   initChat: (...args: any[]) => mockInitChat(...args),
 }));
 
+jest.mock("@cocalc/frontend/components/loading", () => ({
+  Loading: () => <div data-testid="loading" />,
+}));
+
 jest.mock("@cocalc/frontend/chat/side-chat", () => ({
   __esModule: true,
   default: (props: any) => {
@@ -39,10 +43,6 @@ jest.mock("@cocalc/frontend/i18n", () => ({
 
 jest.mock("@cocalc/frontend/chat/paths", () => ({
   chatMetaFile: (path: string) => `${path}.sage-chat`,
-}));
-
-jest.mock("@cocalc/frontend/frame-editors/chat-editor/editor", () => ({
-  chatroom: { commands: {} },
 }));
 
 function createMockChatActions(id: string, initialState = "ready") {

@@ -7,10 +7,11 @@
 Top-level react component for editing chat
 */
 
-import { createElement } from "react";
+import { createElement, Suspense } from "react";
 
-import { ChatRoom } from "@cocalc/frontend/chat/chatroom";
-import { Loading } from "@cocalc/frontend/components";
+import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
+import { Loading } from "@cocalc/frontend/components/loading";
 import { createEditor } from "@cocalc/frontend/frame-editors/frame-tree/editor";
 import type {
   EditorComponentProps,
@@ -19,7 +20,15 @@ import type {
 import { terminal } from "@cocalc/frontend/frame-editors/terminal-editor/editor";
 import { time_travel } from "@cocalc/frontend/frame-editors/time-travel-editor/editor";
 import { set } from "@cocalc/util/misc";
+import { CHATROOM_COMMANDS } from "./commands";
 import { search } from "./search";
+
+const ChatRoom = lazyWithRetry(
+  async () => ({
+    default: (await import("@cocalc/frontend/chat/chatroom")).ChatRoom,
+  }),
+  "chat editor",
+);
 
 export const chatroom: EditorDescription = {
   type: "chatroom",
@@ -33,26 +42,20 @@ export const chatroom: EditorDescription = {
     if (actions == null) {
       return createElement(Loading, { theme: "medium" });
     }
-    return createElement(ChatRoom, {
-      ...props,
-      actions,
+    return createElement(CocalcErrorBoundary, {
+      scope: "frame-editor.chat",
+      resetKeys: [props.project_id, props.path],
+      children: createElement(
+        Suspense,
+        { fallback: createElement(Loading, { theme: "medium" }) },
+        createElement(ChatRoom, {
+          ...props,
+          actions,
+        }),
+      ),
     });
   },
-  commands: set([
-    "decrease_font_size",
-    "increase_font_size",
-    "time_travel",
-    "undo",
-    "redo",
-    "save",
-    "help",
-    "export_document",
-    "codex",
-    "scrollToBottom",
-    "scrollToTop",
-    "show_search",
-    "terminal",
-  ]),
+  commands: set([...CHATROOM_COMMANDS]),
   customizeCommands: {
     scrollToTop: {
       label: "Scroll to Old",
@@ -65,11 +68,7 @@ export const chatroom: EditorDescription = {
       title: "Scroll to newest message in chat",
     },
   },
-  buttons: set([
-    "undo",
-    "redo",
-    "show_search",
-  ]),
+  buttons: set(["undo", "redo", "show_search"]),
 } as const;
 
 const EDITOR_SPEC = {

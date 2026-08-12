@@ -28,9 +28,8 @@ import { isReactDomMutationError } from "@cocalc/frontend/app/react-dom-mutation
 import { getExternalSideChatDesc } from "@cocalc/frontend/chat/external-side-chat-selection";
 import { chatMetaFile } from "@cocalc/frontend/chat/paths";
 import type { ChatState } from "@cocalc/frontend/chat/chat-indicator";
-import SideChat from "@cocalc/frontend/chat/side-chat";
 import { Loading } from "@cocalc/frontend/components";
-import KaTeX from "@cocalc/frontend/components/math/katex";
+import KaTeX from "@cocalc/frontend/components/math/lazy-katex";
 import getMermaid from "@cocalc/frontend/editors/slate/elements/code-block/get-mermaid";
 import { IS_MOBILE, IS_TOUCH } from "@cocalc/frontend/feature";
 import { lite } from "@cocalc/frontend/lite";
@@ -121,6 +120,10 @@ const WorkspacesPanel = lazyWithRetry(
     default: (await import("./flyouts/workspaces")).WorkspacesPanel,
   }),
   "project workspaces panel",
+);
+const SideChat = lazyWithRetry(
+  () => import("@cocalc/frontend/chat/side-chat"),
+  "external side chat",
 );
 
 // Default width of chat window as a fraction of the
@@ -558,12 +561,19 @@ const EditorContent: React.FC<EditorContentProps> = ({
             flexBasis: `${chat_width * 100}%`,
           }}
         >
-          <SideChat
-            style={{ position: "absolute" }}
-            project_id={project_id}
-            path={chatMetaFile(path)}
-            desc={sideChatDesc}
-          />
+          <CocalcErrorBoundary
+            scope="project.external-side-chat"
+            resetKeys={[project_id, path]}
+          >
+            <Suspense fallback={<Loading theme="medium" />}>
+              <SideChat
+                style={{ position: "absolute" }}
+                project_id={project_id}
+                path={chatMetaFile(path)}
+                desc={sideChatDesc}
+              />
+            </Suspense>
+          </CocalcErrorBoundary>
         </div>
       </div>
     );

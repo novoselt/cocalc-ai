@@ -33,10 +33,26 @@ function serializeRunQuota(run_quota?: any): string | null {
   const parsed = parseRunQuota(run_quota);
   if (parsed == null) return null;
   try {
-    return JSON.stringify(parsed);
+    return JSON.stringify(canonicalJsonValue(parsed));
   } catch {
     return null;
   }
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJsonValue);
+  }
+  if (value != null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.keys(record)
+      .sort()
+      .reduce<Record<string, unknown>>((result, key) => {
+        result[key] = canonicalJsonValue(record[key]);
+        return result;
+      }, {});
+  }
+  return value;
 }
 
 function parseStringArray(value?: any): string[] | undefined {

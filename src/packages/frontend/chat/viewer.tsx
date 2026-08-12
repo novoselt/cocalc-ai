@@ -7,7 +7,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { Document } from "@cocalc/sync/editor/generic/types";
 import { useTypedRedux } from "@cocalc/frontend/app-framework";
 import { COLORS } from "@cocalc/util/theme";
-import { MessageList, getSortedDates } from "./chat-log";
+import { MessageList } from "./chat-log";
+import { getSortedDates } from "./sorted-dates";
 import type { ChatMessageTyped, ChatMessages } from "./types";
 import { firstHistory, historyArray, parentMessageId } from "./access";
 

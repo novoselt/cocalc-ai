@@ -221,8 +221,21 @@ export function load_target(
 
     case "notifications": {
       const { filter, id } = getNotificationFilterFromFragment(hash);
-      redux.getActions("mentions").set_filter(filter, id);
       redux.getActions("page").set_active_tab("notifications", change_history);
+      const mentions = redux.getActions("mentions");
+      if (mentions != null) {
+        mentions.set_filter(filter, id);
+      } else {
+        void import("@cocalc/frontend/notifications/ensure-init")
+          .then(({ ensureNotificationsInitialized }) =>
+            ensureNotificationsInitialized(),
+          )
+          .then(() => redux.getActions("mentions")?.set_filter(filter, id))
+          .catch(() => {
+            // The route-scoped lazy boundary reports and offers recovery for
+            // the same failure; URL processing must not create an unhandled one.
+          });
+      }
       break;
     }
 

@@ -4,7 +4,7 @@
  */
 
 import type { CSSProperties } from "react";
-import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
+import StaticMarkdown from "./lazy-static-markdown";
 import infoToMode from "@cocalc/frontend/editors/slate/elements/code-block/info-to-mode";
 import "./static-code-block.css";
 

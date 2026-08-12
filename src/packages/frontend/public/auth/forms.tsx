@@ -53,6 +53,7 @@ import {
 } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import { joinUrlPath } from "@cocalc/util/url-path";
+import { prefetchSignedInShell } from "./prefetch-signed-in";
 
 const STACK_STYLE: CSSProperties = {
   display: "flex",
@@ -538,7 +539,9 @@ function SsoButton({
           !requireEssentialConsent()
         ) {
           event.preventDefault();
+          return;
         }
+        void prefetchSignedInShell();
       }}
     >
       <span style={SSO_BUTTON_CONTENT_STYLE}>
@@ -1028,6 +1031,7 @@ export function PublicEmailFirstForm({
     setSubmitting(true);
     setError("");
     setRequiredSso(undefined);
+    void prefetchSignedInShell();
     try {
       const result = await postAuthApi<any>({
         endpoint: "auth/email/start",
@@ -1431,6 +1435,7 @@ export function PublicSignInForm({
     }
     setError("");
     setSigningIn(true);
+    void prefetchSignedInShell();
     try {
       let method: SignInMethod | undefined;
       try {
@@ -1495,6 +1500,7 @@ export function PublicSignInForm({
     }
     setError("");
     setSigningIn(true);
+    void prefetchSignedInShell();
     try {
       const result =
         factorMethod === "passkey"
@@ -2212,6 +2218,7 @@ export function PublicSignUpForm({
     setIssues({});
     setError("");
     setSigningUp(true);
+    void prefetchSignedInShell();
     try {
       let result = await postAuthApi<any>({
         endpoint: "auth/sign-up",

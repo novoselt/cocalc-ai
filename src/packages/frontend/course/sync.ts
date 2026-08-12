@@ -6,6 +6,7 @@
 // Describes how the client course editor syncs with the database
 
 import { fromJS } from "immutable";
+import "@cocalc/conat/sync-doc/install";
 import { callback2 } from "@cocalc/util/async-utils";
 import { defaultCourseTitle } from "@cocalc/util/course-path";
 

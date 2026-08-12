@@ -9,7 +9,7 @@ Session management
 
 import { throttle } from "lodash";
 import { webapp_client } from "./webapp-client";
-import { should_load_target_url } from "./misc";
+import { should_load_target_url } from "./misc/misc";
 import { AppRedux } from "./app-framework";
 import { COCALC_MINIMAL } from "./fullscreen";
 import { callback2 } from "@cocalc/util/async-utils";

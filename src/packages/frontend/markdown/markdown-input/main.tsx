@@ -23,23 +23,11 @@ import { labels } from "@cocalc/frontend/i18n";
 // Sibling Libraries
 import { COLORS } from "@cocalc/util/theme";
 import { markdown_to_html } from "../index";
-import { MarkdownWidgetActions } from "./actions";
+import type { MarkdownWidgetActions } from "./actions";
 import * as info from "./info";
-import { MarkdownWidgetStore, MarkdownWidgetStoreState } from "./store";
-
-export function init(): void {
-  if (redux.hasActions(info.REDUX_NAME)) {
-    return;
-  }
-  redux.createStore<MarkdownWidgetStoreState, MarkdownWidgetStore>(
-    info.REDUX_NAME,
-    MarkdownWidgetStore,
-  );
-  redux.createActions<MarkdownWidgetStoreState, MarkdownWidgetActions>(
-    info.REDUX_NAME,
-    MarkdownWidgetActions,
-  );
-}
+import { init } from "./init";
+import type { MarkdownWidgetStoreState } from "./store";
+export { init };
 
 interface MarkdownInputProps {
   autoFocus?: boolean;
@@ -78,6 +66,7 @@ export function MarkdownInput({
   rendered_style,
   hide_edit_button,
 }: MarkdownInputProps) {
+  init();
   const intl = useIntl();
 
   const open_inputs = useRedux([info.REDUX_NAME, "open_inputs"]);

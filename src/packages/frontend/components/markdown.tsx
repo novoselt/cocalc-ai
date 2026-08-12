@@ -7,7 +7,7 @@ import { HTML } from "./html";
 import { markdown_to_html } from "../markdown";
 import { Props as HTMLProps } from "./html";
 
-type Props = HTMLProps & {
+export type Props = HTMLProps & {
   // inject data attributes with line numbers to enable reverse search:
   line_numbers?: boolean;
 };

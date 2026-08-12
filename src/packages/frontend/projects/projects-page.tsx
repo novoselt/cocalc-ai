@@ -5,7 +5,7 @@
 
 import { Button, Grid, Layout } from "antd";
 import { Map, Set as ImmutableSet } from "immutable";
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { Suspense, useLayoutEffect, useRef } from "react";
 import { useIntl } from "react-intl";
 
 // ensure redux stuff (actions and store) are initialized:
@@ -30,7 +30,6 @@ import {
 } from "@cocalc/frontend/collaborators";
 import { capitalize } from "@cocalc/util/misc";
 
-import { NewProjectCreator } from "./create-project";
 import { ProjectsOperations } from "./projects-operations";
 import { StarredProjectsBar } from "./projects-starred";
 import { ProjectsTable } from "./projects-table";
@@ -58,13 +57,29 @@ import {
 import { projectRootfsEntryLabel } from "./project-rootfs-badge";
 import { openAccountSettings } from "@cocalc/frontend/account/settings-routing";
 import { OTHER_SETTINGS_LEGACY_MIGRATION_PROJECTS_BUTTON } from "@cocalc/util/legacy-migration";
-import { FirstRunOnboarding } from "./onboarding/first-run-onboarding";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import {
   classifyFirstRunOnboarding,
   FIRST_RUN_ONBOARDING_SETTING,
   normalizeStoredFirstRunOnboarding,
   type FirstRunProject,
 } from "./onboarding/state";
+
+const FirstRunOnboarding = lazyWithRetry(async () => {
+  const [, onboarding] = await Promise.all([
+    ensureProjectReduxRuntime(),
+    import("./onboarding/first-run-onboarding"),
+  ]);
+  return { default: onboarding.FirstRunOnboarding };
+}, "first-run onboarding");
+
+const NewProjectCreator = lazyWithRetry(
+  async () => ({
+    default: (await import("./create-project")).NewProjectCreator,
+  }),
+  "create project dialog",
+);
 
 const LOADING_STYLE: CSS = {
   fontSize: "40px",
@@ -80,7 +95,7 @@ const VISIBLE_WINDOW_REPAIR_LIMIT = 200;
 const VISIBLE_WINDOW_REPAIR_DELAY_MS = 500;
 
 function useProjectTableBodyHeight(
-  projectListRef: RefObject<HTMLDivElement | null>,
+  element: HTMLDivElement | null,
   enabled: boolean,
 ): number {
   const [height, setHeight] = useState(PROJECTS_TABLE_INITIAL_BODY_HEIGHT);
@@ -89,7 +104,6 @@ function useProjectTableBodyHeight(
     if (!enabled) {
       return;
     }
-    const element = projectListRef.current;
     if (element == null) {
       return;
     }
@@ -115,7 +129,7 @@ function useProjectTableBodyHeight(
     const resizeObserver = new ResizeObserver(updateHeight);
     resizeObserver.observe(element);
     return () => resizeObserver.disconnect();
-  }, [enabled, projectListRef]);
+  }, [enabled, element]);
 
   return height;
 }
@@ -202,12 +216,23 @@ export const ProjectsPage: React.FC = () => {
   const filtersRef = useRef<any>(null);
   const createNewRef = useRef<any>(null);
   const projectListRef = useRef<HTMLDivElement>(null);
+  const [projectListElement, setProjectListElement] =
+    useState<HTMLDivElement | null>(null);
+  const attachProjectListRef = React.useCallback(
+    (element: HTMLDivElement | null) => {
+      projectListRef.current = element;
+      setProjectListElement(element);
+    },
+    [],
+  );
   const filenameSearchRef = useRef<any>(null);
 
   const [createPanelOpen, setCreatePanelOpen] = useState(false);
+  const createPanelMounted = useRef(false);
+  if (createPanelOpen) createPanelMounted.current = true;
 
   const tableHeight = useProjectTableBodyHeight(
-    projectListRef,
+    projectListElement,
     !mobileProjectsList,
   );
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
@@ -274,8 +299,20 @@ export const ProjectsPage: React.FC = () => {
   const project_list_window = useTypedRedux("projects", "project_list_window");
 
   function openInvitations() {
-    redux.getActions("mentions").set_filter("unread");
     redux.getActions("page").set_active_tab("notifications");
+    const mentions = redux.getActions("mentions");
+    if (mentions != null) {
+      mentions.set_filter("unread");
+      return;
+    }
+    void import("@cocalc/frontend/notifications/ensure-init")
+      .then(({ ensureNotificationsInitialized }) =>
+        ensureNotificationsInitialized(),
+      )
+      .then(() => redux.getActions("mentions")?.set_filter("unread"))
+      .catch(() => {
+        // The route loader owns visible error recovery.
+      });
   }
 
   const local_visible_projects: string[] = useMemo(() => {
@@ -492,12 +529,19 @@ export const ProjectsPage: React.FC = () => {
           minHeight: 0,
         }}
       >
-        {!createProjectDisabled && (
-          <NewProjectCreator
-            default_value={search}
-            open={createPanelOpen}
-            onClose={() => setCreatePanelOpen(false)}
-          />
+        {!createProjectDisabled && createPanelMounted.current && (
+          <CocalcErrorBoundary
+            scope="projects.create-project"
+            resetKeys={[createPanelOpen]}
+          >
+            <Suspense fallback={null}>
+              <NewProjectCreator
+                default_value={search}
+                open={createPanelOpen}
+                onClose={() => setCreatePanelOpen(false)}
+              />
+            </Suspense>
+          </CocalcErrorBoundary>
         )}
         <Layout.Content
           style={{
@@ -536,13 +580,15 @@ export const ProjectsPage: React.FC = () => {
                 scope="projects.first-run-onboarding"
                 resetKeys={[firstRunDecision.kind]}
               >
-                <FirstRunOnboarding
-                  decision={firstRunDecision}
-                  inviteState={inviteState}
-                  createDisabled={createProjectDisabled}
-                  showLegacyProjects={showLegacyProjectsButton}
-                  onOpenAdvanced={handleCreateProject}
-                />
+                <Suspense fallback={<Loading theme="medium" />}>
+                  <FirstRunOnboarding
+                    decision={firstRunDecision}
+                    inviteState={inviteState}
+                    createDisabled={createProjectDisabled}
+                    showLegacyProjects={showLegacyProjectsButton}
+                    onOpenAdvanced={handleCreateProject}
+                  />
+                </Suspense>
               </CocalcErrorBoundary>
             ) : (
               <div style={contentStyle}>
@@ -701,7 +747,7 @@ export const ProjectsPage: React.FC = () => {
                   </div>
 
                   <div
-                    ref={projectListRef}
+                    ref={attachProjectListRef}
                     style={{
                       flex: mobileProjectsList ? "0 0 auto" : "1 1 0",
                       height: mobileProjectsList ? undefined : "100%",

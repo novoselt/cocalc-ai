@@ -15,7 +15,7 @@ import { latexMathToHtmlOrError } from "@cocalc/frontend/misc/math-to-html";
 import { replace_all } from "@cocalc/util/misc";
 import { replaceMathBracketDelims } from "./util";
 
-interface Props {
+export interface Props {
   data: string;
   inMarkdown?: boolean;
 }

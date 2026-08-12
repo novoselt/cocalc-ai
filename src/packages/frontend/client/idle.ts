@@ -3,7 +3,6 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import $ from "jquery";
 import { throttle } from "lodash";
 import { delay } from "awaiting";
 import { redux } from "../app-framework";
@@ -76,14 +75,18 @@ export class IdleClient {
 
     // activate a listener on our global body (universal sink for
     // bubbling events, unless stopped!)
-    $(document).on(
-      "click mousemove keydown focusin touchstart",
-      this.idle_reset,
-    );
-    $("#smc-idle-notification").on(
-      "click mousemove keydown focusin touchstart",
-      this.idle_reset,
-    );
+    for (const event of [
+      "click",
+      "mousemove",
+      "keydown",
+      "focusin",
+      "touchstart",
+    ]) {
+      document.addEventListener(event, this.idle_reset, { passive: true });
+      document
+        .getElementById("smc-idle-notification")
+        ?.addEventListener(event, this.idle_reset, { passive: true });
+    }
 
     // Keep visible pages alive. Passive viewing is a legitimate use case:
     // presentations, dashboards, second-monitor watching, and following live
@@ -216,22 +219,21 @@ export class IdleClient {
 
   show_notification = (): void => {
     if (this.notification_is_visible || lite) return;
-    const idle = $("#cocalc-idle-notification");
-    if (idle.length === 0) {
-      const content = this.notification_html();
-      const box = $("<div/>", { id: "cocalc-idle-notification" }).html(content);
-      $("body").append(box);
-      // quick slide up, just to properly slide down the fist time
-      box.slideUp(0, () => box.slideDown("slow"));
-    } else {
-      idle.slideDown("slow");
+    let idle = document.getElementById("cocalc-idle-notification");
+    if (idle == null) {
+      idle = document.createElement("div");
+      idle.id = "cocalc-idle-notification";
+      idle.innerHTML = this.notification_html();
+      document.body.append(idle);
     }
+    idle.style.display = "block";
     this.notification_is_visible = true;
   };
 
   hide_notification = (): void => {
     if (!this.notification_is_visible) return;
-    $("#cocalc-idle-notification").slideUp("slow");
+    const idle = document.getElementById("cocalc-idle-notification");
+    if (idle != null) idle.style.display = "none";
     this.notification_is_visible = false;
   };
 }

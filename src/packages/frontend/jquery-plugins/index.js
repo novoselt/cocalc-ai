@@ -12,8 +12,12 @@ import { init as initProcessLinks } from "../misc/process-links/jquery";
 import { init as initProcessIcons } from "./process-icons";
 import $ from "jquery";
 
+let initialized = false;
+
 export function init() {
-  window.$ = $;
+  if (initialized) return;
+  initialized = true;
+  window.$ = window.jQuery = $;
   initHeight();
   initIconSpin();
   initMisc();

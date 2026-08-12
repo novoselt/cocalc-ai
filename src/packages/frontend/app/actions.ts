@@ -4,6 +4,7 @@
  */
 
 import { Actions, redux } from "@cocalc/frontend/app-framework";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { set_window_title } from "@cocalc/frontend/browser";
 import { set_url, update_params } from "@cocalc/frontend/history";
 import { labels } from "@cocalc/frontend/i18n";
@@ -63,25 +64,31 @@ export class PageActions extends Actions<PageState> {
     }
 
     if (handler != null) {
-      $(window).off("keydown", this.active_key_handler);
+      if (this.active_key_handler != null) {
+        window.removeEventListener("keydown", this.active_key_handler);
+      }
       this.active_key_handler = handler;
     }
 
     if (this.active_key_handler != null && !this.suppress_key_handlers) {
-      $(window).on("keydown", this.active_key_handler);
+      window.addEventListener("keydown", this.active_key_handler);
     }
   }
 
   // Only clears it from the window
   public unattach_active_key_handler() {
-    $(window).off("keydown", this.active_key_handler);
+    if (this.active_key_handler != null) {
+      window.removeEventListener("keydown", this.active_key_handler);
+    }
   }
 
   // Actually removes the handler from active memory
   // takes a handler to only remove if it's the active one
   public erase_active_key_handler(handler?) {
     if (handler == null || handler === this.active_key_handler) {
-      $(window).off("keydown", this.active_key_handler);
+      if (this.active_key_handler != null) {
+        window.removeEventListener("keydown", this.active_key_handler);
+      }
       this.active_key_handler = undefined;
     }
   }
@@ -90,7 +97,9 @@ export class PageActions extends Actions<PageState> {
   // Right now there aren't even any ways (other than manually)
   // of adding click handlers that the app knows about.
   public clear_all_handlers() {
-    $(window).off("keydown", this.active_key_handler);
+    if (this.active_key_handler != null) {
+      window.removeEventListener("keydown", this.active_key_handler);
+    }
     this.active_key_handler = undefined;
   }
 
@@ -170,6 +179,9 @@ export class PageActions extends Actions<PageState> {
     }
 
     const prev_key = this.redux.getStore("page").get("active_top_tab");
+    if (prev_key?.length === 36 || key?.length === 36) {
+      await ensureProjectReduxRuntime();
+    }
     this.setState({ active_top_tab: key });
 
     if (prev_key !== key && prev_key?.length == 36) {

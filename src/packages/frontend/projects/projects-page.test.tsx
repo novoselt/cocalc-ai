@@ -23,6 +23,7 @@ let mockSearch = "";
 let mockSelectedHashtags: any = mockEmptyMap;
 let mockEmailVerificationRequired = false;
 let mockActiveTopTab: string | undefined;
+let mockProjectMap: any = mockEmptyMap;
 const mockLoadProjectListWindow = jest.fn();
 
 jest.mock("./actions", () => ({}));
@@ -221,13 +222,14 @@ beforeEach(() => {
   mockSelectedHashtags = mockEmptyMap;
   mockEmailVerificationRequired = false;
   mockActiveTopTab = undefined;
+  mockProjectMap = mockEmptyMap;
   mockLoadProjectListWindow.mockClear();
   (globalThis as any).ResizeObserver = class {
     observe() {}
     disconnect() {}
   };
   useTypedReduxMock.mockImplementation((store: string, key: string) => {
-    if (store === "projects" && key === "project_map") return mockEmptyMap;
+    if (store === "projects" && key === "project_map") return mockProjectMap;
     if (store === "projects" && key === "host_info") return mockEmptyMap;
     if (store === "users" && key === "user_map") return mockEmptyMap;
     if (store === "projects" && key === "hidden") return mockHidden;
@@ -268,19 +270,16 @@ test("project creation modal does not auto-open for an empty project list", () =
 
   render(<ProjectsPage />);
 
-  expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
-    "data-open",
-    "false",
-  );
+  expect(screen.queryByTestId("new-project-creator")).toBeNull();
   expect(screen.getByRole("button", { name: /create/i })).toBeInTheDocument();
 });
 
-test("project creation modal opens from the explicit create button", () => {
+test("project creation modal opens from the explicit create button", async () => {
   render(<ProjectsPage />);
 
   fireEvent.click(screen.getByRole("button", { name: /create/i }));
 
-  expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
+  expect(await screen.findByTestId("new-project-creator")).toHaveAttribute(
     "data-open",
     "true",
   );
@@ -314,6 +313,38 @@ test("projects page sizes the table from the flex list slot", () => {
 
   try {
     render(<ProjectsPage />);
+
+    expect(screen.getByTestId("projects-table")).toHaveAttribute(
+      "data-height",
+      "672",
+    );
+  } finally {
+    rectSpy.mockRestore();
+  }
+});
+
+test("projects page observes the flex list when it mounts after project data", () => {
+  mockProjectMap = undefined;
+  const rectSpy = jest
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockReturnValue({
+      bottom: 720,
+      height: 720,
+      left: 0,
+      right: 0,
+      top: 0,
+      width: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+  try {
+    const { rerender } = render(<ProjectsPage />);
+    expect(screen.queryByTestId("projects-table")).toBeNull();
+
+    mockProjectMap = mockEmptyMap;
+    rerender(<ProjectsPage />);
 
     expect(screen.getByTestId("projects-table")).toHaveAttribute(
       "data-height",

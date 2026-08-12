@@ -1,0 +1,34 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL - see LICENSE.md for details
+ */
+
+import AutomaticUpdateNotice from "./automatic-update-notice";
+import { I18NBanner, useShowI18NBanner } from "./i18n-banner";
+import { LegacyMigrationCtaBanner } from "./legacy-migration-cta-banner";
+import { TeamLicenseWarningBanner } from "./team-license-warning-banner";
+import { VerifyEmail } from "./verify-email-banner";
+import { CookieWarning, LocalStorageWarning } from "./warnings";
+
+export function PostSurfaceBanners({
+  cookieWarning,
+  fullscreen,
+  localStorageWarning,
+}: {
+  cookieWarning: boolean;
+  fullscreen: boolean;
+  localStorageWarning: boolean;
+}) {
+  const showI18n = useShowI18NBanner();
+  return (
+    <>
+      <AutomaticUpdateNotice />
+      {cookieWarning ? <CookieWarning /> : undefined}
+      {localStorageWarning ? <LocalStorageWarning /> : undefined}
+      {showI18n ? <I18NBanner /> : undefined}
+      <TeamLicenseWarningBanner />
+      <VerifyEmail />
+      {!fullscreen ? <LegacyMigrationCtaBanner /> : undefined}
+    </>
+  );
+}

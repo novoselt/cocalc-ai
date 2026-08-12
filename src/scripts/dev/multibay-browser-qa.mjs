@@ -868,6 +868,7 @@ async function runSyncdocRouting(page, options) {
       }
 
       const fs = routedSync.fs({ project_id: projectId });
+      await withTimeout("syncdoc-capability", routedSync.sync.ensure());
       let syncstring;
       let syncdb;
       try {

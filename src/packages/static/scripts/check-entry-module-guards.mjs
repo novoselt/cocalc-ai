@@ -9,7 +9,7 @@ const OUTPUT_DIR = resolve(
 );
 const STATS_PATH = resolve(OUTPUT_DIR, "chunk-stats.json");
 
-const { chunks } = JSON.parse(readFileSync(STATS_PATH, "utf8"));
+const { chunks, groups } = JSON.parse(readFileSync(STATS_PATH, "utf8"));
 
 const loadAndAppForbidden = [
   "pdfjs-dist/",
@@ -22,6 +22,30 @@ const loadAndAppForbidden = [
   "frontend/codemirror/static.js",
   "cheerio/",
   "@uiw/react-textarea-code-editor/",
+  "node_modules/.pnpm/katex@",
+  "node_modules/.pnpm/slate@",
+  "node_modules/.pnpm/slate-react@",
+  "frontend/components/markdown.tsx",
+  "frontend/markdown/markdown-input/init.ts",
+  "frontend/editors/slate/editable-markdown.tsx",
+  "frontend/editors/slate/static-markdown.tsx",
+  "frontend/editors/stopwatch/stopwatch.tsx",
+  "frontend/markdown/component.tsx",
+  "frontend/markdown/markdown-input/main.tsx",
+  "dropzone/",
+];
+
+const appOnlyForbidden = [
+  "frontend/hosts/project-host-recommendations.ts",
+  "frontend/project/archive-info.ts",
+  "frontend/project/use-project-course.ts",
+  "frontend/projects/offline-move-confirmation.tsx",
+  "node_modules/.pnpm/jquery@",
+  "node_modules/.pnpm/jquery-tooltip@",
+  "node_modules/.pnpm/jquery.scrollintoview@",
+  "node_modules/.pnpm/markdown-it@",
+  "node_modules/.pnpm/markdown-it-emoji@",
+  "node_modules/.pnpm/timeago@",
 ];
 
 const initialProjectSurfaceForbidden = [
@@ -29,6 +53,53 @@ const initialProjectSurfaceForbidden = [
   "frontend/project/new/new-file-page.tsx",
   "frontend/project/page/flyouts/agents.tsx",
   "frontend/project/page/flyouts/workspaces.tsx",
+];
+
+const signedInStartupRouteForbidden = [
+  "frontend/app/post-surface-banners.tsx",
+  "frontend/app/post-surface-modals.tsx",
+  "frontend/app/post-surface-right-nav.tsx",
+  "frontend/app/automatic-update-notice.tsx",
+  "frontend/app/import-public-url-modal.tsx",
+  "frontend/app/onboarding-email-prompt.tsx",
+  "frontend/app/settings-modal.tsx",
+  "frontend/chat/chat-log.tsx",
+  "frontend/chat/chatroom.tsx",
+  "frontend/chat/codex-activity.tsx",
+  "frontend/chat/git-commit-drawer.tsx",
+  "frontend/chat/message.tsx",
+  "frontend/chat/side-chat.tsx",
+  "frontend/conat/browser-session/action-engine.ts",
+  "frontend/conat/browser-session/exec-operations.ts",
+  "frontend/conat/browser-session/exec-api-declaration.ts",
+  "frontend/conat/extensions-runtime.tsx",
+  "frontend/conat/browser-session/fs-api.ts",
+  "frontend/conat/browser-session/index.ts",
+  "frontend/conat/browser-session/project-open-helpers.ts",
+  "frontend/hosts/components/host-current-metrics.tsx",
+  "frontend/hosts/pick-host.tsx",
+  "frontend/hosts/providers/registry.ts",
+  "frontend/hosts/select-host-for-project-start.tsx",
+  "frontend/notifications/mentions/actions.ts",
+  "frontend/notifications/mentions/init.ts",
+  "frontend/notifications/news/init.ts",
+  "frontend/project/page/flyouts/log.tsx",
+  "frontend/project/docs-actions.ts",
+  "frontend/project/settings/root-filesystem-image.tsx",
+  "frontend/purchases/balance-button.tsx",
+];
+
+const projectsStartupForbidden = [
+  "conat/dist/sync-doc/install.js",
+  "conat/dist/sync-doc/immer-db.js",
+  "conat/dist/sync-doc/syncdb.js",
+  "conat/dist/sync-doc/syncstring.js",
+  "sync/dist/editor/generic/ipywidgets-state.js",
+  "sync/dist/editor/generic/sync-doc.js",
+  "frontend/project/redux/store.ts",
+  "frontend/project/redux/actions.ts",
+  "frontend/chat/actions.ts",
+  "frontend/frame-editors/base-editor/actions-base.ts",
 ];
 
 const publicViewerForbidden = [
@@ -60,7 +131,53 @@ const publicNotebookForbidden = [
   "frontend/jupyter/codemirror-component.tsx",
 ];
 
+const grandfatheredMatches = [
+  {
+    chunk: "public-viewer-md",
+    pattern: "frontend/conat/client.ts",
+    reason: "existing public Markdown viewer control-plane dependency",
+  },
+  {
+    chunk: "public",
+    pattern: "frontend/components/iconfont.cn/",
+    reason: "existing public-site icon bundle",
+  },
+];
+
+function findGroup(moduleSuffix, request) {
+  const matches = groups.filter((group) =>
+    group.origins?.some(
+      (origin) =>
+        origin.module?.endsWith(moduleSuffix) && origin.request === request,
+    ),
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      `expected one chunk group for ${moduleSuffix} -> ${request}; found ${matches.length}`,
+    );
+  }
+  return matches[0];
+}
+
+const signedInProjectsStartupChunks = findGroup(
+  "frontend/app/route-components.ts",
+  "@cocalc/frontend/projects/projects-page",
+).chunks;
+
+const signedInStartupChunks = [
+  ...signedInProjectsStartupChunks,
+  ...findGroup(
+    "frontend/app/route-components.ts",
+    "@cocalc/frontend/project/page/page",
+  ).chunks,
+];
+
 const rules = [
+  {
+    label: "main app chunk",
+    chunks: ["app"],
+    forbidden: appOnlyForbidden,
+  },
   {
     label: "shared/load and main app chunks",
     chunks: ["load", "app", "embed"],
@@ -70,6 +187,16 @@ const rules = [
     label: "initial project surface chunks",
     chunks: ["app", "embed"],
     forbidden: initialProjectSurfaceForbidden,
+  },
+  {
+    label: "signed-in startup route chunks",
+    chunks: [...new Set(signedInStartupChunks)],
+    forbidden: signedInStartupRouteForbidden,
+  },
+  {
+    label: "signed-in Projects startup chunks",
+    chunks: ["app", ...signedInProjectsStartupChunks],
+    forbidden: projectsStartupForbidden,
   },
   {
     label: "public viewer and public site chunks",
@@ -111,6 +238,7 @@ const rules = [
 ];
 
 let failed = false;
+let grandfatheredCount = 0;
 
 function ensureChunk(name) {
   const chunk = chunks?.[name];
@@ -155,6 +283,13 @@ for (const rule of rules) {
     for (const pattern of rule.forbidden) {
       const match = modules.find((moduleName) => moduleName.includes(pattern));
       if (match != null) {
+        const grandfathered = grandfatheredMatches.find(
+          (entry) => entry.chunk === chunkName && entry.pattern === pattern,
+        );
+        if (grandfathered != null) {
+          grandfatheredCount += 1;
+          continue;
+        }
         failed = true;
         console.error(
           `${chunkName}: matched forbidden module pattern "${pattern}" in ${rule.label}`,
@@ -171,7 +306,7 @@ for (const rule of rules) {
 
 if (!failed) {
   console.log(
-    `checked ${Object.keys(chunks ?? {}).length} named chunks against module guards`,
+    `checked ${Object.keys(chunks ?? {}).length} named chunks against module guards (${grandfatheredCount} grandfathered matches)`,
   );
 }
 

@@ -9,6 +9,7 @@ import {
   type ExternalChange,
 } from "./sync-fs-watch";
 import { AStream } from "@cocalc/conat/sync/astream";
+import "@cocalc/conat/sync-doc/install";
 import { patchesStreamName } from "@cocalc/conat/sync/synctable-stream";
 import { conat } from "@cocalc/backend/conat/conat";
 import { client_db } from "@cocalc/util/db-schema/client-db";

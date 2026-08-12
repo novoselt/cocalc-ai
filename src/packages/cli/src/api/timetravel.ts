@@ -1,5 +1,6 @@
 import { RefcountLeaseManager } from "@cocalc/util/refcount/lease";
 import type { Client as ConatClient } from "@cocalc/conat/core/client";
+import "@cocalc/conat/sync-doc/install";
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 
 export type TimeTravelProjectIdentity = {

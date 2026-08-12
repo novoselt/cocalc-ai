@@ -9,64 +9,48 @@ Register the time editor -- stopwatch
     and how to init and remove the actions/store
 */
 
+import { loadWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
+import { type AppRedux, redux_name } from "@cocalc/frontend/app-framework";
 import { register_file_editor } from "@cocalc/frontend/project-file";
-import { redux_name, Store, AppRedux } from "@cocalc/frontend/app-framework";
-import { alert_message } from "@cocalc/frontend/alerts";
-import EditorTime from "./editor";
-import { TimeActions, StopwatchEditorState } from "./actions";
+import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 
-import { syncdb2 as new_syncdb } from "@cocalc/frontend/frame-editors/generic/client";
+type StopwatchRuntime = typeof import("./runtime");
+
+let runtime: StopwatchRuntime | undefined;
+const loadRuntime = reuseInFlight(async (): Promise<StopwatchRuntime> => {
+  runtime ??= await loadWithRetry(() => import("./runtime"), {
+    name: "stopwatch editor",
+  });
+  return runtime;
+});
 
 register_file_editor({
   ext: ["time"],
 
   icon: "stopwatch",
 
-  component: EditorTime,
+  componentAsync: async () => (await loadRuntime()).default,
 
-  init(path: string, redux: AppRedux, project_id: string): string {
-    const name = redux_name(project_id, path);
-    if (redux.getActions(name) !== undefined) {
-      return name; // already initialized
-    }
-
-    const store: Store<StopwatchEditorState> =
-      redux.createStore<StopwatchEditorState>(name);
-    const actions = redux.createActions(name, TimeActions);
-
-    actions._init(project_id, path);
-
-    const syncdb = new_syncdb({
-      project_id,
-      path,
-      primary_keys: ["id"],
-      string_cols: ["label"],
-    });
-    actions.syncdb = syncdb;
-    actions.store = store;
-    syncdb.once("error", (err) => {
-      const message = `Stopwatch error '${path}' -- ${err}`;
-      alert_message({ type: "error", message });
-    });
-    syncdb.on("change", actions._syncdb_change);
-    return name;
+  async initAsync(
+    path: string,
+    redux: AppRedux,
+    project_id: string | undefined,
+  ): Promise<string> {
+    return (await loadRuntime()).initialize(path, redux, project_id);
   },
 
-  remove(path: string, redux: AppRedux, project_id: string): string {
+  remove(
+    path: string,
+    redux: AppRedux,
+    project_id: string | undefined,
+  ): string {
+    if (runtime != null) {
+      return runtime.remove(path, redux, project_id);
+    }
+    if (project_id == null) {
+      throw new Error("a project is required to close a stopwatch");
+    }
     const name = redux_name(project_id, path);
-    const actions: InstanceType<typeof TimeActions> = redux.getActions(name);
-    if (actions !== undefined && actions.syncdb !== undefined) {
-      actions.syncdb.close();
-    }
-    const store: Store<StopwatchEditorState> | undefined =
-      redux.getStore<StopwatchEditorState>(name);
-    if (store == undefined) {
-      return name;
-    }
-    // It is *critical* to first unmount the store, then the actions,
-    // or there will be a huge memory leak.
-    redux.removeStore(name);
-    redux.removeActions(name);
     return name;
   },
 });

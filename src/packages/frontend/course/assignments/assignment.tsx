@@ -23,11 +23,11 @@ import {
   Icon,
   IconName,
   Loading,
-  MarkdownInput,
   Tip,
 } from "@cocalc/frontend/components";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import { course, labels } from "@cocalc/frontend/i18n";
+import { MarkdownInput } from "@cocalc/frontend/markdown/markdown-input/main";
 import { capitalize, trunc_middle } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import { CourseActions } from "../actions";

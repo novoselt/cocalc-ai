@@ -6,7 +6,14 @@
 import type { TabsProps } from "antd";
 import { Button, Divider, Popover, Select, Tabs } from "antd";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CSSProperties,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   CSS,
@@ -18,6 +25,7 @@ import {
 } from "@cocalc/frontend/app-framework";
 import { set_window_title } from "@cocalc/frontend/browser";
 import { Icon, Loading, Tooltip } from "@cocalc/frontend/components";
+import LazyMarkdown from "@cocalc/frontend/components/lazy-markdown";
 import {
   AccessibleAddTabIcon,
   SortableTab,
@@ -25,7 +33,6 @@ import {
   useItemContext,
   useSortable,
 } from "@cocalc/frontend/components/sortable-tabs";
-import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
 import { IS_MOBILE } from "@cocalc/frontend/feature";
 import { ProjectAvatarImage } from "@cocalc/frontend/projects/project-avatar";
 import {
@@ -42,7 +49,15 @@ import {
   projectThemeFromProject,
 } from "./theme";
 import { useBookmarkedProjects } from "./use-bookmarked-projects";
-import { NewProjectCreator } from "./create-project";
+import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
+
+const NewProjectCreator = lazyWithRetry(
+  async () => ({
+    default: (await import("./create-project")).NewProjectCreator,
+  }),
+  "project navigation create dialog",
+);
 
 const PROJECT_NAME_STYLE: CSS = {
   alignItems: "center",
@@ -212,7 +227,7 @@ function ProjectTab({ project_id }: ProjectTabProps) {
           size={120}
           style={{ textAlign: "center" }}
         />
-        <StaticMarkdown
+        <LazyMarkdown
           style={{ display: "inline-block" }}
           value={project?.get("description") ?? ""}
         />
@@ -295,7 +310,7 @@ function ProjectTab({ project_id }: ProjectTabProps) {
     <Popover
       zIndex={10000}
       title={() => (
-        <StaticMarkdown style={{ display: "inline-block" }} value={title} />
+        <LazyMarkdown style={{ display: "inline-block" }} value={title} />
       )}
       content={renderContent}
       placement="bottom"
@@ -329,6 +344,8 @@ export function ProjectsNav(props: ProjectsNavProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [searchValue, setSearchValue] = useState("");
   const [createPanelOpen, setCreatePanelOpen] = useState(false);
+  const createPanelMounted = useRef(false);
+  if (createPanelOpen) createPanelMounted.current = true;
   const selectRef = useRef<any>(null);
 
   useEffect(() => {
@@ -739,11 +756,20 @@ export function ProjectsNav(props: ProjectsNavProps) {
         ...style,
       }}
     >
-      <NewProjectCreator
-        default_value=""
-        open={createPanelOpen}
-        onClose={() => setCreatePanelOpen(false)}
-      />
+      {createPanelMounted.current && (
+        <CocalcErrorBoundary
+          scope="projects.navigation.create-project"
+          resetKeys={[createPanelOpen]}
+        >
+          <Suspense fallback={null}>
+            <NewProjectCreator
+              default_value=""
+              open={createPanelOpen}
+              onClose={() => setCreatePanelOpen(false)}
+            />
+          </Suspense>
+        </CocalcErrorBoundary>
+      )}
       {mode === "dropdown" ? (
         renderDropdownNav()
       ) : (

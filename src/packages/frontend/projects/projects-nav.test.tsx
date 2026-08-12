@@ -104,7 +104,7 @@ jest.mock("@cocalc/frontend/components/sortable-tabs", () => ({
   useSortable: () => ({ active: null }),
 }));
 
-jest.mock("@cocalc/frontend/editors/slate/static-markdown", () => ({
+jest.mock("@cocalc/frontend/components/lazy-markdown", () => ({
   __esModule: true,
   default: ({ value }: any) => <span>{value}</span>,
 }));
@@ -155,12 +155,12 @@ describe("ProjectsNav", () => {
     mockBookmarkedProjects = [];
   });
 
-  it("opens the create-project modal from the native accessible add tab", () => {
+  it("opens the create-project modal from the native accessible add tab", async () => {
     render(<ProjectsNav height={42} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
-    expect(screen.getByTestId("new-project-creator")).toHaveAttribute(
+    expect(await screen.findByTestId("new-project-creator")).toHaveAttribute(
       "data-open",
       "true",
     );

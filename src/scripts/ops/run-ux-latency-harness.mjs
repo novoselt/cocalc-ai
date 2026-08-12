@@ -30,6 +30,24 @@ const NETWORK_PROFILES = {
     uploadThroughput: (8 * 1_000_000) / 8,
     connectionType: "wifi",
   },
+  "5mbps": {
+    latency: 50,
+    downloadThroughput: (5 * 1_000_000) / 8,
+    uploadThroughput: (2 * 1_000_000) / 8,
+    connectionType: "wifi",
+  },
+  "10mbps": {
+    latency: 50,
+    downloadThroughput: (10 * 1_000_000) / 8,
+    uploadThroughput: (4 * 1_000_000) / 8,
+    connectionType: "wifi",
+  },
+  "10mbps-high-latency": {
+    latency: 300,
+    downloadThroughput: (10 * 1_000_000) / 8,
+    uploadThroughput: (4 * 1_000_000) / 8,
+    connectionType: "wifi",
+  },
   "slow-4g": {
     latency: 150,
     downloadThroughput: (1.6 * 1_000_000) / 8,
@@ -50,6 +68,17 @@ const NETWORK_PROFILES = {
   },
 };
 
+const STARTUP_TARGETS = new Set([
+  "projects",
+  "project",
+  "file",
+  "jupyter",
+  "terminal",
+  "account",
+  "docs",
+  "admin",
+]);
+
 function usage(exitCode = 0) {
   console.log(`Usage:
   node src/scripts/ops/run-ux-latency-harness.mjs \\
@@ -57,13 +86,16 @@ function usage(exitCode = 0) {
     --project <uuid> [--browser <id>] [--iterations 3] [--include-codex]
 
 Direct Chromium qualification options:
-  --network <native|fast-4g|slow-4g|1mbps|3g>
+  --network <native|fast-4g|5mbps|10mbps|10mbps-high-latency|slow-4g|1mbps|3g>
   --cpu-throttle <1-20>  --cache <warm|cold>  --mobile
-  --startup-only
+  --startup-only [--startup-target <projects|project|file|jupyter|terminal|account|docs|admin>]
+  --test-account <account-id-or-email>
 
-For an isolated test account, set COCALC_UX_HARNESS_SIGN_IN_URL to a one-time
-sign-in URL and pass --direct. This launches a clean Chromium process directly,
-without exposing the operator's account cookie or discovering browser sessions.
+For an isolated test account, pass --test-account with --direct to issue a new
+one-time impersonation grant from the selected fresh-auth CLI profile. You may
+instead set COCALC_UX_HARNESS_SIGN_IN_URL explicitly. Both paths launch a clean
+Chromium process without exposing the operator's account cookie or discovering
+browser sessions.
 
 The target browser must already be signed in and connected. The harness creates
 small fixtures under /home/user/cocalc-ux-harness, drives a hard refresh,
@@ -85,6 +117,7 @@ function parseArgs(argv) {
     cache: "warm",
     mobile: false,
     startupOnly: false,
+    startupTarget: "project",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -107,6 +140,8 @@ function parseArgs(argv) {
     else if (arg === "--cache") options.cache = value();
     else if (arg === "--mobile") options.mobile = true;
     else if (arg === "--startup-only") options.startupOnly = true;
+    else if (arg === "--startup-target") options.startupTarget = value();
+    else if (arg === "--test-account") options.testAccount = value();
     else if (arg === "--help" || arg === "-h") usage();
     else throw Error(`unknown option '${arg}'`);
   }
@@ -124,8 +159,10 @@ function parseArgs(argv) {
   ) {
     throw Error("--iterations must be an integer from 1 through 100");
   }
-  if (options.direct && !options.signInUrl) {
-    throw Error("COCALC_UX_HARNESS_SIGN_IN_URL is required with --direct");
+  if (options.direct && !options.signInUrl && !options.testAccount) {
+    throw Error(
+      "--test-account or COCALC_UX_HARNESS_SIGN_IN_URL is required with --direct",
+    );
   }
   if (!(options.network in NETWORK_PROFILES)) {
     throw Error(`unknown --network profile '${options.network}'`);
@@ -139,6 +176,9 @@ function parseArgs(argv) {
   }
   if (!new Set(["warm", "cold"]).has(options.cache)) {
     throw Error("--cache must be warm or cold");
+  }
+  if (!STARTUP_TARGETS.has(options.startupTarget)) {
+    throw Error(`unknown --startup-target '${options.startupTarget}'`);
   }
   if (
     !options.direct &&
@@ -197,6 +237,27 @@ function run(args, { capture = false } = {}) {
   return capture ? result.stdout : "";
 }
 
+function issueDirectSignInUrl() {
+  if (options.signInUrl) return options.signInUrl;
+  const output = JSON.parse(
+    run(
+      [
+        "--json",
+        "admin",
+        "user",
+        "issue-impersonation-link",
+        options.testAccount,
+      ],
+      { capture: true },
+    ),
+  );
+  const url = `${output?.data?.url ?? ""}`.trim();
+  if (!url) {
+    throw Error("impersonation grant response did not contain a sign-in URL");
+  }
+  return url;
+}
+
 function projectFileUrl(path = "") {
   const relative = `${path}`
     .replace(/^\/home\/user\/?/, "")
@@ -221,6 +282,13 @@ function navigate(name, path) {
   return {
     name,
     action: { name: "navigate", url: remoteUrl(path), wait_for_url_ms: 20_000 },
+  };
+}
+
+function navigateUrl(name, url) {
+  return {
+    name,
+    action: { name: "navigate", url, wait_for_url_ms: 20_000 },
   };
 }
 
@@ -249,6 +317,88 @@ function enterHarnessDirectorySteps(prefix) {
     },
     waitForText(`${prefix}: directory listing`, "visible.md"),
   ];
+}
+
+function startupQualificationSteps() {
+  const reload = {
+    name: `hard refresh ${options.startupTarget} surface`,
+    action: { name: "reload", hard: true },
+    pause_ms: 2_500,
+    retries: 2,
+  };
+  switch (options.startupTarget) {
+    case "projects":
+      return [
+        navigateUrl("load Projects before hard refresh", `${origin}/projects`),
+        reload,
+        waitForText("Projects useful surface", "Create"),
+      ];
+    case "project":
+      return [
+        navigateProjectHome("load project before hard refresh"),
+        reload,
+        ...enterHarnessDirectorySteps("application and project ready"),
+      ];
+    case "file":
+      return [
+        navigate("load text file before hard refresh", "visible.md"),
+        reload,
+        waitForText("text useful surface", `Visible marker ${runId}`),
+      ];
+    case "jupyter":
+      return [
+        navigate("load Jupyter before hard refresh", "notebook.ipynb"),
+        reload,
+        {
+          name: "Jupyter useful surface",
+          action: {
+            name: "wait_for_selector",
+            selector: ".CodeMirror",
+            timeout_ms: 90_000,
+          },
+        },
+      ];
+    case "terminal":
+      return [
+        navigate("load terminal before hard refresh", "terminal.term"),
+        reload,
+        {
+          name: "terminal useful surface",
+          action: {
+            name: "wait_for_selector",
+            selector: ".xterm-helper-textarea",
+            state: "attached",
+            timeout_ms: 90_000,
+          },
+        },
+      ];
+    case "account":
+      return [
+        navigateUrl("load Account before hard refresh", `${origin}/settings`),
+        reload,
+        waitForText("Account useful surface", "Settings"),
+      ];
+    case "docs":
+      return [
+        navigateUrl("load Docs before hard refresh", `${origin}/docs`),
+        reload,
+        {
+          name: "Docs useful surface",
+          action: {
+            name: "wait_for_selector",
+            selector: "[data-testid='docs-markdown']",
+            timeout_ms: 90_000,
+          },
+        },
+      ];
+    case "admin":
+      return [
+        navigateUrl("load Admin before hard refresh", `${origin}/admin`),
+        reload,
+        waitForText("Admin useful surface", "Administration", 90_000),
+      ];
+  }
+  throw Error(`unsupported startup target '${options.startupTarget}'`);
 }
 
 function createFixtures() {
@@ -445,21 +595,24 @@ function iterationSteps(iteration) {
 
 async function runDirectHarness(plan) {
   const require = createRequire(import.meta.url);
-  const { chromium } = require(
+  const { chromium, devices } = require(
     resolve(srcRoot, "packages/cli/node_modules/playwright-core"),
   );
+  const mobileDevice = devices["iPhone 15 Pro"];
   const browser = await chromium.launch({
     executablePath: options.chromium,
     headless: true,
   });
   const context = await browser.newContext({
     ignoreHTTPSErrors: false,
-    viewport: options.mobile
-      ? { width: 390, height: 844 }
-      : { width: 1440, height: 1000 },
-    deviceScaleFactor: options.mobile ? 3 : 1,
-    hasTouch: options.mobile,
-    isMobile: options.mobile,
+    ...(options.mobile
+      ? mobileDevice
+      : {
+          viewport: { width: 1440, height: 1000 },
+          deviceScaleFactor: 1,
+          hasTouch: false,
+          isMobile: false,
+        }),
   });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
@@ -704,7 +857,8 @@ async function runDirectHarness(plan) {
 
   let failure;
   try {
-    await page.goto(options.signInUrl, {
+    const signInUrl = issueDirectSignInUrl();
+    await page.goto(signInUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -769,7 +923,9 @@ async function runDirectHarness(plan) {
             cpu_throttle: options.cpuThrottle,
             cache: options.cache,
             mobile: options.mobile,
+            mobile_device: options.mobile ? "iPhone 15 Pro" : undefined,
             startup_only: options.startupOnly,
+            startup_target: options.startupTarget,
           },
           steps,
           browser_logs: browserLogs,
@@ -798,16 +954,7 @@ try {
       logs_on_fail: 160,
       network_on_fail: 160,
     },
-    before_all: [
-      navigateProjectHome("load project before hard refresh"),
-      {
-        name: "hard refresh application",
-        action: { name: "reload", hard: true },
-        pause_ms: 2_500,
-        retries: 2,
-      },
-      ...enterHarnessDirectorySteps("application and project ready"),
-    ],
+    before_all: startupQualificationSteps(),
     steps: options.startupOnly
       ? []
       : Array.from({ length: options.iterations }, (_, index) =>

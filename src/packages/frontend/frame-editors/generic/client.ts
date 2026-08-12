@@ -8,6 +8,7 @@ Typescript async/await file client implementation.
 */
 
 import { Map } from "immutable";
+import "@cocalc/conat/sync-doc/install";
 import { redux } from "@cocalc/frontend/app-framework";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { callback2 } from "@cocalc/util/async-utils";

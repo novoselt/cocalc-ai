@@ -15,23 +15,14 @@ import { COCALC_MINIMAL } from "./fullscreen";
 // Load/initialize Redux-based react functionality
 import { redux } from "./app-framework";
 
-// News about the platform, features, etc. – also shown at https://$DNS/news
-import { init as initNews } from "./notifications/news/init";
-
 import "./launch/actions";
 
-// Various jquery plugins:
-import "./jquery-plugins";
-
 // Initialize app stores, actions, etc.
-import { init as initJqueryPlugins } from "./jquery-plugins";
 import { init as initAccount } from "./account";
 import { init as initApp } from "./app/init";
 import { init as initProjects } from "./projects";
 import { init as initFileUse } from "./file-use/init";
 import { init as initWebHooks } from "./webapp-hooks";
-import { init as initNotifications } from "./notifications/init";
-import { init as initMarkdown } from "./markdown/markdown-input/main";
 // only enable iframe comms in minimal kiosk mode
 import { init as initIframeComm } from "./iframe-communication";
 import { init as initCrashBanner } from "./crash-banner";
@@ -41,25 +32,38 @@ import { init as initCustomize } from "./customize";
 import { init as initLast } from "./last";
 
 import { render } from "./app/render";
+import { markAppBootstrapPhase } from "./app/bootstrap-ux-latency";
+import { installPostSurfaceJqueryPlugins } from "./jquery-plugins/ensure-init";
+
+function runInitializer(name: string, initializer: () => void): void {
+  markAppBootstrapPhase(`${name}_started`);
+  try {
+    initializer();
+    markAppBootstrapPhase(`${name}_finished`);
+  } catch (err) {
+    markAppBootstrapPhase(`${name}_failed`);
+    throw err;
+  }
+}
 
 export async function init() {
-  initJqueryPlugins();
-  initAccount(redux);
-  initNews();
-  initApp();
-  initProjects();
-  initFileUse();
-  initWebHooks();
-  if (!COCALC_MINIMAL) {
-    initNotifications(redux);
-  }
-  initMarkdown();
-  initCustomize();
+  markAppBootstrapPhase("global_initializers_started");
+  installPostSurfaceJqueryPlugins();
+  runInitializer("account", () => initAccount(redux));
+  runInitializer("app", initApp);
+  runInitializer("projects", initProjects);
+  runInitializer("file_use", initFileUse);
+  runInitializer("webapp_hooks", initWebHooks);
+  runInitializer("customize", () => void initCustomize());
   if (COCALC_MINIMAL) {
-    initIframeComm();
+    runInitializer("iframe_communication", initIframeComm);
   }
-  $(window).on("beforeunload", redux.getActions("page").check_unload);
-  initLast();
+  window.addEventListener(
+    "beforeunload",
+    redux.getActions("page").check_unload,
+  );
+  runInitializer("last", initLast);
+  markAppBootstrapPhase("global_initializers_finished");
   try {
     await render();
   } finally {

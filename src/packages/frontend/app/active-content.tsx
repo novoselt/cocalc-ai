@@ -39,6 +39,7 @@ import {
   SiteLicenseClaimPage,
   SshPage,
 } from "./route-components";
+import { markStartupPhaseOnce } from "./startup-phase";
 
 const CONNECTIVITY_DOCS_SLUG = "troubleshooting/connectivity";
 
@@ -126,6 +127,11 @@ export const ActiveContent: React.FC = React.memo(() => {
   const get_api_key = useTypedRedux("page", "get_api_key");
   const open_projects = useTypedRedux("projects", "open_projects");
   const share_slug = useTypedRedux("page", "share_slug");
+  if (typeof active_top_tab === "string") {
+    markStartupPhaseOnce("initial_route_selected", {
+      route: active_top_tab.match(/^[a-z-]+$/) ? active_top_tab : "project",
+    });
+  }
 
   // initially, we assume a user is signed in – most likely case
   const [notSignedIn, setNotSignedIn] = React.useState<boolean>(false);

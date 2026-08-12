@@ -1,6 +1,6 @@
 import { Alert } from "antd";
 import { CSSProperties } from "react";
-import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
+import StaticMarkdown from "./lazy-static-markdown";
 
 interface Props {
   error: any;

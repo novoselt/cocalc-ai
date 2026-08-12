@@ -34,7 +34,7 @@ export function configureUxLatency({
   success_sample_rate,
 }: {
   telemetry_enabled?: boolean;
-  success_sample_rate?: number;
+  success_sample_rate?: number | null;
 }): void {
   if (typeof telemetry_enabled === "boolean") {
     configured = true;
@@ -47,8 +47,9 @@ export function configureUxLatency({
       }
     }
   }
-  const rate = Number(success_sample_rate);
-  if (Number.isFinite(rate)) {
+  const rate =
+    success_sample_rate == null ? undefined : Number(success_sample_rate);
+  if (rate != null && Number.isFinite(rate)) {
     lightweightSuccessSampleRate = Math.min(1, Math.max(0, rate));
   }
 }

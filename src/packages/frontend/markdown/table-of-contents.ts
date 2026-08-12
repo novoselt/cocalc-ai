@@ -15,7 +15,7 @@ one extra thing we better do.
 */
 
 import { remove_math, replace_math } from "@cocalc/util/mathjax-utils";
-import { TableOfContentsEntry as Entry } from "../components";
+import type { TableOfContentsEntry as Entry } from "../components/table-of-contents";
 import { parseHeader } from "./header";
 
 import { Token } from "./types";

@@ -111,6 +111,11 @@ import {
   isExamMode,
   waitForExamModeConfiguration,
 } from "@cocalc/frontend/customize/exam-mode";
+import { registerSyncDocLoader } from "@cocalc/conat/sync-doc/factories";
+
+registerSyncDocLoader(async () => {
+  await import("@cocalc/conat/sync-doc/install");
+});
 
 export interface ConatConnectionStatus {
   state: "connected" | "connecting" | "disconnected";

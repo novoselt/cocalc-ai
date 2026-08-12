@@ -58,7 +58,7 @@ optionally upgrade all online project hosts through the site's CLI API.
 This is an operational wrapper around the proven manual lifecycle:
   1. copy bay-systemd scaffold and runtime tarball to the VM
   2. stage a versioned release with bay-bootstrap-release.sh
-  3. run migrations, roll hub workers, and run bay-health
+  3. restart the frontdoor, run migrations, roll hub workers, and run bay-health
   4. run cocalc host upgrade --all-online --wait
   5. verify project_hosts software/rollout state
   6. remove temporary auth/session and upload artifacts
@@ -642,11 +642,13 @@ esac
 /opt/cocalc/bay/current/bin/bay-health
 EOF
   elif [[ "$HUB_ONLY" -eq 1 ]]; then
-    log "Run migrations, roll hub workers, and run health checks"
+    log "Restart frontdoor, run migrations, roll hub workers, and run health checks"
     remote_exec "sudo env BAY_USER=$(q "$BAY_USER") bash -s" <<'EOF' | tee "${REPORT_DIR}/bay-health.txt"
 set -euo pipefail
 source /etc/cocalc/bay-workers.env
-systemctl start cocalc-bay-frontdoor.service
+systemctl daemon-reload
+systemctl restart cocalc-bay-frontdoor.service
+/opt/cocalc/bay/current/bin/bay-frontdoor-health
 
 credential_dir="$(mktemp -d /run/cocalc-bay-deploy-credentials.XXXXXX)"
 cleanup() {
@@ -681,13 +683,14 @@ done
 /opt/cocalc/bay/current/bin/bay-health
 EOF
   else
-    log "Run migrations, roll hub workers, and run health checks"
+    log "Restart frontdoor, run migrations, roll hub workers, and run health checks"
     remote_exec "sudo env RESTART_SHARED_SERVICES=$(q "$RESTART_SHARED_SERVICES") RESTART_CLOUDFLARED=$(q "$RESTART_CLOUDFLARED") BAY_USER=$(q "$BAY_USER") bash -s" <<'EOF' | tee "${REPORT_DIR}/bay-health.txt"
 set -euo pipefail
 source /etc/cocalc/bay-workers.env
 systemctl daemon-reload
 systemctl start cocalc-bay.target
-systemctl start cocalc-bay-frontdoor.service
+systemctl restart cocalc-bay-frontdoor.service
+/opt/cocalc/bay/current/bin/bay-frontdoor-health
 if [[ "$RESTART_CLOUDFLARED" -eq 1 ]]; then
   systemctl restart cocalc-bay-cloudflared.service
   systemctl is-active --quiet cocalc-bay-cloudflared.service

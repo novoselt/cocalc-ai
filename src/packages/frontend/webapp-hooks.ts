@@ -11,7 +11,7 @@
 import { alert_message } from "./alerts";
 import { redux } from "./app-framework";
 import { webapp_client } from "./webapp-client";
-import { should_load_target_url } from "./misc";
+import { should_load_target_url } from "./misc/misc";
 import { reset_password_key } from "./client/password-reset";
 import { load_target } from "./history";
 import {

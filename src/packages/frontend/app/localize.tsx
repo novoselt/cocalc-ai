@@ -13,7 +13,7 @@ import useAsyncEffect from "use-async-effect";
 
 type OnErrorFn = (typeof IntlProvider.defaultProps)["onError"];
 
-import { Loading } from "@cocalc/frontend/components";
+import { Loading } from "@cocalc/frontend/components/loading";
 import {
   DEFAULT_LOCALE,
   loadLocaleMessages,

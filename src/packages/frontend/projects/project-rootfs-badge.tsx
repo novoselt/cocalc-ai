@@ -14,7 +14,7 @@ import {
   type ProjectContextState,
   emptyProjectContext,
 } from "@cocalc/frontend/project/context";
-import { RootFilesystemImageModal } from "@cocalc/frontend/project/settings/root-filesystem-image";
+import { LazyRootFilesystemImageModal } from "@cocalc/frontend/project/settings/lazy-root-filesystem-image-modal";
 import { latestRootfsUpgradeEntry } from "@cocalc/frontend/rootfs/catalog-ui";
 import { COLORS } from "@cocalc/util/theme";
 import { isManagedRootfsImageName } from "@cocalc/util/rootfs-images";
@@ -247,7 +247,7 @@ function ProjectRootfsRuntimeModalContent({
 
   return (
     <ProjectContext.Provider value={context}>
-      <RootFilesystemImageModal onClose={onClose} open={open} />
+      <LazyRootFilesystemImageModal onClose={onClose} open={open} />
     </ProjectContext.Provider>
   );
 }

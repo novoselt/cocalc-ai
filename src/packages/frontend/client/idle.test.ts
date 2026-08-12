@@ -1,53 +1,4 @@
-type JQueryStub = {
-  length: number;
-  on: jest.Mock;
-  slideUp: jest.Mock;
-  slideDown: jest.Mock;
-  append?: jest.Mock;
-  html?: jest.Mock;
-};
-
-const selectors = new Map<any, JQueryStub>();
 let mockCustomizeStore: { get: jest.Mock } | undefined;
-
-function getStub(selector: any): JQueryStub {
-  if (!selectors.has(selector)) {
-    selectors.set(selector, {
-      length: 0,
-      on: jest.fn(),
-      slideUp: jest.fn((_speed?: any, cb?: () => void) => cb?.()),
-      slideDown: jest.fn(),
-      append: jest.fn(),
-      html: jest.fn().mockReturnThis(),
-    });
-  }
-  return selectors.get(selector)!;
-}
-
-function registerVisibleStub(selector: any): JQueryStub {
-  const stub = getStub(selector);
-  stub.length = 1;
-  return stub;
-}
-
-jest.mock("jquery", () => {
-  return (selector: any, attrs?: any) => {
-    if (typeof selector === "string" && selector.startsWith("<")) {
-      const stub = {
-        length: 1,
-        on: jest.fn(),
-        slideUp: jest.fn((_speed?: any, cb?: () => void) => cb?.()),
-        slideDown: jest.fn(),
-        html: jest.fn().mockReturnThis(),
-      };
-      if (attrs?.id) {
-        selectors.set(`#${attrs.id}`, stub as any);
-      }
-      return stub;
-    }
-    return getStub(selector);
-  };
-});
 
 jest.mock("../app-framework", () => ({
   redux: {
@@ -71,7 +22,7 @@ describe("IdleClient", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.clearAllMocks();
-    selectors.clear();
+    document.body.innerHTML = '<div id="smc-idle-notification"></div>';
     mockCustomizeStore = {
       get: jest.fn((key: string) => {
         switch (key) {
@@ -86,9 +37,6 @@ describe("IdleClient", () => {
         }
       }),
     };
-    registerVisibleStub(document);
-    registerVisibleStub("body");
-    registerVisibleStub("#smc-idle-notification");
     Object.defineProperty(document, "hidden", {
       configurable: true,
       value: false,
@@ -161,6 +109,6 @@ describe("IdleClient", () => {
     } as any);
 
     expect(() => idle.show_notification()).not.toThrow();
-    expect(getStub("body").append).toHaveBeenCalledTimes(1);
+    expect(document.getElementById("cocalc-idle-notification")).not.toBeNull();
   });
 });

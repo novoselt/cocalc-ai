@@ -8,14 +8,10 @@ import { FormattedMessage, useIntl } from "react-intl";
 
 import { useActions, useStore } from "@cocalc/frontend/app-framework";
 import type { AppRedux } from "@cocalc/frontend/app-framework";
-import {
-  Icon,
-  LabeledRow,
-  MarkdownInput,
-  TextInput,
-} from "@cocalc/frontend/components";
+import { Icon, LabeledRow, TextInput } from "@cocalc/frontend/components";
 import HelpPopover from "@cocalc/frontend/course/common/help-popover";
 import { course } from "@cocalc/frontend/i18n";
+import { MarkdownInput } from "@cocalc/frontend/markdown/markdown-input/main";
 import { SharedProjectPanel } from "@cocalc/frontend/course/shared-project/shared-project-panel";
 import { CourseActions } from "../actions";
 import { CourseSettingsRecord, CourseStore } from "../store";

@@ -8,6 +8,9 @@ import { Element, Node } from "slate";
 import { register, RenderElementProps, SlateElement } from "../register";
 import { useFileContext } from "@cocalc/frontend/lib/file-context";
 import DefaultMath from "@cocalc/frontend/components/math/ssr";
+import { stripMathEnvironment } from "./strip-math-environment";
+
+export { stripMathEnvironment } from "./strip-math-environment";
 
 type MathDelimiter = "$" | "$$" | "\\(" | "\\[" | "\\";
 
@@ -133,17 +136,3 @@ register({
   StaticElement,
   toSlate: toDisplayMath,
 });
-
-export function stripMathEnvironment(s: string): string {
-  // These environments get detected, but we must remove them, since once in
-  // math mode they make no sense. All the other environments do make sense.
-  for (const env of ["math", "displaymath"]) {
-    if (s.startsWith(`\\begin{${env}}`)) {
-      return s.slice(
-        `\\begin{${env}}`.length,
-        s.length - `\\end{${env}}`.length,
-      );
-    }
-  }
-  return s;
-}

@@ -9,6 +9,7 @@ import {
   isExamMode,
   waitForExamModeConfiguration,
 } from "@cocalc/frontend/customize/exam-mode";
+import { markStartupPhaseOnce } from "@cocalc/frontend/app/startup-phase";
 
 declare var DEBUG: boolean;
 
@@ -23,6 +24,8 @@ interface ProjectsTableConnection extends EventEmitter {
 // Create and register projects table, which gets automatically
 // synchronized with the server.
 export class ProjectsTable extends Table {
+  private firstSnapshot = true;
+
   no_changefeed() {
     return true;
   }
@@ -43,8 +46,15 @@ export class ProjectsTable extends Table {
     const project_id = redux.getStore("page").get("kiosk_project_id");
     const actions = redux.getActions("projects");
     void actions.ensureRealtimeFeedForCurrentAccount?.();
+    const snapshot = table.get();
+    if (this.firstSnapshot) {
+      this.firstSnapshot = false;
+      markStartupPhaseOnce("projects_snapshot_applied", {
+        project_count: Number(snapshot?.size ?? 0),
+      });
+    }
     if (actions.applyProjectsTableSnapshot != null) {
-      return actions.applyProjectsTableSnapshot(table.get(), {
+      return actions.applyProjectsTableSnapshot(snapshot, {
         mergeIntoExisting: project_id != null,
         removeMissingProjectIds: project_id != null ? [project_id] : undefined,
       });
@@ -94,10 +104,12 @@ async function waitForProjectsTableConnected(
 }
 
 async function createProjectsTableUntilConnected(): Promise<void> {
+  markStartupPhaseOnce("projects_snapshot_requested");
   for (let attempt = 1; attempt <= PROJECTS_TABLE_CONNECT_ATTEMPTS; attempt++) {
     const table = redux.createTable("projects", ProjectsTable);
     initTableError();
     if (await waitForProjectsTableConnected(table._table)) {
+      markStartupPhaseOnce("projects_snapshot_connected", { attempt });
       return;
     }
     if (attempt < PROJECTS_TABLE_CONNECT_ATTEMPTS) {

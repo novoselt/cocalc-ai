@@ -18,6 +18,7 @@ import getLogger from "@cocalc/backend/logger";
 import { conatPassword } from "@cocalc/backend/data";
 import { HUB_PASSWORD_COOKIE_NAME } from "@cocalc/backend/auth/cookie-names";
 import { connect, type Client as ConatClient } from "@cocalc/conat/core/client";
+import "@cocalc/conat/sync-doc/install";
 import { inboxPrefix } from "@cocalc/conat/names";
 import { projectApiClient } from "@cocalc/conat/project/api";
 import { jupyterClient } from "@cocalc/conat/project/jupyter/run-code";

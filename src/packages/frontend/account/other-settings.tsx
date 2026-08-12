@@ -5,7 +5,7 @@
 
 // cSpell:ignore brandcolors codebar
 
-import { Button, Space, Tag } from "antd";
+import { Button, Select, Space, Tag } from "antd";
 import { useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import { Panel, Switch } from "@cocalc/frontend/antd-bootstrap";
@@ -51,6 +51,11 @@ import Tours from "./tours";
 import LiteAISettings from "./lite-ai-settings";
 import { lite } from "@cocalc/frontend/lite";
 import { AgentDebugPanel } from "./agent-debug-panel";
+import {
+  setStartupPerformanceOverride,
+  type StartupPerformanceOverride,
+} from "@cocalc/frontend/app/startup-performance-policy";
+import useStartupPerformancePolicy from "@cocalc/frontend/app/use-startup-performance-policy";
 
 declare var DEBUG: boolean;
 
@@ -72,6 +77,7 @@ export function OtherSettings(props: Readonly<Props>): React.JSX.Element {
   const { labels: showActBarLabels } = useActivityBarPreferences();
   const [showLauncherCustomize, setShowLauncherCustomize] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const startupPerformance = useStartupPerformancePolicy();
 
   function on_change(name: string, value: any): void {
     redux.getActions("account").set_other_settings(name, value);
@@ -191,6 +197,53 @@ export function OtherSettings(props: Readonly<Props>): React.JSX.Element {
   function render_antd(): Rendered {
     return (
       <>
+        <LabeledRow
+          label={intl.formatMessage({
+            id: "account.other-settings.startup-performance.label",
+            defaultMessage: "Startup performance",
+          })}
+        >
+          <div>
+            <Select<StartupPerformanceOverride>
+              value={startupPerformance.override}
+              onChange={setStartupPerformanceOverride}
+              options={[
+                {
+                  value: "auto",
+                  label: intl.formatMessage({
+                    id: "account.other-settings.startup-performance.auto",
+                    defaultMessage: "Automatic (recommended)",
+                  }),
+                },
+                {
+                  value: "full",
+                  label: intl.formatMessage({
+                    id: "account.other-settings.startup-performance.full",
+                    defaultMessage: "Always load full UI",
+                  }),
+                },
+                {
+                  value: "reduced",
+                  label: intl.formatMessage({
+                    id: "account.other-settings.startup-performance.reduced",
+                    defaultMessage: "Prefer reduced-data UI",
+                  }),
+                },
+              ]}
+              style={{ minWidth: 230 }}
+            />
+            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              {intl.formatMessage(
+                {
+                  id: "account.other-settings.startup-performance.description",
+                  defaultMessage:
+                    "Current mode: {mode}. Automatic mode delays optional controls on slow networks, low-power devices, and small touch screens. This preference is stored only in this browser.",
+                },
+                { mode: startupPerformance.mode },
+              )}
+            </Paragraph>
+          </div>
+        </LabeledRow>
         <Switch
           checked={props.other_settings.get("antd_rounded", true)}
           onChange={(e) => on_change("antd_rounded", e.target.checked)}

@@ -17,6 +17,7 @@ import {
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
 import { canUseSyncDocHistory } from "@cocalc/frontend/lib/syncdoc-history";
+import { loadWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
 
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { ImmerDB } from "@cocalc/sync/editor/immer-db";
@@ -26,8 +27,9 @@ import {
   type LanguageModel,
 } from "@cocalc/util/db-schema/ai-models";
 import { history_path, isValidUUID, uuid } from "@cocalc/util/misc";
-import { getSortedDates, getUserName } from "./chat-log";
-import { message_to_markdown } from "./message";
+import { messageToMarkdown } from "./message-to-markdown";
+import { getSortedDates } from "./sorted-dates";
+import { getUserName } from "./user-name";
 import { ChatState, ChatStore } from "./store";
 import { handleSyncDBChange, initFromSyncDB } from "./sync";
 import {
@@ -2362,7 +2364,7 @@ export class ChatActions extends Actions<ChatState> {
     for (const date of dates) {
       const message = this.getMessageByDate(parseFloat(date));
       if (message == null) continue;
-      v.push(message_to_markdown(message));
+      v.push(messageToMarkdown(message));
     }
     const content = v.join("\n\n---\n\n");
     await webapp_client.project_client.write_text_file({
@@ -2395,8 +2397,19 @@ export class ChatActions extends Actions<ChatState> {
     const list = this.getMessagesInThread(threadKey);
     if (!list?.length) return;
 
+    const logRenderer = includeLogs
+      ? (
+          await loadWithRetry(() => import("./message"), {
+            name: "chat log export renderer",
+          })
+        ).message_to_markdown
+      : undefined;
     const content = list
-      .map((msg) => message_to_markdown(msg, { includeLog: includeLogs }))
+      .map((msg) =>
+        logRenderer != null
+          ? logRenderer(msg, { includeLog: true })
+          : messageToMarkdown(msg),
+      )
       .join("\n\n---\n\n");
 
     await webapp_client.project_client.write_text_file({

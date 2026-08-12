@@ -9,7 +9,7 @@ import * as os_path from "path";
 import { generate as heroku } from "project-name-generator";
 import * as superb from "superb";
 import { file_options } from "@cocalc/frontend/editor-tmp";
-import { BASE_URL } from "@cocalc/frontend/misc";
+import { BASE_URL } from "@cocalc/frontend/misc/base-url";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { DEFAULT_NEW_FILENAMES } from "@cocalc/util/db-schema";
 import { NewFilenameTypes } from "@cocalc/util/db-schema/defaults";

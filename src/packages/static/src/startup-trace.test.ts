@@ -61,6 +61,15 @@ test("completion suppresses the incomplete-start beacon", () => {
   expect(sendBeacon).not.toHaveBeenCalled();
 });
 
+test("records privacy-safe details with startup phases", () => {
+  const trace = initializeStartupTrace();
+  trace?.mark("account_snapshot_applied", { field_count: 4 });
+
+  expect(trace?.snapshot().details.phase_details).toEqual({
+    account_snapshot_applied: { field_count: 4 },
+  });
+});
+
 test("reports a startup that remains incomplete", () => {
   const sendBeacon = navigator.sendBeacon as jest.Mock;
   initializeStartupTrace();
