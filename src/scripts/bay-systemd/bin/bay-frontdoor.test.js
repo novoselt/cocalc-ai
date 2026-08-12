@@ -10,10 +10,66 @@ process.env.COCALC_BAY_PUBLIC_INGRESS_MODE = "cloudflare-proxy";
 
 const {
   formatHealthError,
+  isContentAddressedStaticRequest,
+  prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,
   serializeProxyRequest,
 } = require("./bay-frontdoor.js");
+
+test("recognizes content-addressed static assets only", () => {
+  assert.equal(
+    isContentAddressedStaticRequest({
+      url: "/static/app-6e50741dfe558fe6.js",
+    }),
+    true,
+  );
+  assert.equal(
+    isContentAddressedStaticRequest({
+      url: "/base/static/7386645f80d6d0a6.wasm?cache=1",
+    }),
+    true,
+  );
+  assert.equal(
+    isContentAddressedStaticRequest({ url: "/static/app.html" }),
+    false,
+  );
+  assert.equal(
+    isContentAddressedStaticRequest({ url: "/api/static/report-deadbeef" }),
+    false,
+  );
+});
+
+test("does not poison immutable static assets with the affinity cookie", () => {
+  const headers = prepareResponseHeaders(
+    { url: "/static/app-6e50741dfe558fe6.js" },
+    {
+      "cache-control": "public, max-age=864000, must-revalidate",
+      etag: 'W/"asset"',
+    },
+    { id: 2 },
+    true,
+  );
+  assert.equal(headers["set-cookie"], undefined);
+  assert.equal(headers["cache-control"], "public, max-age=31536000, immutable");
+  assert.equal(headers.etag, 'W/"asset"');
+});
+
+test("keeps affinity on mutable shells and dynamic responses", () => {
+  const worker = { id: 2 };
+  for (const url of ["/static/app.html", "/api/v2/projects"]) {
+    const headers = prepareResponseHeaders(
+      { url },
+      { "cache-control": "no-store" },
+      worker,
+      true,
+    );
+    assert.match(
+      headers["set-cookie"],
+      /^cocalc_bay_frontdoor_worker=2(?:\.|;)/,
+    );
+  }
+});
 
 test("includes a normalized readiness body in health errors", () => {
   assert.equal(

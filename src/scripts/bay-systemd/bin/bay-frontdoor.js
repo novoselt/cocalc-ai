@@ -47,6 +47,7 @@ const affinityMaxAgeSeconds = intEnv(
   "COCALC_BAY_FRONTDOOR_AFFINITY_MAX_AGE_SECONDS",
   3600,
 );
+const immutableStaticMaxAgeSeconds = 365 * 24 * 60 * 60;
 const minHealthyWorkers = Math.min(
   intEnv("COCALC_BAY_MIN_HEALTHY_WORKERS", 1),
   workerCount,
@@ -371,6 +372,25 @@ function addAffinityCookie(headers, worker, changed) {
   return nextHeaders;
 }
 
+function isContentAddressedStaticRequest(req) {
+  const pathname = `${req?.url ?? ""}`.split(/[?#]/, 1)[0];
+  const basename = pathname.slice(pathname.lastIndexOf("/") + 1);
+  return (
+    /(?:^|\/)static\//.test(pathname) &&
+    /(?:^|[-.])[0-9a-f]{16,}(?=[-.]|$)/i.test(basename)
+  );
+}
+
+function prepareResponseHeaders(req, headers, worker, changed) {
+  if (!isContentAddressedStaticRequest(req)) {
+    return addAffinityCookie(headers, worker, changed);
+  }
+  return {
+    ...headers,
+    "cache-control": `public, max-age=${immutableStaticMaxAgeSeconds}, immutable`,
+  };
+}
+
 function firstHeaderValue(value) {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -481,7 +501,7 @@ function proxyHttp(req, res) {
     (upstreamRes) => {
       res.writeHead(
         upstreamRes.statusCode ?? 502,
-        addAffinityCookie(upstreamRes.headers, worker, changed),
+        prepareResponseHeaders(req, upstreamRes.headers, worker, changed),
       );
       upstreamRes.pipe(res);
     },
@@ -582,6 +602,8 @@ if (require.main === module) {
 module.exports = {
   evictWorkerUpgrades,
   formatHealthError,
+  isContentAddressedStaticRequest,
+  prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,
   serializeProxyRequest,
