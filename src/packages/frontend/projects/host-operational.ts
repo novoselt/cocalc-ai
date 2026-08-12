@@ -1,6 +1,7 @@
 import { COMPUTE_STATES } from "@cocalc/util/compute-states";
 
-const HOST_ONLINE_WINDOW_MS = 10 * 60 * 1000;
+const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
+const DEFAULT_RECOVERY_ESTIMATE_MS = 3 * 60 * 1000;
 
 type HostInfoLike = {
   get?: (key: string) => any;
@@ -20,7 +21,6 @@ export type HostRecoveryDisplay = {
   description?: string;
   etaMinutes?: number;
   startedAt?: string;
-  progressPercent?: number;
   timingDescription?: string;
 };
 
@@ -59,21 +59,21 @@ function timestamp(value: unknown): number | undefined {
 export function getHostRecoveryDisplay(
   hostInfo: HostInfoLike | undefined,
   now = Date.now(),
+  clientUnavailableSince?: string,
 ): HostRecoveryDisplay {
   const recovery = read(hostInfo, "spot_recovery_state");
   const phase = `${
     read(hostInfo, "recovery_phase") ?? read(recovery, "phase") ?? ""
   }`.trim();
   const desiredState = `${read(hostInfo, "desired_state") ?? "running"}`;
-  if (!phase || phase === "idle" || desiredState !== "running") {
-    return { active: false };
-  }
+  const recoveryActive =
+    !!phase && phase !== "idle" && desiredState === "running";
   const desiredPricing = `${
     read(hostInfo, "desired_pricing_model") ??
     read(hostInfo, "pricing_model") ??
     ""
   }`;
-  if (desiredPricing !== "spot") return { active: false };
+  const isSpotRecovery = recoveryActive && desiredPricing === "spot";
   const effectivePricing = `${
     read(hostInfo, "effective_pricing_model") ?? desiredPricing
   }`;
@@ -86,52 +86,58 @@ export function getHostRecoveryDisplay(
   const etaMinutes = nextRetry
     ? Math.max(2, Math.ceil((nextRetry - now) / 60_000) + 2)
     : 3;
-  const startedAt = `${
-    read(hostInfo, "unavailable_since") ??
-    read(recovery, "outage_started_at") ??
-    ""
-  }`.trim();
-  const startedAtMs = timestamp(startedAt);
+  const lastSeenMs = timestamp(read(hostInfo, "last_seen"));
+  const clientStartedAtMs = timestamp(clientUnavailableSince);
+  const serverStartedAtCandidates = [
+    isSpotRecovery ? read(recovery, "outage_started_at") : undefined,
+    read(hostInfo, "unavailable_since"),
+  ]
+    .map(timestamp)
+    .filter((value): value is number => value != null && value <= now)
+    .filter((value) => lastSeenMs == null || value >= lastSeenMs);
+  const startedAtCandidates = [
+    ...(clientStartedAtMs != null && clientStartedAtMs <= now
+      ? [clientStartedAtMs]
+      : []),
+    ...serverStartedAtCandidates,
+  ];
+  const startedAtMs =
+    startedAtCandidates.length > 0
+      ? Math.min(...startedAtCandidates)
+      : undefined;
   const historicalEstimate = Number(
     read(hostInfo, "recovery_duration_estimate_ms"),
   );
   const estimatedDurationMs =
     Number.isFinite(historicalEstimate) && historicalEstimate > 0
       ? historicalEstimate
-      : etaMinutes * 60_000;
+      : DEFAULT_RECOVERY_ESTIMATE_MS;
   const elapsedMs =
     startedAtMs == null ? undefined : Math.max(0, now - startedAtMs);
   const estimatedMinutes = Math.max(
     1,
     Math.round(estimatedDurationMs / 60_000),
   );
-  const remainingMinutes =
-    elapsedMs == null
-      ? undefined
-      : Math.max(0, Math.ceil((estimatedDurationMs - elapsedMs) / 60_000));
-  const progressPercent =
-    elapsedMs == null
-      ? undefined
-      : Math.max(
-          5,
-          Math.min(95, Math.round((elapsedMs / estimatedDurationMs) * 100)),
-        );
   const timingDescription =
-    remainingMinutes == null
-      ? `Expected recovery is within about ${etaMinutes} minutes.`
-      : remainingMinutes > 0
-        ? `Similar recoveries usually finish within about ${estimatedMinutes} minutes; estimated time remaining is ${remainingMinutes} minute${remainingMinutes === 1 ? "" : "s"}.`
-        : `This has taken longer than the usual ${estimatedMinutes} minute${estimatedMinutes === 1 ? "" : "s"}; recovery is still in progress.`;
+    elapsedMs != null && elapsedMs > estimatedDurationMs
+      ? `This is taking longer than the usual ${estimatedMinutes} minute${estimatedMinutes === 1 ? "" : "s"}, but CoCalc is still retrying automatically.`
+      : `This usually takes about ${estimatedMinutes} minute${estimatedMinutes === 1 ? "" : "s"}, though cloud capacity can make it longer.`;
   const timing = {
     etaMinutes,
     ...(startedAtMs == null
       ? {}
       : {
           startedAt: new Date(startedAtMs).toISOString(),
-          progressPercent,
         }),
     timingDescription,
   };
+
+  if (!isSpotRecovery && startedAtMs == null) {
+    return { active: false };
+  }
+  if (!isSpotRecovery) {
+    return { active: false, ...timing };
+  }
 
   if (
     effectivePricing === "on_demand" ||

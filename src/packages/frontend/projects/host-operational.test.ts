@@ -30,7 +30,7 @@ describe("projects host operational display state", () => {
     });
   });
 
-  it("shows elapsed recovery progress using host history", () => {
+  it("shows honest elapsed recovery timing using host history", () => {
     expect(
       getHostRecoveryDisplay(
         {
@@ -47,8 +47,31 @@ describe("projects host operational display state", () => {
     ).toMatchObject({
       active: true,
       startedAt: "2026-08-12T11:59:00.000Z",
-      progressPercent: 25,
-      timingDescription: expect.stringContaining("3 minutes"),
+      timingDescription: expect.stringContaining("about 4 minutes"),
+    });
+  });
+
+  it("keeps the browser-observed disconnect as the stable incident start", () => {
+    expect(
+      getHostRecoveryDisplay(
+        {
+          desired_state: "running",
+          desired_pricing_model: "spot",
+          recovery_phase: "retrying_spot",
+          last_seen: "2026-08-12T12:01:00.000Z",
+          unavailable_since: "2026-08-12T12:02:00.000Z",
+          spot_recovery_state: {
+            phase: "retrying_spot",
+            outage_started_at: "2026-08-12T12:02:00.000Z",
+          },
+        },
+        new Date("2026-08-12T12:04:00.000Z").getTime(),
+        "2026-08-12T12:00:00.000Z",
+      ),
+    ).toMatchObject({
+      active: true,
+      startedAt: "2026-08-12T12:00:00.000Z",
+      timingDescription: expect.stringContaining("longer than the usual"),
     });
   });
 

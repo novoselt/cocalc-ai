@@ -14,7 +14,6 @@ import {
   Space,
   Tag,
   Typography,
-  Progress,
 } from "antd";
 import {
   React,
@@ -76,7 +75,7 @@ import { throttle } from "lodash";
 import { StartButton } from "@cocalc/frontend/project/start-button";
 import {
   useHostInfo,
-  useProjectHostConnected,
+  useProjectHostConnectionState,
 } from "@cocalc/frontend/projects/host-info";
 import {
   evaluateHostOperational,
@@ -220,7 +219,8 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const hostInfo = useHostInfo(host_id, {
     enabled: !props.publicDirectoryShare,
   });
-  const projectHostConnected = useProjectHostConnected(host_id);
+  const projectHostConnection = useProjectHostConnectionState(host_id);
+  const projectHostConnected = projectHostConnection.connected;
   const hostOperational = useMemo(
     () => evaluateHostOperational(hostInfo),
     [hostInfo],
@@ -245,7 +245,8 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const moveStatusVisible = shouldRenderMoveStatus(moveLro, moveReopenRequired);
   const hostUnavailable =
     !!host_id &&
-    hostOperational.state === "unavailable" &&
+    (hostOperational.state === "unavailable" ||
+      (projectHostConnection.observed && !projectHostConnected)) &&
     !projectHostConnected;
   const lifecycle = useMemo(
     () =>
@@ -265,16 +266,24 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const [hostRecoveryNow, setHostRecoveryNow] = useState(Date.now());
   useEffect(() => {
     if (!hostUnavailable) return;
+    const refresh = () =>
+      redux.getActions("projects")?.ensure_host_info(host_id, true);
+    refresh();
     setHostRecoveryNow(Date.now());
-    const timer = window.setInterval(
-      () => setHostRecoveryNow(Date.now()),
-      10_000,
-    );
+    const timer = window.setInterval(() => {
+      setHostRecoveryNow(Date.now());
+      refresh();
+    }, 15_000);
     return () => window.clearInterval(timer);
-  }, [hostUnavailable]);
+  }, [hostUnavailable, host_id]);
   const hostRecovery = useMemo(
-    () => getHostRecoveryDisplay(hostInfo, hostRecoveryNow),
-    [hostInfo, hostRecoveryNow],
+    () =>
+      getHostRecoveryDisplay(
+        hostInfo,
+        hostRecoveryNow,
+        projectHostConnection.unavailableSince,
+      ),
+    [hostInfo, hostRecoveryNow, projectHostConnection.unavailableSince],
   );
   const fullscreen = useTypedRedux("page", "fullscreen");
   const active_top_tab = useTypedRedux("page", "active_top_tab");
@@ -932,7 +941,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         title={
           hostRecovery.active
             ? hostRecovery.title
-            : "Project host is not available"
+            : "Reconnecting to your project"
         }
         description={
           <Space wrap>
@@ -945,16 +954,16 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
                 </>
               ) : (
                 <>
-                  This project is assigned to {assignedHostLabel}, which is
-                  unavailable ({hostUnavailableReason}). File access may fail
-                  until the host comes back online, but project settings and
-                  cached metadata are still available.
+                  CoCalc temporarily lost contact with the computer running this
+                  project and is reconnecting automatically. Your saved files
+                  are safe. Editing, terminals, and notebooks will resume when
+                  the connection is restored. {hostRecovery.timingDescription}
                 </>
               )}
             </span>
             {hostRecovery.startedAt ? (
               <span>
-                Offline since{" "}
+                Reconnecting since{" "}
                 {new Date(hostRecovery.startedAt).toLocaleString()} ({""}
                 <TimeAgo
                   date={new Date(hostRecovery.startedAt)}
@@ -964,13 +973,11 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
                 ).
               </span>
             ) : null}
-            {hostRecovery.progressPercent != null ? (
-              <Progress
-                percent={hostRecovery.progressPercent}
-                size="small"
-                status="active"
-                style={{ minWidth: 180, maxWidth: 300 }}
-              />
+            {!hostRecovery.active ? (
+              <details style={{ maxWidth: 600 }}>
+                <summary>Technical details</summary>
+                {assignedHostLabel}: {hostUnavailableReason}
+              </details>
             ) : null}
             {!hostRecovery.active ? (
               <Button

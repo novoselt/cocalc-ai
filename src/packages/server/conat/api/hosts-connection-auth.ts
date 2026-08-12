@@ -64,6 +64,7 @@ import {
 import * as publicDirectoryShares from "./public-directory-shares";
 import {
   computeHostOperationalAvailability,
+  HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS,
   defaultInterruptionRestorePolicy,
   normalizeHostInterruptionRestorePolicy,
   normalizeHostPricingModel,
@@ -87,6 +88,7 @@ async function getHostRecoveryTiming(host_id: string): Promise<{
           WHERE host_id=$1
             AND ended_at IS NOT NULL
             AND state IN ('unavailable', 'recovering')
+            AND category IN ('spot_interruption', 'provider_offline')
             AND planned IS NOT TRUE
           ORDER BY ended_at DESC
           LIMIT 20
@@ -113,7 +115,11 @@ async function getHostRecoveryTiming(host_id: string): Promise<{
     return {
       ...(unavailableSince ? { unavailable_since: unavailableSince } : {}),
       ...(Number.isFinite(estimate) && estimate > 0
-        ? { recovery_duration_estimate_ms: Math.round(estimate) }
+        ? {
+            recovery_duration_estimate_ms: Math.round(
+              estimate + HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS,
+            ),
+          }
         : {}),
     };
   } catch (err) {
@@ -585,7 +591,9 @@ export async function resolveHostConnectionLocalHelper({
       ? undefined
       : availability.reason_unavailable,
     unavailable_since:
-      recoveryTiming.unavailable_since ?? recoveryOutageStartedAt,
+      spotRecoveryState?.phase && spotRecoveryState.phase !== "idle"
+        ? (recoveryOutageStartedAt ?? recoveryTiming.unavailable_since)
+        : availability.unavailable_since,
     recovery_duration_estimate_ms: recoveryTiming.recovery_duration_estimate_ms,
   } as HostConnectionInfo;
 }

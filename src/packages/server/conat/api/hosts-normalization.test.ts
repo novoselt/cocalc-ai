@@ -522,6 +522,23 @@ describe("computeHostOperationalAvailability", () => {
     ...overrides,
   });
 
+  it("dates a stale-heartbeat outage from the end of the heartbeat window", () => {
+    const lastSeen = new Date(Date.now() - 3 * 60_000);
+    expect(
+      computeHostOperationalAvailability({
+        status: "running",
+        last_seen: lastSeen,
+        metadata: {},
+      }),
+    ).toMatchObject({
+      operational: false,
+      online: false,
+      unavailable_since: new Date(
+        lastSeen.getTime() + 2 * 60_000,
+      ).toISOString(),
+    });
+  });
+
   it("removes a host from placement during a planned project-host upgrade", () => {
     expect(
       computeHostOperationalAvailability({
