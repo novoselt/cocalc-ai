@@ -89,10 +89,13 @@ Direct Chromium qualification options:
   --network <native|fast-4g|5mbps|10mbps|10mbps-high-latency|slow-4g|1mbps|3g>
   --cpu-throttle <1-20>  --cache <warm|cold>  --mobile
   --startup-only [--startup-target <projects|project|file|jupyter|terminal|account|docs|admin>]
+  --test-account <account-id-or-email>
 
-For an isolated test account, set COCALC_UX_HARNESS_SIGN_IN_URL to a one-time
-sign-in URL and pass --direct. This launches a clean Chromium process directly,
-without exposing the operator's account cookie or discovering browser sessions.
+For an isolated test account, pass --test-account with --direct to issue a new
+one-time impersonation grant from the selected fresh-auth CLI profile. You may
+instead set COCALC_UX_HARNESS_SIGN_IN_URL explicitly. Both paths launch a clean
+Chromium process without exposing the operator's account cookie or discovering
+browser sessions.
 
 The target browser must already be signed in and connected. The harness creates
 small fixtures under /home/user/cocalc-ux-harness, drives a hard refresh,
@@ -138,6 +141,7 @@ function parseArgs(argv) {
     else if (arg === "--mobile") options.mobile = true;
     else if (arg === "--startup-only") options.startupOnly = true;
     else if (arg === "--startup-target") options.startupTarget = value();
+    else if (arg === "--test-account") options.testAccount = value();
     else if (arg === "--help" || arg === "-h") usage();
     else throw Error(`unknown option '${arg}'`);
   }
@@ -155,8 +159,10 @@ function parseArgs(argv) {
   ) {
     throw Error("--iterations must be an integer from 1 through 100");
   }
-  if (options.direct && !options.signInUrl) {
-    throw Error("COCALC_UX_HARNESS_SIGN_IN_URL is required with --direct");
+  if (options.direct && !options.signInUrl && !options.testAccount) {
+    throw Error(
+      "--test-account or COCALC_UX_HARNESS_SIGN_IN_URL is required with --direct",
+    );
   }
   if (!(options.network in NETWORK_PROFILES)) {
     throw Error(`unknown --network profile '${options.network}'`);
@@ -229,6 +235,27 @@ function run(args, { capture = false } = {}) {
     throw Error(`cocalc ${args.join(" ")} failed${detail}`);
   }
   return capture ? result.stdout : "";
+}
+
+function issueDirectSignInUrl() {
+  if (options.signInUrl) return options.signInUrl;
+  const output = JSON.parse(
+    run(
+      [
+        "--json",
+        "admin",
+        "user",
+        "issue-impersonation-link",
+        options.testAccount,
+      ],
+      { capture: true },
+    ),
+  );
+  const url = `${output?.data?.url ?? ""}`.trim();
+  if (!url) {
+    throw Error("impersonation grant response did not contain a sign-in URL");
+  }
+  return url;
 }
 
 function projectFileUrl(path = "") {
@@ -830,7 +857,8 @@ async function runDirectHarness(plan) {
 
   let failure;
   try {
-    await page.goto(options.signInUrl, {
+    const signInUrl = issueDirectSignInUrl();
+    await page.goto(signInUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
