@@ -6,6 +6,7 @@
 import {
   getHostRecoveryDisplay,
   getProjectLifecycleView,
+  isHostRecoveryTransient,
   normalizeProjectStateForDisplay,
 } from "./host-operational";
 
@@ -75,6 +76,30 @@ describe("projects host operational display state", () => {
     });
   });
 
+  it("does not replace the current browser incident with stale fallback metadata", () => {
+    expect(
+      getHostRecoveryDisplay(
+        {
+          desired_state: "running",
+          desired_pricing_model: "spot",
+          effective_pricing_model: "on_demand",
+          recovery_phase: "running_standard_fallback",
+          last_seen: null,
+          spot_recovery_state: {
+            phase: "running_standard_fallback",
+            outage_started_at: "2026-08-12T16:45:30.652Z",
+            standard_hold_until: "2026-08-13T16:45:30.652Z",
+          },
+        },
+        new Date("2026-08-12T17:14:45.000Z").getTime(),
+        "2026-08-12T17:12:35.000Z",
+      ),
+    ).toMatchObject({
+      active: true,
+      startedAt: "2026-08-12T17:12:35.000Z",
+    });
+  });
+
   it("does not describe idle spot hosts as recovering", () => {
     expect(
       getHostRecoveryDisplay({
@@ -83,6 +108,34 @@ describe("projects host operational display state", () => {
         recovery_phase: "idle",
       }),
     ).toEqual({ active: false });
+  });
+
+  it("distinguishes transient recovery from terminal host states", () => {
+    expect(
+      isHostRecoveryTransient({
+        status: "starting",
+        desired_state: "running",
+      }),
+    ).toBe(true);
+    expect(
+      isHostRecoveryTransient({
+        status: "off",
+        desired_state: "running",
+        recovery_phase: "running_standard_fallback",
+      }),
+    ).toBe(true);
+    expect(
+      isHostRecoveryTransient({
+        status: "deprovisioned",
+        desired_state: "off",
+      }),
+    ).toBe(false);
+    expect(
+      isHostRecoveryTransient({
+        status: "error",
+        desired_state: "running",
+      }),
+    ).toBe(false);
   });
 
   it("keeps running projects running when host heartbeat is stale", () => {

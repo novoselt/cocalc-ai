@@ -1067,6 +1067,76 @@ describe("ProjectsActions archive flow", () => {
     });
   });
 
+  it("retains start intent while an assigned host is recovering", async () => {
+    jest.useFakeTimers();
+    try {
+      configureProject({
+        state: "opened",
+        hostId: "host-1",
+        hostInfo: {
+          desired_state: "running",
+          online: false,
+          reason_unavailable: "Host is starting; it must be running.",
+          recovery_phase: "running_standard_fallback",
+          status: "starting",
+          updated_at: Date.now(),
+        },
+      });
+      const { actions, setState } = makeActions();
+      const ensureHostInfo = jest
+        .spyOn(actions, "ensure_host_info" as any)
+        .mockResolvedValueOnce(
+          ImmutableMap({
+            desired_state: "running",
+            recovery_phase: "running_standard_fallback",
+            status: "running",
+          }),
+        )
+        .mockResolvedValueOnce(
+          ImmutableMap({
+            desired_state: "running",
+            online: true,
+            recovery_phase: "running_standard_fallback",
+            status: "running",
+          }),
+        );
+      jest
+        .spyOn(actions as any, "project_log")
+        .mockImplementation(async () => {});
+
+      const started = actions.start_project(project_id);
+      await Promise.resolve();
+      expect(
+        mockedWebappClient.conat_client.hub.projects.start,
+      ).not.toHaveBeenCalled();
+      expect(setState).toHaveBeenCalledWith({
+        control_error: "",
+        control_status: "Waiting for the project host to reconnect...",
+      });
+
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(
+        mockedWebappClient.conat_client.hub.projects.start,
+      ).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(10_000);
+      await expect(started).resolves.toBe(true);
+
+      expect(ensureHostInfo).toHaveBeenCalledWith("host-1", true);
+      expect(
+        mockedWebappClient.conat_client.hub.projects.start,
+      ).toHaveBeenCalledWith({
+        foreground_wait_ms: 5000,
+        project_id,
+        wait: false,
+      });
+      expect(alertMessageMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error" }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("logs project_started only after the project is observed running", async () => {
     jest.useFakeTimers();
     try {

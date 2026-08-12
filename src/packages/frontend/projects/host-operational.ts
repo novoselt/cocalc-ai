@@ -95,16 +95,16 @@ export function getHostRecoveryDisplay(
     .map(timestamp)
     .filter((value): value is number => value != null && value <= now)
     .filter((value) => lastSeenMs == null || value >= lastSeenMs);
-  const startedAtCandidates = [
-    ...(clientStartedAtMs != null && clientStartedAtMs <= now
-      ? [clientStartedAtMs]
-      : []),
-    ...serverStartedAtCandidates,
-  ];
+  // Once this browser witnesses a disconnect, its timestamp is the stable
+  // identity of this incident. Provider recovery state can retain an older
+  // outage while a Standard fallback hold remains active; accepting that value
+  // later would make the displayed elapsed time jump backwards by hours.
   const startedAtMs =
-    startedAtCandidates.length > 0
-      ? Math.min(...startedAtCandidates)
-      : undefined;
+    clientStartedAtMs != null && clientStartedAtMs <= now
+      ? clientStartedAtMs
+      : serverStartedAtCandidates.length > 0
+        ? Math.min(...serverStartedAtCandidates)
+        : undefined;
   const historicalEstimate = Number(
     read(hostInfo, "recovery_duration_estimate_ms"),
   );
@@ -234,6 +234,24 @@ export function evaluateHostOperational(
     };
   }
   return { state: "operational", status, online };
+}
+
+export function isHostRecoveryTransient(
+  hostInfo: HostInfoLike | undefined,
+): boolean {
+  const status = normalizeStatus(read(hostInfo, "status"));
+  const desiredState = normalizeStatus(read(hostInfo, "desired_state"));
+  const recovery = read(hostInfo, "spot_recovery_state");
+  const phase = `${
+    read(hostInfo, "recovery_phase") ?? read(recovery, "phase") ?? ""
+  }`.trim();
+  const recoveryActive = phase.length > 0 && phase !== "idle";
+
+  if (status === "starting") return true;
+  if (desiredState !== "running") return false;
+  return (
+    recoveryActive || status === "running" || status === "off" || status == null
+  );
 }
 
 export function hostLabel(
