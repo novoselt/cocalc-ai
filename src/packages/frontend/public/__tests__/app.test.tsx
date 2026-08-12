@@ -898,6 +898,32 @@ describe("PublicApp", () => {
     expect(
       within(videoOnlyRow!).getByText(/supplemental previews/),
     ).not.toBeNull();
+    const infoRelationshipsRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.3\.1 Info and Relationships/,
+      })
+      .closest("tr");
+    expect(infoRelationshipsRow).not.toBeNull();
+    expect(
+      within(infoRelationshipsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(infoRelationshipsRow!).getByText(
+        /visible labels are rendered separately from their controls/,
+      ),
+    ).not.toBeNull();
+    const meaningfulSequenceRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.3\.2 Meaningful Sequence/,
+      })
+      .closest("tr");
+    expect(meaningfulSequenceRow).not.toBeNull();
+    expect(within(meaningfulSequenceRow!).getByText("Supports")).not.toBeNull();
+    expect(
+      within(meaningfulSequenceRow!).getByText(
+        /no layout reordering that changed the meaning/,
+      ),
+    ).not.toBeNull();
     const keyboardRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.1\.1 Keyboard/,
@@ -1007,6 +1033,37 @@ describe("PublicApp", () => {
     expect(
       within(consistentHelpRow!).getByText(
         /without changing those global help mechanisms/,
+      ),
+    ).not.toBeNull();
+    const labelInNameRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.5\.3 Label in Name/,
+      })
+      .closest("tr");
+    expect(labelInNameRow).not.toBeNull();
+    expect(
+      within(labelInNameRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(labelInNameRow!).getByText(
+        /accessible name is absent or derived from placeholder text/,
+      ),
+    ).not.toBeNull();
+    const identifyInputPurposeRow = within(tables[2])
+      .getByRole("rowheader", {
+        name: /1\.3\.5 Identify Input Purpose/,
+      })
+      .closest("tr");
+    expect(identifyInputPurposeRow).not.toBeNull();
+    expect(
+      within(identifyInputPurposeRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(identifyInputPurposeRow!).getByText("one-time-code"),
+    ).not.toBeNull();
+    expect(
+      within(identifyInputPurposeRow!).getByText(
+        /Profile display-name field disables autocomplete/,
       ),
     ).not.toBeNull();
     const errorIdentificationRow = within(tables[1])

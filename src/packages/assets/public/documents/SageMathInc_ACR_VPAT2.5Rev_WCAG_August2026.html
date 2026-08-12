@@ -549,7 +549,16 @@
                     <span>(Level A)</span>
                   </th>
                   <td>Partially supports</td>
-                  <td></td>
+                  <td>
+                    Most sampled screens use semantic headings, tables, and
+                    controls, and automated checks did not identify relationship
+                    failures in most tested states. However, source review found
+                    authentication and account-setting fields whose visible
+                    labels are rendered separately from their controls without a
+                    programmatic label association. Automated testing also found
+                    a visible Help label that was not programmatically
+                    associated with its switch.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -561,8 +570,13 @@
                     >
                     <span>(Level A)</span>
                   </th>
-                  <td>Partially supports</td>
-                  <td></td>
+                  <td>Supports</td>
+                  <td>
+                    On the manually reviewed Profile and Files pages, visual
+                    presentation and keyboard order followed a logical sequence.
+                    Source review found no layout reordering that changed the
+                    meaning of those sampled screens.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -840,7 +854,14 @@
                     <span>(Level A 2.1 and 2.2)</span>
                   </th>
                   <td>Partially supports</td>
-                  <td></td>
+                  <td>
+                    Automated checks passed for most sampled controls. Source
+                    review found visible labels such as “Email address” and “New
+                    email address” rendered separately from their inputs without
+                    a programmatic association. In these cases, the accessible
+                    name is absent or derived from placeholder text and does not
+                    contain the visible label.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
@@ -1128,7 +1149,15 @@
                     <span>(Level AA 2.1 and 2.2)</span>
                   </th>
                   <td>Partially supports</td>
-                  <td></td>
+                  <td>
+                    Public authentication fields use input-purpose tokens such
+                    as <code>name</code>, <code>email</code>,
+                    <code>username</code>, <code>current-password</code>,
+                    <code>new-password</code>, and <code>one-time-code</code>.
+                    Source review found that the Profile display-name field
+                    disables autocomplete and that account email and password
+                    edit fields omit applicable input-purpose tokens.
+                  </td>
                 </tr>
                 <tr>
                   <th scope="row">
