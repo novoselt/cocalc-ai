@@ -178,8 +178,13 @@ jobs:
 
       - name: Install system packages
         run: |
-          sudo apt-get update
-          sudo apt-get install -y attr btrfs-progs python3
+          APT_RETRY=(
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=15
+            -o Acquire::https::Timeout=15
+          )
+          sudo timeout 3m apt-get "${APT_RETRY[@]}" update
+          sudo timeout 3m apt-get "${APT_RETRY[@]}" install -y attr btrfs-progs python3
 
       - name: Install workspace dependencies
         run: pnpm -C src/packages install --frozen-lockfile
