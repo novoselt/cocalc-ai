@@ -912,6 +912,21 @@ describe("PublicApp", () => {
         /visible labels are rendered separately from their controls/,
       ),
     ).not.toBeNull();
+    const useOfColorRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.4\.1 Use of Color/,
+      })
+      .closest("tr");
+    expect(useOfColorRow).not.toBeNull();
+    expect(
+      within(useOfColorRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(useOfColorRow!).getByText(/removes text decoration/),
+    ).not.toBeNull();
+    expect(
+      within(useOfColorRow!).getByText(/distinguished.*primarily by color/),
+    ).not.toBeNull();
     const meaningfulSequenceRow = within(tables[1])
       .getByRole("rowheader", {
         name: /1\.3\.2 Meaningful Sequence/,
