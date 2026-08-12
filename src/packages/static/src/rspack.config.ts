@@ -50,6 +50,7 @@ import bannerPlugin from "./plugins/banner";
 import chunkStatsPlugin from "./plugins/chunk-stats";
 import cleanPlugin from "./plugins/clean";
 import defineConstantsPlugin from "./plugins/define-constants";
+import frontendBuildManifestPlugin from "./plugins/frontend-build-manifest";
 import { javascriptOutputFilenames } from "./output-filenames";
 
 const logger = getLogger("rspack.config");
@@ -133,6 +134,14 @@ export default function getConfig(): Configuration {
   cleanPlugin(registerPlugin, OUTPUT);
 
   appLoaderPlugin(registerPlugin, PRODMODE);
+
+  frontendBuildManifestPlugin(registerPlugin, {
+    schema: 1,
+    git_revision: COCALC_GIT_REVISION,
+    build_timestamp: BUILD_TS,
+    build_date: BUILD_DATE,
+    fingerprint: frontendSourceFingerprint.fingerprint,
+  });
 
   defineConstantsPlugin(registerPlugin, {
     SMC_VERSION,
