@@ -848,12 +848,16 @@ function shouldReconcileRunWithRuntime(
 async function ensureExamDns({
   host,
   config,
+  ensure_public_ingress = false,
 }: {
   host: ExamHostRow;
   config: HostExamConfig;
+  ensure_public_ingress?: boolean;
 }): Promise<HostExamConfig> {
   const route = examDnsRoute(host);
-  await ensureExamPublicIngress({ host, route });
+  if (ensure_public_ingress) {
+    await ensureExamPublicIngress({ host, route });
+  }
   const { record_id } =
     route.type === "A"
       ? await ensureProxiedAddressDns({
@@ -955,7 +959,11 @@ export async function setExamConfigLocal({
   );
   const saved = mapConfig(rows[0]);
   if (!saved.enabled) return saved;
-  return await ensureExamDns({ host, config: saved });
+  return await ensureExamDns({
+    host,
+    config: saved,
+    ensure_public_ingress: true,
+  });
 }
 
 async function updateRunFromRuntime({
@@ -1019,10 +1027,15 @@ export async function createExamRunLocal({
       "the project host must be running before preparing an exam",
     );
   }
-  const config = await loadConfig(host.id);
+  let config = await loadConfig(host.id);
   if (!config?.enabled) {
     throw new Error("exam mode is not enabled for this project host");
   }
+  config = await ensureExamDns({
+    host,
+    config,
+    ensure_public_ingress: true,
+  });
   const key = validateIdempotencyKey(idempotency_key);
   const nextCleanupMode: HostExamCleanupMode =
     cleanup_mode === "manual" ? "manual" : "scheduled";
