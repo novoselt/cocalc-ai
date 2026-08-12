@@ -76,7 +76,7 @@ export function projectRuntimePathForProcess(
   rawPath: string | undefined,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string | undefined {
-  if (rawPath == null || !path.isAbsolute(rawPath)) {
+  if (rawPath == null || !rawPath.startsWith("/")) {
     return rawPath;
   }
   const runtimeHomeRaw = `${env.COCALC_RUNTIME_HOME ?? ""}`.trim();
@@ -84,23 +84,57 @@ export function projectRuntimePathForProcess(
   if (
     !runtimeHomeRaw ||
     !processHomeRaw ||
-    !path.isAbsolute(runtimeHomeRaw) ||
-    !path.isAbsolute(processHomeRaw)
+    !path.posix.isAbsolute(runtimeHomeRaw)
   ) {
     return rawPath;
   }
-  const runtimeHome = path.resolve(runtimeHomeRaw);
-  const normalized = path.resolve(rawPath);
-  if (
-    normalized !== runtimeHome &&
-    !normalized.startsWith(`${runtimeHome}${path.sep}`)
-  ) {
+  const runtimeHome = path.posix.resolve(runtimeHomeRaw);
+  const normalized = path.posix.resolve(rawPath);
+  if (normalized !== runtimeHome && !normalized.startsWith(`${runtimeHome}/`)) {
     return rawPath;
   }
-  const relative = path.relative(runtimeHome, normalized);
+  const relative = path.posix.relative(runtimeHome, normalized);
+  const nativePath = windowsAbsolutePath(processHomeRaw) ? path.win32 : path;
+  const processHome = nativePath.resolve(processHomeRaw);
   return relative
-    ? path.join(path.resolve(processHomeRaw), relative)
-    : path.resolve(processHomeRaw);
+    ? nativePath.join(processHome, ...relative.split("/"))
+    : processHome;
+}
+
+function windowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
+export function projectRuntimePathForClient(
+  rawPath: string | undefined,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  if (rawPath == null) return rawPath;
+  const runtimeHomeRaw = `${env.COCALC_RUNTIME_HOME ?? ""}`.trim();
+  const processHomeRaw = `${env.HOME ?? ""}`.trim();
+  if (
+    !runtimeHomeRaw ||
+    !processHomeRaw ||
+    !path.posix.isAbsolute(runtimeHomeRaw)
+  ) {
+    return rawPath;
+  }
+  const nativePath = windowsAbsolutePath(processHomeRaw) ? path.win32 : path;
+  if (!nativePath.isAbsolute(rawPath)) return rawPath;
+  const processHome = nativePath.resolve(processHomeRaw);
+  const normalized = nativePath.resolve(rawPath);
+  const relative = nativePath.relative(processHome, normalized);
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${nativePath.sep}`) ||
+    nativePath.isAbsolute(relative)
+  ) {
+    return rawPath;
+  }
+  const runtimeHome = path.posix.resolve(runtimeHomeRaw);
+  return relative
+    ? path.posix.join(runtimeHome, relative.replace(/\\/g, "/"))
+    : runtimeHome;
 }
 
 export type ProjectRuntimeMode = "external" | "workspace" | "podman";

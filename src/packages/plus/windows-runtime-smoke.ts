@@ -6,6 +6,7 @@
 import { conat } from "@cocalc/conat/client";
 import { fsClient, fsSubject } from "@cocalc/conat/files/fs";
 import { terminalClient } from "@cocalc/conat/project/terminal";
+import { projectApiClient } from "@cocalc/conat/project/api/project-client";
 import { FALLBACK_PROJECT_UUID } from "@cocalc/util/misc";
 
 async function waitFor(
@@ -67,17 +68,54 @@ export async function runWindowsRuntimeSmoke(port: number): Promise<void> {
   });
   const marker = `cocalc-plus-windows-${Date.now()}`;
   await smokeHttp(port);
+  const projectApi = projectApiClient({ client, project_id });
+  const configuration = await projectApi.system.configuration("main", true);
+  if (configuration.capabilities.homeDirectory !== "/home/user") {
+    throw new Error(
+      `project configuration exposed a noncanonical home: ${JSON.stringify(configuration.capabilities.homeDirectory)}`,
+    );
+  }
+  await projectApi.system.listing({ path: "/home/user" });
   const filename = ".cocalc-plus-windows-smoke.txt";
-  await fs.writeFile(filename, marker);
-  const stored = await fs.readFile(filename, "utf8");
+  const canonicalFilename = `/home/user/${filename}`;
+  const renamedFilename = `/home/user/.cocalc-plus-windows-smoke-renamed.txt`;
+  const destinationDirectory = `/home/user/.cocalc-plus-windows-smoke-dir`;
+  const movedFilename = `${destinationDirectory}/.cocalc-plus-windows-smoke-renamed.txt`;
+  await projectApi.system.writeTextFileToProject({
+    path: canonicalFilename,
+    content: marker,
+  });
+  const stored = await projectApi.system.readTextFileFromProject({
+    path: canonicalFilename,
+  });
   if (stored !== marker) {
     throw new Error(`filesystem smoke mismatch: ${JSON.stringify(stored)}`);
   }
-  const names = await fs.readdir("");
+  if (
+    (await projectApi.system.realpath(canonicalFilename)) !== canonicalFilename
+  ) {
+    throw new Error("project realpath did not preserve the canonical path");
+  }
+  const names = await fs.readdir("/home/user");
   if (!names.includes(filename)) {
     throw new Error(
       "filesystem smoke file is missing from the project listing",
     );
+  }
+  await projectApi.system.renameFile({
+    src: canonicalFilename,
+    dest: renamedFilename,
+  });
+  if ((await fs.readFile(renamedFilename, "utf8")) !== marker) {
+    throw new Error("renamed project file smoke mismatch");
+  }
+  await fs.mkdir(destinationDirectory);
+  await projectApi.system.moveFiles({
+    paths: [renamedFilename],
+    dest: destinationDirectory,
+  });
+  if ((await fs.readFile(movedFilename, "utf8")) !== marker) {
+    throw new Error("moved project file smoke mismatch");
   }
 
   const terminal = terminalClient({
@@ -104,7 +142,12 @@ export async function runWindowsRuntimeSmoke(port: number): Promise<void> {
   } finally {
     await terminal.destroy().catch(() => {});
     terminal.close();
-    await fs.rm(filename, { force: true }).catch(() => {});
+    await fs.rm(canonicalFilename, { force: true }).catch(() => {});
+    await fs.rm(renamedFilename, { force: true }).catch(() => {});
+    await fs.rm(movedFilename, { force: true }).catch(() => {});
+    await fs
+      .rm(destinationDirectory, { recursive: true, force: true })
+      .catch(() => {});
   }
   process.stdout.write(
     `${JSON.stringify({ ok: true, http: true, files: true, powershell_terminal: true })}\n`,

@@ -2,7 +2,7 @@ import { getHome } from "./util";
 import { move, pathExists } from "fs-extra";
 import { stat } from "node:fs/promises";
 import { move_file_variations } from "@cocalc/util/delete-files";
-import { join } from "path";
+import { isAbsolute, join } from "path";
 import getLogger from "@cocalc/backend/logger";
 
 const log = getLogger("rename-file");
@@ -15,10 +15,10 @@ export async function rename_file(
 ): Promise<void> {
   if (src == dest) return; // no-op
   const HOME = getHome(home);
-  if (!src.startsWith("/")) {
+  if (!isAbsolute(src)) {
     src = join(HOME, src);
   }
-  if (!dest.startsWith("/")) {
+  if (!isAbsolute(dest)) {
     dest = join(HOME, dest);
   }
   log.debug({ src, dest, home, HOME });

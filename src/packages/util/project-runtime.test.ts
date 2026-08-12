@@ -5,6 +5,7 @@ import {
   projectRuntimeCapabilityError,
   projectRuntimeConfiguration,
   projectRuntimeHomeRelativePath,
+  projectRuntimePathForClient,
   projectRuntimePathForProcess,
   projectRuntimeRootfsContractLabels,
   rootfsLabelsSatisfyCurrentProjectRuntimeContract,
@@ -55,6 +56,25 @@ describe("project runtime home helpers", () => {
     expect(projectRuntimePathForProcess("src/index.ts", env)).toBe(
       "src/index.ts",
     );
+  });
+
+  it("maps canonical client paths to and from a native Windows workspace", () => {
+    const env = {
+      COCALC_RUNTIME_HOME: "/home/user",
+      HOME: "C:\\Users\\Ada\\CoCalc",
+    };
+    expect(projectRuntimePathForProcess("/home/user", env)).toBe(
+      "C:\\Users\\Ada\\CoCalc",
+    );
+    expect(projectRuntimePathForProcess("/home/user/src/index.ts", env)).toBe(
+      "C:\\Users\\Ada\\CoCalc\\src\\index.ts",
+    );
+    expect(
+      projectRuntimePathForClient("C:\\Users\\Ada\\CoCalc\\src\\index.ts", env),
+    ).toBe("/home/user/src/index.ts");
+    expect(
+      projectRuntimePathForClient("C:\\Windows\\System32\\cmd.exe", env),
+    ).toBe("C:\\Windows\\System32\\cmd.exe");
   });
 
   it("does not map paths outside the configured runtime home", () => {

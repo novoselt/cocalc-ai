@@ -1,4 +1,7 @@
 import getListing from "./get-listing";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("it gets a directory listing", async () => {
   const listing = await getListing(".");
@@ -14,5 +17,18 @@ test("it gets a directory listing", async () => {
     expect(typeof entry.name).toBe("string");
     expect(typeof entry.mtime).toBe("number");
     expect(typeof entry.size).toBe("number");
+  }
+});
+
+test("it does not prefix an absolute directory with home", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cocalc-listing-"));
+  try {
+    await writeFile(join(directory, "marker.txt"), "test");
+    const listing = await getListing(directory, false, {
+      home: join(directory, "wrong-home"),
+    });
+    expect(listing.map(({ name }) => name)).toContain("marker.txt");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });

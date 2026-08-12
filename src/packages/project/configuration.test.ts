@@ -33,6 +33,13 @@ describe("project home directory capabilities", () => {
     await expect(get_homeDirectory()).resolves.toBe("/home/user");
   });
 
+  it("keeps the canonical runtime home POSIX on native Windows", async () => {
+    process.env.HOME = "C:\\Users\\Ada\\CoCalc";
+    process.env.COCALC_RUNTIME_HOME = "/home/user/notes/..";
+
+    await expect(get_homeDirectory()).resolves.toBe("/home/user");
+  });
+
   it("resolves HOME symlinks when no runtime home override is configured", async () => {
     const root = await mkdtemp(join(tmpdir(), "cocalc-project-home-"));
     const home = join(root, "home");
