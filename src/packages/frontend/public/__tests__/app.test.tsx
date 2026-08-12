@@ -939,6 +939,21 @@ describe("PublicApp", () => {
         /no layout reordering that changed the meaning/,
       ),
     ).not.toBeNull();
+    const sensoryCharacteristicsRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /1\.3\.3 Sensory Characteristics/,
+      })
+      .closest("tr");
+    expect(sensoryCharacteristicsRow).not.toBeNull();
+    expect(
+      within(sensoryCharacteristicsRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(sensoryCharacteristicsRow!).getByText(/rely on visual position/),
+    ).not.toBeNull();
+    expect(
+      within(sensoryCharacteristicsRow!).getByText(/Fix the error above/),
+    ).not.toBeNull();
     const pauseStopHideRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.2\.2 Pause, Stop, Hide/,
