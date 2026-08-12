@@ -5,7 +5,11 @@
 
 export type HubApiAdmissionDecision = {
   allowed: boolean;
-  source: "hub-api" | "hub-api-low-priority" | "hub-api-account";
+  source:
+    | "hub-api"
+    | "hub-api-low-priority"
+    | "hub-api-account"
+    | "hub-api-account-low-priority";
   reason?: string;
   maximum: number;
 };
@@ -18,6 +22,11 @@ const LOW_PRIORITY_METHODS = new Set([
   "purchases.getManagedEgressAdminOverview",
   "purchases.getManagedEgressHistory",
   "purchases.getMembershipDetails",
+  "system.listNews",
+  "system.recordUxLatencyEvent",
+  "system.removeBrowserSession",
+  "system.upsertBrowserSession",
+  "system.webappError",
 ]);
 
 export function isLowPriorityHubApiMethod(name: unknown): boolean {
@@ -52,9 +61,19 @@ export function getHubApiAdmissionDecision({
 }): HubApiAdmissionDecision {
   const max = Math.max(1, Math.floor(Number(maximum)));
   const current = Math.max(0, Math.floor(Number(active)));
+  const lowPriority = isLowPriorityHubApiMethod(key);
   if (accountActive != null && accountMaximum != null) {
     const accountCurrent = Math.max(0, Math.floor(Number(accountActive) || 0));
     const accountMax = Math.max(1, Math.floor(Number(accountMaximum) || 1));
+    const accountLowPriorityMax = getHubApiLowPriorityMaximum(accountMax);
+    if (lowPriority && accountCurrent >= accountLowPriorityMax) {
+      return {
+        allowed: false,
+        source: "hub-api-account-low-priority",
+        maximum: accountLowPriorityMax,
+        reason: "hub api per-account low-priority request budget is exhausted",
+      };
+    }
     if (accountCurrent >= accountMax) {
       return {
         allowed: false,
@@ -64,7 +83,6 @@ export function getHubApiAdmissionDecision({
       };
     }
   }
-  const lowPriority = isLowPriorityHubApiMethod(key);
   if (lowPriority) {
     const lowPriorityMaximum = getHubApiLowPriorityMaximum(max);
     if (current >= lowPriorityMaximum) {

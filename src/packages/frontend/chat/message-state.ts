@@ -19,6 +19,49 @@ export type InlineCodexActivityBlock = {
   state?: "sending" | "sent" | "queued" | "not-sent";
 };
 
+export const DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT = 100;
+
+export function codexActivityBlocksToSelectableMarkdown(
+  blocks: InlineCodexActivityBlock[],
+): string {
+  return blocks
+    .map((block) => {
+      const text = `${block.text ?? ""}`;
+      if (!text.trim()) return "";
+      if (block.kind === "agent") return text;
+      const label =
+        block.state === "sending"
+          ? "Sending guidance"
+          : block.state === "queued"
+            ? "Guidance queued"
+            : block.state === "not-sent"
+              ? "Guidance not sent"
+              : "Guidance sent";
+      const quotedText = text
+        .split(/\r?\n/)
+        .map((line) => `> ${line}`)
+        .join("\n");
+      return `> **${label}**\n>\n${quotedText}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function limitCodexActivityBlocks(
+  blocks: InlineCodexActivityBlock[],
+  visibleLimit: number,
+): {
+  visibleBlocks: InlineCodexActivityBlock[];
+  hiddenCount: number;
+} {
+  const limit = Math.max(1, Math.floor(visibleLimit));
+  const hiddenCount = Math.max(0, blocks.length - limit);
+  return {
+    visibleBlocks: hiddenCount > 0 ? blocks.slice(hiddenCount) : blocks,
+    hiddenCount,
+  };
+}
+
 export function computeAcpStateToRender({
   acpState,
   latestThreadInterrupted,

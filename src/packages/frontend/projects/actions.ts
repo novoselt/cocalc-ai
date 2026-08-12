@@ -5,6 +5,7 @@
 
 import { Map, Set, fromJS } from "immutable";
 import { isEqual } from "lodash";
+import { delay } from "awaiting";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { Actions, redux } from "@cocalc/frontend/app-framework";
 import { set_window_title } from "@cocalc/frontend/browser";
@@ -39,7 +40,11 @@ import { ProjectsState, store } from "./store";
 import { switch_to_project } from "./table";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import { defaultOpenProjectTarget } from "./open-project-default";
-import { evaluateHostOperational, hostLabel } from "./host-operational";
+import {
+  evaluateHostOperational,
+  hostLabel,
+  isHostRecoveryTransient,
+} from "./host-operational";
 import { getProjectUrlPath } from "@cocalc/frontend/project-routing";
 import { markProjectRecentlyCreated } from "@cocalc/frontend/project/recently-created-project";
 import {
@@ -413,6 +418,8 @@ type DirectProjectBootstrapRow = {
 export class ProjectsActions extends Actions<ProjectsState> {
   private static HOST_INFO_TTL_MS = 60_000;
   private static HOST_INFO_RPC_TIMEOUT_MS = 5_000;
+  private static HOST_RECOVERY_POLL_MS = 10_000;
+  private static HOST_RECOVERY_WAIT_MS = 10 * 60_000;
   private static ARCHIVE_RPC_TIMEOUT_MS = 30_000;
   private static REALTIME_FEED_BATCH_MS = 50;
   private static CREATE_PROJECT_FEED_WAIT_TIMEOUT_S = 5;
@@ -568,6 +575,43 @@ export class ProjectsActions extends Actions<ProjectsState> {
       return;
     }
   });
+
+  private waitForAssignedHostRecovery = async ({
+    host_id,
+    hostInfo,
+    project_id,
+  }: {
+    host_id: string;
+    hostInfo: any;
+    project_id: string;
+  }): Promise<any> => {
+    if (!isHostRecoveryTransient(hostInfo)) return hostInfo;
+    const projectActions = redux.getProjectActions(project_id);
+    projectActions?.setState({
+      control_error: "",
+      control_status: "Waiting for the project host to reconnect...",
+    });
+    const deadline = Date.now() + ProjectsActions.HOST_RECOVERY_WAIT_MS;
+    let current = hostInfo;
+    while (Date.now() < deadline) {
+      await delay(ProjectsActions.HOST_RECOVERY_POLL_MS);
+      current =
+        (await this.ensure_host_info(host_id, true)) ??
+        store.get("host_info")?.get(host_id) ??
+        current;
+      const state = evaluateHostOperational(current);
+      if (state.state === "operational") {
+        projectActions?.setState({ control_status: "" });
+        return current;
+      }
+      if (!isHostRecoveryTransient(current)) {
+        projectActions?.setState({ control_status: "" });
+        return current;
+      }
+    }
+    projectActions?.setState({ control_status: "" });
+    return current;
+  };
   private getProjectTable = async () => {
     const the_table = this.redux.getTable("projects");
     if (the_table == null) {
@@ -4256,16 +4300,44 @@ export class ProjectsActions extends Actions<ProjectsState> {
           // control-plane round trip to every normal start.
           void this.ensure_host_info(assignedHostId);
         }
+        if (
+          hostState.state === "unavailable" &&
+          isHostRecoveryTransient(hostInfo as any)
+        ) {
+          hostInfo = await this.waitForAssignedHostRecovery({
+            host_id: assignedHostId,
+            hostInfo,
+            project_id,
+          });
+          hostState = evaluateHostOperational(hostInfo as any);
+          const currentLifecycleState = store.getIn([
+            "project_map",
+            project_id,
+            "state",
+            "state",
+          ]) as string | undefined;
+          if (
+            currentLifecycleState === "starting" ||
+            currentLifecycleState === "running"
+          ) {
+            return false;
+          }
+        }
         if (hostState.state === "unavailable") {
           const hostName = hostLabel(hostInfo as any, assignedHostId);
           const reason = hostState.reason ?? "Assigned host is unavailable.";
-          const message =
-            `Cannot start project because ${hostName} is unavailable (${reason}). ` +
-            "Open Settings and move this project to an available host, or start the assigned host.";
+          const recovering = isHostRecoveryTransient(hostInfo as any);
+          const message = recovering
+            ? `${hostName} is still reconnecting (${reason}). CoCalc will keep monitoring it; try starting the project again shortly.`
+            : `Cannot start project because ${hostName} is unavailable (${reason}). Open Settings and move this project to an available host, or start the assigned host.`;
           redux
             .getProjectActions(project_id)
             ?.setState({ control_error: message });
-          alert_message({ type: "error", message, timeout: 20 });
+          alert_message({
+            type: recovering ? "warning" : "error",
+            message,
+            timeout: 20,
+          });
           return false;
         }
       } else {

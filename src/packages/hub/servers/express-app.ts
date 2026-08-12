@@ -478,6 +478,14 @@ async function initStatic(router) {
       express.static(publicAssetsPath, { setHeaders: cacheLongTerm }),
     );
   }
+  router.get("/static/frontend-build.json", (_req, res) => {
+    cacheNoStore(res);
+    res.sendFile(join(staticPath, "frontend-build.json"), (err) => {
+      if (err && !res.headersSent) {
+        res.status(404).end();
+      }
+    });
+  });
   router.use(
     "/static/app.html",
     staticCompression,

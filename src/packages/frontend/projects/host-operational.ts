@@ -1,6 +1,8 @@
 import { COMPUTE_STATES } from "@cocalc/util/compute-states";
 
-const HOST_ONLINE_WINDOW_MS = 10 * 60 * 1000;
+const HOST_ONLINE_WINDOW_MS = 2 * 60 * 1000;
+const DEFAULT_RECOVERY_ESTIMATE_MS = 3 * 60 * 1000;
+export const HOST_UNAVAILABLE_BANNER_GRACE_MS = 5_000;
 
 type HostInfoLike = {
   get?: (key: string) => any;
@@ -19,6 +21,8 @@ export type HostRecoveryDisplay = {
   title?: string;
   description?: string;
   etaMinutes?: number;
+  startedAt?: string;
+  timingDescription?: string;
 };
 
 function read(hostInfo: HostInfoLike | undefined, key: string): any {
@@ -43,30 +47,54 @@ function normalizeStatus(value: unknown): string | undefined {
   return status === "active" ? "running" : status;
 }
 
-function futureTimestamp(value: unknown): number | undefined {
+function futureTimestamp(value: unknown, now = Date.now()): number | undefined {
   const timestamp = Date.parse(`${value ?? ""}`);
-  return Number.isFinite(timestamp) && timestamp > Date.now()
-    ? timestamp
-    : undefined;
+  return Number.isFinite(timestamp) && timestamp > now ? timestamp : undefined;
+}
+
+function timestamp(value: unknown): number | undefined {
+  const parsed = Date.parse(`${value ?? ""}`);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function hostUnavailableBannerDelay({
+  candidate,
+  recoveryActive,
+  unavailableSince,
+  now = Date.now(),
+  graceMs = HOST_UNAVAILABLE_BANNER_GRACE_MS,
+}: {
+  candidate: boolean;
+  recoveryActive: boolean;
+  unavailableSince?: string;
+  now?: number;
+  graceMs?: number;
+}): number | undefined {
+  if (!candidate) return;
+  if (recoveryActive) return 0;
+  const unavailableAt = timestamp(unavailableSince);
+  const elapsed = unavailableAt == null ? 0 : Math.max(0, now - unavailableAt);
+  return Math.max(0, graceMs - elapsed);
 }
 
 export function getHostRecoveryDisplay(
   hostInfo: HostInfoLike | undefined,
+  now = Date.now(),
+  clientUnavailableSince?: string,
 ): HostRecoveryDisplay {
   const recovery = read(hostInfo, "spot_recovery_state");
   const phase = `${
     read(hostInfo, "recovery_phase") ?? read(recovery, "phase") ?? ""
   }`.trim();
   const desiredState = `${read(hostInfo, "desired_state") ?? "running"}`;
-  if (!phase || phase === "idle" || desiredState !== "running") {
-    return { active: false };
-  }
+  const recoveryActive =
+    !!phase && phase !== "idle" && desiredState === "running";
   const desiredPricing = `${
     read(hostInfo, "desired_pricing_model") ??
     read(hostInfo, "pricing_model") ??
     ""
   }`;
-  if (desiredPricing !== "spot") return { active: false };
+  const isSpotRecovery = recoveryActive && desiredPricing === "spot";
   const effectivePricing = `${
     read(hostInfo, "effective_pricing_model") ?? desiredPricing
   }`;
@@ -75,10 +103,62 @@ export function getHostRecoveryDisplay(
   const activeMachineType = `${
     read(recovery, "active_machine_type") ?? desiredMachineType
   }`.trim();
-  const nextRetry = futureTimestamp(read(recovery, "next_retry_at"));
+  const nextRetry = futureTimestamp(read(recovery, "next_retry_at"), now);
   const etaMinutes = nextRetry
-    ? Math.max(2, Math.ceil((nextRetry - Date.now()) / 60_000) + 2)
-    : 2;
+    ? Math.max(2, Math.ceil((nextRetry - now) / 60_000) + 2)
+    : 3;
+  const lastSeenMs = timestamp(read(hostInfo, "last_seen"));
+  const clientStartedAtMs = timestamp(clientUnavailableSince);
+  const serverStartedAtCandidates = [
+    isSpotRecovery ? read(recovery, "outage_started_at") : undefined,
+    read(hostInfo, "unavailable_since"),
+  ]
+    .map(timestamp)
+    .filter((value): value is number => value != null && value <= now)
+    .filter((value) => lastSeenMs == null || value >= lastSeenMs);
+  // Once this browser witnesses a disconnect, its timestamp is the stable
+  // identity of this incident. Provider recovery state can retain an older
+  // outage while a Standard fallback hold remains active; accepting that value
+  // later would make the displayed elapsed time jump backwards by hours.
+  const startedAtMs =
+    clientStartedAtMs != null && clientStartedAtMs <= now
+      ? clientStartedAtMs
+      : serverStartedAtCandidates.length > 0
+        ? Math.min(...serverStartedAtCandidates)
+        : undefined;
+  const historicalEstimate = Number(
+    read(hostInfo, "recovery_duration_estimate_ms"),
+  );
+  const estimatedDurationMs =
+    Number.isFinite(historicalEstimate) && historicalEstimate > 0
+      ? historicalEstimate
+      : DEFAULT_RECOVERY_ESTIMATE_MS;
+  const elapsedMs =
+    startedAtMs == null ? undefined : Math.max(0, now - startedAtMs);
+  const estimatedMinutes = Math.max(
+    1,
+    Math.round(estimatedDurationMs / 60_000),
+  );
+  const timingDescription =
+    elapsedMs != null && elapsedMs > estimatedDurationMs
+      ? `This is taking longer than the usual ${estimatedMinutes} minute${estimatedMinutes === 1 ? "" : "s"}, but CoCalc is still retrying automatically.`
+      : `This usually takes about ${estimatedMinutes} minute${estimatedMinutes === 1 ? "" : "s"}, though cloud capacity can make it longer.`;
+  const timing = {
+    etaMinutes,
+    ...(startedAtMs == null
+      ? {}
+      : {
+          startedAt: new Date(startedAtMs).toISOString(),
+        }),
+    timingDescription,
+  };
+
+  if (!isSpotRecovery && startedAtMs == null) {
+    return { active: false };
+  }
+  if (!isSpotRecovery) {
+    return { active: false, ...timing };
+  }
 
   if (
     effectivePricing === "on_demand" ||
@@ -89,7 +169,7 @@ export function getHostRecoveryDisplay(
       title: "Project host is restarting on guaranteed capacity",
       description:
         "Spot capacity was not available, so CoCalc switched this host to Standard capacity and is reconnecting projects automatically.",
-      etaMinutes,
+      ...timing,
     };
   }
   if (
@@ -101,7 +181,7 @@ export function getHostRecoveryDisplay(
       active: true,
       title: "Project host is restarting on alternate Spot capacity",
       description: `The cloud provider interrupted this Spot VM. CoCalc is now trying ${activeMachineType} after ${desiredMachineType} was unavailable.`,
-      etaMinutes,
+      ...timing,
     };
   }
   return {
@@ -109,7 +189,7 @@ export function getHostRecoveryDisplay(
     title: "Project host is restarting automatically",
     description:
       "The cloud provider interrupted this Spot VM. CoCalc detected the shutdown and is restarting the host and its projects automatically.",
-    etaMinutes,
+    ...timing,
   };
 }
 
@@ -175,6 +255,24 @@ export function evaluateHostOperational(
     };
   }
   return { state: "operational", status, online };
+}
+
+export function isHostRecoveryTransient(
+  hostInfo: HostInfoLike | undefined,
+): boolean {
+  const status = normalizeStatus(read(hostInfo, "status"));
+  const desiredState = normalizeStatus(read(hostInfo, "desired_state"));
+  const recovery = read(hostInfo, "spot_recovery_state");
+  const phase = `${
+    read(hostInfo, "recovery_phase") ?? read(recovery, "phase") ?? ""
+  }`.trim();
+  const recoveryActive = phase.length > 0 && phase !== "idle";
+
+  if (status === "starting") return true;
+  if (desiredState !== "running") return false;
+  return (
+    recoveryActive || status === "running" || status === "off" || status == null
+  );
 }
 
 export function hostLabel(

@@ -183,16 +183,19 @@ usually make deliberate overprovisioning the safest choice.
 
 1. Open **Project Hosts**, select the private host, and open its **Exams** tab.
 2. Turn on **Enable exam mode**.
-3. Set **Maximum projects** to the largest number of browser sessions that may
+3. Keep the generated stable admission token, or choose your own. The resulting
+   admission link can be published before the exam and changes only when an
+   instructor explicitly replaces the token.
+4. Set **Maximum projects** to the largest number of browser sessions that may
    be admitted. This is also the student count used by the host-sizing guidance.
    Leave headroom for instructor testing and accidental extra sessions.
-4. Set CPU, memory, and disk limits for each project.
-5. Set **Maximum run** to the longest permitted project lifetime.
-6. Set **Cleanup grace**. This is the spending-safety interval before forced
+5. Set CPU, memory, and disk limits for each project.
+6. Set **Maximum run** to the longest permitted scheduled project lifetime.
+7. Set **Cleanup grace**. This is the spending-safety interval before forced
    VM poweroff if cleanup cannot complete; it is not additional candidate time.
-7. Decide whether to allow terminals. They are disabled by default. This choice
+8. Decide whether to allow terminals. They are disabled by default. This choice
    is frozen when a run is prepared.
-8. Save the configuration and complete the fresh-authentication prompt.
+9. Save the configuration and complete the fresh-authentication prompt.
 
 Outbound networking is fixed to **disabled** in the current version.
 
@@ -210,7 +213,8 @@ cocalc host exam status <host>
 # Enable exam mode and configure per-project limits.
 cocalc host exam configure <host> --enable --max-projects 100 \
   --project-cpu 1 --project-memory-mb 2000 --project-disk-mb 5000 \
-  --maximum-run-minutes 360 --cleanup-grace-minutes 10 --deny-terminal
+  --maximum-run-minutes 360 --cleanup-grace-minutes 10 --deny-terminal \
+  --admission-token UCL-practice-2026
 
 # Prepare the run and wait for its smoke test to finish.
 cocalc host exam prepare <host> --rootfs <image> \
@@ -223,14 +227,17 @@ cocalc host exam status <host> --wait
 
 # Change cleanup policy, or end early and permanently erase all exam projects.
 cocalc host exam deadline <host> --delete-at 2026-08-01T15:30:00Z --stop-host
+cocalc host exam deadline <host> --manual-cleanup
 cocalc host exam capacity <host> --max-projects 110
 cocalc host exam end <host> --stop-host --yes
 ~~~
 
-Preparation and token rotation print the plaintext admission token and a
-copyable admission URL. The authenticated status command also shows the current
-token and admission URL while a run is active. The URL stores the token in its
-fragment, so browsers do not send it to Cloudflare or server access logs.
+Configuration, preparation, and token rotation return the stable plaintext
+admission token and a copyable admission URL. The authenticated status command
+also shows them before, during, and after a run. The URL stores the token in its
+fragment, so browsers do not send it to Cloudflare or server access logs. Host
+restarts and new exam runs preserve the link; only an explicit token change or
+rotation replaces it.
 Mutation commands require fresh authentication; run
 \`cocalc auth bootstrap\` first when the current CLI session is not elevated.
 Pass \`--keep-host-running\` instead of \`--stop-host\` when cleanup should leave
@@ -241,8 +248,8 @@ the reusable project host online. Destructive early cleanup always requires
 
 1. Start the host and wait until it reports **running** and online.
 2. In the **Exams** tab, select a RootFS from the managed catalog.
-3. Choose **Delete all exam projects at**. Allow enough time for the rehearsal
-   as well as the candidate session.
+3. For a timed exam, choose **Delete all exam projects at**. For an open-ended
+   practice period, select **Practice mode: erase projects manually** instead.
 4. Leave **Also shut down the project host to save resources** selected unless
    the host should remain running for unrelated work after exam cleanup.
 5. Select **Prepare and test run** and complete fresh authentication.
@@ -260,9 +267,15 @@ after you select **Open admission**.
 The panel displays a stable student URL, a copyable admission link, and the raw
 shared token as a manual fallback. The admission link prefills the token and
 then removes it from the browser address. The token remains visible to the
-authenticated instructor while the run is active; it grants only one temporary
-project per candidate browser for this run. Rotate it before opening admission
-if it was shared prematurely.
+authenticated instructor even when no run is active. Rotate it explicitly if
+it was disclosed; otherwise leave it unchanged so already published links keep
+working.
+
+Practice mode has no automatic project-deletion deadline and never shuts down
+the host automatically. Admission and student projects remain available until
+an instructor selects **End exam and erase now**. Spot capacity can reduce the
+cost of a long-running practice session, but it may be interrupted and should
+not be used for a high-stakes live exam.
 
 ## Step 3: run a candidate rehearsal
 

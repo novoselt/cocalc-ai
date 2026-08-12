@@ -520,6 +520,25 @@ footer a {
     transform: rotate(0deg);
   }
 }
+
+@keyframes cocalc-indeterminate-progress-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(270%);
+  }
+}
+
+.cocalc-indeterminate-progress {
+  animation: cocalc-indeterminate-progress-slide 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cocalc-indeterminate-progress {
+    animation: none;
+  }
+}
 .smc-chat-notification {
   animation: pulse 10s ease infinite;
 }

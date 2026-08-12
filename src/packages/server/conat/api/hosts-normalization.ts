@@ -73,7 +73,7 @@ import {
 // This gates placement, recovery, and runtime management. Keep it short; the
 // operator UI uses its own display grace so false stale dashboards do not delay
 // real host repair or spot replacement.
-const HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
+export const HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS = 2 * 60 * 1000;
 const RUNTIME_FAILURES_BEFORE_DEGRADED = 2;
 const HOST_RUNNING_STATUSES = new Set(["running", "active"]);
 const HOST_BILLING_ENFORCEMENT_STATES = new Set<HostBillingEnforcementState>([
@@ -459,6 +459,7 @@ export function computeHostOperationalAvailability(
   online: boolean;
   status: string;
   reason_unavailable?: string;
+  unavailable_since?: string;
 } {
   if (!row || row.deleted) {
     return {
@@ -518,6 +519,9 @@ export function computeHostOperationalAvailability(
       online: false,
       status,
       reason_unavailable: "Host heartbeat is stale; host appears offline.",
+      unavailable_since: new Date(
+        seenMs + HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS,
+      ).toISOString(),
     };
   }
 

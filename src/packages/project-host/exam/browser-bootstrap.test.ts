@@ -55,4 +55,18 @@ describe("exam browser bootstrap", () => {
       },
     });
   });
+
+  it("does not advertise an automatic deletion time in manual mode", () => {
+    const bootstrap = buildExamBrowserBootstrap({
+      session: {
+        account_id: "account-1",
+        project_id: "project-1",
+        run_id: "run-1",
+        expires_at_ms: 1234,
+        scheduled_stop_at_ms: 1000,
+        cleanup_mode: "manual",
+      },
+    });
+    expect(bootstrap.delete_at).toBeUndefined();
+  });
 });

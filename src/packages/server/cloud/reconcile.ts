@@ -19,7 +19,9 @@ import { getServerProvider, listServerProviders } from "./providers";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getNebiusRegionKeys } from "./nebius-credentials";
 import {
+  desiredPricingModel,
   effectivePricingModel,
+  normalizeSpotRecoveryState,
   recordProviderSpotPreemption,
   shouldAutoRestoreInterruptedSpotHost,
   spotRecoveryPolicy,
@@ -63,6 +65,7 @@ type HostRow = {
   public_url?: string;
   internal_url?: string;
   ssh_server?: string | null;
+  last_seen?: Date | string | null;
 };
 
 type RemoteInstance = {
@@ -75,6 +78,8 @@ type RemoteInstance = {
 
 const RECONCILE_MISSING_CONFIRMATIONS = 2;
 const RECONCILE_GRACE_MS = 2 * 60 * 1000;
+const STALE_ACTIVE_RECOVERY_MS = 10 * 60 * 1000;
+const FRESH_HOST_HEARTBEAT_MS = 2 * 60 * 1000;
 const HOST_READY_VERIFICATION_PHASES = new Set([
   "retrying_spot",
   "returning_to_spot",
@@ -120,7 +125,7 @@ const RESTORE_BLOCKING_PENDING_ACTIONS = [
 async function loadHosts(provider: Provider): Promise<HostRow[]> {
   const { rows } = await pool().query(
     `
-      SELECT id, name, status, region, metadata, public_url, internal_url, ssh_server
+      SELECT id, name, status, region, metadata, public_url, internal_url, ssh_server, last_seen
       FROM project_hosts
       WHERE metadata->'machine'->>'cloud' = $1
         AND deleted IS NULL
@@ -128,6 +133,66 @@ async function loadHosts(provider: Provider): Promise<HostRow[]> {
     [provider],
   );
   return rows;
+}
+
+function recoveryActivityAt(state: Record<string, any>): number | undefined {
+  for (const value of [
+    state.verification_started_at,
+    state.outage_started_at,
+    state.last_preempted_at,
+    state.machine_type_attempt_started_at,
+  ]) {
+    const timestamp = Date.parse(`${value ?? ""}`);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+}
+
+export function closeStaleObservedSpotRecovery({
+  row,
+  provider_status,
+  now = new Date(),
+}: {
+  row: HostRow;
+  provider_status?: string;
+  now?: Date;
+}): Record<string, any> | undefined {
+  if (provider_status !== "running") return;
+  if (`${row.status ?? ""}` !== "running") return;
+  if (desiredPricingModel(row) !== "spot") return;
+  if (effectivePricingModel(row) !== "spot") return;
+  const state = normalizeSpotRecoveryState(row.metadata?.spot_recovery_state);
+  if (!state || !HOST_READY_VERIFICATION_PHASES.has(state.phase)) return;
+  const activityAt = recoveryActivityAt(state);
+  if (
+    activityAt == null ||
+    now.getTime() - activityAt < STALE_ACTIVE_RECOVERY_MS
+  ) {
+    return;
+  }
+  const lastSeenAt = new Date(row.last_seen ?? 0).getTime();
+  if (
+    !Number.isFinite(lastSeenAt) ||
+    now.getTime() - lastSeenAt > FRESH_HOST_HEARTBEAT_MS
+  ) {
+    return;
+  }
+  return {
+    phase: "idle",
+    ...(state.outage_started_at
+      ? { outage_started_at: state.outage_started_at }
+      : {}),
+    last_recovered_at: now.toISOString(),
+    ...(state.attempt != null ? { attempt: state.attempt } : {}),
+    ...(state.active_machine_type
+      ? { active_machine_type: state.active_machine_type }
+      : {}),
+    ...(state.last_preempted_at
+      ? { last_preempted_at: state.last_preempted_at }
+      : {}),
+    ...(state.standard_hold_until
+      ? { standard_hold_until: state.standard_hold_until }
+      : {}),
+  };
 }
 
 async function loadKnownCloudHosts(
@@ -779,11 +844,25 @@ async function reconcileProvider(provider: Provider) {
 
     const desiredStatus =
       entry.provider.mapStatus?.(remote.status) ?? row.status;
-    await ensureHostReadyVerificationWork({
-      provider,
+    const closedRecoveryState = closeStaleObservedSpotRecovery({
       row,
       provider_status: desiredStatus,
+      now,
     });
+    if (closedRecoveryState) {
+      logger.warn("cloud reconcile: closed stale observed spot recovery", {
+        provider,
+        host_id: row.id,
+        previous_phase: row.metadata?.spot_recovery_state?.phase,
+        outage_started_at: row.metadata?.spot_recovery_state?.outage_started_at,
+      });
+    } else {
+      await ensureHostReadyVerificationWork({
+        provider,
+        row,
+        provider_status: desiredStatus,
+      });
+    }
     const bootstrapDone =
       row.metadata?.bootstrap?.status === "done" ||
       row.metadata?.bootstrap_lifecycle?.summary_status === "in_sync";
@@ -806,6 +885,9 @@ async function reconcileProvider(provider: Provider) {
     await updateHost(row, {
       status: nextStatus,
       runtime: nextRuntime,
+      ...(closedRecoveryState
+        ? { spot_recovery_state: closedRecoveryState }
+        : {}),
     });
     // cloud-init handles bootstrap; no queue-based bootstrap scheduling.
   }

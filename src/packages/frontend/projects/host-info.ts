@@ -1,6 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import type { Map as ImmutableMap } from "immutable";
+import { webapp_client } from "@cocalc/frontend/webapp-client";
+
+export type ProjectHostConnectionState = {
+  connected: boolean;
+  observed: boolean;
+  unavailableSince?: string;
+};
 
 export function isPublicDirectoryShareHost(
   host_id?: string,
@@ -47,6 +54,46 @@ export function useHostInfo(
     redux.getActions("projects")?.ensure_host_info(host_id);
   }, [enabled, host_id, publicDirectoryShareHost]);
   return hostInfo;
+}
+
+export function useProjectHostConnectionState(
+  host_id?: string,
+): ProjectHostConnectionState {
+  const client = webapp_client.conat_client;
+  const [state, setState] = useState<ProjectHostConnectionState>(() => {
+    const connected = !!client?.isProjectHostConnected?.(host_id);
+    return { connected, observed: connected };
+  });
+  useEffect(() => {
+    const initiallyConnected = !!client?.isProjectHostConnected?.(host_id);
+    setState({ connected: initiallyConnected, observed: initiallyConnected });
+    const connected = (changedHostId?: string) => {
+      if (changedHostId != null && changedHostId !== host_id) return;
+      setState({ connected: true, observed: true });
+    };
+    const disconnected = (changedHostId?: string) => {
+      if (changedHostId != null && changedHostId !== host_id) return;
+      setState((previous) => ({
+        connected: false,
+        observed: true,
+        unavailableSince: previous.unavailableSince ?? new Date().toISOString(),
+      }));
+    };
+    if (initiallyConnected) {
+      connected();
+    }
+    client?.on?.("project-host-connected", connected);
+    client?.on?.("project-host-disconnected", disconnected);
+    return () => {
+      client?.removeListener?.("project-host-connected", connected);
+      client?.removeListener?.("project-host-disconnected", disconnected);
+    };
+  }, [client, host_id]);
+  return state;
+}
+
+export function useProjectHostConnected(host_id?: string): boolean {
+  return useProjectHostConnectionState(host_id).connected;
 }
 
 export function getHostName(host_id?: string): string | undefined {

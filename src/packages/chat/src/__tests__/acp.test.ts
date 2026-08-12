@@ -39,6 +39,134 @@ describe("appendStreamMessage", () => {
     ).toBe("Initial update. I");
   });
 
+  test("compares whitespace-normalized snapshots without changing their text", () => {
+    const previous = "  Alpha   `  beta  `\n gamma  ";
+    const next = "Alpha `beta` gamma   delta";
+
+    expect(mergeProgressiveMessageText(previous, next)).toBe(next);
+    expect(mergeProgressiveMessageText(next, previous)).toBe(next);
+  });
+
+  test("matches the allocating normalization behavior across mixed text", () => {
+    const referenceMerge = (previous: string, next: string) => {
+      if (!previous || !next) return undefined;
+      if (next.startsWith(previous)) return next;
+      if (previous.startsWith(next) || previous.endsWith(next)) return previous;
+      const normalize = (text: string) =>
+        text
+          .replace(/`\s+/g, "`")
+          .replace(/\s+`/g, "`")
+          .replace(/\s+/g, " ")
+          .trim();
+      const normalizedPrevious = normalize(previous);
+      const normalizedNext = normalize(next);
+      if (!normalizedPrevious || !normalizedNext) return undefined;
+      if (normalizedNext.startsWith(normalizedPrevious)) return next;
+      if (normalizedPrevious.startsWith(normalizedNext)) return previous;
+      if (normalizedPrevious === normalizedNext) {
+        return next.length >= previous.length ? next : previous;
+      }
+      return undefined;
+    };
+    let state = 0x5eed1234;
+    const alphabet = ["a", "b", "`", " ", "\n", "\t", "\u00a0"];
+    const randomText = () => {
+      state = (state * 1664525 + 1013904223) >>> 0;
+      const length = state % 80;
+      let text = "";
+      for (let i = 0; i < length; i += 1) {
+        state = (state * 1664525 + 1013904223) >>> 0;
+        text += alphabet[state % alphabet.length];
+      }
+      return text;
+    };
+
+    for (let i = 0; i < 2_000; i += 1) {
+      const previous = randomText();
+      const next = randomText();
+      expect(mergeProgressiveMessageText(previous, next)).toBe(
+        referenceMerge(previous, next),
+      );
+    }
+  });
+
+  test("does not merge normalized-empty snapshots into delta streams", () => {
+    expect(
+      mergeProgressiveMessageText(" \n\t ", "\u00a0", {
+        previousHasDelta: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  test("handles large formatting-changing snapshots repeatedly", () => {
+    const words = Array.from({ length: 5_000 }, (_, index) => `word${index}`);
+    const previous = words.join("  ");
+    const next = `${words.join(" ")} final`;
+    const events = [
+      textEvent("message", previous, 1),
+      textEvent("message", next, 2),
+    ];
+
+    for (let i = 0; i < 20; i += 1) {
+      expect(getLiveResponseMarkdown(events)).toBe(next);
+      expect(getLiveResponseBlocks(events)).toEqual([
+        {
+          kind: "agent",
+          text: next,
+          time: undefined,
+          state: undefined,
+        },
+      ]);
+    }
+  });
+
+  test("compacts long progressive runs without losing guidance chronology", () => {
+    const words = Array.from({ length: 40 }, (_, index) => `word${index}`);
+    const events = words.map((_, index) => ({
+      type: "event",
+      event: {
+        type: "message",
+        text: words.slice(0, index + 1).join(" "),
+      },
+      seq: index + 1,
+      time: (index + 1) * 1_000,
+    })) as AcpStreamMessage[];
+
+    expect(
+      getLiveResponseBlocks(events, [
+        { date: 19_500, text: "check this too", state: "sent" },
+      ]),
+    ).toEqual([
+      {
+        kind: "agent",
+        text: words.slice(0, 19).join(" "),
+        time: 19_000,
+        state: undefined,
+      },
+      {
+        kind: "guidance",
+        text: "check this too",
+        time: 19_500,
+        state: "sent",
+      },
+      {
+        kind: "agent",
+        text: words.slice(19).join(" "),
+        time: 40_000,
+        state: undefined,
+      },
+    ]);
+  });
+
+  test("does not compact long runs of independent agent messages", () => {
+    const events = Array.from({ length: 20 }, (_, index) =>
+      textEvent("message", `independent block ${index}`, index + 1),
+    );
+    expect(getAgentMessageTexts(events)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `independent block ${index}`),
+    );
+  });
+
   test("adds a separating space between adjacent markdown bold blocks", () => {
     const events = [textEvent("thinking", "**First block**", 1)];
     const merged = appendStreamMessage(

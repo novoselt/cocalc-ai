@@ -7,12 +7,14 @@ import { randomUUID } from "node:crypto";
 import { executeCode } from "@cocalc/backend/execute-code";
 import getLogger from "@cocalc/backend/logger";
 import type {
+  HostExamCleanupMode,
   HostExamConfig,
   HostExamReadinessCheck,
   HostExamRun,
   HostExamRunStatus,
   HostExamRuntimeStatus,
 } from "@cocalc/conat/hub/api/hosts";
+import { isExamCleanupDue, isExamSessionExpired } from "./cleanup";
 import type { ApplyHostExamRunRequest } from "@cocalc/conat/project-host/api";
 import { hubApi } from "@cocalc/lite/hub/api";
 import {
@@ -51,6 +53,7 @@ const POWEROFF_RESPONSE_GRACE_MS = 5_000;
 const TOKEN_FAILURE_WINDOW_MS = 10 * 60_000;
 const TOKEN_FAILURE_LIMIT = 12;
 const TOKEN_FAILURE_SOURCE_LIMIT = 10_000;
+const MANUAL_CLEANUP_DEADLINE_MS = Date.UTC(9999, 11, 31, 23, 59, 59);
 
 interface LocalExamRunRow {
   run_id: string;
@@ -144,8 +147,16 @@ function normalizeExamRun(raw: HostExamRun | Record<string, any>): HostExamRun {
   return {
     ...raw,
     max_projects: Number(raw.max_projects ?? legacy.max_workspaces),
+    cleanup_mode: raw.cleanup_mode === "manual" ? "manual" : "scheduled",
     stop_host_at_deadline: raw.stop_host_at_deadline !== false,
   } as HostExamRun;
+}
+
+function cleanupIsDue(row: LocalExamRunRow): boolean {
+  return isExamCleanupDue({
+    cleanup_mode: decodeRun(row).run.cleanup_mode,
+    scheduled_stop_at_ms: row.scheduled_stop_at_ms,
+  });
 }
 
 function currentRunRow(): LocalExamRunRow | undefined {
@@ -246,9 +257,16 @@ function runtimeStatus(row?: LocalExamRunRow): HostExamRuntimeStatus {
     admission_open: row.admission_open === 1,
     active_projects: activeProjectCount(row.run_id),
     max_projects: run.max_projects,
-    scheduled_stop_at: new Date(row.scheduled_stop_at_ms).toISOString(),
+    cleanup_mode: run.cleanup_mode,
+    ...(run.cleanup_mode === "scheduled"
+      ? {
+          scheduled_stop_at: new Date(row.scheduled_stop_at_ms).toISOString(),
+          cleanup_deadline_at: new Date(
+            row.cleanup_deadline_at_ms,
+          ).toISOString(),
+        }
+      : {}),
     stop_host_at_deadline: run.stop_host_at_deadline,
-    cleanup_deadline_at: new Date(row.cleanup_deadline_at_ms).toISOString(),
     hostname: config.hostname,
     title: config.title,
     terminal_enabled: run.terminal_enabled,
@@ -315,7 +333,7 @@ function reserveProject({
       !current ||
       current.status !== "open" ||
       current.admission_open !== 1 ||
-      current.scheduled_stop_at_ms <= Date.now()
+      cleanupIsDue(current)
     ) {
       throw new Error("scratchpad access is closed");
     }
@@ -578,11 +596,20 @@ export async function applyExamRunLocal({
   if (run.network_mode !== "disabled") {
     throw new Error("the exam MVP only supports disabled networking");
   }
-  const deadline = new Date(run.scheduled_stop_at).valueOf();
-  if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+  const deadline =
+    run.cleanup_mode === "manual"
+      ? MANUAL_CLEANUP_DEADLINE_MS
+      : new Date(run.scheduled_stop_at).valueOf();
+  if (
+    run.cleanup_mode !== "manual" &&
+    (!Number.isFinite(deadline) || deadline <= Date.now())
+  ) {
     throw new Error("exam deadline is invalid or expired");
   }
-  const cleanupDeadline = deadline + config.cleanup_grace_minutes * 60_000;
+  const cleanupDeadline =
+    run.cleanup_mode === "manual"
+      ? MANUAL_CLEANUP_DEADLINE_MS
+      : deadline + config.cleanup_grace_minutes * 60_000;
   const cached = await listRootfsCacheEntries();
   const rootfs = cached.find((entry) => entry.image === run.rootfs_image);
   if (!rootfs || rootfs.digest !== run.rootfs_digest) {
@@ -661,7 +688,7 @@ export function openExamRunLocal({
   if (row.status !== "ready" && row.status !== "open") {
     throw new Error(`exam run is not ready (status=${row.status})`);
   }
-  if (row.scheduled_stop_at_ms <= Date.now()) {
+  if (cleanupIsDue(row)) {
     throw new Error("exam deadline has passed");
   }
   getDatabase()
@@ -675,23 +702,39 @@ export function openExamRunLocal({
 export function updateExamRunDeadlineLocal({
   run_id,
   config_generation,
+  cleanup_mode,
   scheduled_stop_at,
   stop_host_at_deadline,
 }: {
   run_id: string;
   config_generation: number;
-  scheduled_stop_at: string;
+  cleanup_mode?: HostExamCleanupMode;
+  scheduled_stop_at?: string;
   stop_host_at_deadline?: boolean;
 }): HostExamRuntimeStatus {
   const row = assertRunIdentity({ run_id, config_generation });
   const { config, run } = decodeRun(row);
-  const deadline = new Date(scheduled_stop_at).valueOf();
-  if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+  const nextCleanupMode =
+    cleanup_mode == null
+      ? run.cleanup_mode
+      : cleanup_mode === "manual"
+        ? "manual"
+        : "scheduled";
+  const deadline =
+    nextCleanupMode === "manual"
+      ? MANUAL_CLEANUP_DEADLINE_MS
+      : new Date(`${scheduled_stop_at ?? ""}`).valueOf();
+  if (
+    nextCleanupMode !== "manual" &&
+    (!Number.isFinite(deadline) || deadline <= Date.now())
+  ) {
     throw new Error("exam deadline must be in the future");
   }
   run.scheduled_stop_at = new Date(deadline).toISOString();
+  run.cleanup_mode = nextCleanupMode;
   run.stop_host_at_deadline =
-    stop_host_at_deadline ?? run.stop_host_at_deadline;
+    nextCleanupMode === "scheduled" &&
+    (stop_host_at_deadline ?? run.stop_host_at_deadline);
   getDatabase()
     .prepare(
       `UPDATE exam_runs
@@ -702,7 +745,9 @@ export function updateExamRunDeadlineLocal({
     .run(
       JSON.stringify(run),
       deadline,
-      deadline + config.cleanup_grace_minutes * 60_000,
+      nextCleanupMode === "manual"
+        ? MANUAL_CLEANUP_DEADLINE_MS
+        : deadline + config.cleanup_grace_minutes * 60_000,
       Date.now(),
       run_id,
     );
@@ -749,9 +794,9 @@ export function rotateExamRunTokenLocal({
   token_hash: string;
 }): HostExamRuntimeStatus {
   const row = assertRunIdentity({ run_id, config_generation });
-  if (row.status !== "ready") {
+  if (row.status !== "ready" && row.status !== "open") {
     throw new Error(
-      "the shared token can only be rotated before admission opens",
+      "the shared token can only be rotated while the run is ready or open",
     );
   }
   getDatabase()
@@ -768,6 +813,7 @@ export interface ExamBrowserSession {
   run_id: string;
   expires_at_ms: number;
   scheduled_stop_at_ms: number;
+  cleanup_mode?: HostExamCleanupMode;
 }
 
 export function getExamBrowserSession(
@@ -785,7 +831,10 @@ export function getExamBrowserSession(
   if (
     !row ||
     (row.status !== "open" && row.status !== "ready") ||
-    row.cleanup_deadline_at_ms <= Date.now()
+    isExamSessionExpired({
+      cleanup_mode: decodeRun(row).run.cleanup_mode,
+      cleanup_deadline_at_ms: row.cleanup_deadline_at_ms,
+    })
   ) {
     return;
   }
@@ -795,6 +844,7 @@ export function getExamBrowserSession(
     run_id: session.run_id,
     expires_at_ms: session.expires_at_ms,
     scheduled_stop_at_ms: row.scheduled_stop_at_ms,
+    cleanup_mode: decodeRun(row).run.cleanup_mode,
   };
 }
 
@@ -825,7 +875,7 @@ export async function joinExamRun({
     !row ||
     row.status !== "open" ||
     row.admission_open !== 1 ||
-    row.scheduled_stop_at_ms <= Date.now()
+    cleanupIsDue(row)
   ) {
     throw new Error("scratchpad access is closed");
   }
@@ -845,6 +895,7 @@ export async function joinExamRun({
     run_id: row.run_id,
     expires_at_ms: row.cleanup_deadline_at_ms,
     scheduled_stop_at_ms: row.scheduled_stop_at_ms,
+    cleanup_mode: decodeRun(row).run.cleanup_mode,
   };
 }
 
@@ -911,7 +962,7 @@ export async function closeAndCleanupExamRunLocal({
 
 async function reconcileDeadline(): Promise<void> {
   const row = currentRunRow();
-  if (!row || row.scheduled_stop_at_ms > Date.now()) return;
+  if (!row || !cleanupIsDue(row)) return;
   if (row.status === "stopped") return;
   try {
     await closeAndCleanupExamRunLocal({

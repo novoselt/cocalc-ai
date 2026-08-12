@@ -34,7 +34,12 @@ import {
   resolveProjectBay,
 } from "@cocalc/server/inter-bay/directory";
 import { resolveOnPremHost } from "@cocalc/server/onprem";
-import { desiredHostState } from "@cocalc/server/cloud/spot-restore";
+import {
+  desiredHostState,
+  desiredPricingModel,
+  effectivePricingModel,
+  normalizeSpotRecoveryState,
+} from "@cocalc/server/cloud/spot-restore";
 import { syncProjectUsersOnHost } from "@cocalc/server/project-host/control";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import {
@@ -59,6 +64,7 @@ import {
 import * as publicDirectoryShares from "./public-directory-shares";
 import {
   computeHostOperationalAvailability,
+  HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS,
   defaultInterruptionRestorePolicy,
   normalizeHostInterruptionRestorePolicy,
   normalizeHostPricingModel,
@@ -69,6 +75,60 @@ function pool() {
 }
 
 const logger = getLogger("server:conat:api:hosts-connection-auth");
+
+async function getHostRecoveryTiming(host_id: string): Promise<{
+  unavailable_since?: string;
+  recovery_duration_estimate_ms?: number;
+}> {
+  try {
+    const { rows } = await pool().query(
+      `WITH recent AS (
+         SELECT EXTRACT(EPOCH FROM (ended_at - started_at)) * 1000 AS duration_ms
+           FROM project_host_availability_events
+          WHERE host_id=$1
+            AND ended_at IS NOT NULL
+            AND state IN ('unavailable', 'recovering')
+            AND category IN ('spot_interruption', 'provider_offline')
+            AND planned IS NOT TRUE
+          ORDER BY ended_at DESC
+          LIMIT 20
+       )
+       SELECT (
+                SELECT started_at
+                  FROM project_host_availability_events
+                 WHERE host_id=$1
+                   AND ended_at IS NULL
+                   AND state IN ('unavailable', 'recovering')
+                 ORDER BY started_at DESC
+                 LIMIT 1
+              ) AS unavailable_since,
+              percentile_cont(0.75) WITHIN GROUP (ORDER BY duration_ms)
+                AS recovery_duration_estimate_ms
+         FROM recent`,
+      [host_id],
+    );
+    const row = rows[0] ?? {};
+    const unavailableSince = row.unavailable_since
+      ? new Date(row.unavailable_since).toISOString()
+      : undefined;
+    const estimate = Number(row.recovery_duration_estimate_ms);
+    return {
+      ...(unavailableSince ? { unavailable_since: unavailableSince } : {}),
+      ...(Number.isFinite(estimate) && estimate > 0
+        ? {
+            recovery_duration_estimate_ms: Math.round(
+              estimate + HOST_OPERATIONAL_HEARTBEAT_WINDOW_MS,
+            ),
+          }
+        : {}),
+    };
+  } catch (err) {
+    // Availability history is supplemental. Older/self-hosted databases may
+    // resolve host connections before the maintenance schema is initialized.
+    logger.debug("host recovery timing unavailable", { host_id, err });
+    return {};
+  }
+}
 
 async function hostControlClient(host_id: string, timeout?: number) {
   return await getRoutedHostControlClient({
@@ -457,6 +517,17 @@ export async function resolveHostConnectionLocalHelper({
     row.status === "active" ? "running" : (row.status ?? null);
   const pricingModel =
     normalizeHostPricingModel(metadata.pricing_model) ?? "on_demand";
+  const desiredPricing = desiredPricingModel({
+    status: normalizedStatus ?? undefined,
+    metadata,
+  });
+  const effectivePricing = effectivePricingModel({
+    status: normalizedStatus ?? undefined,
+    metadata,
+  });
+  const spotRecoveryState = normalizeSpotRecoveryState(
+    metadata.spot_recovery_state,
+  );
   const interruptionRestorePolicy =
     normalizeHostInterruptionRestorePolicy(
       metadata.interruption_restore_policy,
@@ -476,6 +547,12 @@ export async function resolveHostConnectionLocalHelper({
     connect_url = row.public_url ?? row.internal_url ?? null;
     ready = !!connect_url;
   }
+  const recoveryTiming =
+    !availability.operational ||
+    (spotRecoveryState?.phase != null && spotRecoveryState.phase !== "idle")
+      ? await getHostRecoveryTiming(row.id)
+      : {};
+  const recoveryOutageStartedAt = spotRecoveryState?.outage_started_at;
 
   return {
     host_id: row.id,
@@ -499,7 +576,11 @@ export async function resolveHostConnectionLocalHelper({
     status: normalizedStatus,
     tier: typeof row.tier === "number" ? row.tier : null,
     pricing_model: pricingModel,
+    desired_pricing_model: desiredPricing,
+    effective_pricing_model: effectivePricing,
     interruption_restore_policy: interruptionRestorePolicy,
+    spot_recovery_state: spotRecoveryState,
+    recovery_phase: spotRecoveryState?.phase,
     desired_state: desiredHostState({
       status: normalizedStatus ?? undefined,
       metadata,
@@ -509,5 +590,10 @@ export async function resolveHostConnectionLocalHelper({
     reason_unavailable: availability.operational
       ? undefined
       : availability.reason_unavailable,
+    unavailable_since:
+      spotRecoveryState?.phase && spotRecoveryState.phase !== "idle"
+        ? (recoveryOutageStartedAt ?? recoveryTiming.unavailable_since)
+        : availability.unavailable_since,
+    recovery_duration_estimate_ms: recoveryTiming.recovery_duration_estimate_ms,
   } as HostConnectionInfo;
 }

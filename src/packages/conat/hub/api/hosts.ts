@@ -627,6 +627,7 @@ export interface HostRootfsImage {
 }
 
 export type HostExamNetworkMode = "disabled";
+export type HostExamCleanupMode = "scheduled" | "manual";
 
 export type HostExamRunStatus =
   | "preparing"
@@ -675,6 +676,7 @@ export interface HostExamRun {
   max_projects: number;
   terminal_enabled: boolean;
   network_mode: HostExamNetworkMode;
+  cleanup_mode: HostExamCleanupMode;
   scheduled_stop_at: string;
   stop_host_at_deadline: boolean;
   owner_account_id: string;
@@ -710,6 +712,7 @@ export interface HostExamRuntimeStatus {
   admission_open: boolean;
   active_projects: number;
   max_projects?: number;
+  cleanup_mode?: HostExamCleanupMode;
   scheduled_stop_at?: string;
   stop_host_at_deadline?: boolean;
   cleanup_deadline_at?: string;
@@ -743,6 +746,7 @@ export interface HostExamConfigInput {
   cleanup_grace_minutes: number;
   terminal_enabled?: boolean;
   network_mode?: HostExamNetworkMode;
+  admission_token?: string;
 }
 
 export interface HostRootfsGcItem {
@@ -1276,11 +1280,17 @@ export interface HostConnectionInfo {
   status?: HostStatus | null;
   tier?: number | null;
   pricing_model?: HostPricingModel;
+  desired_pricing_model?: HostPricingModel;
+  effective_pricing_model?: HostPricingModel;
   interruption_restore_policy?: HostInterruptionRestorePolicy;
+  spot_recovery_state?: HostSpotRecoveryState;
+  recovery_phase?: HostSpotRecoveryPhase;
   desired_state?: "running" | "stopped";
   last_seen?: string;
   online?: boolean;
   reason_unavailable?: string;
+  unavailable_since?: string;
+  recovery_duration_estimate_ms?: number;
 }
 
 export interface HostLogEntry {
@@ -1955,7 +1965,8 @@ export interface Hosts {
     session_hash?: string | null;
     id: string;
     rootfs_image: string;
-    scheduled_stop_at: string;
+    cleanup_mode?: HostExamCleanupMode;
+    scheduled_stop_at?: string;
     stop_host_at_deadline?: boolean;
     idempotency_key: string;
     timeout?: number;
@@ -1967,6 +1978,7 @@ export interface Hosts {
     id: string;
     run_id: string;
     idempotency_key: string;
+    token?: string;
     timeout?: number;
   }) => Promise<HostExamState & { token: string }>;
   openHostExamRun: (opts: {
@@ -1984,7 +1996,8 @@ export interface Hosts {
     session_hash?: string | null;
     id: string;
     run_id: string;
-    scheduled_stop_at: string;
+    cleanup_mode?: HostExamCleanupMode;
+    scheduled_stop_at?: string;
     stop_host_at_deadline?: boolean;
     idempotency_key: string;
     timeout?: number;

@@ -106,7 +106,10 @@ function effectiveArch(): string {
   return normalizeArch(overrideArch ?? arch());
 }
 
-function getCodexReleaseAssetName(version: string): string {
+function getCodexReleaseAssetName(
+  version: string,
+  binary: "codex" | "codex-code-mode-host",
+): string {
   if (effectivePlatform() !== "linux") {
     throw Error(`unsupported codex platform ${effectivePlatform()}`);
   }
@@ -114,14 +117,26 @@ function getCodexReleaseAssetName(version: string): string {
   if (currentArch !== "x64" && currentArch !== "arm64") {
     throw Error(`unsupported codex arch ${currentArch}`);
   }
-  return `codex-v${version}-linux-${currentArch}.xz`;
+  return `${binary}-v${version}-linux-${currentArch}.xz`;
 }
 
 function getCodexInstallScript(version: string): string {
-  const assetName = getCodexReleaseAssetName(version);
-  const dest = join(binPath, "codex");
-  const url = `https://github.com/sagemathinc/codex/releases/download/v${version}/${assetName}`;
-  return `curl -fL "${url}" | xz -dc > "${dest}" && chmod a+x "${dest}"`;
+  const releaseBase = `https://github.com/sagemathinc/codex/releases/download/v${version}`;
+  const binaries = ["codex", "codex-code-mode-host"] as const;
+  const paths = Object.fromEntries(
+    binaries.map((binary) => [binary, join(binPath, binary)]),
+  );
+  const downloads = binaries.map((binary) => {
+    const assetName = getCodexReleaseAssetName(version, binary);
+    return `curl -fL "${releaseBase}/${assetName}" | xz -dc > "${paths[binary]}.tmp"`;
+  });
+  return [
+    `rm -f "${paths.codex}.tmp" "${paths["codex-code-mode-host"]}.tmp"`,
+    ...downloads,
+    `chmod a+x "${paths.codex}.tmp" "${paths["codex-code-mode-host"]}.tmp"`,
+    `mv "${paths["codex-code-mode-host"]}.tmp" "${paths["codex-code-mode-host"]}"`,
+    `mv "${paths.codex}.tmp" "${paths.codex}"`,
+  ].join(" && ");
 }
 
 interface Spec {
@@ -398,6 +413,12 @@ export async function versions() {
 export async function alreadyInstalled(app: App) {
   const { path, VERSION } = SPEC[app] as Spec;
   if (!(await exists(path))) {
+    return false;
+  }
+  if (
+    app === "codex" &&
+    !(await exists(join(binPath, "codex-code-mode-host")))
+  ) {
     return false;
   }
   if (isCrossBuild()) {

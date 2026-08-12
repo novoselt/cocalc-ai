@@ -382,6 +382,55 @@ describe("HostExamPanel", () => {
     );
   });
 
+  it("prepares practice runs without a cleanup deadline", async () => {
+    mockGetHostExamState.mockResolvedValueOnce({
+      eligible: true,
+      config: savedConfig,
+    });
+    mockCreateHostExamRun.mockResolvedValue({
+      eligible: true,
+      config: savedConfig,
+    });
+    render(
+      <HostExamPanel
+        host={{ id: "host-1", status: "running" } as any}
+        rootfsImages={[
+          {
+            image: "cocalc.local/rootfs/exam",
+            digest: "sha256:abc",
+          } as any,
+        ]}
+      />,
+    );
+
+    const prepare = screen.getByRole("button", {
+      name: "Prepare and test run",
+    });
+    await waitFor(() => expect(prepare).toBeEnabled());
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Practice mode: erase projects manually (no automatic timeout)",
+      }),
+    );
+    expect(
+      screen.getByText("Projects remain until you end and erase the session"),
+    ).toBeVisible();
+    const practicePrepare = screen.getByRole("button", {
+      name: "Prepare and test run",
+    });
+    expect(practicePrepare).toBeEnabled();
+    fireEvent.click(practicePrepare);
+
+    await waitFor(() => expect(mockCreateHostExamRun).toHaveBeenCalled());
+    expect(mockCreateHostExamRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanup_mode: "manual",
+        scheduled_stop_at: undefined,
+        stop_host_at_deadline: false,
+      }),
+    );
+  });
+
   it("reuses one idempotency key when fresh auth retries preparation", async () => {
     mockGetHostExamState.mockResolvedValueOnce({
       eligible: true,

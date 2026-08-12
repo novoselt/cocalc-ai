@@ -232,11 +232,13 @@ export function getExamJoinPage({
   admission_open,
   title = "Exam Scratchpad",
   scheduled_stop_at,
+  cleanup_mode = "scheduled",
 }: {
   error?: string;
   admission_open: boolean;
   title?: string;
   scheduled_stop_at?: string;
+  cleanup_mode?: "scheduled" | "manual";
 }): string {
   const escapeHtml = (value: unknown) =>
     `${value ?? ""}`
@@ -252,6 +254,10 @@ export function getExamJoinPage({
   const deadlineText = hasDeadline
     ? `<time data-deadline-ms="${deadline.valueOf()}" datetime="${deadlineIso}" title="${deadlineIso}">at ${escapeHtml(deadline.toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" }))}</time>`
     : "at the configured deletion time";
+  const cleanupText =
+    cleanup_mode === "manual"
+      ? "This practice project remains available until your instructor ends the session and erases all projects."
+      : `This temporary project will be completely erased automatically <strong>${deadlineText}</strong>, with nothing retained.`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -295,7 +301,7 @@ export function getExamJoinPage({
   ${
     admission_open
       ? `<p>Enter the token provided to you.</p>
-  <p>This temporary project will be completely erased automatically <strong>${deadlineText}</strong>, with nothing retained.</p>
+  <p>${cleanupText}</p>
   <form method="post" action="/exam/join">
     <label for="token">Access token</label>
     <input id="token" name="token" type="password" autocomplete="off" required autofocus>
@@ -342,6 +348,7 @@ export async function initHttp({
         admission_open: runtime.admission_open,
         title: runtime.title,
         scheduled_stop_at: runtime.scheduled_stop_at,
+        cleanup_mode: runtime.cleanup_mode,
       }),
     );
   });
@@ -360,6 +367,7 @@ export async function initHttp({
         admission_open: runtime.admission_open,
         title: runtime.title,
         scheduled_stop_at: runtime.scheduled_stop_at,
+        cleanup_mode: runtime.cleanup_mode,
       }),
     );
   });
@@ -415,6 +423,7 @@ export async function initHttp({
             admission_open: runtime.admission_open,
             title: runtime.title,
             scheduled_stop_at: runtime.scheduled_stop_at,
+            cleanup_mode: runtime.cleanup_mode,
             error: `${(err as Error)?.message ?? err}`,
           }),
         );

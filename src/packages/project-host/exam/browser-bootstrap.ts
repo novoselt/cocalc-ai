@@ -6,7 +6,7 @@
 import type { ExamBrowserSession } from "./controller";
 
 export interface ExamBrowserBootstrap {
-  delete_at: string;
+  delete_at?: string;
   account: {
     account_id: string;
     first_name: string;
@@ -49,7 +49,9 @@ export function buildExamBrowserBootstrap({
         ? project.state.state
         : "running";
   return {
-    delete_at: new Date(session.scheduled_stop_at_ms).toISOString(),
+    ...(session.cleanup_mode !== "manual"
+      ? { delete_at: new Date(session.scheduled_stop_at_ms).toISOString() }
+      : {}),
     account: {
       account_id: session.account_id,
       first_name: account?.first_name ?? "Exam",

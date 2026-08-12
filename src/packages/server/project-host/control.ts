@@ -32,7 +32,11 @@ import { countsTowardManagedCpuBudgetForHost } from "@cocalc/server/membership/m
 import { cancelStaleProjectStartLros } from "@cocalc/server/projects/start-lro-cleanup";
 import { getLro } from "@cocalc/server/lro/lro-db";
 import { DEFAULT_PROJECT_IMAGE } from "@cocalc/util/db-schema/defaults";
-import { mapCloudRegionToR2Region, parseR2Region } from "@cocalc/util/consts";
+import {
+  mapCloudRegionToR2Region,
+  parseR2Region,
+  rankR2RegionDistance,
+} from "@cocalc/util/consts";
 import { getRoutedHostControlClient } from "./client";
 import { resolveHostBayAcrossCluster } from "@cocalc/server/inter-bay/directory";
 import { resolveMembershipForAccount } from "@cocalc/server/membership/resolve";
@@ -246,6 +250,31 @@ export function choosePlacementHostRow<T extends HostRegistryRow>(
     Math.max(0, Math.floor(random() * bestRows.length)),
   );
   return bestRows[index];
+}
+
+function chooseNearestRegionHostRow<T extends HostRegistryRow>(
+  rows: T[],
+  projectRegion: string,
+  random: () => number = Math.random,
+): T | undefined {
+  const parsedProjectRegion = parseR2Region(projectRegion);
+  if (!parsedProjectRegion) return choosePlacementHostRow(rows, random);
+  let nearestRank = Number.POSITIVE_INFINITY;
+  const nearestRows: T[] = [];
+  for (const row of rows) {
+    const rank = rankR2RegionDistance(
+      parsedProjectRegion,
+      mapCloudRegionToR2Region(row.region),
+    );
+    if (rank < nearestRank) {
+      nearestRank = rank;
+      nearestRows.length = 0;
+      nearestRows.push(row);
+    } else if (rank === nearestRank) {
+      nearestRows.push(row);
+    }
+  }
+  return choosePlacementHostRow(nearestRows, random);
 }
 
 function mapHostRegistryRow(row: HostRegistryRow) {
@@ -708,6 +737,12 @@ export async function selectActiveHost({
     );
     return remoteRows;
   };
+  const filterPlaceableRows = async (rows: HostRegistryRow[]) => {
+    return await filterRowsPlaceableByAccount({
+      rows,
+      account_id,
+    });
+  };
   const choosePlaceableRow = async (rows: HostRegistryRow[]) => {
     const placeableRows = await filterRowsPlaceableByAccount({
       rows,
@@ -716,24 +751,35 @@ export async function selectActiveHost({
     return choosePlacementHostRow(placeableRows, Math.random, project_region);
   };
 
-  const sameBayRow = await choosePlaceableRow(await loadCandidateRows());
+  const sameBayRows = await loadCandidateRows();
+  const sameBayRow = await choosePlaceableRow(sameBayRows);
   if (sameBayRow) return mapHostRegistryRow(sameBayRow);
 
-  const sharedPoolRow = await choosePlaceableRow(
-    await loadCandidateRows({ anyBay: true, sharedPoolOnly: true }),
-  );
+  const sharedPoolRows = await loadCandidateRows({
+    anyBay: true,
+    sharedPoolOnly: true,
+  });
+  const sharedPoolRow = await choosePlaceableRow(sharedPoolRows);
   if (sharedPoolRow) return mapHostRegistryRow(sharedPoolRow);
 
-  const remoteSharedPoolRow = await choosePlaceableRow(
-    await loadRemoteSharedPoolCandidateRows(),
-  );
+  const remoteSharedPoolRows = await loadRemoteSharedPoolCandidateRows();
+  const remoteSharedPoolRow = await choosePlaceableRow(remoteSharedPoolRows);
   if (remoteSharedPoolRow) return mapHostRegistryRow(remoteSharedPoolRow);
   if (!allow_region_fallback || !project_region) return undefined;
-  return await selectActiveHost({
-    exclude_host_id,
-    bay_id,
-    account_id,
-  });
+
+  const fallbackRowsById = new Map<string, HostRegistryRow>();
+  for (const row of [
+    ...sameBayRows,
+    ...sharedPoolRows,
+    ...remoteSharedPoolRows,
+  ]) {
+    fallbackRowsById.set(row.id, row);
+  }
+  const fallbackRows = await filterPlaceableRows([
+    ...fallbackRowsById.values(),
+  ]);
+  const fallbackRow = chooseNearestRegionHostRow(fallbackRows, project_region);
+  return fallbackRow ? mapHostRegistryRow(fallbackRow) : undefined;
 }
 
 export async function savePlacement(
@@ -831,6 +877,7 @@ export async function ensurePlacement(
     bay_id: projectBayId,
     project_region: projectRegion,
     account_id,
+    allow_region_fallback: true,
   });
   if (!chosen) {
     if (projectRegion) {

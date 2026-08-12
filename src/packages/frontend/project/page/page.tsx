@@ -73,11 +73,15 @@ import {
 } from "./activity-bar-storage";
 import { throttle } from "lodash";
 import { StartButton } from "@cocalc/frontend/project/start-button";
-import { useHostInfo } from "@cocalc/frontend/projects/host-info";
+import {
+  useHostInfo,
+  useProjectHostConnectionState,
+} from "@cocalc/frontend/projects/host-info";
 import {
   evaluateHostOperational,
   getHostRecoveryDisplay,
   getProjectLifecycleView,
+  hostUnavailableBannerDelay,
   hostLabel,
 } from "@cocalc/frontend/projects/host-operational";
 import { projectThemeColor } from "@cocalc/frontend/projects/theme";
@@ -115,6 +119,7 @@ import {
   shouldShowProjectRuntimeRecoveryBanner,
 } from "@cocalc/frontend/project/runtime-recovery";
 import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
+import { HostRecoveryBanner } from "./host-recovery-banner";
 
 const START_BANNER = false;
 
@@ -216,6 +221,8 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const hostInfo = useHostInfo(host_id, {
     enabled: !props.publicDirectoryShare,
   });
+  const projectHostConnection = useProjectHostConnectionState(host_id);
+  const projectHostConnected = projectHostConnection.connected;
   const hostOperational = useMemo(
     () => evaluateHostOperational(hostInfo),
     [hostInfo],
@@ -238,7 +245,11 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     startLro: startLroRecord,
   });
   const moveStatusVisible = shouldRenderMoveStatus(moveLro, moveReopenRequired);
-  const hostUnavailable = !!host_id && hostOperational.state === "unavailable";
+  const hostUnavailableCandidate =
+    !!host_id &&
+    (hostOperational.state === "unavailable" ||
+      (projectHostConnection.observed && !projectHostConnected)) &&
+    !projectHostConnected;
   const lifecycle = useMemo(
     () =>
       getProjectLifecycleView({
@@ -254,10 +265,55 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const hostUnavailableReason =
     hostOperational.reason ?? "Assigned host is unavailable.";
   const assignedHostLabel = hostLabel(hostInfo, host_id);
+  const [hostRecoveryNow, setHostRecoveryNow] = useState(Date.now());
   const hostRecovery = useMemo(
-    () => getHostRecoveryDisplay(hostInfo),
-    [hostInfo],
+    () =>
+      getHostRecoveryDisplay(
+        hostInfo,
+        hostRecoveryNow,
+        projectHostConnection.unavailableSince,
+      ),
+    [hostInfo, hostRecoveryNow, projectHostConnection.unavailableSince],
   );
+  const [hostUnavailableConfirmed, setHostUnavailableConfirmed] =
+    useState(false);
+  useEffect(() => {
+    const delay = hostUnavailableBannerDelay({
+      candidate: hostUnavailableCandidate,
+      recoveryActive: hostRecovery.active,
+      unavailableSince: projectHostConnection.unavailableSince,
+    });
+    if (delay == null) {
+      setHostUnavailableConfirmed(false);
+      return;
+    }
+    if (delay === 0) {
+      setHostUnavailableConfirmed(true);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setHostUnavailableConfirmed(true),
+      delay,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    hostRecovery.active,
+    hostUnavailableCandidate,
+    projectHostConnection.unavailableSince,
+  ]);
+  const hostUnavailable = hostUnavailableCandidate && hostUnavailableConfirmed;
+  useEffect(() => {
+    if (!hostUnavailable) return;
+    const refresh = () =>
+      redux.getActions("projects")?.ensure_host_info(host_id, true);
+    refresh();
+    setHostRecoveryNow(Date.now());
+    const timer = window.setInterval(() => {
+      setHostRecoveryNow(Date.now());
+      refresh();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [hostUnavailable, host_id]);
   const fullscreen = useTypedRedux("page", "fullscreen");
   const active_top_tab = useTypedRedux("page", "active_top_tab");
   const modal = useTypedRedux({ project_id }, "modal");
@@ -271,8 +327,6 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const current_path_abs = useTypedRedux({ project_id }, "current_path_abs");
   const [homePageButtonWidth, setHomePageButtonWidth] =
     React.useState<number>(80);
-  const [checkingHost, setCheckingHost] = useState<boolean>(false);
-
   useEffect(() => {
     if (!is_active || project == null || open_files_order == null) return;
     return recordSignedInSurfaceReady("project");
@@ -907,58 +961,14 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   function renderHostUnavailableBanner() {
     if (!hostUnavailable || hardDeleteBlocked) return;
     return (
-      <Alert
-        showIcon
-        type="warning"
-        banner
-        title={
-          hostRecovery.active
-            ? hostRecovery.title
-            : "Project host is not available"
-        }
-        description={
-          <Space wrap>
-            <span>
-              {hostRecovery.active ? (
-                <>
-                  {hostRecovery.description} Expected recovery is within about{" "}
-                  {hostRecovery.etaMinutes ?? 2} minute
-                  {(hostRecovery.etaMinutes ?? 2) === 1 ? "" : "s"}. Saved
-                  project data remains safe; file, terminal, and notebook access
-                  resumes when the host reconnects.
-                </>
-              ) : (
-                <>
-                  This project is assigned to {assignedHostLabel}, which is
-                  unavailable ({hostUnavailableReason}). File access may fail
-                  until the host comes back online, but project settings and
-                  cached metadata are still available.
-                </>
-              )}
-            </span>
-            {!hostRecovery.active ? (
-              <Button
-                size="small"
-                loading={checkingHost}
-                onClick={async () => {
-                  if (!host_id) return;
-                  try {
-                    setCheckingHost(true);
-                    await redux
-                      .getActions("projects")
-                      ?.ensure_host_info(host_id, true);
-                  } catch (err) {
-                    console.warn("failed to refresh host status", err);
-                  } finally {
-                    setCheckingHost(false);
-                  }
-                }}
-              >
-                <Icon name="refresh" /> Check Host Status
-              </Button>
-            ) : null}
-          </Space>
-        }
+      <HostRecoveryBanner
+        assignedHostLabel={assignedHostLabel}
+        hostUnavailableReason={hostUnavailableReason}
+        onCheckStatus={async () => {
+          if (!host_id) return;
+          await redux.getActions("projects")?.ensure_host_info(host_id, true);
+        }}
+        recovery={hostRecovery}
       />
     );
   }

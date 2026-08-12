@@ -694,6 +694,78 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("installs tools without restarting managed components or falling back to ssh", async () => {
+    spawnMock = jest.fn(() => {
+      throw new Error("ssh should not be used");
+    });
+    const row = makeHostRow({
+      version: "1776486535462",
+      lifecycleStatus: "drifted",
+    });
+    row.metadata.software.tools = "tools-2";
+
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return { rows: [row] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { reconcileHostSoftwareInternal } = await import("./hosts");
+    await expect(
+      reconcileHostSoftwareInternal({
+        account_id: ACCOUNT_ID,
+        id: HOST_ID,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(upgradeHostSoftwareInternalHelperMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: ACCOUNT_ID,
+        id: HOST_ID,
+        targets: [{ artifact: "tools", version: "tools-2" }],
+      }),
+    );
+    expect(
+      rolloutHostManagedComponentsInternalHelperMock,
+    ).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a failed tools install into a full bootstrap", async () => {
+    spawnMock = jest.fn(() => {
+      throw new Error("ssh should not be used");
+    });
+    upgradeHostSoftwareInternalHelperMock = jest.fn(async () => {
+      throw new Error("tools install failed");
+    });
+    const row = makeHostRow({
+      version: "1776486535462",
+      lifecycleStatus: "drifted",
+    });
+    row.metadata.software.tools = "tools-2";
+
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT * FROM project_hosts WHERE id=$1")) {
+        return { rows: [row] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const { reconcileHostSoftwareInternal } = await import("./hosts");
+    await expect(
+      reconcileHostSoftwareInternal({
+        account_id: ACCOUNT_ID,
+        id: HOST_ID,
+      }),
+    ).rejects.toThrow("tools install failed");
+
+    expect(
+      rolloutHostManagedComponentsInternalHelperMock,
+    ).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it.each(["helpers", "environment"] as const)(
     "forces %s-only bootstrap reconcile without runtime rollout",
     async (bootstrapScope) => {

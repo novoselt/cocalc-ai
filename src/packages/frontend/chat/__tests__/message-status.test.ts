@@ -1,9 +1,54 @@
 /** @jest-environment jsdom */
 
 import {
+  codexActivityBlocksToSelectableMarkdown,
   computeAcpStateToRender,
+  limitCodexActivityBlocks,
   shouldShowAcpResubmitToAgentButton,
 } from "../message-state";
+
+describe("codexActivityBlocksToSelectableMarkdown", () => {
+  it("combines the visible activity window into one chronological document", () => {
+    expect(
+      codexActivityBlocksToSelectableMarkdown([
+        { kind: "agent", text: "Inspecting the project." },
+        {
+          kind: "guidance",
+          text: "Also check the tests.\nDo not deploy yet.",
+          state: "sent",
+        },
+        { kind: "agent", text: "The focused tests pass." },
+      ]),
+    ).toBe(
+      "Inspecting the project.\n\n" +
+        "> **Guidance sent**\n>\n" +
+        "> Also check the tests.\n> Do not deploy yet.\n\n" +
+        "The focused tests pass.",
+    );
+  });
+});
+
+describe("limitCodexActivityBlocks", () => {
+  const blocks = Array.from({ length: 250 }, (_, index) => ({
+    kind: "agent" as const,
+    text: `activity ${index}`,
+  }));
+
+  it("shows the newest capped window and reports hidden activity", () => {
+    const result = limitCodexActivityBlocks(blocks, 100);
+    expect(result.hiddenCount).toBe(150);
+    expect(result.visibleBlocks).toHaveLength(100);
+    expect(result.visibleBlocks[0].text).toBe("activity 150");
+    expect(result.visibleBlocks[99].text).toBe("activity 249");
+  });
+
+  it("supports loading earlier activity in bounded pages", () => {
+    const result = limitCodexActivityBlocks(blocks, 200);
+    expect(result.hiddenCount).toBe(50);
+    expect(result.visibleBlocks).toHaveLength(200);
+    expect(result.visibleBlocks[0].text).toBe("activity 50");
+  });
+});
 
 describe("computeAcpStateToRender", () => {
   it("hides queue state for non-viewer messages", () => {

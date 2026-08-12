@@ -10,6 +10,7 @@ import type {
 } from "@cocalc/util/db-schema/projects";
 import type { SnapshotSchedule } from "@cocalc/util/consts/snapshots";
 import type {
+  HostExamCleanupMode,
   HostExamConfig,
   HostExamRun,
   HostExamRuntimeStatus,
@@ -554,7 +555,8 @@ export interface HostControlApi {
   updateExamRunDeadline: (opts: {
     run_id: string;
     config_generation: number;
-    scheduled_stop_at: string;
+    cleanup_mode?: HostExamCleanupMode;
+    scheduled_stop_at?: string;
     stop_host_at_deadline?: boolean;
   }) => Promise<HostExamRuntimeStatus>;
   increaseExamRunCapacity: (opts: {

@@ -29,6 +29,10 @@ describe("hub api admission", () => {
     ).toBe(true);
     expect(isLowPriorityHubApiMethod("purchases.getAIUsage")).toBe(true);
     expect(isLowPriorityHubApiMethod("growthAnalytics.recordEvent")).toBe(true);
+    expect(isLowPriorityHubApiMethod("system.recordUxLatencyEvent")).toBe(true);
+    expect(isLowPriorityHubApiMethod("system.listNews")).toBe(true);
+    expect(isLowPriorityHubApiMethod("system.upsertBrowserSession")).toBe(true);
+    expect(isLowPriorityHubApiMethod("system.webappError")).toBe(true);
     expect(isLowPriorityHubApiMethod("db.userQuery")).toBe(false);
   });
 
@@ -104,5 +108,31 @@ describe("hub api admission", () => {
       source: "hub-api",
       maximum: 3000,
     });
+  });
+
+  it("reserves per-account capacity from low-priority frontend maintenance", () => {
+    expect(
+      getHubApiAdmissionDecision({
+        active: 100,
+        maximum: 3000,
+        accountActive: 205,
+        accountMaximum: 256,
+        key: "system.recordUxLatencyEvent",
+      }),
+    ).toMatchObject({
+      allowed: false,
+      source: "hub-api-account-low-priority",
+      maximum: 204,
+    });
+
+    expect(
+      getHubApiAdmissionDecision({
+        active: 100,
+        maximum: 3000,
+        accountActive: 205,
+        accountMaximum: 256,
+        key: "hosts.resolveHostConnection",
+      }),
+    ).toMatchObject({ allowed: true });
   });
 });

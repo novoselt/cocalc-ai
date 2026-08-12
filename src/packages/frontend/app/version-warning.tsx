@@ -8,6 +8,10 @@ import { Gap, Icon } from "@cocalc/frontend/components";
 import { type CSSProperties, useEffect, useState } from "react";
 import { version } from "@cocalc/util/smc-version";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import {
+  reloadForFrontendBuild,
+  useFrontendBuildMonitor,
+} from "./frontend-build-monitor";
 
 const VERSION_WARNING_STYLE = {
   fontSize: "12pt",
@@ -26,6 +30,7 @@ const VERSION_WARNING_STYLE = {
 
 export default function VersionWarning() {
   const [closed, setClosed] = useState<boolean>(false);
+  const frontendBuild = useFrontendBuildMonitor();
   const minVersion = useTypedRedux("customize", "version_min_browser");
   const recommendedVersion = useTypedRedux(
     "customize",
@@ -39,7 +44,11 @@ export default function VersionWarning() {
     }
   }, [minVersion]);
 
-  if (version >= recommendedVersion) {
+  const manualUpdateRecommended = version < recommendedVersion;
+  const updateRecommended =
+    manualUpdateRecommended || frontendBuild.reloadRecommended;
+
+  if (!updateRecommended) {
     return null;
   }
 
@@ -89,9 +98,13 @@ export default function VersionWarning() {
         }}
       >
         <div style={{ flex: "1 1 auto" }}>
-          <Icon name={"refresh"} /> New Version Available: upgrade by <Gap />
+          <Icon name={"refresh"} />
+          {frontendBuild.reloadRecommended
+            ? " CoCalc was updated while this page was open. Reload to use one consistent version."
+            : " New Version Available: upgrade by"}
+          <Gap />
           <a
-            onClick={() => window.location.reload()}
+            onClick={() => reloadForFrontendBuild(frontendBuild.current)}
             style={{
               cursor: "pointer",
               fontWeight: "bold",
@@ -99,9 +112,9 @@ export default function VersionWarning() {
               textDecoration: "underline",
             }}
           >
-            reloading this page
+            Reload this page
           </a>
-          .
+          {frontendBuild.reloadRecommended ? " now." : "."}
         </div>
         {render_close()}
       </div>

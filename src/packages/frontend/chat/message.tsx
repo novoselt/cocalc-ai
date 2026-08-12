@@ -89,7 +89,6 @@ import { SyncOutlined } from "@ant-design/icons";
 import {
   AgentMessageStatus,
   AttachedSteerStatusList,
-  InlineSteerStatusRow,
   type AttachedSteerMessage,
 } from "./agent-message-status";
 import { useCodexLog } from "./use-codex-log";
@@ -110,8 +109,11 @@ import {
 } from "./git-commit-links";
 import {
   canUseCompletedCachedCodexActivity,
+  codexActivityBlocksToSelectableMarkdown,
   computeAcpStateToRender,
+  DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT,
   getQueuedMessageEditHelpText,
+  limitCodexActivityBlocks,
   resolveCodexShowActivityButtonState,
   resolveEditedMessageForSave,
   resolveEffectiveGenerating,
@@ -382,6 +384,9 @@ export default function Message({
   const edited_message_ref = useRef(edited_message);
 
   const [show_history, set_show_history] = useState(false);
+  const [codexActivityVisibleLimit, setCodexActivityVisibleLimit] = useState(
+    DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT,
+  );
 
   const historyEntries = useMemo(() => historyArray(message), [message]);
   const firstHistoryEntry = useMemo(
@@ -1889,7 +1894,6 @@ export default function Message({
   function renderInterleavedCodexBody({
     blocks,
     message_class,
-    inlineCodeLinks,
     openCommitFromMessage,
     showHeader = false,
     onHideActivity,
@@ -1902,16 +1906,21 @@ export default function Message({
       state?: "sending" | "sent" | "queued" | "not-sent";
     }>;
     message_class?: string;
-    inlineCodeLinks?: InlineCodeLink[];
     openCommitFromMessage: (e: any) => void;
     showHeader?: boolean;
     onHideActivity?: () => void;
     showQuotaHelp?: boolean;
   }) {
-    const combinedAgentText = blocks
+    const { visibleBlocks, hiddenCount } = limitCodexActivityBlocks(
+      blocks,
+      codexActivityVisibleLimit,
+    );
+    const combinedAgentText = visibleBlocks
       .filter((block) => block.kind === "agent")
       .map((block) => block.text)
       .join("\n\n");
+    const selectableActivityMarkdown =
+      codexActivityBlocksToSelectableMarkdown(visibleBlocks);
     const body = (
       <div onClickCapture={openCommitFromMessage}>
         <div
@@ -1921,49 +1930,40 @@ export default function Message({
             gap: 8,
           }}
         >
-          {blocks.map((block, index) =>
-            block.kind === "guidance" ? (
-              <div
-                key={`guidance-${index}-${block.time ?? index}`}
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
+          {hiddenCount > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                gap: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <Button
+                size="small"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setCodexActivityVisibleLimit((current) =>
+                    Math.min(
+                      blocks.length,
+                      current + DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT,
+                    ),
+                  );
                 }}
               >
-                <div style={{ maxWidth: "80%" }}>
-                  <InlineSteerStatusRow
-                    steer={{
-                      messageId: `live-guidance-${index}`,
-                      date: block.time ?? 0,
-                      text: block.text,
-                      state: block.state ?? "sent",
-                    }}
-                  />
-                </div>
-              </div>
-            ) : messageBodyMode === "select" ? (
-              <div key={`agent-${index}-${block.time ?? index}`}>
-                {renderSelectableMarkdownBody({
-                  value: linkifyCommitHashes(block.text),
-                  message_class,
-                  style: MARKDOWN_STYLE,
-                })}
-              </div>
-            ) : (
-              <StaticMarkdown
-                key={`agent-${index}-${block.time ?? index}`}
-                style={MARKDOWN_STYLE}
-                value={linkifyCommitHashes(block.text)}
-                className={message_class}
-                editorTheme={editorTheme}
-                highlightQuery={searchHighlight}
-                inlineCodeLinks={
-                  Array.isArray(inlineCodeLinks) ? inlineCodeLinks : undefined
-                }
-                inlineCodeProjectRoot={activityBasePath}
-              />
-            ),
-          )}
+                Show {Math.min(hiddenCount, DEFAULT_CODEX_ACTIVITY_BLOCK_LIMIT)}
+                {" earlier activity items"}
+              </Button>
+            </div>
+          ) : null}
+          {selectableActivityMarkdown
+            ? renderSelectableMarkdownBody({
+                value: linkifyCommitHashes(selectableActivityMarkdown),
+                message_class,
+                style: MARKDOWN_STYLE,
+              })
+            : null}
         </div>
         {showQuotaHelp ? (
           <CodexQuotaHelp message={combinedAgentText} projectId={project_id} />
@@ -2117,9 +2117,6 @@ export default function Message({
           ? renderInterleavedCodexBody({
               blocks: activityBlocksToRender,
               message_class,
-              inlineCodeLinks: Array.isArray(inlineCodeLinks)
-                ? inlineCodeLinks
-                : undefined,
               openCommitFromMessage,
               showHeader: inlineCodexActivityMode === "completed",
               showQuotaHelp: !shouldRenderCompletedFinalResponse,

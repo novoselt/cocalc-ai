@@ -205,6 +205,28 @@ describe("news notifications loading recovery", () => {
     expect(mockNewsState.loading).toBe(false);
   });
 
+  it("coalesces overlapping news refreshes", async () => {
+    mockAccountStore = {
+      async_wait: jest.fn(),
+      get: jest.fn(() => undefined),
+      get_account_id: jest.fn(() => "acct-1"),
+    };
+    let release!: (rows: any[]) => void;
+    mockListNews.mockImplementationOnce(
+      () => new Promise<any[]>((resolve) => (release = resolve)),
+    );
+    const actions = new NewsActions("news", mockRedux);
+
+    const first = actions.refresh();
+    const second = actions.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockListNews).toHaveBeenCalledTimes(1);
+
+    release([]);
+    await Promise.all([first, second]);
+    expect(mockListNews).toHaveBeenCalledTimes(1);
+  });
+
   it("records news feed diagnostics and repairs on refresh events", async () => {
     const feed = new MockFeed();
     mockGetSharedAccountDStream.mockResolvedValue(feed);

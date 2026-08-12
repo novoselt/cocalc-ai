@@ -6,10 +6,47 @@
 import {
   getHostRecoveryDisplay,
   getProjectLifecycleView,
+  hostUnavailableBannerDelay,
+  isHostRecoveryTransient,
   normalizeProjectStateForDisplay,
 } from "./host-operational";
 
 describe("projects host operational display state", () => {
+  it("suppresses brief unconfirmed project-host disconnects", () => {
+    const now = new Date("2026-08-12T19:00:05.000Z").getTime();
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: true,
+        recoveryActive: false,
+        unavailableSince: "2026-08-12T19:00:03.000Z",
+        now,
+      }),
+    ).toBe(3_000);
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: true,
+        recoveryActive: false,
+        unavailableSince: "2026-08-12T19:00:00.000Z",
+        now,
+      }),
+    ).toBe(0);
+  });
+
+  it("shows confirmed recovery immediately and hides on reconnection", () => {
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: true,
+        recoveryActive: true,
+      }),
+    ).toBe(0);
+    expect(
+      hostUnavailableBannerDelay({
+        candidate: false,
+        recoveryActive: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("describes automatic spot recovery with an alternate machine type", () => {
     expect(
       getHostRecoveryDisplay({
@@ -26,7 +63,76 @@ describe("projects host operational display state", () => {
     ).toMatchObject({
       active: true,
       title: "Project host is restarting on alternate Spot capacity",
-      etaMinutes: 2,
+      etaMinutes: 3,
+    });
+  });
+
+  it("shows honest elapsed recovery timing using host history", () => {
+    expect(
+      getHostRecoveryDisplay(
+        {
+          desired_state: "running",
+          desired_pricing_model: "spot",
+          effective_pricing_model: "spot",
+          recovery_phase: "retrying_spot",
+          unavailable_since: "2026-08-12T11:59:00.000Z",
+          recovery_duration_estimate_ms: 4 * 60_000,
+          spot_recovery_state: { phase: "retrying_spot" },
+        },
+        new Date("2026-08-12T12:00:00.000Z").getTime(),
+      ),
+    ).toMatchObject({
+      active: true,
+      startedAt: "2026-08-12T11:59:00.000Z",
+      timingDescription: expect.stringContaining("about 4 minutes"),
+    });
+  });
+
+  it("keeps the browser-observed disconnect as the stable incident start", () => {
+    expect(
+      getHostRecoveryDisplay(
+        {
+          desired_state: "running",
+          desired_pricing_model: "spot",
+          recovery_phase: "retrying_spot",
+          last_seen: "2026-08-12T12:01:00.000Z",
+          unavailable_since: "2026-08-12T12:02:00.000Z",
+          spot_recovery_state: {
+            phase: "retrying_spot",
+            outage_started_at: "2026-08-12T12:02:00.000Z",
+          },
+        },
+        new Date("2026-08-12T12:04:00.000Z").getTime(),
+        "2026-08-12T12:00:00.000Z",
+      ),
+    ).toMatchObject({
+      active: true,
+      startedAt: "2026-08-12T12:00:00.000Z",
+      timingDescription: expect.stringContaining("longer than the usual"),
+    });
+  });
+
+  it("does not replace the current browser incident with stale fallback metadata", () => {
+    expect(
+      getHostRecoveryDisplay(
+        {
+          desired_state: "running",
+          desired_pricing_model: "spot",
+          effective_pricing_model: "on_demand",
+          recovery_phase: "running_standard_fallback",
+          last_seen: null,
+          spot_recovery_state: {
+            phase: "running_standard_fallback",
+            outage_started_at: "2026-08-12T16:45:30.652Z",
+            standard_hold_until: "2026-08-13T16:45:30.652Z",
+          },
+        },
+        new Date("2026-08-12T17:14:45.000Z").getTime(),
+        "2026-08-12T17:12:35.000Z",
+      ),
+    ).toMatchObject({
+      active: true,
+      startedAt: "2026-08-12T17:12:35.000Z",
     });
   });
 
@@ -38,6 +144,34 @@ describe("projects host operational display state", () => {
         recovery_phase: "idle",
       }),
     ).toEqual({ active: false });
+  });
+
+  it("distinguishes transient recovery from terminal host states", () => {
+    expect(
+      isHostRecoveryTransient({
+        status: "starting",
+        desired_state: "running",
+      }),
+    ).toBe(true);
+    expect(
+      isHostRecoveryTransient({
+        status: "off",
+        desired_state: "running",
+        recovery_phase: "running_standard_fallback",
+      }),
+    ).toBe(true);
+    expect(
+      isHostRecoveryTransient({
+        status: "deprovisioned",
+        desired_state: "off",
+      }),
+    ).toBe(false);
+    expect(
+      isHostRecoveryTransient({
+        status: "error",
+        desired_state: "running",
+      }),
+    ).toBe(false);
   });
 
   it("keeps running projects running when host heartbeat is stale", () => {

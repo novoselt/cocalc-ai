@@ -340,11 +340,81 @@ export function getAgentMessageTexts(events: AcpStreamMessage[]): string[] {
   return getAgentMessageBlocks(events).map(({ text }) => text);
 }
 
+const PROGRESSIVE_SNAPSHOT_COMPACTION_MIN = 16;
+
+function compactProgressiveProjectionEvents(
+  events: AcpStreamMessage[],
+  guidance?: Array<{ date: number }>,
+): AcpStreamMessage[] {
+  const guidanceTimes = (guidance ?? [])
+    .map(({ date }) => date)
+    .filter((date) => Number.isFinite(date))
+    .sort((a, b) => a - b);
+  const compacted: AcpStreamMessage[] = [];
+  let run: AcpStreamMessage[] = [];
+  let guidanceIndex = 0;
+
+  const flushRun = () => {
+    if (run.length < PROGRESSIVE_SNAPSHOT_COMPACTION_MIN) {
+      compacted.push(...run);
+      run = [];
+      return;
+    }
+    const first = run[0];
+    const last = run[run.length - 1];
+    const firstText =
+      first.type === "event" && first.event.type === "message"
+        ? first.event.text
+        : "";
+    const lastText =
+      last.type === "event" && last.event.type === "message"
+        ? last.event.text
+        : "";
+    const relation = compareNormalizedProgressiveText(firstText, lastText);
+    if (relation === "previous-prefix" || relation === "equal") {
+      compacted.push(last);
+    } else {
+      compacted.push(...run);
+    }
+    run = [];
+  };
+
+  for (const evt of events ?? []) {
+    const time = typeof evt?.time === "number" ? evt.time : undefined;
+    if (time != null) {
+      while (
+        guidanceIndex < guidanceTimes.length &&
+        guidanceTimes[guidanceIndex] < time
+      ) {
+        flushRun();
+        guidanceIndex += 1;
+      }
+    }
+    if (
+      evt?.type === "event" &&
+      evt.event?.type === "message" &&
+      evt.event.delta !== true
+    ) {
+      run.push(evt);
+      continue;
+    }
+    flushRun();
+    compacted.push(evt);
+  }
+  flushRun();
+  return compacted;
+}
+
 export function getAgentMessageBlocks(
   events: AcpStreamMessage[],
 ): Array<{ text: string; time?: number }> {
-  const blocks: Array<{ text: string; time?: number; hasDelta: boolean }> = [];
-  for (const evt of events ?? []) {
+  const blocks: Array<{
+    text: string;
+    time?: number;
+    hasDelta: boolean;
+    sourceEvent?: object;
+  }> = [];
+  for (const evt of compactProgressiveProjectionEvents(events)) {
     if (evt?.type !== "event" || evt.event?.type !== "message") continue;
     const text = evt.event.text;
     if (typeof text !== "string" || text.trim().length === 0) continue;
@@ -352,17 +422,23 @@ export function getAgentMessageBlocks(
     if (last?.text === text) {
       last.hasDelta = last.hasDelta || evt.event.delta === true;
       last.time = evt.time ?? last.time;
+      last.sourceEvent = evt;
       continue;
     }
-    const progressive = mergeProgressiveMessageText(last?.text, text, {
+    const progressive = mergeProgressiveEventText({
+      previous: last?.text,
+      next: text,
+      previousEvent: last?.sourceEvent,
+      nextEvent: evt,
       previousHasDelta: last?.hasDelta === true,
       nextIsDelta: evt.event.delta === true,
     });
-    if (typeof progressive === "string") {
+    if (typeof progressive.text === "string") {
       blocks[blocks.length - 1] = {
-        text: progressive,
+        text: progressive.text,
         hasDelta: (last?.hasDelta ?? false) || evt.event.delta === true,
         time: evt.time ?? last?.time,
+        sourceEvent: progressive.sourceEvent,
       };
       continue;
     }
@@ -370,6 +446,7 @@ export function getAgentMessageBlocks(
       text,
       hasDelta: evt.event.delta === true,
       time: evt.time,
+      sourceEvent: evt,
     });
   }
   return blocks.map(({ text, time }) => ({ text, time }));
@@ -395,6 +472,7 @@ export function getLiveResponseBlocks(
         time?: number;
         delta: boolean;
         seq: number;
+        sourceEvent: object;
       }
     | {
         kind: "agent-boundary";
@@ -410,7 +488,10 @@ export function getLiveResponseBlocks(
       };
 
   const timeline: TimelineItem[] = [
-    ...(events ?? []).flatMap<TimelineItem>((evt) => {
+    ...compactProgressiveProjectionEvents(
+      events,
+      guidance,
+    ).flatMap<TimelineItem>((evt) => {
       if (
         evt?.type === "event" &&
         evt.event?.type === "message" &&
@@ -424,6 +505,7 @@ export function getLiveResponseBlocks(
             time: evt.time,
             delta: evt.event.delta === true,
             seq: evt.seq ?? 0,
+            sourceEvent: evt,
           },
         ];
       }
@@ -468,6 +550,7 @@ export function getLiveResponseBlocks(
   }> = [];
   let latestFullText: string | undefined;
   let latestFullHasDelta = false;
+  let latestFullSourceEvent: object | undefined;
   let activeSegmentBaseText: string | undefined;
   let pendingGuidanceSplitBaseText: string | undefined;
 
@@ -490,15 +573,23 @@ export function getLiveResponseBlocks(
       continue;
     }
 
-    const progressive = mergeProgressiveMessageText(latestFullText, item.text, {
+    const progressive = mergeProgressiveEventText({
+      previous: latestFullText,
+      next: item.text,
+      previousEvent: latestFullSourceEvent,
+      nextEvent: item.sourceEvent,
       previousHasDelta: latestFullHasDelta,
       nextIsDelta: item.delta,
     });
-    if (typeof progressive === "string") {
-      latestFullText = progressive;
+    if (typeof progressive.text === "string") {
+      latestFullText = progressive.text;
       latestFullHasDelta = latestFullHasDelta || item.delta;
+      latestFullSourceEvent = progressive.sourceEvent;
       const baseText = pendingGuidanceSplitBaseText ?? activeSegmentBaseText;
-      const segmentText = getInterleavedAgentSegmentText(baseText, progressive);
+      const segmentText = getInterleavedAgentSegmentText(
+        baseText,
+        progressive.text,
+      );
       if (segmentText.trim().length === 0) {
         continue;
       }
@@ -520,6 +611,7 @@ export function getLiveResponseBlocks(
 
     latestFullText = item.text;
     latestFullHasDelta = item.delta;
+    latestFullSourceEvent = item.sourceEvent;
     blocks.push({
       kind: "agent",
       text: item.text,
@@ -602,6 +694,153 @@ function getInterleavedAgentSegmentText(
   return suffix;
 }
 
+type ProgressiveMergeCacheChoice = "previous" | "next" | "none";
+
+const progressiveEventMergeCache = new WeakMap<
+  object,
+  WeakMap<object, Map<number, ProgressiveMergeCacheChoice>>
+>();
+
+function mergeProgressiveEventText({
+  previous,
+  next,
+  previousEvent,
+  nextEvent,
+  previousHasDelta,
+  nextIsDelta,
+}: {
+  previous: string | undefined;
+  next: string | undefined;
+  previousEvent?: object;
+  nextEvent: object;
+  previousHasDelta: boolean;
+  nextIsDelta: boolean;
+}): { text?: string; sourceEvent?: object } {
+  const flags = (previousHasDelta ? 1 : 0) | (nextIsDelta ? 2 : 0);
+  const choices = previousEvent
+    ? progressiveEventMergeCache.get(nextEvent)?.get(previousEvent)
+    : undefined;
+  const cached = choices?.get(flags);
+  if (cached === "previous") {
+    return { text: previous, sourceEvent: previousEvent };
+  }
+  if (cached === "next") {
+    return { text: next, sourceEvent: nextEvent };
+  }
+  if (cached === "none") {
+    return {};
+  }
+
+  const text = mergeProgressiveMessageText(previous, next, {
+    previousHasDelta,
+    nextIsDelta,
+  });
+  const choice: ProgressiveMergeCacheChoice | undefined =
+    text == null
+      ? "none"
+      : text === next
+        ? "next"
+        : text === previous
+          ? "previous"
+          : undefined;
+  const sourceEvent =
+    choice === "next"
+      ? nextEvent
+      : choice === "previous"
+        ? previousEvent
+        : undefined;
+  if (previousEvent && choice != null) {
+    let byPrevious = progressiveEventMergeCache.get(nextEvent);
+    if (byPrevious == null) {
+      byPrevious = new WeakMap();
+      progressiveEventMergeCache.set(nextEvent, byPrevious);
+    }
+    let byFlags = byPrevious.get(previousEvent);
+    if (byFlags == null) {
+      byFlags = new Map();
+      byPrevious.set(previousEvent, byFlags);
+    }
+    byFlags.set(flags, choice);
+  }
+  return { text, sourceEvent };
+}
+
+type NormalizedTextRelation =
+  | "equal"
+  | "previous-prefix"
+  | "next-prefix"
+  | "different"
+  | "empty";
+
+interface NormalizedTextCursor {
+  text: string;
+  index: number;
+  emitted: boolean;
+  last?: string;
+}
+
+const WHITESPACE = /\s/;
+
+function nextNormalizedTextChar(
+  cursor: NormalizedTextCursor,
+): string | undefined {
+  while (cursor.index < cursor.text.length) {
+    const char = cursor.text[cursor.index];
+    if (!WHITESPACE.test(char)) {
+      cursor.index += 1;
+      cursor.emitted = true;
+      cursor.last = char;
+      return char;
+    }
+    let next = cursor.index + 1;
+    while (next < cursor.text.length && WHITESPACE.test(cursor.text[next])) {
+      next += 1;
+    }
+    cursor.index = next;
+    if (
+      !cursor.emitted ||
+      next >= cursor.text.length ||
+      cursor.text[next] === "`" ||
+      cursor.last === "`"
+    ) {
+      continue;
+    }
+    cursor.last = " ";
+    return " ";
+  }
+  return undefined;
+}
+
+function compareNormalizedProgressiveText(
+  previous: string,
+  next: string,
+): NormalizedTextRelation {
+  const previousCursor: NormalizedTextCursor = {
+    text: previous,
+    index: 0,
+    emitted: false,
+  };
+  const nextCursor: NormalizedTextCursor = {
+    text: next,
+    index: 0,
+    emitted: false,
+  };
+  let previousChar = nextNormalizedTextChar(previousCursor);
+  let nextChar = nextNormalizedTextChar(nextCursor);
+  if (previousChar == null || nextChar == null) {
+    return "empty";
+  }
+  while (previousChar === nextChar) {
+    previousChar = nextNormalizedTextChar(previousCursor);
+    nextChar = nextNormalizedTextChar(nextCursor);
+    if (previousChar == null || nextChar == null) {
+      if (previousChar == null && nextChar == null) return "equal";
+      return previousChar == null ? "previous-prefix" : "next-prefix";
+    }
+  }
+  return "different";
+}
+
 export function mergeProgressiveMessageText(
   previous: string | undefined,
   next: string | undefined,
@@ -622,14 +861,11 @@ export function mergeProgressiveMessageText(
   if (cur.startsWith(prev)) return cur;
   if (prev.startsWith(cur)) return prev;
   if (prev.endsWith(cur)) return prev;
-  const normalizedPrev = normalizeProgressiveCompareText(prev);
-  const normalizedCur = normalizeProgressiveCompareText(cur);
-  if (!normalizedPrev || !normalizedCur) return undefined;
-  if (normalizedCur.startsWith(normalizedPrev)) return cur;
-  if (normalizedPrev.startsWith(normalizedCur)) return prev;
-  if (normalizedPrev === normalizedCur) {
-    return cur.length >= prev.length ? cur : prev;
-  }
+  const relation = compareNormalizedProgressiveText(prev, cur);
+  if (relation === "previous-prefix") return cur;
+  if (relation === "next-prefix") return prev;
+  if (relation === "equal") return cur;
+  if (relation === "empty") return undefined;
   if (opts?.previousHasDelta) {
     return mergeResponseText(prev, cur, { preferParagraphBreaks: true });
   }

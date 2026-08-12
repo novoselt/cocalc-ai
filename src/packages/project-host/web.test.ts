@@ -107,4 +107,13 @@ describe("project-host exam admission page", () => {
     expect(closed).not.toContain("Enter the token provided to you");
     expect(closed).not.toContain('name="token"');
   });
+
+  it("explains instructor-controlled cleanup for practice sessions", () => {
+    const page = getExamJoinPage({
+      admission_open: true,
+      cleanup_mode: "manual",
+    });
+    expect(page).toContain("until your instructor ends the session");
+    expect(page).not.toContain("erased automatically");
+  });
 });
