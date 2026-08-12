@@ -114,6 +114,9 @@ export function initCookieConsent({
         },
       },
       categories: buildCategoriesConfig(),
+      // CookieConsent normally hides from WebDriver. CoCalc's signup flow
+      // requires consent, so hiding the modal would deadlock browser automation.
+      hideFromBots: navigator.webdriver !== true,
       language: {
         default: "en",
         translations: {

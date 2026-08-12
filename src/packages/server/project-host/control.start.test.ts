@@ -407,7 +407,7 @@ describe("startProjectOnHost placement", () => {
     });
   });
 
-  it("falls back to another project region only when requested", async () => {
+  it("falls back to the nearest available project region only when requested", async () => {
     resolveMembershipForAccountMock = jest.fn(async () => ({
       entitlements: { features: { project_host_tier: 0 } },
     }));
@@ -419,14 +419,14 @@ describe("startProjectOnHost placement", () => {
         sql.includes("WHERE status='running'")
       ) {
         placementQuery += 1;
-        if (placementQuery === 1 || placementQuery === 3) {
+        if (placementQuery === 1) {
           expect(params).toEqual(["bay-1", "account-1"]);
           return {
             rows: [
               {
-                id: "same-bay-other-region",
+                id: "same-bay-far-region",
                 bay_id: "bay-1",
-                name: "Same Bay Other Region",
+                name: "Same Bay Far Region",
                 region: "europe-west1",
                 public_url: null,
                 internal_url: null,
@@ -441,7 +441,22 @@ describe("startProjectOnHost placement", () => {
         expect(params).toEqual(["account-1"]);
         expect(sql).not.toContain("COALESCE(bay_id");
         expect(sql).toContain("tier IS NOT NULL");
-        return { rows: [] };
+        return {
+          rows: [
+            {
+              id: "shared-pool-near-region",
+              bay_id: "bay-9",
+              name: "Shared Pool Near Region",
+              region: "us-east1",
+              public_url: null,
+              internal_url: null,
+              ssh_server: null,
+              tier: 0,
+              metadata: { machine: {} },
+              delegated_access_role: null,
+            },
+          ],
+        };
       }
       throw new Error(`unexpected query: ${sql}`);
     });
@@ -465,11 +480,11 @@ describe("startProjectOnHost placement", () => {
         allow_region_fallback: true,
       }),
     ).resolves.toMatchObject({
-      id: "same-bay-other-region",
-      bay_id: "bay-1",
+      id: "shared-pool-near-region",
+      bay_id: "bay-9",
       tier: 0,
     });
-    expect(placementQuery).toBe(3);
+    expect(placementQuery).toBe(2);
   });
 
   it("registers a new host placement without doing the long runtime start in createProject", async () => {
