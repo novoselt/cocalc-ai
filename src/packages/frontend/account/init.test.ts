@@ -14,6 +14,7 @@ const mockGetControlPlaneAuthBootstrap = jest.fn();
 const mockAlertMessage = jest.fn();
 const mockLogWarn = jest.fn();
 const mockWaitForExamModeConfiguration = jest.fn(async () => false);
+const mockWaitForAccountTableConnected = jest.fn(async () => undefined);
 
 jest.mock("../webapp-client", () => ({ webapp_client: mockWebappClient }));
 jest.mock("@cocalc/frontend/client/handle-target", () => ({
@@ -43,7 +44,8 @@ jest.mock("@cocalc/frontend/auth/api", () => ({
     mockGetControlPlaneAuthBootstrap(...args),
 }));
 jest.mock("./wait-for-account-table-connected", () => ({
-  waitForAccountTableConnectedForSignIn: jest.fn(async () => undefined),
+  waitForAccountTableConnectedForSignIn: (...args: any[]) =>
+    mockWaitForAccountTableConnected(...args),
 }));
 jest.mock("@cocalc/frontend/customize/exam-mode", () => ({
   waitForExamModeConfiguration: (...args: any[]) =>
@@ -60,7 +62,11 @@ import { init } from "./init";
 
 function createRedux({
   emitStoreChangeOnSignIn = false,
-}: { emitStoreChangeOnSignIn?: boolean } = {}) {
+  accountTableState = "connected",
+}: {
+  emitStoreChangeOnSignIn?: boolean;
+  accountTableState?: string;
+} = {}) {
   const state: Record<string, any> = emitStoreChangeOnSignIn
     ? { account_id: "account-1" }
     : {};
@@ -84,7 +90,9 @@ function createRedux({
     createStore: jest.fn(() => store),
     createActions: jest.fn(() => actions),
     getActions: jest.fn(() => actions),
-    getTable: jest.fn(() => ({ _table: { get_state: () => "connected" } })),
+    getTable: jest.fn(() => ({
+      _table: { get_state: () => accountTableState },
+    })),
   };
   return { actions, redux };
 }
@@ -96,6 +104,8 @@ describe("account initialization", () => {
     mockAlertMessage.mockReset();
     mockLogWarn.mockReset();
     mockWaitForExamModeConfiguration.mockClear();
+    mockWaitForAccountTableConnected.mockReset();
+    mockWaitForAccountTableConnected.mockResolvedValue(undefined);
   });
 
   it("loads routing metadata before exposing signed-in state", async () => {
@@ -131,6 +141,39 @@ describe("account initialization", () => {
         impersonation: null,
       }),
     );
+    expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
+  });
+
+  it("loads routing metadata while waiting for the account snapshot", async () => {
+    let resolveAccountTable: () => void = () => undefined;
+    mockWaitForAccountTableConnected.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveAccountTable = resolve;
+      }),
+    );
+    mockGetControlPlaneAuthBootstrap.mockResolvedValue({
+      signed_in: true,
+      home_bay_id: "bay-1",
+      impersonation: null,
+    });
+    const { actions, redux } = createRedux({
+      accountTableState: "connecting",
+    });
+    init(redux);
+    const signedIn = mockWebappClient.listeners("signed_in")[0] as (message: {
+      account_id: string;
+    }) => Promise<void>;
+
+    const signInPromise = signedIn({ account_id: "account-1" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockGetControlPlaneAuthBootstrap).toHaveBeenCalledTimes(1);
+    expect(actions.set_user_type).not.toHaveBeenCalledWith("signed_in");
+
+    resolveAccountTable();
+    await signInPromise;
+
     expect(actions.set_user_type).toHaveBeenCalledWith("signed_in");
   });
 

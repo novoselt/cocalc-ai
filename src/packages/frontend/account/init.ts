@@ -148,6 +148,10 @@ export function init(redux) {
     if (sessionRevision !== authSessionRevision) {
       return;
     }
+    const authBootstrap = loadAuthBootstrap({
+      account_id: mesg?.account_id,
+      force: true,
+    });
     const table = redux.getTable("account")?._table;
     if (!examMode && table?.get_state?.() !== "connected") {
       // not fully signed in until the account table is connected, so that we know
@@ -160,13 +164,7 @@ export function init(redux) {
         return;
       }
     }
-    if (
-      (await loadAuthBootstrap({
-        account_id: mesg?.account_id,
-        force: true,
-      })) &&
-      sessionRevision === authSessionRevision
-    ) {
+    if ((await authBootstrap) && sessionRevision === authSessionRevision) {
       actions.set_user_type("signed_in");
       markStartupPhase("signed_in_account_ready");
     }
