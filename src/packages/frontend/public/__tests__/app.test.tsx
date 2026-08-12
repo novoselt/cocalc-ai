@@ -924,6 +924,21 @@ describe("PublicApp", () => {
         /no layout reordering that changed the meaning/,
       ),
     ).not.toBeNull();
+    const pauseStopHideRow = within(tables[1])
+      .getByRole("rowheader", {
+        name: /2\.2\.2 Pause, Stop, Hide/,
+      })
+      .closest("tr");
+    expect(pauseStopHideRow).not.toBeNull();
+    expect(
+      within(pauseStopHideRow!).getByText("Partially supports"),
+    ).not.toBeNull();
+    expect(
+      within(pauseStopHideRow!).getByText(/repeat on ten-second cycles/),
+    ).not.toBeNull();
+    expect(
+      within(pauseStopHideRow!).getByText("prefers-reduced-motion"),
+    ).not.toBeNull();
     const threeFlashesRow = within(tables[1])
       .getByRole("rowheader", {
         name: /2\.3\.1 Three Flashes or Below Threshold/,
