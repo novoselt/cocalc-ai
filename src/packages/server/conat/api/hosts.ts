@@ -9015,6 +9015,7 @@ export async function reconcileHostSoftwareInternal({
   }
   const availability = computeHostOperationalAvailability(row);
   let fallbackReason: string | undefined;
+  let artifactOnlyRuntimeReconcile = false;
 
   if (availability.online) {
     try {
@@ -9047,6 +9048,8 @@ export async function reconcileHostSoftwareInternal({
       const shouldRollManagedComponents = targets.some(
         (target) => target.artifact === "project-host",
       );
+      artifactOnlyRuntimeReconcile =
+        targets.length > 0 && !shouldRollManagedComponents;
       const touchedHostControl =
         targets.length > 0 || shouldRollManagedComponents;
       const startedAt = touchedHostControl ? Date.now() : 0;
@@ -9072,6 +9075,13 @@ export async function reconcileHostSoftwareInternal({
           record_runtime_deployments: false,
         });
       }
+      // Project bundles, tools, and container runtimes are immutable artifacts.
+      // Installing them must never escalate into a full bootstrap, which would
+      // restart unrelated host services. Running projects select these bundles
+      // independently when they start.
+      if (artifactOnlyRuntimeReconcile) {
+        return;
+      }
       let refreshedRow = row;
       if (touchedHostControl) {
         await waitForHostHeartbeatAfter({ host_id: id, since: startedAt });
@@ -9091,6 +9101,9 @@ export async function reconcileHostSoftwareInternal({
         },
       );
     } catch (err) {
+      if (artifactOnlyRuntimeReconcile) {
+        throw err;
+      }
       fallbackReason = `${err}`;
       logger.warn(
         "host software reconcile: host-agent path failed; falling back to ssh",

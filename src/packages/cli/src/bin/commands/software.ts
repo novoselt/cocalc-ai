@@ -854,6 +854,7 @@ function rawSoftwareComponentInfo(
         upgradeArtifact: "tools",
         notes: [
           "Tools builds intentionally include both linux/amd64 and linux/arm64 because project hosts can be either architecture.",
+          "Tools deploys install the immutable artifact on every online host without restarting managed host services.",
         ],
       });
     case "tools-minimal":
@@ -3994,7 +3995,7 @@ Supported deploy/smoke components:
     )
     .option(
       "--rollout",
-      "for host runtime components, run a durable canary-first rollout before promoting fleet defaults",
+      "for host runtime components, install on online hosts; managed components use a durable canary-first rollout",
     )
     .option("--rollout-canary <host>", "project-host rollout canary")
     .option(
@@ -4289,7 +4290,9 @@ Supported deploy/smoke components:
                         reason,
                       ],
                     ];
-                if (opts.rollout) {
+                const upgradeOnlineHosts =
+                  opts.rollout === true || component === "tools";
+                if (upgradeOnlineHosts) {
                   commandArgsList.push([
                     ...cli.args,
                     "--profile",
@@ -4458,7 +4461,8 @@ Supported deploy/smoke components:
                   ? {
                       host_rollout:
                         hostTarget.pacedFleetRollout === true ||
-                        opts.rollout === true,
+                        opts.rollout === true ||
+                        component === "tools",
                     }
                   : {}),
                 ...(hostBootstrapTarget
@@ -4706,7 +4710,8 @@ Supported deploy/smoke components:
                 ? {
                     host_rollout:
                       hostTarget.pacedFleetRollout === true ||
-                      opts.rollout === true,
+                      opts.rollout === true ||
+                      component === "tools",
                   }
                 : {}),
               ...(hostBootstrapUrl

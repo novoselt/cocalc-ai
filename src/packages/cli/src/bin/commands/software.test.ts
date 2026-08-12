@@ -3767,7 +3767,7 @@ test("software deploy tools publishes both architecture compatibility objects", 
     );
     assert.equal(versions.versions[0].version, artifactId);
   }
-  assert.equal(runs.length, 2);
+  assert.equal(runs.length, 4);
   assert.deepEqual(runs[1].args, [
     "--profile",
     "staging",
@@ -3782,6 +3782,30 @@ test("software deploy tools publishes both architecture compatibility objects", 
     "--reason",
     "software-deploy-tools",
   ]);
+  assert.deepEqual(runs[2].args, [
+    "--profile",
+    "staging",
+    "host",
+    "upgrade",
+    "--all-online",
+    "--artifact",
+    "tools",
+    "--artifact-version",
+    artifactId,
+    "--base-url",
+    "https://software.example.test/software",
+    "--wait",
+  ]);
+  assert.deepEqual(runs[3].args, [
+    "--profile",
+    "staging",
+    "host",
+    "deploy",
+    "resume-default",
+    "--all-hosts",
+    "--artifact",
+    "tools",
+  ]);
   const history = JSON.parse(
     r2.objects
       .get("software/deployments/staging/tools/index.json")!
@@ -3789,6 +3813,14 @@ test("software deploy tools publishes both architecture compatibility objects", 
   );
   assert.equal(history.deployments[0].status, "succeeded");
   assert.equal(history.deployments[0].artifact_id, artifactId);
+  const deploymentRecord = JSON.parse(
+    r2.objects
+      .get(
+        `software/deployments/staging/tools/${history.deployments[0].deployment_id}.json`,
+      )!
+      .toString("utf8"),
+  );
+  assert.equal(deploymentRecord.details.host_rollout, true);
 });
 
 test("software deploy container-runtime publishes an arch catalog without rolling out", async () => {
