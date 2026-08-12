@@ -18,6 +18,14 @@ no change in `total_bytes` or `object_count` from the 2026-08-11 baseline:
 36,758,197 objects; `kucalc-prod2-archived-projects` remains
 61,197,462,829,175 bytes and 4,202,162 objects.
 
+Update 2026-08-12T20:00Z: Google Cloud Console object browser showed "No rows
+to display" and "No soft-deleted objects" for both buckets. A direct Storage
+JSON API `objects.list` check with `maxResults=5` also returned zero live
+objects and zero versioned objects for both buckets. This is stronger evidence
+that lifecycle deletion completed and the Cloud Monitoring
+`storage/total_bytes` and `storage/object_count` aggregates are stale or
+lagging.
+
 ## Goal
 
 Reduce ongoing costs from old `cocalc.com` infrastructure after the July 2026
