@@ -1,10 +1,6 @@
-import jQuery from "jquery";
 import { installBrowserCompatibility } from "./browser-compat";
 
 installBrowserCompatibility();
-
-// This is assumed in some of the ancient libraries we're still loading:
-(window as any).$ = (window as any).jQuery = jQuery;
 
 // node.js polyfill -- needed for some modules to load in the browser.
 import { Buffer } from "buffer";
@@ -12,16 +8,6 @@ import { Buffer } from "buffer";
 
 // this must come before anything that touches event handling, etc.
 import "./webapp-error-reporter";
-
-// jQuery plugins
-// this is a require since it must happen after window.jQuery above (and imports happen before code).
-import "jquery-tooltip/jquery.tooltip";
-
-// Timeago jQuery plugin
-import "timeago";
-
-// Scroll into view plugin
-import "jquery.scrollintoview/jquery.scrollintoview";
 
 import "@cocalc/frontend/set-version-cookie.js";
 

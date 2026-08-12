@@ -3,11 +3,13 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert as AntdAlert, Button } from "antd";
+import { Alert as AntdAlert, Button, Typography } from "antd";
 import { ReactElement, useEffect } from "react";
 
-import { Icon, Paragraph } from "@cocalc/frontend/components";
+import { Icon } from "@cocalc/frontend/components/icon";
 import { warnEditorLoadFailure } from "./editor-load-diagnostics";
+
+const { Paragraph } = Typography;
 
 interface EditorLoadErrorProps {
   path: string;

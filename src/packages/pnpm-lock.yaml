@@ -874,6 +874,12 @@ importers:
       jquery:
         specifier: ^3.6.0
         version: 3.7.1
+      jquery-tooltip:
+        specifier: ^0.2.1
+        version: 0.2.1(jquery-focus-flyout@0.0.5(jquery-focus-exit@1.0.1(jquery@3.7.1))(jquery-next-id@1.0.1(jquery@3.7.1))(jquery@3.7.1))(jquery-hover-flyout@0.0.5(jquery-mouse-exit@1.0.1(jquery@3.7.1))(jquery-next-id@1.0.1(jquery@3.7.1))(jquery@3.7.1))(jquery@3.7.1)
+      jquery.scrollintoview:
+        specifier: ^1.9
+        version: 1.9.4
       js-cookie:
         specifier: ^3.0.7
         version: 3.0.7
@@ -988,6 +994,9 @@ importers:
       superb:
         specifier: ^3.0.0
         version: 3.0.0
+      timeago:
+        specifier: ^1.6.3
+        version: 1.6.7
       tsd:
         specifier: ^0.22.0
         version: 0.22.0
@@ -1849,12 +1858,6 @@ importers:
       jquery:
         specifier: ^3.6.0
         version: 3.7.1
-      jquery-tooltip:
-        specifier: ^0.2.1
-        version: 0.2.1(jquery-focus-flyout@0.0.5(jquery-focus-exit@1.0.1(jquery@3.7.1))(jquery-next-id@1.0.1(jquery@3.7.1))(jquery@3.7.1))(jquery-hover-flyout@0.0.5(jquery-mouse-exit@1.0.1(jquery@3.7.1))(jquery-next-id@1.0.1(jquery@3.7.1))(jquery@3.7.1))(jquery@3.7.1)
-      jquery.scrollintoview:
-        specifier: ^1.9
-        version: 1.9.4
       path-browserify:
         specifier: ^1.0.1
         version: 1.0.1
@@ -1876,9 +1879,6 @@ importers:
       style-loader:
         specifier: ^2.0.0
         version: 2.0.0(webpack@5.106.2(postcss@8.5.26))
-      timeago:
-        specifier: ^1.6.3
-        version: 1.6.7
       tsd:
         specifier: ^0.22.0
         version: 0.22.0

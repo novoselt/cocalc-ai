@@ -64,25 +64,31 @@ export class PageActions extends Actions<PageState> {
     }
 
     if (handler != null) {
-      $(window).off("keydown", this.active_key_handler);
+      if (this.active_key_handler != null) {
+        window.removeEventListener("keydown", this.active_key_handler);
+      }
       this.active_key_handler = handler;
     }
 
     if (this.active_key_handler != null && !this.suppress_key_handlers) {
-      $(window).on("keydown", this.active_key_handler);
+      window.addEventListener("keydown", this.active_key_handler);
     }
   }
 
   // Only clears it from the window
   public unattach_active_key_handler() {
-    $(window).off("keydown", this.active_key_handler);
+    if (this.active_key_handler != null) {
+      window.removeEventListener("keydown", this.active_key_handler);
+    }
   }
 
   // Actually removes the handler from active memory
   // takes a handler to only remove if it's the active one
   public erase_active_key_handler(handler?) {
     if (handler == null || handler === this.active_key_handler) {
-      $(window).off("keydown", this.active_key_handler);
+      if (this.active_key_handler != null) {
+        window.removeEventListener("keydown", this.active_key_handler);
+      }
       this.active_key_handler = undefined;
     }
   }
@@ -91,7 +97,9 @@ export class PageActions extends Actions<PageState> {
   // Right now there aren't even any ways (other than manually)
   // of adding click handlers that the app knows about.
   public clear_all_handlers() {
-    $(window).off("keydown", this.active_key_handler);
+    if (this.active_key_handler != null) {
+      window.removeEventListener("keydown", this.active_key_handler);
+    }
     this.active_key_handler = undefined;
   }
 

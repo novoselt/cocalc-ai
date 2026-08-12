@@ -19,7 +19,8 @@ import {
   TypedMap,
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
-import { A, Loading } from "@cocalc/frontend/components";
+import { A } from "@cocalc/frontend/components/A";
+import { Loading } from "@cocalc/frontend/components/loading";
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { Locale } from "@cocalc/frontend/i18n";
 import { callback2, retry_until_success } from "@cocalc/util/async-utils";

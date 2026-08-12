@@ -170,7 +170,10 @@ export class AccountActions extends Actions<AccountState> {
   }
 
   private finish_sign_out(sign_in: boolean = false): void {
-    $(window).off("beforeunload", this.redux.getActions("page").check_unload);
+    window.removeEventListener(
+      "beforeunload",
+      this.redux.getActions("page").check_unload,
+    );
     // redirect to sign in page if sign_in is true; otherwise, the landing page:
     window.location.href = join(appBasePath, sign_in ? "auth/sign-in" : "/");
   }

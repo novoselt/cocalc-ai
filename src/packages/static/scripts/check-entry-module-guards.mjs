@@ -35,6 +35,13 @@ const loadAndAppForbidden = [
   "dropzone/",
 ];
 
+const appOnlyForbidden = [
+  "node_modules/.pnpm/jquery@",
+  "node_modules/.pnpm/jquery-tooltip@",
+  "node_modules/.pnpm/jquery.scrollintoview@",
+  "node_modules/.pnpm/timeago@",
+];
+
 const initialProjectSurfaceForbidden = [
   "frontend/project/compute-vms.tsx",
   "frontend/project/new/new-file-page.tsx",
@@ -160,6 +167,11 @@ const signedInStartupChunks = [
 ];
 
 const rules = [
+  {
+    label: "main app chunk",
+    chunks: ["app"],
+    forbidden: appOnlyForbidden,
+  },
   {
     label: "shared/load and main app chunks",
     chunks: ["load", "app", "embed"],

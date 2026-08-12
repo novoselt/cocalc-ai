@@ -1,9 +1,11 @@
 import { CSS } from "@cocalc/frontend/app-framework";
 import { useBottomScroller } from "@cocalc/frontend/app-framework/use-bottom-scroller";
-import { Paragraph } from "@cocalc/frontend/components";
+import { Typography } from "antd";
 import StaticMarkdown from "./lazy-static-markdown";
 import { COLORS } from "@cocalc/util/theme";
 import type { RefObject } from "react";
+
+const { Paragraph } = Typography;
 
 const STYLE = {
   border: "1px solid lightgrey",

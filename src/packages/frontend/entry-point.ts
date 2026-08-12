@@ -17,11 +17,7 @@ import { redux } from "./app-framework";
 
 import "./launch/actions";
 
-// Various jquery plugins:
-import "./jquery-plugins";
-
 // Initialize app stores, actions, etc.
-import { init as initJqueryPlugins } from "./jquery-plugins";
 import { init as initAccount } from "./account";
 import { init as initApp } from "./app/init";
 import { init as initProjects } from "./projects";
@@ -37,6 +33,7 @@ import { init as initLast } from "./last";
 
 import { render } from "./app/render";
 import { markAppBootstrapPhase } from "./app/bootstrap-ux-latency";
+import { installPostSurfaceJqueryPlugins } from "./jquery-plugins/ensure-init";
 
 function runInitializer(name: string, initializer: () => void): void {
   markAppBootstrapPhase(`${name}_started`);
@@ -51,7 +48,7 @@ function runInitializer(name: string, initializer: () => void): void {
 
 export async function init() {
   markAppBootstrapPhase("global_initializers_started");
-  runInitializer("jquery_plugins", initJqueryPlugins);
+  installPostSurfaceJqueryPlugins();
   runInitializer("account", () => initAccount(redux));
   runInitializer("app", initApp);
   runInitializer("projects", initProjects);
@@ -61,7 +58,10 @@ export async function init() {
   if (COCALC_MINIMAL) {
     runInitializer("iframe_communication", initIframeComm);
   }
-  $(window).on("beforeunload", redux.getActions("page").check_unload);
+  window.addEventListener(
+    "beforeunload",
+    redux.getActions("page").check_unload,
+  );
   runInitializer("last", initLast);
   markAppBootstrapPhase("global_initializers_finished");
   try {

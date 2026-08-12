@@ -26,6 +26,15 @@ const routes = [
   },
 ];
 
+const entryBudgets = [
+  {
+    chunk: "app",
+    label: "signed-in app bootstrap",
+    maxRawBytes: 3.8 * MiB,
+    maxGzipBytes: 1020 * KiB,
+  },
+];
+
 const { chunks, groups } = JSON.parse(readFileSync(STATS_PATH, "utf8"));
 
 function findGroup(moduleSuffix, request) {
@@ -64,6 +73,38 @@ function formatBytes(bytes) {
 const shellGroup = findGroup("frontend/app/render.tsx", "./page");
 let failed = false;
 const report = {};
+
+for (const budget of entryBudgets) {
+  const assets = collectAssets([budget.chunk]);
+  const totals = assets.reduce(
+    (sum, asset) => ({
+      brotliBytes: sum.brotliBytes + asset.brotliBytes,
+      gzipBytes: sum.gzipBytes + asset.gzipBytes,
+      rawBytes: sum.rawBytes + asset.rawBytes,
+    }),
+    { brotliBytes: 0, gzipBytes: 0, rawBytes: 0 },
+  );
+  report[budget.label] = {
+    assets: assets.map(({ file }) => file).sort(),
+    ...totals,
+  };
+  console.log(
+    `${budget.label}: raw=${formatBytes(totals.rawBytes)} gzip=${formatBytes(totals.gzipBytes)} brotli=${formatBytes(totals.brotliBytes)} assets=${assets.length}`,
+  );
+  if (process.argv.includes("--report-only")) continue;
+  if (totals.rawBytes > budget.maxRawBytes) {
+    failed = true;
+    console.error(
+      `${budget.label}: raw budget exceeded by ${formatBytes(totals.rawBytes - budget.maxRawBytes)}`,
+    );
+  }
+  if (totals.gzipBytes > budget.maxGzipBytes) {
+    failed = true;
+    console.error(
+      `${budget.label}: gzip budget exceeded by ${formatBytes(totals.gzipBytes - budget.maxGzipBytes)}`,
+    );
+  }
+}
 
 for (const route of routes) {
   const routeGroup = findGroup(

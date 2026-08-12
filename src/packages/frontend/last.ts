@@ -5,7 +5,6 @@
 
 // This should be the last code run on client application startup.
 
-import $ from "jquery";
 declare var COCALC_GIT_REVISION: string;
 
 import { webapp_client } from "./webapp-client";
@@ -17,8 +16,12 @@ import checkFeaturesEnabled from "@cocalc/frontend/misc/check-features-enabled";
 export function init() {
   // see http://stackoverflow.com/questions/12197122/how-can-i-prevent-a-user-from-middle-clicking-a-link-with-javascript-or-jquery
   // I have some concern about performance.
-  $(document).on("click", function (e) {
-    if (e.button === 1 && $(e.target).hasClass("webapp-no-middle-click")) {
+  document.addEventListener("click", (e) => {
+    if (
+      e.button === 1 &&
+      e.target instanceof Element &&
+      e.target.classList.contains("webapp-no-middle-click")
+    ) {
       e.preventDefault();
       e.stopPropagation(); // ?
     }
