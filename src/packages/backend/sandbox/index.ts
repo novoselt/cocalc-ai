@@ -66,7 +66,7 @@ import {
 import { createHash } from "node:crypto";
 import { move } from "fs-extra";
 import { exists } from "@cocalc/backend/misc/async-utils-node";
-import { basename, dirname, join, posix } from "path";
+import nodePath, { basename, dirname, join, posix } from "node:path";
 import { replace_all } from "@cocalc/util/misc";
 import find, { type FindOptions } from "./find";
 import ripgrep, { type RipgrepOptions } from "./ripgrep";
@@ -293,6 +293,23 @@ function normalizeHomeAliases(homeAliases?: string[]): string[] {
   return [...normalized];
 }
 
+export function relativePathWithin(
+  candidatePath: string,
+  basePath: string,
+  pathApi: Pick<typeof nodePath, "isAbsolute" | "relative" | "sep"> = nodePath,
+): string | undefined {
+  const rel = pathApi.relative(basePath, candidatePath);
+  if (rel === "") return "";
+  if (
+    rel === ".." ||
+    rel.startsWith(`..${pathApi.sep}`) ||
+    pathApi.isAbsolute(rel)
+  ) {
+    return;
+  }
+  return rel;
+}
+
 // If you add any methods below that are NOT for the public api
 // be sure to exclude them here!
 const INTERNAL_METHODS = new Set([
@@ -426,22 +443,24 @@ export class SandboxedFilesystem {
             // keep original error, and best-effort sanitize with home path
           }
           if (typeof err?.path == "string") {
-            if (
-              err.path == sandboxBasePath ||
-              err.path.startsWith(sandboxBasePath + "/")
-            ) {
+            if (relativePathWithin(err.path, sandboxBasePath) != null) {
               err.path = this.toSandboxRelativePath(err.path, sandboxBasePath);
-            } else if (
-              err.path == this.path ||
-              err.path.startsWith(this.path + "/")
-            ) {
-              err.path = err.path.slice(this.path.length + 1);
+            } else if (relativePathWithin(err.path, this.path) != null) {
+              err.path = this.toSandboxRelativePath(err.path, this.path);
             }
           }
           if (typeof err?.message == "string") {
-            err.message = replace_all(err.message, sandboxBasePath + "/", "");
+            err.message = replace_all(
+              err.message,
+              `${sandboxBasePath}${nodePath.sep}`,
+              "",
+            );
             if (sandboxBasePath != this.path) {
-              err.message = replace_all(err.message, this.path + "/", "");
+              err.message = replace_all(
+                err.message,
+                `${this.path}${nodePath.sep}`,
+                "",
+              );
             }
           }
           this.logSecurityDenial(f, args, err);
@@ -1027,14 +1046,11 @@ export class SandboxedFilesystem {
     if (absPath == compareBasePath || absPath == basePath) {
       return basePath == this.path ? "" : "/";
     }
-    if (absPath.startsWith(compareBasePath + "/")) {
-      const rel = absPath.slice(compareBasePath.length + 1);
-      return basePath == this.path ? rel : `/${rel}`;
-    }
-    if (!absPath.startsWith(basePath + "/")) {
-      return absPath;
-    }
-    const rel = absPath.slice(basePath.length + 1);
+    const nativeRelative =
+      relativePathWithin(absPath, compareBasePath) ??
+      relativePathWithin(absPath, basePath);
+    if (nativeRelative == null) return absPath;
+    const rel = nativeRelative.split(nodePath.sep).join("/");
     return basePath == this.path ? rel : `/${rel}`;
   }
 
@@ -1312,10 +1328,7 @@ export class SandboxedFilesystem {
     candidatePath: string,
     sandboxBasePath: string,
   ): boolean => {
-    return (
-      candidatePath == sandboxBasePath ||
-      candidatePath.startsWith(sandboxBasePath + "/")
-    );
+    return relativePathWithin(candidatePath, sandboxBasePath) != null;
   };
 
   private resolveSandboxBasePathForComparison = async (
@@ -2140,28 +2153,19 @@ export class SandboxedFilesystem {
       // it is a link).  This is an absolute path on the fileserver, which we try
       // not to expose from the sandbox, hence we modify them all if possible.
       for (const a of x) {
-        if (
-          a.name == sandboxBasePath ||
-          a.name.startsWith(sandboxBasePath + "/")
-        ) {
+        if (relativePathWithin(a.name, sandboxBasePath) != null) {
           a.name = this.toSandboxRelativePath(a.name, sandboxBasePath);
         }
-        if (
-          a.parentPath == sandboxBasePath ||
-          a.parentPath.startsWith(sandboxBasePath + "/")
-        ) {
+        if (relativePathWithin(a.parentPath, sandboxBasePath) != null) {
           a.parentPath = this.toSandboxRelativePath(
             a.parentPath,
             sandboxBasePath,
           );
         }
-        if (a.name == this.path || a.name.startsWith(this.path + "/")) {
+        if (relativePathWithin(a.name, this.path) != null) {
           a.name = this.toSandboxRelativePath(a.name, this.path);
         }
-        if (
-          a.parentPath == this.path ||
-          a.parentPath.startsWith(this.path + "/")
-        ) {
+        if (relativePathWithin(a.parentPath, this.path) != null) {
           a.parentPath = this.toSandboxRelativePath(a.parentPath, this.path);
         }
       }

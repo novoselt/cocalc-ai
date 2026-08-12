@@ -2,10 +2,11 @@
 param(
   [Parameter(Mandatory = $true)][string]$Archive,
   [Parameter(Mandatory = $true)][string]$ReleaseId,
-  [string]$Installer = (Join-Path $PSScriptRoot "..\install.ps1")
+  [string]$Installer
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $Installer) { $Installer = Join-Path $PSScriptRoot "..\install.ps1" }
 $root = Join-Path ([IO.Path]::GetTempPath()) ("cocalc-plus-smoke-{0}" -f [Guid]::NewGuid())
 $installRoot = Join-Path $root "install root"
 $binDir = Join-Path $root "bin dir"
@@ -34,8 +35,8 @@ try {
     $env:COCALC_ACP_MODE = "mock"
     $output = (& $launcher --internal-windows-smoke 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "CoCalc Plus runtime smoke failed: $output" }
-    if ($output -notmatch '"http":true' -or $output -notmatch '"files":true' -or $output -notmatch '"powershell_terminal":true') {
-      throw "CoCalc Plus runtime smoke did not report HTTP, file, and terminal success: $output"
+    if ($output -notmatch '"http":true' -or $output -notmatch '"files":true' -or $output -notmatch '"collaborative_editor":true' -or $output -notmatch '"powershell_terminal":true') {
+      throw "CoCalc Plus runtime smoke did not report HTTP, file, collaborative editor, and terminal success: $output"
     }
 
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
