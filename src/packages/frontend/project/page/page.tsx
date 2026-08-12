@@ -27,7 +27,7 @@ import {
   useState,
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
-import { Icon, Loading, TimeAgo } from "@cocalc/frontend/components";
+import { Icon, Loading } from "@cocalc/frontend/components";
 import { useAppContext } from "@cocalc/frontend/app/context";
 import {
   FrameContext,
@@ -118,6 +118,7 @@ import {
   shouldShowProjectRuntimeRecoveryBanner,
 } from "@cocalc/frontend/project/runtime-recovery";
 import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
+import { HostRecoveryBanner } from "./host-recovery-banner";
 
 const START_BANNER = false;
 
@@ -298,8 +299,6 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const current_path_abs = useTypedRedux({ project_id }, "current_path_abs");
   const [homePageButtonWidth, setHomePageButtonWidth] =
     React.useState<number>(80);
-  const [checkingHost, setCheckingHost] = useState<boolean>(false);
-
   useEffect(() => {
     if (!is_active || project == null || open_files_order == null) return;
     return recordSignedInSurfaceReady("project");
@@ -934,97 +933,14 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   function renderHostUnavailableBanner() {
     if (!hostUnavailable || hardDeleteBlocked) return;
     return (
-      <Alert
-        showIcon
-        type="warning"
-        banner
-        title={
-          hostRecovery.active
-            ? hostRecovery.title
-            : "Reconnecting to your project"
-        }
-        description={
-          <Space wrap>
-            <span>
-              {hostRecovery.active ? (
-                <>
-                  {hostRecovery.description} {hostRecovery.timingDescription}{" "}
-                  Saved project data remains safe; file, terminal, and notebook
-                  access resumes when the host reconnects.
-                </>
-              ) : (
-                <>
-                  CoCalc temporarily lost contact with the computer running this
-                  project and is reconnecting automatically. Your saved files
-                  are safe. Editing, terminals, and notebooks will resume when
-                  the connection is restored. {hostRecovery.timingDescription}
-                </>
-              )}
-            </span>
-            {hostRecovery.startedAt ? (
-              <span>
-                Reconnecting since{" "}
-                {new Date(hostRecovery.startedAt).toLocaleString()} ({""}
-                <TimeAgo
-                  date={new Date(hostRecovery.startedAt)}
-                  live
-                  click_to_toggle={false}
-                />
-                ).
-              </span>
-            ) : null}
-            <div
-              aria-label="Project reconnection is in progress"
-              role="progressbar"
-              style={{
-                background: COLORS.ANTD_BG_BLUE_L,
-                borderRadius: 4,
-                height: 6,
-                minWidth: 200,
-                maxWidth: 360,
-                overflow: "hidden",
-                width: "100%",
-              }}
-            >
-              <div
-                className="cocalc-indeterminate-progress"
-                style={{
-                  background: COLORS.ANTD_LINK_BLUE,
-                  borderRadius: 4,
-                  height: "100%",
-                  width: "45%",
-                }}
-              />
-            </div>
-            {!hostRecovery.active ? (
-              <details style={{ maxWidth: 600 }}>
-                <summary>Technical details</summary>
-                {assignedHostLabel}: {hostUnavailableReason}
-              </details>
-            ) : null}
-            {!hostRecovery.active ? (
-              <Button
-                size="small"
-                loading={checkingHost}
-                onClick={async () => {
-                  if (!host_id) return;
-                  try {
-                    setCheckingHost(true);
-                    await redux
-                      .getActions("projects")
-                      ?.ensure_host_info(host_id, true);
-                  } catch (err) {
-                    console.warn("failed to refresh host status", err);
-                  } finally {
-                    setCheckingHost(false);
-                  }
-                }}
-              >
-                <Icon name="refresh" /> Check Host Status
-              </Button>
-            ) : null}
-          </Space>
-        }
+      <HostRecoveryBanner
+        assignedHostLabel={assignedHostLabel}
+        hostUnavailableReason={hostUnavailableReason}
+        onCheckStatus={async () => {
+          if (!host_id) return;
+          await redux.getActions("projects")?.ensure_host_info(host_id, true);
+        }}
+        recovery={hostRecovery}
       />
     );
   }
