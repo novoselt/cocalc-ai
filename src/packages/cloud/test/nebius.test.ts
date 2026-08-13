@@ -151,6 +151,27 @@ describe("NebiusProvider", () => {
     ).toEqual({ $case: "subnetId", subnetId: "subnet-1" });
   });
 
+  it("does not send provisional instance names to ID-only APIs", async () => {
+    const instance = await new NebiusProvider().getInstance(
+      {
+        provider: "nebius",
+        instance_id: "cocalc-vm-provisional-name",
+        metadata: { provisional_instance_id: true },
+      },
+      {
+        parentId: "project-1",
+        serviceAccountId: "svc-1",
+        publicKeyId: "pub-1",
+        privateKeyPem: "key",
+        sshPublicKey: "ssh-ed25519 AAAA",
+        subnetId: "subnet-1",
+      },
+    );
+
+    expect(instance).toBeUndefined();
+    expect(instancesGetMock).not.toHaveBeenCalled();
+  });
+
   it("creates preemptible instances for spot hosts", async () => {
     const provider = new NebiusProvider();
     await provider.createHost(

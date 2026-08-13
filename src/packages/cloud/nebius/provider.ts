@@ -75,7 +75,15 @@ type NebiusRuntimeMeta = {
   diskTypeCode?: number;
   scratchDiskTypeCode?: number;
   subnetId?: string;
+  provisional_instance_id?: boolean;
 };
+
+function hasProvisionalInstanceId(runtime: HostRuntime): boolean {
+  return (
+    (runtime.metadata as NebiusRuntimeMeta | undefined)
+      ?.provisional_instance_id === true
+  );
+}
 
 const DISK_DELETE_MAX_ATTEMPTS = 12;
 const DISK_DELETE_RETRY_DELAY_MS = 5000;
@@ -1312,6 +1320,7 @@ export class NebiusProvider implements CloudProvider {
   }
 
   async stopHost(runtime: HostRuntime, creds: NebiusProviderCreds) {
+    if (hasProvisionalInstanceId(runtime)) return;
     const client = new NebiusClient(creds);
     try {
       const op = await client.instances.stop(
@@ -1379,6 +1388,7 @@ export class NebiusProvider implements CloudProvider {
     creds: NebiusProviderCreds,
     opts?: { preserveDataDisk?: boolean },
   ) {
+    if (hasProvisionalInstanceId(runtime)) return;
     const client = new NebiusClient(creds);
     try {
       const op = await client.instances.delete(
@@ -1574,6 +1584,7 @@ export class NebiusProvider implements CloudProvider {
     runtime: HostRuntime,
     creds: NebiusProviderCreds,
   ): Promise<RemoteInstance | undefined> {
+    if (hasProvisionalInstanceId(runtime)) return undefined;
     const client = new NebiusClient(creds);
     let instance;
     try {

@@ -683,6 +683,9 @@ function runtimeFor(vm: ComputeVmRow): HostRuntime {
       ssh_public_keys: vm.metadata?.ssh_public_keys,
       ssh_user: vm.ssh_user,
       public_address_id: vm.public_address_id,
+      provisional_instance_id:
+        vm.provider === "nebius" &&
+        vm.provider_instance_id === vm.metadata?.provider_instance_name,
     },
   };
 }
