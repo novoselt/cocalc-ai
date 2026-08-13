@@ -779,6 +779,7 @@ export class GcpProvider implements CloudProvider {
         zone,
         metadata: {
           gcp_project_id: credentials.projectId,
+          gcp_instance_id: instance?.id?.toString(),
           machine_type: machineType,
           gpu_count: spec.gpu?.count ?? 0,
           disk_type: diskType,
