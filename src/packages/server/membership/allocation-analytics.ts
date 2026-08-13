@@ -14,15 +14,21 @@ import {
   toDecimal,
   type MoneyValue,
 } from "@cocalc/util/money";
+import type {
+  MembershipAllocationBillingInterval,
+  MembershipAllocationChannel,
+  MembershipAllocationLifecycle,
+  MembershipAllocationTierChange,
+} from "@cocalc/conat/hub/api/purchases";
+
+export type {
+  MembershipAllocationBillingInterval,
+  MembershipAllocationChannel,
+  MembershipAllocationLifecycle,
+  MembershipAllocationTierChange,
+} from "@cocalc/conat/hub/api/purchases";
 
 type Queryable = Pick<PoolClient, "query">;
-
-export type MembershipAllocationChannel =
-  | "personal"
-  | "direct-student"
-  | "course"
-  | "team"
-  | "site";
 
 export type MembershipAllocationSourceKind =
   | "purchase"
@@ -33,24 +39,6 @@ export type MembershipAllocationSourceKind =
   | "assignment"
   | "correction"
   | "external-import";
-
-export type MembershipAllocationBillingInterval =
-  | "trial"
-  | "month"
-  | "year"
-  | "fixed";
-
-export type MembershipAllocationLifecycle =
-  | "trial"
-  | "first_paid"
-  | "renewal"
-  | "plan_change";
-
-export type MembershipAllocationTierChange =
-  | "none"
-  | "upgrade"
-  | "downgrade"
-  | "same";
 
 export interface MembershipAllocationFact {
   fact_key: string;
