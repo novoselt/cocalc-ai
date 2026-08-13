@@ -34,6 +34,7 @@ export interface PersonalMembershipPeriodOptions {
   account_id: string;
   subscription_id: number;
   purchase_id?: number;
+  occurred_at?: Date;
   membership_class: string;
   billing_interval: Interval;
   lifecycle: MembershipAllocationLifecycle;
@@ -132,6 +133,7 @@ export async function recordPersonalMembershipPeriod({
   account_id,
   subscription_id,
   purchase_id,
+  occurred_at = new Date(),
   membership_class,
   billing_interval,
   lifecycle,
@@ -145,7 +147,7 @@ export async function recordPersonalMembershipPeriod({
 }: PersonalMembershipPeriodOptions): Promise<boolean> {
   return await recordMembershipAllocationFact({
     fact_key: factIdentity({ subscription_id, purchase_id, lifecycle }),
-    occurred_at: new Date(),
+    occurred_at,
     account_id,
     channel: "personal",
     source_kind: lifecycle === "plan_change" ? "plan-change" : "purchase",

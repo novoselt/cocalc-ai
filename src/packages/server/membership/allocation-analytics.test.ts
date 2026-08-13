@@ -120,6 +120,8 @@ describe("membership allocation analytics", () => {
     });
 
     it("records exact compensating facts without rewriting the originals", async () => {
+      const purchaseId = -Math.floor(Math.random() * 1_000_000_000) - 1;
+      const refundPurchaseId = purchaseId - 1;
       for (const [suffix, memberships, revenue] of [
         ["target", 1, 20],
         ["credit", -1, -8],
@@ -138,7 +140,7 @@ describe("membership allocation analytics", () => {
           allocation_end: "2026-09-03",
           active_memberships: memberships,
           revenue,
-          purchase_id: 123,
+          purchase_id: purchaseId,
           subscription_id: 456,
           client,
         });
@@ -146,15 +148,15 @@ describe("membership allocation analytics", () => {
 
       expect(
         await recordMembershipAllocationRefund({
-          original_purchase_id: 123,
-          refund_purchase_id: 124,
+          original_purchase_id: purchaseId,
+          refund_purchase_id: refundPurchaseId,
           client,
         }),
       ).toBe(2);
       expect(
         await recordMembershipAllocationRefund({
-          original_purchase_id: 123,
-          refund_purchase_id: 124,
+          original_purchase_id: purchaseId,
+          refund_purchase_id: refundPurchaseId,
           client,
         }),
       ).toBe(0);
@@ -165,9 +167,10 @@ describe("membership allocation analytics", () => {
                 SUM(revenue_cents)::int AS revenue_cents,
                 COUNT(*)::int AS fact_count
            FROM membership_allocation_facts
-          WHERE purchase_id IN (123,124)
+          WHERE purchase_id IN ($1,$2)
           GROUP BY membership_class
           ORDER BY membership_class`,
+        [purchaseId, refundPurchaseId],
       );
       expect(rows).toEqual([
         {
