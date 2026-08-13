@@ -682,6 +682,18 @@ printf '%s\n' '${vm.bootstrap_revision}' >/run/cocalc-managed-vm/bootstrap-ready
 `;
 }
 
+export function providerInstanceIdIsProvisional(
+  vm: Pick<ComputeVmRow, "provider" | "provider_instance_id" | "metadata">,
+): boolean {
+  const providerInstanceName = vm.metadata?.provider_instance_name;
+  return (
+    vm.provider === "nebius" &&
+    typeof providerInstanceName === "string" &&
+    providerInstanceName.length > 0 &&
+    vm.provider_instance_id === providerInstanceName
+  );
+}
+
 function runtimeFor(vm: ComputeVmRow): HostRuntime {
   return {
     provider: vm.provider,
@@ -700,9 +712,7 @@ function runtimeFor(vm: ComputeVmRow): HostRuntime {
       ssh_public_keys: vm.metadata?.ssh_public_keys,
       ssh_user: vm.ssh_user,
       public_address_id: vm.public_address_id,
-      provisional_instance_id:
-        vm.provider === "nebius" &&
-        vm.provider_instance_id === vm.metadata?.provider_instance_name,
+      provisional_instance_id: providerInstanceIdIsProvisional(vm),
     },
   };
 }
@@ -1380,6 +1390,9 @@ export async function deleteProviderComputeVm(vm: ComputeVmRow) {
 }
 
 export async function inspectProviderComputeVm(vm: ComputeVmRow) {
+  if (providerInstanceIdIsProvisional(vm)) {
+    return { status: "missing" as const, instance: undefined };
+  }
   const { config, creds } = await context(vm.provider, vm.region);
   const selectedProvider = vm.provider === "gcp" ? gcpProvider : nebiusProvider;
   try {
@@ -1429,6 +1442,7 @@ export async function setProviderComputePricing(
   vm: ComputeVmRow,
   pricingModel: "spot" | "on_demand",
 ) {
+  if (providerInstanceIdIsProvisional(vm)) return;
   const { creds } = await context(vm.provider, vm.region);
   if (vm.provider === "gcp") {
     await gcpProvider.setPricingModel(runtimeFor(vm), pricingModel, creds);

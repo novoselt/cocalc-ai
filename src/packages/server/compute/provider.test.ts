@@ -7,6 +7,7 @@ import {
   gcpInstanceIdForEgress,
   isProviderNotFound,
   managedVmBootstrapScript,
+  providerInstanceIdIsProvisional,
 } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 
@@ -72,6 +73,42 @@ describe("isProviderNotFound", () => {
 }`),
       ),
     ).toBe(true);
+  });
+});
+
+describe("providerInstanceIdIsProvisional", () => {
+  it("recognizes a Nebius provider name before an instance is created", () => {
+    expect(
+      providerInstanceIdIsProvisional({
+        provider: "nebius",
+        provider_instance_id: "cocalc-vm-provisional-name",
+        metadata: { provider_instance_name: "cocalc-vm-provisional-name" },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects actual Nebius IDs and GCP instance names", () => {
+    expect(
+      providerInstanceIdIsProvisional({
+        provider: "nebius",
+        provider_instance_id: "computeinstance-e00actual",
+        metadata: { provider_instance_name: "cocalc-vm-name" },
+      }),
+    ).toBe(false);
+    expect(
+      providerInstanceIdIsProvisional({
+        provider: "gcp",
+        provider_instance_id: "cocalc-vm-name",
+        metadata: { provider_instance_name: "cocalc-vm-name" },
+      }),
+    ).toBe(false);
+    expect(
+      providerInstanceIdIsProvisional({
+        provider: "nebius",
+        provider_instance_id: undefined,
+        metadata: {},
+      }),
+    ).toBe(false);
   });
 });
 

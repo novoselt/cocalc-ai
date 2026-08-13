@@ -1405,6 +1405,7 @@ export class NebiusProvider implements CloudProvider {
     runtime: HostRuntime,
     creds: NebiusProviderCreds,
   ): Promise<void> {
+    if (hasProvisionalInstanceId(runtime)) return;
     const client = new NebiusClient(creds);
     try {
       const op = await client.instances.delete(

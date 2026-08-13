@@ -1750,9 +1750,7 @@ async function switchToOnDemand(vm: ComputeVmRow) {
     },
     error: null,
   }))!;
-  await startProviderComputeVm(fallback);
-  const observed = await inspectProviderComputeVm(fallback);
-  await markReady(fallback, observed.instance ?? {});
+  await start(fallback);
 }
 
 async function probeAndReturnToSpot(vm: ComputeVmRow) {

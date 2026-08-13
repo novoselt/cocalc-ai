@@ -15,6 +15,7 @@ const instancesCreateMock = jest.fn();
 const instancesDeleteMock = jest.fn();
 const instancesGetMock = jest.fn();
 const instancesListMock = jest.fn();
+const instancesStopMock = jest.fn();
 const instancesUpdateMock = jest.fn();
 const allocationsCreateMock = jest.fn();
 const allocationsGetMock = jest.fn();
@@ -35,6 +36,7 @@ jest.mock("../nebius/client", () => {
       delete: instancesDeleteMock,
       get: instancesGetMock,
       list: instancesListMock,
+      stop: instancesStopMock,
       update: instancesUpdateMock,
     };
     readonly allocations = {
@@ -98,6 +100,7 @@ describe("NebiusProvider", () => {
     instancesDeleteMock.mockReset();
     instancesGetMock.mockReset();
     instancesListMock.mockReset();
+    instancesStopMock.mockReset();
     instancesUpdateMock.mockReset();
     allocationsCreateMock.mockReset();
     allocationsGetMock.mockReset();
@@ -176,24 +179,30 @@ describe("NebiusProvider", () => {
   });
 
   it("does not send provisional instance names to ID-only APIs", async () => {
-    const instance = await new NebiusProvider().getInstance(
-      {
-        provider: "nebius",
-        instance_id: "cocalc-vm-provisional-name",
-        metadata: { provisional_instance_id: true },
-      },
-      {
-        parentId: "project-1",
-        serviceAccountId: "svc-1",
-        publicKeyId: "pub-1",
-        privateKeyPem: "key",
-        sshPublicKey: "ssh-ed25519 AAAA",
-        subnetId: "subnet-1",
-      },
-    );
+    const provider = new NebiusProvider();
+    const runtime = {
+      provider: "nebius" as const,
+      instance_id: "cocalc-vm-provisional-name",
+      metadata: { provisional_instance_id: true },
+    };
+    const creds = {
+      parentId: "project-1",
+      serviceAccountId: "svc-1",
+      publicKeyId: "pub-1",
+      privateKeyPem: "key",
+      sshPublicKey: "ssh-ed25519 AAAA",
+      subnetId: "subnet-1",
+    };
+
+    const instance = await provider.getInstance(runtime, creds);
+    await provider.stopHost(runtime, creds);
+    await provider.deleteHost(runtime, creds);
+    await provider.deleteInstanceOnly(runtime, creds);
 
     expect(instance).toBeUndefined();
     expect(instancesGetMock).not.toHaveBeenCalled();
+    expect(instancesStopMock).not.toHaveBeenCalled();
+    expect(instancesDeleteMock).not.toHaveBeenCalled();
   });
 
   it("creates preemptible instances for spot hosts", async () => {
