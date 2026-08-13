@@ -712,6 +712,10 @@ export async function createVm(
       `Nebius machine '${machine.machine_type}' does not support Spot capacity`,
     );
   }
+  const spotSupported = !(
+    provider === "nebius" &&
+    machine.provider_spec.allowed_for_preemptibles === false
+  );
   const ttlMinutes =
     opts.ttl_minutes == null ? undefined : Number(opts.ttl_minutes);
   if (actorKind === "agent" && ttlMinutes == null) {
@@ -768,7 +772,11 @@ export async function createVm(
         billing_state: "stopped",
       }),
     ]);
-  if (!customerSpotRate || !customerOnDemandRate || !customerStoppedRate) {
+  if (
+    (spotSupported && !customerSpotRate) ||
+    !customerOnDemandRate ||
+    !customerStoppedRate
+  ) {
     throw new Error(
       `pricing is unavailable for ${machine.machine_type} in ${region}`,
     );
@@ -778,7 +786,14 @@ export async function createVm(
   const authorizedFallbackHours = allowOnDemandFallback ? 24 : 0;
   const id = randomUUID();
   const settings = await getServerSettings();
-  const spotRate = rateWithProviderCost(provider, customerSpotRate, settings);
+  // The database keeps both rates on every VM. For an on-demand-only Nebius
+  // shape, use the on-demand rate as the inert Spot placeholder; admission
+  // above still rejects selecting Spot for that machine.
+  const spotRate = rateWithProviderCost(
+    provider,
+    customerSpotRate ?? customerOnDemandRate,
+    settings,
+  );
   const onDemandRate = rateWithProviderCost(
     provider,
     customerOnDemandRate,
@@ -903,6 +918,7 @@ export async function createVm(
         max_ttl_minutes: config.max_ttl_minutes,
         billing: {
           funding_mode: fundingMode,
+          spot_supported: spotSupported,
           running_rates: {
             spot: spotRate,
             on_demand: onDemandRate,
