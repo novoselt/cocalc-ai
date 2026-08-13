@@ -15,7 +15,10 @@ import {
   runtimeIdentityChanged,
   volumeAttachedToVm,
 } from "./worker";
-import { effectiveComputeVolumeSizeGb } from "./volume-size";
+import {
+  effectiveComputeVolumeSizeGb,
+  validComputeVolumeSizeIncrement,
+} from "./volume-size";
 
 describe("managed compute volume sizes", () => {
   it("keeps requested and effective Nebius sizes distinct", () => {
@@ -23,6 +26,13 @@ describe("managed compute volume sizes", () => {
     expect(effectiveComputeVolumeSizeGb("nebius", 93)).toBe(93);
     expect(effectiveComputeVolumeSizeGb("nebius", 94)).toBe(186);
     expect(effectiveComputeVolumeSizeGb("gcp", 50)).toBe(50);
+  });
+
+  it("requires explicit Nebius allocation increments", () => {
+    expect(validComputeVolumeSizeIncrement("nebius", 50)).toBe(false);
+    expect(validComputeVolumeSizeIncrement("nebius", 93)).toBe(true);
+    expect(validComputeVolumeSizeIncrement("nebius", 186)).toBe(true);
+    expect(validComputeVolumeSizeIncrement("gcp", 50)).toBe(true);
   });
 });
 

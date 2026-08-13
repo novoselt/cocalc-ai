@@ -90,19 +90,56 @@ const COPYABLE_PROPS = {
 } as const;
 const NEBIUS_VOLUME_INCREMENT_GB = 93;
 
+function normalizedVolumeSizeGb(
+  provider: "gcp" | "nebius",
+  requestedSizeGb?: number,
+): number {
+  const sizeGb = Number(requestedSizeGb);
+  if (provider !== "nebius") {
+    return Number.isFinite(sizeGb) && sizeGb > 0 ? sizeGb : 50;
+  }
+  if (!Number.isFinite(sizeGb) || sizeGb <= 0) {
+    return NEBIUS_VOLUME_INCREMENT_GB;
+  }
+  return (
+    Math.max(1, Math.ceil(sizeGb / NEBIUS_VOLUME_INCREMENT_GB)) *
+    NEBIUS_VOLUME_INCREMENT_GB
+  );
+}
+
+function volumeSizeRules(provider: "gcp" | "nebius") {
+  return [
+    { required: true },
+    {
+      validator: async (_: unknown, value: unknown) => {
+        if (value == null || value === "") return;
+        const sizeGb = Number(value);
+        if (!Number.isInteger(sizeGb)) {
+          throw new Error("Size must be a whole number of GB.");
+        }
+        if (
+          provider === "nebius" &&
+          sizeGb % NEBIUS_VOLUME_INCREMENT_GB !== 0
+        ) {
+          throw new Error(
+            `Nebius volumes must be a multiple of ${NEBIUS_VOLUME_INCREMENT_GB} GB.`,
+          );
+        }
+      },
+    },
+  ];
+}
+
 function effectiveVolumeSizeGb(
   provider: "gcp" | "nebius",
   requestedSizeGb?: number,
 ): number | undefined {
   const sizeGb = Number(requestedSizeGb);
   if (!Number.isFinite(sizeGb) || sizeGb <= 0) return undefined;
-  return provider === "nebius"
-    ? Math.max(
-        NEBIUS_VOLUME_INCREMENT_GB,
-        Math.ceil(sizeGb / NEBIUS_VOLUME_INCREMENT_GB) *
-          NEBIUS_VOLUME_INCREMENT_GB,
-      )
-    : sizeGb;
+  if (provider === "nebius" && sizeGb % NEBIUS_VOLUME_INCREMENT_GB !== 0) {
+    return undefined;
+  }
+  return sizeGb;
 }
 
 interface VmDraft extends VmCreateCliValues {
@@ -531,6 +568,10 @@ function VmCreateModal({
                   gpu_count: 0,
                   home_volume: undefined,
                   create_home_volume: false,
+                  new_home_volume_size_gb: normalizedVolumeSizeGb(
+                    nextProvider,
+                    draft.new_home_volume_size_gb,
+                  ),
                 });
               }}
             />
@@ -848,7 +889,13 @@ function VmCreateModal({
           <Checkbox
             onChange={(event) => {
               if (event.target.checked) {
-                patchDraft({ home_volume: undefined });
+                patchDraft({
+                  home_volume: undefined,
+                  new_home_volume_size_gb: normalizedVolumeSizeGb(
+                    provider,
+                    draft.new_home_volume_size_gb,
+                  ),
+                });
               }
             }}
           >
@@ -877,12 +924,14 @@ function VmCreateModal({
               <Form.Item
                 name="new_home_volume_size_gb"
                 label="Size (GB)"
-                rules={[{ required: true }]}
+                rules={volumeSizeRules(provider)}
                 style={{ flex: "1 1 160px" }}
               >
                 <InputNumber
-                  min={10}
+                  min={provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 10}
                   max={catalog.limits.max_volume_gb}
+                  step={provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 1}
+                  precision={0}
                   style={{ width: "100%" }}
                 />
               </Form.Item>
@@ -901,14 +950,12 @@ function VmCreateModal({
                     The volume will be created in {draft.zone ?? draft.region},
                     attached to this VM, and retained if the VM is deleted.
                   </span>
-                  {provider === "nebius" &&
-                    newVolumeEffectiveSizeGb !==
-                      Number(draft.new_home_volume_size_gb) && (
-                      <Text strong>
-                        Nebius allocates storage in 93 GB increments, so this
-                        request creates and bills {newVolumeEffectiveSizeGb} GB.
-                      </Text>
-                    )}
+                  {provider === "nebius" && (
+                    <Text strong>
+                      Nebius persistent volumes are available in 93 GB
+                      increments.
+                    </Text>
+                  )}
                 </Space>
               }
               style={{ marginBottom: 16 }}
@@ -1081,13 +1128,14 @@ function VolumeCreateModal({
   onCreate: (values: VolumeDraft) => Promise<void>;
 }) {
   const [form] = Form.useForm<VolumeDraft>();
+  const initialProvider = catalog.defaults.provider;
   const initial = {
     name: "home-data",
-    provider: catalog.defaults.provider,
+    provider: initialProvider,
     funding_mode: catalog.default_funding_mode,
     region: catalog.defaults.region,
     zone: catalog.defaults.zone,
-    size_gb: 50,
+    size_gb: normalizedVolumeSizeGb(initialProvider, 50),
   };
   const [draft, setDraft] = useState<Partial<VolumeDraft>>(initial);
   const pricingSettings = useHostPricingSettings();
@@ -1218,6 +1266,7 @@ function VolumeCreateModal({
                     nextProvider === "gcp"
                       ? catalog.defaults.zone
                       : options.zone?.[0]?.value,
+                  size_gb: normalizedVolumeSizeGb(nextProvider, draft.size_gb),
                 });
               }}
             />
@@ -1272,10 +1321,15 @@ function VolumeCreateModal({
           <Form.Item
             name="size_gb"
             label="Size (GB)"
-            rules={[{ required: true }]}
+            rules={volumeSizeRules(provider)}
             style={{ flex: "1 1 120px" }}
           >
-            <InputNumber min={10} max={catalog.limits.max_volume_gb} />
+            <InputNumber
+              min={provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 10}
+              max={catalog.limits.max_volume_gb}
+              step={provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 1}
+              precision={0}
+            />
           </Form.Item>
         </Flex>
       </Form>
@@ -1294,15 +1348,11 @@ function VolumeCreateModal({
               are retained when VMs are deleted. They can grow online but cannot
               shrink. The estimate includes the site surcharge.
             </span>
-            {provider === "nebius" &&
-              effectiveVolumeSizeGb(provider, draft.size_gb) !==
-                Number(draft.size_gb) && (
-                <Text strong>
-                  Nebius allocates storage in 93 GB increments, so this request
-                  creates and bills{" "}
-                  {effectiveVolumeSizeGb(provider, draft.size_gb)} GB.
-                </Text>
-              )}
+            {provider === "nebius" && (
+              <Text strong>
+                Nebius persistent volumes are available in 93 GB increments.
+              </Text>
+            )}
           </Space>
         }
       />
@@ -1331,11 +1381,14 @@ function VolumeResizeModal({
 }) {
   const [form] = Form.useForm<VolumeResizeDraft>();
   const sizeGb = Form.useWatch("size_gb", form);
+  const currentSizeGb = volume
+    ? Math.max(volume.size_gb, volume.effective_size_gb)
+    : 10;
 
   useEffect(() => {
     if (!volume) return;
-    form.setFieldsValue({ size_gb: volume.size_gb });
-  }, [form, volume]);
+    form.setFieldsValue({ size_gb: currentSizeGb });
+  }, [currentSizeGb, form, volume]);
 
   const monthlyPrice =
     volume && Number.isFinite(Number(sizeGb))
@@ -1356,25 +1409,28 @@ function VolumeResizeModal({
           label="New size (GB)"
           extra={
             volume
-              ? "Current size: " +
-                volume.size_gb +
-                " GB. Volumes cannot shrink."
+              ? "Current size: " + currentSizeGb + " GB. Volumes cannot shrink."
               : undefined
           }
           rules={[
             { required: true },
             {
               validator: async (_, value) => {
-                if (volume && Number(value) < volume.size_gb) {
+                if (volume && Number(value) < currentSizeGb) {
                   throw new Error("The new size cannot be smaller.");
                 }
               },
             },
+            ...(volume ? volumeSizeRules(volume.provider).slice(1) : []),
           ]}
         >
           <InputNumber
-            min={volume?.size_gb ?? 10}
+            min={currentSizeGb}
             max={maxSizeGb}
+            step={
+              volume?.provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 1
+            }
+            precision={0}
             style={{ width: "100%" }}
           />
         </Form.Item>
@@ -1388,9 +1444,18 @@ function VolumeResizeModal({
             : "Estimated storage: $" + monthlyPrice.toFixed(2) + "/month"
         }
         description={
-          volume?.attached_vm_id
-            ? "The block device grows online. The VM checks every 30 seconds and automatically grows the ext4 /home/user filesystem without a reboot."
-            : "The enlarged capacity is available the next time this volume is attached."
+          <Space direction="vertical" size={2}>
+            <span>
+              {volume?.attached_vm_id
+                ? "The block device grows online. The VM checks every 30 seconds and automatically grows the ext4 /home/user filesystem without a reboot."
+                : "The enlarged capacity is available the next time this volume is attached."}
+            </span>
+            {volume?.provider === "nebius" && (
+              <Text strong>
+                Nebius persistent volumes are available in 93 GB increments.
+              </Text>
+            )}
+          </Space>
         }
       />
     </Modal>

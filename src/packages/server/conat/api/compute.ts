@@ -69,7 +69,11 @@ import {
   resolveOwnedComputeVolume,
   updateComputeVolume,
 } from "@cocalc/server/compute/volume-db";
-import { effectiveComputeVolumeSizeGb } from "@cocalc/server/compute/volume-size";
+import {
+  effectiveComputeVolumeSizeGb,
+  NEBIUS_COMPUTE_VOLUME_INCREMENT_GB,
+  validComputeVolumeSizeIncrement,
+} from "@cocalc/server/compute/volume-size";
 import { assertDedicatedHostAdmissionForAccount } from "@cocalc/server/project-host/admission";
 import type { DedicatedHostFundingMode } from "@cocalc/server/project-host/admission";
 import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
@@ -495,7 +499,11 @@ async function getComputeMachine(opts: {
   };
 }
 
-function volumeAuthorization(opts: { size_gb: number; max_volume_gb: number }) {
+function volumeAuthorization(opts: {
+  provider: "gcp" | "nebius";
+  size_gb: number;
+  max_volume_gb: number;
+}) {
   const sizeGb = Number(opts.size_gb);
   if (
     !Number.isInteger(sizeGb) ||
@@ -504,6 +512,11 @@ function volumeAuthorization(opts: { size_gb: number; max_volume_gb: number }) {
   ) {
     throw new Error(
       `size_gb must be an integer from ${MIN_VOLUME_GB} to ${opts.max_volume_gb}`,
+    );
+  }
+  if (!validComputeVolumeSizeIncrement(opts.provider, sizeGb)) {
+    throw new Error(
+      `size_gb must be a multiple of ${NEBIUS_COMPUTE_VOLUME_INCREMENT_GB} for Nebius volumes`,
     );
   }
   return sizeGb;
@@ -1011,6 +1024,7 @@ export async function createVolume(
     await requireProviderComputeSubnetwork(zone!);
   }
   const sizeGb = volumeAuthorization({
+    provider,
     size_gb: opts.size_gb,
     max_volume_gb: config.max_volume_gb,
   });
@@ -1163,6 +1177,7 @@ export async function resizeVolume(opts: {
     provider: volume.provider,
   });
   const sizeGb = volumeAuthorization({
+    provider: volume.provider,
     size_gb: opts.size_gb,
     max_volume_gb: config.max_volume_gb,
   });
