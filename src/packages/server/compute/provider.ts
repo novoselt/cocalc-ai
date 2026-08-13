@@ -741,8 +741,8 @@ if (-not $isAdministrator) {
   Add-LocalGroupMember -Group $administrators -Member $account
 }
 
-$home = "C:\\Users\\user"
-$sshDir = Join-Path $home ".ssh"
+$userHome = "C:\\Users\\user"
+$sshDir = Join-Path $userHome ".ssh"
 New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
 $keys = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedKeys}"))
 [IO.File]::WriteAllText((Join-Path $sshDir "authorized_keys"), $keys, [Text.UTF8Encoding]::new($false))

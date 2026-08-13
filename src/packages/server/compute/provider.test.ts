@@ -78,6 +78,8 @@ describe("managedWindowsVmBootstrapScript", () => {
     expect(script).toContain("AuthorizedKeysFile .ssh/authorized_keys");
     expect(script).toContain("fDenyTSConnections");
     expect(script).toContain("bootstrap-ready.txt");
+    expect(script).toContain('$userHome = "C:\\Users\\user"');
+    expect(script).not.toMatch(/\$home\s*=/i);
     expect(script).not.toContain("ssh-ed25519 AAAAOWNER");
   });
 });
