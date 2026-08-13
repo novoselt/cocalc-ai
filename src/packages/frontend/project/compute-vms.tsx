@@ -64,7 +64,10 @@ import {
   type HostFieldOption,
   type ProviderSelection,
 } from "../hosts/providers/registry";
-import { sortRegionOptionsByPreference } from "../hosts/utils/region-ranking";
+import {
+  markRecommendedRegionOption,
+  sortRegionOptionsByPreference,
+} from "../hosts/utils/region-ranking";
 import {
   vmCreateCli,
   volumeCreateCli,
@@ -128,6 +131,15 @@ function compatibleOptions(options: HostFieldOption[]): HostFieldOption[] {
       option.stateLabel !== "price unavailable" &&
       meta.compatible !== false
     );
+  });
+}
+
+function selectablePlacementOptions(
+  options: HostFieldOption[],
+): HostFieldOption[] {
+  return options.filter((option) => {
+    const meta = (option.meta ?? {}) as { compatible?: boolean };
+    return !option.disabled && meta.compatible !== false;
   });
 }
 
@@ -255,15 +267,16 @@ function VmCreateModal({
   };
   const providerOptions = getProviderOptions(provider, hostCatalog, selection);
   const descriptor = getProviderDescriptor(provider);
-  const regionOptions = sortRegionOptionsByPreference({
-    options: compatibleOptions(
-      provider === "gcp"
-        ? getGcpRegionOptions(hostCatalog, selection)
-        : (providerOptions.region ?? []),
-    ),
-    preference: sortRegionsByPrice ? "cheapest" : "closest",
-    preferredRegion: preferredR2Region,
-  });
+  const regionOptions = markRecommendedRegionOption(
+    sortRegionOptionsByPreference({
+      options:
+        provider === "gcp"
+          ? compatibleOptions(getGcpRegionOptions(hostCatalog, selection))
+          : selectablePlacementOptions(providerOptions.region ?? []),
+      preference: sortRegionsByPrice ? "cheapest" : "closest",
+      preferredRegion: preferredR2Region,
+    }),
+  );
   const zoneOptions = compatibleOptions(
     provider === "gcp"
       ? getGcpZoneOptions(hostCatalog, selection)
@@ -526,31 +539,29 @@ function VmCreateModal({
             rules={[{ required: true }]}
             style={{ flex: "1 1 280px" }}
           >
-            {regionOptions.length ? (
-              <HostOptionsSelect
-                options={regionOptions}
-                disabled={selectedVolume != null}
-                onChange={(region) => {
-                  const nextSelection = {
-                    ...selection,
-                    region,
-                    zone: undefined,
-                  };
-                  const nextZone = compatibleOptions(
-                    provider === "gcp"
-                      ? getGcpZoneOptions(hostCatalog, nextSelection)
-                      : (getProviderOptions(
-                          provider,
-                          hostCatalog,
-                          nextSelection,
-                        ).zone ?? []),
-                  )[0]?.value;
-                  patchDraft({ region, zone: nextZone });
-                }}
-              />
-            ) : (
-              <Input disabled={selectedVolume != null} />
-            )}
+            <HostOptionsSelect
+              options={regionOptions}
+              disabled={selectedVolume != null || !regionOptions.length}
+              placeholder={
+                regionOptions.length
+                  ? "Select a region"
+                  : "No regions available"
+              }
+              onChange={(region) => {
+                const nextSelection = {
+                  ...selection,
+                  region,
+                  zone: undefined,
+                };
+                const nextZone = compatibleOptions(
+                  provider === "gcp"
+                    ? getGcpZoneOptions(hostCatalog, nextSelection)
+                    : (getProviderOptions(provider, hostCatalog, nextSelection)
+                        .zone ?? []),
+                )[0]?.value;
+                patchDraft({ region, zone: nextZone });
+              }}
+            />
           </Form.Item>
           <Form.Item
             name="zone"
@@ -925,11 +936,10 @@ function VolumeCreateModal({
     hostCatalog,
     placementSelection,
   );
-  const regionOptions = compatibleOptions(
+  const regionOptions =
     provider === "gcp"
-      ? getGcpRegionOptions(hostCatalog, placementSelection)
-      : (providerOptions.region ?? []),
-  );
+      ? compatibleOptions(getGcpRegionOptions(hostCatalog, placementSelection))
+      : selectablePlacementOptions(providerOptions.region ?? []);
   const zoneOptions = compatibleOptions(
     provider === "gcp"
       ? getGcpZoneOptions(hostCatalog, placementSelection)
@@ -1040,31 +1050,30 @@ function VolumeCreateModal({
             rules={[{ required: true }]}
             style={{ flex: "1 1 220px" }}
           >
-            {regionOptions.length ? (
-              <HostOptionsSelect
-                value={region}
-                options={regionOptions}
-                onChange={(nextRegion) => {
-                  const nextSelection = {
-                    ...placementSelection,
-                    region: nextRegion,
-                    zone: undefined,
-                  };
-                  const zone = compatibleOptions(
-                    provider === "gcp"
-                      ? getGcpZoneOptions(hostCatalog, nextSelection)
-                      : (getProviderOptions(
-                          provider,
-                          hostCatalog,
-                          nextSelection,
-                        ).zone ?? []),
-                  )[0]?.value;
-                  patchDraft({ region: nextRegion, zone });
-                }}
-              />
-            ) : (
-              <Input value={region} disabled />
-            )}
+            <HostOptionsSelect
+              value={region}
+              options={regionOptions}
+              disabled={!regionOptions.length}
+              placeholder={
+                regionOptions.length
+                  ? "Select a region"
+                  : "No regions available"
+              }
+              onChange={(nextRegion) => {
+                const nextSelection = {
+                  ...placementSelection,
+                  region: nextRegion,
+                  zone: undefined,
+                };
+                const zone = compatibleOptions(
+                  provider === "gcp"
+                    ? getGcpZoneOptions(hostCatalog, nextSelection)
+                    : (getProviderOptions(provider, hostCatalog, nextSelection)
+                        .zone ?? []),
+                )[0]?.value;
+                patchDraft({ region: nextRegion, zone });
+              }}
+            />
           </Form.Item>
           <Form.Item
             name="zone"
