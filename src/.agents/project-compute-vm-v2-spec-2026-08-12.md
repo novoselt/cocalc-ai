@@ -10,9 +10,9 @@ The v2 schema, hub control plane, project integration, CLI, frontend, provider
 adapters, billing, egress metering, and turn-scoped capability implementation
 are deployed on staging. The current staging artifacts are:
 
-- hub: `20260813T032433Z-2b6c294d-vm-v2-placement-2b6c294d`;
+- hub: `20260813T035248Z-9618fb60-20260813T035223Z-9618fb60-nebius-home-9618fb60`;
 - project: `20260813T010410Z-8c25e5e7-vm-v2-ssh-default-8c25e5e7`; and
-- static: `20260813T032959Z-3657193c-vm-v2-placement-3657193c`.
+- static: `20260813T035511Z-9618fb60-20260813T035223Z-9618fb60-nebius-home-9618fb60`.
 
 Live staging validation completed the GCP x86-64 and T2A ARM64 lifecycles,
 stable address and DNS behavior, project SSH configuration, the `user` and
@@ -21,6 +21,12 @@ persistent-home replacement and online growth, all funding-lane authorization
 paths, project-credential denial, egress measurement, explicit stop/restart,
 deletion, and provider-orphan cleanup. Site-funded resources created no
 customer purchases; temporary prepaid transitions closed their purchases.
+Nebius storage-only authorization was also validated live by creating a 50 GB
+replicated SSD home volume in `us-central1`: the durable logical size remained
+50 GB while the provider and billing snapshot correctly recorded Nebius's
+93 GB allocation unit. The detached test volume was then deleted successfully.
+New guest bootstrap removes `/home/user/lost+found` only when that directory is
+empty.
 
 Two provider-capacity tests remain externally blocked rather than
 implementation-blocked:
