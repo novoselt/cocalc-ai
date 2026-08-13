@@ -118,16 +118,25 @@ export async function managedVmSshPublicKey(): Promise<string | null> {
 }
 
 function managedVmAlias(vmName: string, vmId: string): string {
-  const name = vmName
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
+  const name = vmName.trim();
   const shortId = vmId.replaceAll("-", "").slice(0, 8).toLowerCase();
-  if (!name || !/^[a-f0-9]{8}$/.test(shortId)) {
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(name) || !/^[a-f0-9]{8}$/.test(shortId)) {
     throw new Error("invalid managed VM identity");
   }
-  return `vm-${name}-${shortId}`;
+  return name;
+}
+
+function hasExactSshHostAlias(content: string, alias: string): boolean {
+  const normalizedAlias = alias.toLowerCase();
+  return content.split("\n").some((line) => {
+    const match = line.match(/^\s*Host\s+(.+)$/i);
+    if (!match) return false;
+    return match[1]
+      .split("#", 1)[0]
+      .trim()
+      .split(/\s+/)
+      .some((token) => token.toLowerCase() === normalizedAlias);
+  });
 }
 
 function managedVmMarkers(vmId: string) {
@@ -163,6 +172,11 @@ export function updateManagedVmSshConfig(opts: {
     .trimEnd();
   if (!opts.enabled) {
     return { content: stripped ? `${stripped}\n` : "", alias };
+  }
+  if (hasExactSshHostAlias(stripped, alias)) {
+    throw new Error(
+      `SSH config already defines Host '${alias}'; rename that entry or choose another VM name`,
+    );
   }
   const block = `${markers.start}
 Host ${alias}

@@ -732,14 +732,15 @@ export class GcpProvider implements CloudProvider {
       });
     }
 
-    const guestAccelerators = spec.gpu
-      ? [
-          {
-            acceleratorCount: Math.max(1, spec.gpu.count ?? 1),
-            acceleratorType: `projects/${credentials.projectId}/zones/${zone}/acceleratorTypes/${spec.gpu.type}`,
-          },
-        ]
-      : [];
+    const guestAccelerators =
+      spec.gpu && !machineTypeFor(spec).startsWith("g2-")
+        ? [
+            {
+              acceleratorCount: Math.max(1, spec.gpu.count ?? 1),
+              acceleratorType: `projects/${credentials.projectId}/zones/${zone}/acceleratorTypes/${spec.gpu.type}`,
+            },
+          ]
+        : [];
     const scheduling =
       spec.pricing_model === "spot"
         ? spotScheduling()
@@ -1452,14 +1453,15 @@ export class GcpProvider implements CloudProvider {
         subnetwork,
       },
     ];
-    const guestAccelerators = spec.gpu
-      ? [
-          {
-            acceleratorCount: Math.max(1, spec.gpu.count ?? 1),
-            acceleratorType: `projects/${credentials.projectId}/zones/${zone}/acceleratorTypes/${spec.gpu.type}`,
-          },
-        ]
-      : [];
+    const guestAccelerators =
+      spec.gpu && !machineTypeFor(spec).startsWith("g2-")
+        ? [
+            {
+              acceleratorCount: Math.max(1, spec.gpu.count ?? 1),
+              acceleratorType: `projects/${credentials.projectId}/zones/${zone}/acceleratorTypes/${spec.gpu.type}`,
+            },
+          ]
+        : [];
     try {
       const [response] = await client.insert({
         project: credentials.projectId,

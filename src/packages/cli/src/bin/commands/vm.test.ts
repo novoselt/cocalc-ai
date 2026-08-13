@@ -29,6 +29,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
   const projectSshAuthorizationCalls: any[] = [];
   const listCalls: any[] = [];
   const projectListCalls: any[] = [];
+  const catalogCalls: any[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -41,6 +42,15 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
         },
         hub: {
           compute: {
+            getCatalog: async (callOpts: any) => {
+              catalogCalls.push(callOpts);
+              return {
+                provider_catalogs: { gcp: { entries: [] } },
+                defaults: { provider: "gcp" },
+                limits: { max_active_per_project: 3 },
+                funding_modes: [],
+              };
+            },
             listVms: async (callOpts: any) => {
               listCalls.push(callOpts);
               return [];
@@ -111,8 +121,31 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
     projectSshAuthorizationCalls,
     listCalls,
     projectListCalls,
+    catalogCalls,
   };
 }
+
+describe("vm catalog", () => {
+  it("queries and selects the live provider catalog", async () => {
+    const { program, catalogCalls, callbackResults } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "catalog",
+      "--provider",
+      "gcp",
+    ]);
+    assert.deepEqual(catalogCalls, [{}]);
+    assert.deepEqual(callbackResults[0], {
+      provider: "gcp",
+      catalog: { entries: [] },
+      defaults: { provider: "gcp" },
+      limits: { max_active_per_project: 3 },
+      funding_modes: [],
+    });
+  });
+});
 
 describe("vm list scope", () => {
   it("defaults project authentication to the current project", async () => {
@@ -152,6 +185,27 @@ describe("vm create", () => {
     ]);
     assert.equal(createCalls[0]?.ssh_public_key, undefined);
     assert.equal(createCalls[0]?.configure_project_ssh, true);
+    assert.equal(createCalls[0]?.gpu_count, undefined);
+  });
+
+  it("passes an explicit fixed GPU count", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "l4-vm",
+      "--project",
+      "project-id",
+      "--machine",
+      "g2-standard-4",
+      "--gpu-type",
+      "nvidia-l4",
+      "--gpu-count",
+      "1",
+    ]);
+    assert.equal(createCalls[0]?.gpu_count, 1);
   });
 
   it("can deliberately create without an initial SSH key", async () => {

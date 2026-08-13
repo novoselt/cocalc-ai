@@ -76,6 +76,8 @@ import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
 import {
   getDedicatedHostSurchargeFraction,
   gcpMachineArchitecture,
+  gcpMachineGpu,
+  gcpMinimumBootDiskGb,
   isSupportedCatalogGcpMachineType,
 } from "@cocalc/util/project-host-pricing";
 import { getCatalog as getHostCatalog } from "./hosts";
@@ -95,7 +97,6 @@ import { deleteHostDns } from "@cocalc/server/cloud/dns";
 import centralLog from "@cocalc/database/postgres/central-log";
 import type { MoneyValue } from "@cocalc/util/money";
 
-const MIN_BOOT_DISK_GB = 10;
 const MIN_VOLUME_GB = 10;
 const HOURS_PER_MONTH = 730;
 
@@ -315,8 +316,8 @@ async function egressSummary(vm: ComputeVmRow) {
   }
 }
 
-function managedVmSshAlias(vm: Pick<ComputeVmRow, "id" | "name">): string {
-  return `vm-${vm.name}-${vm.id.replaceAll("-", "").slice(0, 8)}`;
+function managedVmSshAlias(vm: Pick<ComputeVmRow, "name">): string {
+  return vm.name;
 }
 
 async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
@@ -482,13 +483,14 @@ async function getComputeMachine(opts: {
       `machine '${opts.machine_type}' is not available in ${opts.zone}`,
     );
   }
+  const gpu = gcpMachineGpu(machine.name);
   return {
     machine_type: machine.name,
     architecture: gcpMachineArchitecture(machine.name),
     cpu: machine.guestCpus,
     ram_gb: machine.memoryMb / 1024,
-    gpu_type: null,
-    gpu_count: 0,
+    gpu_type: gpu?.type ?? null,
+    gpu_count: gpu?.count ?? 0,
     provider_spec: {},
   };
 }
@@ -683,9 +685,10 @@ export async function createVm(
     requestedGpuType && requestedGpuType !== "none"
       ? requestedGpuType
       : undefined;
+  const machineGpuType = `${machine.gpu_type ?? ""}`.trim() || undefined;
   if (
     normalizedRequestedGpuType != null &&
-    normalizedRequestedGpuType !== `${machine.gpu_type ?? ""}`.trim()
+    normalizedRequestedGpuType !== machineGpuType
   ) {
     throw new Error(
       `machine '${machine.machine_type}' provides GPU '${machine.gpu_type ?? "none"}', not '${normalizedRequestedGpuType}'`,
@@ -702,7 +705,6 @@ export async function createVm(
   if (
     (provider === "gcp" &&
       !isSupportedCatalogGcpMachineType(machine.machine_type)) ||
-    machine.machine_type.startsWith("g2-") ||
     (machine.ram_gb < 8 && machine.machine_type !== "t2a-standard-1")
   ) {
     throw new Error(
@@ -745,13 +747,15 @@ export async function createVm(
     );
   }
   const bootDiskGb = Number(opts.boot_disk_gb ?? 20);
+  const minimumBootDiskGb =
+    provider === "gcp" ? gcpMinimumBootDiskGb(machine.machine_type) : 10;
   if (
     !Number.isInteger(bootDiskGb) ||
-    bootDiskGb < MIN_BOOT_DISK_GB ||
+    bootDiskGb < minimumBootDiskGb ||
     bootDiskGb > config.max_boot_disk_gb
   ) {
     throw new Error(
-      `boot_disk_gb must be an integer from ${MIN_BOOT_DISK_GB} to ${config.max_boot_disk_gb}`,
+      `boot_disk_gb must be an integer from ${minimumBootDiskGb} to ${config.max_boot_disk_gb} for ${machine.machine_type}`,
     );
   }
   const rateInput = {

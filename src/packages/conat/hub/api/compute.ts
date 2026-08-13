@@ -241,7 +241,7 @@ export interface ComputeCatalog {
 }
 
 export const compute = {
-  getCatalog: authFirstRequireAccount,
+  getCatalog: authFirstRequireAccountOrComputeAgent,
   createVm: authFirstRequireAccountOrComputeAgent,
   listVms: authFirstRequireAccount,
   getVm: authFirstRequireAccount,

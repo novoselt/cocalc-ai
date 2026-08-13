@@ -53,6 +53,27 @@ describe("managed compute CLI equivalents", () => {
     ).not.toContain("--gpu-type");
   });
 
+  it("includes the fixed G2 accelerator shape", () => {
+    const command = vmCreateCli({
+      api: "https://staging.cocalc.ai",
+      project_id: "project-id",
+      values: {
+        name: "l4-vm",
+        provider: "gcp",
+        architecture: "x86_64",
+        region: "us-central1",
+        zone: "us-central1-a",
+        machine_type: "g2-standard-4",
+        gpu_type: "nvidia-l4",
+        gpu_count: 1,
+        boot_disk_gb: 40,
+      },
+    });
+    expect(command).toContain("--machine g2-standard-4");
+    expect(command).toContain("--gpu-type nvidia-l4 --gpu-count 1");
+    expect(command).toContain("--boot-disk-gb=40");
+  });
+
   it("makes a deliberately keyless browser configuration explicit", () => {
     expect(
       vmCreateCli({

@@ -47,7 +47,11 @@ import {
   COCALC_CLI_INSTALL_COMMAND,
 } from "@cocalc/util/consts/ui";
 import { uuid } from "@cocalc/util/misc";
-import { gcpMachineArchitecture } from "@cocalc/util/project-host-pricing";
+import {
+  gcpMachineArchitecture,
+  gcpMachineGpu,
+  gcpMinimumBootDiskGb,
+} from "@cocalc/util/project-host-pricing";
 import {
   HostOptionsSelect,
   sortMachineTypeOptions,
@@ -258,6 +262,7 @@ function VmCreateModal({
     region: draft.region || regionFromZone(draft.zone),
     zone: draft.zone,
     machine_type: draft.machine_type,
+    gpu_type: draft.gpu_type,
     pricing_model: draft.pricing_model,
     storage_mode: "persistent",
     disk_type: provider === "nebius" ? "ssd" : "balanced",
@@ -336,6 +341,33 @@ function VmCreateModal({
   const patchDraft = (patch: Partial<VmDraft>) => {
     form.setFieldsValue(patch);
     setDraft((current) => ({ ...current, ...patch }));
+  };
+
+  const chooseGcpMachine = (
+    nextSelection: ProviderSelection,
+    preferredMachine = draft.machine_type,
+  ) => {
+    const options = compatibleOptions(
+      getGcpMachineTypeOptions(hostCatalog, nextSelection),
+    ).filter(
+      ({ value }) =>
+        gcpMachineArchitecture(value) === nextSelection.architecture,
+    );
+    return options.some(({ value }) => value === preferredMachine)
+      ? preferredMachine
+      : options[0]?.value;
+  };
+
+  const gcpMachinePatch = (machine_type?: string): Partial<VmDraft> => {
+    const gpu = machine_type ? gcpMachineGpu(machine_type) : undefined;
+    return {
+      machine_type,
+      gpu_count: gpu?.count ?? 0,
+      boot_disk_gb: Math.max(
+        Number(draft.boot_disk_gb ?? 20),
+        machine_type ? gcpMinimumBootDiskGb(machine_type) : 10,
+      ),
+    };
   };
 
   const withResolvedSshKey = (values: VmDraft): VmDraft => ({
@@ -503,13 +535,13 @@ function VmCreateModal({
                 ).find(
                   ({ value }) => gcpMachineArchitecture(value) === architecture,
                 )?.value;
+                const nextMachinePatch = gcpMachinePatch(machine_type);
                 patchDraft({
                   architecture,
                   region,
                   zone,
-                  machine_type,
                   gpu_type: undefined,
-                  gpu_count: 0,
+                  ...nextMachinePatch,
                 });
               }}
             >
@@ -559,7 +591,16 @@ function VmCreateModal({
                     : (getProviderOptions(provider, hostCatalog, nextSelection)
                         .zone ?? []),
                 )[0]?.value;
-                patchDraft({ region, zone: nextZone });
+                const machinePatch =
+                  provider === "gcp"
+                    ? gcpMachinePatch(
+                        chooseGcpMachine({
+                          ...nextSelection,
+                          zone: nextZone,
+                        }),
+                      )
+                    : {};
+                patchDraft({ region, zone: nextZone, ...machinePatch });
               }}
             />
           </Form.Item>
@@ -575,6 +616,15 @@ function VmCreateModal({
               <HostOptionsSelect
                 options={zoneOptions}
                 disabled={selectedVolume != null}
+                onChange={(zone) => {
+                  const machinePatch =
+                    provider === "gcp"
+                      ? gcpMachinePatch(
+                          chooseGcpMachine({ ...selection, zone }),
+                        )
+                      : {};
+                  patchDraft({ zone, ...machinePatch });
+                }}
               />
             ) : (
               <Input disabled={selectedVolume != null} />
@@ -590,14 +640,62 @@ function VmCreateModal({
                 label="GPU"
                 style={{ flex: "1 1 280px" }}
               >
-                <HostOptionsSelect options={gpuOptions} placeholder="No GPU" />
+                <HostOptionsSelect
+                  options={gpuOptions}
+                  placeholder="No GPU"
+                  onChange={(value) => {
+                    const gpu_type = value === "none" ? undefined : value;
+                    if (provider !== "gcp") {
+                      patchDraft({ gpu_type });
+                      return;
+                    }
+                    const baseSelection: ProviderSelection = {
+                      ...selection,
+                      architecture: "x86_64",
+                      gpu_type,
+                      machine_type: undefined,
+                      region: undefined,
+                      zone: undefined,
+                    };
+                    const regions = sortRegionOptionsByPreference({
+                      options: compatibleOptions(
+                        getGcpRegionOptions(hostCatalog, baseSelection),
+                      ),
+                      preference: sortRegionsByPrice ? "cheapest" : "closest",
+                      preferredRegion: preferredR2Region,
+                    });
+                    const region = regions.some(
+                      ({ value }) => value === draft.region,
+                    )
+                      ? draft.region
+                      : regions[0]?.value;
+                    const regionSelection = { ...baseSelection, region };
+                    const zones = compatibleOptions(
+                      getGcpZoneOptions(hostCatalog, regionSelection),
+                    );
+                    const zone = zones.some(({ value }) => value === draft.zone)
+                      ? draft.zone
+                      : zones[0]?.value;
+                    const machine_type = chooseGcpMachine(
+                      { ...regionSelection, zone },
+                      undefined,
+                    );
+                    patchDraft({
+                      architecture: "x86_64",
+                      gpu_type,
+                      region,
+                      zone,
+                      ...gcpMachinePatch(machine_type),
+                    });
+                  }}
+                />
               </Form.Item>
               <Form.Item
                 name="gpu_count"
                 label="GPU count"
                 style={{ flex: "1 1 160px" }}
               >
-                <InputNumber min={0} max={8} />
+                <InputNumber disabled min={0} max={8} />
               </Form.Item>
             </Flex>
           )}
@@ -626,6 +724,13 @@ function VmCreateModal({
               options={machineOptions}
               disabled={machineOptions.length === 0}
               placeholder="Select a machine available in this zone"
+              onChange={(machine_type) => {
+                patchDraft(
+                  provider === "gcp"
+                    ? gcpMachinePatch(machine_type)
+                    : { machine_type },
+                );
+              }}
             />
           </Form.Item>
           <Form.Item
@@ -634,7 +739,14 @@ function VmCreateModal({
             rules={[{ required: true }]}
             style={{ flex: "1 1 160px" }}
           >
-            <InputNumber min={10} max={catalog.limits.max_boot_disk_gb} />
+            <InputNumber
+              min={
+                provider === "gcp" && draft.machine_type
+                  ? gcpMinimumBootDiskGb(draft.machine_type)
+                  : 10
+              }
+              max={catalog.limits.max_boot_disk_gb}
+            />
           </Form.Item>
           <Form.Item
             name="ttl_minutes"

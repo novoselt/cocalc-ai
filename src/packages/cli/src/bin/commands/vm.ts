@@ -379,6 +379,27 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .command("vm")
     .description("account-owned managed compute VMs");
 
+  vm.command("catalog")
+    .description("show the live managed-compute provider catalog")
+    .option("--provider <provider>", "limit output to gcp or nebius")
+    .action(async (opts: { provider?: string }, command: Command) => {
+      await withContext(command, "vm catalog", async (ctx) => {
+        requireAccountAuth(ctx, "vm catalog");
+        const catalog = await ctx.hub.compute.getCatalog({});
+        if (!opts.provider) return catalog;
+        if (opts.provider !== "gcp" && opts.provider !== "nebius") {
+          throw new Error("provider must be gcp or nebius");
+        }
+        return {
+          provider: opts.provider,
+          catalog: catalog.provider_catalogs[opts.provider],
+          defaults: catalog.defaults,
+          limits: catalog.limits,
+          funding_modes: catalog.funding_modes,
+        };
+      });
+    });
+
   vm.command("list")
     .description("list managed compute VMs in project or account scope")
     .option("--project <project_id>", "filter by attached project")
@@ -493,7 +514,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "existing persistent volume mounted at /home/user",
     )
     .option("--gpu-type <type>", "provider GPU type")
-    .option("--gpu-count <count>", "number of GPUs", "0")
+    .option("--gpu-count <count>", "number of GPUs")
     .option(
       "--funding-mode <mode>",
       "site-funded, account-postpaid, or account-prepaid",
@@ -545,7 +566,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           machine_type: opts.machine,
           gpu_type:
             opts.gpuType && opts.gpuType !== "none" ? opts.gpuType : undefined,
-          gpu_count: Number(opts.gpuCount),
+          gpu_count: opts.gpuCount == null ? undefined : Number(opts.gpuCount),
           pricing_model: opts.spot ? "spot" : "on_demand",
           allow_on_demand_fallback: opts.allowStandardFallback === true,
           ttl_minutes: opts.ttl ? parseTtlMinutes(opts.ttl) : null,

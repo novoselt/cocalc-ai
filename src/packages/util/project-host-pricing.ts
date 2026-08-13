@@ -36,6 +36,28 @@ export function gcpMachineArchitecture(
   );
 }
 
+const GCP_G2_GPU_COUNTS: Record<string, number> = {
+  "g2-standard-4": 1,
+  "g2-standard-8": 1,
+  "g2-standard-12": 1,
+  "g2-standard-16": 1,
+  "g2-standard-24": 2,
+  "g2-standard-32": 1,
+  "g2-standard-48": 4,
+  "g2-standard-96": 8,
+};
+
+export function gcpMachineGpu(
+  machineType: string,
+): { type: "nvidia-l4"; count: number } | undefined {
+  const count = GCP_G2_GPU_COUNTS[machineType];
+  return count == null ? undefined : { type: "nvidia-l4", count };
+}
+
+export function gcpMinimumBootDiskGb(machineType: string): number {
+  return gcpMachineGpu(machineType) ? 40 : 10;
+}
+
 export type GcpPricingFamily =
   | "e2"
   | "t2a"

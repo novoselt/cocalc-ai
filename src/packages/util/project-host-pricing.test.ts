@@ -7,12 +7,27 @@ import {
   estimateNebiusCatalogRateUsdPerHour,
   getDedicatedHostSurchargeFraction,
   gcpMachineArchitecture,
+  gcpMachineGpu,
+  gcpMinimumBootDiskGb,
   hostPriceBreakdownForBillingState,
   isSupportedCatalogGcpMachineType,
   type GcpCatalogPrices,
 } from "./project-host-pricing";
 
 describe("project host pricing", () => {
+  it("describes the fixed L4 topology of G2 machine types", () => {
+    expect(gcpMachineGpu("g2-standard-4")).toEqual({
+      type: "nvidia-l4",
+      count: 1,
+    });
+    expect(gcpMachineGpu("g2-standard-24")?.count).toBe(2);
+    expect(gcpMachineGpu("g2-standard-48")?.count).toBe(4);
+    expect(gcpMachineGpu("g2-standard-96")?.count).toBe(8);
+    expect(gcpMachineGpu("t2d-standard-4")).toBeUndefined();
+    expect(gcpMinimumBootDiskGb("g2-standard-4")).toBe(40);
+    expect(gcpMinimumBootDiskGb("t2d-standard-4")).toBe(10);
+  });
+
   it("selects stopped costs from explicit billing-state metadata", () => {
     const stopped = hostPriceBreakdownForBillingState(
       {

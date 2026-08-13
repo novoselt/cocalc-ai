@@ -24,7 +24,10 @@ import {
 import { getProviderContext } from "@cocalc/server/cloud/provider-context";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { getNebiusRegionKeys } from "@cocalc/server/cloud/nebius-credentials";
-import { buildHostSpec } from "@cocalc/server/cloud/host-util";
+import {
+  buildHostSpec,
+  getGcpAcceleratorImage,
+} from "@cocalc/server/cloud/host-util";
 import { getHostOwnerBaySshIdentity } from "@cocalc/server/cloud/ssh-key";
 import {
   gcpCpuCountForMachineType,
@@ -498,7 +501,18 @@ async function resolvedSpecFor(
   volume?: ComputeVolumeRow,
 ): Promise<HostSpec> {
   const managed = specFor(vm, config, subnetwork, pricingModel, volume);
-  if (vm.provider === "gcp") return managed;
+  if (vm.provider === "gcp") {
+    if (!managed.gpu) return managed;
+    const image = await getGcpAcceleratorImage(vm.machine_type);
+    return {
+      ...managed,
+      metadata: {
+        ...(managed.metadata ?? {}),
+        source_image_project: image.project,
+        source_image_family: image.family,
+      },
+    };
+  }
   const securityGroupId = await ensureNebiusManagedComputeSecurityGroup(
     vm.region,
   );

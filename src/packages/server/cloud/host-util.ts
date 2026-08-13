@@ -168,6 +168,24 @@ const pickGcpAcceleratorFamily = (
   };
 };
 
+export async function getGcpAcceleratorImage(machineType: string): Promise<{
+  family: string;
+  project: string;
+}> {
+  const { family, project } = pickGcpAcceleratorFamily(await loadGcpImages(), {
+    machineType,
+  });
+  if (!family) {
+    throw new Error(
+      `no GCP accelerator Ubuntu ${MIN_UBUNTU_VERSION / 100}+ images available`,
+    );
+  }
+  return {
+    family,
+    project: project || "ubuntu-os-accelerator-images",
+  };
+}
+
 const pickNebiusImageFamily = (
   images: NebiusImage[],
   wantsGpu: boolean,
@@ -445,18 +463,12 @@ export async function buildHostSpec(row: HostRow): Promise<HostSpec> {
     }
   }
   if (providerId === "gcp" && gpu) {
-    const images = await loadGcpImages();
-    const { family, project } = pickGcpAcceleratorFamily(images, {
-      machineType: machine.machine_type,
-    });
-    if (!family) {
-      throw new Error(
-        `no GCP accelerator Ubuntu ${MIN_UBUNTU_VERSION / 100}+ images available`,
-      );
-    }
+    const { family, project } = await getGcpAcceleratorImage(
+      machine.machine_type ?? "",
+    );
     sourceImage = undefined;
     sourceImageFamily = family;
-    sourceImageProject = project || "ubuntu-os-accelerator-images";
+    sourceImageProject = project;
     logger.debug("buildHostSpec: selected gcp accelerator image", {
       host_id: row.id,
       family,

@@ -16,15 +16,15 @@ describe("managed VM SSH config", () => {
     const result = updateManagedVmSshConfig({
       content: original,
       vm_id: vmId,
-      vm_name: "Build Machine!",
+      vm_name: "build-machine",
       hostname: "vm-0123456789abcdef0123456789abcdef.example.com",
       enabled: true,
     });
 
-    expect(result.alias).toBe("vm-build-machine-12345678");
+    expect(result.alias).toBe("build-machine");
     expect(result.content).toContain(original.trim());
     expect(result.content).toContain("# >>> cocalc managed vm 12345678 >>>");
-    expect(result.content).toContain("Host vm-build-machine-12345678");
+    expect(result.content).toContain("Host build-machine");
     expect(result.content).toContain("  User user");
     expect(result.content).toContain("  BatchMode yes");
     expect(result.content).toContain("# <<< cocalc managed vm 12345678 <<<");
@@ -81,5 +81,35 @@ describe("managed VM SSH config", () => {
     expect(disabled.content).toBe(
       "Include .cocalc/config\n\nHost another\n  HostName another.example.com\n",
     );
+  });
+
+  it("replaces the old suffixed alias using the stable VM markers", () => {
+    const result = updateManagedVmSshConfig({
+      content: `# >>> cocalc managed vm 12345678 >>>
+Host vm-build-12345678
+  HostName vm-old.example.com
+# <<< cocalc managed vm 12345678 <<<
+`,
+      vm_id: vmId,
+      vm_name: "build",
+      hostname: "vm-new.example.com",
+      enabled: true,
+    });
+
+    expect(result.alias).toBe("build");
+    expect(result.content).toContain("Host build\n");
+    expect(result.content).not.toContain("Host vm-build-12345678");
+  });
+
+  it("rejects an ambiguous exact alias already owned by the project", () => {
+    expect(() =>
+      updateManagedVmSshConfig({
+        content: "Host build other\n  HostName personal.example.com\n",
+        vm_id: vmId,
+        vm_name: "build",
+        hostname: "vm-build.example.com",
+        enabled: true,
+      }),
+    ).toThrow("SSH config already defines Host 'build'");
   });
 });

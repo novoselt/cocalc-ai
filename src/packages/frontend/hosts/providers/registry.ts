@@ -24,6 +24,7 @@ import {
   getDedicatedHostSurchargeFraction,
   gcpCatalogMachineTypeSortKey,
   gcpMachineArchitecture,
+  gcpMachineGpu,
   isSupportedCatalogGcpMachineType,
   getNebiusPlatformAliases,
   normalizeNebiusPricingProduct,
@@ -559,6 +560,9 @@ const estimateGcpSelectionUsdPerHour = (
   const next = { ...selection, ...overrides };
   const gpuType =
     next.gpu_type && next.gpu_type !== "none" ? next.gpu_type : undefined;
+  const gpuCount = next.machine_type
+    ? gcpMachineGpu(next.machine_type)?.count
+    : undefined;
   const machineTypeMeta = getGcpMachineTypeByZone(
     catalog,
     next.zone,
@@ -579,7 +583,7 @@ const estimateGcpSelectionUsdPerHour = (
       memory_gib: memoryGiB,
       pricing_model: next.pricing_model === "spot" ? "spot" : "on_demand",
       gpu_type: gpuType,
-      gpu_count: gpuType ? 1 : undefined,
+      gpu_count: gpuType ? (gpuCount ?? 1) : undefined,
       disk_type: next.disk_type,
       disk_gb: next.disk_gb,
       shared_disk_type: next.shared_disk_type,
@@ -598,6 +602,9 @@ const estimateGcpSelectionBreakdown = (
   const next = { ...selection, ...overrides };
   const gpuType =
     next.gpu_type && next.gpu_type !== "none" ? next.gpu_type : undefined;
+  const gpuCount = next.machine_type
+    ? gcpMachineGpu(next.machine_type)?.count
+    : undefined;
   const machineTypeMeta = getGcpMachineTypeByZone(
     catalog,
     next.zone,
@@ -618,7 +625,7 @@ const estimateGcpSelectionBreakdown = (
       memory_gib: memoryGiB,
       pricing_model: next.pricing_model === "spot" ? "spot" : "on_demand",
       gpu_type: gpuType,
-      gpu_count: gpuType ? 1 : undefined,
+      gpu_count: gpuType ? (gpuCount ?? 1) : undefined,
       disk_type: next.disk_type,
       disk_gb: next.disk_gb,
       shared_disk_type: next.shared_disk_type,
@@ -1414,8 +1421,6 @@ export const getGcpZoneOptions = (
   });
 };
 
-const GCP_GPU_ONLY_MACHINE_PREFIXES = ["g2-"];
-
 // Release-frozen GCP GPU lane: G2 with L4 only.
 const GCP_ACCELERATOR_TYPES = new Set(["nvidia-l4"]);
 
@@ -1470,11 +1475,10 @@ export const getGcpMachineTypeOptions = (
     const memoryGiB =
       mt.memoryMb != null ? Number(mt.memoryMb) / 1024 : undefined;
     if (memoryGiB != null && memoryGiB < MIN_USABLE_RAM_GIB) return false;
-    if (!selection.gpu_type || selection.gpu_type === "none") {
-      return !GCP_GPU_ONLY_MACHINE_PREFIXES.some((prefix) =>
-        name.startsWith(prefix),
-      );
-    }
+    const machineGpu = gcpMachineGpu(name);
+    if (!selection.gpu_type || selection.gpu_type === "none")
+      return !machineGpu;
+    if (machineGpu?.type !== selection.gpu_type) return false;
     if (gpuPrefixes === undefined) return true;
     if (!gpuPrefixes.length) return false;
     return gpuPrefixes.some((prefix) => name.startsWith(prefix));

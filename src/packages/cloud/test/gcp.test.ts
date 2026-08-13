@@ -386,6 +386,32 @@ describe("GcpProvider", () => {
     );
   });
 
+  it("uses the GPUs integrated into a G2 machine without reattaching them", async () => {
+    insertMock.mockResolvedValueOnce([
+      { latestResponse: { name: "op-g2", status: "DONE" } },
+    ]);
+    waitMock.mockResolvedValueOnce([{ status: "DONE" }]);
+    getMock.mockResolvedValueOnce([{ networkInterfaces: [] }]);
+    diskGetMock.mockRejectedValueOnce({ code: 404 });
+
+    const provider = new GcpProvider();
+    await provider.createHost(
+      buildSpec({
+        gpu: { type: "nvidia-l4", count: 1 },
+        metadata: { machine_type: "g2-standard-4" },
+      }),
+      {
+        project_id: "proj-1",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+
+    const instance = insertMock.mock.calls[0][0].instanceResource;
+    expect(instance.guestAccelerators).toEqual([]);
+    expect(instance.scheduling?.onHostMaintenance).toBe("TERMINATE");
+  });
+
   it("creates a host with a shared scratch disk", async () => {
     insertMock.mockResolvedValueOnce([
       { latestResponse: { name: "op-scratch", status: "DONE" } },

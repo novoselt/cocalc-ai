@@ -265,17 +265,18 @@ atomically updates `~/.ssh/config` using managed markers. Reuse and generalize
 the existing project-to-project SSH config parser rather than implementing a
 second parser.
 
-Use an unambiguous stable alias:
+Use the exact VM name as the stable alias. VM names are already restricted to
+safe SSH host tokens and should be unique within the attached project:
 
 ```text
-vm-<sanitized-vm-name>-<first-8-hex-of-vm-id>
+<vm-name>
 ```
 
 Example block:
 
 ```sshconfig
 # >>> cocalc managed vm 12345678 >>>
-Host vm-build-12345678
+Host build
   HostName vm-0123456789abcdef0123456789abcdef.cocalc.ai
   User user
   IdentityFile ~/.ssh/id_ed25519
@@ -295,6 +296,8 @@ The writer must:
 - preserve all content outside its exact VM marker block;
 - use compare-and-swap or an atomic project-host file mutation;
 - create `~/.ssh` with mode 0700 and config with mode 0600;
+- fail clearly rather than create ambiguous configuration if content outside
+  the VM's managed marker block already defines the same exact `Host` alias;
 - retry project-host unavailability durably;
 - remove the block after intentional stop or VM deletion;
 - retain the block during automatic Spot recovery; and
@@ -303,7 +306,7 @@ The writer must:
 The UI and CLI display both the alias and direct command:
 
 ```bash
-ssh vm-build-12345678
+ssh build
 ssh user@vm-0123456789abcdef0123456789abcdef.cocalc.ai
 ```
 
@@ -481,7 +484,8 @@ Provider -> CPU architecture -> Region -> Zone -> Machine
 
 Supported initial architecture choices:
 
-- `x86_64`: existing supported non-GPU GCP machine families;
+- `x86_64`: existing supported CPU-only GCP machine families plus the frozen
+  G2/L4 GPU lane;
 - `arm64`: `t2a-standard-1`, `t2a-standard-2`, ..., through provider catalog
   availability.
 
@@ -490,6 +494,18 @@ Do not require users to discover a T2A zone before T2A appears. Permit the 4 GB
 `t2a-standard-1` for managed VMs even if dedicated project hosts retain an 8 GB
 minimum. Price and image compatibility are required before an option is
 selectable.
+
+For the initial GCP GPU lane, selecting `nvidia-l4` restricts machines to the
+catalog's `g2-standard-*` types and restricts regions and zones accordingly.
+G2 has a fixed integrated L4 topology, so GPU count is derived from the machine
+shape rather than entered by the user: 1 for `g2-standard-4/8/12/16/32`, 2 for
+`g2-standard-24`, 4 for `g2-standard-48`, and 8 for `g2-standard-96`. Use the
+current Ubuntu accelerator image and enforce G2's 40 GB minimum boot disk. A
+CPU-only machine and a selected GPU must never coexist in a submitted form.
+
+The CLI exposes the same live source of truth with `cocalc vm catalog` and
+`cocalc vm catalog --provider gcp|nebius`. Account sessions and turn-scoped
+compute agents may query it; ambient collaborative project credentials may not.
 
 Architecture detection must use catalog/provider metadata or an explicit
 machine-family map. Do not use the current heuristic that assumes a family is
@@ -1097,7 +1113,7 @@ The redesign is complete when an eligible user can:
 
 1. create either a GCP x86-64/ARM VM or supported Nebius CPU/GPU VM using an
    eligible funding lane;
-2. run `ssh <managed-alias>` from the attached project without editing config;
+2. run `ssh <vm-name>` from the attached project without editing config;
 3. land as `user` in `/home/user` with passwordless sudo;
 4. persist and enlarge `/home/user` through an independent home volume;
 5. survive Spot preemption without an IP, hostname, or SSH-config change;
