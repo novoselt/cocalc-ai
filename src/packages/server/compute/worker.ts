@@ -8,7 +8,7 @@ import { execFile } from "node:child_process";
 import net from "node:net";
 import { promisify } from "node:util";
 import getLogger from "@cocalc/backend/logger";
-import getPool from "@cocalc/database/pool";
+import getPool, { withSessionAdvisoryLock } from "@cocalc/database/pool";
 import adminAlert from "@cocalc/server/messages/admin-alert";
 import { nextCalendarMonthStartAfter } from "@cocalc/server/purchases/billing-period";
 import type { HostRuntime, RemoteInstance } from "@cocalc/cloud";
@@ -34,6 +34,7 @@ import {
   listComputeVmsForEgressMetering,
   listComputeVmsForInventory,
   updateComputeInstance,
+  updateComputeVmEgressMetadata,
   updateComputeVm,
 } from "./db";
 import { getComputeVmConfig } from "./config";
@@ -103,6 +104,7 @@ import {
 const logger = getLogger("server:compute:worker");
 const COMPUTE_PUBLIC_EGRESS_USD_PER_GB = 0.1;
 const COMPUTE_EGRESS_FINALIZATION_DELAY_MS = 5 * 60_000;
+const COMPUTE_EGRESS_METER_LOCK_KEY = "managed-compute-egress-meter";
 const COMPUTE_ORPHAN_GRACE_MS = 24 * 60 * 60_000;
 const COMPUTE_ORPHAN_BOOT_DISK_GRACE_MS = 7 * COMPUTE_ORPHAN_GRACE_MS;
 const execFileAsync = promisify(execFile);
@@ -812,23 +814,21 @@ async function meterComputeVmPublicEgress() {
           metadata: { unit_cost_usd_per_gb: unitCostUsd },
         });
       }
-      await updateComputeVm(vm.id, {
-        metadata: {
-          ...current.metadata,
-          billing: {
-            ...current.metadata.billing,
-            egress: {
-              ...previous,
-              metered_through_at: metered.metered_through_at,
-              total_bytes: metered.total_bytes,
-              total_cost_usd: metered.total_cost_usd,
-              unit_cost_usd_per_gb: unitCostUsd,
-              finalized: metered.finalized,
-            },
-          },
-        },
+      await updateComputeVmEgressMetadata(vm.id, {
+        ...previous,
+        metered_through_at: metered.metered_through_at,
+        total_bytes: metered.total_bytes,
+        total_cost_usd: metered.total_cost_usd,
+        unit_cost_usd_per_gb: unitCostUsd,
+        finalized: metered.finalized,
+        error: null,
       });
     } catch (err) {
+      const current = await getComputeVmById(vm.id);
+      await updateComputeVmEgressMetadata(vm.id, {
+        ...current?.metadata?.billing?.egress,
+        error: `${err}`.slice(0, 1000),
+      });
       logger.error("failed to meter compute VM public egress", {
         vm_id: vm.id,
         start,
@@ -2194,7 +2194,10 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
         if (Date.now() - lastEgressMeter >= 5 * 60_000) {
           lastEgressMeter = Date.now();
           try {
-            await meterComputeVmPublicEgress();
+            await withSessionAdvisoryLock({
+              lockKey: COMPUTE_EGRESS_METER_LOCK_KEY,
+              fn: meterComputeVmPublicEgress,
+            });
           } catch (err) {
             logger.warn("managed compute egress metering pass failed", { err });
           }

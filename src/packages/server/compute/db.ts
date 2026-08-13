@@ -327,6 +327,27 @@ export async function listComputeVmsForEgressMetering() {
   return rows;
 }
 
+export async function updateComputeVmEgressMetadata(
+  id: string,
+  egress: Record<string, unknown>,
+): Promise<ComputeVmRow | undefined> {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `UPDATE compute_vms
+        SET metadata=jsonb_set(
+              COALESCE(metadata, '{}'::jsonb),
+              '{billing}',
+              COALESCE(metadata->'billing', '{}'::jsonb) ||
+                jsonb_build_object('egress', $2::jsonb),
+              true
+            ),
+            updated_at=NOW()
+      WHERE id=$1
+      RETURNING *`,
+    [id, egress],
+  );
+  return rows[0];
+}
+
 export async function updateComputeVm(
   id: string,
   updates: Partial<ComputeVmRow>,

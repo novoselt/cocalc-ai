@@ -18,6 +18,7 @@ import {
   getComputeVmById,
   listOwnedComputeVms,
   resolveProjectComputeVm,
+  updateComputeVmEgressMetadata,
 } from "./db";
 import type { ComputeVmRow } from "./types";
 import type { ComputeVolumeRow } from "./types";
@@ -401,6 +402,41 @@ describe("compute VM durable state", () => {
       [vm.id],
     );
     expect(work.rows).toEqual([{ action: "delete", state: "queued" }]);
+  });
+
+  it("updates egress without replacing concurrent billing metadata", async () => {
+    const vm = await insertComputeVm(
+      vmInput({
+        metadata: {
+          billing: {
+            funding_mode: "site-funded",
+            pending_funding_mode: "account-prepaid",
+          },
+          runtime: { provider_status: "RUNNING" },
+        },
+      }),
+    );
+
+    const updated = await updateComputeVmEgressMetadata(vm.id, {
+      metered_through_at: "2026-08-13T02:30:00.000Z",
+      total_bytes: 1234,
+      total_cost_usd: "0.000000123",
+      error: null,
+    });
+
+    expect(updated?.metadata).toEqual({
+      billing: {
+        funding_mode: "site-funded",
+        pending_funding_mode: "account-prepaid",
+        egress: {
+          metered_through_at: "2026-08-13T02:30:00.000Z",
+          total_bytes: 1234,
+          total_cost_usd: "0.000000123",
+          error: null,
+        },
+      },
+      runtime: { provider_status: "RUNNING" },
+    });
   });
 
   it("keeps budget-only VMs out of expiry while reconciling them", async () => {
