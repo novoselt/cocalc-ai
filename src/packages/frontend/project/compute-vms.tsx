@@ -7,6 +7,7 @@ import {
   Alert,
   Button,
   Checkbox,
+  Collapse,
   Divider,
   Dropdown,
   Flex,
@@ -56,6 +57,7 @@ import {
   HostOptionsSelect,
   sortMachineTypeOptions,
 } from "../hosts/components/host-options-select";
+import { HostPriceBreakdown } from "../hosts/components/host-price-breakdown";
 import { useHostPricingSettings } from "../hosts/hooks/use-host-pricing-settings";
 import {
   getGcpMachineTypeOptions,
@@ -67,6 +69,7 @@ import {
   getProviderPriceEstimate,
   getNebiusPersistentDiskPriceEstimate,
   type HostFieldOption,
+  type ProviderPriceEstimate,
   type ProviderSelection,
 } from "../hosts/providers/registry";
 import {
@@ -171,6 +174,77 @@ function hourlyPrice(vm: ComputeVm): string {
 
 function pricingLabel(value: string): string {
   return value === "spot" ? "Spot" : "Standard";
+}
+
+const VM_MONTHLY_HOURS = 730;
+
+function formatVmPrice(value: number, suffix: "hr" | "mo"): string {
+  return `$${value.toFixed(2)}/${suffix}`;
+}
+
+function storedPriceEstimate(
+  rate: any,
+  notes: string[],
+): ProviderPriceEstimate | undefined {
+  const snapshot = rate?.pricing_snapshot;
+  if (!Array.isArray(snapshot?.components)) return undefined;
+  const line_items = snapshot.components
+    .map((component: any) => {
+      const usdPerHour = Number(component.hourly_cost_usd);
+      if (!Number.isFinite(usdPerHour)) return undefined;
+      return {
+        key: component.key,
+        label: component.label,
+        billing_states: component.billing_states ?? ["running"],
+        usd_per_hour: usdPerHour,
+        usd_per_month: usdPerHour * VM_MONTHLY_HOURS,
+        hourly_label: formatVmPrice(usdPerHour, "hr"),
+        monthly_label: formatVmPrice(usdPerHour * VM_MONTHLY_HOURS, "mo"),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null);
+  const usd_per_hour = Number(snapshot.hourly_cost_usd ?? rate.hourly_cost_usd);
+  if (!Number.isFinite(usd_per_hour)) return undefined;
+  return {
+    usd_per_hour,
+    usd_per_month: usd_per_hour * VM_MONTHLY_HOURS,
+    hourly_label: formatVmPrice(usd_per_hour, "hr"),
+    monthly_label: formatVmPrice(usd_per_hour * VM_MONTHLY_HOURS, "mo"),
+    line_items,
+    notes,
+  };
+}
+
+function vmStoredPriceEstimate(
+  vm: ComputeVm,
+): ProviderPriceEstimate | undefined {
+  return storedPriceEstimate(
+    vm.metadata?.billing?.running_rates?.[vm.effective_pricing_model],
+    [
+      ...(vm.operating_system === "windows"
+        ? [
+            "The Windows Server license is charged only while this VM is running. It does not accrue while the VM is stopped.",
+          ]
+        : []),
+      "The persistent boot disk continues to cost money while the VM is stopped.",
+    ],
+  );
+}
+
+function vmStoredStoppedPriceEstimate(
+  vm: ComputeVm,
+): ProviderPriceEstimate | undefined {
+  return storedPriceEstimate(vm.metadata?.billing?.stopped_rate, [
+    "Stopped VMs retain their persistent boot disk. Compute and Windows Server licensing do not accrue while stopped.",
+  ]);
+}
+
+function providerErrorSummary(error: string): string {
+  if (/ZONE_RESOURCE_POOL_EXHAUSTED|not enough resources/i.test(error)) {
+    return "Capacity unavailable in this zone";
+  }
+  if (/QUOTA/i.test(error)) return "Provider quota exhausted";
+  return "Provider operation failed";
 }
 
 function regionFromZone(zone?: string): string {
@@ -325,6 +399,7 @@ function VmCreateModal({
     storage_mode: "persistent",
     disk_type: provider === "nebius" ? "ssd" : "balanced",
     disk_gb: draft.boot_disk_gb,
+    funding_mode: draft.funding_mode,
     price_display: "hourly",
     pricing_settings: pricingSettings,
   };
@@ -497,7 +572,7 @@ function VmCreateModal({
         </Flex>
       }
       styles={{ body: { maxHeight: "calc(100vh - 260px)", overflowY: "auto" } }}
-      width={720}
+      width={920}
     >
       <Form<VmDraft>
         form={form}
@@ -878,6 +953,7 @@ function VmCreateModal({
             name="boot_disk_gb"
             label="Boot disk (GB)"
             rules={[{ required: true }]}
+            extra="Choose carefully: boot disks cannot currently be enlarged after VM creation. Persistent home volumes can be enlarged separately."
             style={{ flex: "1 1 160px" }}
           >
             <InputNumber
@@ -891,50 +967,7 @@ function VmCreateModal({
               max={catalog.limits.max_boot_disk_gb}
             />
           </Form.Item>
-          <Form.Item
-            name="ttl_minutes"
-            label="Optional deletion deadline"
-            extra="Leave blank to run until you stop it or membership funding is unavailable."
-            style={{ flex: "1 1 160px" }}
-          >
-            <Select
-              allowClear
-              placeholder="No deadline"
-              options={[
-                { value: 30, label: "30 minutes" },
-                { value: 60, label: "1 hour" },
-                { value: 240, label: "4 hours" },
-                { value: 480, label: "8 hours" },
-                { value: 1440, label: "1 day" },
-              ].filter(({ value }) => value <= catalog.limits.max_ttl_minutes)}
-            />
-          </Form.Item>
         </Flex>
-        <Form.Item name="pricing_model" label="Capacity">
-          <Radio.Group
-            optionType="button"
-            buttonStyle="solid"
-            onChange={(event) => {
-              const pricing_model = event.target.value;
-              patchDraft({
-                pricing_model,
-                allow_on_demand_fallback: pricing_model === "spot",
-              });
-            }}
-          >
-            <Radio.Button value="spot">Spot · lower cost</Radio.Button>
-            <Radio.Button value="on_demand">Standard</Radio.Button>
-          </Radio.Group>
-        </Form.Item>
-        {draft.pricing_model === "spot" && (
-          <Form.Item name="allow_on_demand_fallback" valuePropName="checked">
-            <Checkbox>
-              Automatically restart interrupted Spot VMs. If Spot remains
-              unavailable, use Standard capacity for up to 24 hours and keep
-              retrying Spot.
-            </Checkbox>
-          </Form.Item>
-        )}
         {operatingSystem === "linux" && (
           <>
             <Form.Item name="create_home_volume" valuePropName="checked">
@@ -1047,128 +1080,228 @@ function VmCreateModal({
             )}
           </>
         )}
-        <Form.Item name="configure_project_ssh" valuePropName="checked">
-          <Checkbox disabled={!draft.use_project_ssh_key}>
-            Add a managed SSH alias to this project&apos;s{" "}
-            <Text code>~/.ssh/config</Text> when the VM is ready
-          </Checkbox>
-        </Form.Item>
-        {projectSshPublicKey ? (
-          <Form.Item name="use_project_ssh_key" valuePropName="checked">
-            <Checkbox>
-              Add this project&apos;s SSH key from{" "}
-              <Text code>.ssh/id_ed25519.pub</Text>
-            </Checkbox>
-          </Form.Item>
-        ) : (
-          <Alert
-            showIcon
-            type="info"
-            title="This project does not have an SSH keypair yet."
-            description="Create an encrypted project SSH keypair, then use its public key for this VM. The project does not need to restart."
-            action={
-              <Button
-                size="small"
-                loading={saving}
-                onClick={() => {
-                  setSshKeyError(undefined);
-                  void onGenerateProjectSshKey()
-                    .then((publicKey) => {
-                      if (publicKey) {
-                        patchDraft({ use_project_ssh_key: true });
-                      }
-                    })
-                    .catch((err) => setSshKeyError(String(err)));
-                }}
-              >
-                Create project SSH keypair
-              </Button>
-            }
-            style={{ marginBottom: 16 }}
-          />
-        )}
-        {sshKeyError && (
-          <Alert
-            showIcon
-            type="warning"
-            title="Unable to create project SSH keypair"
-            description={sshKeyError}
-            style={{ marginBottom: 16 }}
-          />
-        )}
-        <Form.Item
-          name="ssh_public_key"
-          label={
-            projectSshPublicKey
-              ? "Other SSH public key (optional)"
-              : "SSH public key (optional)"
+        <Alert
+          showIcon
+          type="info"
+          title={
+            price
+              ? `Estimated price: ${price.hourly_label} (${price.monthly_label})`
+              : "Price estimate unavailable for this selection"
           }
-          extra={
-            draft.use_project_ssh_key
-              ? "Uncheck the project key above to select a different initial key."
-              : sshKeys.length
-                ? "Select an account key, or leave blank. The CoCalc CLI can authorize your local key later when you run cocalc vm ssh."
-                : "Leave blank to authorize your local key later with cocalc vm ssh, or paste a public key now."
-          }
-        >
-          {sshKeys.length ? (
-            <Select
-              allowClear
-              disabled={draft.use_project_ssh_key}
-              options={sshKeys}
-              placeholder="No initial key"
-            />
-          ) : (
-            <Input.TextArea
-              autoSize={{ minRows: 2, maxRows: 4 }}
-              disabled={draft.use_project_ssh_key}
-            />
-          )}
-        </Form.Item>
-      </Form>
-      <Alert
-        showIcon
-        type="info"
-        title={
-          price
-            ? `Estimated price: ${price.hourly_label} (${price.monthly_label})`
-            : "Price estimate unavailable for this selection"
-        }
-        description={
-          <Space direction="vertical" size={2}>
-            <span>
-              {standardFallbackPrice
-                ? `Standard fallback: ${standardFallbackPrice.hourly_label} (${standardFallbackPrice.monthly_label}). `
-                : ""}
-              Includes the VM, balanced persistent boot disk, public IPv4
-              address,{" "}
-              {operatingSystem === "windows" ? "Windows Server license, " : ""}
-              and the site surcharge. Public Internet egress is billed
-              separately at $0.10/GB.
-            </span>
-            {maximumSpend != null && (
-              <Text strong>
-                Maximum spend through the deletion deadline:{" "}
-                {formatMaximumSpend(maximumSpend)} + $0.10/GB public egress.
+          description={
+            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              {price && (
+                <HostPriceBreakdown
+                  estimate={price}
+                  title="Itemized running cost"
+                  compact
+                />
+              )}
+              {operatingSystem === "windows" && (
+                <Text strong>
+                  The Windows Server license is charged only while this VM is
+                  running. It does not accrue while the VM is stopped.
+                </Text>
+              )}
+              {standardFallbackPrice && (
+                <Text>
+                  Standard fallback: {standardFallbackPrice.hourly_label} (
+                  {standardFallbackPrice.monthly_label}).
+                </Text>
+              )}
+              <Text type="secondary">
+                The persistent boot disk continues to cost money while the VM is
+                stopped. Public Internet egress is{" "}
+                {provider === "nebius" || draft.funding_mode === "site-funded"
+                  ? "included for this provider and funding lane."
+                  : "billed separately at $0.10/GB."}
               </Text>
-            )}
-          </Space>
-        }
-      />
-      <Divider />
-      <Text strong>Equivalent CLI command</Text>
-      <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-        The command reproduces the form exactly, including an initial SSH key or
-        an explicitly keyless VM.
-      </Paragraph>
-      <CopyToClipBoard
-        value={vmCreateCli({
-          api,
-          project_id,
-          values: withResolvedSshKey(draft as VmDraft),
-        })}
-        {...COPYABLE_PROPS}
-      />
+              {maximumSpend != null && (
+                <Text strong>
+                  Maximum compute and storage spend through the deletion
+                  deadline: {formatMaximumSpend(maximumSpend)}
+                  {provider === "nebius" || draft.funding_mode === "site-funded"
+                    ? "."
+                    : " + $0.10/GB public egress."}
+                </Text>
+              )}
+            </Space>
+          }
+          style={{ marginBottom: 12 }}
+        />
+        <Collapse
+          ghost
+          items={[
+            {
+              key: "advanced",
+              label: "Advanced options",
+              forceRender: true,
+              children: (
+                <>
+                  <Title level={5}>Capacity and lifetime</Title>
+                  <Flex gap={12} wrap>
+                    <Form.Item
+                      name="pricing_model"
+                      label="Capacity"
+                      style={{ flex: "1 1 320px" }}
+                    >
+                      <Radio.Group
+                        optionType="button"
+                        buttonStyle="solid"
+                        onChange={(event) => {
+                          const pricing_model = event.target.value;
+                          patchDraft({
+                            pricing_model,
+                            allow_on_demand_fallback: pricing_model === "spot",
+                          });
+                        }}
+                      >
+                        <Radio.Button value="spot">
+                          Spot · lower cost
+                        </Radio.Button>
+                        <Radio.Button value="on_demand">Standard</Radio.Button>
+                      </Radio.Group>
+                    </Form.Item>
+                    <Form.Item
+                      name="ttl_minutes"
+                      label="Optional deletion deadline"
+                      extra="Leave blank to run until you stop it or membership funding is unavailable."
+                      style={{ flex: "1 1 260px" }}
+                    >
+                      <Select
+                        allowClear
+                        placeholder="No deadline"
+                        options={[
+                          { value: 30, label: "30 minutes" },
+                          { value: 60, label: "1 hour" },
+                          { value: 240, label: "4 hours" },
+                          { value: 480, label: "8 hours" },
+                          { value: 1440, label: "1 day" },
+                        ].filter(
+                          ({ value }) =>
+                            value <= catalog.limits.max_ttl_minutes,
+                        )}
+                      />
+                    </Form.Item>
+                  </Flex>
+                  {draft.pricing_model === "spot" && (
+                    <Form.Item
+                      name="allow_on_demand_fallback"
+                      valuePropName="checked"
+                    >
+                      <Checkbox>
+                        Automatically restart interrupted Spot VMs. If Spot
+                        remains unavailable, use Standard capacity for up to 24
+                        hours and keep retrying Spot.
+                      </Checkbox>
+                    </Form.Item>
+                  )}
+                  <Divider />
+                  <Title level={5}>SSH access</Title>
+                  <Form.Item
+                    name="configure_project_ssh"
+                    valuePropName="checked"
+                  >
+                    <Checkbox disabled={!draft.use_project_ssh_key}>
+                      Add a managed SSH alias to this project&apos;s{" "}
+                      <Text code>~/.ssh/config</Text> when the VM is ready
+                    </Checkbox>
+                  </Form.Item>
+                  {projectSshPublicKey ? (
+                    <Form.Item
+                      name="use_project_ssh_key"
+                      valuePropName="checked"
+                    >
+                      <Checkbox>
+                        Add this project&apos;s SSH key from{" "}
+                        <Text code>.ssh/id_ed25519.pub</Text>
+                      </Checkbox>
+                    </Form.Item>
+                  ) : (
+                    <Alert
+                      showIcon
+                      type="info"
+                      title="This project does not have an SSH keypair yet."
+                      description="Create an encrypted project SSH keypair, then use its public key for this VM. The project does not need to restart."
+                      action={
+                        <Button
+                          size="small"
+                          loading={saving}
+                          onClick={() => {
+                            setSshKeyError(undefined);
+                            void onGenerateProjectSshKey()
+                              .then((publicKey) => {
+                                if (publicKey) {
+                                  patchDraft({ use_project_ssh_key: true });
+                                }
+                              })
+                              .catch((err) => setSshKeyError(String(err)));
+                          }}
+                        >
+                          Create project SSH keypair
+                        </Button>
+                      }
+                      style={{ marginBottom: 16 }}
+                    />
+                  )}
+                  {sshKeyError && (
+                    <Alert
+                      showIcon
+                      type="warning"
+                      title="Unable to create project SSH keypair"
+                      description={sshKeyError}
+                      style={{ marginBottom: 16 }}
+                    />
+                  )}
+                  <Form.Item
+                    name="ssh_public_key"
+                    label={
+                      projectSshPublicKey
+                        ? "Other SSH public key (optional)"
+                        : "SSH public key (optional)"
+                    }
+                    extra={
+                      draft.use_project_ssh_key
+                        ? "Uncheck the project key above to select a different initial key."
+                        : sshKeys.length
+                          ? "Select an account key, or leave blank. The CoCalc CLI can authorize your local key later when you run cocalc vm ssh."
+                          : "Leave blank to authorize your local key later with cocalc vm ssh, or paste a public key now."
+                    }
+                  >
+                    {sshKeys.length ? (
+                      <Select
+                        allowClear
+                        disabled={draft.use_project_ssh_key}
+                        options={sshKeys}
+                        placeholder="No initial key"
+                      />
+                    ) : (
+                      <Input.TextArea
+                        autoSize={{ minRows: 2, maxRows: 4 }}
+                        disabled={draft.use_project_ssh_key}
+                      />
+                    )}
+                  </Form.Item>
+                  <Divider />
+                  <Text strong>Equivalent CLI command</Text>
+                  <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
+                    The command reproduces the form exactly, including an
+                    initial SSH key or an explicitly keyless VM.
+                  </Paragraph>
+                  <CopyToClipBoard
+                    value={vmCreateCli({
+                      api,
+                      project_id,
+                      values: withResolvedSshKey(draft as VmDraft),
+                    })}
+                    {...COPYABLE_PROPS}
+                  />
+                </>
+              ),
+            },
+          ]}
+        />
+      </Form>
     </Modal>
   );
 }
@@ -1632,6 +1765,143 @@ function VmTtlModal({
   );
 }
 
+function VmMachineTypeModal({
+  vm,
+  catalog,
+  saving,
+  error,
+  onCancel,
+  onSave,
+}: {
+  vm?: ComputeVm;
+  catalog: ComputeCatalog;
+  saving: boolean;
+  error?: string;
+  onCancel: () => void;
+  onSave: (machineType: string) => Promise<void>;
+}) {
+  const [machineType, setMachineType] = useState<string>();
+  const [sortByPrice, setSortByPrice] = useState(false);
+  const pricingSettings = useHostPricingSettings();
+
+  useEffect(() => {
+    setMachineType(vm?.machine_type);
+    setSortByPrice(false);
+  }, [vm]);
+
+  if (!vm) return null;
+  const hostCatalog = providerCatalog(catalog, vm.provider);
+  const selection: ProviderSelection = {
+    operating_system: vm.operating_system,
+    architecture: vm.architecture,
+    region: vm.region,
+    zone: vm.zone ?? undefined,
+    machine_type: machineType,
+    gpu_type: vm.gpu_type ?? undefined,
+    pricing_model: vm.desired_pricing_model,
+    storage_mode: "persistent",
+    disk_type: vm.provider === "nebius" ? "ssd" : "balanced",
+    disk_gb: vm.boot_disk_gb,
+    funding_mode: vm.funding_mode,
+    price_display: "hourly",
+    pricing_settings: pricingSettings,
+  };
+  const rawOptions =
+    vm.provider === "gcp"
+      ? getGcpMachineTypeOptions(hostCatalog, selection)
+      : (getProviderOptions(vm.provider, hostCatalog, selection).machine_type ??
+        []);
+  const machineOptions = sortMachineTypeOptions(
+    compatibleOptions(rawOptions).filter(({ value }) => {
+      if (
+        vm.provider === "gcp" &&
+        gcpMachineArchitecture(value) !== vm.architecture
+      ) {
+        return false;
+      }
+      const gpu = vm.provider === "gcp" ? gcpMachineGpu(value) : undefined;
+      return vm.provider !== "gcp"
+        ? true
+        : (gpu?.type ?? null) === (vm.gpu_type ?? null) &&
+            Number(gpu?.count ?? 0) === Number(vm.gpu_count);
+    }),
+    sortByPrice ? "price" : "type",
+  );
+  const estimate = machineType
+    ? getProviderPriceEstimate(
+        vm.provider,
+        hostCatalog,
+        selection,
+        pricingSettings,
+      )
+    : undefined;
+
+  return (
+    <Modal
+      open
+      width={720}
+      title={`Change machine type for ${vm.name}`}
+      okText="Change machine type"
+      confirmLoading={saving}
+      okButtonProps={{
+        disabled: !machineType || machineType === vm.machine_type || !estimate,
+      }}
+      onCancel={onCancel}
+      onOk={() => machineType && void onSave(machineType)}
+    >
+      <Alert
+        showIcon
+        type="info"
+        title={`This VM remains in ${vm.zone ?? vm.region}`}
+        description="The persistent boot disk contains the VM's data and is tied to this location. Changing location requires a separate disk-migration workflow."
+        style={{ marginBottom: 16 }}
+      />
+      <Flex align="center" justify="space-between" gap={12}>
+        <Text strong>Machine</Text>
+        <Space size={6}>
+          <Text type="secondary">Sort by price</Text>
+          <Switch
+            size="small"
+            checked={sortByPrice}
+            onChange={setSortByPrice}
+          />
+        </Space>
+      </Flex>
+      <div style={{ marginBottom: 16, marginTop: 6 }}>
+        <HostOptionsSelect
+          options={machineOptions}
+          value={machineType}
+          onChange={setMachineType}
+          style={{ width: "100%" }}
+        />
+      </div>
+      {estimate && (
+        <HostPriceBreakdown
+          estimate={estimate}
+          title={`${pricingLabel(vm.desired_pricing_model)} running cost after change`}
+        />
+      )}
+      {vm.operating_system === "windows" && (
+        <Alert
+          showIcon
+          type="info"
+          title="The Windows Server license is charged only while this VM is running."
+          style={{ marginTop: 12 }}
+        />
+      )}
+      {error && (
+        <Alert
+          showIcon
+          type="error"
+          title="Unable to change machine type"
+          description={error}
+          style={{ marginTop: 12 }}
+        />
+      )}
+    </Modal>
+  );
+}
+
 export function ProjectComputeVms({
   project_id,
   compact = false,
@@ -1666,6 +1936,8 @@ export function ProjectComputeVms({
   const [volumeModalOpen, setVolumeModalOpen] = useState(false);
   const [resizeVolumeTarget, setResizeVolumeTarget] = useState<ComputeVolume>();
   const [ttlVm, setTtlVm] = useState<ComputeVm>();
+  const [machineTypeVm, setMachineTypeVm] = useState<ComputeVm>();
+  const [machineTypeError, setMachineTypeError] = useState<string>();
   const [vmInitial, setVmInitial] = useState<VmDraft>();
   const [projectSshPublicKey, setProjectSshPublicKey] = useState<string | null>(
     null,
@@ -1731,10 +2003,6 @@ export function ProjectComputeVms({
   }, [isVisible, project_id]);
 
   const defaultVm = (): VmDraft => {
-    const recent = [...rows].sort(
-      (a, b) =>
-        new Date(b.created_at).valueOf() - new Date(a.created_at).valueOf(),
-    )[0];
     const catalogDefaultZone = catalog?.defaults.zone ?? "us-central1-a";
     const defaultProvider = catalog?.defaults.provider ?? "gcp";
     const defaultCatalog = catalog
@@ -1773,39 +2041,24 @@ export function ProjectComputeVms({
             }),
           )[0]?.value
         : undefined;
-    const zone = recent?.zone ?? nearestZone ?? catalogDefaultZone;
+    const zone = nearestZone ?? catalogDefaultZone;
     const name = availableName(
-      recent?.name ?? "compute-vm",
+      "compute-vm",
       allRows.map((vm) => vm.name),
     );
-    const ttlMinutes = recent ? originalTtlMinutes(recent) : null;
     return {
       name,
       provider: defaultProvider,
-      operating_system:
-        recent?.operating_system ??
-        catalog?.defaults.operating_system ??
-        "linux",
-      funding_mode:
-        recent?.funding_mode ??
-        catalog?.default_funding_mode ??
-        "account-prepaid",
-      architecture:
-        recent?.architecture ?? catalog?.defaults.architecture ?? "x86_64",
+      operating_system: catalog?.defaults.operating_system ?? "linux",
+      funding_mode: catalog?.default_funding_mode ?? "account-prepaid",
+      architecture: catalog?.defaults.architecture ?? "x86_64",
       region: regionFromZone(zone),
       zone,
-      machine_type:
-        recent?.machine_type ??
-        catalog?.defaults.machine_type ??
-        "e2-standard-2",
-      pricing_model: recent?.desired_pricing_model ?? "on_demand",
-      allow_on_demand_fallback: recent?.allow_on_demand_fallback ?? false,
-      ttl_minutes:
-        ttlMinutes == null
-          ? (catalog?.defaults.ttl_minutes ?? null)
-          : Math.min(ttlMinutes, catalog?.limits.max_ttl_minutes ?? ttlMinutes),
-      boot_disk_gb:
-        recent?.boot_disk_gb ?? catalog?.defaults.boot_disk_gb ?? 20,
+      machine_type: catalog?.defaults.machine_type ?? "e2-standard-2",
+      pricing_model: "on_demand",
+      allow_on_demand_fallback: false,
+      ttl_minutes: catalog?.defaults.ttl_minutes ?? null,
+      boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
       create_home_volume: false,
       new_home_volume_name: availableName(
         name + "-home",
@@ -2043,6 +2296,32 @@ export function ProjectComputeVms({
     }
   };
 
+  const saveVmMachineType = async (machineType: string) => {
+    if (!machineTypeVm) return;
+    setSaving(true);
+    setMachineTypeError(undefined);
+    try {
+      const completed = await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.compute.setVmMachineType({
+          id_or_name: machineTypeVm.id,
+          machine_type: machineType,
+          idempotency_key: uuid(),
+          browser_id: webapp_client.browser_id,
+        });
+      });
+      if (!completed) return;
+      setNotice(
+        `Machine type for '${machineTypeVm.name}' changed to ${machineType}.`,
+      );
+      setMachineTypeVm(undefined);
+      await load();
+    } catch (err) {
+      setMachineTypeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const changeVmFunding = (vm: ComputeVm) => {
     let fundingMode = vm.funding_mode;
     Modal.confirm({
@@ -2256,9 +2535,30 @@ export function ProjectComputeVms({
             <Text type="secondary">Spot unavailable; retrying</Text>
           )}
           {state === "failed" && vm.error && (
-            <Text type="danger" title={vm.error}>
-              Provider error
-            </Text>
+            <Popover
+              trigger="click"
+              title={providerErrorSummary(vm.error)}
+              content={
+                <Space direction="vertical" size={8} style={{ maxWidth: 430 }}>
+                  {/ZONE_RESOURCE_POOL_EXHAUSTED|not enough resources/i.test(
+                    vm.error,
+                  ) && (
+                    <Text>
+                      Stop this VM, choose another machine type, then start it
+                      again. If the zone remains out of capacity, create a VM in
+                      another zone.
+                    </Text>
+                  )}
+                  <Text type="secondary" copyable={{ text: vm.error }}>
+                    {vm.error}
+                  </Text>
+                </Space>
+              }
+            >
+              <Button danger size="small" type="link" style={{ padding: 0 }}>
+                {providerErrorSummary(vm.error)}
+              </Button>
+            </Popover>
           )}
           {!vm.expires_at && <Text type="secondary">No deletion deadline</Text>}
         </Space>
@@ -2290,25 +2590,71 @@ export function ProjectComputeVms({
         const egress = vm.egress_summary;
         const gb = Number(egress.current_month_bytes ?? 0) / 1_000_000_000;
         const cost = Number(egress.current_month_cost_usd ?? 0);
+        const estimate = vmStoredPriceEstimate(vm);
+        const stoppedEstimate = vmStoredStoppedPriceEstimate(vm);
+        const egressLabel = egress.free
+          ? "Egress included"
+          : `Egress $${cost.toFixed(2)}`;
         return (
-          <Space direction="vertical" size={0}>
-            <Text>
-              {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
-            </Text>
-            <Text type="secondary">{vm.funding_mode}</Text>
-            <Text
-              type="secondary"
-              title={`Current calendar month; lifetime ${(
-                Number(egress.lifetime_bytes) / 1_000_000_000
-              ).toFixed(3)} GB / $${Number(egress.lifetime_cost_usd).toFixed(
-                2,
-              )}`}
+          <Popover
+            trigger="click"
+            title={`Cost and usage for ${vm.name}`}
+            content={
+              <Space
+                direction="vertical"
+                size={10}
+                style={{ width: 430, maxWidth: "80vw" }}
+              >
+                {estimate ? (
+                  <HostPriceBreakdown
+                    estimate={estimate}
+                    title={`${pricingLabel(vm.effective_pricing_model)} running cost`}
+                  />
+                ) : (
+                  <Text>Running cost: {hourlyPrice(vm)}</Text>
+                )}
+                {stoppedEstimate && (
+                  <HostPriceBreakdown
+                    compact
+                    estimate={stoppedEstimate}
+                    title="Stopped cost"
+                  />
+                )}
+                <Text>
+                  Current-month egress: {gb.toFixed(gb >= 10 ? 1 : 3)} GB ·{" "}
+                  {egress.free ? "included" : `$${cost.toFixed(2)}`}
+                </Text>
+                <Text type="secondary">
+                  Lifetime egress:{" "}
+                  {(Number(egress.lifetime_bytes) / 1_000_000_000).toFixed(3)}{" "}
+                  GB · ${Number(egress.lifetime_cost_usd).toFixed(2)}.
+                  {egress.stale
+                    ? " Usage reporting is delayed; these totals may lag."
+                    : ""}
+                </Text>
+                <Text type="secondary">
+                  The boot disk remains billable while stopped and cannot
+                  currently be enlarged after creation.
+                </Text>
+              </Space>
+            }
+          >
+            <Button
+              type="link"
+              style={{ height: "auto", padding: 0, textAlign: "left" }}
             >
-              Egress {gb.toFixed(gb >= 10 ? 1 : 3)} GB ·{" "}
-              {egress.free ? "free" : `$${cost.toFixed(2)}`}
-              {egress.stale ? " · delayed" : ""}
-            </Text>
-          </Space>
+              <Space direction="vertical" size={0} align="start">
+                <Text>
+                  {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
+                </Text>
+                <Text type="secondary">{vm.funding_mode}</Text>
+                <Text type="secondary">
+                  {egressLabel} · {gb.toFixed(gb >= 10 ? 1 : 3)} GB
+                  {egress.stale ? " · usage reporting delayed" : ""}
+                </Text>
+              </Space>
+            </Button>
+          </Popover>
         );
       },
     },
@@ -2423,6 +2769,14 @@ export function ProjectComputeVms({
               menu={{
                 items: [
                   {
+                    key: "machine-type",
+                    disabled: vm.state !== "stopped",
+                    label:
+                      vm.state === "stopped"
+                        ? "Change machine type"
+                        : "Change machine type (stop first)",
+                  },
+                  {
                     key: "deadline",
                     label: vm.expires_at
                       ? "Change deletion deadline"
@@ -2439,7 +2793,10 @@ export function ProjectComputeVms({
                   },
                 ],
                 onClick: ({ key }) => {
-                  if (key === "deadline") {
+                  if (key === "machine-type") {
+                    setMachineTypeError(undefined);
+                    setMachineTypeVm(vm);
+                  } else if (key === "deadline") {
                     setTtlVm(vm);
                   } else if (key === "similar") {
                     openSimilar(vm);
@@ -2568,17 +2925,16 @@ export function ProjectComputeVms({
               content={
                 <Space direction="vertical" size={10} style={{ maxWidth: 430 }}>
                   <Paragraph style={{ marginBottom: 0 }}>
-                    VMs run a minimal Ubuntu 24.04 LTS image; CoCalc and other
-                    special software are not installed. Compute, boot disks, and
-                    retained home volumes appear in Purchases. The login is{" "}
-                    <Text code>user</Text>, whose home is{" "}
-                    <Text code>/home/user</Text>.
+                    VMs run either minimal Ubuntu 24.04 LTS or Windows Server
+                    2022; CoCalc and other special software are not installed.
+                    Compute, boot disks, and retained home volumes appear in
+                    Purchases. The login is <Text code>user</Text>.
                   </Paragraph>
                   <Paragraph style={{ marginBottom: 0 }}>
-                    Public Internet egress costs $0.10/GB and appears as one
-                    accumulating purchase per VM per calendar month, not a new
-                    line item for every meter sample. Usage can take about five
-                    minutes to appear.
+                    Billable GCP public Internet egress costs $0.10/GB and
+                    appears as one accumulating purchase per VM per calendar
+                    month. Nebius egress and site-funded egress are included.
+                    Usage can take about five minutes to appear.
                   </Paragraph>
                   <Paragraph style={{ marginBottom: 0 }}>
                     Running VMs stop when funding is unavailable. After
@@ -2869,6 +3225,19 @@ export function ProjectComputeVms({
         onCancel={() => setTtlVm(undefined)}
         onSave={saveVmTtl}
       />
+      {catalog && (
+        <VmMachineTypeModal
+          vm={machineTypeVm}
+          catalog={catalog}
+          saving={saving}
+          error={machineTypeError}
+          onCancel={() => {
+            setMachineTypeVm(undefined);
+            setMachineTypeError(undefined);
+          }}
+          onSave={saveVmMachineType}
+        />
+      )}
       {catalog && (
         <VolumeResizeModal
           volume={resizeVolumeTarget}

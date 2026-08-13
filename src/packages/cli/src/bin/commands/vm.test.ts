@@ -25,6 +25,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
   const callbackResults: unknown[] = [];
   const ttlCalls: any[] = [];
   const createCalls: any[] = [];
+  const machineCalls: any[] = [];
   const progressMessages: string[] = [];
   const sshAuthorizationCalls: any[] = [];
   const projectSshAuthorizationCalls: any[] = [];
@@ -99,6 +100,15 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
               ttlCalls.push(opts);
               return { id: "vm-id", name: "build-vm", ...opts };
             },
+            setVmMachineType: async (opts: any) => {
+              machineCalls.push(opts);
+              return {
+                id: "vm-id",
+                name: "build-vm",
+                state: "stopped",
+                machine_type: opts.machine_type,
+              };
+            },
             prepareWindowsRdp: async (callOpts: any) => {
               rdpCalls.push(callOpts);
               return {
@@ -133,6 +143,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
     callbackResults,
     ttlCalls,
     createCalls,
+    machineCalls,
     progressMessages,
     sshAuthorizationCalls,
     projectSshAuthorizationCalls,
@@ -332,6 +343,23 @@ describe("vm ttl", () => {
       "--clear",
     ]);
     assert.equal(ttlCalls[0]?.ttl_minutes, null);
+  });
+});
+
+describe("vm machine", () => {
+  it("changes the machine type through the account control plane", async () => {
+    const { program, machineCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "machine",
+      "build-vm",
+      "n2d-standard-8",
+    ]);
+    assert.equal(machineCalls[0]?.id_or_name, "build-vm");
+    assert.equal(machineCalls[0]?.machine_type, "n2d-standard-8");
+    assert.equal(typeof machineCalls[0]?.idempotency_key, "string");
   });
 });
 

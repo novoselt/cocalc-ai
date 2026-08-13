@@ -4,6 +4,7 @@
  */
 
 import { Select } from "antd";
+import type { CSSProperties } from "react";
 import { COLORS } from "@cocalc/util/theme";
 import type { HostFieldOption } from "../providers/registry";
 
@@ -14,6 +15,7 @@ type HostOptionsSelectProps = {
   value?: string;
   onChange?: (value: string) => void;
   size?: "small" | "middle" | "large";
+  style?: CSSProperties;
 };
 
 type HostOptionGroup = {
@@ -211,6 +213,7 @@ export function HostOptionsSelect({
   value,
   onChange,
   size,
+  style,
 }: HostOptionsSelectProps) {
   const groupedOptions = groupHostOptions(options);
   const hasDetailLabels = options?.some((option) => !!option.detailLabel);
@@ -223,6 +226,7 @@ export function HostOptionsSelect({
       value={value}
       onChange={onChange}
       size={size}
+      style={style}
       showSearch
       optionFilterProp="label"
       filterOption={(input, option) => {

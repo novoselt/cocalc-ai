@@ -727,6 +727,35 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       },
     );
 
+  vm.command("machine <vm> [machine_type]")
+    .description("show or change the machine type of a stopped VM")
+    .action(
+      async (
+        idOrName: string,
+        machineType: string | undefined,
+        _opts: unknown,
+        command: Command,
+      ) => {
+        await withContext(command, "vm machine", async (ctx) => {
+          const current = await getVmForContext(ctx, idOrName);
+          if (!machineType) {
+            return {
+              id: current.id,
+              name: current.name,
+              state: current.state,
+              machine_type: current.machine_type,
+            };
+          }
+          requireAccountAuth(ctx, "changing a VM machine type");
+          return await ctx.hub.compute.setVmMachineType({
+            id_or_name: idOrName,
+            machine_type: machineType,
+            idempotency_key: randomUUID(),
+          });
+        });
+      },
+    );
+
   for (const action of ["start", "stop"] as const) {
     vm.command(`${action} <vm>`)
       .description(`${action} an owned compute VM inside its existing lease`)

@@ -1397,6 +1397,15 @@ export async function startProviderComputeVm(vm: ComputeVmRow) {
   );
 }
 
+export async function setProviderComputeMachineType(vm: ComputeVmRow) {
+  if (vm.provider !== "gcp") return;
+  const { creds } = await context("gcp", vm.region);
+  if (!gcpProvider.setMachineType) {
+    throw new Error("GCP machine type changes are unavailable");
+  }
+  await gcpProvider.setMachineType(runtimeFor(vm), vm.machine_type, creds);
+}
+
 export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
   const { creds } = await context(vm.provider, vm.region);
   const controller = await getHostOwnerBaySshIdentity();

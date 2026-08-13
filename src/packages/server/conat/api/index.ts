@@ -393,6 +393,7 @@ const AGENT_HUB_API_METHODS = new Set([
   "compute.deleteVm",
   "compute.setVmTtl",
   "compute.setVmFundingMode",
+  "compute.setVmMachineType",
   "compute.createVolume",
   "compute.resizeVolume",
   "compute.setVolumeFundingMode",

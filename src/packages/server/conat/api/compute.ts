@@ -2183,6 +2183,201 @@ export async function setVmFundingMode(opts: {
   return publicVm(next);
 }
 
+export async function setVmMachineType(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  machine_type: string;
+  idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
+}) {
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  if (vm.state !== "stopped" || vm.desired_state !== "stopped") {
+    throw new Error("stop the VM before changing its machine type");
+  }
+  if (vm.machine_type === opts.machine_type) return await publicVm(vm);
+  const machine = await getComputeMachine({
+    account_id: accountId,
+    provider: vm.provider,
+    region: vm.region,
+    zone: vm.zone ?? undefined,
+    machine_type: opts.machine_type,
+  });
+  if (machine.architecture !== vm.architecture) {
+    throw new Error(
+      `machine '${machine.machine_type}' has architecture ${machine.architecture}, not ${vm.architecture}`,
+    );
+  }
+  if (
+    (machine.gpu_type ?? null) !== (vm.gpu_type ?? null) ||
+    Number(machine.gpu_count) !== Number(vm.gpu_count)
+  ) {
+    throw new Error(
+      "changing GPU type or count is not supported; select a machine with the same GPU configuration",
+    );
+  }
+  if (
+    (vm.provider === "gcp" &&
+      !isSupportedCatalogGcpMachineType(machine.machine_type)) ||
+    (machine.ram_gb < 8 && machine.machine_type !== "t2a-standard-1")
+  ) {
+    throw new Error(
+      `machine_type '${machine.machine_type}' is not supported for managed compute VMs`,
+    );
+  }
+  const minimumBootDiskGb =
+    vm.operating_system === "windows"
+      ? 50
+      : vm.provider === "gcp"
+        ? gcpMinimumBootDiskGb(machine.machine_type)
+        : 10;
+  if (vm.boot_disk_gb < minimumBootDiskGb) {
+    throw new Error(
+      `the existing ${vm.boot_disk_gb} GB boot disk is too small for ${machine.machine_type}; ${minimumBootDiskGb} GB is required`,
+    );
+  }
+  const spotSupported = !(
+    vm.provider === "nebius" &&
+    machine.provider_spec.allowed_for_preemptibles === false
+  );
+  if (vm.desired_pricing_model === "spot" && !spotSupported) {
+    throw new Error(
+      `Nebius machine '${machine.machine_type}' does not support Spot capacity`,
+    );
+  }
+  const rateInput = {
+    provider: vm.provider,
+    region: vm.region,
+    zone: vm.zone,
+    machine_type: machine.machine_type,
+    gpu_type: machine.gpu_type ?? undefined,
+    gpu_count: machine.gpu_count,
+    disk_gb: vm.boot_disk_gb,
+    disk_type: defaultComputeVolumeDiskType(vm.provider),
+    operating_system: vm.operating_system,
+  } as const;
+  const [customerSpotRate, customerOnDemandRate, customerStoppedRate] =
+    await Promise.all([
+      estimateDedicatedHostRate({
+        ...rateInput,
+        pricing_model: "spot",
+        billing_state: "running",
+      }),
+      estimateDedicatedHostRate({
+        ...rateInput,
+        pricing_model: "on_demand",
+        billing_state: "running",
+      }),
+      estimateDedicatedHostRate({
+        ...rateInput,
+        pricing_model: vm.desired_pricing_model,
+        billing_state: "stopped",
+      }),
+    ]);
+  if (
+    (spotSupported && !customerSpotRate) ||
+    !customerOnDemandRate ||
+    !customerStoppedRate
+  ) {
+    throw new Error(
+      `pricing is unavailable for ${machine.machine_type} in ${vm.region}`,
+    );
+  }
+  const settings = await getServerSettings();
+  const spotRate = rateWithProviderCost(
+    vm.provider,
+    customerSpotRate ?? customerOnDemandRate,
+    settings,
+  );
+  const onDemandRate = rateWithProviderCost(
+    vm.provider,
+    customerOnDemandRate,
+    settings,
+  );
+  const stoppedRate = rateWithProviderCost(
+    vm.provider,
+    customerStoppedRate,
+    settings,
+  );
+  const selectedRate =
+    vm.desired_pricing_model === "spot" ? spotRate : onDemandRate;
+  const osLicenseHourlyPrice =
+    selectedRate.pricing_snapshot.components.find(
+      ({ key }) => key === "windows_license",
+    )?.hourly_cost_usd ?? "0.000000";
+  const remainingTtlMinutes = vm.expires_at
+    ? Math.max(0, Math.ceil((vm.expires_at.valueOf() - Date.now()) / 60_000))
+    : 0;
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: vm.project_id,
+    vm_id: vm.id,
+    request: {
+      operation: "set-vm-machine-type",
+      operation_id: opts.idempotency_key,
+      vm_id: vm.id,
+      provider: vm.provider,
+      machine_class: machine.machine_type,
+      funding_mode: vm.funding_mode,
+      hourly_usd: Number(selectedRate.hourly_cost_usd),
+      total_authorized_usd:
+        (Number(selectedRate.hourly_cost_usd) * remainingTtlMinutes) / 60,
+      ttl_minutes: remainingTtlMinutes,
+    },
+    require_fresh_auth: true,
+  });
+  const next = (await updateComputeVm(vm.id, {
+    machine_type: machine.machine_type,
+    cpu: machine.cpu,
+    ram_gb: machine.ram_gb,
+    gpu_type: machine.gpu_type,
+    gpu_count: machine.gpu_count,
+    provider_spec: {
+      ...machine.provider_spec,
+      operating_system: vm.operating_system,
+      operating_system_version: vm.operating_system_version,
+    },
+    os_license_hourly_price: `${osLicenseHourlyPrice}`,
+    spot_hourly_price: `${spotRate.hourly_cost_usd}`,
+    on_demand_hourly_price: `${onDemandRate.hourly_cost_usd}`,
+    metadata: {
+      ...vm.metadata,
+      machine: { cpu: machine.cpu, ram_gb: machine.ram_gb },
+      billing: {
+        ...vm.metadata?.billing,
+        spot_supported: spotSupported,
+        running_rates: {
+          spot: spotRate,
+          on_demand: onDemandRate,
+        },
+        stopped_rate: stoppedRate,
+      },
+    },
+  }))!;
+  await appendComputeEvent({
+    vm: next,
+    actor_account_id: accountId,
+    actor_kind: actorKind,
+    action: "machine-type-change",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: vm.state,
+    new_state: next.state,
+    status: "completed",
+    details: {
+      from: vm.machine_type,
+      to: machine.machine_type,
+      hourly_cost_usd: selectedRate.hourly_cost_usd,
+    },
+  });
+  return await publicVm(next);
+}
+
 export async function deleteVm(opts: {
   account_id?: string;
   browser_id?: string;

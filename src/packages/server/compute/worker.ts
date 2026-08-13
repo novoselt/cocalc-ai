@@ -56,6 +56,7 @@ import {
   probeProviderComputeSpot,
   releaseProviderComputePublicAddress,
   resizeProviderComputeVolume,
+  setProviderComputeMachineType,
   setProviderComputePricing,
   startProviderComputeVm,
   stopProviderComputeVm,
@@ -1682,6 +1683,9 @@ async function start(vm: ComputeVmRow) {
   if (vm.desired_state === "stopped") return await reconcile(vm);
   const observed = await inspectProviderComputeVm(vm);
   if (observed.status === "missing") return await provision(vm);
+  await observeVmPhase(vm, "provider_set_machine_type", async () =>
+    setProviderComputeMachineType(vm),
+  );
   vm = await ensureVmPublicAddress(vm);
   await ensureProviderComputePublicAddressAttached(vm);
   vm = (await updateComputeVm(vm.id, {
