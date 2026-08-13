@@ -2,10 +2,59 @@
 
 Date: 2026-08-13
 
-Status: proposed; implementation and deployment are deferred.
+Status: first usable version implemented and deployed to staging only;
+production deployment is deferred.
 
 Related specification:
 [Project Compute VM v2 Specification](./project-compute-vm-v2-spec-2026-08-12.md).
+
+## First Usable Staging Implementation
+
+The first usable GCP Windows Server 2022 implementation was completed on
+2026-08-13 in these commits:
+
+- `5c983bbde0`: operating-system schema/catalog, pricing, GCP provisioning,
+  Windows bootstrap, SSH/RDP CLI and API, and frontend support;
+- `ce0f69cc0a`: fail-closed encoded-PowerShell readiness and resilient CLI
+  wait polling;
+- `02c319a056`: avoid assigning PowerShell's read-only `$HOME` variable during
+  bootstrap; and
+- `822f99dce7`: synchronize post-bootstrap Windows SSH keys through the bay
+  controller with strict `authorized_keys` ACLs.
+
+Staging is running these immutable artifacts:
+
+- static: `20260813T213801Z-5c983bbd-windows-vm-5c983bbde0`;
+- project bundle: `20260813T213840Z-5c983bbd-windows-vm-5c983bbde0`;
+- project tools: `20260813T215509Z-ce0f69cc-windows-vm-readiness-ce0f69cc0a`;
+  and
+- hub: `20260813T221826Z-822f99dc-windows-vm-ssh-822f99dce7`.
+
+Live staging validation covered:
+
+- clean Windows Server 2022 provisioning with fail-closed bootstrap revision
+  observation;
+- the `user` administrator account, `C:\Users\user`, PowerShell, OpenSSH, and
+  Terminal Services;
+- the project-managed `ssh <vm-name>` alias and account `cocalc vm ssh` key
+  authorization;
+- one-time fresh-auth RDP password rotation, a reachable localhost RDP tunnel,
+  and externally blocked TCP 3389;
+- immutable Windows license pricing, including no license component in the
+  stopped price;
+- explicit stop/start with address release, stable DNS identity, regenerated
+  project SSH config, and persistent boot-disk data;
+- a Spot request with Standard fallback: GCP reported no Spot capacity, the
+  bounded fallback activated, and the Windows VM reached readiness; and
+- complete deletion of all smoke VMs, boot disks, addresses, DNS records, and
+  SSH config, with no matching provider orphans.
+
+The static, project bundle, tools, and hub route smoke tests pass on staging;
+the hub route check reports all four workers healthy. The full monorepo
+typecheck passes, and the server compute suite reports 78 passing tests and 2
+intentional skips. A forced provider preemption was not simulated, so actual
+Spot preemption recovery remains a production-readiness validation item rather
+than a completed staging claim.
 
 ## Executive Decision
 
