@@ -21,6 +21,36 @@ type HostOptionGroup = {
   options: HostFieldOption[];
 };
 
+export function hostOptionsRevision(options?: HostFieldOption[]): string {
+  return JSON.stringify(
+    options?.map(
+      ({
+        value,
+        label,
+        selectionLabel,
+        mainLabel,
+        subLabel,
+        detailLabel,
+        priceLabel,
+        hourlyRate,
+        stateLabel,
+        disabled,
+      }) => [
+        value,
+        label,
+        selectionLabel,
+        mainLabel,
+        subLabel,
+        detailLabel,
+        priceLabel,
+        hourlyRate,
+        stateLabel,
+        disabled,
+      ],
+    ) ?? [],
+  );
+}
+
 export type MachineTypeSortMode = "type" | "price" | "cpu" | "value";
 
 export function getMachineTypeSortOptions(
@@ -186,6 +216,7 @@ export function HostOptionsSelect({
   const hasDetailLabels = options?.some((option) => !!option.detailLabel);
   return (
     <Select
+      key={hostOptionsRevision(options)}
       options={groupedOptions as any}
       disabled={disabled}
       placeholder={placeholder}
