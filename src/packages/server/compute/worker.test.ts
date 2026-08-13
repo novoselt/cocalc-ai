@@ -9,6 +9,7 @@ import {
   computePostStopTransition,
   isSpotCapacityError,
   managedVmReadinessCommand,
+  managedVmProjectSshConfigNeedsSync,
   providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
   runtimeIdentityChanged,
@@ -38,6 +39,30 @@ describe("managed VM readiness command", () => {
     expect(command).toContain("readlink -f /dev/disk/by-id/google-home-disk");
     expect(command).toContain("bootstrap-ready");
     expect(command).toMatch(/'$/);
+  });
+});
+
+describe("managed VM project SSH config reconciliation", () => {
+  it("rewrites legacy aliases even when their old state is ready", () => {
+    expect(
+      managedVmProjectSshConfigNeedsSync({
+        name: "arm1",
+        metadata: {
+          project_ssh_config: {
+            state: "ready",
+            alias: "vm-arm1-bab319f4",
+          },
+        },
+      } as any),
+    ).toBe(true);
+    expect(
+      managedVmProjectSshConfigNeedsSync({
+        name: "arm1",
+        metadata: {
+          project_ssh_config: { state: "ready", alias: "arm1" },
+        },
+      } as any),
+    ).toBe(false);
   });
 });
 

@@ -503,7 +503,9 @@ async function resolvedSpecFor(
   const managed = specFor(vm, config, subnetwork, pricingModel, volume);
   if (vm.provider === "gcp") {
     if (!managed.gpu) return managed;
-    const image = await getGcpAcceleratorImage(vm.machine_type);
+    const image = await getGcpAcceleratorImage(vm.machine_type, {
+      ubuntuVersion: 2404,
+    });
     return {
       ...managed,
       metadata: {

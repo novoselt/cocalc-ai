@@ -1467,6 +1467,15 @@ async function syncVmProjectSshConfig(
   }
 }
 
+export function managedVmProjectSshConfigNeedsSync(
+  vm: Pick<ComputeVmRow, "name" | "metadata">,
+): boolean {
+  return (
+    vm.metadata?.project_ssh_config?.state !== "ready" ||
+    vm.metadata?.project_ssh_config?.alias !== vm.name
+  );
+}
+
 async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
   const publicIp = runtime.public_ip;
   if (!publicIp) throw new Error("provider VM has no public IPv4 address");
@@ -2080,7 +2089,7 @@ async function reconcile(vm: ComputeVmRow) {
       await markReady(vm, observed.instance ?? {});
     } else {
       if (vm.dns_state !== "ready") vm = await ensureVmDns(vm);
-      if (vm.metadata?.project_ssh_config?.state !== "ready") {
+      if (managedVmProjectSshConfigNeedsSync(vm)) {
         await syncVmProjectSshConfig(vm, true);
       }
     }
