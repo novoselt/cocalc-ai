@@ -36,10 +36,7 @@ import {
   UpdateDiskRequest,
   UpdateInstanceRequest,
 } from "@nebius/js-sdk/api/nebius/compute/v1/index";
-import {
-  GetByNameRequest,
-  ResourceMetadata,
-} from "@nebius/js-sdk/api/nebius/common/v1/index";
+import { ResourceMetadata } from "@nebius/js-sdk/api/nebius/common/v1/index";
 import {
   AllocationSpec,
   CreateAllocationRequest,
@@ -896,17 +893,22 @@ export class NebiusProvider implements CloudProvider {
     if (!subnetId) {
       throw new Error("nebius subnetId is required");
     }
-    try {
-      const getByName = (client.instances as any).getByName;
-      if (typeof getByName !== "function") {
-        throw Object.assign(new Error("instance name lookup is unavailable"), {
-          code: "UNIMPLEMENTED",
-        });
-      }
-      const existing = await getByName.call(
-        client.instances,
-        GetByNameRequest.create({ parentId, name }),
+    let existing;
+    let pageToken = "";
+    do {
+      const response = await client.instances.list(
+        ListInstancesRequest.create({
+          parentId,
+          pageSize: Long.fromNumber(999),
+          pageToken,
+        }),
       );
+      existing = response.items?.find(
+        (instance) => instance.metadata?.name === name,
+      );
+      pageToken = response.nextPageToken ?? "";
+    } while (!existing && pageToken);
+    if (existing) {
       const instanceId = `${existing.metadata?.id ?? ""}`.trim();
       if (!instanceId) {
         throw new Error(`existing Nebius instance '${name}' has no ID`);
@@ -981,14 +983,6 @@ export class NebiusProvider implements CloudProvider {
           subnetId: nic?.subnetId,
         },
       };
-    } catch (err: any) {
-      if (
-        !isNotFoundError(err) &&
-        err?.code !== "UNIMPLEMENTED" &&
-        !/name lookup is unavailable/i.test(`${err}`)
-      ) {
-        throw err;
-      }
     }
     const serviceAccountId =
       spec.metadata?.disable_service_account === true

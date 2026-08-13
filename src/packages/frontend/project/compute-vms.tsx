@@ -2117,6 +2117,10 @@ export function ProjectComputeVms({
         const directCommand = vm.public_hostname
           ? `ssh user@${vm.public_hostname}`
           : undefined;
+        const projectSshCommand =
+          vm.state === "ready" && vm.metadata?.configure_project_ssh === true
+            ? `ssh ${vm.ssh_alias || vm.name}`
+            : undefined;
         return (
           <Space.Compact>
             <Popover
@@ -2136,6 +2140,15 @@ export function ProjectComputeVms({
                       {cliCommand}
                     </Text>
                   </div>
+                  {vm.public_hostname && (
+                    <div>
+                      <Text type="secondary">DNS hostname</Text>
+                      <br />
+                      <Text copyable={{ text: vm.public_hostname }}>
+                        {vm.public_hostname}
+                      </Text>
+                    </div>
+                  )}
                   {directCommand ? (
                     <div>
                       <Text type="secondary">Direct SSH</Text>
@@ -2148,6 +2161,19 @@ export function ProjectComputeVms({
                     <Text type="secondary">
                       A public address will appear when the VM is ready.
                     </Text>
+                  )}
+                  {projectSshCommand && (
+                    <div>
+                      <Text type="secondary">From this project</Text>
+                      <br />
+                      <Text code copyable={{ text: projectSshCommand }}>
+                        {projectSshCommand}
+                      </Text>
+                      <br />
+                      <Text type="secondary">
+                        This shortcut is managed in .ssh/config.
+                      </Text>
+                    </div>
                   )}
                   <Text type="secondary">
                     Public TCP ports: {vm.public_ports.join(", ")}. HTTPS

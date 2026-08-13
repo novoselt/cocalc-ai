@@ -14,6 +14,7 @@ const disksUpdateMock = jest.fn();
 const instancesCreateMock = jest.fn();
 const instancesDeleteMock = jest.fn();
 const instancesGetMock = jest.fn();
+const instancesListMock = jest.fn();
 const instancesUpdateMock = jest.fn();
 const allocationsCreateMock = jest.fn();
 const allocationsGetMock = jest.fn();
@@ -33,6 +34,7 @@ jest.mock("../nebius/client", () => {
       create: instancesCreateMock,
       delete: instancesDeleteMock,
       get: instancesGetMock,
+      list: instancesListMock,
       update: instancesUpdateMock,
     };
     readonly allocations = {
@@ -95,6 +97,7 @@ describe("NebiusProvider", () => {
     instancesCreateMock.mockReset();
     instancesDeleteMock.mockReset();
     instancesGetMock.mockReset();
+    instancesListMock.mockReset();
     instancesUpdateMock.mockReset();
     allocationsCreateMock.mockReset();
     allocationsGetMock.mockReset();
@@ -119,6 +122,7 @@ describe("NebiusProvider", () => {
       .mockResolvedValueOnce(diskOp("boot-disk"))
       .mockResolvedValueOnce(diskOp("data-disk"));
     instancesCreateMock.mockResolvedValue(instanceOp("instance-1"));
+    instancesListMock.mockResolvedValue({ items: [], nextPageToken: "" });
     instancesDeleteMock.mockResolvedValue(instanceOp("instance-1"));
     instancesUpdateMock.mockResolvedValue(instanceOp("instance-1"));
     disksDeleteMock.mockResolvedValue(diskOp("deleted-disk"));
@@ -215,6 +219,85 @@ describe("NebiusProvider", () => {
     );
     expect(createArgs.spec.preemptible.priority).toBe(3);
     expect(createArgs.spec.recoveryPolicy).toBe(InstanceRecoveryPolicy.FAIL);
+  });
+
+  it("adopts a matching instance from the paginated parent listing", async () => {
+    instancesListMock
+      .mockResolvedValueOnce({ items: [], nextPageToken: "next" })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            metadata: { id: "instance-existing", name: "spot-host" },
+            spec: {
+              networkInterfaces: [
+                {
+                  subnetId: "subnet-1",
+                  publicIpAddress: {
+                    allocation: {
+                      $case: "allocationId",
+                      allocationId: "address-1",
+                    },
+                  },
+                  securityGroups: [{ id: "security-group-1" }],
+                },
+              ],
+              bootDisk: {
+                type: {
+                  $case: "existingDisk",
+                  existingDisk: { id: "boot-existing" },
+                },
+              },
+              secondaryDisks: [
+                {
+                  deviceId: "home",
+                  type: {
+                    $case: "existingDisk",
+                    existingDisk: { id: "home-existing" },
+                  },
+                },
+              ],
+            },
+            status: {
+              networkInterfaces: [
+                { publicIpAddress: { address: "192.0.2.10" } },
+              ],
+            },
+          },
+        ],
+        nextPageToken: "",
+      });
+
+    const runtime = await new NebiusProvider().createHost(
+      buildSpec({
+        metadata: {
+          machine_type: "spot-enabled-machine",
+          platform: "spot-platform",
+          source_image: "image-1",
+          public_address_id: "address-1",
+          security_group_ids: ["security-group-1"],
+          shared_disk_device_id: "home",
+          disable_service_account: true,
+        },
+      }),
+      {
+        parentId: "project-1",
+        serviceAccountId: "svc-1",
+        publicKeyId: "pub-1",
+        privateKeyPem: "key",
+        sshPublicKey: "ssh-ed25519 AAAA",
+        subnetId: "subnet-1",
+      },
+    );
+
+    expect(instancesListMock).toHaveBeenCalledTimes(2);
+    expect(instancesCreateMock).not.toHaveBeenCalled();
+    expect(runtime).toMatchObject({
+      instance_id: "instance-existing",
+      public_ip: "192.0.2.10",
+      metadata: {
+        diskIds: { boot: "boot-existing", scratch: "home-existing" },
+      },
+    });
   });
 
   it("creates and attaches a shared scratch disk", async () => {
