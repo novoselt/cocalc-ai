@@ -733,10 +733,12 @@ if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
 $account = Get-LocalUser -Name "user" -ErrorAction SilentlyContinue
 if (-not $account) {
   $bootstrapPassword = ConvertTo-SecureString (([guid]::NewGuid().ToString("N")) + "aA1!") -AsPlainText -Force
-  New-LocalUser -Name "user" -Password $bootstrapPassword -AccountNeverExpires -PasswordNeverExpires | Out-Null
+  $account = New-LocalUser -Name "user" -Password $bootstrapPassword -AccountNeverExpires -PasswordNeverExpires
 }
-if (-not (Get-LocalGroupMember -Group "Administrators" -Member "user" -ErrorAction SilentlyContinue)) {
-  Add-LocalGroupMember -Group "Administrators" -Member "user"
+$administrators = Get-LocalGroup -SID "S-1-5-32-544"
+$isAdministrator = Get-LocalGroupMember -Group $administrators | Where-Object { $_.SID.Value -eq $account.SID.Value }
+if (-not $isAdministrator) {
+  Add-LocalGroupMember -Group $administrators -Member $account
 }
 
 $home = "C:\\Users\\user"

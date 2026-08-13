@@ -72,6 +72,8 @@ describe("managedWindowsVmBootstrapScript", () => {
     } as ComputeVmRow);
 
     expect(script).toContain('New-LocalUser -Name "user"');
+    expect(script).toContain('Get-LocalGroup -SID "S-1-5-32-544"');
+    expect(script).toContain("$_.SID.Value -eq $account.SID.Value");
     expect(script).toContain("google-compute-engine-ssh");
     expect(script).toContain("AuthorizedKeysFile .ssh/authorized_keys");
     expect(script).toContain("fDenyTSConnections");

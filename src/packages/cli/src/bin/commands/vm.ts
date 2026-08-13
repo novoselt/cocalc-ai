@@ -149,8 +149,22 @@ async function waitForState(
   const deadline = Date.now() + timeoutMs;
   let last: any;
   let lastProgress = "";
+  let transientPollFailures = 0;
   while (Date.now() < deadline) {
-    last = await getVm(idOrName);
+    try {
+      last = await getVm(idOrName);
+      transientPollFailures = 0;
+    } catch (err) {
+      if (!isTransientVmPollError(err)) throw err;
+      transientPollFailures += 1;
+      await new Promise((resolvePromise) =>
+        setTimeout(
+          resolvePromise,
+          Math.min(10_000, 1000 * transientPollFailures),
+        ),
+      );
+      continue;
+    }
     if (desired.has(last.state)) return last;
     if (last.state === "failed") {
       throw new Error(last.error || `compute VM '${idOrName}' failed`);
@@ -164,6 +178,21 @@ async function waitForState(
   }
   throw new Error(
     `timed out waiting for compute VM '${idOrName}'; last state=${last?.state ?? "unknown"}`,
+  );
+}
+
+export function isTransientVmPollError(err: unknown) {
+  const code = `${(err as any)?.code ?? ""}`;
+  if (code === "503" || code === "408") return true;
+  const message = `${err ?? ""}`.toLowerCase();
+  return (
+    message.includes("server is busy") ||
+    message.includes("api server is busy") ||
+    message.includes("timeout") ||
+    message.includes("socket has been disconnected") ||
+    message.includes("socket is disconnected") ||
+    message.includes("connection closed") ||
+    /once: .* not emitted before "closed"/i.test(message)
   );
 }
 
@@ -223,8 +252,22 @@ async function waitForVolumeState(
 ) {
   const deadline = Date.now() + timeoutMs;
   let last: any;
+  let transientPollFailures = 0;
   while (Date.now() < deadline) {
-    last = await getVolume(idOrName);
+    try {
+      last = await getVolume(idOrName);
+      transientPollFailures = 0;
+    } catch (err) {
+      if (!isTransientVmPollError(err)) throw err;
+      transientPollFailures += 1;
+      await new Promise((resolvePromise) =>
+        setTimeout(
+          resolvePromise,
+          Math.min(10_000, 1000 * transientPollFailures),
+        ),
+      );
+      continue;
+    }
     if (desired.has(last.state)) return last;
     if (last.state === "failed") {
       throw new Error(last.error || `compute volume '${idOrName}' failed`);

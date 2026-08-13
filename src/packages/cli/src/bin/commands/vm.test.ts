@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import { Command } from "commander";
 import {
   buildVmSshConfigBlock,
+  isTransientVmPollError,
   parseTtlMinutes,
   registerVmCommand,
   removeVmSshConfigBlock,
@@ -503,6 +504,21 @@ describe("vm list", () => {
 });
 
 describe("vm wait", () => {
+  it("retries transient hub socket failures but not provider failures", () => {
+    assert.equal(
+      isTransientVmPollError(new Error("socket has been disconnected")),
+      true,
+    );
+    assert.equal(
+      isTransientVmPollError(new Error("connection closed before reply")),
+      true,
+    );
+    assert.equal(
+      isTransientVmPollError(new Error("provider provisioning failed")),
+      false,
+    );
+  });
+
   it("explains retryable Spot capacity recovery", () => {
     assert.match(
       vmWaitProgress({

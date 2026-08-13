@@ -58,8 +58,11 @@ describe("managed VM readiness command", () => {
     } as any);
 
     expect(command).toContain("powershell.exe");
-    expect(command).toContain("bootstrap-ready.txt");
-    expect(command).toContain("Get-Service sshd");
+    expect(command).toContain("-EncodedCommand");
+    const encoded = command.split(" ").at(-1)!;
+    const script = Buffer.from(encoded, "base64").toString("utf16le");
+    expect(script).toContain("bootstrap-ready.txt");
+    expect(script).toContain("Get-Service sshd");
     expect(command).not.toContain("bash -lc");
   });
 });

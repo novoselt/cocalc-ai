@@ -1225,9 +1225,8 @@ export function managedVmReadinessCommand(
       `$revision=(Get-Content -Raw "C:\\ProgramData\\CoCalc\\bootstrap-ready.txt").Trim(); if ($revision -ne "${vm.bootstrap_revision}") { exit 12 }`,
       'Write-Output "ready"',
     ].join("; ");
-    return `powershell.exe -NoLogo -NoProfile -NonInteractive -Command ${shellQuote(
-      script,
-    )}`;
+    const encoded = Buffer.from(script, "utf16le").toString("base64");
+    return `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
   }
   const checks = [
     'test "$(id -un)" = user',
