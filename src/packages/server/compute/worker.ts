@@ -1853,10 +1853,10 @@ async function remove(vm: ComputeVmRow) {
     (await getComputeVmById(vm.id)) ?? vm,
     false,
   );
-  vm = await releaseVmNetwork(vm);
   await observeVmPhase(vm, "provider_delete", async () =>
     deleteProviderComputeVm(vm),
   );
+  vm = await releaseVmNetwork(vm);
   if (vm.home_volume_id) {
     const volume = await getComputeVolumeById(vm.home_volume_id);
     if (volume) {
