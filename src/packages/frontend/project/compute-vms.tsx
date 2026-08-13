@@ -377,29 +377,40 @@ function VmCreateModal({
       : values.ssh_public_key,
   });
 
+  const submit = () =>
+    void form
+      .validateFields()
+      .then((values) => onCreate(withResolvedSshKey(values)));
+
   return (
     <Modal
       open={open}
       title={initial.name ? `Create ${initial.name}` : "Create virtual machine"}
-      okText="Create VM"
-      confirmLoading={saving}
       onCancel={onCancel}
-      onOk={() =>
-        void form
-          .validateFields()
-          .then((values) => onCreate(withResolvedSshKey(values)))
+      footer={
+        <Flex vertical gap={12}>
+          {error && (
+            <Alert
+              showIcon
+              type="error"
+              title="Unable to create VM"
+              description={error}
+              style={{ textAlign: "left" }}
+            />
+          )}
+          <Flex justify="flex-end" gap={8}>
+            <Button disabled={saving} onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button type="primary" loading={saving} onClick={submit}>
+              Create VM
+            </Button>
+          </Flex>
+        </Flex>
       }
+      styles={{ body: { maxHeight: "calc(100vh - 260px)", overflowY: "auto" } }}
       width={720}
     >
-      {error && (
-        <Alert
-          showIcon
-          type="error"
-          title="Unable to create VM"
-          description={error}
-          style={{ marginBottom: 16 }}
-        />
-      )}
       <Form<VmDraft>
         form={form}
         layout="vertical"

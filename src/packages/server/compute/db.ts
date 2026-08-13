@@ -11,6 +11,17 @@ const pool = () => getPool();
 const MAX_COMPUTE_VM_SSH_KEYS = 32;
 const MAX_COMPUTE_VM_SSH_KEY_METADATA_BYTES = 128 * 1024;
 
+function sameProviderLocation(
+  left: Pick<ComputeVmRow | ComputeVolumeRow, "provider" | "region" | "zone">,
+  right: Pick<ComputeVmRow | ComputeVolumeRow, "provider" | "region" | "zone">,
+): boolean {
+  return (
+    left.provider === right.provider &&
+    left.region === right.region &&
+    (left.zone ?? null) === (right.zone ?? null)
+  );
+}
+
 export async function allocateComputeVmPublicHostname(
   dns: string,
   generateLabel = () => `vm-${randomBytes(16).toString("hex")}`,
@@ -183,11 +194,7 @@ export async function insertComputeVm(
       );
       const volume = volumes[0];
       if (!volume) throw new Error("compute volume not found or access denied");
-      if (
-        volume.provider !== row.provider ||
-        volume.region !== row.region ||
-        volume.zone !== row.zone
-      ) {
+      if (!sameProviderLocation(volume, row)) {
         throw new Error(
           "compute volume and VM must use the same provider location",
         );

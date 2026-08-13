@@ -51,11 +51,13 @@ function vmInput(
     owner_account_id: overrides.owner_account_id ?? randomUUID(),
     owning_bay_id: "bay-0",
     project_id: overrides.project_id ?? randomUUID(),
-    provider: "gcp",
-    region: "us-central1",
-    zone: "us-central1-a",
+    provider: overrides.provider ?? "gcp",
+    region: overrides.region ?? "us-central1",
+    zone: Object.prototype.hasOwnProperty.call(overrides, "zone")
+      ? overrides.zone
+      : "us-central1-a",
     architecture: "x86_64",
-    machine_type: "e2-standard-2",
+    machine_type: overrides.machine_type ?? "e2-standard-2",
     cpu: 2,
     ram_gb: 8,
     gpu_type: null,
@@ -113,13 +115,15 @@ function volumeInput(
     name: overrides.name ?? "test-volume",
     owner_account_id: overrides.owner_account_id ?? randomUUID(),
     owning_bay_id: "bay-0",
-    provider: "gcp",
-    region: "us-central1",
-    zone: overrides.zone ?? "us-central1-a",
+    provider: overrides.provider ?? "gcp",
+    region: overrides.region ?? "us-central1",
+    zone: Object.prototype.hasOwnProperty.call(overrides, "zone")
+      ? overrides.zone
+      : "us-central1-a",
     role: "home",
     funding_mode: "account-prepaid",
     provider_spec: {},
-    disk_type: "balanced",
+    disk_type: overrides.disk_type ?? "balanced",
     filesystem: "ext4",
     size_gb: overrides.size_gb ?? 20,
     desired_size_gb: overrides.desired_size_gb ?? 20,
@@ -171,6 +175,37 @@ describe("compute VM durable state", () => {
     expect(
       await listOwnedComputeVms({ owner_account_id: input.owner_account_id }),
     ).toHaveLength(1);
+  });
+
+  it("attaches a zoneless Nebius volume to a zoneless VM", async () => {
+    const owner = randomUUID();
+    const project = randomUUID();
+    const volume = await insertComputeVolume(
+      volumeInput({
+        owner_account_id: owner,
+        project_id: project,
+        provider: "nebius",
+        region: "us-central1",
+        zone: null,
+        disk_type: "ssd",
+      }),
+    );
+    const vm = await insertComputeVm(
+      vmInput({
+        owner_account_id: owner,
+        project_id: project,
+        provider: "nebius",
+        region: "us-central1",
+        zone: undefined,
+        machine_type: "1gpu-24vcpu-218gb",
+        home_volume_id: volume.id,
+      }),
+    );
+    expect(vm.home_volume_id).toBe(volume.id);
+    await expect(getComputeVolumeById(volume.id)).resolves.toMatchObject({
+      attached_vm_id: vm.id,
+      attachment_state: "reserved",
+    });
   });
 
   it("resolves only an unambiguous VM attached to the project", async () => {
