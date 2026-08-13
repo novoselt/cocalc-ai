@@ -2,7 +2,37 @@
 
 Date: 2026-08-12
 
-Status: approved design target; implementation not started by this document.
+Status: implemented and deployed to staging; production is unchanged.
+
+## Staging Implementation Record
+
+The v2 schema, hub control plane, project integration, CLI, frontend, provider
+adapters, billing, egress metering, and turn-scoped capability implementation
+are deployed on staging. The current staging artifacts are:
+
+- hub: `20260813T025550Z-d819f722-vm-v2-gcp-create-id-d819f722`;
+- project: `20260813T010410Z-8c25e5e7-vm-v2-ssh-default-8c25e5e7`; and
+- static: `20260813T002414Z-105f7c0a-20260813T0024Z`.
+
+Live staging validation completed the GCP x86-64 and T2A ARM64 lifecycles,
+stable address and DNS behavior, project SSH configuration, the `user` and
+`/home/user` guest contract, public TCP 443, Docker, unprivileged FUSE,
+persistent-home replacement and online growth, all funding-lane authorization
+paths, project-credential denial, egress measurement, explicit stop/restart,
+deletion, and provider-orphan cleanup. Site-funded resources created no
+customer purchases; temporary prepaid transitions closed their purchases.
+
+Two provider-capacity tests remain externally blocked rather than
+implementation-blocked:
+
+- GCP returned no Spot capacity in both tested zones, so retry behavior was
+  observed but a real provider preemption could not be induced; and
+- the configured Nebius tenant has consumed all three public IPv4 addresses,
+  so CPU/GPU catalog and admission paths were tested but live instance
+  creation cannot proceed until one address is safely freed or quota is
+  raised.
+
+Production rollout remains explicitly out of scope for this staging record.
 
 Supersedes the product contract in
 [Project Compute VM MVP Implementation Plan](./project-compute-vm-mvp-implementation-plan-2026-08-01.md).
