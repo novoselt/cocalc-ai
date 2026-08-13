@@ -72,6 +72,49 @@ Guidance for Claude Code, Gemini CLI, and OpenAI Codex when working in this repo
 - Redux store values are deep-converted with Immutable.js at runtime. Do not assume nested values returned by `useTypedRedux` are plain objects just because the TypeScript type says so; normalize or use `.get(...)`/`.toJS()` before nested property access.
 - For admin site-settings secret/password configuration fields, use `src/packages/frontend/admin/site-settings/secret-setting-input.tsx` instead of raw password inputs or custom stored-secret notes.
 
+## Frontend Accessibility Guardrails
+
+- New or substantially changed first-party frontend UI must not introduce new
+  WCAG 2.2 Level A or AA defects. Unrelated legacy remediation is not
+  automatically in scope, but do not copy a known inaccessible pattern into
+  new code.
+- Prefer native semantic elements and controls. Every interactive control must
+  have an accessible name; associate visible labels programmatically and expose
+  the control's role, state, and value. The accessible name must include the
+  visible label text. Icon-only controls require a meaningful accessible name,
+  not only a tooltip.
+- Keep pointer functionality keyboard operable unless the pointer path itself
+  is essential. Provide a non-drag, single-pointer alternative for dragging or
+  multipoint gestures when they are not essential.
+- Preserve logical focus order, visible focus, and a keyboard path into and out
+  of new UI. Do not create keyboard traps; dialogs and temporary overlays must
+  manage and restore focus. New overlays and global shortcuts must use the
+  shared helpers in `src/packages/frontend/keyboard/boundary.tsx`; bare-character
+  shortcuts must be scoped to the focused editor or component.
+- New general-purpose UI must remain usable at 200% browser zoom and reflow
+  without loss of content or controls at 320 CSS pixels wide. Treat intrinsically
+  two-dimensional content, such as canvases or large data grids, as a documented
+  exception rather than applying it to surrounding navigation and controls.
+- Do not convey information solely by color, shape, or spatial wording such as
+  "above" or "below". Do not reuse the same unlabeled icon for different
+  actions in the same context. Meet text and non-text contrast requirements in
+  every supported theme and state.
+- Custom content shown on hover or focus must be hoverable, persistent, and
+  dismissible, including with Escape when it can obscure other content.
+  Persistent nonessential animation must have a pause/stop mechanism or honor
+  reduced-motion preferences.
+- Forms must use programmatically associated labels, appropriate
+  `autocomplete` purpose tokens, and specific programmatically exposed errors.
+  Do not deliberately interfere with paste or password managers in
+  authentication fields.
+- Expose important asynchronous status changes through appropriate live-region
+  or alert semantics without unnecessarily moving keyboard focus.
+- Add focused tests for accessible roles/names and keyboard/focus behavior when
+  changing interactive UI. For substantial public, authentication, navigation,
+  or application-shell changes, run the relevant audit under
+  `src/scripts/accessibility/`. Automated checks are regression evidence, not a
+  substitute for keyboard and interaction review.
+
 ## Multibay Architecture Rule
 
 - Before changing auth, accounts, billing, projects, collaborators, hosts, project files, backups, secrets, public sharing, or Conat control-plane APIs, read `src/.agents/scalable-architecture.md`.
