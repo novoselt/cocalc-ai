@@ -460,6 +460,7 @@ export class NebiusProvider implements CloudProvider {
     const client = new NebiusClient(creds);
     const parentId = client.parentId();
     if (!parentId) throw new Error("nebius parentId is required");
+    if (!creds.subnetId) throw new Error("nebius subnetId is required");
     let allocation;
     if (spec.id) {
       try {
@@ -492,7 +493,13 @@ export class NebiusProvider implements CloudProvider {
           spec: AllocationSpec.create({
             ipSpec: {
               $case: "ipv4Public",
-              ipv4Public: IPv4PublicAllocationSpec.create({ cidr: "/32" }),
+              ipv4Public: IPv4PublicAllocationSpec.create({
+                cidr: "/32",
+                pool: {
+                  $case: "subnetId",
+                  subnetId: creds.subnetId,
+                },
+              }),
             },
           }),
         }),
