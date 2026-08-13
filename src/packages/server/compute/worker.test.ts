@@ -8,10 +8,27 @@ import {
   computeRuntimeMetadata,
   computePostStopTransition,
   isSpotCapacityError,
+  managedVmReadinessCommand,
   providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
   volumeAttachedToVm,
 } from "./worker";
+
+describe("managed VM readiness command", () => {
+  it("preserves the full remote shell expression as one quoted command", () => {
+    const command = managedVmReadinessCommand(
+      { bootstrap_revision: 2 } as any,
+      "/dev/disk/by-id/google-home-disk",
+    );
+
+    expect(command).toMatch(/^bash -lc '/);
+    expect(command).toContain('test "$(id -gn)" = user');
+    expect(command).toContain("! id ubuntu >/dev/null 2>&1");
+    expect(command).toContain("readlink -f /dev/disk/by-id/google-home-disk");
+    expect(command).toContain("bootstrap-ready");
+    expect(command).toMatch(/'$/);
+  });
+});
 
 describe("compute VM work failure state", () => {
   it("keeps scheduled Spot retries in recovering state", () => {

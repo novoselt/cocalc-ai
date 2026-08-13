@@ -1208,6 +1208,30 @@ function spotState(vm: ComputeVmRow) {
   );
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+export function managedVmReadinessCommand(
+  vm: ComputeVmRow,
+  expectedHomeDevice?: string,
+): string {
+  const checks = [
+    'test "$(id -un)" = user',
+    'test "$(id -u)" = 1001',
+    'test "$(id -gn)" = user',
+    'test "$HOME" = /home/user',
+    "! id ubuntu >/dev/null 2>&1",
+    `test "$(cat /run/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision}`,
+    ...(expectedHomeDevice
+      ? [
+          `test "$(readlink -f "$(findmnt -n -o SOURCE /home/user)")" = "$(readlink -f ${expectedHomeDevice})"`,
+        ]
+      : []),
+  ].join(" && ");
+  return `bash -lc ${shellQuote(checks)}`;
+}
+
 async function waitForSsh(vm: ComputeVmRow, host: string, timeoutMs = 180_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = "SSH is not ready";
@@ -1223,19 +1247,7 @@ async function waitForSsh(vm: ComputeVmRow, host: string, timeoutMs = 180_000) {
       ? `/dev/disk/by-id/google-${homeVolume.provider_disk_id}`
       : "/dev/disk/by-id/virtio-home"
     : undefined;
-  const checks = [
-    'test "$(id -un)" = user',
-    'test "$(id -u)" = 1001',
-    'test "$(id -gn)" = user',
-    'test "$HOME" = /home/user',
-    "! id ubuntu >/dev/null 2>&1",
-    `test "$(cat /run/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision}`,
-    ...(expectedHomeDevice
-      ? [
-          `test "$(readlink -f "$(findmnt -n -o SOURCE /home/user)")" = "$(readlink -f ${expectedHomeDevice})"`,
-        ]
-      : []),
-  ].join(" && ");
+  const command = managedVmReadinessCommand(vm, expectedHomeDevice);
   while (Date.now() < deadline) {
     try {
       await new Promise<void>((resolve, reject) => {
@@ -1270,9 +1282,7 @@ async function waitForSsh(vm: ComputeVmRow, host: string, timeoutMs = 180_000) {
           "-o",
           "ConnectTimeout=5",
           `user@${host}`,
-          "bash",
-          "-lc",
-          checks,
+          command,
         ],
         { timeout: 15_000 },
       );
