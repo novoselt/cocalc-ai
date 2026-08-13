@@ -361,6 +361,7 @@ function VmCreateModal({
   const [draft, setDraft] = useState<Partial<VmDraft>>(initial);
   const [sortRegionsByPrice, setSortRegionsByPrice] = useState(false);
   const [sortMachinesByPrice, setSortMachinesByPrice] = useState(false);
+  const [usePersistentHomeVolume, setUsePersistentHomeVolume] = useState(false);
   const [sshKeyError, setSshKeyError] = useState<string>();
   const pricingSettings = useHostPricingSettings();
 
@@ -370,6 +371,9 @@ function VmCreateModal({
     setDraft(initial);
     setSortRegionsByPrice(false);
     setSortMachinesByPrice(false);
+    setUsePersistentHomeVolume(
+      initial.create_home_volume === true || !!initial.home_volume,
+    );
     setSshKeyError(undefined);
   }, [form, initial, open]);
 
@@ -571,7 +575,7 @@ function VmCreateModal({
           </Flex>
         </Flex>
       }
-      styles={{ body: { maxHeight: "calc(100vh - 260px)", overflowY: "auto" } }}
+      styles={{ body: { maxHeight: "calc(100vh - 190px)", overflowY: "auto" } }}
       width={920}
     >
       <Form<VmDraft>
@@ -598,13 +602,11 @@ function VmCreateModal({
           >
             <Input autoFocus />
           </Form.Item>
-        </Flex>
-        <Flex gap={12} wrap>
           <Form.Item
             name="funding_mode"
             label="Funding"
             rules={[{ required: true }]}
-            style={{ flex: "1 1 280px" }}
+            style={{ flex: "1 1 320px" }}
           >
             <Select
               options={catalog.funding_modes.map((mode) => ({
@@ -615,6 +617,8 @@ function VmCreateModal({
               }))}
             />
           </Form.Item>
+        </Flex>
+        <Flex gap={12} wrap>
           <Form.Item
             name="operating_system"
             label="Operating system"
@@ -643,6 +647,9 @@ function VmCreateModal({
                   });
                 } else {
                   patchDraft({ operating_system: "linux" });
+                }
+                if (nextOs === "windows") {
+                  setUsePersistentHomeVolume(false);
                 }
               }}
             />
@@ -695,6 +702,7 @@ function VmCreateModal({
                     draft.new_home_volume_size_gb,
                   ),
                 });
+                setUsePersistentHomeVolume(false);
               }}
             />
           </Form.Item>
@@ -702,7 +710,7 @@ function VmCreateModal({
             name="architecture"
             label="Architecture"
             rules={[{ required: true }]}
-            style={{ flex: "1 1 180px" }}
+            style={{ flex: "1 1 180px", order: -1 }}
           >
             <Radio.Group
               optionType="button"
@@ -953,8 +961,7 @@ function VmCreateModal({
             name="boot_disk_gb"
             label="Boot disk (GB)"
             rules={[{ required: true }]}
-            extra="Choose carefully: boot disks cannot currently be enlarged after VM creation. Persistent home volumes can be enlarged separately."
-            style={{ flex: "1 1 160px" }}
+            style={{ flex: "0 1 150px" }}
           >
             <InputNumber
               min={
@@ -967,28 +974,94 @@ function VmCreateModal({
               max={catalog.limits.max_boot_disk_gb}
             />
           </Form.Item>
+          <Text strong style={{ flex: "1 1 300px", marginTop: 31 }}>
+            Boot disks cannot currently be enlarged after VM creation.
+          </Text>
         </Flex>
         {operatingSystem === "linux" && (
           <>
-            <Form.Item name="create_home_volume" valuePropName="checked">
+            <Form.Item name="create_home_volume" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="home_volume" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item
+              style={{ marginBottom: usePersistentHomeVolume ? 8 : 16 }}
+            >
               <Checkbox
+                checked={usePersistentHomeVolume}
                 onChange={(event) => {
                   if (event.target.checked) {
+                    setUsePersistentHomeVolume(true);
                     patchDraft({
                       home_volume: undefined,
+                      create_home_volume: true,
                       new_home_volume_size_gb: normalizedVolumeSizeGb(
                         provider,
                         draft.new_home_volume_size_gb,
                       ),
                     });
+                  } else {
+                    setUsePersistentHomeVolume(false);
+                    patchDraft({
+                      home_volume: undefined,
+                      create_home_volume: false,
+                    });
                   }
                 }}
               >
-                Create a new persistent home volume mounted at{" "}
-                <Text code>/home/user</Text>
+                Persistent home volume mounted at <Text code>/home/user</Text>
               </Checkbox>
             </Form.Item>
-            {draft.create_home_volume ? (
+            {usePersistentHomeVolume && (
+              <Form.Item
+                label="Home volume"
+                style={{ marginBottom: draft.create_home_volume ? 12 : 16 }}
+              >
+                <Select
+                  value={
+                    draft.create_home_volume ? "__new__" : draft.home_volume
+                  }
+                  options={[
+                    {
+                      value: "__new__",
+                      label: "Create a new persistent home volume",
+                    },
+                    ...availableVolumes.map((volume) => ({
+                      value: volume.name,
+                      label: `${volume.name} · ${volume.effective_size_gb} GB · ${volume.region}${volume.zone ? `/${volume.zone}` : ""}${
+                        volume.region === draft.region &&
+                        (!volume.zone || volume.zone === draft.zone)
+                          ? ""
+                          : " · unavailable in this location"
+                      }`,
+                      disabled:
+                        volume.region !== draft.region ||
+                        (!!volume.zone && volume.zone !== draft.zone),
+                    })),
+                  ]}
+                  onChange={(value) => {
+                    if (value === "__new__") {
+                      patchDraft({
+                        home_volume: undefined,
+                        create_home_volume: true,
+                        new_home_volume_size_gb: normalizedVolumeSizeGb(
+                          provider,
+                          draft.new_home_volume_size_gb,
+                        ),
+                      });
+                    } else {
+                      patchDraft({
+                        home_volume: value,
+                        create_home_volume: false,
+                      });
+                    }
+                  }}
+                />
+              </Form.Item>
+            )}
+            {usePersistentHomeVolume && draft.create_home_volume && (
               <>
                 <Flex gap={12} wrap>
                   <Form.Item
@@ -1051,45 +1124,19 @@ function VmCreateModal({
                   style={{ marginBottom: 16 }}
                 />
               </>
-            ) : (
-              <Form.Item
-                name="home_volume"
-                label="Existing persistent home volume"
-                extra="Optional. The VM and volume must be in the same zone. Volumes survive VM deletion and can be attached to only one VM."
-              >
-                <Select
-                  allowClear
-                  placeholder="Use the VM boot disk for /home/user"
-                  options={availableVolumes.map((volume) => ({
-                    value: volume.name,
-                    label: `${volume.name} · ${volume.effective_size_gb} GB · ${volume.region}${volume.zone ? `/${volume.zone}` : ""}${
-                      volume.region === draft.region &&
-                      (!volume.zone || volume.zone === draft.zone)
-                        ? ""
-                        : " · unavailable in this location"
-                    }`,
-                    disabled:
-                      volume.region !== draft.region ||
-                      (!!volume.zone && volume.zone !== draft.zone),
-                  }))}
-                  onChange={(name) => {
-                    patchDraft({ home_volume: name || undefined });
-                  }}
-                />
-              </Form.Item>
             )}
           </>
         )}
-        <Alert
-          showIcon
-          type="info"
-          title={
-            price
-              ? `Estimated price: ${price.hourly_label} (${price.monthly_label})`
-              : "Price estimate unavailable for this selection"
-          }
-          description={
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+        <Popover
+          trigger="click"
+          placement="topLeft"
+          title="Estimated price"
+          content={
+            <Space
+              direction="vertical"
+              size={10}
+              style={{ width: 480, maxWidth: "80vw" }}
+            >
               {price && (
                 <HostPriceBreakdown
                   estimate={price}
@@ -1127,8 +1174,13 @@ function VmCreateModal({
               )}
             </Space>
           }
-          style={{ marginBottom: 12 }}
-        />
+        >
+          <Button style={{ marginBottom: 8 }}>
+            {price
+              ? `Estimated price: ${price.hourly_label} (${price.monthly_label})`
+              : "Price estimate unavailable for this selection"}
+          </Button>
+        </Popover>
         <Collapse
           ghost
           items={[
@@ -2675,6 +2727,10 @@ export function ProjectComputeVms({
           vm.state === "ready" && vm.metadata?.configure_project_ssh === true
             ? `ssh ${vm.ssh_alias || vm.name}`
             : undefined;
+        const directRdpTunnelCommand =
+          vm.operating_system === "windows" && vm.public_hostname
+            ? `ssh -N -L 3389:localhost:3389 ${vm.ssh_user || "user"}@${vm.public_hostname}`
+            : undefined;
         return (
           <Space.Compact>
             <Popover
@@ -2744,6 +2800,26 @@ export function ProjectComputeVms({
                         Generates a fresh password and a private SSH tunnel; TCP
                         3389 is not public.
                       </Text>
+                      {directRdpTunnelCommand && (
+                        <>
+                          <br />
+                          <br />
+                          <Text type="secondary">Manual SSH tunnel</Text>
+                          <br />
+                          <Text
+                            code
+                            copyable={{ text: directRdpTunnelCommand }}
+                          >
+                            {directRdpTunnelCommand}
+                          </Text>
+                          <br />
+                          <Text type="secondary">
+                            If RDP credentials are already configured, connect
+                            your RDP client to localhost:3389. This command does
+                            not create or reset the Windows password.
+                          </Text>
+                        </>
+                      )}
                     </div>
                   )}
                   <Text type="secondary">
