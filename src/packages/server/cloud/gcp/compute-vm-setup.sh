@@ -267,7 +267,12 @@ gcloud iam service-accounts describe "$SA_EMAIL" --project "$PROJECT_ID" >/dev/n
   gcloud iam service-accounts create "$SA_NAME" --project "$PROJECT_ID" \
     --display-name="CoCalc managed compute VM controller"
 
-for role in roles/compute.instanceAdmin.v1 roles/compute.networkUser roles/compute.networkViewer roles/monitoring.viewer; do
+for role in \
+  roles/compute.instanceAdmin.v1 \
+  roles/compute.networkUser \
+  roles/compute.networkViewer \
+  roles/compute.publicIpAdmin \
+  roles/monitoring.viewer; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${SA_EMAIL}" --role="$role" \
     --condition=None --quiet >/dev/null
