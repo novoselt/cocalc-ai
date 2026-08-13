@@ -2210,6 +2210,8 @@ export class GcpProvider implements CloudProvider {
             `${blockProjectSshKeys ?? ""}`.toUpperCase() === "TRUE",
           tags: instance?.tags?.items ?? [],
           subnetwork: networkInterface?.subnetwork,
+          external_access_config_count:
+            networkInterface?.accessConfigs?.length ?? 0,
           network_tier: networkInterface?.accessConfigs?.[0]?.networkTier,
           external_ipv6:
             (networkInterface?.ipv6AccessConfigs?.length ?? 0) > 0 ||
