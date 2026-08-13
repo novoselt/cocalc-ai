@@ -2072,6 +2072,7 @@ export class CodexAppServerAgent implements AcpAgent {
       string,
       { command?: string; cwd?: string }
     >();
+    const agentMessageTextById = new Map<string, string>();
     const completedTerminals = new Set<string>();
     const emittedFileWrites = new Set<string>();
     const emittedFileWritePaths = new Set<string>();
@@ -2369,6 +2370,23 @@ export class CodexAppServerAgent implements AcpAgent {
           case "agentMessage":
             if (typeof item.text === "string") {
               finalResponse = item.text;
+              const itemId = `${item.id ?? "agent-message"}`;
+              const previous = agentMessageTextById.get(itemId) ?? "";
+              if (item.text !== previous) {
+                const delta =
+                  previous && item.text.startsWith(previous)
+                    ? item.text.slice(previous.length)
+                    : "";
+                agentMessageTextById.set(itemId, item.text);
+                await stream({
+                  type: "event",
+                  event: {
+                    type: "message",
+                    text: delta || item.text,
+                    delta: !!delta,
+                  },
+                });
+              }
             }
             break;
           case "commandExecution": {
@@ -2604,9 +2622,14 @@ export class CodexAppServerAgent implements AcpAgent {
             await stream({ type: "status", state: "running" });
             break;
           case "item/agentMessage/delta": {
+            const itemId = `${notification.params?.itemId ?? "agent-message"}`;
             const delta = `${notification.params?.delta ?? ""}`;
             if (delta) {
               finalResponse += delta;
+              agentMessageTextById.set(
+                itemId,
+                `${agentMessageTextById.get(itemId) ?? ""}${delta}`,
+              );
               await stream({
                 type: "event",
                 event: { type: "message", text: delta, delta: true },
