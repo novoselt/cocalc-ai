@@ -7,6 +7,7 @@ import {
   gcpInstanceIdForEgress,
   isProviderNotFound,
   managedVmBootstrapScript,
+  managedWindowsSshKeysScript,
   managedWindowsVmBootstrapScript,
   mergeManagedNebiusSpec,
   providerInstanceIdIsProvisional,
@@ -64,6 +65,23 @@ describe("managedVmBootstrapScript", () => {
 });
 
 describe("managedWindowsVmBootstrapScript", () => {
+  it("encodes approved keys and preserves strict Windows ACL setup", () => {
+    const script = managedWindowsSshKeysScript([
+      "ssh-ed25519 AAAAOWNER owner",
+      "ssh-ed25519 AAAACONTROLLER controller",
+      "ssh-ed25519 AAAAOWNER owner",
+    ]);
+
+    expect(script).toContain('$userHome = "C:\\Users\\user"');
+    expect(script).toContain("authorized_keys");
+    expect(script).toContain("icacls.exe");
+    expect(script).not.toContain("ssh-ed25519 AAAAOWNER");
+    const encoded = script.match(/FromBase64String\("([^"]+)"\)/)?.[1];
+    expect(Buffer.from(encoded!, "base64").toString("utf8")).toBe(
+      "ssh-ed25519 AAAAOWNER owner\nssh-ed25519 AAAACONTROLLER controller\n",
+    );
+  });
+
   it("creates a Windows user, OpenSSH service, private RDP, and readiness marker", () => {
     const script = managedWindowsVmBootstrapScript({
       ssh_public_key: "ssh-ed25519 AAAAOWNER owner",

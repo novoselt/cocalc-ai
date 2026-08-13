@@ -703,20 +703,30 @@ printf '%s\n' '${vm.bootstrap_revision}' >/run/cocalc-managed-vm/bootstrap-ready
 `;
 }
 
-export function managedWindowsVmBootstrapScript(vm: ComputeVmRow): string {
+export function managedWindowsSshKeysScript(
+  values: Array<string | null | undefined>,
+): string {
   const keys = Array.from(
-    new Set(
-      [
-        vm.ssh_public_key,
-        ...(Array.isArray(vm.metadata?.ssh_public_keys)
-          ? vm.metadata.ssh_public_keys
-          : []),
-      ]
-        .map((key) => `${key ?? ""}`.trim())
-        .filter(Boolean),
-    ),
+    new Set(values.map((key) => `${key ?? ""}`.trim()).filter(Boolean)),
   ).join("\n");
   const encodedKeys = Buffer.from(`${keys}\n`, "utf8").toString("base64");
+  return `$userHome = "C:\\Users\\user"
+$sshDir = Join-Path $userHome ".ssh"
+New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+$keys = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedKeys}"))
+[IO.File]::WriteAllText((Join-Path $sshDir "authorized_keys"), $keys, [Text.UTF8Encoding]::new($false))
+$principal = "$env:COMPUTERNAME\\user"
+& icacls.exe $sshDir /inheritance:r /grant:r ($principal + ":(OI)(CI)F") "SYSTEM:(OI)(CI)F" | Out-Null
+& icacls.exe (Join-Path $sshDir "authorized_keys") /inheritance:r /grant:r ($principal + ":F") "SYSTEM:F" | Out-Null`;
+}
+
+export function managedWindowsVmBootstrapScript(vm: ComputeVmRow): string {
+  const sshKeySetup = managedWindowsSshKeysScript([
+    vm.ssh_public_key,
+    ...(Array.isArray(vm.metadata?.ssh_public_keys)
+      ? vm.metadata.ssh_public_keys
+      : []),
+  ]);
   return `$ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
@@ -741,14 +751,7 @@ if (-not $isAdministrator) {
   Add-LocalGroupMember -Group $administrators -Member $account
 }
 
-$userHome = "C:\\Users\\user"
-$sshDir = Join-Path $userHome ".ssh"
-New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
-$keys = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedKeys}"))
-[IO.File]::WriteAllText((Join-Path $sshDir "authorized_keys"), $keys, [Text.UTF8Encoding]::new($false))
-$principal = "$env:COMPUTERNAME\\user"
-& icacls.exe $sshDir /inheritance:r /grant:r ($principal + ":(OI)(CI)F") "SYSTEM:(OI)(CI)F" | Out-Null
-& icacls.exe (Join-Path $sshDir "authorized_keys") /inheritance:r /grant:r ($principal + ":F") "SYSTEM:F" | Out-Null
+${sshKeySetup}
 
 $sshdConfig = @'
 PubkeyAuthentication yes
@@ -1397,6 +1400,18 @@ export async function startProviderComputeVm(vm: ComputeVmRow) {
 export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
   const { creds } = await context(vm.provider, vm.region);
   const controller = await getHostOwnerBaySshIdentity();
+  if ((vm.operating_system ?? "linux") === "windows") {
+    await runProviderComputeWindowsPowerShell(
+      vm,
+      managedWindowsSshKeysScript([
+        vm.ssh_public_key,
+        ...(vm.metadata?.ssh_public_keys ?? []),
+        controller.publicKey,
+      ]),
+      controller,
+    );
+    return;
+  }
   if (vm.provider === "nebius") {
     const host = vm.public_hostname || vm.public_ip;
     if (!host) throw new Error("managed compute VM has no SSH address");
@@ -1450,34 +1465,20 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
   );
 }
 
-export async function prepareProviderComputeWindowsRdp(
+async function runProviderComputeWindowsPowerShell(
   vm: ComputeVmRow,
-  password: string,
+  script: string,
+  identity?: { privateKeyPath: string },
 ): Promise<void> {
-  if ((vm.operating_system ?? "linux") !== "windows") {
-    throw new Error("RDP preparation requires a Windows VM");
-  }
-  if (vm.state !== "ready") {
-    throw new Error(`compute VM '${vm.name}' is not ready`);
-  }
   const host = vm.public_hostname || vm.public_ip;
   if (!host) throw new Error("managed compute VM has no SSH address");
-  const identity = await getHostOwnerBaySshIdentity();
-  const passwordBase64 = Buffer.from(password, "utf8").toString("base64");
-  const script = `$ErrorActionPreference = "Stop"
-$passwordText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${passwordBase64}"))
-$securePassword = ConvertTo-SecureString $passwordText -AsPlainText -Force
-Set-LocalUser -Name "user" -Password $securePassword -PasswordNeverExpires $true
-Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name fDenyTSConnections -Value 0
-Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" -Name UserAuthentication -Value 1
-Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-Write-Output "rdp-ready"`;
+  const selectedIdentity = identity ?? (await getHostOwnerBaySshIdentity());
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   await execFileAsync(
     "ssh",
     [
       "-i",
-      identity.privateKeyPath,
+      selectedIdentity.privateKeyPath,
       "-o",
       "BatchMode=yes",
       "-o",
@@ -1498,6 +1499,28 @@ Write-Output "rdp-ready"`;
     ],
     { timeout: 60_000, maxBuffer: 1024 * 1024 },
   );
+}
+
+export async function prepareProviderComputeWindowsRdp(
+  vm: ComputeVmRow,
+  password: string,
+): Promise<void> {
+  if ((vm.operating_system ?? "linux") !== "windows") {
+    throw new Error("RDP preparation requires a Windows VM");
+  }
+  if (vm.state !== "ready") {
+    throw new Error(`compute VM '${vm.name}' is not ready`);
+  }
+  const passwordBase64 = Buffer.from(password, "utf8").toString("base64");
+  const script = `$ErrorActionPreference = "Stop"
+$passwordText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${passwordBase64}"))
+$securePassword = ConvertTo-SecureString $passwordText -AsPlainText -Force
+Set-LocalUser -Name "user" -Password $securePassword -PasswordNeverExpires $true
+Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name fDenyTSConnections -Value 0
+Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" -Name UserAuthentication -Value 1
+Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+Write-Output "rdp-ready"`;
+  await runProviderComputeWindowsPowerShell(vm, script);
 }
 
 export async function stopProviderComputeVm(vm: ComputeVmRow) {
