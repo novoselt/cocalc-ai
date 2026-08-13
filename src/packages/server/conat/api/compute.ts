@@ -673,12 +673,17 @@ export async function createVm(
       `machine '${machine.machine_type}' has architecture ${machine.architecture}, not ${opts.architecture}`,
     );
   }
+  const requestedGpuType = `${opts.gpu_type ?? ""}`.trim();
+  const normalizedRequestedGpuType =
+    requestedGpuType && requestedGpuType !== "none"
+      ? requestedGpuType
+      : undefined;
   if (
-    opts.gpu_type != null &&
-    `${opts.gpu_type}`.trim() !== `${machine.gpu_type ?? ""}`.trim()
+    normalizedRequestedGpuType != null &&
+    normalizedRequestedGpuType !== `${machine.gpu_type ?? ""}`.trim()
   ) {
     throw new Error(
-      `machine '${machine.machine_type}' provides GPU '${machine.gpu_type ?? "none"}', not '${opts.gpu_type}'`,
+      `machine '${machine.machine_type}' provides GPU '${machine.gpu_type ?? "none"}', not '${normalizedRequestedGpuType}'`,
     );
   }
   if (

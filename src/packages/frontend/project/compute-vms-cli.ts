@@ -72,7 +72,9 @@ export function vmCreateCli(opts: {
     values.machine_type ?? "e2-standard-2",
   ];
   if (values.zone) args.push("--zone", values.zone);
-  if (values.gpu_type) args.push("--gpu-type", values.gpu_type);
+  if (values.gpu_type && values.gpu_type !== "none") {
+    args.push("--gpu-type", values.gpu_type);
+  }
   if (values.gpu_count) args.push("--gpu-count", `${values.gpu_count}`);
   if (values.ttl_minutes != null) {
     args.push(`--ttl=${ttlArgument(values.ttl_minutes)}`);

@@ -38,6 +38,21 @@ describe("managed compute CLI equivalents", () => {
     ).not.toContain("--ttl");
   });
 
+  it("omits the no-GPU UI sentinel", () => {
+    expect(
+      vmCreateCli({
+        api: "https://staging.cocalc.ai",
+        project_id: "project-id",
+        values: {
+          name: "arm-vm",
+          architecture: "arm64",
+          machine_type: "t2a-standard-4",
+          gpu_type: "none",
+        },
+      }),
+    ).not.toContain("--gpu-type");
+  });
+
   it("makes a deliberately keyless browser configuration explicit", () => {
     expect(
       vmCreateCli({

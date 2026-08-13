@@ -242,6 +242,7 @@ function VmCreateModal({
     (volume) => volume.name === draft.home_volume,
   );
   const selection: ProviderSelection = {
+    architecture: draft.architecture,
     region: draft.region || regionFromZone(draft.zone),
     zone: draft.zone,
     machine_type: draft.machine_type,
@@ -448,13 +449,55 @@ function VmCreateModal({
               buttonStyle="solid"
               disabled={provider !== "gcp"}
               onChange={(event) => {
-                const architecture = event.target.value;
+                const architecture = event.target.value as "x86_64" | "arm64";
+                const architectureSelection: ProviderSelection = {
+                  ...selection,
+                  architecture,
+                  machine_type: undefined,
+                  gpu_type: undefined,
+                  region: undefined,
+                  zone: undefined,
+                };
+                const compatibleRegions = sortRegionOptionsByPreference({
+                  options: compatibleOptions(
+                    getGcpRegionOptions(hostCatalog, architectureSelection),
+                  ),
+                  preference: sortRegionsByPrice ? "cheapest" : "closest",
+                  preferredRegion: preferredR2Region,
+                });
+                const region = compatibleRegions.some(
+                  (option) => option.value === draft.region,
+                )
+                  ? draft.region
+                  : compatibleRegions[0]?.value;
+                const zoneSelection = {
+                  ...architectureSelection,
+                  region,
+                };
+                const compatibleZones = compatibleOptions(
+                  getGcpZoneOptions(hostCatalog, zoneSelection),
+                );
+                const zone = compatibleZones.some(
+                  (option) => option.value === draft.zone,
+                )
+                  ? draft.zone
+                  : compatibleZones[0]?.value;
                 const machine_type = compatibleOptions(
-                  getGcpMachineTypeOptions(hostCatalog, selection),
+                  getGcpMachineTypeOptions(hostCatalog, {
+                    ...zoneSelection,
+                    zone,
+                  }),
                 ).find(
                   ({ value }) => gcpMachineArchitecture(value) === architecture,
                 )?.value;
-                patchDraft({ architecture, machine_type });
+                patchDraft({
+                  architecture,
+                  region,
+                  zone,
+                  machine_type,
+                  gpu_type: undefined,
+                  gpu_count: 0,
+                });
               }}
             >
               <Radio.Button value="x86_64">x86-64</Radio.Button>
@@ -527,24 +570,26 @@ function VmCreateModal({
             )}
           </Form.Item>
         </Flex>
-        {descriptor.supports.gpuType && gpuOptions.length > 0 && (
-          <Flex gap={12} wrap>
-            <Form.Item
-              name="gpu_type"
-              label="GPU"
-              style={{ flex: "1 1 280px" }}
-            >
-              <HostOptionsSelect options={gpuOptions} placeholder="No GPU" />
-            </Form.Item>
-            <Form.Item
-              name="gpu_count"
-              label="GPU count"
-              style={{ flex: "1 1 160px" }}
-            >
-              <InputNumber min={0} max={8} />
-            </Form.Item>
-          </Flex>
-        )}
+        {descriptor.supports.gpuType &&
+          !(provider === "gcp" && draft.architecture === "arm64") &&
+          gpuOptions.length > 0 && (
+            <Flex gap={12} wrap>
+              <Form.Item
+                name="gpu_type"
+                label="GPU"
+                style={{ flex: "1 1 280px" }}
+              >
+                <HostOptionsSelect options={gpuOptions} placeholder="No GPU" />
+              </Form.Item>
+              <Form.Item
+                name="gpu_count"
+                label="GPU count"
+                style={{ flex: "1 1 160px" }}
+              >
+                <InputNumber min={0} max={8} />
+              </Form.Item>
+            </Flex>
+          )}
         <Flex gap={12} wrap>
           <Form.Item
             name="machine_type"
@@ -1552,7 +1597,10 @@ export function ProjectComputeVms({
           region: values.region,
           zone: values.zone,
           machine_type: values.machine_type,
-          gpu_type: values.gpu_type,
+          gpu_type:
+            values.gpu_type && values.gpu_type !== "none"
+              ? values.gpu_type
+              : undefined,
           gpu_count: values.gpu_count,
           pricing_model: values.pricing_model,
           allow_on_demand_fallback: values.allow_on_demand_fallback,

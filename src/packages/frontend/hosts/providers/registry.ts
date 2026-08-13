@@ -23,6 +23,7 @@ import {
   estimateNebiusCatalogRateUsdPerHour,
   getDedicatedHostSurchargeFraction,
   gcpCatalogMachineTypeSortKey,
+  gcpMachineArchitecture,
   isSupportedCatalogGcpMachineType,
   getNebiusPlatformAliases,
   normalizeNebiusPricingProduct,
@@ -202,6 +203,7 @@ export const isNebiusSpotSupported = (
 };
 
 export type ProviderSelection = {
+  architecture?: "x86_64" | "arm64";
   region?: string;
   zone?: string;
   machine_type?: string;
@@ -1198,6 +1200,23 @@ const gcpZoneHasMachineType = (
   return (types ?? []).some((mt) => mt.name === machineType);
 };
 
+const gcpZoneHasMachineArchitecture = (
+  catalog: HostCatalog | undefined,
+  zone: string,
+  architecture?: "x86_64" | "arm64",
+): boolean => {
+  if (!architecture) return true;
+  const types = getCatalogEntryPayload<HostCatalogMachineType[]>(
+    catalog,
+    "machine_types",
+    `zone/${zone}`,
+  );
+  return (types ?? []).some(
+    (machine) =>
+      !!machine.name && gcpMachineArchitecture(machine.name) === architecture,
+  );
+};
+
 const gcpZoneHasGpuType = (
   catalog: HostCatalog | undefined,
   zone: string,
@@ -1291,14 +1310,20 @@ export const getGcpRegionOptions = (
     const gpuPrefixes = gcpMachinePrefixesForGpuType(gpuType);
     let compatible = true;
     let compatibleZone: string | undefined;
-    if (gpuType || selection.machine_type) {
+    if (gpuType || selection.machine_type || selection.architecture) {
       const regionZones = r.zones ?? [];
       compatible = regionZones.some((zone) => {
         if (!gcpZoneHasGpuType(catalog, zone, gpuType)) return false;
         if (
           selection.machine_type
             ? !gcpZoneHasMachineType(catalog, zone, selection.machine_type)
-            : !gcpZoneHasMachinePrefix(catalog, zone, gpuPrefixes)
+            : selection.architecture
+              ? !gcpZoneHasMachineArchitecture(
+                  catalog,
+                  zone,
+                  selection.architecture,
+                )
+              : !gcpZoneHasMachinePrefix(catalog, zone, gpuPrefixes)
         ) {
           return false;
         }
@@ -1372,7 +1397,9 @@ export const getGcpZoneOptions = (
     const gpuCompatible = gcpZoneHasGpuType(catalog, z, gpuType);
     const machineCompatible = selection.machine_type
       ? gcpZoneHasMachineType(catalog, z, selection.machine_type)
-      : gcpZoneHasMachinePrefix(catalog, z, gpuPrefixes);
+      : selection.architecture
+        ? gcpZoneHasMachineArchitecture(catalog, z, selection.architecture)
+        : gcpZoneHasMachinePrefix(catalog, z, gpuPrefixes);
     const compatible = gpuCompatible && machineCompatible;
     return {
       value: z,

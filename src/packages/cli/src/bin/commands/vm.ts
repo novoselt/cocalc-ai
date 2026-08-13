@@ -543,7 +543,8 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           region: opts.region,
           zone: opts.zone,
           machine_type: opts.machine,
-          gpu_type: opts.gpuType,
+          gpu_type:
+            opts.gpuType && opts.gpuType !== "none" ? opts.gpuType : undefined,
           gpu_count: Number(opts.gpuCount),
           pricing_model: opts.spot ? "spot" : "on_demand",
           allow_on_demand_fallback: opts.allowStandardFallback === true,
