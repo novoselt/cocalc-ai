@@ -34,6 +34,10 @@ import {
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
 import {
+  normalizeManagedVmSshPublicKey,
+  resolveManagedVmCreateSshAuthorization,
+} from "@cocalc/server/compute/ssh-authorization";
+import {
   ensureProviderComputeSshAccess,
   deleteOrphanProviderComputeAddress,
   deleteOrphanProviderComputeBootDisk,
@@ -228,23 +232,6 @@ function normalizeZone(value: string) {
     throw new Error(`invalid GCP zone '${value}'`);
   }
   return zone;
-}
-
-function normalizeSshPublicKey(value: string) {
-  const key = `${value ?? ""}`.trim();
-  if (!key) return "";
-  if (key.includes("\n") || key.includes("\r")) {
-    throw new Error("ssh_public_key must contain exactly one public key");
-  }
-  if (
-    !/^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp\d+)\s+[A-Za-z0-9+/]+={0,3}(?:\s+[^\r\n]+)?$/.test(
-      key,
-    )
-  ) {
-    throw new Error("ssh_public_key must be an OpenSSH public key");
-  }
-  if (key.length > 16_384) throw new Error("ssh_public_key is too large");
-  return key;
 }
 
 function normalizeIdempotencyKey(value: string) {
@@ -828,22 +815,21 @@ export async function createVm(
     },
     require_fresh_auth: true,
   });
-  const sshPublicKey = normalizeSshPublicKey(opts.ssh_public_key ?? "");
-  let configureProjectSsh = false;
-  if (opts.configure_project_ssh === true) {
-    const projectKey = normalizeSshPublicKey(
-      (await getManagedVmProjectSshPublicKey({
-        account_id: accountId,
-        project_id: opts.project_id,
-      })) ?? "",
-    );
-    if (!projectKey || projectKey !== sshPublicKey) {
-      throw new Error(
-        "automatic project SSH configuration requires the exact project deploy public key",
-      );
-    }
-    configureProjectSsh = true;
-  }
+  const projectKey =
+    opts.configure_project_ssh === true || opts.ssh_public_key == null
+      ? await getManagedVmProjectSshPublicKey({
+          account_id: accountId,
+          project_id: opts.project_id,
+        })
+      : null;
+  const {
+    ssh_public_key: sshPublicKey,
+    configure_project_ssh: configureProjectSsh,
+  } = resolveManagedVmCreateSshAuthorization({
+    requested_key: opts.ssh_public_key,
+    configure_project_ssh: opts.configure_project_ssh,
+    project_key: projectKey,
+  });
   const providerInstanceId = `cocalc-vm-${id.replaceAll("-", "").slice(0, 24)}`;
   const vm = await insertComputeVm(
     {
@@ -1503,7 +1489,7 @@ export async function authorizeSshKey(opts: {
   idempotency_key: string;
 }) {
   const accountId = requireAccount(opts.account_id);
-  const key = normalizeSshPublicKey(opts.ssh_public_key);
+  const key = normalizeManagedVmSshPublicKey(opts.ssh_public_key);
   if (!key) throw new Error("ssh_public_key is required");
   const vm = await resolveOwned(accountId, opts.id_or_name);
   return await authorizeSshKeyForVm({
@@ -1591,7 +1577,7 @@ async function authorizeVerifiedProjectSshKey(opts: {
 }) {
   const projectId = `${opts.project_id ?? ""}`.trim();
   if (!projectId) throw new Error("must be a project");
-  const key = normalizeSshPublicKey(opts.ssh_public_key);
+  const key = normalizeManagedVmSshPublicKey(opts.ssh_public_key);
   if (!key) throw new Error("ssh_public_key is required");
   const vm = await resolveProjectComputeVm({
     project_id: projectId,
@@ -1607,7 +1593,7 @@ async function authorizeVerifiedProjectSshKey(opts: {
         { code: 403 },
       );
     }
-    const projectKey = normalizeSshPublicKey(
+    const projectKey = normalizeManagedVmSshPublicKey(
       (await getManagedVmProjectSshPublicKey({
         account_id: opts.agent_auth.account_id,
         project_id: projectId,

@@ -139,6 +139,21 @@ describe("vm list scope", () => {
 });
 
 describe("vm create", () => {
+  it("defaults to the attached project's deploy key", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "project-key",
+      "--project",
+      "project-id",
+    ]);
+    assert.equal(createCalls[0]?.ssh_public_key, undefined);
+    assert.equal(createCalls[0]?.configure_project_ssh, true);
+  });
+
   it("can deliberately create without an initial SSH key", async () => {
     const { program, createCalls } = harness();
     await program.parseAsync([
@@ -152,6 +167,7 @@ describe("vm create", () => {
       "--no-ssh-key",
     ]);
     assert.equal(createCalls[0]?.ssh_public_key, "");
+    assert.equal(createCalls[0]?.configure_project_ssh, false);
   });
 
   it("accepts the literal public key shown by the web UI", async () => {
@@ -171,6 +187,7 @@ describe("vm create", () => {
       createCalls[0]?.ssh_public_key,
       "ssh-ed25519 AAAAUSER user@example.com",
     );
+    assert.equal(createCalls[0]?.configure_project_ssh, false);
   });
 
   it("reports when provider provisioning is queued", async () => {

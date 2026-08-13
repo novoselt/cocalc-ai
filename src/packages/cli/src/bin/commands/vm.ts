@@ -522,12 +522,15 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             "use only one of --ssh-public-key, --ssh-public-key-value, or --no-ssh-key",
           );
         }
+        const hasExplicitKey = keySources.length > 0;
         const key =
           opts.sshKey === false
             ? { key: "", path: undefined }
             : opts.sshPublicKeyValue
               ? { key: `${opts.sshPublicKeyValue}`.trim(), path: undefined }
-              : resolvePublicKey(opts.sshPublicKey);
+              : opts.sshPublicKey
+                ? resolvePublicKey(opts.sshPublicKey)
+                : { key: undefined, path: undefined };
         progress(
           `[vm create] Submitting '${name}' (${opts.provider}, ${opts.machine}, ${opts.zone ?? opts.region})...`,
         );
@@ -548,7 +551,8 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           boot_disk_gb: Number(opts.bootDiskGb),
           home_volume: opts.homeVolume,
           ssh_public_key: key.key,
-          configure_project_ssh: opts.configureProjectSsh !== false,
+          configure_project_ssh:
+            opts.configureProjectSsh !== false && !hasExplicitKey,
           idempotency_key: randomUUID(),
         });
         progress(
