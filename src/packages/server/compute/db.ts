@@ -112,6 +112,7 @@ export async function insertComputeVm(
     const { rows } = await client.query<ComputeVmRow>(
       `INSERT INTO compute_vms (
          id, name, owner_account_id, owning_bay_id, project_id, provider,
+         operating_system, operating_system_version, os_license_hourly_price,
          region, zone, architecture, machine_type, cpu, ram_gb, gpu_type,
          gpu_count, provider_spec, funding_mode, desired_pricing_model,
          effective_pricing_model, boot_disk_gb, boot_disk_id, state,
@@ -127,9 +128,9 @@ export async function insertComputeVm(
          spot_recovery_state, idempotency_key, error, metadata
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-         $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,
-         NOW(),NOW(),$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,
-         $50,$51
+         $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
+         $37,$38,NOW(),NOW(),$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,
+         $51,$52,$53,$54
        ) RETURNING *`,
       [
         row.id,
@@ -138,6 +139,9 @@ export async function insertComputeVm(
         row.owning_bay_id,
         row.project_id,
         row.provider,
+        row.operating_system,
+        row.operating_system_version,
+        row.os_license_hourly_price,
         row.region,
         row.zone,
         row.architecture,

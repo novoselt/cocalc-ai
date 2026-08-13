@@ -30,6 +30,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
   const listCalls: any[] = [];
   const projectListCalls: any[] = [];
   const catalogCalls: any[] = [];
+  const rdpCalls: any[] = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -65,6 +66,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
               state: "ready",
               public_ip: "203.0.113.10",
               ssh_user: "user",
+              operating_system: "windows",
             }),
             authorizeSshKey: async (opts: any) => {
               sshAuthorizationCalls.push(opts);
@@ -74,6 +76,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
                 state: "ready",
                 public_ip: "203.0.113.10",
                 ssh_user: "user",
+                operating_system: "windows",
               };
             },
             authorizeProjectSshKey: async (callOpts: any) => {
@@ -84,6 +87,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
                 state: "ready",
                 public_ip: "203.0.113.10",
                 ssh_user: "user",
+                operating_system: "windows",
               };
             },
             createVm: async (opts: any) => {
@@ -93,6 +97,18 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
             setVmTtl: async (opts: any) => {
               ttlCalls.push(opts);
               return { id: "vm-id", name: "build-vm", ...opts };
+            },
+            prepareWindowsRdp: async (callOpts: any) => {
+              rdpCalls.push(callOpts);
+              return {
+                id: "vm-id",
+                name: "build-vm",
+                hostname: "vm.example.test",
+                ssh_user: "user",
+                windows_user: "user",
+                windows_password: "temporary-password",
+                remote_port: 3389,
+              };
             },
           },
         },
@@ -122,6 +138,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
     listCalls,
     projectListCalls,
     catalogCalls,
+    rdpCalls,
   };
 }
 
@@ -186,6 +203,7 @@ describe("vm create", () => {
     assert.equal(createCalls[0]?.ssh_public_key, undefined);
     assert.equal(createCalls[0]?.configure_project_ssh, true);
     assert.equal(createCalls[0]?.gpu_count, undefined);
+    assert.equal(createCalls[0]?.operating_system, "linux");
   });
 
   it("passes an explicit fixed GPU count", async () => {
@@ -206,6 +224,23 @@ describe("vm create", () => {
       "1",
     ]);
     assert.equal(createCalls[0]?.gpu_count, 1);
+  });
+
+  it("creates Windows with its safer boot-disk default", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "windows-vm",
+      "--project",
+      "project-id",
+      "--os",
+      "windows",
+    ]);
+    assert.equal(createCalls[0]?.operating_system, "windows");
+    assert.equal(createCalls[0]?.boot_disk_gb, 80);
   });
 
   it("can deliberately create without an initial SSH key", async () => {
@@ -261,7 +296,7 @@ describe("vm create", () => {
       "--no-ssh-key",
     ]);
     assert.deepEqual(progressMessages, [
-      "[vm create] Submitting 'status-vm' (gcp, e2-standard-2, us-west1-a)...",
+      "[vm create] Submitting 'status-vm' (gcp, linux, e2-standard-2, us-west1-a)...",
       "[vm create] Provider provisioning queued for 'status-vm' (id vm-id).",
     ]);
   });
@@ -342,6 +377,33 @@ describe("vm ssh", () => {
       "-la",
     ]);
     assert.deepEqual(callbackResults, [undefined]);
+  });
+});
+
+describe("vm rdp", () => {
+  it("returns a private tunnel and freshly rotated credentials", async () => {
+    const { program, callbackResults, rdpCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "rdp",
+      "build-vm",
+      "--local-port",
+      "14489",
+    ]);
+
+    assert.equal(rdpCalls[0]?.id_or_name, "vm-id");
+    assert.deepEqual(callbackResults[0], {
+      id: "vm-id",
+      name: "build-vm",
+      rdp_address: "127.0.0.1:14489",
+      username: "user",
+      password: "temporary-password",
+      tunnel_command:
+        'ssh "-N" "-o" "ExitOnForwardFailure=yes" "-L" "14489:127.0.0.1:3389" "-o" "ForwardAgent=no" "-o" "StrictHostKeyChecking=accept-new" "user@203.0.113.10"',
+      note: "TCP 3389 is not public. Keep the SSH tunnel open while using RDP.",
+    });
   });
 });
 
@@ -428,6 +490,7 @@ describe("vm list", () => {
           name: "build-vm",
           state: "ready",
           machine: "e2-standard-2",
+          os: "Linux",
           pricing: "Spot",
           zone: "us-central1-a",
           ip: "203.0.113.10",

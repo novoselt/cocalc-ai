@@ -249,7 +249,7 @@ function sshArgs(vm: any, opts: { identity?: string }, command?: string[]) {
     "StrictHostKeyChecking=accept-new",
   ];
   if (opts.identity) args.push("-i", expandHome(opts.identity));
-  args.push(`user@${vm.public_hostname || vm.public_ip}`);
+  args.push(`${vm.ssh_user || "user"}@${vm.public_hostname || vm.public_ip}`);
   if (command?.length) args.push(...command);
   return args;
 }
@@ -317,7 +317,7 @@ export function vmRsyncArgs(
   if (opts.identity) ssh.push("-i", expandHome(opts.identity));
   const next = [...args];
   next[endpoint.index] =
-    `user@${vm.public_hostname || vm.public_ip}:${endpoint.path}`;
+    `${vm.ssh_user || "user"}@${vm.public_hostname || vm.public_ip}:${endpoint.path}`;
   return ["-e", ssh.map(shellQuote).join(" "), ...next];
 }
 
@@ -326,6 +326,10 @@ export function vmListSummary(rows: any[]) {
     name: row.name,
     state: row.state,
     machine: row.machine_type,
+    os:
+      (row.operating_system ?? "linux") === "windows"
+        ? "Windows 2022"
+        : "Linux",
     pricing: row.effective_pricing_model === "spot" ? "Spot" : "Standard",
     zone: row.zone,
     ip: row.public_ip ?? "",
@@ -493,6 +497,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .description("create a managed compute VM")
     .requiredOption("--project <project_id>", "attached CoCalc project")
     .option("--provider <provider>", "gcp or nebius", "gcp")
+    .option("--os <operating_system>", "linux or windows", "linux")
     .option("--region <region>", "provider region", "us-central1")
     .option("--zone <zone>", "provider zone")
     .option("--architecture <arch>", "x86_64 or arm64", "x86_64")
@@ -508,7 +513,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       false,
     )
     .option("--ttl <duration>", "optional deletion deadline, e.g. 30m or 8h")
-    .option("--boot-disk-gb <gb>", "persistent root disk size", "20")
+    .option("--boot-disk-gb <gb>", "persistent root disk size")
     .option(
       "--home-volume <name>",
       "existing persistent volume mounted at /home/user",
@@ -553,12 +558,13 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
                 ? resolvePublicKey(opts.sshPublicKey)
                 : { key: undefined, path: undefined };
         progress(
-          `[vm create] Submitting '${name}' (${opts.provider}, ${opts.machine}, ${opts.zone ?? opts.region})...`,
+          `[vm create] Submitting '${name}' (${opts.provider}, ${opts.os}, ${opts.machine}, ${opts.zone ?? opts.region})...`,
         );
         const created = await ctx.hub.compute.createVm({
           project_id: opts.project,
           name,
           provider: opts.provider,
+          operating_system: opts.os,
           funding_mode: opts.fundingMode,
           architecture: opts.architecture,
           region: opts.region,
@@ -570,7 +576,9 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           pricing_model: opts.spot ? "spot" : "on_demand",
           allow_on_demand_fallback: opts.allowStandardFallback === true,
           ttl_minutes: opts.ttl ? parseTtlMinutes(opts.ttl) : null,
-          boot_disk_gb: Number(opts.bootDiskGb),
+          boot_disk_gb: Number(
+            opts.bootDiskGb ?? (opts.os === "windows" ? 80 : 20),
+          ),
           home_volume: opts.homeVolume,
           ssh_public_key: key.key,
           configure_project_ssh:
@@ -592,7 +600,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             (vm) => getVmForContext(ctx, vm),
             created.id,
             new Set(["ready"]),
-            5 * 60_000,
+            opts.os === "windows" ? 15 * 60_000 : 5 * 60_000,
           )),
           ...(key.path ? { ssh_public_key_path: key.path } : {}),
         };
@@ -760,6 +768,64 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         });
       },
     );
+
+  vm.command("rdp <vm>")
+    .description(
+      "rotate a Windows login password and print a private RDP-over-SSH tunnel",
+    )
+    .option("--identity <path>", "SSH private key")
+    .option("--ssh-public-key <path>", "public key matching the SSH identity")
+    .option("--local-port <port>", "localhost port for the tunnel", "13389")
+    .option("--tunnel", "run the SSH tunnel in the foreground", false)
+    .action(async (idOrName: string, opts: any, command: Command) => {
+      await withContext(command, "vm rdp", async (ctx) => {
+        requireAccountAuth(ctx, "vm rdp");
+        const row = await authorizeSsh(ctx, idOrName, opts);
+        if ((row.operating_system ?? "linux") !== "windows") {
+          throw new Error(`compute VM '${row.name}' is not a Windows VM`);
+        }
+        const localPort = Number(opts.localPort);
+        if (
+          !Number.isInteger(localPort) ||
+          localPort < 1024 ||
+          localPort > 65535
+        ) {
+          throw new Error("--local-port must be an integer from 1024 to 65535");
+        }
+        const prepared = await ctx.hub.compute.prepareWindowsRdp({
+          id_or_name: row.id,
+        });
+        const tunnelArgs = sshArgs(row, opts);
+        tunnelArgs.unshift(
+          "-N",
+          "-o",
+          "ExitOnForwardFailure=yes",
+          "-L",
+          `${localPort}:127.0.0.1:${prepared.remote_port}`,
+        );
+        const tunnelCommand = `ssh ${tunnelArgs
+          .map((arg) => JSON.stringify(arg))
+          .join(" ")}`;
+        const result = {
+          id: row.id,
+          name: row.name,
+          rdp_address: `127.0.0.1:${localPort}`,
+          username: prepared.windows_user,
+          password: prepared.windows_password,
+          tunnel_command: tunnelCommand,
+          note: "TCP 3389 is not public. Keep the SSH tunnel open while using RDP.",
+        };
+        if (!opts.tunnel) return result;
+        process.stderr.write(
+          `[vm rdp] Connect your RDP client to ${result.rdp_address}\n` +
+            `[vm rdp] Username: ${result.username}\n` +
+            `[vm rdp] One-time displayed password: ${result.password}\n` +
+            "[vm rdp] Starting the private SSH tunnel; press Ctrl-C to stop it.\n",
+        );
+        runSsh(tunnelArgs);
+        return undefined;
+      });
+    });
 
   vm.command("rsync <rsync_args...>")
     .description(
@@ -974,7 +1040,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         const block = buildVmSshConfigBlock({
           alias,
           hostname: row.public_hostname || row.public_ip,
-          username: "user",
+          username: row.ssh_user || "user",
           identity,
         });
         mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });

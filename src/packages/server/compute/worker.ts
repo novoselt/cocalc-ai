@@ -1217,6 +1217,18 @@ export function managedVmReadinessCommand(
   vm: ComputeVmRow,
   expectedHomeDevice?: string,
 ): string {
+  if ((vm.operating_system ?? "linux") === "windows") {
+    const script = [
+      '$ErrorActionPreference="Stop"',
+      'if ($env:USERNAME -ne "user") { exit 10 }',
+      'if ((Get-Service sshd).Status -ne "Running") { exit 11 }',
+      `$revision=(Get-Content -Raw "C:\\ProgramData\\CoCalc\\bootstrap-ready.txt").Trim(); if ($revision -ne "${vm.bootstrap_revision}") { exit 12 }`,
+      'Write-Output "ready"',
+    ].join("; ");
+    return `powershell.exe -NoLogo -NoProfile -NonInteractive -Command ${shellQuote(
+      script,
+    )}`;
+  }
   const checks = [
     'test "$(id -un)" = user',
     'test "$(id -u)" = 1001',
@@ -1233,7 +1245,13 @@ export function managedVmReadinessCommand(
   return `bash -lc ${shellQuote(checks)}`;
 }
 
-async function waitForSsh(vm: ComputeVmRow, host: string, timeoutMs = 180_000) {
+async function waitForSsh(
+  vm: ComputeVmRow,
+  host: string,
+  timeoutMs = (vm.operating_system ?? "linux") === "windows"
+    ? 12 * 60_000
+    : 180_000,
+) {
   const deadline = Date.now() + timeoutMs;
   let lastError = "SSH is not ready";
   const identity = await getHostOwnerBaySshIdentity();
@@ -1282,7 +1300,7 @@ async function waitForSsh(vm: ComputeVmRow, host: string, timeoutMs = 180_000) {
           "UserKnownHostsFile=/dev/null",
           "-o",
           "ConnectTimeout=5",
-          `user@${host}`,
+          `${vm.ssh_user || "user"}@${host}`,
           command,
         ],
         { timeout: 15_000 },

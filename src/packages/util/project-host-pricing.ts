@@ -105,6 +105,7 @@ export type HostPricingModel = "on_demand" | "spot";
 export type HostPriceBreakdownItemKey =
   | "vm"
   | "gpu"
+  | "windows_license"
   | "disk"
   | "shared_scratch_disk"
   | "public_ipv4";
@@ -158,6 +159,7 @@ export type GcpCatalogRateEstimateInput = {
   gpu_type?: string | null;
   gpu_count?: number | null;
   pricing_model?: HostPricingModel | null;
+  operating_system?: "linux" | "windows" | null;
 };
 
 export type NebiusCatalogPriceItem = {
@@ -181,6 +183,10 @@ const GCP_PUBLIC_IPV4_HOURLY_USD = {
   on_demand: 0.005,
   spot: 0.0025,
 } as const;
+
+// GCP bills this per visible vCPU while Windows Server is running. Spot
+// discounts apply to compute, but not to the operating-system license.
+export const GCP_WINDOWS_SERVER_LICENSE_USD_PER_VCPU_HOUR = 0.046;
 
 function normalizeSurchargeFraction(value: unknown): number {
   const numeric = Number(value);
@@ -438,6 +444,14 @@ export function estimateGcpCatalogRateBreakdown(
       billing_states: ["running"],
     },
   ];
+  if (input.operating_system === "windows") {
+    items.push({
+      key: "windows_license",
+      label: "Windows Server license",
+      usd_per_hour: GCP_WINDOWS_SERVER_LICENSE_USD_PER_VCPU_HOUR * Number(cpus),
+      billing_states: ["running"],
+    });
+  }
   const gpuType = `${input.gpu_type ?? ""}`.trim() as GcpGpuCatalogKey;
   const gpuCount = Number(input.gpu_count ?? 0);
   if (gpuType && gpuCount > 0) {

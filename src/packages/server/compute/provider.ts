@@ -419,6 +419,7 @@ function specFor(
   pricingModel = vm.effective_pricing_model,
   volume?: ComputeVolumeRow,
 ): HostSpec {
+  const operatingSystem = vm.operating_system ?? "linux";
   const cpu =
     Number(vm.cpu) ||
     Number(vm.metadata?.machine?.cpu) ||
@@ -458,18 +459,29 @@ function specFor(
       boot_disk_name: vm.boot_disk_id,
       boot_disk_provider_id: vm.metadata?.runtime?.diskIds?.boot,
       persistent_boot_disk: true,
-      ...(vm.provider === "gcp"
+      ...(vm.provider === "gcp" && operatingSystem === "windows"
         ? {
-            source_image_project: "ubuntu-os-cloud",
-            source_image_family:
-              vm.architecture === "arm64"
-                ? "ubuntu-2404-lts-arm64"
-                : "ubuntu-2404-lts-amd64",
+            source_image_project: "windows-cloud",
+            source_image_family: "windows-2022",
+            instance_metadata: {
+              "enable-windows-ssh": "TRUE",
+              "sysprep-specialize-script-cmd":
+                "googet -noconfirm=true install google-compute-engine-ssh",
+              "windows-startup-script-ps1": managedWindowsVmBootstrapScript(vm),
+            },
           }
-        : {
-            public_address_id: vm.public_address_id,
-            shared_disk_device_id: "home",
-          }),
+        : vm.provider === "gcp"
+          ? {
+              source_image_project: "ubuntu-os-cloud",
+              source_image_family:
+                vm.architecture === "arm64"
+                  ? "ubuntu-2404-lts-arm64"
+                  : "ubuntu-2404-lts-amd64",
+            }
+          : {
+              public_address_id: vm.public_address_id,
+              shared_disk_device_id: "home",
+            }),
       ssh_user: vm.ssh_user,
       ssh_public_key: vm.ssh_public_key,
       ssh_public_keys: vm.metadata?.ssh_public_keys,
@@ -486,7 +498,10 @@ function specFor(
       shared_disk_name: volume?.provider_disk_id,
       shared_disk_id:
         volume?.metadata?.provider?.id ?? volume?.provider_disk_id,
-      startup_script: managedVmBootstrapScript(vm, volume),
+      startup_script:
+        operatingSystem === "windows"
+          ? undefined
+          : managedVmBootstrapScript(vm, volume),
     },
   };
 }
@@ -685,6 +700,82 @@ chown user:user /home/user/.ssh/authorized_keys
 chmod 0600 /home/user/.ssh/authorized_keys
 install -d -m 0755 /run/cocalc-managed-vm
 printf '%s\n' '${vm.bootstrap_revision}' >/run/cocalc-managed-vm/bootstrap-ready
+`;
+}
+
+export function managedWindowsVmBootstrapScript(vm: ComputeVmRow): string {
+  const keys = Array.from(
+    new Set(
+      [
+        vm.ssh_public_key,
+        ...(Array.isArray(vm.metadata?.ssh_public_keys)
+          ? vm.metadata.ssh_public_keys
+          : []),
+      ]
+        .map((key) => `${key ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ).join("\n");
+  const encodedKeys = Buffer.from(`${keys}\n`, "utf8").toString("base64");
+  return `$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
+if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+  $googet = "C:\\Program Files\\Google\\Compute Engine\\package_manager\\googet.exe"
+  if (Test-Path $googet) {
+    & $googet -noconfirm=true install google-compute-engine-ssh
+  }
+}
+if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+  Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+}
+
+$account = Get-LocalUser -Name "user" -ErrorAction SilentlyContinue
+if (-not $account) {
+  $bootstrapPassword = ConvertTo-SecureString (([guid]::NewGuid().ToString("N")) + "aA1!") -AsPlainText -Force
+  New-LocalUser -Name "user" -Password $bootstrapPassword -AccountNeverExpires -PasswordNeverExpires | Out-Null
+}
+if (-not (Get-LocalGroupMember -Group "Administrators" -Member "user" -ErrorAction SilentlyContinue)) {
+  Add-LocalGroupMember -Group "Administrators" -Member "user"
+}
+
+$home = "C:\\Users\\user"
+$sshDir = Join-Path $home ".ssh"
+New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+$keys = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${encodedKeys}"))
+[IO.File]::WriteAllText((Join-Path $sshDir "authorized_keys"), $keys, [Text.UTF8Encoding]::new($false))
+$principal = "$env:COMPUTERNAME\\user"
+& icacls.exe $sshDir /inheritance:r /grant:r ($principal + ":(OI)(CI)F") "SYSTEM:(OI)(CI)F" | Out-Null
+& icacls.exe (Join-Path $sshDir "authorized_keys") /inheritance:r /grant:r ($principal + ":F") "SYSTEM:F" | Out-Null
+
+$sshdConfig = @'
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthorizedKeysFile .ssh/authorized_keys
+AllowUsers user
+Subsystem sftp sftp-server.exe
+'@
+[IO.File]::WriteAllText("C:\\ProgramData\\ssh\\sshd_config", $sshdConfig, [Text.UTF8Encoding]::new($false))
+New-Item -Path "HKLM:\\SOFTWARE\\OpenSSH" -Force | Out-Null
+New-ItemProperty -Path "HKLM:\\SOFTWARE\\OpenSSH" -Name DefaultShell -Value "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -PropertyType String -Force | Out-Null
+Set-Service -Name sshd -StartupType Automatic
+Restart-Service sshd
+if (-not (Get-NetFirewallRule -Name "CoCalc-Managed-SSH" -ErrorAction SilentlyContinue)) {
+  New-NetFirewallRule -Name "CoCalc-Managed-SSH" -DisplayName "CoCalc managed SSH" -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow | Out-Null
+}
+if (-not (Get-NetFirewallRule -Name "CoCalc-Managed-HTTPS" -ErrorAction SilentlyContinue)) {
+  New-NetFirewallRule -Name "CoCalc-Managed-HTTPS" -DisplayName "CoCalc managed HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow | Out-Null
+}
+
+Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name fDenyTSConnections -Value 0
+Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+Set-Service -Name TermService -StartupType Automatic
+Start-Service -Name TermService -ErrorAction SilentlyContinue
+
+$readyDir = "C:\\ProgramData\\CoCalc"
+New-Item -ItemType Directory -Force -Path $readyDir | Out-Null
+[IO.File]::WriteAllText((Join-Path $readyDir "bootstrap-ready.txt"), "${vm.bootstrap_revision}", [Text.UTF8Encoding]::new($false))
 `;
 }
 
@@ -1354,6 +1445,56 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
       },
     }),
     creds,
+  );
+}
+
+export async function prepareProviderComputeWindowsRdp(
+  vm: ComputeVmRow,
+  password: string,
+): Promise<void> {
+  if ((vm.operating_system ?? "linux") !== "windows") {
+    throw new Error("RDP preparation requires a Windows VM");
+  }
+  if (vm.state !== "ready") {
+    throw new Error(`compute VM '${vm.name}' is not ready`);
+  }
+  const host = vm.public_hostname || vm.public_ip;
+  if (!host) throw new Error("managed compute VM has no SSH address");
+  const identity = await getHostOwnerBaySshIdentity();
+  const passwordBase64 = Buffer.from(password, "utf8").toString("base64");
+  const script = `$ErrorActionPreference = "Stop"
+$passwordText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("${passwordBase64}"))
+$securePassword = ConvertTo-SecureString $passwordText -AsPlainText -Force
+Set-LocalUser -Name "user" -Password $securePassword -PasswordNeverExpires $true
+Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name fDenyTSConnections -Value 0
+Set-ItemProperty -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" -Name UserAuthentication -Value 1
+Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+Write-Output "rdp-ready"`;
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  await execFileAsync(
+    "ssh",
+    [
+      "-i",
+      identity.privateKeyPath,
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "ConnectTimeout=10",
+      `${vm.ssh_user || "user"}@${host}`,
+      "powershell.exe",
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      encoded,
+    ],
+    { timeout: 60_000, maxBuffer: 1024 * 1024 },
   );
 }
 

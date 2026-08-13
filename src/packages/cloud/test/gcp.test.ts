@@ -322,6 +322,10 @@ describe("GcpProvider", () => {
     const spec = buildSpec({
       metadata: {
         bootstrap_url: "https://example.com/bootstrap.sh",
+        instance_metadata: {
+          "enable-windows-ssh": "TRUE",
+          "windows-startup-script-ps1": "Write-Output ready",
+        },
         subnetwork_uri:
           "projects/compute-proj/regions/us-west1/subnetworks/hostile-guests",
       },
@@ -351,6 +355,11 @@ describe("GcpProvider", () => {
         (item: any) => item.key === "startup-script",
       )?.value,
     ).toContain("bootstrap.sh");
+    expect(
+      insertArgs.instanceResource.metadata.items.find(
+        (item: any) => item.key === "windows-startup-script-ps1",
+      )?.value,
+    ).toBe("Write-Output ready");
 
     expect(runtime.public_ip).toBe("203.0.113.10");
     expect(runtime.private_ip).toBe("10.180.0.16");

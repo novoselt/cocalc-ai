@@ -76,6 +76,7 @@ export interface DedicatedHostRateEstimateInput {
   gpu_count?: number | null;
   pricing_model?: "on_demand" | "spot" | null;
   billing_state?: DedicatedHostBillingState;
+  operating_system?: "linux" | "windows" | null;
 }
 
 export interface DedicatedHostRateEstimate {
@@ -1365,6 +1366,7 @@ function pricingConfiguration(
       ? {
           machine_type: input.machine_type ?? null,
           pricing_model: input.pricing_model ?? null,
+          operating_system: input.operating_system ?? "linux",
         }
       : {}),
     disk_gb: input.disk_gb ?? null,

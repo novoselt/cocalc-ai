@@ -24,7 +24,7 @@ describe("managed compute CLI equivalents", () => {
         },
       }),
     ).toBe(
-      "cocalc vm create --project project-id --provider gcp --funding-mode account-prepaid --architecture x86_64 --region us-central1 --machine t2d-standard-16 --zone us-central1-a --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --home-volume build-cache --ssh-public-key-value 'ssh-ed25519 AAAATEST user@example.com' --wait build-vm",
+      "cocalc vm create --project project-id --provider gcp --os linux --funding-mode account-prepaid --architecture x86_64 --region us-central1 --machine t2d-standard-16 --zone us-central1-a --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --home-volume build-cache --ssh-public-key-value 'ssh-ed25519 AAAATEST user@example.com' --wait build-vm",
     );
   });
 
@@ -36,6 +36,20 @@ describe("managed compute CLI equivalents", () => {
         values: { name: "open-ended", ttl_minutes: null },
       }),
     ).not.toContain("--ttl");
+  });
+
+  it("renders an explicit Windows selection", () => {
+    expect(
+      vmCreateCli({
+        api: "https://staging.cocalc.ai",
+        project_id: "project-id",
+        values: {
+          name: "windows-vm",
+          operating_system: "windows",
+          boot_disk_gb: 80,
+        },
+      }),
+    ).toContain("--os windows");
   });
 
   it("omits the no-GPU UI sentinel", () => {

@@ -14,6 +14,7 @@ import type { HostCatalog } from "./hosts";
 export type ComputeVmPricingModel = "spot" | "on_demand";
 export type ComputeVmDesiredState = "running" | "stopped" | "deleted";
 export type ManagedComputeProviderId = "gcp" | "nebius";
+export type ManagedComputeOperatingSystem = "linux" | "windows";
 export type ManagedComputeVolumeDiskType =
   | "balanced"
   | "ssd"
@@ -87,6 +88,9 @@ export interface ComputeVm {
   owning_bay_id: string;
   project_id: string;
   provider: ManagedComputeProviderId;
+  operating_system: ManagedComputeOperatingSystem;
+  operating_system_version: string;
+  os_license_hourly_price: string;
   region: string;
   zone?: string | null;
   architecture: "x86_64" | "arm64";
@@ -144,6 +148,7 @@ export interface CreateComputeVmRequest {
   project_id: string;
   name: string;
   provider: ManagedComputeProviderId;
+  operating_system?: ManagedComputeOperatingSystem;
   architecture?: "x86_64" | "arm64";
   region: string;
   zone?: string;
@@ -223,8 +228,18 @@ export interface ComputeCatalog {
     reason?: string;
   }>;
   default_funding_mode: ManagedComputeFundingMode;
+  operating_systems: Array<{
+    value: ManagedComputeOperatingSystem;
+    label: string;
+    providers: ManagedComputeProviderId[];
+    architectures: Array<"x86_64" | "arm64">;
+    versions: string[];
+    minimum_boot_disk_gb: number;
+    license_per_vcpu_hourly_usd: string;
+  }>;
   defaults: {
     provider: ManagedComputeProviderId;
+    operating_system: ManagedComputeOperatingSystem;
     architecture: "x86_64" | "arm64";
     region: string;
     zone: string;
@@ -240,6 +255,16 @@ export interface ComputeCatalog {
   };
 }
 
+export interface PrepareComputeWindowsRdpResult {
+  id: string;
+  name: string;
+  hostname: string;
+  ssh_user: string;
+  windows_user: string;
+  windows_password: string;
+  remote_port: 3389;
+}
+
 export const compute = {
   getCatalog: authFirstRequireAccountOrComputeAgent,
   createVm: authFirstRequireAccountOrComputeAgent,
@@ -248,6 +273,7 @@ export const compute = {
   listProjectVms: authFirstRequireComputeProject,
   getProjectVm: authFirstRequireComputeProject,
   authorizeSshKey: authFirstRequireAccount,
+  prepareWindowsRdp: authFirstRequireAccount,
   authorizeProjectSshKey: authFirstRequireComputeProject,
   authorizeProjectSshKeyFromHost: authFirstRequireHost,
   startVm: authFirstRequireAccountOrComputeAgent,
@@ -300,6 +326,12 @@ export interface ComputeApi {
     ssh_public_key: string;
     idempotency_key: string;
   }) => Promise<ComputeVm>;
+  prepareWindowsRdp: (opts: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
+    id_or_name: string;
+  }) => Promise<PrepareComputeWindowsRdpResult>;
   authorizeProjectSshKey: (opts: {
     project_id?: string;
     id_or_name: string;

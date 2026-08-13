@@ -50,6 +50,18 @@ describe("managed VM readiness command", () => {
     expect(command).toContain("bootstrap-ready");
     expect(command).toMatch(/'$/);
   });
+
+  it("uses a PowerShell readiness contract for Windows", () => {
+    const command = managedVmReadinessCommand({
+      operating_system: "windows",
+      bootstrap_revision: 1,
+    } as any);
+
+    expect(command).toContain("powershell.exe");
+    expect(command).toContain("bootstrap-ready.txt");
+    expect(command).toContain("Get-Service sshd");
+    expect(command).not.toContain("bash -lc");
+  });
 });
 
 describe("managed VM project SSH config reconciliation", () => {

@@ -18,6 +18,7 @@ export type ComputeVmState =
 export type ComputeVmDesiredState = "running" | "stopped" | "deleted";
 export type ComputeVmPricingModel = "spot" | "on_demand";
 export type ManagedComputeProviderId = "gcp" | "nebius";
+export type ManagedComputeOperatingSystem = "linux" | "windows";
 export type ManagedComputeVolumeDiskType =
   | "balanced"
   | "ssd"
@@ -35,6 +36,9 @@ export interface ComputeVmRow {
   owning_bay_id: string;
   project_id: string;
   provider: ManagedComputeProviderId;
+  operating_system: ManagedComputeOperatingSystem;
+  operating_system_version: string;
+  os_license_hourly_price: string;
   region: string;
   zone?: string | null;
   architecture: "x86_64" | "arm64";

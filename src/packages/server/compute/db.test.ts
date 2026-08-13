@@ -52,6 +52,10 @@ function vmInput(
     owning_bay_id: "bay-0",
     project_id: overrides.project_id ?? randomUUID(),
     provider: overrides.provider ?? "gcp",
+    operating_system: overrides.operating_system ?? "linux",
+    operating_system_version:
+      overrides.operating_system_version ?? "ubuntu-24.04",
+    os_license_hourly_price: overrides.os_license_hourly_price ?? "0.000000",
     region: overrides.region ?? "us-central1",
     zone: Object.prototype.hasOwnProperty.call(overrides, "zone")
       ? overrides.zone

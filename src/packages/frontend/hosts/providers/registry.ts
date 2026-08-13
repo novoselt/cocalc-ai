@@ -204,6 +204,7 @@ export const isNebiusSpotSupported = (
 };
 
 export type ProviderSelection = {
+  operating_system?: "linux" | "windows";
   architecture?: "x86_64" | "arm64";
   region?: string;
   zone?: string;
@@ -589,6 +590,7 @@ const estimateGcpSelectionUsdPerHour = (
       shared_disk_type: next.shared_disk_type,
       shared_disk_gb: next.shared_disk_gb,
       storage_mode: next.storage_mode,
+      operating_system: next.operating_system,
     }),
     getDedicatedHostSurchargeFraction("gcp", next.pricing_settings),
   );
@@ -631,6 +633,7 @@ const estimateGcpSelectionBreakdown = (
       shared_disk_type: next.shared_disk_type,
       shared_disk_gb: next.shared_disk_gb,
       storage_mode: next.storage_mode,
+      operating_system: next.operating_system,
     }),
     getDedicatedHostSurchargeFraction("gcp", next.pricing_settings),
   );

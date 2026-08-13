@@ -6,6 +6,7 @@
 export interface VmCreateCliValues {
   name: string;
   provider: "gcp" | "nebius";
+  operating_system: "linux" | "windows";
   funding_mode: "site-funded" | "account-postpaid" | "account-prepaid";
   architecture: "x86_64" | "arm64";
   region: string;
@@ -62,6 +63,8 @@ export function vmCreateCli(opts: {
     opts.project_id,
     "--provider",
     values.provider ?? "gcp",
+    "--os",
+    values.operating_system ?? "linux",
     "--funding-mode",
     values.funding_mode ?? "account-prepaid",
     "--architecture",

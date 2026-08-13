@@ -537,6 +537,16 @@ export class GcpProvider implements CloudProvider {
     delete logMetadata.startup_script;
     delete logMetadata.bootstrap_url;
     delete logMetadata.user_data;
+    if (logMetadata.instance_metadata) {
+      logMetadata.instance_metadata = Object.fromEntries(
+        Object.keys(
+          logMetadata.instance_metadata as Record<string, unknown>,
+        ).map((key) => [
+          key,
+          key.includes("script") ? "[redacted script]" : "[set]",
+        ]),
+      );
+    }
     logger.info("gcp.createHost", {
       name: spec.name,
       region: spec.region,
@@ -730,6 +740,22 @@ export class GcpProvider implements CloudProvider {
         key: "ssh-keys",
         value: entries.join("\n"),
       });
+    }
+    const instanceMetadata = spec.metadata?.instance_metadata;
+    if (instanceMetadata && typeof instanceMetadata === "object") {
+      const reserved = new Set(metadataItems.map(({ key }) => key));
+      for (const [key, rawValue] of Object.entries(instanceMetadata)) {
+        if (reserved.has(key)) {
+          throw new Error(`gcp: instance metadata key '${key}' is reserved`);
+        }
+        if (!/^[a-zA-Z0-9_-]{1,128}$/.test(key)) {
+          throw new Error(`gcp: invalid instance metadata key '${key}'`);
+        }
+        if (typeof rawValue !== "string") {
+          throw new Error(`gcp: instance metadata '${key}' must be a string`);
+        }
+        metadataItems.push({ key, value: rawValue });
+      }
     }
 
     const guestAccelerators =

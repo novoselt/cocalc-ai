@@ -7,6 +7,7 @@ import {
   gcpInstanceIdForEgress,
   isProviderNotFound,
   managedVmBootstrapScript,
+  managedWindowsVmBootstrapScript,
   mergeManagedNebiusSpec,
   providerInstanceIdIsProvisional,
 } from "./provider";
@@ -59,6 +60,23 @@ describe("managedVmBootstrapScript", () => {
       "systemctl enable --now cocalc-grow-home-filesystem.timer",
     );
     expect(script).not.toContain("/work");
+  });
+});
+
+describe("managedWindowsVmBootstrapScript", () => {
+  it("creates a Windows user, OpenSSH service, private RDP, and readiness marker", () => {
+    const script = managedWindowsVmBootstrapScript({
+      ssh_public_key: "ssh-ed25519 AAAAOWNER owner",
+      bootstrap_revision: 1,
+      metadata: { ssh_public_keys: ["ssh-ed25519 AAAACONTROLLER controller"] },
+    } as ComputeVmRow);
+
+    expect(script).toContain('New-LocalUser -Name "user"');
+    expect(script).toContain("google-compute-engine-ssh");
+    expect(script).toContain("AuthorizedKeysFile .ssh/authorized_keys");
+    expect(script).toContain("fDenyTSConnections");
+    expect(script).toContain("bootstrap-ready.txt");
+    expect(script).not.toContain("ssh-ed25519 AAAAOWNER");
   });
 });
 

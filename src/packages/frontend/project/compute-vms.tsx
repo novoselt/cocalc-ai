@@ -300,10 +300,13 @@ function VmCreateModal({
   }, [form, initial, open]);
 
   const api = globalThis.location?.origin ?? "https://cocalc.ai";
+  const operatingSystem =
+    draft.operating_system ?? initial.operating_system ?? "linux";
   const provider = draft.provider ?? initial.provider;
   const hostCatalog = providerCatalog(catalog, provider);
   const availableVolumes = volumes.filter(
     (volume) =>
+      operatingSystem === "linux" &&
       volume.provider === provider &&
       volume.state === "ready" &&
       volume.attachment_state === "detached",
@@ -312,6 +315,7 @@ function VmCreateModal({
     (volume) => volume.name === draft.home_volume,
   );
   const selection: ProviderSelection = {
+    operating_system: operatingSystem,
     architecture: draft.architecture,
     region: draft.region || regionFromZone(draft.zone),
     zone: draft.zone,
@@ -350,7 +354,8 @@ function VmCreateModal({
         ).filter(
           ({ value }) =>
             provider !== "gcp" ||
-            gcpMachineArchitecture(value) === draft.architecture,
+            (gcpMachineArchitecture(value) === draft.architecture &&
+              (operatingSystem !== "windows" || !gcpMachineGpu(value))),
         ),
       ),
       sortMachinesByPrice ? "price" : "type",
@@ -424,7 +429,8 @@ function VmCreateModal({
       getGcpMachineTypeOptions(hostCatalog, nextSelection),
     ).filter(
       ({ value }) =>
-        gcpMachineArchitecture(value) === nextSelection.architecture,
+        gcpMachineArchitecture(value) === nextSelection.architecture &&
+        (operatingSystem !== "windows" || !gcpMachineGpu(value)),
     );
     return options.some(({ value }) => value === preferredMachine)
       ? preferredMachine
@@ -437,8 +443,12 @@ function VmCreateModal({
       machine_type,
       gpu_count: gpu?.count ?? 0,
       boot_disk_gb: Math.max(
-        Number(draft.boot_disk_gb ?? 20),
-        machine_type ? gcpMinimumBootDiskGb(machine_type) : 10,
+        Number(draft.boot_disk_gb ?? (operatingSystem === "windows" ? 80 : 20)),
+        operatingSystem === "windows"
+          ? 50
+          : machine_type
+            ? gcpMinimumBootDiskGb(machine_type)
+            : 10,
       ),
     };
   };
@@ -531,16 +541,53 @@ function VmCreateModal({
             />
           </Form.Item>
           <Form.Item
+            name="operating_system"
+            label="Operating system"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 260px" }}
+          >
+            <Select
+              options={catalog.operating_systems.map((entry) => ({
+                value: entry.value,
+                label: entry.label,
+              }))}
+              onChange={(nextOs: "linux" | "windows") => {
+                if (nextOs === "windows") {
+                  patchDraft({
+                    operating_system: "windows",
+                    provider: "gcp",
+                    architecture: "x86_64",
+                    region: catalog.defaults.region,
+                    zone: catalog.defaults.zone,
+                    machine_type: catalog.defaults.machine_type,
+                    gpu_type: undefined,
+                    gpu_count: 0,
+                    home_volume: undefined,
+                    create_home_volume: false,
+                    boot_disk_gb: Math.max(Number(draft.boot_disk_gb ?? 0), 80),
+                  });
+                } else {
+                  patchDraft({ operating_system: "linux" });
+                }
+              }}
+            />
+          </Form.Item>
+          <Form.Item
             name="provider"
             label="Cloud provider"
             rules={[{ required: true }]}
             style={{ flex: "1 1 220px" }}
           >
             <Select
-              options={catalog.providers.map((value) => ({
-                value,
-                label: getProviderDescriptor(value).label,
-              }))}
+              disabled={operatingSystem === "windows"}
+              options={catalog.providers
+                .filter(
+                  (value) => operatingSystem !== "windows" || value === "gcp",
+                )
+                .map((value) => ({
+                  value,
+                  label: getProviderDescriptor(value).label,
+                }))}
               onChange={(nextProvider: "gcp" | "nebius") => {
                 const nextCatalog = providerCatalog(catalog, nextProvider);
                 const options = getProviderOptions(nextProvider, nextCatalog, {
@@ -585,7 +632,7 @@ function VmCreateModal({
             <Radio.Group
               optionType="button"
               buttonStyle="solid"
-              disabled={provider !== "gcp"}
+              disabled={provider !== "gcp" || operatingSystem === "windows"}
               onChange={(event) => {
                 const architecture = event.target.value as "x86_64" | "arm64";
                 const architectureSelection: ProviderSelection = {
@@ -725,6 +772,7 @@ function VmCreateModal({
           </Form.Item>
         </Flex>
         {descriptor.supports.gpuType &&
+          operatingSystem === "linux" &&
           !(provider === "gcp" && draft.architecture === "arm64") &&
           gpuOptions.length > 0 && (
             <Flex gap={12} wrap>
@@ -834,9 +882,11 @@ function VmCreateModal({
           >
             <InputNumber
               min={
-                provider === "gcp" && draft.machine_type
-                  ? gcpMinimumBootDiskGb(draft.machine_type)
-                  : 10
+                operatingSystem === "windows"
+                  ? 50
+                  : provider === "gcp" && draft.machine_type
+                    ? gcpMinimumBootDiskGb(draft.machine_type)
+                    : 10
               }
               max={catalog.limits.max_boot_disk_gb}
             />
@@ -885,108 +935,117 @@ function VmCreateModal({
             </Checkbox>
           </Form.Item>
         )}
-        <Form.Item name="create_home_volume" valuePropName="checked">
-          <Checkbox
-            onChange={(event) => {
-              if (event.target.checked) {
-                patchDraft({
-                  home_volume: undefined,
-                  new_home_volume_size_gb: normalizedVolumeSizeGb(
-                    provider,
-                    draft.new_home_volume_size_gb,
-                  ),
-                });
-              }
-            }}
-          >
-            Create a new persistent home volume mounted at{" "}
-            <Text code>/home/user</Text>
-          </Checkbox>
-        </Form.Item>
-        {draft.create_home_volume ? (
+        {operatingSystem === "linux" && (
           <>
-            <Flex gap={12} wrap>
-              <Form.Item
-                name="new_home_volume_name"
-                label="New home volume name"
-                rules={[
-                  { required: true },
-                  {
-                    pattern: /^[a-z][a-z0-9-]{0,31}$/,
-                    message:
-                      "Use at most 32 lowercase letters, digits, or hyphens.",
-                  },
-                ]}
-                style={{ flex: "1 1 260px" }}
+            <Form.Item name="create_home_volume" valuePropName="checked">
+              <Checkbox
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    patchDraft({
+                      home_volume: undefined,
+                      new_home_volume_size_gb: normalizedVolumeSizeGb(
+                        provider,
+                        draft.new_home_volume_size_gb,
+                      ),
+                    });
+                  }
+                }}
               >
-                <Input />
-              </Form.Item>
+                Create a new persistent home volume mounted at{" "}
+                <Text code>/home/user</Text>
+              </Checkbox>
+            </Form.Item>
+            {draft.create_home_volume ? (
+              <>
+                <Flex gap={12} wrap>
+                  <Form.Item
+                    name="new_home_volume_name"
+                    label="New home volume name"
+                    rules={[
+                      { required: true },
+                      {
+                        pattern: /^[a-z][a-z0-9-]{0,31}$/,
+                        message:
+                          "Use at most 32 lowercase letters, digits, or hyphens.",
+                      },
+                    ]}
+                    style={{ flex: "1 1 260px" }}
+                  >
+                    <Input />
+                  </Form.Item>
+                  <Form.Item
+                    name="new_home_volume_size_gb"
+                    label="Size (GB)"
+                    rules={volumeSizeRules(provider)}
+                    style={{ flex: "1 1 160px" }}
+                  >
+                    <InputNumber
+                      min={
+                        provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 10
+                      }
+                      max={catalog.limits.max_volume_gb}
+                      step={
+                        provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 1
+                      }
+                      precision={0}
+                      style={{ width: "100%" }}
+                    />
+                  </Form.Item>
+                </Flex>
+                <Alert
+                  showIcon
+                  type="info"
+                  title={
+                    newVolumePrice
+                      ? `New home volume: ${newVolumePrice.monthly_label}`
+                      : "New home volume pricing is unavailable"
+                  }
+                  description={
+                    <Space direction="vertical" size={2}>
+                      <span>
+                        The volume will be created in{" "}
+                        {draft.zone ?? draft.region}, attached to this VM, and
+                        retained if the VM is deleted.
+                      </span>
+                      {provider === "nebius" && (
+                        <Text strong>
+                          Nebius persistent volumes are available in 93 GB
+                          increments.
+                        </Text>
+                      )}
+                    </Space>
+                  }
+                  style={{ marginBottom: 16 }}
+                />
+              </>
+            ) : (
               <Form.Item
-                name="new_home_volume_size_gb"
-                label="Size (GB)"
-                rules={volumeSizeRules(provider)}
-                style={{ flex: "1 1 160px" }}
+                name="home_volume"
+                label="Existing persistent home volume"
+                extra="Optional. The VM and volume must be in the same zone. Volumes survive VM deletion and can be attached to only one VM."
               >
-                <InputNumber
-                  min={provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 10}
-                  max={catalog.limits.max_volume_gb}
-                  step={provider === "nebius" ? NEBIUS_VOLUME_INCREMENT_GB : 1}
-                  precision={0}
-                  style={{ width: "100%" }}
+                <Select
+                  allowClear
+                  placeholder="Use the VM boot disk for /home/user"
+                  options={availableVolumes.map((volume) => ({
+                    value: volume.name,
+                    label: `${volume.name} · ${volume.effective_size_gb} GB · ${volume.region}${volume.zone ? `/${volume.zone}` : ""}${
+                      volume.region === draft.region &&
+                      (!volume.zone || volume.zone === draft.zone)
+                        ? ""
+                        : " · unavailable in this location"
+                    }`,
+                    disabled:
+                      volume.region !== draft.region ||
+                      (!!volume.zone && volume.zone !== draft.zone),
+                  }))}
+                  onChange={(name) => {
+                    patchDraft({ home_volume: name || undefined });
+                  }}
                 />
               </Form.Item>
-            </Flex>
-            <Alert
-              showIcon
-              type="info"
-              title={
-                newVolumePrice
-                  ? `New home volume: ${newVolumePrice.monthly_label}`
-                  : "New home volume pricing is unavailable"
-              }
-              description={
-                <Space direction="vertical" size={2}>
-                  <span>
-                    The volume will be created in {draft.zone ?? draft.region},
-                    attached to this VM, and retained if the VM is deleted.
-                  </span>
-                  {provider === "nebius" && (
-                    <Text strong>
-                      Nebius persistent volumes are available in 93 GB
-                      increments.
-                    </Text>
-                  )}
-                </Space>
-              }
-              style={{ marginBottom: 16 }}
-            />
+            )}
           </>
-        ) : (
-          <Form.Item
-            name="home_volume"
-            label="Existing persistent home volume"
-            extra="Optional. The VM and volume must be in the same zone. Volumes survive VM deletion and can be attached to only one VM."
-          >
-            <Select
-              allowClear
-              placeholder="Use the VM boot disk for /home/user"
-              options={availableVolumes.map((volume) => ({
-                value: volume.name,
-                label: `${volume.name} · ${volume.effective_size_gb} GB · ${volume.region}${volume.zone ? `/${volume.zone}` : ""}${
-                  volume.region === draft.region &&
-                  (!volume.zone || volume.zone === draft.zone)
-                    ? ""
-                    : " · unavailable in this location"
-                }`,
-                disabled:
-                  volume.region !== draft.region ||
-                  (!!volume.zone && volume.zone !== draft.zone),
-              }))}
-              onChange={(name) => {
-                patchDraft({ home_volume: name || undefined });
-              }}
-            />
-          </Form.Item>
         )}
         <Form.Item name="configure_project_ssh" valuePropName="checked">
           <Checkbox disabled={!draft.use_project_ssh_key}>
@@ -1082,7 +1141,9 @@ function VmCreateModal({
                 ? `Standard fallback: ${standardFallbackPrice.hourly_label} (${standardFallbackPrice.monthly_label}). `
                 : ""}
               Includes the VM, balanced persistent boot disk, public IPv4
-              address, and the site surcharge. Public Internet egress is billed
+              address,{" "}
+              {operatingSystem === "windows" ? "Windows Server license, " : ""}
+              and the site surcharge. Public Internet egress is billed
               separately at $0.10/GB.
             </span>
             {maximumSpend != null && (
@@ -1680,6 +1741,7 @@ export function ProjectComputeVms({
       ? providerCatalog(catalog, defaultProvider)
       : undefined;
     const defaultSelection: ProviderSelection = {
+      operating_system: "linux",
       region: regionFromZone(catalogDefaultZone),
       zone: catalogDefaultZone,
       machine_type: catalog?.defaults.machine_type ?? "e2-standard-2",
@@ -1720,6 +1782,10 @@ export function ProjectComputeVms({
     return {
       name,
       provider: defaultProvider,
+      operating_system:
+        recent?.operating_system ??
+        catalog?.defaults.operating_system ??
+        "linux",
       funding_mode:
         recent?.funding_mode ??
         catalog?.default_funding_mode ??
@@ -1758,6 +1824,7 @@ export function ProjectComputeVms({
     setVmInitial({
       name,
       provider: vm.provider,
+      operating_system: vm.operating_system ?? "linux",
       funding_mode: vm.funding_mode,
       architecture: vm.architecture,
       region: vm.region,
@@ -1863,6 +1930,7 @@ export function ProjectComputeVms({
           project_id,
           name: values.name,
           provider: values.provider,
+          operating_system: values.operating_system,
           funding_mode: values.funding_mode,
           architecture: values.architecture,
           region: values.region,
@@ -2203,7 +2271,8 @@ export function ProjectComputeVms({
         <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
           <Text strong>{vm.machine_type}</Text>
           <Text type="secondary">
-            {getProviderDescriptor(vm.provider).label} · {vm.architecture}
+            {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
+            {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
           </Text>
           <Text type="secondary">{vm.zone ?? vm.region}</Text>
           {vm.gpu_type && (
@@ -2254,7 +2323,7 @@ export function ProjectComputeVms({
           vm.desired_state === "running" && vm.state !== "stopped";
         const cliCommand = `cocalc vm ssh ${vm.name}`;
         const directCommand = vm.public_hostname
-          ? `ssh user@${vm.public_hostname}`
+          ? `ssh ${vm.ssh_user || "user"}@${vm.public_hostname}`
           : undefined;
         const projectSshCommand =
           vm.state === "ready" && vm.metadata?.configure_project_ssh === true
@@ -2311,6 +2380,23 @@ export function ProjectComputeVms({
                       <br />
                       <Text type="secondary">
                         This shortcut is managed in .ssh/config.
+                      </Text>
+                    </div>
+                  )}
+                  {vm.operating_system === "windows" && (
+                    <div>
+                      <Text type="secondary">Remote Desktop</Text>
+                      <br />
+                      <Text
+                        code
+                        copyable={{ text: `cocalc vm rdp ${vm.name}` }}
+                      >
+                        cocalc vm rdp {vm.name}
+                      </Text>
+                      <br />
+                      <Text type="secondary">
+                        Generates a fresh password and a private SSH tunnel; TCP
+                        3389 is not public.
                       </Text>
                     </div>
                   )}

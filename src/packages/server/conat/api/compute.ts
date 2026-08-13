@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type {
   ComputeCatalog,
   ComputeVolume,
@@ -39,6 +39,7 @@ import {
 } from "@cocalc/server/compute/ssh-authorization";
 import {
   ensureProviderComputeSshAccess,
+  prepareProviderComputeWindowsRdp,
   deleteOrphanProviderComputeAddress,
   deleteOrphanProviderComputeBootDisk,
   deleteOrphanProviderComputeInstance,
@@ -78,6 +79,7 @@ import { assertDedicatedHostAdmissionForAccount } from "@cocalc/server/project-h
 import type { DedicatedHostFundingMode } from "@cocalc/server/project-host/admission";
 import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
 import {
+  GCP_WINDOWS_SERVER_LICENSE_USD_PER_VCPU_HOUR,
   getDedicatedHostSurchargeFraction,
   gcpMachineArchitecture,
   gcpMachineGpu,
@@ -335,6 +337,9 @@ async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
   const { ssh_public_keys: _sshPublicKeys, ...publicMetadata } = metadata ?? {};
   return {
     ...result,
+    operating_system: vm.operating_system ?? "linux",
+    operating_system_version: vm.operating_system_version ?? "ubuntu-24.04",
+    os_license_hourly_price: vm.os_license_hourly_price ?? "0.000000",
     private_ip: vm.metadata?.runtime?.private_ip ?? null,
     internal_hostname: vm.metadata?.runtime?.internal_hostname ?? null,
     egress_summary: await egressSummary(vm),
@@ -604,8 +609,30 @@ export async function getCatalog(opts: {
     provider_catalogs: providerCatalogs,
     funding_modes: fundingModes,
     default_funding_mode: allowedFunding.value,
+    operating_systems: [
+      {
+        value: "linux",
+        label: "Linux (Ubuntu 24.04)",
+        providers: providerCatalogs.nebius ? ["gcp", "nebius"] : ["gcp"],
+        architectures: ["x86_64", "arm64"],
+        versions: ["ubuntu-24.04"],
+        minimum_boot_disk_gb: 20,
+        license_per_vcpu_hourly_usd: "0.000000",
+      },
+      {
+        value: "windows",
+        label: "Windows Server 2022",
+        providers: ["gcp"],
+        architectures: ["x86_64"],
+        versions: ["windows-server-2022"],
+        minimum_boot_disk_gb: 50,
+        license_per_vcpu_hourly_usd:
+          GCP_WINDOWS_SERVER_LICENSE_USD_PER_VCPU_HOUR.toFixed(6),
+      },
+    ],
     defaults: {
       provider: "gcp",
+      operating_system: "linux",
       architecture: "x86_64",
       region: regionFromComputeZone(zone),
       zone,
@@ -632,6 +659,15 @@ export async function createVm(
   const provider = opts.provider;
   if (provider !== "gcp" && provider !== "nebius") {
     throw new Error("provider must be gcp or nebius");
+  }
+  const operatingSystem = opts.operating_system ?? "linux";
+  if (operatingSystem !== "linux" && operatingSystem !== "windows") {
+    throw new Error("operating_system must be linux or windows");
+  }
+  if (operatingSystem === "windows" && provider !== "gcp") {
+    throw new Error(
+      "Windows managed compute is currently available only on GCP",
+    );
   }
   const fundingMode = await requireComputeFunding({
     account_id: accountId,
@@ -667,6 +703,11 @@ export async function createVm(
   if (homeVolume && homeVolume.provider !== provider) {
     throw new Error("home volume and VM must use the same provider");
   }
+  if (operatingSystem === "windows" && homeVolume) {
+    throw new Error(
+      "Windows VMs currently use only their persistent boot disk; home volumes are not supported",
+    );
+  }
   if (
     homeVolume &&
     (homeVolume.region !== region ||
@@ -693,12 +734,18 @@ export async function createVm(
       `machine '${machine.machine_type}' has architecture ${machine.architecture}, not ${opts.architecture}`,
     );
   }
+  if (operatingSystem === "windows" && machine.architecture !== "x86_64") {
+    throw new Error("Windows managed compute requires an x86-64 machine");
+  }
   const requestedGpuType = `${opts.gpu_type ?? ""}`.trim();
   const normalizedRequestedGpuType =
     requestedGpuType && requestedGpuType !== "none"
       ? requestedGpuType
       : undefined;
   const machineGpuType = `${machine.gpu_type ?? ""}`.trim() || undefined;
+  if (operatingSystem === "windows" && machineGpuType) {
+    throw new Error("Windows managed compute does not yet support GPUs");
+  }
   if (
     normalizedRequestedGpuType != null &&
     normalizedRequestedGpuType !== machineGpuType
@@ -759,9 +806,15 @@ export async function createVm(
       `ttl_minutes must be an integer from 5 to ${config.max_ttl_minutes}`,
     );
   }
-  const bootDiskGb = Number(opts.boot_disk_gb ?? 20);
+  const bootDiskGb = Number(
+    opts.boot_disk_gb ?? (operatingSystem === "windows" ? 80 : 20),
+  );
   const minimumBootDiskGb =
-    provider === "gcp" ? gcpMinimumBootDiskGb(machine.machine_type) : 10;
+    operatingSystem === "windows"
+      ? 50
+      : provider === "gcp"
+        ? gcpMinimumBootDiskGb(machine.machine_type)
+        : 10;
   if (
     !Number.isInteger(bootDiskGb) ||
     bootDiskGb < minimumBootDiskGb ||
@@ -780,6 +833,7 @@ export async function createVm(
     gpu_count: machine.gpu_count,
     disk_gb: bootDiskGb,
     disk_type: defaultComputeVolumeDiskType(provider),
+    operating_system: operatingSystem,
   } as const;
   const [customerSpotRate, customerOnDemandRate, customerStoppedRate] =
     await Promise.all([
@@ -837,6 +891,10 @@ export async function createVm(
     [accountId],
   );
   const selectedRate = pricingModel === "spot" ? spotRate : onDemandRate;
+  const osLicenseHourlyPrice =
+    selectedRate.pricing_snapshot.components.find(
+      ({ key }) => key === "windows_license",
+    )?.hourly_cost_usd ?? "0.000000";
   await authorizeComputeMutation({
     actor: opts,
     action: "billable",
@@ -881,6 +939,10 @@ export async function createVm(
       owning_bay_id: getConfiguredBayId(),
       project_id: opts.project_id,
       provider,
+      operating_system: operatingSystem,
+      operating_system_version:
+        operatingSystem === "windows" ? "windows-server-2022" : "ubuntu-24.04",
+      os_license_hourly_price: `${osLicenseHourlyPrice}`,
       region,
       zone,
       architecture: machine.architecture,
@@ -891,6 +953,11 @@ export async function createVm(
       gpu_count: machine.gpu_count,
       provider_spec: {
         ...machine.provider_spec,
+        operating_system: operatingSystem,
+        operating_system_version:
+          operatingSystem === "windows"
+            ? "windows-server-2022"
+            : "ubuntu-24.04",
       },
       funding_mode: fundingMode,
       desired_pricing_model: pricingModel,
@@ -923,7 +990,7 @@ export async function createVm(
       authorized_cost: "0.000000",
       accrued_cost: "0.000000",
       billing_state: "pending",
-      bootstrap_revision: 2,
+      bootstrap_revision: operatingSystem === "windows" ? 1 : 2,
       observed_bootstrap_revision: null,
       public_port_policy_revision: 2,
       spot_recovery_policy: {
@@ -1553,6 +1620,52 @@ export async function authorizeSshKey(opts: {
       });
     },
   });
+}
+
+export async function prepareWindowsRdp(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  if ((vm.operating_system ?? "linux") !== "windows") {
+    throw new Error(`compute VM '${vm.name}' is not a Windows VM`);
+  }
+  if (vm.state !== "ready") {
+    throw new Error(`compute VM '${vm.name}' is not ready (state=${vm.state})`);
+  }
+  const hostname = vm.public_hostname || vm.public_ip;
+  if (!hostname) throw new Error("Windows VM has no public SSH hostname");
+  const password = `${randomBytes(24).toString("base64url")}aA1!`;
+  await prepareProviderComputeWindowsRdp(vm, password);
+  await appendComputeEvent({
+    vm,
+    actor_account_id: accountId,
+    actor_kind: "account",
+    action: "prepare-rdp",
+    idempotency_key: randomUUID(),
+    old_state: vm.state,
+    new_state: vm.state,
+    status: "success",
+    details: { public_rdp_port_open: false },
+  });
+  return {
+    id: vm.id,
+    name: vm.name,
+    hostname,
+    ssh_user: vm.ssh_user || "user",
+    windows_user: "user",
+    windows_password: password,
+    remote_port: 3389 as const,
+  };
 }
 
 async function authorizeSshKeyForVm(opts: {
