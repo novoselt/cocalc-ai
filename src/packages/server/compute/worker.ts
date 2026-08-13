@@ -1226,8 +1226,9 @@ async function waitForSsh(vm: ComputeVmRow, host: string, timeoutMs = 180_000) {
   const checks = [
     'test "$(id -un)" = user',
     'test "$(id -u)" = 1001',
-    'test "$(id -g)" = 1001',
+    'test "$(id -gn)" = user',
     'test "$HOME" = /home/user',
+    "! id ubuntu >/dev/null 2>&1",
     `test "$(cat /run/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision}`,
     ...(expectedHomeDevice
       ? [

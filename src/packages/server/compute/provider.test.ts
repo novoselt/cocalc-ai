@@ -21,7 +21,9 @@ describe("managedVmBootstrapScript", () => {
 
     expect(script).toContain("useradd --uid 1001 --gid user --create-home");
     expect(script).toContain('test "$(id -u user)" = 1001');
-    expect(script).toContain('test "$(id -g user)" = 1001');
+    expect(script).toContain('test "$(id -gn user)" = user');
+    expect(script).toContain("user_gid=$(id -g user)");
+    expect(script).toContain("userdel --remove ubuntu");
     expect(script).toContain("user ALL=(ALL) NOPASSWD:ALL");
     expect(script).toContain("/home/user/.ssh/authorized_keys");
     expect(script).toContain("ssh-ed25519 AAAAOWNER owner");
@@ -38,6 +40,9 @@ describe("managedVmBootstrapScript", () => {
 
     expect(script).toContain("device=/dev/disk/by-id/google-cocalc-vol-test");
     expect(script).toContain("UUID=$uuid /home/user ext4");
+    expect(script).toContain(
+      'chown -R "$user_uid:$user_gid" /mnt/cocalc-managed-home',
+    );
     expect(script).toContain("cocalc-grow-home-filesystem.timer");
     expect(script).toContain("OnUnitActiveSec=30s");
     expect(script).toContain('readlink -f "$mounted_device"');

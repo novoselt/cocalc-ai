@@ -573,7 +573,7 @@ mkdir -p /mnt/cocalc-managed-home
 mountpoint -q /mnt/cocalc-managed-home || mount "$device" /mnt/cocalc-managed-home
 if test "$new_filesystem" = yes; then
   cp -a /etc/skel/. /mnt/cocalc-managed-home/
-  chown -R 1001:1001 /mnt/cocalc-managed-home
+  chown -R "$user_uid:$user_gid" /mnt/cocalc-managed-home
 fi
 umount /mnt/cocalc-managed-home
 uuid=$(blkid -s UUID -o value "$device")
@@ -632,23 +632,26 @@ systemctl start cocalc-grow-home-filesystem.service
   return `#!/bin/bash
 set -euo pipefail
 if ! getent group user >/dev/null; then
-  groupadd --gid 1001 user
+  groupadd user
 fi
-test "$(getent group user | cut -d: -f3)" = 1001
 if ! id user >/dev/null 2>&1; then
   useradd --uid 1001 --gid user --create-home --shell /bin/bash user
 fi
 test "$(id -u user)" = 1001
-test "$(id -g user)" = 1001
+test "$(id -gn user)" = user
 test "$(getent passwd user | cut -d: -f6)" = /home/user
 test "$(getent passwd user | cut -d: -f7)" = /bin/bash
+user_uid=$(id -u user)
+user_gid=$(id -g user)
 usermod -aG sudo user
 cat >/etc/sudoers.d/cocalc-user <<'EOF'
 user ALL=(ALL) NOPASSWD:ALL
 EOF
 chmod 0440 /etc/sudoers.d/cocalc-user
-passwd -l ubuntu >/dev/null 2>&1 || true
-rm -rf /home/ubuntu/.ssh
+if id ubuntu >/dev/null 2>&1; then
+  userdel --remove ubuntu
+fi
+! id ubuntu >/dev/null 2>&1
 
 ${volumeSetup}
 install -d -m 0700 -o user -g user /home/user/.ssh
