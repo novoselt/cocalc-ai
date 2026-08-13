@@ -5,6 +5,7 @@ import {
   getHostDisplayedPrice,
   getHostPriceEstimate,
   getGcpPersistentDiskPriceEstimate,
+  getNebiusPersistentDiskPriceEstimate,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
   getGcpRegionOptions,
@@ -999,6 +1000,38 @@ describe("catalog-backed pricing labels", () => {
     );
 
     expect(estimate?.usd_per_hour).toBeCloseTo(0.0065, 9);
+    expect(estimate?.line_items.map(({ key }) => key)).toEqual(["disk"]);
+    expect(estimate?.notes).toEqual(["Includes a 30% site surcharge."]);
+  });
+
+  it("prices a Nebius persistent disk without machine pricing", () => {
+    const catalog = testCatalog([
+      {
+        kind: "prices",
+        scope: "global",
+        payload: [
+          {
+            product: "Network SSD disk",
+            region: "eu-north1",
+            price_usd: "0.0001",
+            unit: "GiB hour",
+          },
+        ],
+      },
+    ]);
+
+    const estimate = getNebiusPersistentDiskPriceEstimate(
+      catalog,
+      {
+        region: "eu-north1",
+        storage_mode: "persistent",
+        disk_type: "ssd",
+        disk_gb: 93,
+      },
+      { project_hosts_nebius_surcharge_percent: 30 },
+    );
+
+    expect(estimate?.usd_per_hour).toBeCloseTo(0.01209, 9);
     expect(estimate?.line_items.map(({ key }) => key)).toEqual(["disk"]);
     expect(estimate?.notes).toEqual(["Includes a 30% site surcharge."]);
   });

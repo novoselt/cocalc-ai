@@ -65,6 +65,7 @@ import {
   getProviderDescriptor,
   getProviderOptions,
   getProviderPriceEstimate,
+  getNebiusPersistentDiskPriceEstimate,
   type HostFieldOption,
   type ProviderSelection,
 } from "../hosts/providers/registry";
@@ -87,6 +88,22 @@ const COPYABLE_PROPS = {
   outerStyle: { width: "100%" },
   style: { marginTop: 6, width: "100%" },
 } as const;
+const NEBIUS_VOLUME_INCREMENT_GB = 93;
+
+function effectiveVolumeSizeGb(
+  provider: "gcp" | "nebius",
+  requestedSizeGb?: number,
+): number | undefined {
+  const sizeGb = Number(requestedSizeGb);
+  if (!Number.isFinite(sizeGb) || sizeGb <= 0) return undefined;
+  return provider === "nebius"
+    ? Math.max(
+        NEBIUS_VOLUME_INCREMENT_GB,
+        Math.ceil(sizeGb / NEBIUS_VOLUME_INCREMENT_GB) *
+          NEBIUS_VOLUME_INCREMENT_GB,
+      )
+    : sizeGb;
+}
 
 interface VmDraft extends VmCreateCliValues {
   use_project_ssh_key: boolean;
@@ -317,21 +334,40 @@ function VmCreateModal({
           pricingSettings,
         )
       : undefined;
-  const newVolumePrice =
-    draft.create_home_volume && provider === "gcp"
-      ? getGcpPersistentDiskPriceEstimate(
-          hostCatalog,
-          {
-            region: draft.region || regionFromZone(draft.zone),
-            zone: draft.zone,
-            storage_mode: "persistent",
-            disk_type: "balanced",
-            disk_gb: draft.new_home_volume_size_gb,
-            pricing_settings: pricingSettings,
-          },
-          pricingSettings,
-        )?.line_items.find((item) => item.key === "disk")
+  const newVolumeEffectiveSizeGb = effectiveVolumeSizeGb(
+    provider,
+    draft.new_home_volume_size_gb,
+  );
+  const newVolumeEstimate =
+    draft.create_home_volume && newVolumeEffectiveSizeGb
+      ? provider === "gcp"
+        ? getGcpPersistentDiskPriceEstimate(
+            hostCatalog,
+            {
+              region: draft.region || regionFromZone(draft.zone),
+              zone: draft.zone,
+              storage_mode: "persistent",
+              disk_type: "balanced",
+              disk_gb: newVolumeEffectiveSizeGb,
+              pricing_settings: pricingSettings,
+            },
+            pricingSettings,
+          )
+        : getNebiusPersistentDiskPriceEstimate(
+            hostCatalog,
+            {
+              region: draft.region,
+              storage_mode: "persistent",
+              disk_type: "ssd",
+              disk_gb: newVolumeEffectiveSizeGb,
+              pricing_settings: pricingSettings,
+            },
+            pricingSettings,
+          )
       : undefined;
+  const newVolumePrice = newVolumeEstimate?.line_items.find(
+    (item) => item.key === "disk",
+  );
   const maximumSpend =
     draft.ttl_minutes && (standardFallbackPrice ?? price)
       ? ((standardFallbackPrice ?? price)!.usd_per_hour * draft.ttl_minutes) /
@@ -402,7 +438,12 @@ function VmCreateModal({
             <Button disabled={saving} onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="primary" loading={saving} onClick={submit}>
+            <Button
+              type="primary"
+              loading={saving}
+              disabled={saving || (draft.create_home_volume && !newVolumePrice)}
+              onClick={submit}
+            >
               Create VM
             </Button>
           </Flex>
@@ -855,9 +896,20 @@ function VmCreateModal({
                   : "New home volume pricing is unavailable"
               }
               description={
-                "The volume will be created in " +
-                (draft.zone ?? "the selected zone") +
-                ", attached to this VM, and retained if the VM is deleted."
+                <Space direction="vertical" size={2}>
+                  <span>
+                    The volume will be created in {draft.zone ?? draft.region},
+                    attached to this VM, and retained if the VM is deleted.
+                  </span>
+                  {provider === "nebius" &&
+                    newVolumeEffectiveSizeGb !==
+                      Number(draft.new_home_volume_size_gb) && (
+                      <Text strong>
+                        Nebius allocates storage in 93 GB increments, so this
+                        request creates and bills {newVolumeEffectiveSizeGb} GB.
+                      </Text>
+                    )}
+                </Space>
               }
               style={{ marginBottom: 16 }}
             />
@@ -1050,8 +1102,8 @@ function VolumeCreateModal({
   const pricingSelection = {
     ...placementSelection,
     storage_mode: "persistent",
-    disk_type: "balanced",
-    disk_gb: draft.size_gb,
+    disk_type: provider === "nebius" ? "ssd" : "balanced",
+    disk_gb: effectiveVolumeSizeGb(provider, draft.size_gb),
     pricing_settings: pricingSettings,
   } as const;
   const providerOptions = getProviderOptions(
@@ -1075,7 +1127,11 @@ function VolumeCreateModal({
           pricingSelection,
           pricingSettings,
         )
-      : undefined;
+      : getNebiusPersistentDiskPriceEstimate(
+          hostCatalog,
+          pricingSelection,
+          pricingSettings,
+        );
   const diskEstimate = volumeEstimate?.line_items.find(
     (item) => item.key === "disk",
   );
@@ -1097,6 +1153,7 @@ function VolumeCreateModal({
       title="Create persistent home volume"
       okText="Create volume"
       confirmLoading={saving}
+      okButtonProps={{ disabled: !diskEstimate }}
       onCancel={onCancel}
       onOk={() => void form.validateFields().then(onCreate)}
       width={650}
@@ -1227,10 +1284,27 @@ function VolumeCreateModal({
         type="info"
         title={
           diskEstimate
-            ? `Balanced persistent SSD: ${diskEstimate.monthly_label} (${(diskEstimate.usd_per_month / Number(draft.size_gb ?? 1)).toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 3, maximumFractionDigits: 3 })}/GB/month)`
-            : "Balanced persistent SSD pricing is unavailable for this region"
+            ? `${provider === "nebius" ? "Persistent SSD" : "Balanced persistent SSD"}: ${diskEstimate.monthly_label} (${(diskEstimate.usd_per_month / Number(effectiveVolumeSizeGb(provider, draft.size_gb) ?? 1)).toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 3, maximumFractionDigits: 3 })}/GB/month)`
+            : "Persistent SSD pricing is unavailable for this region"
         }
-        description="The volume and VM must use the same provider and location. Volumes are retained when VMs are deleted. They can grow online but cannot shrink. The estimate includes the site surcharge."
+        description={
+          <Space direction="vertical" size={2}>
+            <span>
+              The volume and VM must use the same provider and location. Volumes
+              are retained when VMs are deleted. They can grow online but cannot
+              shrink. The estimate includes the site surcharge.
+            </span>
+            {provider === "nebius" &&
+              effectiveVolumeSizeGb(provider, draft.size_gb) !==
+                Number(draft.size_gb) && (
+                <Text strong>
+                  Nebius allocates storage in 93 GB increments, so this request
+                  creates and bills{" "}
+                  {effectiveVolumeSizeGb(provider, draft.size_gb)} GB.
+                </Text>
+              )}
+          </Space>
+        }
       />
       <Divider />
       <Text strong>Equivalent CLI command</Text>

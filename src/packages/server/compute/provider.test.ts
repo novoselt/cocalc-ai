@@ -7,6 +7,7 @@ import {
   gcpInstanceIdForEgress,
   isProviderNotFound,
   managedVmBootstrapScript,
+  mergeManagedNebiusSpec,
   providerInstanceIdIsProvisional,
 } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
@@ -58,6 +59,42 @@ describe("managedVmBootstrapScript", () => {
       "systemctl enable --now cocalc-grow-home-filesystem.timer",
     );
     expect(script).not.toContain("/work");
+  });
+});
+
+describe("mergeManagedNebiusSpec", () => {
+  it("preserves the CUDA image selected by shared host provisioning", () => {
+    const result = mergeManagedNebiusSpec(
+      {
+        name: "base",
+        region: "us-central1",
+        cpu: 16,
+        ram_gb: 200,
+        disk_gb: 0,
+        metadata: {
+          source_image_family: "ubuntu24.04-cuda13.0",
+          platform: "gpu-h200-sxm",
+        },
+      },
+      {
+        name: "managed",
+        region: "us-central1",
+        cpu: 16,
+        ram_gb: 200,
+        disk_gb: 0,
+        metadata: { public_address_id: "address-1" },
+      },
+      "security-group-1",
+    );
+
+    expect(result.metadata).toEqual(
+      expect.objectContaining({
+        source_image_family: "ubuntu24.04-cuda13.0",
+        platform: "gpu-h200-sxm",
+        public_address_id: "address-1",
+        security_group_ids: ["security-group-1"],
+      }),
+    );
   });
 });
 

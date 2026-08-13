@@ -872,6 +872,56 @@ export const getGcpPersistentDiskPriceEstimate = (
   };
 };
 
+export const getNebiusPersistentDiskPriceEstimate = (
+  catalog: HostCatalog | undefined,
+  selection: Pick<
+    ProviderSelection,
+    "region" | "disk_type" | "disk_gb" | "storage_mode" | "pricing_settings"
+  >,
+  surchargeSettings?: DedicatedHostSurchargeSettings,
+): ProviderPriceEstimate | undefined => {
+  const pricingSettings = surchargeSettings ?? selection.pricing_settings;
+  const breakdown = applyDedicatedHostSurchargeToBreakdown(
+    estimateNebiusCatalogRateBreakdown({
+      prices: getNebiusPriceItems(catalog),
+      region: selection.region,
+      disk_type: selection.disk_type,
+      disk_gb: selection.disk_gb,
+      storage_mode: selection.storage_mode,
+    }),
+    getDedicatedHostSurchargeFraction("nebius", pricingSettings),
+  );
+  const hourlyRate = breakdown?.total_usd_per_hour;
+  if (
+    !breakdown ||
+    typeof hourlyRate !== "number" ||
+    !Number.isFinite(hourlyRate)
+  ) {
+    return undefined;
+  }
+  const line_items = breakdown.items.map((item) => ({
+    ...item,
+    usd_per_month: item.usd_per_hour * MONTHLY_HOURS,
+    hourly_label: formatUsdHourlyLabel(item.usd_per_hour),
+    monthly_label: formatUsdMonthlyLabel(item.usd_per_hour),
+  }));
+  const surchargeFraction = getDedicatedHostSurchargeFraction(
+    "nebius",
+    pricingSettings,
+  );
+  return {
+    usd_per_hour: hourlyRate,
+    usd_per_month: hourlyRate * MONTHLY_HOURS,
+    hourly_label: formatUsdHourlyLabel(hourlyRate),
+    monthly_label: formatUsdMonthlyLabel(hourlyRate),
+    line_items,
+    notes:
+      surchargeFraction > 0
+        ? [`Includes a ${Math.round(surchargeFraction * 100)}% site surcharge.`]
+        : [],
+  };
+};
+
 const hostProviderSelectionForPricing = (host: Host): ProviderSelection => ({
   region: host.region ?? undefined,
   zone: host.machine?.zone ?? undefined,

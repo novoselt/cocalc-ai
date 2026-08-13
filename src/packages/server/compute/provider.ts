@@ -467,8 +467,6 @@ function specFor(
                 : "ubuntu-2404-lts-amd64",
           }
         : {
-            source_image_family:
-              vm.provider_spec?.source_image_family ?? "ubuntu24.04-driverless",
             public_address_id: vm.public_address_id,
             shared_disk_device_id: "home",
           }),
@@ -541,6 +539,14 @@ async function resolvedSpecFor(
       pricing_model: pricingModel,
     },
   });
+  return mergeManagedNebiusSpec(base, managed, securityGroupId);
+}
+
+export function mergeManagedNebiusSpec(
+  base: HostSpec,
+  managed: HostSpec,
+  securityGroupId: string,
+): HostSpec {
   return {
     ...base,
     ...managed,
