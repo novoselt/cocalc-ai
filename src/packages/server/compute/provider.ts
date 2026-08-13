@@ -741,14 +741,9 @@ export async function getProviderComputePublicEgressBytes(opts: {
   end: Date;
 }): Promise<number> {
   if (opts.vm.provider === "nebius") return 0;
+  const instanceId = gcpInstanceIdForEgress(opts.vm);
+  if (instanceId == null) return 0;
   const config = await getComputeVmConfig();
-  const instanceId =
-    `${opts.vm.metadata?.runtime?.gcp_instance_id ?? ""}`.trim();
-  if (!instanceId) {
-    throw new Error(
-      `compute VM '${opts.vm.id}' has no GCP numeric instance id`,
-    );
-  }
   if (!config.gcp_service_account_json || !config.gcp_project_id) {
     throw new Error(
       "managed compute egress metering credentials are not configured",
@@ -798,6 +793,13 @@ export async function getProviderComputePublicEgressBytes(opts: {
     pageToken = `${payload.nextPageToken ?? ""}`;
   } while (pageToken);
   return Math.floor(bytes);
+}
+
+export function gcpInstanceIdForEgress(vm: ComputeVmRow): string | undefined {
+  const instanceId = `${vm.metadata?.runtime?.gcp_instance_id ?? ""}`.trim();
+  if (instanceId) return instanceId;
+  if (vm.deleted_at && !vm.ready_at) return undefined;
+  throw new Error(`compute VM '${vm.id}' has no GCP numeric instance id`);
 }
 
 export async function listProviderComputeInventory(opts: {

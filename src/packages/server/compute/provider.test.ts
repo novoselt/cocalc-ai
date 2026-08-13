@@ -3,7 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { isProviderNotFound, managedVmBootstrapScript } from "./provider";
+import {
+  gcpInstanceIdForEgress,
+  isProviderNotFound,
+  managedVmBootstrapScript,
+} from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 
 describe("managedVmBootstrapScript", () => {
@@ -67,5 +71,39 @@ describe("isProviderNotFound", () => {
 }`),
       ),
     ).toBe(true);
+  });
+});
+
+describe("gcpInstanceIdForEgress", () => {
+  it("returns the observed numeric provider identity", () => {
+    expect(
+      gcpInstanceIdForEgress({
+        id: "vm-1",
+        metadata: { runtime: { gcp_instance_id: "1234567890" } },
+      } as ComputeVmRow),
+    ).toBe("1234567890");
+  });
+
+  it("treats a deleted VM that never became ready as zero egress", () => {
+    expect(
+      gcpInstanceIdForEgress({
+        id: "vm-1",
+        deleted_at: new Date(),
+        ready_at: null,
+      } as ComputeVmRow),
+    ).toBeUndefined();
+  });
+
+  it("rejects a missing identity for active or formerly ready VMs", () => {
+    expect(() =>
+      gcpInstanceIdForEgress({ id: "vm-active" } as ComputeVmRow),
+    ).toThrow("no GCP numeric instance id");
+    expect(() =>
+      gcpInstanceIdForEgress({
+        id: "vm-ready",
+        ready_at: new Date(),
+        deleted_at: new Date(),
+      } as ComputeVmRow),
+    ).toThrow("no GCP numeric instance id");
   });
 });
