@@ -2833,13 +2833,27 @@ export function ProjectComputeVms({
                 Connect
               </Button>
             </Popover>
-            <Button
-              size="small"
-              disabled={transitioning}
-              onClick={() => void setVmRunning(vm, !running)}
-            >
-              {running ? "Stop" : "Start"}
-            </Button>
+            {running ? (
+              <Popconfirm
+                title={`Stop ${vm.name}?`}
+                description="Compute and Windows license charges stop, but persistent disk charges continue."
+                okText="Stop VM"
+                cancelText="Keep running"
+                onConfirm={() => void setVmRunning(vm, false)}
+              >
+                <Button size="small" disabled={transitioning}>
+                  Stop
+                </Button>
+              </Popconfirm>
+            ) : (
+              <Button
+                size="small"
+                disabled={transitioning}
+                onClick={() => void setVmRunning(vm, true)}
+              >
+                Start
+              </Button>
+            )}
             <Dropdown
               trigger={["click"]}
               menu={{
