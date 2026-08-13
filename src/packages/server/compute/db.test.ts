@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { after, before, getPool } from "@cocalc/server/test";
 import {
   addComputeVmSshPublicKey,
+  allocateComputeVmPublicHostname,
   claimComputeWork,
   enqueueComputeWork,
   enqueueComputeEmergencyStops,
@@ -54,21 +55,39 @@ function vmInput(
     zone: "us-central1-a",
     architecture: "x86_64",
     machine_type: "e2-standard-2",
+    cpu: 2,
+    ram_gb: 8,
+    gpu_type: null,
+    gpu_count: 0,
+    provider_spec: {},
+    funding_mode: "account-prepaid",
     desired_pricing_model: "on_demand",
     effective_pricing_model: "on_demand",
     boot_disk_gb: 20,
     boot_disk_id: `cocalc-vm-${id.slice(0, 8)}-boot`,
-    attached_volume_id: overrides.attached_volume_id ?? null,
+    home_volume_id: overrides.home_volume_id ?? null,
     state: "requested",
     desired_state: "running",
     instance_generation: 1,
     provider_instance_id: `cocalc-vm-${id.slice(0, 8)}`,
+    public_address_id: null,
+    public_address_state: "released",
     public_ip: null,
-    ssh_user: "ubuntu",
+    public_hostname:
+      overrides.public_hostname ??
+      `vm-${id.replaceAll("-", "").slice(0, 32)}.example.test`,
+    dns_record_id: null,
+    dns_state: "released",
+    dns_error: null,
+    public_ports: [22, 443],
+    ssh_user: "user",
     ssh_public_key: "ssh-ed25519 AAAATEST owner",
     expires_at: Object.prototype.hasOwnProperty.call(overrides, "expires_at")
       ? overrides.expires_at
       : new Date(Date.now() + 60_000),
+    bootstrap_revision: 1,
+    observed_bootstrap_revision: null,
+    public_port_policy_revision: 1,
     allow_on_demand_fallback: false,
     authorized_fallback_hours: 0,
     spot_hourly_price: "0.020000",
@@ -96,10 +115,14 @@ function volumeInput(
     provider: "gcp",
     region: "us-central1",
     zone: overrides.zone ?? "us-central1-a",
+    role: "home",
+    funding_mode: "account-prepaid",
+    provider_spec: {},
     disk_type: "balanced",
     filesystem: "ext4",
     size_gb: overrides.size_gb ?? 20,
     desired_size_gb: overrides.desired_size_gb ?? 20,
+    effective_size_gb: overrides.effective_size_gb ?? 20,
     provider_disk_id: `cocalc-vol-${id.slice(0, 8)}`,
     state: overrides.state ?? "ready",
     desired_state: "ready",
@@ -116,6 +139,25 @@ function volumeInput(
 }
 
 describe("compute VM durable state", () => {
+  it("allocates a random hostname and retries a collision", async () => {
+    const labels = [
+      "vm-11111111111111111111111111111111",
+      "vm-22222222222222222222222222222222",
+    ];
+    await insertComputeVm(
+      vmInput({
+        public_hostname: `${labels[0]}.staging.example.com`,
+      }),
+    );
+
+    await expect(
+      allocateComputeVmPublicHostname(
+        "https://staging.example.com/",
+        () => labels.shift()!,
+      ),
+    ).resolves.toBe("vm-22222222222222222222222222222222.staging.example.com");
+  });
+
   it("deduplicates owner-scoped create idempotency", async () => {
     const input = vmInput();
     const first = await insertComputeVm(input);
@@ -427,7 +469,7 @@ describe("compute volume durable state", () => {
       vmInput({
         owner_account_id: owner,
         name: "first-vm",
-        attached_volume_id: volume.id,
+        home_volume_id: volume.id,
       }),
     );
     await expect(
@@ -435,7 +477,7 @@ describe("compute volume durable state", () => {
         vmInput({
           owner_account_id: owner,
           name: "second-vm",
-          attached_volume_id: volume.id,
+          home_volume_id: volume.id,
         }),
       ),
     ).rejects.toThrow("already reserved");

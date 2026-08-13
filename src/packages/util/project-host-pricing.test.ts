@@ -6,6 +6,7 @@ import {
   estimateNebiusCatalogRateBreakdown,
   estimateNebiusCatalogRateUsdPerHour,
   getDedicatedHostSurchargeFraction,
+  gcpMachineArchitecture,
   hostPriceBreakdownForBillingState,
   isSupportedCatalogGcpMachineType,
   type GcpCatalogPrices,
@@ -50,6 +51,12 @@ describe("project host pricing", () => {
   it("filters out local-SSD GCP machine variants from the frozen catalog", () => {
     expect(isSupportedCatalogGcpMachineType("c3d-standard-8")).toBe(true);
     expect(isSupportedCatalogGcpMachineType("c3d-standard-8-lssd")).toBe(false);
+  });
+
+  it("uses the explicit machine-family architecture map", () => {
+    expect(gcpMachineArchitecture("t2a-standard-1")).toBe("arm64");
+    expect(gcpMachineArchitecture("t2d-standard-2")).toBe("x86_64");
+    expect(gcpMachineArchitecture("c3d-standard-8")).toBe("x86_64");
   });
 
   it("estimates GCP hourly rates from normalized catalog pricing", () => {

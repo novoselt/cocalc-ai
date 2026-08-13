@@ -168,11 +168,14 @@ async function waitForState(
 }
 
 function projectScopedAuthId(ctx: any): string | undefined {
-  const projectId = `${ctx?.remote?.user?.project_id ?? ""}`.trim();
+  const projectId = `${
+    ctx?.remote?.user?.project_id ?? ctx?.remote?.user?.auth_project_id ?? ""
+  }`.trim();
   return projectId || undefined;
 }
 
 function requireAccountAuth(ctx: any, action: string) {
+  if (ctx?.remote?.user?.auth_actor === "agent") return;
   if (projectScopedAuthId(ctx)) {
     throw Object.assign(
       new Error(
@@ -213,7 +216,7 @@ export function vmWaitProgress(vm: any): string | undefined {
 }
 
 async function waitForVolumeState(
-  hub: any,
+  getVolume: (idOrName: string) => Promise<any>,
   idOrName: string,
   desired: Set<string>,
   timeoutMs: number,
@@ -221,7 +224,7 @@ async function waitForVolumeState(
   const deadline = Date.now() + timeoutMs;
   let last: any;
   while (Date.now() < deadline) {
-    last = await hub.compute.getVolume({ id_or_name: idOrName });
+    last = await getVolume(idOrName);
     if (desired.has(last.state)) return last;
     if (last.state === "failed") {
       throw new Error(last.error || `compute volume '${idOrName}' failed`);
@@ -246,7 +249,7 @@ function sshArgs(vm: any, opts: { identity?: string }, command?: string[]) {
     "StrictHostKeyChecking=accept-new",
   ];
   if (opts.identity) args.push("-i", expandHome(opts.identity));
-  args.push(`${vm.ssh_user || "ubuntu"}@${vm.public_ip}`);
+  args.push(`user@${vm.public_hostname || vm.public_ip}`);
   if (command?.length) args.push(...command);
   return args;
 }
@@ -279,7 +282,7 @@ export function resolveVmRsyncEndpoint(args: string[]) {
   });
   if (candidates.length !== 1) {
     throw new Error(
-      "rsync requires exactly one VM endpoint, e.g. vm-name:/work/data",
+      "rsync requires exactly one VM endpoint, e.g. vm-name:/home/user/data",
     );
   }
   return candidates[0];
@@ -314,7 +317,7 @@ export function vmRsyncArgs(
   if (opts.identity) ssh.push("-i", expandHome(opts.identity));
   const next = [...args];
   next[endpoint.index] =
-    `${vm.ssh_user || "ubuntu"}@${vm.public_ip}:${endpoint.path}`;
+    `user@${vm.public_hostname || vm.public_ip}:${endpoint.path}`;
   return ["-e", ssh.map(shellQuote).join(" "), ...next];
 }
 
@@ -432,10 +435,46 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       });
     });
 
+  vm.command("orphans")
+    .description("list managed-compute provider orphans (admin only)")
+    .option("--include-resolved", "include resolved orphan observations", false)
+    .action(async (opts: { includeResolved?: boolean }, command: Command) => {
+      await withContext(command, "vm orphans", async (ctx) => {
+        requireAccountAuth(ctx, "vm orphans");
+        return await ctx.hub.compute.listOrphans({
+          include_resolved: opts.includeResolved === true,
+        });
+      });
+    });
+
+  vm.command("orphan-resolve <orphan-id>")
+    .description(
+      "stop, delete, or ignore a managed-compute orphan (admin only)",
+    )
+    .requiredOption("--action <action>", "stop, delete, or ignore")
+    .action(
+      async (
+        orphanId: string,
+        opts: { action: "stop" | "delete" | "ignore" },
+        command: Command,
+      ) => {
+        await withContext(command, "vm orphan-resolve", async (ctx) => {
+          requireAccountAuth(ctx, "vm orphan-resolve");
+          return await ctx.hub.compute.resolveOrphan({
+            orphan_id: orphanId,
+            action: opts.action,
+          });
+        });
+      },
+    );
+
   vm.command("create <name>")
     .description("create a managed compute VM")
     .requiredOption("--project <project_id>", "attached CoCalc project")
-    .option("--zone <zone>", "GCP zone", "us-central1-a")
+    .option("--provider <provider>", "gcp or nebius", "gcp")
+    .option("--region <region>", "provider region", "us-central1")
+    .option("--zone <zone>", "provider zone")
+    .option("--architecture <arch>", "x86_64 or arm64", "x86_64")
     .option(
       "--machine <machine_type>",
       "allowlisted machine type",
@@ -449,10 +488,19 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     )
     .option("--ttl <duration>", "optional deletion deadline, e.g. 30m or 8h")
     .option("--boot-disk-gb <gb>", "persistent root disk size", "20")
-    .option("--volume <name>", "existing persistent volume mounted at /work")
+    .option(
+      "--home-volume <name>",
+      "existing persistent volume mounted at /home/user",
+    )
+    .option("--gpu-type <type>", "provider GPU type")
+    .option("--gpu-count <count>", "number of GPUs", "0")
     .option(
       "--funding-mode <mode>",
-      "account-prepaid or account-postpaid; auto-detected when omitted",
+      "site-funded, account-postpaid, or account-prepaid",
+    )
+    .option(
+      "--no-configure-project-ssh",
+      "do not maintain this VM's alias in the attached project's SSH config",
     )
     .option("--ssh-public-key <path>", "OpenSSH public key file")
     .option("--ssh-public-key-value <key>", "literal OpenSSH public key")
@@ -481,20 +529,26 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
               ? { key: `${opts.sshPublicKeyValue}`.trim(), path: undefined }
               : resolvePublicKey(opts.sshPublicKey);
         progress(
-          `[vm create] Submitting '${name}' (${opts.machine}, ${opts.zone})...`,
+          `[vm create] Submitting '${name}' (${opts.provider}, ${opts.machine}, ${opts.zone ?? opts.region})...`,
         );
         const created = await ctx.hub.compute.createVm({
           project_id: opts.project,
           name,
+          provider: opts.provider,
+          funding_mode: opts.fundingMode,
+          architecture: opts.architecture,
+          region: opts.region,
           zone: opts.zone,
           machine_type: opts.machine,
+          gpu_type: opts.gpuType,
+          gpu_count: Number(opts.gpuCount),
           pricing_model: opts.spot ? "spot" : "on_demand",
           allow_on_demand_fallback: opts.allowStandardFallback === true,
           ttl_minutes: opts.ttl ? parseTtlMinutes(opts.ttl) : null,
           boot_disk_gb: Number(opts.bootDiskGb),
-          volume: opts.volume,
-          funding_mode: opts.fundingMode,
+          home_volume: opts.homeVolume,
           ssh_public_key: key.key,
+          configure_project_ssh: opts.configureProjectSsh !== false,
           idempotency_key: randomUUID(),
         });
         progress(
@@ -571,6 +625,30 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         });
       });
     });
+
+  vm.command("funding <vm>")
+    .description("show or change a VM funding lane")
+    .option("--set <mode>", "site-funded, account-postpaid, or account-prepaid")
+    .action(
+      async (idOrName: string, opts: { set?: string }, command: Command) => {
+        await withContext(command, "vm funding", async (ctx) => {
+          const current = await getVmForContext(ctx, idOrName);
+          if (!opts.set) {
+            return {
+              id: current.id,
+              name: current.name,
+              funding_mode: current.funding_mode,
+            };
+          }
+          requireAccountAuth(ctx, "changing a VM funding lane");
+          return await ctx.hub.compute.setVmFundingMode({
+            id_or_name: idOrName,
+            funding_mode: opts.set,
+            idempotency_key: randomUUID(),
+          });
+        });
+      },
+    );
 
   for (const action of ["start", "stop"] as const) {
     vm.command(`${action} <vm>`)
@@ -688,7 +766,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
 
   const volume = vm
     .command("volume")
-    .description("manage persistent account-owned /work volumes");
+    .description("manage persistent account-owned home volumes");
 
   volume
     .command("list")
@@ -728,13 +806,15 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
 
   volume
     .command("create <name>")
-    .description("create a persistent pd-balanced /work volume")
+    .description("create a persistent /home/user volume")
     .requiredOption("--project <project_id>", "attached CoCalc project")
-    .option("--zone <zone>", "GCP zone", "us-central1-a")
+    .option("--provider <provider>", "gcp or nebius", "gcp")
+    .option("--region <region>", "provider region", "us-central1")
+    .option("--zone <zone>", "provider zone")
     .option("--size-gb <gb>", "volume size", "50")
     .option(
       "--funding-mode <mode>",
-      "account-prepaid or account-postpaid; auto-detected when omitted",
+      "site-funded, account-postpaid, or account-prepaid",
     )
     .option("--wait", "wait until the volume is ready", false)
     .action(async (name: string, opts: any, command: Command) => {
@@ -743,6 +823,8 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         const created = await ctx.hub.compute.createVolume({
           project_id: opts.project,
           name,
+          provider: opts.provider,
+          region: opts.region,
           zone: opts.zone,
           size_gb: Number(opts.sizeGb),
           funding_mode: opts.fundingMode,
@@ -750,7 +832,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         });
         if (!opts.wait) return created;
         return await waitForVolumeState(
-          ctx.hub,
+          (volume) => getVolumeForContext(ctx, volume),
           created.id,
           new Set(["ready"]),
           5 * 60_000,
@@ -764,7 +846,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
     .requiredOption("--size-gb <gb>", "new grow-only volume size")
     .option(
       "--funding-mode <mode>",
-      "account-prepaid or account-postpaid; auto-detected when omitted",
+      "site-funded, account-postpaid, or account-prepaid",
     )
     .option("--wait", "wait until provider resize completes", false)
     .action(async (idOrName: string, opts: any, command: Command) => {
@@ -778,13 +860,38 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         });
         if (!opts.wait) return resized;
         return await waitForVolumeState(
-          ctx.hub,
+          (volume) => getVolumeForContext(ctx, volume),
           resized.id,
           new Set(["ready"]),
           5 * 60_000,
         );
       });
     });
+
+  volume
+    .command("funding <volume>")
+    .description("show or change a persistent home volume funding lane")
+    .option("--set <mode>", "site-funded, account-postpaid, or account-prepaid")
+    .action(
+      async (idOrName: string, opts: { set?: string }, command: Command) => {
+        await withContext(command, "vm volume funding", async (ctx) => {
+          const current = await getVolumeForContext(ctx, idOrName);
+          if (!opts.set) {
+            return {
+              id: current.id,
+              name: current.name,
+              funding_mode: current.funding_mode,
+            };
+          }
+          requireAccountAuth(ctx, "changing a home volume funding lane");
+          return await ctx.hub.compute.setVolumeFundingMode({
+            id_or_name: idOrName,
+            funding_mode: opts.set,
+            idempotency_key: randomUUID(),
+          });
+        });
+      },
+    );
 
   volume
     .command("delete <volume>")
@@ -801,7 +908,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         });
         if (!opts.wait) return deleted;
         return await waitForVolumeState(
-          ctx.hub,
+          (volume) => getVolumeForContext(ctx, volume),
           deleted.id,
           new Set(["deleted"]),
           5 * 60_000,
@@ -840,8 +947,8 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         ).content.trimEnd();
         const block = buildVmSshConfigBlock({
           alias,
-          hostname: row.public_ip,
-          username: row.ssh_user || "ubuntu",
+          hostname: row.public_hostname || row.public_ip,
+          username: "user",
           identity,
         });
         mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });

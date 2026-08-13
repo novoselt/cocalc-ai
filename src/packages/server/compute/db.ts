@@ -3,13 +3,40 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import getPool from "@cocalc/database/pool";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
 
 const pool = () => getPool();
 const MAX_COMPUTE_VM_SSH_KEYS = 32;
 const MAX_COMPUTE_VM_SSH_KEY_METADATA_BYTES = 128 * 1024;
+
+export async function allocateComputeVmPublicHostname(
+  dns: string,
+  generateLabel = () => `vm-${randomBytes(16).toString("hex")}`,
+): Promise<string> {
+  const hostname = `${dns ?? ""}`
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+  if (!hostname || !/^[a-z0-9.-]+$/.test(hostname)) {
+    throw new Error("managed compute public DNS hostname is not configured");
+  }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const label = generateLabel().trim().toLowerCase();
+    if (!/^vm-[a-f0-9]{32}$/.test(label)) {
+      throw new Error("invalid managed compute public DNS label");
+    }
+    const candidate = `${label}.${hostname}`;
+    const { rows } = await pool().query(
+      "SELECT 1 FROM compute_vms WHERE public_hostname=$1 LIMIT 1",
+      [candidate],
+    );
+    if (!rows.length) return candidate;
+  }
+  throw new Error("unable to allocate a unique managed compute hostname");
+}
 
 export async function insertComputeVm(
   row: Omit<
@@ -74,18 +101,24 @@ export async function insertComputeVm(
     const { rows } = await client.query<ComputeVmRow>(
       `INSERT INTO compute_vms (
          id, name, owner_account_id, owning_bay_id, project_id, provider,
-         region, zone, architecture, machine_type, desired_pricing_model,
+         region, zone, architecture, machine_type, cpu, ram_gb, gpu_type,
+         gpu_count, provider_spec, funding_mode, desired_pricing_model,
          effective_pricing_model, boot_disk_gb, boot_disk_id, state,
-         attached_volume_id, desired_state, instance_generation,
-         provider_instance_id, public_ip, ssh_user, ssh_public_key, created_at,
-         updated_at, expires_at,
+         home_volume_id, desired_state, instance_generation,
+         provider_instance_id, public_address_id, public_address_state,
+         public_ip, public_hostname, dns_record_id, dns_state, dns_error,
+         public_ports, ssh_user, ssh_public_key, created_at,
+         updated_at, expires_at, bootstrap_revision,
+         observed_bootstrap_revision, public_port_policy_revision,
          allow_on_demand_fallback, authorized_fallback_hours,
          spot_hourly_price, on_demand_hourly_price, authorized_cost,
          accrued_cost, billing_state, spot_recovery_policy,
          spot_recovery_state, idempotency_key, error, metadata
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-         $20,$21,$22,NOW(),NOW(),$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+         $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,
+         NOW(),NOW(),$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,
+         $50,$51
        ) RETURNING *`,
       [
         row.id,
@@ -98,19 +131,35 @@ export async function insertComputeVm(
         row.zone,
         row.architecture,
         row.machine_type,
+        row.cpu,
+        row.ram_gb,
+        row.gpu_type ?? null,
+        row.gpu_count,
+        row.provider_spec,
+        row.funding_mode,
         row.desired_pricing_model,
         row.effective_pricing_model,
         row.boot_disk_gb,
         row.boot_disk_id,
         row.state,
-        row.attached_volume_id ?? null,
+        row.home_volume_id ?? null,
         row.desired_state,
         row.instance_generation,
         row.provider_instance_id,
+        row.public_address_id ?? null,
+        row.public_address_state,
         row.public_ip ?? null,
+        row.public_hostname,
+        row.dns_record_id ?? null,
+        row.dns_state,
+        row.dns_error ?? null,
+        row.public_ports,
         row.ssh_user,
         row.ssh_public_key,
         row.expires_at,
+        row.bootstrap_revision,
+        row.observed_bootstrap_revision ?? null,
+        row.public_port_policy_revision,
         row.allow_on_demand_fallback,
         row.authorized_fallback_hours,
         row.spot_hourly_price,
@@ -125,17 +174,23 @@ export async function insertComputeVm(
         row.metadata,
       ],
     );
-    if (row.attached_volume_id) {
+    if (row.home_volume_id) {
       const { rows: volumes } = await client.query<ComputeVolumeRow>(
         `SELECT * FROM compute_volumes
          WHERE id=$1 AND owner_account_id=$2 AND deleted_at IS NULL
          FOR UPDATE`,
-        [row.attached_volume_id, row.owner_account_id],
+        [row.home_volume_id, row.owner_account_id],
       );
       const volume = volumes[0];
       if (!volume) throw new Error("compute volume not found or access denied");
-      if (volume.zone !== row.zone) {
-        throw new Error("compute volume and VM must be in the same zone");
+      if (
+        volume.provider !== row.provider ||
+        volume.region !== row.region ||
+        volume.zone !== row.zone
+      ) {
+        throw new Error(
+          "compute volume and VM must use the same provider location",
+        );
       }
       if (volume.state !== "ready" || volume.desired_state !== "ready") {
         throw new Error(`compute volume is not ready (state=${volume.state})`);
@@ -280,7 +335,18 @@ export async function updateComputeVm(
     "state",
     "desired_state",
     "effective_pricing_model",
+    "funding_mode",
+    "provider_instance_id",
+    "instance_generation",
+    "public_address_id",
+    "public_address_state",
+    "public_address_updated_at",
     "public_ip",
+    "dns_record_id",
+    "dns_state",
+    "dns_updated_at",
+    "dns_error",
+    "observed_bootstrap_revision",
     "ready_at",
     "stopped_at",
     "deleted_at",
@@ -375,9 +441,9 @@ export async function insertComputeInstance(vm: ComputeVmRow) {
     `INSERT INTO compute_vm_instances (
        id, vm_id, owner_account_id, owning_bay_id, project_id, generation,
        provider_instance_id, machine_type, pricing_model, public_ip,
-       hourly_price, created_at
+       public_address_id, hourly_price, created_at
      )
-     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW()
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW()
      WHERE NOT EXISTS (
        SELECT 1 FROM compute_vm_instances WHERE vm_id=$2 AND generation=$6
      )`,
@@ -392,6 +458,7 @@ export async function insertComputeInstance(vm: ComputeVmRow) {
       vm.machine_type,
       vm.effective_pricing_model,
       vm.public_ip ?? null,
+      vm.public_address_id ?? null,
       vm.effective_pricing_model === "spot"
         ? vm.spot_hourly_price
         : vm.on_demand_hourly_price,

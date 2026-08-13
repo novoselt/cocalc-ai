@@ -19,12 +19,12 @@ describe("managed compute CLI equivalents", () => {
           allow_on_demand_fallback: true,
           ttl_minutes: 480,
           boot_disk_gb: 40,
-          volume: "build-cache",
+          home_volume: "build-cache",
           ssh_public_key: "ssh-ed25519 AAAATEST user@example.com",
         },
       }),
     ).toBe(
-      "cocalc vm create --project project-id --zone us-central1-a --machine t2d-standard-16 --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --volume build-cache --ssh-public-key-value 'ssh-ed25519 AAAATEST user@example.com' --wait build-vm",
+      "cocalc vm create --project project-id --provider gcp --funding-mode account-prepaid --architecture x86_64 --region us-central1 --machine t2d-standard-16 --zone us-central1-a --ttl=8h --boot-disk-gb=40 --spot --allow-standard-fallback --home-volume build-cache --ssh-public-key-value 'ssh-ed25519 AAAATEST user@example.com' --wait build-vm",
     );
   });
 
@@ -56,11 +56,11 @@ describe("managed compute CLI equivalents", () => {
         values: { name: "my data", zone: "us-central1-b", size_gb: 80 },
       }),
     ).toBe(
-      "cocalc vm volume create --project project-id --zone us-central1-b --size-gb=80 --wait 'my data'",
+      "cocalc vm volume create --project project-id --provider gcp --funding-mode account-prepaid --region us-central1 --size-gb=80 --zone us-central1-b --wait 'my data'",
     );
   });
 
-  it("creates and waits for a new /work volume before creating the VM", () => {
+  it("creates and waits for a new home volume before creating the VM", () => {
     const command = vmCreateCli({
       api: "https://staging.cocalc.ai",
       project_id: "project-id",
@@ -71,15 +71,15 @@ describe("managed compute CLI equivalents", () => {
         pricing_model: "on_demand",
         allow_on_demand_fallback: false,
         boot_disk_gb: 20,
-        create_volume: true,
-        new_volume_name: "compute-vm-work",
-        new_volume_size_gb: 100,
+        create_home_volume: true,
+        new_home_volume_name: "compute-vm-home",
+        new_home_volume_size_gb: 100,
       },
     });
     expect(command).toContain(
-      "vm volume create --project project-id --zone us-west1-a --size-gb=100 --wait compute-vm-work",
+      "vm volume create --project project-id --provider gcp --funding-mode account-prepaid --region us-central1 --size-gb=100 --zone us-west1-a --wait compute-vm-home",
     );
     expect(command).toContain("&& cocalc vm create");
-    expect(command).toContain("--volume compute-vm-work");
+    expect(command).toContain("--home-volume compute-vm-home");
   });
 });

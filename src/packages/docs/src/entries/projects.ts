@@ -136,11 +136,11 @@ export const PROJECTS_ENTRIES: DocsEntry[] = [
     lastReviewed: "2026-08-08",
     requiredFeatures: ["compute-vms"],
     searchKeywords:
-      "managed compute dedicated virtual machines vm ssh rsync work volume spot standard egress billing",
+      "managed compute dedicated virtual machines vm ssh rsync home volume spot standard egress billing gcp nebius gpu arm",
     slug: "projects/virtual-machines",
     status: "ready",
     summary:
-      "Create and operate standalone Ubuntu VMs with SSH access, metered egress, and optional persistent /work storage.",
+      "Create and operate standalone Ubuntu VMs with SSH access, stable DNS, metered egress, and optional persistent home storage.",
     title: "Virtual machines",
   },
   {

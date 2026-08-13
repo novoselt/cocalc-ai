@@ -8,7 +8,9 @@ import {
   computeRuntimeMetadata,
   computePostStopTransition,
   isSpotCapacityError,
+  providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
+  volumeAttachedToVm,
 } from "./worker";
 
 describe("compute VM work failure state", () => {
@@ -20,6 +22,63 @@ describe("compute VM work failure state", () => {
 
     expect(computeWorkFailureState(retry)).toBe("recovering");
     expect(retry.retryAt.toISOString()).toBe("2026-08-04T00:00:00.000Z");
+  });
+
+  it("matches Nebius inventory by opaque ID or stable provider name", () => {
+    const vm = {
+      provider: "nebius",
+      provider_instance_id: "opaque-nebius-id",
+      metadata: { provider_instance_name: "cocalc-vm-stable" },
+    } as any;
+    expect(
+      providerComputeInstanceIsExpected(
+        {
+          provider: "nebius",
+          instance_id: "opaque-nebius-id",
+          name: "cocalc-vm-stable",
+        },
+        [vm],
+      ),
+    ).toBe(true);
+    expect(
+      providerComputeInstanceIsExpected(
+        {
+          provider: "nebius",
+          instance_id: "different-opaque-id",
+          name: "cocalc-vm-stable",
+        },
+        [vm],
+      ),
+    ).toBe(true);
+    expect(
+      providerComputeInstanceIsExpected(
+        {
+          provider: "nebius",
+          instance_id: "unknown",
+          name: "cocalc-vm-unknown",
+        },
+        [vm],
+      ),
+    ).toBe(false);
+  });
+
+  it("matches an attached volume against the provider's opaque VM ID", () => {
+    const vm = { provider_instance_id: "opaque-nebius-id" } as any;
+    expect(
+      volumeAttachedToVm(
+        [
+          "compute/v1/disks/disk-1/users/instances/opaque-nebius-id",
+          "compute/v1/disks/disk-1/users/instances/another-instance",
+        ],
+        vm,
+      ),
+    ).toBe(true);
+    expect(
+      volumeAttachedToVm(
+        ["compute/v1/disks/disk-1/users/instances/provider-name-only"],
+        vm,
+      ),
+    ).toBe(false);
   });
 
   it("classifies terminal work errors as failed", () => {

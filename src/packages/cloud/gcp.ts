@@ -703,6 +703,7 @@ export class GcpProvider implements CloudProvider {
           {
             name: "External NAT",
             networkTier: "STANDARD",
+            natIP: spec.metadata?.public_ip || undefined,
           },
         ],
         stackType: "IPV4_ONLY",
@@ -774,7 +775,7 @@ export class GcpProvider implements CloudProvider {
         public_ip: publicIp,
         private_ip: privateIp,
         internal_hostname: internalHostname,
-        ssh_user: "ubuntu",
+        ssh_user: sshUserFor(spec),
         zone,
         metadata: {
           gcp_project_id: credentials.projectId,

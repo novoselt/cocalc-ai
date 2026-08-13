@@ -63,13 +63,14 @@ export async function insertComputeVolume(
     const { rows } = await client.query<ComputeVolumeRow>(
       `INSERT INTO compute_volumes (
          id, name, owner_account_id, owning_bay_id, project_id, provider, region, zone,
-         disk_type, filesystem, size_gb, desired_size_gb, provider_disk_id,
+         role, funding_mode, provider_spec, disk_type, filesystem, size_gb,
+         desired_size_gb, effective_size_gb, provider_disk_id,
          state, desired_state, attached_vm_id, attachment_generation,
          attachment_state, created_at, updated_at, monthly_price_per_gb,
          authorized_monthly_cost, billing_state, idempotency_key, error, metadata
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-         NOW(),NOW(),$19,$20,$21,$22,$23,$24
+         $19,$20,$21,$22,NOW(),NOW(),$23,$24,$25,$26,$27,$28
        ) RETURNING *`,
       [
         row.id,
@@ -80,10 +81,14 @@ export async function insertComputeVolume(
         row.provider,
         row.region,
         row.zone,
+        row.role,
+        row.funding_mode,
+        row.provider_spec,
         row.disk_type,
         row.filesystem,
         row.size_gb,
         row.desired_size_gb,
+        row.effective_size_gb,
         row.provider_disk_id,
         row.state,
         row.desired_state,
@@ -203,6 +208,8 @@ export async function updateComputeVolume(
     "project_id",
     "size_gb",
     "desired_size_gb",
+    "effective_size_gb",
+    "funding_mode",
     "state",
     "desired_state",
     "attached_vm_id",

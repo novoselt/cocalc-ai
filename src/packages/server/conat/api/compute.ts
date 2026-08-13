@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ComputeCatalog,
   ComputeVolume,
@@ -13,11 +13,15 @@ import type {
 } from "@cocalc/conat/hub/api/compute";
 import type { HostCatalogMachineType } from "@cocalc/conat/hub/api/hosts";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
+import isAdmin from "@cocalc/server/accounts/is-admin";
+import { getServerSettings } from "@cocalc/database/settings/server-settings";
+import getPool from "@cocalc/database/pool";
 import { assertComputeProjectAssignedToHost } from "@cocalc/server/compute/host-authorization";
 import { requireDangerousSessionAuth } from "./dangerous-session-auth";
 import { resolveProjectReferenceAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import {
   addComputeVmSshPublicKey,
+  allocateComputeVmPublicHostname,
   appendComputeEvent,
   enqueueComputeWork,
   insertComputeVm,
@@ -31,9 +35,21 @@ import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
 import {
   ensureProviderComputeSshAccess,
+  deleteOrphanProviderComputeAddress,
+  deleteOrphanProviderComputeBootDisk,
+  deleteOrphanProviderComputeInstance,
   getProviderComputeRegions,
   requireProviderComputeSubnetwork,
+  stopOrphanProviderComputeInstance,
 } from "@cocalc/server/compute/provider";
+import {
+  approveAgentComputeGrant,
+  listAgentComputeGrants,
+  requireAgentComputeGrant,
+  revokeAgentComputeGrant,
+  type ComputeAgentAuth,
+  type ComputeAgentGrantRequest,
+} from "@cocalc/server/compute/turn-grants";
 import { DEFAULT_SPOT_RECOVERY_POLICY } from "@cocalc/server/cloud/spot-restore";
 import {
   getComputeVmConfig,
@@ -50,24 +66,138 @@ import {
   updateComputeVolume,
 } from "@cocalc/server/compute/volume-db";
 import { assertDedicatedHostAdmissionForAccount } from "@cocalc/server/project-host/admission";
+import type { DedicatedHostFundingMode } from "@cocalc/server/project-host/admission";
 import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
-import { isSupportedCatalogGcpMachineType } from "@cocalc/util/project-host-pricing";
+import {
+  getDedicatedHostSurchargeFraction,
+  gcpMachineArchitecture,
+  isSupportedCatalogGcpMachineType,
+} from "@cocalc/util/project-host-pricing";
 import { getCatalog as getHostCatalog } from "./hosts";
+import { loadNebiusInstanceTypes } from "@cocalc/server/cloud/providers";
+import { getManagedVmProjectSshPublicKey } from "@cocalc/server/projects/managed-vm-ssh-config";
 import {
   defaultComputeZone,
   regionFromComputeZone,
   requireComputeZoneInRegions,
   restrictHostCatalogToRegions,
 } from "@cocalc/server/compute/placement";
+import {
+  listComputeOrphans,
+  updateComputeOrphan,
+} from "@cocalc/server/compute/orphans";
+import { deleteHostDns } from "@cocalc/server/cloud/dns";
+import centralLog from "@cocalc/database/postgres/central-log";
+import type { MoneyValue } from "@cocalc/util/money";
 
 const MIN_BOOT_DISK_GB = 10;
 const MIN_VOLUME_GB = 10;
 const HOURS_PER_MONTH = 730;
 
+export function rateWithProviderCost<
+  T extends {
+    hourly_cost_usd: MoneyValue;
+    pricing_snapshot: Record<string, any>;
+  },
+>(
+  provider: "gcp" | "nebius",
+  rate: T,
+  settings: Record<string, any>,
+): T & { provider_hourly_cost_usd: string } {
+  const surcharge = getDedicatedHostSurchargeFraction(provider, settings);
+  return {
+    ...rate,
+    provider_hourly_cost_usd: (
+      Number(rate.hourly_cost_usd) /
+      (1 + surcharge)
+    ).toFixed(9),
+  };
+}
+
 function requireAccount(accountId?: string) {
   const value = `${accountId ?? ""}`.trim();
   if (!value) throw new Error("must be signed in");
   return value;
+}
+
+function resolveComputeActor(
+  opts: {
+    account_id?: string;
+    project_id?: string;
+    agent_auth?: ComputeAgentAuth;
+  },
+  expectedProjectId?: string,
+) {
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
+  if (opts.agent_auth) {
+    const projectId = expectedProjectId ?? `${opts.project_id ?? ""}`.trim();
+    if (!projectId || opts.agent_auth.project_id !== projectId) {
+      throw Object.assign(
+        new Error("managed-compute capability cannot cross projects"),
+        { code: 403 },
+      );
+    }
+  }
+  return {
+    accountId,
+    actorKind: opts.agent_auth ? ("agent" as const) : ("human" as const),
+  };
+}
+
+async function authorizeComputeMutation(opts: {
+  actor: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
+    agent_auth?: ComputeAgentAuth;
+  };
+  action: "availability" | "billable" | "destructive";
+  project_id: string;
+  vm_id?: string;
+  request?: ComputeAgentGrantRequest;
+  require_fresh_auth: boolean;
+}) {
+  if (opts.actor.agent_auth) {
+    const semanticRequest = { ...(opts.request ?? {}) };
+    delete semanticRequest.operation_id;
+    const operationId = createHash("sha256")
+      .update(opts.actor.agent_auth.token_fingerprint)
+      .update("\0")
+      .update(opts.action)
+      .update("\0")
+      .update(opts.project_id)
+      .update("\0")
+      .update(opts.vm_id ?? "")
+      .update("\0")
+      .update(
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(semanticRequest).sort(([a], [b]) =>
+              a.localeCompare(b),
+            ),
+          ),
+        ),
+      )
+      .digest("hex");
+    await requireAgentComputeGrant({
+      auth: opts.actor.agent_auth,
+      action: opts.action,
+      project_id: opts.project_id,
+      vm_id: opts.vm_id,
+      request: { ...semanticRequest, operation_id: operationId },
+    });
+    return;
+  }
+  if (opts.require_fresh_auth) {
+    await requireDangerousSessionAuth({
+      account_id: requireAccount(opts.actor.account_id),
+      browser_id: opts.actor.browser_id,
+      session_hash: opts.actor.session_hash,
+      require_second_factor: "if_enabled",
+    });
+  }
 }
 
 async function requireProjectMembership(accountId: string, projectId: string) {
@@ -103,7 +233,14 @@ function normalizeZone(value: string) {
 function normalizeSshPublicKey(value: string) {
   const key = `${value ?? ""}`.trim();
   if (!key) return "";
-  if (!/^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp\d+)\s+\S+/.test(key)) {
+  if (key.includes("\n") || key.includes("\r")) {
+    throw new Error("ssh_public_key must contain exactly one public key");
+  }
+  if (
+    !/^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp\d+)\s+[A-Za-z0-9+/]+={0,3}(?:\s+[^\r\n]+)?$/.test(
+      key,
+    )
+  ) {
     throw new Error("ssh_public_key must be an OpenSSH public key");
   }
   if (key.length > 16_384) throw new Error("ssh_public_key is too large");
@@ -120,16 +257,96 @@ function normalizeIdempotencyKey(value: string) {
   return key;
 }
 
-function publicVm(vm: ComputeVmRow): ComputeVm {
+function cachedEgressSummary(vm: ComputeVmRow) {
+  const egress = vm.metadata?.billing?.egress ?? {};
+  const updatedAt = egress.metered_through_at ?? null;
+  const stale =
+    !updatedAt || Date.now() - new Date(updatedAt).valueOf() > 20 * 60_000;
+  const free = vm.provider === "nebius" || vm.funding_mode === "site-funded";
+  return {
+    current_month_bytes: Number(
+      egress.current_month_bytes ?? egress.total_bytes ?? 0,
+    ),
+    current_month_cost_usd: `${egress.current_month_cost_usd ?? egress.total_cost_usd ?? "0"}`,
+    lifetime_bytes: Number(egress.lifetime_bytes ?? egress.total_bytes ?? 0),
+    lifetime_cost_usd: `${egress.lifetime_cost_usd ?? egress.total_cost_usd ?? "0"}`,
+    unit_price_per_gb_usd: `${free ? 0 : (egress.unit_cost_usd_per_gb ?? 0.1)}`,
+    free,
+    updated_at: updatedAt,
+    complete_through: updatedAt,
+    stale,
+    error: egress.error ?? null,
+  };
+}
+
+async function egressSummary(vm: ComputeVmRow) {
+  try {
+    const { rows } = await getPool("medium").query(
+      `WITH intervals AS (
+         SELECT bytes::numeric AS bytes, amount_usd AS amount, ended_at
+           FROM compute_egress_meter_intervals WHERE resource_id=$1
+         UNION ALL
+         SELECT quantity::numeric AS bytes, provider_cost_usd AS amount, ended_at
+           FROM compute_site_funded_usage
+          WHERE resource_id=$1 AND usage_kind='egress'
+       )
+       SELECT
+         COALESCE(SUM(bytes),0)::text AS lifetime_bytes,
+         COALESCE(SUM(amount),0)::text AS lifetime_cost,
+         COALESCE(SUM(bytes) FILTER
+           (WHERE ended_at >= date_trunc('month',NOW())),0)::text AS month_bytes,
+         COALESCE(SUM(amount) FILTER
+           (WHERE ended_at >= date_trunc('month',NOW())),0)::text AS month_cost,
+         MAX(ended_at) AS complete_through
+       FROM intervals`,
+      [vm.id],
+    );
+    const row = rows[0] ?? {};
+    const completeThrough = row.complete_through ?? null;
+    const free = vm.provider === "nebius" || vm.funding_mode === "site-funded";
+    return {
+      current_month_bytes: Number(row.month_bytes ?? 0),
+      current_month_cost_usd: free ? "0" : `${row.month_cost ?? "0"}`,
+      lifetime_bytes: Number(row.lifetime_bytes ?? 0),
+      lifetime_cost_usd: free ? "0" : `${row.lifetime_cost ?? "0"}`,
+      unit_price_per_gb_usd: free ? "0" : "0.10",
+      free,
+      updated_at: completeThrough,
+      complete_through: completeThrough,
+      stale:
+        !completeThrough ||
+        Date.now() - new Date(completeThrough).valueOf() > 20 * 60_000,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      ...cachedEgressSummary(vm),
+      stale: true,
+      error: `authoritative egress ledger unavailable: ${err}`,
+    };
+  }
+}
+
+function managedVmSshAlias(vm: Pick<ComputeVmRow, "id" | "name">): string {
+  return `vm-${vm.name}-${vm.id.replaceAll("-", "").slice(0, 8)}`;
+}
+
+async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
   const {
     ssh_public_key: _sshPublicKey,
+    dns_record_id: _dnsRecordId,
     idempotency_key: _key,
+    metadata,
     ...result
   } = vm;
+  const { ssh_public_keys: _sshPublicKeys, ...publicMetadata } = metadata ?? {};
   return {
     ...result,
     private_ip: vm.metadata?.runtime?.private_ip ?? null,
     internal_hostname: vm.metadata?.runtime?.internal_hostname ?? null,
+    egress_summary: await egressSummary(vm),
+    ssh_alias: managedVmSshAlias(vm),
+    metadata: publicMetadata,
   };
 }
 
@@ -176,31 +393,42 @@ function normalizeVolumeName(value: string) {
   return name;
 }
 
-function normalizeFundingMode(
-  value: unknown,
-): "account-prepaid" | "account-postpaid" {
-  if (value === "account-prepaid" || value === "account-postpaid") {
+function normalizeFundingMode(value: unknown): DedicatedHostFundingMode {
+  if (
+    value === "site-funded" ||
+    value === "account-prepaid" ||
+    value === "account-postpaid"
+  ) {
     return value;
   }
-  throw new Error("funding_mode must be account-prepaid or account-postpaid");
+  throw new Error(
+    "funding_mode must be site-funded, account-prepaid, or account-postpaid",
+  );
 }
 
 async function requireComputeFunding(opts: {
   account_id: string;
   action: "create" | "start" | "resize";
   funding_mode: unknown;
+  provider?: "gcp" | "nebius";
 }) {
-  const candidates =
+  const candidates: readonly DedicatedHostFundingMode[] =
     opts.funding_mode == null
-      ? (["account-prepaid", "account-postpaid"] as const)
-      : ([normalizeFundingMode(opts.funding_mode)] as const);
+      ? ["account-prepaid", "account-postpaid"]
+      : [normalizeFundingMode(opts.funding_mode)];
   let lastError: unknown;
   for (const fundingMode of candidates) {
     try {
+      if (fundingMode === "site-funded" && !(await isAdmin(opts.account_id))) {
+        throw Object.assign(
+          new Error("site-funded managed compute requires a site admin"),
+          { code: "site_funded_requires_admin" },
+        );
+      }
       await assertDedicatedHostAdmissionForAccount({
         account_id: opts.account_id,
         action: opts.action,
-        machine_cloud: "gcp",
+        machine_cloud: opts.provider ?? "gcp",
         funding_mode_override: fundingMode,
       });
       return fundingMode;
@@ -209,10 +437,6 @@ async function requireComputeFunding(opts: {
     }
   }
   throw lastError;
-}
-
-function machineArchitecture(machineType: string): "arm64" | "x86_64" {
-  return machineType.split("-")[0]?.endsWith("a") ? "arm64" : "x86_64";
 }
 
 function machineEntries(
@@ -227,9 +451,37 @@ function machineEntries(
 
 async function getComputeMachine(opts: {
   account_id: string;
-  zone: string;
+  provider: "gcp" | "nebius";
+  region: string;
+  zone?: string;
   machine_type: string;
 }) {
+  if (opts.provider === "nebius") {
+    const machine = (await loadNebiusInstanceTypes()).find(
+      ({ name, regions }) =>
+        name === opts.machine_type &&
+        (!regions?.length || regions.includes(opts.region)),
+    );
+    if (!machine?.vcpus || !machine.memory_gib) {
+      throw new Error(
+        `machine '${opts.machine_type}' is not available in ${opts.region}`,
+      );
+    }
+    return {
+      machine_type: machine.name,
+      architecture: "x86_64" as const,
+      cpu: machine.vcpus,
+      ram_gb: machine.memory_gib,
+      gpu_type: machine.gpus ? (machine.gpu_label ?? machine.platform) : null,
+      gpu_count: machine.gpus ?? 0,
+      provider_spec: {
+        platform: machine.platform,
+        platform_label: machine.platform_label,
+        allowed_for_preemptibles: machine.allowed_for_preemptibles !== false,
+      },
+    };
+  }
+  if (!opts.zone) throw new Error("zone is required for GCP managed compute");
   const catalog = await getHostCatalog({
     account_id: opts.account_id,
     provider: "gcp",
@@ -244,9 +496,12 @@ async function getComputeMachine(opts: {
   }
   return {
     machine_type: machine.name,
-    architecture: machineArchitecture(machine.name),
+    architecture: gcpMachineArchitecture(machine.name),
     cpu: machine.guestCpus,
     ram_gb: machine.memoryMb / 1024,
+    gpu_type: null,
+    gpu_count: 0,
+    provider_spec: {},
   };
 }
 
@@ -270,17 +525,82 @@ export async function getCatalog(opts: {
   const accountId = requireAccount(opts.account_id);
   const config = await getComputeVmConfig();
   const configuredRegions = await getProviderComputeRegions();
-  const catalog = restrictHostCatalogToRegions(
+  const gcpCatalog = restrictHostCatalogToRegions(
     await getHostCatalog({
       account_id: accountId,
       provider: "gcp",
     }),
     configuredRegions,
   );
-  const zone = defaultComputeZone(catalog);
+  const zone = defaultComputeZone(gcpCatalog);
+  const fundingModes = await Promise.all(
+    (["site-funded", "account-prepaid", "account-postpaid"] as const).map(
+      async (value) => {
+        if (value === "site-funded" && !(await isAdmin(accountId))) {
+          return {
+            value,
+            label: "Site-funded",
+            allowed: false,
+            reason: "Site-funded VMs are available only to site admins.",
+          };
+        }
+        try {
+          await assertDedicatedHostAdmissionForAccount({
+            account_id: accountId,
+            action: "create",
+            machine_cloud: "gcp",
+            funding_mode_override: value,
+          });
+          return {
+            value,
+            label:
+              value === "site-funded"
+                ? "Site-funded"
+                : value === "account-prepaid"
+                  ? "Prepaid from this account"
+                  : "Postpaid to this account",
+            allowed: true,
+          };
+        } catch (err) {
+          return {
+            value,
+            label:
+              value === "site-funded"
+                ? "Site-funded"
+                : value === "account-prepaid"
+                  ? "Prepaid from this account"
+                  : "Postpaid to this account",
+            allowed: false,
+            reason: `${(err as Error)?.message ?? err}`,
+          };
+        }
+      },
+    ),
+  );
+  const allowedFunding = fundingModes.find(({ allowed }) => allowed);
+  if (!allowedFunding) {
+    throw new Error("no managed compute funding lane is currently available");
+  }
+  const providerCatalogs: ComputeCatalog["provider_catalogs"] = {
+    gcp: gcpCatalog,
+  };
+  try {
+    providerCatalogs.nebius = await getHostCatalog({
+      account_id: accountId,
+      provider: "nebius",
+    });
+  } catch {
+    // Nebius is omitted until its provider credentials/catalog are configured.
+  }
   return {
-    host_catalog: catalog,
+    providers: providerCatalogs.nebius ? ["gcp", "nebius"] : ["gcp"],
+    provider_catalogs: providerCatalogs,
+    funding_modes: fundingModes,
+    default_funding_mode: allowedFunding.value,
     defaults: {
+      provider: "gcp",
+      architecture: "x86_64",
+      region: regionFromComputeZone(zone),
       zone,
       machine_type: "e2-standard-2",
       ttl_minutes: null,
@@ -295,58 +615,98 @@ export async function getCatalog(opts: {
   };
 }
 
-export async function createVm(opts: CreateComputeVmRequest) {
-  const accountId = requireAccount(opts.account_id);
+export async function createVm(
+  opts: CreateComputeVmRequest & { agent_auth?: ComputeAgentAuth },
+) {
+  const { accountId, actorKind } = resolveComputeActor(opts, opts.project_id);
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
-  await requireDangerousSessionAuth({
-    account_id: accountId,
-    browser_id: opts.browser_id,
-    session_hash: opts.session_hash,
-    require_second_factor: "if_enabled",
-  });
   await requireProjectMembership(accountId, opts.project_id);
+  const provider = opts.provider;
+  if (provider !== "gcp" && provider !== "nebius") {
+    throw new Error("provider must be gcp or nebius");
+  }
   const fundingMode = await requireComputeFunding({
     account_id: accountId,
     action: "create",
     funding_mode: opts.funding_mode,
+    provider,
   });
 
   const name = normalizeName(opts.name);
-  const zone = normalizeZone(opts.zone);
-  const configuredRegions = await getProviderComputeRegions();
-  requireComputeZoneInRegions(zone, configuredRegions);
-  await requireProviderComputeSubnetwork(zone);
-  let attachedVolume = opts.volume
-    ? await resolveOwnedVolume(accountId, opts.volume)
+  if (provider === "gcp" && !opts.zone) {
+    throw new Error("zone is required for GCP managed compute");
+  }
+  const zone =
+    provider === "gcp"
+      ? normalizeZone(opts.zone!)
+      : opts.zone?.trim() || undefined;
+  const region =
+    provider === "gcp"
+      ? regionFromComputeZone(zone!)
+      : `${opts.region ?? ""}`.trim();
+  if (!region) throw new Error("region is required");
+  if (provider === "gcp") {
+    if (opts.region && opts.region !== region) {
+      throw new Error(`zone '${zone}' is not in region '${opts.region}'`);
+    }
+    const configuredRegions = await getProviderComputeRegions();
+    requireComputeZoneInRegions(zone!, configuredRegions);
+    await requireProviderComputeSubnetwork(zone!);
+  }
+  let homeVolume = opts.home_volume
+    ? await resolveOwnedVolume(accountId, opts.home_volume)
     : undefined;
-  if (attachedVolume && attachedVolume.zone !== zone) {
-    throw new Error(
-      `compute volume '${attachedVolume.name}' is in ${attachedVolume.zone}; create the VM in the same zone`,
-    );
+  if (homeVolume && homeVolume.provider !== provider) {
+    throw new Error("home volume and VM must use the same provider");
   }
   if (
-    attachedVolume?.project_id &&
-    attachedVolume.project_id !== opts.project_id
+    homeVolume &&
+    (homeVolume.region !== region ||
+      (homeVolume.zone ?? null) !== (zone ?? null))
   ) {
     throw new Error(
-      `compute volume '${attachedVolume.name}' belongs to a different project`,
+      `compute volume '${homeVolume.name}' is in a different provider location`,
     );
   }
-  if (attachedVolume && !attachedVolume.project_id) {
-    attachedVolume = (await updateComputeVolume(attachedVolume.id, {
-      project_id: opts.project_id,
-    }))!;
+  if (homeVolume && homeVolume.project_id !== opts.project_id) {
+    throw new Error(
+      `compute volume '${homeVolume.name}' belongs to a different project`,
+    );
   }
   const machine = await getComputeMachine({
     account_id: accountId,
+    provider,
+    region,
     zone,
     machine_type: opts.machine_type,
   });
+  if (opts.architecture && opts.architecture !== machine.architecture) {
+    throw new Error(
+      `machine '${machine.machine_type}' has architecture ${machine.architecture}, not ${opts.architecture}`,
+    );
+  }
   if (
-    !isSupportedCatalogGcpMachineType(machine.machine_type) ||
+    opts.gpu_type != null &&
+    `${opts.gpu_type}`.trim() !== `${machine.gpu_type ?? ""}`.trim()
+  ) {
+    throw new Error(
+      `machine '${machine.machine_type}' provides GPU '${machine.gpu_type ?? "none"}', not '${opts.gpu_type}'`,
+    );
+  }
+  if (
+    opts.gpu_count != null &&
+    Number(opts.gpu_count) !== Number(machine.gpu_count)
+  ) {
+    throw new Error(
+      `machine '${machine.machine_type}' provides ${machine.gpu_count} GPUs, not ${opts.gpu_count}`,
+    );
+  }
+  if (
+    (provider === "gcp" &&
+      !isSupportedCatalogGcpMachineType(machine.machine_type)) ||
     machine.machine_type.startsWith("g2-") ||
-    machine.ram_gb < 8
+    (machine.ram_gb < 8 && machine.machine_type !== "t2a-standard-1")
   ) {
     throw new Error(
       `machine_type '${machine.machine_type}' is not supported for managed compute VMs`,
@@ -356,8 +716,23 @@ export async function createVm(opts: CreateComputeVmRequest) {
   if (pricingModel !== "spot" && pricingModel !== "on_demand") {
     throw new Error("pricing_model must be spot or on_demand");
   }
+  if (
+    provider === "nebius" &&
+    pricingModel === "spot" &&
+    machine.provider_spec.allowed_for_preemptibles === false
+  ) {
+    throw new Error(
+      `Nebius machine '${machine.machine_type}' does not support Spot capacity`,
+    );
+  }
   const ttlMinutes =
     opts.ttl_minutes == null ? undefined : Number(opts.ttl_minutes);
+  if (actorKind === "agent" && ttlMinutes == null) {
+    throw Object.assign(
+      new Error("agent-created VMs require an explicit deletion deadline"),
+      { code: 403 },
+    );
+  }
   if (
     ttlMinutes != null &&
     (!Number.isInteger(ttlMinutes) ||
@@ -379,40 +754,96 @@ export async function createVm(opts: CreateComputeVmRequest) {
     );
   }
   const rateInput = {
-    provider: "gcp",
-    region: regionFromComputeZone(zone),
+    provider,
+    region,
     zone,
     machine_type: machine.machine_type,
+    gpu_type: machine.gpu_type ?? undefined,
+    gpu_count: machine.gpu_count,
     disk_gb: bootDiskGb,
     disk_type: "balanced",
   } as const;
-  const [spotRate, onDemandRate, stoppedRate] = await Promise.all([
-    estimateDedicatedHostRate({
-      ...rateInput,
-      pricing_model: "spot",
-      billing_state: "running",
-    }),
-    estimateDedicatedHostRate({
-      ...rateInput,
-      pricing_model: "on_demand",
-      billing_state: "running",
-    }),
-    estimateDedicatedHostRate({
-      ...rateInput,
-      pricing_model: pricingModel,
-      billing_state: "stopped",
-    }),
-  ]);
-  if (!spotRate || !onDemandRate || !stoppedRate) {
+  const [customerSpotRate, customerOnDemandRate, customerStoppedRate] =
+    await Promise.all([
+      estimateDedicatedHostRate({
+        ...rateInput,
+        pricing_model: "spot",
+        billing_state: "running",
+      }),
+      estimateDedicatedHostRate({
+        ...rateInput,
+        pricing_model: "on_demand",
+        billing_state: "running",
+      }),
+      estimateDedicatedHostRate({
+        ...rateInput,
+        pricing_model: pricingModel,
+        billing_state: "stopped",
+      }),
+    ]);
+  if (!customerSpotRate || !customerOnDemandRate || !customerStoppedRate) {
     throw new Error(
-      `pricing is unavailable for ${machine.machine_type} in ${regionFromComputeZone(zone)}`,
+      `pricing is unavailable for ${machine.machine_type} in ${region}`,
     );
   }
   const allowOnDemandFallback =
     pricingModel === "spot" && opts.allow_on_demand_fallback === true;
   const authorizedFallbackHours = allowOnDemandFallback ? 24 : 0;
   const id = randomUUID();
+  const settings = await getServerSettings();
+  const spotRate = rateWithProviderCost(provider, customerSpotRate, settings);
+  const onDemandRate = rateWithProviderCost(
+    provider,
+    customerOnDemandRate,
+    settings,
+  );
+  const stoppedRate = rateWithProviderCost(
+    provider,
+    customerStoppedRate,
+    settings,
+  );
+  const { rows: activeRows } = await getPool().query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM compute_vms
+      WHERE owner_account_id=$1 AND deleted_at IS NULL`,
+    [accountId],
+  );
+  const selectedRate = pricingModel === "spot" ? spotRate : onDemandRate;
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: opts.project_id,
+    request: {
+      operation: "create-vm",
+      operation_id: opts.idempotency_key,
+      allow_create: true,
+      provider,
+      machine_class: machine.machine_type,
+      funding_mode: fundingMode,
+      active_vms: Number(activeRows[0]?.count ?? 0) + 1,
+      hourly_usd: Number(selectedRate.hourly_cost_usd),
+      total_authorized_usd:
+        Number(selectedRate.hourly_cost_usd) *
+        ((ttlMinutes ?? config.max_ttl_minutes) / 60),
+      ttl_minutes: ttlMinutes ?? config.max_ttl_minutes,
+    },
+    require_fresh_auth: true,
+  });
   const sshPublicKey = normalizeSshPublicKey(opts.ssh_public_key ?? "");
+  let configureProjectSsh = false;
+  if (opts.configure_project_ssh === true) {
+    const projectKey = normalizeSshPublicKey(
+      (await getManagedVmProjectSshPublicKey({
+        account_id: accountId,
+        project_id: opts.project_id,
+      })) ?? "",
+    );
+    if (!projectKey || projectKey !== sshPublicKey) {
+      throw new Error(
+        "automatic project SSH configuration requires the exact project deploy public key",
+      );
+    }
+    configureProjectSsh = true;
+  }
   const providerInstanceId = `cocalc-vm-${id.replaceAll("-", "").slice(0, 24)}`;
   const vm = await insertComputeVm(
     {
@@ -421,22 +852,39 @@ export async function createVm(opts: CreateComputeVmRequest) {
       owner_account_id: accountId,
       owning_bay_id: getConfiguredBayId(),
       project_id: opts.project_id,
-      provider: "gcp",
-      region: regionFromComputeZone(zone),
+      provider,
+      region,
       zone,
       architecture: machine.architecture,
       machine_type: machine.machine_type,
+      cpu: machine.cpu,
+      ram_gb: machine.ram_gb,
+      gpu_type: machine.gpu_type,
+      gpu_count: machine.gpu_count,
+      provider_spec: {
+        ...machine.provider_spec,
+      },
+      funding_mode: fundingMode,
       desired_pricing_model: pricingModel,
       effective_pricing_model: pricingModel,
       boot_disk_gb: bootDiskGb,
       boot_disk_id: `${providerInstanceId}-boot`,
-      attached_volume_id: attachedVolume?.id ?? null,
+      home_volume_id: homeVolume?.id ?? null,
       state: "requested",
       desired_state: "running",
       instance_generation: 1,
       provider_instance_id: providerInstanceId,
+      public_address_id: null,
+      public_address_state: "pending",
+      public_address_updated_at: null,
       public_ip: null,
-      ssh_user: "ubuntu",
+      public_hostname: await allocateComputeVmPublicHostname(settings.dns),
+      dns_record_id: null,
+      dns_state: "pending",
+      dns_updated_at: null,
+      dns_error: null,
+      public_ports: [22, 443],
+      ssh_user: "user",
       ssh_public_key: sshPublicKey,
       expires_at:
         ttlMinutes == null ? null : new Date(Date.now() + ttlMinutes * 60_000),
@@ -447,6 +895,9 @@ export async function createVm(opts: CreateComputeVmRequest) {
       authorized_cost: "0.000000",
       accrued_cost: "0.000000",
       billing_state: "pending",
+      bootstrap_revision: 2,
+      observed_bootstrap_revision: null,
+      public_port_policy_revision: 2,
       spot_recovery_policy: {
         ...DEFAULT_SPOT_RECOVERY_POLICY,
         standard_fallback_enabled: allowOnDemandFallback,
@@ -456,7 +907,9 @@ export async function createVm(opts: CreateComputeVmRequest) {
       error: null,
       metadata: {
         machine: { cpu: machine.cpu, ram_gb: machine.ram_gb },
+        provider_instance_name: providerInstanceId,
         ssh_public_keys: sshPublicKey ? [sshPublicKey] : [],
+        configure_project_ssh: configureProjectSsh,
         provider_context: config.staging_legacy_provider
           ? "project-host-provider-context"
           : "dedicated-compute-provider-context",
@@ -480,7 +933,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
   await appendComputeEvent({
     vm,
     actor_account_id: accountId,
-    actor_kind: "human",
+    actor_kind: actorKind,
     action: "create",
     idempotency_key: opts.idempotency_key,
     new_state: vm.state,
@@ -490,7 +943,7 @@ export async function createVm(opts: CreateComputeVmRequest) {
       pricing_model: vm.desired_pricing_model,
       expires_at: vm.expires_at,
       funding_mode: fundingMode,
-      attached_volume_id: vm.attached_volume_id,
+      home_volume_id: vm.home_volume_id,
     },
   });
   await enqueueComputeWork({
@@ -501,47 +954,88 @@ export async function createVm(opts: CreateComputeVmRequest) {
   return publicVm(vm);
 }
 
-export async function createVolume(opts: CreateComputeVolumeRequest) {
-  const accountId = requireAccount(opts.account_id);
+export async function createVolume(
+  opts: CreateComputeVolumeRequest & { agent_auth?: ComputeAgentAuth },
+) {
+  const { accountId, actorKind } = resolveComputeActor(opts, opts.project_id);
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
-  await requireDangerousSessionAuth({
-    account_id: accountId,
-    browser_id: opts.browser_id,
-    session_hash: opts.session_hash,
-    require_second_factor: "if_enabled",
-  });
   await requireProjectMembership(accountId, opts.project_id);
+  const provider = opts.provider;
+  if (provider !== "gcp" && provider !== "nebius") {
+    throw new Error("provider must be gcp or nebius");
+  }
   const fundingMode = await requireComputeFunding({
     account_id: accountId,
     action: "create",
     funding_mode: opts.funding_mode,
+    provider,
   });
   const name = normalizeVolumeName(opts.name);
-  const zone = normalizeZone(opts.zone);
-  const configuredRegions = await getProviderComputeRegions();
-  requireComputeZoneInRegions(zone, configuredRegions);
-  await requireProviderComputeSubnetwork(zone);
+  const zone =
+    provider === "gcp"
+      ? normalizeZone(
+          opts.zone ??
+            (() => {
+              throw new Error("zone is required for a GCP home volume");
+            })(),
+        )
+      : opts.zone?.trim() || undefined;
+  const region =
+    provider === "gcp"
+      ? regionFromComputeZone(zone!)
+      : `${opts.region ?? ""}`.trim();
+  if (!region) throw new Error("region is required");
+  if (provider === "gcp") {
+    if (opts.region && opts.region !== region) {
+      throw new Error(`zone '${zone}' is not in region '${opts.region}'`);
+    }
+    const configuredRegions = await getProviderComputeRegions();
+    requireComputeZoneInRegions(zone!, configuredRegions);
+    await requireProviderComputeSubnetwork(zone!);
+  }
   const sizeGb = volumeAuthorization({
     size_gb: opts.size_gb,
     max_volume_gb: config.max_volume_gb,
   });
-  const volumeRate = await estimateDedicatedHostRate({
-    provider: "gcp",
-    region: regionFromComputeZone(zone),
+  const effectiveSizeGb =
+    provider === "nebius" ? Math.max(93, Math.ceil(sizeGb / 93) * 93) : sizeGb;
+  const customerVolumeRate = await estimateDedicatedHostRate({
+    provider,
+    region,
     zone,
-    machine_type: "e2-standard-2",
+    machine_type: provider === "gcp" ? "e2-standard-2" : undefined,
     pricing_model: "on_demand",
-    disk_gb: sizeGb,
+    disk_gb: effectiveSizeGb,
     disk_type: "balanced",
     billing_state: "stopped",
   });
-  if (!volumeRate) {
-    throw new Error(
-      `storage pricing is unavailable in ${regionFromComputeZone(zone)}`,
-    );
+  if (!customerVolumeRate) {
+    throw new Error(`storage pricing is unavailable in ${region}`);
   }
+  const volumeRate = rateWithProviderCost(
+    provider,
+    customerVolumeRate,
+    await getServerSettings(),
+  );
   const monthlyCost = Number(volumeRate.hourly_cost_usd) * HOURS_PER_MONTH;
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: opts.project_id,
+    request: {
+      operation: "create-volume",
+      operation_id: opts.idempotency_key,
+      allow_create: true,
+      provider,
+      machine_class: "home-volume",
+      funding_mode: fundingMode,
+      hourly_usd: Number(volumeRate.hourly_cost_usd),
+      total_authorized_usd: monthlyCost,
+      ttl_minutes: 30 * 24 * 60,
+    },
+    require_fresh_auth: true,
+  });
   const id = randomUUID();
   const volume = await insertComputeVolume(
     {
@@ -550,20 +1044,24 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
       owner_account_id: accountId,
       owning_bay_id: getConfiguredBayId(),
       project_id: opts.project_id,
-      provider: "gcp",
-      region: regionFromComputeZone(zone),
+      provider,
+      region,
       zone,
+      role: "home",
+      funding_mode: fundingMode,
+      provider_spec: {},
       disk_type: "balanced",
       filesystem: "ext4",
       size_gb: sizeGb,
       desired_size_gb: sizeGb,
+      effective_size_gb: effectiveSizeGb,
       provider_disk_id: `cocalc-vol-${id.replaceAll("-", "").slice(0, 24)}`,
       state: "requested",
       desired_state: "ready",
       attached_vm_id: null,
       attachment_generation: 0,
       attachment_state: "detached",
-      monthly_price_per_gb: (monthlyCost / sizeGb).toFixed(6),
+      monthly_price_per_gb: (monthlyCost / effectiveSizeGb).toFixed(6),
       authorized_monthly_cost: monthlyCost.toFixed(6),
       billing_state: "pending",
       idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
@@ -581,7 +1079,7 @@ export async function createVolume(opts: CreateComputeVolumeRequest) {
   await appendComputeVolumeEvent({
     volume,
     actor_account_id: accountId,
-    actor_kind: "human",
+    actor_kind: actorKind,
     action: "create",
     idempotency_key: opts.idempotency_key,
     new_state: volume.state,
@@ -631,23 +1129,22 @@ export async function resizeVolume(opts: {
   session_hash?: string;
   id_or_name: string;
   size_gb: number;
-  funding_mode?: "account-prepaid" | "account-postpaid";
+  funding_mode?: "site-funded" | "account-prepaid" | "account-postpaid";
   idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
-  const accountId = requireAccount(opts.account_id);
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
-  await requireDangerousSessionAuth({
-    account_id: accountId,
-    browser_id: opts.browser_id,
-    session_hash: opts.session_hash,
-    require_second_factor: "if_enabled",
-  });
   const volume = await resolveOwnedVolume(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, volume.project_id ?? "");
   const fundingMode = await requireComputeFunding({
     account_id: accountId,
     action: "resize",
-    funding_mode: opts.funding_mode,
+    funding_mode: opts.funding_mode ?? volume.funding_mode,
+    provider: volume.provider,
   });
   const sizeGb = volumeAuthorization({
     size_gb: opts.size_gb,
@@ -656,19 +1153,48 @@ export async function resizeVolume(opts: {
   if (sizeGb < volume.size_gb) {
     throw new Error("compute volumes cannot be shrunk");
   }
-  const volumeRate = await estimateDedicatedHostRate({
-    provider: "gcp",
+  const customerVolumeRate = await estimateDedicatedHostRate({
+    provider: volume.provider,
     region: volume.region,
     zone: volume.zone,
-    machine_type: "e2-standard-2",
+    machine_type: volume.provider === "gcp" ? "e2-standard-2" : undefined,
     pricing_model: "on_demand",
     disk_gb: sizeGb,
     disk_type: "balanced",
     billing_state: "stopped",
   });
-  if (!volumeRate)
+  if (!customerVolumeRate)
     throw new Error(`storage pricing is unavailable in ${volume.region}`);
+  const volumeRate = rateWithProviderCost(
+    volume.provider,
+    customerVolumeRate,
+    await getServerSettings(),
+  );
   const monthlyCost = Number(volumeRate.hourly_cost_usd) * HOURS_PER_MONTH;
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: volume.project_id!,
+    vm_id: volume.id,
+    request: {
+      operation: "resize-volume",
+      operation_id: opts.idempotency_key,
+      vm_id: volume.id,
+      provider: volume.provider,
+      machine_class: "home-volume",
+      funding_mode: fundingMode,
+      hourly_usd: Number(volumeRate.hourly_cost_usd),
+      total_authorized_usd: monthlyCost,
+    },
+    require_fresh_auth: true,
+  });
+  const fundingChanging = fundingMode !== volume.funding_mode;
+  const pendingFundingMode = volume.metadata?.billing?.pending_funding_mode;
+  if (pendingFundingMode && pendingFundingMode !== fundingMode) {
+    throw new Error(
+      `compute volume funding transition to '${pendingFundingMode}' is already pending`,
+    );
+  }
   const next = (await updateComputeVolume(volume.id, {
     desired_size_gb: sizeGb,
     monthly_price_per_gb: (monthlyCost / sizeGb).toFixed(6),
@@ -677,13 +1203,18 @@ export async function resizeVolume(opts: {
     error: null,
     metadata: {
       ...volume.metadata,
-      billing: { funding_mode: fundingMode, rate: volumeRate },
+      billing: {
+        ...volume.metadata?.billing,
+        funding_mode: volume.funding_mode,
+        pending_funding_mode: fundingChanging ? fundingMode : null,
+        rate: volumeRate,
+      },
     },
   }))!;
   await appendComputeVolumeEvent({
     volume: next,
     actor_account_id: accountId,
-    actor_kind: "human",
+    actor_kind: actorKind,
     action: "resize",
     idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
     old_state: volume.state,
@@ -691,6 +1222,15 @@ export async function resizeVolume(opts: {
     status: "requested",
     details: { old_size_gb: volume.size_gb, desired_size_gb: sizeGb },
   });
+  if (fundingChanging) {
+    await enqueueComputeWork({
+      resource_kind: "volume",
+      resource_id: volume.id,
+      action: "funding_transition",
+      idempotency_key: `${opts.idempotency_key}:funding`,
+      payload: { funding_mode: fundingMode },
+    });
+  }
   if (sizeGb > volume.size_gb) {
     await enqueueComputeWork({
       resource_kind: "volume",
@@ -702,6 +1242,81 @@ export async function resizeVolume(opts: {
   return publicVolume(next);
 }
 
+export async function setVolumeFundingMode(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  funding_mode: "site-funded" | "account-prepaid" | "account-postpaid";
+  idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
+}) {
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
+  const volume = await resolveOwnedVolume(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, volume.project_id ?? "");
+  const fundingMode = await requireComputeFunding({
+    account_id: accountId,
+    action: "resize",
+    funding_mode: opts.funding_mode,
+    provider: volume.provider,
+  });
+  const pendingFundingMode = volume.metadata?.billing?.pending_funding_mode;
+  if (pendingFundingMode && pendingFundingMode !== fundingMode) {
+    throw new Error(
+      `compute volume funding transition to '${pendingFundingMode}' is already pending`,
+    );
+  }
+  if (volume.funding_mode === fundingMode && !pendingFundingMode) {
+    return publicVolume(volume);
+  }
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: volume.project_id ?? "",
+    vm_id: volume.id,
+    request: {
+      operation: "set-volume-funding",
+      operation_id: opts.idempotency_key,
+      vm_id: volume.id,
+      provider: volume.provider,
+      machine_class: "home-volume",
+      funding_mode: fundingMode,
+      hourly_usd: Number(volume.metadata?.billing?.rate?.hourly_cost_usd ?? 0),
+      total_authorized_usd: Number(volume.authorized_monthly_cost),
+    },
+    require_fresh_auth: true,
+  });
+  const next = (await updateComputeVolume(volume.id, {
+    billing_state: "transitioning",
+    metadata: {
+      ...volume.metadata,
+      billing: {
+        ...volume.metadata?.billing,
+        pending_funding_mode: fundingMode,
+      },
+    },
+  }))!;
+  await appendComputeVolumeEvent({
+    volume: next,
+    actor_account_id: accountId,
+    actor_kind: actorKind,
+    action: "funding-mode-change",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    status: "requested",
+    details: { from: volume.funding_mode, to: fundingMode },
+  });
+  await enqueueComputeWork({
+    resource_kind: "volume",
+    resource_id: volume.id,
+    action: "funding_transition",
+    idempotency_key: opts.idempotency_key,
+    payload: { funding_mode: fundingMode },
+  });
+  return publicVolume(next);
+}
+
 export async function deleteVolume(opts: {
   account_id?: string;
   browser_id?: string;
@@ -709,15 +1324,25 @@ export async function deleteVolume(opts: {
   id_or_name: string;
   confirm_name: string;
   idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
-  const accountId = requireAccount(opts.account_id);
-  await requireDangerousSessionAuth({
-    account_id: accountId,
-    browser_id: opts.browser_id,
-    session_hash: opts.session_hash,
-    require_second_factor: "if_enabled",
-  });
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
   const volume = await resolveOwnedVolume(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, volume.project_id ?? "");
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "destructive",
+    project_id: volume.project_id ?? "",
+    vm_id: volume.id,
+    request: {
+      operation: "delete-volume",
+      operation_id: opts.idempotency_key,
+      vm_id: volume.id,
+    },
+    require_fresh_auth: true,
+  });
   if (`${opts.confirm_name ?? ""}` !== volume.name) {
     throw new Error(`confirm_name must exactly equal '${volume.name}'`);
   }
@@ -732,7 +1357,7 @@ export async function deleteVolume(opts: {
   await appendComputeVolumeEvent({
     volume: next,
     actor_account_id: accountId,
-    actor_kind: "human",
+    actor_kind: actorKind,
     action: "delete",
     idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
     old_state: volume.state,
@@ -759,21 +1384,29 @@ export async function listVms(opts: {
     project_id: opts.project_id,
     include_deleted: opts.include_deleted,
   });
-  return rows.map(publicVm);
+  return await Promise.all(rows.map(publicVm));
 }
 
 export async function listProjectVms(opts: {
   host_id?: string;
   project_id?: string;
   include_deleted?: boolean;
+  agent_auth?: ComputeAgentAuth;
 }) {
   const projectId = await requireComputeProjectReadIdentity(opts);
-  return (
-    await listProjectComputeVms({
-      project_id: projectId,
-      include_deleted: opts.include_deleted,
-    })
-  ).map(publicVm);
+  await requireAgentComputeGrant({
+    auth: opts.agent_auth,
+    action: "read",
+    project_id: projectId,
+  });
+  return await Promise.all(
+    (
+      await listProjectComputeVms({
+        project_id: projectId,
+        include_deleted: opts.include_deleted,
+      })
+    ).map(publicVm),
+  );
 }
 
 export async function getVm(opts: { account_id?: string; id_or_name: string }) {
@@ -785,6 +1418,7 @@ export async function getProjectVm(opts: {
   host_id?: string;
   project_id?: string;
   id_or_name: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
   const projectId = await requireComputeProjectReadIdentity(opts);
   const vm = await resolveProjectComputeVm({
@@ -793,6 +1427,12 @@ export async function getProjectVm(opts: {
     include_deleted: true,
   });
   if (!vm) throw new Error(`compute VM '${opts.id_or_name}' not found`);
+  await requireAgentComputeGrant({
+    auth: opts.agent_auth,
+    action: "read",
+    project_id: projectId,
+    vm_id: vm.id,
+  });
   return publicVm(vm);
 }
 
@@ -800,8 +1440,14 @@ export async function listProjectVolumes(opts: {
   host_id?: string;
   project_id?: string;
   include_deleted?: boolean;
+  agent_auth?: ComputeAgentAuth;
 }) {
   const projectId = await requireComputeProjectReadIdentity(opts);
+  await requireAgentComputeGrant({
+    auth: opts.agent_auth,
+    action: "read",
+    project_id: projectId,
+  });
   return (
     await listProjectComputeVolumes({
       project_id: projectId,
@@ -814,6 +1460,7 @@ export async function getProjectVolume(opts: {
   host_id?: string;
   project_id?: string;
   id_or_name: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
   const projectId = await requireComputeProjectReadIdentity(opts);
   const volume = await resolveProjectComputeVolume({
@@ -822,6 +1469,11 @@ export async function getProjectVolume(opts: {
     include_deleted: true,
   });
   if (!volume) throw new Error(`compute volume '${opts.id_or_name}' not found`);
+  await requireAgentComputeGrant({
+    auth: opts.agent_auth,
+    action: "read",
+    project_id: projectId,
+  });
   return publicVolume(volume);
 }
 
@@ -929,11 +1581,13 @@ async function authorizeSshKeyForVm(opts: {
   return publicVm(next);
 }
 
-export async function authorizeProjectSshKey(opts: {
+async function authorizeVerifiedProjectSshKey(opts: {
   project_id?: string;
   id_or_name: string;
   ssh_public_key: string;
   idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
+  key_verified_by_host?: boolean;
 }) {
   const projectId = `${opts.project_id ?? ""}`.trim();
   if (!projectId) throw new Error("must be a project");
@@ -944,11 +1598,64 @@ export async function authorizeProjectSshKey(opts: {
     id_or_name: `${opts.id_or_name ?? ""}`.trim(),
   });
   if (!vm) throw new Error(`compute VM '${opts.id_or_name}' not found`);
-  return await authorizeSshKeyForVm({
+  if (!opts.key_verified_by_host) {
+    if (!opts.agent_auth) {
+      throw Object.assign(
+        new Error(
+          "project SSH authorization requires a scoped agent or project-host identity",
+        ),
+        { code: 403 },
+      );
+    }
+    const projectKey = normalizeSshPublicKey(
+      (await getManagedVmProjectSshPublicKey({
+        account_id: opts.agent_auth.account_id,
+        project_id: projectId,
+      })) ?? "",
+    );
+    if (!projectKey || projectKey !== key) {
+      throw Object.assign(
+        new Error("only the exact project deploy public key may be authorized"),
+        { code: 403 },
+      );
+    }
+  }
+  await requireAgentComputeGrant({
+    auth: opts.agent_auth,
+    action: "data-plane",
+    project_id: projectId,
+    vm_id: vm.id,
+  });
+  const authorized = await authorizeSshKeyForVm({
     vm,
     key,
     idempotency_key: opts.idempotency_key,
     actor_kind: "project",
+  });
+  const next = (await updateComputeVm(vm.id, {
+    metadata: { ...vm.metadata, configure_project_ssh: true },
+  }))!;
+  await enqueueComputeWork({
+    resource_id: vm.id,
+    action: "reconcile",
+    idempotency_key: `project-ssh-config:${opts.idempotency_key}`,
+  });
+  return { ...authorized, metadata: next.metadata };
+}
+
+export async function authorizeProjectSshKey(opts: {
+  project_id?: string;
+  id_or_name: string;
+  ssh_public_key: string;
+  idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
+}) {
+  return await authorizeVerifiedProjectSshKey({
+    project_id: opts.project_id,
+    id_or_name: opts.id_or_name,
+    ssh_public_key: opts.ssh_public_key,
+    idempotency_key: opts.idempotency_key,
+    agent_auth: opts.agent_auth,
   });
 }
 
@@ -968,36 +1675,96 @@ export async function authorizeProjectSshKeyFromHost(opts: {
     host_id: hostId,
     bay_id: getConfiguredBayId(),
   });
-  return await authorizeProjectSshKey({
+  return await authorizeVerifiedProjectSshKey({
     project_id: projectId,
     id_or_name: opts.id_or_name,
     ssh_public_key: opts.ssh_public_key,
     idempotency_key: opts.idempotency_key,
+    key_verified_by_host: true,
   });
 }
 
 async function requestState(opts: {
   account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
   id_or_name: string;
   idempotency_key: string;
   desired_state: "running" | "stopped";
+  agent_auth?: ComputeAgentAuth;
 }) {
-  const accountId = requireAccount(opts.account_id);
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
   if (opts.desired_state === "running") {
     requireComputeVmStartAllowed(await getComputeVmConfig(), accountId);
   }
   const vm = await resolveOwned(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, vm.project_id);
   if (opts.desired_state === "running") {
     await requireComputeFunding({
       account_id: accountId,
       action: "start",
-      funding_mode: vm.metadata?.billing?.funding_mode,
+      funding_mode: vm.funding_mode,
+      provider: vm.provider,
     });
   }
   if (vm.expires_at && vm.expires_at.valueOf() <= Date.now()) {
     throw new Error("compute VM lease has expired");
   }
+  if (
+    actorKind === "agent" &&
+    opts.desired_state === "running" &&
+    !vm.expires_at
+  ) {
+    throw Object.assign(
+      new Error("agent-started VMs require an explicit deletion deadline"),
+      { code: 403 },
+    );
+  }
   const action = opts.desired_state === "running" ? "start" : "stop";
+  const selectedRate =
+    vm.desired_pricing_model === "spot"
+      ? vm.spot_hourly_price
+      : vm.on_demand_hourly_price;
+  const remainingTtlMinutes = vm.expires_at
+    ? Math.max(0, Math.ceil((vm.expires_at.valueOf() - Date.now()) / 60_000))
+    : 0;
+  const activeVms =
+    opts.desired_state === "running"
+      ? Number(
+          (
+            await getPool().query<{ count: string }>(
+              `SELECT COUNT(*)::text AS count FROM compute_vms
+                WHERE owner_account_id=$1 AND deleted_at IS NULL
+                  AND desired_state='running'`,
+              [accountId],
+            )
+          ).rows[0]?.count ?? 0,
+        ) + (vm.desired_state === "running" ? 0 : 1)
+      : undefined;
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "availability",
+    project_id: vm.project_id,
+    vm_id: vm.id,
+    request: {
+      operation: opts.desired_state === "running" ? "start-vm" : "stop-vm",
+      operation_id: opts.idempotency_key,
+      vm_id: vm.id,
+      provider: vm.provider,
+      machine_class: vm.machine_type,
+      funding_mode: vm.funding_mode,
+      active_vms: activeVms,
+      hourly_usd: Number(selectedRate),
+      total_authorized_usd:
+        opts.desired_state === "running"
+          ? (Number(selectedRate) * remainingTtlMinutes) / 60
+          : 0,
+      ttl_minutes: remainingTtlMinutes,
+    },
+    require_fresh_auth: opts.desired_state === "running",
+  });
   const next = (await updateComputeVm(vm.id, {
     desired_state: opts.desired_state,
     state: opts.desired_state === "running" ? "starting" : "stopping",
@@ -1006,7 +1773,7 @@ async function requestState(opts: {
   await appendComputeEvent({
     vm: next,
     actor_account_id: accountId,
-    actor_kind: "human",
+    actor_kind: actorKind,
     action,
     idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
     old_state: vm.state,
@@ -1023,8 +1790,11 @@ async function requestState(opts: {
 
 export async function startVm(opts: {
   account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
   id_or_name: string;
   idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
   return await requestState({ ...opts, desired_state: "running" });
 }
@@ -1033,6 +1803,7 @@ export async function stopVm(opts: {
   account_id?: string;
   id_or_name: string;
   idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
   return await requestState({ ...opts, desired_state: "stopped" });
 }
@@ -1045,16 +1816,14 @@ export async function setVmTtl(opts: {
   ttl_minutes?: number | null;
   extend_minutes?: number;
   idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
-  const accountId = requireAccount(opts.account_id);
-  await requireDangerousSessionAuth({
-    account_id: accountId,
-    browser_id: opts.browser_id,
-    session_hash: opts.session_hash,
-    require_second_factor: "if_enabled",
-  });
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
   const config = await getComputeVmConfig();
   const vm = await resolveOwned(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, vm.project_id);
   if (vm.desired_state === "deleted" || vm.state === "deleting") {
     throw new Error("cannot change the TTL of a deleting VM");
   }
@@ -1094,6 +1863,12 @@ export async function setVmTtl(opts: {
       `the resulting TTL must be at most ${config.max_ttl_minutes} minutes from now`,
     );
   }
+  if (actorKind === "agent" && expiresAt == null) {
+    throw Object.assign(
+      new Error("an agent cannot remove a managed VM deletion deadline"),
+      { code: 403 },
+    );
+  }
 
   const increasesExposure =
     expiresAt == null ||
@@ -1104,14 +1879,49 @@ export async function setVmTtl(opts: {
       account_id: accountId,
       action: "start",
       funding_mode: vm.metadata?.billing?.funding_mode,
+      provider: vm.provider,
     });
   }
+
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: vm.project_id,
+    vm_id: vm.id,
+    request: {
+      operation: "set-vm-ttl",
+      operation_id: opts.idempotency_key,
+      vm_id: vm.id,
+      provider: vm.provider,
+      machine_class: vm.machine_type,
+      funding_mode: vm.funding_mode,
+      hourly_usd: Number(
+        vm.desired_pricing_model === "spot"
+          ? vm.spot_hourly_price
+          : vm.on_demand_hourly_price,
+      ),
+      total_authorized_usd:
+        Number(
+          vm.desired_pricing_model === "spot"
+            ? vm.spot_hourly_price
+            : vm.on_demand_hourly_price,
+        ) *
+        ((expiresAt
+          ? Math.max(0, Math.ceil((expiresAt.valueOf() - Date.now()) / 60_000))
+          : config.max_ttl_minutes) /
+          60),
+      ttl_minutes: expiresAt
+        ? Math.max(0, Math.ceil((expiresAt.valueOf() - Date.now()) / 60_000))
+        : config.max_ttl_minutes,
+    },
+    require_fresh_auth: true,
+  });
 
   const next = (await updateComputeVm(vm.id, { expires_at: expiresAt }))!;
   await appendComputeEvent({
     vm: next,
     actor_account_id: accountId,
-    actor_kind: "human",
+    actor_kind: actorKind,
     action: "set_ttl",
     idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
     old_state: vm.state,
@@ -1126,21 +1936,133 @@ export async function setVmTtl(opts: {
   return publicVm(next);
 }
 
+export async function setVmFundingMode(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  funding_mode: "site-funded" | "account-prepaid" | "account-postpaid";
+  idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
+}) {
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  if (actorKind === "agent" && !vm.expires_at) {
+    throw Object.assign(
+      new Error(
+        "an agent cannot change funding for a VM without a deletion deadline",
+      ),
+      { code: 403 },
+    );
+  }
+  const fundingMode = await requireComputeFunding({
+    account_id: accountId,
+    action: vm.desired_state === "running" ? "start" : "create",
+    funding_mode: opts.funding_mode,
+    provider: vm.provider,
+  });
+  const pendingFundingMode = vm.metadata?.billing?.pending_funding_mode;
+  if (pendingFundingMode && pendingFundingMode !== fundingMode) {
+    throw new Error(
+      `compute VM funding transition to '${pendingFundingMode}' is already pending`,
+    );
+  }
+  if (vm.funding_mode === fundingMode && !pendingFundingMode) {
+    return publicVm(vm);
+  }
+  const selectedRate =
+    vm.desired_pricing_model === "spot"
+      ? vm.spot_hourly_price
+      : vm.on_demand_hourly_price;
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: vm.project_id,
+    vm_id: vm.id,
+    request: {
+      operation: "set-vm-funding",
+      operation_id: opts.idempotency_key,
+      vm_id: vm.id,
+      provider: vm.provider,
+      machine_class: vm.machine_type,
+      funding_mode: fundingMode,
+      hourly_usd: Number(selectedRate),
+      total_authorized_usd:
+        Number(selectedRate) *
+        ((vm.expires_at
+          ? Math.max(
+              0,
+              Math.ceil((vm.expires_at.valueOf() - Date.now()) / 60_000),
+            )
+          : 0) /
+          60),
+      ttl_minutes: vm.expires_at
+        ? Math.max(
+            0,
+            Math.ceil((vm.expires_at.valueOf() - Date.now()) / 60_000),
+          )
+        : 0,
+    },
+    require_fresh_auth: true,
+  });
+  const next = (await updateComputeVm(vm.id, {
+    billing_state: "transitioning",
+    metadata: {
+      ...vm.metadata,
+      billing: {
+        ...vm.metadata?.billing,
+        pending_funding_mode: fundingMode,
+      },
+    },
+  }))!;
+  await appendComputeEvent({
+    vm: next,
+    actor_account_id: accountId,
+    actor_kind: actorKind,
+    action: "funding-mode-change",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: vm.billing_state,
+    new_state: "transitioning",
+    status: "requested",
+    details: { from: vm.funding_mode, to: fundingMode },
+  });
+  await enqueueComputeWork({
+    resource_id: vm.id,
+    action: "funding_transition",
+    idempotency_key: opts.idempotency_key,
+    payload: { funding_mode: fundingMode },
+  });
+  return publicVm(next);
+}
+
 export async function deleteVm(opts: {
   account_id?: string;
   browser_id?: string;
   session_hash?: string;
   id_or_name: string;
   idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
 }) {
-  const accountId = requireAccount(opts.account_id);
-  await requireDangerousSessionAuth({
-    account_id: accountId,
-    browser_id: opts.browser_id,
-    session_hash: opts.session_hash,
-    require_second_factor: "if_enabled",
-  });
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
   const vm = await resolveOwned(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "destructive",
+    project_id: vm.project_id,
+    vm_id: vm.id,
+    request: {
+      operation: "delete-vm",
+      operation_id: opts.idempotency_key,
+      vm_id: vm.id,
+    },
+    require_fresh_auth: true,
+  });
   const next = (await updateComputeVm(vm.id, {
     desired_state: "deleted",
     state: "deleting",
@@ -1148,7 +2070,7 @@ export async function deleteVm(opts: {
   await appendComputeEvent({
     vm: next,
     actor_account_id: accountId,
-    actor_kind: "human",
+    actor_kind: actorKind,
     action: "delete",
     idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
     old_state: vm.state,
@@ -1161,4 +2083,182 @@ export async function deleteVm(opts: {
     idempotency_key: opts.idempotency_key,
   });
   return publicVm(next);
+}
+
+export async function listOrphans(opts: {
+  account_id?: string;
+  include_resolved?: boolean;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  if (!(await isAdmin(accountId))) throw new Error("not authorized");
+  return await listComputeOrphans({
+    include_resolved: opts.include_resolved === true,
+  });
+}
+
+export async function listAgentGrants(opts: {
+  account_id?: string;
+  project_id: string;
+  include_expired?: boolean;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireProjectMembership(accountId, opts.project_id);
+  return await listAgentComputeGrants({
+    account_id: accountId,
+    project_id: opts.project_id,
+    include_expired: opts.include_expired,
+  });
+}
+
+export async function approveAgentGrant(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  grant_id: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  const grant = await approveAgentComputeGrant({
+    account_id: accountId,
+    grant_id: opts.grant_id,
+  });
+  await centralLog({
+    event: "managed_compute_agent_grant_approved",
+    value: {
+      account_id: accountId,
+      grant_id: grant.grant_id,
+      project_id: grant.project_id,
+      allowed_actions: grant.allowed_actions,
+      allowed_vm_ids: grant.allowed_vm_ids,
+      expires_at: grant.expires_at,
+    },
+  });
+  return grant;
+}
+
+export async function revokeAgentGrant(opts: {
+  account_id?: string;
+  grant_id: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  await revokeAgentComputeGrant({
+    account_id: accountId,
+    grant_id: opts.grant_id,
+  });
+}
+
+export async function resolveOrphan(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  orphan_id: string;
+  action: "stop" | "delete" | "ignore";
+}) {
+  const accountId = requireAccount(opts.account_id);
+  if (!(await isAdmin(accountId))) throw new Error("not authorized");
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  const orphan = (await listComputeOrphans({ include_resolved: true })).find(
+    ({ id }) => id === opts.orphan_id,
+  );
+  if (!orphan) throw new Error("managed compute orphan not found");
+  if (!["stop", "delete", "ignore"].includes(opts.action)) {
+    throw new Error("invalid managed compute orphan resolution action");
+  }
+  await centralLog({
+    event: "managed_compute_orphan_resolution",
+    value: {
+      account_id: accountId,
+      orphan_id: orphan.id,
+      provider: orphan.provider,
+      resource_type: orphan.resource_type,
+      resource_id: orphan.resource_id,
+      action: opts.action,
+      status: "requested",
+    },
+  });
+  const resource = {
+    provider: orphan.provider as "gcp" | "nebius",
+    resource_id: orphan.resource_id,
+    resource_name: orphan.resource_name,
+    region: orphan.region,
+    zone: orphan.zone,
+  };
+  if (opts.action === "ignore") {
+    await updateComputeOrphan(orphan.id, {
+      state: "ignored",
+      resolved_at: new Date(),
+      last_error: null,
+    });
+  } else if (opts.action === "stop") {
+    if (
+      orphan.resource_type !== "instance" ||
+      orphan.provider === "cloudflare"
+    ) {
+      throw new Error("only orphan instances can be stopped");
+    }
+    await stopOrphanProviderComputeInstance(resource);
+    await updateComputeOrphan(orphan.id, {
+      state: "stopped",
+      stopped_at: new Date(),
+      last_error: null,
+    });
+  } else if (orphan.resource_type === "instance") {
+    if (orphan.provider === "cloudflare") throw new Error("invalid provider");
+    await deleteOrphanProviderComputeInstance(resource);
+    await updateComputeOrphan(orphan.id, {
+      state: "deleted",
+      resolved_at: new Date(),
+      last_error: null,
+    });
+  } else if (orphan.resource_type === "boot_disk") {
+    if (orphan.provider === "cloudflare") throw new Error("invalid provider");
+    await deleteOrphanProviderComputeBootDisk(resource);
+    await updateComputeOrphan(orphan.id, {
+      state: "deleted",
+      resolved_at: new Date(),
+      last_error: null,
+    });
+  } else if (orphan.resource_type === "address") {
+    if (orphan.provider === "cloudflare") throw new Error("invalid provider");
+    await deleteOrphanProviderComputeAddress(resource);
+    await updateComputeOrphan(orphan.id, {
+      state: "deleted",
+      resolved_at: new Date(),
+      last_error: null,
+    });
+  } else {
+    await deleteHostDns({
+      record_id: orphan.resource_id,
+      name: orphan.resource_name,
+    });
+    await updateComputeOrphan(orphan.id, {
+      state: "deleted",
+      resolved_at: new Date(),
+      last_error: null,
+    });
+  }
+  await centralLog({
+    event: "managed_compute_orphan_resolution",
+    value: {
+      account_id: accountId,
+      orphan_id: orphan.id,
+      action: opts.action,
+      status: "completed",
+    },
+  });
+  const resolved = (await listComputeOrphans({ include_resolved: true })).find(
+    ({ id }) => id === orphan.id,
+  );
+  if (!resolved) throw new Error("managed compute orphan audit row vanished");
+  return resolved;
 }

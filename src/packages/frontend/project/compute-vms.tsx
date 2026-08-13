@@ -28,6 +28,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 
 import type {
+  ComputeAgentGrant,
   ComputeCatalog,
   ComputeVolume,
   ComputeVm,
@@ -46,6 +47,7 @@ import {
   COCALC_CLI_INSTALL_COMMAND,
 } from "@cocalc/util/consts/ui";
 import { uuid } from "@cocalc/util/misc";
+import { gcpMachineArchitecture } from "@cocalc/util/project-host-pricing";
 import {
   HostOptionsSelect,
   sortMachineTypeOptions,
@@ -56,6 +58,8 @@ import {
   getGcpPersistentDiskPriceEstimate,
   getGcpRegionOptions,
   getGcpZoneOptions,
+  getProviderDescriptor,
+  getProviderOptions,
   getProviderPriceEstimate,
   type HostFieldOption,
   type ProviderSelection,
@@ -78,7 +82,6 @@ const COPYABLE_PROPS = {
 } as const;
 
 interface VmDraft extends VmCreateCliValues {
-  region: string;
   use_project_ssh_key: boolean;
 }
 
@@ -111,6 +114,10 @@ function pricingLabel(value: string): string {
 
 function regionFromZone(zone?: string): string {
   return `${zone ?? ""}`.replace(/-[a-z]$/, "");
+}
+
+function providerCatalog(catalog: ComputeCatalog, provider: "gcp" | "nebius") {
+  return catalog.provider_catalogs[provider];
 }
 
 function compatibleOptions(options: HostFieldOption[]): HostFieldOption[] {
@@ -223,11 +230,17 @@ function VmCreateModal({
   }, [form, initial, open]);
 
   const api = globalThis.location?.origin ?? "https://cocalc.ai";
+  const provider = draft.provider ?? initial.provider;
+  const hostCatalog = providerCatalog(catalog, provider);
   const availableVolumes = volumes.filter(
     (volume) =>
-      volume.state === "ready" && volume.attachment_state === "detached",
+      volume.provider === provider &&
+      volume.state === "ready" &&
+      volume.attachment_state === "detached",
   );
-  const selectedVolume = volumes.find((volume) => volume.name === draft.volume);
+  const selectedVolume = volumes.find(
+    (volume) => volume.name === draft.home_volume,
+  );
   const selection: ProviderSelection = {
     region: draft.region || regionFromZone(draft.zone),
     zone: draft.zone,
@@ -239,52 +252,67 @@ function VmCreateModal({
     price_display: "hourly",
     pricing_settings: pricingSettings,
   };
+  const providerOptions = getProviderOptions(provider, hostCatalog, selection);
+  const descriptor = getProviderDescriptor(provider);
   const regionOptions = sortRegionOptionsByPreference({
     options: compatibleOptions(
-      getGcpRegionOptions(catalog.host_catalog, selection),
+      provider === "gcp"
+        ? getGcpRegionOptions(hostCatalog, selection)
+        : (providerOptions.region ?? []),
     ),
     preference: sortRegionsByPrice ? "cheapest" : "closest",
     preferredRegion: preferredR2Region,
   });
   const zoneOptions = compatibleOptions(
-    getGcpZoneOptions(catalog.host_catalog, selection),
+    provider === "gcp"
+      ? getGcpZoneOptions(hostCatalog, selection)
+      : (providerOptions.zone ?? []),
   );
   const machineOptions =
     sortMachineTypeOptions(
       compatibleOptions(
-        getGcpMachineTypeOptions(catalog.host_catalog, selection),
+        (provider === "gcp"
+          ? getGcpMachineTypeOptions(hostCatalog, selection)
+          : (providerOptions.machine_type ?? [])
+        ).filter(
+          ({ value }) =>
+            provider !== "gcp" ||
+            gcpMachineArchitecture(value) === draft.architecture,
+        ),
       ),
       sortMachinesByPrice ? "price" : "type",
     ) ?? [];
+  const gpuOptions = compatibleOptions(providerOptions.gpu_type ?? []);
   const price = getProviderPriceEstimate(
-    "gcp",
-    catalog.host_catalog,
+    provider,
+    hostCatalog,
     selection,
     pricingSettings,
   );
   const standardFallbackPrice =
     draft.pricing_model === "spot" && draft.allow_on_demand_fallback
       ? getProviderPriceEstimate(
-          "gcp",
-          catalog.host_catalog,
+          provider,
+          hostCatalog,
           { ...selection, pricing_model: "on_demand" },
           pricingSettings,
         )
       : undefined;
-  const newVolumePrice = draft.create_volume
-    ? getGcpPersistentDiskPriceEstimate(
-        catalog.host_catalog,
-        {
-          region: draft.region || regionFromZone(draft.zone),
-          zone: draft.zone,
-          storage_mode: "persistent",
-          disk_type: "balanced",
-          disk_gb: draft.new_volume_size_gb,
-          pricing_settings: pricingSettings,
-        },
-        pricingSettings,
-      )?.line_items.find((item) => item.key === "disk")
-    : undefined;
+  const newVolumePrice =
+    draft.create_home_volume && provider === "gcp"
+      ? getGcpPersistentDiskPriceEstimate(
+          hostCatalog,
+          {
+            region: draft.region || regionFromZone(draft.zone),
+            zone: draft.zone,
+            storage_mode: "persistent",
+            disk_type: "balanced",
+            disk_gb: draft.new_home_volume_size_gb,
+            pricing_settings: pricingSettings,
+          },
+          pricingSettings,
+        )?.line_items.find((item) => item.key === "disk")
+      : undefined;
   const maximumSpend =
     draft.ttl_minutes && (standardFallbackPrice ?? price)
       ? ((standardFallbackPrice ?? price)!.usd_per_hour * draft.ttl_minutes) /
@@ -353,6 +381,89 @@ function VmCreateModal({
         </Flex>
         <Flex gap={12} wrap>
           <Form.Item
+            name="funding_mode"
+            label="Funding"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 280px" }}
+          >
+            <Select
+              options={catalog.funding_modes.map((mode) => ({
+                value: mode.value,
+                label: mode.label,
+                disabled: !mode.allowed,
+                title: mode.reason,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="provider"
+            label="Cloud provider"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 220px" }}
+          >
+            <Select
+              options={catalog.providers.map((value) => ({
+                value,
+                label: getProviderDescriptor(value).label,
+              }))}
+              onChange={(nextProvider: "gcp" | "nebius") => {
+                const nextCatalog = providerCatalog(catalog, nextProvider);
+                const options = getProviderOptions(nextProvider, nextCatalog, {
+                  pricing_model: draft.pricing_model,
+                });
+                const region =
+                  nextProvider === "gcp"
+                    ? catalog.defaults.region
+                    : options.region?.[0]?.value;
+                const zone =
+                  nextProvider === "gcp"
+                    ? catalog.defaults.zone
+                    : options.zone?.[0]?.value;
+                const machine_type =
+                  nextProvider === "gcp"
+                    ? catalog.defaults.machine_type
+                    : options.machine_type?.[0]?.value;
+                patchDraft({
+                  provider: nextProvider,
+                  architecture: "x86_64",
+                  region,
+                  zone,
+                  machine_type,
+                  gpu_type: undefined,
+                  gpu_count: 0,
+                  home_volume: undefined,
+                  create_home_volume: false,
+                });
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="architecture"
+            label="Architecture"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 180px" }}
+          >
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              disabled={provider !== "gcp"}
+              onChange={(event) => {
+                const architecture = event.target.value;
+                const machine_type = compatibleOptions(
+                  getGcpMachineTypeOptions(hostCatalog, selection),
+                ).find(
+                  ({ value }) => gcpMachineArchitecture(value) === architecture,
+                )?.value;
+                patchDraft({ architecture, machine_type });
+              }}
+            >
+              <Radio.Button value="x86_64">x86-64</Radio.Button>
+              <Radio.Button value="arm64">ARM64</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+        </Flex>
+        <Flex gap={12} wrap>
+          <Form.Item
             name="region"
             label={
               <Flex align="center" justify="space-between" gap={12}>
@@ -383,7 +494,13 @@ function VmCreateModal({
                     zone: undefined,
                   };
                   const nextZone = compatibleOptions(
-                    getGcpZoneOptions(catalog.host_catalog, nextSelection),
+                    provider === "gcp"
+                      ? getGcpZoneOptions(hostCatalog, nextSelection)
+                      : (getProviderOptions(
+                          provider,
+                          hostCatalog,
+                          nextSelection,
+                        ).zone ?? []),
                   )[0]?.value;
                   patchDraft({ region, zone: nextZone });
                 }}
@@ -395,10 +512,12 @@ function VmCreateModal({
           <Form.Item
             name="zone"
             label="Zone"
-            rules={[{ required: true }]}
+            rules={[{ required: provider === "gcp" }]}
             style={{ flex: "1 1 280px" }}
           >
-            {zoneOptions.length ? (
+            {!descriptor.supports.zone ? (
+              <Input disabled placeholder="Provider-managed location" />
+            ) : zoneOptions.length ? (
               <HostOptionsSelect
                 options={zoneOptions}
                 disabled={selectedVolume != null}
@@ -408,6 +527,24 @@ function VmCreateModal({
             )}
           </Form.Item>
         </Flex>
+        {descriptor.supports.gpuType && gpuOptions.length > 0 && (
+          <Flex gap={12} wrap>
+            <Form.Item
+              name="gpu_type"
+              label="GPU"
+              style={{ flex: "1 1 280px" }}
+            >
+              <HostOptionsSelect options={gpuOptions} placeholder="No GPU" />
+            </Form.Item>
+            <Form.Item
+              name="gpu_count"
+              label="GPU count"
+              style={{ flex: "1 1 160px" }}
+            >
+              <InputNumber min={0} max={8} />
+            </Form.Item>
+          </Flex>
+        )}
         <Flex gap={12} wrap>
           <Form.Item
             name="machine_type"
@@ -487,22 +624,24 @@ function VmCreateModal({
             </Checkbox>
           </Form.Item>
         )}
-        <Form.Item name="create_volume" valuePropName="checked">
+        <Form.Item name="create_home_volume" valuePropName="checked">
           <Checkbox
             onChange={(event) => {
-              if (event.target.checked) patchDraft({ volume: undefined });
+              if (event.target.checked) {
+                patchDraft({ home_volume: undefined });
+              }
             }}
           >
-            Create a new persistent Balanced SSD mounted at{" "}
-            <Text code>/work</Text>
+            Create a new persistent home volume mounted at{" "}
+            <Text code>/home/user</Text>
           </Checkbox>
         </Form.Item>
-        {draft.create_volume ? (
+        {draft.create_home_volume ? (
           <>
             <Flex gap={12} wrap>
               <Form.Item
-                name="new_volume_name"
-                label="New volume name"
+                name="new_home_volume_name"
+                label="New home volume name"
                 rules={[
                   { required: true },
                   {
@@ -516,7 +655,7 @@ function VmCreateModal({
                 <Input />
               </Form.Item>
               <Form.Item
-                name="new_volume_size_gb"
+                name="new_home_volume_size_gb"
                 label="Size (GB)"
                 rules={[{ required: true }]}
                 style={{ flex: "1 1 160px" }}
@@ -533,8 +672,8 @@ function VmCreateModal({
               type="info"
               title={
                 newVolumePrice
-                  ? `New /work volume: ${newVolumePrice.monthly_label}`
-                  : "New /work volume pricing is unavailable"
+                  ? `New home volume: ${newVolumePrice.monthly_label}`
+                  : "New home volume pricing is unavailable"
               }
               description={
                 "The volume will be created in " +
@@ -546,28 +685,37 @@ function VmCreateModal({
           </>
         ) : (
           <Form.Item
-            name="volume"
-            label="Existing persistent /work volume"
+            name="home_volume"
+            label="Existing persistent home volume"
             extra="Optional. The VM and volume must be in the same zone. Volumes survive VM deletion and can be attached to only one VM."
           >
             <Select
               allowClear
-              placeholder="No persistent /work volume"
+              placeholder="Use the VM boot disk for /home/user"
               options={availableVolumes.map((volume) => ({
                 value: volume.name,
-                label: `${volume.name} · ${volume.size_gb} GB · ${volume.zone}${
-                  volume.zone === draft.zone
+                label: `${volume.name} · ${volume.effective_size_gb} GB · ${volume.region}${volume.zone ? `/${volume.zone}` : ""}${
+                  volume.region === draft.region &&
+                  (!volume.zone || volume.zone === draft.zone)
                     ? ""
-                    : " · unavailable in this zone"
+                    : " · unavailable in this location"
                 }`,
-                disabled: volume.zone !== draft.zone,
+                disabled:
+                  volume.region !== draft.region ||
+                  (!!volume.zone && volume.zone !== draft.zone),
               }))}
               onChange={(name) => {
-                patchDraft({ volume: name || undefined });
+                patchDraft({ home_volume: name || undefined });
               }}
             />
           </Form.Item>
         )}
+        <Form.Item name="configure_project_ssh" valuePropName="checked">
+          <Checkbox disabled={!draft.use_project_ssh_key}>
+            Add a managed SSH alias to this project&apos;s{" "}
+            <Text code>~/.ssh/config</Text> when the VM is ready
+          </Checkbox>
+        </Form.Item>
         {projectSshPublicKey ? (
           <Form.Item name="use_project_ssh_key" valuePropName="checked">
             <Checkbox>
@@ -703,14 +851,19 @@ function VolumeCreateModal({
 }) {
   const [form] = Form.useForm<VolumeDraft>();
   const initial = {
-    name: "work-data",
+    name: "home-data",
+    provider: catalog.defaults.provider,
+    funding_mode: catalog.default_funding_mode,
+    region: catalog.defaults.region,
     zone: catalog.defaults.zone,
     size_gb: 50,
   };
   const [draft, setDraft] = useState<Partial<VolumeDraft>>(initial);
   const pricingSettings = useHostPricingSettings();
   const api = globalThis.location?.origin ?? "https://cocalc.ai";
-  const region = regionFromZone(draft.zone ?? initial.zone);
+  const provider = draft.provider ?? initial.provider;
+  const hostCatalog = providerCatalog(catalog, provider);
+  const region = draft.region ?? regionFromZone(draft.zone ?? initial.zone);
   const placementSelection: ProviderSelection = {
     region,
     zone: draft.zone,
@@ -722,17 +875,29 @@ function VolumeCreateModal({
     disk_gb: draft.size_gb,
     pricing_settings: pricingSettings,
   } as const;
+  const providerOptions = getProviderOptions(
+    provider,
+    hostCatalog,
+    placementSelection,
+  );
   const regionOptions = compatibleOptions(
-    getGcpRegionOptions(catalog.host_catalog, placementSelection),
+    provider === "gcp"
+      ? getGcpRegionOptions(hostCatalog, placementSelection)
+      : (providerOptions.region ?? []),
   );
   const zoneOptions = compatibleOptions(
-    getGcpZoneOptions(catalog.host_catalog, placementSelection),
+    provider === "gcp"
+      ? getGcpZoneOptions(hostCatalog, placementSelection)
+      : (providerOptions.zone ?? []),
   );
-  const volumeEstimate = getGcpPersistentDiskPriceEstimate(
-    catalog.host_catalog,
-    pricingSelection,
-    pricingSettings,
-  );
+  const volumeEstimate =
+    provider === "gcp"
+      ? getGcpPersistentDiskPriceEstimate(
+          hostCatalog,
+          pricingSelection,
+          pricingSettings,
+        )
+      : undefined;
   const diskEstimate = volumeEstimate?.line_items.find(
     (item) => item.key === "disk",
   );
@@ -751,7 +916,7 @@ function VolumeCreateModal({
   return (
     <Modal
       open={open}
-      title="Create persistent /work volume"
+      title="Create persistent home volume"
       okText="Create volume"
       confirmLoading={saving}
       onCancel={onCancel}
@@ -775,7 +940,61 @@ function VolumeCreateModal({
           </Form.Item>
         </Flex>
         <Flex gap={12} wrap>
-          <Form.Item label="Region" style={{ flex: "1 1 220px" }}>
+          <Form.Item
+            name="funding_mode"
+            label="Funding"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 260px" }}
+          >
+            <Select
+              options={catalog.funding_modes.map((mode) => ({
+                value: mode.value,
+                label: mode.label,
+                disabled: !mode.allowed,
+                title: mode.reason,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="provider"
+            label="Cloud provider"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 220px" }}
+          >
+            <Select
+              options={catalog.providers.map((value) => ({
+                value,
+                label: getProviderDescriptor(value).label,
+              }))}
+              onChange={(nextProvider: "gcp" | "nebius") => {
+                const nextCatalog = providerCatalog(catalog, nextProvider);
+                const options = getProviderOptions(
+                  nextProvider,
+                  nextCatalog,
+                  {},
+                );
+                patchDraft({
+                  provider: nextProvider,
+                  region:
+                    nextProvider === "gcp"
+                      ? catalog.defaults.region
+                      : options.region?.[0]?.value,
+                  zone:
+                    nextProvider === "gcp"
+                      ? catalog.defaults.zone
+                      : options.zone?.[0]?.value,
+                });
+              }}
+            />
+          </Form.Item>
+        </Flex>
+        <Flex gap={12} wrap>
+          <Form.Item
+            name="region"
+            label="Region"
+            rules={[{ required: true }]}
+            style={{ flex: "1 1 220px" }}
+          >
             {regionOptions.length ? (
               <HostOptionsSelect
                 value={region}
@@ -787,9 +1006,15 @@ function VolumeCreateModal({
                     zone: undefined,
                   };
                   const zone = compatibleOptions(
-                    getGcpZoneOptions(catalog.host_catalog, nextSelection),
+                    provider === "gcp"
+                      ? getGcpZoneOptions(hostCatalog, nextSelection)
+                      : (getProviderOptions(
+                          provider,
+                          hostCatalog,
+                          nextSelection,
+                        ).zone ?? []),
                   )[0]?.value;
-                  patchDraft({ zone });
+                  patchDraft({ region: nextRegion, zone });
                 }}
               />
             ) : (
@@ -799,10 +1024,12 @@ function VolumeCreateModal({
           <Form.Item
             name="zone"
             label="Zone"
-            rules={[{ required: true }]}
+            rules={[{ required: provider === "gcp" }]}
             style={{ flex: "1 1 220px" }}
           >
-            {zoneOptions.length ? (
+            {!getProviderDescriptor(provider).supports.zone ? (
+              <Input disabled placeholder="Provider-managed location" />
+            ) : zoneOptions.length ? (
               <HostOptionsSelect options={zoneOptions} />
             ) : (
               <Input />
@@ -826,7 +1053,7 @@ function VolumeCreateModal({
             ? `Balanced persistent SSD: ${diskEstimate.monthly_label} (${(diskEstimate.usd_per_month / Number(draft.size_gb ?? 1)).toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 3, maximumFractionDigits: 3 })}/GB/month)`
             : "Balanced persistent SSD pricing is unavailable for this region"
         }
-        description="The volume and VM must be in the same zone. Volumes are retained when VMs are deleted. They can grow online but cannot shrink. The estimate includes the site surcharge."
+        description="The volume and VM must use the same provider and location. Volumes are retained when VMs are deleted. They can grow online but cannot shrink. The estimate includes the site surcharge."
       />
       <Divider />
       <Text strong>Equivalent CLI command</Text>
@@ -911,7 +1138,7 @@ function VolumeResizeModal({
         }
         description={
           volume?.attached_vm_id
-            ? "The block device grows online. The VM checks every 30 seconds and automatically grows the ext4 /work filesystem without a reboot."
+            ? "The block device grows online. The VM checks every 30 seconds and automatically grows the ext4 /home/user filesystem without a reboot."
             : "The enlarged capacity is available the next time this volume is attached."
         }
       />
@@ -979,7 +1206,7 @@ function VmTtlModal({
         }
         description={
           vm?.expires_at
-            ? "A separate persistent /work volume is retained."
+            ? "A separate persistent home volume is retained."
             : "It runs until you stop or delete it, or membership funding becomes unavailable."
         }
         style={{ marginBottom: 16 }}
@@ -1052,6 +1279,7 @@ export function ProjectComputeVms({
   const [allRows, setAllRows] = useState<ComputeVm[]>([]);
   const [volumes, setVolumes] = useState<ComputeVolume[]>([]);
   const [catalog, setCatalog] = useState<ComputeCatalog>();
+  const [agentGrants, setAgentGrants] = useState<ComputeAgentGrant[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -1071,15 +1299,20 @@ export function ProjectComputeVms({
   const load = async () => {
     setLoading(true);
     try {
-      const [ownedVms, projectVolumes, computeCatalog] = await Promise.all([
-        webapp_client.conat_client.hub.compute.listVms({}),
-        webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
-        webapp_client.conat_client.hub.compute.getCatalog({}),
-      ]);
+      const [ownedVms, projectVolumes, computeCatalog, grants] =
+        await Promise.all([
+          webapp_client.conat_client.hub.compute.listVms({}),
+          webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
+          webapp_client.conat_client.hub.compute.getCatalog({}),
+          webapp_client.conat_client.hub.compute.listAgentGrants({
+            project_id,
+          }),
+        ]);
       setAllRows(ownedVms);
       setRows(ownedVms.filter((vm) => vm.project_id === project_id));
       setVolumes(projectVolumes);
       setCatalog(computeCatalog);
+      setAgentGrants(grants);
       setError(undefined);
     } catch (err) {
       setError(`${err}`);
@@ -1126,6 +1359,10 @@ export function ProjectComputeVms({
         new Date(b.created_at).valueOf() - new Date(a.created_at).valueOf(),
     )[0];
     const catalogDefaultZone = catalog?.defaults.zone ?? "us-central1-a";
+    const defaultProvider = catalog?.defaults.provider ?? "gcp";
+    const defaultCatalog = catalog
+      ? providerCatalog(catalog, defaultProvider)
+      : undefined;
     const defaultSelection: ProviderSelection = {
       region: regionFromZone(catalogDefaultZone),
       zone: catalogDefaultZone,
@@ -1138,7 +1375,7 @@ export function ProjectComputeVms({
     const nearestRegion = catalog
       ? sortRegionOptionsByPreference({
           options: compatibleOptions(
-            getGcpRegionOptions(catalog.host_catalog, {
+            getGcpRegionOptions(defaultCatalog, {
               ...defaultSelection,
               region: undefined,
               zone: undefined,
@@ -1151,7 +1388,7 @@ export function ProjectComputeVms({
     const nearestZone =
       catalog && nearestRegion
         ? compatibleOptions(
-            getGcpZoneOptions(catalog.host_catalog, {
+            getGcpZoneOptions(defaultCatalog, {
               ...defaultSelection,
               region: nearestRegion,
               zone: undefined,
@@ -1166,6 +1403,13 @@ export function ProjectComputeVms({
     const ttlMinutes = recent ? originalTtlMinutes(recent) : null;
     return {
       name,
+      provider: defaultProvider,
+      funding_mode:
+        recent?.funding_mode ??
+        catalog?.default_funding_mode ??
+        "account-prepaid",
+      architecture:
+        recent?.architecture ?? catalog?.defaults.architecture ?? "x86_64",
       region: regionFromZone(zone),
       zone,
       machine_type:
@@ -1180,13 +1424,14 @@ export function ProjectComputeVms({
           : Math.min(ttlMinutes, catalog?.limits.max_ttl_minutes ?? ttlMinutes),
       boot_disk_gb:
         recent?.boot_disk_gb ?? catalog?.defaults.boot_disk_gb ?? 20,
-      create_volume: false,
-      new_volume_name: availableName(
-        name + "-work",
+      create_home_volume: false,
+      new_home_volume_name: availableName(
+        name + "-home",
         volumes.map((volume) => volume.name),
       ),
-      new_volume_size_gb: 50,
+      new_home_volume_size_gb: 50,
       use_project_ssh_key: projectSshPublicKey != null,
+      configure_project_ssh: projectSshPublicKey != null,
       ssh_public_key: sshKeys[0]?.value ?? "",
     };
   };
@@ -1196,8 +1441,11 @@ export function ProjectComputeVms({
     const name = similarName(vm.name, allRows);
     setVmInitial({
       name,
+      provider: vm.provider,
+      funding_mode: vm.funding_mode,
+      architecture: vm.architecture,
       region: vm.region,
-      zone: vm.zone,
+      zone: vm.zone ?? undefined,
       machine_type: vm.machine_type,
       pricing_model: vm.desired_pricing_model,
       allow_on_demand_fallback: vm.allow_on_demand_fallback,
@@ -1206,13 +1454,14 @@ export function ProjectComputeVms({
           ? null
           : Math.min(ttlMinutes, catalog?.limits.max_ttl_minutes ?? ttlMinutes),
       boot_disk_gb: vm.boot_disk_gb,
-      create_volume: false,
-      new_volume_name: availableName(
-        name + "-work",
+      create_home_volume: false,
+      new_home_volume_name: availableName(
+        name + "-home",
         volumes.map((volume) => volume.name),
       ),
-      new_volume_size_gb: 50,
+      new_home_volume_size_gb: 50,
       use_project_ssh_key: projectSshPublicKey != null,
+      configure_project_ssh: projectSshPublicKey != null,
       ssh_public_key: sshKeys[0]?.value ?? "",
     });
     setVmCreateError(undefined);
@@ -1263,7 +1512,7 @@ export function ProjectComputeVms({
       await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
     throw new Error(
-      "Timed out waiting for the /work volume (state=" + state + ").",
+      "Timed out waiting for the home volume (state=" + state + ").",
     );
   };
 
@@ -1273,35 +1522,45 @@ export function ProjectComputeVms({
     let createdVolumeName: string | undefined;
     try {
       const completed = await runFreshAuthAction(async () => {
-        let volume = values.volume;
-        if (values.create_volume) {
-          if (!values.new_volume_name || !values.new_volume_size_gb) {
-            throw new Error("A new volume name and size are required.");
+        let homeVolume = values.home_volume;
+        if (values.create_home_volume) {
+          if (!values.new_home_volume_name || !values.new_home_volume_size_gb) {
+            throw new Error("A new home volume name and size are required.");
           }
           const createdVolume =
             await webapp_client.conat_client.hub.compute.createVolume({
               project_id,
-              name: values.new_volume_name,
+              name: values.new_home_volume_name,
+              provider: values.provider,
+              funding_mode: values.funding_mode,
+              region: values.region,
               zone: values.zone,
-              size_gb: values.new_volume_size_gb,
+              size_gb: values.new_home_volume_size_gb,
               idempotency_key: uuid(),
               browser_id: webapp_client.browser_id,
             });
           createdVolumeName = createdVolume.name;
           await waitForVolumeReady(createdVolume.id);
-          volume = createdVolume.name;
+          homeVolume = createdVolume.name;
         }
         await webapp_client.conat_client.hub.compute.createVm({
           project_id,
           name: values.name,
+          provider: values.provider,
+          funding_mode: values.funding_mode,
+          architecture: values.architecture,
+          region: values.region,
           zone: values.zone,
           machine_type: values.machine_type,
+          gpu_type: values.gpu_type,
+          gpu_count: values.gpu_count,
           pricing_model: values.pricing_model,
           allow_on_demand_fallback: values.allow_on_demand_fallback,
           ttl_minutes: values.ttl_minutes ?? null,
           boot_disk_gb: values.boot_disk_gb,
-          volume,
+          home_volume: homeVolume,
           ssh_public_key: values.ssh_public_key,
+          configure_project_ssh: values.configure_project_ssh,
           idempotency_key: uuid(),
           browser_id: webapp_client.browser_id,
         });
@@ -1343,19 +1602,130 @@ export function ProjectComputeVms({
     }
   };
 
+  const approveAgentGrant = async (grant: ComputeAgentGrant) => {
+    setError(undefined);
+    try {
+      const completed = await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.compute.approveAgentGrant({
+          grant_id: grant.grant_id,
+          browser_id: webapp_client.browser_id,
+        });
+      });
+      if (!completed) return;
+      setNotice("The pending Codex VM action is authorized for this turn.");
+      await load();
+    } catch (err) {
+      setError(`${err}`);
+    }
+  };
+
+  const revokeAgentGrant = async (grant: ComputeAgentGrant) => {
+    setError(undefined);
+    try {
+      await webapp_client.conat_client.hub.compute.revokeAgentGrant({
+        grant_id: grant.grant_id,
+      });
+      setNotice("The Codex VM authorization was revoked.");
+      await load();
+    } catch (err) {
+      setError(`${err}`);
+    }
+  };
+
   const setVmRunning = async (vm: ComputeVm, running: boolean) => {
     setError(undefined);
     try {
       const action = running ? "startVm" : "stopVm";
-      await webapp_client.conat_client.hub.compute[action]({
-        id_or_name: vm.id,
-        idempotency_key: uuid(),
-      });
+      const execute = async () => {
+        await webapp_client.conat_client.hub.compute[action]({
+          id_or_name: vm.id,
+          idempotency_key: uuid(),
+          ...(running ? { browser_id: webapp_client.browser_id } : {}),
+        });
+      };
+      if (running) {
+        const completed = await runFreshAuthAction(execute);
+        if (!completed) return;
+      } else {
+        await execute();
+      }
       setNotice(`VM '${vm.name}' is ${running ? "starting" : "stopping"}.`);
       await load();
     } catch (err) {
       setError(`${err}`);
     }
+  };
+
+  const changeVmFunding = (vm: ComputeVm) => {
+    let fundingMode = vm.funding_mode;
+    Modal.confirm({
+      title: `Change funding for ${vm.name}`,
+      content: (
+        <Select
+          defaultValue={fundingMode}
+          style={{ marginTop: 12, width: "100%" }}
+          options={(catalog?.funding_modes ?? []).map((mode) => ({
+            value: mode.value,
+            label: mode.allowed ? mode.label : `${mode.label} (${mode.reason})`,
+            disabled: !mode.allowed,
+          }))}
+          onChange={(value) => {
+            fundingMode = value;
+          }}
+        />
+      ),
+      okText: "Change funding",
+      onOk: async () => {
+        if (fundingMode === vm.funding_mode) return;
+        const completed = await runFreshAuthAction(async () => {
+          await webapp_client.conat_client.hub.compute.setVmFundingMode({
+            id_or_name: vm.id,
+            funding_mode: fundingMode,
+            idempotency_key: uuid(),
+            browser_id: webapp_client.browser_id,
+          });
+        });
+        if (!completed) throw new Error("Fresh authorization was cancelled.");
+        setNotice(`Funding for '${vm.name}' changed to ${fundingMode}.`);
+        await load();
+      },
+    });
+  };
+
+  const changeVolumeFunding = (volume: ComputeVolume) => {
+    let fundingMode = volume.funding_mode;
+    Modal.confirm({
+      title: `Change funding for ${volume.name}`,
+      content: (
+        <Select
+          defaultValue={fundingMode}
+          style={{ marginTop: 12, width: "100%" }}
+          options={(catalog?.funding_modes ?? []).map((mode) => ({
+            value: mode.value,
+            label: mode.allowed ? mode.label : `${mode.label} (${mode.reason})`,
+            disabled: !mode.allowed,
+          }))}
+          onChange={(value) => {
+            fundingMode = value;
+          }}
+        />
+      ),
+      okText: "Change funding",
+      onOk: async () => {
+        if (fundingMode === volume.funding_mode) return;
+        const completed = await runFreshAuthAction(async () => {
+          await webapp_client.conat_client.hub.compute.setVolumeFundingMode({
+            id_or_name: volume.id,
+            funding_mode: fundingMode,
+            idempotency_key: uuid(),
+            browser_id: webapp_client.browser_id,
+          });
+        });
+        if (!completed) throw new Error("Fresh authorization was cancelled.");
+        setNotice(`Funding for '${volume.name}' changed to ${fundingMode}.`);
+        await load();
+      },
+    });
   };
 
   const saveVmTtl = async (values: TtlDraft) => {
@@ -1394,6 +1764,9 @@ export function ProjectComputeVms({
         await webapp_client.conat_client.hub.compute.createVolume({
           project_id,
           name: values.name,
+          provider: values.provider,
+          funding_mode: values.funding_mode,
+          region: values.region,
           zone: values.zone,
           size_gb: values.size_gb,
           idempotency_key: uuid(),
@@ -1510,7 +1883,15 @@ export function ProjectComputeVms({
       render: (_, vm) => (
         <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
           <Text strong>{vm.machine_type}</Text>
-          <Text type="secondary">{vm.zone}</Text>
+          <Text type="secondary">
+            {getProviderDescriptor(vm.provider).label} · {vm.architecture}
+          </Text>
+          <Text type="secondary">{vm.zone ?? vm.region}</Text>
+          {vm.gpu_type && (
+            <Text type="secondary">
+              {vm.gpu_count}× {vm.gpu_type}
+            </Text>
+          )}
         </Space>
       ),
     },
@@ -1518,19 +1899,26 @@ export function ProjectComputeVms({
       title: "Cost & usage",
       width: 190,
       render: (_, vm) => {
-        const egress = vm.metadata?.billing?.egress;
-        const gb = Number(egress?.total_bytes ?? 0) / 1_000_000_000;
-        const cost = Number(egress?.total_cost_usd ?? 0);
+        const egress = vm.egress_summary;
+        const gb = Number(egress.current_month_bytes ?? 0) / 1_000_000_000;
+        const cost = Number(egress.current_month_cost_usd ?? 0);
         return (
           <Space direction="vertical" size={0}>
             <Text>
               {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
             </Text>
+            <Text type="secondary">{vm.funding_mode}</Text>
             <Text
               type="secondary"
-              title="Cumulative metered public egress since this VM was created"
+              title={`Current calendar month; lifetime ${(
+                Number(egress.lifetime_bytes) / 1_000_000_000
+              ).toFixed(3)} GB / $${Number(egress.lifetime_cost_usd).toFixed(
+                2,
+              )}`}
             >
-              Egress {gb.toFixed(gb >= 10 ? 1 : 3)} GB · ${cost.toFixed(2)}
+              Egress {gb.toFixed(gb >= 10 ? 1 : 3)} GB ·{" "}
+              {egress.free ? "free" : `$${cost.toFixed(2)}`}
+              {egress.stale ? " · delayed" : ""}
             </Text>
           </Space>
         );
@@ -1546,8 +1934,8 @@ export function ProjectComputeVms({
         const running =
           vm.desired_state === "running" && vm.state !== "stopped";
         const cliCommand = `cocalc vm ssh ${vm.name}`;
-        const directCommand = vm.public_ip
-          ? `ssh ${vm.ssh_user || "ubuntu"}@${vm.public_ip}`
+        const directCommand = vm.public_hostname
+          ? `ssh user@${vm.public_hostname}`
           : undefined;
         return (
           <Space.Compact>
@@ -1581,6 +1969,10 @@ export function ProjectComputeVms({
                       A public address will appear when the VM is ready.
                     </Text>
                   )}
+                  <Text type="secondary">
+                    Public TCP ports: {vm.public_ports.join(", ")}. HTTPS
+                    certificates and services are managed by you.
+                  </Text>
                 </Space>
               }
             >
@@ -1606,6 +1998,7 @@ export function ProjectComputeVms({
                       : "Set deletion deadline",
                   },
                   { key: "similar", label: "Create similar" },
+                  { key: "funding", label: "Change funding" },
                   { type: "divider" },
                   {
                     key: "delete",
@@ -1619,11 +2012,13 @@ export function ProjectComputeVms({
                     setTtlVm(vm);
                   } else if (key === "similar") {
                     openSimilar(vm);
+                  } else if (key === "funding") {
+                    changeVmFunding(vm);
                   } else if (key === "delete") {
                     Modal.confirm({
                       title: `Delete ${vm.name}?`,
                       content:
-                        "The persistent boot disk is deleted. An attached /work volume is retained.",
+                        "The VM, persistent boot disk, public address, and DNS record are deleted. An attached persistent home volume is retained independently.",
                       okText: "Delete VM",
                       okButtonProps: { danger: true },
                       onOk: () => deleteVm(vm),
@@ -1659,8 +2054,14 @@ export function ProjectComputeVms({
       dataIndex: "state",
       render: (state: string) => <Tag>{state}</Tag>,
     },
-    { title: "Size", render: (_, volume) => `${volume.size_gb} GB` },
-    { title: "Zone", dataIndex: "zone" },
+    {
+      title: "Size",
+      render: (_, volume) => `${volume.effective_size_gb} GB`,
+    },
+    {
+      title: "Location",
+      render: (_, volume) => volume.zone ?? volume.region,
+    },
     {
       title: "Attachment",
       render: (_, volume) => (
@@ -1675,7 +2076,9 @@ export function ProjectComputeVms({
     {
       title: "Storage",
       render: (_, volume) =>
-        `$${(volume.size_gb * Number(volume.monthly_price_per_gb)).toFixed(2)}/month`,
+        `$${(
+          volume.effective_size_gb * Number(volume.monthly_price_per_gb)
+        ).toFixed(2)}/month · ${volume.funding_mode}`,
     },
     {
       title: "Actions",
@@ -1690,6 +2093,9 @@ export function ProjectComputeVms({
               onClick={() => setResizeVolumeTarget(volume)}
             >
               Enlarge
+            </Button>
+            <Button size="small" onClick={() => changeVolumeFunding(volume)}>
+              Funding
             </Button>
             <Popconfirm
               title={`Permanently delete ${volume.name}?`}
@@ -1733,8 +2139,9 @@ export function ProjectComputeVms({
                   <Paragraph style={{ marginBottom: 0 }}>
                     VMs run a minimal Ubuntu 24.04 LTS image; CoCalc and other
                     special software are not installed. Compute, boot disks, and
-                    retained <Text code>/work</Text> volumes appear in
-                    Purchases.
+                    retained home volumes appear in Purchases. The login is{" "}
+                    <Text code>user</Text>, whose home is{" "}
+                    <Text code>/home/user</Text>.
                   </Paragraph>
                   <Paragraph style={{ marginBottom: 0 }}>
                     Public Internet egress costs $0.10/GB and appears as one
@@ -1745,7 +2152,9 @@ export function ProjectComputeVms({
                   <Paragraph style={{ marginBottom: 0 }}>
                     Running VMs stop when funding is unavailable. After
                     authorizing an SSH key, connect with the CoCalc CLI or
-                    directly as <Text code>ubuntu</Text> at the public IP.
+                    directly as <Text code>user</Text> at the stable hostname.
+                    TCP ports 22 and 443 are public; you manage any HTTPS server
+                    and certificate yourself.
                   </Paragraph>
                 </Space>
               }
@@ -1821,6 +2230,98 @@ export function ProjectComputeVms({
           style={{ marginBottom: 12 }}
         />
       )}
+      {agentGrants
+        .filter((grant) => grant.metadata?.pending_request)
+        .map((grant) => {
+          const request = grant.metadata.pending_request;
+          const details = [
+            request.operation ?? request.action,
+            request.vm_id ? `VM ${request.vm_id.slice(0, 8)}` : undefined,
+            request.provider,
+            request.machine_class,
+            request.funding_mode,
+            Number(request.hourly_usd) > 0
+              ? `$${Number(request.hourly_usd).toFixed(3)}/hour maximum`
+              : undefined,
+            Number(request.total_authorized_usd) > 0
+              ? `$${Number(request.total_authorized_usd).toFixed(2)} authorized maximum`
+              : undefined,
+            Number(request.ttl_minutes) > 0
+              ? `${request.ttl_minutes} minute maximum TTL`
+              : undefined,
+          ].filter(Boolean);
+          return (
+            <Alert
+              key={grant.grant_id}
+              showIcon
+              type="warning"
+              title="Codex requests temporary VM authority"
+              description={
+                <Space direction="vertical" size={8}>
+                  <Text>{details.join(" · ")}</Text>
+                  <Text type="secondary">
+                    Approval is bound to this project and agent-turn token,
+                    expires within 30 minutes, and does not place an account
+                    session in the project.
+                  </Text>
+                  <Space>
+                    <Button
+                      type="primary"
+                      size="small"
+                      onClick={() => void approveAgentGrant(grant)}
+                    >
+                      Approve exact request
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => void revokeAgentGrant(grant)}
+                    >
+                      Deny
+                    </Button>
+                  </Space>
+                </Space>
+              }
+              style={{ marginBottom: 12 }}
+            />
+          );
+        })}
+      {agentGrants
+        .filter(
+          (grant) =>
+            !grant.metadata?.pending_request &&
+            grant.allowed_actions.some((action) =>
+              ["availability", "billable", "destructive"].includes(action),
+            ),
+        )
+        .map((grant) => {
+          const request = grant.metadata?.approved_request;
+          return (
+            <Alert
+              key={grant.grant_id}
+              showIcon
+              type="info"
+              title="Codex has temporary VM authority"
+              description={
+                <Space direction="vertical" size={8}>
+                  <Text>
+                    {request?.operation ?? grant.allowed_actions.join(", ")}
+                    {request?.vm_id
+                      ? ` · resource ${request.vm_id.slice(0, 8)}`
+                      : ""}
+                    {` · expires ${new Date(grant.expires_at).toLocaleTimeString()}`}
+                  </Text>
+                  <Button
+                    size="small"
+                    onClick={() => void revokeAgentGrant(grant)}
+                  >
+                    Revoke now
+                  </Button>
+                </Space>
+              }
+              style={{ marginBottom: 12 }}
+            />
+          );
+        })}
       <Table<ComputeVm>
         columns={vmColumns}
         dataSource={rows}
@@ -1838,17 +2339,18 @@ export function ProjectComputeVms({
         <div>
           <Flex align="center" gap={4}>
             <Title level={4} style={{ marginBottom: 0 }}>
-              Persistent /work volumes
+              Persistent home volumes
             </Title>
             <Popover
               trigger="click"
-              title="About persistent /work volumes"
+              title="About persistent home volumes"
               content={
                 <Paragraph style={{ marginBottom: 0, maxWidth: 400 }}>
                   Retained independently from virtual machines. A volume can
-                  only be attached to a VM in the same zone. Select an existing
-                  volume or create a new one when creating the VM; changing
-                  attachments later is not yet supported.
+                  only be attached at <Text code>/home/user</Text> to a VM from
+                  the same provider and location. Select an existing volume or
+                  create a new one when creating the VM; changing attachments
+                  later is not yet supported.
                 </Paragraph>
               }
             >

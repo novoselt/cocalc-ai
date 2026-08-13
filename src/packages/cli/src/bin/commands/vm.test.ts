@@ -54,7 +54,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
               name: "build-vm",
               state: "ready",
               public_ip: "203.0.113.10",
-              ssh_user: "ubuntu",
+              ssh_user: "user",
             }),
             authorizeSshKey: async (opts: any) => {
               sshAuthorizationCalls.push(opts);
@@ -63,7 +63,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
                 name: "build-vm",
                 state: "ready",
                 public_ip: "203.0.113.10",
-                ssh_user: "ubuntu",
+                ssh_user: "user",
               };
             },
             authorizeProjectSshKey: async (callOpts: any) => {
@@ -73,7 +73,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
                 name: "build-vm",
                 state: "ready",
                 public_ip: "203.0.113.10",
-                ssh_user: "ubuntu",
+                ssh_user: "user",
               };
             },
             createVm: async (opts: any) => {
@@ -190,7 +190,7 @@ describe("vm create", () => {
       "--no-ssh-key",
     ]);
     assert.deepEqual(progressMessages, [
-      "[vm create] Submitting 'status-vm' (e2-standard-2, us-west1-a)...",
+      "[vm create] Submitting 'status-vm' (gcp, e2-standard-2, us-west1-a)...",
       "[vm create] Provider provisioning queued for 'status-vm' (id vm-id).",
     ]);
   });
@@ -233,7 +233,7 @@ describe("vm ssh", () => {
     const { program, sshCalls, callbackResults, sshAuthorizationCalls } =
       harness();
     await program.parseAsync(["node", "cocalc", "vm", "ssh", "build-vm"]);
-    assert.deepEqual(sshCalls[0]?.slice(-1), ["ubuntu@203.0.113.10"]);
+    assert.deepEqual(sshCalls[0]?.slice(-1), ["user@203.0.113.10"]);
     assert.equal(
       sshAuthorizationCalls[0]?.ssh_public_key,
       "ssh-ed25519 AAAATEST test@example.com",
@@ -266,7 +266,7 @@ describe("vm ssh", () => {
       "-la",
     ]);
     assert.deepEqual(sshCalls[0]?.slice(-3), [
-      "ubuntu@203.0.113.10",
+      "user@203.0.113.10",
       "ls",
       "-la",
     ]);
@@ -284,12 +284,12 @@ describe("vm rsync", () => {
       "rsync",
       "-az",
       "./src/",
-      "build-vm:/work/src/",
+      "build-vm:/home/user/src/",
     ]);
     assert.deepEqual(rsyncCalls[0]?.slice(-3), [
       "-az",
       "./src/",
-      "ubuntu@203.0.113.10:/work/src/",
+      "user@203.0.113.10:/home/user/src/",
     ]);
     assert.deepEqual(callbackResults, [undefined]);
   });
@@ -301,21 +301,21 @@ describe("vm rsync", () => {
         name: "build-vm",
         state: "ready",
         public_ip: "203.0.113.10",
-        ssh_user: "ubuntu",
+        ssh_user: "user",
       },
-      ["-a", "build-vm:/work/dist/", "./dist/"],
+      ["-a", "build-vm:/home/user/dist/", "./dist/"],
       {},
     );
-    assert.equal(args.at(-2), "ubuntu@203.0.113.10:/work/dist/");
+    assert.equal(args.at(-2), "user@203.0.113.10:/home/user/dist/");
     assert.equal(
-      resolveVmRsyncEndpoint(["build-vm:/work", "."]).vm,
+      resolveVmRsyncEndpoint(["build-vm:/home/user", "."]).vm,
       "build-vm",
     );
   });
 
   it("rejects remote-to-remote and transport overrides", () => {
     assert.throws(
-      () => resolveVmRsyncEndpoint(["one:/work", "two:/work"]),
+      () => resolveVmRsyncEndpoint(["one:/home/user", "two:/home/user"]),
       /exactly one VM endpoint/,
     );
     assert.throws(
@@ -327,7 +327,7 @@ describe("vm rsync", () => {
             state: "ready",
             public_ip: "203.0.113.10",
           },
-          ["-e", "ssh -A", ".", "build-vm:/work"],
+          ["-e", "ssh -A", ".", "build-vm:/home/user"],
           {},
         ),
       /use --identity/,
@@ -417,7 +417,7 @@ describe("vm ssh-config", () => {
     const oldBlock = buildVmSshConfigBlock({
       alias: "build-vm",
       hostname: "203.0.113.1",
-      username: "ubuntu",
+      username: "user",
       identity: "/home/user/.ssh/id_ed25519",
     });
     const content = `Host personal\n  HostName example.com\n\n${oldBlock}`;
@@ -431,7 +431,7 @@ describe("vm ssh-config", () => {
     const block = buildVmSshConfigBlock({
       alias: "build-vm",
       hostname: "203.0.113.10",
-      username: "ubuntu",
+      username: "user",
       identity: "/home/user/.ssh/id_ed25519",
     });
     assert.match(block, /Host build-vm/);

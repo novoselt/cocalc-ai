@@ -22,6 +22,20 @@ export const SUPPORTED_GCP_MACHINE_TYPE_PREFIXES = [
 export type SupportedGcpMachineTypePrefix =
   (typeof SUPPORTED_GCP_MACHINE_TYPE_PREFIXES)[number];
 
+const GCP_MACHINE_ARCHITECTURE_FAMILIES = [
+  { prefix: "t2a-standard-", architecture: "arm64" as const },
+] as const;
+
+export function gcpMachineArchitecture(
+  machineType: string,
+): "x86_64" | "arm64" {
+  return (
+    GCP_MACHINE_ARCHITECTURE_FAMILIES.find(({ prefix }) =>
+      machineType.startsWith(prefix),
+    )?.architecture ?? "x86_64"
+  );
+}
+
 export type GcpPricingFamily =
   | "e2"
   | "t2a"
