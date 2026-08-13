@@ -117,6 +117,7 @@ describe("compute VM work failure state", () => {
 
   it("matches an attached volume against the provider's opaque VM ID", () => {
     const vm = { provider_instance_id: "opaque-nebius-id" } as any;
+    expect(volumeAttachedToVm(["opaque-nebius-id"], vm)).toBe(true);
     expect(
       volumeAttachedToVm(
         [

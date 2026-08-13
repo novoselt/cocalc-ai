@@ -1297,8 +1297,11 @@ async function waitForSsh(vm: ComputeVmRow, host: string, timeoutMs = 180_000) {
 }
 
 export function volumeAttachedToVm(users: string[], vm: ComputeVmRow) {
-  const expected = `/instances/${vm.provider_instance_id}`;
-  return users.some((user) => user.endsWith(expected));
+  const providerInstanceId = vm.provider_instance_id;
+  const expectedPath = `/instances/${providerInstanceId}`;
+  return users.some(
+    (user) => user === providerInstanceId || user.endsWith(expectedPath),
+  );
 }
 
 async function waitForVolumeAttachment(
