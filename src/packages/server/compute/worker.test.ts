@@ -14,6 +14,16 @@ import {
   runtimeIdentityChanged,
   volumeAttachedToVm,
 } from "./worker";
+import { effectiveComputeVolumeSizeGb } from "./volume-size";
+
+describe("managed compute volume sizes", () => {
+  it("keeps requested and effective Nebius sizes distinct", () => {
+    expect(effectiveComputeVolumeSizeGb("nebius", 50)).toBe(93);
+    expect(effectiveComputeVolumeSizeGb("nebius", 93)).toBe(93);
+    expect(effectiveComputeVolumeSizeGb("nebius", 94)).toBe(186);
+    expect(effectiveComputeVolumeSizeGb("gcp", 50)).toBe(50);
+  });
+});
 
 describe("managed VM readiness command", () => {
   it("preserves the full remote shell expression as one quoted command", () => {

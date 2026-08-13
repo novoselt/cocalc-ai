@@ -123,29 +123,26 @@ function sanitizeName(base: string, maxLen = 63): string {
   return safeBase || "cocalc";
 }
 
-function diskTypeFor(spec: HostSpec): DiskSpec_DiskType {
-  if (spec.disk_type === "standard") return DiskSpec_DiskType.NETWORK_HDD;
-  if (spec.disk_type === "balanced") {
-    return DiskSpec_DiskType.NETWORK_SSD_NON_REPLICATED;
-  }
-  if (spec.disk_type === "ssd_io_m3") {
-    return DiskSpec_DiskType.NETWORK_SSD_IO_M3;
-  }
-  return DiskSpec_DiskType.NETWORK_SSD;
-}
-
-function sharedScratchDiskTypeFor(spec: HostSpec): DiskSpec_DiskType {
-  switch (spec.shared_disk_type) {
+function diskTypeForValue(diskType?: string): DiskSpec_DiskType {
+  switch (diskType) {
+    case "standard":
+      return DiskSpec_DiskType.NETWORK_HDD;
     case "balanced":
       return DiskSpec_DiskType.NETWORK_SSD_NON_REPLICATED;
     case "ssd_io_m3":
       return DiskSpec_DiskType.NETWORK_SSD_IO_M3;
-    case "standard":
-      return DiskSpec_DiskType.NETWORK_HDD;
     case "ssd":
     default:
       return DiskSpec_DiskType.NETWORK_SSD;
   }
+}
+
+function diskTypeFor(spec: HostSpec): DiskSpec_DiskType {
+  return diskTypeForValue(spec.disk_type);
+}
+
+function sharedScratchDiskTypeFor(spec: HostSpec): DiskSpec_DiskType {
+  return diskTypeForValue(spec.shared_disk_type);
 }
 
 const NEBIUS_DISK_INCREMENT_GIB = 93;
@@ -727,10 +724,7 @@ export class NebiusProvider implements CloudProvider {
     const parentId = client.parentId();
     if (!parentId) throw new Error("nebius parentId is required");
     const normalized = normalizeDiskSizeGib(spec.size_gb);
-    const diskType =
-      spec.disk_type === "standard"
-        ? DiskSpec_DiskType.NETWORK_HDD
-        : DiskSpec_DiskType.NETWORK_SSD_NON_REPLICATED;
+    const diskType = diskTypeForValue(spec.disk_type);
     const id = await createDiskOrReuse(
       client,
       parentId,

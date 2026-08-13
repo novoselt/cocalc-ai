@@ -1324,29 +1324,32 @@ async function estimateNebiusRateBreakdown(
 ): Promise<HostPriceBreakdown | undefined> {
   const region = `${input.region ?? ""}`.trim();
   const machineType = `${input.machine_type ?? ""}`.trim();
-  if (!region || !machineType) return undefined;
+  if (!region) return undefined;
   const [instances, prices] = await Promise.all([
     loadNebiusInstanceTypes(),
     loadNebiusPriceItems(),
   ]);
-  const instance = (instances as NebiusCatalogInstanceType[]).find(
-    (entry) => entry.name === machineType,
-  );
-  if (!instance) return undefined;
+  const instance = machineType
+    ? (instances as NebiusCatalogInstanceType[]).find(
+        (entry) => entry.name === machineType,
+      )
+    : undefined;
+  if (machineType && !instance) return undefined;
   const settings = await getServerSettings();
+  const estimated = estimateNebiusCatalogRateBreakdown({
+    prices,
+    region,
+    pricing_model: input.pricing_model,
+    instance,
+    disk_type: input.disk_type,
+    disk_gb: input.disk_gb,
+    shared_disk_type: input.shared_disk_type,
+    shared_disk_gb: input.shared_disk_gb,
+    storage_mode: input.storage_mode,
+  });
   return hostPriceBreakdownForBillingState(
     applyDedicatedHostSurchargeToBreakdown(
-      estimateNebiusCatalogRateBreakdown({
-        prices,
-        region,
-        pricing_model: input.pricing_model,
-        instance,
-        disk_type: input.disk_type,
-        disk_gb: input.disk_gb,
-        shared_disk_type: input.shared_disk_type,
-        shared_disk_gb: input.shared_disk_gb,
-        storage_mode: input.storage_mode,
-      }),
+      estimated,
       getDedicatedHostSurchargeFraction("nebius", settings),
     ),
     input.billing_state ?? "running",

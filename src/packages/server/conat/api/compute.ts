@@ -69,6 +69,7 @@ import {
   resolveOwnedComputeVolume,
   updateComputeVolume,
 } from "@cocalc/server/compute/volume-db";
+import { effectiveComputeVolumeSizeGb } from "@cocalc/server/compute/volume-size";
 import { assertDedicatedHostAdmissionForAccount } from "@cocalc/server/project-host/admission";
 import type { DedicatedHostFundingMode } from "@cocalc/server/project-host/admission";
 import { estimateDedicatedHostRate } from "@cocalc/server/project-host/spend";
@@ -506,6 +507,10 @@ function volumeAuthorization(opts: { size_gb: number; max_volume_gb: number }) {
   return sizeGb;
 }
 
+function defaultComputeVolumeDiskType(provider: "gcp" | "nebius") {
+  return provider === "nebius" ? ("ssd" as const) : ("balanced" as const);
+}
+
 export async function getCatalog(opts: {
   account_id?: string;
 }): Promise<ComputeCatalog> {
@@ -757,7 +762,7 @@ export async function createVm(
     gpu_type: machine.gpu_type ?? undefined,
     gpu_count: machine.gpu_count,
     disk_gb: bootDiskGb,
-    disk_type: "balanced",
+    disk_type: defaultComputeVolumeDiskType(provider),
   } as const;
   const [customerSpotRate, customerOnDemandRate, customerStoppedRate] =
     await Promise.all([
@@ -1005,8 +1010,8 @@ export async function createVolume(
     size_gb: opts.size_gb,
     max_volume_gb: config.max_volume_gb,
   });
-  const effectiveSizeGb =
-    provider === "nebius" ? Math.max(93, Math.ceil(sizeGb / 93) * 93) : sizeGb;
+  const effectiveSizeGb = effectiveComputeVolumeSizeGb(provider, sizeGb);
+  const diskType = defaultComputeVolumeDiskType(provider);
   const customerVolumeRate = await estimateDedicatedHostRate({
     provider,
     region,
@@ -1014,7 +1019,7 @@ export async function createVolume(
     machine_type: provider === "gcp" ? "e2-standard-2" : undefined,
     pricing_model: "on_demand",
     disk_gb: effectiveSizeGb,
-    disk_type: "balanced",
+    disk_type: diskType,
     billing_state: "stopped",
   });
   if (!customerVolumeRate) {
@@ -1057,7 +1062,7 @@ export async function createVolume(
       role: "home",
       funding_mode: fundingMode,
       provider_spec: {},
-      disk_type: "balanced",
+      disk_type: diskType,
       filesystem: "ext4",
       size_gb: sizeGb,
       desired_size_gb: sizeGb,
@@ -1160,14 +1165,15 @@ export async function resizeVolume(opts: {
   if (sizeGb < volume.size_gb) {
     throw new Error("compute volumes cannot be shrunk");
   }
+  const effectiveSizeGb = effectiveComputeVolumeSizeGb(volume.provider, sizeGb);
   const customerVolumeRate = await estimateDedicatedHostRate({
     provider: volume.provider,
     region: volume.region,
     zone: volume.zone,
     machine_type: volume.provider === "gcp" ? "e2-standard-2" : undefined,
     pricing_model: "on_demand",
-    disk_gb: sizeGb,
-    disk_type: "balanced",
+    disk_gb: effectiveSizeGb,
+    disk_type: volume.disk_type,
     billing_state: "stopped",
   });
   if (!customerVolumeRate)
@@ -1204,7 +1210,7 @@ export async function resizeVolume(opts: {
   }
   const next = (await updateComputeVolume(volume.id, {
     desired_size_gb: sizeGb,
-    monthly_price_per_gb: (monthlyCost / sizeGb).toFixed(6),
+    monthly_price_per_gb: (monthlyCost / effectiveSizeGb).toFixed(6),
     authorized_monthly_cost: monthlyCost.toFixed(6),
     state: sizeGb === volume.size_gb ? volume.state : "resizing",
     error: null,

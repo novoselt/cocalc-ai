@@ -47,7 +47,7 @@ Table({
     },
     disk_type: { type: "string", desc: "Provider disk class." },
     filesystem: { type: "string", desc: "Filesystem created on first mount." },
-    size_gb: { type: "number", desc: "Provider-confirmed disk size." },
+    size_gb: { type: "number", desc: "User-requested logical disk size." },
     desired_size_gb: { type: "number", desc: "Requested grow-only disk size." },
     effective_size_gb: {
       type: "number",

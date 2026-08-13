@@ -260,7 +260,7 @@ function VmCreateModal({
     machine_type: draft.machine_type,
     pricing_model: draft.pricing_model,
     storage_mode: "persistent",
-    disk_type: "balanced",
+    disk_type: provider === "nebius" ? "ssd" : "balanced",
     disk_gb: draft.boot_disk_gb,
     price_display: "hourly",
     pricing_settings: pricingSettings,

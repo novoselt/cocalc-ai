@@ -44,6 +44,7 @@ describe("managedVmBootstrapScript", () => {
 
     expect(script).toContain("device=/dev/disk/by-id/google-cocalc-vol-test");
     expect(script).toContain("UUID=$uuid /home/user ext4");
+    expect(script).toContain("rmdir /home/user/lost+found 2>/dev/null || true");
     expect(script).toContain(
       'chown -R "$user_uid:$user_gid" /mnt/cocalc-managed-home',
     );

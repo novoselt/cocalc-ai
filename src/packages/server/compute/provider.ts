@@ -440,8 +440,8 @@ function specFor(
     ram_gb: ramGb,
     disk_gb: 0,
     disk_type: "balanced" as const,
-    shared_disk_gb: volume?.size_gb,
-    shared_disk_type: volume ? "balanced" : undefined,
+    shared_disk_gb: volume?.effective_size_gb,
+    shared_disk_type: volume?.disk_type,
     gpu:
       vm.gpu_type && vm.gpu_count > 0
         ? { type: vm.gpu_type, count: vm.gpu_count }
@@ -513,7 +513,7 @@ async function resolvedSpecFor(
         disk_gb: 0,
         disk_type: "balanced",
         shared_disk_gb: volume?.effective_size_gb,
-        shared_disk_type: volume ? "balanced" : undefined,
+        shared_disk_type: volume?.disk_type,
         gpu_type: vm.gpu_type ?? undefined,
         gpu_count: vm.gpu_count,
         metadata: {
@@ -580,6 +580,7 @@ uuid=$(blkid -s UUID -o value "$device")
 sed -i '\\|[[:space:]]/home/user[[:space:]]|d' /etc/fstab
 echo "UUID=$uuid /home/user ext4 defaults,nofail 0 2" >> /etc/fstab
 mountpoint -q /home/user || mount /home/user
+rmdir /home/user/lost+found 2>/dev/null || true
 
 cat >/usr/local/sbin/cocalc-grow-home-filesystem <<'EOF'
 #!/bin/bash
@@ -1438,19 +1439,25 @@ export async function ensureProviderComputeVolume(volume: ComputeVolumeRow) {
   const spec = {
     name: volume.provider_disk_id,
     size_gb: volume.desired_size_gb,
-    disk_type: "balanced" as const,
+    disk_type: volume.disk_type,
     labels: {
       "managed-by": "cocalc-compute",
       "logical-volume": volume.id.replaceAll("-", "").slice(0, 40),
       owner: volume.owner_account_id.replaceAll("-", "").slice(0, 40),
     },
   };
-  return volume.provider === "gcp"
-    ? await gcpProvider.ensurePersistentDisk(
-        { ...spec, zone: requireGcpZone(volume) },
-        creds,
-      )
-    : await nebiusProvider.ensurePersistentDisk(spec, creds);
+  if (volume.provider === "gcp") {
+    if (volume.disk_type !== "balanced") {
+      throw new Error(
+        `managed GCP volume '${volume.id}' has invalid disk type '${volume.disk_type}'`,
+      );
+    }
+    return await gcpProvider.ensurePersistentDisk(
+      { ...spec, disk_type: "balanced", zone: requireGcpZone(volume) },
+      creds,
+    );
+  }
+  return await nebiusProvider.ensurePersistentDisk(spec, creds);
 }
 
 export async function inspectProviderComputeVolume(volume: ComputeVolumeRow) {

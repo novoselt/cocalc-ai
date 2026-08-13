@@ -125,6 +125,26 @@ describe("NebiusProvider", () => {
     disksUpdateMock.mockResolvedValue(diskOp("updated-disk"));
   });
 
+  it("creates independent replicated SSD volumes with the requested type", async () => {
+    disksCreateMock.mockReset().mockResolvedValueOnce(diskOp("home-disk"));
+
+    await new NebiusProvider().ensurePersistentDisk(
+      { name: "managed-home", size_gb: 50, disk_type: "ssd" },
+      {
+        parentId: "project-1",
+        serviceAccountId: "svc-1",
+        publicKeyId: "pub-1",
+        privateKeyPem: "key",
+        sshPublicKey: "ssh-ed25519 AAAA",
+        subnetId: "subnet-1",
+      },
+    );
+
+    expect(disksCreateMock.mock.calls[0][0].spec.type).toBe(
+      DiskSpec_DiskType.NETWORK_SSD,
+    );
+  });
+
   it("allocates a static public address from the configured subnet", async () => {
     allocationsGetByNameMock.mockRejectedValue(new Error("NOT_FOUND"));
     allocationsCreateMock.mockResolvedValue(diskOp("allocation-1"));

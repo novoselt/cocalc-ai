@@ -69,6 +69,7 @@ import {
 import { getHostOwnerBaySshIdentity } from "@cocalc/server/cloud/ssh-key";
 import { syncManagedVmProjectSshConfig } from "@cocalc/server/projects/managed-vm-ssh-config";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
+import { effectiveComputeVolumeSizeGb } from "./volume-size";
 import { ensureComputeWorkQueueSchema } from "./schema";
 import {
   closeDedicatedHostPurchaseSessionForAccount,
@@ -1548,7 +1549,7 @@ async function provision(vm: ComputeVmRow) {
     }
     volume = (await updateComputeVolume(volume.id, {
       state: "ready",
-      size_gb: disk.size_gb,
+      size_gb: volume.desired_size_gb,
       effective_size_gb: disk.size_gb,
       ready_at: volume.ready_at ?? new Date(),
       error: null,
@@ -1897,7 +1898,7 @@ async function provisionVolume(volume: ComputeVolumeRow) {
   const disk = await ensureProviderComputeVolume(provisioning);
   const next = (await updateComputeVolume(volume.id, {
     state: "ready",
-    size_gb: disk.size_gb,
+    size_gb: volume.desired_size_gb,
     effective_size_gb: disk.size_gb,
     ready_at: volume.ready_at ?? new Date(),
     error: null,
@@ -1924,14 +1925,11 @@ async function resizeVolume(volume: ComputeVolumeRow) {
   await resizeProviderComputeVolume(volume);
   const next = (await updateComputeVolume(volume.id, {
     state: "ready",
-    size_gb:
-      volume.provider === "nebius"
-        ? Math.max(93, Math.ceil(volume.desired_size_gb / 93) * 93)
-        : volume.desired_size_gb,
-    effective_size_gb:
-      volume.provider === "nebius"
-        ? Math.max(93, Math.ceil(volume.desired_size_gb / 93) * 93)
-        : volume.desired_size_gb,
+    size_gb: volume.desired_size_gb,
+    effective_size_gb: effectiveComputeVolumeSizeGb(
+      volume.provider,
+      volume.desired_size_gb,
+    ),
     resized_at: new Date(),
     error: null,
     metadata: {
@@ -1988,7 +1986,10 @@ async function reconcileVolume(volume: ComputeVolumeRow) {
     });
     return;
   }
-  if (observed.size_gb < volume.desired_size_gb) {
+  if (
+    observed.size_gb <
+    effectiveComputeVolumeSizeGb(volume.provider, volume.desired_size_gb)
+  ) {
     return await resizeVolume(volume);
   }
   const attachedVm = volume.attached_vm_id
@@ -2000,7 +2001,7 @@ async function reconcileVolume(volume: ComputeVolumeRow) {
   const attachedElsewhere = observed.users.length > 0 && !attachedToExpectedVm;
   await updateComputeVolume(volume.id, {
     state: "ready",
-    size_gb: observed.size_gb,
+    size_gb: volume.desired_size_gb,
     effective_size_gb: observed.size_gb,
     attachment_state: attachedElsewhere
       ? "unknown"

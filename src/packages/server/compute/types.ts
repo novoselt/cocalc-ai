@@ -18,6 +18,11 @@ export type ComputeVmState =
 export type ComputeVmDesiredState = "running" | "stopped" | "deleted";
 export type ComputeVmPricingModel = "spot" | "on_demand";
 export type ManagedComputeProviderId = "gcp" | "nebius";
+export type ManagedComputeVolumeDiskType =
+  | "balanced"
+  | "ssd"
+  | "ssd_io_m3"
+  | "standard";
 export type ManagedComputeFundingMode =
   | "site-funded"
   | "account-postpaid"
@@ -122,7 +127,7 @@ export interface ComputeVolumeRow {
   role: "home";
   funding_mode: ManagedComputeFundingMode;
   provider_spec: Record<string, any>;
-  disk_type: "balanced";
+  disk_type: ManagedComputeVolumeDiskType;
   filesystem: "ext4";
   size_gb: number;
   desired_size_gb: number;

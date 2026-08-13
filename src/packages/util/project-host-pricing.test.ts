@@ -453,6 +453,34 @@ describe("project host pricing", () => {
     expect(breakdown?.total_usd_per_hour).toBeCloseTo(0.114183323, 9);
   });
 
+  it("prices an independent Nebius persistent disk without an instance", () => {
+    const breakdown = estimateNebiusCatalogRateBreakdown({
+      prices: [
+        {
+          product: "Network SSD disk",
+          region: "us-central1",
+          price_usd: "0.00009726027397260273",
+          unit: "GiB hour",
+        },
+      ],
+      region: "us-central1",
+      disk_type: "ssd",
+      disk_gb: 93,
+      storage_mode: "persistent",
+    });
+
+    expect(breakdown?.items).toEqual([
+      expect.objectContaining({
+        key: "disk",
+        billing_states: ["running", "stopped"],
+      }),
+    ]);
+    expect(breakdown?.total_usd_per_hour).toBeCloseTo(
+      0.00009726027397260273 * 93,
+      12,
+    );
+  });
+
   it("adds Nebius shared scratch disk as a separate line item", () => {
     const breakdown = estimateNebiusCatalogRateBreakdown({
       prices: [
