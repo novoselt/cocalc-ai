@@ -1157,6 +1157,8 @@ describe("GcpProvider", () => {
     getMock.mockResolvedValueOnce([
       {
         name: "compute-vm",
+        machineType: "zones/us-central1-a/machineTypes/e2-standard-4",
+        status: "RUNNING",
         canIpForward: false,
         deletionProtection: false,
         serviceAccounts: [],
@@ -1199,6 +1201,10 @@ describe("GcpProvider", () => {
       network_tier: "STANDARD",
       external_access_config_count: 1,
       external_ipv6: false,
+    });
+    expect(observed?.metadata).toMatchObject({
+      machine_type: "e2-standard-4",
+      provider_status: "RUNNING",
     });
   });
 
