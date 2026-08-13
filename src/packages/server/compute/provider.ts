@@ -70,7 +70,7 @@ const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
   "240.0.0.0/4",
 ];
 
-function isProviderNotFound(err: unknown): boolean {
+export function isProviderNotFound(err: unknown): boolean {
   return /not found|was not found|code.?5|404/i.test(`${err}`);
 }
 
@@ -1324,7 +1324,12 @@ export async function stopProviderComputeVm(vm: ComputeVmRow) {
       creds,
     );
   } catch (err) {
-    if (!/already.*stopped|terminated|not.*running/i.test(`${err}`)) throw err;
+    if (
+      !isProviderNotFound(err) &&
+      !/already.*stopped|terminated|not.*running/i.test(`${err}`)
+    ) {
+      throw err;
+    }
   }
 }
 

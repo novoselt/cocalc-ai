@@ -3,7 +3,7 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { managedVmBootstrapScript } from "./provider";
+import { isProviderNotFound, managedVmBootstrapScript } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 
 describe("managedVmBootstrapScript", () => {
@@ -47,5 +47,20 @@ describe("managedVmBootstrapScript", () => {
       "systemctl enable --now cocalc-grow-home-filesystem.timer",
     );
     expect(script).not.toContain("/work");
+  });
+});
+
+describe("isProviderNotFound", () => {
+  it("recognizes the JSON-shaped Google API error returned for an absent VM", () => {
+    expect(
+      isProviderNotFound(
+        new Error(`{
+  "error": {
+    "code": 404,
+    "message": "The resource 'projects/test/zones/test/instances/missing' was not found"
+  }
+}`),
+      ),
+    ).toBe(true);
   });
 });
