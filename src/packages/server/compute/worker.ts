@@ -1333,7 +1333,7 @@ export function computeRuntimeMetadata(
   };
 }
 
-function runtimeIdentityChanged(
+export function runtimeIdentityChanged(
   current: Record<string, any>,
   observed: ObservedRuntime,
 ) {
@@ -1341,7 +1341,9 @@ function runtimeIdentityChanged(
     (observed.private_ip != null &&
       observed.private_ip !== current.private_ip) ||
     (observed.internal_hostname != null &&
-      observed.internal_hostname !== current.internal_hostname)
+      observed.internal_hostname !== current.internal_hostname) ||
+    (observed.metadata?.gcp_instance_id != null &&
+      observed.metadata.gcp_instance_id !== current.gcp_instance_id)
   );
 }
 

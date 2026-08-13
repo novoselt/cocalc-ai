@@ -11,6 +11,7 @@ import {
   managedVmReadinessCommand,
   providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
+  runtimeIdentityChanged,
   volumeAttachedToVm,
 } from "./worker";
 
@@ -133,6 +134,27 @@ describe("compute VM work failure state", () => {
       boot_disk_name: "disk-1",
       machine_type: "e2-standard-2",
     });
+  });
+
+  it("converges the GCP numeric instance identity used for egress metering", () => {
+    expect(
+      runtimeIdentityChanged(
+        { private_ip: "10.0.0.2" },
+        {
+          private_ip: "10.0.0.2",
+          metadata: { gcp_instance_id: "1234567890" },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      runtimeIdentityChanged(
+        { private_ip: "10.0.0.2", gcp_instance_id: "1234567890" },
+        {
+          private_ip: "10.0.0.2",
+          metadata: { gcp_instance_id: "1234567890" },
+        },
+      ),
+    ).toBe(false);
   });
 
   it("honors newer durable intent after a provider stop completes", () => {
