@@ -1162,6 +1162,7 @@ describe("GcpProvider", () => {
       subnetwork:
         "projects/compute-prod/regions/us-central1/subnetworks/hostile-guests",
       network_tier: "STANDARD",
+      external_access_config_count: 1,
       external_ipv6: false,
     });
   });
