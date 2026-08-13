@@ -10,7 +10,7 @@ The v2 schema, hub control plane, project integration, CLI, frontend, provider
 adapters, billing, egress metering, and turn-scoped capability implementation
 are deployed on staging. The current staging artifacts are:
 
-- hub: `20260813T025550Z-d819f722-vm-v2-gcp-create-id-d819f722`;
+- hub: `20260813T030538Z-09d5c419-vm-v2-egress-finalize-09d5c419`;
 - project: `20260813T010410Z-8c25e5e7-vm-v2-ssh-default-8c25e5e7`; and
 - static: `20260813T002414Z-105f7c0a-20260813T0024Z`.
 
