@@ -62,6 +62,19 @@ pnpm i18n:delete <key-id>   # removes the key and all its translations from Simp
 pnpm i18n:update             # re-extracts, uploads (as new), auto-translates, downloads, compiles
 ```
 
+Caveat, observed 2026-08-13: this does **not** reliably produce a _different_
+translation. Four `command.generic.layout.*.title` keys were deleted and
+re-uploaded with an unchanged English source after the AI Context had been
+amended, and the German came back the same as before, still mixing du- and
+Sie-form. The likely cause is translation memory reusing the earlier result
+for an identical source string, so the model is never asked again.
+
+So delete-and-retranslate is the right move when the **English source
+changed**, but is not a way to re-roll a translation you simply dislike. To
+change an existing translation, edit it in the SimpleLocalize UI and download,
+or change the English wording as well. Amending the AI Context only affects
+strings the model is genuinely asked to translate.
+
 ### Unused keys
 
 Development goes on, and it might happen that keys are no longer in use.
