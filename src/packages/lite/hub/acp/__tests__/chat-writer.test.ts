@@ -1685,7 +1685,7 @@ describe("ChatStreamWriter", () => {
     (writer as any).dispose?.(true);
   });
 
-  it("keeps complete agent delta updates as separate preview paragraphs", async () => {
+  it("keeps complete agent delta updates in one preview document", async () => {
     const previewPayloads: Array<AcpStreamMessage | AcpStreamMessage[]> = [];
     const { syncdb } = makeFakeSyncDB();
     const writer: any = new ChatStreamWriter({
@@ -1741,6 +1741,12 @@ describe("ChatStreamWriter", () => {
     expect(getLiveResponseMarkdown(previewEvents)).toBe(
       `${first}\n\n${second}`,
     );
+    expect(getLiveResponseBlocks(previewEvents)).toEqual([
+      expect.objectContaining({
+        kind: "agent",
+        text: `${first}\n\n${second}`,
+      }),
+    ]);
     writer.dispose?.(true);
   });
 
@@ -1798,10 +1804,71 @@ describe("ChatStreamWriter", () => {
       "Initial update.\n\nI am keeping the output.",
     );
     expect(getLiveResponseBlocks(previewEvents)).toEqual([
-      expect.objectContaining({ kind: "agent", text: "Initial update." }),
       expect.objectContaining({
         kind: "agent",
-        text: "I am keeping the output.",
+        text: "Initial update.\n\nI am keeping the output.",
+      }),
+    ]);
+    writer.dispose?.(true);
+  });
+
+  it("retries a failed preview publish without waiting for more agent output", async () => {
+    const previewPayloads: Array<AcpStreamMessage | AcpStreamMessage[]> = [];
+    let publishAttempts = 0;
+    const { syncdb } = makeFakeSyncDB();
+    const writer: any = new ChatStreamWriter({
+      metadata: baseMetadata,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+      livePreviewStreamFactory: () =>
+        ({
+          publish: async (payload: AcpStreamMessage | AcpStreamMessage[]) => {
+            publishAttempts += 1;
+            if (publishAttempts === 1) {
+              throw new Error("transient preview transport failure");
+            }
+            previewPayloads.push(payload);
+            return { seq: previewPayloads.length, time: Date.now() };
+          },
+          close: () => {},
+        }) as any,
+    });
+    const replacementStream = {
+      publish: async (payload: AcpStreamMessage | AcpStreamMessage[]) => {
+        publishAttempts += 1;
+        previewPayloads.push(payload);
+        return { seq: previewPayloads.length, time: Date.now() };
+      },
+      close: () => {},
+    };
+    writer.getLivePreviewStream = async () =>
+      publishAttempts === 0 ? writer.livePreviewStream : replacementStream;
+
+    await writer.handle({
+      type: "event",
+      event: {
+        type: "message",
+        text: "This snapshot must not be dropped.",
+        delta: true,
+      },
+      seq: 1,
+      time: 1000,
+    } as AcpStreamMessage);
+    await writer.waitForLivePreviewFlush();
+
+    expect(publishAttempts).toBe(2);
+    expect(flattenLivePayloads(previewPayloads)).toEqual([
+      expect.objectContaining({
+        seq: 1,
+        event: expect.objectContaining({
+          text: "This snapshot must not be dropped.",
+          delta: false,
+        }),
       }),
     ]);
     writer.dispose?.(true);
