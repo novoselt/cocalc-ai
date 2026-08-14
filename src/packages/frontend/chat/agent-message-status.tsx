@@ -19,6 +19,10 @@ import type { InlineCodeLink } from "@cocalc/chat";
 import type { AcpStreamMessage } from "@cocalc/conat/ai/acp/types";
 import { COLORS } from "@cocalc/util/theme";
 import CodexLogPanel from "./codex-log-panel";
+import {
+  reconcileSubagentEvents,
+  summarizeSubagentEvents,
+} from "./codex-activity";
 import type { ActivityLogContext } from "./actions/activity-logs";
 import type { CodexLiveLogStatus } from "./use-codex-log";
 
@@ -257,6 +261,8 @@ interface AgentMessageStatusProps {
   interruptRequested?: boolean;
   onInterrupt?: () => void;
   activityLiveStatus?: CodexLiveLogStatus;
+  activeDescendantThreadIds?: readonly string[];
+  backgroundTerminalProcesses?: number;
 }
 
 interface AgentActivityChipProps {
@@ -268,6 +274,7 @@ interface AgentActivityChipProps {
   onOpen: () => void;
   style?: CSSProperties;
   liveStatus?: CodexLiveLogStatus;
+  activeSubagents?: number;
 }
 
 export function AgentActivityChip({
@@ -279,6 +286,7 @@ export function AgentActivityChip({
   onOpen,
   style,
   liveStatus = "idle",
+  activeSubagents = 0,
 }: AgentActivityChipProps) {
   const runStartMs = resolveLiveRunStartMs({ startedAtMs, date });
   const lastActivityInfo = useMemo(
@@ -389,6 +397,11 @@ export function AgentActivityChip({
           ? `Running ${durationLabel}`
           : `Worked for ${durationLabel}`}
       </span>
+      {activeSubagents > 0 ? (
+        <span style={{ color: COLORS.BRWN, fontSize: 12, fontWeight: 600 }}>
+          · {activeSubagents} subagent{activeSubagents === 1 ? "" : "s"} working
+        </span>
+      ) : null}
       {generating && lastActivityInfo.label ? (
         <Tooltip
           title={
@@ -470,6 +483,8 @@ export function AgentMessageStatus({
   interruptRequested = false,
   onInterrupt,
   activityLiveStatus,
+  activeDescendantThreadIds,
+  backgroundTerminalProcesses = 0,
 }: AgentMessageStatusProps) {
   const [showDrawer, setShowDrawer] = useState(false);
   const [activitySize, setActivitySize0] = useState<number>(
@@ -598,6 +613,19 @@ export function AgentMessageStatus({
     onDrawerOpenChange?.(showDrawer);
   }, [onDrawerOpenChange, showDrawer]);
 
+  const effectiveLogEvents = useMemo(
+    () => reconcileSubagentEvents(logEvents ?? [], activeDescendantThreadIds),
+    [activeDescendantThreadIds, logEvents],
+  );
+  const activeSubagents = summarizeSubagentEvents(effectiveLogEvents).active;
+  const backgroundCommands = Math.max(
+    0,
+    Number.isFinite(backgroundTerminalProcesses)
+      ? Math.floor(backgroundTerminalProcesses)
+      : 0,
+  );
+  const outstandingWork = activeSubagents + backgroundCommands;
+
   if (!show) return null;
 
   const openActivity = () => setShowDrawer(true);
@@ -621,15 +649,20 @@ export function AgentMessageStatus({
           date={date}
           onOpen={openActivity}
           liveStatus={activityLiveStatus}
+          activeSubagents={activeSubagents}
         />
-        {generating && onInterrupt ? (
+        {(generating || outstandingWork > 0) && onInterrupt ? (
           <Button
             size="small"
             disabled={interruptRequested}
             loading={interruptRequested}
             onClick={onInterrupt}
           >
-            {interruptRequested ? "Interrupting..." : "Interrupt"}
+            {interruptRequested
+              ? "Stopping..."
+              : outstandingWork > 0
+                ? "Stop all"
+                : "Interrupt"}
           </Button>
         ) : null}
         {generating && onNotifyOnTurnFinishChange ? (
@@ -648,6 +681,26 @@ export function AgentMessageStatus({
           </Tooltip>
         ) : null}
       </div>
+      {!generating && outstandingWork > 0 ? (
+        <div
+          role="status"
+          style={{
+            marginBottom: 8,
+            color: COLORS.ORANGE_WARN,
+            fontWeight: 600,
+          }}
+        >
+          Manager finished ·{" "}
+          {activeSubagents > 0
+            ? `${activeSubagents} subagent${activeSubagents === 1 ? " is" : "s are"} still running`
+            : ""}
+          {activeSubagents > 0 && backgroundCommands > 0 ? " · " : ""}
+          {backgroundCommands > 0
+            ? `${backgroundCommands} background command${backgroundCommands === 1 ? " is" : "s are"} still running`
+            : ""}{" "}
+          · AI usage may continue
+        </div>
+      ) : null}
       <AttachedSteerStatusList attachedSteers={attachedSteers} />
 
       <Drawer
@@ -700,7 +753,7 @@ export function AgentMessageStatus({
             liveLogStream={logRefs.liveStream}
             logProjectId={project_id}
             logEnabled={showDrawer}
-            events={logEvents}
+            events={effectiveLogEvents}
             activityContext={activityContext}
             onJumpToBottom={handleJumpToBottom}
             jumpText={jumpText}

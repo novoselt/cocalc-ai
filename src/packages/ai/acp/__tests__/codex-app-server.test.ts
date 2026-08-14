@@ -295,6 +295,42 @@ describe("CodexAppServerAgent", () => {
                 durationMs: 5,
               },
             });
+            fake.sendNotification("item/updated", {
+              threadId: "thr-shared-1",
+              turnId: "turn-1",
+              item: {
+                type: "collabAgentToolCall",
+                id: "spawn-1",
+                tool: "spawnAgent",
+                status: "completed",
+                senderThreadId: "thr-shared-1",
+                receiverThreadIds: ["thr-child-1"],
+                prompt: "Review the adapter",
+                model: "gpt-5.6-sol",
+                reasoningEffort: "high",
+                agentsStates: {
+                  "thr-child-1": { status: "running" },
+                },
+              },
+            });
+            fake.sendNotification("item/updated", {
+              threadId: "thr-shared-1",
+              turnId: "turn-1",
+              item: {
+                type: "collabAgentToolCall",
+                id: "spawn-1",
+                tool: "spawnAgent",
+                status: "completed",
+                senderThreadId: "thr-shared-1",
+                receiverThreadIds: ["thr-child-1"],
+                prompt: "Review the adapter",
+                model: "gpt-5.6-sol",
+                reasoningEffort: "high",
+                agentsStates: {
+                  "thr-child-1": { status: "running" },
+                },
+              },
+            });
             fake.sendNotification("thread/tokenUsage/updated", {
               threadId: "thr-shared-1",
               turnId: "turn-1",
@@ -328,7 +364,7 @@ describe("CodexAppServerAgent", () => {
               item: {
                 type: "agentMessage",
                 id: "msg-1",
-                text: "Hello",
+                text: "Rewritten response",
                 phase: null,
               },
             });
@@ -407,6 +443,21 @@ describe("CodexAppServerAgent", () => {
         },
         {
           type: "event",
+          event: {
+            type: "subagent",
+            operationId: "spawn-1",
+            threadId: "thr-child-1",
+            parentThreadId: "thr-shared-1",
+            state: "running",
+            tool: "spawn",
+            task: "Review the adapter",
+            message: undefined,
+            model: "gpt-5.6-sol",
+            reasoning: "high",
+          },
+        },
+        {
+          type: "event",
           event: { type: "message", text: "Hello", delta: true },
         },
         {
@@ -422,7 +473,7 @@ describe("CodexAppServerAgent", () => {
         },
         {
           type: "summary",
-          finalResponse: "Hello",
+          finalResponse: "Rewritten response",
           usage: {
             input_tokens: 10,
             cached_input_tokens: 1,
@@ -435,6 +486,20 @@ describe("CodexAppServerAgent", () => {
         },
       ]),
     );
+    expect(streamPayloads).not.toContainEqual({
+      type: "event",
+      event: {
+        type: "message",
+        text: "Rewritten response",
+        delta: false,
+      },
+    });
+    expect(
+      streamPayloads.filter(
+        (payload) =>
+          payload.type === "event" && payload.event?.type === "subagent",
+      ),
+    ).toHaveLength(1);
     expect(loginRequests).toEqual([
       {
         type: "apiKey",
@@ -2672,8 +2737,11 @@ describe("CodexAppServerAgent", () => {
     expect(spawnCount).toBe(1);
   });
 
-  it("reports and retains app-server background terminals after a turn", async () => {
+  it("reports and retains background terminals and subagents after a turn", async () => {
+    const requests: Array<{ method: string; params: any }> = [];
+    const outstandingWorkChanged = jest.fn();
     const proc = new FakeCodexAppServerProc((fake, message) => {
+      requests.push({ method: message.method, params: message.params });
       switch (message.method) {
         case "initialize":
           fake.sendResponse(message.id, { ok: true });
@@ -2702,6 +2770,26 @@ describe("CodexAppServerAgent", () => {
             nextCursor: null,
           });
           break;
+        case "thread/list":
+          fake.sendResponse(message.id, {
+            data: [
+              {
+                id: "thr-child-background",
+                parentThreadId: "thr-background",
+                status: { type: "active", activeFlags: ["waiting"] },
+              },
+            ],
+            nextCursor: null,
+          });
+          break;
+        case "thread/read":
+          fake.sendResponse(message.id, {
+            thread: {
+              id: "thr-child-background",
+              turns: [{ id: "turn-child", status: "inProgress" }],
+            },
+          });
+          break;
         default:
           if (typeof message.id === "number") fake.sendResponse(message.id, {});
       }
@@ -2717,7 +2805,9 @@ describe("CodexAppServerAgent", () => {
         cwd: "/tmp/project",
       }),
     });
-    const agent = new CodexAppServerAgent();
+    const agent = new CodexAppServerAgent({
+      onOutstandingWorkChanged: outstandingWorkChanged,
+    });
 
     await agent.evaluate({
       project_id: "00000000-0000-4000-8000-000000000000",
@@ -2732,7 +2822,40 @@ describe("CodexAppServerAgent", () => {
       liveRuntimes: 1,
       activeTurns: 0,
       backgroundTerminals: 1,
+      activeDescendants: 1,
     });
+    expect(outstandingWorkChanged).toHaveBeenCalledWith({
+      sessionId: "chat-background",
+      projectId: "00000000-0000-4000-8000-000000000000",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      chat: undefined,
+      managerState: "completed",
+      activeDescendantThreadIds: ["thr-child-background"],
+      activeDescendants: 1,
+      backgroundTerminals: 1,
+    });
+    await expect(agent.interruptOutstanding("chat-background")).resolves.toBe(
+      true,
+    );
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "turn/interrupt",
+          params: {
+            threadId: "thr-child-background",
+            turnId: "turn-child",
+          },
+        },
+        {
+          method: "thread/backgroundTerminals/clean",
+          params: { threadId: "chat-background" },
+        },
+        {
+          method: "thread/backgroundTerminals/clean",
+          params: { threadId: "thr-child-background" },
+        },
+      ]),
+    );
     expect(proc.killed).toBe(false);
     await agent.dispose();
     expect(proc.killed).toBe(true);
@@ -4869,6 +4992,7 @@ describe("CodexAppServerAgent", () => {
         model: "gpt-5.6-sol",
         reasoning: "high",
         serviceTier: "fast",
+        maxConcurrentSubagents: 10,
       } as any,
     });
 
@@ -4885,6 +5009,9 @@ describe("CodexAppServerAgent", () => {
     ).toMatchObject({
       model: "gpt-5.6-luna",
       serviceTier: null,
+      config: {
+        "agents.max_concurrent_threads_per_session": 11,
+      },
     });
     expect(
       requests.find(({ method }) => method === "turn/start")?.params,

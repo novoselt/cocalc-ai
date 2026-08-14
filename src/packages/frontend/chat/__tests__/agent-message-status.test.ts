@@ -188,6 +188,40 @@ describe("AgentMessageStatus", () => {
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps post-turn retained work visible and stoppable", () => {
+    const onInterrupt = jest.fn();
+    render(
+      React.createElement(AgentMessageStatus, {
+        show: true,
+        generating: false,
+        durationLabel: "0:10",
+        date: 1000,
+        logRefs: {},
+        activityContext: {} as any,
+        activeDescendantThreadIds: ["child-1"],
+        backgroundTerminalProcesses: 1,
+        logEvents: [
+          {
+            type: "event",
+            seq: 1,
+            event: {
+              type: "subagent",
+              operationId: "spawn-1",
+              threadId: "child-1",
+              state: "running",
+            },
+          },
+        ] as any,
+        onInterrupt,
+      }),
+    );
+
+    expect(screen.getByText(/Manager finished/)).toBeTruthy();
+    expect(screen.getByText(/background command/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop all" }));
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+  });
+
   it("includes steer guidance in the Codex activity drawer", () => {
     render(
       React.createElement(AgentMessageStatus, {
