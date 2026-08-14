@@ -20,6 +20,7 @@ import { projectRuntimeHomeRelativePath } from "@cocalc/util/project-runtime";
 import type {
   AcpAgent,
   AcpEvaluateRequest,
+  AcpStreamEvent,
   AcpSteerRequest,
   AcpSteerResult,
   AcpStreamUsage,
@@ -72,6 +73,8 @@ const BACKGROUND_TERMINAL_POLL_MS = Math.max(
 );
 const MAX_CONCURRENT_SUBAGENTS = 16;
 const MAX_SUBAGENT_EVENT_TEXT_LENGTH = 2_000;
+
+type SubagentStreamEvent = Extract<AcpStreamEvent, { type: "subagent" }>;
 
 function boundedSubagentText(value: unknown): string | undefined {
   if (typeof value !== "string") return;
@@ -2206,6 +2209,7 @@ export class CodexAppServerAgent implements AcpAgent {
     >();
     const agentMessageTextById = new Map<string, string>();
     const emittedSubagentEventSignatures = new Set<string>();
+    const latestSubagentEvents = new Map<string, SubagentStreamEvent>();
     const completedTerminals = new Set<string>();
     const emittedFileWrites = new Set<string>();
     const emittedFileWritePaths = new Set<string>();
@@ -2502,6 +2506,82 @@ export class CodexAppServerAgent implements AcpAgent {
         });
       };
 
+      const emitSubagentEvent = async (
+        event: SubagentStreamEvent,
+      ): Promise<void> => {
+        latestSubagentEvents.set(event.threadId, event);
+        const signature = JSON.stringify(event);
+        if (emittedSubagentEventSignatures.has(signature)) return;
+        emittedSubagentEventSignatures.add(signature);
+        await stream({ type: "event", event });
+      };
+
+      const reconcileSubagentStates = async (): Promise<void> => {
+        if (latestSubagentEvents.size === 0) return;
+        let descendants: any[];
+        try {
+          descendants = await this.listDescendantThreads(runtime);
+        } catch (err) {
+          logger.warn("codex app-server: failed reconciling subagent states", {
+            threadId: actualThreadId,
+            turnId,
+            err: `${err}`,
+          });
+          return;
+        }
+        const descendantsById = new Map(
+          descendants
+            .filter((thread) => typeof thread?.id === "string")
+            .map((thread) => [thread.id, thread]),
+        );
+        for (const [threadId, previous] of latestSubagentEvents) {
+          if (previous.state !== "pending" && previous.state !== "running") {
+            continue;
+          }
+          const descendant = descendantsById.get(threadId);
+          let state: SubagentStreamEvent["state"];
+          if (descendant?.status?.type === "active") {
+            state = "running";
+          } else if (descendant?.status?.type === "systemError") {
+            state = "failed";
+          } else {
+            try {
+              const result = await runtime.client.request("thread/read", {
+                threadId,
+                includeTurns: true,
+              });
+              const turns = Array.isArray(result?.thread?.turns)
+                ? result.thread.turns
+                : [];
+              const status = `${turns[turns.length - 1]?.status ?? ""}`;
+              state =
+                status === "inProgress"
+                  ? "running"
+                  : status === "failed"
+                    ? "failed"
+                    : status === "interrupted"
+                      ? "interrupted"
+                      : status === "completed"
+                        ? "completed"
+                        : "unknown";
+            } catch {
+              state = descendant ? "unknown" : "missing";
+            }
+          }
+          if (state === previous.state) continue;
+          await emitSubagentEvent({
+            ...previous,
+            operationId: `reconcile:${turnId ?? "turn"}:${threadId}`,
+            state,
+            tool: "activity",
+            message:
+              state === "unknown"
+                ? "The subagent is no longer active; its final outcome was unavailable."
+                : previous.message,
+          });
+        }
+      };
+
       const handleItem = async (item: any): Promise<void> => {
         if (!item || typeof item !== "object") return;
         switch (item.type) {
@@ -2570,10 +2650,7 @@ export class CodexAppServerAgent implements AcpAgent {
                     ? item.reasoningEffort
                     : undefined,
               } as const;
-              const signature = JSON.stringify(event);
-              if (emittedSubagentEventSignatures.has(signature)) continue;
-              emittedSubagentEventSignatures.add(signature);
-              await stream({ type: "event", event });
+              await emitSubagentEvent(event);
             }
             break;
           }
@@ -2593,11 +2670,7 @@ export class CodexAppServerAgent implements AcpAgent {
               agentPath:
                 typeof item.agentPath === "string" ? item.agentPath : undefined,
             } as const;
-            const signature = JSON.stringify(event);
-            if (!emittedSubagentEventSignatures.has(signature)) {
-              emittedSubagentEventSignatures.add(signature);
-              await stream({ type: "event", event });
-            }
+            await emitSubagentEvent(event);
             break;
           }
           case "agentMessage":
@@ -3060,6 +3133,7 @@ export class CodexAppServerAgent implements AcpAgent {
       })();
 
       await pendingNotificationLoop;
+      await reconcileSubagentStates();
       await emitMissingTurnDiffEvents();
       if (quotaPollTimer) {
         clearInterval(quotaPollTimer);

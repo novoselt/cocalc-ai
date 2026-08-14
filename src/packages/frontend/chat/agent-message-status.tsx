@@ -623,8 +623,11 @@ export function AgentMessageStatus({
 
   const effectiveLogEvents = useMemo(
     () =>
-      reconcileAvailableSubagentEvents(logEvents, activeDescendantThreadIds),
-    [activeDescendantThreadIds, logEvents],
+      reconcileAvailableSubagentEvents(
+        logEvents,
+        activeDescendantThreadIds ?? (generating === false ? [] : undefined),
+      ),
+    [activeDescendantThreadIds, generating, logEvents],
   );
   const activeSubagents = summarizeSubagentEvents(
     effectiveLogEvents ?? [],

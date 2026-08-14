@@ -373,6 +373,18 @@ describe("CodexAppServerAgent", () => {
             });
           });
           break;
+        case "thread/list":
+          fake.sendResponse(message.id, {
+            data: [
+              {
+                id: "thr-child-1",
+                parentThreadId: "thr-shared-1",
+                status: { type: "active", activeFlags: [] },
+              },
+            ],
+            nextCursor: null,
+          });
+          break;
         default:
           if (typeof message.id === "number") {
             fake.sendResponse(message.id, {});
@@ -516,6 +528,86 @@ describe("CodexAppServerAgent", () => {
         serviceTier: null,
       }),
     ]);
+  });
+
+  it("reconciles started subagent activity when the manager turn completes", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-manager" } });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-manager" } });
+          setImmediate(() => {
+            fake.sendNotification("item/started", {
+              threadId: "thr-manager",
+              turnId: "turn-manager",
+              item: {
+                type: "subAgentActivity",
+                id: "subagent-started",
+                kind: "started",
+                agentThreadId: "thr-child",
+                agentPath: "/root/reviewer",
+              },
+            });
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-manager", status: "completed" },
+            });
+          });
+          break;
+        case "thread/list":
+          // Completed descendants may no longer be included in this listing.
+          fake.sendResponse(message.id, { data: [], nextCursor: null });
+          break;
+        case "thread/read":
+          fake.sendResponse(message.id, {
+            thread: {
+              id: "thr-child",
+              turns: [{ id: "turn-child", status: "completed" }],
+            },
+          });
+          break;
+        case "thread/backgroundTerminals/list":
+          fake.sendResponse(message.id, { data: [], nextCursor: null });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const streamPayloads: any[] = [];
+    await new CodexAppServerAgent().evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "delegate this task",
+      stream: async (payload) => {
+        if (payload) streamPayloads.push(payload);
+      },
+      config: { workingDirectory: "/tmp/project" },
+    });
+
+    expect(
+      streamPayloads
+        .filter(
+          (payload) =>
+            payload.type === "event" && payload.event?.type === "subagent",
+        )
+        .map((payload) => payload.event.state),
+    ).toEqual(["pending", "completed"]);
   });
 
   it("streams completed app-server agent messages when no delta was emitted", async () => {

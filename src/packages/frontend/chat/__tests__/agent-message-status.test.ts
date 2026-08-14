@@ -250,6 +250,37 @@ describe("AgentMessageStatus", () => {
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
+  it("does not leave old pending subagents spinning after a turn completes", () => {
+    render(
+      React.createElement(AgentMessageStatus, {
+        show: true,
+        generating: false,
+        durationLabel: "0:10",
+        date: 8_675_309,
+        logRefs: {},
+        activityContext: {} as any,
+        logEvents: [
+          {
+            type: "event",
+            seq: 1,
+            event: {
+              type: "subagent",
+              operationId: "spawn-1",
+              threadId: "child-1",
+              state: "pending",
+            },
+          },
+        ] as any,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(screen.getByText(/None working/)).toBeTruthy();
+    expect(screen.getByText("unknown")).toBeTruthy();
+    expect(screen.queryByLabelText("working")).toBeNull();
+  });
+
   it("includes steer guidance in the Codex activity drawer", () => {
     render(
       React.createElement(AgentMessageStatus, {
