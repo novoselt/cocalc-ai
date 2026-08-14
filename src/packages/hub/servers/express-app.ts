@@ -22,6 +22,7 @@ import initUpload from "./app/upload";
 import initBlobs from "./app/blobs";
 import initCustomize from "./app/customize";
 import initLegacyCommerceRedirects from "./app/legacy-commerce-redirects";
+import initLegacyPublicShareRedirect from "./app/legacy-public-share-redirect";
 import initPublicAuth from "./app/public-auth";
 import initPublicContent from "./app/public-content";
 import initPublicFeatures from "./app/public-features";
@@ -270,6 +271,7 @@ export default async function init(opts: Options): Promise<{
   initUpload(router);
   initCustomize(router, opts.isPersonal);
   initLegacyCommerceRedirects(router);
+  initLegacyPublicShareRedirect(router);
   initLanding(router);
   initPublicAuth(router);
   initPublicContent(router);

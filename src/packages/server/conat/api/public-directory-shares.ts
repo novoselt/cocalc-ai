@@ -17,6 +17,8 @@ import type {
   ListPublicDirectorySharesResponse,
   ListProjectPublicDirectorySharesOptions,
   PublicDirectoryShareSummary,
+  ResolveLegacyPublicDirectorySharePathOptions,
+  ResolveLegacyPublicDirectorySharePathResponse,
   ResolvePublicDirectoryShareOptions,
   ResolvedPublicDirectoryShare,
   UpdatePublicDirectoryShareOptions,
@@ -100,6 +102,34 @@ async function resolvePublicDirectoryShareWithBay(
     }
   }
   throw lastNotFound ?? Error("public directory share not found");
+}
+
+export async function resolveLegacyPublicDirectorySharePath(
+  opts: ResolveLegacyPublicDirectorySharePathOptions,
+): Promise<ResolveLegacyPublicDirectorySharePathResponse | null> {
+  let lastError: unknown;
+  for (const bay_id of await publicDirectoryShareSearchBayIds()) {
+    try {
+      const resolved = await callPublicDirectoryShareBay({
+        bay_id,
+        local: async () =>
+          await publicDirectoryShares.resolveLegacyPublicDirectorySharePath(
+            opts,
+          ),
+        remote: async (client) =>
+          await client.publicDirectoryShareResolveLegacyPath(opts),
+      });
+      if (resolved != null) return resolved;
+    } catch (err) {
+      lastError = err;
+      log.warn("legacy public share path lookup failed on bay", {
+        bay_id,
+        err: `${(err as Error | undefined)?.message ?? err}`,
+      });
+    }
+  }
+  if (lastError != null) throw lastError;
+  return null;
 }
 
 async function projectPublicDirectoryShareBay(
