@@ -1719,34 +1719,62 @@ describe("PublicAuthApp", () => {
   });
 
   it("prefills an anonymous CLI login from its email hint", async () => {
-    mockedPostAuthApi.mockResolvedValueOnce({
-      challenge_id: "challenge-1",
-      kind: "login",
-      account_id: null,
-      email_address: null,
-      display_name: null,
-      email_hint: "hint@example.com",
-      current_account_id: null,
-      current_email_address: null,
-      current_display_name: null,
-      current_matches_account: null,
-      state: "pending",
-      expires_at: "2026-05-08T18:00:00.000Z",
-    } as any);
-    mockedApi.mockResolvedValue({
-      email: "hint@example.com",
-      password_allowed: true,
-      sso_required: false,
-    });
+    window.history.replaceState({}, "", "/auth/cli-login/challenge-1");
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        challenge_id: "challenge-1",
+        kind: "login",
+        account_id: null,
+        email_address: null,
+        display_name: null,
+        email_hint: "hint@example.com",
+        current_account_id: null,
+        current_email_address: null,
+        current_display_name: null,
+        current_matches_account: null,
+        state: "pending",
+        expires_at: "2026-05-08T18:00:00.000Z",
+      } as any)
+      .mockResolvedValueOnce({
+        challenge_id: "email-challenge-1",
+        state: "pending",
+        masked_email: "hi…@example.com",
+        expires_at: "2026-05-08T18:00:00.000Z",
+        resend_available_at: "2026-05-08T17:55:30.000Z",
+      } as any);
 
     render(
       <PublicAuthApp
-        config={config({ is_authenticated: false })}
+        config={config({
+          email_authentication_mode: "email_first",
+          is_authenticated: false,
+        })}
         initialRoute={{ challengeId: "challenge-1", kind: "auth-cli-login" }}
       />,
     );
 
     expect(await screen.findByDisplayValue("hint@example.com")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Continue with email" }),
+    ).not.toBeNull();
+    expect(screen.queryByPlaceholderText("Password")).toBeNull();
+    expect(
+      screen.queryByText(/CoCalc.com accounts do not sign in directly/),
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+    await waitFor(() =>
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "auth/email/start",
+        body: {
+          email: "hint@example.com",
+          target: "/auth/cli-login/challenge-1",
+          terms: true,
+        },
+      }),
+    );
   });
 
   it("lets the current browser account approve an unbound CLI login challenge", async () => {

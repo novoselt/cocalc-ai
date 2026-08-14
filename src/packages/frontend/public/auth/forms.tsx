@@ -886,6 +886,12 @@ export function PublicEmailFirstForm({
   const { termsUrl, privacyUrl } = policyUrls(publicConfig);
 
   useEffect(() => {
+    const value = validInitialEmail(initialEmail);
+    if (!value) return;
+    setEmail((current) => current || value);
+  }, [initialEmail]);
+
+  useEffect(() => {
     if (view !== "sign-up") {
       setRequiresToken(false);
       return;

@@ -29,6 +29,7 @@ import {
   PublicVerifyEmailView,
 } from "./completion-views";
 import {
+  type AuthNavigate,
   type AuthNavigateOptions,
   PublicEmailAuthLinkView,
   PublicEmailFirstForm,
@@ -154,11 +155,20 @@ function cardWidthForRoute(route: PublicAuthRoute): string | undefined {
 function routeForcesCookieConsent(
   route: PublicAuthRoute,
   emailAuthenticationMode?: string,
+  isAuthenticated?: boolean,
 ): boolean {
+  if (route.kind === "auth-form") {
+    return (
+      route.view === "sign-up" ||
+      (route.view === "sign-in" && emailAuthenticationMode === "email_first")
+    );
+  }
   return (
-    route.kind === "auth-form" &&
-    (route.view === "sign-up" ||
-      (route.view === "sign-in" && emailAuthenticationMode === "email_first"))
+    !isAuthenticated &&
+    emailAuthenticationMode === "email_first" &&
+    (route.kind === "auth-cli-login" ||
+      route.kind === "auth-cli-elevate" ||
+      route.kind === "project-invite")
   );
 }
 
@@ -238,6 +248,41 @@ function SignedInSignUpView({
   );
 }
 
+function ConfiguredSignInForm({
+  cookieBannerEnabled,
+  emailAuthenticationMode,
+  initialEmail,
+  initialSSOStrategies,
+  onNavigate,
+  redirectToPath,
+}: {
+  cookieBannerEnabled: boolean;
+  emailAuthenticationMode?: string;
+  initialEmail?: string;
+  initialSSOStrategies?: PublicSSOStrategy[];
+  onNavigate: AuthNavigate;
+  redirectToPath?: string | (() => string);
+}) {
+  return emailAuthenticationMode === "email_first" ? (
+    <PublicEmailFirstForm
+      cookieBannerEnabled={cookieBannerEnabled}
+      initialEmail={initialEmail}
+      initialSSOStrategies={initialSSOStrategies}
+      onNavigate={onNavigate}
+      redirectToPath={redirectToPath}
+      view="sign-in"
+    />
+  ) : (
+    <PublicSignInForm
+      cookieBannerEnabled={cookieBannerEnabled}
+      initialEmail={initialEmail}
+      initialSSOStrategies={initialSSOStrategies}
+      onNavigate={onNavigate}
+      redirectToPath={redirectToPath}
+    />
+  );
+}
+
 export { getPublicAuthRouteFromPath };
 
 export default function PublicAuthApp({
@@ -313,7 +358,11 @@ export default function PublicAuthApp({
   useEffect(() => {
     if (!resolvedConfig?.cookie_banner_enabled) return;
     if (
-      !routeForcesCookieConsent(route, resolvedConfig.email_authentication_mode)
+      !routeForcesCookieConsent(
+        route,
+        resolvedConfig.email_authentication_mode,
+        resolvedConfig.is_authenticated,
+      )
     ) {
       return;
     }
@@ -321,6 +370,7 @@ export default function PublicAuthApp({
   }, [
     resolvedConfig?.cookie_banner_enabled,
     resolvedConfig?.email_authentication_mode,
+    resolvedConfig?.is_authenticated,
     route,
   ]);
 
@@ -351,24 +401,13 @@ export default function PublicAuthApp({
         }
       >
         {route.kind === "auth-form" && route.view === "sign-in" && (
-          <>
-            {resolvedConfig?.email_authentication_mode === "email_first" ? (
-              <PublicEmailFirstForm
-                cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
-                initialSSOStrategies={ssoStrategies}
-                onNavigate={onNavigate}
-                redirectToPath={redirectToPath}
-                view="sign-in"
-              />
-            ) : (
-              <PublicSignInForm
-                cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
-                initialSSOStrategies={ssoStrategies}
-                onNavigate={onNavigate}
-                redirectToPath={redirectToPath}
-              />
-            )}
-          </>
+          <ConfiguredSignInForm
+            cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+            emailAuthenticationMode={resolvedConfig?.email_authentication_mode}
+            initialSSOStrategies={ssoStrategies}
+            onNavigate={onNavigate}
+            redirectToPath={redirectToPath}
+          />
         )}
         {route.kind === "auth-second-factor" && (
           <PublicSignInForm
@@ -447,8 +486,11 @@ export default function PublicAuthApp({
               onEmailHintChange={setCliEmailHint}
             />
             {!resolvedConfig?.is_authenticated ? (
-              <PublicSignInForm
+              <ConfiguredSignInForm
                 cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+                emailAuthenticationMode={
+                  resolvedConfig?.email_authentication_mode
+                }
                 initialEmail={cliEmailHint}
                 initialSSOStrategies={ssoStrategies}
                 onNavigate={onNavigate}
@@ -466,8 +508,11 @@ export default function PublicAuthApp({
               isAuthenticated={!!resolvedConfig?.is_authenticated}
             />
             {!resolvedConfig?.is_authenticated ? (
-              <PublicSignInForm
+              <ConfiguredSignInForm
                 cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+                emailAuthenticationMode={
+                  resolvedConfig?.email_authentication_mode
+                }
                 initialSSOStrategies={ssoStrategies}
                 onNavigate={onNavigate}
                 redirectToPath={() =>
@@ -499,8 +544,11 @@ export default function PublicAuthApp({
               token={route.token}
             />
             {!resolvedConfig?.is_authenticated ? (
-              <PublicSignInForm
+              <ConfiguredSignInForm
                 cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+                emailAuthenticationMode={
+                  resolvedConfig?.email_authentication_mode
+                }
                 initialSSOStrategies={ssoStrategies}
                 onNavigate={onNavigate}
                 redirectToPath={() =>
