@@ -164,6 +164,33 @@ describe("host runtime fleet rollout planning", () => {
     ).toBe(false);
   });
 
+  test("accepts the desired ACP worker while an old worker drains", () => {
+    expect(
+      __test__.runtimeObservationIsStable({
+        version: "artifact-v2",
+        components: ["acp-worker"],
+        status: {
+          host_id: "host-a",
+          configured: [],
+          effective: [],
+          observed_components: [
+            {
+              component: "acp-worker",
+              artifact: "project-host",
+              upgrade_policy: "drain_then_replace",
+              runtime_state: "running",
+              version_state: "mixed",
+              desired_version: "build-v2",
+              running_versions: ["build-v1", "build-v2"],
+              running_pids: [123, 456],
+            },
+          ],
+          observed_targets: [],
+        },
+      }),
+    ).toBe(true);
+  });
+
   test("accepts a staged auxiliary router only when it runs the requested artifact", () => {
     expect(
       __test__.runtimeObservationIsStable({
@@ -213,6 +240,31 @@ describe("host runtime fleet rollout planning", () => {
               version_state: "aligned",
               running_versions: ["build-v2"],
               running_pids: [456],
+            },
+          ],
+        })),
+      }),
+    ).toEqual({ "acp-worker": "build-v2" });
+  });
+
+  test("promotes the desired ACP identity while older workers drain", () => {
+    expect(
+      __test__.componentRuntimeVersionsForPromotion({
+        components: ["acp-worker"],
+        statuses: ["host-a", "host-b"].map((host_id) => ({
+          host_id,
+          configured: [],
+          effective: [],
+          observed_components: [
+            {
+              component: "acp-worker",
+              artifact: "project-host",
+              upgrade_policy: "drain_then_replace",
+              runtime_state: "running",
+              version_state: "mixed",
+              desired_version: "build-v2",
+              running_versions: ["build-v1", "build-v2"],
+              running_pids: [456, 789],
             },
           ],
         })),

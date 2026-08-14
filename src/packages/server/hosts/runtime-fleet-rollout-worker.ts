@@ -145,7 +145,17 @@ function runtimeObservationIsStable({
   const componentsStable = Array.from(requiredComponents).every((component) => {
     const observed = observedComponents.get(component);
     if (observed?.runtime_state !== "running") return false;
-    if (component === "project-host" || component === "acp-worker") {
+    if (component === "acp-worker") {
+      const desiredVersion = `${observed.desired_version ?? ""}`.trim();
+      const runningVersions = new Set(observed.running_versions ?? []);
+      return (
+        observed.version_state === "aligned" ||
+        (observed.upgrade_policy === "drain_then_replace" &&
+          !!desiredVersion &&
+          runningVersions.has(desiredVersion))
+      );
+    }
+    if (component === "project-host") {
       return observed.version_state === "aligned";
     }
     const runningVersions = [...new Set(observed.running_versions ?? [])];
@@ -182,13 +192,22 @@ function componentRuntimeVersionsForPromotion({
       const observed = (status.observed_components ?? []).find(
         (entry) => entry.component === component,
       );
-      const runningVersions = [
+      let runningVersions = [
         ...new Set(
           (observed?.running_versions ?? [])
             .map((version) => `${version ?? ""}`.trim())
             .filter(Boolean),
         ),
       ];
+      const desiredVersion = `${observed?.desired_version ?? ""}`.trim();
+      if (
+        component === "acp-worker" &&
+        observed?.upgrade_policy === "drain_then_replace" &&
+        desiredVersion &&
+        runningVersions.includes(desiredVersion)
+      ) {
+        runningVersions = [desiredVersion];
+      }
       if (runningVersions.length !== 1) {
         throw new Error(
           `cannot promote ${component}; host ${status.host_id} reports ${runningVersions.length || "no"} runtime versions`,
