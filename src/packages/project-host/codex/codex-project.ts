@@ -481,24 +481,6 @@ export type ProjectCliTokenLease = {
   close: () => Promise<void>;
 };
 
-async function chownProjectRuntimePath(path: string): Promise<void> {
-  try {
-    await fs.chown(
-      path,
-      DEFAULT_PROJECT_RUNTIME_UID,
-      DEFAULT_PROJECT_RUNTIME_GID,
-    );
-  } catch (err) {
-    const stat = await fs.stat(path);
-    if (
-      stat.uid !== DEFAULT_PROJECT_RUNTIME_UID ||
-      stat.gid !== DEFAULT_PROJECT_RUNTIME_GID
-    ) {
-      throw err;
-    }
-  }
-}
-
 export async function createProjectCliTokenLease({
   projectId,
   accountId,
@@ -552,14 +534,12 @@ export async function createProjectCliTokenLease({
 
   await fs.mkdir(hostDir, { recursive: true, mode: 0o700 });
   await fs.chmod(hostDir, 0o700);
-  await chownProjectRuntimePath(hostDir);
 
   const writeToken = async (token: string): Promise<void> => {
     const tempPath = join(hostDir, `.token-${randomUUID()}.tmp`);
     try {
       await fs.writeFile(tempPath, `${token}\n`, { mode: 0o600 });
       await fs.chmod(tempPath, 0o600);
-      await chownProjectRuntimePath(tempPath);
       await fs.rename(tempPath, hostPath);
     } catch (err) {
       await fs.rm(tempPath, { force: true });

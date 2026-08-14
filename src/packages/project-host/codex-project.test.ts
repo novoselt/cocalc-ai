@@ -434,6 +434,37 @@ describe("initCodexProjectRunner", () => {
     });
   });
 
+  it("keeps token lease ownership with the rootless Podman host user", async () => {
+    const scratch = await mkTempDir("codex-project-scratch-ownership-");
+    const chown = jest
+      .spyOn(fs, "chown")
+      .mockRejectedValue(
+        Object.assign(new Error("chown denied"), { code: "EPERM" }),
+      );
+    try {
+      const { createProjectCliTokenLease } =
+        await import("./codex/codex-project");
+      const lease = await createProjectCliTokenLease({
+        projectId: "6bc2c387-4c80-4a79-aa68-65d8e68a6a52",
+        accountId: "00000000-0000-4000-8000-000000000001",
+        currentEnv: {},
+        home: scratch,
+        scratch,
+        refreshMs: 60_000,
+      });
+
+      expect(lease).toBeDefined();
+      expect(chown).not.toHaveBeenCalled();
+      const directory = await fs.stat(path.dirname(lease!.hostPath));
+      const token = await fs.stat(lease!.hostPath);
+      expect(directory.mode & 0o777).toBe(0o700);
+      expect(token.mode & 0o777).toBe(0o600);
+      await lease!.close();
+    } finally {
+      chown.mockRestore();
+    }
+  });
+
   it("keeps a turn identity across restarts and rotates it for a new turn", async () => {
     const scratch = await mkTempDir("codex-project-turn-token-");
     hubApi.hosts.issueProjectHostAgentAuthToken
