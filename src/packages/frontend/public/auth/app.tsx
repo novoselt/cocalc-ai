@@ -252,6 +252,7 @@ export default function PublicAuthApp({
     useState<AuthNavigateOptions>({});
   const [signupVerificationPending, setSignupVerificationPending] =
     useState(false);
+  const [cliEmailHint, setCliEmailHint] = useState<string>();
   const pendingAuthNavigateOptions = useRef<AuthNavigateOptions | undefined>(
     undefined,
   );
@@ -263,6 +264,7 @@ export default function PublicAuthApp({
   useEffect(() => {
     setRoute(initialRoute);
     setSignupVerificationPending(false);
+    setCliEmailHint(undefined);
     if (pendingAuthNavigateOptions.current) {
       setAuthNavigateOptions(pendingAuthNavigateOptions.current);
       pendingAuthNavigateOptions.current = undefined;
@@ -442,10 +444,12 @@ export default function PublicAuthApp({
             <PublicCliLoginApprovalView
               challengeId={route.challengeId}
               isAuthenticated={!!resolvedConfig?.is_authenticated}
+              onEmailHintChange={setCliEmailHint}
             />
             {!resolvedConfig?.is_authenticated ? (
               <PublicSignInForm
                 cookieBannerEnabled={!!resolvedConfig?.cookie_banner_enabled}
+                initialEmail={cliEmailHint}
                 initialSSOStrategies={ssoStrategies}
                 onNavigate={onNavigate}
                 redirectToPath={() =>

@@ -245,9 +245,11 @@ function InlineActionLink(props: {
 export function PublicCliLoginApprovalView({
   challengeId,
   isAuthenticated,
+  onEmailHintChange,
 }: {
   challengeId: string;
   isAuthenticated: boolean;
+  onEmailHintChange?: (email: string | undefined) => void;
 }) {
   const [info, setInfo] = useState<ChallengeInfo | null>(null);
   const [approving, setApproving] = useState(false);
@@ -263,6 +265,7 @@ export function PublicCliLoginApprovalView({
 
   useEffect(() => {
     let cancelled = false;
+    onEmailHintChange?.(undefined);
     async function load() {
       try {
         const next = await postAuthApi<ChallengeInfo>({
@@ -271,6 +274,8 @@ export function PublicCliLoginApprovalView({
         });
         if (!cancelled) {
           setInfo(next);
+          const emailHint = `${next.email_hint ?? ""}`.trim();
+          onEmailHintChange?.(emailHint || undefined);
         }
       } catch (err) {
         if (!cancelled) {
@@ -282,7 +287,7 @@ export function PublicCliLoginApprovalView({
     return () => {
       cancelled = true;
     };
-  }, [challengeId]);
+  }, [challengeId, onEmailHintChange]);
 
   async function approve() {
     setApproving(true);

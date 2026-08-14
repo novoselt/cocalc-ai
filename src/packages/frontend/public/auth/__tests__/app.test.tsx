@@ -1278,6 +1278,9 @@ describe("PublicAuthApp", () => {
     expect(
       await screen.findByText(/password for 'ada@example.com' is incorrect/),
     ).not.toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "password for 'ada@example.com' is incorrect",
+    );
     expect(
       screen.getByRole("heading", { name: "Sign in to CoCalc" }),
     ).not.toBeNull();
@@ -1713,6 +1716,37 @@ describe("PublicAuthApp", () => {
       expect(mockedSignOutAuthSession).toHaveBeenCalledWith(),
     );
     consoleError.mockRestore();
+  });
+
+  it("prefills an anonymous CLI login from its email hint", async () => {
+    mockedPostAuthApi.mockResolvedValueOnce({
+      challenge_id: "challenge-1",
+      kind: "login",
+      account_id: null,
+      email_address: null,
+      display_name: null,
+      email_hint: "hint@example.com",
+      current_account_id: null,
+      current_email_address: null,
+      current_display_name: null,
+      current_matches_account: null,
+      state: "pending",
+      expires_at: "2026-05-08T18:00:00.000Z",
+    } as any);
+    mockedApi.mockResolvedValue({
+      email: "hint@example.com",
+      password_allowed: true,
+      sso_required: false,
+    });
+
+    render(
+      <PublicAuthApp
+        config={config({ is_authenticated: false })}
+        initialRoute={{ challengeId: "challenge-1", kind: "auth-cli-login" }}
+      />,
+    );
+
+    expect(await screen.findByDisplayValue("hint@example.com")).not.toBeNull();
   });
 
   it("lets the current browser account approve an unbound CLI login challenge", async () => {
