@@ -5,6 +5,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import getPool from "@cocalc/database/pool";
+import { COMPUTE_VM_V2_SQL } from "./contract";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
 
 const pool = () => getPool();
@@ -65,6 +66,7 @@ export async function insertComputeVm(
     const existing = await client.query<ComputeVmRow>(
       `SELECT * FROM compute_vms
        WHERE owner_account_id=$1 AND idempotency_key=$2
+         AND ${COMPUTE_VM_V2_SQL}
        ORDER BY created_at DESC LIMIT 1
        FOR UPDATE`,
       [row.owner_account_id, row.idempotency_key],
@@ -81,11 +83,13 @@ export async function insertComputeVm(
       );
       const { rows: projectRows } = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM compute_vms
-         WHERE project_id=$1 AND deleted_at IS NULL`,
+         WHERE project_id=$1 AND deleted_at IS NULL
+           AND ${COMPUTE_VM_V2_SQL}`,
         [row.project_id],
       );
       const { rows: totalRows } = await client.query<{ count: string }>(
-        "SELECT COUNT(*)::text AS count FROM compute_vms WHERE deleted_at IS NULL",
+        `SELECT COUNT(*)::text AS count FROM compute_vms
+         WHERE deleted_at IS NULL AND ${COMPUTE_VM_V2_SQL}`,
       );
       const projectCount = Number(projectRows[0]?.count ?? 0);
       const totalCount = Number(totalRows[0]?.count ?? 0);
@@ -103,6 +107,7 @@ export async function insertComputeVm(
     const collision = await client.query(
       `SELECT id FROM compute_vms
        WHERE owner_account_id=$1 AND name=$2 AND deleted_at IS NULL
+         AND ${COMPUTE_VM_V2_SQL}
        LIMIT 1 FOR UPDATE`,
       [row.owner_account_id, row.name],
     );
@@ -245,6 +250,7 @@ export async function resolveOwnedComputeVm(opts: {
     `SELECT * FROM compute_vms
      WHERE owner_account_id=$1
        AND (id::text=$2 OR name=$2)
+       AND ${COMPUTE_VM_V2_SQL}
        ${deletedClause}
      ORDER BY created_at DESC LIMIT 1`,
     [opts.owner_account_id, opts.id_or_name],
@@ -262,6 +268,7 @@ export async function resolveProjectComputeVm(opts: {
     `SELECT * FROM compute_vms
      WHERE project_id=$1
        AND (id::text=$2 OR name=$2)
+       AND ${COMPUTE_VM_V2_SQL}
        ${deletedClause}
      ORDER BY created_at DESC LIMIT 2`,
     [opts.project_id, opts.id_or_name],
@@ -289,6 +296,7 @@ export async function listOwnedComputeVms(opts: {
   const { rows } = await pool().query<ComputeVmRow>(
     `SELECT * FROM compute_vms
      WHERE owner_account_id=$1 ${projectClause} ${deletedClause}
+       AND ${COMPUTE_VM_V2_SQL}
      ORDER BY created_at DESC`,
     params,
   );
@@ -303,6 +311,7 @@ export async function listProjectComputeVms(opts: {
   const { rows } = await pool().query<ComputeVmRow>(
     `SELECT * FROM compute_vms
      WHERE project_id=$1 ${deletedClause}
+       AND ${COMPUTE_VM_V2_SQL}
      ORDER BY created_at DESC`,
     [opts.project_id],
   );
@@ -314,6 +323,7 @@ export async function listComputeVmsForBillingEnforcement() {
     `SELECT * FROM compute_vms
       WHERE deleted_at IS NULL
         AND desired_state <> 'deleted'
+        AND ${COMPUTE_VM_V2_SQL}
       ORDER BY owner_account_id, created_at`,
   );
   return rows;
@@ -331,8 +341,11 @@ export async function listComputeVmsForInventory() {
 export async function listComputeVmsForEgressMetering() {
   const { rows } = await pool().query<ComputeVmRow>(
     `SELECT * FROM compute_vms
-      WHERE deleted_at IS NULL
-         OR COALESCE((metadata#>>'{billing,egress,finalized}')::boolean, FALSE) IS NOT TRUE
+      WHERE (
+          deleted_at IS NULL
+          OR COALESCE((metadata#>>'{billing,egress,finalized}')::boolean, FALSE) IS NOT TRUE
+        )
+        AND ${COMPUTE_VM_V2_SQL}
       ORDER BY created_at`,
   );
   return rows;
@@ -677,6 +690,7 @@ export async function enqueueExpiredComputeVms(limit = 100) {
        SELECT id FROM compute_vms
        WHERE deleted_at IS NULL AND expires_at IS NOT NULL
          AND expires_at <= NOW()
+         AND ${COMPUTE_VM_V2_SQL}
        ORDER BY expires_at LIMIT $1 FOR UPDATE SKIP LOCKED
      )
      RETURNING id`,
@@ -700,6 +714,7 @@ export async function enqueueComputeEmergencyStops(limit = 100) {
      WHERE id IN (
        SELECT id FROM compute_vms
        WHERE deleted_at IS NULL AND desired_state='running'
+         AND ${COMPUTE_VM_V2_SQL}
        ORDER BY updated_at ASC LIMIT $1 FOR UPDATE SKIP LOCKED
      )
      RETURNING id`,
@@ -719,6 +734,7 @@ export async function enqueueComputeReconciliation(limit = 100) {
   const { rows } = await pool().query<{ id: string }>(
     `SELECT id FROM compute_vms
      WHERE deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
+       AND ${COMPUTE_VM_V2_SQL}
      ORDER BY updated_at ASC LIMIT $1`,
     [limit],
   );

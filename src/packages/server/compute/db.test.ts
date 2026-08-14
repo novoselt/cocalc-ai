@@ -16,6 +16,9 @@ import {
   finishComputeWork,
   insertComputeVm,
   getComputeVmById,
+  listComputeVmsForBillingEnforcement,
+  listComputeVmsForEgressMetering,
+  listComputeVmsForInventory,
   listOwnedComputeVms,
   resolveProjectComputeVm,
   updateComputeVmEgressMetadata,
@@ -25,6 +28,8 @@ import type { ComputeVolumeRow } from "./types";
 import {
   getComputeVolumeById,
   insertComputeVolume,
+  enqueueComputeVolumeReconciliation,
+  listComputeVolumesForInventory,
   listOwnedComputeVolumes,
 } from "./volume-db";
 
@@ -148,6 +153,49 @@ function volumeInput(
 }
 
 describe("compute VM durable state", () => {
+  it("quarantines pre-v2 rows while retaining them for provider inventory", async () => {
+    const vm = await insertComputeVm(vmInput());
+    const volume = await insertComputeVolume(
+      volumeInput({
+        owner_account_id: vm.owner_account_id,
+        project_id: vm.project_id,
+        attached_vm_id: vm.id,
+      }),
+      10,
+    );
+    await getPool().query(
+      `UPDATE compute_vms
+       SET public_hostname=NULL, bootstrap_revision=NULL, funding_mode=NULL,
+           expires_at=NOW() - interval '1 minute'
+       WHERE id=$1`,
+      [vm.id],
+    );
+    await getPool().query(
+      `UPDATE compute_volumes SET role=NULL, funding_mode=NULL WHERE id=$1`,
+      [volume.id],
+    );
+
+    await expect(
+      listOwnedComputeVms({ owner_account_id: vm.owner_account_id }),
+    ).resolves.toEqual([]);
+    await expect(
+      listOwnedComputeVolumes({ owner_account_id: vm.owner_account_id }),
+    ).resolves.toEqual([]);
+    await expect(listComputeVmsForBillingEnforcement()).resolves.toEqual([]);
+    await expect(listComputeVmsForEgressMetering()).resolves.toEqual([]);
+    await expect(enqueueExpiredComputeVms()).resolves.toBe(0);
+    await expect(enqueueComputeEmergencyStops()).resolves.toBe(0);
+    await expect(enqueueComputeReconciliation()).resolves.toBe(0);
+    await expect(enqueueComputeVolumeReconciliation()).resolves.toBe(0);
+
+    await expect(listComputeVmsForInventory()).resolves.toEqual([
+      expect.objectContaining({ id: vm.id }),
+    ]);
+    await expect(listComputeVolumesForInventory()).resolves.toEqual([
+      expect.objectContaining({ id: volume.id }),
+    ]);
+  });
+
   it("allocates a random hostname and retries a collision", async () => {
     const labels = [
       "vm-11111111111111111111111111111111",

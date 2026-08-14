@@ -62,6 +62,7 @@ import {
   stopProviderComputeVm,
   stopOrphanProviderComputeInstance,
 } from "./provider";
+import { isComputeVmV2, isComputeVolumeV2 } from "./contract";
 import {
   deleteHostDns,
   ensureUnproxiedAddressDns,
@@ -634,6 +635,7 @@ async function enforceComputeVolumeFunding() {
     Awaited<ReturnType<typeof getDedicatedHostPolicySnapshotForAccount>>
   >();
   for (const volume of volumes) {
+    if (!isComputeVolumeV2(volume)) continue;
     const fundingMode = volume.funding_mode;
     if (fundingMode === "site-funded") {
       if (
@@ -887,6 +889,7 @@ async function reconcileComputeProviderInventory() {
       ),
   );
   for (const vm of vms) {
+    if (!isComputeVmV2(vm)) continue;
     const instanceMissing =
       !providerInstances.has(
         providerKey(vm.provider, vm.provider_instance_id),
@@ -905,6 +908,7 @@ async function reconcileComputeProviderInventory() {
     }
   }
   for (const volume of volumes) {
+    if (!isComputeVolumeV2(volume)) continue;
     if (
       providerInventory.disks_observed &&
       !providerDisks.has(
@@ -1083,7 +1087,7 @@ async function reconcileComputeProviderInventory() {
   try {
     const managedDnsRecords = await listManagedVmDnsRecords();
     const expectedHostnames = new Set(
-      vms.map(({ public_hostname }) => public_hostname),
+      vms.filter(isComputeVmV2).map(({ public_hostname }) => public_hostname),
     );
     const orphanDnsRecords = managedDnsRecords.filter(
       ({ name }) => !expectedHostnames.has(name),
@@ -2163,7 +2167,7 @@ async function reconcile(vm: ComputeVmRow) {
 async function handleWork(row: ComputeWorkRow) {
   if (row.resource_kind === "volume") {
     const volume = await getComputeVolumeById(row.resource_id);
-    if (!volume) return;
+    if (!isComputeVolumeV2(volume)) return;
     switch (row.action) {
       case "provision_volume":
         return await provisionVolume(volume);
@@ -2182,7 +2186,7 @@ async function handleWork(row: ComputeWorkRow) {
     }
   }
   const vm = await getComputeVmById(row.resource_id);
-  if (!vm) return;
+  if (!isComputeVmV2(vm)) return;
   switch (row.action) {
     case "provision":
       return await provision(vm);
