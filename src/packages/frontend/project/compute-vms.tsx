@@ -176,6 +176,11 @@ function pricingLabel(value: string): string {
   return value === "spot" ? "Spot" : "Standard";
 }
 
+function egressRateLabel(vm: ComputeVm): string {
+  if (vm.provider === "nebius") return "Egress $0/GB";
+  return `Egress $0.10/GB${vm.funding_mode === "site-funded" ? " · paid by site" : ""}`;
+}
+
 const VM_MONTHLY_HOURS = 730;
 
 function formatVmPrice(value: number, suffix: "hr" | "mo"): string {
@@ -362,6 +367,7 @@ function VmCreateModal({
   const [sortRegionsByPrice, setSortRegionsByPrice] = useState(false);
   const [sortMachinesByPrice, setSortMachinesByPrice] = useState(false);
   const [usePersistentHomeVolume, setUsePersistentHomeVolume] = useState(false);
+  const [confirmedDraft, setConfirmedDraft] = useState<VmDraft>();
   const [sshKeyError, setSshKeyError] = useState<string>();
   const pricingSettings = useHostPricingSettings();
 
@@ -374,6 +380,7 @@ function VmCreateModal({
     setUsePersistentHomeVolume(
       initial.create_home_volume === true || !!initial.home_volume,
     );
+    setConfirmedDraft(undefined);
     setSshKeyError(undefined);
   }, [form, initial, open]);
 
@@ -494,6 +501,12 @@ function VmCreateModal({
       ? ((standardFallbackPrice ?? price)!.usd_per_hour * draft.ttl_minutes) /
         60
       : undefined;
+  const minimumBootDiskGb =
+    operatingSystem === "windows"
+      ? 50
+      : provider === "gcp" && draft.machine_type
+        ? gcpMinimumBootDiskGb(draft.machine_type)
+        : 10;
 
   const patchDraft = (patch: Partial<VmDraft>) => {
     form.setFieldsValue(patch);
@@ -539,10 +552,10 @@ function VmCreateModal({
       : values.ssh_public_key,
   });
 
-  const submit = () =>
+  const reviewCreate = () =>
     void form
       .validateFields()
-      .then((values) => onCreate(withResolvedSshKey(values)));
+      .then((values) => setConfirmedDraft(withResolvedSshKey(values)));
 
   return (
     <Modal
@@ -564,14 +577,65 @@ function VmCreateModal({
             <Button disabled={saving} onClick={onCancel}>
               Cancel
             </Button>
-            <Button
-              type="primary"
-              loading={saving}
-              disabled={saving || (draft.create_home_volume && !newVolumePrice)}
-              onClick={submit}
+            <Popconfirm
+              open={confirmedDraft != null}
+              title={`Create ${confirmedDraft?.name ?? "this VM"}?`}
+              description={
+                confirmedDraft && (
+                  <Space direction="vertical" size={2}>
+                    <Text>
+                      {confirmedDraft.operating_system === "windows"
+                        ? "Windows Server 2022"
+                        : "Ubuntu 24.04"}{" "}
+                      · {confirmedDraft.machine_type} ·{" "}
+                      {confirmedDraft.zone ?? confirmedDraft.region}
+                    </Text>
+                    <Text strong>
+                      Boot disk: {confirmedDraft.boot_disk_gb} GB
+                    </Text>
+                    <Text>
+                      Capacity: {pricingLabel(confirmedDraft.pricing_model)}
+                      {price
+                        ? ` · ${price.hourly_label} (${price.monthly_label})`
+                        : " · price unavailable"}
+                    </Text>
+                    <Text>
+                      Home:{" "}
+                      {confirmedDraft.create_home_volume
+                        ? `new ${confirmedDraft.new_home_volume_size_gb} GB persistent volume`
+                        : confirmedDraft.home_volume
+                          ? `persistent volume ${confirmedDraft.home_volume}`
+                          : "boot disk"}
+                    </Text>
+                    <Text type="secondary">
+                      The boot disk size cannot currently be changed after
+                      creation.
+                    </Text>
+                  </Space>
+                )
+              }
+              okText="Create VM"
+              cancelText="Review"
+              okButtonProps={{ loading: saving }}
+              onConfirm={() => {
+                if (!confirmedDraft) return;
+                const values = confirmedDraft;
+                setConfirmedDraft(undefined);
+                void onCreate(values);
+              }}
+              onCancel={() => setConfirmedDraft(undefined)}
             >
-              Create VM
-            </Button>
+              <Button
+                type="primary"
+                loading={saving}
+                disabled={
+                  saving || (draft.create_home_volume && !newVolumePrice)
+                }
+                onClick={reviewCreate}
+              >
+                Create VM
+              </Button>
+            </Popconfirm>
           </Flex>
         </Flex>
       }
@@ -960,18 +1024,27 @@ function VmCreateModal({
           <Form.Item
             name="boot_disk_gb"
             label="Boot disk (GB)"
-            rules={[{ required: true }]}
+            rules={[
+              { required: true },
+              {
+                validator: async (_rule, value) => {
+                  const size = Number(value);
+                  if (
+                    !Number.isInteger(size) ||
+                    size < minimumBootDiskGb ||
+                    size > catalog.limits.max_boot_disk_gb
+                  ) {
+                    throw new Error(
+                      `Enter a whole number from ${minimumBootDiskGb} to ${catalog.limits.max_boot_disk_gb} GB.`,
+                    );
+                  }
+                },
+              },
+            ]}
             style={{ flex: "0 1 150px" }}
           >
             <InputNumber
-              min={
-                operatingSystem === "windows"
-                  ? 50
-                  : provider === "gcp" && draft.machine_type
-                    ? gcpMinimumBootDiskGb(draft.machine_type)
-                    : 10
-              }
-              max={catalog.limits.max_boot_disk_gb}
+              placeholder={`${minimumBootDiskGb}-${catalog.limits.max_boot_disk_gb}`}
             />
           </Form.Item>
           <Text strong style={{ flex: "1 1 300px", marginTop: 31 }}>
@@ -980,8 +1053,8 @@ function VmCreateModal({
         </Flex>
         {operatingSystem === "linux" && (
           <>
-            <Form.Item name="create_home_volume" hidden>
-              <Input />
+            <Form.Item name="create_home_volume" hidden valuePropName="checked">
+              <Checkbox />
             </Form.Item>
             <Form.Item name="home_volume" hidden>
               <Input />
@@ -1158,10 +1231,12 @@ function VmCreateModal({
               )}
               <Text type="secondary">
                 The persistent boot disk continues to cost money while the VM is
-                stopped. Public Internet egress is{" "}
-                {provider === "nebius" || draft.funding_mode === "site-funded"
-                  ? "included for this provider and funding lane."
-                  : "billed separately at $0.10/GB."}
+                stopped. Public Internet egress{" "}
+                {provider === "nebius"
+                  ? "costs $0/GB on Nebius."
+                  : draft.funding_mode === "site-funded"
+                    ? "costs $0.10/GB on GCP and is paid by the site."
+                    : "costs $0.10/GB on GCP and is billed separately."}
               </Text>
               {maximumSpend != null && (
                 <Text strong>
@@ -2627,6 +2702,7 @@ export function ProjectComputeVms({
             {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
           </Text>
           <Text type="secondary">{vm.zone ?? vm.region}</Text>
+          <Text type="secondary">Boot disk · {vm.boot_disk_gb} GB</Text>
           {vm.gpu_type && (
             <Text type="secondary">
               {vm.gpu_count}× {vm.gpu_type}
@@ -2644,9 +2720,7 @@ export function ProjectComputeVms({
         const cost = Number(egress.current_month_cost_usd ?? 0);
         const estimate = vmStoredPriceEstimate(vm);
         const stoppedEstimate = vmStoredStoppedPriceEstimate(vm);
-        const egressLabel = egress.free
-          ? "Egress included"
-          : `Egress $${cost.toFixed(2)}`;
+        const egressLabel = egressRateLabel(vm);
         return (
           <Popover
             trigger="click"
@@ -2674,7 +2748,11 @@ export function ProjectComputeVms({
                 )}
                 <Text>
                   Current-month egress: {gb.toFixed(gb >= 10 ? 1 : 3)} GB ·{" "}
-                  {egress.free ? "included" : `$${cost.toFixed(2)}`}
+                  {vm.provider === "nebius"
+                    ? "$0/GB"
+                    : vm.funding_mode === "site-funded"
+                      ? "$0.10/GB · paid by site"
+                      : `$0.10/GB · $${cost.toFixed(2)} charged`}
                 </Text>
                 <Text type="secondary">
                   Lifetime egress:{" "}
@@ -2741,8 +2819,27 @@ export function ProjectComputeVms({
                 <Space
                   direction="vertical"
                   size={10}
-                  style={{ maxWidth: 430, width: 390 }}
+                  style={{
+                    maxHeight: "calc(100vh - 140px)",
+                    maxWidth: 430,
+                    overflowY: "auto",
+                    paddingRight: 6,
+                    width: 390,
+                  }}
                 >
+                  {projectSshCommand && (
+                    <div>
+                      <Text type="secondary">From this project</Text>
+                      <br />
+                      <Text code copyable={{ text: projectSshCommand }}>
+                        {projectSshCommand}
+                      </Text>
+                      <br />
+                      <Text type="secondary">
+                        This shortcut is managed in .ssh/config.
+                      </Text>
+                    </div>
+                  )}
                   <div>
                     <Text type="secondary">CoCalc CLI</Text>
                     <br />
@@ -2771,19 +2868,6 @@ export function ProjectComputeVms({
                     <Text type="secondary">
                       A public address will appear when the VM is ready.
                     </Text>
-                  )}
-                  {projectSshCommand && (
-                    <div>
-                      <Text type="secondary">From this project</Text>
-                      <br />
-                      <Text code copyable={{ text: projectSshCommand }}>
-                        {projectSshCommand}
-                      </Text>
-                      <br />
-                      <Text type="secondary">
-                        This shortcut is managed in .ssh/config.
-                      </Text>
-                    </div>
                   )}
                   {vm.operating_system === "windows" && (
                     <div>
@@ -3023,8 +3107,9 @@ export function ProjectComputeVms({
                   <Paragraph style={{ marginBottom: 0 }}>
                     Billable GCP public Internet egress costs $0.10/GB and
                     appears as one accumulating purchase per VM per calendar
-                    month. Nebius egress and site-funded egress are included.
-                    Usage can take about five minutes to appear.
+                    month. For site-funded VMs, the site pays that GCP egress
+                    cost. Nebius egress costs $0/GB. Usage can take about five
+                    minutes to appear.
                   </Paragraph>
                   <Paragraph style={{ marginBottom: 0 }}>
                     Running VMs stop when funding is unavailable. After

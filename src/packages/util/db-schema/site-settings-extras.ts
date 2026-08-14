@@ -1773,7 +1773,7 @@ export const EXTRAS: SettingsExtras = {
   compute_vm_max_boot_disk_gb: {
     name: "Managed Compute VMs: Maximum Boot Disk GB",
     desc: "Largest persistent root disk allowed for a VM lease.",
-    default: "200",
+    default: "10000",
     to_val: to_int,
     valid: only_pos_int,
     tags: ["Cloud"],
