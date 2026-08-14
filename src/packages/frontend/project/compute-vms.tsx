@@ -95,15 +95,6 @@ const NEBIUS_VOLUME_INCREMENT_GB = 93;
 const VM_REFRESH_BASE_MS = 12_000;
 const VM_REFRESH_JITTER_MS = 6_000;
 
-function isProjectVmAvailabilityRequest(
-  request: Record<string, unknown> | undefined,
-): boolean {
-  return (
-    request?.action === "availability" &&
-    ["start-vm", "stop-vm"].includes(`${request?.operation ?? ""}`)
-  );
-}
-
 function hasProjectVmAvailabilityScope(grant: ComputeAgentGrant): boolean {
   return (
     grant.metadata?.approved_scope?.kind === "project-vm-availability" &&
@@ -2465,27 +2456,6 @@ export function ProjectComputeVms({
     }
   };
 
-  const approveAgentGrant = async (grant: ComputeAgentGrant) => {
-    setError(undefined);
-    try {
-      const completed = await runFreshAuthAction(async () => {
-        await webapp_client.conat_client.hub.compute.approveAgentGrant({
-          grant_id: grant.grant_id,
-          browser_id: webapp_client.browser_id,
-        });
-      });
-      if (!completed) return;
-      setNotice(
-        isProjectVmAvailabilityRequest(grant.metadata?.pending_request)
-          ? "Codex can start and stop existing VMs in this project for this turn."
-          : "The pending Codex VM action is authorized for this turn.",
-      );
-      await load();
-    } catch (err) {
-      setError(`${err}`);
-    }
-  };
-
   const revokeAgentGrant = async (grant: ComputeAgentGrant) => {
     setError(undefined);
     try {
@@ -3292,74 +3262,6 @@ export function ProjectComputeVms({
           style={{ marginBottom: 12 }}
         />
       )}
-      {agentGrants
-        .filter((grant) => grant.metadata?.pending_request)
-        .map((grant) => {
-          const request = grant.metadata.pending_request;
-          const availabilityRequest = isProjectVmAvailabilityRequest(request);
-          const details = [
-            request.operation ?? request.action,
-            request.vm_id ? `VM ${request.vm_id.slice(0, 8)}` : undefined,
-            request.provider,
-            request.machine_class,
-            request.funding_mode,
-            Number(request.hourly_usd) > 0
-              ? `$${Number(request.hourly_usd).toFixed(3)}/hour maximum`
-              : undefined,
-            Number(request.total_authorized_usd) > 0
-              ? `$${Number(request.total_authorized_usd).toFixed(2)} authorized maximum`
-              : undefined,
-            Number(request.ttl_minutes) > 0
-              ? `${request.ttl_minutes} minute maximum TTL`
-              : undefined,
-          ].filter(Boolean);
-          return (
-            <Alert
-              key={grant.grant_id}
-              showIcon
-              type="warning"
-              title={
-                availabilityRequest
-                  ? "Codex requests VM start/stop access for this turn"
-                  : "Codex requests temporary VM authority"
-              }
-              description={
-                <Space direction="vertical" size={8}>
-                  {availabilityRequest && (
-                    <Text>
-                      Allow this Codex turn to start and stop any existing VM in
-                      this project without asking again. Starting a VM incurs
-                      its configured price shown in the VM list.
-                    </Text>
-                  )}
-                  <Text type="secondary">
-                    {availabilityRequest
-                      ? `Triggering request: ${details.join(" · ")}. This does not allow creating or deleting resources, changing machine types, disks, funding, or TTL, and does not place an account session in the project.`
-                      : `${details.join(" · ")}. Approval is limited to this exact request and does not place an account session in the project.`}
-                  </Text>
-                  <Space>
-                    <Button
-                      type="primary"
-                      size="small"
-                      onClick={() => void approveAgentGrant(grant)}
-                    >
-                      {availabilityRequest
-                        ? "Allow start/stop for this turn"
-                        : "Approve exact request"}
-                    </Button>
-                    <Button
-                      size="small"
-                      onClick={() => void revokeAgentGrant(grant)}
-                    >
-                      Deny
-                    </Button>
-                  </Space>
-                </Space>
-              }
-              style={{ marginBottom: 12 }}
-            />
-          );
-        })}
       {agentGrants
         .filter(
           (grant) =>

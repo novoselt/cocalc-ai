@@ -8,6 +8,9 @@ const clientQuery = jest.fn();
 const release = jest.fn();
 const connect = jest.fn(async () => ({ query: clientQuery, release }));
 const centralLog = jest.fn(async () => undefined);
+const publishProjectDetailInvalidationBestEffort = jest.fn(
+  async () => undefined,
+);
 const siteUrl = jest.fn(
   async (path?: string) => `https://cocalc.test/${path ?? ""}`,
 );
@@ -20,6 +23,11 @@ jest.mock("@cocalc/database/pool", () => ({
 jest.mock("@cocalc/database/postgres/central-log", () => ({
   __esModule: true,
   default: (...args: any[]) => centralLog(...args),
+}));
+
+jest.mock("@cocalc/server/account/project-detail-feed", () => ({
+  publishProjectDetailInvalidationBestEffort: (...args: any[]) =>
+    publishProjectDetailInvalidationBestEffort(...args),
 }));
 
 jest.mock("../hub/site-url", () => ({
@@ -121,6 +129,7 @@ beforeEach(() => {
   connect.mockClear();
   release.mockClear();
   centralLog.mockClear();
+  publishProjectDetailInvalidationBestEffort.mockClear();
 });
 
 it("creates a hash-only read/data-plane grant and touches it", async () => {
@@ -190,6 +199,10 @@ it("records an exact pending mutation request", async () => {
       event: "managed_compute_agent_grant_requested",
     }),
   );
+  expect(publishProjectDetailInvalidationBestEffort).toHaveBeenCalledWith({
+    project_id,
+    fields: ["compute_agent_grants"],
+  });
 });
 
 it("does not rewrite or re-log the same pending mutation request", async () => {
@@ -373,6 +386,10 @@ it("approves a pending request transactionally", async () => {
     },
   });
   expect(release).toHaveBeenCalled();
+  expect(publishProjectDetailInvalidationBestEffort).toHaveBeenCalledWith({
+    project_id,
+    fields: ["compute_agent_grants"],
+  });
 });
 
 it("rejects expired, cross-project, and malformed mutation capabilities", async () => {
@@ -401,10 +418,14 @@ it("rejects expired, cross-project, and malformed mutation capabilities", async 
 });
 
 it("revokes only the owner's grant", async () => {
-  query.mockResolvedValueOnce({ rows: [] });
+  query.mockResolvedValueOnce({ rows: [{ project_id }] });
   await revokeAgentComputeGrant({ account_id, grant_id });
   expect(query).toHaveBeenCalledWith(
     expect.stringContaining("revoked_at=NOW()"),
     [grant_id, account_id],
   );
+  expect(publishProjectDetailInvalidationBestEffort).toHaveBeenCalledWith({
+    project_id,
+    fields: ["compute_agent_grants"],
+  });
 });

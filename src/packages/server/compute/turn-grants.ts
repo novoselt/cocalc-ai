@@ -6,6 +6,8 @@
 import { randomUUID } from "node:crypto";
 import getPool from "@cocalc/database/pool";
 import centralLog from "@cocalc/database/postgres/central-log";
+import { COMPUTE_AGENT_GRANTS_PROJECT_DETAIL_FIELD } from "@cocalc/conat/hub/api/compute";
+import { publishProjectDetailInvalidationBestEffort } from "@cocalc/server/account/project-detail-feed";
 import siteUrl from "../hub/site-url";
 
 export interface ComputeAgentAuth {
@@ -215,6 +217,10 @@ export async function requireAgentComputeGrant(opts: {
           session_id: grant.session_id,
           request,
         },
+      });
+      await publishProjectDetailInvalidationBestEffort({
+        project_id: opts.project_id,
+        fields: [COMPUTE_AGENT_GRANTS_PROJECT_DETAIL_FIELD],
       });
     }
     const approvalUrl = await siteUrl(
@@ -463,6 +469,10 @@ export async function approveAgentComputeGrant(opts: {
       ],
     );
     await client.query("COMMIT");
+    await publishProjectDetailInvalidationBestEffort({
+      project_id: grant.project_id,
+      fields: [COMPUTE_AGENT_GRANTS_PROJECT_DETAIL_FIELD],
+    });
     return updated.rows[0];
   } catch (err) {
     await client.query("ROLLBACK");
@@ -476,9 +486,16 @@ export async function revokeAgentComputeGrant(opts: {
   account_id: string;
   grant_id: string;
 }): Promise<void> {
-  await getPool().query(
+  const { rows } = await getPool().query<{ project_id: string }>(
     `UPDATE compute_vm_turn_grants SET revoked_at=NOW()
-      WHERE grant_id=$1 AND owner_account_id=$2 AND revoked_at IS NULL`,
+      WHERE grant_id=$1 AND owner_account_id=$2 AND revoked_at IS NULL
+      RETURNING project_id`,
     [opts.grant_id, opts.account_id],
   );
+  if (rows[0]?.project_id) {
+    await publishProjectDetailInvalidationBestEffort({
+      project_id: rows[0].project_id,
+      fields: [COMPUTE_AGENT_GRANTS_PROJECT_DETAIL_FIELD],
+    });
+  }
 }
