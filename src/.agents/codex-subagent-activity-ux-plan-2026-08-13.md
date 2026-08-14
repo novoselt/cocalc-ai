@@ -2,7 +2,8 @@
 
 Date: 2026-08-13
 
-Status: proposed for review
+Status: approved direction; amended 2026-08-14 for concurrency controls and
+post-turn activity
 
 ## Executive Decision
 
@@ -45,6 +46,17 @@ effort, lifecycle details, result or error, agent path, and copyable thread ID.
 Full child transcripts are a separate on-demand feature; they should not be
 copied into the parent activity log by default.
 
+Two related behaviors are part of the first release, not follow-up polish:
+
+1. Users can configure their account-wide maximum number of concurrent Codex
+   subagents. The setting is available both in the chat's `Codex settings`
+   modal and on the account AI settings page near the OpenAI credentials and
+   Codex payment source panel.
+2. If the manager turn finishes while a subagent or background command is still
+   running, CoCalc continues to show that work prominently. The UI explicitly
+   says that AI usage may continue and provides a `Stop all` action. A completed
+   manager message must never make live descendant work look idle.
+
 ## Why This UX
 
 The user needs to answer three questions without reading internal protocol
@@ -82,6 +94,14 @@ final answer.
    The hub must not proxy steady-state agent output.
 9. The implementation consumes typed Codex app-server notifications. It must
    not scrape Codex rollout JSONL files.
+10. A manager turn and its retained runtime are separate lifecycle concepts.
+    The manager may finish while descendant agents or background commands are
+    still active.
+11. CoCalc must not dispose, drain, or report an app-server runtime as idle
+    while it has confirmed active descendant agents or background commands.
+12. A notification-silence timeout is a reconciliation trigger, not proof that
+    a Codex turn failed. CoCalc must query authoritative app-server state before
+    terminalizing the turn or killing the runtime.
 
 ## Current System
 
@@ -106,6 +126,195 @@ preserves the manager-only main-chat rule.
 The recent completed-manager-message fix is complementary to this plan. The
 manager's ordinary commentary must continue to appear in the main chat and
 activity log even while subagents are working.
+
+Current runtime retention accounts for `thread/backgroundTerminals/list`, but
+not descendant agent threads. The app-server idle timer can therefore dispose
+a runtime after the manager finishes even though a descendant is still active.
+The worker/session status also exposes only active manager turns and background
+terminal counts. This is a correctness and cost-visibility gap.
+
+The current parent-turn notification loop has a 30-minute idle timeout and
+accepts only notifications matching the manager turn ID. Child-agent activity
+can continue without matching that predicate. The observed error
+`app-server notification timed out after 1800000ms` is consequently not proof
+that Codex stopped working; it can be a false failure while descendants are
+active. On that path CoCalc currently disposes the app-server runtime, which is
+too destructive without an authoritative state check.
+
+## Account Setting: Maximum Concurrent Subagents
+
+### Product Semantics
+
+Add one account-wide preference:
+
+```ts
+type CodexMaxConcurrentSubagents = "automatic" | number;
+```
+
+Suggested stored key in `accounts.other_settings`:
+
+```text
+codex_max_concurrent_subagents
+```
+
+Semantics:
+
+- `automatic`, absent, or `null` leaves the Codex setting unset and lets the
+  installed Codex release choose its default. The current default permits
+  three spawned subagents in addition to the manager.
+- An integer is the maximum number of spawned subagents, excluding the manager.
+- The first UI should accept integers from 1 through 16. This supports a value
+  of 10 while preventing an accidental or malicious request for hundreds of
+  workers.
+- The project-host adapter independently validates and clamps/rejects the value;
+  it must not trust a browser-supplied ACP configuration value.
+- A future site policy may impose a lower maximum. The UI should display the
+  effective site maximum when present.
+- Copy must warn that higher concurrency can consume tokens and paid usage much
+  faster. Do not describe the setting as a performance-only control.
+
+The preference is authoritative on the account's home bay and reaches the
+project host as part of the explicitly authorized ACP evaluate configuration.
+The project host remains the enforcement boundary. Do not make a project host
+query the account database directly, and do not proxy Codex data-plane traffic
+through the hub.
+
+### UI Placement
+
+Use one shared field component and normalization helper in both locations:
+
+1. `Codex settings` modal: add a clearly labeled `Parallel subagents` section.
+   Mark it `Account-wide`, since the rest of that modal mostly edits the current
+   chat thread. Saving the modal saves this preference through the account
+   settings action as well as saving thread-local settings.
+2. Account AI settings: place the same field on the same page as the Codex
+   credentials and payment source panel, preferably immediately after it or
+   inside a short `Codex execution` panel. It must not be hidden among unrelated
+   generic AI settings.
+
+Recommended control:
+
+```text
+Maximum concurrent subagents        [ Automatic (currently 3) v ]
+Codex may use up to this many workers in parallel, in addition to the manager.
+Higher values can use your Codex or API allowance much faster.
+```
+
+Offer `Automatic`, common values such as `1`, `3`, `5`, and `10`, plus a bounded
+custom integer. Both surfaces read from the same Redux account projection and
+write the same account preference; changing one must update the other without
+maintaining duplicate defaults.
+
+### App-Server Propagation
+
+Extend `CodexSessionConfig` with a validated optional field, for example:
+
+```ts
+maxConcurrentSubagents?: number;
+```
+
+At `thread/start`, and at a genuine `thread/resume` into a newly loaded runtime,
+map it to the app-server request's generic `config` object:
+
+```json
+{
+  "agents.max_concurrent_threads_per_session": 10
+}
+```
+
+Do not edit `~/.codex/config.toml`. Do not send this in `turn/start`; the current
+protocol does not offer it as a turn override. A resume request against an
+already loaded thread ignores generic config overrides, so the runtime reuse
+key must include the effective subagent limit. When the preference changes:
+
+- recreate/resume the runtime before the next turn if no descendant work or
+  background command remains;
+- if work remains, retain the old runtime and show "Applies after current Codex
+  activity finishes" rather than killing work or failing the current turn;
+- apply the new value when the next safe runtime is created.
+
+Add tests for absent/automatic, explicit 1 and 10, invalid browser values,
+site-cap enforcement, runtime reuse with the same value, and deferred runtime
+replacement after a value change.
+
+## Post-Turn Activity And Cost Visibility
+
+### Required User State
+
+Manager completion must not collapse the entire session to `Done` when child
+work remains. Represent at least these independent states:
+
+- manager turn: running, completed, failed, or interrupted;
+- descendant agents: active count and per-agent status;
+- background commands: active count;
+- retained app-server runtime: healthy, unavailable, or being reconciled.
+
+If the manager finishes with outstanding work, render a persistent status near
+the completed response and in the chat header/activity chip:
+
+```text
+Manager finished | 2 subagents still running | AI usage may continue | Stop all
+```
+
+The same state must appear in `Account settings -> Codex sessions`, so users can
+find and stop work after closing the chat or project. Do not rely on an open
+Activity drawer or transient toast.
+
+The warning remains until authoritative reconciliation reports zero active
+descendants and zero background commands. Browser reload, ACP worker restart,
+and switching devices must preserve or reconstruct it.
+
+### Runtime Reconciliation
+
+Track `activeDescendantAgents` alongside `backgroundTerminalCount` in the
+retained runtime. Use app-server APIs rather than rollout-file inspection:
+
+- list descendants with `thread/list` and `ancestorThreadId` set to the manager
+  thread ID;
+- use each returned thread's `status` to identify active descendants;
+- consume `thread/status/changed` and typed subagent item notifications for fast
+  updates;
+- periodically poll while any work is active to recover missed notifications;
+- list background commands with `thread/backgroundTerminals/list` as today.
+
+The runtime idle-exit, worker drain/readiness, runtime status metrics, and
+configuration-change logic must all treat either count as live work. If a
+reconciliation request fails, retain the runtime and report an uncertain state;
+never convert an inability to prove liveness into permission to kill it.
+
+### Stop All
+
+Provide one project-host operation scoped to the authorized parent Codex
+session. It should:
+
+1. enumerate the parent's descendant threads;
+2. interrupt active descendant turns using their actual thread and turn IDs;
+3. terminate background terminals for the parent session;
+4. return per-item success/failure and the reconciled remaining counts;
+5. be idempotent and safe to retry.
+
+Do not implement `Stop all` by deleting threads or rollout history. Preserve
+the parent and child transcripts for diagnostics. Authorization must bind the
+request to the project, chat, account, and known parent session; accepting an
+arbitrary thread ID is not sufficient.
+
+### Parent Notification Watchdog
+
+Replace the fatal 30-minute `waitForMessage` timeout with a shorter
+reconciliation cadence. On notification silence:
+
+1. query the parent thread/turn state from app-server;
+2. query descendant and background-command state;
+3. if the parent turn is still active and app-server responds, continue waiting
+   and emit a low-volume liveness/reconciliation event;
+4. if the parent is terminal, synthesize/process the missed terminal state;
+5. only fail the transport when app-server exits, becomes unresponsive across a
+   bounded retry policy, or returns an authoritative unrecoverable state.
+
+The bridge must not dispose the runtime merely because no parent-turn
+notification matched for 30 minutes. Tests must reproduce a manager waiting
+longer than the watchdog interval while child notifications continue and prove
+that the turn remains alive and visible.
 
 ## Upstream Codex Inputs
 
@@ -557,12 +766,19 @@ parent turn failure.
   - merge pending spawn identity;
   - deduplicate repeated snapshots;
   - throttle liveness events;
-  - bound task/result/error text.
+  - bound task/result/error text;
+  - pass the validated concurrency preference through thread start/resume;
+  - reconcile descendant status as well as background terminals;
+  - retain runtimes while either kind of work is active;
+  - replace fatal parent-notification silence with reconciliation;
+  - implement the scoped, idempotent stop-all operation.
 
 - `src/packages/ai/acp/__tests__/codex-app-server.test.ts`
   - add fixtures matching current upstream camelCase app-server payloads;
   - verify mapping, deduplication, throttling, nested sender IDs, terminal
-    results, errors, interruption, and resume.
+    results, errors, interruption, and resume;
+  - verify concurrency config, runtime replacement, descendant retention, long
+    parent silence, and stop-all partial failures.
 
 ### ACP writer
 
@@ -571,7 +787,9 @@ parent turn failure.
   - verify subagent events go to the full live/persisted log;
   - verify they do not go to the manager message preview;
   - include them in last-backend-activity derivation;
-  - preserve checkpoint/final flush behavior.
+  - preserve checkpoint/final flush behavior;
+  - project post-turn outstanding work into the account-visible Codex session
+    registry instead of marking the whole session idle.
 
 - `src/packages/lite/hub/acp/__tests__/chat-writer.test.ts`
   - verify live log, preview exclusion, checkpoint replay, and terminal flush.
@@ -592,11 +810,48 @@ parent turn failure.
 
 - `src/packages/frontend/chat/agent-message-status.tsx`
   - show aggregate active/done/failed counts in the chip;
-  - count subagent updates as backend activity.
+  - count subagent updates as backend activity;
+  - keep the post-turn cost warning and stop-all action visible after manager
+    completion.
 
 - `src/packages/frontend/chat/use-codex-log.ts`
   - likely no protocol change beyond carrying the new typed event;
   - verify reconnect and replay preserve all events.
+
+### Account setting
+
+- `src/packages/util/ai/codex.ts`
+  - add the bounded `maxConcurrentSubagents` session field and shared
+    normalization constants/types.
+
+- `src/packages/frontend/account/types.ts`
+  - type the `codex_max_concurrent_subagents` account preference.
+
+- new shared Codex concurrency field
+  - render Automatic/common/custom values and the usage warning;
+  - read/write one `accounts.other_settings` key;
+  - expose the same component in both requested UI locations.
+
+- `src/packages/frontend/account/account-preferences-ai.tsx`
+  - place the account-wide field next to the Codex credentials/payment panel.
+
+- `src/packages/frontend/chat/codex.tsx`
+  - include the account-wide field in the Codex settings modal without
+    persisting a duplicate thread-local preference;
+  - explain deferred application while the current runtime owns work.
+
+- `src/packages/frontend/chat/acp-api.ts`
+  - add the normalized preference to the project-host evaluate request.
+
+### Session lifecycle UI/API
+
+- `src/packages/frontend/account/codex-sessions-panel.tsx`
+  - show post-turn descendant/background activity and a stop-all action.
+
+- ACP project-host session registry/API types
+  - add active descendant count, background command count, reconciliation
+    state, and scoped stop-all response details;
+  - keep the browser-to-project-host path direct.
 
 ### Tests
 
@@ -620,9 +875,14 @@ parent turn failure.
    items.
 4. Confirm which operation reports a child's terminal message when the manager
    does and does not explicitly call `wait`.
+5. Reproduce the 30-minute failure with a shortened test timeout: keep a child
+   active while no parent-turn notification matches.
+6. Confirm `thread/list` with `ancestorThreadId`, `thread/status/changed`, and
+   turn lookup provide enough information to reconcile and interrupt active
+   descendants without deleting them.
 
-Exit criterion: adapter tests describe the real protocol and fail before the
-mapping is implemented.
+Exit criterion: adapter tests describe the real protocol, reproduce the false
+timeout, and prove descendant work can be enumerated and stopped safely.
 
 ### Phase 1: Schema, Adapter, And Durable Activity
 
@@ -631,10 +891,15 @@ mapping is implemented.
 3. Implement app-server mapping, text bounds, deduplication, and throttling.
 4. Verify full-log persistence and preview exclusion.
 5. Verify subagent events advance parent last-activity time.
+6. Add descendant reconciliation and retain the runtime while descendants or
+   background commands remain active.
+7. Replace the fatal notification-idle timeout behavior.
+8. Add account setting propagation and server-side enforcement.
 
 Exit criterion: a real turn with subagents produces a compact, replayable typed
 event sequence, with manager messages still visible and no blank rows on older
-logs.
+logs. A manager waiting on a long child does not time out, and a completed
+manager cannot hide or destroy active child work.
 
 ### Phase 2: Grouped UI
 
@@ -643,9 +908,12 @@ logs.
 3. Add chip counts and failure warning.
 4. Add markdown export.
 5. Add responsive and accessibility behavior.
+6. Add the persistent post-turn cost warning and stop-all action.
+7. Add the shared concurrency field to both Codex settings surfaces.
 
 Exit criterion: one, five, and twenty-agent fixtures remain understandable on
-desktop and mobile, during the run and after reload.
+desktop and mobile, during the run and after reload. Outstanding post-turn work
+remains visible from both the chat and account session list.
 
 ### Phase 3: On-Demand Transcript Drawer
 
@@ -702,6 +970,36 @@ rows or false completion, and event volume stays bounded.
 - `.chat` patchflow commit count does not scale with child activity;
 - ACP worker drain/restart leaves uncertain children visibly uncertain.
 
+### Runtime reconciliation and safety
+
+- manager receives no matching notification for longer than the watchdog
+  interval while a child remains active;
+- app-server responds and the parent remains active, so the bridge continues;
+- parent completion is missed but authoritative turn state is terminal, so the
+  bridge reconciles completion;
+- descendant status notification is missed and polling repairs the count;
+- manager completes with one active child and zero background terminals;
+- manager completes with zero children and one background terminal;
+- runtime configuration changes while descendant work remains active;
+- runtime idle cleanup waits for both active counts to reach zero;
+- worker drain reports outstanding descendant work;
+- stop-all interrupts descendants and terminates background commands;
+- one stop operation fails and the response preserves accurate remaining work;
+- repeated stop-all is harmless.
+
+### Account setting
+
+- Automatic omits the app-server config override;
+- explicit 1 and 10 map to the correct app-server key;
+- the manager thread is not counted in the user-entered value;
+- zero, negative, fractional, nonnumeric, and excessive values are rejected or
+  clamped according to the documented server policy;
+- a site maximum overrides a larger account preference;
+- both UI surfaces stay synchronized through the account projection;
+- changing the setting does not mutate an established active runtime;
+- the new setting applies after outstanding work finishes and the runtime is
+  safely recreated.
+
 ### Frontend
 
 - zero subagents leaves the current UI unchanged;
@@ -729,6 +1027,10 @@ rows or false completion, and event volume stays bounded.
 7. Complete a run and verify results/failures remain visible.
 8. Copy activity as markdown and inspect the compact export.
 9. Run a non-subagent turn and verify no visual regression.
+10. Let the manager finish while a child remains active; verify the persistent
+    usage warning from chat and Account settings, reload, then use `Stop all`.
+11. Set the account maximum to 10 in each UI surface and verify the other
+    reflects it and a newly created runtime receives the app-server override.
 
 ## Rollout Strategy
 
@@ -755,6 +1057,11 @@ Add structured counters or logs for:
 - exact duplicates suppressed;
 - liveness updates throttled;
 - active/uncertain children when a parent turn terminalizes;
+- active descendant and background-command counts per retained runtime;
+- notification-silence reconciliations by outcome;
+- runtime disposal deferred because work remains;
+- stop-all requests by complete/partial/error outcome;
+- requested and effective subagent concurrency, without account secrets;
 - malformed upstream payloads;
 - child transcript reads by success/unavailable/unauthorized/error.
 
@@ -791,6 +1098,12 @@ The first release is complete when:
 9. Unknown event types do not create blank activity rows.
 10. The implementation works through the direct project-host ACP path on Lite,
     Launchpad, and Rocket.
+11. A user can configure an account-wide maximum of 10 subagents from either
+    requested UI surface, and the project host enforces safe bounds.
+12. Manager completion cannot hide active descendants or background commands;
+    the UI warns that usage may continue and provides a durable stop-all path.
+13. Notification silence alone cannot fail a healthy long-running multi-agent
+    turn or cause its app-server runtime to be killed.
 
 The transcript drawer is useful but is not required for the first release. The
 schema and row-details affordance should leave a clean path to add it later.
