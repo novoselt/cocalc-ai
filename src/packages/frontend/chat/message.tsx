@@ -2170,6 +2170,7 @@ export default function Message({
           }
           onContinue={
             !effectiveGenerating &&
+            !acpInterrupted &&
             !read_only &&
             isLastMessageInThread &&
             actions != null
