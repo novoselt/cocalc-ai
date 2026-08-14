@@ -1,6 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { fromJS } from "immutable";
-import { IntlProvider } from "react-intl";
 
 import { NBConvert } from "./nbconvert";
 
@@ -144,23 +143,22 @@ describe("NBConvert", () => {
   });
 
   it("shows a bounded, copyable error log", () => {
-    const error = "Traceback\nfinal conversion error";
+    const error =
+      "Traceback\nnbconvert/exporters/pdf.py\nfinal conversion error";
 
     render(
-      <IntlProvider locale="en">
-        <NBConvert
-          actions={createActions()}
-          path="analysis.ipynb"
-          project_id="project-1"
-          nbconvert={fromJS({
-            state: "done",
-            args: ["--to", "pdf"],
-            error,
-            time: Date.now(),
-          })}
-          nbconvert_dialog={fromJS({ to: "pdf" })}
-        />
-      </IntlProvider>,
+      <NBConvert
+        actions={createActions()}
+        path="analysis.ipynb"
+        project_id="project-1"
+        nbconvert={fromJS({
+          state: "done",
+          args: ["--to", "pdf"],
+          error,
+          time: Date.now(),
+        })}
+        nbconvert_dialog={fromJS({ to: "pdf" })}
+      />,
     );
 
     const log = screen.getByRole("region", { name: "nbconvert error log" });
@@ -170,5 +168,7 @@ describe("NBConvert", () => {
     expect(
       screen.getByRole("button", { name: "Copy full error log" }),
     ).toHaveAttribute("data-copy-value", error);
+    expect(screen.getByText(/Copy the full log/)).toBeInTheDocument();
+    expect(screen.queryByText(/restart your/i)).not.toBeInTheDocument();
   });
 });
