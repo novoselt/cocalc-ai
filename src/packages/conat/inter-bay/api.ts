@@ -83,6 +83,8 @@ import type {
   ListProjectPublicDirectorySharesOptions,
   ListPublicDirectorySharesResponse,
   PublicDirectoryShareSummary,
+  ResolveLegacyPublicDirectorySharePathOptions,
+  ResolveLegacyPublicDirectorySharePathResponse,
   ResolvePublicDirectoryShareOptions,
   ResolvedPublicDirectoryShare,
   UpdatePublicDirectoryShareOptions,
@@ -2671,6 +2673,7 @@ export type AccountLocalMethod =
   | "legacy-migration-admin-list-linked-legacy-projects"
   | "legacy-migration-admin-replay-public-paths"
   | "legacy-migration-admin-replay-restored-public-paths"
+  | "public-directory-share-resolve-legacy-path"
   | "public-directory-share-resolve"
   | "public-directory-share-list-mine"
   | "public-directory-share-list-project"
@@ -4255,6 +4258,9 @@ export interface InterBayAccountLocalApi {
   legacyMigrationAdminReplayRestoredPublicPaths: (
     opts: LegacyMigrationAdminReplayRestoredPublicPathsOptions,
   ) => Promise<LegacyMigrationAdminReplayRestoredPublicPathsResponse>;
+  publicDirectoryShareResolveLegacyPath: (
+    opts: ResolveLegacyPublicDirectorySharePathOptions,
+  ) => Promise<ResolveLegacyPublicDirectorySharePathResponse | null>;
   publicDirectoryShareResolve: (
     opts: ResolvePublicDirectoryShareOptions,
   ) => Promise<ResolvedPublicDirectoryShare>;
@@ -7349,6 +7355,15 @@ export function createInterBayAccountLocalClient({
         method: "legacy-migration-admin-replay-restored-public-paths",
       }),
     });
+  const publicDirectoryShareResolveLegacyPathClient = createServiceClient<
+    Pick<InterBayAccountLocalApi, "publicDirectoryShareResolveLegacyPath">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: accountLocalSubject({
+      dest_bay,
+      method: "public-directory-share-resolve-legacy-path",
+    }),
+  });
   const publicDirectoryShareResolveClient = createServiceClient<
     Pick<InterBayAccountLocalApi, "publicDirectoryShareResolve">
   >({
@@ -7791,6 +7806,10 @@ export function createInterBayAccountLocalClient({
       ),
     legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
       await legacyMigrationAdminReplayRestoredPublicPathsClient.legacyMigrationAdminReplayRestoredPublicPaths(
+        opts,
+      ),
+    publicDirectoryShareResolveLegacyPath: async (opts) =>
+      await publicDirectoryShareResolveLegacyPathClient.publicDirectoryShareResolveLegacyPath(
         opts,
       ),
     publicDirectoryShareResolve: async (opts) =>
@@ -9433,6 +9452,20 @@ export function createInterBayAccountLocalHandler({
       impl: {
         legacyMigrationAdminReplayRestoredPublicPaths: async (opts) =>
           await impl.legacyMigrationAdminReplayRestoredPublicPaths(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayAccountLocalApi, "publicDirectoryShareResolveLegacyPath">
+    >({
+      ...options,
+      service: "inter-bay-account-local",
+      subject: accountLocalSubject({
+        dest_bay: bay_id,
+        method: "public-directory-share-resolve-legacy-path",
+      }),
+      impl: {
+        publicDirectoryShareResolveLegacyPath: async (opts) =>
+          await impl.publicDirectoryShareResolveLegacyPath(opts),
       },
     }),
     createServiceHandler<
