@@ -112,6 +112,60 @@ function renderSteerStatus(state: AttachedSteerState) {
   }
 }
 
+export function SteerGuidanceCard({ steer }: { steer: AttachedSteerMessage }) {
+  const status = renderSteerStatus(steer.state);
+  return (
+    <section
+      aria-label={status.label}
+      style={{
+        padding: "8px 10px 10px",
+        borderRadius: 10,
+        background: status.background,
+        border: `1px solid ${status.borderColor}`,
+      }}
+    >
+      <div style={{ marginBottom: 7 }}>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "2px 8px",
+            borderRadius: 999,
+            background: status.pillBackground,
+            color: status.pillColor,
+            fontSize: 12,
+            fontWeight: 600,
+            lineHeight: 1.2,
+          }}
+        >
+          {steer.state === "sending" ? (
+            <LoadingOutlined spin style={{ fontSize: 12 }} />
+          ) : null}
+          {status.label}
+        </span>
+      </div>
+      <div
+        style={{
+          fontSize: 13,
+          color: COLORS.GRAY_D,
+          minWidth: 0,
+          overflowWrap: "anywhere",
+        }}
+      >
+        <StaticMarkdown
+          value={steer.text}
+          style={{
+            fontSize: 13,
+            color: COLORS.GRAY_D,
+            overflowWrap: "anywhere",
+          }}
+        />
+      </div>
+    </section>
+  );
+}
+
 export function AttachedSteerStatusList({
   attachedSteers,
 }: {
@@ -130,59 +184,7 @@ export function AttachedSteerStatusList({
       }}
     >
       {steerItems.map((steer) => {
-        const status = renderSteerStatus(steer.state);
-        return (
-          <div
-            key={steer.messageId}
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 8,
-              flexWrap: "wrap",
-              padding: "6px 10px",
-              borderRadius: 8,
-              background: status.background,
-              border: `1px solid ${status.borderColor}`,
-            }}
-          >
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "2px 8px",
-                borderRadius: 999,
-                background: status.pillBackground,
-                color: status.pillColor,
-                fontSize: 12,
-                fontWeight: 600,
-                lineHeight: 1.2,
-              }}
-            >
-              {steer.state === "sending" ? (
-                <LoadingOutlined spin style={{ fontSize: 12 }} />
-              ) : null}
-              {status.label}
-            </span>
-            <div
-              style={{
-                fontSize: 12,
-                color: COLORS.GRAY_D,
-                flex: "1 1 220px",
-                minWidth: 0,
-              }}
-            >
-              <StaticMarkdown
-                value={steer.text}
-                style={{
-                  fontSize: 12,
-                  color: COLORS.GRAY_D,
-                  overflowWrap: "anywhere",
-                }}
-              />
-            </div>
-          </div>
-        );
+        return <SteerGuidanceCard key={steer.messageId} steer={steer} />;
       })}
     </div>
   );

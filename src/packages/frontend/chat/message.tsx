@@ -131,6 +131,7 @@ import {
   trimCompletedCachedCodexActivityBlocks,
   type InlineCodexActivityBlock,
 } from "./message-state";
+import { CodexFinalResponseCopy } from "./codex-final-response-copy";
 
 const EDIT_MARKDOWN_MIN_HEIGHT = 120;
 
@@ -1953,8 +1954,12 @@ export default function Message({
       .filter((block) => block.kind === "agent")
       .map((block) => block.text)
       .join("\n\n");
-    const selectableActivityMarkdown =
-      codexActivityBlocksToSelectableMarkdown(visibleBlocks);
+    const selectableActivityMarkdown = codexActivityBlocksToSelectableMarkdown(
+      visibleBlocks.map((block) => ({
+        ...block,
+        text: linkifyCommitHashes(block.text),
+      })),
+    );
     const body = (
       <div onClickCapture={openCommitFromMessage}>
         <div
@@ -1993,7 +1998,7 @@ export default function Message({
           ) : null}
           {selectableActivityMarkdown
             ? renderSelectableMarkdownBody({
-                value: linkifyCommitHashes(selectableActivityMarkdown),
+                value: selectableActivityMarkdown,
                 message_class,
                 style: MARKDOWN_STYLE,
               })
@@ -2211,6 +2216,7 @@ export default function Message({
             label: "Final response",
             accentColor: COLORS.BLUE_DD,
             borderColor: COLORS.BLUE_LLL,
+            action: <CodexFinalResponseCopy value={value} />,
             children: (
               <div onClickCapture={openCommitFromMessage}>
                 {messageBodyMode === "select" ? (

@@ -309,7 +309,7 @@ describe("AgentMessageStatus", () => {
 });
 
 describe("AttachedSteerStatusList", () => {
-  it("renders guidance text as markdown", () => {
+  it("keeps quoted guidance distinct from the user's follow-up", () => {
     render(
       React.createElement(AttachedSteerStatusList, {
         attachedSteers: [
@@ -317,14 +317,18 @@ describe("AttachedSteerStatusList", () => {
             messageId: "m1",
             date: 1000,
             state: "sent",
-            text: "**bold guidance** with `code`",
+            text: "> quoted request\n\n**follow-up guidance** with `code`",
           },
         ],
       }),
     );
 
-    expect(screen.getByText("bold guidance")).toBeTruthy();
+    const card = screen.getByRole("region", { name: "Guidance sent" });
+    expect(
+      screen.getByText("quoted request").closest("blockquote"),
+    ).toBeTruthy();
+    expect(screen.getByText("follow-up guidance")).toBeTruthy();
     expect(screen.getByText("code")).toBeTruthy();
-    expect(screen.getByText("Guidance sent")).toBeTruthy();
+    expect(card).toContainElement(screen.getByText("Guidance sent"));
   });
 });
