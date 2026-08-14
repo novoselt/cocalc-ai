@@ -218,6 +218,7 @@ describe("AgentMessageStatus", () => {
 
   it("keeps post-turn retained work visible and stoppable", () => {
     const onInterrupt = jest.fn();
+    const onContinue = jest.fn();
     render(
       React.createElement(AgentMessageStatus, {
         show: true,
@@ -241,11 +242,14 @@ describe("AgentMessageStatus", () => {
           },
         ] as any,
         onInterrupt,
+        onContinue,
       }),
     );
 
     expect(screen.getByText(/Manager finished/)).toBeTruthy();
     expect(screen.getByText(/background command/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onContinue).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Stop all" }));
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });

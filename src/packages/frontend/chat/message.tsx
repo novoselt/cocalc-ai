@@ -2168,6 +2168,20 @@ export default function Message({
               ? stopRetainedWork
               : undefined
           }
+          onContinue={
+            hasRetainedWork &&
+            !effectiveGenerating &&
+            !read_only &&
+            isLastMessageInThread &&
+            actions != null
+              ? () =>
+                  actions.sendReply({
+                    message,
+                    reply: "continue",
+                    noNotification: true,
+                  })
+              : undefined
+          }
           openDrawerToken={openActivityDrawerToken}
           jumpText={undefined}
           jumpToken={0}
