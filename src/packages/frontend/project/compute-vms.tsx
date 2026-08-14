@@ -92,6 +92,14 @@ const COPYABLE_PROPS = {
   style: { marginTop: 6, width: "100%" },
 } as const;
 const NEBIUS_VOLUME_INCREMENT_GB = 93;
+const VM_REFRESH_BASE_MS = 12_000;
+const VM_REFRESH_JITTER_MS = 6_000;
+
+function documentIsVisible(): boolean {
+  return (
+    typeof document === "undefined" || document.visibilityState !== "hidden"
+  );
+}
 
 function normalizedVolumeSizeGb(
   provider: "gcp" | "nebius",
@@ -2072,36 +2080,108 @@ export function ProjectComputeVms({
   const [projectSshKeyLoading, setProjectSshKeyLoading] = useState(true);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({
+    refreshCatalogAndGrants = true,
+    showLoading = true,
+    projectOnly = false,
+  }: {
+    refreshCatalogAndGrants?: boolean;
+    showLoading?: boolean;
+    projectOnly?: boolean;
+  } = {}) => {
+    if (showLoading) setLoading(true);
     try {
       const [ownedVms, projectVolumes, computeCatalog, grants] =
         await Promise.all([
-          webapp_client.conat_client.hub.compute.listVms({}),
+          webapp_client.conat_client.hub.compute.listVms(
+            projectOnly ? { project_id } : {},
+          ),
           webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
-          webapp_client.conat_client.hub.compute.getCatalog({}),
-          webapp_client.conat_client.hub.compute.listAgentGrants({
-            project_id,
-          }),
+          refreshCatalogAndGrants
+            ? webapp_client.conat_client.hub.compute.getCatalog({})
+            : Promise.resolve(undefined),
+          refreshCatalogAndGrants
+            ? webapp_client.conat_client.hub.compute.listAgentGrants({
+                project_id,
+              })
+            : Promise.resolve(undefined),
         ]);
-      setAllRows(ownedVms);
+      if (projectOnly) {
+        setAllRows((current) => [
+          ...current.filter((vm) => vm.project_id !== project_id),
+          ...ownedVms,
+        ]);
+      } else {
+        setAllRows(ownedVms);
+      }
       setRows(ownedVms.filter((vm) => vm.project_id === project_id));
       setVolumes(projectVolumes);
-      setCatalog(computeCatalog);
-      setAgentGrants(grants);
+      if (computeCatalog != null) setCatalog(computeCatalog);
+      if (grants != null) setAgentGrants(grants);
       setError(undefined);
     } catch (err) {
       setError(`${err}`);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
   useEffect(() => {
     if (!isVisible) return;
-    void load();
-    const timer = setInterval(() => void load(), 15_000);
-    return () => clearInterval(timer);
+    let disposed = false;
+    let inFlight = false;
+    let refreshCatalogNext = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const schedule = () => {
+      if (disposed || !documentIsVisible()) return;
+      timer = setTimeout(
+        () => void run(),
+        VM_REFRESH_BASE_MS + Math.random() * VM_REFRESH_JITTER_MS,
+      );
+    };
+
+    const run = async () => {
+      if (disposed || !documentIsVisible()) return;
+      if (inFlight) {
+        refreshCatalogNext = true;
+        return;
+      }
+      inFlight = true;
+      const refreshCatalogAndGrants = refreshCatalogNext;
+      refreshCatalogNext = false;
+      try {
+        await load({
+          refreshCatalogAndGrants,
+          showLoading: refreshCatalogAndGrants,
+          projectOnly: !refreshCatalogAndGrants,
+        });
+      } finally {
+        inFlight = false;
+        if (disposed || !documentIsVisible()) return;
+        if (refreshCatalogNext) {
+          void run();
+        } else {
+          schedule();
+        }
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (timer != null) clearTimeout(timer);
+      timer = undefined;
+      if (!documentIsVisible()) return;
+      refreshCatalogNext = true;
+      void run();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    void run();
+    return () => {
+      disposed = true;
+      if (timer != null) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [isVisible, project_id]);
 
   useEffect(() => {
@@ -3165,7 +3245,7 @@ export function ProjectComputeVms({
           <Button
             icon={<Icon name="refresh" />}
             loading={loading}
-            onClick={load}
+            onClick={() => void load()}
           >
             Refresh
           </Button>
