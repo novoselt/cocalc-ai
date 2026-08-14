@@ -62,6 +62,7 @@ describe("personal membership analytics view", () => {
       breakdown: "tier",
       start: "2026-08-08",
       end: "2026-08-08",
+      historyStart: "2026-08-01",
       comparisonDays: 7,
     });
 
@@ -208,6 +209,7 @@ describe("personal membership analytics view", () => {
       breakdown: "tier",
       start: "2026-08-08",
       end: "2026-08-08",
+      historyStart: "2026-08-01",
       comparisonDays: 7,
     });
     expect(totalMembershipAnalyticsPoints(view.series, "comparison")).toEqual([
@@ -218,5 +220,40 @@ describe("personal membership analytics view", () => {
         revenueCents: 125,
       },
     ]);
+  });
+
+  it("reports zero on the selected end day after allocations expire", () => {
+    const view = buildMembershipAnalyticsView({
+      rows: [row("2026-08-01")],
+      tiers,
+      breakdown: "tier",
+      start: "2026-08-08",
+      end: "2026-08-10",
+      historyStart: "2026-08-01",
+      comparisonDays: 7,
+    });
+
+    expect(view.latestDay).toBe("2026-08-10");
+    expect(view.comparisonAvailable).toBe(true);
+    expect(view.summary[0]).toMatchObject({
+      activeMemberships: 0,
+      comparisonActiveMemberships: 0,
+      revenueCents: 0,
+      comparisonRevenueCents: 0,
+    });
+  });
+
+  it("does not compare against a day before the fetched history", () => {
+    const view = buildMembershipAnalyticsView({
+      rows: [row("2026-08-08")],
+      tiers,
+      breakdown: "tier",
+      start: "2026-08-08",
+      end: "2026-08-08",
+      historyStart: "2026-08-05",
+      comparisonDays: 7,
+    });
+
+    expect(view.comparisonAvailable).toBe(false);
   });
 });

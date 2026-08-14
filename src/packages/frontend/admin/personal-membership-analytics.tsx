@@ -303,6 +303,7 @@ export function MembershipAnalyticsAdmin() {
         breakdown,
         start,
         end,
+        historyStart: allocation.start,
         comparisonDays: comparison,
       })
     : undefined;

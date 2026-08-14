@@ -229,6 +229,7 @@ export function buildMembershipAnalyticsView({
   breakdown,
   start,
   end,
+  historyStart = start,
   comparisonDays = 0,
 }: {
   rows: MembershipAllocationDailyRow[];
@@ -236,10 +237,12 @@ export function buildMembershipAnalyticsView({
   breakdown: MembershipAnalyticsBreakdown;
   start: Date | string;
   end: Date | string;
+  historyStart?: Date | string;
   comparisonDays?: number;
 }): MembershipAnalyticsView {
   const startDay = dayKey(start);
   const endDay = dayKey(end);
+  const historyStartDay = dayKey(historyStart);
   const startNumber = dayNumber(startDay);
   const endNumber = dayNumber(endDay);
   if (startNumber > endNumber) {
@@ -252,7 +255,6 @@ export function buildMembershipAnalyticsView({
   const tierMap = new Map(tiers.map((tier) => [tier.id, tier]));
   const categories = new Map<string, Category>();
   const valuesByCategory = new Map<string, Map<string, DailyValue>>();
-  const populatedDays = new Set<string>();
   for (const row of rows) {
     const day = dayKey(row.day);
     const category = categoryForRow(row, breakdown, tierMap);
@@ -266,22 +268,15 @@ export function buildMembershipAnalyticsView({
     value.revenueCents += Number(row.revenue_cents) || 0;
     values.set(day, value);
     valuesByCategory.set(category.key, values);
-    populatedDays.add(day);
   }
 
   const days = Array.from({ length: endNumber - startNumber + 1 }, (_, index) =>
     dayFromNumber(startNumber + index),
   );
-  const latestDay =
-    [...populatedDays]
-      .filter(
-        (day) => dayNumber(day) >= startNumber && dayNumber(day) <= endNumber,
-      )
-      .sort()
-      .at(-1) ?? endDay;
+  const latestDay = endDay;
   const comparisonDay = shiftMembershipAnalyticsDay(latestDay, -comparisonDays);
   const comparisonAvailable =
-    comparisonDays > 0 && populatedDays.has(comparisonDay);
+    comparisonDays > 0 && dayNumber(comparisonDay) >= dayNumber(historyStartDay);
 
   const series = [...categories.values()].sort(categorySort).map((category) => {
     const values = valuesByCategory.get(category.key) ?? new Map();
