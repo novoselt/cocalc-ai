@@ -50,6 +50,20 @@ function isSamePendingRequest(
   );
 }
 
+function hasProjectVmAvailabilityScope(
+  grant: Record<string, any> | undefined,
+  request: ComputeAgentGrantRequest | undefined,
+): boolean {
+  const scope = grant?.metadata?.approved_scope;
+  return Boolean(
+    scope?.kind === "project-vm-availability" &&
+    scope?.existing_resources_only === true &&
+    Array.isArray(scope.operations) &&
+    scope.operations.includes(request?.operation) &&
+    ["start-vm", "stop-vm"].includes(`${request?.operation ?? ""}`),
+  );
+}
+
 function validateAgentAuth(auth: ComputeAgentAuth): void {
   const now = Date.now() / 1000;
   if (!/^[a-f0-9]{64}$/.test(auth.token_fingerprint)) {
@@ -96,10 +110,15 @@ export async function requireAgentComputeGrant(opts: {
   }
   const pool = getPool();
   let { rows } = await pool.query(
-    `SELECT * FROM compute_vm_turn_grants
+    `WITH refreshed AS (
+       UPDATE compute_vm_turn_grants
+          SET expires_at=GREATEST(expires_at, $2::timestamptz)
+        WHERE secret_hash=$1 AND revoked_at IS NULL
+     )
+     SELECT * FROM compute_vm_turn_grants
       WHERE secret_hash=$1 AND revoked_at IS NULL AND expires_at > NOW()
       LIMIT 1`,
-    [opts.auth.token_fingerprint],
+    [opts.auth.token_fingerprint, new Date(opts.auth.expires_at_s * 1000)],
   );
   if (!rows[0]) {
     const expiresAt = new Date(
@@ -145,9 +164,14 @@ export async function requireAgentComputeGrant(opts: {
   const grant = rows[0];
   const allowedActions: string[] = grant?.allowed_actions ?? [];
   const approvedRequest = grant?.metadata?.approved_request;
+  const projectVmAvailabilityScope = hasProjectVmAvailabilityScope(
+    grant,
+    opts.request,
+  );
   const exactMutation =
     opts.action === "read" ||
     opts.action === "data-plane" ||
+    (opts.action === "availability" && projectVmAvailabilityScope) ||
     (approvedRequest?.action === opts.action &&
       approvedRequest?.operation === opts.request?.operation &&
       approvedRequest?.operation_id === opts.request?.operation_id &&
@@ -230,6 +254,7 @@ export async function requireAgentComputeGrant(opts: {
     );
   }
   if (
+    !projectVmAvailabilityScope &&
     request.provider &&
     !(grant.allowed_providers ?? []).includes(request.provider)
   ) {
@@ -239,6 +264,7 @@ export async function requireAgentComputeGrant(opts: {
     );
   }
   if (
+    !projectVmAvailabilityScope &&
     request.machine_class &&
     (grant.allowed_machine_classes ?? []).length > 0 &&
     !(grant.allowed_machine_classes ?? []).includes(request.machine_class)
@@ -248,7 +274,11 @@ export async function requireAgentComputeGrant(opts: {
       { code: 403 },
     );
   }
-  if (request.funding_mode && grant.funding_mode !== request.funding_mode) {
+  if (
+    !projectVmAvailabilityScope &&
+    request.funding_mode &&
+    grant.funding_mode !== request.funding_mode
+  ) {
     throw Object.assign(
       new Error("managed-compute grant does not allow this funding lane"),
       { code: 403 },
@@ -265,6 +295,7 @@ export async function requireAgentComputeGrant(opts: {
     [request.ttl_minutes, grant.max_ttl_minutes, "TTL"],
   ];
   for (const [actual, rawMaximum, label] of numericBounds) {
+    if (projectVmAvailabilityScope) break;
     if (actual == null) continue;
     const maximum = Number(rawMaximum ?? 0);
     if (!Number.isFinite(maximum) || actual > maximum) {
@@ -360,7 +391,18 @@ export async function approveAgentComputeGrant(opts: {
     const expiresAt = new Date(
       Math.min(new Date(grant.expires_at).valueOf(), Date.now() + 30 * 60_000),
     );
-    const allowedVmIds = request.vm_id ? [request.vm_id] : [];
+    const projectVmAvailabilityScope =
+      request.action === "availability" &&
+      ["start-vm", "stop-vm"].includes(request.operation);
+    const allowedVmIds =
+      projectVmAvailabilityScope || !request.vm_id ? [] : [request.vm_id];
+    const approvedScope = projectVmAvailabilityScope
+      ? {
+          kind: "project-vm-availability",
+          operations: ["start-vm", "stop-vm"],
+          existing_resources_only: true,
+        }
+      : undefined;
     const updated = await client.query(
       `UPDATE compute_vm_turn_grants SET
        issued_by_account_id=$2,
@@ -388,15 +430,27 @@ export async function approveAgentComputeGrant(opts: {
         request.action,
         allowedVmIds,
         request.allow_create === true,
-        request.provider,
-        request.machine_class,
-        request.funding_mode,
-        Math.max(0, Number(request.active_vms ?? 0)),
-        Math.max(0, Number(request.hourly_usd ?? 0)),
-        Math.max(0, Number(request.total_authorized_usd ?? 0)),
-        Math.max(0, Number(request.ttl_minutes ?? 0)),
+        projectVmAvailabilityScope ? null : request.provider,
+        projectVmAvailabilityScope ? null : request.machine_class,
+        projectVmAvailabilityScope ? null : request.funding_mode,
+        projectVmAvailabilityScope
+          ? 0
+          : Math.max(0, Number(request.active_vms ?? 0)),
+        projectVmAvailabilityScope
+          ? 0
+          : Math.max(0, Number(request.hourly_usd ?? 0)),
+        projectVmAvailabilityScope
+          ? 0
+          : Math.max(0, Number(request.total_authorized_usd ?? 0)),
+        projectVmAvailabilityScope
+          ? 0
+          : Math.max(0, Number(request.ttl_minutes ?? 0)),
         expiresAt,
-        { approved_request: request, approved_at: new Date().toISOString() },
+        {
+          approved_request: request,
+          ...(approvedScope ? { approved_scope: approvedScope } : {}),
+          approved_at: new Date().toISOString(),
+        },
       ],
     );
     await client.query("COMMIT");

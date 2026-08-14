@@ -93,6 +93,28 @@ function approvedGrant(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function availabilityTurnGrant(overrides: Record<string, unknown> = {}) {
+  return approvedGrant({
+    allowed_vm_ids: [],
+    allowed_providers: [],
+    allowed_machine_classes: [],
+    funding_mode: null,
+    max_active_vms: 0,
+    max_hourly_usd: 0,
+    max_total_authorized_usd: 0,
+    max_ttl_minutes: 0,
+    metadata: {
+      approved_request: { action: "availability", ...request() },
+      approved_scope: {
+        kind: "project-vm-availability",
+        operations: ["start-vm", "stop-vm"],
+        existing_resources_only: true,
+      },
+    },
+    ...overrides,
+  });
+}
+
 beforeEach(() => {
   query.mockReset();
   clientQuery.mockReset();
@@ -242,6 +264,68 @@ it("authorizes the exact approved mutation and records its use", async () => {
   );
 });
 
+it("authorizes repeated start and stop operations across existing project VMs", async () => {
+  const anotherVmId = "00000000-0000-4000-8000-000000000099";
+  query
+    .mockResolvedValueOnce({ rows: [availabilityTurnGrant()] })
+    .mockResolvedValueOnce({ rows: [] });
+  await expect(
+    requireAgentComputeGrant({
+      auth: auth(),
+      action: "availability",
+      project_id,
+      vm_id: anotherVmId,
+      request: request({
+        operation: "start-vm",
+        operation_id: "b".repeat(64),
+        vm_id: anotherVmId,
+        provider: "nebius",
+        machine_class: "1gpu-16vcpu-200gb",
+        funding_mode: "site-funded",
+        active_vms: 12,
+        hourly_usd: 25,
+        total_authorized_usd: 1_000,
+        ttl_minutes: 10_000,
+      }),
+    }),
+  ).resolves.toBeUndefined();
+
+  query.mockReset();
+  query
+    .mockResolvedValueOnce({ rows: [availabilityTurnGrant()] })
+    .mockResolvedValueOnce({ rows: [] });
+  await expect(
+    requireAgentComputeGrant({
+      auth: auth(),
+      action: "availability",
+      project_id,
+      vm_id: anotherVmId,
+      request: request({
+        operation: "stop-vm",
+        operation_id: "c".repeat(64),
+        vm_id: anotherVmId,
+        hourly_usd: 0,
+        total_authorized_usd: 0,
+      }),
+    }),
+  ).resolves.toBeUndefined();
+});
+
+it("does not broaden turn availability authority to billable mutations", async () => {
+  query
+    .mockResolvedValueOnce({ rows: [availabilityTurnGrant()] })
+    .mockResolvedValueOnce({ rows: [] });
+  await expect(
+    requireAgentComputeGrant({
+      auth: auth(),
+      action: "billable",
+      project_id,
+      vm_id,
+      request: request({ operation: "set-vm-machine-type" }),
+    }),
+  ).rejects.toMatchObject({ code: "agent_grant_required" });
+});
+
 it("approves a pending request transactionally", async () => {
   const pending = {
     action: "availability",
@@ -268,6 +352,14 @@ it("approves a pending request transactionally", async () => {
   expect(
     clientQuery.mock.calls.map(([sql]) => sql.trim().split(/\s+/)[0]),
   ).toEqual(["BEGIN", "SELECT", "UPDATE", "COMMIT"]);
+  expect(clientQuery.mock.calls[2][1][3]).toEqual([]);
+  expect(clientQuery.mock.calls[2][1][13]).toMatchObject({
+    approved_scope: {
+      kind: "project-vm-availability",
+      operations: ["start-vm", "stop-vm"],
+      existing_resources_only: true,
+    },
+  });
   expect(release).toHaveBeenCalled();
 });
 

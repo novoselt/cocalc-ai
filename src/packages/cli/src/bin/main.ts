@@ -59,6 +59,7 @@ import {
   type AuthProfile,
   type GlobalAuthOptions,
 } from "../core/auth-config";
+import { resolveAgentTokenFromEnv } from "../core/agent-token";
 import {
   buildCookieHeader,
   cookieNameFor,
@@ -522,10 +523,7 @@ function shouldPreferHubConatAddressForAgentMode(): boolean {
   if (!apiUrl) {
     return false;
   }
-  const bearer =
-    `${process.env.COCALC_BEARER_TOKEN ?? ""}`.trim() ||
-    `${process.env.COCALC_AGENT_TOKEN ?? ""}`.trim();
-  return !!bearer;
+  return !!resolveAgentTokenFromEnv();
 }
 
 function asUtf8(value: unknown): string {
@@ -1171,8 +1169,7 @@ function maybeApplyLiteAgentAuth({
     !!normalizeOptionalSecret(globals.bearer) ||
     !!normalizeOptionalSecret(globals.apiKey) ||
     !!normalizeSecretValue(globals.hubPassword) ||
-    !!normalizeOptionalSecret(process.env.COCALC_BEARER_TOKEN) ||
-    !!normalizeOptionalSecret(process.env.COCALC_AGENT_TOKEN) ||
+    !!normalizeOptionalSecret(resolveAgentTokenFromEnv()) ||
     !!normalizeOptionalSecret(process.env.COCALC_API_KEY) ||
     !!normalizeSecretValue(process.env.COCALC_HUB_PASSWORD);
   if (hasExplicitAuth) return globals;
@@ -1260,12 +1257,9 @@ async function connectRemote({
     !!normalizeOptionalSecret(globals.apiKey) ||
     !!normalizeSecretValue(globals.hubPassword) ||
     !!normalizeOptionalSecret(globals.bearer);
-  const bearer =
-    globals.bearer ??
-    (allowEnvAuthDefaults ? process.env.COCALC_BEARER_TOKEN : undefined);
   const effectiveBearer =
-    bearer ??
-    (allowEnvAuthDefaults ? process.env.COCALC_AGENT_TOKEN : undefined);
+    globals.bearer ??
+    (allowEnvAuthDefaults ? resolveAgentTokenFromEnv() : undefined);
   const projectScopedAuth =
     !hasDirectAuth && !effectiveBearer && allowEnvAuthDefaults
       ? resolveProjectScopedAuth(process.env)
@@ -1497,7 +1491,7 @@ async function maybeReconnectAsRequestedAccount({
     normalizeOptionalSecret(globals.bearer) ||
     normalizeOptionalSecret(globals.apiKey) ||
     (!globals.disableEnvAuthDefaults &&
-      (normalizeOptionalSecret(process.env.COCALC_BEARER_TOKEN) ||
+      (normalizeOptionalSecret(resolveAgentTokenFromEnv()) ||
         normalizeOptionalSecret(process.env.COCALC_API_KEY)))
   ) {
     return;

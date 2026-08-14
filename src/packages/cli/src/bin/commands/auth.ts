@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describeProjectScopedAuth } from "../../core/auth-cookies";
+import { resolveAgentTokenFromEnv } from "../../core/agent-token";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 
 export type AuthCommandDeps = {
@@ -270,7 +271,9 @@ export function registerAuthCommand(
         const effective_remote_auth = effective.cookie
           ? "cookie"
           : (effective.bearer ??
-              (allowEnvAuthDefaults ? env.COCALC_BEARER_TOKEN : undefined))
+              (allowEnvAuthDefaults
+                ? resolveAgentTokenFromEnv(env)
+                : undefined))
             ? "bearer"
             : (effective.apiKey ??
                 (allowEnvAuthDefaults ? env.COCALC_API_KEY : undefined))
@@ -396,7 +399,7 @@ export function registerAuthCommand(
           has_cookie: !!effective.cookie,
           has_bearer: !!(
             effective.bearer ??
-            (allowEnvAuthDefaults ? env.COCALC_BEARER_TOKEN : undefined)
+            (allowEnvAuthDefaults ? resolveAgentTokenFromEnv(env) : undefined)
           ),
           has_hub_password: !!normalizeSecretValue(
             effective.hubPassword ??
