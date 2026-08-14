@@ -105,6 +105,8 @@ export const hubApi: HubApi = {
 
 const logger = getLogger("server:conat:api");
 
+const HUB_API_SUBJECTS = ["hub.*.*.api", "hub.agent.*.*.*.*.*.api"] as const;
+
 let activeApiRequests = 0;
 const activeApiRequestsByAccount = new Map<string, number>();
 type ActiveAccountApiRequest = { name: string; startedAt: number };
@@ -164,8 +166,8 @@ async function mainLoop() {
 }
 
 async function serve() {
-  const subject = "hub.*.*.api";
-  logger.debug(`initAPI -- subject='${subject}', options=`, {
+  logger.debug("initAPI", {
+    subjects: HUB_API_SUBJECTS,
     queue: "0",
   });
   // Load current ban/security state before accepting API traffic. The sync loop
@@ -173,15 +175,28 @@ async function serve() {
   await syncAccountSecurityStateOnce({ maxPages: 1000 });
   startAccountSecurityStateSyncLoop();
   const cn = await conat({ noCache: true });
-  const api = await cn.subscribe(subject, { queue: "0" });
-  for await (const mesg of api) {
-    (async () => {
-      try {
-        await handleMessage({ mesg });
-      } catch (err) {
-        logger.debug(`WARNING: unexpected error  - ${err}`);
-      }
-    })();
+  const subscriptions = await Promise.all(
+    HUB_API_SUBJECTS.map(async (subject) => ({
+      subject,
+      subscription: await cn.subscribe(subject, { queue: "0" }),
+    })),
+  );
+  try {
+    await Promise.race(
+      subscriptions.map(async ({ subject, subscription }) => {
+        for await (const mesg of subscription) {
+          void handleMessage({ mesg }).catch((err) => {
+            logger.debug(`WARNING: unexpected error - ${err}`);
+          });
+        }
+        throw new Error(`hub api subscription ended: ${subject}`);
+      }),
+    );
+  } finally {
+    for (const { subscription } of subscriptions) {
+      subscription.close();
+    }
+    cn.close();
   }
 }
 
