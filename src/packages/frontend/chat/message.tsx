@@ -2169,7 +2169,6 @@ export default function Message({
               : undefined
           }
           onContinue={
-            hasRetainedWork &&
             !effectiveGenerating &&
             !read_only &&
             isLastMessageInThread &&

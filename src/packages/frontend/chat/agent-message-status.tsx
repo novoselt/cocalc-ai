@@ -683,7 +683,7 @@ export function AgentMessageStatus({
                 : "Interrupt"}
           </Button>
         ) : null}
-        {!generating && outstandingWork > 0 && onContinue ? (
+        {!generating && onContinue ? (
           <Button type="primary" size="small" onClick={onContinue}>
             Continue
           </Button>

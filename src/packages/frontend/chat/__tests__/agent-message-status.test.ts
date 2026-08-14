@@ -254,6 +254,25 @@ describe("AgentMessageStatus", () => {
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
+  it("offers continuation after a stopped turn without retained work", () => {
+    const onContinue = jest.fn();
+    render(
+      React.createElement(AgentMessageStatus, {
+        show: true,
+        generating: false,
+        durationLabel: "0:10",
+        date: 1000,
+        logRefs: {},
+        activityContext: {} as any,
+        onContinue,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onContinue).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Manager finished/)).toBeNull();
+  });
+
   it("does not leave old pending subagents spinning after a turn completes", () => {
     render(
       React.createElement(AgentMessageStatus, {
