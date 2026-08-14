@@ -57,6 +57,14 @@ type LogRefs = {
   liveStream?: string;
 };
 
+export function reconcileAvailableSubagentEvents(
+  events: AcpStreamMessage[] | null | undefined,
+  activeThreadIds: readonly string[] | undefined,
+): AcpStreamMessage[] | null | undefined {
+  if (events == null) return events;
+  return reconcileSubagentEvents(events, activeThreadIds);
+}
+
 export type AttachedSteerState = "sending" | "sent" | "queued" | "not-sent";
 
 export interface AttachedSteerMessage {
@@ -614,10 +622,13 @@ export function AgentMessageStatus({
   }, [onDrawerOpenChange, showDrawer]);
 
   const effectiveLogEvents = useMemo(
-    () => reconcileSubagentEvents(logEvents ?? [], activeDescendantThreadIds),
+    () =>
+      reconcileAvailableSubagentEvents(logEvents, activeDescendantThreadIds),
     [activeDescendantThreadIds, logEvents],
   );
-  const activeSubagents = summarizeSubagentEvents(effectiveLogEvents).active;
+  const activeSubagents = summarizeSubagentEvents(
+    effectiveLogEvents ?? [],
+  ).active;
   const backgroundCommands = Math.max(
     0,
     Number.isFinite(backgroundTerminalProcesses)

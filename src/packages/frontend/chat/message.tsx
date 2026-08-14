@@ -2146,6 +2146,7 @@ export default function Message({
           }
           deleteLog={codexPreviewLog.deleteLog}
           activityLiveStatus={codexPreviewLog.liveStatus}
+          logEvents={codexPreviewLog.events}
           activeDescendantThreadIds={activeDescendantThreadIds}
           backgroundTerminalProcesses={backgroundTerminalProcesses}
           interruptRequested={retainedWorkStopRequested}

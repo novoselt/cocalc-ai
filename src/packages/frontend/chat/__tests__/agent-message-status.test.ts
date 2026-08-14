@@ -7,9 +7,37 @@ import {
   AgentMessageStatus,
   AttachedSteerStatusList,
   describeLastActivity,
+  reconcileAvailableSubagentEvents,
   resolveLiveRunStartMs,
   STALE_ACTIVITY_MS,
 } from "../agent-message-status";
+
+describe("reconcileAvailableSubagentEvents", () => {
+  it("preserves missing events so the activity panel can load its persisted log", () => {
+    expect(reconcileAvailableSubagentEvents(undefined, [])).toBeUndefined();
+    expect(reconcileAvailableSubagentEvents(null, [])).toBeNull();
+  });
+
+  it("reconciles events that have already been loaded", () => {
+    const events = [
+      {
+        type: "event",
+        seq: 1,
+        event: {
+          type: "subagent",
+          operationId: "spawn-1",
+          threadId: "child-1",
+          state: "running",
+        },
+      },
+    ] as any;
+
+    const reconciled = reconcileAvailableSubagentEvents(events, []);
+
+    expect(reconciled).toHaveLength(2);
+    expect((reconciled as any[])[1].event.state).toBe("unknown");
+  });
+});
 
 describe("describeLastActivity", () => {
   it("prefers the ACP start time over the row date for live timing", () => {
