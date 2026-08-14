@@ -119,6 +119,7 @@ import {
   shouldShowProjectRuntimeRecoveryBanner,
 } from "@cocalc/frontend/project/runtime-recovery";
 import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
+import { markStartupPhaseOnce } from "@cocalc/frontend/app/startup-phase";
 import { HostRecoveryBanner } from "./host-recovery-banner";
 
 const START_BANNER = false;
@@ -152,6 +153,9 @@ interface Props {
 }
 
 export const ProjectPage: React.FC<Props> = (props: Props) => {
+  if (props.is_active) {
+    markStartupPhaseOnce("project_page_render_started");
+  }
   const accountIsReady = !!useTypedRedux("account", "is_ready");
   const isLoggedIn = !!useTypedRedux("account", "is_logged_in");
   const userType = useTypedRedux("account", "user_type") as string | undefined;
@@ -160,6 +164,9 @@ export const ProjectPage: React.FC<Props> = (props: Props) => {
     | undefined;
   const groups = useTypedRedux("account", "groups") as string[] | undefined;
   const project = useRedux(["projects", "project_map", props.project_id]);
+  if (props.is_active && project != null) {
+    markStartupPhaseOnce("project_record_ready");
+  }
   if (!accountIsReady) {
     return <Loading />;
   }
@@ -319,7 +326,13 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const modal = useTypedRedux({ project_id }, "modal");
   const open_files = useTypedRedux({ project_id }, "open_files");
   const openFilesReady = open_files != null;
+  if (is_active && openFilesReady) {
+    markStartupPhaseOnce("project_open_files_ready");
+  }
   const open_files_order = useTypedRedux({ project_id }, "open_files_order");
+  if (is_active && open_files_order != null) {
+    markStartupPhaseOnce("project_open_files_order_ready");
+  }
   const active_project_tab = useTypedRedux(
     { project_id },
     "active_project_tab",
@@ -329,6 +342,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     React.useState<number>(80);
   useEffect(() => {
     if (!is_active || project == null || open_files_order == null) return;
+    markStartupPhaseOnce("project_surface_gate_ready");
     return recordSignedInSurfaceReady("project");
   }, [is_active, open_files_order, project]);
 

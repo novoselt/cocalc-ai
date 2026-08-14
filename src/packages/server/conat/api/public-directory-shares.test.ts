@@ -171,6 +171,9 @@ describe("public directory share conat API routing", () => {
     ).toHaveBeenCalledWith({
       path: "georeg/matrix-certificates/notebook",
     });
+    expect(mockCreateInterBayAccountLocalClient).toHaveBeenCalledWith(
+      expect.objectContaining({ dest_bay: "bay-1", timeout: 2_000 }),
+    );
   });
 
   it("continues legacy path lookup when one attached bay is unavailable", async () => {
