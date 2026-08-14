@@ -1,5 +1,6 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { fromJS } from "immutable";
+import { IntlProvider } from "react-intl";
 
 import { NBConvert } from "./nbconvert";
 
@@ -30,6 +31,15 @@ jest.mock("@cocalc/frontend/components", () => ({
 }));
 
 jest.mock("@cocalc/frontend/components/progress-estimate", () => () => null);
+
+jest.mock("@cocalc/frontend/components/copy-button", () => ({
+  __esModule: true,
+  default: ({ ariaLabel, value }: any) => (
+    <button aria-label={ariaLabel} data-copy-value={value}>
+      Copy
+    </button>
+  ),
+}));
 
 function createActions(fileExtension = ".py") {
   return {
@@ -131,5 +141,34 @@ describe("NBConvert", () => {
         path: "/home/user/analysis.txt",
       });
     });
+  });
+
+  it("shows a bounded, copyable error log", () => {
+    const error = "Traceback\nfinal conversion error";
+
+    render(
+      <IntlProvider locale="en">
+        <NBConvert
+          actions={createActions()}
+          path="analysis.ipynb"
+          project_id="project-1"
+          nbconvert={fromJS({
+            state: "done",
+            args: ["--to", "pdf"],
+            error,
+            time: Date.now(),
+          })}
+          nbconvert_dialog={fromJS({ to: "pdf" })}
+        />
+      </IntlProvider>,
+    );
+
+    const log = screen.getByRole("region", { name: "nbconvert error log" });
+    expect(log.textContent).toBe(error);
+    expect(log).toHaveAttribute("tabindex", "0");
+    expect(log).toHaveStyle({ maxHeight: "45vh", overflow: "auto" });
+    expect(
+      screen.getByRole("button", { name: "Copy full error log" }),
+    ).toHaveAttribute("data-copy-value", error);
   });
 });

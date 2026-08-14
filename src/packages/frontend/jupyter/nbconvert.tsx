@@ -13,6 +13,7 @@ import { useIntl } from "react-intl";
 
 import { redux } from "@cocalc/frontend/app-framework";
 import { A, Icon, Loading, TimeAgo } from "@cocalc/frontend/components";
+import CopyButton from "@cocalc/frontend/components/copy-button";
 import { labels } from "@cocalc/frontend/i18n";
 import { BASE_URL } from "@cocalc/frontend/misc/base-url";
 import * as misc from "@cocalc/util/misc";
@@ -118,7 +119,7 @@ const Error: React.FC<ErrorProps> = (props: ErrorProps) => {
     return <Loading />;
   } else {
     return (
-      <span>
+      <div style={{ minWidth: 0 }}>
         <h3>Error</h3>
         Running nbconvert failed with an error {render_time()}.{" "}
         {error.toLowerCase().includes("exporter") ? (
@@ -132,13 +133,36 @@ const Error: React.FC<ErrorProps> = (props: ErrorProps) => {
             again.
           </>
         )}
-        <pre
-          ref={preNode}
-          style={{ maxHeight: "40vh", margin: "5px 20px", fontSize: "10px" }}
-        >
-          {error}
-        </pre>
-      </span>
+        <div style={{ minWidth: 0, marginTop: "8px" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <CopyButton
+              ariaLabel="Copy full error log"
+              size="small"
+              value={error}
+            />
+          </div>
+          <pre
+            aria-label="nbconvert error log"
+            ref={preNode}
+            role="region"
+            tabIndex={0}
+            style={{
+              boxSizing: "border-box",
+              fontSize: "12px",
+              lineHeight: 1.4,
+              margin: "4px 0 0",
+              maxHeight: "45vh",
+              maxWidth: "100%",
+              overflow: "auto",
+              padding: "12px",
+              whiteSpace: "pre",
+              width: "100%",
+            }}
+          >
+            {error}
+          </pre>
+        </div>
+      </div>
     );
   }
 };
