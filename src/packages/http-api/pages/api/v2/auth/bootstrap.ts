@@ -11,6 +11,8 @@ import { getImpersonationBootstrapInfo } from "@cocalc/server/auth/impersonation
 import { getClusterAccountById } from "@cocalc/server/inter-bay/accounts";
 import isPost from "@cocalc/http-api/lib/api/is-post";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import basePath from "@cocalc/backend/base-path";
+import { clientProtocolCapabilities } from "@cocalc/util/client-capabilities";
 
 export default async function bootstrap(req, res) {
   if (!isPost(req, res)) {
@@ -22,6 +24,7 @@ export default async function bootstrap(req, res) {
     return;
   }
   const account_id = await getAccountId(req);
+  const client_capabilities = clientProtocolCapabilities(basePath);
   if (!account_id) {
     const hinted_home_bay_id =
       `${req.cookies?.[HOME_BAY_ID_COOKIE_NAME] ?? ""}`.trim() ||
@@ -30,6 +33,7 @@ export default async function bootstrap(req, res) {
       signed_in: false,
       home_bay_id: hinted_home_bay_id,
       home_bay_url: await getBayPublicOriginForRequest(req, hinted_home_bay_id),
+      client_capabilities,
     });
     return;
   }
@@ -46,5 +50,6 @@ export default async function bootstrap(req, res) {
     home_bay_id,
     home_bay_url: await getBayPublicOriginForRequest(req, home_bay_id),
     impersonation: await getImpersonationBootstrapInfo({ req, account_id }),
+    client_capabilities,
   });
 }

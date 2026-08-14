@@ -1,6 +1,11 @@
 # CoCalc React Native First Vertical Slice Plan
 
-Status: proposed implementation plan as of 2026-08-14.
+Status: first vertical slice implemented locally as of 2026-08-14. The Expo
+development build has compiled, installed, and loaded its JavaScript bundle in
+an iPhone simulator. Focused package tests and the production iOS bundle export
+pass. Interactive authentication/chat validation against local and remote
+CoCalc deployments, physical-device validation, and release signing remain as
+follow-up validation.
 
 ## Executive Decision
 
