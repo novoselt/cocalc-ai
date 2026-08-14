@@ -2296,6 +2296,7 @@ export interface Hosts {
     account_id: string;
     project_id: string;
     ttl_seconds?: number;
+    session_id?: string;
   }) => Promise<{
     host_id: string;
     token: string;

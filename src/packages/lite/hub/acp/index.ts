@@ -9310,20 +9310,36 @@ async function processPendingAcpSteersOnce(): Promise<void> {
     for (const row of listPendingAcpSteers()) {
       const request = decodeAcpSteerRequest(row);
       try {
+        const candidateIds = resolveSteerCandidateIds({
+          project_id: row.project_id,
+          path: row.path,
+          thread_id: row.thread_id,
+          session_id: request.session_id,
+          chat: request.chat,
+        }).concat(decodeAcpSteerCandidateIds(row));
         const result = await trySteerCandidateIds({
           threadId: row.thread_id,
           chat: request.chat,
           request,
-          candidateIds: resolveSteerCandidateIds({
-            project_id: row.project_id,
-            path: row.path,
-            thread_id: row.thread_id,
-            session_id: request.session_id,
-            chat: request.chat,
-          }).concat(decodeAcpSteerCandidateIds(row)),
+          candidateIds,
         });
         if (result.state === "steered") {
           markAcpSteerHandled({ id: row.id });
+          continue;
+        }
+        // During drain/replace, every worker can observe the shared steer
+        // queue, but only the worker holding the live turn can deliver it.
+        // Leave the request pending for that worker instead of converting it
+        // into a follow-up turn on a non-owning worker.
+        if (
+          result.state === "missing" &&
+          hasOtherWorkerRunningAcpTurn({
+            project_id: row.project_id,
+            path: row.path,
+            thread_id: row.thread_id,
+            candidateIds,
+          })
+        ) {
           continue;
         }
         await fallbackAcpSteerToQueuedTurn(request);
@@ -9518,7 +9534,6 @@ async function attemptAcpSteerRequest(
   }
   if (
     liteUseDetachedAcpWorker() &&
-    !acpExecutionOwnedByCurrentProcess &&
     hasOtherWorkerRunningAcpTurn({
       project_id: projectId,
       path: request.chat.path,
@@ -10265,6 +10280,7 @@ export function getAcpAgentRuntimeStatus(): {
 }
 
 export const acpTestInternals = {
+  hasOtherWorkerRunningAcpTurn,
   noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,
   prepareQueuedUserMessageForExecution,

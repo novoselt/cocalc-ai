@@ -3959,6 +3959,55 @@ describe("queued ACP user message projection", () => {
   });
 });
 
+describe("cross-worker ACP guidance routing", () => {
+  it("detects a matching live turn owned by another worker", () => {
+    (turns.listRunningAcpTurnLeases as any).mockReturnValue([
+      {
+        project_id: "p",
+        path: "chat",
+        thread_id: "thread-other-worker",
+        session_id: "session-other-worker",
+        state: "running",
+        owner_instance_id: "other-worker",
+      },
+    ]);
+
+    expect(
+      acpTestInternals.hasOtherWorkerRunningAcpTurn({
+        project_id: "p",
+        path: "chat",
+        thread_id: "thread-other-worker",
+        candidateIds: ["session-other-worker"],
+      }),
+    ).toBe(true);
+    expect(turns.listRunningAcpTurnLeases).toHaveBeenCalledWith({
+      exclude_owner_instance_id: expect.any(String),
+    });
+  });
+
+  it("does not route guidance to an unrelated live turn", () => {
+    (turns.listRunningAcpTurnLeases as any).mockReturnValue([
+      {
+        project_id: "other-project",
+        path: "chat",
+        thread_id: "thread-other-worker",
+        session_id: "session-other-worker",
+        state: "running",
+        owner_instance_id: "other-worker",
+      },
+    ]);
+
+    expect(
+      acpTestInternals.hasOtherWorkerRunningAcpTurn({
+        project_id: "p",
+        path: "chat",
+        thread_id: "thread-other-worker",
+        candidateIds: ["session-other-worker"],
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("recoverCurrentWorkerStuckAcpTurns", () => {
   it("repairs a running lease owned by the current worker when no live writer remains", async () => {
     const { syncdb, sets, setCurrent } = makeFakeSyncDB();

@@ -2781,16 +2781,19 @@ describe("CodexAppServerAgent", () => {
         }
       });
 
+    const setAgentSessionKey = jest.fn(async () => {});
+    const spawnCodexAppServer = jest.fn(async () => ({
+      proc: makeProc(++spawnCount) as any,
+      cmd: "fake-codex",
+      args: ["app-server"],
+      cwd: "/tmp/project",
+      setAgentSessionKey,
+    }));
     setCodexProjectSpawner({
       spawnCodexExec: async () => {
         throw new Error("unexpected codex exec spawn");
       },
-      spawnCodexAppServer: async () => ({
-        proc: makeProc(++spawnCount) as any,
-        cmd: "fake-codex",
-        args: ["app-server"],
-        cwd: "/tmp/project",
-      }),
+      spawnCodexAppServer,
     });
 
     const agent = new CodexAppServerAgent();
@@ -2801,6 +2804,14 @@ describe("CodexAppServerAgent", () => {
       config: {
         workingDirectory: "/tmp/project",
       } as any,
+      chat: {
+        project_id: "00000000-0000-4000-8000-000000000000",
+        path: "research.chat",
+        message_date: "2026-08-14T12:00:00.001Z",
+        user_message_date: "2026-08-14T12:00:00.000Z",
+        sender_id: "00000000-0000-4000-8000-000000000001",
+        thread_id: "research-thread",
+      },
       stream: async () => {},
     };
 
@@ -2811,6 +2822,11 @@ describe("CodexAppServerAgent", () => {
     await agent.evaluate({
       ...baseRequest,
       prompt: "second turn",
+      chat: {
+        ...baseRequest.chat,
+        message_date: "2026-08-14T12:05:00.001Z",
+        user_message_date: "2026-08-14T12:05:00.000Z",
+      },
     });
 
     expect(
@@ -2827,6 +2843,14 @@ describe("CodexAppServerAgent", () => {
       }),
     ]);
     expect(spawnCount).toBe(1);
+    expect(spawnCodexAppServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "research-thread\u00002026-08-14T12:00:00.000Z",
+      }),
+    );
+    expect(setAgentSessionKey).toHaveBeenCalledWith(
+      "research-thread\u00002026-08-14T12:05:00.000Z",
+    );
   });
 
   it("reports and retains background terminals and subagents after a turn", async () => {

@@ -374,8 +374,22 @@ type SpawnedCodexAppServer = {
   appServerLogin?: CodexAppServerLoginHint;
   handleAppServerRequest?: CodexAppServerRequestHandler;
   runtimeEnv?: Record<string, string>;
+  setAgentSessionKey?: (agentSessionKey: string) => Promise<void>;
   siteFundedTurn?: CodexSiteFundedTurnRuntime;
 };
+
+function agentTurnSessionKey(
+  request: AcpEvaluateRequest,
+  fallback: string,
+): string {
+  const threadId = `${request.chat?.thread_id ?? ""}`.trim();
+  const turnId =
+    `${request.chat?.user_message_date ?? ""}`.trim() ||
+    `${request.chat?.recovery_parent_op_id ?? ""}`.trim() ||
+    `${request.chat?.message_id ?? ""}`.trim() ||
+    fallback;
+  return `${threadId}\0${turnId}`;
+}
 
 function authSourceForSpawned(
   spawned: Pick<SpawnedCodexAppServer, "authSource" | "appServerLogin">,
@@ -1977,6 +1991,7 @@ export class CodexAppServerAgent implements AcpAgent {
     cwd: string;
     runtimeEnv: Record<string, string>;
   }): Promise<{ runtime: CodexAppServerRuntime; created: boolean }> {
+    const agentSessionKey = agentTurnSessionKey(request, session.sessionId);
     let runtime = this.runtimesByAlias.get(session.sessionId);
     if (runtime && !this.runtimeMatchesRequest(runtime, request, cwd)) {
       let backgroundTerminalCount = runtime.backgroundTerminalCount;
@@ -2007,6 +2022,7 @@ export class CodexAppServerAgent implements AcpAgent {
         throw new Error("This Codex thread already has an active turn.");
       }
       this.clearRuntimeTimers(runtime);
+      await runtime.spawned.setAgentSessionKey?.(agentSessionKey);
       runtime.chat = request.chat;
       runtime.managerState = "completed";
       runtime.lastOutstandingSignature = undefined;
@@ -2030,6 +2046,7 @@ export class CodexAppServerAgent implements AcpAgent {
     const spawned = await this.spawnAppServer({
       projectId: request.chat?.project_id ?? request.project_id,
       accountId: request.account_id,
+      agentSessionKey,
       cwd,
       env: runtimeEnv,
       siteFundedTurn: {
@@ -3634,6 +3651,7 @@ export class CodexAppServerAgent implements AcpAgent {
   private async spawnAppServer({
     projectId,
     accountId,
+    agentSessionKey,
     cwd,
     env,
     siteFundedTurn,
@@ -3641,6 +3659,7 @@ export class CodexAppServerAgent implements AcpAgent {
   }: {
     projectId: string;
     accountId?: string;
+    agentSessionKey?: string;
     cwd: string;
     env?: NodeJS.ProcessEnv;
     siteFundedTurn?: CodexSiteFundedTurnRequest;
@@ -3651,6 +3670,7 @@ export class CodexAppServerAgent implements AcpAgent {
       const spawned = await projectSpawner.spawnCodexAppServer({
         projectId,
         accountId,
+        agentSessionKey,
         cwd,
         env,
         siteFundedTurn,
