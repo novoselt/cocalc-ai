@@ -591,7 +591,6 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             "use only one of --ssh-public-key, --ssh-public-key-value, or --no-ssh-key",
           );
         }
-        const hasExplicitKey = keySources.length > 0;
         const key =
           opts.sshKey === false
             ? { key: "", path: undefined }
@@ -625,7 +624,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           home_volume: opts.homeVolume,
           ssh_public_key: key.key,
           configure_project_ssh:
-            opts.configureProjectSsh !== false && !hasExplicitKey,
+            opts.sshKey !== false && opts.configureProjectSsh !== false,
           idempotency_key: randomUUID(),
         });
         progress(

@@ -288,6 +288,23 @@ describe("vm create", () => {
       createCalls[0]?.ssh_public_key,
       "ssh-ed25519 AAAAUSER user@example.com",
     );
+    assert.equal(createCalls[0]?.configure_project_ssh, true);
+  });
+
+  it("can use a custom key without maintaining the project SSH alias", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "custom-key",
+      "--project",
+      "project-id",
+      "--ssh-public-key-value",
+      "ssh-ed25519 AAAAUSER user@example.com",
+      "--no-configure-project-ssh",
+    ]);
     assert.equal(createCalls[0]?.configure_project_ssh, false);
   });
 
