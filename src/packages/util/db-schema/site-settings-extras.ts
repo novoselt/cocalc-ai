@@ -365,6 +365,7 @@ export type SiteSettingsExtrasKeys =
   | "project_hosts_ssh_public_keys"
   | "google_cloud_service_account_json"
   | "project_hosts_google_prefix"
+  | "project_hosts_route_mode"
   | "project_hosts_software_base_url"
   | "project_hosts_runtime_retention_policy"
   | "project_hosts_bootstrap_channel"
@@ -1943,6 +1944,21 @@ export const EXTRAS: SettingsExtras = {
     valid: () => true,
     group: "Compute / Project Hosts",
     subgroup: "Google Cloud",
+  },
+  project_hosts_route_mode: {
+    name: "Project Hosts: Hub Route Mode",
+    desc: "Controls how hubs connect to managed project hosts. `auto` uses private GCP routing when available and public routing for other providers. `internal` explicitly selects private GCP routing. `public` routes through each host's public Cloudflare/DNS URL, which is required when the hub and project hosts are in separate cloud projects or VPCs.",
+    default: "auto",
+    to_val: to_trimmed_str,
+    valid: ["auto", "internal", "public"],
+    valid_labels: {
+      auto: "Automatic (private GCP routing)",
+      internal: "Internal/private network",
+      public: "Public host URL",
+    },
+    tags: ["Project Hosts", "Cloud"],
+    group: "Compute / Project Hosts",
+    subgroup: "Networking",
   },
   project_hosts_software_base_url: {
     name: "Project Hosts: Software Base URL",
