@@ -453,6 +453,93 @@ describe("CodexAppServerAgent", () => {
     ]);
   });
 
+  it("streams completed app-server agent messages when no delta was emitted", async () => {
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, {
+            thread: { id: "thr-completed-message-1" },
+          });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-message-1" } });
+          setImmediate(() => {
+            fake.sendNotification("turn/started", {
+              turn: { id: "turn-message-1", status: "inProgress" },
+            });
+            fake.sendNotification("item/completed", {
+              threadId: "thr-completed-message-1",
+              turnId: "turn-message-1",
+              item: {
+                type: "agentMessage",
+                id: "msg-completed-1",
+                text: "Manager progress update",
+                phase: "commentary",
+              },
+            });
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-message-1", status: "completed" },
+            });
+          });
+          break;
+        default:
+          if (typeof message.id === "number") {
+            fake.sendResponse(message.id, {});
+          }
+      }
+    });
+
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const agent = new CodexAppServerAgent();
+    const streamPayloads: any[] = [];
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "say progress",
+      stream: async (payload) => {
+        if (payload) {
+          streamPayloads.push(payload);
+        }
+      },
+      config: {
+        workingDirectory: "/tmp/project",
+      } as any,
+    });
+
+    expect(streamPayloads).toEqual(
+      expect.arrayContaining([
+        {
+          type: "event",
+          event: {
+            type: "message",
+            text: "Manager progress update",
+            delta: false,
+          },
+        },
+        {
+          type: "summary",
+          finalResponse: "Manager progress update",
+          usage: undefined,
+          threadId: "thr-completed-message-1",
+        },
+      ]),
+    );
+  });
+
   it("clears persisted Codex goals before normal chat turns", async () => {
     const rootHostPath = mkdtempSync(path.join(tmpdir(), "codex-root-"));
     const codexHome = path.join(rootHostPath, ".codex");

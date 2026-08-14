@@ -2010,7 +2010,7 @@ export function ChatRoomThreadPanel({
         >
           <img
             src={threadImagePreview}
-            alt="Chat image"
+            alt="Chat attachment"
             style={{
               width: 84,
               height: 84,

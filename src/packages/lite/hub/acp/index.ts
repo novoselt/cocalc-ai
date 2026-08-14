@@ -364,6 +364,10 @@ const ACP_LOG_PERSIST_SLOW_MS = envNumber(
   "COCALC_ACP_LOG_PERSIST_SLOW_MS",
   150,
 );
+const ACP_LOG_CHECKPOINT_INTERVAL_MS = envNumber(
+  "COCALC_ACP_LOG_CHECKPOINT_INTERVAL_MS",
+  30_000,
+);
 const ACP_LIVE_LOG_PUBLISH_SLOW_MS = envNumber(
   "COCALC_ACP_LIVE_LOG_PUBLISH_SLOW_MS",
   100,
@@ -1681,6 +1685,9 @@ export class ChatStreamWriter {
   private logStoreName: string;
   private logKey: string;
   private logSubject: string;
+  private logPersistChain: Promise<void> = Promise.resolve();
+  private lastLogCheckpointAt = 0;
+  private pendingLogCheckpoint = false;
   private liveLogStream?: AStream<AcpStreamMessage | AcpStreamMessage[]>;
   private liveLogStreamName: string;
   private liveLogInitPromise?: Promise<
@@ -2503,6 +2510,7 @@ export class ChatStreamWriter {
     const shouldAutoRotate =
       message.type === "summary" || message.type === "error";
     this.processPayload(message, { persist: true });
+    this.scheduleLogCheckpoint(message);
     const isLastMessage =
       message.type === "summary" || message.type === "error" || this.finished;
     if (isLastMessage) {
@@ -3444,6 +3452,7 @@ export class ChatStreamWriter {
         time: Date.now(),
       };
       this.processPayload(message, { persist: true });
+      this.scheduleLogCheckpoint(message);
     })();
   }
 
@@ -3881,6 +3890,55 @@ export class ChatStreamWriter {
   }
 
   private async persistLog(): Promise<void> {
+    if (this.events.length === 0) return;
+    const persist = this.logPersistChain
+      .catch(() => {
+        // Earlier best-effort checkpoints must not prevent the terminal persist.
+      })
+      .then(() => this.persistLogNow());
+    this.logPersistChain = persist;
+    return await persist;
+  }
+
+  private scheduleLogCheckpoint(message: AcpStreamMessage): void {
+    if (
+      message.type === "summary" ||
+      message.type === "error" ||
+      this.finished ||
+      this.events.length === 0
+    ) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      now - this.lastLogCheckpointAt < ACP_LOG_CHECKPOINT_INTERVAL_MS ||
+      this.pendingLogCheckpoint
+    ) {
+      return;
+    }
+    this.pendingLogCheckpoint = true;
+    this.lastLogCheckpointAt = now;
+    const persist = this.logPersistChain
+      .catch(() => {
+        // Keep checkpoint failures isolated and let later persists proceed.
+      })
+      .then(() => this.persistLogNow())
+      .catch((err) => {
+        logger.warn("failed to checkpoint acp log", {
+          chatKey: this.chatKey,
+          path: this.metadata.path,
+          logKey: this.logKey,
+          events: this.events.length,
+          err,
+        });
+      })
+      .finally(() => {
+        this.pendingLogCheckpoint = false;
+      });
+    this.logPersistChain = persist;
+  }
+
+  private async persistLogNow(): Promise<void> {
     if (this.events.length === 0) return;
     const store = this.getLogStore();
     let lastError: unknown;
