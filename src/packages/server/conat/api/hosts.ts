@@ -8912,6 +8912,7 @@ export async function rolloutHostManagedComponents({
   id,
   components,
   desired_version,
+  record_runtime_deployments,
   base_url,
   reason,
 }: {
@@ -8919,6 +8920,7 @@ export async function rolloutHostManagedComponents({
   id: string;
   components: ManagedComponentKind[];
   desired_version?: string;
+  record_runtime_deployments?: boolean;
   base_url?: string;
   reason?: string;
 }): Promise<HostLroResponse> {
@@ -8931,6 +8933,7 @@ export async function rolloutHostManagedComponents({
         id,
         components,
         desired_version,
+        record_runtime_deployments,
         base_url,
         reason,
       });
@@ -8946,6 +8949,7 @@ export async function rolloutHostManagedComponents({
       account_id,
       components,
       desired_version,
+      record_runtime_deployments,
       base_url,
       reason,
     },
@@ -8953,6 +8957,7 @@ export async function rolloutHostManagedComponents({
       hostId: row.id,
       components,
       desiredVersion: desired_version,
+      recordRuntimeDeployments: record_runtime_deployments,
       baseUrl: base_url,
       reason,
     }),

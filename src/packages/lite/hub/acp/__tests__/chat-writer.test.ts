@@ -1856,7 +1856,7 @@ describe("ChatStreamWriter", () => {
         text: "This snapshot must not be dropped.",
         delta: true,
       },
-      seq: 1,
+      seq: 0,
       time: 1000,
     } as AcpStreamMessage);
     await writer.waitForLivePreviewFlush();
@@ -1864,7 +1864,7 @@ describe("ChatStreamWriter", () => {
     expect(publishAttempts).toBe(2);
     expect(flattenLivePayloads(previewPayloads)).toEqual([
       expect.objectContaining({
-        seq: 1,
+        seq: 0,
         event: expect.objectContaining({
           text: "This snapshot must not be dropped.",
           delta: false,

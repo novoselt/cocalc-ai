@@ -260,6 +260,7 @@ function applyProjectRuntimeCliEnv(
   env.COCALC_CLI_BIN = getProjectRuntimeCliPath();
   env.COCALC_CLI_CMD = getProjectRuntimeCliCommand();
   env.COCALC_CLI_AGENT_MODE = "1";
+  env.COCALC_PROFILE = "_env";
   if (accountId?.trim()) {
     env.COCALC_ACCOUNT_ID = accountId.trim();
   }
