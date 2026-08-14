@@ -3,8 +3,8 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Select, Typography } from "antd";
-import { useMemo } from "react";
+import { Button, Popover, Select, Typography } from "antd";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
 
 const { Paragraph, Text } = Typography;
@@ -84,5 +84,61 @@ export function CodexSubagentConcurrencyField({
         change applies when a Codex session is next loaded.
       </Paragraph>
     </div>
+  );
+}
+
+export function CodexSubagentConcurrencyButton() {
+  const otherSettings = useTypedRedux("account", "other_settings");
+  const value = readCodexMaxConcurrentSubagents(otherSettings) ?? 3;
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => contentRef.current?.focus());
+  }, [open]);
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    requestAnimationFrame(() => buttonRef.current?.focus());
+  };
+
+  return (
+    <Popover
+      trigger="click"
+      placement="bottomRight"
+      open={open}
+      onOpenChange={setOpen}
+      destroyOnHidden
+      content={
+        <div
+          id={contentId}
+          ref={contentRef}
+          role="dialog"
+          aria-label="Parallel subagents settings"
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            closeAndRestoreFocus();
+          }}
+          style={{ width: 320, maxWidth: "min(320px, calc(100vw - 48px))" }}
+        >
+          <CodexSubagentConcurrencyField compact />
+        </div>
+      }
+    >
+      <Button
+        ref={buttonRef}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={contentId}
+      >
+        Parallel subagents: {value}
+      </Button>
+    </Popover>
   );
 }
