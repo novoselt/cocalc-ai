@@ -8,6 +8,9 @@ const clientQuery = jest.fn();
 const release = jest.fn();
 const connect = jest.fn(async () => ({ query: clientQuery, release }));
 const centralLog = jest.fn(async () => undefined);
+const siteUrl = jest.fn(
+  async (path?: string) => `https://cocalc.test/${path ?? ""}`,
+);
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -17,6 +20,11 @@ jest.mock("@cocalc/database/pool", () => ({
 jest.mock("@cocalc/database/postgres/central-log", () => ({
   __esModule: true,
   default: (...args: any[]) => centralLog(...args),
+}));
+
+jest.mock("../hub/site-url", () => ({
+  __esModule: true,
+  default: (...args: any[]) => siteUrl(...args),
 }));
 
 import {
@@ -79,6 +87,7 @@ function approvedGrant(overrides: Record<string, unknown> = {}) {
     max_hourly_usd: 0.12,
     max_total_authorized_usd: 0.24,
     max_ttl_minutes: 120,
+    expires_at: new Date(Date.now() + 600_000),
     metadata: { approved_request: approvedRequest },
     ...overrides,
   };
@@ -137,7 +146,13 @@ it("records an exact pending mutation request", async () => {
       vm_id,
       request: request(),
     }),
-  ).rejects.toMatchObject({ code: "agent_grant_required", grant_id });
+  ).rejects.toMatchObject({
+    code: "agent_grant_required",
+    request_id: grant_id,
+    grant_id,
+    approval_url: `https://cocalc.test/projects/${project_id}/vms?agent_grant=${grant_id}`,
+    project_id,
+  });
   expect(query.mock.calls[1][1][1].pending_request).toMatchObject({
     action: "availability",
     operation: "start-vm",
@@ -150,6 +165,38 @@ it("records an exact pending mutation request", async () => {
       event: "managed_compute_agent_grant_requested",
     }),
   );
+});
+
+it("does not rewrite or re-log the same pending mutation request", async () => {
+  query.mockResolvedValueOnce({
+    rows: [
+      approvedGrant({
+        allowed_actions: [],
+        metadata: {
+          pending_request: {
+            action: "availability",
+            ...request(),
+            requested_at: new Date().toISOString(),
+          },
+        },
+      }),
+    ],
+  });
+
+  await expect(
+    requireAgentComputeGrant({
+      auth: auth(),
+      action: "availability",
+      project_id,
+      vm_id,
+      request: request(),
+    }),
+  ).rejects.toMatchObject({
+    code: "agent_grant_required",
+    request_id: grant_id,
+  });
+  expect(query).toHaveBeenCalledTimes(1);
+  expect(centralLog).not.toHaveBeenCalled();
 });
 
 it("requires exact operation identity and enforces the approved envelope", async () => {

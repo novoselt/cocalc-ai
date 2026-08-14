@@ -58,6 +58,7 @@ import * as growthAnalytics from "./growth-analytics";
 
 import getLogger from "@cocalc/backend/logger";
 import { type HubApi, getUserId, transformArgs } from "@cocalc/conat/hub/api";
+import { hubApiErrorAttrs } from "@cocalc/conat/hub/api/error-attrs";
 import { conat } from "@cocalc/backend/conat";
 import { delay } from "awaiting";
 import { recordServiceAdmissionDenialLocal } from "./service-admission-denials";
@@ -350,7 +351,7 @@ export async function handleApiRequest({ request, mesg }) {
     resp = null;
     headers = {
       error: err.message ? err.message : `${err}`,
-      error_attrs: { code: err.code, subject: err.subject },
+      error_attrs: hubApiErrorAttrs(err),
     };
   }
   try {

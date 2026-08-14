@@ -111,6 +111,11 @@ import {
   printArrayTable,
 } from "./core/cli-output";
 import {
+  type AgentGrantApprovalDetails,
+  isAgentGrantRequiredError,
+  waitForAgentGrantApproval,
+} from "./core/agent-grant-approval";
+import {
   canOfferInteractiveAuthLogin,
   canOfferInteractiveFreshAuth,
   canOfferInteractiveProjectAccountBootstrap,
@@ -1690,6 +1695,23 @@ function closeCommandContext(ctx: CommandContext | undefined): void {
   }
 }
 
+function reportAgentGrantPending(
+  globals: GlobalOptions,
+  details: AgentGrantApprovalDetails,
+): void {
+  if (globals.json || globals.output === "json") {
+    process.stderr.write(
+      `${JSON.stringify({ event: "agent_grant_required", ...details })}\n`,
+    );
+    return;
+  }
+  process.stderr.write(
+    `This VM action needs account approval${details.request_id ? ` (request ${details.request_id})` : ""}.\n` +
+      `${details.approval_url ?? "Open this project's VMs page to approve it."}\n` +
+      "Waiting for approval; this command will continue automatically.\n",
+  );
+}
+
 async function withContext(
   command: unknown,
   commandName: string,
@@ -1761,6 +1783,12 @@ async function withContext(
         runInteractiveFreshAuth(globals, apiBaseUrl);
         ctx = await contextForGlobals(globals);
         data = await fn(ctx);
+      } else if (isAgentGrantRequiredError(error)) {
+        data = await waitForAgentGrantApproval({
+          initialError: error,
+          operation: () => fn(ctx!),
+          onPending: (details) => reportAgentGrantPending(globals, details),
+        });
       } else {
         throw error;
       }

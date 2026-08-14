@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import getPool from "@cocalc/database/pool";
 import centralLog from "@cocalc/database/postgres/central-log";
+import siteUrl from "../hub/site-url";
 
 export interface ComputeAgentAuth {
   account_id: string;
@@ -34,6 +35,19 @@ export interface ComputeAgentGrantRequest {
   hourly_usd?: number;
   total_authorized_usd?: number;
   ttl_minutes?: number;
+}
+
+function isSamePendingRequest(
+  current: Record<string, unknown> | undefined,
+  next: Record<string, unknown>,
+): boolean {
+  return Boolean(
+    current &&
+    current.action === next.action &&
+    current.operation === next.operation &&
+    current.operation_id === next.operation_id &&
+    (current.vm_id ?? null) === (next.vm_id ?? null),
+  );
 }
 
 function validateAgentAuth(auth: ComputeAgentAuth): void {
@@ -140,7 +154,7 @@ export async function requireAgentComputeGrant(opts: {
       (approvedRequest?.vm_id ?? null) ===
         (opts.vm_id ?? opts.request?.vm_id ?? null));
   if (grant && (!allowedActions.includes(opts.action) || !exactMutation)) {
-    const request = {
+    const request: Record<string, unknown> = {
       action: opts.action,
       operation: opts.request?.operation ?? null,
       operation_id: opts.request?.operation_id ?? null,
@@ -155,28 +169,41 @@ export async function requireAgentComputeGrant(opts: {
       ttl_minutes: Number(opts.request?.ttl_minutes ?? 0),
       requested_at: new Date().toISOString(),
     };
-    await pool.query(
-      `UPDATE compute_vm_turn_grants
-          SET metadata=COALESCE(metadata,'{}'::jsonb) || $2::jsonb
-        WHERE grant_id=$1`,
-      [grant.grant_id, { pending_request: request }],
+    if (!isSamePendingRequest(grant.metadata?.pending_request, request)) {
+      await pool.query(
+        `UPDATE compute_vm_turn_grants
+            SET metadata=COALESCE(metadata,'{}'::jsonb) || $2::jsonb
+          WHERE grant_id=$1`,
+        [grant.grant_id, { pending_request: request }],
+      );
+      await centralLog({
+        event: "managed_compute_agent_grant_requested",
+        value: {
+          account_id: opts.auth.account_id,
+          project_id: opts.project_id,
+          grant_id: grant.grant_id,
+          turn_id: grant.turn_id,
+          session_id: grant.session_id,
+          request,
+        },
+      });
+    }
+    const approvalUrl = await siteUrl(
+      `projects/${opts.project_id}/vms?agent_grant=${encodeURIComponent(grant.grant_id)}`,
     );
-    await centralLog({
-      event: "managed_compute_agent_grant_requested",
-      value: {
-        account_id: opts.auth.account_id,
-        project_id: opts.project_id,
-        grant_id: grant.grant_id,
-        turn_id: grant.turn_id,
-        session_id: grant.session_id,
-        request,
-      },
-    });
+    const expiresAt = new Date(grant.expires_at).toISOString();
     throw Object.assign(
       new Error(
-        `this VM action needs temporary account approval; open the attached project's VMs page and approve request ${grant.grant_id}`,
+        `this VM action needs temporary account approval; approve request ${grant.grant_id} at ${approvalUrl}`,
       ),
-      { code: "agent_grant_required", grant_id: grant.grant_id },
+      {
+        code: "agent_grant_required",
+        request_id: grant.grant_id,
+        grant_id: grant.grant_id,
+        approval_url: approvalUrl,
+        expires_at: expiresAt,
+        project_id: opts.project_id,
+      },
     );
   }
   if (

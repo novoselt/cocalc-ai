@@ -173,6 +173,7 @@ async function authorizeComputeMutation(opts: {
 }) {
   if (opts.actor.agent_auth) {
     const semanticRequest = { ...(opts.request ?? {}) };
+    const requestedOperationId = `${semanticRequest.operation_id ?? ""}`;
     delete semanticRequest.operation_id;
     const operationId = createHash("sha256")
       .update(opts.actor.agent_auth.token_fingerprint)
@@ -183,15 +184,9 @@ async function authorizeComputeMutation(opts: {
       .update("\0")
       .update(opts.vm_id ?? "")
       .update("\0")
-      .update(
-        JSON.stringify(
-          Object.fromEntries(
-            Object.entries(semanticRequest).sort(([a], [b]) =>
-              a.localeCompare(b),
-            ),
-          ),
-        ),
-      )
+      .update(`${semanticRequest.operation ?? ""}`)
+      .update("\0")
+      .update(requestedOperationId)
       .digest("hex");
     await requireAgentComputeGrant({
       auth: opts.actor.agent_auth,

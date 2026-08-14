@@ -769,11 +769,12 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           opts: { wait?: boolean },
           command: Command,
         ) => {
+          const idempotencyKey = randomUUID();
           await withContext(command, `vm ${action}`, async (ctx) => {
             requireAccountAuth(ctx, `vm ${action}`);
             const result = await ctx.hub.compute[`${action}Vm`]({
               id_or_name: idOrName,
-              idempotency_key: randomUUID(),
+              idempotency_key: idempotencyKey,
             });
             if (!opts.wait) return result;
             return await waitForState(
