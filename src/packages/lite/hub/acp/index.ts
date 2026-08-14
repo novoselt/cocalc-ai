@@ -3845,7 +3845,11 @@ export class ChatStreamWriter {
         } else {
           logger.debug("failed to publish live acp preview; retrying", details);
         }
-        if (this.closed) return;
+        // The live preview is ephemeral. Once the turn is terminal, the
+        // durable chat row must take priority over retrying a failed preview
+        // transport; otherwise this flush can consume the entire terminal
+        // storage budget and leave the message marked as generating.
+        if (this.closed || this.finished) return;
         await sleep(retryMs);
       }
     }

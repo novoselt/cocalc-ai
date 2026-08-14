@@ -2926,6 +2926,26 @@ describe("CodexAppServerAgent", () => {
       activeDescendants: 1,
       backgroundTerminals: 1,
     });
+    await expect(
+      agent.evaluate({
+        project_id: "00000000-0000-4000-8000-000000000000",
+        account_id: "00000000-0000-4000-8000-000000000001",
+        session_id: "chat-background",
+        prompt: "continue managing the outstanding work",
+        stream: async () => {},
+        config: {
+          workingDirectory: "/tmp/project",
+          maxConcurrentSubagents: 10,
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(
+      requests.filter(({ method }) => method === "initialize"),
+    ).toHaveLength(1);
+    expect(
+      requests.filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(2);
+    expect(proc.killed).toBe(false);
     await expect(agent.interruptOutstanding("chat-background")).resolves.toBe(
       true,
     );

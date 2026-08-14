@@ -1954,14 +1954,15 @@ export class CodexAppServerAgent implements AcpAgent {
     request: AcpEvaluateRequest,
     cwd: string,
   ): boolean {
+    // The subagent limit configures a Codex thread, not its owning process.
+    // Never replace a live manager (and its retained work) merely because a
+    // recovered or older client omitted the limit that a newer client sends.
     return (
       runtime.projectId === (request.chat?.project_id ?? request.project_id) &&
       runtime.accountId === request.account_id &&
       runtime.cwd === cwd &&
       (runtime.paymentSource ?? "auto") ===
-        (request.config?.paymentSource ?? "auto") &&
-      runtime.maxConcurrentSubagents ===
-        normalizeMaxConcurrentSubagents(request.config?.maxConcurrentSubagents)
+        (request.config?.paymentSource ?? "auto")
     );
   }
 
