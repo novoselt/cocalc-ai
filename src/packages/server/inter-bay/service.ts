@@ -2372,6 +2372,7 @@ async function startHostConnectionService(): Promise<void> {
       id,
       components,
       desired_version,
+      record_runtime_deployments,
       base_url,
       reason,
     }) =>
@@ -2380,6 +2381,7 @@ async function startHostConnectionService(): Promise<void> {
         id,
         components,
         desired_version,
+        record_runtime_deployments,
         base_url,
         reason,
       }),

@@ -19,7 +19,13 @@ import {
   volumeListSummary,
 } from "./vm";
 
-function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
+function harness(
+  opts: {
+    projectId?: string;
+    projectAuth?: boolean;
+    agentAuth?: boolean;
+  } = {},
+) {
   const sshCalls: string[][] = [];
   const rsyncCalls: string[][] = [];
   const callbackResults: unknown[] = [];
@@ -33,6 +39,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
   const projectListCalls: any[] = [];
   const catalogCalls: any[] = [];
   const rdpCalls: any[] = [];
+  const stateCalls: Array<{ action: "start" | "stop"; opts: any }> = [];
   const program = new Command();
   program.exitOverride();
   program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
@@ -41,7 +48,11 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
       const result = await callback({
         globals: {},
         remote: {
-          user: opts.projectAuth ? { project_id: opts.projectId } : {},
+          user: opts.agentAuth
+            ? { auth_actor: "agent", auth_project_id: opts.projectId }
+            : opts.projectAuth
+              ? { project_id: opts.projectId }
+              : {},
         },
         hub: {
           compute: {
@@ -95,6 +106,14 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
             createVm: async (opts: any) => {
               createCalls.push(opts);
               return { id: "vm-id", name: opts.name, state: "requested" };
+            },
+            startVm: async (opts: any) => {
+              stateCalls.push({ action: "start", opts });
+              return { id: "vm-id", name: "build-vm", state: "starting" };
+            },
+            stopVm: async (opts: any) => {
+              stateCalls.push({ action: "stop", opts });
+              return { id: "vm-id", name: "build-vm", state: "stopping" };
             },
             setVmTtl: async (opts: any) => {
               ttlCalls.push(opts);
@@ -151,6 +170,7 @@ function harness(opts: { projectId?: string; projectAuth?: boolean } = {}) {
     projectListCalls,
     catalogCalls,
     rdpCalls,
+    stateCalls,
   };
 }
 
@@ -187,6 +207,16 @@ describe("vm list scope", () => {
     assert.equal(listCalls.length, 0);
   });
 
+  it("uses the project-scoped listing for agent authentication", async () => {
+    const { program, listCalls, projectListCalls } = harness({
+      projectId: "project-id",
+      agentAuth: true,
+    });
+    await program.parseAsync(["node", "cocalc", "vm", "list"]);
+    assert.equal(projectListCalls.length, 1);
+    assert.equal(listCalls.length, 0);
+  });
+
   it("uses COCALC_PROJECT_ID as the account-authenticated default filter", async () => {
     const { program, listCalls } = harness({ projectId: "project-id" });
     await program.parseAsync(["node", "cocalc", "vm", "list"]);
@@ -197,6 +227,27 @@ describe("vm list scope", () => {
     const { program, listCalls } = harness({ projectId: "project-id" });
     await program.parseAsync(["node", "cocalc", "vm", "list", "--all"]);
     assert.equal(listCalls[0]?.project_id, undefined);
+  });
+});
+
+describe("vm availability", () => {
+  it("allows a project agent to start and stop existing VMs", async () => {
+    const { program, stateCalls } = harness({
+      projectId: "project-id",
+      agentAuth: true,
+    });
+    await program.parseAsync(["node", "cocalc", "vm", "start", "build-vm"]);
+    await program.parseAsync(["node", "cocalc", "vm", "stop", "build-vm"]);
+    assert.deepEqual(
+      stateCalls.map(({ action, opts }) => ({
+        action,
+        id_or_name: opts.id_or_name,
+      })),
+      [
+        { action: "start", id_or_name: "build-vm" },
+        { action: "stop", id_or_name: "build-vm" },
+      ],
+    );
   });
 });
 

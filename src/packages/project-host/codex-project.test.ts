@@ -221,6 +221,7 @@ describe("initCodexProjectRunner", () => {
       env: {
         FOO: "bar",
         COCALC_API_URL: "http://localhost:7103",
+        COCALC_PROFILE: "prod",
       },
     });
 
@@ -246,6 +247,8 @@ describe("initCodexProjectRunner", () => {
         "COCALC_BEARER_TOKEN=issued-project-host-token",
         "-e",
         "COCALC_AGENT_TOKEN=issued-project-host-token",
+        "-e",
+        "COCALC_PROFILE=_env",
         "-e",
         "FOO=bar",
         "-e",
@@ -279,6 +282,7 @@ describe("initCodexProjectRunner", () => {
       COCALC_BEARER_TOKEN: "issued-project-host-token",
       COCALC_AGENT_TOKEN: "issued-project-host-token",
       COCALC_ACCOUNT_ID: "00000000-0000-4000-8000-000000000001",
+      COCALC_PROFILE: "_env",
     });
     expect(spawned.appServerLogin).toEqual({
       type: "apiKey",

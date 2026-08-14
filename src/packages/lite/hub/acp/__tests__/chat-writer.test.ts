@@ -327,10 +327,16 @@ describe("ChatStreamWriter", () => {
     ).toThrow("missing required message_id");
   });
 
-  it("clears generating on summary", async () => {
+  it("clears generating on summary when live preview is unavailable", async () => {
     const { syncdb, sets, setCurrent } = makeFakeSyncDB();
     setCurrent({
-      get: (key: string) => (key === "generating" ? true : undefined),
+      event: "chat",
+      date: baseMetadata.message_date,
+      sender_id: baseMetadata.sender_id,
+      message_id: baseMetadata.message_id,
+      thread_id: baseMetadata.thread_id,
+      history: [],
+      generating: true,
     });
     const writer: any = new ChatStreamWriter({
       metadata: baseMetadata,
@@ -1856,7 +1862,7 @@ describe("ChatStreamWriter", () => {
         text: "This snapshot must not be dropped.",
         delta: true,
       },
-      seq: 1,
+      seq: 0,
       time: 1000,
     } as AcpStreamMessage);
     await writer.waitForLivePreviewFlush();
@@ -1864,7 +1870,7 @@ describe("ChatStreamWriter", () => {
     expect(publishAttempts).toBe(2);
     expect(flattenLivePayloads(previewPayloads)).toEqual([
       expect.objectContaining({
-        seq: 1,
+        seq: 0,
         event: expect.objectContaining({
           text: "This snapshot must not be dropped.",
           delta: false,
