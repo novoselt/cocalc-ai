@@ -144,7 +144,10 @@ it("creates a hash-only read/data-plane grant and touches it", async () => {
       action: "read",
       project_id,
     }),
-  ).resolves.toBeUndefined();
+  ).resolves.toMatchObject({
+    grant_id,
+    project_vm_availability_scope: false,
+  });
   expect(query.mock.calls[1][0]).toContain(
     "INSERT INTO compute_vm_turn_grants",
   );
@@ -258,7 +261,10 @@ it("authorizes the exact approved mutation and records its use", async () => {
       vm_id,
       request: request(),
     }),
-  ).resolves.toBeUndefined();
+  ).resolves.toMatchObject({
+    grant_id,
+    project_vm_availability_scope: false,
+  });
   expect(centralLog).toHaveBeenCalledWith(
     expect.objectContaining({ event: "managed_compute_agent_grant_used" }),
   );
@@ -288,7 +294,10 @@ it("authorizes repeated start and stop operations across existing project VMs", 
         ttl_minutes: 10_000,
       }),
     }),
-  ).resolves.toBeUndefined();
+  ).resolves.toMatchObject({
+    grant_id,
+    project_vm_availability_scope: true,
+  });
 
   query.mockReset();
   query
@@ -308,7 +317,10 @@ it("authorizes repeated start and stop operations across existing project VMs", 
         total_authorized_usd: 0,
       }),
     }),
-  ).resolves.toBeUndefined();
+  ).resolves.toMatchObject({
+    grant_id,
+    project_vm_availability_scope: true,
+  });
 });
 
 it("does not broaden turn availability authority to billable mutations", async () => {

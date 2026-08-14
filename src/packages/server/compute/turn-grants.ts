@@ -37,6 +37,11 @@ export interface ComputeAgentGrantRequest {
   ttl_minutes?: number;
 }
 
+export interface ComputeAgentGrantAuthorization {
+  grant_id: string;
+  project_vm_availability_scope: boolean;
+}
+
 function isSamePendingRequest(
   current: Record<string, unknown> | undefined,
   next: Record<string, unknown>,
@@ -89,7 +94,7 @@ export async function requireAgentComputeGrant(opts: {
   project_id: string;
   vm_id?: string;
   request?: ComputeAgentGrantRequest;
-}): Promise<void> {
+}): Promise<ComputeAgentGrantAuthorization | undefined> {
   if (!opts.auth) return;
   validateAgentAuth(opts.auth);
   if (opts.auth.project_id !== opts.project_id) {
@@ -325,6 +330,10 @@ export async function requireAgentComputeGrant(opts: {
       result: "authorized",
     },
   });
+  return {
+    grant_id: grant.grant_id,
+    project_vm_availability_scope: projectVmAvailabilityScope,
+  };
 }
 
 export async function listAgentComputeGrants(opts: {
