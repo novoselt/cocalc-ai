@@ -3,7 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { getTransactionClient, type PoolClient } from "@cocalc/database/pool";
+import {
+  getTransactionClient,
+  initEphemeralDatabase,
+  type PoolClient,
+} from "@cocalc/database/pool";
 import {
   generateMembershipAllocationFixture,
   MEMBERSHIP_ALLOCATION_FIXTURE_BAY,
@@ -198,6 +202,7 @@ describe("membership allocation analytics fixtures", () => {
     let client: PoolClient | undefined;
 
     beforeAll(async () => {
+      await initEphemeralDatabase({});
       client = await getTransactionClient();
     }, 30_000);
 

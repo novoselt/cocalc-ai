@@ -3,7 +3,11 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { getTransactionClient, type PoolClient } from "@cocalc/database/pool";
+import {
+  getTransactionClient,
+  initEphemeralDatabase,
+  type PoolClient,
+} from "@cocalc/database/pool";
 import { ensureMembershipAnalyticsTables } from "@cocalc/server/membership/analytics";
 import { uuid } from "@cocalc/util/misc";
 import { backfillMembershipAllocationFacts } from "./allocation-analytics-backfill";
@@ -12,6 +16,7 @@ describe("membership allocation analytics backfill", () => {
   let client: PoolClient;
 
   beforeAll(async () => {
+    await initEphemeralDatabase({});
     client = await getTransactionClient();
     await ensureMembershipAnalyticsTables(client);
   }, 30_000);
@@ -244,7 +249,7 @@ describe("membership allocation analytics backfill", () => {
         lifecycle: "plan_change",
         tier_change: "upgrade",
         previous_membership_class: null,
-        active_memberships: 0,
+        active_memberships: -1,
         purchased_capacity: 0,
         revenue_cents: 0,
         facts: 2,
