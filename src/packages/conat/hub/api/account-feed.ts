@@ -190,25 +190,6 @@ export interface AccountFeedProjectDetailInvalidateEvent {
   fields: string[];
 }
 
-export interface AccountFeedCliAuthChallengeSummary {
-  challenge_id: string;
-  kind: "login" | "elevate";
-  requested_duration: "default" | "extended";
-  elevated_login: boolean;
-  approval_url: string;
-  expires_at: string | Date;
-  created_at: string | Date;
-}
-
-export interface AccountFeedCliAuthChangedEvent {
-  type: "cli.auth.changed";
-  ts: number;
-  account_id: string;
-  challenge_id: string;
-  pending: boolean;
-  challenge?: AccountFeedCliAuthChallengeSummary;
-}
-
 export interface AccountFeedLroSummaryEvent {
   type: "lro.summary";
   ts: number;
@@ -227,7 +208,6 @@ export type AccountFeedEvent =
   | AccountFeedCollaboratorRemoveEvent
   | AccountFeedNewsRefreshEvent
   | AccountFeedProjectDetailInvalidateEvent
-  | AccountFeedCliAuthChangedEvent
   | AccountFeedLroSummaryEvent;
 
 export function accountFeedStreamName(): string {

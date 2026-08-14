@@ -4,7 +4,6 @@
  */
 
 import AutomaticUpdateNotice from "./automatic-update-notice";
-import { CliFreshAuthBanner } from "./cli-fresh-auth-banner";
 import { I18NBanner, useShowI18NBanner } from "./i18n-banner";
 import { LegacyMigrationCtaBanner } from "./legacy-migration-cta-banner";
 import { TeamLicenseWarningBanner } from "./team-license-warning-banner";
@@ -24,7 +23,6 @@ export function PostSurfaceBanners({
   return (
     <>
       <AutomaticUpdateNotice />
-      <CliFreshAuthBanner />
       {cookieWarning ? <CookieWarning /> : undefined}
       {localStorageWarning ? <LocalStorageWarning /> : undefined}
       {showI18n ? <I18NBanner /> : undefined}

@@ -32,11 +32,8 @@ import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import {
   createClusterCliLoginSession,
   getClusterAccountById,
-  getClusterAccountByEmail,
 } from "@cocalc/server/inter-bay/accounts";
-import { publishAccountFeedEventBestEffort } from "@cocalc/server/account/feed";
 import { isValidUUID } from "@cocalc/util/misc";
-import type { AccountFeedCliAuthChallengeSummary } from "@cocalc/conat/hub/api/account-feed";
 
 const CHALLENGE_TTL_MS = 8 * 60 * 60_000;
 const PENDING_CLI_LOGIN_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000";
@@ -71,16 +68,6 @@ type CliAuthChallengeRow = {
   expire: Date;
   created: Date;
   metadata?: Record<string, any> | null;
-};
-
-export type PendingCliFreshAuthChallenge = {
-  challenge_id: string;
-  kind: CliAuthChallengeKind;
-  requested_duration: FreshAuthDuration;
-  elevated_login: boolean;
-  approval_url: string;
-  expires_at: Date;
-  created_at: Date;
 };
 
 function cleanEmail(email: string): string {
@@ -180,59 +167,6 @@ function assertDevCliFreshAuthAllowed(hub_password: string): void {
 
 function isChallengeExpired(row: CliAuthChallengeRow): boolean {
   return new Date(row.expire).valueOf() <= Date.now();
-}
-
-async function publishCliAuthChange({
-  account_id,
-  challenge_id,
-  pending,
-  challenge,
-}: {
-  account_id: string;
-  challenge_id: string;
-  pending: boolean;
-  challenge?: AccountFeedCliAuthChallengeSummary;
-}): Promise<void> {
-  await publishAccountFeedEventBestEffort({
-    account_id,
-    event: {
-      type: "cli.auth.changed",
-      ts: Date.now(),
-      account_id,
-      challenge_id,
-      pending,
-      challenge,
-    },
-  });
-}
-
-async function publishCliAuthChangeForEmail({
-  email,
-  challenge_id,
-  pending,
-  challenge,
-}: {
-  email: string | undefined;
-  challenge_id: string;
-  pending: boolean;
-  challenge?: AccountFeedCliAuthChallengeSummary;
-}): Promise<void> {
-  const email_address = cleanEmail(`${email ?? ""}`);
-  if (!email_address) return;
-  try {
-    const account = await getClusterAccountByEmail(email_address);
-    if (account?.account_id) {
-      await publishCliAuthChange({
-        account_id: account.account_id,
-        challenge_id,
-        pending,
-        challenge,
-      });
-    }
-  } catch {
-    // CLI auth must still work when this optional UI notification cannot be
-    // routed. The CLI always prints the approval URL as a fallback.
-  }
 }
 
 function getRequestIpKey(req: any): string {
@@ -553,33 +487,15 @@ export async function startCliLoginChallenge({
       ip_key: ipKey || "unknown",
     },
   });
-  const approval_url = await challengeApprovalUrl({
-    req,
-    kind: "login",
-    challenge_id: inserted.id,
-  });
-
-  if (elevated_login) {
-    void publishCliAuthChangeForEmail({
-      email: emailHint,
-      challenge_id: inserted.id,
-      pending: true,
-      challenge: {
-        challenge_id: inserted.id,
-        kind: "login",
-        requested_duration: duration ?? "default",
-        elevated_login: true,
-        approval_url,
-        expires_at: inserted.expire,
-        created_at: new Date(),
-      },
-    });
-  }
 
   return {
     challenge_id: inserted.id,
     poll_token,
-    approval_url,
+    approval_url: await challengeApprovalUrl({
+      req,
+      kind: "login",
+      challenge_id: inserted.id,
+    }),
     expires_at: inserted.expire,
     home_bay_id: getConfiguredBayId(),
     home_bay_url:
@@ -628,87 +544,20 @@ export async function startCliElevateChallenge({
         },
       }),
   });
-  const approval_url = await challengeApprovalUrl({
-    req,
-    kind: "elevate",
-    challenge_id: inserted.id,
-  });
-  void publishCliAuthChange({
-    account_id,
-    challenge_id: inserted.id,
-    pending: true,
-    challenge: {
-      challenge_id: inserted.id,
-      kind: "elevate",
-      requested_duration: duration ?? "default",
-      elevated_login: false,
-      approval_url,
-      expires_at: inserted.expire,
-      created_at: new Date(),
-    },
-  });
   return {
     challenge_id: inserted.id,
     poll_token,
-    approval_url,
+    approval_url: await challengeApprovalUrl({
+      req,
+      kind: "elevate",
+      challenge_id: inserted.id,
+    }),
     expires_at: inserted.expire,
     home_bay_id: getConfiguredBayId(),
     home_bay_url:
       (await getBayPublicOriginForRequest(req, getConfiguredBayId())) ??
       undefined,
   };
-}
-
-export async function listPendingCliFreshAuthChallenges({
-  req,
-  account_id,
-}: {
-  req: any;
-  account_id: string;
-}): Promise<PendingCliFreshAuthChallenge[]> {
-  const account = await getClusterAccountById(account_id);
-  const email = cleanEmail(`${account?.email_address ?? ""}`);
-  const rows = (
-    await getPool().query<CliAuthChallengeRow>(
-      `
-        SELECT *
-          FROM account_cli_auth_challenges
-         WHERE status = 'pending'::VARCHAR(32)
-           AND expire > NOW()
-           AND (
-             (
-               kind = 'elevate'::VARCHAR(32)
-               AND account_id = $1::UUID
-             )
-             OR (
-               $2::TEXT <> ''
-               AND kind = 'login'::VARCHAR(32)
-               AND account_id = $3::UUID
-               AND metadata->>'elevated_login' = 'true'
-               AND lower(metadata->>'email_hint') = $2::TEXT
-             )
-           )
-         ORDER BY created DESC
-         LIMIT 10
-      `,
-      [account_id, email, PENDING_CLI_LOGIN_ACCOUNT_ID],
-    )
-  ).rows;
-  return await Promise.all(
-    rows.map(async (row) => ({
-      challenge_id: row.id,
-      kind: row.kind,
-      requested_duration: row.requested_duration ?? "default",
-      elevated_login: row.metadata?.elevated_login === true,
-      approval_url: await challengeApprovalUrl({
-        req,
-        kind: row.kind,
-        challenge_id: row.id,
-      }),
-      expires_at: new Date(row.expire),
-      created_at: new Date(row.created),
-    })),
-  );
 }
 
 export async function getCliAuthChallengeStatus({
@@ -959,27 +808,6 @@ export async function approveCliLoginChallenge({
     redeem_token,
     account_id: isPendingLogin ? account_id : undefined,
   });
-  void publishCliAuthChange({
-    account_id,
-    challenge_id: row.id,
-    pending: false,
-  });
-  const hintedEmail =
-    typeof row.metadata?.email_hint === "string"
-      ? row.metadata.email_hint
-      : undefined;
-  if (isPendingLogin && cleanEmail(`${hintedEmail ?? ""}`)) {
-    const hintedAccount = await getClusterAccountByEmail(
-      cleanEmail(`${hintedEmail}`),
-    ).catch(() => null);
-    if (hintedAccount?.account_id && hintedAccount.account_id !== account_id) {
-      void publishCliAuthChange({
-        account_id: hintedAccount.account_id,
-        challenge_id: row.id,
-        pending: false,
-      });
-    }
-  }
   return { approved: true };
 }
 
@@ -1040,11 +868,6 @@ export async function approveCliElevateChallenge({
         },
       });
     },
-  });
-  void publishCliAuthChange({
-    account_id,
-    challenge_id: row.id,
-    pending: false,
   });
   return {
     approved: true,
@@ -1187,11 +1010,6 @@ export async function finishCliElevatePasskeyChallenge({
         },
       });
     },
-  });
-  void publishCliAuthChange({
-    account_id,
-    challenge_id: row.id,
-    pending: false,
   });
   return {
     approved: true,

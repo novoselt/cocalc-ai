@@ -9,8 +9,6 @@ let queryMock: jest.Mock;
 let withAccountRehomeWriteFenceMock: jest.Mock;
 let createClusterCliLoginSessionMock: jest.Mock;
 let getClusterAccountByIdMock: jest.Mock;
-let getClusterAccountByEmailMock: jest.Mock;
-let publishAccountFeedEventBestEffortMock: jest.Mock;
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -45,13 +43,6 @@ jest.mock("@cocalc/server/inter-bay/accounts", () => ({
   createClusterCliLoginSession: (...args: any[]) =>
     createClusterCliLoginSessionMock(...args),
   getClusterAccountById: (...args: any[]) => getClusterAccountByIdMock(...args),
-  getClusterAccountByEmail: (...args: any[]) =>
-    getClusterAccountByEmailMock(...args),
-}));
-
-jest.mock("@cocalc/server/account/feed", () => ({
-  publishAccountFeedEventBestEffort: (...args: any[]) =>
-    publishAccountFeedEventBestEffortMock(...args),
 }));
 
 jest.mock("@cocalc/server/bay-config", () => ({
@@ -243,8 +234,6 @@ describe("CLI elevated login approval", () => {
     );
     createClusterCliLoginSessionMock = jest.fn();
     getClusterAccountByIdMock = jest.fn();
-    getClusterAccountByEmailMock = jest.fn(async () => null);
-    publishAccountFeedEventBestEffortMock = jest.fn(async () => undefined);
   });
 
   it("persists signed fresh-auth proof on an elevated login challenge", async () => {
@@ -314,59 +303,5 @@ describe("CLI elevated login approval", () => {
     await expect(
       approveCliLoginChallenge({ challenge_id, account_id }),
     ).rejects.toThrow("valid factor level");
-  });
-});
-
-describe("pending CLI fresh-auth notices", () => {
-  const account_id = "00000000-1000-4000-8000-000000000001";
-
-  beforeEach(() => {
-    jest.resetModules();
-    getClusterAccountByIdMock = jest.fn(async () => ({
-      account_id,
-      email_address: "user@example.com",
-    }));
-    getClusterAccountByEmailMock = jest.fn(async () => null);
-    publishAccountFeedEventBestEffortMock = jest.fn(async () => undefined);
-    queryMock = jest.fn(async () => ({
-      rows: [
-        {
-          id: "00000000-1000-4000-8000-000000000010",
-          account_id,
-          kind: "elevate",
-          status: "pending",
-          poll_token_hash: hashToken("poll-token"),
-          requested_duration: "extended",
-          expire: new Date("2099-06-22T00:00:00.000Z"),
-          created: new Date("2099-06-21T00:00:00.000Z"),
-          metadata: { auth_client: "cli" },
-        },
-      ],
-    }));
-  });
-
-  it("returns only safe display data for the signed-in account", async () => {
-    const { listPendingCliFreshAuthChallenges } = await import("./cli-auth");
-
-    await expect(
-      listPendingCliFreshAuthChallenges({ req: {}, account_id }),
-    ).resolves.toEqual([
-      {
-        challenge_id: "00000000-1000-4000-8000-000000000010",
-        kind: "elevate",
-        requested_duration: "extended",
-        elevated_login: false,
-        approval_url:
-          "https://cocalc.test/auth/cli-elevate/00000000-1000-4000-8000-000000000010",
-        expires_at: new Date("2099-06-22T00:00:00.000Z"),
-        created_at: new Date("2099-06-21T00:00:00.000Z"),
-      },
-    ]);
-
-    expect(queryMock.mock.calls[0][1]).toEqual([
-      account_id,
-      "user@example.com",
-      "00000000-0000-0000-0000-000000000000",
-    ]);
   });
 });
