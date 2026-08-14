@@ -166,11 +166,13 @@ function LiveResponseComponent({
   logKey = "log-key",
   logSubject = "subject-1",
   liveLogStream,
+  liveStreamIsProjection = false,
 }: {
   generating: boolean;
   logKey?: string;
   logSubject?: string;
   liveLogStream?: string;
+  liveStreamIsProjection?: boolean;
 }) {
   const { events } = useCodexLog({
     enabled: true,
@@ -180,6 +182,7 @@ function LiveResponseComponent({
     logKey,
     logSubject,
     liveLogStream,
+    liveStreamIsProjection,
   });
   return (
     <div data-testid="live-response">
@@ -520,6 +523,47 @@ describe("useCodexLog", () => {
       expect(screen.getByTestId("latest-event").textContent).toBe("Hello!");
     });
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it("flushes a cumulative preview snapshot immediately", async () => {
+    const stream = new FakeDstream();
+    dstreamMock.mockResolvedValue(stream);
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get: jest.fn() }),
+      },
+    });
+
+    render(
+      <LiveResponseComponent
+        generating={true}
+        logKey="log-key-projected-immediate"
+        liveLogStream="preview-stream-immediate"
+        liveStreamIsProjection
+      />,
+    );
+
+    await waitFor(() => expect(dstreamMock).toHaveBeenCalled());
+    act(() => {
+      stream.push({
+        type: "event",
+        seq: 1,
+        time: 10,
+        event: {
+          type: "message",
+          text: "Visible without another token.",
+          delta: false,
+        },
+      });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("live-response").textContent).toBe(
+      "Visible without another token.",
+    );
   });
 
   it("does not miss messages pushed after the shared dstream listener attaches", async () => {
@@ -978,5 +1022,66 @@ describe("useCodexLog", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("does not merge the full persisted log into a live preview projection", async () => {
+    const stream = new FakeDstream([
+      {
+        type: "event",
+        seq: 10,
+        time: 10,
+        event: {
+          type: "message",
+          text: "Projected manager activity.",
+          delta: false,
+        },
+      },
+    ]);
+    const get = jest.fn().mockResolvedValue([
+      {
+        type: "event",
+        seq: 1,
+        time: 1,
+        event: { type: "message", text: "Raw manager delta.", delta: true },
+      },
+      {
+        type: "event",
+        seq: 2,
+        time: 2,
+        event: { type: "terminal", phase: "start", terminalId: "term-1" },
+      },
+      { type: "status", state: "running", seq: 3, time: 3 },
+    ]);
+    dstreamMock.mockResolvedValue(stream);
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get }),
+      },
+    });
+
+    render(
+      <LiveResponseComponent
+        generating={true}
+        logKey="log-key-projected-reconnect"
+        liveLogStream="preview-stream-reconnect"
+        liveStreamIsProjection
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("live-response").textContent).toBe(
+        "Projected manager activity.",
+      );
+    });
+    const options = reconnectRegisterMock.mock.calls[0][0];
+    await act(async () => {
+      await options.reconnect();
+    });
+
+    expect(get).not.toHaveBeenCalled();
+    expect(screen.getByTestId("live-response").textContent).toBe(
+      "Projected manager activity.",
+    );
   });
 });

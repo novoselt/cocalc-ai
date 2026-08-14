@@ -393,6 +393,14 @@ const ACP_LIVE_LOG_BATCH_MAX_EVENTS = envNumber(
   "COCALC_ACP_LIVE_LOG_BATCH_MAX_EVENTS",
   128,
 );
+const ACP_LIVE_PREVIEW_RETRY_MIN_MS = envNumber(
+  "COCALC_ACP_LIVE_PREVIEW_RETRY_MIN_MS",
+  100,
+);
+const ACP_LIVE_PREVIEW_RETRY_MAX_MS = envNumber(
+  "COCALC_ACP_LIVE_PREVIEW_RETRY_MAX_MS",
+  2_000,
+);
 const ACP_LIVE_LOG_MAX_BYTES = envNumber(
   "COCALC_ACP_LIVE_LOG_MAX_BYTES",
   8 * 1024 * 1024,
@@ -3760,19 +3768,7 @@ export class ChatStreamWriter {
       latencyMultiplier: ACP_LIVE_LOG_BATCH_LATENCY_MULTIPLIER,
       maxItems: ACP_LIVE_LOG_BATCH_MAX_EVENTS,
       flush: async (batch) => {
-        try {
-          const stream = await this.getLivePreviewStream();
-          await stream.publish(batch.length === 1 ? batch[0] : batch);
-        } catch (err) {
-          logger.debug("failed to publish live acp preview event", {
-            chatKey: this.chatKey,
-            path: this.metadata.path,
-            seqStart: batch[0]?.seq,
-            seqEnd: batch.at(-1)?.seq,
-            batchSize: batch.length,
-            err,
-          });
-        }
+        await this.publishLivePreviewBatch(batch);
       },
       onFlushComplete: ({
         batchSize,
@@ -3799,6 +3795,62 @@ export class ChatStreamWriter {
     });
   }
 
+  private async publishLivePreviewBatch(
+    batch: AcpStreamMessage[],
+  ): Promise<void> {
+    let attempt = 0;
+    while (true) {
+      try {
+        const stream = await this.getLivePreviewStream();
+        await stream.publish(batch.length === 1 ? batch[0] : batch);
+        if (attempt > 0) {
+          logger.info("live acp preview publish recovered", {
+            chatKey: this.chatKey,
+            path: this.metadata.path,
+            seqStart: batch[0]?.seq,
+            seqEnd: batch.at(-1)?.seq,
+            batchSize: batch.length,
+            attempts: attempt + 1,
+          });
+        }
+        return;
+      } catch (err) {
+        attempt += 1;
+        // Recreate the producer after a transport failure instead of keeping a
+        // stale AStream handle. The ordered batcher holds later snapshots until
+        // this cumulative preview snapshot has been published successfully.
+        try {
+          this.livePreviewStream?.close();
+        } catch {
+          // ignore
+        }
+        this.livePreviewStream = undefined;
+        this.livePreviewInitPromise = undefined;
+        const retryMs = Math.min(
+          ACP_LIVE_PREVIEW_RETRY_MAX_MS,
+          ACP_LIVE_PREVIEW_RETRY_MIN_MS * 2 ** Math.min(attempt - 1, 8),
+        );
+        const details = {
+          chatKey: this.chatKey,
+          path: this.metadata.path,
+          seqStart: batch[0]?.seq,
+          seqEnd: batch.at(-1)?.seq,
+          batchSize: batch.length,
+          attempt,
+          retryMs,
+          err,
+        };
+        if (attempt === 1 || attempt % 5 === 0) {
+          logger.warn("failed to publish live acp preview; retrying", details);
+        } else {
+          logger.debug("failed to publish live acp preview; retrying", details);
+        }
+        if (this.closed) return;
+        await sleep(retryMs);
+      }
+    }
+  }
+
   private publishLiveLog(event: AcpStreamMessage): void {
     if (this.closed) return;
     const shouldFlushNow =
@@ -3819,6 +3871,12 @@ export class ChatStreamWriter {
     if (event.type === "status") {
       if (this.livePreviewText) {
         this.livePreviewMessageBoundary = true;
+        // Status is transport/control-plane information. Once manager text has
+        // started, publishing every repeated "running" status turns each Codex
+        // agent-message item into a separate inline activity block. Keep the
+        // paragraph boundary in the cumulative text, but leave raw statuses in
+        // the full activity stream only.
+        return;
       }
       this.livePreviewBatcher.add(event, { flush: true });
       return;

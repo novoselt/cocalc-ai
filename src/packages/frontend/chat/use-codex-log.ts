@@ -39,6 +39,9 @@ export interface CodexLogOptions {
   logKey?: string | null;
   logSubject?: string | null;
   liveLogStream?: string | null;
+  // The stream is a complete derived view and must not be merged with the
+  // differently shaped persisted raw activity log while it is live.
+  liveStreamIsProjection?: boolean;
   generating?: boolean;
   enabled?: boolean;
 }
@@ -246,6 +249,7 @@ export function useCodexLog({
   logKey,
   logSubject,
   liveLogStream,
+  liveStreamIsProjection = false,
   generating,
   enabled = true,
 }: CodexLogOptions): CodexLogResult {
@@ -264,6 +268,7 @@ export function useCodexLog({
   });
 
   const [fetchedLog, setFetchedLog] = useState<any[] | null>(() => {
+    if (generating && liveStreamIsProjection) return null;
     if (!cacheKey) return null;
     return recentLogCache.get(cacheKey) ?? null;
   });
@@ -273,6 +278,7 @@ export function useCodexLog({
   );
   const [loadError, setLoadError] = useState<string | undefined>();
   const [liveLog, setLiveLog] = useState<any[]>(() => {
+    if (generating && liveStreamIsProjection) return [];
     if (!cacheKey) return [];
     return recentLogCache.get(cacheKey) ?? [];
   });
@@ -359,7 +365,10 @@ export function useCodexLog({
   // Reset when log ref changes.
   useEffect(() => {
     if (cacheKey) {
-      const cached = recentLogCache.get(cacheKey);
+      const cached =
+        generating && liveStreamIsProjection
+          ? undefined
+          : recentLogCache.get(cacheKey);
       setFetchedLog(cached ?? null);
       setLiveLog(cached ?? []);
       setLoadState(cached?.length ? "loaded" : "idle");
@@ -384,7 +393,7 @@ export function useCodexLog({
       }
       setAkvLoaded(false);
     }
-  }, [cacheKey, logSubject]);
+  }, [cacheKey, generating, liveStreamIsProjection, logSubject]);
 
   const fetchPersistedLog = useCallback(
     async ({
@@ -395,7 +404,11 @@ export function useCodexLog({
       if (!enabled || !hasLogRef || !projectId || !logStore || !logKey) {
         return undefined;
       }
-      if (!allowDuringGeneration && generating && liveLogStream) {
+      if (
+        generating &&
+        liveLogStream &&
+        (liveStreamIsProjection || !allowDuringGeneration)
+      ) {
         return undefined;
       }
       const cn = await webapp_client.conat_client.projectConat({
@@ -413,6 +426,7 @@ export function useCodexLog({
       generating,
       hasLogRef,
       liveLogStream,
+      liveStreamIsProjection,
       logKey,
       logStore,
       projectId,
@@ -509,18 +523,20 @@ export function useCodexLog({
         priority: () => "foreground",
         reconnect: async () => {
           setLiveConnectionState(false, "reconnecting");
-          void fetchPersistedLog({
-            allowDuringGeneration: true,
-          })
-            .then((persisted) => {
-              if (mountedRef.current && persisted != null) {
-                setFetchedLog(persisted);
-                setAkvLoaded(true);
-              }
+          if (!liveStreamIsProjection) {
+            void fetchPersistedLog({
+              allowDuringGeneration: true,
             })
-            .catch((err) => {
-              console.warn("codex log reconnect fetch failed", err);
-            });
+              .then((persisted) => {
+                if (mountedRef.current && persisted != null) {
+                  setFetchedLog(persisted);
+                  setAkvLoaded(true);
+                }
+              })
+              .catch((err) => {
+                console.warn("codex log reconnect fetch failed", err);
+              });
+          }
           if (!mountedRef.current || !hasLiveSource) {
             return;
           }
@@ -564,6 +580,7 @@ export function useCodexLog({
     canReconnectLive,
     fetchPersistedLog,
     hasLiveSource,
+    liveStreamIsProjection,
     mergeLogs,
     setLiveConnectionState,
     waitForLiveReconnect,
@@ -681,7 +698,11 @@ export function useCodexLog({
               if (
                 evt.type === "summary" ||
                 evt.type === "error" ||
-                evt.type === "status"
+                evt.type === "status" ||
+                (liveStreamIsProjection &&
+                  evt.type === "event" &&
+                  evt.event.type === "message" &&
+                  evt.event.delta !== true)
               ) {
                 immediate = true;
               }
@@ -789,18 +810,27 @@ export function useCodexLog({
     liveReconnectToken,
     projectId,
     liveLogStream,
+    liveStreamIsProjection,
     logSubject,
     mergeLogs,
     setLiveConnectionState,
   ]);
 
   const events = useMemo(() => {
+    if (generating && liveStreamIsProjection) return liveLog;
     if (!hasLogRef) return generating ? liveLog : undefined;
     // Merge fetched + live, preserving order by seq and de-duplicating.
     const merged = mergeLogs(fetchedLog, liveLog);
     if (merged.length > 0) return merged;
     return generating ? liveLog : fetchedLog;
-  }, [hasLogRef, fetchedLog, liveLog, generating, mergeLogs]);
+  }, [
+    hasLogRef,
+    fetchedLog,
+    liveLog,
+    generating,
+    liveStreamIsProjection,
+    mergeLogs,
+  ]);
 
   useEffect(() => {
     if (!cacheKey || !events || !events.length) return;
