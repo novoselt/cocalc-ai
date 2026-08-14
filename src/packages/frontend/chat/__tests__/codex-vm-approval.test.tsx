@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 
 const listAgentGrants = jest.fn();
 
@@ -52,5 +52,41 @@ describe("CodexVmApprovalPrompt", () => {
     expect(
       screen.queryByRole("link", { name: "Review and approve VM access" }),
     ).toBeNull();
+  });
+
+  it("confirms approval while the VM operation continues", async () => {
+    jest.useFakeTimers();
+    listAgentGrants
+      .mockResolvedValueOnce([
+        {
+          grant_id: "grant-1",
+          metadata: { pending_request: { operation: "start-vm" } },
+        },
+      ])
+      .mockResolvedValue([
+        {
+          grant_id: "grant-1",
+          metadata: {
+            approved_at: "2026-08-14T20:00:00.000Z",
+            approved_request: { operation: "start-vm" },
+          },
+        },
+      ]);
+
+    const { unmount } = render(
+      <CodexVmApprovalPrompt projectId="project-1" active />,
+    );
+    await screen.findByRole("link", { name: "Review and approve VM access" });
+    await act(async () => {
+      jest.advanceTimersByTime(2_000);
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("VM access approved")).not.toBeNull();
+    expect(screen.getByText(/can take about a minute/)).not.toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Review and approve VM access" }),
+    ).toBeNull();
+    unmount();
+    jest.useRealTimers();
   });
 });

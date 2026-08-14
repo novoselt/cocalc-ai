@@ -5,7 +5,7 @@
 
 import { Alert, Button, Space, Typography } from "antd";
 import type { ComputeAgentGrant } from "@cocalc/conat/hub/api/compute";
-import { useEffect, useState } from "@cocalc/frontend/app-framework";
+import { useEffect, useRef, useState } from "@cocalc/frontend/app-framework";
 import { projectFileBasePath } from "@cocalc/frontend/lib/cocalc-urls";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 
@@ -26,10 +26,12 @@ export function CodexVmApprovalPrompt({
   active: boolean;
 }) {
   const [grant, setGrant] = useState<ComputeAgentGrant>();
+  const observedGrantId = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (!active || !projectId) {
       setGrant(undefined);
+      observedGrantId.current = undefined;
       return;
     }
     let disposed = false;
@@ -40,7 +42,21 @@ export function CodexVmApprovalPrompt({
           await webapp_client.conat_client.hub.compute.listAgentGrants({
             project_id: projectId,
           });
-        if (!disposed) setGrant(pendingGrant(grants));
+        if (!disposed) {
+          const pending = pendingGrant(grants);
+          if (pending) {
+            observedGrantId.current = pending.grant_id;
+            setGrant(pending);
+          } else if (observedGrantId.current) {
+            setGrant(
+              grants.find(
+                (candidate) =>
+                  candidate.grant_id === observedGrantId.current &&
+                  candidate.metadata?.approved_at != null,
+              ),
+            );
+          }
+        }
       } catch {
         // The terminal command still reports the request if this optional UI
         // shortcut cannot reach the control plane.
@@ -57,24 +73,29 @@ export function CodexVmApprovalPrompt({
   }, [active, projectId]);
 
   if (!grant || !projectId) return null;
-  const request = grant.metadata?.pending_request ?? {};
+  const approved = grant.metadata?.pending_request == null;
+  const request =
+    grant.metadata?.pending_request ?? grant.metadata?.approved_request ?? {};
   const operation = `${request.operation ?? request.action ?? "VM action"}`;
   const approvalUrl = `${projectFileBasePath(projectId)}/vms?agent_grant=${encodeURIComponent(grant.grant_id)}`;
 
   return (
     <Alert
       showIcon
-      type="warning"
-      title="Codex needs VM approval"
+      type={approved ? "success" : "warning"}
+      title={approved ? "VM access approved" : "Codex needs VM approval"}
       description={
         <Space direction="vertical" size={8}>
           <Text>
-            Review the {operation} request. The running CLI command will
-            continue automatically after approval.
+            {approved
+              ? `Codex is continuing the ${operation} operation. VM start and stop operations can take about a minute.`
+              : `Review the ${operation} request. The running CLI command will continue automatically after approval.`}
           </Text>
-          <Button type="primary" href={approvalUrl} target="_blank">
-            Review and approve VM access
-          </Button>
+          {!approved && (
+            <Button type="primary" href={approvalUrl} target="_blank">
+              Review and approve VM access
+            </Button>
+          )}
         </Space>
       }
       style={{ marginBottom: 8 }}

@@ -14,6 +14,7 @@ import {
   removeVmSshConfigBlock,
   resolveVmRsyncEndpoint,
   vmListSummary,
+  vmLifecycleSummary,
   vmRsyncArgs,
   vmWaitProgress,
   volumeListSummary,
@@ -112,11 +113,23 @@ function harness(
               },
               startVm: async (opts: any) => {
                 stateCalls.push({ action: "start", opts });
-                return { id: "vm-id", name: "build-vm", state: "starting" };
+                return {
+                  id: "vm-id",
+                  name: "build-vm",
+                  state: "starting",
+                  desired_state: "running",
+                  metadata: { provider_internal: true },
+                };
               },
               stopVm: async (opts: any) => {
                 stateCalls.push({ action: "stop", opts });
-                return { id: "vm-id", name: "build-vm", state: "stopping" };
+                return {
+                  id: "vm-id",
+                  name: "build-vm",
+                  state: "stopping",
+                  desired_state: "stopped",
+                  metadata: { provider_internal: true },
+                };
               },
               setVmTtl: async (opts: any) => {
                 ttlCalls.push(opts);
@@ -266,6 +279,68 @@ describe("vm availability", () => {
       stateCalls[0].opts.idempotency_key,
       stateCalls[1].opts.idempotency_key,
     );
+  });
+
+  it("summarizes lifecycle results without internal provider metadata", () => {
+    assert.deepEqual(
+      vmLifecycleSummary({
+        id: "vm-id",
+        name: "build-vm",
+        state: "ready",
+        desired_state: "running",
+        provider: "gcp",
+        machine_type: "e2-standard-2",
+        operating_system: "linux",
+        effective_pricing_model: "spot",
+        zone: "us-west1-a",
+        public_hostname: "vm.example.test",
+        public_ip: "203.0.113.10",
+        ssh_alias: "build-vm",
+        expires_at: null,
+        metadata: { large: "internal record" },
+      }),
+      {
+        id: "vm-id",
+        name: "build-vm",
+        state: "ready",
+        desired_state: "running",
+        provider: "gcp",
+        machine: "e2-standard-2",
+        os: "Linux",
+        pricing: "Spot",
+        zone: "us-west1-a",
+        hostname: "vm.example.test",
+        ip: "203.0.113.10",
+        ssh_alias: "build-vm",
+        expires: "never",
+      },
+    );
+  });
+
+  it("uses compact lifecycle output unless --long is requested", async () => {
+    const compact = harness();
+    await compact.program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "start",
+      "build-vm",
+    ]);
+    assert.equal("metadata" in (compact.callbackResults[0] as object), false);
+    assert.match(compact.progressMessages[0], /Requesting start/);
+
+    const full = harness();
+    await full.program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "start",
+      "build-vm",
+      "--long",
+    ]);
+    assert.deepEqual((full.callbackResults[0] as any).metadata, {
+      provider_internal: true,
+    });
   });
 });
 
