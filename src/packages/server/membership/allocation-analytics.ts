@@ -272,6 +272,21 @@ export async function recordMembershipAllocationRefund({
   );
   let recorded = 0;
   for (const fact of rows) {
+    const reverseProductAllocation = fact.source_kind !== "plan-change-credit";
+    const activeMemberships = reverseProductAllocation
+      ? -Number(fact.active_memberships)
+      : 0;
+    const purchasedCapacity = reverseProductAllocation
+      ? -Number(fact.purchased_capacity)
+      : 0;
+    const revenue = toDecimal(fact.revenue_cents).div(100).neg();
+    if (
+      activeMemberships === 0 &&
+      purchasedCapacity === 0 &&
+      revenue.eq(0)
+    ) {
+      continue;
+    }
     if (
       await recordMembershipAllocationFact({
         fact_key: refundFactKey(refund_purchase_id, fact.fact_key),
@@ -288,9 +303,9 @@ export async function recordMembershipAllocationRefund({
         tier_change: fact.tier_change,
         allocation_start: fact.allocation_start,
         allocation_end: fact.allocation_end,
-        active_memberships: -Number(fact.active_memberships),
-        purchased_capacity: -Number(fact.purchased_capacity),
-        revenue: toDecimal(fact.revenue_cents).div(100).neg(),
+        active_memberships: activeMemberships,
+        purchased_capacity: purchasedCapacity,
+        revenue,
         purchase_id: refund_purchase_id,
         subscription_id: fact.subscription_id,
         reverses_fact_key: fact.fact_key,

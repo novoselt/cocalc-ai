@@ -175,7 +175,7 @@ describe("membership allocation analytics", () => {
       expect(rows).toEqual([
         {
           membership_class: "credit",
-          active_memberships: 0,
+          active_memberships: -1,
           revenue_cents: 0,
           fact_count: 2,
         },
@@ -184,6 +184,75 @@ describe("membership allocation analytics", () => {
           active_memberships: 0,
           revenue_cents: 0,
           fact_count: 2,
+        },
+      ]);
+    });
+
+    it("does not restore a removed membership for a zero-value upgrade credit", async () => {
+      const purchaseId = -Math.floor(Math.random() * 1_000_000_000) - 1;
+      const refundPurchaseId = purchaseId - 1;
+      await recordMembershipAllocationFact({
+        fact_key: "test:zero-credit-upgrade:target",
+        account_id: "00000000-0000-4000-8000-000000000001",
+        channel: "personal",
+        source_kind: "plan-change",
+        membership_class: "pro",
+        billing_interval: "month",
+        lifecycle: "plan_change",
+        tier_change: "upgrade",
+        allocation_start: "2026-08-03",
+        allocation_end: "2026-09-03",
+        active_memberships: 1,
+        revenue: 20,
+        purchase_id: purchaseId,
+        subscription_id: 456,
+        client,
+      });
+      await recordMembershipAllocationFact({
+        fact_key: "test:zero-credit-upgrade:credit",
+        account_id: "00000000-0000-4000-8000-000000000001",
+        channel: "personal",
+        source_kind: "plan-change-credit",
+        membership_class: "standard",
+        billing_interval: "trial",
+        lifecycle: "plan_change",
+        tier_change: "upgrade",
+        allocation_start: "2026-08-03",
+        allocation_end: "2026-09-03",
+        active_memberships: -1,
+        purchase_id: purchaseId,
+        subscription_id: 455,
+        client,
+      });
+
+      expect(
+        await recordMembershipAllocationRefund({
+          original_purchase_id: purchaseId,
+          refund_purchase_id: refundPurchaseId,
+          client,
+        }),
+      ).toBe(1);
+
+      const { rows } = await client.query(
+        `SELECT membership_class,
+                SUM(active_memberships)::int AS active_memberships,
+                SUM(revenue_cents)::int AS revenue_cents
+           FROM membership_allocation_facts
+          WHERE purchase_id IN ($1,$2)
+          GROUP BY membership_class
+          ORDER BY membership_class`,
+        [purchaseId, refundPurchaseId],
+      );
+      expect(rows).toEqual([
+        {
+          membership_class: "pro",
+          active_memberships: 0,
+          revenue_cents: 0,
+        },
+        {
+          membership_class: "standard",
+          active_memberships: -1,
+          revenue_cents: 0,
         },
       ]);
     });
