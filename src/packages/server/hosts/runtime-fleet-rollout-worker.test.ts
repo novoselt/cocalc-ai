@@ -197,6 +197,54 @@ describe("host runtime fleet rollout planning", () => {
     ).toBe(true);
   });
 
+  test("records one exact runtime identity for each promoted component", () => {
+    expect(
+      __test__.componentRuntimeVersionsForPromotion({
+        components: ["acp-worker"],
+        statuses: ["host-a", "host-b"].map((host_id) => ({
+          host_id,
+          configured: [],
+          effective: [],
+          observed_components: [
+            {
+              component: "acp-worker",
+              artifact: "project-host",
+              runtime_state: "running",
+              version_state: "aligned",
+              running_versions: ["build-v2"],
+              running_pids: [456],
+            },
+          ],
+        })),
+      }),
+    ).toEqual({ "acp-worker": "build-v2" });
+  });
+
+  test("refuses promotion when component runtime identities differ", () => {
+    expect(() =>
+      __test__.componentRuntimeVersionsForPromotion({
+        components: ["acp-worker"],
+        statuses: ["build-v2", "unexpected-build"].map(
+          (running_version, index) => ({
+            host_id: `host-${index}`,
+            configured: [],
+            effective: [],
+            observed_components: [
+              {
+                component: "acp-worker",
+                artifact: "project-host",
+                runtime_state: "running",
+                version_state: "aligned",
+                running_versions: [running_version],
+                running_pids: [456 + index],
+              },
+            ],
+          }),
+        ),
+      }),
+    ).toThrow("hosts disagree on runtime version");
+  });
+
   test("defaults old durable operations to project-host and rejects invalid input", () => {
     expect(__test__.normalizedRolloutComponents(undefined)).toEqual([
       "project-host",
