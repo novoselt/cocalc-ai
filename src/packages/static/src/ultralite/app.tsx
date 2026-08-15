@@ -5,6 +5,7 @@
 
 import { lazy, Suspense, useEffect, useState } from "react";
 import { getAuthBootstrap, type AuthBootstrap } from "./api";
+import { parseRoute, type UltraliteRoute } from "./routes";
 import { ultraliteTheme } from "./theme";
 import { siteUrl } from "./urls";
 import { TopBar } from "./ui";
@@ -19,6 +20,17 @@ const Workspace = lazy(
         () => resolve(require("./workspace")),
         reject,
         "ultralite-workspace",
+      );
+    }),
+);
+const ProjectsWorkspace = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./projects-workspace")),
+        reject,
+        "ultralite-projects",
       );
     }),
 );
@@ -37,6 +49,7 @@ function Loading({ message }: { message: string }) {
 export function UltraliteApp() {
   const [bootstrap, setBootstrap] = useState<AuthBootstrap>();
   const [error, setError] = useState<string>();
+  const [route, setRoute] = useState<UltraliteRoute>(() => parseRoute());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -48,6 +61,13 @@ export function UltraliteApp() {
         }
       });
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => setRoute(parseRoute());
+    window.addEventListener("hashchange", onHashChange);
+    if (!window.location.hash) window.location.hash = "#/projects";
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   return (
@@ -85,8 +105,12 @@ export function UltraliteApp() {
           </a>
         </main>
       ) : (
-        <Suspense fallback={<Loading message="Connecting to your home bay" />}>
-          <Workspace bootstrap={bootstrap} />
+        <Suspense fallback={<Loading message="Loading CoCalc" />}>
+          {route.kind === "projects" ? (
+            <ProjectsWorkspace bootstrap={bootstrap} />
+          ) : (
+            <Workspace bootstrap={bootstrap} route={route} />
+          )}
         </Suspense>
       )}
     </div>

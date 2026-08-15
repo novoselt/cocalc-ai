@@ -4,20 +4,12 @@
  */
 
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
-import {
-  lazy,
-  Suspense,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import type { AuthBootstrap } from "./api";
-import { navigate, parseRoute, type UltraliteRoute } from "./routes";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { getAccountProjectWindow, type AuthBootstrap } from "./api";
+import type { UltraliteRoute } from "./routes";
 import { UltraliteSession } from "./session";
 import {
   ChunkErrorBoundary,
-  EmptyState,
   InlineAlert,
   LoadingState,
   ProjectLayout,
@@ -69,124 +61,8 @@ const AppSurface = lazy(
       );
     }),
 );
-const PAGE_SIZE = 50;
 
-function stateLabel(project: AccountProjectListWindowRow): string {
-  const state = `${project.state_summary?.state ?? "off"}`;
-  return state === "running" ? "running" : state;
-}
-
-function ProjectList({
-  projects,
-  loading,
-  hasMore,
-  query,
-  setQuery,
-  loadMore,
-}: {
-  projects: AccountProjectListWindowRow[];
-  loading: boolean;
-  hasMore: boolean;
-  query: string;
-  setQuery: (value: string) => void;
-  loadMore: () => void;
-}) {
-  return (
-    <>
-      <TopBar />
-      <main className="ul-page ul-projects-page" id="main-content">
-        <SurfaceHeader
-          actions={
-            <div className="ul-search-wrap">
-              <label className="ul-visually-hidden" htmlFor="ul-project-search">
-                Search projects
-              </label>
-              <input
-                className="ul-search"
-                id="ul-project-search"
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search projects"
-                type="search"
-                value={query}
-              />
-            </div>
-          }
-          title="Projects"
-        />
-        <div className="ul-project-table" role="list">
-          {projects.map((project) => {
-            const state = stateLabel(project);
-            const title = project.title || "Untitled project";
-            const edited = project.last_edited || project.last_activity_at;
-            return (
-              <button
-                aria-label={`Open project ${title}, ${state}`}
-                className="ul-project-row"
-                key={project.project_id}
-                onClick={() =>
-                  navigate({
-                    kind: "files",
-                    projectId: project.project_id,
-                    path: "/home/user",
-                  })
-                }
-                role="listitem"
-                type="button"
-              >
-                <span
-                  aria-hidden="true"
-                  className="ul-project-avatar"
-                  style={{
-                    borderColor:
-                      typeof project.theme?.color === "string"
-                        ? project.theme.color
-                        : undefined,
-                  }}
-                >
-                  {title.slice(0, 1).toUpperCase()}
-                </span>
-                <span className="ul-project-main">
-                  <strong>{title}</strong>
-                  {project.description ? (
-                    <span className="ul-project-description">
-                      {project.description}
-                    </span>
-                  ) : null}
-                </span>
-                <span
-                  className={`ul-project-state ${state === "running" ? "ul-status-running" : ""}`}
-                >
-                  {state}
-                </span>
-                <span className="ul-project-edited">
-                  {edited
-                    ? new Date(edited).toLocaleString(undefined, {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })
-                    : ""}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        {!projects.length && !loading ? (
-          <EmptyState>No projects match this search.</EmptyState>
-        ) : null}
-        {loading ? <LoadingState label="Loading projects" /> : null}
-        {hasMore ? (
-          <button
-            className="ul-button ul-button-secondary"
-            onClick={loadMore}
-            type="button"
-          >
-            Load more projects
-          </button>
-        ) : null}
-      </main>
-    </>
-  );
-}
+type ProjectRoute = Exclude<UltraliteRoute, { kind: "projects" }>;
 
 function MissingHost({ project }: { project: AccountProjectListWindowRow }) {
   return (
@@ -222,13 +98,13 @@ function DeferredSurface({
   );
 }
 
-function ProjectRoute({
+function ProjectSurface({
   project,
   route,
   session,
 }: {
   project: AccountProjectListWindowRow;
-  route: Exclude<UltraliteRoute, { kind: "projects" }>;
+  route: ProjectRoute;
   session: UltraliteSession;
 }) {
   let surface: ReactNode;
@@ -266,65 +142,6 @@ function ProjectRoute({
   );
 }
 
-function RouteSurface({
-  route,
-  session,
-  projects,
-  loading,
-  hasMore,
-  query,
-  setQuery,
-  loadMore,
-}: {
-  route: UltraliteRoute;
-  session: UltraliteSession;
-  projects: AccountProjectListWindowRow[];
-  loading: boolean;
-  hasMore: boolean;
-  query: string;
-  setQuery: (value: string) => void;
-  loadMore: () => void;
-}) {
-  if (route.kind === "projects") {
-    return (
-      <ProjectList
-        hasMore={hasMore}
-        loadMore={loadMore}
-        loading={loading}
-        projects={projects}
-        query={query}
-        setQuery={setQuery}
-      />
-    );
-  }
-  const project = projects.find(
-    ({ project_id }) => project_id === route.projectId,
-  );
-  if (project == null) {
-    if (loading) return <RouteLoading label="Loading project metadata" />;
-    return (
-      <>
-        <TopBar />
-        <main className="ul-page" id="main-content">
-          <SurfaceHeader title="Project unavailable" />
-          <InlineAlert kind="error">
-            This project is not in the loaded project window. Return to Projects
-            and search for it by title.
-          </InlineAlert>
-          <button
-            className="ul-button"
-            onClick={() => navigate({ kind: "projects" })}
-            type="button"
-          >
-            Back to projects
-          </button>
-        </main>
-      </>
-    );
-  }
-  return <ProjectRoute project={project} route={route} session={session} />;
-}
-
 function RouteLoading({ label }: { label: string }) {
   return (
     <>
@@ -336,35 +153,50 @@ function RouteLoading({ label }: { label: string }) {
   );
 }
 
-export default function Workspace({ bootstrap }: { bootstrap: AuthBootstrap }) {
+export default function Workspace({
+  bootstrap,
+  route,
+}: {
+  bootstrap: AuthBootstrap;
+  route: ProjectRoute;
+}) {
   const [session, setSession] = useState<UltraliteSession>();
-  const [route, setRoute] = useState(() => parseRoute());
-  const [projects, setProjects] = useState<AccountProjectListWindowRow[]>([]);
-  const [query, setQuery] = useState("");
-  const [activeQuery, setActiveQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [hasMore, setHasMore] = useState(false);
+  const [project, setProject] = useState<AccountProjectListWindowRow>();
   const [error, setError] = useState<string>();
-  const request = useRef(0);
-  const routeProjectId =
-    route.kind === "projects" ? undefined : route.projectId;
 
   useEffect(() => {
-    const onHashChange = () => setRoute(parseRoute());
-    window.addEventListener("hashchange", onHashChange);
-    if (!window.location.hash) navigate({ kind: "projects" });
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setActiveQuery(query.trim()), 300);
-    return () => clearTimeout(timer);
-  }, [query]);
+    let cancelled = false;
+    const initial = bootstrap.project_window?.find(
+      ({ project_id }) => project_id === route.projectId,
+    );
+    setProject(initial);
+    setError(undefined);
+    if (initial) return;
+    const controller = new AbortController();
+    void getAccountProjectWindow({
+      bootstrap,
+      request: { limit: 1, project_id: route.projectId },
+      signal: controller.signal,
+    })
+      .then(({ projects }) => {
+        if (cancelled) return;
+        if (projects[0]) setProject(projects[0]);
+        else setError("This project is not available to your account.");
+      })
+      .catch((err) => {
+        if (!cancelled && !controller.signal.aborted) {
+          setError(err instanceof Error ? err.message : `${err}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [bootstrap, route.projectId]);
 
   useEffect(() => {
     let current: UltraliteSession | undefined;
     let cancelled = false;
-    setError(undefined);
     void UltraliteSession.open(bootstrap)
       .then((opened) => {
         current = opened;
@@ -380,43 +212,11 @@ export default function Workspace({ bootstrap }: { bootstrap: AuthBootstrap }) {
     };
   }, [bootstrap]);
 
-  const load = async (replace: boolean) => {
-    if (!session) return;
-    const generation = ++request.current;
-    setLoading(true);
-    setError(undefined);
-    try {
-      const offset = replace ? 0 : projects.length;
-      const page = await session.listProjects({
-        limit: PAGE_SIZE,
-        offset,
-        search: activeQuery,
-      });
-      if (generation !== request.current) return;
-      setProjects((current) => (replace ? page : [...current, ...page]));
-      setHasMore(page.length === PAGE_SIZE);
-    } catch (err) {
-      if (generation === request.current) {
-        setError(err instanceof Error ? err.message : `${err}`);
-      }
-    } finally {
-      if (generation === request.current) setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!session) return;
-    setProjects([]);
-    void load(true);
-    // load is intentionally keyed by the session and debounced query only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeQuery, session]);
-
   useEffect(() => {
     requestAnimationFrame(() =>
       document.querySelector<HTMLElement>("h1")?.focus(),
     );
-  }, [route.kind, routeProjectId]);
+  }, [route.kind, route.projectId]);
 
   if (error) {
     return (
@@ -436,23 +236,8 @@ export default function Workspace({ bootstrap }: { bootstrap: AuthBootstrap }) {
       </>
     );
   }
-  if (!session) {
-    return (
-      <RouteLoading
-        label={`Connecting ${bootstrap.display_name || "your account"}`}
-      />
-    );
+  if (!session || !project) {
+    return <RouteLoading label="Connecting to project" />;
   }
-  return (
-    <RouteSurface
-      hasMore={hasMore}
-      loadMore={() => void load(false)}
-      loading={loading}
-      projects={projects}
-      query={query}
-      route={route}
-      session={session}
-      setQuery={setQuery}
-    />
-  );
+  return <ProjectSurface project={project} route={route} session={session} />;
 }

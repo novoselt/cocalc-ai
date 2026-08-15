@@ -3,7 +3,6 @@
  * License: MS-RSL - see LICENSE.md for details
  */
 
-import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import callHub from "@cocalc/conat/hub/call-hub";
 import { connect, type Client } from "@cocalc/conat/core/client";
 import { initHubApi, type HubApi } from "@cocalc/conat/hub/api";
@@ -122,24 +121,6 @@ export class UltraliteSession {
       hubClient.close();
       throw err;
     }
-  }
-
-  async listProjects({
-    limit = 50,
-    offset = 0,
-    search,
-  }: {
-    limit?: number;
-    offset?: number;
-    search?: string;
-  } = {}): Promise<AccountProjectListWindowRow[]> {
-    return await this.hubApi.projects.listAccountProjectWindow({
-      hidden: false,
-      limit,
-      offset,
-      search: search?.trim() || undefined,
-      sort: "last_edited",
-    });
   }
 
   async openProjectHost(

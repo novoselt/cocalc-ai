@@ -41,6 +41,7 @@ function brotliBytes(chunkNames) {
 
 const initial = findNamedGroup("ultralite");
 if (!initial?.length) throw new Error("missing initial ultralite chunk group");
+const projects = findNamedGroup("ultralite-projects");
 const workspace = findNamedGroup("ultralite-workspace");
 const files = findNamedGroup("ultralite-files");
 const chat = findNamedGroup("ultralite-chat");
@@ -49,7 +50,7 @@ const apps = findNamedGroup("ultralite-apps");
 
 const surfaces = [
   { label: "shell", chunks: initial, max: 75 * KiB },
-  { label: "projects", chunks: [...initial, ...workspace], max: 400 * KiB },
+  { label: "projects", chunks: [...initial, ...projects], max: 400 * KiB },
   {
     label: "files and read-only Jupyter",
     chunks: [...initial, ...workspace, ...files],
