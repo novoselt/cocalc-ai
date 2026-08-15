@@ -14,7 +14,9 @@ const NETWORK = {
 
 const VIEWPORTS = {
   desktop: { width: 1440, height: 900 },
+  tablet: { width: 768, height: 1024 },
   narrow: { width: 390, height: 844 },
+  small: { width: 320, height: 720 },
 };
 
 function parseArgs(argv) {
@@ -354,7 +356,7 @@ Options:
   --notebook <path>       Also measure a read-only notebook
   --chat-path <path>      Existing chat path (requires --thread-id)
   --thread-id <id>        Existing Codex thread
-  --viewport desktop|narrow
+  --viewport desktop|tablet|narrow|small
   --cpu 1|4
   --standard-url <origin> Capture matching full-CoCalc reference screenshots
   --output <directory>
@@ -367,7 +369,9 @@ Options:
   const output = resolve(
     `${args.output ?? `/tmp/cocalc-ultralite-measurements-${new Date().toISOString().replace(/[:.]/g, "-")}`}`,
   );
-  const viewport = args.viewport === "narrow" ? "narrow" : "desktop";
+  const viewport = Object.hasOwn(VIEWPORTS, args.viewport)
+    ? args.viewport
+    : "desktop";
   const cpuRate = Number(args.cpu ?? 1) === 4 ? 4 : 1;
   const storageState = args["storage-state"]
     ? resolve(`${args["storage-state"]}`)
