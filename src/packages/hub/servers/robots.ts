@@ -40,6 +40,7 @@ function renderPublicRobots(req: Request): string {
     "Disallow: /static/app.html",
     "Disallow: /static/embed.html",
     "Disallow: /static/ultralite.html",
+    "Disallow: /essential",
     // The wildcard covers all public-viewer*.html share-viewer shells while
     // leaving the public-viewer*-<hash>.js entry chunks fetchable — crawlers
     // need those bundles to render indexable /share pages.

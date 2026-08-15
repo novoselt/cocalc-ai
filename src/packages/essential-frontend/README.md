@@ -5,9 +5,11 @@ essential work with low startup, network, CPU, and interface overhead. It is a
 recognizable subset of CoCalc rather than a separate visual product or a
 preview of the full frontend.
 
-The application is currently served at `/static/ultralite.html`. That URL is a
-deployment detail retained for compatibility; `essential-frontend` is the
-application and package name.
+The application is served at `/essential/projects`. Project files use clean,
+shareable paths such as
+`/essential/projects/<project-id>/files/home/user/README.md`; a trailing slash
+denotes a directory. Historical `/static/ultralite.html#/...` links remain
+compatible and are converted to the clean route when opened.
 
 ## Product Test
 

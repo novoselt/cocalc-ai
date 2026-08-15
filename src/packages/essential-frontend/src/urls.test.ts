@@ -3,6 +3,8 @@ import { fullProjectUrl, getAppBasePath, siteUrl } from "./urls";
 test("detects root and prefixed static deployments", () => {
   expect(getAppBasePath("/static/ultralite.html")).toBe("");
   expect(getAppBasePath("/cocalc/static/ultralite.html")).toBe("/cocalc");
+  expect(getAppBasePath("/essential/projects")).toBe("");
+  expect(getAppBasePath("/cocalc/essential/projects")).toBe("/cocalc");
 });
 
 test("builds prefixed site and project URLs", () => {

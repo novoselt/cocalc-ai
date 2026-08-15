@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import compression from "compression";
 import express from "express";
 import { existsSync } from "fs";
+import { readFile } from "fs/promises";
 import ms from "ms";
 import { join } from "path";
 import { parse as parseURL } from "url";
@@ -34,6 +35,7 @@ import initProjectHostBootstrap from "./app/project-host-bootstrap";
 import initProjectHostSoftware from "./app/project-host-software";
 import initSelfHostConnector from "./app/self-host-connector";
 import initStripeWebhook from "./app/stripe-webhook";
+import { renderEssentialShell } from "./app/essential-shell";
 import initRootfsManifest from "./app/rootfs-manifest";
 import { getDatabase } from "./database";
 import initHttpServer from "./http";
@@ -509,6 +511,15 @@ async function initStatic(router) {
       setHeaders: cacheShortTerm,
     }),
   );
+  router.get(/^\/essential(?:\/.*)?$/, staticCompression, (_req, res, next) => {
+    cacheShortTerm(res);
+    const staticBase = basePath === "/" ? "/static/" : `${basePath}/static/`;
+    void readFile(join(staticPath, "ultralite.html"), "utf8")
+      .then((html) => {
+        res.type("html").send(renderEssentialShell(html, staticBase));
+      })
+      .catch(next);
+  });
   router.use(
     [
       "/static/public-viewer.html",

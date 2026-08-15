@@ -4,10 +4,14 @@
  */
 
 export function getAppBasePath(pathname = window.location.pathname): string {
-  const marker = "/static/";
-  const index = pathname.indexOf(marker);
-  if (index < 0) return "";
-  return pathname.slice(0, index).replace(/\/$/, "");
+  for (const marker of ["/essential/", "/static/"]) {
+    const index = pathname.indexOf(marker);
+    if (index >= 0) return pathname.slice(0, index).replace(/\/$/, "");
+  }
+  if (pathname.endsWith("/essential")) {
+    return pathname.slice(0, -"/essential".length).replace(/\/$/, "");
+  }
+  return "";
 }
 
 export function siteUrl(path: string, basePath = getAppBasePath()): string {

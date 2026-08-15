@@ -108,7 +108,7 @@ test("keeps the draft and blocks overwrite after an etag conflict", async () => 
 test("can cancel constrained-client navigation while dirty", async () => {
   const value = props();
   jest.spyOn(window, "confirm").mockReturnValue(false);
-  window.location.hash = "#/projects";
+  window.history.replaceState({}, "", "/essential/projects");
   render(<CodeView {...value} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   fireEvent.change(
@@ -124,7 +124,7 @@ test("can cancel constrained-client navigation while dirty", async () => {
     path: "/home/user",
   });
 
-  expect(window.location.hash).toBe("#/projects");
+  expect(window.location.pathname).toBe("/essential/projects");
 });
 
 test("replaces the editor document when a different file is opened", async () => {
