@@ -6,6 +6,8 @@
 const mockPoolQuery = jest.fn();
 const mockEnsureMembershipAnalyticsTables = jest.fn();
 const mockSnapshotMembershipAnalyticsDailyCounts = jest.fn();
+const mockBackfillMembershipAllocationFacts = jest.fn();
+const mockProjectOutstandingMembershipAllocationFacts = jest.fn();
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -32,6 +34,16 @@ jest.mock("@cocalc/server/membership/analytics", () => ({
     mockSnapshotMembershipAnalyticsDailyCounts(...args),
 }));
 
+jest.mock("@cocalc/server/membership/allocation-analytics-backfill", () => ({
+  backfillMembershipAllocationFacts: (...args: any[]) =>
+    mockBackfillMembershipAllocationFacts(...args),
+}));
+
+jest.mock("@cocalc/server/membership/allocation-analytics", () => ({
+  projectOutstandingMembershipAllocationFacts: (...args: any[]) =>
+    mockProjectOutstandingMembershipAllocationFacts(...args),
+}));
+
 describe("maintainMembershipAnalytics", () => {
   beforeEach(() => {
     jest.useFakeTimers({ now: new Date("2026-07-01T17:20:00.000Z") });
@@ -40,6 +52,15 @@ describe("maintainMembershipAnalytics", () => {
       .mockReset()
       .mockResolvedValue(undefined);
     mockSnapshotMembershipAnalyticsDailyCounts.mockReset().mockResolvedValue(4);
+    mockBackfillMembershipAllocationFacts.mockReset().mockResolvedValue({
+      trials: 0,
+      personal_purchases: 0,
+      direct_student_purchases: 0,
+      refunds: 0,
+    });
+    mockProjectOutstandingMembershipAllocationFacts
+      .mockReset()
+      .mockResolvedValue(0);
   });
 
   afterEach(() => {
@@ -64,6 +85,12 @@ describe("maintainMembershipAnalytics", () => {
       bay_id: "bay-test",
       snapshot_date: "2026-07-01",
     });
+    expect(mockBackfillMembershipAllocationFacts).toHaveBeenCalledWith({
+      limit: 250,
+    });
+    expect(
+      mockProjectOutstandingMembershipAllocationFacts,
+    ).toHaveBeenCalledWith({ limit: 1000 });
   });
 
   it("does not rewrite a daily count snapshot that already exists for this bay today", async () => {
@@ -76,5 +103,11 @@ describe("maintainMembershipAnalytics", () => {
     await maintainMembershipAnalytics();
 
     expect(mockSnapshotMembershipAnalyticsDailyCounts).not.toHaveBeenCalled();
+    expect(mockBackfillMembershipAllocationFacts).toHaveBeenCalledWith({
+      limit: 250,
+    });
+    expect(
+      mockProjectOutstandingMembershipAllocationFacts,
+    ).toHaveBeenCalledWith({ limit: 1000 });
   });
 });

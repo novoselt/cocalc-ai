@@ -10,6 +10,8 @@ import {
   ensureMembershipAnalyticsTables,
   snapshotMembershipAnalyticsDailyCounts,
 } from "@cocalc/server/membership/analytics";
+import { backfillMembershipAllocationFacts } from "@cocalc/server/membership/allocation-analytics-backfill";
+import { projectOutstandingMembershipAllocationFacts } from "@cocalc/server/membership/allocation-analytics";
 
 const logger = getLogger("purchases:maintain-membership-analytics");
 
@@ -43,20 +45,30 @@ async function snapshotExists({
 export default async function maintainMembershipAnalytics(): Promise<void> {
   const snapshot_date = todayUtc();
   const bay_id = getConfiguredBayId();
-  if (await snapshotExists({ bay_id, snapshot_date })) {
+  if (!(await snapshotExists({ bay_id, snapshot_date }))) {
+    const rows = await snapshotMembershipAnalyticsDailyCounts({
+      bay_id,
+      snapshot_date,
+    });
+    logger.debug("membership analytics snapshot complete", {
+      bay_id,
+      snapshot_date,
+      rows,
+    });
+  } else {
     logger.debug("membership analytics snapshot already exists", {
       bay_id,
       snapshot_date,
     });
-    return;
   }
-  const rows = await snapshotMembershipAnalyticsDailyCounts({
-    bay_id,
-    snapshot_date,
+
+  const backfill = await backfillMembershipAllocationFacts({ limit: 250 });
+  const projected = await projectOutstandingMembershipAllocationFacts({
+    limit: 1000,
   });
-  logger.debug("membership analytics snapshot complete", {
+  logger.debug("membership allocation analytics maintenance complete", {
     bay_id,
-    snapshot_date,
-    rows,
+    backfill,
+    projected,
   });
 }
