@@ -15,6 +15,7 @@ export type UltraliteIconName =
   | "external"
   | "file"
   | "folder"
+  | "notebook"
   | "projects"
   | "refresh"
   | "server"
@@ -62,6 +63,12 @@ const PATHS: Record<UltraliteIconName, ReactNode> = {
     </>
   ),
   folder: <path d="M3 6h7l2 2h9v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />,
+  notebook: (
+    <>
+      <path d="M6 3h13v18H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />
+      <path d="M8 3v18M11 8h5M11 12h5" />
+    </>
+  ),
   projects: (
     <>
       <path d="M4 4h16v16H4Z" />

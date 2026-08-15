@@ -14,8 +14,16 @@ import {
   openJupyterLiveRunStore,
   type JupyterLiveRunSnapshot,
 } from "@cocalc/conat/project/jupyter/live-run";
+import {
+  editJournalAvailable,
+  saveNotebookJournal,
+} from "@cocalc/conat/project/edit-journal";
 import { syncdbPath } from "@cocalc/util/jupyter/names";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefCallback } from "react";
+import CodeMirrorEditor, {
+  type CodeMirrorEditorHandle,
+  type CodeMirrorShortcut,
+} from "./codemirror-editor";
 import type { UltraliteSession } from "./session";
 import {
   NotebookOutputView,
@@ -26,12 +34,15 @@ import {
   type NotebookOutput,
 } from "./notebook-view";
 import { InlineAlert, LoadingState } from "./ui";
+import useEditCheckpoint from "./use-edit-checkpoint";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
 import {
   recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
+import type { UltraliteLanguage } from "./prism-languages";
+import { sha256Text } from "./sha256";
 
 const MAX_OUTPUT_TEXT = 100_000;
 const MAX_OUTPUT_IMAGE = 7 * 1024 * 1024;
@@ -130,6 +141,93 @@ function cellInput(cell: NotebookCell): string {
   return sourceText(cell.source);
 }
 
+function newNotebookCell(
+  cellType: "code" | "markdown" | "raw" = "code",
+): NotebookCell {
+  return {
+    cell_type: cellType,
+    id: crypto.randomUUID(),
+    metadata: {},
+    outputs: cellType === "code" ? [] : undefined,
+    source: "",
+  };
+}
+
+export function insertNotebookCellBelow(
+  notebook: NotebookDocument,
+  index: number,
+  cellType: "code" | "markdown" | "raw" = "code",
+): { cellId: string; notebook: NotebookDocument } {
+  const cell = newNotebookCell(cellType);
+  const cells = [...notebook.cells];
+  cells.splice(Math.min(index + 1, cells.length), 0, cell);
+  return { cellId: cell.id!, notebook: { ...notebook, cells } };
+}
+
+function notebookCodeLanguage(
+  notebook: NotebookDocument,
+): UltraliteLanguage | undefined {
+  const metadata = notebook.metadata ?? {};
+  const value = `${
+    metadata.language_info?.name ?? metadata.kernelspec?.language ?? ""
+  }`.toLowerCase();
+  if (value.includes("python")) return "python";
+  if (value.includes("typescript")) return "typescript";
+  if (value.includes("javascript") || value === "node") return "javascript";
+  if (value === "go" || value === "golang") return "go";
+  if (value === "rust") return "rust";
+  if (value === "bash" || value === "shell" || value === "sh") return "bash";
+  if (value === "sql") return "sql";
+  return;
+}
+
+function NotebookCellEditor({
+  autoFocus,
+  cell,
+  editorRef,
+  index,
+  language,
+  onChange,
+  onSave,
+  path,
+  readOnly,
+  shortcuts,
+}: {
+  autoFocus: boolean;
+  cell: NotebookCell;
+  editorRef: RefCallback<CodeMirrorEditorHandle>;
+  index: number;
+  language?: UltraliteLanguage;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  path: string;
+  readOnly: boolean;
+  shortcuts: CodeMirrorShortcut[];
+}) {
+  // CodeMirror owns the live draft. Parent updates must not reset its history.
+  const [initialValue] = useState(() => cellInput(cell));
+  return (
+    <CodeMirrorEditor
+      ariaLabel={`Source for cell ${index + 1}`}
+      autoFocus={autoFocus}
+      className="ul-notebook-cm"
+      initialValue={initialValue}
+      language={cell.cell_type === "markdown" ? "markdown" : language}
+      onChange={onChange}
+      onCursorChange={() => undefined}
+      onDirtyChange={() => undefined}
+      onLanguageError={() => undefined}
+      onSave={onSave}
+      path={`${path}#${cell.id ?? index}`}
+      readOnly={readOnly}
+      ref={editorRef}
+      shortcuts={shortcuts}
+      spellCheck={cell.cell_type === "markdown"}
+      wrap={cell.cell_type !== "code"}
+    />
+  );
+}
+
 export default function NotebookEditor({
   baseContents: initialBase,
   filesystem,
@@ -156,6 +254,7 @@ export default function NotebookEditor({
   );
   const [baseContents, setBaseContents] = useState(initialBase);
   const [dirty, setDirty] = useState(false);
+  const [editRevision, setEditRevision] = useState(0);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -163,7 +262,11 @@ export default function NotebookEditor({
   const [kernelStatus, setKernelStatus] = useState("not started");
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const jupyter = useRef<JupyterClient | undefined>(undefined);
+  const cellEditors = useRef(new Map<string, CodeMirrorEditorHandle>());
+  const journalId = useRef(crypto.randomUUID());
+  const journalSequence = useRef(0);
   const completedLiveRunIds = useRef(new Set<string>());
   const directRunId = useRef<string | undefined>(undefined);
   const dirtyRef = useRef(dirty);
@@ -206,6 +309,12 @@ export default function NotebookEditor({
 
   useEffect(() => recordUltraliteSurfaceReady("notebook_execute"), []);
 
+  const markEdited = () => {
+    setDirty(true);
+    setEditRevision((value) => value + 1);
+    setNotice(undefined);
+  };
+
   const updateCell = (index: number, patch: Partial<NotebookCell>) => {
     setNotebook((current) => ({
       ...current,
@@ -213,19 +322,68 @@ export default function NotebookEditor({
         i === index ? { ...cell, ...patch } : cell,
       ),
     }));
-    setDirty(true);
-    setNotice(undefined);
+    markEdited();
   };
 
   const saveCandidate = async (candidate: NotebookDocument) => {
     const contents = serializeNotebook(candidate);
-    await filesystem.writeFileIfUnchanged(path, contents, baseContents, true);
-    setBaseContents(contents);
-    setNotebook(candidate);
+    let savedContents = contents;
+    let savedNotebook = candidate;
+    let savedWithJournal = false;
+    if (
+      project.host_id &&
+      session.accountId &&
+      typeof session.openProjectHost === "function"
+    ) {
+      const opened = await session.openProjectHost(
+        project.project_id,
+        project.host_id,
+      );
+      const cell_patches = candidate.cells.flatMap((cell) => {
+        if (!cell.id) return [];
+        const batch = cellEditors.current.get(cell.id)?.getJournalBatch();
+        return batch ? [{ cell_id: cell.id, patch: batch.patch }] : [];
+      });
+      if (
+        await editJournalAvailable({
+          client: opened.client,
+          account_id: session.accountId,
+          project_id: project.project_id,
+        })
+      ) {
+        const response = await saveNotebookJournal({
+          client: opened.client,
+          account_id: session.accountId,
+          project_id: project.project_id,
+          request: {
+            path,
+            base_sha256: await sha256Text(baseContents),
+            journal_id: journalId.current,
+            sequence: journalSequence.current,
+            contents,
+            cell_patches,
+          },
+        });
+        journalSequence.current += 1;
+        savedContents = response.contents;
+        savedNotebook = parseNotebook(savedContents);
+        savedWithJournal = true;
+        for (const cell of savedNotebook.cells) {
+          if (!cell.id) continue;
+          cellEditors.current.get(cell.id)?.acknowledgeJournal(cellInput(cell));
+        }
+      }
+    }
+    if (!savedWithJournal) {
+      await filesystem.writeFileIfUnchanged(path, contents, baseContents, true);
+      for (const editor of cellEditors.current.values()) editor.markClean();
+    }
+    setBaseContents(savedContents);
+    setNotebook(savedNotebook);
     setDirty(false);
     setConflict(false);
-    onSaved?.(candidate, contents);
-    return contents;
+    onSaved?.(savedNotebook, savedContents);
+    return savedContents;
   };
 
   const save = async () => {
@@ -254,6 +412,11 @@ export default function NotebookEditor({
       setSaving(false);
     }
   };
+  useEditCheckpoint({
+    active: dirty && !saving && !running && !conflict && !readOnly,
+    revision: editRevision,
+    save,
+  });
 
   const applyMessages = (messages: OutputMessage[]) => {
     const started = messages.find(
@@ -317,6 +480,7 @@ export default function NotebookEditor({
       if (disposed) return;
       const savedNotebook = parseNotebook(saved);
       setNotebook(savedNotebook);
+      setEditorEpoch((value) => value + 1);
       onSaved?.(savedNotebook, saved);
       setBaseContents(saved);
       setDirty(false);
@@ -417,7 +581,16 @@ export default function NotebookEditor({
     };
   }, [filesystem, path, project.host_id, project.project_id, session]);
 
-  const runCells = async (indexes: number[]) => {
+  const focusCell = (cellId?: string) => {
+    if (!cellId) return;
+    requestAnimationFrame(() => cellEditors.current.get(cellId)?.focus());
+  };
+
+  const runCells = async (
+    indexes: number[],
+    notebookCandidate: NotebookDocument = notebook,
+    focusAfterRun?: string,
+  ) => {
     if (readOnly || running || saving || !project.host_id) return;
     setRunning(true);
     setError(undefined);
@@ -436,7 +609,7 @@ export default function NotebookEditor({
           code: "ETAG_MISMATCH",
         });
       }
-      const candidate = normalizeNotebook(notebook);
+      const candidate = normalizeNotebook(notebookCandidate);
       const candidateContents = serializeNotebook(candidate);
       if (dirty || candidateContents !== baseContents) {
         await saveCandidate(candidate);
@@ -510,6 +683,7 @@ export default function NotebookEditor({
       );
       const savedNotebook = parseNotebook(saved);
       setNotebook(savedNotebook);
+      setEditorEpoch((value) => value + 1);
       onSaved?.(savedNotebook, saved);
       setBaseContents(saved);
       setDirty(false);
@@ -545,9 +719,36 @@ export default function NotebookEditor({
       if (!detached) {
         setRunningCell(undefined);
         setRunning(false);
+        focusCell(focusAfterRun);
       }
       jupyter.current?.close();
       jupyter.current = undefined;
+    }
+  };
+
+  const handleCellShortcut = (
+    index: number,
+    mode: "advance" | "insert" | "stay",
+  ) => {
+    let candidate = notebook;
+    let focusCellId = notebook.cells[index]?.id;
+    if (
+      mode === "insert" ||
+      (mode === "advance" && !notebook.cells[index + 1])
+    ) {
+      const inserted = insertNotebookCellBelow(notebook, index);
+      candidate = inserted.notebook;
+      focusCellId = inserted.cellId;
+      setNotebook(candidate);
+      markEdited();
+    } else if (mode === "advance") {
+      focusCellId = notebook.cells[index + 1]?.id;
+    }
+
+    if (notebook.cells[index]?.cell_type === "code") {
+      void runCells([index], candidate, focusCellId);
+    } else {
+      focusCell(focusCellId);
     }
   };
 
@@ -569,6 +770,7 @@ export default function NotebookEditor({
   const codeIndexes = notebook.cells
     .map((cell, index) => (cell.cell_type === "code" ? index : -1))
     .filter((index) => index >= 0);
+  const codeLanguage = notebookCodeLanguage(notebook);
 
   return (
     <div>
@@ -619,95 +821,117 @@ export default function NotebookEditor({
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {running ? <LoadingState label={`Kernel ${kernelStatus}`} /> : null}
       <div className="ul-notebook">
-        {notebook.cells.map((cell, index) => (
-          <section className="ul-cell" key={cell.id ?? index}>
-            <div className="ul-cell-toolbar">
-              <span className="ul-cell-label">
-                {cell.cell_type || "code"} cell {index + 1}
-                {runningCell === cell.id ? " · running" : ""}
-              </span>
-              {cell.cell_type === "code" ? (
+        {notebook.cells.map((cell, index) => {
+          const cellKey = cell.id ?? `cell-${index}`;
+          const shortcuts: CodeMirrorShortcut[] = [
+            {
+              key: "Shift-Enter",
+              run: () => handleCellShortcut(index, "advance"),
+            },
+            {
+              key: "Alt-Enter",
+              run: () => handleCellShortcut(index, "insert"),
+            },
+            {
+              key: "Ctrl-Enter",
+              run: () => handleCellShortcut(index, "stay"),
+            },
+          ];
+          return (
+            <section className="ul-cell" key={`${editorEpoch}:${cellKey}`}>
+              <div className="ul-cell-toolbar">
+                <span className="ul-cell-label">
+                  {cell.cell_type || "code"} cell {index + 1}
+                  {runningCell === cell.id ? " · running" : ""}
+                </span>
+                {cell.cell_type === "code" ? (
+                  <button
+                    className="ul-icon-button"
+                    disabled={readOnly || running || conflict}
+                    onClick={() => void runCells([index])}
+                    type="button"
+                  >
+                    Run
+                  </button>
+                ) : null}
                 <button
+                  aria-label={`Move cell ${index + 1} up`}
                   className="ul-icon-button"
-                  disabled={readOnly || running || conflict}
-                  onClick={() => void runCells([index])}
+                  disabled={readOnly || index === 0 || running}
+                  onClick={() => {
+                    const cells = [...notebook.cells];
+                    [cells[index - 1], cells[index]] = [
+                      cells[index],
+                      cells[index - 1],
+                    ];
+                    setNotebook({ ...notebook, cells });
+                    markEdited();
+                  }}
                   type="button"
                 >
-                  Run
+                  Up
                 </button>
-              ) : null}
-              <button
-                aria-label={`Move cell ${index + 1} up`}
-                className="ul-icon-button"
-                disabled={readOnly || index === 0 || running}
-                onClick={() => {
-                  const cells = [...notebook.cells];
-                  [cells[index - 1], cells[index]] = [
-                    cells[index],
-                    cells[index - 1],
-                  ];
-                  setNotebook({ ...notebook, cells });
-                  setDirty(true);
+                <button
+                  aria-label={`Move cell ${index + 1} down`}
+                  className="ul-icon-button"
+                  disabled={
+                    readOnly || index === notebook.cells.length - 1 || running
+                  }
+                  onClick={() => {
+                    const cells = [...notebook.cells];
+                    [cells[index], cells[index + 1]] = [
+                      cells[index + 1],
+                      cells[index],
+                    ];
+                    setNotebook({ ...notebook, cells });
+                    markEdited();
+                  }}
+                  type="button"
+                >
+                  Down
+                </button>
+                <button
+                  aria-label={`Delete cell ${index + 1}`}
+                  className="ul-icon-button"
+                  disabled={readOnly || running}
+                  onClick={() => {
+                    if (!window.confirm(`Delete cell ${index + 1}?`)) return;
+                    setNotebook({
+                      ...notebook,
+                      cells: notebook.cells.filter((_, i) => i !== index),
+                    });
+                    markEdited();
+                  }}
+                  type="button"
+                >
+                  Delete
+                </button>
+              </div>
+              <NotebookCellEditor
+                autoFocus={false}
+                cell={cell}
+                editorRef={(editor) => {
+                  if (editor) cellEditors.current.set(cellKey, editor);
+                  else cellEditors.current.delete(cellKey);
                 }}
-                type="button"
-              >
-                Up
-              </button>
-              <button
-                aria-label={`Move cell ${index + 1} down`}
-                className="ul-icon-button"
-                disabled={
-                  readOnly || index === notebook.cells.length - 1 || running
-                }
-                onClick={() => {
-                  const cells = [...notebook.cells];
-                  [cells[index], cells[index + 1]] = [
-                    cells[index + 1],
-                    cells[index],
-                  ];
-                  setNotebook({ ...notebook, cells });
-                  setDirty(true);
-                }}
-                type="button"
-              >
-                Down
-              </button>
-              <button
-                aria-label={`Delete cell ${index + 1}`}
-                className="ul-icon-button"
-                disabled={readOnly || running}
-                onClick={() => {
-                  if (!window.confirm(`Delete cell ${index + 1}?`)) return;
-                  setNotebook({
-                    ...notebook,
-                    cells: notebook.cells.filter((_, i) => i !== index),
-                  });
-                  setDirty(true);
-                }}
-                type="button"
-              >
-                Delete
-              </button>
-            </div>
-            <textarea
-              aria-label={`Source for cell ${index + 1}`}
-              className="ul-cell-source ul-editor"
-              onChange={(event) =>
-                updateCell(index, { source: event.target.value })
-              }
-              readOnly={readOnly || running}
-              spellCheck={cell.cell_type === "markdown"}
-              value={cellInput(cell)}
-            />
-            {cell.outputs?.map((output, outputIndex) => (
-              <NotebookOutputView
-                index={outputIndex}
-                key={outputIndex}
-                output={output}
+                index={index}
+                language={codeLanguage}
+                onChange={(source) => updateCell(index, { source })}
+                onSave={() => void save()}
+                path={path}
+                readOnly={readOnly || running || saving}
+                shortcuts={shortcuts}
               />
-            ))}
-          </section>
-        ))}
+              {cell.outputs?.map((output, outputIndex) => (
+                <NotebookOutputView
+                  index={outputIndex}
+                  key={outputIndex}
+                  output={output}
+                />
+              ))}
+            </section>
+          );
+        })}
       </div>
       {!readOnly ? (
         <div className="ul-toolbar ul-notebook-add">
@@ -722,15 +946,11 @@ export default function NotebookEditor({
                   cells: [
                     ...notebook.cells,
                     {
-                      cell_type: cellType,
-                      id: crypto.randomUUID(),
-                      metadata: {},
-                      outputs: cellType === "code" ? [] : undefined,
-                      source: "",
+                      ...newNotebookCell(cellType),
                     },
                   ],
                 });
-                setDirty(true);
+                markEdited();
               }}
               type="button"
             >

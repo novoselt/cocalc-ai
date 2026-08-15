@@ -727,6 +727,12 @@ textarea {
   resize: vertical;
 }
 
+.ul-notebook-cm {
+  border-width: 0;
+  height: clamp(140px, 22vh, 300px);
+  resize: vertical;
+}
+
 .ul-markdown-cell {
   line-height: 1.55;
   padding: 12px;

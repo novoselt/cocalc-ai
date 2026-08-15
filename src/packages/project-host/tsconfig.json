@@ -26,6 +26,7 @@
     { "path": "../file-server" },
     { "path": "../project-proxy" },
     { "path": "../static" },
+    { "path": "../sync" },
     { "path": "../util" }
   ]
 }

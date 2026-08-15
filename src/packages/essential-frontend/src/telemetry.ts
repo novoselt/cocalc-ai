@@ -16,6 +16,7 @@ export type UltraliteSurface =
   | "file"
   | "editor"
   | "notebook"
+  | "notebooks"
   | "notebook_execute"
   | "kernel"
   | "chat"

@@ -750,6 +750,57 @@ largest relevant cumulative totals were 615.0 KiB Brotli for the editor plus
 largest language parser, 600.5 KiB for chat plus lazy math, and 488.5 KiB for
 the terminal.
 
+### Focused File And Jupyter Follow-Up
+
+Commits `1c92cc436a` through `8e21132522` were deployed only as staging static
+artifact `20260815T180334Z-8e211325-essential-jupyter-scan`, bay release
+`20260815180425-static`. This did not update the hub or project hosts.
+
+The exact motivating Go source route rendered 9,156 Prism tokens without a
+load warning. Its CodeMirror editor was white, bordered, and 585 px high in a
+900 px viewport. The repository README rendered as structured Markdown with
+15 headings and 130 paragraphs instead of source text.
+
+The first recent-notebook scan exposed permission errors under hidden project
+state. The final query prunes hidden directories before traversing, after
+which the staging project returned 127 visible notebooks ordered by
+modification time. The result is cached by project host and project for the
+browser session; only Refresh rescans. Opening `spiral.ipynb` produced two
+bounded white CodeMirror cell editors, and Reload from disk preserved notebook
+edit mode. These browser checks produced no page or console errors.
+
+Production graph validation passed with 418.3 KiB Brotli for syntax-highlighted
+code, 464.1 KiB for rendered Markdown, 619.3 KiB for ordinary editing, 665.1
+KiB for Markdown editing, 623.4 KiB for executable Jupyter, and 403.9 KiB for
+the recent-notebook index.
+
+### Clean Routes And Open-File Watches
+
+Commits `0c7506e655`, `23f08e2fdb`, and `7156df5baf` added the clean
+`/essential/projects/...` URL schema and direct project-host open-file watches.
+They were deployed only to staging. Production and project-host software were
+not changed.
+
+- Hub artifact:
+  `20260815T182552Z-23f08e2f-20260815T182535Z-23f08e2f-essential-route-watch`;
+  bay release `20260815182738-hub`.
+- Final static artifact:
+  `20260815T183713Z-7156df5b-20260815T183300Z-7156df5b-essential-watch-atomic`;
+  bay release `20260815183805-static`.
+
+A direct authenticated load and browser refresh of the motivating Go source
+URL returned HTTP 200, retained the clean path, resolved the entry chunk from
+`/static`, rendered `main.go`, and produced no page or console errors. A
+historical hash link converted in place to its corresponding clean URL.
+
+Live watch validation used a temporary project file and external atomic
+uploads. A passive view automatically reloaded the new contents. A subsequent
+atomic replacement while CodeMirror held an unsaved draft displayed the
+changed-on-disk warning and retained the draft. The initial staging test also
+found that `closeOnUnlink` ended subscriptions during normal rename-based
+saves; `7156df5baf` fixed this by following the visible path until navigation
+closes the watcher. All temporary project files were removed afterward.
+
 ## Relevant Code And Plans
 
 - `src/packages/essential-frontend/`

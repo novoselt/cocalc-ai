@@ -50,6 +50,7 @@
     "@cocalc/project-proxy": "workspace:*",
     "@cocalc/project-runner": "workspace:*",
     "@cocalc/static": "workspace:*",
+    "@cocalc/sync": "workspace:*",
     "@cocalc/util": "workspace:*",
     "@isaacs/ttlcache": "^1.4.1",
     "compression": "^1.8.1",

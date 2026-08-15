@@ -3,12 +3,15 @@
  * License: MS-RSL - see LICENSE.md for details
  */
 
+import { getAppBasePath, siteUrl } from "./urls";
+
 export type UltraliteRoute =
   | { kind: "projects" }
   | { kind: "notifications" }
   | { kind: "files"; projectId: string; path: string }
   | { kind: "file"; projectId: string; path: string }
   | { kind: "agents"; projectId: string }
+  | { kind: "notebooks"; projectId: string }
   | { kind: "terminal"; projectId: string }
   | { kind: "vms"; projectId: string }
   | { kind: "apps"; projectId: string }
@@ -22,9 +25,16 @@ export type UltraliteRoute =
     };
 
 export const ULTRALITE_BEFORE_NAVIGATE = "cocalc-ultralite-before-navigate";
+export const ESSENTIAL_ROUTE_CHANGE = "cocalc-essential-route-change";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export interface EssentialRouteLocation {
+  hash?: string;
+  pathname: string;
+  search?: string;
+}
 
 export function normalizeProjectPath(value?: string): string {
   const parts = `${value || "/home/user"}`
@@ -43,7 +53,7 @@ export function normalizeProjectPath(value?: string): string {
     : "/home/user";
 }
 
-export function parseRoute(hash = window.location.hash): UltraliteRoute {
+function parseLegacyHash(hash: string): UltraliteRoute {
   const raw = hash.replace(/^#\/?/, "");
   const [pathname, query = ""] = raw.split("?", 2);
   const segments = pathname.split("/").filter(Boolean);
@@ -68,6 +78,8 @@ export function parseRoute(hash = window.location.hash): UltraliteRoute {
       };
     case "agents":
       return { kind: "agents", projectId };
+    case "notebooks":
+      return { kind: "notebooks", projectId };
     case "terminal":
       return { kind: "terminal", projectId };
     case "vms":
@@ -90,6 +102,77 @@ export function parseRoute(hash = window.location.hash): UltraliteRoute {
   }
 }
 
+function decodeSegments(values: string[]): string[] | undefined {
+  try {
+    return values.map(decodeURIComponent);
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseEssentialRoute(
+  location: EssentialRouteLocation,
+): UltraliteRoute | undefined {
+  const marker = /\/essential(?:\/|$)/.exec(location.pathname);
+  if (!marker) return;
+  const raw = location.pathname.slice(marker.index + marker[0].length);
+  const segments = decodeSegments(raw.split("/").filter(Boolean));
+  if (!segments) return { kind: "projects" };
+  if (!segments.length || (segments[0] === "projects" && !segments[1])) {
+    return { kind: "projects" };
+  }
+  if (segments[0] === "notifications") return { kind: "notifications" };
+  if (segments[0] !== "projects" || !UUID.test(segments[1] ?? "")) {
+    return { kind: "projects" };
+  }
+  const projectId = segments[1];
+  const surface = segments[2];
+  switch (surface) {
+    case "files": {
+      const path = normalizeProjectPath(`/${segments.slice(3).join("/")}`);
+      const directory =
+        segments.length === 3 || location.pathname.endsWith("/");
+      return { kind: directory ? "files" : "file", projectId, path };
+    }
+    case "codex": {
+      if (segments[3] !== "chat") return { kind: "agents", projectId };
+      const params = new URLSearchParams(location.search ?? "");
+      const chatPath = normalizeProjectPath(params.get("path") ?? undefined);
+      const threadId = params.get("thread")?.trim();
+      return threadId
+        ? { kind: "chat", projectId, chatPath, threadId }
+        : { kind: "agents", projectId };
+    }
+    case "jupyter":
+      return { kind: "notebooks", projectId };
+    case "terminal":
+      return { kind: "terminal", projectId };
+    case "vms":
+      return { kind: "vms", projectId };
+    case "apps":
+      return { kind: "apps", projectId };
+    case "cli":
+      return { kind: "cli", projectId };
+    case "settings":
+      return { kind: "settings", projectId };
+    default:
+      return { kind: "files", projectId, path: "/home/user" };
+  }
+}
+
+export function parseRoute(
+  input?: string | EssentialRouteLocation,
+): UltraliteRoute {
+  if (typeof input === "string") return parseLegacyHash(input);
+  const location = input ?? window.location;
+  return (
+    parseEssentialRoute(location) ??
+    (location.hash ? parseLegacyHash(location.hash) : { kind: "projects" })
+  );
+}
+
+// Retained for compatibility tests and old external links. New navigation uses
+// essentialRouteUrl and the History API.
 export function routeHash(route: UltraliteRoute): string {
   if (route.kind === "projects") return "#/projects";
   if (route.kind === "notifications") return "#/notifications";
@@ -101,6 +184,8 @@ export function routeHash(route: UltraliteRoute): string {
       return `${root}/file?${new URLSearchParams({ path: route.path })}`;
     case "agents":
       return `${root}/agents`;
+    case "notebooks":
+      return `${root}/notebooks`;
     case "terminal":
       return `${root}/terminal`;
     case "vms":
@@ -119,11 +204,58 @@ export function routeHash(route: UltraliteRoute): string {
   }
 }
 
+function encodeProjectPath(path: string): string {
+  return normalizeProjectPath(path)
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+export function essentialRouteUrl(
+  route: UltraliteRoute,
+  basePath = getAppBasePath(),
+): string {
+  const root = siteUrl("essential", basePath);
+  if (route.kind === "projects") return `${root}/projects`;
+  if (route.kind === "notifications") return `${root}/notifications`;
+  const projectRoot = `${root}/projects/${route.projectId}`;
+  switch (route.kind) {
+    case "files":
+      return `${projectRoot}/files/${encodeProjectPath(route.path)}/`;
+    case "file":
+      return `${projectRoot}/files/${encodeProjectPath(route.path)}`;
+    case "agents":
+      return `${projectRoot}/codex`;
+    case "notebooks":
+      return `${projectRoot}/jupyter`;
+    case "terminal":
+      return `${projectRoot}/terminal`;
+    case "vms":
+      return `${projectRoot}/vms`;
+    case "apps":
+      return `${projectRoot}/apps`;
+    case "cli":
+      return `${projectRoot}/cli`;
+    case "settings":
+      return `${projectRoot}/settings`;
+    case "chat":
+      return `${projectRoot}/codex/chat?${new URLSearchParams({
+        path: route.chatPath,
+        thread: route.threadId,
+      })}`;
+  }
+}
+
 export function navigate(route: UltraliteRoute): void {
   const event = new CustomEvent(ULTRALITE_BEFORE_NAVIGATE, {
     cancelable: true,
     detail: { route },
   });
   if (!window.dispatchEvent(event)) return;
-  window.location.hash = routeHash(route);
+  const url = essentialRouteUrl(route);
+  if (`${window.location.pathname}${window.location.search}` !== url) {
+    window.history.pushState({}, "", url);
+  }
+  window.dispatchEvent(new Event(ESSENTIAL_ROUTE_CHANGE));
 }

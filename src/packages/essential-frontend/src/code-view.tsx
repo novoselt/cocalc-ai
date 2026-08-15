@@ -4,6 +4,7 @@
  */
 
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
+import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import {
   Fragment,
   lazy,
@@ -14,6 +15,8 @@ import {
   type ReactNode,
 } from "react";
 import type { CodeMirrorEditorHandle } from "./codemirror-editor";
+import { sha256Text } from "./sha256";
+import type { UltraliteSession } from "./session";
 import {
   languageForPath,
   loadLanguage,
@@ -27,6 +30,7 @@ import {
   recordUltraliteSurfaceReady,
 } from "./telemetry";
 import { InlineAlert, LoadingState } from "./ui";
+import useEditCheckpoint from "./use-edit-checkpoint";
 
 function tokenClass(token: Prism.Token): string {
   const aliases = Array.isArray(token.alias)
@@ -146,22 +150,31 @@ export default function CodeView({
   contents,
   filesystem,
   onDirtyChange,
+  onEditingChange,
   onSaved,
   path,
+  project,
   readOnly,
+  session,
 }: {
   contents: string;
   filesystem: FilesystemClient;
   onDirtyChange: (dirty: boolean) => void;
+  onEditingChange?: (editing: boolean) => void;
   onSaved: (contents: string) => void;
   path: string;
+  project?: AccountProjectListWindowRow;
   readOnly: boolean;
+  session?: UltraliteSession;
 }) {
   const [base, setBase] = useState(contents);
   const [draft, setDraft] = useState(contents);
   const editorRef = useRef<CodeMirrorEditorHandle>(null);
+  const journalId = useRef(crypto.randomUUID());
+  const journalSequence = useRef(0);
   const [editing, setEditing] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [editRevision, setEditRevision] = useState(0);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string>();
@@ -204,6 +217,11 @@ export default function CodeView({
     if (editing) recordUltraliteSurfaceReady("editor");
   }, [editing]);
 
+  useEffect(() => {
+    onEditingChange?.(editing);
+    return () => onEditingChange?.(false);
+  }, [editing, onEditingChange]);
+
   const save = async () => {
     if (!dirty || saving || conflict || readOnly) return;
     const next = editorRef.current?.getValue() ?? draft;
@@ -211,12 +229,49 @@ export default function CodeView({
     setError(undefined);
     setNotice(undefined);
     try {
-      await filesystem.writeFileIfUnchanged(path, next, base, true);
-      setBase(next);
-      setDraft(next);
+      const batch = editorRef.current?.getJournalBatch?.();
+      let saved = next;
+      let savedWithJournal = false;
+      if (batch && project?.host_id && session) {
+        const { editJournalAvailable, saveTextJournal } =
+          await import("@cocalc/conat/project/edit-journal");
+        const lease = await session.openProjectHost(
+          project.project_id,
+          project.host_id,
+        );
+        if (
+          await editJournalAvailable({
+            client: lease.client,
+            account_id: session.accountId,
+            project_id: project.project_id,
+          })
+        ) {
+          const response = await saveTextJournal({
+            client: lease.client,
+            account_id: session.accountId,
+            project_id: project.project_id,
+            request: {
+              path,
+              base_sha256: await sha256Text(batch.base),
+              journal_id: journalId.current,
+              sequence: journalSequence.current,
+              patch: batch.patch,
+            },
+          });
+          journalSequence.current += 1;
+          saved = response.contents;
+          savedWithJournal = true;
+          editorRef.current?.acknowledgeJournal(saved);
+        }
+      }
+      if (!savedWithJournal) {
+        await filesystem.writeFileIfUnchanged(path, next, base, true);
+        editorRef.current?.markClean();
+      }
+      setBase(saved);
+      setDraft(saved);
       setDirty(false);
-      editorRef.current?.markClean();
-      onSaved(next);
+      onSaved(saved);
       setNotice("Saved.");
       recordUltraliteOutcome("editor", "file_save");
     } catch (err: any) {
@@ -234,6 +289,11 @@ export default function CodeView({
       setSaving(false);
     }
   };
+  useEditCheckpoint({
+    active: editing && dirty && !saving && !conflict && !readOnly,
+    revision: editRevision,
+    save,
+  });
 
   return (
     <div>
@@ -321,9 +381,11 @@ export default function CodeView({
                 setNotice(undefined);
               }}
               onCursorChange={setCursor}
+              onChange={() => setEditRevision((value) => value + 1)}
               onLanguageError={setError}
               onSave={() => void save()}
               path={path}
+              readOnly={saving}
               ref={editorRef}
               wrap={wrap}
             />

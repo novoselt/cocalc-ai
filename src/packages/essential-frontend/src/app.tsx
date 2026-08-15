@@ -5,7 +5,12 @@
 
 import { lazy, Suspense, useEffect, useState } from "react";
 import { getAuthBootstrap, type AuthBootstrap } from "./api";
-import { parseRoute, type UltraliteRoute } from "./routes";
+import {
+  ESSENTIAL_ROUTE_CHANGE,
+  essentialRouteUrl,
+  parseRoute,
+  type UltraliteRoute,
+} from "./routes";
 import { ultraliteTheme } from "./theme";
 import { siteUrl } from "./urls";
 import { TopBar } from "./ui";
@@ -103,10 +108,22 @@ export function UltraliteApp() {
   }, []);
 
   useEffect(() => {
-    const onHashChange = () => setRoute(parseRoute());
-    window.addEventListener("hashchange", onHashChange);
-    if (!window.location.hash) window.location.hash = "#/projects";
-    return () => window.removeEventListener("hashchange", onHashChange);
+    const onRouteChange = () => setRoute(parseRoute());
+    const initialRoute = parseRoute();
+    const canonicalUrl = essentialRouteUrl(initialRoute);
+    if (
+      `${window.location.pathname}${window.location.search}` !== canonicalUrl ||
+      window.location.hash
+    ) {
+      window.history.replaceState({}, "", canonicalUrl);
+    }
+    setRoute(initialRoute);
+    window.addEventListener("popstate", onRouteChange);
+    window.addEventListener(ESSENTIAL_ROUTE_CHANGE, onRouteChange);
+    return () => {
+      window.removeEventListener("popstate", onRouteChange);
+      window.removeEventListener(ESSENTIAL_ROUTE_CHANGE, onRouteChange);
+    };
   }, []);
 
   return (

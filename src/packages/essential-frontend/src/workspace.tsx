@@ -44,6 +44,17 @@ const ChatSurface = lazy(
       );
     }),
 );
+const NotebooksSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./notebooks-surface")),
+        reject,
+        "ultralite-notebooks",
+      );
+    }),
+);
 const VmSurface = lazy(
   () =>
     new Promise((resolve, reject) => {
@@ -166,6 +177,12 @@ function ProjectSurface({
     surface = (
       <DeferredSurface label="Codex">
         <ChatSurface project={project} route={route} session={session} />
+      </DeferredSurface>
+    );
+  } else if (route.kind === "notebooks") {
+    surface = (
+      <DeferredSurface label="Jupyter">
+        <NotebooksSurface project={project} session={session} />
       </DeferredSurface>
     );
   } else if (route.kind === "vms") {

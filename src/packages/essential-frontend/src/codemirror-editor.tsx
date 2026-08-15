@@ -39,24 +39,41 @@ import {
 } from "@codemirror/view";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { loadCodeMirrorLanguage } from "./codemirror-languages";
+import {
+  CodeMirrorEditJournal,
+  type CodeMirrorJournalBatch,
+} from "./edit-journal";
 import type { UltraliteLanguage } from "./prism-languages";
 
 export interface CodeMirrorEditorHandle {
+  acknowledgeJournal(value: string): void;
   focus(): void;
+  getJournalBatch(): CodeMirrorJournalBatch | undefined;
   getValue(): string;
   markClean(): void;
   replaceValue(value: string): void;
 }
 
+export interface CodeMirrorShortcut {
+  key: string;
+  run: () => void;
+}
+
 interface Props {
   ariaLabel: string;
+  autoFocus?: boolean;
+  className?: string;
   initialValue: string;
   language?: UltraliteLanguage;
+  onChange?: (value: string) => void;
   onDirtyChange: (dirty: boolean) => void;
   onCursorChange: (position: string) => void;
   onLanguageError: (message?: string) => void;
   onSave: () => void;
   path: string;
+  readOnly?: boolean;
+  shortcuts?: CodeMirrorShortcut[];
+  spellCheck?: boolean;
   wrap: boolean;
 }
 
@@ -70,13 +87,19 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
   function CodeMirrorEditor(
     {
       ariaLabel,
+      autoFocus = true,
+      className,
       initialValue,
       language,
+      onChange,
       onDirtyChange,
       onCursorChange,
       onLanguageError,
       onSave,
       path,
+      readOnly = false,
+      shortcuts = [],
+      spellCheck = false,
       wrap,
     },
     ref,
@@ -85,31 +108,50 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
     const viewRef = useRef<EditorView | undefined>(undefined);
     const initialValueRef = useRef(initialValue);
     const cleanDocumentRef = useRef<Text | undefined>(undefined);
+    const journalRef = useRef(new CodeMirrorEditJournal(initialValue));
     const languageCompartmentRef = useRef(new Compartment());
+    const readOnlyCompartmentRef = useRef(new Compartment());
     const wrapCompartmentRef = useRef(new Compartment());
     const callbacksRef = useRef({
       onDirtyChange,
+      onChange,
       onCursorChange,
       onLanguageError,
       onSave,
+      shortcuts,
     });
     callbacksRef.current = {
       onDirtyChange,
+      onChange,
       onCursorChange,
       onLanguageError,
       onSave,
+      shortcuts,
     };
 
     useImperativeHandle(
       ref,
       () => ({
+        acknowledgeJournal: (value) => {
+          const view = viewRef.current;
+          if (view && view.state.doc.toString() !== value) {
+            view.dispatch({
+              changes: { from: 0, to: view.state.doc.length, insert: value },
+            });
+          }
+          journalRef.current.reset(value);
+          if (view) cleanDocumentRef.current = view.state.doc;
+          callbacksRef.current.onDirtyChange(false);
+        },
         focus: () => viewRef.current?.focus(),
+        getJournalBatch: () => journalRef.current.getBatch(),
         getValue: () =>
           viewRef.current?.state.doc.toString() ?? initialValueRef.current,
         markClean: () => {
           const view = viewRef.current;
           if (!view) return;
           cleanDocumentRef.current = view.state.doc;
+          journalRef.current.reset(view.state.doc.toString());
           callbacksRef.current.onDirtyChange(false);
         },
         replaceValue: (value) => {
@@ -134,6 +176,14 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
           return true;
         },
       };
+      const shortcutBindings = shortcuts.map((shortcut, index) => ({
+        key: shortcut.key,
+        preventDefault: true,
+        run: () => {
+          callbacksRef.current.shortcuts[index]?.run();
+          return true;
+        },
+      }));
       const extensions: Extension[] = [
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -150,6 +200,7 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
         search(),
         highlightSelectionMatches(),
         keymap.of([
+          ...shortcutBindings,
           saveBinding,
           ...closeBracketsKeymap,
           ...defaultKeymap,
@@ -163,10 +214,12 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
           autocapitalize: "off",
           autocomplete: "off",
           autocorrect: "off",
-          spellcheck: "false",
+          spellcheck: spellCheck ? "true" : "false",
         }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
+            journalRef.current.record(update.changes);
+            callbacksRef.current.onChange?.(update.state.doc.toString());
             callbacksRef.current.onDirtyChange(
               !cleanDocumentRef.current?.eq(update.state.doc),
             );
@@ -176,6 +229,10 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
           }
         }),
         languageCompartmentRef.current.of([]),
+        readOnlyCompartmentRef.current.of([
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
+        ]),
         wrapCompartmentRef.current.of(wrap ? EditorView.lineWrapping : []),
       ];
       const view = new EditorView({
@@ -188,12 +245,23 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
       viewRef.current = view;
       cleanDocumentRef.current = view.state.doc;
       callbacksRef.current.onCursorChange(cursorPosition(view));
-      view.focus();
+      if (autoFocus) view.focus();
       return () => {
         viewRef.current = undefined;
         view.destroy();
       };
     }, [ariaLabel]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: readOnlyCompartmentRef.current.reconfigure([
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
+        ]),
+      });
+    }, [readOnly]);
 
     useEffect(() => {
       const view = viewRef.current;
@@ -219,6 +287,7 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
         });
       }
       cleanDocumentRef.current = view.state.doc;
+      journalRef.current.reset(view.state.doc.toString());
       callbacksRef.current.onDirtyChange(false);
     }, [initialValue, path]);
 
@@ -244,7 +313,9 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
       };
     }, [language, path]);
 
-    return <div className="ul-cm-editor" ref={hostRef} />;
+    return (
+      <div className={`ul-cm-editor ${className ?? ""}`.trim()} ref={hostRef} />
+    );
   },
 );
 
