@@ -61,6 +61,17 @@ const AppSurface = lazy(
       );
     }),
 );
+const CliSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./cli-surface")),
+        reject,
+        "ultralite-cli",
+      );
+    }),
+);
 
 type ProjectRoute = Exclude<UltraliteRoute, { kind: "projects" }>;
 
@@ -108,7 +119,7 @@ function ProjectSurface({
   session: UltraliteSession;
 }) {
   let surface: ReactNode;
-  if (!project.host_id && route.kind !== "vms") {
+  if (!project.host_id && route.kind !== "vms" && route.kind !== "cli") {
     surface = <MissingHost project={project} />;
   } else if (route.kind === "files" || route.kind === "file") {
     surface = (
@@ -128,10 +139,16 @@ function ProjectSurface({
         <VmSurface project={project} session={session} />
       </DeferredSurface>
     );
-  } else {
+  } else if (route.kind === "apps") {
     surface = (
       <DeferredSurface label="Apps">
         <AppSurface project={project} session={session} />
+      </DeferredSurface>
+    );
+  } else {
+    surface = (
+      <DeferredSurface label="CLI">
+        <CliSurface project={project} />
       </DeferredSurface>
     );
   }

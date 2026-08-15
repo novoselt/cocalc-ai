@@ -10,6 +10,7 @@ export type UltraliteRoute =
   | { kind: "agents"; projectId: string }
   | { kind: "vms"; projectId: string }
   | { kind: "apps"; projectId: string }
+  | { kind: "cli"; projectId: string }
   | {
       kind: "chat";
       projectId: string;
@@ -67,6 +68,8 @@ export function parseRoute(hash = window.location.hash): UltraliteRoute {
       return { kind: "vms", projectId };
     case "apps":
       return { kind: "apps", projectId };
+    case "cli":
+      return { kind: "cli", projectId };
     case "chat": {
       const chatPath = normalizeProjectPath(params.get("path") ?? undefined);
       const threadId = params.get("thread")?.trim();
@@ -93,6 +96,8 @@ export function routeHash(route: UltraliteRoute): string {
       return `${root}/vms`;
     case "apps":
       return `${root}/apps`;
+    case "cli":
+      return `${root}/cli`;
     case "chat":
       return `${root}/chat?${new URLSearchParams({
         path: route.chatPath,

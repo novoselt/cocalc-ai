@@ -99,6 +99,7 @@ measured and reported separately.
 | Existing Codex chat                    | 550 KiB     | 500 KiB        |
 | Existing dedicated VM control          | 450 KiB     | 400 KiB        |
 | JupyterLab and VS Code app launch      | 475 KiB     | 425 KiB        |
+| CoCalc CLI discovery                   | 425 KiB     | 350 KiB        |
 
 Rules for changing these budgets:
 
@@ -246,6 +247,8 @@ Use the standard project workspace as the reference:
 - Codex as a first-class surface;
 - Virtual Machines as a first-class gateway to existing dedicated compute;
 - Apps as a first-class gateway to JupyterLab and VS Code;
+- CLI as a compact discovery surface for project, Jupyter, app, VM, and agent
+  automation commands;
 - path and active file context in familiar locations; and
 - full CoCalc escape without a separate intermediate dashboard.
 
@@ -258,6 +261,10 @@ starting existing VMs, and discovering and launching JupyterLab and VS Code.
 VM creation, deletion, funding, resize, and advanced configuration remain in
 full CoCalc. App views must not start project compute merely by being opened;
 Start is an explicit, clearly labeled action.
+
+The CLI surface is documentation and command discovery, not a browser terminal.
+It must remain useful without project compute, make project context explicit,
+and link to full CoCalc when a terminal is required.
 
 ### Files
 

@@ -755,6 +755,59 @@ textarea {
   margin-top: 3px;
 }
 
+.ul-context-list {
+  background: white;
+  border: 1px solid var(--ul-border);
+  margin: 12px 0 18px;
+}
+
+.ul-context-list > div {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 100px minmax(0, 1fr);
+  padding: 8px 10px;
+}
+
+.ul-context-list > div + div {
+  border-top: 1px solid var(--ul-border);
+}
+
+.ul-context-list dt {
+  color: var(--ul-muted);
+}
+
+.ul-context-list dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ul-command-group {
+  margin: 18px 0;
+}
+
+.ul-command-group h2 {
+  font-size: 16px;
+  margin: 0 0 5px;
+}
+
+.ul-command-row {
+  align-items: center;
+  background: white;
+  border-bottom: 1px solid var(--ul-border);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 7px 10px;
+}
+
+.ul-command-row code {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
 .ul-visually-hidden {
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
