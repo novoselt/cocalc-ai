@@ -1830,6 +1830,64 @@ describe("PublicAuthApp", () => {
     );
   });
 
+  it("labels mobile app login approvals without terminal or CLI wording", async () => {
+    mockedPostAuthApi.mockResolvedValueOnce({
+      challenge_id: "challenge-1",
+      kind: "login",
+      auth_client: "mobile",
+      account_id: null,
+      email_address: null,
+      display_name: null,
+      email_hint: "hint@example.com",
+      current_account_id: "acct-viewer",
+      current_email_address: "alice@example.com",
+      current_display_name: "Alice Example",
+      current_matches_account: true,
+      state: "pending",
+      expires_at: "2026-05-08T18:00:00.000Z",
+    } as any);
+    mockedPostAuthApi
+      .mockResolvedValueOnce({
+        token: "approval-token",
+        home_bay_id: "bay-0",
+      } as any)
+      .mockResolvedValueOnce({ approved: true } as any);
+
+    render(
+      <PublicAuthApp
+        config={config({ is_authenticated: true })}
+        initialRoute={{ challengeId: "challenge-1", kind: "auth-cli-login" }}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        /Approve a CoCalc mobile app sign-in for alice@example.com \(Alice Example\)\./,
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(
+        /The mobile app was started with email hint hint@example.com\./,
+      ),
+    ).not.toBeNull();
+    expect(document.body.textContent).not.toMatch(/terminal sign-in/i);
+    expect(document.body.textContent).not.toMatch(/CLI sign-in/i);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve Mobile App Login" }),
+    );
+    await waitFor(() =>
+      expect(mockedPostAuthApi).toHaveBeenCalledWith({
+        endpoint: "auth/cli/login/approve",
+        body: {
+          challenge_id: "challenge-1",
+          approval_token: "approval-token",
+          approval_home_bay_id: "bay-0",
+        },
+      }),
+    );
+  });
+
   it("clearly approves an elevated CLI login in one browser flow", async () => {
     mockedPostAuthApi
       .mockResolvedValueOnce({

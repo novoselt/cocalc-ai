@@ -69,7 +69,7 @@ function titleForRoute(route: PublicAuthRoute, siteName: string): string {
           return `Sign in to ${siteName}`;
       }
     case "auth-cli-login":
-      return `Approve CLI sign-in for ${siteName}`;
+      return `Approve sign-in for ${siteName}`;
     case "auth-cli-elevate":
       return `Approve CLI security action for ${siteName}`;
     case "auth-second-factor":
@@ -113,7 +113,7 @@ function subtitleForRoute(
     case "sso-index":
       return `Single sign-on for ${siteName}`;
     case "auth-cli-login":
-      return `Approve a terminal sign-in request for ${siteName}`;
+      return `Approve a sign-in request for ${siteName}`;
     case "auth-cli-elevate":
       return `Verify a terminal security action for ${siteName}`;
     case "auth-second-factor":

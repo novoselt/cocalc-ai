@@ -65,7 +65,10 @@ export async function startLoginChallenge({
   return await postSiteApi<LoginChallengeStart>({
     site,
     endpoint: "auth/cli/login/start",
-    body: email?.trim() ? { email: email.trim() } : {},
+    body: {
+      ...(email?.trim() ? { email: email.trim() } : {}),
+      client_kind: "mobile",
+    },
     signal,
   });
 }
