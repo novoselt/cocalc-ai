@@ -715,6 +715,59 @@ block startup.
 with measured resource behavior, use hysteresis, allow user override, and make
 the default thin shell safe for everyone.
 
+## 2026-08-14 Implementation Update
+
+Production traces and a manual 2 Mbps Chrome profile isolated two independent
+direct-project delays:
+
+- the full project startup closure is 2.79 MiB Brotli when the project Redux
+  runtime is counted correctly; and
+- a cold directory listing could spend more than 30 seconds in three serial
+  ten-second attempts even while the project host had negligible CPU, load,
+  and IO pressure.
+
+The first reduced-data implementation now:
+
+- combines `navigator.connection` with measured bootstrap-script throughput
+  and fixed bootstrap elapsed time, without a polling loop or separate speed
+  test;
+- authorizes and resolves host routing in the ordinary projects control plane,
+  but does not initialize project editor/session Redux for an ordinary
+  directory target;
+- lists files directly from the project host through the existing scoped Conat
+  filesystem client;
+- preserves directory navigation, browser URLs, viewer restrictions, and an
+  explicit handoff to the full workspace when a file is opened;
+- falls back to the full workspace for files, backup/snapshot virtual paths,
+  archived projects, exam/kiosk mode, access edge cases, and Lite;
+- limits the fast listing to 200 rendered rows and offers an explicit full
+  workspace transition;
+- replaces serial visible-listing retries with requests hedged at three and six
+  seconds under one twelve-second deadline, while leaving background cache
+  warming and watcher catch-up conservative; and
+- records directory paint, rather than project chrome initialization, as the
+  useful project surface.
+
+The bundle guard now measures both direct-project modes, including the project
+Redux runtime in the full mode:
+
+| Route mode      | Brotli   | Gzip     | Assets |
+| --------------- | -------- | -------- | ------ |
+| Reduced project | 1.24 MiB | 1.38 MiB | 30     |
+| Full project    | 2.79 MiB | 3.08 MiB | 107    |
+
+The reduced route-specific group is only 9.6 KiB Brotli; most remaining bytes
+are the shared signed-in shell. At 2 Mbps, the ideal transfer floor falls from
+about 11.4 seconds for the correctly counted full closure to about 5.1 seconds
+for reduced mode, before latency and project data. This is a material first
+step, not the final SLO: the shared shell remains the next bundle target.
+
+The production new-account sample from 2026-08-11 through 2026-08-13 also
+showed that this cohort is not marginal: 48.4% of accounts with a browser
+estimate reported at most 2 Mbps, though the browser API is coarse and must not
+be treated as ground truth. Staging qualification must validate actual
+directory paint and fallback behavior before any production experiment.
+
 ## Immediate Work Queue
 
 1. Save reproducible production baseline queries and add the useful-surface and
