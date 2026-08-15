@@ -618,6 +618,34 @@ CoCalc, or because completed page loads are fast. It must preserve user trust,
 task completion, and a coherent transition between constrained and standard
 CoCalc.
 
+## Staging Validation, 2026-08-15
+
+The completed constrained client was deployed only to staging as hub and
+static artifact
+`20260815T071520Z-8d3a528a-ultralite-constrained-release`. The preceding
+`ultralite-f5f5791547` hub and static releases remain available for rollback.
+The staged hub migration and rolling restart completed with four healthy
+workers, healthy frontdoor routing, and successful hub and static smoke tests.
+
+Authenticated canonical Slow 4G measurements passed the hard SLOs:
+
+- desktop, unthrottled CPU: projects cold 1.84 s, files cold 4.84 s, and warm
+  navigation 18-20 ms, against a 5 s limit;
+- 320 px viewport, 4x CPU slowdown: projects cold 2.23 s, files cold 5.82 s,
+  and warm navigation 33-35 ms, against an 8 s limit;
+- cold projects transferred 107 KB across 9 requests; cold files transferred
+  476 KB across 20 requests; and
+- neither the desktop nor 320 px screenshots had horizontal page overflow.
+
+Authenticated route smoke tests covered projects, files, VMs, app servers,
+CLI discovery, Codex session discovery, text/code viewing, safe notebook
+viewing, and the explicit notebook execution opt-in. No page errors or HTTP
+5xx responses were observed. The first cold read of the test notebook had a
+roughly 30-second project-host tail, while its warm read and execution-control
+activation were immediate; this backend tail is kept separate from the static
+client timing and remains operational performance work rather than a client
+release failure.
+
 ## Relevant Code And Plans
 
 - `src/packages/static/src/ultralite/`
