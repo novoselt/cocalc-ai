@@ -80,7 +80,7 @@ The 2026-08-15 implementation measurement is:
 | VMs                     | 1662.5 KiB | 439.1 KiB | 402.2 KiB |       11 |     450 KiB |
 | Apps                    | 1663.5 KiB | 439.1 KiB | 402.2 KiB |       11 |     475 KiB |
 | CLI                     | 1660.3 KiB | 438.3 KiB | 401.5 KiB |       11 |     425 KiB |
-| Terminal                | 2018.6 KiB | 526.7 KiB | 484.8 KiB |       13 |     500 KiB |
+| Terminal                | 2018.7 KiB | 526.7 KiB | 484.8 KiB |       13 |     500 KiB |
 
 The canonical Slow 4G harness uses 1.4 Mbps down, 750 Kbps up, 150 ms added
 latency, cold and warm cache runs, and optional 4x CPU slowdown:

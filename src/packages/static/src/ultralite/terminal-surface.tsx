@@ -396,6 +396,7 @@ export default function TerminalSurface({
         aria-label="Project terminal"
         className="ul-terminal-host"
         onClick={() => xtermRef.current?.focus()}
+        ref={hostRef}
         role="application"
       />
       <p className="ul-muted">

@@ -14,7 +14,9 @@ jest.mock("@xterm/xterm", () => ({
     dispose() {}
     focus() {}
     loadAddon() {}
-    open() {}
+    open(host: HTMLElement) {
+      host.dataset.xtermOpened = "true";
+    }
     reset() {}
     write(_data: string, callback?: () => void) {
       callback?.();
@@ -114,7 +116,7 @@ test("viewing Terminal never starts project compute or creates a PTY", async () 
   await screen.findByText(/This project is stopped/);
   expect(
     screen.getByRole("application", { name: "Project terminal" }),
-  ).toBeInTheDocument();
+  ).toHaveAttribute("data-xterm-opened", "true");
   expect(
     screen.getByRole("button", { name: "Connect terminal" }),
   ).toBeEnabled();
