@@ -1965,6 +1965,12 @@ importers:
       '@types/react-dom':
         specifier: ^19.1.7
         version: 19.2.2(@types/react@19.2.7)
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@cocalc/xterm@5.5.0-cocalc.5)
+      '@xterm/xterm':
+        specifier: https://registry.npmjs.org/@cocalc/xterm/-/xterm-5.5.0-cocalc.5.tgz
+        version: '@cocalc/xterm@5.5.0-cocalc.5'
       assert:
         specifier: ^2.0.0
         version: 2.1.0

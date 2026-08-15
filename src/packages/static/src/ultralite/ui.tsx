@@ -44,11 +44,12 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
 
 const NAV: Array<{
   icon: UltraliteIconName;
-  kind: "agents" | "apps" | "cli" | "files" | "vms";
+  kind: "agents" | "apps" | "cli" | "files" | "terminal" | "vms";
   label: string;
 }> = [
   { icon: "folder", kind: "files", label: "Files" },
   { icon: "chat", kind: "agents", label: "Codex" },
+  { icon: "terminal", kind: "terminal", label: "Terminal" },
   { icon: "server", kind: "vms", label: "VMs" },
   { icon: "apps", kind: "apps", label: "Apps" },
   { icon: "code", kind: "cli", label: "CLI" },

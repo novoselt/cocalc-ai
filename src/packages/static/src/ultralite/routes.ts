@@ -8,6 +8,7 @@ export type UltraliteRoute =
   | { kind: "files"; projectId: string; path: string }
   | { kind: "file"; projectId: string; path: string }
   | { kind: "agents"; projectId: string }
+  | { kind: "terminal"; projectId: string }
   | { kind: "vms"; projectId: string }
   | { kind: "apps"; projectId: string }
   | { kind: "cli"; projectId: string }
@@ -64,6 +65,8 @@ export function parseRoute(hash = window.location.hash): UltraliteRoute {
       };
     case "agents":
       return { kind: "agents", projectId };
+    case "terminal":
+      return { kind: "terminal", projectId };
     case "vms":
       return { kind: "vms", projectId };
     case "apps":
@@ -92,6 +95,8 @@ export function routeHash(route: UltraliteRoute): string {
       return `${root}/file?${new URLSearchParams({ path: route.path })}`;
     case "agents":
       return `${root}/agents`;
+    case "terminal":
+      return `${root}/terminal`;
     case "vms":
       return `${root}/vms`;
     case "apps":

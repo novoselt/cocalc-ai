@@ -55,6 +55,17 @@ const VmSurface = lazy(
       );
     }),
 );
+const TerminalSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./terminal-surface")),
+        reject,
+        "ultralite-terminal",
+      );
+    }),
+);
 const AppSurface = lazy(
   () =>
     new Promise((resolve, reject) => {
@@ -142,6 +153,12 @@ function ProjectSurface({
     surface = (
       <DeferredSurface label="VMs">
         <VmSurface project={project} session={session} />
+      </DeferredSurface>
+    );
+  } else if (route.kind === "terminal") {
+    surface = (
+      <DeferredSurface label="Terminal">
+        <TerminalSurface project={project} session={session} />
       </DeferredSurface>
     );
   } else if (route.kind === "apps") {

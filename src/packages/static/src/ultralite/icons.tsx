@@ -16,7 +16,8 @@ export type UltraliteIconName =
   | "folder"
   | "projects"
   | "refresh"
-  | "server";
+  | "server"
+  | "terminal";
 
 const PATHS: Record<UltraliteIconName, ReactNode> = {
   apps: (
@@ -70,6 +71,12 @@ const PATHS: Record<UltraliteIconName, ReactNode> = {
       <rect height="7" rx="1" width="18" x="3" y="3" />
       <rect height="7" rx="1" width="18" x="3" y="14" />
       <path d="M7 7h.01M7 18h.01" />
+    </>
+  ),
+  terminal: (
+    <>
+      <rect height="16" rx="2" width="20" x="2" y="4" />
+      <path d="m6 9 3 3-3 3M12 15h5" />
     </>
   ),
 };

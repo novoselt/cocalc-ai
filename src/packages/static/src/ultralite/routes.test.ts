@@ -21,7 +21,7 @@ test("parses and serializes Codex routes", () => {
   expect(parseRoute(routeHash(route))).toEqual(route);
 });
 
-test.each(["agents", "apps", "cli", "vms"] as const)(
+test.each(["agents", "apps", "cli", "terminal", "vms"] as const)(
   "parses and serializes the %s project surface",
   (kind) => {
     const route = { kind, projectId };

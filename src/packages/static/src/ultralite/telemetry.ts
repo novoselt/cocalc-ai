@@ -19,6 +19,7 @@ export type UltraliteSurface =
   | "notebook_execute"
   | "kernel"
   | "chat"
+  | "terminal"
   | "vms"
   | "apps"
   | "cli";
@@ -29,6 +30,7 @@ export type UltraliteOutcome =
   | "file_save"
   | "notebook_execute"
   | "codex_prompt"
+  | "terminal_connect"
   | "full_cocalc"
   | "timeout"
   | "chunk_failure"

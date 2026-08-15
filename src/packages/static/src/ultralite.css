@@ -600,6 +600,33 @@ textarea {
   margin-left: auto;
 }
 
+.ul-terminal-page {
+  max-width: none;
+}
+
+.ul-terminal-meta {
+  color: var(--ul-muted);
+  font-size: 12px;
+  margin-bottom: 7px;
+}
+
+.ul-terminal-host {
+  background: var(--ul-code-text);
+  border: 1px solid var(--ul-border-dark);
+  height: clamp(340px, calc(100vh - 250px), 760px);
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px;
+}
+
+.ul-terminal-host .xterm {
+  height: 100%;
+}
+
+.ul-terminal-host .xterm-viewport {
+  overflow-y: auto;
+}
+
 .ul-notebook {
   display: grid;
   gap: 10px;
@@ -884,6 +911,11 @@ textarea {
 
   .ul-page {
     padding: 14px 9px;
+  }
+
+  .ul-terminal-host {
+    height: max(340px, calc(100vh - 280px));
+    padding: 5px;
   }
 
   .ul-surface-header {

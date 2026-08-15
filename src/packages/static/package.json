@@ -72,6 +72,8 @@
     "@types/prismjs": "^1.26.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.1.7",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "https://registry.npmjs.org/@cocalc/xterm/-/xterm-5.5.0-cocalc.5.tgz",
     "assert": "^2.0.0",
     "awaiting": "^3.0.0",
     "buffer": "^6.0.3",

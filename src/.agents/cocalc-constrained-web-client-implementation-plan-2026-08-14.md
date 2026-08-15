@@ -245,6 +245,7 @@ Use the standard project workspace as the reference:
   surfaces;
 - Files as the default surface;
 - Codex as a first-class surface;
+- Terminal as a separately loaded, explicit compute surface;
 - Virtual Machines as a first-class gateway to existing dedicated compute;
 - Apps as a first-class gateway to JupyterLab and VS Code;
 - CLI as a compact discovery surface for project, Jupyter, app, VM, and agent
@@ -262,9 +263,12 @@ VM creation, deletion, funding, resize, and advanced configuration remain in
 full CoCalc. App views must not start project compute merely by being opened;
 Start is an explicit, clearly labeled action.
 
-The CLI surface is documentation and command discovery, not a browser terminal.
-It must remain useful without project compute, make project context explicit,
-and link to full CoCalc when a terminal is required.
+The CLI surface remains documentation and command discovery rather than
+embedding a terminal. A separate lazy Terminal surface may use xterm.js and
+the direct project-host PTY service. Merely viewing Terminal must not start
+compute or spawn a shell; Connect is the explicit boundary, with confirmation
+before starting a stopped project. Terminal is the intentional realtime
+exception and must have its own cumulative route budget.
 
 ### Files
 

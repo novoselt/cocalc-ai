@@ -53,6 +53,7 @@ const chat = findNamedGroup("ultralite-chat");
 const vms = findNamedGroup("ultralite-vms");
 const apps = findNamedGroup("ultralite-apps");
 const cli = findNamedGroup("ultralite-cli");
+const terminal = findNamedGroup("ultralite-terminal");
 const prismLanguages = [
   "bash",
   "c",
@@ -114,6 +115,11 @@ const surfaces = [
     label: "CLI discovery",
     chunks: [...initial, ...workspace, ...cli],
     max: 425 * KiB,
+  },
+  {
+    label: "terminal",
+    chunks: [...initial, ...workspace, ...terminal],
+    max: 500 * KiB,
   },
 ];
 

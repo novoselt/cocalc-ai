@@ -20,14 +20,18 @@ The implemented client provides:
   interrupt, continue, reconnect, and activity display;
 - explicit status and start/stop controls for existing dedicated VMs;
 - explicit status and launch controls for JupyterLab and VS Code; and
+- a separately loaded xterm.js terminal with an explicit project-start
+  boundary, persistent per-account shell session, resize, reconnect, history,
+  and direct project-host transport; and
 - a compact CoCalc CLI discovery surface with copyable project-context
   commands.
 
 Creation and advanced management remain in full CoCalc. The constrained
-client deliberately omits terminals, realtime filesystem updates, presence,
-rich notebook HTML/widgets, broad editor integrations, and background account
-polling. Opening files, a notebook, VMs, or Apps does not start project
-compute. Running a notebook or starting an app is an explicit action.
+client deliberately omits realtime filesystem updates, presence, rich
+notebook HTML/widgets, broad editor integrations, and background account
+polling. Opening files, a notebook, Terminal, VMs, or Apps does not start
+project compute. Connecting a terminal, running a notebook, or starting an app
+is an explicit action.
 
 ## Architecture And Security
 
@@ -35,8 +39,8 @@ The initial shell uses the same-origin signed-in cookie. The first authorized
 project window is read from the account's authoritative home bay through the
 bounded bootstrap API; the Projects route does not load Conat. After project
 selection, the client opens the ordinary home-bay control-plane connection and
-scoped direct project-host connections. File, Jupyter, Codex, and app-server
-data do not flow through the hub.
+scoped direct project-host connections. File, Terminal, Jupyter, Codex, and
+app-server data do not flow through the hub.
 
 Project-host bearer credentials remain in memory. File paths are confined to
 `/home/user`; reads and output have hard size limits; HTML, JavaScript,
@@ -67,15 +71,16 @@ The 2026-08-15 implementation measurement is:
 
 | Surface                 |        Raw |      Gzip |    Brotli | Requests |  Hard limit |
 | ----------------------- | ---------: | --------: | --------: | -------: | ----------: |
-| Shell                   |  233.6 KiB |  73.5 KiB |  69.4 KiB |        1 |      75 KiB |
-| Projects                |  239.9 KiB |  76.1 KiB |  71.9 KiB |        2 |     400 KiB |
-| Files/read-only Jupyter | 1667.5 KiB | 440.7 KiB | 403.7 KiB |       11 |     425 KiB |
-| Syntax code/editor      | 1724.0 KiB | 464.9 KiB | 426.6 KiB |       27 | 450/500 KiB |
-| Executable Jupyter      | 1710.9 KiB | 455.5 KiB | 418.1 KiB |       13 |     650 KiB |
-| Codex                   | 1938.4 KiB | 512.4 KiB | 472.1 KiB |       15 |     550 KiB |
-| VMs                     | 1660.5 KiB | 438.6 KiB | 401.8 KiB |       11 |     450 KiB |
-| Apps                    | 1661.4 KiB | 438.6 KiB | 401.7 KiB |       11 |     475 KiB |
-| CLI                     | 1658.4 KiB | 437.9 KiB | 401.1 KiB |       11 |     425 KiB |
+| Shell                   |  235.2 KiB |  73.9 KiB |  69.8 KiB |        1 |      75 KiB |
+| Projects                |  241.7 KiB |  76.6 KiB |  72.3 KiB |        2 |     400 KiB |
+| Files/read-only Jupyter | 1669.6 KiB | 441.2 KiB | 404.2 KiB |       11 |     425 KiB |
+| Syntax code/editor      | 1726.1 KiB | 465.4 KiB | 427.0 KiB |       27 | 450/500 KiB |
+| Executable Jupyter      | 1713.0 KiB | 456.0 KiB | 418.6 KiB |       13 |     650 KiB |
+| Codex                   | 1940.6 KiB | 512.9 KiB | 472.5 KiB |       15 |     550 KiB |
+| VMs                     | 1662.5 KiB | 439.1 KiB | 402.2 KiB |       11 |     450 KiB |
+| Apps                    | 1663.5 KiB | 439.1 KiB | 402.2 KiB |       11 |     475 KiB |
+| CLI                     | 1660.3 KiB | 438.3 KiB | 401.5 KiB |       11 |     425 KiB |
+| Terminal                | 2018.6 KiB | 526.7 KiB | 484.8 KiB |       13 |     500 KiB |
 
 The canonical Slow 4G harness uses 1.4 Mbps down, 750 Kbps up, 150 ms added
 latency, cold and warm cache runs, and optional 4x CPU slowdown:
