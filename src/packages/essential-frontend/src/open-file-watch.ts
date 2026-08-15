@@ -47,7 +47,9 @@ export function startOpenFileWatch({
 
   void filesystem
     .watch(path, {
-      closeOnUnlink: true,
+      // Editors and uploaders commonly save through unlink/rename/add. Keep
+      // following this path until the visible surface itself closes.
+      closeOnUnlink: false,
       maxQueue: 4,
       overflow: "ignore",
       stabilityThreshold: 400,
@@ -55,18 +57,14 @@ export function startOpenFileWatch({
     })
     .then(async (value) => {
       watcher = value;
-      let unlinked = false;
       if (closed) {
         watcher.close();
         return;
       }
       for await (const event of watcher) {
-        if (event.event === "unlink" || event.event === "unlinkDir") {
-          unlinked = true;
-        }
         emit(event);
       }
-      if (!closed && !unlinked) {
+      if (!closed) {
         onError?.(new Error("The project-host file watch ended."));
       }
     })

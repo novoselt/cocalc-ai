@@ -55,7 +55,7 @@ test("subscribes without polling and forwards project-host changes", async () =>
   await Promise.resolve();
 
   expect(filesystem.watch).toHaveBeenCalledWith("/home/user/a.py", {
-    closeOnUnlink: true,
+    closeOnUnlink: false,
     maxQueue: 4,
     overflow: "ignore",
     stabilityThreshold: 400,
