@@ -148,6 +148,7 @@ import { initProjectTouchService } from "./touch-service";
 import { initProjectStorageInfoService } from "./storage-info-service";
 import { initProjectDocumentActivityService } from "./document-activity-service";
 import { initEssentialChatService } from "./essential-chat-service";
+import { initProjectEditJournalService } from "./edit-journal-service";
 import { initProjectArchiveInfoService } from "./archive-info-service";
 import {
   getProjectHostEventLoopStallStatus,
@@ -1490,6 +1491,7 @@ export async function main(
     "Serve per-project files via the fs.* conat service, mounting from the local file-server.",
   );
   const fsServer = await initFsServer({ client: conatClient });
+  const editJournalService = await initProjectEditJournalService(conatClient);
 
   logger.info("HTTP static + customize + API wiring");
   await initHttp({ app, conatClient });
@@ -1651,6 +1653,7 @@ export async function main(
     closed = true;
     persistServer?.close?.();
     fsServer?.close?.();
+    editJournalService?.close?.();
     stopProvisionedInventoryReporter();
     projectTouchService?.close?.();
     projectStorageInfoService?.close?.();

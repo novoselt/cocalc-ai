@@ -60,6 +60,13 @@ navigation. Read-only content reloads after an external change. Active editors
 retain their draft and show a changed-on-disk warning; optimistic saves remain
 the final protection against overwriting a newer version.
 
+CodeMirror edits are composed from its operation log and checkpointed after a
+short idle period, at a bounded maximum interval during continuous editing, and
+on explicit save. The project host records those exact patches in the ordinary
+Patchflow document with the authenticated account as author, then writes the
+accepted merged value to disk. This preserves full TimeTravel history without
+loading history, collaboration, or diff machinery in the Essential browser.
+
 PDF files may use the browser's native viewer. Complete LaTeX authoring and
 build management remain in full CoCalc.
 
@@ -88,6 +95,13 @@ is rescanned only when the user explicitly refreshes it. Notebook cells use
 the same lazy CodeMirror 6 foundation as file editing. `Shift+Enter` runs and
 advances (inserting a code cell at the end), `Alt+Enter` runs and inserts below,
 and `Ctrl+Enter` runs in place.
+
+Notebook checkpoints use exact CodeMirror source patches plus the structural,
+metadata, and output delta from the notebook opened by the client. The project
+host applies only that delta to the live canonical notebook, preserving newer
+RTC changes rather than replacing the document wholesale. Standard CoCalc and
+instructor TimeTravel therefore see Essential edits, including nbgrader
+metadata, even though Essential does not download the history viewer.
 
 Arbitrary HTML, JavaScript, widgets, JupyterLab plugins, and broad rich-output
 registries are intentionally omitted. Users can launch JupyterLab when they
@@ -169,6 +183,12 @@ Project-host bearer credentials stay in memory. File access is confined to the
 authorized project namespace, transfers and rendering are bounded, and writes
 use optimistic conflict detection. Untrusted chat and notebook content is not
 inserted as arbitrary HTML or executed.
+
+Edit-journal batches carry a browser-session journal id and monotonic sequence,
+making retries idempotent. The project-host service rechecks project
+collaboration, serializes writes per document, bounds patch and notebook sizes,
+and rejects stale disk baselines. It does not poll, proxy through the hub, or
+introduce a second history store.
 
 ## Performance Contract
 

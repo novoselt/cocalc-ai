@@ -1757,6 +1757,9 @@ importers:
       '@cocalc/static':
         specifier: workspace:*
         version: link:../static
+      '@cocalc/sync':
+        specifier: workspace:*
+        version: link:../sync
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util

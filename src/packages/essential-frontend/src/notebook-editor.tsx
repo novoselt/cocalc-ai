@@ -14,6 +14,7 @@ import {
   openJupyterLiveRunStore,
   type JupyterLiveRunSnapshot,
 } from "@cocalc/conat/project/jupyter/live-run";
+import { saveNotebookJournal } from "@cocalc/conat/project/edit-journal";
 import { syncdbPath } from "@cocalc/util/jupyter/names";
 import { useEffect, useRef, useState, type RefCallback } from "react";
 import CodeMirrorEditor, {
@@ -30,6 +31,7 @@ import {
   type NotebookOutput,
 } from "./notebook-view";
 import { InlineAlert, LoadingState } from "./ui";
+import useEditCheckpoint from "./use-edit-checkpoint";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
 import {
   recordUltraliteFailure,
@@ -37,6 +39,7 @@ import {
   recordUltraliteSurfaceReady,
 } from "./telemetry";
 import type { UltraliteLanguage } from "./prism-languages";
+import { sha256Text } from "./sha256";
 
 const MAX_OUTPUT_TEXT = 100_000;
 const MAX_OUTPUT_IMAGE = 7 * 1024 * 1024;
@@ -248,6 +251,7 @@ export default function NotebookEditor({
   );
   const [baseContents, setBaseContents] = useState(initialBase);
   const [dirty, setDirty] = useState(false);
+  const [editRevision, setEditRevision] = useState(0);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -258,6 +262,8 @@ export default function NotebookEditor({
   const [editorEpoch, setEditorEpoch] = useState(0);
   const jupyter = useRef<JupyterClient | undefined>(undefined);
   const cellEditors = useRef(new Map<string, CodeMirrorEditorHandle>());
+  const journalId = useRef(crypto.randomUUID());
+  const journalSequence = useRef(0);
   const completedLiveRunIds = useRef(new Set<string>());
   const directRunId = useRef<string | undefined>(undefined);
   const dirtyRef = useRef(dirty);
@@ -300,6 +306,12 @@ export default function NotebookEditor({
 
   useEffect(() => recordUltraliteSurfaceReady("notebook_execute"), []);
 
+  const markEdited = () => {
+    setDirty(true);
+    setEditRevision((value) => value + 1);
+    setNotice(undefined);
+  };
+
   const updateCell = (index: number, patch: Partial<NotebookCell>) => {
     setNotebook((current) => ({
       ...current,
@@ -307,19 +319,57 @@ export default function NotebookEditor({
         i === index ? { ...cell, ...patch } : cell,
       ),
     }));
-    setDirty(true);
-    setNotice(undefined);
+    markEdited();
   };
 
   const saveCandidate = async (candidate: NotebookDocument) => {
     const contents = serializeNotebook(candidate);
-    await filesystem.writeFileIfUnchanged(path, contents, baseContents, true);
-    setBaseContents(contents);
-    setNotebook(candidate);
+    let savedContents = contents;
+    let savedNotebook = candidate;
+    if (
+      project.host_id &&
+      session.accountId &&
+      typeof session.openProjectHost === "function"
+    ) {
+      const opened = await session.openProjectHost(
+        project.project_id,
+        project.host_id,
+      );
+      const cell_patches = candidate.cells.flatMap((cell) => {
+        if (!cell.id) return [];
+        const batch = cellEditors.current.get(cell.id)?.getJournalBatch();
+        return batch ? [{ cell_id: cell.id, patch: batch.patch }] : [];
+      });
+      const response = await saveNotebookJournal({
+        client: opened.client,
+        account_id: session.accountId,
+        project_id: project.project_id,
+        request: {
+          path,
+          base_sha256: await sha256Text(baseContents),
+          journal_id: journalId.current,
+          sequence: journalSequence.current,
+          contents,
+          cell_patches,
+        },
+      });
+      journalSequence.current += 1;
+      savedContents = response.contents;
+      savedNotebook = parseNotebook(savedContents);
+      for (const cell of savedNotebook.cells) {
+        if (!cell.id) continue;
+        cellEditors.current.get(cell.id)?.acknowledgeJournal(cellInput(cell));
+      }
+    } else {
+      await filesystem.writeFileIfUnchanged(path, contents, baseContents, true);
+      for (const editor of cellEditors.current.values()) editor.markClean();
+    }
+    setBaseContents(savedContents);
+    setNotebook(savedNotebook);
     setDirty(false);
     setConflict(false);
-    onSaved?.(candidate, contents);
-    return contents;
+    onSaved?.(savedNotebook, savedContents);
+    return savedContents;
   };
 
   const save = async () => {
@@ -348,6 +398,11 @@ export default function NotebookEditor({
       setSaving(false);
     }
   };
+  useEditCheckpoint({
+    active: dirty && !saving && !running && !conflict && !readOnly,
+    revision: editRevision,
+    save,
+  });
 
   const applyMessages = (messages: OutputMessage[]) => {
     const started = messages.find(
@@ -671,7 +726,7 @@ export default function NotebookEditor({
       candidate = inserted.notebook;
       focusCellId = inserted.cellId;
       setNotebook(candidate);
-      setDirty(true);
+      markEdited();
     } else if (mode === "advance") {
       focusCellId = notebook.cells[index + 1]?.id;
     }
@@ -796,7 +851,7 @@ export default function NotebookEditor({
                       cells[index - 1],
                     ];
                     setNotebook({ ...notebook, cells });
-                    setDirty(true);
+                    markEdited();
                   }}
                   type="button"
                 >
@@ -815,7 +870,7 @@ export default function NotebookEditor({
                       cells[index],
                     ];
                     setNotebook({ ...notebook, cells });
-                    setDirty(true);
+                    markEdited();
                   }}
                   type="button"
                 >
@@ -831,7 +886,7 @@ export default function NotebookEditor({
                       ...notebook,
                       cells: notebook.cells.filter((_, i) => i !== index),
                     });
-                    setDirty(true);
+                    markEdited();
                   }}
                   type="button"
                 >
@@ -850,7 +905,7 @@ export default function NotebookEditor({
                 onChange={(source) => updateCell(index, { source })}
                 onSave={() => void save()}
                 path={path}
-                readOnly={readOnly || running}
+                readOnly={readOnly || running || saving}
                 shortcuts={shortcuts}
               />
               {cell.outputs?.map((output, outputIndex) => (
@@ -881,7 +936,7 @@ export default function NotebookEditor({
                     },
                   ],
                 });
-                setDirty(true);
+                markEdited();
               }}
               type="button"
             >

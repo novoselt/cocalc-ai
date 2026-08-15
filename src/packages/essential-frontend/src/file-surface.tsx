@@ -706,7 +706,9 @@ export default function FileSurface({
                 setContents(saved);
               }}
               path={route.path}
+              project={project}
               readOnly={!editable || !canWrite}
+              session={session}
             />
           </Suspense>
         </ChunkErrorBoundary>
