@@ -774,6 +774,33 @@ code, 464.1 KiB for rendered Markdown, 619.3 KiB for ordinary editing, 665.1
 KiB for Markdown editing, 623.4 KiB for executable Jupyter, and 403.9 KiB for
 the recent-notebook index.
 
+### Clean Routes And Open-File Watches
+
+Commits `0c7506e655`, `23f08e2fdb`, and `7156df5baf` added the clean
+`/essential/projects/...` URL schema and direct project-host open-file watches.
+They were deployed only to staging. Production and project-host software were
+not changed.
+
+- Hub artifact:
+  `20260815T182552Z-23f08e2f-20260815T182535Z-23f08e2f-essential-route-watch`;
+  bay release `20260815182738-hub`.
+- Final static artifact:
+  `20260815T183713Z-7156df5b-20260815T183300Z-7156df5b-essential-watch-atomic`;
+  bay release `20260815183805-static`.
+
+A direct authenticated load and browser refresh of the motivating Go source
+URL returned HTTP 200, retained the clean path, resolved the entry chunk from
+`/static`, rendered `main.go`, and produced no page or console errors. A
+historical hash link converted in place to its corresponding clean URL.
+
+Live watch validation used a temporary project file and external atomic
+uploads. A passive view automatically reloaded the new contents. A subsequent
+atomic replacement while CodeMirror held an unsaved draft displayed the
+changed-on-disk warning and retained the draft. The initial staging test also
+found that `closeOnUnlink` ended subscriptions during normal rename-based
+saves; `7156df5baf` fixed this by following the visible path until navigation
+closes the watcher. All temporary project files were removed afterward.
+
 ## Relevant Code And Plans
 
 - `src/packages/essential-frontend/`
