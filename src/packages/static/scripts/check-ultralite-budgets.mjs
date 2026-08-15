@@ -45,6 +45,7 @@ const projects = findNamedGroup("ultralite-projects");
 const workspace = findNamedGroup("ultralite-workspace");
 const files = findNamedGroup("ultralite-files");
 const code = findNamedGroup("ultralite-code");
+const notebookExecute = findNamedGroup("ultralite-notebook-execute");
 const chat = findNamedGroup("ultralite-chat");
 const vms = findNamedGroup("ultralite-vms");
 const apps = findNamedGroup("ultralite-apps");
@@ -84,6 +85,11 @@ const surfaces = [
     label: "text and code editor",
     chunks: [...initial, ...workspace, ...files, ...code, ...prismLanguages],
     max: 500 * KiB,
+  },
+  {
+    label: "executable Jupyter",
+    chunks: [...initial, ...workspace, ...files, ...notebookExecute],
+    max: 650 * KiB,
   },
   {
     label: "Codex chat",

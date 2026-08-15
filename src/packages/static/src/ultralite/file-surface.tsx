@@ -26,6 +26,7 @@ import { UltraliteIcon } from "./icons";
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const MAX_EDIT_BYTES = 2 * 1024 * 1024;
 const MAX_NOTEBOOK_BYTES = 15 * 1024 * 1024;
+const MAX_NOTEBOOK_EDIT_BYTES = 5 * 1024 * 1024;
 
 const CodeView = lazy(
   () =>
@@ -35,6 +36,17 @@ const CodeView = lazy(
         () => resolve(require("./code-view")),
         reject,
         "ultralite-code",
+      );
+    }),
+);
+const NotebookEditor = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./notebook-editor")),
+        reject,
+        "ultralite-notebook-execute",
       );
     }),
 );
@@ -205,6 +217,9 @@ export default function FileSurface({
   const [truncated, setTruncated] = useState(false);
   const [contents, setContents] = useState<string>();
   const [notebook, setNotebook] = useState<NotebookDocument>();
+  const [notebookContents, setNotebookContents] = useState<string>();
+  const [notebookEditable, setNotebookEditable] = useState(false);
+  const [executeNotebook, setExecuteNotebook] = useState(false);
   const [editable, setEditable] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -239,6 +254,9 @@ export default function FileSurface({
     setFiles(undefined);
     setContents(undefined);
     setNotebook(undefined);
+    setNotebookContents(undefined);
+    setNotebookEditable(false);
+    setExecuteNotebook(false);
     setEditable(false);
     setDirty(false);
     void (async () => {
@@ -267,8 +285,11 @@ export default function FileSurface({
         );
       }
       if (!cancelled) {
-        if (notebookFile) setNotebook(parseNotebook(text));
-        else {
+        if (notebookFile) {
+          setNotebook(parseNotebook(text));
+          setNotebookContents(text);
+          setNotebookEditable(stats.size <= MAX_NOTEBOOK_EDIT_BYTES);
+        } else {
           setContents(text);
           setEditable(stats.size <= MAX_EDIT_BYTES);
         }
@@ -286,8 +307,7 @@ export default function FileSurface({
   }, [filesystem, refresh, route.kind, route.path]);
 
   const download = () => {
-    const text =
-      contents ?? (notebook ? JSON.stringify(notebook, null, 2) : undefined);
+    const text = contents ?? notebookContents;
     if (text == null || route.kind !== "file") return;
     const blob = new Blob([text], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
@@ -360,8 +380,47 @@ export default function FileSurface({
           project={project}
           truncated={truncated}
         />
-      ) : notebook ? (
-        <NotebookView notebook={notebook} />
+      ) : notebook && notebookContents != null ? (
+        executeNotebook ? (
+          <ChunkErrorBoundary label="Executable notebook">
+            <Suspense
+              fallback={<LoadingState label="Loading notebook tools" />}
+            >
+              <div className="ul-file-view-header">
+                <button
+                  className="ul-button ul-button-secondary"
+                  onClick={() => setExecuteNotebook(false)}
+                  type="button"
+                >
+                  Read-only view
+                </button>
+              </div>
+              <NotebookEditor
+                baseContents={notebookContents}
+                filesystem={filesystem!}
+                notebook={notebook}
+                path={route.path}
+                project={project}
+                readOnly={!notebookEditable || !canWrite}
+                session={session}
+              />
+            </Suspense>
+          </ChunkErrorBoundary>
+        ) : (
+          <>
+            <div className="ul-file-view-header">
+              <span className="ul-muted">Safe read-only notebook view</span>
+              <button
+                className="ul-button ul-button-secondary"
+                onClick={() => setExecuteNotebook(true)}
+                type="button"
+              >
+                Edit or run notebook
+              </button>
+            </div>
+            <NotebookView notebook={notebook} />
+          </>
+        )
       ) : contents != null ? (
         <ChunkErrorBoundary label="Code viewer">
           <Suspense fallback={<LoadingState label="Loading code viewer" />}>

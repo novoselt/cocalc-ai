@@ -9,18 +9,27 @@ export interface NotebookOutput {
   text?: string | string[];
   traceback?: string[];
   data?: Record<string, string | string[]>;
+  execution_count?: number | null;
+  metadata?: Record<string, unknown>;
+  ename?: string;
+  evalue?: string;
 }
 
 export interface NotebookCell {
+  id?: string;
   cell_type?: string;
   execution_count?: number | null;
   source?: string | string[];
   outputs?: NotebookOutput[];
+  metadata?: Record<string, unknown>;
+  attachments?: Record<string, unknown>;
 }
 
 export interface NotebookDocument {
   cells: NotebookCell[];
   nbformat?: number;
+  nbformat_minor?: number;
+  metadata?: Record<string, any>;
 }
 
 export function sourceText(source?: string | string[]): string {
@@ -35,10 +44,18 @@ export function parseNotebook(contents: string): NotebookDocument {
   return { ...value, cells: value.cells };
 }
 
-function Output({ output, index }: { output: NotebookOutput; index: number }) {
+export function NotebookOutputView({
+  output,
+  index,
+}: {
+  output: NotebookOutput;
+  index: number;
+}) {
   const text =
     sourceText(output.text) || sourceText(output.data?.["text/plain"]);
-  const traceback = sourceText(output.traceback);
+  const traceback =
+    sourceText(output.traceback) ||
+    [output.ename, output.evalue].filter(Boolean).join(": ");
   const png = sourceText(output.data?.["image/png"]);
   const jpeg = sourceText(output.data?.["image/jpeg"]);
   const image = png || jpeg;
@@ -98,7 +115,11 @@ export default function NotebookView({
               <code>{source}</code>
             </pre>
             {cell.outputs?.map((output, outputIndex) => (
-              <Output index={outputIndex} key={outputIndex} output={output} />
+              <NotebookOutputView
+                index={outputIndex}
+                key={outputIndex}
+                output={output}
+              />
             ))}
           </section>
         );
