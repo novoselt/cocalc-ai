@@ -50,7 +50,7 @@ textarea {
   color: white;
   display: grid;
   gap: 0.85rem;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   min-height: 48px;
   padding: 0 14px;
   position: sticky;
@@ -594,6 +594,61 @@ textarea {
   white-space: pre;
 }
 
+.ul-cm-editor {
+  background: var(--ul-code-bg);
+  border: 1px solid var(--ul-border);
+  color: var(--ul-code-text);
+  min-height: min(65vh, 720px);
+}
+
+.ul-cm-editor .cm-editor {
+  min-height: inherit;
+}
+
+.ul-cm-editor .cm-scroller {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: inherit;
+}
+
+.ul-cm-editor .cm-content {
+  caret-color: var(--ul-code-text);
+  padding-block: 8px;
+}
+
+.ul-cm-editor .cm-gutters {
+  background: var(--ul-rail);
+  border-right: 1px solid var(--ul-border);
+  color: var(--ul-muted);
+}
+
+.ul-cm-editor .cm-activeLine,
+.ul-cm-editor .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--ul-accent) 8%, transparent);
+}
+
+.ul-cm-editor .cm-editor.cm-focused {
+  outline: 2px solid var(--ul-focus);
+  outline-offset: 1px;
+}
+
+.ul-cm-editor .cm-panels {
+  background: var(--ul-rail);
+  color: var(--ul-ink);
+}
+
+.ul-cm-editor .cm-search input,
+.ul-cm-editor .cm-search button {
+  font: inherit;
+}
+
+.ul-editor-help {
+  color: var(--ul-muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
 .ul-editor-status {
   color: var(--ul-muted);
   font-size: 12px;
@@ -689,9 +744,13 @@ textarea {
 }
 
 .ul-chat-layout {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 330px);
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 190px);
+  margin: 0 auto;
+  max-width: 980px;
+  min-height: 430px;
+  position: relative;
 }
 
 .ul-message {
@@ -699,7 +758,6 @@ textarea {
   border: 1px solid var(--ul-border);
   line-height: 1.5;
   padding: 10px 12px;
-  white-space: pre-wrap;
 }
 
 .ul-message-human {
@@ -715,27 +773,122 @@ textarea {
   background: var(--ul-rail);
   border: 1px solid var(--ul-border);
   color: var(--ul-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   margin: 8px 0;
   max-height: 260px;
   overflow: auto;
   padding: 8px;
-  white-space: pre-wrap;
+}
+
+.ul-activity summary {
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .ul-composer {
-  align-self: start;
   background: white;
   border: 1px solid var(--ul-border);
+  border-top-width: 2px;
   padding: 10px;
-  position: sticky;
-  top: 60px;
+  z-index: 2;
 }
 
 .ul-textarea {
-  min-height: 120px;
+  min-height: 74px;
   resize: vertical;
+}
+
+.ul-chat-layout > .ul-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 4px 14px;
+  scroll-behavior: smooth;
+}
+
+.ul-newest-button {
+  align-self: center;
+  background: var(--ul-accent);
+  border: 1px solid var(--ul-accent);
+  border-radius: 16px;
+  color: white;
+  cursor: pointer;
+  margin: -42px 0 10px;
+  min-height: 32px;
+  padding: 4px 14px;
+  position: relative;
+  z-index: 3;
+}
+
+.ul-markdown {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.ul-markdown > :first-child {
+  margin-top: 0;
+}
+
+.ul-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.ul-markdown p,
+.ul-markdown ul,
+.ul-markdown ol,
+.ul-markdown blockquote,
+.ul-markdown pre,
+.ul-markdown table {
+  margin: 0.65em 0;
+}
+
+.ul-markdown ul,
+.ul-markdown ol {
+  padding-left: 1.7em;
+}
+
+.ul-markdown blockquote {
+  border-left: 3px solid var(--ul-border-dark);
+  color: var(--ul-muted);
+  padding-left: 10px;
+}
+
+.ul-markdown code {
+  background: var(--ul-code-bg);
+  border-radius: 3px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+  padding: 1px 4px;
+}
+
+.ul-markdown pre {
+  background: var(--ul-code-bg);
+  border: 1px solid var(--ul-border);
+  overflow: auto;
+  padding: 10px;
+}
+
+.ul-markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.ul-markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+.ul-markdown th,
+.ul-markdown td {
+  border: 1px solid var(--ul-border);
+  padding: 4px 7px;
+}
+
+.ul-math-display {
+  display: block;
+  overflow-x: auto;
+  padding: 4px 0;
 }
 
 .ul-row-title {
@@ -766,6 +919,38 @@ textarea {
   gap: 12px;
   grid-template-columns: 100px minmax(0, 1fr);
   padding: 8px 10px;
+}
+
+.ul-account-page {
+  margin: 0 auto;
+  max-width: 980px;
+}
+
+.ul-notification-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ul-notification {
+  background: white;
+  border: 1px solid var(--ul-border);
+  border-left: 4px solid var(--ul-border);
+  padding: 10px 12px;
+}
+
+.ul-notification-unread {
+  border-left-color: var(--ul-accent);
+}
+
+.ul-notification-title {
+  font-size: 15px;
+  margin: 0;
+}
+
+.ul-unread-dot {
+  color: var(--ul-accent);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .ul-context-list > div + div {
@@ -848,17 +1033,14 @@ textarea {
   }
 
   .ul-chat-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .ul-composer {
-    position: static;
+    height: calc(100dvh - 155px);
+    min-height: 360px;
   }
 }
 
 @media (max-width: 480px) {
   .ul-topbar {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
   }
 
   .ul-mode {

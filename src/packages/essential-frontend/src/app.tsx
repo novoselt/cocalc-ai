@@ -39,6 +39,17 @@ const ProjectsWorkspace = lazy(
       );
     }),
 );
+const NotificationsSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./notifications-surface")),
+        reject,
+        "ultralite-notifications",
+      );
+    }),
+);
 
 function Loading({ message }: { message: string }) {
   return (
@@ -106,7 +117,7 @@ export function UltraliteApp() {
       {bootstrap?.signed_in ? null : <TopBar />}
       {error ? (
         <main className="ul-centered" id="main-content">
-          <h1>Ultralite could not start</h1>
+          <h1>Essential CoCalc could not start</h1>
           <p className="ul-error" role="alert">
             {error}
           </p>
@@ -126,7 +137,7 @@ export function UltraliteApp() {
         <main className="ul-centered" id="main-content">
           <h1>Sign in to continue</h1>
           <p>
-            Ultralite uses your existing CoCalc account and project permissions.
+            Essential CoCalc uses your existing account and project permissions.
           </p>
           <a
             className="ul-link-button"
@@ -140,6 +151,8 @@ export function UltraliteApp() {
         <Suspense fallback={<Loading message="Loading CoCalc" />}>
           {route.kind === "projects" ? (
             <ProjectsWorkspace bootstrap={bootstrap} />
+          ) : route.kind === "notifications" ? (
+            <NotificationsSurface bootstrap={bootstrap} />
           ) : (
             <Workspace bootstrap={bootstrap} route={route} />
           )}

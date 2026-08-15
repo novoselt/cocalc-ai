@@ -7,6 +7,35 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import CodeView from "./code-view";
 import { navigate } from "./routes";
 
+jest.mock("./codemirror-editor", () => {
+  const React = require("react");
+  return {
+    __esModule: true,
+    default: React.forwardRef((props: any, ref: any) => {
+      const [value, setValue] = React.useState(props.initialValue);
+      const valueRef = React.useRef(value);
+      valueRef.current = value;
+      React.useEffect(() => setValue(props.initialValue), [props.initialValue]);
+      React.useImperativeHandle(ref, () => ({
+        focus: jest.fn(),
+        getValue: () => valueRef.current,
+        markClean: jest.fn(),
+        replaceValue: setValue,
+      }));
+      return (
+        <textarea
+          aria-label={props.ariaLabel}
+          onChange={(event) => {
+            setValue(event.target.value);
+            props.onDirtyChange(event.target.value !== props.initialValue);
+          }}
+          value={value}
+        />
+      );
+    }),
+  };
+});
+
 function props(writeFileIfUnchanged = jest.fn(async () => undefined)) {
   return {
     contents: "old\n",
@@ -24,9 +53,12 @@ test("saves exactly against the version that was opened", async () => {
   const value = props();
   render(<CodeView {...value} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Edit notes.txt" }), {
-    target: { value: "new\n" },
-  });
+  fireEvent.change(
+    await screen.findByRole("textbox", { name: "Edit notes.txt" }),
+    {
+      target: { value: "new\n" },
+    },
+  );
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   await waitFor(() =>
@@ -48,9 +80,12 @@ test("keeps the draft and blocks overwrite after an etag conflict", async () => 
   const value = props(jest.fn(async () => Promise.reject(conflict)));
   render(<CodeView {...value} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Edit notes.txt" }), {
-    target: { value: "my draft\n" },
-  });
+  fireEvent.change(
+    await screen.findByRole("textbox", { name: "Edit notes.txt" }),
+    {
+      target: { value: "my draft\n" },
+    },
+  );
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   expect(
@@ -63,15 +98,18 @@ test("keeps the draft and blocks overwrite after an etag conflict", async () => 
   expect(value.filesystem.writeFileIfUnchanged).toHaveBeenCalledTimes(1);
 });
 
-test("can cancel constrained-client navigation while dirty", () => {
+test("can cancel constrained-client navigation while dirty", async () => {
   const value = props();
   jest.spyOn(window, "confirm").mockReturnValue(false);
   window.location.hash = "#/projects";
   render(<CodeView {...value} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Edit notes.txt" }), {
-    target: { value: "dirty" },
-  });
+  fireEvent.change(
+    await screen.findByRole("textbox", { name: "Edit notes.txt" }),
+    {
+      target: { value: "dirty" },
+    },
+  );
 
   navigate({
     kind: "files",
@@ -80,4 +118,23 @@ test("can cancel constrained-client navigation while dirty", () => {
   });
 
   expect(window.location.hash).toBe("#/projects");
+});
+
+test("replaces the editor document when a different file is opened", async () => {
+  const value = props();
+  const { rerender } = render(<CodeView {...value} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(
+    await screen.findByRole("textbox", { name: "Edit notes.txt" }),
+  ).toHaveValue("old\n");
+
+  rerender(
+    <CodeView {...value} contents={"second\n"} path="/home/user/second.txt" />,
+  );
+
+  await waitFor(() =>
+    expect(
+      screen.getByRole("textbox", { name: "Edit second.txt" }),
+    ).toHaveValue("second\n"),
+  );
 });

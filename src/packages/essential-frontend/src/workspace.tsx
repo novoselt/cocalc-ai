@@ -88,8 +88,22 @@ const CliSurface = lazy(
       );
     }),
 );
+const SettingsSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./settings-surface")),
+        reject,
+        "ultralite-settings",
+      );
+    }),
+);
 
-type ProjectRoute = Exclude<UltraliteRoute, { kind: "projects" }>;
+type ProjectRoute = Exclude<
+  UltraliteRoute,
+  { kind: "notifications" | "projects" }
+>;
 
 function MissingHost({ project }: { project: AccountProjectListWindowRow }) {
   return (
@@ -135,7 +149,12 @@ function ProjectSurface({
   session: UltraliteSession;
 }) {
   let surface: ReactNode;
-  if (!project.host_id && route.kind !== "vms" && route.kind !== "cli") {
+  if (
+    !project.host_id &&
+    route.kind !== "vms" &&
+    route.kind !== "cli" &&
+    route.kind !== "settings"
+  ) {
     surface = <MissingHost project={project} />;
   } else if (route.kind === "files" || route.kind === "file") {
     surface = (
@@ -165,6 +184,12 @@ function ProjectSurface({
     surface = (
       <DeferredSurface label="Apps">
         <AppSurface project={project} session={session} />
+      </DeferredSurface>
+    );
+  } else if (route.kind === "settings") {
+    surface = (
+      <DeferredSurface label="Settings">
+        <SettingsSurface project={project} session={session} />
       </DeferredSurface>
     );
   } else {

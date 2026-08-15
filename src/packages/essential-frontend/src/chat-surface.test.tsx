@@ -6,7 +6,7 @@
 import "@testing-library/jest-dom";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
-  createHeadlessChatClient,
+  createRemoteHeadlessChatClient,
   type ChatSnapshot,
   type HeadlessChatClient,
 } from "@cocalc/chat-client";
@@ -14,7 +14,7 @@ import { Chat, SafeMessageContent } from "./chat-surface";
 
 jest.mock("@cocalc/chat-client", () => ({
   AgentSessionIndex: class {},
-  createHeadlessChatClient: jest.fn(),
+  createRemoteHeadlessChatClient: jest.fn(),
 }));
 
 const snapshot: ChatSnapshot = {
@@ -52,6 +52,7 @@ function mockClient(): HeadlessChatClient {
     close: jest.fn(async () => undefined),
     getSnapshot: jest.fn(() => snapshot),
     interrupt: jest.fn(async () => undefined),
+    loadOlderMessages: jest.fn(async () => undefined),
     open: jest.fn(async () => undefined),
     reconnect: jest.fn(async () => undefined),
     selectThread: jest.fn(),
@@ -64,7 +65,7 @@ function mockClient(): HeadlessChatClient {
       return () => undefined;
     }),
   };
-  (createHeadlessChatClient as jest.Mock).mockReturnValue(client);
+  (createRemoteHeadlessChatClient as jest.Mock).mockReturnValue(client);
   return client;
 }
 
@@ -84,11 +85,22 @@ test("renders approval links as safe visible links in their chat context", () =>
   expect(link).toHaveAttribute("rel", "noreferrer");
 });
 
+test("renders raw HTML and unsafe links as inert content", () => {
+  const { container } = render(
+    <SafeMessageContent
+      content={'<script>alert("x")</script> [unsafe](javascript:alert("x"))'}
+    />,
+  );
+
+  expect(container.querySelector("script")).toBeNull();
+  expect(screen.queryByRole("link", { name: "unsafe" })).toBeNull();
+  expect(container).toHaveTextContent('[unsafe](javascript:alert("x"))');
+});
+
 test("continues an idle Codex thread and catches up without another prompt", async () => {
   const client = mockClient();
   const session = {
     accountId: "22222222-2222-4222-8222-222222222222",
-    ensureProjectRunning: jest.fn(async () => undefined),
     openProjectHost: jest.fn(async () => ({ client: {} })),
   };
   render(

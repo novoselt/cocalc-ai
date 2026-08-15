@@ -15,6 +15,7 @@
     { "path": "../backend" },
     { "path": "../chat-client" },
     { "path": "../conat" },
+    { "path": "../essential-frontend" },
     { "path": "../frontend" },
     { "path": "../util" }
   ],

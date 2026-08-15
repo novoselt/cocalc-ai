@@ -5,6 +5,7 @@
 
 export type UltraliteRoute =
   | { kind: "projects" }
+  | { kind: "notifications" }
   | { kind: "files"; projectId: string; path: string }
   | { kind: "file"; projectId: string; path: string }
   | { kind: "agents"; projectId: string }
@@ -12,6 +13,7 @@ export type UltraliteRoute =
   | { kind: "vms"; projectId: string }
   | { kind: "apps"; projectId: string }
   | { kind: "cli"; projectId: string }
+  | { kind: "settings"; projectId: string }
   | {
       kind: "chat";
       projectId: string;
@@ -45,6 +47,7 @@ export function parseRoute(hash = window.location.hash): UltraliteRoute {
   const raw = hash.replace(/^#\/?/, "");
   const [pathname, query = ""] = raw.split("?", 2);
   const segments = pathname.split("/").filter(Boolean);
+  if (segments[0] === "notifications") return { kind: "notifications" };
   if (segments[0] !== "project" || !UUID.test(segments[1] ?? "")) {
     return { kind: "projects" };
   }
@@ -73,6 +76,8 @@ export function parseRoute(hash = window.location.hash): UltraliteRoute {
       return { kind: "apps", projectId };
     case "cli":
       return { kind: "cli", projectId };
+    case "settings":
+      return { kind: "settings", projectId };
     case "chat": {
       const chatPath = normalizeProjectPath(params.get("path") ?? undefined);
       const threadId = params.get("thread")?.trim();
@@ -87,6 +92,7 @@ export function parseRoute(hash = window.location.hash): UltraliteRoute {
 
 export function routeHash(route: UltraliteRoute): string {
   if (route.kind === "projects") return "#/projects";
+  if (route.kind === "notifications") return "#/notifications";
   const root = `#/project/${route.projectId}`;
   switch (route.kind) {
     case "files":
@@ -103,6 +109,8 @@ export function routeHash(route: UltraliteRoute): string {
       return `${root}/apps`;
     case "cli":
       return `${root}/cli`;
+    case "settings":
+      return `${root}/settings`;
     case "chat":
       return `${root}/chat?${new URLSearchParams({
         path: route.chatPath,

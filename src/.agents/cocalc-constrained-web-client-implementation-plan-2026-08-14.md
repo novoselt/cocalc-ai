@@ -11,6 +11,52 @@ polish of the prototype's independent visual design.
 
 ## Executive Decision
 
+### 2026-08-15 Essential Frontend Amendment
+
+The product and package name is now **Essential CoCalc** and
+`@cocalc/essential-frontend`. The adjective is the admission rule: a feature
+belongs only when it is essential to completing real work, not merely because
+it exists in full CoCalc. The historical `/static/ultralite.html`, chunk names,
+and telemetry identifiers remain temporarily stable deployment details.
+
+The essential scope is project listing; ordinary code and Markdown file
+browsing, viewing, and editing; recent-first human and Codex chat; terminal;
+basic Jupyter viewing and execution; dedicated VM control; launching core app
+servers; on-demand account notifications; and minimal project identity and
+lifecycle controls. Course, admin, full account or project settings,
+workspaces, launcher configuration, rich LaTeX tooling, specialized editors,
+project-host management, process and activity management, advanced search,
+and backup management remain in full CoCalc.
+
+This amendment supersedes the earlier blanket CodeMirror prohibition and the
+native-textarea editor design. A measured, minimal CodeMirror 6 editor loads
+only after the explicit Edit action, and only its selected language parser is
+loaded. Tests with very large documents showed that CodeMirror's bounded
+parsing and viewport rendering provide much better _felt_ performance than
+smaller Prism-overlay editors. The route budget counts editor core plus the
+largest one parser, not every mutually exclusive grammar.
+
+It also supersedes the earlier notification startup exclusion only for the
+explicit Notifications surface. Notifications remain absent from startup and
+project routes; no permanent poll is allowed. A future unread indicator must
+use the bounded account event stream.
+
+Production bundle measurement after the CM6 integration established a
+612.2 KiB Brotli worst-case editor route, including the largest 76.1 KiB
+language parser. The editor hard budget is therefore amended from 500 KiB to
+650 KiB. This is an explicit, editor-only tradeoff for viewport rendering,
+bounded parsing, reliable editing of very large files, and a cacheable lazy
+chunk; it does not increase shell, project, file-view, chat, or notebook
+budgets. The on-demand Notifications surface has a 475 KiB budget because it
+shares the safe Markdown renderer; it remains absent from startup.
+
+Chat history is transferred through an authenticated project-host data-plane
+service as a bounded recent tail. The browser does not open the complete chat
+ImmerDB and then discard old messages. Older history is explicit, activity
+updates are bounded diffs, and visible clients keep short-lived sessions alive
+without global polling. This protocol is shared infrastructure for web,
+mobile, CLI, and agent clients.
+
 Build a constrained web client as a recognizable, focused subset of CoCalc.
 Keep React and Rspack, but use an isolated entrypoint and lightweight semantic
 HTML and CSS. Reproduce the standard CoCalc visual and interaction contract
@@ -93,13 +139,17 @@ measured and reported separately.
 | Searchable project list                | 400 KiB     | 300 KiB        |
 | Project shell and directory listing    | 425 KiB     | 350 KiB        |
 | Text and syntax-highlighted code view  | 450 KiB     | 375 KiB        |
-| Text and code editing with save        | 500 KiB     | 425 KiB        |
+| Text and code editing with save        | 650 KiB     | 600 KiB        |
 | Read-only Jupyter notebook             | 500 KiB     | 425 KiB        |
 | Executable Jupyter notebook            | 650 KiB     | 550 KiB        |
 | Existing Codex chat                    | 550 KiB     | 500 KiB        |
+| Codex chat with mathematics            | 700 KiB     | 650 KiB        |
 | Existing dedicated VM control          | 450 KiB     | 400 KiB        |
 | JupyterLab and VS Code app launch      | 475 KiB     | 425 KiB        |
 | CoCalc CLI discovery                   | 425 KiB     | 350 KiB        |
+| Terminal                               | 500 KiB     | 475 KiB        |
+| On-demand notifications                | 475 KiB     | 450 KiB        |
+| Minimal project settings               | 425 KiB     | 400 KiB        |
 
 Rules for changing these budgets:
 
@@ -363,22 +413,25 @@ code-view cumulative route is at most 450 KiB Brotli.
 
 ### Phase 4: Lightweight Text And Code Editing
 
-The first editor is deliberately simple:
+The editor is a deliberately narrow CodeMirror 6 configuration, loaded only
+after an explicit Edit action:
 
-- native textarea or a similarly small browser-native editing surface;
-- monospace text, tabs, configurable wrapping, and line/column status;
+- viewport rendering and CodeMirror's bounded parsing for responsive large
+  files;
+- one lazy parser selected from the supported language set;
+- monospace text, tabs, configurable wrapping, search, and line/column status;
 - explicit Save and Revert;
 - standard keyboard save shortcut;
 - dirty-state and navigation warning;
 - server version or content-hash conflict detection;
 - read-only fallback for viewers, oversized files, and unsupported binary
   data; and
-- Prism read preview as an optional separate mode, not a fragile highlighted
-  textarea overlay.
+- the existing lazy Prism surface for read-only viewing, with no CodeMirror
+  transfer before Edit.
 
-Do not implement multiple cursors, minimap, language servers, autocompletion,
-collaborative cursors, extension loading, broad keymaps, or an editor plugin
-system. Those belong in full CoCalc.
+Do not implement minimap, language servers, semantic completion,
+collaborative cursors, extension loading, broad IDE keymaps, or an editor
+plugin system. Those belong in full CoCalc.
 
 Initial limits:
 
@@ -389,7 +442,8 @@ Initial limits:
   resolves it in full CoCalc.
 
 Exit gate: edit, conflict, retry, read-only, and failed-save tests pass and the
-editor route remains at most 500 KiB Brotli.
+editor route, including its largest one language parser, remains at most
+650 KiB Brotli.
 
 ### Phase 5: Focused Executable Jupyter
 
@@ -652,7 +706,7 @@ release failure.
 
 ## Relevant Code And Plans
 
-- `src/packages/static/src/ultralite/`
+- `src/packages/essential-frontend/`
 - `src/packages/static/scripts/check-ultralite-budgets.mjs`
 - `src/.agents/signed-in-startup-retention-performance-plan-2026-08-11.md`
 - `src/.agents/scalable-architecture.md`

@@ -209,6 +209,7 @@ test("an approved connection starts compute and uses the direct terminal client"
     cwd: "/home/user",
     env0: { COLORTERM: "truecolor", TERM: "xterm-256color" },
     id: "ultralite-22222222-2222-4222-8222-222222222222",
+    historyLimit: 128 * 1024,
     timeout: 15_000,
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -239,4 +240,25 @@ test("an approved connection starts compute and uses the direct terminal client"
     kind: "auto",
   });
   confirm.mockRestore();
+});
+
+test("a running project reconnects its retained terminal automatically", async () => {
+  const { ensureProjectRunning, openProjectHost, session, terminal } =
+    makeSession("running");
+  render(<TerminalSurface project={project} session={session} />);
+
+  await screen.findByRole("button", { name: "Disconnect" });
+  expect(ensureProjectRunning).not.toHaveBeenCalled();
+  expect(openProjectHost).toHaveBeenCalledWith(
+    project.project_id,
+    project.host_id,
+  );
+  expect(terminal.spawn).toHaveBeenCalledWith(
+    "bash",
+    [],
+    expect.objectContaining({
+      historyLimit: 128 * 1024,
+      id: "ultralite-22222222-2222-4222-8222-222222222222",
+    }),
+  );
 });

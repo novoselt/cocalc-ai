@@ -5,7 +5,7 @@
 
 import {
   AgentSessionIndex,
-  createHeadlessChatClient,
+  createRemoteHeadlessChatClient,
   type AgentSessionRecord,
   type ChatSnapshot,
   type HeadlessChatClient,
@@ -23,6 +23,7 @@ import {
 import { navigate, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
+import { Markdown } from "./markdown";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import {
   markUltraliteBackend,
@@ -32,58 +33,17 @@ import {
 } from "./telemetry";
 
 const ACTIVE_STATUS = new Set(["active", "running"]);
-const INITIAL_MESSAGE_LIMIT = 100;
-const MESSAGE_LIMIT_STEP = 100;
+const INITIAL_MESSAGE_LIMIT = 30;
+const MESSAGE_LIMIT_STEP = 30;
 const MAX_RENDERED_MESSAGE_LENGTH = 200_000;
-const SAFE_LINK =
-  /\[([^\]\n]{1,160})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
 
 function boundedMessageContent(content: string): string {
   if (content.length <= MAX_RENDERED_MESSAGE_LENGTH) return content;
-  return `${content.slice(0, MAX_RENDERED_MESSAGE_LENGTH)}\n\n[message truncated in constrained mode]`;
+  return `${content.slice(0, MAX_RENDERED_MESSAGE_LENGTH)}\n\n[message truncated in Essential CoCalc]`;
 }
 
 export function SafeMessageContent({ content }: { content: string }) {
-  const text = boundedMessageContent(content);
-  const nodes: React.ReactNode[] = [];
-  let cursor = 0;
-  for (const match of text.matchAll(SAFE_LINK)) {
-    const index = match.index ?? 0;
-    if (index > cursor) nodes.push(text.slice(cursor, index));
-    const href = match[2] || match[3];
-    let end = index + match[0].length;
-    let suffix = "";
-    if (!match[2]) {
-      const trimmed = href.replace(/[.,;:!?]+$/, "");
-      suffix = href.slice(trimmed.length);
-      end -= suffix.length;
-      nodes.push(
-        <a
-          href={trimmed}
-          key={`${index}:${trimmed}`}
-          rel="noreferrer"
-          target="_blank"
-        >
-          {trimmed}
-        </a>,
-      );
-    } else {
-      nodes.push(
-        <a
-          href={href}
-          key={`${index}:${href}`}
-          rel="noreferrer"
-          target="_blank"
-        >
-          {match[1]}
-        </a>,
-      );
-    }
-    if (suffix) nodes.push(suffix);
-    cursor = end + suffix.length;
-  }
-  if (cursor < text.length) nodes.push(text.slice(cursor));
-  return <>{nodes}</>;
+  return <Markdown source={boundedMessageContent(content)} />;
 }
 
 function sessionSort(records: AgentSessionRecord[]): AgentSessionRecord[] {
@@ -161,8 +121,8 @@ function AgentList({
         title="Codex"
       />
       <p className="ul-muted">
-        Ultralite continues existing indexed sessions. Creating a new Codex
-        thread still uses the full workspace.
+        Essential CoCalc continues existing indexed sessions. Creating a new
+        Codex thread still uses the full workspace.
       </p>
       {loading ? <LoadingState label="Loading Codex sessions" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
@@ -244,7 +204,12 @@ export function Message({ message }: { message: ProjectedChatMessage }) {
         {message.state ? ` - ${message.state}` : ""}
       </div>
       {message.activity?.markdown ? (
-        <pre className="ul-activity">{message.activity.markdown}</pre>
+        <details className="ul-activity" open={message.generating}>
+          <summary>
+            {message.generating ? "Codex activity" : "Activity"}
+          </summary>
+          <Markdown source={message.activity.markdown} />
+        </details>
       ) : null}
       <div>
         <SafeMessageContent
@@ -270,12 +235,15 @@ export function Chat({
   const [submitting, setSubmitting] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
-  const [messageLimit, setMessageLimit] = useState(INITIAL_MESSAGE_LIMIT);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [showNewest, setShowNewest] = useState(false);
   const [status, setStatus] = useState("Connecting...");
   const [error, setError] = useState<string>();
+  const messagesRef = useRef<HTMLElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const followNewestRef = useRef(true);
+  const firstHistoryRef = useRef(true);
   const snapshot = useChatSnapshot(client, project.project_id, route.chatPath);
-
-  useEffect(() => setMessageLimit(INITIAL_MESSAGE_LIMIT), [route.threadId]);
 
   useEffect(() => {
     if (snapshot.ready) recordUltraliteSurfaceReady("chat");
@@ -286,20 +254,23 @@ export function Chat({
     let opened: HeadlessChatClient | undefined;
     setError(undefined);
     setStatus("Connecting to the project host...");
+    firstHistoryRef.current = true;
+    followNewestRef.current = true;
+    setShowNewest(false);
     markUltraliteBackend("chat", "start");
     void (async () => {
-      await session.ensureProjectRunning(project.project_id, setStatus);
       const lease = await session.openProjectHost(
         project.project_id,
         project.host_id!,
       );
       if (cancelled) return;
-      opened = createHeadlessChatClient({
+      opened = createRemoteHeadlessChatClient({
         account_id: session.accountId,
         project_id: project.project_id,
         path: route.chatPath,
         projectHostClient: lease.client,
         selected_thread_id: route.threadId,
+        initial_message_limit: INITIAL_MESSAGE_LIMIT,
       });
       clientRef.current = opened;
       setClient(opened);
@@ -339,7 +310,7 @@ export function Chat({
     !!draft.trim() &&
     (selectedThread?.agent_kind === "acp" ||
       selectedThread?.acp_config != null);
-  const visibleMessages = snapshot.messages.slice(-messageLimit);
+  const visibleMessages = snapshot.messages;
   const generating = snapshot.messages.some((message) => message.generating);
   const canContinue =
     snapshot.ready &&
@@ -347,6 +318,70 @@ export function Chat({
     !generating &&
     (selectedThread?.agent_kind === "acp" ||
       selectedThread?.acp_config != null);
+
+  const newestSignature = visibleMessages.length
+    ? `${visibleMessages.at(-1)?.message_id}:${visibleMessages.at(-1)?.revision_date}:${visibleMessages.at(-1)?.content.length}:${visibleMessages.at(-1)?.activity?.markdown?.length ?? 0}`
+    : "empty";
+
+  useEffect(() => {
+    if (!snapshot.ready || !visibleMessages.length) return;
+    if (firstHistoryRef.current || followNewestRef.current) {
+      firstHistoryRef.current = false;
+      requestAnimationFrame(() => {
+        messagesEndRef.current?.scrollIntoView({
+          behavior: followNewestRef.current ? "smooth" : "auto",
+          block: "end",
+        });
+      });
+    } else {
+      setShowNewest(true);
+    }
+  }, [newestSignature, snapshot.ready, visibleMessages.length]);
+
+  const handleMessageScroll = () => {
+    const host = messagesRef.current;
+    if (!host) return;
+    const nearEnd = host.scrollHeight - host.scrollTop - host.clientHeight < 96;
+    followNewestRef.current = nearEnd;
+    if (nearEnd) setShowNewest(false);
+  };
+
+  const goToNewest = () => {
+    followNewestRef.current = true;
+    setShowNewest(false);
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  };
+
+  const loadOlder = async () => {
+    const active = clientRef.current;
+    const host = messagesRef.current;
+    if (!active?.loadOlderMessages || !host || loadingOlder) return;
+    const previousHeight = host.scrollHeight;
+    const previousTop = host.scrollTop;
+    setLoadingOlder(true);
+    setError(undefined);
+    try {
+      await active.loadOlderMessages(
+        (snapshot.message_window?.limit ?? INITIAL_MESSAGE_LIMIT) +
+          MESSAGE_LIMIT_STEP,
+      );
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!messagesRef.current) return;
+          messagesRef.current.scrollTop =
+            previousTop + messagesRef.current.scrollHeight - previousHeight;
+        }),
+      );
+    } catch (err) {
+      recordUltraliteFailure("chat", err);
+      setError(err instanceof Error ? err.message : `${err}`);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   const submitText = async (text: string, clearDraft: boolean) => {
     const active = clientRef.current;
@@ -446,23 +481,6 @@ export function Chat({
         eyebrow={status}
         title={selectedThread?.name || "Codex chat"}
       />
-      {snapshot.messages.length > visibleMessages.length ? (
-        <div className="ul-history-notice">
-          <span>
-            Showing the newest {visibleMessages.length} of{" "}
-            {snapshot.messages.length} messages.
-          </span>
-          <button
-            className="ul-icon-button"
-            onClick={() =>
-              setMessageLimit((current) => current + MESSAGE_LIMIT_STEP)
-            }
-            type="button"
-          >
-            Show older
-          </button>
-        </div>
-      ) : null}
       {snapshot.connection === "disconnected" ||
       snapshot.connection === "error" ? (
         <InlineAlert kind="warning">
@@ -475,14 +493,45 @@ export function Chat({
       ) : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       <div className="ul-chat-layout">
-        <section aria-label="Chat messages" className="ul-messages">
+        <section
+          aria-label="Chat messages"
+          className="ul-messages"
+          onScroll={handleMessageScroll}
+          ref={messagesRef}
+        >
+          {snapshot.message_window?.has_older ? (
+            <div className="ul-history-notice">
+              <span>
+                {snapshot.message_window.omitted.toLocaleString()} older
+                messages are not loaded.
+              </span>
+              <button
+                className="ul-icon-button"
+                disabled={loadingOlder}
+                onClick={() => void loadOlder()}
+                type="button"
+              >
+                {loadingOlder ? "Loading..." : "Load 30 older"}
+              </button>
+            </div>
+          ) : null}
           {visibleMessages.map((message) => (
             <Message key={message.message_id} message={message} />
           ))}
           {!visibleMessages.length ? (
             <EmptyState>Waiting for chat history...</EmptyState>
           ) : null}
+          <div aria-hidden="true" ref={messagesEndRef} />
         </section>
+        {showNewest ? (
+          <button
+            className="ul-newest-button"
+            onClick={goToNewest}
+            type="button"
+          >
+            New messages
+          </button>
+        ) : null}
         <form
           className="ul-composer"
           onSubmit={(event) => {

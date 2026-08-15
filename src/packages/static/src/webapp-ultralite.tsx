@@ -4,9 +4,9 @@
  */
 
 import { createRoot } from "react-dom/client";
-import { UltraliteApp } from "./ultralite/app";
-import "./ultralite.css";
+import { UltraliteApp } from "@cocalc/essential-frontend";
+import "@cocalc/essential-frontend/styles.css";
 
 const container = document.getElementById("cocalc-ultralite-root");
-if (container == null) throw new Error("CoCalc Ultralite root is missing.");
+if (container == null) throw new Error("CoCalc Essential root is missing.");
 createRoot(container).render(<UltraliteApp />);

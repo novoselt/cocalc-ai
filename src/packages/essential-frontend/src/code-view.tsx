@@ -6,11 +6,14 @@
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
 import {
   Fragment,
+  lazy,
+  Suspense,
   useEffect,
+  useRef,
   useState,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
+import type { CodeMirrorEditorHandle } from "./codemirror-editor";
 import {
   languageForPath,
   loadLanguage,
@@ -103,11 +106,23 @@ function HighlightedCode({
   );
 }
 
-function position(contents: string, offset: number): string {
-  const before = contents.slice(0, offset);
-  const lines = before.split("\n");
-  return `Ln ${lines.length}, Col ${(lines.at(-1)?.length ?? 0) + 1}`;
-}
+const LazyCodeMirrorEditor = lazy(
+  () =>
+    new Promise<{ default: typeof import("./codemirror-editor").default }>(
+      (resolve, reject) => {
+        if (process.env.COCALC_TEST_MODE) {
+          resolve({ default: require("./codemirror-editor").default });
+          return;
+        }
+        require.ensure(
+          [],
+          () => resolve({ default: require("./codemirror-editor").default }),
+          reject,
+          "ultralite-codemirror",
+        );
+      },
+    ),
+);
 
 export default function CodeView({
   contents,
@@ -126,7 +141,9 @@ export default function CodeView({
 }) {
   const [base, setBase] = useState(contents);
   const [draft, setDraft] = useState(contents);
+  const editorRef = useRef<CodeMirrorEditorHandle>(null);
   const [editing, setEditing] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string>();
@@ -134,11 +151,11 @@ export default function CodeView({
   const [cursor, setCursor] = useState("Ln 1, Col 1");
   const [wrap, setWrap] = useState(false);
   const language = languageForPath(path);
-  const dirty = draft !== base;
 
   useEffect(() => {
     setBase(contents);
     setDraft(contents);
+    setDirty(false);
     setConflict(false);
     setError(undefined);
     setNotice(undefined);
@@ -171,13 +188,17 @@ export default function CodeView({
 
   const save = async () => {
     if (!dirty || saving || conflict || readOnly) return;
+    const next = editorRef.current?.getValue() ?? draft;
     setSaving(true);
     setError(undefined);
     setNotice(undefined);
     try {
-      await filesystem.writeFileIfUnchanged(path, draft, base, true);
-      setBase(draft);
-      onSaved(draft);
+      await filesystem.writeFileIfUnchanged(path, next, base, true);
+      setBase(next);
+      setDraft(next);
+      setDirty(false);
+      editorRef.current?.markClean();
+      onSaved(next);
       setNotice("Saved.");
       recordUltraliteOutcome("editor", "file_save");
     } catch (err: any) {
@@ -196,26 +217,6 @@ export default function CodeView({
     }
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      void save();
-      return;
-    }
-    if (event.key === "Tab") {
-      event.preventDefault();
-      const input = event.currentTarget;
-      const start = input.selectionStart;
-      const end = input.selectionEnd;
-      const next = `${draft.slice(0, start)}  ${draft.slice(end)}`;
-      setDraft(next);
-      requestAnimationFrame(() => {
-        input.selectionStart = input.selectionEnd = start + 2;
-        setCursor(position(next, start + 2));
-      });
-    }
-  };
-
   return (
     <div>
       <div className="ul-file-view-header">
@@ -223,7 +224,14 @@ export default function CodeView({
           {!readOnly ? (
             <button
               className="ul-button ul-button-secondary"
-              onClick={() => setEditing((value) => !value)}
+              onClick={() => {
+                if (editing) {
+                  setDraft(editorRef.current?.getValue() ?? draft);
+                  setEditing(false);
+                } else {
+                  setEditing(true);
+                }
+              }}
               type="button"
             >
               {editing ? "Preview" : "Edit"}
@@ -247,7 +255,9 @@ export default function CodeView({
                     !dirty ||
                     window.confirm("Revert your unsaved changes?")
                   ) {
+                    editorRef.current?.replaceValue(base);
                     setDraft(base);
+                    setDirty(false);
                     setConflict(false);
                     setError(undefined);
                   }
@@ -258,16 +268,14 @@ export default function CodeView({
               </button>
             </>
           ) : null}
-          {!editing ? (
-            <label className="ul-check-label">
-              <input
-                checked={wrap}
-                onChange={(event) => setWrap(event.target.checked)}
-                type="checkbox"
-              />
-              Wrap lines
-            </label>
-          ) : null}
+          <label className="ul-check-label">
+            <input
+              checked={wrap}
+              onChange={(event) => setWrap(event.target.checked)}
+              type="checkbox"
+            />
+            Wrap lines
+          </label>
         </div>
         <span aria-live="polite" className="ul-editor-status">
           {editing ? cursor : language || "plain text"}
@@ -276,31 +284,37 @@ export default function CodeView({
       </div>
       {readOnly ? (
         <InlineAlert kind="info">
-          This file is read-only in constrained CoCalc because you are a viewer
-          or it exceeds the 2 MiB editing limit.
+          This file is read-only in Essential CoCalc because you are a viewer or
+          it exceeds the 2 MiB editing limit.
         </InlineAlert>
       ) : null}
       {notice ? <InlineAlert>{notice}</InlineAlert> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {editing ? (
-        <textarea
-          aria-label={`Edit ${path.split("/").pop() || "file"}`}
-          className="ul-editor"
-          onChange={(event) => {
-            setDraft(event.target.value);
-            setNotice(undefined);
-          }}
-          onClick={(event) =>
-            setCursor(position(draft, event.currentTarget.selectionStart))
-          }
-          onKeyDown={handleKeyDown}
-          onKeyUp={(event) =>
-            setCursor(position(draft, event.currentTarget.selectionStart))
-          }
-          readOnly={readOnly}
-          spellCheck={false}
-          value={draft}
-        />
+        <>
+          <Suspense fallback={<LoadingState label="Loading code editor" />}>
+            <LazyCodeMirrorEditor
+              ariaLabel={`Edit ${path.split("/").pop() || "file"}`}
+              initialValue={draft}
+              key={path}
+              language={language}
+              onDirtyChange={(nextDirty) => {
+                setDirty(nextDirty);
+                setNotice(undefined);
+              }}
+              onCursorChange={setCursor}
+              onLanguageError={setError}
+              onSave={() => void save()}
+              path={path}
+              ref={editorRef}
+              wrap={wrap}
+            />
+          </Suspense>
+          <p className="ul-editor-help">
+            Search with Ctrl-F or Command-F. Press Escape, then Tab, to move
+            focus out of the editor.
+          </p>
+        </>
       ) : (
         <HighlightedCode contents={draft} language={language} wrap={wrap} />
       )}

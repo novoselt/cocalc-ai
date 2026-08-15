@@ -60,6 +60,12 @@ export interface ChatSnapshot {
   selected_thread_id?: string;
   threads: ProjectedChatThread[];
   messages: ProjectedChatMessage[];
+  message_window?: {
+    limit: number;
+    loaded: number;
+    has_older: boolean;
+    omitted: number;
+  };
 }
 
 export interface HeadlessChatClient {
@@ -72,6 +78,7 @@ export interface HeadlessChatClient {
     text: string;
   }): Promise<{ message_id: string; thread_id: string }>;
   interrupt(thread_id: string): Promise<void>;
+  loadOlderMessages?(limit: number): Promise<void>;
   reconnect(reason: string): Promise<void>;
   close(): Promise<void>;
 }

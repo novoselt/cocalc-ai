@@ -33,7 +33,19 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
       ) : (
         <div className="ul-topbar-title">Projects</div>
       )}
-      <span className="ul-mode">Constrained</span>
+      <span className="ul-mode">Essential</span>
+      <a
+        aria-label="Notifications"
+        className="ul-topbar-link"
+        href="#/notifications"
+        onClick={(event) => {
+          event.preventDefault();
+          navigate({ kind: "notifications" });
+        }}
+      >
+        <UltraliteIcon name="bell" size={16} />
+        Notifications
+      </a>
       <a className="ul-topbar-link" data-ul-full-cocalc href={siteUrl("app")}>
         Full CoCalc
         <UltraliteIcon name="external" size={15} />
@@ -44,7 +56,7 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
 
 const NAV: Array<{
   icon: UltraliteIconName;
-  kind: "agents" | "apps" | "cli" | "files" | "terminal" | "vms";
+  kind: "agents" | "apps" | "cli" | "files" | "settings" | "terminal" | "vms";
   label: string;
 }> = [
   { icon: "folder", kind: "files", label: "Files" },
@@ -53,6 +65,7 @@ const NAV: Array<{
   { icon: "server", kind: "vms", label: "VMs" },
   { icon: "apps", kind: "apps", label: "Apps" },
   { icon: "code", kind: "cli", label: "CLI" },
+  { icon: "settings", kind: "settings", label: "Settings" },
 ];
 
 export function ProjectRail({

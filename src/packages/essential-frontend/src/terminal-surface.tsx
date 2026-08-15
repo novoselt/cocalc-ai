@@ -34,6 +34,7 @@ type ConnectionState =
   | "exited";
 
 const SPAWN_TIMEOUT_MS = 15_000;
+const DEFAULT_HISTORY_LIMIT = 128 * 1024;
 const MAX_AUTO_RESPONSE_BUFFER = 4_096;
 const MOBILE_TERMINAL_KEYS = [
   { data: "\u001b", label: "Esc", name: "Escape" },
@@ -165,6 +166,9 @@ export default function TerminalSurface({
   const [projectRunning, setProjectRunning] = useState(false);
   const [progress, setProgress] = useState<string>();
   const [error, setError] = useState<string>();
+  const [historyOmitted, setHistoryOmitted] = useState(false);
+  const autoConnectAttempted = useRef(false);
+  const connectTerminalRef = useRef<() => Promise<void>>(async () => {});
 
   const sessionId = `ultralite-${session.accountId}`;
 
@@ -285,6 +289,7 @@ export default function TerminalSurface({
 
   useEffect(() => {
     let active = true;
+    autoConnectAttempted.current = false;
     const check = async () => {
       markUltraliteBackend("terminal", "start");
       try {
@@ -309,12 +314,24 @@ export default function TerminalSurface({
     };
   }, [project.project_id, session]);
 
+  useEffect(() => {
+    if (
+      projectRunning &&
+      connection === "idle" &&
+      !autoConnectAttempted.current
+    ) {
+      autoConnectAttempted.current = true;
+      void connectTerminalRef.current();
+    }
+  }, [connection, projectRunning]);
+
   const disconnect = () => {
     connectGeneration.current += 1;
     ptyRef.current?.close();
     ptyRef.current = undefined;
     setConnection("idle");
     setProgress(undefined);
+    setHistoryOmitted(false);
   };
 
   const sendMobileKey = (data: string) => {
@@ -439,6 +456,7 @@ export default function TerminalSurface({
           TERM: "xterm-256color",
         },
         id: sessionId,
+        historyLimit: DEFAULT_HISTORY_LIMIT,
         timeout: SPAWN_TIMEOUT_MS,
       });
       if (generation !== connectGeneration.current) {
@@ -448,8 +466,15 @@ export default function TerminalSurface({
       }
       if (history) {
         xtermRef.current?.reset();
+        if (terminal.historyOmitted) {
+          writeTerminalOutput(
+            "\r\n[Older terminal output omitted. Use Load more history to retrieve it.]\r\n",
+            true,
+          );
+        }
         writeTerminalOutput(history, true);
       }
+      setHistoryOmitted(terminal.historyOmitted);
       try {
         fitRef.current?.fit();
       } catch {
@@ -477,6 +502,31 @@ export default function TerminalSurface({
       setError(err instanceof Error ? err.message : `${err}`);
     }
   };
+  connectTerminalRef.current = connectTerminal;
+
+  const loadFullHistory = async () => {
+    const terminal = ptyRef.current;
+    if (!terminal || terminal.socket.state !== "ready") return;
+    setError(undefined);
+    setProgress("Loading retained terminal history...");
+    try {
+      const history = await terminal.history(sessionId);
+      xtermRef.current?.reset();
+      if (history) writeTerminalOutput(history, true);
+      setHistoryOmitted(false);
+      setProgress(undefined);
+      xtermRef.current?.focus();
+    } catch (err) {
+      setProgress(undefined);
+      setError(err instanceof Error ? err.message : `${err}`);
+    }
+  };
+
+  const resetDisplay = () => {
+    xtermRef.current?.reset();
+    autoResponseBuffer.current = "";
+    xtermRef.current?.focus();
+  };
 
   const busy =
     connection === "checking" ||
@@ -490,13 +540,31 @@ export default function TerminalSurface({
         actions={
           <>
             {connected ? (
-              <button
-                className="ul-button ul-button-secondary"
-                onClick={disconnect}
-                type="button"
-              >
-                Disconnect
-              </button>
+              <>
+                {historyOmitted ? (
+                  <button
+                    className="ul-button ul-button-secondary"
+                    onClick={() => void loadFullHistory()}
+                    type="button"
+                  >
+                    Load more history
+                  </button>
+                ) : null}
+                <button
+                  className="ul-button ul-button-secondary"
+                  onClick={resetDisplay}
+                  type="button"
+                >
+                  Reset display
+                </button>
+                <button
+                  className="ul-button ul-button-secondary"
+                  onClick={disconnect}
+                  type="button"
+                >
+                  Disconnect
+                </button>
+              </>
             ) : (
               <button
                 className="ul-button"
@@ -529,6 +597,12 @@ export default function TerminalSurface({
         <InlineAlert>
           This project is stopped. Viewing this page does not start compute;
           connecting will ask before starting the project.
+        </InlineAlert>
+      ) : null}
+      {projectRunning &&
+      (connection === "checking" || connection === "idle") ? (
+        <InlineAlert>
+          Connecting to the retained project terminal...
         </InlineAlert>
       ) : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}

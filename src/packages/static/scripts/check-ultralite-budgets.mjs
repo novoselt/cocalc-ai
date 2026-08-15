@@ -54,11 +54,17 @@ const vms = findNamedGroup("ultralite-vms");
 const apps = findNamedGroup("ultralite-apps");
 const cli = findNamedGroup("ultralite-cli");
 const terminal = findNamedGroup("ultralite-terminal");
+const notifications = findNamedGroup("ultralite-notifications");
+const settings = findNamedGroup("ultralite-settings");
+const codeMirror = findNamedGroup("ultralite-codemirror");
+const katexComponent = findNamedGroup("ultralite-katex-component");
+const katex = findNamedGroup("ultralite-katex");
 const prismLanguages = [
   "bash",
   "c",
   "cpp",
   "css",
+  "go",
   "javascript",
   "json",
   "latex",
@@ -69,7 +75,57 @@ const prismLanguages = [
   "sql",
   "typescript",
   "yaml",
-].flatMap((language) => findNamedGroup(`ultralite-prism-${language}`));
+].map((language) => ({
+  language,
+  chunks: findNamedGroup(`ultralite-prism-${language}`),
+}));
+const codeMirrorLanguages = [
+  "bash",
+  "cpp",
+  "css",
+  "go",
+  "html",
+  "javascript",
+  "json",
+  "latex",
+  "markdown",
+  "python",
+  "rust",
+  "sql",
+  "yaml",
+].map((language) => ({
+  language,
+  chunks: findNamedGroup(`ultralite-cm-${language}`),
+}));
+
+function largestOptionalGroup(groups) {
+  return groups.reduce(
+    (largest, group) => {
+      const bytes = assetSummary(group.chunks).brotliBytes;
+      return bytes > largest.bytes ? { ...group, bytes } : largest;
+    },
+    { language: "none", chunks: [], bytes: 0 },
+  );
+}
+
+const largestCodeMirrorLanguage = largestOptionalGroup(codeMirrorLanguages);
+const largestPrismLanguage = largestOptionalGroup(prismLanguages);
+// Rspack associates the lazy CM6 shared core with the parent code-view chunk
+// group even though React does not request it until <LazyCodeMirrorEditor> is
+// rendered. Keep it out of the read-only route while retaining it in the
+// editor route below.
+const readOnlyCode = code.filter(
+  (chunkName) =>
+    !Object.keys(chunks[chunkName]?.importers ?? {}).some((moduleName) =>
+      moduleName.includes("node_modules/.pnpm/@codemirror+"),
+    ),
+);
+console.log(
+  `ultralite editor largest language: ${largestCodeMirrorLanguage.language} (${(largestCodeMirrorLanguage.bytes / KiB).toFixed(1)} KiB Brotli)`,
+);
+console.log(
+  `ultralite read-only largest language: ${largestPrismLanguage.language} (${(largestPrismLanguage.bytes / KiB).toFixed(1)} KiB Brotli)`,
+);
 
 const surfaces = [
   { label: "shell", chunks: initial, max: 75 * KiB },
@@ -81,15 +137,31 @@ const surfaces = [
   },
   {
     label: "syntax-highlighted code",
-    // Conservatively count every optional grammar even though a browser only
-    // loads the grammar for the displayed file.
-    chunks: [...initial, ...workspace, ...files, ...code, ...prismLanguages],
+    // A browser requests only the grammar for the displayed file. Count the
+    // largest parser rather than summing mutually exclusive language chunks.
+    chunks: [
+      ...initial,
+      ...workspace,
+      ...files,
+      ...readOnlyCode,
+      ...largestPrismLanguage.chunks,
+    ],
     max: 450 * KiB,
   },
   {
     label: "text and code editor",
-    chunks: [...initial, ...workspace, ...files, ...code, ...prismLanguages],
-    max: 500 * KiB,
+    // Only the parser for the selected file is requested. Count the largest
+    // parser instead of summing mutually exclusive language chunks.
+    chunks: [
+      ...initial,
+      ...workspace,
+      ...files,
+      ...code,
+      ...largestPrismLanguage.chunks,
+      ...codeMirror,
+      ...largestCodeMirrorLanguage.chunks,
+    ],
+    max: 650 * KiB,
   },
   {
     label: "executable Jupyter",
@@ -100,6 +172,11 @@ const surfaces = [
     label: "Codex chat",
     chunks: [...initial, ...workspace, ...chat],
     max: 550 * KiB,
+  },
+  {
+    label: "Codex chat with mathematics",
+    chunks: [...initial, ...workspace, ...chat, ...katexComponent, ...katex],
+    max: 700 * KiB,
   },
   {
     label: "VMs",
@@ -121,10 +198,19 @@ const surfaces = [
     chunks: [...initial, ...workspace, ...terminal],
     max: 500 * KiB,
   },
+  {
+    label: "notifications",
+    chunks: [...initial, ...notifications],
+    max: 475 * KiB,
+  },
+  {
+    label: "minimal project settings",
+    chunks: [...initial, ...workspace, ...settings],
+    max: 425 * KiB,
+  },
 ];
 
 const forbidden = [
-  "frontend/",
   "node_modules/.pnpm/antd@",
   "node_modules/.pnpm/@ant-design/",
   "node_modules/.pnpm/jquery@",
@@ -155,7 +241,9 @@ for (const surface of surfaces) {
   }
   for (const chunkName of new Set(surface.chunks)) {
     for (const moduleName of Object.keys(chunks[chunkName]?.importers ?? {})) {
-      const match = forbidden.find((pattern) => moduleName.includes(pattern));
+      const match = moduleName.startsWith("frontend/")
+        ? "frontend/"
+        : forbidden.find((pattern) => moduleName.includes(pattern));
       if (match) {
         failed = true;
         console.error(

@@ -10,6 +10,7 @@ export type UltraliteLanguage =
   | "c"
   | "cpp"
   | "css"
+  | "go"
   | "javascript"
   | "json"
   | "latex"
@@ -33,6 +34,7 @@ const EXTENSIONS: Record<string, UltraliteLanguage> = {
   hpp: "cpp",
   htm: "markup",
   html: "markup",
+  go: "go",
   js: "javascript",
   json: "json",
   jsx: "javascript",
@@ -105,6 +107,17 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
           },
           reject,
           "ultralite-prism-css",
+        );
+        break;
+      case "go":
+        require.ensure(
+          [],
+          () => {
+            require("prismjs/components/prism-go");
+            resolve();
+          },
+          reject,
+          "ultralite-prism-go",
         );
         break;
       case "javascript":
