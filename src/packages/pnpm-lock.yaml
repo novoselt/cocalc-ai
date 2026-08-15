@@ -1920,6 +1920,12 @@ importers:
       '@cocalc/cdn':
         specifier: workspace:*
         version: link:../cdn
+      '@cocalc/chat-client':
+        specifier: workspace:*
+        version: link:../chat-client
+      '@cocalc/conat':
+        specifier: workspace:*
+        version: link:../conat
       '@cocalc/docs':
         specifier: workspace:*
         version: link:../docs

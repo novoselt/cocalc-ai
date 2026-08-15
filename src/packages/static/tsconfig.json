@@ -13,6 +13,8 @@
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "src/**/*.jsx"],
   "references": [
     { "path": "../backend" },
+    { "path": "../chat-client" },
+    { "path": "../conat" },
     { "path": "../frontend" },
     { "path": "../util" }
   ],

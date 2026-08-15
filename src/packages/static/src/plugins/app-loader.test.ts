@@ -19,3 +19,10 @@ test("identifies each generated shell independently", () => {
     'data-cocalc-entry="public-viewer"',
   );
 });
+
+test("renders the independent ultralite shell", () => {
+  const html = renderAppTemplate("ultralite");
+  expect(html).toContain('id="cocalc-ultralite-root"');
+  expect(html).toContain('data-cocalc-entry="ultralite"');
+  expect(html).not.toContain("cocalc-public-head-placeholder");
+});

@@ -1,0 +1,37 @@
+/*
+ * This file is part of CoCalc: Copyright (c) 2026 Sagemath, Inc.
+ * License: MS-RSL - see LICENSE.md for details
+ */
+
+export function getAppBasePath(pathname = window.location.pathname): string {
+  const marker = "/static/";
+  const index = pathname.indexOf(marker);
+  if (index < 0) return "";
+  return pathname.slice(0, index).replace(/\/$/, "");
+}
+
+export function siteUrl(path: string, basePath = getAppBasePath()): string {
+  const relative = path.replace(/^\/+/, "");
+  return `${basePath}/${relative}`;
+}
+
+export function authBootstrapUrl(basePath = getAppBasePath()): string {
+  return siteUrl("api/v2/auth/bootstrap", basePath);
+}
+
+export function fullProjectUrl({
+  projectId,
+  path,
+  basePath = getAppBasePath(),
+}: {
+  projectId: string;
+  path?: string;
+  basePath?: string;
+}): string {
+  const root = siteUrl(`projects/${projectId}/files`, basePath);
+  if (!path) return `${root}/`;
+  const relative = path.replace(/^\/home\/user\/?/, "");
+  return relative
+    ? `${root}/${relative.split("/").map(encodeURIComponent).join("/")}`
+    : `${root}/`;
+}

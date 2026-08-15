@@ -503,6 +503,13 @@ async function initStatic(router) {
     }),
   );
   router.use(
+    "/static/ultralite.html",
+    staticCompression,
+    express.static(join(staticPath, "ultralite.html"), {
+      setHeaders: cacheShortTerm,
+    }),
+  );
+  router.use(
     [
       "/static/public-viewer.html",
       "/static/public-viewer-md.html",
