@@ -44,9 +44,26 @@ if (!initial?.length) throw new Error("missing initial ultralite chunk group");
 const projects = findNamedGroup("ultralite-projects");
 const workspace = findNamedGroup("ultralite-workspace");
 const files = findNamedGroup("ultralite-files");
+const code = findNamedGroup("ultralite-code");
 const chat = findNamedGroup("ultralite-chat");
 const vms = findNamedGroup("ultralite-vms");
 const apps = findNamedGroup("ultralite-apps");
+const prismLanguages = [
+  "bash",
+  "c",
+  "cpp",
+  "css",
+  "javascript",
+  "json",
+  "latex",
+  "markdown",
+  "markup",
+  "python",
+  "rust",
+  "sql",
+  "typescript",
+  "yaml",
+].flatMap((language) => findNamedGroup(`ultralite-prism-${language}`));
 
 const surfaces = [
   { label: "shell", chunks: initial, max: 75 * KiB },
@@ -55,6 +72,18 @@ const surfaces = [
     label: "files and read-only Jupyter",
     chunks: [...initial, ...workspace, ...files],
     max: 425 * KiB,
+  },
+  {
+    label: "syntax-highlighted code",
+    // Conservatively count every optional grammar even though a browser only
+    // loads the grammar for the displayed file.
+    chunks: [...initial, ...workspace, ...files, ...code, ...prismLanguages],
+    max: 450 * KiB,
+  },
+  {
+    label: "text and code editor",
+    chunks: [...initial, ...workspace, ...files, ...code, ...prismLanguages],
+    max: 500 * KiB,
   },
   {
     label: "Codex chat",

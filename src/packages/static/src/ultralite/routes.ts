@@ -17,6 +17,8 @@ export type UltraliteRoute =
       threadId: string;
     };
 
+export const ULTRALITE_BEFORE_NAVIGATE = "cocalc-ultralite-before-navigate";
+
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -100,5 +102,10 @@ export function routeHash(route: UltraliteRoute): string {
 }
 
 export function navigate(route: UltraliteRoute): void {
+  const event = new CustomEvent(ULTRALITE_BEFORE_NAVIGATE, {
+    cancelable: true,
+    detail: { route },
+  });
+  if (!window.dispatchEvent(event)) return;
   window.location.hash = routeHash(route);
 }

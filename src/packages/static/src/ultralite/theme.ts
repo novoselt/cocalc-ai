@@ -24,6 +24,12 @@ export const ultraliteTheme = {
   "--ul-rail": COLORS.GRAY_LLL,
   "--ul-success": COLORS.ANTD_GREEN_D,
   "--ul-topbar": COLORS.BLUE_D,
+  "--ul-token-comment": COLORS.GRAY_M,
+  "--ul-token-function": COLORS.BLUE_DDD,
+  "--ul-token-keyword": COLORS.BS_RED,
+  "--ul-token-number": COLORS.BLUE_DD,
+  "--ul-token-string": COLORS.ANTD_GREEN_D,
+  "--ul-token-warning": COLORS.YELL_D,
   "--ul-warning": COLORS.YELL_D,
   "--ul-warning-soft": COLORS.YELL_LLL,
 } as CSSProperties;

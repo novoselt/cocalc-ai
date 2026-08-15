@@ -6,7 +6,7 @@
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import type { Files } from "@cocalc/conat/files/listing";
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import NotebookView, {
   parseNotebook,
   type NotebookDocument,
@@ -14,11 +14,30 @@ import NotebookView, {
 import { navigate, normalizeProjectPath, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
-import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
+import {
+  ChunkErrorBoundary,
+  EmptyState,
+  InlineAlert,
+  LoadingState,
+  SurfaceHeader,
+} from "./ui";
 import { UltraliteIcon } from "./icons";
 
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
+const MAX_EDIT_BYTES = 2 * 1024 * 1024;
 const MAX_NOTEBOOK_BYTES = 15 * 1024 * 1024;
+
+const CodeView = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./code-view")),
+        reject,
+        "ultralite-code",
+      );
+    }),
+);
 
 function childPath(parent: string, name: string): string {
   return normalizeProjectPath(`${parent.replace(/\/$/, "")}/${name}`);
@@ -186,6 +205,8 @@ export default function FileSurface({
   const [truncated, setTruncated] = useState(false);
   const [contents, setContents] = useState<string>();
   const [notebook, setNotebook] = useState<NotebookDocument>();
+  const [editable, setEditable] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
@@ -218,6 +239,8 @@ export default function FileSurface({
     setFiles(undefined);
     setContents(undefined);
     setNotebook(undefined);
+    setEditable(false);
+    setDirty(false);
     void (async () => {
       if (route.kind === "files") {
         const listing = await filesystem.getListing(route.path);
@@ -245,7 +268,10 @@ export default function FileSurface({
       }
       if (!cancelled) {
         if (notebookFile) setNotebook(parseNotebook(text));
-        else setContents(text);
+        else {
+          setContents(text);
+          setEditable(stats.size <= MAX_EDIT_BYTES);
+        }
       }
     })()
       .catch((err) => {
@@ -272,6 +298,14 @@ export default function FileSurface({
     URL.revokeObjectURL(url);
   };
 
+  const refreshFile = () => {
+    if (dirty && !window.confirm("Discard unsaved changes and reload?")) return;
+    setRefresh((value) => value + 1);
+  };
+
+  const group = project.users_summary?.[session.accountId]?.group;
+  const canWrite = group === "owner" || group === "collaborator";
+
   return (
     <main className="ul-page" id="main-content">
       <SurfaceHeader
@@ -279,7 +313,7 @@ export default function FileSurface({
           <>
             <button
               className="ul-icon-button"
-              onClick={() => setRefresh((value) => value + 1)}
+              onClick={refreshFile}
               type="button"
             >
               <UltraliteIcon name="refresh" /> Refresh
@@ -329,9 +363,18 @@ export default function FileSurface({
       ) : notebook ? (
         <NotebookView notebook={notebook} />
       ) : contents != null ? (
-        <pre className="ul-text-view">
-          <code>{contents}</code>
-        </pre>
+        <ChunkErrorBoundary label="Code viewer">
+          <Suspense fallback={<LoadingState label="Loading code viewer" />}>
+            <CodeView
+              contents={contents}
+              filesystem={filesystem!}
+              onDirtyChange={setDirty}
+              onSaved={setContents}
+              path={route.path}
+              readOnly={!editable || !canWrite}
+            />
+          </Suspense>
+        </ChunkErrorBoundary>
       ) : null}
     </main>
   );

@@ -12,7 +12,15 @@ import { UltraliteIcon, type UltraliteIconName } from "./icons";
 export function TopBar({ projectTitle }: { projectTitle?: string }) {
   return (
     <header className="ul-topbar">
-      <a aria-label="CoCalc projects" className="ul-brand" href="#/projects">
+      <a
+        aria-label="CoCalc projects"
+        className="ul-brand"
+        href="#/projects"
+        onClick={(event) => {
+          event.preventDefault();
+          navigate({ kind: "projects" });
+        }}
+      >
         <span aria-hidden="true" className="ul-brand-mark">
           CoCalc
         </span>
