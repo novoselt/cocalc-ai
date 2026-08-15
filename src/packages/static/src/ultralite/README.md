@@ -22,7 +22,8 @@ The implemented client provides:
 - explicit status and launch controls for JupyterLab and VS Code; and
 - a separately loaded xterm.js terminal with an explicit project-start
   boundary, persistent per-account shell session, resize, reconnect, history,
-  and direct project-host transport; and
+  direct project-host transport, and compact touch controls for Paste, Esc,
+  Tab, Control+C, backtick, and arrow keys; and
 - a compact CoCalc CLI discovery surface with copyable project-context
   commands.
 
@@ -71,16 +72,16 @@ The 2026-08-15 implementation measurement is:
 
 | Surface                 |        Raw |      Gzip |    Brotli | Requests |  Hard limit |
 | ----------------------- | ---------: | --------: | --------: | -------: | ----------: |
-| Shell                   |  235.2 KiB |  73.9 KiB |  69.8 KiB |        1 |      75 KiB |
-| Projects                |  241.7 KiB |  76.6 KiB |  72.3 KiB |        2 |     400 KiB |
-| Files/read-only Jupyter | 1669.6 KiB | 441.2 KiB | 404.2 KiB |       11 |     425 KiB |
-| Syntax code/editor      | 1726.1 KiB | 465.4 KiB | 427.0 KiB |       27 | 450/500 KiB |
-| Executable Jupyter      | 1713.0 KiB | 456.0 KiB | 418.6 KiB |       13 |     650 KiB |
-| Codex                   | 1940.6 KiB | 512.9 KiB | 472.5 KiB |       15 |     550 KiB |
-| VMs                     | 1662.5 KiB | 439.1 KiB | 402.2 KiB |       11 |     450 KiB |
-| Apps                    | 1663.5 KiB | 439.1 KiB | 402.2 KiB |       11 |     475 KiB |
-| CLI                     | 1660.3 KiB | 438.3 KiB | 401.5 KiB |       11 |     425 KiB |
-| Terminal                | 2020.0 KiB | 527.2 KiB | 485.3 KiB |       13 |     500 KiB |
+| Shell                   |  234.7 KiB |  73.8 KiB |  69.7 KiB |        1 |      75 KiB |
+| Projects                |  241.1 KiB |  76.5 KiB |  72.2 KiB |        2 |     400 KiB |
+| Files/read-only Jupyter | 1669.1 KiB | 441.0 KiB | 404.1 KiB |       11 |     425 KiB |
+| Syntax code/editor      | 1725.6 KiB | 465.3 KiB | 426.9 KiB |       27 | 450/500 KiB |
+| Executable Jupyter      | 1712.5 KiB | 455.9 KiB | 418.5 KiB |       13 |     650 KiB |
+| Codex                   | 1940.1 KiB | 512.7 KiB | 472.4 KiB |       15 |     550 KiB |
+| VMs                     | 1662.0 KiB | 439.0 KiB | 402.1 KiB |       11 |     450 KiB |
+| Apps                    | 1662.9 KiB | 439.0 KiB | 402.1 KiB |       11 |     475 KiB |
+| CLI                     | 1659.8 KiB | 438.2 KiB | 401.4 KiB |       11 |     425 KiB |
+| Terminal                | 2022.6 KiB | 528.0 KiB | 486.0 KiB |       13 |     500 KiB |
 
 The canonical Slow 4G harness uses 1.4 Mbps down, 750 Kbps up, 150 ms added
 latency, cold and warm cache runs, and optional 4x CPU slowdown:

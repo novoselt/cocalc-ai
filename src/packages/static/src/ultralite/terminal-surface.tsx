@@ -14,6 +14,7 @@ import { Terminal as XtermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { UltraliteSession } from "./session";
+import "./terminal-surface.css";
 import {
   markUltraliteBackend,
   recordUltraliteFailure,
@@ -34,6 +35,16 @@ type ConnectionState =
 
 const SPAWN_TIMEOUT_MS = 15_000;
 const MAX_AUTO_RESPONSE_BUFFER = 4_096;
+const MOBILE_TERMINAL_KEYS = [
+  { data: "\u001b", label: "Esc", name: "Escape" },
+  { data: "\t", label: "Tab", name: "Tab" },
+  { data: "\u0003", label: "^C", name: "Control+C" },
+  { data: "`", label: "`", name: "Backtick" },
+  { data: "\u001b[D", label: "\u2190", name: "Left arrow" },
+  { data: "\u001b[A", label: "\u2191", name: "Up arrow" },
+  { data: "\u001b[B", label: "\u2193", name: "Down arrow" },
+  { data: "\u001b[C", label: "\u2192", name: "Right arrow" },
+];
 
 export function extractTerminalAutoResponses(buffer: string): {
   remaining: string;
@@ -145,6 +156,7 @@ export default function TerminalSurface({
   const connectGeneration = useRef(0);
   const autoResponseBuffer = useRef("");
   const historyReplayDepth = useRef(0);
+  const programmaticUserInputDepth = useRef(0);
   const renderingOutput = useRef(0);
   const resizeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -214,7 +226,10 @@ export default function TerminalSurface({
     const observer = new ResizeObserver(fitAndResize);
     observer.observe(host);
     const input = xterm.onData((data) => {
-      if (renderingOutput.current === 0) {
+      if (
+        renderingOutput.current === 0 ||
+        programmaticUserInputDepth.current > 0
+      ) {
         autoResponseBuffer.current = "";
         writeTerminalInput(ptyRef.current, data, "user");
         return;
@@ -261,6 +276,7 @@ export default function TerminalSurface({
       xterm.dispose();
       autoResponseBuffer.current = "";
       historyReplayDepth.current = 0;
+      programmaticUserInputDepth.current = 0;
       renderingOutput.current = 0;
       xtermRef.current = undefined;
       fitRef.current = undefined;
@@ -299,6 +315,35 @@ export default function TerminalSurface({
     ptyRef.current = undefined;
     setConnection("idle");
     setProgress(undefined);
+  };
+
+  const sendMobileKey = (data: string) => {
+    writeTerminalInput(ptyRef.current, data, "user");
+    xtermRef.current?.focus();
+  };
+
+  const pasteFromClipboard = async () => {
+    const xterm = xtermRef.current;
+    if (!xterm || !connected) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) return;
+      programmaticUserInputDepth.current += 1;
+      try {
+        xterm.paste(text);
+      } finally {
+        programmaticUserInputDepth.current = Math.max(
+          0,
+          programmaticUserInputDepth.current - 1,
+        );
+      }
+      xterm.focus();
+    } catch {
+      xterm.focus();
+      setError(
+        "Clipboard access was denied. Focus the terminal and use the system Paste command instead.",
+      );
+    }
   };
 
   const connectTerminal = async () => {
@@ -494,6 +539,34 @@ export default function TerminalSurface({
         {connectionLabel(connection)}. The shell session is retained when this
         browser disconnects.
       </div>
+      {connected ? (
+        <div
+          aria-label="Mobile terminal controls"
+          className="ul-terminal-mobile-toolbar"
+          onTouchStart={(event) => event.stopPropagation()}
+          role="toolbar"
+        >
+          <button
+            aria-label="Paste"
+            onClick={() => void pasteFromClipboard()}
+            title="Paste"
+            type="button"
+          >
+            Paste
+          </button>
+          {MOBILE_TERMINAL_KEYS.map(({ data, label, name }) => (
+            <button
+              aria-label={name}
+              key={name}
+              onClick={() => sendMobileKey(data)}
+              title={name}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div
         aria-label="Project terminal"
         className="ul-terminal-host"

@@ -21,6 +21,9 @@ jest.mock("@xterm/xterm", () => ({
       host.dataset.xtermOpened = "true";
     }
     reset() {}
+    paste(data: string) {
+      mockXtermOnData?.(data);
+    }
     write(_data: string, callback?: () => void) {
       callback?.();
     }
@@ -149,6 +152,9 @@ test("viewing Terminal never starts project compute or creates a PTY", async () 
   expect(
     screen.getByRole("button", { name: "Connect terminal" }),
   ).toBeEnabled();
+  expect(
+    screen.queryByRole("toolbar", { name: "Mobile terminal controls" }),
+  ).not.toBeInTheDocument();
   expect(ensureProjectRunning).not.toHaveBeenCalled();
   expect(openProjectHost).not.toHaveBeenCalled();
   expect(mockTerminalClient).not.toHaveBeenCalled();
@@ -182,6 +188,9 @@ test("an approved connection starts compute and uses the direct terminal client"
   fireEvent.click(screen.getByRole("button", { name: "Connect terminal" }));
 
   await screen.findByRole("button", { name: "Disconnect" });
+  expect(
+    screen.getByRole("toolbar", { name: "Mobile terminal controls" }),
+  ).toBeInTheDocument();
   expect(ensureProjectRunning).toHaveBeenCalledWith(
     project.project_id,
     expect.any(Function),
@@ -214,6 +223,11 @@ test("an approved connection starts compute and uses the direct terminal client"
     [{ data: "x", kind: "user" }],
     [{ data: "\u001b[1;2R", kind: "auto" }],
   ]);
+  fireEvent.click(screen.getByRole("button", { name: "Control+C" }));
+  expect(terminal.socket.write).toHaveBeenLastCalledWith({
+    data: "\u0003",
+    kind: "user",
+  });
   writeTerminalInput(terminal, "ls\r");
   expect(terminal.socket.write).toHaveBeenCalledWith({
     data: "ls\r",
