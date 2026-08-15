@@ -23,6 +23,10 @@ import {
 } from "./notebook-view";
 import { InlineAlert, LoadingState } from "./ui";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
+import {
+  recordUltraliteOutcome,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 
 const MAX_OUTPUT_TEXT = 100_000;
 const MAX_OUTPUT_IMAGE = 7 * 1024 * 1024;
@@ -181,6 +185,8 @@ export default function NotebookEditor({
     [],
   );
 
+  useEffect(() => recordUltraliteSurfaceReady("notebook_execute"), []);
+
   const updateCell = (index: number, patch: Partial<NotebookCell>) => {
     setNotebook((current) => ({
       ...current,
@@ -210,8 +216,12 @@ export default function NotebookEditor({
     try {
       await saveCandidate(normalizeNotebook(notebook));
       setNotice("Notebook saved.");
+      recordUltraliteOutcome("notebook_execute", "file_save");
     } catch (err: any) {
-      if (err?.code === "ETAG_MISMATCH") setConflict(true);
+      if (err?.code === "ETAG_MISMATCH") {
+        setConflict(true);
+        recordUltraliteOutcome("notebook_execute", "save_conflict");
+      }
       setError(
         err?.code === "ETAG_MISMATCH"
           ? "This notebook changed on the server. Your draft was not written; reload it or resolve the conflict in full CoCalc."
@@ -294,6 +304,7 @@ export default function NotebookEditor({
       const syncPath = syncdbPath(path);
       setKernelStatus("starting kernel");
       await opened.api.jupyter.start(syncPath);
+      recordUltraliteSurfaceReady("kernel");
       await opened.api.jupyter.set({ path: syncPath, ipynb: candidate });
       const client = jupyterClient({
         client: opened.lease.client,
@@ -328,8 +339,12 @@ export default function NotebookEditor({
       setDirty(false);
       setKernelStatus("idle");
       setNotice("Execution finished and notebook outputs were saved.");
+      recordUltraliteOutcome("notebook_execute", "notebook_execute");
     } catch (err: any) {
-      if (err?.code === "ETAG_MISMATCH") setConflict(true);
+      if (err?.code === "ETAG_MISMATCH") {
+        setConflict(true);
+        recordUltraliteOutcome("notebook_execute", "save_conflict");
+      }
       setKernelStatus("failed");
       setError(
         err?.code === "ETAG_MISMATCH"

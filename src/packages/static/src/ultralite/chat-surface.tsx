@@ -24,6 +24,10 @@ import { navigate, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
+import {
+  recordUltraliteOutcome,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 
 const ACTIVE_STATUS = new Set(["active", "running"]);
 const INITIAL_MESSAGE_LIMIT = 100;
@@ -136,6 +140,7 @@ function AgentList({
         actions={
           <a
             className="ul-link-button ul-link-button-subtle"
+            data-ul-full-cocalc
             href={fullProjectUrl({ projectId: project.project_id })}
           >
             Create in full CoCalc
@@ -262,6 +267,10 @@ export function Chat({
   useEffect(() => setMessageLimit(INITIAL_MESSAGE_LIMIT), [route.threadId]);
 
   useEffect(() => {
+    if (snapshot.ready) recordUltraliteSurfaceReady("chat");
+  }, [snapshot.ready]);
+
+  useEffect(() => {
     let cancelled = false;
     let opened: HeadlessChatClient | undefined;
     setError(undefined);
@@ -335,6 +344,7 @@ export function Chat({
       });
       if (clearDraft) setDraft("");
       setStatus("Prompt accepted by Codex");
+      recordUltraliteOutcome("chat", "codex_prompt");
     } catch (err) {
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
@@ -403,6 +413,7 @@ export function Chat({
             </button>
             <a
               className="ul-link-button ul-link-button-subtle"
+              data-ul-full-cocalc
               href={fullProjectUrl({
                 projectId: project.project_id,
                 path: route.chatPath,

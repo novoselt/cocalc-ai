@@ -7,6 +7,10 @@ import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { getAccountProjectWindow, type AuthBootstrap } from "./api";
 import type { UltraliteRoute } from "./routes";
+import {
+  recordUltraliteOutcome,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 import { UltraliteSession } from "./session";
 import {
   ChunkErrorBoundary,
@@ -221,13 +225,22 @@ export default function Workspace({
         else setSession(opened);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : `${err}`);
+        if (!cancelled) {
+          recordUltraliteOutcome("project", "routing_failure");
+          setError(err instanceof Error ? err.message : `${err}`);
+        }
       });
     return () => {
       cancelled = true;
       current?.close();
     };
   }, [bootstrap]);
+
+  useEffect(() => {
+    if (!session || !project) return;
+    recordUltraliteSurfaceReady("project");
+    recordUltraliteOutcome("project", "project_open");
+  }, [project, session]);
 
   useEffect(() => {
     requestAnimationFrame(() =>

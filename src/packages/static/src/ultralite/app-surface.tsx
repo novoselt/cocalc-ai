@@ -10,6 +10,7 @@ import type { UltraliteSession } from "./session";
 import { fullProjectToolUrl } from "./urls";
 import { InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import { UltraliteIcon } from "./icons";
+import { recordUltraliteSurfaceReady } from "./telemetry";
 
 const SERVERS = [
   {
@@ -50,6 +51,7 @@ export default function AppSurface({
       setProjectRunning(running);
       if (!running) {
         setStatuses({});
+        recordUltraliteSurfaceReady("apps");
         return;
       }
       const { api } = await session.openProjectApi(
@@ -62,6 +64,7 @@ export default function AppSurface({
         ),
       );
       setStatuses(Object.fromEntries(values));
+      recordUltraliteSurfaceReady("apps");
     } catch (err) {
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
@@ -161,6 +164,7 @@ export default function AppSurface({
             </button>
             <a
               className="ul-link-button ul-link-button-subtle"
+              data-ul-full-cocalc
               href={fullProjectToolUrl({
                 projectId: project.project_id,
                 tool: "servers",

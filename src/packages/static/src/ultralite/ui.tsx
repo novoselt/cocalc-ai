@@ -8,6 +8,7 @@ import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects
 import { navigate, type UltraliteRoute } from "./routes";
 import { fullProjectUrl, siteUrl } from "./urls";
 import { UltraliteIcon, type UltraliteIconName } from "./icons";
+import { recordUltraliteOutcome } from "./telemetry";
 
 export function TopBar({ projectTitle }: { projectTitle?: string }) {
   return (
@@ -33,7 +34,7 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
         <div className="ul-topbar-title">Projects</div>
       )}
       <span className="ul-mode">Constrained</span>
-      <a className="ul-topbar-link" href={siteUrl("app")}>
+      <a className="ul-topbar-link" data-ul-full-cocalc href={siteUrl("app")}>
         Full CoCalc
         <UltraliteIcon name="external" size={15} />
       </a>
@@ -99,6 +100,7 @@ export function ProjectRail({
       })}
       <a
         className="ul-rail-item ul-rail-full"
+        data-ul-full-cocalc
         href={fullProjectUrl({ projectId: project.project_id })}
       >
         <UltraliteIcon name="external" />
@@ -199,6 +201,7 @@ export class ChunkErrorBoundary extends Component<
 
   componentDidCatch(_error: unknown, _info: ErrorInfo): void {
     // Rspack chunk failures are reported by the standard static error path.
+    recordUltraliteOutcome("shell", "chunk_failure");
   }
 
   render() {

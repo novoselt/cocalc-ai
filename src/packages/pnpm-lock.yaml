@@ -1935,6 +1935,9 @@ importers:
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util
+      '@playwright/test':
+        specifier: ^1.57.0
+        version: 1.57.0
       '@rspack/cli':
         specifier: ^2.0.4
         version: 2.0.4(@rspack/core@2.0.4(@swc/helpers@0.5.15))

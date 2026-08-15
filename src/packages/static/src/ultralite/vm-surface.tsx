@@ -10,6 +10,7 @@ import type { UltraliteSession } from "./session";
 import { fullProjectToolUrl } from "./urls";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import { UltraliteIcon } from "./icons";
+import { recordUltraliteSurfaceReady } from "./telemetry";
 
 function hourlyPrice(vm: ComputeVm): string {
   const machine = Number(
@@ -99,6 +100,7 @@ export default function VmSurface({
           project_id: project.project_id,
         }),
       );
+      recordUltraliteSurfaceReady("vms");
     } catch (err) {
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
@@ -153,6 +155,7 @@ export default function VmSurface({
             </button>
             <a
               className="ul-link-button ul-link-button-subtle"
+              data-ul-full-cocalc
               href={fullProjectToolUrl({
                 projectId: project.project_id,
                 tool: "vms",

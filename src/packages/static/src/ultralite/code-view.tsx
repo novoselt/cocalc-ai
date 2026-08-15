@@ -18,6 +18,10 @@ import {
   type UltraliteLanguage,
 } from "./prism-languages";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
+import {
+  recordUltraliteOutcome,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 import { InlineAlert, LoadingState } from "./ui";
 
 function tokenClass(token: Prism.Token): string {
@@ -160,6 +164,10 @@ export default function CodeView({
     };
   }, [dirty, onDirtyChange]);
 
+  useEffect(() => {
+    if (editing) recordUltraliteSurfaceReady("editor");
+  }, [editing]);
+
   const save = async () => {
     if (!dirty || saving || conflict || readOnly) return;
     setSaving(true);
@@ -170,8 +178,10 @@ export default function CodeView({
       setBase(draft);
       onSaved(draft);
       setNotice("Saved.");
+      recordUltraliteOutcome("editor", "file_save");
     } catch (err: any) {
       if (err?.code === "ETAG_MISMATCH") {
+        recordUltraliteOutcome("editor", "save_conflict");
         setConflict(true);
         setError(
           "This file changed on the server after you opened it. Your draft was not written. Reload or resolve it in full CoCalc.",

@@ -22,6 +22,10 @@ import {
   SurfaceHeader,
 } from "./ui";
 import { UltraliteIcon } from "./icons";
+import {
+  recordUltraliteOutcome,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const MAX_EDIT_BYTES = 2 * 1024 * 1024;
@@ -272,6 +276,10 @@ export default function FileSurface({
       const notebookFile = route.path.toLowerCase().endsWith(".ipynb");
       const limit = notebookFile ? MAX_NOTEBOOK_BYTES : MAX_TEXT_BYTES;
       if (stats.size > limit) {
+        recordUltraliteOutcome(
+          notebookFile ? "notebook" : "file",
+          "unsupported_file",
+        );
         throw new Error(
           `This ${formatBytes(stats.size)} file exceeds the ${formatBytes(limit)} ultralite viewing limit.`,
         );
@@ -280,6 +288,7 @@ export default function FileSurface({
         (await filesystem.readFile(route.path, "utf8")) as string | Uint8Array,
       );
       if (!notebookFile && text.includes("\0")) {
+        recordUltraliteOutcome("file", "unsupported_file");
         throw new Error(
           "This appears to be a binary file. Open it in full CoCalc.",
         );
@@ -305,6 +314,21 @@ export default function FileSurface({
       cancelled = true;
     };
   }, [filesystem, refresh, route.kind, route.path]);
+
+  useEffect(() => {
+    if (loading || error) return;
+    if (route.kind === "files" && files) {
+      recordUltraliteSurfaceReady("files");
+      return;
+    }
+    if (notebook) {
+      recordUltraliteSurfaceReady("notebook");
+      recordUltraliteOutcome("notebook", "file_open");
+    } else if (contents != null) {
+      recordUltraliteSurfaceReady("file");
+      recordUltraliteOutcome("file", "file_open");
+    }
+  }, [contents, error, files, loading, notebook, route.kind]);
 
   const download = () => {
     const text = contents ?? notebookContents;
@@ -349,6 +373,7 @@ export default function FileSurface({
             ) : null}
             <a
               className="ul-link-button ul-link-button-subtle"
+              data-ul-full-cocalc
               href={fullProjectUrl({
                 projectId: project.project_id,
                 path: route.path,

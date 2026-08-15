@@ -4,9 +4,10 @@
  */
 
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fullProjectUrl } from "./urls";
 import { InlineAlert, SurfaceHeader } from "./ui";
+import { recordUltraliteSurfaceReady } from "./telemetry";
 
 const COMMAND_GROUPS = [
   {
@@ -61,12 +62,14 @@ export default function CliSurface({
 }: {
   project: AccountProjectListWindowRow;
 }) {
+  useEffect(() => recordUltraliteSurfaceReady("cli"), []);
   return (
     <main className="ul-page" id="main-content">
       <SurfaceHeader
         actions={
           <a
             className="ul-link-button ul-link-button-subtle"
+            data-ul-full-cocalc
             href={fullProjectUrl({ projectId: project.project_id })}
           >
             Open a project terminal

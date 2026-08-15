@@ -7,6 +7,7 @@ import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects
 import { useEffect, useRef, useState } from "react";
 import { getAccountProjectWindow, type AuthBootstrap } from "./api";
 import { navigate } from "./routes";
+import { recordUltraliteSurfaceReady } from "./telemetry";
 import {
   EmptyState,
   InlineAlert,
@@ -82,6 +83,10 @@ export default function ProjectsWorkspace({
     // load is intentionally keyed by the debounced query only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeQuery]);
+
+  useEffect(() => {
+    if (!loading && !error) recordUltraliteSurfaceReady("projects");
+  }, [error, loading]);
 
   return (
     <>

@@ -9,6 +9,10 @@ import { parseRoute, type UltraliteRoute } from "./routes";
 import { ultraliteTheme } from "./theme";
 import { siteUrl } from "./urls";
 import { TopBar } from "./ui";
+import {
+  recordUltraliteOutcome,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 
 const Workspace = lazy(
   () =>
@@ -57,10 +61,28 @@ export function UltraliteApp() {
       .then(setBootstrap)
       .catch((err) => {
         if (!controller.signal.aborted) {
+          recordUltraliteOutcome("shell", "auth_failure");
           setError(err instanceof Error ? err.message : `${err}`);
         }
       });
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (bootstrap?.signed_in) recordUltraliteSurfaceReady("shell");
+  }, [bootstrap?.signed_in]);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      const anchor = (event.target as Element | null)?.closest?.(
+        "a[data-ul-full-cocalc]",
+      );
+      if (anchor) {
+        recordUltraliteOutcome("shell", "full_cocalc");
+      }
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
   }, []);
 
   useEffect(() => {
@@ -100,7 +122,11 @@ export function UltraliteApp() {
           <p>
             Ultralite uses your existing CoCalc account and project permissions.
           </p>
-          <a className="ul-link-button" href={siteUrl("app")}>
+          <a
+            className="ul-link-button"
+            data-ul-full-cocalc
+            href={siteUrl("app")}
+          >
             Open CoCalc to sign in
           </a>
         </main>
