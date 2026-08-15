@@ -14,6 +14,7 @@
     { "path": "./conat" },
     { "path": "./database" },
     { "path": "./docs" },
+    { "path": "./essential-frontend" },
     { "path": "./export" },
     { "path": "./file-server" },
     { "path": "./frontend" },

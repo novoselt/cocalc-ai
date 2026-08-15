@@ -6,7 +6,7 @@ pins the August 10 SDK 57 patch line so installs honor this repository's
 three-day package-age policy while staying on the current Expo SDK.
 
 Generated `ios/` and `android/` projects are intentionally ignored. Native
-projects are produced locally with `pnpm prebuild` or `pnpm ios`.
+projects are produced locally with `pnpm native:prebuild` or `pnpm ios`.
 
 ## Local commands
 

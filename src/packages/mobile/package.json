@@ -9,7 +9,7 @@
     "start:clear": "expo start --dev-client --clear",
     "ios": "expo run:ios",
     "ios:sim": "COCALC_MOBILE_DEV_SERVER_URL=http://localhost:8081 expo run:ios",
-    "prebuild": "expo prebuild",
+    "native:prebuild": "expo prebuild",
     "export:ios": "expo export --platform ios --output-dir dist/expo",
     "test": "tsx --test 'src/**/*.test.ts'",
     "build": "echo 0",

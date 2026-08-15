@@ -28,6 +28,10 @@ import {
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
 import { Icon, Loading } from "@cocalc/frontend/components";
+import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
+import usePostSurfaceWork from "@cocalc/frontend/app/use-post-surface-work";
+import useSignedInSurfaceReady from "@cocalc/frontend/app/use-signed-in-surface-ready";
+import useStartupPerformancePolicy from "@cocalc/frontend/app/use-startup-performance-policy";
 import { useAppContext } from "@cocalc/frontend/app/context";
 import {
   FrameContext,
@@ -47,8 +51,6 @@ import {
   useProjectContext,
   useProjectContextProvider,
 } from "../context";
-import FileActionModal from "../file-action-modal";
-import { ProjectWarningBanner } from "../project-banner";
 import { FIX_BORDERS } from "./common";
 import { Content } from "./content";
 import { FIXED_PROJECT_TABS, isFixedTab } from "./file-tab";
@@ -112,13 +114,13 @@ import type { ProjectAccessLandingInfo } from "@cocalc/conat/hub/api/projects";
 import { lite } from "@cocalc/frontend/lite";
 import { shouldBypassWorkspaceStartupGuardForTab } from "./workspace-startup";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
-import ProjectVersionUpdate from "./project-version-update";
 import { isProjectRuntimePreparing } from "@cocalc/frontend/project/runtime-start-readiness";
 import {
   isFreeTierPressureRecovery,
   shouldShowProjectRuntimeRecoveryBanner,
 } from "@cocalc/frontend/project/runtime-recovery";
 import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
+import { markStartupPhaseOnce } from "@cocalc/frontend/app/startup-phase";
 import { HostRecoveryBanner } from "./host-recovery-banner";
 
 const START_BANNER = false;
@@ -134,6 +136,23 @@ const HIDDEN_RAIL_TOP_LEFT_WIDTH_PX = 84;
 const HIDDEN_RAIL_HOME_BUTTON_WIDTH_PX = 44;
 const FLYOUT_RESIZE_GUTTER_WIDTH_PX = 5;
 const { Paragraph, Text, Title } = Typography;
+
+const FileActionModal = lazyWithRetry(
+  async () => ({ default: (await import("../file-action-modal")).default }),
+  "project file action modal",
+);
+const ProjectWarningBanner = lazyWithRetry(
+  async () => ({
+    default: (await import("../project-banner")).ProjectWarningBanner,
+  }),
+  "project warning banners",
+);
+const ProjectVersionUpdate = lazyWithRetry(
+  async () => ({
+    default: (await import("./project-version-update")).default,
+  }),
+  "project version update",
+);
 
 function fullPageProjectTab(tab?: string): string | undefined {
   if (isFixedTab(tab) && FIXED_PROJECT_TABS[tab].noFullPage) {
@@ -152,6 +171,9 @@ interface Props {
 }
 
 export const ProjectPage: React.FC<Props> = (props: Props) => {
+  if (props.is_active) {
+    markStartupPhaseOnce("project_page_render_started");
+  }
   const accountIsReady = !!useTypedRedux("account", "is_ready");
   const isLoggedIn = !!useTypedRedux("account", "is_logged_in");
   const userType = useTypedRedux("account", "user_type") as string | undefined;
@@ -160,6 +182,9 @@ export const ProjectPage: React.FC<Props> = (props: Props) => {
     | undefined;
   const groups = useTypedRedux("account", "groups") as string[] | undefined;
   const project = useRedux(["projects", "project_map", props.project_id]);
+  if (props.is_active && project != null) {
+    markStartupPhaseOnce("project_record_ready");
+  }
   if (!accountIsReady) {
     return <Loading />;
   }
@@ -204,6 +229,18 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const flyout = useTypedRedux({ project_id }, "flyout");
   const actions = useActions({ project_id });
   const project = useRedux(["projects", "project_map", project_id]);
+  const startupPerformance = useStartupPerformancePolicy();
+  const signedInSurfaceReady = useSignedInSurfaceReady();
+  const showPostSurfaceModals = usePostSurfaceWork({
+    mode: startupPerformance.mode,
+    surfaceReady: signedInSurfaceReady,
+    work: "modals",
+  });
+  const showPostSurfaceBanners = usePostSurfaceWork({
+    mode: startupPerformance.mode,
+    surfaceReady: signedInSurfaceReady,
+    work: "banners",
+  });
   const project_color = projectThemeColor(project);
   const hardDeleteState = `${project?.getIn(["state", "state"]) ?? ""}`;
   const hardDeleteBlocked =
@@ -319,7 +356,13 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const modal = useTypedRedux({ project_id }, "modal");
   const open_files = useTypedRedux({ project_id }, "open_files");
   const openFilesReady = open_files != null;
+  if (is_active && openFilesReady) {
+    markStartupPhaseOnce("project_open_files_ready");
+  }
   const open_files_order = useTypedRedux({ project_id }, "open_files_order");
+  if (is_active && open_files_order != null) {
+    markStartupPhaseOnce("project_open_files_order_ready");
+  }
   const active_project_tab = useTypedRedux(
     { project_id },
     "active_project_tab",
@@ -329,8 +372,12 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     React.useState<number>(80);
   useEffect(() => {
     if (!is_active || project == null || open_files_order == null) return;
+    if (active_project_tab === "files" || active_project_tab === "home") {
+      return;
+    }
+    markStartupPhaseOnce("project_surface_gate_ready");
     return recordSignedInSurfaceReady("project");
-  }, [is_active, open_files_order, project]);
+  }, [active_project_tab, is_active, open_files_order, project]);
 
   useEffect(() => {
     if (!actions) return;
@@ -953,7 +1000,11 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
           )}
           <ProjectTabs project_id={project_id} />
         </div>
-        {!isViewer && <ProjectVersionUpdate project_id={project_id} />}
+        {!isViewer && showPostSurfaceBanners ? (
+          <React.Suspense fallback={null}>
+            <ProjectVersionUpdate project_id={project_id} />
+          </React.Suspense>
+        ) : null}
       </div>
     );
   }
@@ -1093,7 +1144,11 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
           {render_project_content()}
         </div>
         {render_project_modal()}
-        <FileActionModal />
+        {showPostSurfaceModals ? (
+          <React.Suspense fallback={null}>
+            <FileActionModal />
+          </React.Suspense>
+        ) : null}
       </div>
     );
   }
@@ -1130,7 +1185,11 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
             }}
           />
         ) : null}
-        {!hardDeleteBlocked && !isViewer && <ProjectWarningBanner />}
+        {!hardDeleteBlocked && !isViewer && showPostSurfaceBanners ? (
+          <React.Suspense fallback={null}>
+            <ProjectWarningBanner />
+          </React.Suspense>
+        ) : null}
         {props.publicDirectoryShare ? (
           <PublicDirectoryShareBanner share={props.publicDirectoryShare} />
         ) : null}

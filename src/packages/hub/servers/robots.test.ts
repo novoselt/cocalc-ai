@@ -68,6 +68,7 @@ describe("robots.txt", () => {
     expect(body).toContain("Disallow: /static/public.html");
     expect(body).toContain("Disallow: /static/app.html");
     expect(body).toContain("Disallow: /static/embed.html");
+    expect(body).toContain("Disallow: /static/ultralite.html");
     // The viewer shells are blocked, but the public-viewer*-<hash>.js entry
     // chunks must stay fetchable so crawlers can render /share pages.
     expect(body.split("\n")).toContain("Disallow: /static/public-viewer*.html");

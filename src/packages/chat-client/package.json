@@ -15,8 +15,9 @@
   },
   "scripts": {
     "preinstall": "npx only-allow pnpm",
-    "build": "pnpm exec tsc --build",
+    "build": "pnpm exec tsc --build --force",
     "clean": "rm -rf dist node_modules tsconfig.tsbuildinfo",
+    "measure:browser": "node ./scripts/measure-browser-bundle.mjs",
     "test": "pnpm exec jest",
     "depcheck": "pnpm -w exec depcheck \"$PWD\" --ignores=@types/node,@types/jest"
   },
