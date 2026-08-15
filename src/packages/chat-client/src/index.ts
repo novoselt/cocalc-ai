@@ -4,6 +4,7 @@
  */
 
 export * from "./agent-sessions";
+export * from "./activity";
 export * from "./client";
 export * from "./messages";
 export * from "./send";

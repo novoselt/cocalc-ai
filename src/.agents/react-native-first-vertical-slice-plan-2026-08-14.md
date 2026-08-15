@@ -3,9 +3,16 @@
 Status: first vertical slice implemented locally as of 2026-08-14. The Expo
 development build has compiled, installed, and loaded its JavaScript bundle in
 an iPhone simulator. Focused package tests and the production iOS bundle export
-pass. Interactive authentication/chat validation against local and remote
-CoCalc deployments, physical-device validation, and release signing remain as
-follow-up validation.
+pass. Interactive validation against `lite4b.cocalc.ai` now covers browser
+authentication with 2FA, home-bay bootstrap, project and indexed-session
+listing, existing-thread loading and sending, Patchflow collaboration with the
+web client, and interrupt convergence initiated from both mobile and web.
+Switching away from or backgrounding a running chat exposed that the first
+headless client projected the final chat row but did not recover its separately
+persisted ACP activity log. The client now reloads recent activity from the
+project-host AKV and follows the live activity stream; simulator lifecycle
+retesting, local/cross-bay validation, physical-device validation, and release
+signing remain follow-up work.
 
 ## Executive Decision
 

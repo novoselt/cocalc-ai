@@ -27,6 +27,8 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Linking,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   PlatformColor,
   Pressable,
@@ -94,6 +96,19 @@ function Message({ item }: { item: ProjectedChatMessage }) {
           <Text style={styles.messageState}>{item.state}</Text>
         ) : null}
       </View>
+      {item.activity?.markdown ? (
+        <View accessibilityLabel="Codex activity" style={styles.activity}>
+          <Markdown value={item.activity.markdown} />
+        </View>
+      ) : item.activity?.state === "loading" && item.generating ? (
+        <Text accessibilityLiveRegion="polite" style={styles.activityStatus}>
+          Loading Codex activity…
+        </Text>
+      ) : item.activity?.state === "error" && item.generating ? (
+        <Text accessibilityRole="alert" style={styles.activityError}>
+          Codex activity could not be recovered: {item.activity.error}
+        </Text>
+      ) : null}
       <Markdown value={item.content || (item.generating ? "Working…" : "")} />
       <Pressable
         accessibilityLabel={`Copy ${human ? "your" : "Codex"} message`}
@@ -125,6 +140,8 @@ export default function ChatScreen() {
   const clientRef = useRef<HeadlessChatClient | undefined>(undefined);
   const generation = useRef(0);
   const listRef = useRef<FlatList<ProjectedChatMessage>>(null);
+  const shouldFollowNewest = useRef(true);
+  const userControlsScroll = useRef(false);
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -188,6 +205,36 @@ export default function ChatScreen() {
     void loadChatDraft(draftKey).then(setDraft);
   }, [draftKey]);
 
+  const scrollToNewest = useCallback(() => {
+    listRef.current?.scrollToEnd({ animated: false });
+  }, []);
+  const hasMessages = snapshot.messages.length > 0;
+
+  const updateFollowNewest = useCallback(
+    ({ nativeEvent }: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (userControlsScroll.current) return;
+      const distanceFromNewest =
+        nativeEvent.contentSize.height -
+        nativeEvent.layoutMeasurement.height -
+        nativeEvent.contentOffset.y;
+      shouldFollowNewest.current = distanceFromNewest < 80;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!snapshot.ready || !hasMessages) return;
+    shouldFollowNewest.current = true;
+    const frame = requestAnimationFrame(scrollToNewest);
+    const first = setTimeout(scrollToNewest, 100);
+    const settled = setTimeout(scrollToNewest, 400);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(first);
+      clearTimeout(settled);
+    };
+  }, [hasMessages, scrollToNewest, snapshot.ready, threadId]);
+
   useEffect(() => {
     const timer = setTimeout(() => void saveChatDraft(draftKey, draft), 250);
     return () => clearTimeout(timer);
@@ -241,6 +288,7 @@ export default function ChatScreen() {
     const activeClient = clientRef.current;
     const text = draft.trim();
     if (!activeClient || !canSend || !text) return;
+    shouldFollowNewest.current = true;
     setSubmitting(true);
     setError(undefined);
     try {
@@ -347,10 +395,30 @@ export default function ChatScreen() {
             ) : null
           }
           onContentSizeChange={() =>
-            listRef.current?.scrollToEnd({ animated: false })
+            shouldFollowNewest.current && scrollToNewest()
           }
+          onLayout={() => {
+            if (shouldFollowNewest.current) scrollToNewest();
+          }}
+          onMomentumScrollBegin={() => {
+            userControlsScroll.current = true;
+          }}
+          onMomentumScrollEnd={(event) => {
+            userControlsScroll.current = false;
+            updateFollowNewest(event);
+          }}
+          onScrollBeginDrag={() => {
+            userControlsScroll.current = true;
+            shouldFollowNewest.current = false;
+          }}
+          onScrollEndDrag={(event) => {
+            userControlsScroll.current = false;
+            updateFollowNewest(event);
+          }}
+          onScroll={updateFollowNewest}
           ref={listRef}
           renderItem={({ item }) => <Message item={item} />}
+          scrollEventThrottle={16}
         />
         <View style={styles.composer}>
           <TextInput
@@ -428,6 +496,16 @@ const styles = StyleSheet.create({
     backgroundColor: PlatformColor("tertiarySystemBackground"),
   },
   messageHeader: { flexDirection: "row", gap: 8 },
+  activity: {
+    borderLeftColor: PlatformColor("separator"),
+    borderLeftWidth: 3,
+    paddingLeft: 10,
+  },
+  activityStatus: {
+    color: PlatformColor("secondaryLabel"),
+    fontSize: 13,
+  },
+  activityError: { color: COLORS.BS_RED, fontSize: 13 },
   messageRole: {
     color: PlatformColor("label"),
     fontSize: 13,

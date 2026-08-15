@@ -72,6 +72,9 @@ function projectMessage(row: ChatMessage): ProjectedChatMessage | undefined {
     generating: row.generating === true,
     state: messageState(row),
     acp_events: Array.isArray(row.acp_events) ? row.acp_events : undefined,
+    acp_log_store: id(row.acp_log_store),
+    acp_log_key: id(row.acp_log_key),
+    acp_live_log_stream: id(row.acp_live_log_stream),
   };
 }
 

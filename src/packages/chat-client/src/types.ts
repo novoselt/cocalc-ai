@@ -4,6 +4,7 @@
  */
 
 import type { ChatThreadRuntimeState, CodexThreadConfig } from "@cocalc/chat";
+import type { AcpStreamMessage } from "@cocalc/conat/ai/acp/types";
 
 export type ChatConnectionState =
   | "closed"
@@ -26,6 +27,15 @@ export interface ProjectedChatMessage {
   generating: boolean;
   state?: "queued" | "running" | "interrupted" | "complete" | "error";
   acp_events?: unknown[];
+  acp_log_store?: string;
+  acp_log_key?: string;
+  acp_live_log_stream?: string;
+  activity?: {
+    state: "loading" | "ready" | "error";
+    events: AcpStreamMessage[];
+    markdown?: string;
+    error?: string;
+  };
 }
 
 export interface ProjectedChatThread {

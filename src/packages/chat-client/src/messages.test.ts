@@ -61,6 +61,9 @@ describe("projectChatRows", () => {
           thread_id: "thread-1",
           parent_message_id: "message-1",
           acp_account_id: "agent-account",
+          acp_log_store: "acp-log/chat.chat",
+          acp_log_key: "thread-1:message-2",
+          acp_live_log_stream: "acp-live-log/chat.chat/thread-1/message-2",
           generating: true,
           history: [
             {
@@ -85,7 +88,13 @@ describe("projectChatRows", () => {
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0].content).toBe("edited");
     expect(result.messages[1]).toEqual(
-      expect.objectContaining({ role: "agent", state: "running" }),
+      expect.objectContaining({
+        role: "agent",
+        state: "running",
+        acp_log_store: "acp-log/chat.chat",
+        acp_log_key: "thread-1:message-2",
+        acp_live_log_stream: "acp-live-log/chat.chat/thread-1/message-2",
+      }),
     );
   });
 });
