@@ -12,6 +12,7 @@
     "prebuild": "expo prebuild",
     "export:ios": "expo export --platform ios --output-dir dist/expo",
     "test": "tsx --test 'src/**/*.test.ts'",
+    "build": "echo 0",
     "typecheck": "tsc --noEmit",
     "depcheck": "pnpm -w exec depcheck \"$PWD\" --ignores=@types/node,@types/react,buffer,expo-dev-client,react-native-worklets",
     "doctor": "pnpm dlx expo-doctor@latest"
