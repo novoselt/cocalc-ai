@@ -80,6 +80,7 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
         require.ensure(
           [],
           () => {
+            require("prismjs/components/prism-clike");
             require("prismjs/components/prism-c");
             resolve();
           },
@@ -91,6 +92,8 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
         require.ensure(
           [],
           () => {
+            require("prismjs/components/prism-clike");
+            require("prismjs/components/prism-c");
             require("prismjs/components/prism-cpp");
             resolve();
           },
@@ -113,6 +116,7 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
         require.ensure(
           [],
           () => {
+            require("prismjs/components/prism-clike");
             require("prismjs/components/prism-go");
             resolve();
           },
@@ -124,6 +128,7 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
         require.ensure(
           [],
           () => {
+            require("prismjs/components/prism-clike");
             require("prismjs/components/prism-javascript");
             resolve();
           },
@@ -157,6 +162,7 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
         require.ensure(
           [],
           () => {
+            require("prismjs/components/prism-markup");
             require("prismjs/components/prism-markdown");
             resolve();
           },
@@ -212,6 +218,8 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
         require.ensure(
           [],
           () => {
+            require("prismjs/components/prism-clike");
+            require("prismjs/components/prism-javascript");
             require("prismjs/components/prism-typescript");
             resolve();
           },

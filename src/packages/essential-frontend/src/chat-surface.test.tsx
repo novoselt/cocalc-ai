@@ -141,3 +141,41 @@ test("continues an idle Codex thread and catches up without another prompt", asy
     ),
   );
 });
+
+test("sends the current prompt with Shift+Enter", async () => {
+  const client = mockClient();
+  const session = {
+    accountId: "22222222-2222-4222-8222-222222222222",
+    openProjectHost: jest.fn(async () => ({ client: {} })),
+  };
+  render(
+    <Chat
+      project={
+        {
+          host_id: "host-1",
+          project_id: snapshot.project_id,
+          title: "Test",
+        } as any
+      }
+      route={{
+        chatPath: snapshot.path,
+        kind: "chat",
+        projectId: snapshot.project_id,
+        threadId: "thread-1",
+      }}
+      session={session as any}
+    />,
+  );
+
+  const input = await screen.findByRole("textbox", { name: "Message Codex" });
+  await waitFor(() => expect(input).toBeEnabled());
+  fireEvent.change(input, { target: { value: "Run the next test" } });
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+  await waitFor(() =>
+    expect(client.sendToExistingCodexThread).toHaveBeenCalledWith({
+      text: "Run the next test",
+      thread_id: "thread-1",
+    }),
+  );
+});

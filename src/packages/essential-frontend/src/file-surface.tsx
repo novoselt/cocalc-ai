@@ -34,6 +34,8 @@ const MAX_EDIT_BYTES = 2 * 1024 * 1024;
 const MAX_NOTEBOOK_BYTES = 15 * 1024 * 1024;
 const MAX_NOTEBOOK_EDIT_BYTES = 5 * 1024 * 1024;
 
+type CreateKind = "file" | "folder";
+
 const CodeView = lazy(
   () =>
     new Promise((resolve, reject) => {
@@ -81,6 +83,49 @@ function formatBytes(bytes: number): string {
 
 function asText(value: string | Uint8Array): string {
   return typeof value === "string" ? value : new TextDecoder().decode(value);
+}
+
+export function validateNewEntryName(value: string): string {
+  const name = value.trim();
+  if (!name) throw new Error("Enter a name.");
+  if (name === "." || name === "..") {
+    throw new Error("A file or folder cannot be named . or ...");
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("\0")) {
+    throw new Error("Enter one name without slashes.");
+  }
+  const utf8Bytes = Array.from(name).reduce((total, character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return (
+      total +
+      (codePoint <= 0x7f
+        ? 1
+        : codePoint <= 0x7ff
+          ? 2
+          : codePoint <= 0xffff
+            ? 3
+            : 4)
+    );
+  }, 0);
+  if (utf8Bytes > 255) {
+    throw new Error("This name exceeds the filesystem's 255-byte limit.");
+  }
+  return name;
+}
+
+function initialFileContents(name: string): string {
+  return name.toLowerCase().endsWith(".ipynb")
+    ? `${JSON.stringify(
+        {
+          cells: [],
+          metadata: {},
+          nbformat: 4,
+          nbformat_minor: 5,
+        },
+        null,
+        1,
+      )}\n`
+    : "";
 }
 
 function Breadcrumbs({ projectId, path }: { projectId: string; path: string }) {
@@ -231,6 +276,18 @@ export default function FileSurface({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  const [createKind, setCreateKind] = useState<CreateKind>();
+  const [createName, setCreateName] = useState("");
+  const [createError, setCreateError] = useState<string>();
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    setExecuteNotebook(false);
+    setDirty(false);
+    setCreateKind(undefined);
+    setCreateName("");
+    setCreateError(undefined);
+  }, [route.kind, route.path]);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,7 +323,6 @@ export default function FileSurface({
     setNotebook(undefined);
     setNotebookContents(undefined);
     setNotebookEditable(false);
-    setExecuteNotebook(false);
     setEditable(false);
     setDirty(false);
     const surface =
@@ -370,11 +426,43 @@ export default function FileSurface({
 
   const refreshFile = () => {
     if (dirty && !window.confirm("Discard unsaved changes and reload?")) return;
+    setDirty(false);
     setRefresh((value) => value + 1);
   };
 
   const group = project.users_summary?.[session.accountId]?.group;
   const canWrite = group === "owner" || group === "collaborator";
+
+  const createEntry = async () => {
+    if (!filesystem || route.kind !== "files" || !createKind || creating) {
+      return;
+    }
+    setCreating(true);
+    setCreateError(undefined);
+    try {
+      const name = validateNewEntryName(createName);
+      const target = childPath(route.path, name);
+      if (await filesystem.exists(target)) {
+        throw new Error(`'${name}' already exists.`);
+      }
+      if (createKind === "folder") {
+        await filesystem.mkdir(target);
+      } else {
+        await filesystem.writeFile(target, initialFileContents(name), true);
+      }
+      recordUltraliteOutcome("files", `create_${createKind}`);
+      navigate({
+        kind: createKind === "folder" ? "files" : "file",
+        projectId: project.project_id,
+        path: target,
+      });
+    } catch (err) {
+      recordUltraliteFailure("files", err);
+      setCreateError(err instanceof Error ? err.message : `${err}`);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <main className="ul-page" id="main-content">
@@ -386,7 +474,8 @@ export default function FileSurface({
               onClick={refreshFile}
               type="button"
             >
-              <UltraliteIcon name="refresh" /> Refresh
+              <UltraliteIcon name="refresh" />
+              {route.kind === "files" ? "Reload listing" : "Reload from disk"}
             </button>
             {route.kind === "file" && (contents != null || notebook) ? (
               <button
@@ -425,12 +514,85 @@ export default function FileSurface({
       {loading ? <LoadingState label="Loading from the project host" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {route.kind === "files" && files ? (
-        <DirectoryView
-          files={files}
-          path={route.path}
-          project={project}
-          truncated={truncated}
-        />
+        <>
+          {canWrite ? (
+            <div className="ul-create-entry">
+              <div className="ul-toolbar">
+                <button
+                  className="ul-button ul-button-secondary"
+                  onClick={() => {
+                    setCreateKind("file");
+                    setCreateName("");
+                    setCreateError(undefined);
+                  }}
+                  type="button"
+                >
+                  New file
+                </button>
+                <button
+                  className="ul-button ul-button-secondary"
+                  onClick={() => {
+                    setCreateKind("folder");
+                    setCreateName("");
+                    setCreateError(undefined);
+                  }}
+                  type="button"
+                >
+                  New folder
+                </button>
+              </div>
+              {createKind ? (
+                <form
+                  aria-label={`Create ${createKind}`}
+                  className="ul-create-entry-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void createEntry();
+                  }}
+                >
+                  <label htmlFor="ul-create-entry-name">
+                    {createKind === "file" ? "File name" : "Folder name"}
+                  </label>
+                  <input
+                    autoFocus
+                    className="ul-input"
+                    id="ul-create-entry-name"
+                    onChange={(event) => setCreateName(event.target.value)}
+                    placeholder={createKind === "file" ? "analysis.py" : "data"}
+                    value={createName}
+                  />
+                  <button
+                    className="ul-button"
+                    disabled={creating || !createName.trim()}
+                    type="submit"
+                  >
+                    {creating ? "Creating..." : `Create ${createKind}`}
+                  </button>
+                  <button
+                    className="ul-button ul-button-secondary"
+                    disabled={creating}
+                    onClick={() => {
+                      setCreateKind(undefined);
+                      setCreateError(undefined);
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              ) : null}
+              {createError ? (
+                <InlineAlert kind="error">{createError}</InlineAlert>
+              ) : null}
+            </div>
+          ) : null}
+          <DirectoryView
+            files={files}
+            path={route.path}
+            project={project}
+            truncated={truncated}
+          />
+        </>
       ) : notebook && notebookContents != null ? (
         executeNotebook ? (
           <ChunkErrorBoundary label="Executable notebook">
@@ -450,6 +612,11 @@ export default function FileSurface({
                 baseContents={notebookContents}
                 filesystem={filesystem!}
                 notebook={notebook}
+                onDirtyChange={setDirty}
+                onSaved={(savedNotebook, savedContents) => {
+                  setNotebook(savedNotebook);
+                  setNotebookContents(savedContents);
+                }}
                 path={route.path}
                 project={project}
                 readOnly={!notebookEditable || !canWrite}

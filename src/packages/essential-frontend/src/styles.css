@@ -270,6 +270,7 @@ textarea {
 }
 
 .ul-search,
+.ul-input,
 .ul-select,
 .ul-textarea,
 .ul-editor {
@@ -488,6 +489,30 @@ textarea {
   margin-bottom: 8px;
 }
 
+.ul-create-entry {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ul-create-entry-form {
+  align-items: center;
+  background: var(--ul-rail);
+  border: 1px solid var(--ul-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px;
+}
+
+.ul-create-entry-form label {
+  font-weight: 600;
+}
+
+.ul-create-entry-form .ul-input {
+  flex: 1 1 240px;
+}
+
 .ul-code,
 .ul-code-view,
 .ul-text-view,
@@ -595,21 +620,24 @@ textarea {
 }
 
 .ul-cm-editor {
-  background: var(--ul-code-bg);
-  border: 1px solid var(--ul-border);
+  background: white;
+  border: 1px solid var(--ul-border-dark);
   color: var(--ul-code-text);
-  min-height: min(65vh, 720px);
+  height: clamp(360px, 65vh, 720px);
+  overflow: hidden;
 }
 
 .ul-cm-editor .cm-editor {
-  min-height: inherit;
+  height: 100%;
 }
 
 .ul-cm-editor .cm-scroller {
+  background: white;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
+  height: 100%;
   line-height: 1.5;
-  min-height: inherit;
+  overflow: auto;
 }
 
 .ul-cm-editor .cm-content {
@@ -653,6 +681,13 @@ textarea {
   color: var(--ul-muted);
   font-size: 12px;
   margin-left: auto;
+}
+
+.ul-markdown-document {
+  background: white;
+  border: 1px solid var(--ul-border);
+  min-height: 320px;
+  padding: clamp(16px, 3vw, 34px);
 }
 
 .ul-notebook {

@@ -36,6 +36,13 @@ jest.mock("./codemirror-editor", () => {
   };
 });
 
+jest.mock("./markdown-view", () => ({
+  __esModule: true,
+  default: ({ source }: { source: string }) => (
+    <article aria-label="Rendered Markdown">{source}</article>
+  ),
+}));
+
 function props(writeFileIfUnchanged = jest.fn(async () => undefined)) {
   return {
     contents: "old\n",
@@ -137,4 +144,19 @@ test("replaces the editor document when a different file is opened", async () =>
       screen.getByRole("textbox", { name: "Edit second.txt" }),
     ).toHaveValue("second\n"),
   );
+});
+
+test("renders Markdown instead of showing its source by default", async () => {
+  render(
+    <CodeView
+      {...props()}
+      contents="# A heading\n\n$e^{i\\pi}+1=0$"
+      path="/home/user/README.md"
+    />,
+  );
+
+  expect(
+    await screen.findByRole("article", { name: "Rendered Markdown" }),
+  ).toHaveTextContent("# A heading");
+  expect(screen.queryByText("markdown")).toBeInTheDocument();
 });

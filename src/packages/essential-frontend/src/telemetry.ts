@@ -28,6 +28,8 @@ export type UltraliteOutcome =
   | "project_open"
   | "file_open"
   | "file_save"
+  | "create_file"
+  | "create_folder"
   | "notebook_execute"
   | "codex_prompt"
   | "terminal_connect"

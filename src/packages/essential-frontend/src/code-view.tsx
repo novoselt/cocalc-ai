@@ -124,6 +124,24 @@ const LazyCodeMirrorEditor = lazy(
     ),
 );
 
+const LazyMarkdownView = lazy(
+  () =>
+    new Promise<{ default: typeof import("./markdown-view").default }>(
+      (resolve, reject) => {
+        if (process.env.COCALC_TEST_MODE) {
+          resolve({ default: require("./markdown-view").default });
+          return;
+        }
+        require.ensure(
+          [],
+          () => resolve({ default: require("./markdown-view").default }),
+          reject,
+          "ultralite-markdown-view",
+        );
+      },
+    ),
+);
+
 export default function CodeView({
   contents,
   filesystem,
@@ -315,6 +333,10 @@ export default function CodeView({
             focus out of the editor.
           </p>
         </>
+      ) : language === "markdown" ? (
+        <Suspense fallback={<LoadingState label="Rendering Markdown" />}>
+          <LazyMarkdownView source={draft} />
+        </Suspense>
       ) : (
         <HighlightedCode contents={draft} language={language} wrap={wrap} />
       )}

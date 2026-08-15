@@ -134,6 +134,8 @@ export default function NotebookEditor({
   baseContents: initialBase,
   filesystem,
   notebook: initialNotebook,
+  onDirtyChange,
+  onSaved,
   path,
   project,
   readOnly,
@@ -142,6 +144,8 @@ export default function NotebookEditor({
   baseContents: string;
   filesystem: FilesystemClient;
   notebook: NotebookDocument;
+  onDirtyChange?: (dirty: boolean) => void;
+  onSaved?: (notebook: NotebookDocument, contents: string) => void;
   path: string;
   project: AccountProjectListWindowRow;
   readOnly: boolean;
@@ -168,6 +172,11 @@ export default function NotebookEditor({
     Awaited<ReturnType<UltraliteSession["openProjectApi"]>>["api"] | undefined
   >(undefined);
   dirtyRef.current = dirty;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -215,6 +224,7 @@ export default function NotebookEditor({
     setNotebook(candidate);
     setDirty(false);
     setConflict(false);
+    onSaved?.(candidate, contents);
     return contents;
   };
 
@@ -305,7 +315,9 @@ export default function NotebookEditor({
         (await filesystem.readFile(path, "utf8")) as string | Uint8Array,
       );
       if (disposed) return;
-      setNotebook(parseNotebook(saved));
+      const savedNotebook = parseNotebook(saved);
+      setNotebook(savedNotebook);
+      onSaved?.(savedNotebook, saved);
       setBaseContents(saved);
       setDirty(false);
       setConflict(false);
@@ -496,7 +508,9 @@ export default function NotebookEditor({
       const saved = asText(
         (await filesystem.readFile(path, "utf8")) as string | Uint8Array,
       );
-      setNotebook(parseNotebook(saved));
+      const savedNotebook = parseNotebook(saved);
+      setNotebook(savedNotebook);
+      onSaved?.(savedNotebook, saved);
       setBaseContents(saved);
       setDirty(false);
       setKernelStatus("idle");

@@ -546,6 +546,16 @@ export function Chat({
             className="ul-textarea"
             id="ul-codex-prompt"
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                event.shiftKey &&
+                !event.nativeEvent.isComposing
+              ) {
+                event.preventDefault();
+                void send();
+              }
+            }}
             placeholder="What should Codex do next?"
             value={draft}
           />
