@@ -146,6 +146,7 @@ export default function CodeView({
   contents,
   filesystem,
   onDirtyChange,
+  onEditingChange,
   onSaved,
   path,
   readOnly,
@@ -153,6 +154,7 @@ export default function CodeView({
   contents: string;
   filesystem: FilesystemClient;
   onDirtyChange: (dirty: boolean) => void;
+  onEditingChange?: (editing: boolean) => void;
   onSaved: (contents: string) => void;
   path: string;
   readOnly: boolean;
@@ -203,6 +205,11 @@ export default function CodeView({
   useEffect(() => {
     if (editing) recordUltraliteSurfaceReady("editor");
   }, [editing]);
+
+  useEffect(() => {
+    onEditingChange?.(editing);
+    return () => onEditingChange?.(false);
+  }, [editing, onEditingChange]);
 
   const save = async () => {
     if (!dirty || saving || conflict || readOnly) return;

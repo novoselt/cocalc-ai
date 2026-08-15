@@ -6,7 +6,7 @@
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import type { Files } from "@cocalc/conat/files/listing";
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import NotebookView, {
   parseNotebook,
   type NotebookDocument,
@@ -22,6 +22,7 @@ import {
   SurfaceHeader,
 } from "./ui";
 import { UltraliteIcon } from "./icons";
+import { startOpenFileWatch } from "./open-file-watch";
 import {
   markUltraliteBackend,
   recordUltraliteFailure,
@@ -273,6 +274,9 @@ export default function FileSurface({
   const [executeNotebook, setExecuteNotebook] = useState(false);
   const [editable, setEditable] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [codeEditing, setCodeEditing] = useState(false);
+  const [externalChanged, setExternalChanged] = useState(false);
+  const [watchError, setWatchError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
@@ -280,10 +284,18 @@ export default function FileSurface({
   const [createName, setCreateName] = useState("");
   const [createError, setCreateError] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const dirtyRef = useRef(dirty);
+  const editorActiveRef = useRef(codeEditing || executeNotebook);
+  const localSaveUntilRef = useRef(0);
+  dirtyRef.current = dirty;
+  editorActiveRef.current = codeEditing || executeNotebook;
 
   useEffect(() => {
     setExecuteNotebook(false);
+    setCodeEditing(false);
     setDirty(false);
+    setExternalChanged(false);
+    setWatchError(false);
     setCreateKind(undefined);
     setCreateName("");
     setCreateError(undefined);
@@ -398,6 +410,26 @@ export default function FileSurface({
   }, [filesystem, refresh, route.kind, route.path]);
 
   useEffect(() => {
+    if (!filesystem || route.kind !== "file") return;
+    setExternalChanged(false);
+    setWatchError(false);
+    return startOpenFileWatch({
+      filesystem,
+      path: route.path,
+      onChange: () => {
+        if (Date.now() < localSaveUntilRef.current) return;
+        if (dirtyRef.current || editorActiveRef.current) {
+          setExternalChanged(true);
+        } else {
+          setExternalChanged(false);
+          setRefresh((value) => value + 1);
+        }
+      },
+      onError: () => setWatchError(true),
+    });
+  }, [filesystem, route.kind, route.path]);
+
+  useEffect(() => {
     if (loading || error) return;
     if (route.kind === "files" && files) {
       recordUltraliteSurfaceReady("files");
@@ -427,7 +459,15 @@ export default function FileSurface({
   const refreshFile = () => {
     if (dirty && !window.confirm("Discard unsaved changes and reload?")) return;
     setDirty(false);
+    setExternalChanged(false);
     setRefresh((value) => value + 1);
+  };
+
+  const markLocalSave = () => {
+    // The project-host watcher may deliver the corresponding write just after
+    // the save RPC resolves. Do not misclassify that local write as a conflict.
+    localSaveUntilRef.current = Date.now() + 1_500;
+    setExternalChanged(false);
   };
 
   const group = project.users_summary?.[session.accountId]?.group;
@@ -513,6 +553,19 @@ export default function FileSurface({
       />
       {loading ? <LoadingState label="Loading from the project host" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
+      {externalChanged ? (
+        <InlineAlert kind="warning">
+          This file changed on disk while it was open. Your current editor state
+          has been retained; reload from disk to inspect the newer version. A
+          save will not overwrite an unexpected newer version.
+        </InlineAlert>
+      ) : null}
+      {watchError && route.kind === "file" ? (
+        <InlineAlert kind="info">
+          Automatic change detection is unavailable. Use Reload from disk to
+          check for updates.
+        </InlineAlert>
+      ) : null}
       {route.kind === "files" && files ? (
         <>
           {canWrite ? (
@@ -614,6 +667,7 @@ export default function FileSurface({
                 notebook={notebook}
                 onDirtyChange={setDirty}
                 onSaved={(savedNotebook, savedContents) => {
+                  markLocalSave();
                   setNotebook(savedNotebook);
                   setNotebookContents(savedContents);
                 }}
@@ -646,7 +700,11 @@ export default function FileSurface({
               contents={contents}
               filesystem={filesystem!}
               onDirtyChange={setDirty}
-              onSaved={setContents}
+              onEditingChange={setCodeEditing}
+              onSaved={(saved) => {
+                markLocalSave();
+                setContents(saved);
+              }}
               path={route.path}
               readOnly={!editable || !canWrite}
             />

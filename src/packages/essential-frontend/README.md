@@ -55,6 +55,11 @@ chooses Edit, and only the selected language parser is loaded. Responsiveness
 on real source files matters more than minimizing an explicitly requested,
 cacheable editor chunk.
 
+An open file uses one direct, non-polling project-host watch that is closed on
+navigation. Read-only content reloads after an external change. Active editors
+retain their draft and show a changed-on-disk warning; optimistic saves remain
+the final protection against overwriting a newer version.
+
 PDF files may use the browser's native viewer. Complete LaTeX authoring and
 build management remain in full CoCalc.
 
