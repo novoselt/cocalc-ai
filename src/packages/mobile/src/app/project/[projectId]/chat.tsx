@@ -291,7 +291,12 @@ export default function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["bottom"]}>
-      <Stack.Screen options={{ title: `${params.title || "Codex"}` }} />
+      <Stack.Screen
+        options={{
+          headerLargeTitle: false,
+          title: `${params.title || "Codex"}`,
+        }}
+      />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={90}
@@ -332,6 +337,7 @@ export default function ChatScreen() {
           />
         ) : null}
         <FlatList
+          contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={styles.messages}
           data={snapshot.messages}
           keyExtractor={(item) => item.message_id}

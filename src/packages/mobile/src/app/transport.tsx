@@ -91,6 +91,7 @@ export default function TransportScreen() {
         style={styles.flex}
       >
         <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
         >

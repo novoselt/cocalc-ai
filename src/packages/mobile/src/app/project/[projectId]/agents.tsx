@@ -134,9 +134,13 @@ export default function ProjectAgentsScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={["bottom"]}>
       <Stack.Screen
-        options={{ title: `${params.title || "Project"} agents` }}
+        options={{
+          headerLargeTitle: false,
+          title: `${params.title || "Project"} agents`,
+        }}
       />
       <FlatList
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={sessions.length ? styles.list : styles.empty}
         data={sessions}
         keyExtractor={(item) => `${item.chat_path}:${item.thread_key}`}

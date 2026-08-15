@@ -116,6 +116,7 @@ export default function ProjectsScreen() {
     <SafeAreaView style={styles.safeArea} edges={["bottom"]}>
       <Stack.Screen options={{ title: "Projects" }} />
       <FlatList
+        contentInsetAdjustmentBehavior="automatic"
         data={window.rows}
         keyExtractor={(item) => item.project_id}
         refreshControl={
