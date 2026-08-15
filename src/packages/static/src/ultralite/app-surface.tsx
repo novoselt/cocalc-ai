@@ -10,7 +10,10 @@ import type { UltraliteSession } from "./session";
 import { fullProjectToolUrl } from "./urls";
 import { InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import { UltraliteIcon } from "./icons";
-import { recordUltraliteSurfaceReady } from "./telemetry";
+import {
+  recordUltraliteFailure,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 
 const SERVERS = [
   {
@@ -66,6 +69,7 @@ export default function AppSurface({
       setStatuses(Object.fromEntries(values));
       recordUltraliteSurfaceReady("apps");
     } catch (err) {
+      recordUltraliteFailure("apps", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setLoading(false);
@@ -104,6 +108,7 @@ export default function AppSurface({
         [name]: ready,
       }));
     } catch (err) {
+      recordUltraliteFailure("apps", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setBusy(undefined);
@@ -125,6 +130,7 @@ export default function AppSurface({
         [name]: { state: "stopped" },
       }));
     } catch (err) {
+      recordUltraliteFailure("apps", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setBusy(undefined);
@@ -144,6 +150,7 @@ export default function AppSurface({
       });
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (err) {
+      recordUltraliteFailure("apps", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setBusy(undefined);

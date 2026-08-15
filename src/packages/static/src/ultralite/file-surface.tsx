@@ -23,6 +23,7 @@ import {
 } from "./ui";
 import { UltraliteIcon } from "./icons";
 import {
+  recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -241,6 +242,7 @@ export default function FileSurface({
       })
       .catch((err) => {
         if (!cancelled) {
+          recordUltraliteFailure(route.kind === "files" ? "files" : "file", err);
           setError(err instanceof Error ? err.message : `${err}`);
           setLoading(false);
         }
@@ -305,7 +307,17 @@ export default function FileSurface({
       }
     })()
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : `${err}`);
+        if (!cancelled) {
+          recordUltraliteFailure(
+            route.kind === "files"
+              ? "files"
+              : route.path.toLowerCase().endsWith(".ipynb")
+                ? "notebook"
+                : "file",
+            err,
+          );
+          setError(err instanceof Error ? err.message : `${err}`);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

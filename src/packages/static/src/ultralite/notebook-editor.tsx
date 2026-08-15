@@ -28,6 +28,7 @@ import {
 import { InlineAlert, LoadingState } from "./ui";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
 import {
+  recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -227,6 +228,7 @@ export default function NotebookEditor({
       setNotice("Notebook saved.");
       recordUltraliteOutcome("notebook_execute", "file_save");
     } catch (err: any) {
+      recordUltraliteFailure("notebook_execute", err);
       if (err?.code === "ETAG_MISMATCH") {
         setConflict(true);
         recordUltraliteOutcome("notebook_execute", "save_conflict");
@@ -361,6 +363,7 @@ export default function NotebookEditor({
     const schedule = () => {
       queue = queue.then(process).catch((err) => {
         if (!disposed) {
+          recordUltraliteFailure("notebook_execute", err);
           setError(
             `Unable to recover live notebook execution: ${err instanceof Error ? err.message : err}`,
           );
@@ -388,6 +391,7 @@ export default function NotebookEditor({
       })
       .catch((err) => {
         if (!disposed) {
+          recordUltraliteFailure("notebook_execute", err);
           setError(
             `Live notebook recovery is unavailable: ${err instanceof Error ? err.message : err}`,
           );
@@ -499,6 +503,7 @@ export default function NotebookEditor({
       setNotice("Execution finished and notebook outputs were saved.");
       recordUltraliteOutcome("notebook_execute", "notebook_execute");
     } catch (err: any) {
+      recordUltraliteFailure("notebook_execute", err);
       if (accepted && !completed && err?.code !== "ETAG_MISMATCH") {
         detached = true;
         directRunId.current = undefined;
@@ -542,6 +547,7 @@ export default function NotebookEditor({
       });
       setKernelStatus("interrupted");
     } catch (err) {
+      recordUltraliteFailure("notebook_execute", err);
       setError(err instanceof Error ? err.message : `${err}`);
     }
   };

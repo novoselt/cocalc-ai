@@ -3,7 +3,11 @@
  * License: MS-RSL - see LICENSE.md for details
  */
 
-import { recordUltraliteOutcome, ultraliteTelemetryDetails } from "./telemetry";
+import {
+  recordUltraliteFailure,
+  recordUltraliteOutcome,
+  ultraliteTelemetryDetails,
+} from "./telemetry";
 
 test("emits only content-free constrained-client fields", async () => {
   const request = jest.fn(async (_input: unknown, _options?: RequestInit) => ({
@@ -40,4 +44,31 @@ test("summarizes browser capabilities without route identifiers", () => {
   expect(details).toMatchObject({ client: "ultralite", surface: "projects" });
   expect(details).not.toHaveProperty("project_id");
   expect(details).not.toHaveProperty("path");
+});
+
+test("classifies timeouts without sending the error message", async () => {
+  const request = jest.fn(
+    async (_input: unknown, _options?: RequestInit) => ({ ok: true }),
+  );
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: request,
+  });
+  Object.defineProperty(navigator, "sendBeacon", {
+    configurable: true,
+    value: jest.fn(() => false),
+  });
+
+  recordUltraliteFailure(
+    "files",
+    new Error("timed out while reading /home/user/private.txt"),
+  );
+  await Promise.resolve();
+
+  const payload = JSON.parse(`${request.mock.calls[0][1]?.body}`);
+  expect(payload.details).toMatchObject({
+    outcome: "timeout",
+    surface: "files",
+  });
+  expect(JSON.stringify(payload)).not.toContain("private.txt");
 });

@@ -39,6 +39,7 @@ const CONSTRAINED_OUTCOMES = new Set([
   "notebook_execute",
   "codex_prompt",
   "full_cocalc",
+  "timeout",
   "chunk_failure",
   "auth_failure",
   "routing_failure",

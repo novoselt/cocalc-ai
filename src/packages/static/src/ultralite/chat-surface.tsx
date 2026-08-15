@@ -25,6 +25,7 @@ import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import {
+  recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -123,7 +124,10 @@ function AgentList({
         await index.open();
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : `${err}`);
+        if (!cancelled) {
+          recordUltraliteFailure("chat", err);
+          setError(err instanceof Error ? err.message : `${err}`);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -295,6 +299,7 @@ export function Chat({
       if (!cancelled) setStatus("Live Codex session");
     })().catch((err) => {
       if (!cancelled) {
+        recordUltraliteFailure("chat", err);
         setError(err instanceof Error ? err.message : `${err}`);
         setStatus("Disconnected");
       }
@@ -346,6 +351,7 @@ export function Chat({
       setStatus("Prompt accepted by Codex");
       recordUltraliteOutcome("chat", "codex_prompt");
     } catch (err) {
+      recordUltraliteFailure("chat", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setSubmitting(false);
@@ -367,6 +373,7 @@ export function Chat({
       await active.reconnect("constrained-client-user-request");
       setStatus("Live Codex session");
     } catch (err) {
+      recordUltraliteFailure("chat", err);
       setError(err instanceof Error ? err.message : `${err}`);
       setStatus("Disconnected");
     } finally {
@@ -383,6 +390,7 @@ export function Chat({
       await active.interrupt(route.threadId);
       setStatus("Interrupt confirmed");
     } catch (err) {
+      recordUltraliteFailure("chat", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setInterrupting(false);

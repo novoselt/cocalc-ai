@@ -10,7 +10,10 @@ import type { UltraliteSession } from "./session";
 import { fullProjectToolUrl } from "./urls";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import { UltraliteIcon } from "./icons";
-import { recordUltraliteSurfaceReady } from "./telemetry";
+import {
+  recordUltraliteFailure,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 
 function hourlyPrice(vm: ComputeVm): string {
   const machine = Number(
@@ -102,6 +105,7 @@ export default function VmSurface({
       );
       recordUltraliteSurfaceReady("vms");
     } catch (err) {
+      recordUltraliteFailure("vms", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setLoading(false);
@@ -135,6 +139,7 @@ export default function VmSurface({
       setNotice(`${vm.name} is ${running ? "starting" : "stopping"}.`);
       await load();
     } catch (err) {
+      recordUltraliteFailure("vms", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setBusyId(undefined);

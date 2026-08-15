@@ -30,6 +30,7 @@ export type UltraliteOutcome =
   | "notebook_execute"
   | "codex_prompt"
   | "full_cocalc"
+  | "timeout"
   | "chunk_failure"
   | "auth_failure"
   | "routing_failure"
@@ -165,4 +166,14 @@ export function recordUltraliteOutcome(
 ): void {
   performance.mark?.(`cocalc-ultralite:${surface}:${outcome}`);
   send("constrained_outcome_v1", surface, outcome);
+}
+
+export function recordUltraliteFailure(
+  surface: UltraliteSurface,
+  error: unknown,
+): void {
+  const message = error instanceof Error ? error.message : `${error ?? ""}`;
+  if (/timed?\s*out|timeout/i.test(message)) {
+    recordUltraliteOutcome(surface, "timeout");
+  }
 }

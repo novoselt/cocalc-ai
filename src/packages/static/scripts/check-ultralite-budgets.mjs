@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 
 const KiB = 1024;
@@ -32,11 +32,14 @@ function uniqueAssets(chunkNames) {
   return [...assets.values()];
 }
 
-function brotliBytes(chunkNames) {
-  return uniqueAssets(chunkNames).reduce(
-    (sum, asset) => sum + asset.brotliBytes,
-    0,
-  );
+function assetSummary(chunkNames) {
+  const assets = uniqueAssets(chunkNames);
+  return {
+    requests: assets.length,
+    rawBytes: assets.reduce((sum, asset) => sum + asset.rawBytes, 0),
+    gzipBytes: assets.reduce((sum, asset) => sum + asset.gzipBytes, 0),
+    brotliBytes: assets.reduce((sum, asset) => sum + asset.brotliBytes, 0),
+  };
 }
 
 const initial = findNamedGroup("ultralite");
@@ -130,10 +133,13 @@ const forbidden = [
 ];
 
 let failed = false;
+const report = [];
 for (const surface of surfaces) {
-  const bytes = brotliBytes(surface.chunks);
+  const summary = assetSummary(surface.chunks);
+  const bytes = summary.brotliBytes;
+  report.push({ label: surface.label, limitBytes: surface.max, ...summary });
   console.log(
-    `ultralite ${surface.label}: brotli=${(bytes / KiB).toFixed(1)} KiB limit=${(surface.max / KiB).toFixed(0)} KiB`,
+    `ultralite ${surface.label}: raw=${(summary.rawBytes / KiB).toFixed(1)} KiB gzip=${(summary.gzipBytes / KiB).toFixed(1)} KiB brotli=${(bytes / KiB).toFixed(1)} KiB requests=${summary.requests} limit=${(surface.max / KiB).toFixed(0)} KiB`,
   );
   if (bytes > surface.max) {
     failed = true;
@@ -153,5 +159,10 @@ for (const surface of surfaces) {
     }
   }
 }
+
+writeFileSync(
+  resolve(output, "ultralite-budget-report.json"),
+  `${JSON.stringify({ generatedAt: new Date().toISOString(), surfaces: report }, null, 2)}\n`,
+);
 
 if (failed) process.exit(1);

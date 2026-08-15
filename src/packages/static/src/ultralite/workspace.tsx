@@ -8,6 +8,7 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { getAccountProjectWindow, type AuthBootstrap } from "./api";
 import type { UltraliteRoute } from "./routes";
 import {
+  recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -206,6 +207,7 @@ export default function Workspace({
       })
       .catch((err) => {
         if (!cancelled && !controller.signal.aborted) {
+          recordUltraliteFailure("project", err);
           setError(err instanceof Error ? err.message : `${err}`);
         }
       });
@@ -226,6 +228,7 @@ export default function Workspace({
       })
       .catch((err) => {
         if (!cancelled) {
+          recordUltraliteFailure("project", err);
           recordUltraliteOutcome("project", "routing_failure");
           setError(err instanceof Error ? err.message : `${err}`);
         }

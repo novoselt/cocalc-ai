@@ -7,7 +7,10 @@ import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects
 import { useEffect, useRef, useState } from "react";
 import { getAccountProjectWindow, type AuthBootstrap } from "./api";
 import { navigate } from "./routes";
-import { recordUltraliteSurfaceReady } from "./telemetry";
+import {
+  recordUltraliteFailure,
+  recordUltraliteSurfaceReady,
+} from "./telemetry";
 import {
   EmptyState,
   InlineAlert,
@@ -65,6 +68,7 @@ export default function ProjectsWorkspace({
       );
       setHasMore(result.hasMore);
     } catch (err) {
+      recordUltraliteFailure("projects", err);
       if (generation === request.current) {
         setError(err instanceof Error ? err.message : `${err}`);
       }

@@ -19,6 +19,7 @@ import {
 } from "./prism-languages";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
 import {
+  recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -180,6 +181,7 @@ export default function CodeView({
       setNotice("Saved.");
       recordUltraliteOutcome("editor", "file_save");
     } catch (err: any) {
+      recordUltraliteFailure("editor", err);
       if (err?.code === "ETAG_MISMATCH") {
         recordUltraliteOutcome("editor", "save_conflict");
         setConflict(true);
