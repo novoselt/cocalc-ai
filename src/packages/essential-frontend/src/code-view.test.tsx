@@ -6,9 +6,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import CodeView from "./code-view";
 import { navigate } from "./routes";
-import { saveTextJournal } from "@cocalc/conat/project/edit-journal";
+import {
+  editJournalAvailable,
+  saveTextJournal,
+} from "@cocalc/conat/project/edit-journal";
 
 jest.mock("@cocalc/conat/project/edit-journal", () => ({
+  editJournalAvailable: jest.fn(async () => true),
   saveTextJournal: jest.fn(),
 }));
 
@@ -84,11 +88,13 @@ function props(writeFileIfUnchanged = jest.fn(async () => undefined)) {
 }
 
 afterEach(() => {
+  editJournalAvailableMock.mockReset().mockResolvedValue(true);
   saveTextJournalMock.mockReset();
   jest.restoreAllMocks();
 });
 
 const saveTextJournalMock = jest.mocked(saveTextJournal);
+const editJournalAvailableMock = jest.mocked(editJournalAvailable);
 
 test("saves exactly against the version that was opened", async () => {
   const value = props();
@@ -177,6 +183,33 @@ test("saves editor operations through the project-host journal", async () => {
       }),
     }),
   );
+});
+
+test("falls back safely while a project host lacks the journal service", async () => {
+  editJournalAvailableMock.mockResolvedValue(false);
+  const value = {
+    ...props(),
+    project: {
+      host_id: "host-1",
+      project_id: "11111111-1111-4111-8111-111111111111",
+    } as any,
+    session: {
+      accountId: "00000000-0000-4000-8000-000000000001",
+      openProjectHost: jest.fn(async () => ({ client: {} })),
+    } as any,
+  };
+  render(<CodeView {...value} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(
+    await screen.findByRole("textbox", { name: "Edit notes.txt" }),
+    { target: { value: "new\n" } },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() =>
+    expect(value.filesystem.writeFileIfUnchanged).toHaveBeenCalledTimes(1),
+  );
+  expect(saveTextJournalMock).not.toHaveBeenCalled();
 });
 
 test("can cancel constrained-client navigation while dirty", async () => {

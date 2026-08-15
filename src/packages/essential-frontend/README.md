@@ -190,6 +190,12 @@ collaboration, serializes writes per document, bounds patch and notebook sizes,
 and rejects stale disk baselines. It does not poll, proxy through the hub, or
 introduce a second history store.
 
+The client checks journal-service availability once per project-host connection
+and caches the result. During a rolling deployment, an older host safely falls
+back to the existing optimistic disk write rather than making editing
+unavailable; a refreshed connection uses Patchflow as soon as the host supports
+it.
+
 ## Performance Contract
 
 - The signed-in shell, project list, and read-only file listing never load

@@ -14,7 +14,10 @@ import {
   openJupyterLiveRunStore,
   type JupyterLiveRunSnapshot,
 } from "@cocalc/conat/project/jupyter/live-run";
-import { saveNotebookJournal } from "@cocalc/conat/project/edit-journal";
+import {
+  editJournalAvailable,
+  saveNotebookJournal,
+} from "@cocalc/conat/project/edit-journal";
 import { syncdbPath } from "@cocalc/util/jupyter/names";
 import { useEffect, useRef, useState, type RefCallback } from "react";
 import CodeMirrorEditor, {
@@ -326,6 +329,7 @@ export default function NotebookEditor({
     const contents = serializeNotebook(candidate);
     let savedContents = contents;
     let savedNotebook = candidate;
+    let savedWithJournal = false;
     if (
       project.host_id &&
       session.accountId &&
@@ -340,27 +344,37 @@ export default function NotebookEditor({
         const batch = cellEditors.current.get(cell.id)?.getJournalBatch();
         return batch ? [{ cell_id: cell.id, patch: batch.patch }] : [];
       });
-      const response = await saveNotebookJournal({
-        client: opened.client,
-        account_id: session.accountId,
-        project_id: project.project_id,
-        request: {
-          path,
-          base_sha256: await sha256Text(baseContents),
-          journal_id: journalId.current,
-          sequence: journalSequence.current,
-          contents,
-          cell_patches,
-        },
-      });
-      journalSequence.current += 1;
-      savedContents = response.contents;
-      savedNotebook = parseNotebook(savedContents);
-      for (const cell of savedNotebook.cells) {
-        if (!cell.id) continue;
-        cellEditors.current.get(cell.id)?.acknowledgeJournal(cellInput(cell));
+      if (
+        await editJournalAvailable({
+          client: opened.client,
+          account_id: session.accountId,
+          project_id: project.project_id,
+        })
+      ) {
+        const response = await saveNotebookJournal({
+          client: opened.client,
+          account_id: session.accountId,
+          project_id: project.project_id,
+          request: {
+            path,
+            base_sha256: await sha256Text(baseContents),
+            journal_id: journalId.current,
+            sequence: journalSequence.current,
+            contents,
+            cell_patches,
+          },
+        });
+        journalSequence.current += 1;
+        savedContents = response.contents;
+        savedNotebook = parseNotebook(savedContents);
+        savedWithJournal = true;
+        for (const cell of savedNotebook.cells) {
+          if (!cell.id) continue;
+          cellEditors.current.get(cell.id)?.acknowledgeJournal(cellInput(cell));
+        }
       }
-    } else {
+    }
+    if (!savedWithJournal) {
       await filesystem.writeFileIfUnchanged(path, contents, baseContents, true);
       for (const editor of cellEditors.current.values()) editor.markClean();
     }

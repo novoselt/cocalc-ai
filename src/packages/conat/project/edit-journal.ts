@@ -9,6 +9,7 @@ import { isValidUUID } from "@cocalc/util/misc";
 
 const SERVICE_NAME = "edit-journal";
 const DEFAULT_TIMEOUT = 30_000;
+const availability = new WeakMap<ConatClient, Map<string, Promise<boolean>>>();
 
 export interface EditJournalIdentity {
   account_id: string;
@@ -82,6 +83,26 @@ export function parseEditJournalSubject(subject?: string): EditJournalIdentity {
     account_id: requireUuid("account_id", account_id),
     project_id: requireUuid("project_id", parts[3] ?? ""),
   };
+}
+
+export async function editJournalAvailable({
+  client,
+  account_id,
+  project_id,
+}: EditJournalIdentity & { client: ConatClient }): Promise<boolean> {
+  if (typeof client.interest !== "function") return true;
+  const subject = editJournalSubject({ account_id, project_id });
+  let clientAvailability = availability.get(client);
+  if (!clientAvailability) {
+    clientAvailability = new Map();
+    availability.set(client, clientAvailability);
+  }
+  let result = clientAvailability.get(subject);
+  if (!result) {
+    result = client.interest(subject).catch(() => false);
+    clientAvailability.set(subject, result);
+  }
+  return await result;
 }
 
 async function callEditJournal<T>({

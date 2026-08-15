@@ -4,6 +4,7 @@
  */
 
 import {
+  editJournalAvailable,
   editJournalSubject,
   parseEditJournalSubject,
   saveTextJournal,
@@ -55,5 +56,17 @@ describe("project edit journal client", () => {
       ["saveText", [expect.objectContaining({ sequence: 1 })]],
       expect.objectContaining({ waitForInterest: true }),
     );
+  });
+
+  it("caches project-host service availability per client", async () => {
+    const interest = jest.fn(async () => false);
+    const client = { interest } as any;
+    await expect(
+      editJournalAvailable({ client, account_id, project_id }),
+    ).resolves.toBe(false);
+    await expect(
+      editJournalAvailable({ client, account_id, project_id }),
+    ).resolves.toBe(false);
+    expect(interest).toHaveBeenCalledTimes(1);
   });
 });

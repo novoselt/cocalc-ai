@@ -231,29 +231,40 @@ export default function CodeView({
     try {
       const batch = editorRef.current?.getJournalBatch?.();
       let saved = next;
+      let savedWithJournal = false;
       if (batch && project?.host_id && session) {
-        const { saveTextJournal } =
+        const { editJournalAvailable, saveTextJournal } =
           await import("@cocalc/conat/project/edit-journal");
         const lease = await session.openProjectHost(
           project.project_id,
           project.host_id,
         );
-        const response = await saveTextJournal({
-          client: lease.client,
-          account_id: session.accountId,
-          project_id: project.project_id,
-          request: {
-            path,
-            base_sha256: await sha256Text(batch.base),
-            journal_id: journalId.current,
-            sequence: journalSequence.current,
-            patch: batch.patch,
-          },
-        });
-        journalSequence.current += 1;
-        saved = response.contents;
-        editorRef.current?.acknowledgeJournal(saved);
-      } else {
+        if (
+          await editJournalAvailable({
+            client: lease.client,
+            account_id: session.accountId,
+            project_id: project.project_id,
+          })
+        ) {
+          const response = await saveTextJournal({
+            client: lease.client,
+            account_id: session.accountId,
+            project_id: project.project_id,
+            request: {
+              path,
+              base_sha256: await sha256Text(batch.base),
+              journal_id: journalId.current,
+              sequence: journalSequence.current,
+              patch: batch.patch,
+            },
+          });
+          journalSequence.current += 1;
+          saved = response.contents;
+          savedWithJournal = true;
+          editorRef.current?.acknowledgeJournal(saved);
+        }
+      }
+      if (!savedWithJournal) {
         await filesystem.writeFileIfUnchanged(path, next, base, true);
         editorRef.current?.markClean();
       }
