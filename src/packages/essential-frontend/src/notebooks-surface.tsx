@@ -68,7 +68,18 @@ async function findNotebooks(
   filesystem: FilesystemClient,
 ): Promise<RecentNotebook[]> {
   const result = await filesystem.find(HOME, {
-    options: ["-type", "f", "-name", "*.ipynb"],
+    options: [
+      "(",
+      "-path",
+      "*/.*",
+      "-prune",
+      ")",
+      "-o",
+      "-type",
+      "f",
+      "-name",
+      "*.ipynb",
+    ],
     linux: ["-printf", FIND_FORMAT],
     maxSize: 512 * 1024,
     timeout: 20_000,

@@ -71,6 +71,23 @@ test("reuses the session cache until the user explicitly refreshes", async () =>
     }),
   ).toBeVisible();
   expect(find).toHaveBeenCalledTimes(1);
+  expect(find).toHaveBeenCalledWith("/home/user", {
+    linux: ["-printf", "%T@\t%P\n"],
+    maxSize: 512 * 1024,
+    options: [
+      "(",
+      "-path",
+      "*/.*",
+      "-prune",
+      ")",
+      "-o",
+      "-type",
+      "f",
+      "-name",
+      "*.ipynb",
+    ],
+    timeout: 20_000,
+  });
 
   rendered!.unmount();
   await act(async () => {
