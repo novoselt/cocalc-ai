@@ -33,6 +33,74 @@ type ConnectionState =
   | "exited";
 
 const SPAWN_TIMEOUT_MS = 15_000;
+const MAX_AUTO_RESPONSE_BUFFER = 4_096;
+
+export function extractTerminalAutoResponses(buffer: string): {
+  remaining: string;
+  responses: string[];
+} {
+  const responses: string[] = [];
+  while (buffer.length > 0) {
+    const escapeIndex = buffer.indexOf("\u001b");
+    if (escapeIndex === -1) {
+      buffer = "";
+      break;
+    }
+    if (escapeIndex > 0) {
+      buffer = buffer.slice(escapeIndex);
+    }
+    if (buffer.length < 2) break;
+
+    const prefix = buffer[1];
+    let consumed = 0;
+    if (prefix === "[") {
+      const match = buffer.match(/^\u001b\[[0-9:;<=>?]*[ -/]*[@-~]/);
+      if (match) {
+        consumed = match[0].length;
+        responses.push(match[0]);
+      }
+    } else if (prefix === "]") {
+      const bellIndex = buffer.indexOf("\u0007", 2);
+      const stringTerminatorIndex = buffer.indexOf("\u001b\\", 2);
+      let endIndex = -1;
+      if (
+        bellIndex !== -1 &&
+        (stringTerminatorIndex === -1 || bellIndex < stringTerminatorIndex)
+      ) {
+        endIndex = bellIndex + 1;
+      } else if (stringTerminatorIndex !== -1) {
+        endIndex = stringTerminatorIndex + 2;
+      }
+      if (endIndex !== -1) {
+        consumed = endIndex;
+        responses.push(buffer.slice(0, endIndex));
+      }
+    } else if (prefix === "P" || prefix === "^" || prefix === "_") {
+      const stringTerminatorIndex = buffer.indexOf("\u001b\\", 2);
+      if (stringTerminatorIndex !== -1) {
+        consumed = stringTerminatorIndex + 2;
+        responses.push(buffer.slice(0, consumed));
+      }
+    } else {
+      const charCode = prefix.charCodeAt(0);
+      if (charCode >= 0x20 && charCode <= 0x2f) {
+        if (buffer.length >= 3) {
+          const match = buffer.match(/^\u001b[ -/]+[0-~]/);
+          if (match) {
+            consumed = match[0].length;
+            responses.push(match[0]);
+          }
+        }
+      } else if (charCode >= 0x40 && charCode <= 0x7e) {
+        consumed = 2;
+        responses.push(buffer.slice(0, consumed));
+      }
+    }
+    if (consumed === 0) break;
+    buffer = buffer.slice(consumed);
+  }
+  return { remaining: buffer, responses };
+}
 
 export function writeTerminalInput(
   terminal: TerminalClient | undefined,
@@ -75,6 +143,8 @@ export default function TerminalSurface({
   const fitRef = useRef<FitAddon | undefined>(undefined);
   const ptyRef = useRef<TerminalClient | undefined>(undefined);
   const connectGeneration = useRef(0);
+  const autoResponseBuffer = useRef("");
+  const historyReplayDepth = useRef(0);
   const renderingOutput = useRef(0);
   const resizeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -86,13 +156,20 @@ export default function TerminalSurface({
 
   const sessionId = `ultralite-${session.accountId}`;
 
-  const writeTerminalOutput = (data: string) => {
+  const writeTerminalOutput = (data: string, fromHistory = false) => {
     const xterm = xtermRef.current;
     if (!xterm || !data) return;
     renderingOutput.current += 1;
+    if (fromHistory) historyReplayDepth.current += 1;
     xterm.write(data, () => {
       setTimeout(() => {
         renderingOutput.current = Math.max(0, renderingOutput.current - 1);
+        if (fromHistory) {
+          historyReplayDepth.current = Math.max(
+            0,
+            historyReplayDepth.current - 1,
+          );
+        }
       }, 0);
     });
   };
@@ -137,11 +214,34 @@ export default function TerminalSurface({
     const observer = new ResizeObserver(fitAndResize);
     observer.observe(host);
     const input = xterm.onData((data) => {
-      writeTerminalInput(
-        ptyRef.current,
-        data,
-        renderingOutput.current > 0 ? "auto" : "user",
+      if (renderingOutput.current === 0) {
+        autoResponseBuffer.current = "";
+        writeTerminalInput(ptyRef.current, data, "user");
+        return;
+      }
+      if (historyReplayDepth.current > 0) {
+        autoResponseBuffer.current = "";
+        return;
+      }
+      if (
+        !data.includes("\u001b") &&
+        !autoResponseBuffer.current.includes("\u001b")
+      ) {
+        return;
+      }
+      autoResponseBuffer.current += data;
+      if (autoResponseBuffer.current.length > MAX_AUTO_RESPONSE_BUFFER) {
+        autoResponseBuffer.current = autoResponseBuffer.current.slice(
+          -MAX_AUTO_RESPONSE_BUFFER,
+        );
+      }
+      const { remaining, responses } = extractTerminalAutoResponses(
+        autoResponseBuffer.current,
       );
+      autoResponseBuffer.current = remaining;
+      for (const response of responses) {
+        writeTerminalInput(ptyRef.current, response, "auto");
+      }
     });
     const key = xterm.onKey(({ key }) => {
       if (renderingOutput.current > 0) {
@@ -159,6 +259,8 @@ export default function TerminalSurface({
       ptyRef.current?.close();
       ptyRef.current = undefined;
       xterm.dispose();
+      autoResponseBuffer.current = "";
+      historyReplayDepth.current = 0;
       renderingOutput.current = 0;
       xtermRef.current = undefined;
       fitRef.current = undefined;
@@ -301,7 +403,7 @@ export default function TerminalSurface({
       }
       if (history) {
         xtermRef.current?.reset();
-        writeTerminalOutput(history);
+        writeTerminalOutput(history, true);
       }
       try {
         fitRef.current?.fit();

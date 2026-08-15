@@ -7,6 +7,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import type { UltraliteSession } from "./session";
 
+let mockXtermOnData: ((data: string) => void) | undefined;
+let mockXtermOnKey: ((event: { key: string }) => void) | undefined;
+
 jest.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
@@ -21,10 +24,12 @@ jest.mock("@xterm/xterm", () => ({
     write(_data: string, callback?: () => void) {
       callback?.();
     }
-    onData() {
+    onData(callback: (data: string) => void) {
+      mockXtermOnData = callback;
       return { dispose: jest.fn() };
     }
-    onKey() {
+    onKey(callback: (event: { key: string }) => void) {
+      mockXtermOnKey = callback;
       return { dispose: jest.fn() };
     }
   },
@@ -45,6 +50,7 @@ const {
 } = require("@cocalc/conat/project/terminal");
 const {
   default: TerminalSurface,
+  extractTerminalAutoResponses,
   writeTerminalInput,
 } = require("./terminal-surface");
 
@@ -107,6 +113,29 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockXtermOnData = undefined;
+  mockXtermOnKey = undefined;
+});
+
+test("extracts only complete xterm protocol responses", () => {
+  expect(extractTerminalAutoResponses("ordinary keyboard input")).toEqual({
+    remaining: "",
+    responses: [],
+  });
+  expect(extractTerminalAutoResponses("\u001b[12;34R")).toEqual({
+    remaining: "",
+    responses: ["\u001b[12;34R"],
+  });
+  expect(extractTerminalAutoResponses("\u001b]10;rgb:ffff/ffff/ffff")).toEqual({
+    remaining: "\u001b]10;rgb:ffff/ffff/ffff",
+    responses: [],
+  });
+  expect(
+    extractTerminalAutoResponses("\u001b]10;rgb:ffff/ffff/ffff\u0007"),
+  ).toEqual({
+    remaining: "",
+    responses: ["\u001b]10;rgb:ffff/ffff/ffff\u0007"],
+  });
 });
 
 test("viewing Terminal never starts project compute or creates a PTY", async () => {
@@ -141,8 +170,13 @@ test("a canceled start confirmation leaves the stopped project unchanged", async
 
 test("an approved connection starts compute and uses the direct terminal client", async () => {
   const confirm = jest.spyOn(window, "confirm").mockReturnValue(true);
-  const { ensureProjectRunning, openProjectHost, session, terminal } =
-    makeSession();
+  const {
+    ensureProjectRunning,
+    openProjectHost,
+    session,
+    socketHandlers,
+    terminal,
+  } = makeSession();
   render(<TerminalSurface project={project} session={session} />);
   await screen.findByText(/This project is stopped/);
   fireEvent.click(screen.getByRole("button", { name: "Connect terminal" }));
@@ -168,6 +202,18 @@ test("an approved connection starts compute and uses the direct terminal client"
     id: "ultralite-22222222-2222-4222-8222-222222222222",
     timeout: 15_000,
   });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  terminal.socket.write.mockClear();
+  mockXtermOnData?.("a");
+  socketHandlers.data?.("server output");
+  mockXtermOnKey?.({ key: "x" });
+  mockXtermOnData?.("x");
+  mockXtermOnData?.("\u001b[1;2R");
+  expect(terminal.socket.write.mock.calls).toEqual([
+    [{ data: "a", kind: "user" }],
+    [{ data: "x", kind: "user" }],
+    [{ data: "\u001b[1;2R", kind: "auto" }],
+  ]);
   writeTerminalInput(terminal, "ls\r");
   expect(terminal.socket.write).toHaveBeenCalledWith({
     data: "ls\r",
