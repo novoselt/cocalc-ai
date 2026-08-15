@@ -46,6 +46,7 @@ jest.mock("@cocalc/server/membership/allocation-analytics", () => ({
 
 describe("maintainMembershipAnalytics", () => {
   beforeEach(() => {
+    jest.resetModules();
     jest.useFakeTimers({ now: new Date("2026-07-01T17:20:00.000Z") });
     mockPoolQuery.mockReset();
     mockEnsureMembershipAnalyticsTables
@@ -109,5 +110,45 @@ describe("maintainMembershipAnalytics", () => {
     expect(
       mockProjectOutstandingMembershipAllocationFacts,
     ).toHaveBeenCalledWith({ limit: 1000 });
+  });
+
+  it("rechecks an empty legacy backfill daily instead of every maintenance pass", async () => {
+    mockPoolQuery.mockResolvedValue({ rowCount: 1 });
+
+    const maintainMembershipAnalytics = (
+      await import("./maintain-membership-analytics")
+    ).default;
+
+    await maintainMembershipAnalytics();
+    await maintainMembershipAnalytics();
+
+    expect(mockBackfillMembershipAllocationFacts).toHaveBeenCalledTimes(1);
+    expect(
+      mockProjectOutstandingMembershipAllocationFacts,
+    ).toHaveBeenCalledTimes(2);
+
+    jest.advanceTimersByTime(24 * 60 * 60 * 1000);
+    await maintainMembershipAnalytics();
+
+    expect(mockBackfillMembershipAllocationFacts).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues draining a legacy backfill while it makes progress", async () => {
+    mockPoolQuery.mockResolvedValue({ rowCount: 1 });
+    mockBackfillMembershipAllocationFacts.mockResolvedValue({
+      trials: 0,
+      personal_purchases: 1,
+      direct_student_purchases: 0,
+      refunds: 0,
+    });
+
+    const maintainMembershipAnalytics = (
+      await import("./maintain-membership-analytics")
+    ).default;
+
+    await maintainMembershipAnalytics();
+    await maintainMembershipAnalytics();
+
+    expect(mockBackfillMembershipAllocationFacts).toHaveBeenCalledTimes(2);
   });
 });

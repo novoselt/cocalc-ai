@@ -14,6 +14,14 @@ import { backfillMembershipAllocationFacts } from "@cocalc/server/membership/all
 import { projectOutstandingMembershipAllocationFacts } from "@cocalc/server/membership/allocation-analytics";
 
 const logger = getLogger("purchases:maintain-membership-analytics");
+const EMPTY_BACKFILL_RECHECK_MS = 24 * 60 * 60 * 1000;
+let backfillNotBefore = 0;
+
+function backfillMadeProgress(
+  result: Awaited<ReturnType<typeof backfillMembershipAllocationFacts>>,
+): boolean {
+  return Object.values(result).some((count) => count > 0);
+}
 
 function todayUtc(): string {
   const now = new Date();
@@ -62,7 +70,15 @@ export default async function maintainMembershipAnalytics(): Promise<void> {
     });
   }
 
-  const backfill = await backfillMembershipAllocationFacts({ limit: 250 });
+  let backfill:
+    | Awaited<ReturnType<typeof backfillMembershipAllocationFacts>>
+    | undefined;
+  if (Date.now() >= backfillNotBefore) {
+    backfill = await backfillMembershipAllocationFacts({ limit: 250 });
+    backfillNotBefore = backfillMadeProgress(backfill)
+      ? 0
+      : Date.now() + EMPTY_BACKFILL_RECHECK_MS;
+  }
   const projected = await projectOutstandingMembershipAllocationFacts({
     limit: 1000,
   });

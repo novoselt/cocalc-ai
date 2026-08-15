@@ -14,7 +14,7 @@ import {
   Typography,
 } from "antd";
 import dayjs from "dayjs";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type {
   AdminMembershipTierRow,
@@ -260,15 +260,18 @@ export function MembershipAnalyticsAdmin() {
   const [chartMode, setChartMode] =
     useState<MembershipAnalyticsChartMode>("stacked");
   const [hoverDay, setHoverDay] = useState<string>();
+  const [allHistoryLoaded, setAllHistoryLoaded] = useState(false);
+  const loadSequence = useRef(0);
 
-  const load = useEffectEvent(async () => {
+  const load = useEffectEvent(async (start: string) => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
     try {
       const end = shiftMembershipAnalyticsDay(todayUtc(), 1);
       const [allocationResult, tierResult] = await Promise.all([
         webapp_client.conat_client.hub.purchases.getMembershipAllocationSeries({
-          start: fullHistoryStart(),
+          start,
           end,
           channels: ["personal", "direct-student"],
         }),
@@ -276,18 +279,31 @@ export function MembershipAnalyticsAdmin() {
           {},
         ),
       ]);
+      if (sequence !== loadSequence.current) return;
       setAllocation(allocationResult);
       setTiers(tierMetadata(tierResult.tiers ?? []));
+      setAllHistoryLoaded(start === fullHistoryStart());
     } catch (err) {
+      if (sequence !== loadSequence.current) return;
       setError(`${err}`);
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) {
+        setLoading(false);
+      }
     }
   });
 
   useEffect(() => {
-    void load();
+    void load(queryStart());
   }, []);
+
+  function selectPeriod(value: string | number) {
+    const nextPeriod = value as Period;
+    setPeriod(nextPeriod);
+    if (nextPeriod === "all" && !allHistoryLoaded) {
+      void load(fullHistoryStart());
+    }
+  }
 
   const earliest = allocation?.rows.length
     ? allocation.rows
@@ -343,7 +359,7 @@ export function MembershipAnalyticsAdmin() {
               { value: "year", label: "Last year" },
               { value: "all", label: "All" },
             ]}
-            onChange={(value) => setPeriod(value as Period)}
+            onChange={selectPeriod}
           />
         </Space>
         <Space>

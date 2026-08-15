@@ -246,7 +246,8 @@ async function backfillPersonalPurchases({
             EXISTS (
               SELECT 1
                 FROM purchases earlier
-               WHERE earlier.description->>'type'='membership'
+               WHERE earlier.service='membership'
+                 AND earlier.description->>'type'='membership'
                  AND earlier.description->>'subscription_id'=
                      p.description->>'subscription_id'
                  AND (earlier.time, earlier.id) < (p.time, p.id)

@@ -148,6 +148,11 @@ Table({
     pg_indexes: ["account_id"],
     pg_custom_indexes: [
       {
+        name: "subscriptions_membership_trial_analytics_backfill_idx",
+        query:
+          "(created, id) WHERE metadata->>'type'='membership' AND metadata->>'trial'='true'",
+      },
+      {
         name: "subscriptions_one_renewable_personal_membership_idx",
         query:
           "(account_id) WHERE metadata->>'type'='membership' AND status != 'canceled'",
