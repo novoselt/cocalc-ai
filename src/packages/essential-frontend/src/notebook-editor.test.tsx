@@ -12,11 +12,41 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { openJupyterLiveRunStore } from "@cocalc/conat/project/jupyter/live-run";
-import NotebookEditor, { notebookOutputFromMessage } from "./notebook-editor";
+import NotebookEditor, {
+  insertNotebookCellBelow,
+  notebookOutputFromMessage,
+} from "./notebook-editor";
 
 jest.mock("@cocalc/conat/project/jupyter/live-run", () => ({
   openJupyterLiveRunStore: jest.fn(),
 }));
+
+jest.mock("./codemirror-editor", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const Editor = React.forwardRef<any, any>((props, ref) => {
+    const [value, setValue] = React.useState(props.initialValue);
+    React.useImperativeHandle(ref, () => ({
+      focus: jest.fn(),
+      getValue: () => value,
+      markClean: jest.fn(),
+      replaceValue: setValue,
+    }));
+    return (
+      <textarea
+        aria-label={props.ariaLabel}
+        onChange={(event) => {
+          setValue(event.target.value);
+          props.onChange?.(event.target.value);
+          props.onDirtyChange?.(true);
+        }}
+        readOnly={props.readOnly}
+        value={value}
+      />
+    );
+  });
+  Editor.displayName = "MockCodeMirrorEditor";
+  return { __esModule: true, default: Editor };
+});
 
 const openJupyterLiveRunStoreMock = jest.mocked(openJupyterLiveRunStore);
 
@@ -253,6 +283,20 @@ test("adds, moves, and deletes focused notebook cells", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Delete cell 1" }));
   expect(screen.queryByText("markdown cell 1")).not.toBeInTheDocument();
   confirm.mockRestore();
+});
+
+test("inserts a code cell directly below the selected cell", () => {
+  const notebook = JSON.parse(baseContents);
+  const inserted = insertNotebookCellBelow(notebook, 0);
+
+  expect(inserted.notebook.cells).toHaveLength(2);
+  expect(inserted.notebook.cells[1]).toMatchObject({
+    cell_type: "code",
+    id: inserted.cellId,
+    outputs: [],
+    source: "",
+  });
+  expect(notebook.cells).toHaveLength(1);
 });
 
 test("converts only bounded safe Jupyter output", () => {

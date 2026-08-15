@@ -49,6 +49,7 @@ const workspace = findNamedGroup("ultralite-workspace");
 const files = findNamedGroup("ultralite-files");
 const code = findNamedGroup("ultralite-code");
 const notebookExecute = findNamedGroup("ultralite-notebook-execute");
+const notebooks = findNamedGroup("ultralite-notebooks");
 const chat = findNamedGroup("ultralite-chat");
 const vms = findNamedGroup("ultralite-vms");
 const apps = findNamedGroup("ultralite-apps");
@@ -110,15 +111,37 @@ function largestOptionalGroup(groups) {
 
 const largestCodeMirrorLanguage = largestOptionalGroup(codeMirrorLanguages);
 const largestPrismLanguage = largestOptionalGroup(prismLanguages);
-// Rspack associates the lazy CM6 shared core with the parent code-view chunk
-// group even though React does not request it until <LazyCodeMirrorEditor> is
-// rendered. Keep it out of the read-only route while retaining it in the
-// editor route below.
-const readOnlyCode = code.filter(
-  (chunkName) =>
-    !Object.keys(chunks[chunkName]?.importers ?? {}).some((moduleName) =>
-      moduleName.includes("node_modules/.pnpm/@codemirror+"),
-    ),
+function containsModule(chunkName, patterns) {
+  return (chunks[chunkName]?.modules ?? []).some((moduleName) =>
+    patterns.some((pattern) => moduleName.includes(pattern)),
+  );
+}
+
+const codeMirrorPatterns = [
+  "node_modules/.pnpm/@codemirror+",
+  "essential-frontend/dist/codemirror-languages.js",
+];
+const markdownDependencyPatterns = [
+  "node_modules/.pnpm/entities@",
+  "node_modules/.pnpm/linkify-it@",
+  "node_modules/.pnpm/markdown-it@",
+  "node_modules/.pnpm/mdurl@",
+  "node_modules/.pnpm/punycode.js@",
+  "node_modules/.pnpm/uc.micro@",
+];
+
+// Rspack reports nested lazy chunks as descendants of the code-view group.
+// Model what the browser actually requests for each conditional surface: a
+// source preview does not fetch either CM6 or markdown-it, while a non-Markdown
+// editor does not fetch markdown-it.
+const markdownCode = code.filter(
+  (chunkName) => !containsModule(chunkName, codeMirrorPatterns),
+);
+const readOnlyCode = markdownCode.filter(
+  (chunkName) => !containsModule(chunkName, markdownDependencyPatterns),
+);
+const textEditorCode = code.filter(
+  (chunkName) => !containsModule(chunkName, markdownDependencyPatterns),
 );
 console.log(
   `ultralite editor largest language: ${largestCodeMirrorLanguage.language} (${(largestCodeMirrorLanguage.bytes / KiB).toFixed(1)} KiB Brotli)`,
@@ -149,6 +172,23 @@ const surfaces = [
     max: 450 * KiB,
   },
   {
+    label: "rendered Markdown",
+    chunks: [...initial, ...workspace, ...files, ...markdownCode],
+    max: 500 * KiB,
+  },
+  {
+    label: "rendered Markdown with mathematics",
+    chunks: [
+      ...initial,
+      ...workspace,
+      ...files,
+      ...markdownCode,
+      ...katexComponent,
+      ...katex,
+    ],
+    max: 650 * KiB,
+  },
+  {
     label: "text and code editor",
     // Only the parser for the selected file is requested. Count the largest
     // parser instead of summing mutually exclusive language chunks.
@@ -156,7 +196,7 @@ const surfaces = [
       ...initial,
       ...workspace,
       ...files,
-      ...code,
+      ...textEditorCode,
       ...largestPrismLanguage.chunks,
       ...codeMirror,
       ...largestCodeMirrorLanguage.chunks,
@@ -164,9 +204,33 @@ const surfaces = [
     max: 650 * KiB,
   },
   {
+    label: "Markdown editor",
+    chunks: [
+      ...initial,
+      ...workspace,
+      ...files,
+      ...code,
+      ...codeMirror,
+      ...largestCodeMirrorLanguage.chunks,
+    ],
+    max: 700 * KiB,
+  },
+  {
     label: "executable Jupyter",
-    chunks: [...initial, ...workspace, ...files, ...notebookExecute],
+    // Notebook cells use the same lazy parser selection as the file editor.
+    chunks: [
+      ...initial,
+      ...workspace,
+      ...files,
+      ...notebookExecute,
+      ...largestCodeMirrorLanguage.chunks,
+    ],
     max: 650 * KiB,
+  },
+  {
+    label: "Jupyter notebook index",
+    chunks: [...initial, ...workspace, ...notebooks],
+    max: 450 * KiB,
   },
   {
     label: "Codex chat",

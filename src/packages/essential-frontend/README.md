@@ -75,6 +75,13 @@ Users can inspect notebooks, including mathematics, source, ordinary outputs,
 images, and plots, and perform basic cell editing and execution. The essential
 surface supports save, run, run-all, interrupt, and live-run recovery.
 
+A project-host scan provides a recent-notebook index without starting project
+compute. Its bounded result is cached per project for the browser session and
+is rescanned only when the user explicitly refreshes it. Notebook cells use
+the same lazy CodeMirror 6 foundation as file editing. `Shift+Enter` runs and
+advances (inserting a code cell at the end), `Alt+Enter` runs and inserts below,
+and `Ctrl+Enter` runs in place.
+
 Arbitrary HTML, JavaScript, widgets, JupyterLab plugins, and broad rich-output
 registries are intentionally omitted. Users can launch JupyterLab when they
 need that environment.
