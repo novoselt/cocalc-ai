@@ -662,6 +662,18 @@ textarea {
   gap: 8px;
 }
 
+.ul-history-notice {
+  align-items: center;
+  background: var(--ul-rail);
+  border: 1px solid var(--ul-border);
+  color: var(--ul-muted);
+  display: flex;
+  font-size: 12px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+}
+
 .ul-session-row,
 .ul-compact-row {
   background: white;
@@ -692,6 +704,11 @@ textarea {
 
 .ul-message-human {
   border-left: 4px solid var(--ul-accent);
+}
+
+.ul-message a {
+  color: var(--ul-accent);
+  overflow-wrap: anywhere;
 }
 
 .ul-activity {

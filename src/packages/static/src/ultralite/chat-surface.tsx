@@ -26,6 +26,59 @@ import { fullProjectUrl } from "./urls";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 
 const ACTIVE_STATUS = new Set(["active", "running"]);
+const INITIAL_MESSAGE_LIMIT = 100;
+const MESSAGE_LIMIT_STEP = 100;
+const MAX_RENDERED_MESSAGE_LENGTH = 200_000;
+const SAFE_LINK =
+  /\[([^\]\n]{1,160})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+
+function boundedMessageContent(content: string): string {
+  if (content.length <= MAX_RENDERED_MESSAGE_LENGTH) return content;
+  return `${content.slice(0, MAX_RENDERED_MESSAGE_LENGTH)}\n\n[message truncated in constrained mode]`;
+}
+
+export function SafeMessageContent({ content }: { content: string }) {
+  const text = boundedMessageContent(content);
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(SAFE_LINK)) {
+    const index = match.index ?? 0;
+    if (index > cursor) nodes.push(text.slice(cursor, index));
+    const href = match[2] || match[3];
+    let end = index + match[0].length;
+    let suffix = "";
+    if (!match[2]) {
+      const trimmed = href.replace(/[.,;:!?]+$/, "");
+      suffix = href.slice(trimmed.length);
+      end -= suffix.length;
+      nodes.push(
+        <a
+          href={trimmed}
+          key={`${index}:${trimmed}`}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {trimmed}
+        </a>,
+      );
+    } else {
+      nodes.push(
+        <a
+          href={href}
+          key={`${index}:${href}`}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {match[1]}
+        </a>,
+      );
+    }
+    if (suffix) nodes.push(suffix);
+    cursor = end + suffix.length;
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return <>{nodes}</>;
+}
 
 function sessionSort(records: AgentSessionRecord[]): AgentSessionRecord[] {
   return [...records].sort((a, b) => {
@@ -166,7 +219,7 @@ function useChatSnapshot(
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-function Message({ message }: { message: ProjectedChatMessage }) {
+export function Message({ message }: { message: ProjectedChatMessage }) {
   const human = message.role === "human";
   return (
     <article className={`ul-message ${human ? "ul-message-human" : ""}`}>
@@ -177,12 +230,16 @@ function Message({ message }: { message: ProjectedChatMessage }) {
       {message.activity?.markdown ? (
         <pre className="ul-activity">{message.activity.markdown}</pre>
       ) : null}
-      <div>{message.content || (message.generating ? "Working..." : "")}</div>
+      <div>
+        <SafeMessageContent
+          content={message.content || (message.generating ? "Working..." : "")}
+        />
+      </div>
     </article>
   );
 }
 
-function Chat({
+export function Chat({
   project,
   route,
   session,
@@ -196,9 +253,13 @@ function Chat({
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [messageLimit, setMessageLimit] = useState(INITIAL_MESSAGE_LIMIT);
   const [status, setStatus] = useState("Connecting...");
   const [error, setError] = useState<string>();
   const snapshot = useChatSnapshot(client, project.project_id, route.chatPath);
+
+  useEffect(() => setMessageLimit(INITIAL_MESSAGE_LIMIT), [route.threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,26 +313,54 @@ function Chat({
     !!draft.trim() &&
     (selectedThread?.agent_kind === "acp" ||
       selectedThread?.acp_config != null);
-  const visibleMessages = snapshot.messages.slice(-100);
-  const generating = visibleMessages.some((message) => message.generating);
+  const visibleMessages = snapshot.messages.slice(-messageLimit);
+  const generating = snapshot.messages.some((message) => message.generating);
+  const canContinue =
+    snapshot.ready &&
+    !submitting &&
+    !generating &&
+    (selectedThread?.agent_kind === "acp" ||
+      selectedThread?.acp_config != null);
 
-  const send = async () => {
+  const submitText = async (text: string, clearDraft: boolean) => {
     const active = clientRef.current;
-    const text = draft.trim();
-    if (!active || !canSend || !text) return;
+    const normalized = text.trim();
+    if (!active || !snapshot.ready || submitting || !normalized) return;
     setSubmitting(true);
     setError(undefined);
     try {
       await active.sendToExistingCodexThread({
         thread_id: route.threadId,
-        text,
+        text: normalized,
       });
-      setDraft("");
+      if (clearDraft) setDraft("");
       setStatus("Prompt accepted by Codex");
     } catch (err) {
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const send = async () => {
+    if (!canSend) return;
+    await submitText(draft, true);
+  };
+
+  const reconnect = async () => {
+    const active = clientRef.current;
+    if (!active || reconnecting) return;
+    setReconnecting(true);
+    setError(undefined);
+    setStatus("Catching up...");
+    try {
+      await active.reconnect("constrained-client-user-request");
+      setStatus("Live Codex session");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `${err}`);
+      setStatus("Disconnected");
+    } finally {
+      setReconnecting(false);
     }
   };
 
@@ -304,6 +393,14 @@ function Chat({
             >
               Codex sessions
             </button>
+            <button
+              className="ul-icon-button"
+              disabled={!client || reconnecting}
+              onClick={() => void reconnect()}
+              type="button"
+            >
+              {reconnecting ? "Catching up..." : "Catch up"}
+            </button>
             <a
               className="ul-link-button ul-link-button-subtle"
               href={fullProjectUrl({
@@ -319,9 +416,31 @@ function Chat({
         title={selectedThread?.name || "Codex chat"}
       />
       {snapshot.messages.length > visibleMessages.length ? (
-        <InlineAlert>
-          Showing the newest 100 messages to keep this view lightweight.
+        <div className="ul-history-notice">
+          <span>
+            Showing the newest {visibleMessages.length} of{" "}
+            {snapshot.messages.length} messages.
+          </span>
+          <button
+            className="ul-icon-button"
+            onClick={() =>
+              setMessageLimit((current) => current + MESSAGE_LIMIT_STEP)
+            }
+            type="button"
+          >
+            Show older
+          </button>
+        </div>
+      ) : null}
+      {snapshot.connection === "disconnected" ||
+      snapshot.connection === "error" ? (
+        <InlineAlert kind="warning">
+          The live Codex connection was interrupted. Use Catch up to reconnect
+          and load current activity.
         </InlineAlert>
+      ) : null}
+      {snapshot.error ? (
+        <InlineAlert kind="error">{snapshot.error}</InlineAlert>
       ) : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       <div className="ul-chat-layout">
@@ -354,6 +473,16 @@ function Chat({
             <button className="ul-button" disabled={!canSend} type="submit">
               {submitting ? "Sending..." : "Send"}
             </button>
+            {!generating ? (
+              <button
+                className="ul-button ul-button-secondary"
+                disabled={!canContinue}
+                onClick={() => void submitText("continue", false)}
+                type="button"
+              >
+                {submitting ? "Sending..." : "Continue Codex"}
+              </button>
+            ) : null}
             {generating ? (
               <button
                 className="ul-button ul-button-danger"
