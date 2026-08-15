@@ -23,10 +23,7 @@ import * as _ from "lodash";
 import { isEmpty } from "lodash";
 import base_path from "@cocalc/backend/base-path";
 import getLogger from "@cocalc/backend/logger";
-import {
-  set_account_profile_image_if_not_set,
-  set_email_address_verified,
-} from "@cocalc/database/postgres/account/queries";
+import { set_email_address_verified } from "@cocalc/database/postgres/account/queries";
 import {
   assertNoClusterBannedEquivalentEmailAccount,
   createClusterAccount,
@@ -83,6 +80,7 @@ import {
   displayNameFromParts,
   normalizeDisplayName,
 } from "@cocalc/util/accounts/display-name";
+import { initializeAccountProfileImage } from "@cocalc/server/accounts/initialize-profile-image";
 
 interface SsoAccountCreationContext {
   tokenInfo?: any;
@@ -925,8 +923,7 @@ export class PassportLogin {
     const image = imageFromSsoProfile(opts.profile);
     if (!image) return;
     try {
-      await set_account_profile_image_if_not_set({
-        db: this.database,
+      await initializeAccountProfileImage({
         account_id: locals.account_id,
         image,
       });

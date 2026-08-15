@@ -47,7 +47,7 @@ describe("account query helpers", () => {
     const accountId = await createAccount({ color: "blue" });
 
     await set_account_profile_image_if_not_set({
-      db: database,
+      db: pool,
       account_id: accountId,
       image: "https://images.example.com/ada.jpg",
     });
@@ -66,7 +66,7 @@ describe("account query helpers", () => {
 
     for (const accountId of [existingAccountId, clearedAccountId]) {
       await set_account_profile_image_if_not_set({
-        db: database,
+        db: pool,
         account_id: accountId,
         image: "https://images.example.com/sso.jpg",
       });

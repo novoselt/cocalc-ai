@@ -52,7 +52,12 @@ interface SetAccountFields {
 }
 
 interface SetAccountProfileImageIfNotSetOpts {
-  db: PostgreSQL;
+  db: {
+    query: (
+      sql: string,
+      params?: any[],
+    ) => Promise<{ rows: Array<{ profile?: Record<string, unknown> }> }>;
+  };
   account_id: string;
   image: string;
 }
@@ -61,11 +66,13 @@ export async function set_account_profile_image_if_not_set({
   db,
   account_id,
   image,
-}: SetAccountProfileImageIfNotSetOpts): Promise<void> {
+}: SetAccountProfileImageIfNotSetOpts): Promise<
+  Record<string, unknown> | undefined
+> {
   assert_valid_account_id(account_id);
-  if (!image) return;
-  await db.async_query({
-    query: `UPDATE accounts
+  if (!image) return undefined;
+  const { rows } = await db.query(
+    `UPDATE accounts
                SET profile = jsonb_set(
                  COALESCE(profile, '{}'::jsonb),
                  '{image}',
@@ -73,9 +80,11 @@ export async function set_account_profile_image_if_not_set({
                  true
                )
              WHERE account_id = $1::uuid
-               AND NOT (COALESCE(profile, '{}'::jsonb) ? 'image')`,
-    params: [account_id, image],
-  });
+               AND NOT (COALESCE(profile, '{}'::jsonb) ? 'image')
+         RETURNING profile`,
+    [account_id, image],
+  );
+  return rows[0]?.profile;
 }
 
 // this is like set_account_info_if_different, but only sets the fields if they're not set

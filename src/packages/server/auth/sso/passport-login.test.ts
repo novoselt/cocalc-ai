@@ -46,10 +46,13 @@ jest.mock("../../accounts/get-email-address", () => ({
 }));
 
 jest.mock("@cocalc/database/postgres/account/queries", () => ({
-  set_account_profile_image_if_not_set: (...args: any[]) =>
-    setAccountProfileImageIfNotSetMock(...args),
   set_email_address_verified: (...args: any[]) =>
     setEmailAddressVerifiedMock(...args),
+}));
+
+jest.mock("@cocalc/server/accounts/initialize-profile-image", () => ({
+  initializeAccountProfileImage: (...args: any[]) =>
+    setAccountProfileImageIfNotSetMock(...args),
 }));
 
 jest.mock("@cocalc/database/settings/sso-policies", () => ({
@@ -156,7 +159,6 @@ describe("PassportLogin SSO account creation", () => {
     );
 
     expect(setAccountProfileImageIfNotSetMock).toHaveBeenCalledWith({
-      db: database,
       account_id: "11111111-1111-4111-8111-111111111111",
       image: "https://images.example.com/ada.jpg",
     });
