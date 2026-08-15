@@ -704,6 +704,52 @@ activation were immediate; this backend tail is kept separate from the static
 client timing and remains operational performance work rather than a client
 release failure.
 
+### Essential Frontend Package And Data Plane
+
+The package migration, CodeMirror editor, automatic terminal attachment,
+bounded chat data plane, notifications, and minimal project settings were
+deployed only to staging from commit `ad75c8b41f`.
+
+- Static artifact:
+  `20260815T170500Z-ad75c8b4-essential-frontend-ad75c8b41f`; deployment
+  `20260815T170548Z-20260815T170500Z-ad75c8b4-essential-frontend-ad75c8b41f`;
+  bay release `20260815170553-static`.
+- Project-host artifact and version:
+  `20260815T170626Z-ad75c8b4-essential-frontend-ad75c8b41f`; deployment
+  `20260815T170731Z-20260815T170626Z-ad75c8b4-essential-frontend-ad75c8b41f`.
+- Static rollback target: `ultralite-terminal-mobile-8d9879ec7f`.
+- Project-host rollback version: `20260814T1927Z` from commit
+  `c4189c2c54e6`.
+
+The project-host rollout first upgraded canary host
+`7843c648-86e4-45d3-9ed2-85ebe9faf9ee`, observed it for 60 seconds, then
+upgraded host `37782b66-190d-41c3-a7e5-f5662e34cd4a` with concurrency one and
+a 30-second stabilization interval. Both hosts remained running. Static and
+project-host smoke tests passed. This rollout did not change the hub, project
+image, tools bundle, ACP worker, router, persistence layer, or production.
+
+Authenticated browser validation against
+`https://staging.cocalc.ai/static/ultralite.html#/projects` covered:
+
+- project discovery, file listing, syntax-highlighted reading, and the lazy
+  CodeMirror 6 editor;
+- the bounded project-host Codex history service, newest-message layout,
+  Markdown rendering, bottom composer, catch-up, and continue controls;
+- automatic terminal attachment to the retained shell;
+- safe notebook viewing, including Markdown, source, and image output;
+- listing and lifecycle controls for existing VMs;
+- JupyterLab and VS Code app launch controls;
+- notifications; and
+- minimal project identity and lifecycle settings.
+
+These checks produced no page errors or console errors. With cache disabled
+and network throughput limited to 1.4 Mbps, the exact motivating file-listing
+route rendered its listing in 4.82 seconds, transferring 467 KiB over 21
+requests. The staged production build also passed every route budget; the
+largest relevant cumulative totals were 615.0 KiB Brotli for the editor plus
+largest language parser, 600.5 KiB for chat plus lazy math, and 488.5 KiB for
+the terminal.
+
 ## Relevant Code And Plans
 
 - `src/packages/essential-frontend/`
