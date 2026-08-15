@@ -10,6 +10,10 @@ import {
   type JupyterClient,
   type OutputMessage,
 } from "@cocalc/conat/project/jupyter/run-code";
+import {
+  openJupyterLiveRunStore,
+  type JupyterLiveRunSnapshot,
+} from "@cocalc/conat/project/jupyter/live-run";
 import { syncdbPath } from "@cocalc/util/jupyter/names";
 import { useEffect, useRef, useState } from "react";
 import type { UltraliteSession } from "./session";
@@ -155,9 +159,14 @@ export default function NotebookEditor({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const jupyter = useRef<JupyterClient | undefined>(undefined);
+  const completedLiveRunIds = useRef(new Set<string>());
+  const directRunId = useRef<string | undefined>(undefined);
+  const dirtyRef = useRef(dirty);
+  const processLiveRuns = useRef<() => void>(() => undefined);
   const projectApi = useRef<
     Awaited<ReturnType<UltraliteSession["openProjectApi"]>>["api"] | undefined
   >(undefined);
+  dirtyRef.current = dirty;
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -270,6 +279,127 @@ export default function NotebookEditor({
       return { ...current, cells };
     });
   };
+  const applyMessagesRef = useRef(applyMessages);
+  applyMessagesRef.current = applyMessages;
+
+  useEffect(() => {
+    if (!project.host_id) return;
+    let disposed = false;
+    let store: Awaited<ReturnType<typeof openJupyterLiveRunStore>> | undefined;
+    const seenBatchIds = new Set<string>();
+    const observedRunIds = new Set<string>();
+    let recovering = false;
+    let queue = Promise.resolve();
+
+    const reloadSavedNotebook = async () => {
+      if (dirtyRef.current) {
+        setConflict(true);
+        setError(
+          "Notebook execution finished elsewhere while this draft had unsaved changes. The draft was not overwritten; reload or resolve it in full CoCalc.",
+        );
+        return;
+      }
+      const saved = asText(
+        (await filesystem.readFile(path, "utf8")) as string | Uint8Array,
+      );
+      if (disposed) return;
+      setNotebook(parseNotebook(saved));
+      setBaseContents(saved);
+      setDirty(false);
+      setConflict(false);
+    };
+
+    const process = async () => {
+      if (disposed || !store) return;
+      const snapshots = Object.values(
+        store.getAll() as Record<string, JupyterLiveRunSnapshot>,
+      )
+        .filter(
+          (snapshot) =>
+            snapshot?.path === path &&
+            typeof snapshot.run_id === "string" &&
+            Array.isArray(snapshot.batches),
+        )
+        .sort((a, b) => a.updated_at_ms - b.updated_at_ms);
+      let hasActiveRun = false;
+      for (const snapshot of snapshots) {
+        const runId = snapshot.run_id;
+        if (
+          directRunId.current === runId ||
+          completedLiveRunIds.current.has(runId)
+        ) {
+          continue;
+        }
+        if (snapshot.done === true && !observedRunIds.has(runId)) continue;
+        observedRunIds.add(runId);
+        for (const batch of [...snapshot.batches].sort(
+          (a, b) => a.seq - b.seq,
+        )) {
+          if (!batch.id || seenBatchIds.has(batch.id)) continue;
+          seenBatchIds.add(batch.id);
+          applyMessagesRef.current(batch.mesgs as OutputMessage[]);
+        }
+        if (snapshot.done === true) {
+          completedLiveRunIds.current.add(runId);
+          observedRunIds.delete(runId);
+          await reloadSavedNotebook();
+        } else {
+          hasActiveRun = true;
+        }
+      }
+      if (disposed || directRunId.current) return;
+      setRunning(hasActiveRun);
+      if (hasActiveRun) {
+        recovering = true;
+        setKernelStatus("reattached to active execution");
+      } else if (recovering && observedRunIds.size === 0) {
+        recovering = false;
+        setRunningCell(undefined);
+        setKernelStatus("idle");
+      }
+    };
+    const schedule = () => {
+      queue = queue.then(process).catch((err) => {
+        if (!disposed) {
+          setError(
+            `Unable to recover live notebook execution: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      });
+    };
+    processLiveRuns.current = schedule;
+
+    void session
+      .openProjectApi(project.project_id, project.host_id)
+      .then(async (opened) => {
+        if (disposed) return;
+        projectApi.current = opened.api;
+        store = await openJupyterLiveRunStore({
+          client: opened.lease.client,
+          project_id: project.project_id,
+          path,
+        });
+        if (disposed) {
+          store.close();
+          return;
+        }
+        store.on("change", schedule);
+        schedule();
+      })
+      .catch((err) => {
+        if (!disposed) {
+          setError(
+            `Live notebook recovery is unavailable: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      });
+    return () => {
+      disposed = true;
+      processLiveRuns.current = () => undefined;
+      store?.removeListener("change", schedule);
+      store?.close();
+    };
+  }, [filesystem, path, project.host_id, project.project_id, session]);
 
   const runCells = async (indexes: number[]) => {
     if (readOnly || running || saving || !project.host_id) return;
@@ -277,6 +407,10 @@ export default function NotebookEditor({
     setError(undefined);
     setNotice(undefined);
     setKernelStatus("checking notebook");
+    const runId = crypto.randomUUID();
+    let accepted = false;
+    let completed = false;
+    let detached = false;
     try {
       const latest = asText(
         (await filesystem.readFile(path, "utf8")) as string | Uint8Array,
@@ -315,6 +449,7 @@ export default function NotebookEditor({
       jupyter.current = client;
       await client.socket.waitUntilReady(30_000);
       setKernelStatus("running");
+      directRunId.current = runId;
       const inputs = indexes
         .map((index) => candidate.cells[index])
         .filter((cell) => cell?.cell_type === "code")
@@ -322,8 +457,31 @@ export default function NotebookEditor({
       const iterator = await client.run(inputs, {
         limit: 200,
         noHalt: true,
+        run_id: runId,
       });
-      for await (const messages of iterator) applyMessages(messages);
+      accepted = true;
+      for await (const messages of iterator) {
+        if (
+          messages.some(
+            ({ lifecycle, msg_type }) =>
+              lifecycle === "run_done" || msg_type === "run_done",
+          )
+        ) {
+          completed = true;
+        }
+        applyMessages(messages);
+      }
+      if (!completed) {
+        detached = true;
+        directRunId.current = undefined;
+        setKernelStatus("reconnecting to active execution");
+        setNotice(
+          "The direct execution connection closed. The kernel is still tracked on the project host; this view is reattaching without running cells again.",
+        );
+        processLiveRuns.current();
+        return;
+      }
+      completedLiveRunIds.current.add(runId);
       setRunningCell(undefined);
       setKernelStatus("saving outputs");
       await opened.api.jupyter.save({
@@ -341,6 +499,16 @@ export default function NotebookEditor({
       setNotice("Execution finished and notebook outputs were saved.");
       recordUltraliteOutcome("notebook_execute", "notebook_execute");
     } catch (err: any) {
+      if (accepted && !completed && err?.code !== "ETAG_MISMATCH") {
+        detached = true;
+        directRunId.current = undefined;
+        setKernelStatus("reconnecting to active execution");
+        setNotice(
+          "The execution connection was interrupted. CoCalc is reattaching to the existing run and will not submit it again.",
+        );
+        processLiveRuns.current();
+        return;
+      }
       if (err?.code === "ETAG_MISMATCH") {
         setConflict(true);
         recordUltraliteOutcome("notebook_execute", "save_conflict");
@@ -354,8 +522,11 @@ export default function NotebookEditor({
             : `${err}`,
       );
     } finally {
-      setRunningCell(undefined);
-      setRunning(false);
+      if (directRunId.current === runId) directRunId.current = undefined;
+      if (!detached) {
+        setRunningCell(undefined);
+        setRunning(false);
+      }
       jupyter.current?.close();
       jupyter.current = undefined;
     }
