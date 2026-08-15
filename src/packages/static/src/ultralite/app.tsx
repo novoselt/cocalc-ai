@@ -7,6 +7,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { getAuthBootstrap, type AuthBootstrap } from "./api";
 import { ultraliteTheme } from "./theme";
 import { siteUrl } from "./urls";
+import { TopBar } from "./ui";
 
 const Workspace = lazy(
   () =>
@@ -25,9 +26,6 @@ const Workspace = lazy(
 function Loading({ message }: { message: string }) {
   return (
     <main className="ul-centered" id="main-content">
-      <p aria-live="polite" className="ul-kicker">
-        Low-bandwidth workspace
-      </p>
       <h1>{message}</h1>
       <div aria-hidden="true" className="ul-progress-track">
         <span />
@@ -57,28 +55,9 @@ export function UltraliteApp() {
       <a className="ul-skip" href="#main-content">
         Skip to content
       </a>
-      <header className="ul-topbar">
-        <a
-          aria-label="CoCalc Ultralite projects"
-          className="ul-brand"
-          href="#/projects"
-        >
-          <span aria-hidden="true" className="ul-brand-mark">
-            C
-          </span>
-          <span>CoCalc</span>
-          <span className="ul-mode">Ultralite</span>
-        </a>
-        <a
-          className="ul-link-button ul-link-button-subtle"
-          href={siteUrl("app")}
-        >
-          Open full CoCalc
-        </a>
-      </header>
+      {bootstrap?.signed_in ? null : <TopBar />}
       {error ? (
         <main className="ul-centered" id="main-content">
-          <p className="ul-kicker">Connection problem</p>
           <h1>Ultralite could not start</h1>
           <p className="ul-error" role="alert">
             {error}
@@ -97,7 +76,6 @@ export function UltraliteApp() {
         !bootstrap.account_id ||
         !bootstrap.home_bay_url ? (
         <main className="ul-centered" id="main-content">
-          <p className="ul-kicker">Signed-out session</p>
           <h1>Sign in to continue</h1>
           <p>
             Ultralite uses your existing CoCalc account and project permissions.

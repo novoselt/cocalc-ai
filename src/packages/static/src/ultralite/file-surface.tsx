@@ -14,6 +14,8 @@ import NotebookView, {
 import { navigate, normalizeProjectPath, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
+import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
+import { UltraliteIcon } from "./icons";
 
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const MAX_NOTEBOOK_BYTES = 15 * 1024 * 1024;
@@ -55,7 +57,7 @@ function Breadcrumbs({ projectId, path }: { projectId: string; path: string }) {
         }
         type="button"
       >
-        Home
+        <UltraliteIcon name="folder" size={15} /> Home
       </button>
       {names.map((name, index) => {
         const current = `/home/user/${names.slice(0, index + 1).join("/")}`;
@@ -100,12 +102,17 @@ function DirectoryView({
   return (
     <>
       {truncated ? (
-        <p className="ul-notice" role="status">
+        <InlineAlert kind="warning">
           This directory is large. The project host returned a truncated
           listing.
-        </p>
+        </InlineAlert>
       ) : null}
       <div className="ul-file-list">
+        <div aria-hidden="true" className="ul-file-row ul-file-header">
+          <span className="ul-file-name">Name</span>
+          <span className="ul-file-meta ul-file-modified">Modified</span>
+          <span className="ul-file-meta">Size</span>
+        </div>
         {path !== "/home/user" ? (
           <button
             className="ul-file-row"
@@ -118,7 +125,9 @@ function DirectoryView({
             }
             type="button"
           >
-            <span className="ul-file-name">../</span>
+            <span className="ul-file-name ul-file-directory">
+              <UltraliteIcon name="back" size={16} /> Parent directory
+            </span>
             <span className="ul-file-meta ul-file-modified" />
             <span className="ul-file-meta">Folder</span>
           </button>
@@ -140,8 +149,11 @@ function DirectoryView({
               }
               type="button"
             >
-              <span className="ul-file-name">
-                {directory ? `${name}/` : name}
+              <span
+                className={`ul-file-name ${directory ? "ul-file-directory" : ""}`}
+              >
+                <UltraliteIcon name={directory ? "folder" : "file"} size={16} />
+                {name}
               </span>
               <span className="ul-file-meta ul-file-modified">
                 {data.mtime ? new Date(data.mtime).toLocaleDateString() : ""}
@@ -153,7 +165,7 @@ function DirectoryView({
           );
         })}
         {!entries.length ? (
-          <p className="ul-empty">This directory is empty.</p>
+          <EmptyState>This directory is empty.</EmptyState>
         ) : null}
       </div>
     </>
@@ -176,6 +188,7 @@ export default function FileSurface({
   const [notebook, setNotebook] = useState<NotebookDocument>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -244,52 +257,68 @@ export default function FileSurface({
     return () => {
       cancelled = true;
     };
-  }, [filesystem, route.kind, route.path]);
+  }, [filesystem, refresh, route.kind, route.path]);
+
+  const download = () => {
+    const text =
+      contents ?? (notebook ? JSON.stringify(notebook, null, 2) : undefined);
+    if (text == null || route.kind !== "file") return;
+    const blob = new Blob([text], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = route.path.split("/").pop() || "download";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <main className="ul-page" id="main-content">
-      <div className="ul-page-heading">
-        <div>
-          <button
-            className="ul-icon-button"
-            onClick={() =>
-              navigate({ kind: "project", projectId: project.project_id })
-            }
-            type="button"
-          >
-            Project home
-          </button>
-          <p className="ul-kicker">Read-only files</p>
-          <h1 tabIndex={-1}>
-            {route.kind === "files"
-              ? project.title
-              : route.path.split("/").pop()}
-          </h1>
-        </div>
-        <a
-          className="ul-link-button ul-link-button-subtle"
-          href={fullProjectUrl({
-            projectId: project.project_id,
-            path: route.path,
-          })}
-        >
-          Open in full CoCalc
-        </a>
-      </div>
+      <SurfaceHeader
+        actions={
+          <>
+            <button
+              className="ul-icon-button"
+              onClick={() => setRefresh((value) => value + 1)}
+              type="button"
+            >
+              <UltraliteIcon name="refresh" /> Refresh
+            </button>
+            {route.kind === "file" && (contents != null || notebook) ? (
+              <button
+                className="ul-icon-button"
+                onClick={download}
+                type="button"
+              >
+                Download
+              </button>
+            ) : null}
+            <a
+              className="ul-link-button ul-link-button-subtle"
+              href={fullProjectUrl({
+                projectId: project.project_id,
+                path: route.path,
+              })}
+            >
+              Full CoCalc
+            </a>
+          </>
+        }
+        eyebrow={route.kind === "files" ? "Project files" : "File"}
+        title={
+          route.kind === "files"
+            ? route.path === "/home/user"
+              ? "Home"
+              : route.path.split("/").pop() || "Files"
+            : route.path.split("/").pop() || "File"
+        }
+      />
       <Breadcrumbs
         projectId={project.project_id}
         path={route.kind === "file" ? parentPath(route.path) : route.path}
       />
-      {loading ? (
-        <p aria-live="polite" className="ul-meta">
-          Loading from the project host...
-        </p>
-      ) : null}
-      {error ? (
-        <p className="ul-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {loading ? <LoadingState label="Loading from the project host" /> : null}
+      {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {route.kind === "files" && files ? (
         <DirectoryView
           files={files}

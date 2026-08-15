@@ -97,6 +97,8 @@ measured and reported separately.
 | Read-only Jupyter notebook             | 500 KiB     | 425 KiB        |
 | Executable Jupyter notebook            | 650 KiB     | 550 KiB        |
 | Existing Codex chat                    | 550 KiB     | 500 KiB        |
+| Existing dedicated VM control          | 450 KiB     | 400 KiB        |
+| JupyterLab and VS Code app launch      | 475 KiB     | 425 KiB        |
 
 Rules for changing these budgets:
 
@@ -242,11 +244,20 @@ Use the standard project workspace as the reference:
   surfaces;
 - Files as the default surface;
 - Codex as a first-class surface;
+- Virtual Machines as a first-class gateway to existing dedicated compute;
+- Apps as a first-class gateway to JupyterLab and VS Code;
 - path and active file context in familiar locations; and
 - full CoCalc escape without a separate intermediate dashboard.
 
 The first rail should not include inert placeholders for Home, New, Search,
-Users, Settings, VMs, Servers, Workspaces, or other unavailable tools.
+Users, Settings, Workspaces, or other unavailable tools.
+
+The constrained client is a gateway to CoCalc's backend capabilities, not
+merely a small file viewer. The first gateway scope includes discovering and
+starting existing VMs, and discovering and launching JupyterLab and VS Code.
+VM creation, deletion, funding, resize, and advanced configuration remain in
+full CoCalc. App views must not start project compute merely by being opened;
+Start is an explicit, clearly labeled action.
 
 ### Files
 

@@ -44,19 +44,31 @@ if (!initial?.length) throw new Error("missing initial ultralite chunk group");
 const workspace = findNamedGroup("ultralite-workspace");
 const files = findNamedGroup("ultralite-files");
 const chat = findNamedGroup("ultralite-chat");
+const vms = findNamedGroup("ultralite-vms");
+const apps = findNamedGroup("ultralite-apps");
 
 const surfaces = [
-  { label: "shell", chunks: initial, max: 150 * KiB },
-  { label: "projects", chunks: [...initial, ...workspace], max: 500 * KiB },
+  { label: "shell", chunks: initial, max: 75 * KiB },
+  { label: "projects", chunks: [...initial, ...workspace], max: 400 * KiB },
   {
     label: "files and read-only Jupyter",
     chunks: [...initial, ...workspace, ...files],
-    max: 600 * KiB,
+    max: 425 * KiB,
   },
   {
     label: "Codex chat",
     chunks: [...initial, ...workspace, ...chat],
-    max: 750 * KiB,
+    max: 550 * KiB,
+  },
+  {
+    label: "VMs",
+    chunks: [...initial, ...workspace, ...vms],
+    max: 450 * KiB,
+  },
+  {
+    label: "app servers",
+    chunks: [...initial, ...workspace, ...apps],
+    max: 475 * KiB,
   },
 ];
 
@@ -66,8 +78,12 @@ const forbidden = [
   "node_modules/.pnpm/@ant-design/",
   "node_modules/.pnpm/jquery@",
   "node_modules/.pnpm/redux@",
+  "node_modules/.pnpm/immutable@",
   "node_modules/.pnpm/slate@",
   "node_modules/.pnpm/codemirror@",
+  "node_modules/.pnpm/monaco-editor@",
+  "node_modules/.pnpm/ace-builds@",
+  "node_modules/.pnpm/prosemirror-",
   "node_modules/.pnpm/@jupyterlab/",
 ];
 

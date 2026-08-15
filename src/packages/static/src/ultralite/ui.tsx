@@ -1,0 +1,214 @@
+/*
+ * This file is part of CoCalc: Copyright (c) 2026 Sagemath, Inc.
+ * License: MS-RSL - see LICENSE.md for details
+ */
+
+import { Component, type ErrorInfo, type ReactNode } from "react";
+import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
+import { navigate, type UltraliteRoute } from "./routes";
+import { fullProjectUrl, siteUrl } from "./urls";
+import { UltraliteIcon, type UltraliteIconName } from "./icons";
+
+export function TopBar({ projectTitle }: { projectTitle?: string }) {
+  return (
+    <header className="ul-topbar">
+      <a aria-label="CoCalc projects" className="ul-brand" href="#/projects">
+        <span aria-hidden="true" className="ul-brand-mark">
+          CoCalc
+        </span>
+      </a>
+      {projectTitle ? (
+        <div className="ul-topbar-project" title={projectTitle}>
+          {projectTitle}
+        </div>
+      ) : (
+        <div className="ul-topbar-title">Projects</div>
+      )}
+      <span className="ul-mode">Constrained</span>
+      <a className="ul-topbar-link" href={siteUrl("app")}>
+        Full CoCalc
+        <UltraliteIcon name="external" size={15} />
+      </a>
+    </header>
+  );
+}
+
+const NAV: Array<{
+  icon: UltraliteIconName;
+  kind: "agents" | "apps" | "files" | "vms";
+  label: string;
+}> = [
+  { icon: "folder", kind: "files", label: "Files" },
+  { icon: "chat", kind: "agents", label: "Codex" },
+  { icon: "server", kind: "vms", label: "VMs" },
+  { icon: "apps", kind: "apps", label: "Apps" },
+];
+
+export function ProjectRail({
+  active,
+  project,
+}: {
+  active: UltraliteRoute["kind"];
+  project: AccountProjectListWindowRow;
+}) {
+  return (
+    <nav aria-label="Project tools" className="ul-project-rail">
+      <button
+        className="ul-rail-item"
+        onClick={() => navigate({ kind: "projects" })}
+        type="button"
+      >
+        <UltraliteIcon name="projects" />
+        <span>Projects</span>
+      </button>
+      <div aria-hidden="true" className="ul-rail-rule" />
+      {NAV.map(({ icon, kind, label }) => {
+        const selected =
+          active === kind || (kind === "files" && active === "file");
+        return (
+          <button
+            aria-current={selected ? "page" : undefined}
+            className={`ul-rail-item ${selected ? "ul-rail-item-active" : ""}`}
+            key={kind}
+            onClick={() =>
+              navigate(
+                kind === "files"
+                  ? {
+                      kind: "files",
+                      projectId: project.project_id,
+                      path: "/home/user",
+                    }
+                  : { kind, projectId: project.project_id },
+              )
+            }
+            type="button"
+          >
+            <UltraliteIcon name={icon} />
+            <span>{label}</span>
+          </button>
+        );
+      })}
+      <a
+        className="ul-rail-item ul-rail-full"
+        href={fullProjectUrl({ projectId: project.project_id })}
+      >
+        <UltraliteIcon name="external" />
+        <span>Full</span>
+      </a>
+    </nav>
+  );
+}
+
+export function ProjectLayout({
+  children,
+  project,
+  route,
+}: {
+  children: ReactNode;
+  project: AccountProjectListWindowRow;
+  route: UltraliteRoute;
+}) {
+  return (
+    <>
+      <TopBar projectTitle={project.title || "Untitled project"} />
+      <div className="ul-project-layout">
+        <ProjectRail active={route.kind} project={project} />
+        <div className="ul-project-content">{children}</div>
+      </div>
+    </>
+  );
+}
+
+export function InlineAlert({
+  children,
+  kind = "info",
+}: {
+  children: ReactNode;
+  kind?: "error" | "info" | "warning";
+}) {
+  return (
+    <div
+      className={`ul-alert ul-alert-${kind}`}
+      role={kind === "error" ? "alert" : "status"}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function LoadingState({ label }: { label: string }) {
+  return (
+    <div aria-live="polite" className="ul-state ul-loading-state">
+      <span aria-hidden="true" className="ul-spinner" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+export function EmptyState({ children }: { children: ReactNode }) {
+  return <div className="ul-state ul-empty">{children}</div>;
+}
+
+export function SurfaceHeader({
+  actions,
+  eyebrow,
+  title,
+}: {
+  actions?: ReactNode;
+  eyebrow?: string;
+  title: string;
+}) {
+  return (
+    <div className="ul-surface-header">
+      <div>
+        {eyebrow ? <div className="ul-eyebrow">{eyebrow}</div> : null}
+        <h1 tabIndex={-1}>{title}</h1>
+      </div>
+      {actions ? <div className="ul-toolbar">{actions}</div> : null}
+    </div>
+  );
+}
+
+interface ChunkErrorBoundaryProps {
+  children: ReactNode;
+  label: string;
+}
+
+interface ChunkErrorBoundaryState {
+  error?: string;
+}
+
+export class ChunkErrorBoundary extends Component<
+  ChunkErrorBoundaryProps,
+  ChunkErrorBoundaryState
+> {
+  state: ChunkErrorBoundaryState = {};
+
+  static getDerivedStateFromError(error: unknown): ChunkErrorBoundaryState {
+    return { error: error instanceof Error ? error.message : `${error}` };
+  }
+
+  componentDidCatch(_error: unknown, _info: ErrorInfo): void {
+    // Rspack chunk failures are reported by the standard static error path.
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <main className="ul-page" id="main-content">
+        <SurfaceHeader title={`${this.props.label} could not be displayed`} />
+        <InlineAlert kind="error">
+          The panel assets could not be loaded. Reload this focused client to
+          fetch the current static build.
+        </InlineAlert>
+        <button
+          className="ul-button"
+          onClick={() => window.location.reload()}
+          type="button"
+        >
+          Reload CoCalc
+        </button>
+      </main>
+    );
+  }
+}

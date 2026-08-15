@@ -4,11 +4,26 @@
  */
 
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { AuthBootstrap } from "./api";
 import { navigate, parseRoute, type UltraliteRoute } from "./routes";
 import { UltraliteSession } from "./session";
-import { fullProjectUrl } from "./urls";
+import {
+  ChunkErrorBoundary,
+  EmptyState,
+  InlineAlert,
+  LoadingState,
+  ProjectLayout,
+  SurfaceHeader,
+  TopBar,
+} from "./ui";
 
 const FileSurface = lazy(
   () =>
@@ -29,6 +44,28 @@ const ChatSurface = lazy(
         () => resolve(require("./chat-surface")),
         reject,
         "ultralite-chat",
+      );
+    }),
+);
+const VmSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./vm-surface")),
+        reject,
+        "ultralite-vms",
+      );
+    }),
+);
+const AppSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./app-surface")),
+        reject,
+        "ultralite-apps",
       );
     }),
 );
@@ -55,149 +92,177 @@ function ProjectList({
   loadMore: () => void;
 }) {
   return (
-    <main className="ul-page" id="main-content">
-      <div className="ul-page-heading">
-        <div>
-          <p className="ul-kicker">Your work</p>
-          <h1 tabIndex={-1}>Projects</h1>
-        </div>
-        <span className="ul-meta">Realtime only where it matters</span>
-      </div>
-      <div className="ul-search-wrap">
-        <label className="ul-meta" htmlFor="ul-project-search">
-          Search projects
-        </label>
-        <input
-          className="ul-search"
-          id="ul-project-search"
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Title or description"
-          type="search"
-          value={query}
+    <>
+      <TopBar />
+      <main className="ul-page ul-projects-page" id="main-content">
+        <SurfaceHeader
+          actions={
+            <div className="ul-search-wrap">
+              <label className="ul-visually-hidden" htmlFor="ul-project-search">
+                Search projects
+              </label>
+              <input
+                className="ul-search"
+                id="ul-project-search"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search projects"
+                type="search"
+                value={query}
+              />
+            </div>
+          }
+          title="Projects"
         />
-      </div>
-      {projects.length ? (
-        <div className="ul-grid">
+        <div className="ul-project-table" role="list">
           {projects.map((project) => {
             const state = stateLabel(project);
+            const title = project.title || "Untitled project";
+            const edited = project.last_edited || project.last_activity_at;
             return (
               <button
-                aria-label={`Open project ${project.title || "Untitled project"}, ${state}`}
-                className="ul-card"
+                aria-label={`Open project ${title}, ${state}`}
+                className="ul-project-row"
                 key={project.project_id}
                 onClick={() =>
-                  navigate({ kind: "project", projectId: project.project_id })
+                  navigate({
+                    kind: "files",
+                    projectId: project.project_id,
+                    path: "/home/user",
+                  })
                 }
+                role="listitem"
                 type="button"
               >
-                <div className="ul-card-title">
-                  {project.title || "Untitled project"}
-                </div>
-                {project.description ? <p>{project.description}</p> : null}
                 <span
-                  className={`ul-status ${state === "running" ? "ul-status-running" : ""}`}
+                  aria-hidden="true"
+                  className="ul-project-avatar"
+                  style={{
+                    borderColor:
+                      typeof project.theme?.color === "string"
+                        ? project.theme.color
+                        : undefined,
+                  }}
+                >
+                  {title.slice(0, 1).toUpperCase()}
+                </span>
+                <span className="ul-project-main">
+                  <strong>{title}</strong>
+                  {project.description ? (
+                    <span className="ul-project-description">
+                      {project.description}
+                    </span>
+                  ) : null}
+                </span>
+                <span
+                  className={`ul-project-state ${state === "running" ? "ul-status-running" : ""}`}
                 >
                   {state}
                 </span>
-                {project.last_activity_at ? (
-                  <div className="ul-meta">
-                    Active {new Date(project.last_activity_at).toLocaleString()}
-                  </div>
-                ) : null}
+                <span className="ul-project-edited">
+                  {edited
+                    ? new Date(edited).toLocaleString(undefined, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })
+                    : ""}
+                </span>
               </button>
             );
           })}
         </div>
-      ) : loading ? null : (
-        <div className="ul-empty">No projects match this search.</div>
-      )}
-      {loading ? (
-        <p aria-live="polite" className="ul-meta">
-          Loading projects...
-        </p>
-      ) : null}
-      {hasMore ? (
-        <button
-          className="ul-button ul-button-secondary"
-          onClick={loadMore}
-          type="button"
-        >
-          Load more projects
-        </button>
-      ) : null}
+        {!projects.length && !loading ? (
+          <EmptyState>No projects match this search.</EmptyState>
+        ) : null}
+        {loading ? <LoadingState label="Loading projects" /> : null}
+        {hasMore ? (
+          <button
+            className="ul-button ul-button-secondary"
+            onClick={loadMore}
+            type="button"
+          >
+            Load more projects
+          </button>
+        ) : null}
+      </main>
+    </>
+  );
+}
+
+function MissingHost({ project }: { project: AccountProjectListWindowRow }) {
+  return (
+    <main className="ul-page" id="main-content">
+      <SurfaceHeader title="Project storage unavailable" />
+      <InlineAlert kind="warning">
+        {project.title || "This project"} has not been assigned to a project
+        host. Open it in full CoCalc to complete project placement.
+      </InlineAlert>
     </main>
   );
 }
 
-function ProjectHome({ project }: { project: AccountProjectListWindowRow }) {
-  const noHost = !project.host_id;
+function DeferredSurface({
+  children,
+  label,
+}: {
+  children: ReactNode;
+  label: string;
+}) {
   return (
-    <main className="ul-page" id="main-content">
-      <div className="ul-page-heading">
-        <div>
-          <button
-            className="ul-icon-button"
-            onClick={() => navigate({ kind: "projects" })}
-            type="button"
-          >
-            Back to projects
-          </button>
-          <p className="ul-kicker">Project</p>
-          <h1 tabIndex={-1}>{project.title || "Untitled project"}</h1>
-          {project.description ? <p>{project.description}</p> : null}
-        </div>
-      </div>
-      {noHost ? (
-        <p className="ul-notice" role="status">
-          This project has not been assigned to a project host. Open it once in
-          full CoCalc to assign one.
-        </p>
-      ) : null}
-      <div className="ul-grid">
-        <button
-          className="ul-card"
-          disabled={noHost}
-          onClick={() =>
-            navigate({
-              kind: "files",
-              projectId: project.project_id,
-              path: "/home/user",
-            })
-          }
-          type="button"
-        >
-          <div className="ul-card-title">Files</div>
-          <p>Browse project files and open text or notebook views.</p>
-          <span className="ul-status">Direct project-host access</span>
-        </button>
-        <button
-          className="ul-card"
-          disabled={noHost}
-          onClick={() =>
-            navigate({ kind: "agents", projectId: project.project_id })
-          }
-          type="button"
-        >
-          <div className="ul-card-title">Codex</div>
-          <p>
-            Continue an existing Codex session with live activity and interrupt
-            support.
-          </p>
-          <span className="ul-status">Loaded only when opened</span>
-        </button>
-        <a
-          className="ul-card"
-          href={fullProjectUrl({ projectId: project.project_id })}
-        >
-          <div className="ul-card-title">Full CoCalc</div>
-          <p>
-            Open editors, terminals, collaboration, settings, and all project
-            tools.
-          </p>
-          <span className="ul-status">Standard workspace</span>
-        </a>
-      </div>
-    </main>
+    <ChunkErrorBoundary label={label}>
+      <Suspense
+        fallback={
+          <main className="ul-page" id="main-content">
+            <LoadingState label={`Loading ${label}`} />
+          </main>
+        }
+      >
+        {children}
+      </Suspense>
+    </ChunkErrorBoundary>
+  );
+}
+
+function ProjectRoute({
+  project,
+  route,
+  session,
+}: {
+  project: AccountProjectListWindowRow;
+  route: Exclude<UltraliteRoute, { kind: "projects" }>;
+  session: UltraliteSession;
+}) {
+  let surface: ReactNode;
+  if (!project.host_id && route.kind !== "vms") {
+    surface = <MissingHost project={project} />;
+  } else if (route.kind === "files" || route.kind === "file") {
+    surface = (
+      <DeferredSurface label="Files">
+        <FileSurface project={project} route={route} session={session} />
+      </DeferredSurface>
+    );
+  } else if (route.kind === "agents" || route.kind === "chat") {
+    surface = (
+      <DeferredSurface label="Codex">
+        <ChatSurface project={project} route={route} session={session} />
+      </DeferredSurface>
+    );
+  } else if (route.kind === "vms") {
+    surface = (
+      <DeferredSurface label="VMs">
+        <VmSurface project={project} session={session} />
+      </DeferredSurface>
+    );
+  } else {
+    surface = (
+      <DeferredSurface label="Apps">
+        <AppSurface project={project} session={session} />
+      </DeferredSurface>
+    );
+  }
+  return (
+    <ProjectLayout project={project} route={route}>
+      {surface}
+    </ProjectLayout>
   );
 }
 
@@ -238,42 +303,36 @@ function RouteSurface({
   if (project == null) {
     if (loading) return <RouteLoading label="Loading project metadata" />;
     return (
-      <main className="ul-page" id="main-content">
-        <h1 tabIndex={-1}>Project unavailable</h1>
-        <p role="alert">This project is not in the loaded project window.</p>
-        <button
-          className="ul-button"
-          onClick={() => navigate({ kind: "projects" })}
-          type="button"
-        >
-          Back to projects
-        </button>
-      </main>
+      <>
+        <TopBar />
+        <main className="ul-page" id="main-content">
+          <SurfaceHeader title="Project unavailable" />
+          <InlineAlert kind="error">
+            This project is not in the loaded project window. Return to Projects
+            and search for it by title.
+          </InlineAlert>
+          <button
+            className="ul-button"
+            onClick={() => navigate({ kind: "projects" })}
+            type="button"
+          >
+            Back to projects
+          </button>
+        </main>
+      </>
     );
   }
-  if (route.kind === "project") return <ProjectHome project={project} />;
-  if (!project.host_id) return <ProjectHome project={project} />;
-  if (route.kind === "files" || route.kind === "file") {
-    return (
-      <Suspense fallback={<RouteLoading label="Loading the file surface" />}>
-        <FileSurface project={project} route={route} session={session} />
-      </Suspense>
-    );
-  }
-  return (
-    <Suspense fallback={<RouteLoading label="Loading the Codex client" />}>
-      <ChatSurface project={project} route={route} session={session} />
-    </Suspense>
-  );
+  return <ProjectRoute project={project} route={route} session={session} />;
 }
 
 function RouteLoading({ label }: { label: string }) {
   return (
-    <main className="ul-page" id="main-content">
-      <p aria-live="polite" className="ul-kicker">
-        {label}...
-      </p>
-    </main>
+    <>
+      <TopBar />
+      <main className="ul-page" id="main-content">
+        <LoadingState label={label} />
+      </main>
+    </>
   );
 }
 
@@ -361,28 +420,29 @@ export default function Workspace({ bootstrap }: { bootstrap: AuthBootstrap }) {
 
   if (error) {
     return (
-      <main className="ul-centered" id="main-content">
-        <p className="ul-kicker">Connection problem</p>
-        <h1 tabIndex={-1}>Workspace unavailable</h1>
-        <p className="ul-error" role="alert">
-          {error}
-        </p>
-        <button
-          className="ul-button"
-          onClick={() => window.location.reload()}
-          type="button"
-        >
-          Try again
-        </button>
-      </main>
+      <>
+        <TopBar />
+        <main className="ul-centered" id="main-content">
+          <h1 tabIndex={-1}>Workspace unavailable</h1>
+          <InlineAlert kind="error">{error}</InlineAlert>
+          <button
+            className="ul-button"
+            onClick={() => window.location.reload()}
+            type="button"
+          >
+            Try again
+          </button>
+        </main>
+      </>
     );
   }
-  if (!session)
+  if (!session) {
     return (
       <RouteLoading
         label={`Connecting ${bootstrap.display_name || "your account"}`}
       />
     );
+  }
   return (
     <RouteSurface
       hasMore={hasMore}

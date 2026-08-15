@@ -17,6 +17,8 @@ import {
   fsSubject,
   type FilesystemClient,
 } from "@cocalc/conat/files/fs";
+import { projectApiClient, type ProjectApi } from "@cocalc/conat/project/api";
+import { PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH } from "@cocalc/conat/auth/project-host-browser-session";
 import type { AuthBootstrap } from "./api";
 
 const CONNECT_TIMEOUT_MS = 15_000;
@@ -29,6 +31,7 @@ export interface ProjectFiles {
 
 export class UltraliteSession {
   readonly accountId: string;
+  readonly browserId = crypto.randomUUID();
   readonly hubApi: HubApi;
   private readonly hubClient: Client;
   private readonly projectHosts: ProjectHostClientManager;
@@ -160,6 +163,52 @@ export class UltraliteSession {
     };
   }
 
+  async openProjectApi(
+    project_id: string,
+    host_id: string,
+  ): Promise<{ api: ProjectApi; lease: ProjectHostClientLease }> {
+    const lease = await this.openProjectHost(project_id, host_id);
+    return {
+      lease,
+      api: projectApiClient({ project_id, client: lease.client }),
+    };
+  }
+
+  async getProjectState(project_id: string) {
+    return await this.hubApi.projects.getProjectState({ project_id });
+  }
+
+  async prepareProjectHttpUrl({
+    host_id,
+    project_id,
+    url,
+  }: {
+    host_id: string;
+    project_id: string;
+    url: string;
+  }): Promise<string> {
+    const lease = await this.openProjectHost(project_id, host_id);
+    const { token } = await this.hubApi.hosts.issueProjectHostAuthToken({
+      host_id,
+      project_id,
+      ttl_seconds: 300,
+    });
+    const response = await fetch(
+      `${lease.address.replace(/\/+$/, "")}${PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH}`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Unable to establish the project app session (HTTP ${response.status}).`,
+      );
+    }
+    return routeProjectHttpUrl(lease.address, url);
+  }
+
   async ensureProjectRunning(
     projectId: string,
     onState?: (state: string) => void,
@@ -191,5 +240,22 @@ export class UltraliteSession {
   close(): void {
     this.projectHosts.close();
     this.hubClient.close();
+  }
+}
+
+function routeProjectHttpUrl(address: string, value: string): string {
+  const base = address.replace(/\/+$/, "");
+  try {
+    const url = new URL(value, "https://project-host.invalid");
+    if (
+      /^https?:/i.test(value) &&
+      url.hostname !== "localhost" &&
+      url.hostname !== "127.0.0.1"
+    ) {
+      return url.toString();
+    }
+    return `${base}${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return `${base}/${value.replace(/^\/+/, "")}`;
   }
 }

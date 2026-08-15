@@ -35,3 +35,15 @@ export function fullProjectUrl({
     ? `${root}/${relative.split("/").map(encodeURIComponent).join("/")}`
     : `${root}/`;
 }
+
+export function fullProjectToolUrl({
+  projectId,
+  tool,
+  basePath = getAppBasePath(),
+}: {
+  projectId: string;
+  tool: "servers" | "vms";
+  basePath?: string;
+}): string {
+  return siteUrl(`projects/${projectId}/${tool}`, basePath);
+}

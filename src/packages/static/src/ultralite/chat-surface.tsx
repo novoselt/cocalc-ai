@@ -23,6 +23,7 @@ import {
 import { navigate, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
+import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 
 const ACTIVE_STATUS = new Set(["active", "running"]);
 
@@ -78,47 +79,30 @@ function AgentList({
 
   return (
     <main className="ul-page" id="main-content">
-      <div className="ul-page-heading">
-        <div>
-          <button
-            className="ul-icon-button"
-            onClick={() =>
-              navigate({ kind: "project", projectId: project.project_id })
-            }
-            type="button"
+      <SurfaceHeader
+        actions={
+          <a
+            className="ul-link-button ul-link-button-subtle"
+            href={fullProjectUrl({ projectId: project.project_id })}
           >
-            Project home
-          </button>
-          <p className="ul-kicker">Existing sessions</p>
-          <h1 tabIndex={-1}>Codex</h1>
-        </div>
-        <a
-          className="ul-link-button ul-link-button-subtle"
-          href={fullProjectUrl({ projectId: project.project_id })}
-        >
-          Create in full CoCalc
-        </a>
-      </div>
+            Create in full CoCalc
+          </a>
+        }
+        eyebrow="Existing sessions"
+        title="Codex"
+      />
       <p className="ul-muted">
         Ultralite continues existing indexed sessions. Creating a new Codex
         thread still uses the full workspace.
       </p>
-      {loading ? (
-        <p aria-live="polite" className="ul-meta">
-          Loading Codex sessions...
-        </p>
-      ) : null}
-      {error ? (
-        <p className="ul-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {loading ? <LoadingState label="Loading Codex sessions" /> : null}
+      {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {records.length ? (
         <div className="ul-session-list">
           {records.map((record) => (
             <button
               aria-label={`Open ${record.title || "Codex session"}, ${record.status}`}
-              className="ul-card"
+              className="ul-session-row"
               key={`${record.chat_path}:${record.thread_key}`}
               onClick={() =>
                 navigate({
@@ -130,15 +114,15 @@ function AgentList({
               }
               type="button"
             >
-              <div className="ul-card-title">
+              <div className="ul-row-title">
                 {record.title || "Codex session"}
               </div>
-              <p className="ul-meta">
+              <div className="ul-row-detail">
                 {[record.model, record.reasoning].filter(Boolean).join(" - ") ||
                   record.chat_path}
-              </p>
+              </div>
               <span
-                className={`ul-status ${ACTIVE_STATUS.has(record.status) ? "ul-status-running" : ""}`}
+                className={`ul-row-detail ${ACTIVE_STATUS.has(record.status) ? "ul-status-running" : ""}`}
               >
                 {record.status} - updated{" "}
                 {new Date(record.updated_at).toLocaleString()}
@@ -147,7 +131,7 @@ function AgentList({
           ))}
         </div>
       ) : !loading && !error ? (
-        <div className="ul-empty">No indexed Codex sessions were found.</div>
+        <EmptyState>No indexed Codex sessions were found.</EmptyState>
       ) : null}
     </main>
   );
@@ -308,47 +292,45 @@ function Chat({
 
   return (
     <main className="ul-page" id="main-content">
-      <div className="ul-page-heading">
-        <div>
-          <button
-            className="ul-icon-button"
-            onClick={() =>
-              navigate({ kind: "agents", projectId: project.project_id })
-            }
-            type="button"
-          >
-            Codex sessions
-          </button>
-          <p className="ul-kicker">{status}</p>
-          <h1 tabIndex={-1}>{selectedThread?.name || "Codex chat"}</h1>
-        </div>
-        <a
-          className="ul-link-button ul-link-button-subtle"
-          href={fullProjectUrl({
-            projectId: project.project_id,
-            path: route.chatPath,
-          })}
-        >
-          Open in full CoCalc
-        </a>
-      </div>
+      <SurfaceHeader
+        actions={
+          <>
+            <button
+              className="ul-icon-button"
+              onClick={() =>
+                navigate({ kind: "agents", projectId: project.project_id })
+              }
+              type="button"
+            >
+              Codex sessions
+            </button>
+            <a
+              className="ul-link-button ul-link-button-subtle"
+              href={fullProjectUrl({
+                projectId: project.project_id,
+                path: route.chatPath,
+              })}
+            >
+              Full CoCalc
+            </a>
+          </>
+        }
+        eyebrow={status}
+        title={selectedThread?.name || "Codex chat"}
+      />
       {snapshot.messages.length > visibleMessages.length ? (
-        <p className="ul-notice">
+        <InlineAlert>
           Showing the newest 100 messages to keep this view lightweight.
-        </p>
+        </InlineAlert>
       ) : null}
-      {error ? (
-        <p className="ul-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       <div className="ul-chat-layout">
         <section aria-label="Chat messages" className="ul-messages">
           {visibleMessages.map((message) => (
             <Message key={message.message_id} message={message} />
           ))}
           {!visibleMessages.length ? (
-            <div className="ul-empty">Waiting for chat history...</div>
+            <EmptyState>Waiting for chat history...</EmptyState>
           ) : null}
         </section>
         <form

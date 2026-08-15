@@ -21,6 +21,22 @@ test("parses and serializes Codex routes", () => {
   expect(parseRoute(routeHash(route))).toEqual(route);
 });
 
+test.each(["agents", "apps", "vms"] as const)(
+  "parses and serializes the %s project surface",
+  (kind) => {
+    const route = { kind, projectId };
+    expect(parseRoute(routeHash(route))).toEqual(route);
+  },
+);
+
+test("opens a bare project route at its home directory", () => {
+  expect(parseRoute(`#/project/${projectId}`)).toEqual({
+    kind: "files",
+    projectId,
+    path: "/home/user",
+  });
+});
+
 test("keeps ultralite file paths inside the project home", () => {
   expect(normalizeProjectPath("/home/user/a/../b")).toBe("/home/user/b");
   expect(normalizeProjectPath("/home/user/../../etc/passwd")).toBe(
