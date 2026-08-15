@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { getAccountProjectWindow, type AuthBootstrap } from "./api";
 import { navigate } from "./routes";
 import {
+  markUltraliteBackend,
   recordUltraliteFailure,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -53,6 +54,7 @@ export default function ProjectsWorkspace({
     const generation = ++request.current;
     setLoading(true);
     setError(undefined);
+    markUltraliteBackend("projects", "start");
     try {
       const result = await getAccountProjectWindow({
         bootstrap,
@@ -63,11 +65,13 @@ export default function ProjectsWorkspace({
         },
       });
       if (generation !== request.current) return;
+      markUltraliteBackend("projects", "end");
       setProjects((current) =>
         replace ? result.projects : [...current, ...result.projects],
       );
       setHasMore(result.hasMore);
     } catch (err) {
+      markUltraliteBackend("projects", "end");
       recordUltraliteFailure("projects", err);
       if (generation === request.current) {
         setError(err instanceof Error ? err.message : `${err}`);

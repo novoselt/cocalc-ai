@@ -76,6 +76,7 @@ test("records allowlisted constrained-client telemetry", async () => {
       details: {
         surface: "files",
         request_count: 7,
+        backend_duration_ms: 812,
         project_id: "should-not-be-recorded",
         path: "/home/user/private.txt",
       },
@@ -91,7 +92,11 @@ test("records allowlisted constrained-client telemetry", async () => {
       event_type: "constrained_client",
       metric: "constrained_surface_ready_v1",
       segment: "files",
-      details: { surface: "files", request_count: 7 },
+      details: {
+        surface: "files",
+        request_count: 7,
+        backend_duration_ms: 812,
+      },
     }),
   });
 });

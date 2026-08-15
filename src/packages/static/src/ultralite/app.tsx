@@ -10,6 +10,7 @@ import { ultraliteTheme } from "./theme";
 import { siteUrl } from "./urls";
 import { TopBar } from "./ui";
 import {
+  markUltraliteBackend,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -57,10 +58,15 @@ export function UltraliteApp() {
 
   useEffect(() => {
     const controller = new AbortController();
+    markUltraliteBackend("shell", "start");
     void getAuthBootstrap(controller.signal)
-      .then(setBootstrap)
+      .then((value) => {
+        markUltraliteBackend("shell", "end");
+        setBootstrap(value);
+      })
       .catch((err) => {
         if (!controller.signal.aborted) {
+          markUltraliteBackend("shell", "end");
           recordUltraliteOutcome("shell", "auth_failure");
           setError(err instanceof Error ? err.message : `${err}`);
         }

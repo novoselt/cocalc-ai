@@ -11,6 +11,7 @@ import { fullProjectToolUrl } from "./urls";
 import { InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import { UltraliteIcon } from "./icons";
 import {
+  markUltraliteBackend,
   recordUltraliteFailure,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -48,12 +49,14 @@ export default function AppSurface({
   const load = async () => {
     setLoading(true);
     setError(undefined);
+    markUltraliteBackend("apps", "start");
     try {
       const state = await session.getProjectState(project.project_id);
       const running = state.state === "running";
       setProjectRunning(running);
       if (!running) {
         setStatuses({});
+        markUltraliteBackend("apps", "end");
         recordUltraliteSurfaceReady("apps");
         return;
       }
@@ -67,8 +70,10 @@ export default function AppSurface({
         ),
       );
       setStatuses(Object.fromEntries(values));
+      markUltraliteBackend("apps", "end");
       recordUltraliteSurfaceReady("apps");
     } catch (err) {
+      markUltraliteBackend("apps", "end");
       recordUltraliteFailure("apps", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {

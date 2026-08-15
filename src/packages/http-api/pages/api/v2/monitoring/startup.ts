@@ -61,6 +61,7 @@ const CONSTRAINED_NUMBER_FIELDS = new Set([
   "decoded_body_size",
   "script_count",
   "style_count",
+  "backend_duration_ms",
 ]);
 const CONSTRAINED_BOOLEAN_FIELDS = new Set(["save_data", "document_hidden"]);
 const CONSTRAINED_TEXT_FIELDS = new Set([

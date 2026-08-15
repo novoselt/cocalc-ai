@@ -4,10 +4,39 @@
  */
 
 import {
+  markUltraliteBackend,
   recordUltraliteFailure,
   recordUltraliteOutcome,
   ultraliteTelemetryDetails,
 } from "./telemetry";
+
+test("reports content-free backend phase timing separately", () => {
+  const marks = new Map<string, { startTime: number }[]>();
+  let now = 10;
+  Object.defineProperties(performance, {
+    clearMarks: {
+      configurable: true,
+      value: (name: string) => marks.delete(name),
+    },
+    getEntriesByName: {
+      configurable: true,
+      value: (name: string) => marks.get(name) ?? [],
+    },
+    mark: {
+      configurable: true,
+      value: (name: string) => marks.set(name, [{ startTime: now }]),
+    },
+  });
+
+  markUltraliteBackend("files", "start");
+  now = 86;
+  markUltraliteBackend("files", "end");
+
+  expect(ultraliteTelemetryDetails("files")).toMatchObject({
+    backend_duration_ms: 76,
+    surface: "files",
+  });
+});
 
 test("emits only content-free constrained-client fields", async () => {
   const request = jest.fn(async (_input: unknown, _options?: RequestInit) => ({
@@ -47,9 +76,9 @@ test("summarizes browser capabilities without route identifiers", () => {
 });
 
 test("classifies timeouts without sending the error message", async () => {
-  const request = jest.fn(
-    async (_input: unknown, _options?: RequestInit) => ({ ok: true }),
-  );
+  const request = jest.fn(async (_input: unknown, _options?: RequestInit) => ({
+    ok: true,
+  }));
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: request,

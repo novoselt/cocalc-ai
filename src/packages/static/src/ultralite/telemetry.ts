@@ -48,6 +48,17 @@ const clientEventId =
     ? crypto.randomUUID()
     : `ultralite-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+function backendDuration(surface: UltraliteSurface): number | undefined {
+  const start = performance
+    .getEntriesByName?.(`cocalc-ultralite:${surface}:backend-start`)
+    ?.at(-1);
+  const end = performance
+    .getEntriesByName?.(`cocalc-ultralite:${surface}:backend-end`)
+    ?.at(-1);
+  if (!start || !end || end.startTime < start.startTime) return;
+  return Math.round(end.startTime - start.startTime);
+}
+
 function resourceSummary() {
   const entries = (performance.getEntriesByType?.("resource") ??
     []) as PerformanceResourceTiming[];
@@ -115,8 +126,18 @@ export function ultraliteTelemetryDetails(
     viewport_width: window.innerWidth,
     viewport_height: window.innerHeight,
     document_hidden: document.hidden,
+    backend_duration_ms: backendDuration(surface),
     ...resourceSummary(),
   };
+}
+
+export function markUltraliteBackend(
+  surface: UltraliteSurface,
+  phase: "start" | "end",
+): void {
+  const name = `cocalc-ultralite:${surface}:backend-${phase}`;
+  performance.clearMarks?.(name);
+  performance.mark?.(name);
 }
 
 function send(

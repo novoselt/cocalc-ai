@@ -25,6 +25,7 @@ import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import {
+  markUltraliteBackend,
   recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
@@ -112,6 +113,7 @@ function AgentList({
     let cancelled = false;
     setLoading(true);
     setError(undefined);
+    markUltraliteBackend("chat", "start");
     void session
       .openProjectHost(project.project_id, project.host_id!)
       .then(async ({ client }) => {
@@ -122,9 +124,14 @@ function AgentList({
         });
         index.subscribe((next) => setRecords(sessionSort(next)));
         await index.open();
+        if (!cancelled) {
+          markUltraliteBackend("chat", "end");
+          recordUltraliteSurfaceReady("chat");
+        }
       })
       .catch((err) => {
         if (!cancelled) {
+          markUltraliteBackend("chat", "end");
           recordUltraliteFailure("chat", err);
           setError(err instanceof Error ? err.message : `${err}`);
         }
@@ -279,6 +286,7 @@ export function Chat({
     let opened: HeadlessChatClient | undefined;
     setError(undefined);
     setStatus("Connecting to the project host...");
+    markUltraliteBackend("chat", "start");
     void (async () => {
       await session.ensureProjectRunning(project.project_id, setStatus);
       const lease = await session.openProjectHost(
@@ -296,9 +304,13 @@ export function Chat({
       clientRef.current = opened;
       setClient(opened);
       await opened.open();
-      if (!cancelled) setStatus("Live Codex session");
+      if (!cancelled) {
+        markUltraliteBackend("chat", "end");
+        setStatus("Live Codex session");
+      }
     })().catch((err) => {
       if (!cancelled) {
+        markUltraliteBackend("chat", "end");
         recordUltraliteFailure("chat", err);
         setError(err instanceof Error ? err.message : `${err}`);
         setStatus("Disconnected");

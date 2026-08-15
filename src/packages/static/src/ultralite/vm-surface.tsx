@@ -11,6 +11,7 @@ import { fullProjectToolUrl } from "./urls";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import { UltraliteIcon } from "./icons";
 import {
+  markUltraliteBackend,
   recordUltraliteFailure,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
@@ -97,14 +98,17 @@ export default function VmSurface({
   const load = async () => {
     setLoading(true);
     setError(undefined);
+    markUltraliteBackend("vms", "start");
     try {
       setVms(
         await session.hubApi.compute.listVms({
           project_id: project.project_id,
         }),
       );
+      markUltraliteBackend("vms", "end");
       recordUltraliteSurfaceReady("vms");
     } catch (err) {
+      markUltraliteBackend("vms", "end");
       recordUltraliteFailure("vms", err);
       setError(err instanceof Error ? err.message : `${err}`);
     } finally {

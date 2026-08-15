@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { chromium } from "@playwright/test";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
@@ -161,8 +162,46 @@ async function browserMetrics(page, cdp, baseline) {
         name,
         start_ms: Math.round(startTime),
       }));
+    const groups = {};
+    for (const entry of resources) {
+      const url = new URL(entry.name, location.href);
+      const group = url.pathname.startsWith("/static/")
+        ? "static"
+        : url.pathname.startsWith("/api/")
+          ? "control_plane"
+          : url.origin !== location.origin
+            ? "project_data"
+            : "other";
+      const current = groups[group] ?? {
+        count: 0,
+        decoded_body_size: 0,
+        duration_ms: 0,
+        transfer_size: 0,
+      };
+      current.count += 1;
+      current.decoded_body_size += entry.decodedBodySize || 0;
+      current.duration_ms += entry.duration || 0;
+      current.transfer_size += entry.transferSize || 0;
+      groups[group] = current;
+    }
+    const phases = {};
+    for (const mark of marks) {
+      const match = mark.name.match(
+        /^cocalc-ultralite:([^:]+):backend-(start|end)$/,
+      );
+      if (!match) continue;
+      phases[match[1]] ??= {};
+      phases[match[1]][match[2]] = mark.start_ms;
+    }
+    for (const value of Object.values(phases)) {
+      if (value.start != null && value.end != null) {
+        value.duration_ms = Math.max(0, value.end - value.start);
+      }
+    }
     return {
       marks,
+      backend_phases: phases,
+      resource_groups: groups,
       resource_count: resources.length,
       transfer_size: resources.reduce(
         (sum, entry) => sum + (entry.transferSize || 0),
@@ -320,6 +359,7 @@ Options:
   --standard-url <origin> Capture matching full-CoCalc reference screenshots
   --output <directory>
   --assert-slo            Exit nonzero when a measured SLO fails
+  --chromium <path>       Chromium executable (auto-detects common system paths)
   --headed                Show Chromium`);
     return;
   }
@@ -334,7 +374,18 @@ Options:
     : undefined;
   const rows = scenarios(args);
   await mkdir(output, { recursive: true });
-  const browser = await chromium.launch({ headless: args.headed !== true });
+  const systemChromium = [
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+  ].find(existsSync);
+  const executablePath = args.chromium
+    ? resolve(`${args.chromium}`)
+    : systemChromium;
+  const browser = await chromium.launch({
+    executablePath,
+    headless: args.headed !== true,
+  });
   const results = [];
   try {
     for (const scenario of rows) {

@@ -23,6 +23,7 @@ import {
 } from "./ui";
 import { UltraliteIcon } from "./icons";
 import {
+  markUltraliteBackend,
   recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
@@ -242,7 +243,10 @@ export default function FileSurface({
       })
       .catch((err) => {
         if (!cancelled) {
-          recordUltraliteFailure(route.kind === "files" ? "files" : "file", err);
+          recordUltraliteFailure(
+            route.kind === "files" ? "files" : "file",
+            err,
+          );
           setError(err instanceof Error ? err.message : `${err}`);
           setLoading(false);
         }
@@ -265,12 +269,20 @@ export default function FileSurface({
     setExecuteNotebook(false);
     setEditable(false);
     setDirty(false);
+    const surface =
+      route.kind === "files"
+        ? "files"
+        : route.path.toLowerCase().endsWith(".ipynb")
+          ? "notebook"
+          : "file";
+    markUltraliteBackend(surface, "start");
     void (async () => {
       if (route.kind === "files") {
         const listing = await filesystem.getListing(route.path);
         if (!cancelled) {
           setFiles(listing.files);
           setTruncated(listing.truncated === true);
+          markUltraliteBackend(surface, "end");
         }
         return;
       }
@@ -296,6 +308,7 @@ export default function FileSurface({
         );
       }
       if (!cancelled) {
+        markUltraliteBackend(surface, "end");
         if (notebookFile) {
           setNotebook(parseNotebook(text));
           setNotebookContents(text);
@@ -308,6 +321,7 @@ export default function FileSurface({
     })()
       .catch((err) => {
         if (!cancelled) {
+          markUltraliteBackend(surface, "end");
           recordUltraliteFailure(
             route.kind === "files"
               ? "files"
