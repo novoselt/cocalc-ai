@@ -9,6 +9,27 @@ import { essentialRouteUrl, navigate, type UltraliteRoute } from "./routes";
 import { fullProjectUrl, siteUrl } from "./urls";
 import { UltraliteIcon, type UltraliteIconName } from "./icons";
 import { recordUltraliteOutcome } from "./telemetry";
+import { useEssentialTheme } from "./theme-context";
+
+export function ThemeControl() {
+  const { preference, setPreference } = useEssentialTheme();
+  return (
+    <label className="ul-theme-control">
+      <span>Theme</span>
+      <select
+        aria-label="Color theme"
+        onChange={(event) =>
+          setPreference(event.target.value as "system" | "light" | "dark")
+        }
+        value={preference}
+      >
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+  );
+}
 
 export function TopBar({ projectTitle }: { projectTitle?: string }) {
   return (
@@ -50,6 +71,7 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
         Full CoCalc
         <UltraliteIcon name="external" size={15} />
       </a>
+      <ThemeControl />
     </header>
   );
 }

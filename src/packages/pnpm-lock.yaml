@@ -638,6 +638,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.8
         version: 6.43.8
+      '@lezer/highlight':
+        specifier: ^1.2.3
+        version: 1.2.3
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@cocalc/xterm@5.5.0-cocalc.5)

@@ -162,6 +162,18 @@ The client exposes concise, copyable `cocalc` commands for the current project
 and links to the relevant terminal workflow. It is command discovery, not a
 second embedded automation system.
 
+### Appearance
+
+Essential follows the operating-system light or dark preference by default and
+keeps an explicit System/Light/Dark control in the shared upper-right bar. An
+explicit choice is stored only in the browser and causes no network request or
+polling. Page chrome, Markdown, CodeMirror, and a connected xterm update in
+place, without reloading documents or reconnecting terminal sessions.
+
+Theme colors are semantic CSS variables rather than separate component trees.
+Images and scientific output retain a neutral light canvas when their pixels
+assume one, while the surrounding notebook follows the selected appearance.
+
 ## Explicitly Out Of Scope
 
 - course creation and instructor course management;

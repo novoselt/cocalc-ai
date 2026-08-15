@@ -40,6 +40,7 @@
     "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.8",
+    "@lezer/highlight": "^1.2.3",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "https://registry.npmjs.org/@cocalc/xterm/-/xterm-5.5.0-cocalc.5.tgz",
     "katex": "^0.16.21",

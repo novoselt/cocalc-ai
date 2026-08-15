@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
 }
 
 * {
@@ -32,7 +32,7 @@ textarea {
 
 .ul-skip {
   background: var(--ul-ink);
-  color: white;
+  color: var(--ul-on-accent);
   left: 0.75rem;
   padding: 0.65rem 0.9rem;
   position: fixed;
@@ -47,10 +47,10 @@ textarea {
 .ul-topbar {
   align-items: center;
   background: var(--ul-topbar);
-  color: white;
+  color: var(--ul-on-accent);
   display: grid;
   gap: 0.85rem;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
   min-height: 48px;
   padding: 0 14px;
   position: sticky;
@@ -61,7 +61,7 @@ textarea {
 .ul-brand,
 .ul-topbar-link {
   align-items: center;
-  color: white;
+  color: var(--ul-on-accent);
   display: inline-flex;
   gap: 0.35rem;
   text-decoration: none;
@@ -97,6 +97,29 @@ textarea {
   font-size: 13px;
   min-height: 36px;
   padding: 0 4px;
+}
+
+.ul-theme-control {
+  align-items: center;
+  color: var(--ul-on-accent);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 5px;
+  min-height: 36px;
+}
+
+.ul-theme-control select {
+  background: color-mix(in srgb, var(--ul-topbar) 78%, var(--ul-on-accent) 22%);
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 3px;
+  color: var(--ul-on-accent);
+  min-height: 30px;
+  padding: 3px 6px;
+}
+
+.ul-theme-control option {
+  background: var(--ul-paper);
+  color: var(--ul-ink);
 }
 
 .ul-centered,
@@ -161,7 +184,7 @@ textarea {
   background: var(--ul-accent);
   border: 1px solid var(--ul-accent);
   border-radius: 3px;
-  color: white;
+  color: var(--ul-on-accent);
   cursor: pointer;
   display: inline-flex;
   font-weight: 500;
@@ -175,7 +198,7 @@ textarea {
 .ul-button-secondary,
 .ul-link-button-subtle,
 .ul-icon-button {
-  background: white;
+  background: var(--ul-paper);
   border-color: var(--ul-border-dark);
   color: var(--ul-heading);
 }
@@ -220,7 +243,7 @@ textarea {
 }
 
 .ul-alert {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   border-left: 4px solid var(--ul-accent);
   line-height: 1.45;
@@ -259,7 +282,7 @@ textarea {
 }
 
 .ul-empty {
-  background: white;
+  background: var(--ul-paper);
   border: 1px dashed var(--ul-border-dark);
   margin: 10px 0;
 }
@@ -274,7 +297,7 @@ textarea {
 .ul-select,
 .ul-textarea,
 .ul-editor {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border-dark);
   border-radius: 3px;
   color: var(--ul-ink);
@@ -286,13 +309,13 @@ textarea {
 .ul-project-table,
 .ul-file-list,
 .ul-compact-list {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
 }
 
 .ul-project-row {
   align-items: center;
-  background: white;
+  background: var(--ul-paper);
   border: 0;
   border-bottom: 1px solid var(--ul-border);
   color: var(--ul-ink);
@@ -321,9 +344,9 @@ textarea {
 .ul-project-avatar {
   align-items: center;
   background: var(--ul-accent-soft);
-  border: 2px solid var(--ul-accent);
+  border: 2px solid var(--ul-link);
   border-radius: 4px;
-  color: var(--ul-accent);
+  color: var(--ul-link);
   display: flex;
   font-size: 17px;
   font-weight: 700;
@@ -397,8 +420,8 @@ textarea {
 
 .ul-rail-item:hover,
 .ul-rail-item-active {
-  background: white;
-  color: var(--ul-accent);
+  background: var(--ul-paper);
+  color: var(--ul-link);
 }
 
 .ul-rail-item-active {
@@ -431,7 +454,7 @@ textarea {
 .ul-breadcrumbs button {
   background: transparent;
   border: 0;
-  color: var(--ul-accent);
+  color: var(--ul-link);
   cursor: pointer;
   min-height: 32px;
   padding: 4px 5px;
@@ -472,7 +495,7 @@ textarea {
 }
 
 .ul-file-directory {
-  color: var(--ul-accent);
+  color: var(--ul-link);
   font-weight: 600;
 }
 
@@ -620,7 +643,7 @@ textarea {
 }
 
 .ul-cm-editor {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border-dark);
   color: var(--ul-code-text);
   height: clamp(360px, 65vh, 720px);
@@ -632,7 +655,7 @@ textarea {
 }
 
 .ul-cm-editor .cm-scroller {
-  background: white;
+  background: var(--ul-paper);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   height: 100%;
@@ -643,6 +666,15 @@ textarea {
 .ul-cm-editor .cm-content {
   caret-color: var(--ul-code-text);
   padding-block: 8px;
+}
+
+.ul-cm-editor .cm-cursor {
+  border-left-color: var(--ul-code-text);
+}
+
+.ul-cm-editor .cm-selectionBackground,
+.ul-cm-editor .cm-content ::selection {
+  background: color-mix(in srgb, var(--ul-link) 32%, transparent) !important;
 }
 
 .ul-cm-editor .cm-gutters {
@@ -684,7 +716,7 @@ textarea {
 }
 
 .ul-markdown-document {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   min-height: 320px;
   padding: clamp(16px, 3vw, 34px);
@@ -696,7 +728,7 @@ textarea {
 }
 
 .ul-cell {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
 }
 
@@ -740,12 +772,13 @@ textarea {
 }
 
 .ul-output {
-  background: white;
+  background: var(--ul-paper);
   border-width: 1px 0 0;
   white-space: pre-wrap;
 }
 
 .ul-output-image {
+  background: var(--ul-output-image-bg);
   display: block;
   height: auto;
   margin: 12px;
@@ -772,7 +805,7 @@ textarea {
 
 .ul-session-row,
 .ul-compact-row {
-  background: white;
+  background: var(--ul-paper);
   border: 0;
   border-bottom: 1px solid var(--ul-border);
   color: var(--ul-ink);
@@ -795,7 +828,7 @@ textarea {
 }
 
 .ul-message {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   line-height: 1.5;
   padding: 10px 12px;
@@ -806,7 +839,7 @@ textarea {
 }
 
 .ul-message a {
-  color: var(--ul-accent);
+  color: var(--ul-link);
   overflow-wrap: anywhere;
 }
 
@@ -827,7 +860,7 @@ textarea {
 }
 
 .ul-composer {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   border-top-width: 2px;
   padding: 10px;
@@ -852,7 +885,7 @@ textarea {
   background: var(--ul-accent);
   border: 1px solid var(--ul-accent);
   border-radius: 16px;
-  color: white;
+  color: var(--ul-on-accent);
   cursor: pointer;
   margin: -42px 0 10px;
   min-height: 32px;
@@ -950,7 +983,7 @@ textarea {
 }
 
 .ul-context-list {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   margin: 12px 0 18px;
 }
@@ -973,7 +1006,7 @@ textarea {
 }
 
 .ul-notification {
-  background: white;
+  background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   border-left: 4px solid var(--ul-border);
   padding: 10px 12px;
@@ -989,7 +1022,7 @@ textarea {
 }
 
 .ul-unread-dot {
-  color: var(--ul-accent);
+  color: var(--ul-link);
   font-size: 12px;
   font-weight: 600;
 }
@@ -1019,7 +1052,7 @@ textarea {
 
 .ul-command-row {
   align-items: center;
-  background: white;
+  background: var(--ul-paper);
   border-bottom: 1px solid var(--ul-border);
   display: flex;
   gap: 12px;
@@ -1081,7 +1114,9 @@ textarea {
 
 @media (max-width: 480px) {
   .ul-topbar {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 0.45rem;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    padding-inline: 9px;
   }
 
   .ul-mode {
@@ -1090,6 +1125,14 @@ textarea {
 
   .ul-topbar-link {
     font-size: 0;
+  }
+
+  .ul-theme-control > span {
+    display: none;
+  }
+
+  .ul-theme-control select {
+    max-width: 78px;
   }
 
   .ul-project-layout {

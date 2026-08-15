@@ -11,7 +11,7 @@ import {
   parseRoute,
   type UltraliteRoute,
 } from "./routes";
-import { ultraliteTheme } from "./theme";
+import { EssentialThemeProvider } from "./theme-context";
 import { siteUrl } from "./urls";
 import { TopBar } from "./ui";
 import {
@@ -127,7 +127,7 @@ export function UltraliteApp() {
   }, []);
 
   return (
-    <div className="ul-app" style={ultraliteTheme}>
+    <EssentialThemeProvider>
       <a className="ul-skip" href="#main-content">
         Skip to content
       </a>
@@ -175,6 +175,6 @@ export function UltraliteApp() {
           )}
         </Suspense>
       )}
-    </div>
+    </EssentialThemeProvider>
   );
 }
