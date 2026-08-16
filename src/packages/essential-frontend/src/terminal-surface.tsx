@@ -10,10 +10,12 @@ import {
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import { COLORS } from "@cocalc/util/theme";
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal as XtermTerminal } from "@xterm/xterm";
+import { Terminal as XtermTerminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { UltraliteSession } from "./session";
+import { useEssentialTheme } from "./theme-context";
+import type { ResolvedEssentialTheme } from "./theme";
 import "./terminal-surface.css";
 import {
   markUltraliteBackend,
@@ -46,6 +48,55 @@ const MOBILE_TERMINAL_KEYS = [
   { data: "\u001b[B", label: "\u2193", name: "Down arrow" },
   { data: "\u001b[C", label: "\u2192", name: "Right arrow" },
 ];
+
+export function terminalThemeFor(theme: ResolvedEssentialTheme): ITheme {
+  if (theme === "dark") {
+    return {
+      background: COLORS.GRAY_DD,
+      black: COLORS.GRAY_DD,
+      blue: COLORS.BLUE_L,
+      brightBlack: COLORS.GRAY,
+      brightBlue: COLORS.BLUE_LL,
+      brightCyan: COLORS.FEATURE_TEAL,
+      brightGreen: COLORS.ANTD_GREEN,
+      brightMagenta: COLORS.FEATURE_JULIA_PURPLE,
+      brightRed: COLORS.ANTD_BG_RED_M,
+      brightWhite: COLORS.TOP_BAR.ACTIVE,
+      brightYellow: COLORS.YELL_L,
+      cursor: COLORS.BLUE_L,
+      cyan: COLORS.FEATURE_TEAL,
+      foreground: COLORS.GRAY_LL,
+      green: COLORS.ANTD_GREEN,
+      magenta: COLORS.FEATURE_JULIA_PURPLE,
+      red: COLORS.ANTD_BG_RED_M,
+      selectionBackground: COLORS.BLUE_DD,
+      white: COLORS.GRAY_LL,
+      yellow: COLORS.YELL_L,
+    };
+  }
+  return {
+    background: COLORS.TOP_BAR.ACTIVE,
+    black: COLORS.GRAY_DD,
+    blue: COLORS.BLUE_DD,
+    brightBlack: COLORS.GRAY_M,
+    brightBlue: COLORS.BLUE_D,
+    brightCyan: COLORS.FEATURE_TEAL,
+    brightGreen: COLORS.ANTD_GREEN_D,
+    brightMagenta: COLORS.FEATURE_JULIA_PURPLE,
+    brightRed: COLORS.BS_RED,
+    brightWhite: COLORS.GRAY_DD,
+    brightYellow: COLORS.YELL_D,
+    cursor: COLORS.BLUE_DD,
+    cyan: COLORS.FEATURE_TEAL,
+    foreground: COLORS.GRAY_DD,
+    green: COLORS.ANTD_GREEN_D,
+    magenta: COLORS.FEATURE_PURPLE,
+    red: COLORS.FG_RED,
+    selectionBackground: COLORS.BLUE_LLL,
+    white: COLORS.GRAY_M,
+    yellow: COLORS.YELL_D,
+  };
+}
 
 export function extractTerminalAutoResponses(buffer: string): {
   remaining: string;
@@ -150,6 +201,7 @@ export default function TerminalSurface({
   project: AccountProjectListWindowRow;
   session: UltraliteSession;
 }) {
+  const { resolved: colorTheme } = useEssentialTheme();
   const hostRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XtermTerminal | undefined>(undefined);
   const fitRef = useRef<FitAddon | undefined>(undefined);
@@ -199,12 +251,7 @@ export default function TerminalSurface({
       fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       scrollback: 5_000,
-      theme: {
-        background: COLORS.GRAY_DD,
-        cursor: COLORS.BLUE_L,
-        foreground: COLORS.TOP_BAR.ACTIVE,
-        selectionBackground: COLORS.BLUE_DD,
-      },
+      theme: terminalThemeFor(colorTheme),
     });
     const fit = new FitAddon();
     xterm.loadAddon(fit);
@@ -286,6 +333,11 @@ export default function TerminalSurface({
       fitRef.current = undefined;
     };
   }, []);
+
+  useEffect(() => {
+    const xterm = xtermRef.current;
+    if (xterm) xterm.options.theme = terminalThemeFor(colorTheme);
+  }, [colorTheme]);
 
   useEffect(() => {
     let active = true;

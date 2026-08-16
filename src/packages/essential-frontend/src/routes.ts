@@ -10,6 +10,7 @@ export type UltraliteRoute =
   | { kind: "notifications" }
   | { kind: "files"; projectId: string; path: string }
   | { kind: "file"; projectId: string; path: string }
+  | { kind: "recent"; projectId: string }
   | { kind: "agents"; projectId: string }
   | { kind: "notebooks"; projectId: string }
   | { kind: "terminal"; projectId: string }
@@ -76,6 +77,8 @@ function parseLegacyHash(hash: string): UltraliteRoute {
         projectId,
         path: normalizeProjectPath(params.get("path") ?? undefined),
       };
+    case "recent":
+      return { kind: "recent", projectId };
     case "agents":
       return { kind: "agents", projectId };
     case "notebooks":
@@ -134,6 +137,8 @@ export function parseEssentialRoute(
         segments.length === 3 || location.pathname.endsWith("/");
       return { kind: directory ? "files" : "file", projectId, path };
     }
+    case "recent":
+      return { kind: "recent", projectId };
     case "codex": {
       if (segments[3] !== "chat") return { kind: "agents", projectId };
       const params = new URLSearchParams(location.search ?? "");
@@ -182,6 +187,8 @@ export function routeHash(route: UltraliteRoute): string {
       return `${root}/files?${new URLSearchParams({ path: route.path })}`;
     case "file":
       return `${root}/file?${new URLSearchParams({ path: route.path })}`;
+    case "recent":
+      return `${root}/recent`;
     case "agents":
       return `${root}/agents`;
     case "notebooks":
@@ -225,6 +232,8 @@ export function essentialRouteUrl(
       return `${projectRoot}/files/${encodeProjectPath(route.path)}/`;
     case "file":
       return `${projectRoot}/files/${encodeProjectPath(route.path)}`;
+    case "recent":
+      return `${projectRoot}/recent`;
     case "agents":
       return `${projectRoot}/codex`;
     case "notebooks":

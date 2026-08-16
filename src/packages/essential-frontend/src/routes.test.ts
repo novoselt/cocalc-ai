@@ -32,6 +32,7 @@ test.each([
   "apps",
   "cli",
   "notebooks",
+  "recent",
   "settings",
   "terminal",
   "vms",

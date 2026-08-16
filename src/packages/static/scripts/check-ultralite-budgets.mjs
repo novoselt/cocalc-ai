@@ -47,8 +47,10 @@ if (!initial?.length) throw new Error("missing initial ultralite chunk group");
 const projects = findNamedGroup("ultralite-projects");
 const workspace = findNamedGroup("ultralite-workspace");
 const files = findNamedGroup("ultralite-files");
+const recent = findNamedGroup("ultralite-recent");
 const code = findNamedGroup("ultralite-code");
 const notebookExecute = findNamedGroup("ultralite-notebook-execute");
+const notebookMarkdown = findNamedGroup("ultralite-notebook-markdown");
 const notebooks = findNamedGroup("ultralite-notebooks");
 const chat = findNamedGroup("ultralite-chat");
 const vms = findNamedGroup("ultralite-vms");
@@ -72,6 +74,7 @@ const prismLanguages = [
   "markdown",
   "markup",
   "python",
+  "r",
   "rust",
   "sql",
   "typescript",
@@ -91,6 +94,7 @@ const codeMirrorLanguages = [
   "latex",
   "markdown",
   "python",
+  "r",
   "rust",
   "sql",
   "yaml",
@@ -122,6 +126,7 @@ const codeMirrorPatterns = [
   "essential-frontend/dist/codemirror-languages.js",
 ];
 const markdownDependencyPatterns = [
+  "essential-frontend/dist/notebook-markdown.js",
   "node_modules/.pnpm/entities@",
   "node_modules/.pnpm/linkify-it@",
   "node_modules/.pnpm/markdown-it@",
@@ -143,6 +148,15 @@ const readOnlyCode = markdownCode.filter(
 const textEditorCode = code.filter(
   (chunkName) => !containsModule(chunkName, markdownDependencyPatterns),
 );
+const baseFiles = files.filter(
+  (chunkName) => !containsModule(chunkName, markdownDependencyPatterns),
+);
+const notebookMarkdownRoute = [
+  ...notebookMarkdown,
+  ...files.filter((chunkName) =>
+    containsModule(chunkName, markdownDependencyPatterns),
+  ),
+];
 console.log(
   `ultralite editor largest language: ${largestCodeMirrorLanguage.language} (${(largestCodeMirrorLanguage.bytes / KiB).toFixed(1)} KiB Brotli)`,
 );
@@ -155,7 +169,17 @@ const surfaces = [
   { label: "projects", chunks: [...initial, ...projects], max: 400 * KiB },
   {
     label: "files and read-only Jupyter",
-    chunks: [...initial, ...workspace, ...files],
+    chunks: [...initial, ...workspace, ...baseFiles],
+    max: 425 * KiB,
+  },
+  {
+    label: "read-only Jupyter with Markdown",
+    chunks: [...initial, ...workspace, ...baseFiles, ...notebookMarkdownRoute],
+    max: 500 * KiB,
+  },
+  {
+    label: "recent files",
+    chunks: [...initial, ...workspace, ...recent],
     max: 425 * KiB,
   },
   {
@@ -165,7 +189,7 @@ const surfaces = [
     chunks: [
       ...initial,
       ...workspace,
-      ...files,
+      ...baseFiles,
       ...readOnlyCode,
       ...largestPrismLanguage.chunks,
     ],
@@ -173,7 +197,7 @@ const surfaces = [
   },
   {
     label: "rendered Markdown",
-    chunks: [...initial, ...workspace, ...files, ...markdownCode],
+    chunks: [...initial, ...workspace, ...baseFiles, ...markdownCode],
     max: 500 * KiB,
   },
   {
@@ -181,7 +205,7 @@ const surfaces = [
     chunks: [
       ...initial,
       ...workspace,
-      ...files,
+      ...baseFiles,
       ...markdownCode,
       ...katexComponent,
       ...katex,
@@ -195,7 +219,7 @@ const surfaces = [
     chunks: [
       ...initial,
       ...workspace,
-      ...files,
+      ...baseFiles,
       ...textEditorCode,
       ...largestPrismLanguage.chunks,
       ...codeMirror,
@@ -208,7 +232,7 @@ const surfaces = [
     chunks: [
       ...initial,
       ...workspace,
-      ...files,
+      ...baseFiles,
       ...code,
       ...codeMirror,
       ...largestCodeMirrorLanguage.chunks,
@@ -221,11 +245,23 @@ const surfaces = [
     chunks: [
       ...initial,
       ...workspace,
-      ...files,
+      ...baseFiles,
       ...notebookExecute,
       ...largestCodeMirrorLanguage.chunks,
     ],
     max: 650 * KiB,
+  },
+  {
+    label: "executable Jupyter with Markdown",
+    chunks: [
+      ...initial,
+      ...workspace,
+      ...baseFiles,
+      ...notebookExecute,
+      ...notebookMarkdownRoute,
+      ...largestCodeMirrorLanguage.chunks,
+    ],
+    max: 700 * KiB,
   },
   {
     label: "Jupyter notebook index",

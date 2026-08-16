@@ -8,7 +8,6 @@ import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects
 import { checked_three_way_merge } from "@cocalc/util/dmp";
 import {
   forwardRef,
-  Fragment,
   lazy,
   Suspense,
   useEffect,
@@ -16,17 +15,12 @@ import {
   useRef,
   useState,
   type ForwardedRef,
-  type ReactNode,
 } from "react";
 import type { CodeMirrorEditorHandle } from "./codemirror-editor";
+import { languageForPath } from "./code-language";
+import HighlightedCode from "./highlighted-code";
 import { sha256Text } from "./sha256";
 import type { UltraliteSession } from "./session";
-import {
-  languageForPath,
-  loadLanguage,
-  Prism,
-  type UltraliteLanguage,
-} from "./prism-languages";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
 import {
   recordUltraliteFailure,
@@ -39,84 +33,6 @@ import type {
   ExternalMergeHandle,
   ExternalMergeResult,
 } from "./external-merge";
-
-function tokenClass(token: Prism.Token): string {
-  const aliases = Array.isArray(token.alias)
-    ? token.alias
-    : token.alias
-      ? [token.alias]
-      : [];
-  return ["token", token.type, ...aliases].join(" ");
-}
-
-function renderTokens(tokens: Array<string | Prism.Token>, key = "t") {
-  return tokens.map((token, index): ReactNode => {
-    const tokenKey = `${key}-${index}`;
-    if (typeof token === "string") {
-      return <Fragment key={tokenKey}>{token}</Fragment>;
-    }
-    const content = Array.isArray(token.content)
-      ? renderTokens(token.content, tokenKey)
-      : token.content instanceof Prism.Token
-        ? renderTokens([token.content], tokenKey)
-        : token.content;
-    return (
-      <span className={tokenClass(token)} key={tokenKey}>
-        {content}
-      </span>
-    );
-  });
-}
-
-function HighlightedCode({
-  contents,
-  language,
-  wrap,
-}: {
-  contents: string;
-  language?: UltraliteLanguage;
-  wrap: boolean;
-}) {
-  const [grammar, setGrammar] = useState<Prism.Grammar>();
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setGrammar(undefined);
-    setFailed(false);
-    void loadLanguage(language)
-      .then((value) => {
-        if (!cancelled) setGrammar(value);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [language]);
-
-  let children: ReactNode = contents;
-  if (grammar && language) {
-    children = renderTokens(Prism.tokenize(contents, grammar));
-  }
-  return (
-    <>
-      {language && !grammar && !failed ? (
-        <LoadingState label="Loading syntax highlighting" />
-      ) : null}
-      {failed ? (
-        <InlineAlert kind="warning">
-          Syntax highlighting could not be loaded. Plain text is still safe and
-          available.
-        </InlineAlert>
-      ) : null}
-      <pre className={`ul-code-view ${wrap ? "ul-code-wrap" : ""}`}>
-        <code>{children}</code>
-      </pre>
-    </>
-  );
-}
 
 const LazyCodeMirrorEditor = lazy(
   () =>
@@ -467,7 +383,12 @@ function CodeView(
           <LazyMarkdownView source={draft} />
         </Suspense>
       ) : (
-        <HighlightedCode contents={draft} language={language} wrap={wrap} />
+        <HighlightedCode
+          contents={draft}
+          language={language}
+          showStatus
+          wrap={wrap}
+        />
       )}
     </div>
   );

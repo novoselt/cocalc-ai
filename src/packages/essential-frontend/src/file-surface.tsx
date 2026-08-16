@@ -4,6 +4,7 @@
  */
 
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
+import type { Client } from "@cocalc/conat/core/client";
 import type { Files } from "@cocalc/conat/files/listing";
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -12,6 +13,10 @@ import NotebookView, {
   parseNotebook,
   type NotebookDocument,
 } from "./notebook-view";
+import {
+  createNotebookBlobResolver,
+  type NotebookBlobResolver,
+} from "./notebook-blobs";
 import { navigate, normalizeProjectPath, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
@@ -20,6 +25,7 @@ import {
   EmptyState,
   InlineAlert,
   LoadingState,
+  ShellLoading,
   SurfaceHeader,
 } from "./ui";
 import { UltraliteIcon } from "./icons";
@@ -30,6 +36,11 @@ import {
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
+import {
+  readShowHidden,
+  recordRecentFile,
+  writeShowHidden,
+} from "./recent-files";
 
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const MAX_EDIT_BYTES = 2 * 1024 * 1024;
@@ -200,26 +211,30 @@ function Breadcrumbs({ projectId, path }: { projectId: string; path: string }) {
   );
 }
 
-function DirectoryView({
+export function DirectoryView({
   project,
   path,
   files,
+  showHidden,
   truncated,
 }: {
   project: AccountProjectListWindowRow;
   path: string;
   files: Files;
+  showHidden: boolean;
   truncated?: boolean;
 }) {
-  const entries = Object.entries(files).sort(([nameA, a], [nameB, b]) => {
-    const aDirectory = a.type === "d" || a.isDir;
-    const bDirectory = b.type === "d" || b.isDir;
-    if (aDirectory !== bDirectory) return aDirectory ? -1 : 1;
-    return nameA.localeCompare(nameB, undefined, {
-      numeric: true,
-      sensitivity: "base",
+  const entries = Object.entries(files)
+    .filter(([name]) => showHidden || !name.startsWith("."))
+    .sort(([nameA, a], [nameB, b]) => {
+      const aDirectory = a.type === "d" || a.isDir;
+      const bDirectory = b.type === "d" || b.isDir;
+      if (aDirectory !== bDirectory) return aDirectory ? -1 : 1;
+      return nameA.localeCompare(nameB, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
     });
-  });
   return (
     <>
       {truncated ? (
@@ -303,6 +318,8 @@ export default function FileSurface({
   session: UltraliteSession;
 }) {
   const [filesystem, setFilesystem] = useState<FilesystemClient>();
+  const [projectClient, setProjectClient] = useState<Client>();
+  const [blobResolver, setBlobResolver] = useState<NotebookBlobResolver>();
   const [files, setFiles] = useState<Files>();
   const [truncated, setTruncated] = useState(false);
   const [contents, setContents] = useState<string>();
@@ -324,6 +341,9 @@ export default function FileSurface({
   const [createName, setCreateName] = useState("");
   const [createError, setCreateError] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const [showHidden, setShowHidden] = useState(() =>
+    readShowHidden(session.accountId),
+  );
   const dirtyRef = useRef(dirty);
   const editorActiveRef = useRef(codeEditing || executeNotebook);
   const localSaveUntilRef = useRef(0);
@@ -350,8 +370,11 @@ export default function FileSurface({
     setError(undefined);
     void session
       .openProjectFiles(project.project_id, project.host_id!)
-      .then(({ filesystem }) => {
-        if (!cancelled) setFilesystem(filesystem);
+      .then(({ filesystem, lease }) => {
+        if (!cancelled) {
+          setFilesystem(filesystem);
+          setProjectClient(lease.client);
+        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -367,6 +390,24 @@ export default function FileSurface({
       cancelled = true;
     };
   }, [project.host_id, project.project_id, session]);
+
+  useEffect(() => {
+    if (
+      !projectClient ||
+      route.kind !== "file" ||
+      !route.path.toLowerCase().endsWith(".ipynb")
+    ) {
+      setBlobResolver(undefined);
+      return;
+    }
+    const resolver = createNotebookBlobResolver({
+      client: projectClient,
+      path: route.path,
+      projectId: project.project_id,
+    });
+    setBlobResolver(resolver);
+    return () => resolver.close();
+  }, [project.project_id, projectClient, route.kind, route.path]);
 
   useEffect(() => {
     if (!filesystem) return;
@@ -485,7 +526,25 @@ export default function FileSurface({
       recordUltraliteSurfaceReady("file");
       recordUltraliteOutcome("file", "file_open");
     }
-  }, [contents, error, files, loading, notebook, route.kind]);
+    if (route.kind === "file" && (notebook || contents != null)) {
+      recordRecentFile(session.accountId, {
+        path: route.path,
+        projectId: project.project_id,
+        projectTitle: project.title || "Untitled project",
+      });
+    }
+  }, [
+    contents,
+    error,
+    files,
+    loading,
+    notebook,
+    project.project_id,
+    project.title,
+    route.kind,
+    route.path,
+    session.accountId,
+  ]);
 
   const download = () => {
     const text = contents ?? notebookContents;
@@ -590,6 +649,8 @@ export default function FileSurface({
     }
   };
 
+  if (loading) return <ShellLoading />;
+
   return (
     <main className="ul-page" id="main-content">
       <SurfaceHeader
@@ -637,7 +698,6 @@ export default function FileSurface({
         projectId={project.project_id}
         path={route.kind === "file" ? parentPath(route.path) : route.path}
       />
-      {loading ? <LoadingState label="Loading from the project host" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {externalChanged ? (
         <ExternalChangeActions
@@ -657,81 +717,96 @@ export default function FileSurface({
       ) : null}
       {route.kind === "files" && files ? (
         <>
-          {canWrite ? (
-            <div className="ul-create-entry">
-              <div className="ul-toolbar">
-                <button
-                  className="ul-button ul-button-secondary"
-                  onClick={() => {
-                    setCreateKind("file");
-                    setCreateName("");
-                    setCreateError(undefined);
-                  }}
-                  type="button"
-                >
-                  New file
-                </button>
-                <button
-                  className="ul-button ul-button-secondary"
-                  onClick={() => {
-                    setCreateKind("folder");
-                    setCreateName("");
-                    setCreateError(undefined);
-                  }}
-                  type="button"
-                >
-                  New folder
-                </button>
-              </div>
-              {createKind ? (
-                <form
-                  aria-label={`Create ${createKind}`}
-                  className="ul-create-entry-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void createEntry();
-                  }}
-                >
-                  <label htmlFor="ul-create-entry-name">
-                    {createKind === "file" ? "File name" : "Folder name"}
-                  </label>
-                  <input
-                    autoFocus
-                    className="ul-input"
-                    id="ul-create-entry-name"
-                    onChange={(event) => setCreateName(event.target.value)}
-                    placeholder={createKind === "file" ? "analysis.py" : "data"}
-                    value={createName}
-                  />
-                  <button
-                    className="ul-button"
-                    disabled={creating || !createName.trim()}
-                    type="submit"
-                  >
-                    {creating ? "Creating..." : `Create ${createKind}`}
-                  </button>
+          <div className="ul-create-entry">
+            <div className="ul-toolbar">
+              {canWrite ? (
+                <>
                   <button
                     className="ul-button ul-button-secondary"
-                    disabled={creating}
                     onClick={() => {
-                      setCreateKind(undefined);
+                      setCreateKind("file");
+                      setCreateName("");
                       setCreateError(undefined);
                     }}
                     type="button"
                   >
-                    Cancel
+                    New file
                   </button>
-                </form>
+                  <button
+                    className="ul-button ul-button-secondary"
+                    onClick={() => {
+                      setCreateKind("folder");
+                      setCreateName("");
+                      setCreateError(undefined);
+                    }}
+                    type="button"
+                  >
+                    New folder
+                  </button>
+                </>
               ) : null}
-              {createError ? (
-                <InlineAlert kind="error">{createError}</InlineAlert>
-              ) : null}
+              <label className="ul-checkbox-control">
+                <input
+                  checked={showHidden}
+                  onChange={(event) => {
+                    const value = event.target.checked;
+                    setShowHidden(value);
+                    writeShowHidden(session.accountId, value);
+                  }}
+                  type="checkbox"
+                />
+                Show hidden files
+              </label>
             </div>
-          ) : null}
+            {canWrite && createKind ? (
+              <form
+                aria-label={`Create ${createKind}`}
+                className="ul-create-entry-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void createEntry();
+                }}
+              >
+                <label htmlFor="ul-create-entry-name">
+                  {createKind === "file" ? "File name" : "Folder name"}
+                </label>
+                <input
+                  autoFocus
+                  className="ul-input"
+                  id="ul-create-entry-name"
+                  onChange={(event) => setCreateName(event.target.value)}
+                  placeholder={createKind === "file" ? "analysis.py" : "data"}
+                  value={createName}
+                />
+                <button
+                  className="ul-button"
+                  disabled={creating || !createName.trim()}
+                  type="submit"
+                >
+                  {creating ? "Creating..." : `Create ${createKind}`}
+                </button>
+                <button
+                  className="ul-button ul-button-secondary"
+                  disabled={creating}
+                  onClick={() => {
+                    setCreateKind(undefined);
+                    setCreateError(undefined);
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </form>
+            ) : null}
+            {createError ? (
+              <InlineAlert kind="error">{createError}</InlineAlert>
+            ) : null}
+          </div>
           <DirectoryView
             files={files}
             path={route.path}
             project={project}
+            showHidden={showHidden}
             truncated={truncated}
           />
         </>
@@ -741,22 +816,15 @@ export default function FileSurface({
             <Suspense
               fallback={<LoadingState label="Loading notebook tools" />}
             >
-              <div className="ul-file-view-header">
-                <button
-                  className="ul-button ul-button-secondary"
-                  onClick={() => setExecuteNotebook(false)}
-                  type="button"
-                >
-                  Read-only view
-                </button>
-              </div>
               <NotebookEditor
                 baseContents={notebookContents}
+                blobResolver={blobResolver}
                 externalChanged={externalChanged}
                 filesystem={filesystem!}
                 notebook={notebook}
                 onDirtyChange={setDirty}
                 onExternalConflict={() => setExternalChanged(true)}
+                onReadOnlyView={() => setExecuteNotebook(false)}
                 onSaved={(savedNotebook, savedContents) => {
                   markLocalSave();
                   setNotebook(savedNotebook);
@@ -782,7 +850,7 @@ export default function FileSurface({
                 Edit or run notebook
               </button>
             </div>
-            <NotebookView notebook={notebook} />
+            <NotebookView blobResolver={blobResolver} notebook={notebook} />
           </>
         )
       ) : contents != null ? (

@@ -4,63 +4,9 @@
  */
 
 import Prism from "prismjs/components/prism-core";
+import type { UltraliteLanguage } from "./code-language";
 
-export type UltraliteLanguage =
-  | "bash"
-  | "c"
-  | "cpp"
-  | "css"
-  | "go"
-  | "javascript"
-  | "json"
-  | "latex"
-  | "markdown"
-  | "markup"
-  | "python"
-  | "rust"
-  | "sql"
-  | "typescript"
-  | "yaml";
-
-const EXTENSIONS: Record<string, UltraliteLanguage> = {
-  bash: "bash",
-  c: "c",
-  cc: "cpp",
-  cpp: "cpp",
-  css: "css",
-  cxx: "cpp",
-  h: "c",
-  hh: "cpp",
-  hpp: "cpp",
-  htm: "markup",
-  html: "markup",
-  go: "go",
-  js: "javascript",
-  json: "json",
-  jsx: "javascript",
-  latex: "latex",
-  md: "markdown",
-  py: "python",
-  pyw: "python",
-  rs: "rust",
-  sh: "bash",
-  sql: "sql",
-  tex: "latex",
-  ts: "typescript",
-  tsx: "typescript",
-  xhtml: "markup",
-  xml: "markup",
-  yaml: "yaml",
-  yml: "yaml",
-};
-
-export function languageForPath(path: string): UltraliteLanguage | undefined {
-  const name = path.split("/").pop()?.toLowerCase() ?? "";
-  if (["bashrc", "profile", "zshrc"].includes(name.replace(/^\./, ""))) {
-    return "bash";
-  }
-  return EXTENSIONS[name.split(".").pop() ?? ""];
-}
+export type { UltraliteLanguage } from "./code-language";
 
 function loadChunk(name: UltraliteLanguage): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -190,6 +136,17 @@ function loadChunk(name: UltraliteLanguage): Promise<void> {
           },
           reject,
           "ultralite-prism-python",
+        );
+        break;
+      case "r":
+        require.ensure(
+          [],
+          () => {
+            require("prismjs/components/prism-r");
+            resolve();
+          },
+          reject,
+          "ultralite-prism-r",
         );
         break;
       case "rust":

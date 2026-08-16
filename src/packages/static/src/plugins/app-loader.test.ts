@@ -24,5 +24,7 @@ test("renders the independent ultralite shell", () => {
   const html = renderAppTemplate("ultralite");
   expect(html).toContain('id="cocalc-ultralite-root"');
   expect(html).toContain('data-cocalc-entry="ultralite"');
+  expect(html).toContain("Opening CoCalc");
+  expect(html).not.toContain("Opening the essential CoCalc workspace");
   expect(html).not.toContain("cocalc-public-head-placeholder");
 });

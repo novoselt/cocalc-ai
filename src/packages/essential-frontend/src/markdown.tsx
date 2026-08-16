@@ -14,6 +14,7 @@ import {
   type JSX,
   type ReactNode,
 } from "react";
+import { languageForCode } from "./code-language";
 import markdownMathPlugin from "./markdown-math-plugin";
 
 const markdown = new MarkdownIt({
@@ -32,6 +33,24 @@ const LazyKatexMath = lazy(
           () => resolve({ default: require("./katex-math").default }),
           reject,
           "ultralite-katex-component",
+        );
+      },
+    ),
+);
+
+const LazyHighlightedCode = lazy(
+  () =>
+    new Promise<{ default: typeof import("./highlighted-code").default }>(
+      (resolve, reject) => {
+        if (process.env.COCALC_TEST_MODE) {
+          resolve({ default: require("./highlighted-code").default });
+          return;
+        }
+        require.ensure(
+          [],
+          () => resolve({ default: require("./highlighted-code").default }),
+          reject,
+          "ultralite-prism-renderer",
         );
       },
     ),
@@ -162,13 +181,22 @@ function renderTokens(tokens: Token[], prefix = "md"): ReactNode[] {
         break;
       case "fence":
       case "code_block": {
-        const language = token.info.trim().split(/\s+/, 1)[0];
+        const language = languageForCode(token.info, token.content);
         nodes.push(
-          <pre className="ul-md-code" key={key}>
-            <code className={language ? `language-${language}` : undefined}>
-              {token.content}
-            </code>
-          </pre>,
+          <Suspense
+            fallback={
+              <pre className="ul-md-code">
+                <code>{token.content}</code>
+              </pre>
+            }
+            key={key}
+          >
+            <LazyHighlightedCode
+              className="ul-md-code"
+              contents={token.content}
+              language={language}
+            />
+          </Suspense>,
         );
         break;
       }

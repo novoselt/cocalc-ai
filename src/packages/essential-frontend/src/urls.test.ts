@@ -17,5 +17,5 @@ test("builds prefixed site and project URLs", () => {
       path: "/home/user/a b.txt",
       basePath: "/cocalc",
     }),
-  ).toBe("/cocalc/projects/abc/files/a%20b.txt");
+  ).toBe("/cocalc/projects/abc/files/home/user/a%20b.txt");
 });

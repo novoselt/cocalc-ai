@@ -105,10 +105,14 @@ async function setup({
     writeFileIfUnchanged: jest.fn(async () => undefined),
   };
   const signal = jest.fn(async () => undefined);
+  const getKernelStatus = jest.fn(async () => ({
+    backend_state: "running",
+    kernel_state: "idle",
+  }));
   const session = {
     ensureProjectRunning: jest.fn(async () => undefined),
     openProjectApi: jest.fn(async () => ({
-      api: { jupyter: { signal } },
+      api: { jupyter: { getKernelStatus, signal } },
       lease: { client: {} },
     })),
   };
@@ -133,15 +137,49 @@ async function setup({
     );
     await Promise.resolve();
   });
-  return { filesystem, liveRunStore, session, signal };
+  return { filesystem, getKernelStatus, liveRunStore, session, signal };
 }
 
 test("opening executable notebook controls does not start project compute", async () => {
   const { filesystem, session } = await setup();
 
-  expect(screen.getByText("Kernel: not started")).toBeVisible();
+  expect(await screen.findByText("Kernel: idle")).toBeVisible();
   expect(filesystem.readFile).not.toHaveBeenCalled();
   expect(session.ensureProjectRunning).not.toHaveBeenCalled();
+});
+
+test("renders Markdown cells until explicitly edited", async () => {
+  const markdownContents = JSON.stringify({
+    ...JSON.parse(baseContents),
+    cells: [
+      {
+        cell_type: "markdown",
+        id: "markdown-1",
+        metadata: {},
+        source: "## Rendered heading",
+      },
+    ],
+  });
+  await setup({ base: markdownContents, latest: markdownContents });
+
+  expect(
+    await screen.findByRole("heading", { name: "Rendered heading" }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("textbox", { name: "Source for cell 1" }),
+  ).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit markdown cell 1" }));
+  expect(
+    screen.getByRole("textbox", { name: "Source for cell 1" }),
+  ).toHaveValue("## Rendered heading");
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Finish editing markdown cell 1" }),
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Rendered heading" }),
+  ).toBeVisible();
 });
 
 test("saving uses a conflict-safe write without starting compute", async () => {

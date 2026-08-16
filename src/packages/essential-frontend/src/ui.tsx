@@ -9,19 +9,32 @@ import { essentialRouteUrl, navigate, type UltraliteRoute } from "./routes";
 import { fullProjectUrl, siteUrl } from "./urls";
 import { UltraliteIcon, type UltraliteIconName } from "./icons";
 import { recordUltraliteOutcome } from "./telemetry";
+import { useEssentialTheme } from "./theme-context";
+
+export function ThemeControl() {
+  const { preference, setPreference } = useEssentialTheme();
+  return (
+    <label className="ul-theme-control">
+      <span>Theme</span>
+      <select
+        aria-label="Color theme"
+        onChange={(event) =>
+          setPreference(event.target.value as "system" | "light" | "dark")
+        }
+        value={preference}
+      >
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+  );
+}
 
 export function TopBar({ projectTitle }: { projectTitle?: string }) {
   return (
     <header className="ul-topbar">
-      <a
-        aria-label="CoCalc projects"
-        className="ul-brand"
-        href={essentialRouteUrl({ kind: "projects" })}
-        onClick={(event) => {
-          event.preventDefault();
-          navigate({ kind: "projects" });
-        }}
-      >
+      <a aria-label="CoCalc home" className="ul-brand" href={siteUrl("")}>
         <span aria-hidden="true" className="ul-brand-mark">
           CoCalc
         </span>
@@ -31,7 +44,16 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
           {projectTitle}
         </div>
       ) : (
-        <div className="ul-topbar-title">Projects</div>
+        <a
+          className="ul-topbar-title ul-topbar-title-link"
+          href={essentialRouteUrl({ kind: "projects" })}
+          onClick={(event) => {
+            event.preventDefault();
+            navigate({ kind: "projects" });
+          }}
+        >
+          Projects
+        </a>
       )}
       <span className="ul-mode">Essential</span>
       <a
@@ -50,6 +72,7 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
         Full CoCalc
         <UltraliteIcon name="external" size={15} />
       </a>
+      <ThemeControl />
     </header>
   );
 }
@@ -62,12 +85,14 @@ const NAV: Array<{
     | "cli"
     | "files"
     | "notebooks"
+    | "recent"
     | "settings"
     | "terminal"
     | "vms";
   label: string;
 }> = [
   { icon: "folder", kind: "files", label: "Files" },
+  { icon: "recent", kind: "recent", label: "Recent" },
   { icon: "chat", kind: "agents", label: "Codex" },
   { icon: "notebook", kind: "notebooks", label: "Jupyter" },
   { icon: "terminal", kind: "terminal", label: "Terminal" },
@@ -143,13 +168,10 @@ export function ProjectLayout({
   route: UltraliteRoute;
 }) {
   return (
-    <>
-      <TopBar projectTitle={project.title || "Untitled project"} />
-      <div className="ul-project-layout">
-        <ProjectRail active={route.kind} project={project} />
-        <div className="ul-project-content">{children}</div>
-      </div>
-    </>
+    <div className="ul-project-layout">
+      <ProjectRail active={route.kind} project={project} />
+      <div className="ul-project-content">{children}</div>
+    </div>
   );
 }
 
@@ -176,6 +198,14 @@ export function LoadingState({ label }: { label: string }) {
       <span aria-hidden="true" className="ul-spinner" />
       <span>{label}</span>
     </div>
+  );
+}
+
+export function ShellLoading() {
+  return (
+    <main className="ul-shell-loading" id="main-content">
+      <LoadingState label="Opening CoCalc" />
+    </main>
   );
 }
 
