@@ -323,10 +323,12 @@ const PROJECT_MOVE_RUNTIME_SLOT_TTL_MS = 8 * 60 * 60 * 1000;
 
 function projectStartControlTimeoutMs({
   restore_backup_id,
+  storage_recovery_required,
 }: {
   restore_backup_id?: string;
+  storage_recovery_required?: boolean;
 }): number {
-  return restore_backup_id
+  return restore_backup_id || storage_recovery_required
     ? RESTORE_PROJECT_START_CONTROL_TIMEOUT_MS
     : ORDINARY_PROJECT_START_CONTROL_TIMEOUT_MS;
 }
@@ -5122,12 +5124,13 @@ async function runProjectStartLikeAction({
     project_move_auth === PROJECT_DANGEROUS_INTERNAL_AUTH
       ? project_move_id
       : undefined;
+  let storageRecoveryRequired = false;
   try {
     const ownership = await resolveProjectBay(project_id);
     if (ownership == null) {
       throw new Error(`project ${project_id} not found`);
     }
-    await getInterBayBridge()
+    const admission = await getInterBayBridge()
       .projectControl(ownership.bay_id, {
         timeout_ms: projectStartControlTimeoutMs({
           restore_backup_id: effectiveRestoreBackupId,
@@ -5147,6 +5150,7 @@ async function runProjectStartLikeAction({
         ...(managed_egress_override ? { managed_egress_override } : {}),
         epoch: ownership.epoch,
       });
+    storageRecoveryRequired = admission?.storage_recovery_required === true;
   } catch (err) {
     const runtimeSponsorDenial = extractRuntimeSponsorDenial(err);
     if (runtimeSponsorDenial) {
@@ -5260,6 +5264,7 @@ async function runProjectStartLikeAction({
         {
           timeout_ms: projectStartControlTimeoutMs({
             restore_backup_id: effectiveRestoreBackupId,
+            storage_recovery_required: storageRecoveryRequired,
           }),
         },
       );
