@@ -6,6 +6,12 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import type { NotebookBlobResolver } from "./notebook-blobs";
 import { isNotebookBlobReference } from "./notebook-blobs";
+import HighlightedCode from "./highlighted-code";
+import {
+  languageForCode,
+  languageForName,
+  type UltraliteLanguage,
+} from "./code-language";
 
 const NotebookMarkdown = lazy(
   () =>
@@ -62,6 +68,15 @@ export function parseNotebook(contents: string): NotebookDocument {
     throw new Error("This file is not a valid Jupyter notebook.");
   }
   return { ...value, cells: value.cells };
+}
+
+export function notebookCodeLanguage(
+  notebook: NotebookDocument,
+): UltraliteLanguage | undefined {
+  const metadata = notebook.metadata ?? {};
+  return languageForName(
+    `${metadata.language_info?.name ?? metadata.kernelspec?.language ?? ""}`,
+  );
 }
 
 export function NotebookOutputView({
@@ -183,6 +198,7 @@ export default function NotebookView({
   blobResolver?: NotebookBlobResolver;
   notebook: NotebookDocument;
 }) {
+  const notebookLanguage = notebookCodeLanguage(notebook);
   return (
     <div className="ul-notebook">
       {notebook.cells.map((cell, index) => {
@@ -213,9 +229,11 @@ export default function NotebookView({
                 ? ` - execution ${cell.execution_count}`
                 : ""}
             </div>
-            <pre className="ul-code">
-              <code>{source}</code>
-            </pre>
+            <HighlightedCode
+              className="ul-code"
+              contents={source}
+              language={notebookLanguage ?? languageForCode("", source)}
+            />
             {cell.outputs?.map((output, outputIndex) => (
               <NotebookOutputView
                 blobResolver={blobResolver}

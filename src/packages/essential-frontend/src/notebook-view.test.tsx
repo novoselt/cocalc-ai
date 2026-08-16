@@ -2,6 +2,23 @@ import "@testing-library/jest-dom";
 import { render, screen } from "@testing-library/react";
 import NotebookView, { parseNotebook, sourceText } from "./notebook-view";
 
+jest.mock("./highlighted-code", () => ({
+  __esModule: true,
+  default: ({
+    className,
+    contents,
+    language,
+  }: {
+    className: string;
+    contents: string;
+    language?: string;
+  }) => (
+    <pre className={className} data-language={language} data-testid="code-cell">
+      {contents}
+    </pre>
+  ),
+}));
+
 test("joins Jupyter multiline sources without changing content", () => {
   expect(sourceText(["print('a')\n", "print('b')\n"])).toBe(
     "print('a')\nprint('b')\n",
@@ -53,6 +70,22 @@ test("renders Markdown notebook cells instead of their source", async () => {
   expect(
     await screen.findByRole("heading", { name: "A notebook heading" }),
   ).toBeVisible();
+});
+
+test("highlights read-only code using notebook language metadata", () => {
+  render(
+    <NotebookView
+      notebook={{
+        cells: [{ cell_type: "code", source: "print('hello')" }],
+        metadata: { language_info: { name: "python" } },
+      }}
+    />,
+  );
+
+  expect(screen.getByTestId("code-cell")).toHaveAttribute(
+    "data-language",
+    "python",
+  );
 });
 
 test("loads referenced image output from the notebook blob resolver", async () => {

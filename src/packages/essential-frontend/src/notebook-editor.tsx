@@ -38,6 +38,7 @@ import type { UltraliteSession } from "./session";
 import {
   NotebookMarkdownCell,
   NotebookOutputView,
+  notebookCodeLanguage,
   parseNotebook,
   sourceText,
   type NotebookCell,
@@ -53,7 +54,6 @@ import {
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
-import type { UltraliteLanguage } from "./prism-languages";
 import { sha256Text } from "./sha256";
 import type {
   ExternalMergeHandle,
@@ -188,23 +188,6 @@ export function insertNotebookCellBelow(
   return { cellId: cell.id!, notebook: { ...notebook, cells } };
 }
 
-function notebookCodeLanguage(
-  notebook: NotebookDocument,
-): UltraliteLanguage | undefined {
-  const metadata = notebook.metadata ?? {};
-  const value = `${
-    metadata.language_info?.name ?? metadata.kernelspec?.language ?? ""
-  }`.toLowerCase();
-  if (value.includes("python")) return "python";
-  if (value.includes("typescript")) return "typescript";
-  if (value.includes("javascript") || value === "node") return "javascript";
-  if (value === "go" || value === "golang") return "go";
-  if (value === "rust") return "rust";
-  if (value === "bash" || value === "shell" || value === "sh") return "bash";
-  if (value === "sql") return "sql";
-  return;
-}
-
 function NotebookCellEditor({
   autoFocus,
   cell,
@@ -221,7 +204,7 @@ function NotebookCellEditor({
   cell: NotebookCell;
   editorRef: RefCallback<CodeMirrorEditorHandle>;
   index: number;
-  language?: UltraliteLanguage;
+  language?: ReturnType<typeof notebookCodeLanguage>;
   onChange: (value: string) => void;
   onSave: () => void;
   path: string;

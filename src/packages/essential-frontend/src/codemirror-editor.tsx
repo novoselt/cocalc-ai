@@ -45,7 +45,7 @@ import {
   CodeMirrorEditJournal,
   type CodeMirrorJournalBatch,
 } from "./edit-journal";
-import type { UltraliteLanguage } from "./prism-languages";
+import type { UltraliteLanguage } from "./code-language";
 
 const essentialHighlightStyle = HighlightStyle.define([
   { tag: tags.comment, color: "var(--ul-token-comment)" },
