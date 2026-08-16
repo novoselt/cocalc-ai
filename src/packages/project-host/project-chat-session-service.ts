@@ -8,10 +8,11 @@ import { posix } from "node:path";
 import getLogger from "@cocalc/backend/logger";
 import {
   createHeadlessChatClient,
-  ESSENTIAL_CHAT_SERVICE,
+  PROJECT_CHAT_SESSION_NOT_FOUND,
+  PROJECT_CHAT_SESSION_SERVICE,
   type ChatSnapshot,
-  type EssentialChatOpenResponse,
-  type EssentialChatStreamEvent,
+  type ProjectChatSessionOpenResponse,
+  type ProjectChatSessionStreamEvent,
   type HeadlessChatClient,
   type ProjectedChatMessage,
 } from "@cocalc/chat-client";
@@ -21,9 +22,9 @@ import { dstream, type DStream } from "@cocalc/conat/sync/dstream";
 import { getRow } from "@cocalc/lite/hub/sqlite/database";
 import { isValidUUID } from "@cocalc/util/misc";
 
-const logger = getLogger("project-host:essential-chat");
+const logger = getLogger("project-host:project-chat-session");
 
-export const ESSENTIAL_CHAT_SUBJECT = `services.*.*.*.*.${ESSENTIAL_CHAT_SERVICE}`;
+export const PROJECT_CHAT_SESSION_SUBJECT = `services.*.*.*.*.${PROJECT_CHAT_SESSION_SERVICE}`;
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 const MAX_MESSAGE_LIMIT = 500;
@@ -46,7 +47,7 @@ interface Session extends ChatIdentity {
   limit: number;
   touchedAt: number;
   backend: HeadlessChatClient;
-  stream: DStream<EssentialChatStreamEvent>;
+  stream: DStream<ProjectChatSessionStreamEvent>;
   snapshot: ChatSnapshot;
   unsubscribe: () => void;
   updateTimer?: ReturnType<typeof setTimeout>;
@@ -58,16 +59,16 @@ function parseSubject(subject?: string): ChatIdentity {
   if (
     parts.length !== 6 ||
     parts[0] !== "services" ||
-    parts[5] !== ESSENTIAL_CHAT_SERVICE
+    parts[5] !== PROJECT_CHAT_SESSION_SERVICE
   ) {
-    throw new Error(`invalid essential chat subject '${subject ?? ""}'`);
+    throw new Error(`invalid project chat session subject '${subject ?? ""}'`);
   }
   const account_id = `${parts[1] ?? ""}`.startsWith("account-")
     ? parts[1].slice("account-".length)
     : "";
   const project_id = `${parts[3] ?? ""}`.trim();
   if (!isValidUUID(account_id) || !isValidUUID(project_id)) {
-    throw new Error(`invalid essential chat subject '${subject ?? ""}'`);
+    throw new Error(`invalid project chat session subject '${subject ?? ""}'`);
   }
   return { account_id, project_id };
 }
@@ -83,7 +84,7 @@ function assertCollaborator({ account_id, project_id }: ChatIdentity): void {
   }
 }
 
-export function normalizeEssentialChatPath(path: unknown): string {
+export function normalizeProjectChatPath(path: unknown): string {
   const value = `${path ?? ""}`.trim();
   const normalized = posix.normalize(value);
   if (
@@ -98,7 +99,7 @@ export function normalizeEssentialChatPath(path: unknown): string {
   return normalized;
 }
 
-export function normalizeEssentialChatLimit(limit?: number): number {
+export function normalizeProjectChatLimit(limit?: number): number {
   const value = Math.floor(Number(limit ?? DEFAULT_MESSAGE_LIMIT));
   if (!Number.isFinite(value) || value <= 0) return DEFAULT_MESSAGE_LIMIT;
   return Math.min(value, MAX_MESSAGE_LIMIT);
@@ -117,7 +118,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
   while (end > 0 && Buffer.byteLength(value.slice(0, end)) > maxBytes) {
     end = Math.floor(end * 0.9);
   }
-  return `${value.slice(0, end)}\n\n[content omitted by Essential CoCalc]`;
+  return `${value.slice(0, end)}\n\n[content omitted by CoCalc chat session]`;
 }
 
 function boundedMessage(message: ProjectedChatMessage): ProjectedChatMessage {
@@ -134,18 +135,25 @@ function boundedMessage(message: ProjectedChatMessage): ProjectedChatMessage {
     ...message,
     content: truncateUtf8(message.content, MAX_MESSAGE_TEXT_BYTES),
     acp_events: undefined,
+    acp_log_store: undefined,
+    acp_log_key: undefined,
+    acp_live_log_stream: undefined,
+    acp_live_preview_stream: undefined,
     activity,
   };
 }
 
-export function boundedEssentialChatSnapshot(
+export function boundedProjectChatSnapshot(
   snapshot: ChatSnapshot,
   requestedLimit?: number,
 ): ChatSnapshot {
-  const limit = normalizeEssentialChatLimit(requestedLimit);
+  const limit = normalizeProjectChatLimit(requestedLimit);
   const maxBytes = maxWindowBytes(limit);
   const bounded: ProjectedChatMessage[] = [];
-  let bytes = Buffer.byteLength(JSON.stringify(snapshot.threads));
+  const threads = snapshot.threads.filter(
+    ({ thread_id }) => thread_id === snapshot.selected_thread_id,
+  );
+  let bytes = Buffer.byteLength(JSON.stringify(threads));
   for (
     let index = snapshot.messages.length - 1;
     index >= 0 && bounded.length < limit;
@@ -160,6 +168,7 @@ export function boundedEssentialChatSnapshot(
   const omitted = Math.max(0, snapshot.messages.length - bounded.length);
   return {
     ...snapshot,
+    threads,
     messages: bounded,
     message_window: {
       limit,
@@ -174,10 +183,10 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function essentialChatUpdate(
+export function projectChatSessionUpdate(
   previous: ChatSnapshot,
   current: ChatSnapshot,
-): EssentialChatStreamEvent | undefined {
+): ProjectChatSessionStreamEvent | undefined {
   const previousMessages = new Map(
     previous.messages.map((message) => [message.message_id, message]),
   );
@@ -221,7 +230,7 @@ export function essentialChatUpdate(
   };
 }
 
-export async function initEssentialChatService(client: Client) {
+export async function initProjectChatSessionService(client: Client) {
   const sessions = new Map<string, Session>();
 
   const closeSession = async (session: Session): Promise<void> => {
@@ -256,7 +265,7 @@ export async function initEssentialChatService(client: Client) {
       session.account_id !== identity.account_id ||
       session.project_id !== identity.project_id
     ) {
-      throw new Error("essential chat session was not found");
+      throw new Error(PROJECT_CHAT_SESSION_NOT_FOUND);
     }
     session.touchedAt = Date.now();
     return session;
@@ -266,18 +275,18 @@ export async function initEssentialChatService(client: Client) {
     session.updateTimer = undefined;
     session.publishQueue = session.publishQueue
       .then(async () => {
-        const current = boundedEssentialChatSnapshot(
+        const current = boundedProjectChatSnapshot(
           session.backend.getSnapshot(),
           session.limit,
         );
-        const event = essentialChatUpdate(session.snapshot, current);
+        const event = projectChatSessionUpdate(session.snapshot, current);
         session.snapshot = current;
         if (!event || session.stream.isClosed()) return;
         session.stream.publish(event);
         await session.stream.save();
       })
       .catch((err) => {
-        logger.warn("failed to publish essential chat update", {
+        logger.warn("failed to publish project chat session update", {
           session_id: session.id,
           err: `${err}`,
         });
@@ -292,10 +301,10 @@ export async function initEssentialChatService(client: Client) {
     );
   };
 
-  logger.debug("starting essential chat service", {
-    subject: ESSENTIAL_CHAT_SUBJECT,
+  logger.debug("starting project chat session service", {
+    subject: PROJECT_CHAT_SESSION_SUBJECT,
   });
-  const service = await client.service(ESSENTIAL_CHAT_SUBJECT, {
+  const service = await client.service(PROJECT_CHAT_SESSION_SUBJECT, {
     async open(
       this: { subject?: string },
       opts: {
@@ -303,11 +312,11 @@ export async function initEssentialChatService(client: Client) {
         selected_thread_id?: string;
         limit?: number;
       },
-    ): Promise<EssentialChatOpenResponse> {
+    ): Promise<ProjectChatSessionOpenResponse> {
       pruneSessions();
       const identity = parseSubject(this.subject);
       assertCollaborator(identity);
-      const path = normalizeEssentialChatPath(opts?.path);
+      const path = normalizeProjectChatPath(opts?.path);
       const selected_thread_id = `${opts?.selected_thread_id ?? ""}`.trim();
       if (!selected_thread_id) throw new Error("thread id is required");
       if (sessions.size >= MAX_SESSIONS) {
@@ -317,9 +326,9 @@ export async function initEssentialChatService(client: Client) {
         if (oldest) await closeSession(oldest);
       }
 
-      const limit = normalizeEssentialChatLimit(opts?.limit);
+      const limit = normalizeProjectChatLimit(opts?.limit);
       const id = randomUUID();
-      const stream_name = `essential-chat-${id}`;
+      const stream_name = `project-chat-session-${id}`;
       const backend = createHeadlessChatClient({
         ...identity,
         path,
@@ -328,9 +337,9 @@ export async function initEssentialChatService(client: Client) {
         activityLoadPolicy: "live-preview-only",
       });
       await backend.open();
-      let stream: DStream<EssentialChatStreamEvent> | undefined;
+      let stream: DStream<ProjectChatSessionStreamEvent> | undefined;
       try {
-        stream = await dstream<EssentialChatStreamEvent>({
+        stream = await dstream<ProjectChatSessionStreamEvent>({
           project_id: identity.project_id,
           name: stream_name,
           client,
@@ -349,10 +358,7 @@ export async function initEssentialChatService(client: Client) {
         await backend.close().catch(() => undefined);
         throw err;
       }
-      const snapshot = boundedEssentialChatSnapshot(
-        backend.getSnapshot(),
-        limit,
-      );
+      const snapshot = boundedProjectChatSnapshot(backend.getSnapshot(), limit);
       const session: Session = {
         ...identity,
         id,
@@ -400,8 +406,8 @@ export async function initEssentialChatService(client: Client) {
       opts: { session_id: string; limit: number },
     ): Promise<ChatSnapshot> {
       const session = getSession(this.subject, opts?.session_id);
-      session.limit = normalizeEssentialChatLimit(opts?.limit);
-      const snapshot = boundedEssentialChatSnapshot(
+      session.limit = normalizeProjectChatLimit(opts?.limit);
+      const snapshot = boundedProjectChatSnapshot(
         session.backend.getSnapshot(),
         session.limit,
       );

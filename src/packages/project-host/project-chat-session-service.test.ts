@@ -5,11 +5,11 @@
 
 import type { ChatSnapshot, ProjectedChatMessage } from "@cocalc/chat-client";
 import {
-  boundedEssentialChatSnapshot,
-  essentialChatUpdate,
-  normalizeEssentialChatPath,
-  normalizeEssentialChatLimit,
-} from "./essential-chat-service";
+  boundedProjectChatSnapshot,
+  normalizeProjectChatLimit,
+  normalizeProjectChatPath,
+  projectChatSessionUpdate,
+} from "./project-chat-session-service";
 
 function message(
   index: number,
@@ -24,6 +24,10 @@ function message(
     date: new Date(index * 1000).toISOString(),
     generating: false,
     acp_events: [{ large: "internal detail" }],
+    acp_log_store: "acp-log/test.chat",
+    acp_log_key: `thread-1:message-${index}`,
+    acp_live_log_stream: `acp-live-log/test.chat/thread-1/message-${index}`,
+    acp_live_preview_stream: `acp-preview-log/test.chat/thread-1/message-${index}`,
     activity: {
       state: "ready",
       events: [{ type: "text", text: "internal detail" }] as any[],
@@ -45,9 +49,9 @@ function snapshot(messages: ProjectedChatMessage[]): ChatSnapshot {
   };
 }
 
-describe("essential chat projection", () => {
+describe("project chat session projection", () => {
   it("loads a bounded recent tail without ACP event payloads", () => {
-    const projected = boundedEssentialChatSnapshot(
+    const projected = boundedProjectChatSnapshot(
       snapshot(Array.from({ length: 50 }, (_, index) => message(index))),
       10,
     );
@@ -61,29 +65,53 @@ describe("essential chat projection", () => {
       omitted: 40,
     });
     expect(projected.messages[0].acp_events).toBeUndefined();
+    expect(projected.messages[0].acp_log_store).toBeUndefined();
+    expect(projected.messages[0].acp_log_key).toBeUndefined();
+    expect(projected.messages[0].acp_live_log_stream).toBeUndefined();
+    expect(projected.messages[0].acp_live_preview_stream).toBeUndefined();
     expect(projected.messages[0].activity?.events).toEqual([]);
+    expect(projected.threads).toEqual([
+      { thread_id: "thread-1", state: "idle" },
+    ]);
+  });
+
+  it("includes metadata only for the selected thread", () => {
+    const projected = boundedProjectChatSnapshot(
+      {
+        ...snapshot([message(1)]),
+        threads: [
+          { thread_id: "thread-1", state: "idle" },
+          { thread_id: "thread-2", state: "running" },
+        ],
+      },
+      30,
+    );
+
+    expect(projected.threads.map(({ thread_id }) => thread_id)).toEqual([
+      "thread-1",
+    ]);
   });
 
   it("caps invalid and excessive limits", () => {
-    expect(normalizeEssentialChatLimit(Number.NaN)).toBe(30);
-    expect(normalizeEssentialChatLimit(-1)).toBe(30);
-    expect(normalizeEssentialChatLimit(20_000)).toBe(500);
+    expect(normalizeProjectChatLimit(Number.NaN)).toBe(30);
+    expect(normalizeProjectChatLimit(-1)).toBe(30);
+    expect(normalizeProjectChatLimit(20_000)).toBe(500);
   });
 
   it("confines chat paths to the project home directory", () => {
-    expect(normalizeEssentialChatPath("/home/user/work/../test.chat")).toBe(
+    expect(normalizeProjectChatPath("/home/user/work/../test.chat")).toBe(
       "/home/user/test.chat",
     );
     expect(() =>
-      normalizeEssentialChatPath("/home/user/../etc/private.chat"),
+      normalizeProjectChatPath("/home/user/../etc/private.chat"),
     ).toThrow("under /home/user");
-    expect(() => normalizeEssentialChatPath("/tmp/test.sage-chat")).toThrow(
+    expect(() => normalizeProjectChatPath("/tmp/test.sage-chat")).toThrow(
       "under /home/user",
     );
   });
 
   it("truncates oversized individual message content", () => {
-    const projected = boundedEssentialChatSnapshot(
+    const projected = boundedProjectChatSnapshot(
       snapshot([message(1, "x".repeat(300_000))]),
       30,
     );
@@ -94,15 +122,15 @@ describe("essential chat projection", () => {
   });
 
   it("emits only changed and removed messages", () => {
-    const before = boundedEssentialChatSnapshot(
+    const before = boundedProjectChatSnapshot(
       snapshot([message(1), message(2)]),
       30,
     );
-    const after = boundedEssentialChatSnapshot(
+    const after = boundedProjectChatSnapshot(
       { ...snapshot([message(2, "changed"), message(3)]), revision: 2 },
       30,
     );
-    expect(essentialChatUpdate(before, after)).toMatchObject({
+    expect(projectChatSessionUpdate(before, after)).toMatchObject({
       kind: "update",
       revision: 2,
       messages: [

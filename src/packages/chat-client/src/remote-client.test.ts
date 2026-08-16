@@ -5,9 +5,10 @@
 
 import type { ChatSnapshot } from "./types";
 import {
+  PROJECT_CHAT_SESSION_NOT_FOUND,
   RemoteHeadlessChatClient,
-  essentialChatSubject,
-  type EssentialChatStreamEvent,
+  projectChatSessionSubject,
+  type ProjectChatSessionStreamEvent,
 } from "./remote-client";
 
 const ACCOUNT_ID = "22222222-2222-4222-8222-222222222222";
@@ -50,10 +51,18 @@ function createClient(projectHostClient: any) {
 
 test("builds a project- and account-scoped service subject", () => {
   expect(
-    essentialChatSubject({ account_id: ACCOUNT_ID, project_id: PROJECT_ID }),
-  ).toBe(`services.account-${ACCOUNT_ID}._.${PROJECT_ID}._.essential-chat`);
+    projectChatSessionSubject({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+    }),
+  ).toBe(
+    `services.account-${ACCOUNT_ID}._.${PROJECT_ID}._.project-chat-session`,
+  );
   expect(() =>
-    essentialChatSubject({ account_id: "invalid", project_id: PROJECT_ID }),
+    projectChatSessionSubject({
+      account_id: "invalid",
+      project_id: PROJECT_ID,
+    }),
   ).toThrow("valid account and project ids");
 });
 
@@ -98,7 +107,7 @@ test("ignores stream updates older than the current server snapshot", () => {
     connection: "connected",
     ready: true,
     messages: [{ ...snapshot(1, "stale").messages[0], content: "stale" }],
-  } satisfies EssentialChatStreamEvent);
+  } satisfies ProjectChatSessionStreamEvent);
 
   expect(client.getSnapshot().messages[0].content).toBe("current");
 });
@@ -139,3 +148,143 @@ test("reports service and stream open phases", async () => {
   ]);
   await client.close();
 });
+
+test("retains the selected thread and expanded message window on reconnect", async () => {
+  let openCount = 0;
+  const request = jest.fn(async (_subject, [name, args]) => {
+    if (name === "open") {
+      openCount += 1;
+      const options = args[0];
+      return {
+        data: {
+          session_id: `session-${openCount}`,
+          stream_name: `stream-${openCount}`,
+          snapshot: {
+            ...snapshot(1, `snapshot ${openCount}`),
+            selected_thread_id: options.selected_thread_id,
+            message_window: {
+              limit: options.limit,
+              loaded: 1,
+              has_older: true,
+              omitted: 100,
+            },
+          },
+        },
+      };
+    }
+    if (name === "setLimit") {
+      return {
+        data: {
+          ...snapshot(2, "expanded"),
+          selected_thread_id: "thread-1",
+          message_window: {
+            limit: args[0].limit,
+            loaded: 1,
+            has_older: true,
+            omitted: 40,
+          },
+        },
+      };
+    }
+    return { data: null };
+  });
+  const client = new RemoteHeadlessChatClient({
+    account_id: ACCOUNT_ID,
+    project_id: PROJECT_ID,
+    path: PATH,
+    projectHostClient: {
+      request,
+      sync: { dstream: jest.fn(async () => streamStub()) },
+    } as any,
+    selected_thread_id: THREAD_ID,
+  });
+
+  await client.open();
+  await client.loadOlderMessages(90);
+  client.selectThread("thread-2");
+  await client.reconnect("test");
+
+  const openCalls = request.mock.calls.filter(([, [name]]) => name === "open");
+  expect(openCalls).toHaveLength(2);
+  expect(openCalls[1][1][1][0]).toMatchObject({
+    selected_thread_id: "thread-2",
+    limit: 90,
+  });
+  expect(client.getSnapshot().messages[0].content).toBe("snapshot 2");
+  await client.close();
+});
+
+test("recreates an expired session and safely retries the operation", async () => {
+  let openCount = 0;
+  let sendCount = 0;
+  const request = jest.fn(async (_subject, [name, args]) => {
+    if (name === "open") {
+      openCount += 1;
+      return {
+        data: {
+          session_id: `session-${openCount}`,
+          stream_name: `stream-${openCount}`,
+          snapshot: snapshot(1, `snapshot ${openCount}`),
+        },
+      };
+    }
+    if (name === "send") {
+      sendCount += 1;
+      if (sendCount === 1) throw new Error(PROJECT_CHAT_SESSION_NOT_FOUND);
+      return {
+        data: {
+          message_id: "message-sent",
+          thread_id: args[0].thread_id,
+        },
+      };
+    }
+    return { data: null };
+  });
+  const client = new RemoteHeadlessChatClient({
+    account_id: ACCOUNT_ID,
+    project_id: PROJECT_ID,
+    path: PATH,
+    projectHostClient: {
+      request,
+      sync: { dstream: jest.fn(async () => streamStub()) },
+    } as any,
+    selected_thread_id: THREAD_ID,
+  });
+
+  await client.open();
+  await expect(
+    client.sendToExistingCodexThread({ thread_id: THREAD_ID, text: "test" }),
+  ).resolves.toEqual({
+    message_id: "message-sent",
+    thread_id: THREAD_ID,
+  });
+
+  expect(openCount).toBe(2);
+  expect(sendCount).toBe(2);
+  await client.close();
+});
+
+test("accepts lower server revisions after opening a replacement session", () => {
+  const client = createClient({});
+  const internal = client as any;
+  internal.applySnapshot(snapshot(50, "old session"), true);
+  internal.applySnapshot(snapshot(1, "replacement snapshot"), true);
+  internal.handleEvent({
+    kind: "update",
+    revision: 2,
+    connection: "connected",
+    ready: true,
+    messages: [{ ...snapshot(2, "replacement update").messages[0] }],
+  } satisfies ProjectChatSessionStreamEvent);
+
+  expect(client.getSnapshot().messages[0].content).toBe("replacement update");
+});
+
+function streamStub() {
+  return {
+    close: jest.fn(),
+    getAll: jest.fn(() => []),
+    on: jest.fn(),
+    removeListener: jest.fn(),
+  };
+}
