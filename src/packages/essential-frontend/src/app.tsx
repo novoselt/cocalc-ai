@@ -12,6 +12,7 @@ import {
   type UltraliteRoute,
 } from "./routes";
 import { EssentialThemeProvider } from "./theme-context";
+import { FrontendUpdateNotice } from "./frontend-update";
 import { siteUrl } from "./urls";
 import { TopBar } from "./ui";
 import {
@@ -131,6 +132,7 @@ export function UltraliteApp() {
       <a className="ul-skip" href="#main-content">
         Skip to content
       </a>
+      {bootstrap?.signed_in ? <FrontendUpdateNotice /> : null}
       {bootstrap?.signed_in ? null : <TopBar />}
       {error ? (
         <main className="ul-centered" id="main-content">

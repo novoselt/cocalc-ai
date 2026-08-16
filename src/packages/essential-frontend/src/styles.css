@@ -44,6 +44,44 @@ textarea {
   top: 0.75rem;
 }
 
+.ul-update-tag {
+  align-items: center;
+  background: var(--ul-warning-soft);
+  border: 1px solid var(--ul-warning);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  position: fixed;
+  right: 10px;
+  top: 56px;
+  z-index: 19;
+}
+
+.ul-update-tag button {
+  background: transparent;
+  border: 0;
+  color: var(--ul-heading);
+  cursor: pointer;
+  min-height: 28px;
+}
+
+.ul-update-refresh {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 7px;
+}
+
+.ul-update-dismiss {
+  border-radius: 3px;
+  padding: 2px 8px;
+}
+
+.ul-update-tag button:hover {
+  background: color-mix(in srgb, var(--ul-warning) 18%, transparent);
+}
+
 .ul-topbar {
   align-items: center;
   background: var(--ul-topbar);
