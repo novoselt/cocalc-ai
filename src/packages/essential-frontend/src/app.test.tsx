@@ -16,7 +16,14 @@ test("exposes the lightweight shell navigation before authentication", async () 
   getAuthBootstrapMock.mockResolvedValue({ signed_in: false });
   render(<UltraliteApp />);
 
-  expect(screen.getByRole("link", { name: "CoCalc projects" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "CoCalc home" })).toHaveAttribute(
+    "href",
+    "/",
+  );
+  expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute(
+    "href",
+    "/essential/projects",
+  );
   expect(screen.getByRole("link", { name: "Full CoCalc" })).toBeVisible();
   expect(
     await screen.findByRole("heading", { name: "Sign in to continue" }),

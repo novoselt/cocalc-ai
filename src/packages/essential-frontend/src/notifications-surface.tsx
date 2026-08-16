@@ -11,13 +11,7 @@ import { useEffect, useState } from "react";
 import type { AuthBootstrap } from "./api";
 import { Markdown, safeHref } from "./markdown";
 import { UltraliteSession } from "./session";
-import {
-  EmptyState,
-  InlineAlert,
-  LoadingState,
-  SurfaceHeader,
-  TopBar,
-} from "./ui";
+import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 
 function notificationDate(row: NotificationListRow): string {
   const value = new Date(row.updated_at ?? row.created_at ?? "");
@@ -106,84 +100,79 @@ export default function NotificationsSurface({
   };
 
   return (
-    <>
-      <TopBar />
-      <main className="ul-page ul-account-page" id="main-content">
-        <SurfaceHeader
-          actions={
-            <button
-              className="ul-button ul-button-secondary"
-              disabled={!snapshot?.rows.some((row) => !row.read_state?.read)}
-              onClick={() => void markAllRead()}
-              type="button"
+    <main className="ul-page ul-account-page" id="main-content">
+      <SurfaceHeader
+        actions={
+          <button
+            className="ul-button ul-button-secondary"
+            disabled={!snapshot?.rows.some((row) => !row.read_state?.read)}
+            onClick={() => void markAllRead()}
+            type="button"
+          >
+            Mark all read
+          </button>
+        }
+        eyebrow="Account"
+        title="Notifications"
+      />
+      <p className="ul-muted">
+        Recent account notices, mentions, and Codex updates. This page loads on
+        demand and does not poll in the background.
+      </p>
+      {loading ? <LoadingState label="Loading notifications" /> : null}
+      {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
+      <div className="ul-notification-list">
+        {snapshot?.rows.map((row) => {
+          const summary = row.summary ?? {};
+          const body = `${summary.body_markdown ?? summary.description ?? ""}`;
+          const action = safeHref(summary.action_link);
+          const unread = !row.read_state?.read;
+          return (
+            <article
+              className={`ul-notification ${unread ? "ul-notification-unread" : ""}`}
+              key={row.notification_id}
             >
-              Mark all read
-            </button>
-          }
-          eyebrow="Account"
-          title="Notifications"
-        />
-        <p className="ul-muted">
-          Recent account notices, mentions, and Codex updates. This page loads
-          on demand and does not poll in the background.
-        </p>
-        {loading ? <LoadingState label="Loading notifications" /> : null}
-        {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
-        <div className="ul-notification-list">
-          {snapshot?.rows.map((row) => {
-            const summary = row.summary ?? {};
-            const body = `${summary.body_markdown ?? summary.description ?? ""}`;
-            const action = safeHref(summary.action_link);
-            const unread = !row.read_state?.read;
-            return (
-              <article
-                className={`ul-notification ${unread ? "ul-notification-unread" : ""}`}
-                key={row.notification_id}
-              >
-                <div className="ul-row-grid">
-                  <div>
-                    <h2 className="ul-row-title ul-notification-title">
-                      {`${summary.title ?? summary.origin_label ?? "Notification"}`}
-                    </h2>
-                    <div className="ul-row-detail">
-                      {[summary.origin_label, notificationDate(row)]
-                        .filter(Boolean)
-                        .join(" - ")}
-                    </div>
+              <div className="ul-row-grid">
+                <div>
+                  <h2 className="ul-row-title ul-notification-title">
+                    {`${summary.title ?? summary.origin_label ?? "Notification"}`}
+                  </h2>
+                  <div className="ul-row-detail">
+                    {[summary.origin_label, notificationDate(row)]
+                      .filter(Boolean)
+                      .join(" - ")}
                   </div>
-                  {unread ? (
-                    <span className="ul-unread-dot">Unread</span>
-                  ) : null}
                 </div>
-                {body ? <Markdown source={body} /> : null}
-                <div className="ul-toolbar">
-                  {action ? (
-                    <a
-                      className="ul-link-button ul-link-button-subtle"
-                      href={action}
-                      onClick={() => void markRead(row)}
-                    >
-                      {`${summary.action_label ?? "Open"}`}
-                    </a>
-                  ) : null}
-                  {unread ? (
-                    <button
-                      className="ul-icon-button"
-                      onClick={() => void markRead(row)}
-                      type="button"
-                    >
-                      Mark read
-                    </button>
-                  ) : null}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-        {!loading && !snapshot?.rows.length ? (
-          <EmptyState>No recent notifications.</EmptyState>
-        ) : null}
-      </main>
-    </>
+                {unread ? <span className="ul-unread-dot">Unread</span> : null}
+              </div>
+              {body ? <Markdown source={body} /> : null}
+              <div className="ul-toolbar">
+                {action ? (
+                  <a
+                    className="ul-link-button ul-link-button-subtle"
+                    href={action}
+                    onClick={() => void markRead(row)}
+                  >
+                    {`${summary.action_label ?? "Open"}`}
+                  </a>
+                ) : null}
+                {unread ? (
+                  <button
+                    className="ul-icon-button"
+                    onClick={() => void markRead(row)}
+                    type="button"
+                  >
+                    Mark read
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      {!loading && !snapshot?.rows.length ? (
+        <EmptyState>No recent notifications.</EmptyState>
+      ) : null}
+    </main>
   );
 }

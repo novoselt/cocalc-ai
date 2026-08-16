@@ -19,7 +19,6 @@ import {
   LoadingState,
   ProjectLayout,
   SurfaceHeader,
-  TopBar,
 } from "./ui";
 
 const FileSurface = lazy(
@@ -151,7 +150,7 @@ function DeferredSurface({
       <Suspense
         fallback={
           <main className="ul-page" id="main-content">
-            <LoadingState label={`Loading ${label}`} />
+            <LoadingState label="Opening CoCalc" />
           </main>
         }
       >
@@ -241,22 +240,21 @@ function ProjectSurface({
   );
 }
 
-function RouteLoading({ label }: { label: string }) {
+function RouteLoading() {
   return (
-    <>
-      <TopBar />
-      <main className="ul-page" id="main-content">
-        <LoadingState label={label} />
-      </main>
-    </>
+    <main className="ul-page ul-shell-loading" id="main-content">
+      <LoadingState label="Opening CoCalc" />
+    </main>
   );
 }
 
 export default function Workspace({
   bootstrap,
+  onProjectTitleChange,
   route,
 }: {
   bootstrap: AuthBootstrap;
+  onProjectTitleChange: (title?: string) => void;
   route: ProjectRoute;
 }) {
   const [session, setSession] = useState<UltraliteSession>();
@@ -323,6 +321,12 @@ export default function Workspace({
   }, [project, session]);
 
   useEffect(() => {
+    if (project) {
+      onProjectTitleChange(project.title || "Untitled project");
+    }
+  }, [onProjectTitleChange, project]);
+
+  useEffect(() => {
     requestAnimationFrame(() =>
       document.querySelector<HTMLElement>("h1")?.focus(),
     );
@@ -330,24 +334,21 @@ export default function Workspace({
 
   if (error) {
     return (
-      <>
-        <TopBar />
-        <main className="ul-centered" id="main-content">
-          <h1 tabIndex={-1}>Workspace unavailable</h1>
-          <InlineAlert kind="error">{error}</InlineAlert>
-          <button
-            className="ul-button"
-            onClick={() => window.location.reload()}
-            type="button"
-          >
-            Try again
-          </button>
-        </main>
-      </>
+      <main className="ul-centered" id="main-content">
+        <h1 tabIndex={-1}>Workspace unavailable</h1>
+        <InlineAlert kind="error">{error}</InlineAlert>
+        <button
+          className="ul-button"
+          onClick={() => window.location.reload()}
+          type="button"
+        >
+          Try again
+        </button>
+      </main>
     );
   }
   if (!session || !project) {
-    return <RouteLoading label="Connecting to project" />;
+    return <RouteLoading />;
   }
   return <ProjectSurface project={project} route={route} session={session} />;
 }

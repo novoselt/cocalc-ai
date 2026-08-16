@@ -12,13 +12,7 @@ import {
   recordUltraliteFailure,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
-import {
-  EmptyState,
-  InlineAlert,
-  LoadingState,
-  SurfaceHeader,
-  TopBar,
-} from "./ui";
+import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 
 const PAGE_SIZE = 50;
 
@@ -97,100 +91,97 @@ export default function ProjectsWorkspace({
   }, [error, loading]);
 
   return (
-    <>
-      <TopBar />
-      <main className="ul-page ul-projects-page" id="main-content">
-        <SurfaceHeader
-          actions={
-            <div className="ul-search-wrap">
-              <label className="ul-visually-hidden" htmlFor="ul-project-search">
-                Search projects
-              </label>
-              <input
-                className="ul-search"
-                id="ul-project-search"
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search projects"
-                type="search"
-                value={query}
-              />
-            </div>
-          }
-          title="Projects"
-        />
-        {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
-        <div className="ul-project-table" role="list">
-          {projects.map((project) => {
-            const state = stateLabel(project);
-            const title = project.title || "Untitled project";
-            const edited = project.last_edited || project.last_activity_at;
-            return (
-              <button
-                aria-label={`Open project ${title}, ${state}`}
-                className="ul-project-row"
-                key={project.project_id}
-                onClick={() =>
-                  navigate({
-                    kind: "files",
-                    projectId: project.project_id,
-                    path: "/home/user",
-                  })
-                }
-                role="listitem"
-                type="button"
+    <main className="ul-page ul-projects-page" id="main-content">
+      <SurfaceHeader
+        actions={
+          <div className="ul-search-wrap">
+            <label className="ul-visually-hidden" htmlFor="ul-project-search">
+              Search projects
+            </label>
+            <input
+              className="ul-search"
+              id="ul-project-search"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search projects"
+              type="search"
+              value={query}
+            />
+          </div>
+        }
+        title="Projects"
+      />
+      {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
+      <div className="ul-project-table" role="list">
+        {projects.map((project) => {
+          const state = stateLabel(project);
+          const title = project.title || "Untitled project";
+          const edited = project.last_edited || project.last_activity_at;
+          return (
+            <button
+              aria-label={`Open project ${title}, ${state}`}
+              className="ul-project-row"
+              key={project.project_id}
+              onClick={() =>
+                navigate({
+                  kind: "files",
+                  projectId: project.project_id,
+                  path: "/home/user",
+                })
+              }
+              role="listitem"
+              type="button"
+            >
+              <span
+                aria-hidden="true"
+                className="ul-project-avatar"
+                style={{
+                  borderColor:
+                    typeof project.theme?.color === "string"
+                      ? project.theme.color
+                      : undefined,
+                }}
               >
-                <span
-                  aria-hidden="true"
-                  className="ul-project-avatar"
-                  style={{
-                    borderColor:
-                      typeof project.theme?.color === "string"
-                        ? project.theme.color
-                        : undefined,
-                  }}
-                >
-                  {title.slice(0, 1).toUpperCase()}
-                </span>
-                <span className="ul-project-main">
-                  <strong>{title}</strong>
-                  {project.description ? (
-                    <span className="ul-project-description">
-                      {project.description}
-                    </span>
-                  ) : null}
-                </span>
-                <span
-                  className={`ul-project-state ${state === "running" ? "ul-status-running" : ""}`}
-                >
-                  {state}
-                </span>
-                <span className="ul-project-edited">
-                  {edited
-                    ? new Date(edited).toLocaleString(undefined, {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })
-                    : ""}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        {!projects.length && !loading ? (
-          <EmptyState>No projects match this search.</EmptyState>
-        ) : null}
-        {loading ? <LoadingState label="Loading projects" /> : null}
-        {hasMore ? (
-          <button
-            className="ul-button ul-button-secondary"
-            disabled={loading}
-            onClick={() => void load(false)}
-            type="button"
-          >
-            Load more projects
-          </button>
-        ) : null}
-      </main>
-    </>
+                {title.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="ul-project-main">
+                <strong>{title}</strong>
+                {project.description ? (
+                  <span className="ul-project-description">
+                    {project.description}
+                  </span>
+                ) : null}
+              </span>
+              <span
+                className={`ul-project-state ${state === "running" ? "ul-status-running" : ""}`}
+              >
+                {state}
+              </span>
+              <span className="ul-project-edited">
+                {edited
+                  ? new Date(edited).toLocaleString(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })
+                  : ""}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {!projects.length && !loading ? (
+        <EmptyState>No projects match this search.</EmptyState>
+      ) : null}
+      {loading ? <LoadingState label="Loading projects" /> : null}
+      {hasMore ? (
+        <button
+          className="ul-button ul-button-secondary"
+          disabled={loading}
+          onClick={() => void load(false)}
+          type="button"
+        >
+          Load more projects
+        </button>
+      ) : null}
+    </main>
   );
 }

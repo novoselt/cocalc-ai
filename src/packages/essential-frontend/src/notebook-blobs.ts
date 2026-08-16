@@ -4,7 +4,6 @@
  */
 
 import type { Client } from "@cocalc/conat/core/client";
-import { syncdbPath } from "@cocalc/util/jupyter/names";
 
 const SHA1 = /^[0-9a-f]{40}$/i;
 const MAX_BLOB_BYTES = 8 * 1024 * 1024;
@@ -22,7 +21,7 @@ function asBytes(value: unknown): Uint8Array {
 }
 
 export function notebookBlobStoreName(path: string): string {
-  return `jupyter/${syncdbPath(path).replace(/^\/+/, "")}`;
+  return `jupyter/${path.replace(/^\/+/, "")}`;
 }
 
 export function isNotebookBlobReference(value: string): boolean {

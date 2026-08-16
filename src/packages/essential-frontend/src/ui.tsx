@@ -34,15 +34,7 @@ export function ThemeControl() {
 export function TopBar({ projectTitle }: { projectTitle?: string }) {
   return (
     <header className="ul-topbar">
-      <a
-        aria-label="CoCalc projects"
-        className="ul-brand"
-        href={essentialRouteUrl({ kind: "projects" })}
-        onClick={(event) => {
-          event.preventDefault();
-          navigate({ kind: "projects" });
-        }}
-      >
+      <a aria-label="CoCalc home" className="ul-brand" href={siteUrl("")}>
         <span aria-hidden="true" className="ul-brand-mark">
           CoCalc
         </span>
@@ -52,7 +44,16 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
           {projectTitle}
         </div>
       ) : (
-        <div className="ul-topbar-title">Projects</div>
+        <a
+          className="ul-topbar-title ul-topbar-title-link"
+          href={essentialRouteUrl({ kind: "projects" })}
+          onClick={(event) => {
+            event.preventDefault();
+            navigate({ kind: "projects" });
+          }}
+        >
+          Projects
+        </a>
       )}
       <span className="ul-mode">Essential</span>
       <a
@@ -167,13 +168,10 @@ export function ProjectLayout({
   route: UltraliteRoute;
 }) {
   return (
-    <>
-      <TopBar projectTitle={project.title || "Untitled project"} />
-      <div className="ul-project-layout">
-        <ProjectRail active={route.kind} project={project} />
-        <div className="ul-project-content">{children}</div>
-      </div>
-    </>
+    <div className="ul-project-layout">
+      <ProjectRail active={route.kind} project={project} />
+      <div className="ul-project-content">{children}</div>
+    </div>
   );
 }
 

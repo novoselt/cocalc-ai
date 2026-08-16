@@ -695,7 +695,7 @@ export default function FileSurface({
         projectId={project.project_id}
         path={route.kind === "file" ? parentPath(route.path) : route.path}
       />
-      {loading ? <LoadingState label="Loading from the project host" /> : null}
+      {loading ? <LoadingState label="Opening CoCalc" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {externalChanged ? (
         <ExternalChangeActions

@@ -122,6 +122,11 @@ textarea {
   white-space: nowrap;
 }
 
+.ul-topbar-title-link {
+  color: var(--ul-on-accent);
+  text-decoration: none;
+}
+
 .ul-mode {
   border: 1px solid rgb(255 255 255 / 45%);
   border-radius: 3px;
@@ -172,6 +177,11 @@ textarea {
   max-width: 760px;
   min-height: calc(100vh - 48px);
   padding-top: clamp(52px, 10vh, 110px);
+}
+
+.ul-shell-loading {
+  min-height: calc(100vh - 48px);
+  padding-top: 24px;
 }
 
 .ul-page h1,
@@ -247,6 +257,11 @@ textarea {
   min-height: 34px;
   padding: 6px 11px;
   text-decoration: none;
+}
+
+.ul-icon {
+  display: block;
+  flex: 0 0 auto;
 }
 
 .ul-button-secondary,
@@ -813,7 +828,7 @@ textarea {
   resize: vertical;
 }
 
-.ul-notebook-cm {
+.ul-cm-editor.ul-notebook-cm {
   border-width: 0;
   height: auto;
   min-height: 44px;
@@ -821,13 +836,19 @@ textarea {
   resize: none;
 }
 
-.ul-notebook-cm .cm-editor,
-.ul-notebook-cm .cm-scroller {
+.ul-cm-editor.ul-notebook-cm .cm-editor,
+.ul-cm-editor.ul-notebook-cm .cm-scroller {
   height: auto;
 }
 
-.ul-notebook-cm .cm-scroller {
+.ul-cm-editor.ul-notebook-cm .cm-scroller {
+  min-height: 44px;
   overflow: auto;
+}
+
+.ul-cm-editor.ul-notebook-cm .cm-content,
+.ul-cm-editor.ul-notebook-cm .cm-gutter {
+  min-height: 44px;
 }
 
 .ul-markdown-cell {
@@ -1045,6 +1066,24 @@ textarea {
 
 .ul-row-title {
   font-weight: 600;
+}
+
+.ul-recent-file {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ul-recent-file .ul-row-title {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+  line-height: 1.25;
+}
+
+.ul-recent-file .ul-row-detail {
+  margin-top: 0;
 }
 
 .ul-row-grid {

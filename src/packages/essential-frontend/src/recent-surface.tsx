@@ -61,9 +61,9 @@ export default function RecentSurface({
               }
               type="button"
             >
-              <span>
+              <span className="ul-recent-file">
                 <span className="ul-row-title">
-                  <UltraliteIcon name="file" size={15} />{" "}
+                  <UltraliteIcon name="file" size={15} />
                   {file.path.split("/").pop()}
                 </span>
                 <span className="ul-row-detail">{parentPath(file.path)}</span>

@@ -11,7 +11,7 @@ import {
 
 test("uses the canonical Jupyter AKV name", () => {
   expect(notebookBlobStoreName("/home/user/spiral.ipynb")).toBe(
-    "jupyter/home/user/.spiral.ipynb.sage-jupyter2",
+    "jupyter/home/user/spiral.ipynb",
   );
   expect(isNotebookBlobReference("a".repeat(40))).toBe(true);
   expect(isNotebookBlobReference("not-base64-or-sha1")).toBe(false);
@@ -31,7 +31,7 @@ test("resolves a bounded notebook blob from the project-scoped AKV", async () =>
     new Uint8Array([1, 2, 3]),
   );
   expect(akv).toHaveBeenCalledWith({
-    name: "jupyter/home/user/.a.ipynb.sage-jupyter2",
+    name: "jupyter/home/user/a.ipynb",
     project_id: "project-a",
   });
   resolver.close();
