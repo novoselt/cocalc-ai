@@ -1061,6 +1061,8 @@ describe("startProjectOnHost placement", () => {
       }
       if (sql.includes("UPDATE projects AS projects")) {
         expect(params).toEqual(["host-2", "proj-1", "bay-0"]);
+        expect(sql).toContain("projects.host_id IS DISTINCT FROM $1");
+        expect(sql).toContain("provisioned_checked_at = CASE");
         return {
           rows: [{ owning_bay_id: "bay-0" }],
         };

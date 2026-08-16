@@ -2305,11 +2305,11 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
         // A volume is only authoritative after the restore/start lifecycle
         // succeeds. Quota checks and file browsing may create an incidental
         // local volume before this point and must not suppress recovery.
-        if (restore === "recover") {
+        if (restore === "recover" || restore_backup_id != null) {
           // A reprovisioned host can retain a stale local provisioning ledger
-          // even when the owning bay correctly requires recovery. Force the
-          // successful restore result back to the bay instead of deduplicating
-          // it against that stale local acknowledgement.
+          // even when the owning bay correctly requires recovery or an
+          // explicit restore. Force the successful restore result back to the
+          // bay instead of deduplicating it against that stale acknowledgement.
           queueProjectProvisioned(project_id, true, { forceReport: true });
         } else {
           queueProjectProvisioned(project_id, true);

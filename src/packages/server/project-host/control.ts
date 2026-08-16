@@ -799,7 +799,15 @@ export async function savePlacement(
     }>(
       `
         UPDATE projects AS projects
-        SET host_id = $1
+        SET host_id = $1,
+            provisioned = CASE
+              WHEN projects.host_id IS DISTINCT FROM $1 THEN FALSE
+              ELSE projects.provisioned
+            END,
+            provisioned_checked_at = CASE
+              WHEN projects.host_id IS DISTINCT FROM $1 THEN NOW()
+              ELSE projects.provisioned_checked_at
+            END
         WHERE projects.project_id = $2
         RETURNING
           COALESCE(projects.owning_bay_id, $3) AS owning_bay_id

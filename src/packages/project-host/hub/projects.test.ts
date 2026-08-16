@@ -534,6 +534,26 @@ describe("project host start ACP rehydrate ordering", () => {
     });
   });
 
+  it("forces the provisioning report after an explicit restore", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(),
+    } as any;
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await hubApi.projects.start({
+      project_id,
+      restore: "auto",
+      restore_backup_id: "backup-1",
+    });
+
+    expect(queueProjectProvisioned).toHaveBeenCalledWith(project_id, true, {
+      forceReport: true,
+    });
+  });
+
   it("materializes an unprovisioned project before reading its quota", async () => {
     const order: string[] = [];
     getRecordedProjectVolumeIdentity.mockReturnValue(undefined);
