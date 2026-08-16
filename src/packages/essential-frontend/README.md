@@ -50,6 +50,11 @@ indentation, undo, keyboard save, wrapping control, and conflict-safe explicit
 save. It deliberately excludes collaborative rich editing, IDE registries,
 language servers, and sophisticated project-wide search.
 
+Dotfiles are hidden by default and can be revealed with an account-scoped
+browser preference. A bounded, account-scoped Recent index is also maintained
+in local storage so users can return to files without loading project activity
+streams or adding a network request.
+
 Read-only views remain very small. CodeMirror 6 is loaded only after the user
 chooses Edit, and only the selected language parser is loaded. Responsiveness
 on real source files matters more than minimizing an explicitly requested,
@@ -95,6 +100,11 @@ project host.
 Users can inspect notebooks, including mathematics, source, ordinary outputs,
 images, and plots, and perform basic cell editing and execution. The essential
 surface supports save, run, run-all, interrupt, and live-run recovery.
+
+Markdown cells remain rendered until the user explicitly edits or
+double-clicks them. Stored image outputs are fetched lazily from the notebook's
+project-scoped AKV store over the direct project-host connection; this does not
+load the full Jupyter frontend or proxy notebook data through the hub.
 
 A project-host scan provides a recent-notebook index without starting project
 compute. Its bounded result is cached per project for the browser session and

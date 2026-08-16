@@ -110,6 +110,17 @@ const SettingsSurface = lazy(
       );
     }),
 );
+const RecentSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./recent-surface")),
+        reject,
+        "ultralite-recent",
+      );
+    }),
+);
 
 type ProjectRoute = Exclude<
   UltraliteRoute,
@@ -163,6 +174,7 @@ function ProjectSurface({
   if (
     !project.host_id &&
     route.kind !== "vms" &&
+    route.kind !== "recent" &&
     route.kind !== "cli" &&
     route.kind !== "settings"
   ) {
@@ -171,6 +183,12 @@ function ProjectSurface({
     surface = (
       <DeferredSurface label="Files">
         <FileSurface project={project} route={route} session={session} />
+      </DeferredSurface>
+    );
+  } else if (route.kind === "recent") {
+    surface = (
+      <DeferredSurface label="Recent files">
+        <RecentSurface accountId={session.accountId} project={project} />
       </DeferredSurface>
     );
   } else if (route.kind === "agents" || route.kind === "chat") {

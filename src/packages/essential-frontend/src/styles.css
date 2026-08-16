@@ -177,6 +177,22 @@ textarea {
   gap: 7px;
 }
 
+.ul-checkbox-control {
+  align-items: center;
+  color: var(--ul-muted);
+  display: inline-flex;
+  font-size: 13px;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 4px;
+}
+
+.ul-checkbox-control input {
+  accent-color: var(--ul-accent);
+  height: 16px;
+  width: 16px;
+}
+
 .ul-button,
 .ul-link-button,
 .ul-icon-button {
@@ -761,12 +777,32 @@ textarea {
 
 .ul-notebook-cm {
   border-width: 0;
-  height: clamp(140px, 22vh, 300px);
-  resize: vertical;
+  height: auto;
+  min-height: 44px;
+  overflow: hidden;
+  resize: none;
+}
+
+.ul-notebook-cm .cm-editor,
+.ul-notebook-cm .cm-scroller {
+  height: auto;
+}
+
+.ul-notebook-cm .cm-scroller {
+  overflow: auto;
 }
 
 .ul-markdown-cell {
   line-height: 1.55;
+  padding: 12px;
+}
+
+.ul-raw-cell {
+  background: var(--ul-paper);
+  border: 0;
+  color: var(--ul-code-text);
+  margin: 0;
+  overflow: auto;
   padding: 12px;
   white-space: pre-wrap;
 }
@@ -783,6 +819,10 @@ textarea {
   height: auto;
   margin: 12px;
   max-width: calc(100% - 24px);
+}
+
+.ul-output-loading {
+  margin: 12px;
 }
 
 .ul-session-list,

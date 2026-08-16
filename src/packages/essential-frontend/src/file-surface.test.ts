@@ -5,7 +5,11 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
-import { ExternalChangeActions, validateNewEntryName } from "./file-surface";
+import {
+  DirectoryView,
+  ExternalChangeActions,
+  validateNewEntryName,
+} from "./file-surface";
 
 test.each(["analysis.py", "data set", "spiral.ipynb"])(
   "accepts the leaf name %s",
@@ -39,4 +43,24 @@ test("offers explicit accessible actions for an external file change", () => {
   fireEvent.click(reload);
   expect(onMerge).toHaveBeenCalledTimes(1);
   expect(onReload).toHaveBeenCalledTimes(1);
+});
+
+test("hides dotfiles unless the user explicitly reveals them", () => {
+  const props = {
+    files: {
+      ".secret": { size: 1, type: "f" },
+      "visible.py": { size: 2, type: "f" },
+    } as any,
+    path: "/home/user",
+    project: { project_id: "project-a" } as any,
+    truncated: false,
+  };
+  const { rerender } = render(
+    createElement(DirectoryView, { ...props, showHidden: false }),
+  );
+  expect(screen.getByText("visible.py")).toBeVisible();
+  expect(screen.queryByText(".secret")).not.toBeInTheDocument();
+
+  rerender(createElement(DirectoryView, { ...props, showHidden: true }));
+  expect(screen.getByText(".secret")).toBeVisible();
 });

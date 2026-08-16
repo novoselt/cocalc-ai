@@ -14,6 +14,7 @@ import {
   openJupyterLiveRunStore,
   type JupyterLiveRunSnapshot,
 } from "@cocalc/conat/project/jupyter/live-run";
+import type { KernelStatus } from "@cocalc/conat/project/api/jupyter";
 import {
   editJournalAvailable,
   saveNotebookJournal,
@@ -35,6 +36,7 @@ import CodeMirrorEditor, {
 } from "./codemirror-editor";
 import type { UltraliteSession } from "./session";
 import {
+  NotebookMarkdownCell,
   NotebookOutputView,
   parseNotebook,
   sourceText,
@@ -42,6 +44,7 @@ import {
   type NotebookDocument,
   type NotebookOutput,
 } from "./notebook-view";
+import type { NotebookBlobResolver } from "./notebook-blobs";
 import { InlineAlert, LoadingState } from "./ui";
 import useEditCheckpoint from "./use-edit-checkpoint";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
@@ -59,6 +62,14 @@ import type {
 
 const MAX_OUTPUT_TEXT = 100_000;
 const MAX_OUTPUT_IMAGE = 7 * 1024 * 1024;
+
+export function kernelStatusLabel(status: KernelStatus): string {
+  if (status.backend_state === "off" || status.backend_state === "closed") {
+    return "not started";
+  }
+  if (status.backend_state === "running") return status.kernel_state;
+  return status.backend_state;
+}
 
 function cloneNotebook(notebook: NotebookDocument): NotebookDocument {
   return JSON.parse(JSON.stringify(notebook));
@@ -243,11 +254,13 @@ function NotebookCellEditor({
 
 interface NotebookEditorProps {
   baseContents: string;
+  blobResolver?: NotebookBlobResolver;
   externalChanged?: boolean;
   filesystem: FilesystemClient;
   notebook: NotebookDocument;
   onDirtyChange?: (dirty: boolean) => void;
   onExternalConflict?: () => void;
+  onReadOnlyView?: () => void;
   onSaved?: (notebook: NotebookDocument, contents: string) => void;
   path: string;
   project: AccountProjectListWindowRow;
@@ -258,11 +271,13 @@ interface NotebookEditorProps {
 function NotebookEditor(
   {
     baseContents: initialBase,
+    blobResolver,
     externalChanged = false,
     filesystem,
     notebook: initialNotebook,
     onDirtyChange,
     onExternalConflict,
+    onReadOnlyView,
     onSaved,
     path,
     project,
@@ -286,6 +301,9 @@ function NotebookEditor(
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [editorEpoch, setEditorEpoch] = useState(0);
+  const [editingMarkdownCells, setEditingMarkdownCells] = useState<Set<string>>(
+    () => new Set(),
+  );
   const jupyter = useRef<JupyterClient | undefined>(undefined);
   const cellEditors = useRef(new Map<string, CodeMirrorEditorHandle>());
   const pendingCellRebases = useRef(
@@ -340,6 +358,15 @@ function NotebookEditor(
     setMergeNeedsReview(false);
     setEditRevision((value) => value + 1);
     setNotice(undefined);
+  };
+
+  const setMarkdownEditing = (cellKey: string, editing: boolean) => {
+    setEditingMarkdownCells((current) => {
+      const next = new Set(current);
+      if (editing) next.add(cellKey);
+      else next.delete(cellKey);
+      return next;
+    });
   };
 
   useImperativeHandle(
@@ -673,6 +700,18 @@ function NotebookEditor(
       .then(async (opened) => {
         if (disposed) return;
         projectApi.current = opened.api;
+        if (typeof opened.api.jupyter.getKernelStatus === "function") {
+          void opened.api.jupyter
+            .getKernelStatus({ path: syncdbPath(path) })
+            .then((status) => {
+              if (!disposed && !directRunId.current && !recovering) {
+                setKernelStatus(kernelStatusLabel(status));
+              }
+            })
+            .catch(() => {
+              // Status discovery is best effort and must never start compute.
+            });
+        }
         store = await openJupyterLiveRunStore({
           client: opened.lease.client,
           project_id: project.project_id,
@@ -852,6 +891,10 @@ function NotebookEditor(
   ) => {
     let candidate = notebook;
     let focusCellId = notebook.cells[index]?.id;
+    const currentCellKey = notebook.cells[index]?.id ?? `cell-${index}`;
+    if (notebook.cells[index]?.cell_type === "markdown") {
+      setMarkdownEditing(currentCellKey, false);
+    }
     if (
       mode === "insert" ||
       (mode === "advance" && !notebook.cells[index + 1])
@@ -863,6 +906,13 @@ function NotebookEditor(
       markEdited();
     } else if (mode === "advance") {
       focusCellId = notebook.cells[index + 1]?.id;
+    }
+
+    const focusIndex = candidate.cells.findIndex(
+      ({ id }) => id === focusCellId,
+    );
+    if (candidate.cells[focusIndex]?.cell_type === "markdown" && focusCellId) {
+      setMarkdownEditing(focusCellId, true);
     }
 
     if (notebook.cells[index]?.cell_type === "code") {
@@ -897,6 +947,15 @@ function NotebookEditor(
     <div>
       <div className="ul-file-view-header">
         <div className="ul-toolbar">
+          {onReadOnlyView ? (
+            <button
+              className="ul-button ul-button-secondary"
+              onClick={onReadOnlyView}
+              type="button"
+            >
+              Read-only view
+            </button>
+          ) : null}
           <button
             className="ul-button"
             disabled={readOnly || !dirty || saving || running || diskBlocked}
@@ -928,10 +987,6 @@ function NotebookEditor(
           {dirty ? " · unsaved" : ""}
         </span>
       </div>
-      <InlineAlert kind="info">
-        Editing is manual and focused. Opening this view does not start project
-        compute; Run explicitly starts the project and kernel.
-      </InlineAlert>
       {readOnly ? (
         <InlineAlert kind="warning">
           This notebook is read-only because you are a project viewer or the
@@ -944,6 +999,8 @@ function NotebookEditor(
       <div className="ul-notebook">
         {notebook.cells.map((cell, index) => {
           const cellKey = cell.id ?? `cell-${index}`;
+          const editingMarkdown =
+            cell.cell_type === "markdown" && editingMarkdownCells.has(cellKey);
           const shortcuts: CodeMirrorShortcut[] = [
             {
               key: "Shift-Enter",
@@ -973,6 +1030,18 @@ function NotebookEditor(
                     type="button"
                   >
                     Run
+                  </button>
+                ) : cell.cell_type === "markdown" && !readOnly ? (
+                  <button
+                    aria-label={`${editingMarkdown ? "Finish editing" : "Edit"} markdown cell ${index + 1}`}
+                    className="ul-icon-button"
+                    disabled={running || saving}
+                    onClick={() =>
+                      setMarkdownEditing(cellKey, !editingMarkdown)
+                    }
+                    type="button"
+                  >
+                    {editingMarkdown ? "Done" : "Edit"}
                   </button>
                 ) : null}
                 <button
@@ -1028,31 +1097,44 @@ function NotebookEditor(
                   Delete
                 </button>
               </div>
-              <NotebookCellEditor
-                autoFocus={false}
-                cell={cell}
-                editorRef={(editor) => {
-                  if (editor) {
-                    cellEditors.current.set(cellKey, editor);
-                    const rebase = pendingCellRebases.current.get(cellKey);
-                    if (rebase) {
-                      editor.rebaseValue(rebase.base, rebase.value);
-                      pendingCellRebases.current.delete(cellKey);
+              {cell.cell_type === "markdown" && !editingMarkdown ? (
+                <div
+                  onDoubleClick={() => {
+                    if (!readOnly && !running && !saving) {
+                      setMarkdownEditing(cellKey, true);
                     }
-                  } else {
-                    cellEditors.current.delete(cellKey);
-                  }
-                }}
-                index={index}
-                language={codeLanguage}
-                onChange={(source) => updateCell(index, { source })}
-                onSave={() => void save()}
-                path={path}
-                readOnly={readOnly || running || saving}
-                shortcuts={shortcuts}
-              />
+                  }}
+                >
+                  <NotebookMarkdownCell source={sourceText(cell.source)} />
+                </div>
+              ) : (
+                <NotebookCellEditor
+                  autoFocus={editingMarkdown}
+                  cell={cell}
+                  editorRef={(editor) => {
+                    if (editor) {
+                      cellEditors.current.set(cellKey, editor);
+                      const rebase = pendingCellRebases.current.get(cellKey);
+                      if (rebase) {
+                        editor.rebaseValue(rebase.base, rebase.value);
+                        pendingCellRebases.current.delete(cellKey);
+                      }
+                    } else {
+                      cellEditors.current.delete(cellKey);
+                    }
+                  }}
+                  index={index}
+                  language={codeLanguage}
+                  onChange={(source) => updateCell(index, { source })}
+                  onSave={() => void save()}
+                  path={path}
+                  readOnly={readOnly || running || saving}
+                  shortcuts={shortcuts}
+                />
+              )}
               {cell.outputs?.map((output, outputIndex) => (
                 <NotebookOutputView
+                  blobResolver={blobResolver}
                   index={outputIndex}
                   key={outputIndex}
                   output={output}
@@ -1070,15 +1152,14 @@ function NotebookEditor(
               disabled={running}
               key={cellType}
               onClick={() => {
+                const cell = newNotebookCell(cellType);
                 setNotebook({
                   ...notebook,
-                  cells: [
-                    ...notebook.cells,
-                    {
-                      ...newNotebookCell(cellType),
-                    },
-                  ],
+                  cells: [...notebook.cells, cell],
                 });
+                if (cellType === "markdown") {
+                  setMarkdownEditing(cell.id!, true);
+                }
                 markEdited();
               }}
               type="button"

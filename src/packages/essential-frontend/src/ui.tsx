@@ -84,12 +84,14 @@ const NAV: Array<{
     | "cli"
     | "files"
     | "notebooks"
+    | "recent"
     | "settings"
     | "terminal"
     | "vms";
   label: string;
 }> = [
   { icon: "folder", kind: "files", label: "Files" },
+  { icon: "recent", kind: "recent", label: "Recent" },
   { icon: "chat", kind: "agents", label: "Codex" },
   { icon: "notebook", kind: "notebooks", label: "Jupyter" },
   { icon: "terminal", kind: "terminal", label: "Terminal" },

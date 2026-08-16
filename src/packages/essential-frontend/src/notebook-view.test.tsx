@@ -41,3 +41,53 @@ test("does not execute notebook HTML output", () => {
   expect(screen.getByText(/Interactive HTML output is omitted/)).toBeVisible();
   expect(document.querySelector("script")).toBeNull();
 });
+
+test("renders Markdown notebook cells instead of their source", async () => {
+  render(
+    <NotebookView
+      notebook={{
+        cells: [{ cell_type: "markdown", source: "# A notebook heading" }],
+      }}
+    />,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "A notebook heading" }),
+  ).toBeVisible();
+});
+
+test("loads referenced image output from the notebook blob resolver", async () => {
+  const createObjectURL = jest.fn(() => "blob:notebook-output");
+  const revokeObjectURL = jest.fn();
+  Object.assign(URL, { createObjectURL, revokeObjectURL });
+  const blobResolver = {
+    close: jest.fn(),
+    resolve: jest.fn(async () => new Uint8Array([1, 2, 3])),
+  };
+  const { unmount } = render(
+    <NotebookView
+      blobResolver={blobResolver}
+      notebook={{
+        cells: [
+          {
+            cell_type: "code",
+            outputs: [
+              {
+                data: { "image/png": "a".repeat(40) },
+                output_type: "display_data",
+              },
+            ],
+          },
+        ],
+      }}
+    />,
+  );
+
+  expect(
+    await screen.findByRole("img", { name: "Notebook output 1" }),
+  ).toHaveAttribute("src", "blob:notebook-output");
+  expect(blobResolver.resolve).toHaveBeenCalledWith("a".repeat(40));
+  unmount();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:notebook-output");
+  delete (URL as any).createObjectURL;
+  delete (URL as any).revokeObjectURL;
+});

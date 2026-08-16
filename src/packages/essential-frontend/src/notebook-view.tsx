@@ -3,6 +3,26 @@
  * License: MS-RSL - see LICENSE.md for details
  */
 
+import { lazy, Suspense, useEffect, useState } from "react";
+import type { NotebookBlobResolver } from "./notebook-blobs";
+import { isNotebookBlobReference } from "./notebook-blobs";
+
+const NotebookMarkdown = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      if (process.env.COCALC_TEST_MODE) {
+        resolve(require("./notebook-markdown"));
+        return;
+      }
+      require.ensure(
+        [],
+        () => resolve(require("./notebook-markdown")),
+        reject,
+        "ultralite-notebook-markdown",
+      );
+    }),
+);
+
 export interface NotebookOutput {
   output_type?: string;
   name?: string;
@@ -45,9 +65,11 @@ export function parseNotebook(contents: string): NotebookDocument {
 }
 
 export function NotebookOutputView({
+  blobResolver,
   output,
   index,
 }: {
+  blobResolver?: NotebookBlobResolver;
   output: NotebookOutput;
   index: number;
 }) {
@@ -62,11 +84,11 @@ export function NotebookOutputView({
   const mime = png ? "image/png" : "image/jpeg";
   if (image) {
     return (
-      <img
-        alt={`Notebook output ${index + 1}`}
-        className="ul-output-image"
-        loading="lazy"
-        src={`data:${mime};base64,${image.replace(/\s/g, "")}`}
+      <NotebookImage
+        blobResolver={blobResolver}
+        data={image}
+        index={index}
+        mime={mime}
       />
     );
   }
@@ -84,22 +106,102 @@ export function NotebookOutputView({
   return null;
 }
 
+function NotebookImage({
+  blobResolver,
+  data,
+  index,
+  mime,
+}: {
+  blobResolver?: NotebookBlobResolver;
+  data: string;
+  index: number;
+  mime: "image/jpeg" | "image/png";
+}) {
+  const normalized = data.replace(/\s/g, "");
+  const reference = isNotebookBlobReference(normalized);
+  const [source, setSource] = useState(
+    reference ? undefined : `data:${mime};base64,${normalized}`,
+  );
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    if (!reference || !blobResolver) return;
+    let active = true;
+    let objectUrl: string | undefined;
+    setError(undefined);
+    setSource(undefined);
+    void blobResolver
+      .resolve(normalized)
+      .then((bytes) => {
+        if (!active) return;
+        const buffer = new ArrayBuffer(bytes.byteLength);
+        new Uint8Array(buffer).set(bytes);
+        objectUrl = URL.createObjectURL(new Blob([buffer], { type: mime }));
+        setSource(objectUrl);
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : `${err}`);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [blobResolver, mime, normalized, reference]);
+
+  if (error) {
+    return <p className="ul-notice">Image output unavailable: {error}</p>;
+  }
+  if (!source) {
+    return (
+      <p className="ul-muted ul-output-loading">Loading image output...</p>
+    );
+  }
+  return (
+    <img
+      alt={`Notebook output ${index + 1}`}
+      className="ul-output-image"
+      loading="lazy"
+      src={source}
+    />
+  );
+}
+
+export function NotebookMarkdownCell({ source }: { source: string }) {
+  return (
+    <div className="ul-markdown ul-markdown-cell">
+      <Suspense fallback={<p className="ul-muted">Rendering Markdown...</p>}>
+        <NotebookMarkdown source={source} />
+      </Suspense>
+    </div>
+  );
+}
+
 export default function NotebookView({
+  blobResolver,
   notebook,
 }: {
+  blobResolver?: NotebookBlobResolver;
   notebook: NotebookDocument;
 }) {
   return (
     <div className="ul-notebook">
       {notebook.cells.map((cell, index) => {
         const source = sourceText(cell.source);
-        if (cell.cell_type === "markdown" || cell.cell_type === "raw") {
+        if (cell.cell_type === "markdown") {
           return (
             <section className="ul-cell" key={index}>
               <div className="ul-cell-label">
                 {cell.cell_type || "text"} cell {index + 1}
               </div>
-              <div className="ul-markdown-cell">{source}</div>
+              <NotebookMarkdownCell source={source} />
+            </section>
+          );
+        }
+        if (cell.cell_type === "raw") {
+          return (
+            <section className="ul-cell" key={index}>
+              <div className="ul-cell-label">raw cell {index + 1}</div>
+              <pre className="ul-raw-cell">{source}</pre>
             </section>
           );
         }
@@ -116,6 +218,7 @@ export default function NotebookView({
             </pre>
             {cell.outputs?.map((output, outputIndex) => (
               <NotebookOutputView
+                blobResolver={blobResolver}
                 index={outputIndex}
                 key={outputIndex}
                 output={output}
