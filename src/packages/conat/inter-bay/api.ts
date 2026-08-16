@@ -328,6 +328,10 @@ export interface ProjectControlStartRequest {
   epoch?: number;
 }
 
+export interface ProjectControlStartAdmission {
+  storage_recovery_required: boolean;
+}
+
 export interface ProjectControlStopRequest {
   project_id: string;
   epoch?: number;
@@ -2847,7 +2851,9 @@ export interface InterBayDirectoryApi {
 }
 
 export interface InterBayProjectControlApi {
-  checkStartAdmission: (opts: ProjectControlStartRequest) => Promise<void>;
+  checkStartAdmission: (
+    opts: ProjectControlStartRequest,
+  ) => Promise<ProjectControlStartAdmission>;
   start: (opts: ProjectControlStartRequest) => Promise<void>;
   stop: (opts: ProjectControlStopRequest) => Promise<void>;
   restart: (opts: ProjectControlRestartRequest) => Promise<void>;
