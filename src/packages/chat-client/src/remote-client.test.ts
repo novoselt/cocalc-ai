@@ -102,3 +102,40 @@ test("ignores stream updates older than the current server snapshot", () => {
 
   expect(client.getSnapshot().messages[0].content).toBe("current");
 });
+
+test("reports service and stream open phases", async () => {
+  const phases: string[] = [];
+  const stream = {
+    close: jest.fn(),
+    getAll: jest.fn(() => []),
+    on: jest.fn(),
+    removeListener: jest.fn(),
+  };
+  const client = new RemoteHeadlessChatClient({
+    account_id: ACCOUNT_ID,
+    project_id: PROJECT_ID,
+    path: PATH,
+    projectHostClient: {
+      request: jest.fn(async () => ({
+        data: {
+          session_id: "session-1",
+          stream_name: "stream-1",
+          snapshot: snapshot(1, "ready"),
+        },
+      })),
+      sync: { dstream: jest.fn(async () => stream) },
+    } as any,
+    selected_thread_id: THREAD_ID,
+    onOpenPhase: (phase) => phases.push(phase),
+  });
+
+  await client.open();
+
+  expect(phases).toEqual([
+    "service_open_start",
+    "service_open_done",
+    "stream_open_start",
+    "stream_open_done",
+  ]);
+  await client.close();
+});

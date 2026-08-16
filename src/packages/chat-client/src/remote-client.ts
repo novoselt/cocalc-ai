@@ -18,6 +18,12 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const OPERATION_TIMEOUT_MS = 10 * 60_000;
 const HEARTBEAT_MS = 5 * 60_000;
 
+export type EssentialChatOpenPhase =
+  | "service_open_start"
+  | "service_open_done"
+  | "stream_open_start"
+  | "stream_open_done";
+
 export interface EssentialChatOpenResponse {
   session_id: string;
   stream_name: string;
@@ -47,6 +53,7 @@ export interface CreateRemoteHeadlessChatClientOptions {
   selected_thread_id: string;
   initial_message_limit?: number;
   readyTimeoutMs?: number;
+  onOpenPhase?: (phase: EssentialChatOpenPhase) => void;
 }
 
 export function essentialChatSubject({
@@ -97,6 +104,7 @@ export class RemoteHeadlessChatClient implements HeadlessChatClient {
     if (this.sessionId) return;
     this.setConnection("connecting");
     try {
+      this.options.onOpenPhase?.("service_open_start");
       const opened = await this.call<EssentialChatOpenResponse>(
         "open",
         [
@@ -108,8 +116,10 @@ export class RemoteHeadlessChatClient implements HeadlessChatClient {
         ],
         this.options.readyTimeoutMs ?? DEFAULT_TIMEOUT_MS,
       );
+      this.options.onOpenPhase?.("service_open_done");
       this.sessionId = opened.session_id;
       this.applySnapshot(opened.snapshot, true);
+      this.options.onOpenPhase?.("stream_open_start");
       const stream =
         await this.options.projectHostClient.sync.dstream<EssentialChatStreamEvent>(
           {
@@ -120,6 +130,7 @@ export class RemoteHeadlessChatClient implements HeadlessChatClient {
             noInventory: true,
           },
         );
+      this.options.onOpenPhase?.("stream_open_done");
       if (this.sessionId !== opened.session_id) {
         stream.close();
         return;
