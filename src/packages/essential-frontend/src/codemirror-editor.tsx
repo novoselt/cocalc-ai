@@ -12,7 +12,7 @@ import {
 } from "@codemirror/commands";
 import {
   bracketMatching,
-  defaultHighlightStyle,
+  HighlightStyle,
   indentOnInput,
   syntaxHighlighting,
 } from "@codemirror/language";
@@ -38,13 +38,48 @@ import {
   keymap,
   lineNumbers,
 } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { loadCodeMirrorLanguage } from "./codemirror-languages";
 import {
   CodeMirrorEditJournal,
   type CodeMirrorJournalBatch,
 } from "./edit-journal";
-import type { UltraliteLanguage } from "./prism-languages";
+import type { UltraliteLanguage } from "./code-language";
+
+const essentialHighlightStyle = HighlightStyle.define([
+  { tag: tags.comment, color: "var(--ul-token-comment)" },
+  {
+    tag: [tags.keyword, tags.modifier, tags.operatorKeyword],
+    color: "var(--ul-token-keyword)",
+  },
+  {
+    tag: [tags.string, tags.character, tags.regexp, tags.inserted],
+    color: "var(--ul-token-string)",
+  },
+  {
+    tag: [tags.number, tags.bool, tags.atom, tags.constant(tags.name)],
+    color: "var(--ul-token-number)",
+  },
+  {
+    tag: [
+      tags.function(tags.variableName),
+      tags.definition(tags.name),
+      tags.className,
+      tags.typeName,
+    ],
+    color: "var(--ul-token-function)",
+  },
+  {
+    tag: [tags.link, tags.url],
+    color: "var(--ul-link)",
+    textDecoration: "underline",
+  },
+  { tag: tags.heading, color: "var(--ul-heading)", fontWeight: "bold" },
+  { tag: tags.strong, fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: [tags.invalid, tags.deleted], color: "var(--ul-token-warning)" },
+]);
 
 export interface CodeMirrorEditorHandle {
   acknowledgeJournal(value: string): void;
@@ -218,7 +253,7 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
         dropCursor(),
         EditorState.allowMultipleSelections.of(true),
         indentOnInput(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(essentialHighlightStyle, { fallback: true }),
         bracketMatching(),
         closeBrackets(),
         highlightActiveLine(),

@@ -34,7 +34,7 @@ export function fullProjectUrl({
 }): string {
   const root = siteUrl(`projects/${projectId}/files`, basePath);
   if (!path) return `${root}/`;
-  const relative = path.replace(/^\/home\/user\/?/, "");
+  const relative = path.replace(/^\/+/, "");
   return relative
     ? `${root}/${relative.split("/").map(encodeURIComponent).join("/")}`
     : `${root}/`;

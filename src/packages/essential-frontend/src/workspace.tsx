@@ -16,10 +16,9 @@ import { UltraliteSession } from "./session";
 import {
   ChunkErrorBoundary,
   InlineAlert,
-  LoadingState,
   ProjectLayout,
+  ShellLoading,
   SurfaceHeader,
-  TopBar,
 } from "./ui";
 
 const FileSurface = lazy(
@@ -110,6 +109,17 @@ const SettingsSurface = lazy(
       );
     }),
 );
+const RecentSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./recent-surface")),
+        reject,
+        "ultralite-recent",
+      );
+    }),
+);
 
 type ProjectRoute = Exclude<
   UltraliteRoute,
@@ -137,15 +147,7 @@ function DeferredSurface({
 }) {
   return (
     <ChunkErrorBoundary label={label}>
-      <Suspense
-        fallback={
-          <main className="ul-page" id="main-content">
-            <LoadingState label={`Loading ${label}`} />
-          </main>
-        }
-      >
-        {children}
-      </Suspense>
+      <Suspense fallback={<ShellLoading />}>{children}</Suspense>
     </ChunkErrorBoundary>
   );
 }
@@ -163,6 +165,7 @@ function ProjectSurface({
   if (
     !project.host_id &&
     route.kind !== "vms" &&
+    route.kind !== "recent" &&
     route.kind !== "cli" &&
     route.kind !== "settings"
   ) {
@@ -171,6 +174,12 @@ function ProjectSurface({
     surface = (
       <DeferredSurface label="Files">
         <FileSurface project={project} route={route} session={session} />
+      </DeferredSurface>
+    );
+  } else if (route.kind === "recent") {
+    surface = (
+      <DeferredSurface label="Recent files">
+        <RecentSurface accountId={session.accountId} project={project} />
       </DeferredSurface>
     );
   } else if (route.kind === "agents" || route.kind === "chat") {
@@ -223,22 +232,13 @@ function ProjectSurface({
   );
 }
 
-function RouteLoading({ label }: { label: string }) {
-  return (
-    <>
-      <TopBar />
-      <main className="ul-page" id="main-content">
-        <LoadingState label={label} />
-      </main>
-    </>
-  );
-}
-
 export default function Workspace({
   bootstrap,
+  onProjectTitleChange,
   route,
 }: {
   bootstrap: AuthBootstrap;
+  onProjectTitleChange: (title?: string) => void;
   route: ProjectRoute;
 }) {
   const [session, setSession] = useState<UltraliteSession>();
@@ -305,6 +305,12 @@ export default function Workspace({
   }, [project, session]);
 
   useEffect(() => {
+    if (project) {
+      onProjectTitleChange(project.title || "Untitled project");
+    }
+  }, [onProjectTitleChange, project]);
+
+  useEffect(() => {
     requestAnimationFrame(() =>
       document.querySelector<HTMLElement>("h1")?.focus(),
     );
@@ -312,24 +318,21 @@ export default function Workspace({
 
   if (error) {
     return (
-      <>
-        <TopBar />
-        <main className="ul-centered" id="main-content">
-          <h1 tabIndex={-1}>Workspace unavailable</h1>
-          <InlineAlert kind="error">{error}</InlineAlert>
-          <button
-            className="ul-button"
-            onClick={() => window.location.reload()}
-            type="button"
-          >
-            Try again
-          </button>
-        </main>
-      </>
+      <main className="ul-centered" id="main-content">
+        <h1 tabIndex={-1}>Workspace unavailable</h1>
+        <InlineAlert kind="error">{error}</InlineAlert>
+        <button
+          className="ul-button"
+          onClick={() => window.location.reload()}
+          type="button"
+        >
+          Try again
+        </button>
+      </main>
     );
   }
   if (!session || !project) {
-    return <RouteLoading label="Connecting to project" />;
+    return <ShellLoading />;
   }
   return <ProjectSurface project={project} route={route} session={session} />;
 }

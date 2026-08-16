@@ -11,9 +11,10 @@ import {
   parseRoute,
   type UltraliteRoute,
 } from "./routes";
-import { ultraliteTheme } from "./theme";
+import { EssentialThemeProvider } from "./theme-context";
+import { FrontendUpdateNotice } from "./frontend-update";
 import { siteUrl } from "./urls";
-import { TopBar } from "./ui";
+import { ShellLoading, TopBar } from "./ui";
 import {
   markUltraliteBackend,
   recordUltraliteOutcome,
@@ -56,21 +57,13 @@ const NotificationsSurface = lazy(
     }),
 );
 
-function Loading({ message }: { message: string }) {
-  return (
-    <main className="ul-centered" id="main-content">
-      <h1>{message}</h1>
-      <div aria-hidden="true" className="ul-progress-track">
-        <span />
-      </div>
-    </main>
-  );
-}
-
 export function UltraliteApp() {
   const [bootstrap, setBootstrap] = useState<AuthBootstrap>();
   const [error, setError] = useState<string>();
   const [route, setRoute] = useState<UltraliteRoute>(() => parseRoute());
+  const [projectTitle, setProjectTitle] = useState<string>();
+  const routeProjectId = "projectId" in route ? route.projectId : undefined;
+  const projectRoute = routeProjectId != null;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -89,6 +82,26 @@ export function UltraliteApp() {
       });
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (!projectRoute) {
+      setProjectTitle(undefined);
+      return;
+    }
+    const project = bootstrap?.project_window?.find(
+      ({ project_id }) => project_id === routeProjectId,
+    );
+    setProjectTitle(project?.title || undefined);
+  }, [bootstrap?.project_window, projectRoute, routeProjectId]);
+
+  useEffect(() => {
+    const title = projectRoute
+      ? projectTitle || "Project"
+      : route.kind === "notifications"
+        ? "Notifications"
+        : "Projects";
+    document.title = `${title} - CoCalc`;
+  }, [projectRoute, projectTitle, route.kind]);
 
   useEffect(() => {
     if (bootstrap?.signed_in) recordUltraliteSurfaceReady("shell");
@@ -127,11 +140,14 @@ export function UltraliteApp() {
   }, []);
 
   return (
-    <div className="ul-app" style={ultraliteTheme}>
+    <EssentialThemeProvider>
       <a className="ul-skip" href="#main-content">
         Skip to content
       </a>
-      {bootstrap?.signed_in ? null : <TopBar />}
+      {bootstrap?.signed_in ? <FrontendUpdateNotice /> : null}
+      <TopBar
+        projectTitle={projectRoute ? projectTitle || "Project" : undefined}
+      />
       {error ? (
         <main className="ul-centered" id="main-content">
           <h1>Essential CoCalc could not start</h1>
@@ -147,7 +163,7 @@ export function UltraliteApp() {
           </button>
         </main>
       ) : bootstrap == null ? (
-        <Loading message="Checking your CoCalc session" />
+        <ShellLoading />
       ) : !bootstrap.signed_in ||
         !bootstrap.account_id ||
         !bootstrap.home_bay_url ? (
@@ -165,16 +181,20 @@ export function UltraliteApp() {
           </a>
         </main>
       ) : (
-        <Suspense fallback={<Loading message="Loading CoCalc" />}>
+        <Suspense fallback={<ShellLoading />}>
           {route.kind === "projects" ? (
             <ProjectsWorkspace bootstrap={bootstrap} />
           ) : route.kind === "notifications" ? (
             <NotificationsSurface bootstrap={bootstrap} />
           ) : (
-            <Workspace bootstrap={bootstrap} route={route} />
+            <Workspace
+              bootstrap={bootstrap}
+              onProjectTitleChange={setProjectTitle}
+              route={route}
+            />
           )}
         </Suspense>
       )}
-    </div>
+    </EssentialThemeProvider>
   );
 }

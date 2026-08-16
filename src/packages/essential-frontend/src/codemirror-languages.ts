@@ -4,7 +4,7 @@
  */
 
 import type { Extension } from "@codemirror/state";
-import type { UltraliteLanguage } from "./prism-languages";
+import type { UltraliteLanguage } from "./code-language";
 
 function loadChunk(
   language: UltraliteLanguage,
@@ -106,6 +106,18 @@ function loadChunk(
           () => resolve(require("@codemirror/lang-python").python()),
           reject,
           "ultralite-cm-python",
+        );
+        break;
+      case "r":
+        require.ensure(
+          [],
+          () => {
+            const { StreamLanguage } = require("@codemirror/language");
+            const { r } = require("@codemirror/legacy-modes/mode/r");
+            resolve(StreamLanguage.define(r));
+          },
+          reject,
+          "ultralite-cm-r",
         );
         break;
       case "rust":

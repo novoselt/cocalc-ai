@@ -50,6 +50,11 @@ indentation, undo, keyboard save, wrapping control, and conflict-safe explicit
 save. It deliberately excludes collaborative rich editing, IDE registries,
 language servers, and sophisticated project-wide search.
 
+Dotfiles are hidden by default and can be revealed with an account-scoped
+browser preference. A bounded, account-scoped Recent index is also maintained
+in local storage so users can return to files without loading project activity
+streams or adding a network request.
+
 Read-only views remain very small. CodeMirror 6 is loaded only after the user
 chooses Edit, and only the selected language parser is loaded. Responsiveness
 on real source files matters more than minimizing an explicitly requested,
@@ -95,6 +100,11 @@ project host.
 Users can inspect notebooks, including mathematics, source, ordinary outputs,
 images, and plots, and perform basic cell editing and execution. The essential
 surface supports save, run, run-all, interrupt, and live-run recovery.
+
+Markdown cells remain rendered until the user explicitly edits or
+double-clicks them. Stored image outputs are fetched lazily from the notebook's
+project-scoped AKV store over the direct project-host connection; this does not
+load the full Jupyter frontend or proxy notebook data through the hub.
 
 A project-host scan provides a recent-notebook index without starting project
 compute. Its bounded result is cached per project for the browser session and
@@ -161,6 +171,18 @@ settings.
 The client exposes concise, copyable `cocalc` commands for the current project
 and links to the relevant terminal workflow. It is command discovery, not a
 second embedded automation system.
+
+### Appearance
+
+Essential follows the operating-system light or dark preference by default and
+keeps an explicit System/Light/Dark control in the shared upper-right bar. An
+explicit choice is stored only in the browser and causes no network request or
+polling. Page chrome, Markdown, CodeMirror, and a connected xterm update in
+place, without reloading documents or reconnecting terminal sessions.
+
+Theme colors are semantic CSS variables rather than separate component trees.
+Images and scientific output retain a neutral light canvas when their pixels
+assume one, while the surrounding notebook follows the selected appearance.
 
 ## Explicitly Out Of Scope
 

@@ -6,14 +6,24 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import type { UltraliteSession } from "./session";
+import { EssentialThemeProvider } from "./theme-context";
+import { ThemeControl } from "./ui";
 
 let mockXtermOnData: ((data: string) => void) | undefined;
 let mockXtermOnKey: ((event: { key: string }) => void) | undefined;
+let mockXtermOptions: { theme?: unknown } | undefined;
+let mockXtermConstructCount = 0;
 
 jest.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
+    options: { theme?: unknown };
     rows = 24;
+    constructor(options: { theme?: unknown }) {
+      mockXtermConstructCount += 1;
+      this.options = options;
+      mockXtermOptions = options;
+    }
     dispose() {}
     focus() {}
     loadAddon() {}
@@ -54,6 +64,7 @@ const {
 const {
   default: TerminalSurface,
   extractTerminalAutoResponses,
+  terminalThemeFor,
   writeTerminalInput,
 } = require("./terminal-surface");
 
@@ -118,6 +129,24 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockXtermOnData = undefined;
   mockXtermOnKey = undefined;
+  mockXtermOptions = undefined;
+  mockXtermConstructCount = 0;
+  window.localStorage.clear();
+});
+
+test("provides legible light and dark terminal palettes", () => {
+  expect(terminalThemeFor("light")).toEqual(
+    expect.objectContaining({
+      background: "white",
+      foreground: "#303030",
+    }),
+  );
+  expect(terminalThemeFor("dark")).toEqual(
+    expect.objectContaining({
+      background: "#303030",
+      foreground: "#eeeeee",
+    }),
+  );
 });
 
 test("extracts only complete xterm protocol responses", () => {
@@ -149,6 +178,7 @@ test("viewing Terminal never starts project compute or creates a PTY", async () 
   expect(
     screen.getByRole("application", { name: "Project terminal" }),
   ).toHaveAttribute("data-xterm-opened", "true");
+  expect(mockXtermOptions?.theme).toEqual(terminalThemeFor("light"));
   expect(
     screen.getByRole("button", { name: "Connect terminal" }),
   ).toBeEnabled();
@@ -158,6 +188,24 @@ test("viewing Terminal never starts project compute or creates a PTY", async () 
   expect(ensureProjectRunning).not.toHaveBeenCalled();
   expect(openProjectHost).not.toHaveBeenCalled();
   expect(mockTerminalClient).not.toHaveBeenCalled();
+});
+
+test("switches a mounted terminal theme without recreating it", async () => {
+  const { session } = makeSession();
+  render(
+    <EssentialThemeProvider>
+      <ThemeControl />
+      <TerminalSurface project={project} session={session} />
+    </EssentialThemeProvider>,
+  );
+
+  await screen.findByText(/This project is stopped/);
+  expect(mockXtermConstructCount).toBe(1);
+  fireEvent.change(screen.getByRole("combobox", { name: "Color theme" }), {
+    target: { value: "dark" },
+  });
+  expect(mockXtermOptions?.theme).toEqual(terminalThemeFor("dark"));
+  expect(mockXtermConstructCount).toBe(1);
 });
 
 test("a canceled start confirmation leaves the stopped project unchanged", async () => {
