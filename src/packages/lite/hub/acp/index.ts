@@ -6906,6 +6906,7 @@ async function ensureAgent(
         activeDescendantThreadIds,
         activeDescendants,
         backgroundTerminals,
+        maxConcurrentSubagents,
       }) => {
         if (!chat?.message_id) return;
         const outstanding = activeDescendants + backgroundTerminals;
@@ -6946,6 +6947,10 @@ async function ensureAgent(
             ...existingMetadata,
             active_descendant_thread_ids: activeDescendantThreadIds,
             active_descendant_agents: activeDescendants,
+            max_concurrent_subagents: maxConcurrentSubagents,
+            subagent_limit_exceeded:
+              maxConcurrentSubagents != null &&
+              activeDescendants > maxConcurrentSubagents,
             background_terminal_processes: backgroundTerminals,
             manager_finished: true,
             ai_usage_may_continue: outstanding > 0,
@@ -6967,6 +6972,10 @@ async function ensureAgent(
                 acp_manager_finished: true,
                 acp_active_descendant_thread_ids: activeDescendantThreadIds,
                 acp_active_descendant_agents: activeDescendants,
+                acp_max_concurrent_subagents: maxConcurrentSubagents,
+                acp_subagent_limit_exceeded:
+                  maxConcurrentSubagents != null &&
+                  activeDescendants > maxConcurrentSubagents,
                 acp_background_terminal_processes: backgroundTerminals,
                 acp_ai_usage_may_continue: outstanding > 0,
               });
@@ -9509,9 +9518,7 @@ async function enqueueChatAcpTurn({
   );
   await acknowledgeAutomationFromHumanTurn(request);
   const row = enqueueAcpJob(request, {
-    preferred_worker_id: preferredWorkerForRetainedSession(
-      request.request_kind === "command" ? undefined : request.session_id,
-    ),
+    preferred_worker_id: preferredWorkerForRetainedSession(request.session_id),
   });
   const projectedState = await persistQueuedUserMessageProjection({
     client: conatClient,

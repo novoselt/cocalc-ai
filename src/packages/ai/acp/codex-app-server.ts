@@ -95,8 +95,12 @@ function threadConfigForSubagents(
 ): Record<string, number> | undefined {
   if (maxConcurrentSubagents == null) return;
   // Codex counts the manager in max_concurrent_threads_per_session.
+  const totalThreads = maxConcurrentSubagents + 1;
   return {
-    "agents.max_concurrent_threads_per_session": maxConcurrentSubagents + 1,
+    // V1 and V2 have separate config paths. Supplying both is accepted by
+    // Codex and prevents a feature rollout from silently bypassing the cap.
+    "agents.max_concurrent_threads_per_session": totalThreads,
+    "features.multi_agent_v2.max_concurrent_threads_per_session": totalThreads,
   };
 }
 
@@ -360,6 +364,7 @@ type CodexAppServerOptions = {
     activeDescendantThreadIds: string[];
     activeDescendants: number;
     backgroundTerminals: number;
+    maxConcurrentSubagents?: number;
   }) => void | Promise<void>;
   onRuntimeOwnershipChanged?: (status: {
     state: "owned" | "released";
@@ -1990,8 +1995,20 @@ export class CodexAppServerAgent implements AcpAgent {
       managerState: runtime.managerState,
       activeDescendantThreadIds,
       backgroundTerminals: runtime.backgroundTerminalCount,
+      maxConcurrentSubagents: runtime.maxConcurrentSubagents,
     });
     if (signature === runtime.lastOutstandingSignature) return;
+    if (
+      runtime.maxConcurrentSubagents != null &&
+      runtime.activeDescendantCount > runtime.maxConcurrentSubagents
+    ) {
+      logger.warn("codex app-server: active subagent limit exceeded", {
+        threadId: runtime.threadId,
+        activeDescendants: runtime.activeDescendantCount,
+        maxConcurrentSubagents: runtime.maxConcurrentSubagents,
+        activeDescendantThreadIds,
+      });
+    }
     try {
       await this.opts.onOutstandingWorkChanged({
         sessionId: runtime.threadId,
@@ -2002,6 +2019,7 @@ export class CodexAppServerAgent implements AcpAgent {
         activeDescendantThreadIds,
         activeDescendants: runtime.activeDescendantCount,
         backgroundTerminals: runtime.backgroundTerminalCount,
+        maxConcurrentSubagents: runtime.maxConcurrentSubagents,
       });
       runtime.lastOutstandingSignature = signature;
     } catch (err) {

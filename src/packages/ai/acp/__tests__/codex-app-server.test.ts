@@ -3016,6 +3016,7 @@ describe("CodexAppServerAgent", () => {
       activeDescendantThreadIds: ["thr-child-background"],
       activeDescendants: 1,
       backgroundTerminals: 1,
+      maxConcurrentSubagents: undefined,
     });
     await expect(
       agent.evaluate({
@@ -5214,6 +5215,7 @@ describe("CodexAppServerAgent", () => {
       serviceTier: null,
       config: {
         "agents.max_concurrent_threads_per_session": 11,
+        "features.multi_agent_v2.max_concurrent_threads_per_session": 11,
       },
     });
     expect(
