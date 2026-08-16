@@ -37,6 +37,8 @@ import type {
   MembershipClass,
   MembershipAnalyticsBackfillQuery,
   MembershipAnalyticsBackfillResult,
+  MembershipAllocationSeries,
+  MembershipAllocationSeriesQuery,
   MembershipAnalyticsEventRow,
   MembershipAnalyticsEventsQuery,
   MembershipAnalyticsOverview,
@@ -2706,6 +2708,7 @@ export type BayOpsMethod =
   | "get-membership-tiers"
   | "get-membership-tier-usage-report"
   | "get-membership-analytics-overview"
+  | "get-membership-allocation-series"
   | "get-active-user-map"
   | "get-active-user-map-history-report"
   | "get-active-user-map-history-series"
@@ -4337,6 +4340,9 @@ export interface InterBayBayOpsApi {
   getMembershipAnalyticsOverview: (
     opts: MembershipAnalyticsOverviewQuery,
   ) => Promise<MembershipAnalyticsOverview>;
+  getMembershipAllocationSeries: (
+    opts: MembershipAllocationSeriesQuery,
+  ) => Promise<MembershipAllocationSeries>;
   getActiveUserMap: (
     opts: ActiveUserMapQuery,
   ) => Promise<ActiveUserMapOverview>;
@@ -9844,6 +9850,15 @@ export function createInterBayBayOpsClient({
       method: "get-membership-analytics-overview",
     }),
   });
+  const membershipAllocationSeriesClient = createServiceClient<
+    Pick<InterBayBayOpsApi, "getMembershipAllocationSeries">
+  >({
+    ...serviceClientOptions({ client, timeout }),
+    subject: bayOpsSubject({
+      dest_bay,
+      method: "get-membership-allocation-series",
+    }),
+  });
   const activeUserMapClient = createServiceClient<
     Pick<InterBayBayOpsApi, "getActiveUserMap">
   >({
@@ -9939,6 +9954,10 @@ export function createInterBayBayOpsClient({
       await membershipTierUsageReportClient.getMembershipTierUsageReport(opts),
     getMembershipAnalyticsOverview: async (opts) =>
       await membershipAnalyticsOverviewClient.getMembershipAnalyticsOverview(
+        opts,
+      ),
+    getMembershipAllocationSeries: async (opts) =>
+      await membershipAllocationSeriesClient.getMembershipAllocationSeries(
         opts,
       ),
     getActiveUserMap: async (opts) =>
@@ -10215,6 +10234,20 @@ export function createInterBayBayOpsHandlers({
       impl: {
         getMembershipAnalyticsOverview: async (opts) =>
           await impl.getMembershipAnalyticsOverview(opts),
+      },
+    }),
+    createServiceHandler<
+      Pick<InterBayBayOpsApi, "getMembershipAllocationSeries">
+    >({
+      ...options,
+      service: "inter-bay-bay-ops",
+      subject: bayOpsSubject({
+        dest_bay: bay_id,
+        method: "get-membership-allocation-series",
+      }),
+      impl: {
+        getMembershipAllocationSeries: async (opts) =>
+          await impl.getMembershipAllocationSeries(opts),
       },
     }),
     createServiceHandler<Pick<InterBayBayOpsApi, "getActiveUserMap">>({
