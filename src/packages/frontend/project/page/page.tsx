@@ -85,6 +85,7 @@ import {
   getProjectLifecycleView,
   hostUnavailableBannerDelay,
   hostLabel,
+  isHostRecoveryTransient,
 } from "@cocalc/frontend/projects/host-operational";
 import { projectThemeColor } from "@cocalc/frontend/projects/theme";
 import ProjectControlStatus from "@cocalc/frontend/project/settings/project-control-status";
@@ -302,6 +303,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
   const hostUnavailableReason =
     hostOperational.reason ?? "Assigned host is unavailable.";
   const assignedHostLabel = hostLabel(hostInfo, host_id);
+  const canReconnectHostAutomatically = isHostRecoveryTransient(hostInfo);
   const [hostRecoveryNow, setHostRecoveryNow] = useState(Date.now());
   const hostRecovery = useMemo(
     () =>
@@ -1014,6 +1016,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     return (
       <HostRecoveryBanner
         assignedHostLabel={assignedHostLabel}
+        canReconnectAutomatically={canReconnectHostAutomatically}
         hostUnavailableReason={hostUnavailableReason}
         onCheckStatus={async () => {
           if (!host_id) return;
