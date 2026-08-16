@@ -1714,6 +1714,35 @@ function findChatWriter({
   return undefined;
 }
 
+function compactLivePreviewBatch(
+  batch: AcpStreamMessage[],
+): AcpStreamMessage[] {
+  const compacted: AcpStreamMessage[] = [];
+  let latestProjection: AcpStreamMessage | undefined;
+  const flushProjection = () => {
+    if (latestProjection == null) return;
+    compacted.push(latestProjection);
+    latestProjection = undefined;
+  };
+  for (const message of batch) {
+    if (
+      message.type === "event" &&
+      message.event.type === "message" &&
+      message.event.delta !== true
+    ) {
+      // These are cumulative projection snapshots. Intermediate snapshots in
+      // one transport batch carry no additional state and make the payload
+      // grow as batch size times transcript length.
+      latestProjection = message;
+      continue;
+    }
+    flushProjection();
+    compacted.push(message);
+  }
+  flushProjection();
+  return compacted;
+}
+
 export class ChatStreamWriter {
   public syncdbError?: unknown;
   private syncdb?: SyncDB;
@@ -3863,18 +3892,22 @@ export class ChatStreamWriter {
   private async publishLivePreviewBatch(
     batch: AcpStreamMessage[],
   ): Promise<void> {
+    const compactedBatch = compactLivePreviewBatch(batch);
     let attempt = 0;
     while (true) {
       try {
         const stream = await this.getLivePreviewStream();
-        await stream.publish(batch.length === 1 ? batch[0] : batch);
+        await stream.publish(
+          compactedBatch.length === 1 ? compactedBatch[0] : compactedBatch,
+        );
         if (attempt > 0) {
           logger.info("live acp preview publish recovered", {
             chatKey: this.chatKey,
             path: this.metadata.path,
-            seqStart: batch[0]?.seq,
-            seqEnd: batch.at(-1)?.seq,
-            batchSize: batch.length,
+            seqStart: compactedBatch[0]?.seq,
+            seqEnd: compactedBatch.at(-1)?.seq,
+            batchSize: compactedBatch.length,
+            sourceBatchSize: batch.length,
             attempts: attempt + 1,
           });
         }
@@ -3898,9 +3931,10 @@ export class ChatStreamWriter {
         const details = {
           chatKey: this.chatKey,
           path: this.metadata.path,
-          seqStart: batch[0]?.seq,
-          seqEnd: batch.at(-1)?.seq,
-          batchSize: batch.length,
+          seqStart: compactedBatch[0]?.seq,
+          seqEnd: compactedBatch.at(-1)?.seq,
+          batchSize: compactedBatch.length,
+          sourceBatchSize: batch.length,
           attempt,
           retryMs,
           err,
