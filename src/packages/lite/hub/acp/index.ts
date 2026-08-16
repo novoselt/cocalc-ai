@@ -673,8 +673,10 @@ function projectHostWorkerContextFromEnv(): DetachedWorkerContext | null {
   };
 }
 
-function detachedWorkerCanClaimQueuedJob(job: AcpJobRow): boolean {
-  const context = currentDetachedWorkerContext;
+function detachedWorkerCanClaimQueuedJob(
+  job: AcpJobRow,
+  context = currentDetachedWorkerContext,
+): boolean {
   if (!context) return true;
   const preferredWorkerId = `${job.worker_id ?? ""}`.trim();
   if (preferredWorkerId && preferredWorkerId !== context.worker_id) {
@@ -6643,10 +6645,11 @@ export async function runDetachedAcpQueueWorker(
     let lastRecoveryAt = Date.now();
     while (true) {
       throwIfWorkerFatalError();
-      const workerStatus = syncDetachedWorkerState();
-      if (!workerContext || workerStatus?.state === "active") {
-        kickAllQueuedAcpJobs();
-      }
+      syncDetachedWorkerState();
+      // Draining workers must keep polling so they can finish continuations
+      // pinned to an app-server runtime that they still own. The claim guard
+      // prevents them from accepting any unpinned or foreign work.
+      kickAllQueuedAcpJobs();
       if (Date.now() - lastRecoveryAt >= ACP_ORPHAN_RECOVERY_POLL_MS) {
         lastRecoveryAt = Date.now();
         await recoverCurrentWorkerStuckAcpTurns(client, {
@@ -10394,6 +10397,7 @@ export function getAcpAgentRuntimeStatus(): {
 }
 
 export const acpTestInternals = {
+  detachedWorkerCanClaimQueuedJob,
   hasOtherWorkerRunningAcpTurn,
   noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,
