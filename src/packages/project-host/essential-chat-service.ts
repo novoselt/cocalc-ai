@@ -317,6 +317,7 @@ export async function initEssentialChatService(client: Client) {
         if (oldest) await closeSession(oldest);
       }
 
+      const limit = normalizeEssentialChatLimit(opts?.limit);
       const id = randomUUID();
       const stream_name = `essential-chat-${id}`;
       const backend = createHeadlessChatClient({
@@ -324,6 +325,7 @@ export async function initEssentialChatService(client: Client) {
         path,
         projectHostClient: client,
         selected_thread_id,
+        activityLoadPolicy: "live-preview-only",
       });
       await backend.open();
       let stream: DStream<EssentialChatStreamEvent> | undefined;
@@ -347,7 +349,6 @@ export async function initEssentialChatService(client: Client) {
         await backend.close().catch(() => undefined);
         throw err;
       }
-      const limit = normalizeEssentialChatLimit(opts?.limit);
       const snapshot = boundedEssentialChatSnapshot(
         backend.getSnapshot(),
         limit,

@@ -64,6 +64,8 @@ describe("projectChatRows", () => {
           acp_log_store: "acp-log/chat.chat",
           acp_log_key: "thread-1:message-2",
           acp_live_log_stream: "acp-live-log/chat.chat/thread-1/message-2",
+          acp_live_preview_stream:
+            "acp-preview-log/chat.chat/thread-1/message-2",
           generating: true,
           history: [
             {
@@ -94,6 +96,7 @@ describe("projectChatRows", () => {
         acp_log_store: "acp-log/chat.chat",
         acp_log_key: "thread-1:message-2",
         acp_live_log_stream: "acp-live-log/chat.chat/thread-1/message-2",
+        acp_live_preview_stream: "acp-preview-log/chat.chat/thread-1/message-2",
       }),
     );
   });

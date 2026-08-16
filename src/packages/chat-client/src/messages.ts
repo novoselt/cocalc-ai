@@ -75,6 +75,7 @@ function projectMessage(row: ChatMessage): ProjectedChatMessage | undefined {
     acp_log_store: id(row.acp_log_store),
     acp_log_key: id(row.acp_log_key),
     acp_live_log_stream: id(row.acp_live_log_stream),
+    acp_live_preview_stream: id(row.acp_live_preview_stream),
   };
 }
 

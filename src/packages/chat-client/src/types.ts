@@ -30,6 +30,7 @@ export interface ProjectedChatMessage {
   acp_log_store?: string;
   acp_log_key?: string;
   acp_live_log_stream?: string;
+  acp_live_preview_stream?: string;
   activity?: {
     state: "loading" | "ready" | "error";
     events: AcpStreamMessage[];
