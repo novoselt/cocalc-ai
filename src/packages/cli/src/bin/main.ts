@@ -80,6 +80,7 @@ import {
 } from "./core/context";
 import { isProjectScopedRemoteForProject } from "./core/remote-scope";
 import { effectiveDaemonGlobals } from "./core/daemon-globals";
+import { resolveConatAddress } from "./core/conat-address";
 import {
   listHosts as listHostsCore,
   normalizeUserSearchName as normalizeUserSearchNameCore,
@@ -482,36 +483,19 @@ function defaultAccountApiBaseUrl(): string {
   return siteUrl ? normalizeUrl(siteUrl) : defaultApiBaseUrl();
 }
 
-function defaultConatAddress(apiBaseUrl: string): string {
-  const fromEnv = `${process.env.CONAT_SERVER ?? ""}`.trim();
-  if (fromEnv) {
-    // Agent-mode CLI commands first need an account/hub context. Project
-    // runtimes also set CONAT_SERVER to the host-local project Conat endpoint,
-    // but project-host connections are opened later via resolveProjectConatClient
-    // only when a command actually needs project-scoped services.
-    if (shouldPreferHubConatAddressForAgentMode()) {
-      return apiBaseUrl;
-    }
-    const normalized = normalizeUrl(fromEnv);
-    // A project terminal or hub-dev shell can leave CONAT_SERVER pointed at a
-    // local seed bay. If the user explicitly targets a public/profile API, the
-    // Conat connection must follow that API or account cookies from attached
-    // bays get sent to the wrong hub and appear expired.
-    if (isLoopbackApiBaseUrl(normalized) && !isLoopbackApiBaseUrl(apiBaseUrl)) {
-      return apiBaseUrl;
-    }
-    // In local hub dev, stale Lite CONAT_SERVER values are a common source of
-    // misleading auth/session failures. Prefer the requested API target.
-    if (
-      process.env.COCALC_DEV_ENV_MODE === "hub" &&
-      isLoopbackApiBaseUrl(apiBaseUrl) &&
-      normalized !== normalizeUrl(apiBaseUrl)
-    ) {
-      return apiBaseUrl;
-    }
-    return normalized;
-  }
-  return apiBaseUrl;
+function defaultConatAddress(
+  apiBaseUrl: string,
+  preferApiTransport = false,
+): string {
+  return resolveConatAddress({
+    apiBaseUrl,
+    conatServer: process.env.CONAT_SERVER,
+    devEnvMode: process.env.COCALC_DEV_ENV_MODE,
+    preferApiTransport,
+    // Agent-mode CLI commands first need an account/hub context. Project-host
+    // connections are opened later only for project-scoped services.
+    preferHubForAgentMode: shouldPreferHubConatAddressForAgentMode(),
+  });
 }
 
 function shouldPreferHubConatAddressForAgentMode(): boolean {
@@ -1239,13 +1223,19 @@ async function connectRemote({
   globals,
   apiBaseUrl,
   timeoutMs,
+  preferApiTransport,
 }: {
   globals: GlobalOptions;
   apiBaseUrl: string;
   timeoutMs: number;
+  preferApiTransport?: boolean;
 }): Promise<RemoteConnection> {
   const signInTimeoutMs = Math.min(timeoutMs, MAX_TRANSPORT_TIMEOUT_MS);
-  const conatAddress = defaultConatAddress(apiBaseUrl);
+  const conatAddress = defaultConatAddress(
+    apiBaseUrl,
+    preferApiTransport ??
+      (globals.disableEnvAuthDefaults === true || !!globals.api?.trim()),
+  );
   const extraHeaders: Record<string, string> = {};
   const cookie = buildCookieHeader(apiBaseUrl, globals);
   if (cookie) {
@@ -1507,6 +1497,7 @@ async function contextForGlobals(
 ): Promise<CommandContext> {
   const config = loadAuthConfig();
   const applied = applyAuthProfile(globals, config);
+  const preferApiTransport = applied.fromProfile || !!globals.api?.trim();
   let effectiveGlobals = applied.globals as GlobalOptions;
 
   const timeoutMs = durationToMs(effectiveGlobals.timeout, 600_000);
@@ -1529,6 +1520,7 @@ async function contextForGlobals(
     globals: effectiveGlobals,
     apiBaseUrl,
     timeoutMs,
+    preferApiTransport,
   });
   const bootstrapped = await maybeReconnectAsRequestedAccount({
     globals: effectiveGlobals,
