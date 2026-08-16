@@ -201,6 +201,14 @@ export function LoadingState({ label }: { label: string }) {
   );
 }
 
+export function ShellLoading() {
+  return (
+    <main className="ul-shell-loading" id="main-content">
+      <LoadingState label="Opening CoCalc" />
+    </main>
+  );
+}
+
 export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="ul-state ul-empty">{children}</div>;
 }

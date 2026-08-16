@@ -16,8 +16,8 @@ import { UltraliteSession } from "./session";
 import {
   ChunkErrorBoundary,
   InlineAlert,
-  LoadingState,
   ProjectLayout,
+  ShellLoading,
   SurfaceHeader,
 } from "./ui";
 
@@ -147,15 +147,7 @@ function DeferredSurface({
 }) {
   return (
     <ChunkErrorBoundary label={label}>
-      <Suspense
-        fallback={
-          <main className="ul-page" id="main-content">
-            <LoadingState label="Opening CoCalc" />
-          </main>
-        }
-      >
-        {children}
-      </Suspense>
+      <Suspense fallback={<ShellLoading />}>{children}</Suspense>
     </ChunkErrorBoundary>
   );
 }
@@ -237,14 +229,6 @@ function ProjectSurface({
     <ProjectLayout project={project} route={route}>
       {surface}
     </ProjectLayout>
-  );
-}
-
-function RouteLoading() {
-  return (
-    <main className="ul-page ul-shell-loading" id="main-content">
-      <LoadingState label="Opening CoCalc" />
-    </main>
   );
 }
 
@@ -348,7 +332,7 @@ export default function Workspace({
     );
   }
   if (!session || !project) {
-    return <RouteLoading />;
+    return <ShellLoading />;
   }
   return <ProjectSurface project={project} route={route} session={session} />;
 }

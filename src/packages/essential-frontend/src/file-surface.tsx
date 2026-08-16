@@ -25,6 +25,7 @@ import {
   EmptyState,
   InlineAlert,
   LoadingState,
+  ShellLoading,
   SurfaceHeader,
 } from "./ui";
 import { UltraliteIcon } from "./icons";
@@ -648,6 +649,8 @@ export default function FileSurface({
     }
   };
 
+  if (loading) return <ShellLoading />;
+
   return (
     <main className="ul-page" id="main-content">
       <SurfaceHeader
@@ -695,7 +698,6 @@ export default function FileSurface({
         projectId={project.project_id}
         path={route.kind === "file" ? parentPath(route.path) : route.path}
       />
-      {loading ? <LoadingState label="Opening CoCalc" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {externalChanged ? (
         <ExternalChangeActions

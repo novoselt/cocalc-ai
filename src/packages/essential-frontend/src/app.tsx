@@ -14,7 +14,7 @@ import {
 import { EssentialThemeProvider } from "./theme-context";
 import { FrontendUpdateNotice } from "./frontend-update";
 import { siteUrl } from "./urls";
-import { LoadingState, TopBar } from "./ui";
+import { ShellLoading, TopBar } from "./ui";
 import {
   markUltraliteBackend,
   recordUltraliteOutcome,
@@ -56,14 +56,6 @@ const NotificationsSurface = lazy(
       );
     }),
 );
-
-function ShellLoading() {
-  return (
-    <main className="ul-page ul-shell-loading" id="main-content">
-      <LoadingState label="Opening CoCalc" />
-    </main>
-  );
-}
 
 export function UltraliteApp() {
   const [bootstrap, setBootstrap] = useState<AuthBootstrap>();

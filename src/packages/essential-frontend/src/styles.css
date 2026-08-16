@@ -180,8 +180,11 @@ textarea {
 }
 
 .ul-shell-loading {
-  min-height: calc(100vh - 48px);
-  padding-top: 24px;
+  background: var(--ul-bg);
+  inset: 48px 0 0;
+  padding: 24px clamp(12px, 3vw, 32px);
+  position: fixed;
+  z-index: 18;
 }
 
 .ul-page h1,
