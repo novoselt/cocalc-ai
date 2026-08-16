@@ -530,6 +530,73 @@ describe("CodexAppServerAgent", () => {
     ]);
   });
 
+  it("publishes retained runtime ownership until the app-server is disposed", async () => {
+    const ownershipChanged = jest.fn(async () => {});
+    const proc = new FakeCodexAppServerProc((fake, message) => {
+      switch (message.method) {
+        case "initialize":
+          fake.sendResponse(message.id, { ok: true });
+          break;
+        case "thread/start":
+          fake.sendResponse(message.id, { thread: { id: "thr-owned" } });
+          break;
+        case "turn/start":
+          fake.sendResponse(message.id, { turn: { id: "turn-owned" } });
+          setImmediate(() => {
+            fake.sendNotification("turn/completed", {
+              turn: { id: "turn-owned", status: "completed" },
+            });
+          });
+          break;
+        case "thread/list":
+        case "thread/backgroundTerminals/list":
+          fake.sendResponse(message.id, { data: [], nextCursor: null });
+          break;
+        default:
+          if (typeof message.id === "number") fake.sendResponse(message.id, {});
+      }
+    });
+    setCodexProjectSpawner({
+      spawnCodexExec: async () => {
+        throw new Error("unexpected codex exec spawn");
+      },
+      spawnCodexAppServer: async () => ({
+        proc: proc as any,
+        cmd: "fake-codex",
+        args: ["app-server"],
+        cwd: "/tmp/project",
+      }),
+    });
+
+    const agent = new CodexAppServerAgent({
+      onRuntimeOwnershipChanged: ownershipChanged,
+    });
+    await agent.evaluate({
+      project_id: "00000000-0000-4000-8000-000000000000",
+      account_id: "00000000-0000-4000-8000-000000000001",
+      prompt: "say hello",
+      stream: async () => {},
+      chat: { path: "a.chat" } as any,
+      config: { workingDirectory: "/tmp/project" },
+    });
+
+    expect(ownershipChanged).toHaveBeenCalledWith({
+      state: "owned",
+      sessionId: "thr-owned",
+      projectId: "00000000-0000-4000-8000-000000000000",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      path: "a.chat",
+    });
+    await agent.dispose();
+    expect(ownershipChanged).toHaveBeenLastCalledWith({
+      state: "released",
+      sessionId: "thr-owned",
+      projectId: "00000000-0000-4000-8000-000000000000",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      path: "a.chat",
+    });
+  });
+
   it("reconciles started subagent activity when the manager turn completes", async () => {
     const proc = new FakeCodexAppServerProc((fake, message) => {
       switch (message.method) {
