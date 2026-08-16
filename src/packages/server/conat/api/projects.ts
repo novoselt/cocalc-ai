@@ -4941,7 +4941,7 @@ export async function start({
   // not used; passed through for typing compatibility with project-host
   run_quota?: any;
   // not used; passed through for typing compatibility with project-host
-  restore?: "none" | "auto" | "required";
+  restore?: "none" | "auto" | "recover" | "required";
   restore_backup_id?: string;
   autostart?: boolean;
   managed_egress_override?: ManagedProjectEgressOverride;

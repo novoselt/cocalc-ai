@@ -1109,12 +1109,13 @@ export async function startProjectOnHost(
     // A provisioned project already has authoritative local storage. Asking
     // the runner to auto-restore still performs a file-server round trip even
     // when there is nothing to restore, adding latency to every warm start.
-    // Preserve automatic restore for unprovisioned/unknown storage and every
-    // explicit restore request.
-    const restore =
-      explicitRestoreBackupId ||
-      (rows[0]?.backup_repo_id && rows[0]?.provisioned !== true)
-        ? "auto"
+    // Recover unprovisioned/unknown storage even if an incidental local cache
+    // volume was created by file browsing before start. Unlike "required",
+    // "recover" still permits a genuinely new project with no backups.
+    const restore = explicitRestoreBackupId
+      ? "auto"
+      : rows[0]?.backup_repo_id && rows[0]?.provisioned !== true
+        ? "recover"
         : "none";
     const startRequest: Parameters<HostControlApi["startProject"]>[0] = {
       project_id,

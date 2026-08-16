@@ -1412,7 +1412,7 @@ describe("startProjectOnHost placement", () => {
     );
   });
 
-  it("checks restore storage headroom before auto-restoring an unprovisioned project", async () => {
+  it("checks restore storage headroom before recovering an unprovisioned project", async () => {
     const createProjectMock = jest.fn(async () => ({
       project_id: "proj-1",
       state: "opened",
@@ -1516,7 +1516,7 @@ describe("startProjectOnHost placement", () => {
     });
     expect(startProjectMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        restore: "auto",
+        restore: "recover",
       }),
     );
   });
