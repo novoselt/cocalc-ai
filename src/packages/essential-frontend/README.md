@@ -214,6 +214,10 @@ and app-server traffic flows directly between the browser and the project
 host. The hub authorizes and routes access but does not proxy project data.
 Mobile and agent clients should share the same bounded project-host data-plane
 APIs through headless protocol packages; they must not import this React UI.
+Interactive chat uses the product-neutral `project-chat-session` service from
+`@cocalc/chat-client`, which owns bounded snapshots, disposable server
+sessions, and reconnection semantics shared with future mobile and agent
+clients.
 The conservative text and notebook merge functions likewise live in
 `@cocalc/util` and operate only on strings and serializable notebook values, so
 the React Native client can use exactly the same conflict semantics without a

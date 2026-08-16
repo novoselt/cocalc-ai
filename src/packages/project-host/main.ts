@@ -147,7 +147,7 @@ import { runPrivilegedRmHelper } from "./privileged-rm-helper";
 import { initProjectTouchService } from "./touch-service";
 import { initProjectStorageInfoService } from "./storage-info-service";
 import { initProjectDocumentActivityService } from "./document-activity-service";
-import { initEssentialChatService } from "./essential-chat-service";
+import { initProjectChatSessionService } from "./project-chat-session-service";
 import { initProjectEditJournalService } from "./edit-journal-service";
 import { initProjectArchiveInfoService } from "./archive-info-service";
 import {
@@ -590,7 +590,8 @@ export async function main(
   if (externalPersist) {
     await waitForProjectHostConatPersistReady({ client: conatClient });
   }
-  const essentialChatService = await initEssentialChatService(conatClient);
+  const projectChatSessionService =
+    await initProjectChatSessionService(conatClient);
   configureAcpDetachedWorkerRunning(() =>
     // ACP uses `force: true` to mean "wake or ensure the detached worker now"
     // when new work arrives. That is not evidence of a backend restart, and
@@ -1658,7 +1659,7 @@ export async function main(
     projectTouchService?.close?.();
     projectStorageInfoService?.close?.();
     projectDocumentActivityService?.close?.();
-    essentialChatService?.close?.();
+    projectChatSessionService?.close?.();
     projectArchiveInfoService?.close?.();
     masterRegistration?.stop();
     stopReconciler?.();

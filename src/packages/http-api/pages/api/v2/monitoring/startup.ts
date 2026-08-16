@@ -62,6 +62,10 @@ const CONSTRAINED_NUMBER_FIELDS = new Set([
   "script_count",
   "style_count",
   "backend_duration_ms",
+  "route_chunk_duration_ms",
+  "project_host_connect_duration_ms",
+  "chat_service_open_duration_ms",
+  "chat_stream_open_duration_ms",
 ]);
 const CONSTRAINED_BOOLEAN_FIELDS = new Set(["save_data", "document_hidden"]);
 const CONSTRAINED_TEXT_FIELDS = new Set([

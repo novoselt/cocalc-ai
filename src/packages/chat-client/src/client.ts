@@ -54,6 +54,7 @@ export interface CreateHeadlessChatClientOptions {
   ackTimeoutMs?: number;
   ackMaxAttempts?: number;
   ackBackoffMs?: number;
+  activityLoadPolicy?: "recent" | "live-preview-only";
 }
 
 export class CoCalcHeadlessChatClient implements HeadlessChatClient {
@@ -274,9 +275,17 @@ export class CoCalcHeadlessChatClient implements HeadlessChatClient {
   }
 
   private reconcileActivity(messages: ProjectedChatMessage[]): void {
-    const candidates = messages
-      .filter(({ acp_log_store, acp_log_key }) => acp_log_store && acp_log_key)
-      .slice(-MAX_RECENT_ACTIVITY_LOGS);
+    const candidates =
+      this.options.activityLoadPolicy === "live-preview-only"
+        ? messages.filter(
+            ({ generating, acp_live_preview_stream }) =>
+              generating && !!acp_live_preview_stream,
+          )
+        : messages
+            .filter(
+              ({ acp_log_store, acp_log_key }) => acp_log_store && acp_log_key,
+            )
+            .slice(-MAX_RECENT_ACTIVITY_LOGS);
     const activeMessageIds = new Set(
       candidates.map(({ message_id }) => message_id),
     );
@@ -287,8 +296,18 @@ export class CoCalcHeadlessChatClient implements HeadlessChatClient {
     }
 
     for (const message of candidates) {
-      if (!message.acp_log_store || !message.acp_log_key) continue;
-      const signature = `${message.acp_log_store}:${message.acp_log_key}`;
+      const previewOnly =
+        this.options.activityLoadPolicy === "live-preview-only";
+      if (
+        previewOnly
+          ? !message.acp_live_preview_stream
+          : !message.acp_log_store || !message.acp_log_key
+      ) {
+        continue;
+      }
+      const signature = previewOnly
+        ? `preview:${message.acp_live_preview_stream}`
+        : `${message.acp_log_store}:${message.acp_log_key}`;
       let record = this.activity.get(message.message_id);
       if (record?.signature !== signature) {
         if (record) this.closeActivityStream(record);
@@ -296,13 +315,13 @@ export class CoCalcHeadlessChatClient implements HeadlessChatClient {
           signature,
           state: "loading",
           events: [],
-          persistedLoaded: false,
-          finalLoaded: false,
+          persistedLoaded: previewOnly,
+          finalLoaded: previewOnly,
         };
         this.activity.set(message.message_id, record);
       }
 
-      if (!record.persistedLoaded) {
+      if (!previewOnly && !record.persistedLoaded) {
         void this.loadPersistedActivity(message, record, false);
       }
       if (
@@ -390,7 +409,10 @@ export class CoCalcHeadlessChatClient implements HeadlessChatClient {
     message: ProjectedChatMessage,
     record: ActivityRecord,
   ): Promise<void> {
-    const streamName = message.acp_live_log_stream;
+    const streamName =
+      this.options.activityLoadPolicy === "live-preview-only"
+        ? message.acp_live_preview_stream
+        : message.acp_live_log_stream;
     if (!streamName || record.streamName === streamName) return;
     this.closeActivityStream(record);
     record.streamName = streamName;

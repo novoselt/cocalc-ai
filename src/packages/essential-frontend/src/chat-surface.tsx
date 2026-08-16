@@ -27,6 +27,7 @@ import { Markdown } from "./markdown";
 import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
 import {
   markUltraliteBackend,
+  markUltralitePhase,
   recordUltraliteFailure,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
@@ -259,10 +260,12 @@ export function Chat({
     setShowNewest(false);
     markUltraliteBackend("chat", "start");
     void (async () => {
+      markUltralitePhase("chat", "project-host-connect", "start");
       const lease = await session.openProjectHost(
         project.project_id,
         project.host_id!,
       );
+      markUltralitePhase("chat", "project-host-connect", "end");
       if (cancelled) return;
       opened = createRemoteHeadlessChatClient({
         account_id: session.accountId,
@@ -271,6 +274,16 @@ export function Chat({
         projectHostClient: lease.client,
         selected_thread_id: route.threadId,
         initial_message_limit: INITIAL_MESSAGE_LIMIT,
+        onOpenPhase: (phase) => {
+          const starting = phase.endsWith("_start");
+          const suffix = starting ? "_start" : "_done";
+          const name = phase.slice(0, -suffix.length).split("_").join("-");
+          markUltralitePhase(
+            "chat",
+            `chat-${name}`,
+            starting ? "start" : "end",
+          );
+        },
       });
       clientRef.current = opened;
       setClient(opened);

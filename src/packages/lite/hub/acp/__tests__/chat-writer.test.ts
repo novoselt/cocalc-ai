@@ -1748,6 +1748,11 @@ describe("ChatStreamWriter", () => {
     expect(writer.livePreviewBatcher.snapshot().pendingItems).toBe(0);
     await waitForCondition(() => previewPayloads.length > 0);
     const previewEvents = flattenLivePayloads(previewPayloads);
+    expect(
+      previewEvents.filter(
+        (event) => event.type === "event" && event.event.type === "message",
+      ),
+    ).toHaveLength(1);
     expect(getLiveResponseMarkdown(previewEvents)).toBe(
       "capability ledger/schema, provider decisions, dependency DAG, and parallelizable priorities.",
     );

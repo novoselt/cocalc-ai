@@ -163,6 +163,7 @@ import {
 import {
   cancelQueuedAcpJob,
   claimNextQueuedAcpJobForThread,
+  clearQueuedAcpJobWorkerAffinity,
   countQueuedAcpJobsForThread,
   countRunningAcpJobsForWorker,
   decodeAcpJobRequest,
@@ -182,6 +183,12 @@ import {
   setAcpJobState,
   type AcpJobRow,
 } from "../sqlite/acp-jobs";
+import {
+  getAcpRuntimeOwner,
+  releaseAcpRuntimeOwner,
+  releaseAcpRuntimeOwnersForWorker,
+  upsertAcpRuntimeOwner,
+} from "../sqlite/acp-runtime-owners";
 import {
   getAcpSessionByOpId,
   heartbeatAcpSession,
@@ -666,8 +673,18 @@ function projectHostWorkerContextFromEnv(): DetachedWorkerContext | null {
   };
 }
 
-function detachedWorkerCanClaimQueuedJobs(): boolean {
-  return currentDetachedWorkerContext?.state !== "draining";
+function detachedWorkerCanClaimQueuedJob(
+  job: AcpJobRow,
+  context = currentDetachedWorkerContext,
+): boolean {
+  if (!context) return true;
+  const preferredWorkerId = `${job.worker_id ?? ""}`.trim();
+  if (preferredWorkerId && preferredWorkerId !== context.worker_id) {
+    return false;
+  }
+  return (
+    context.state !== "draining" || preferredWorkerId === context.worker_id
+  );
 }
 
 function acpThreadHasRunningJob({
@@ -765,6 +782,54 @@ function workerRowStillLikelyOwnsTurns({
     return true;
   }
   return false;
+}
+
+function preferredWorkerForRetainedSession(
+  session_id?: string | null,
+): string | undefined {
+  const sessionId = `${session_id ?? ""}`.trim();
+  if (!sessionId) return;
+  const owner = getAcpRuntimeOwner(sessionId);
+  if (!owner) return;
+  const worker = getAcpWorker(owner.worker_id);
+  const currentHostId = currentDetachedWorkerContext?.host_id;
+  const live =
+    worker != null &&
+    worker.state !== "stopped" &&
+    (!currentHostId || worker.host_id === currentHostId) &&
+    (Date.now() - worker.last_heartbeat_at < ACP_WORKER_STALE_MS ||
+      workerRowStillLikelyOwnsTurns({
+        worker_id: worker.worker_id,
+        pid: worker.pid,
+        heartbeat_at: worker.last_heartbeat_at,
+      }));
+  if (live) return owner.worker_id;
+  releaseAcpRuntimeOwner({
+    session_id: sessionId,
+    worker_id: owner.worker_id,
+  });
+  return;
+}
+
+function releaseStaleQueuedJobAffinity(job: AcpJobRow): AcpJobRow {
+  const preferredWorkerId = `${job.worker_id ?? ""}`.trim();
+  if (!preferredWorkerId) return job;
+  const worker = getAcpWorker(preferredWorkerId);
+  const live =
+    worker != null &&
+    worker.state !== "stopped" &&
+    (Date.now() - worker.last_heartbeat_at < ACP_WORKER_STALE_MS ||
+      workerRowStillLikelyOwnsTurns({
+        worker_id: worker.worker_id,
+        pid: worker.pid,
+        heartbeat_at: worker.last_heartbeat_at,
+      }));
+  if (live) return job;
+  clearQueuedAcpJobWorkerAffinity({
+    op_id: job.op_id,
+    worker_id: preferredWorkerId,
+  });
+  return { ...job, worker_id: null, worker_bundle_version: null };
 }
 
 function turnStillLikelyOwnedByLiveWorker(
@@ -1647,6 +1712,35 @@ function findChatWriter({
     return chatWritersByChatKey.get(chatKey(chat));
   }
   return undefined;
+}
+
+function compactLivePreviewBatch(
+  batch: AcpStreamMessage[],
+): AcpStreamMessage[] {
+  const compacted: AcpStreamMessage[] = [];
+  let latestProjection: AcpStreamMessage | undefined;
+  const flushProjection = () => {
+    if (latestProjection == null) return;
+    compacted.push(latestProjection);
+    latestProjection = undefined;
+  };
+  for (const message of batch) {
+    if (
+      message.type === "event" &&
+      message.event.type === "message" &&
+      message.event.delta !== true
+    ) {
+      // These are cumulative projection snapshots. Intermediate snapshots in
+      // one transport batch carry no additional state and make the payload
+      // grow as batch size times transcript length.
+      latestProjection = message;
+      continue;
+    }
+    flushProjection();
+    compacted.push(message);
+  }
+  flushProjection();
+  return compacted;
 }
 
 export class ChatStreamWriter {
@@ -3798,18 +3892,22 @@ export class ChatStreamWriter {
   private async publishLivePreviewBatch(
     batch: AcpStreamMessage[],
   ): Promise<void> {
+    const compactedBatch = compactLivePreviewBatch(batch);
     let attempt = 0;
     while (true) {
       try {
         const stream = await this.getLivePreviewStream();
-        await stream.publish(batch.length === 1 ? batch[0] : batch);
+        await stream.publish(
+          compactedBatch.length === 1 ? compactedBatch[0] : compactedBatch,
+        );
         if (attempt > 0) {
           logger.info("live acp preview publish recovered", {
             chatKey: this.chatKey,
             path: this.metadata.path,
-            seqStart: batch[0]?.seq,
-            seqEnd: batch.at(-1)?.seq,
-            batchSize: batch.length,
+            seqStart: compactedBatch[0]?.seq,
+            seqEnd: compactedBatch.at(-1)?.seq,
+            batchSize: compactedBatch.length,
+            sourceBatchSize: batch.length,
             attempts: attempt + 1,
           });
         }
@@ -3833,9 +3931,10 @@ export class ChatStreamWriter {
         const details = {
           chatKey: this.chatKey,
           path: this.metadata.path,
-          seqStart: batch[0]?.seq,
-          seqEnd: batch.at(-1)?.seq,
-          batchSize: batch.length,
+          seqStart: compactedBatch[0]?.seq,
+          seqEnd: compactedBatch.at(-1)?.seq,
+          batchSize: compactedBatch.length,
+          sourceBatchSize: batch.length,
           attempt,
           retryMs,
           err,
@@ -6580,10 +6679,11 @@ export async function runDetachedAcpQueueWorker(
     let lastRecoveryAt = Date.now();
     while (true) {
       throwIfWorkerFatalError();
-      const workerStatus = syncDetachedWorkerState();
-      if (!workerContext || workerStatus?.state === "active") {
-        kickAllQueuedAcpJobs();
-      }
+      syncDetachedWorkerState();
+      // Draining workers must keep polling so they can finish continuations
+      // pinned to an app-server runtime that they still own. The claim guard
+      // prevents them from accepting any unpinned or foreign work.
+      kickAllQueuedAcpJobs();
       if (Date.now() - lastRecoveryAt >= ACP_ORPHAN_RECOVERY_POLL_MS) {
         lastRecoveryAt = Date.now();
         await recoverCurrentWorkerStuckAcpTurns(client, {
@@ -6656,6 +6756,7 @@ export async function runDetachedAcpQueueWorker(
     workerControlService?.close();
     if (workerContext) {
       try {
+        releaseAcpRuntimeOwnersForWorker(workerContext.worker_id);
         stopAcpWorker({
           worker_id: workerContext.worker_id,
           reason: workerStopReason ?? "shutdown",
@@ -6842,6 +6943,7 @@ async function ensureAgent(
         activeDescendantThreadIds,
         activeDescendants,
         backgroundTerminals,
+        maxConcurrentSubagents,
       }) => {
         if (!chat?.message_id) return;
         const outstanding = activeDescendants + backgroundTerminals;
@@ -6882,6 +6984,10 @@ async function ensureAgent(
             ...existingMetadata,
             active_descendant_thread_ids: activeDescendantThreadIds,
             active_descendant_agents: activeDescendants,
+            max_concurrent_subagents: maxConcurrentSubagents,
+            subagent_limit_exceeded:
+              maxConcurrentSubagents != null &&
+              activeDescendants > maxConcurrentSubagents,
             background_terminal_processes: backgroundTerminals,
             manager_finished: true,
             ai_usage_may_continue: outstanding > 0,
@@ -6903,12 +7009,40 @@ async function ensureAgent(
                 acp_manager_finished: true,
                 acp_active_descendant_thread_ids: activeDescendantThreadIds,
                 acp_active_descendant_agents: activeDescendants,
+                acp_max_concurrent_subagents: maxConcurrentSubagents,
+                acp_subagent_limit_exceeded:
+                  maxConcurrentSubagents != null &&
+                  activeDescendants > maxConcurrentSubagents,
                 acp_background_terminal_processes: backgroundTerminals,
                 acp_ai_usage_may_continue: outstanding > 0,
               });
               syncdb.commit();
               await syncdb.save();
             },
+          });
+        }
+      },
+      onRuntimeOwnershipChanged: async ({
+        state,
+        sessionId,
+        projectId,
+        accountId,
+        path,
+      }) => {
+        const worker = currentDetachedWorkerContext;
+        if (!worker) return;
+        if (state === "owned") {
+          upsertAcpRuntimeOwner({
+            session_id: sessionId,
+            worker_id: worker.worker_id,
+            project_id: projectId,
+            account_id: accountId,
+            path,
+          });
+        } else {
+          releaseAcpRuntimeOwner({
+            session_id: sessionId,
+            worker_id: worker.worker_id,
           });
         }
       },
@@ -7575,7 +7709,11 @@ async function enqueueAutomationRun(
     admitAcpJobCreation(request, admissionLimits),
     "automation",
   );
-  const job = enqueueAcpJob(request);
+  const job = enqueueAcpJob(request, {
+    preferred_worker_id: preferredWorkerForRetainedSession(
+      request.request_kind === "command" ? undefined : request.session_id,
+    ),
+  });
   await persistQueuedUserMessageProjection({
     client: conatClient,
     project_id: row.project_id,
@@ -8537,7 +8675,9 @@ async function enqueueRecoveryContinuationForJob({
     ),
     "recovery",
   );
-  const queued = enqueueAcpJob(resumedRequest);
+  const queued = enqueueAcpJob(resumedRequest, {
+    preferred_worker_id: preferredWorkerForRetainedSession(session_id),
+  });
   await persistQueuedUserMessageProjection({
     client,
     project_id,
@@ -8889,17 +9029,18 @@ async function pumpQueuedAcpJobsForThread({
   thread_id: string;
 }): Promise<void> {
   while (true) {
-    if (!detachedWorkerCanClaimQueuedJobs()) {
-      return;
-    }
-    const nextQueued = listQueuedAcpJobsForThread({
+    const listed = listQueuedAcpJobsForThread({
       project_id,
       path,
       thread_id,
     })[0];
+    const nextQueued = listed
+      ? releaseStaleQueuedJobAffinity(listed)
+      : undefined;
     if (!nextQueued) {
       return;
     }
+    if (!detachedWorkerCanClaimQueuedJob(nextQueued)) return;
     // Reaching the queued row proves the queue loop is responsive even when a
     // live turn or an admission limit intentionally prevents claiming it.
     noteDetachedWorkerQueuePoll();
@@ -8911,9 +9052,7 @@ async function pumpQueuedAcpJobsForThread({
     });
     // Drain can be requested while admission lookup is in flight. Recheck at
     // the claim boundary so an old worker cannot take one final new job.
-    if (!detachedWorkerCanClaimQueuedJobs()) {
-      return;
-    }
+    if (!detachedWorkerCanClaimQueuedJob(nextQueued)) return;
     const executionDecision = admitAcpJobExecution(nextQueued, admissionLimits);
     if (!executionDecision.ok) {
       recordAcpAdmissionDenial(executionDecision, "claim");
@@ -8949,9 +9088,12 @@ function kickQueuedAcpJobsForThread({
   path: string;
   thread_id: string;
 }): void {
-  if (!detachedWorkerCanClaimQueuedJobs()) {
-    return;
-  }
+  const nextQueued = listQueuedAcpJobsForThread({
+    project_id,
+    path,
+    thread_id,
+  })[0];
+  if (!nextQueued || !detachedWorkerCanClaimQueuedJob(nextQueued)) return;
   const key = acpJobThreadKey({ project_id, path, thread_id });
   if (pumpingAcpJobThreads.has(key)) {
     return;
@@ -8990,9 +9132,6 @@ function kickQueuedAcpJobsForThread({
 }
 
 function kickAllQueuedAcpJobs(): void {
-  if (!detachedWorkerCanClaimQueuedJobs()) {
-    return;
-  }
   const seen = new Set<string>();
   for (const job of listQueuedAcpJobThreadKeys()) {
     const key = acpJobThreadKey(job);
@@ -9415,7 +9554,9 @@ async function enqueueChatAcpTurn({
     "chat",
   );
   await acknowledgeAutomationFromHumanTurn(request);
-  const row = enqueueAcpJob(request);
+  const row = enqueueAcpJob(request, {
+    preferred_worker_id: preferredWorkerForRetainedSession(request.session_id),
+  });
   const projectedState = await persistQueuedUserMessageProjection({
     client: conatClient,
     project_id: row.project_id,
@@ -10290,6 +10431,7 @@ export function getAcpAgentRuntimeStatus(): {
 }
 
 export const acpTestInternals = {
+  detachedWorkerCanClaimQueuedJob,
   hasOtherWorkerRunningAcpTurn,
   noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,

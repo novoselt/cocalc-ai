@@ -64,6 +64,20 @@ function backendDuration(surface: UltraliteSurface): number | undefined {
   return Math.round(end.startTime - start.startTime);
 }
 
+function phaseDuration(
+  surface: UltraliteSurface,
+  phase: string,
+): number | undefined {
+  const start = performance
+    .getEntriesByName?.(`cocalc-ultralite:${surface}:${phase}-start`)
+    ?.at(-1);
+  const end = performance
+    .getEntriesByName?.(`cocalc-ultralite:${surface}:${phase}-end`)
+    ?.at(-1);
+  if (!start || !end || end.startTime < start.startTime) return;
+  return Math.round(end.startTime - start.startTime);
+}
+
 function resourceSummary() {
   const entries = (performance.getEntriesByType?.("resource") ??
     []) as PerformanceResourceTiming[];
@@ -132,6 +146,13 @@ export function ultraliteTelemetryDetails(
     viewport_height: window.innerHeight,
     document_hidden: document.hidden,
     backend_duration_ms: backendDuration(surface),
+    route_chunk_duration_ms: phaseDuration(surface, "route-chunks"),
+    project_host_connect_duration_ms: phaseDuration(
+      surface,
+      "project-host-connect",
+    ),
+    chat_service_open_duration_ms: phaseDuration(surface, "chat-service-open"),
+    chat_stream_open_duration_ms: phaseDuration(surface, "chat-stream-open"),
     ...resourceSummary(),
   };
 }
@@ -141,6 +162,16 @@ export function markUltraliteBackend(
   phase: "start" | "end",
 ): void {
   const name = `cocalc-ultralite:${surface}:backend-${phase}`;
+  performance.clearMarks?.(name);
+  performance.mark?.(name);
+}
+
+export function markUltralitePhase(
+  surface: UltraliteSurface,
+  phase: string,
+  boundary: "start" | "end",
+): void {
+  const name = `cocalc-ultralite:${surface}:${phase}-${boundary}`;
   performance.clearMarks?.(name);
   performance.mark?.(name);
 }

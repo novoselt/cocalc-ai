@@ -5,6 +5,7 @@
 
 import {
   markUltraliteBackend,
+  markUltralitePhase,
   recordUltraliteFailure,
   recordUltraliteOutcome,
   ultraliteTelemetryDetails,
@@ -31,9 +32,14 @@ test("reports content-free backend phase timing separately", () => {
   markUltraliteBackend("files", "start");
   now = 86;
   markUltraliteBackend("files", "end");
+  now = 90;
+  markUltralitePhase("files", "project-host-connect", "start");
+  now = 115;
+  markUltralitePhase("files", "project-host-connect", "end");
 
   expect(ultraliteTelemetryDetails("files")).toMatchObject({
     backend_duration_ms: 76,
+    project_host_connect_duration_ms: 25,
     surface: "files",
   });
 });
