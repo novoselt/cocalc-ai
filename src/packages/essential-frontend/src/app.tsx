@@ -17,23 +17,36 @@ import { siteUrl } from "./urls";
 import { ShellLoading, TopBar } from "./ui";
 import {
   markUltraliteBackend,
+  markUltralitePhase,
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
 
-const Workspace = lazy(
-  () =>
-    new Promise((resolve, reject) => {
-      // The static package compiles to CommonJS, so native import() would be
-      // rewritten to require(). Keep this explicit Rspack split point.
-      require.ensure(
-        [],
-        () => resolve(require("./workspace")),
-        reject,
-        "ultralite-workspace",
-      );
-    }),
-);
+function loadWorkspace() {
+  return new Promise<typeof import("./workspace")>((resolve, reject) => {
+    // The static package compiles to CommonJS, so native import() would be
+    // rewritten to require(). Keep this explicit Rspack split point.
+    require.ensure(
+      [],
+      () => resolve(require("./workspace")),
+      reject,
+      "ultralite-workspace",
+    );
+  });
+}
+
+function loadChatSurface() {
+  return new Promise<typeof import("./chat-surface")>((resolve, reject) => {
+    require.ensure(
+      [],
+      () => resolve(require("./chat-surface")),
+      reject,
+      "ultralite-chat",
+    );
+  });
+}
+
+const Workspace = lazy(loadWorkspace);
 const ProjectsWorkspace = lazy(
   () =>
     new Promise((resolve, reject) => {
@@ -64,6 +77,22 @@ export function UltraliteApp() {
   const [projectTitle, setProjectTitle] = useState<string>();
   const routeProjectId = "projectId" in route ? route.projectId : undefined;
   const projectRoute = routeProjectId != null;
+
+  useEffect(() => {
+    if (!projectRoute) return;
+    const loads: Promise<unknown>[] = [loadWorkspace()];
+    if (route.kind === "chat" || route.kind === "agents") {
+      markUltralitePhase("chat", "route-chunks", "start");
+      loads.push(loadChatSurface());
+    }
+    void Promise.all(loads)
+      .then(() => {
+        if (route.kind === "chat" || route.kind === "agents") {
+          markUltralitePhase("chat", "route-chunks", "end");
+        }
+      })
+      .catch(() => undefined);
+  }, [projectRoute, route.kind]);
 
   useEffect(() => {
     const controller = new AbortController();

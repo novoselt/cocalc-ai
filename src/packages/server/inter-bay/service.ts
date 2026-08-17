@@ -1788,7 +1788,7 @@ async function startProjectControlStartService(): Promise<void> {
   const client = getInterBayFabricClient({ noCache: true });
   const impl: InterBayProjectControlApi = {
     checkStartAdmission: async (opts) => {
-      await handleProjectControlCheckStartAdmission(opts);
+      return await handleProjectControlCheckStartAdmission(opts);
     },
     start: async (opts) => {
       await handleProjectControlStart(opts);

@@ -36,6 +36,7 @@ import type {
   ProjectMetadataPatch,
 } from "@cocalc/conat/hub/api/projects";
 import { defaults, is_valid_uuid_string, uuid } from "@cocalc/util/misc";
+import { project_redux_name } from "@cocalc/util/redux/name";
 import { ProjectsState, store } from "./store";
 import { switch_to_project } from "./table";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
@@ -2629,11 +2630,15 @@ export class ProjectsActions extends Actions<ProjectsState> {
 
   // Save all open files in all projects to disk
   public save_all_files(): void {
-    store.get("open_projects").filter((project_id) => {
+    store.get("open_projects").forEach((project_id) => {
       // ? is fine here since if project just got closed or collaborator
       // removed from it, etc., that would be fine.  Save all is
       // just a convenience for autosave. See
       // https://github.com/sagemathinc/cocalc/issues/4789
+      //
+      // In particular, do not initialize the lazy project runtime for a
+      // persisted project tab that has not been opened in this page.
+      if (!this.redux.hasStore(project_redux_name(project_id))) return;
       this.redux.getProjectActions(project_id)?.save_all_files();
     });
   }

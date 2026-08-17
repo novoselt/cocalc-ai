@@ -95,8 +95,12 @@ function threadConfigForSubagents(
 ): Record<string, number> | undefined {
   if (maxConcurrentSubagents == null) return;
   // Codex counts the manager in max_concurrent_threads_per_session.
+  const totalThreads = maxConcurrentSubagents + 1;
   return {
-    "agents.max_concurrent_threads_per_session": maxConcurrentSubagents + 1,
+    // V1 and V2 have separate config paths. Supplying both is accepted by
+    // Codex and prevents a feature rollout from silently bypassing the cap.
+    "agents.max_concurrent_threads_per_session": totalThreads,
+    "features.multi_agent_v2.max_concurrent_threads_per_session": totalThreads,
   };
 }
 
@@ -360,6 +364,14 @@ type CodexAppServerOptions = {
     activeDescendantThreadIds: string[];
     activeDescendants: number;
     backgroundTerminals: number;
+    maxConcurrentSubagents?: number;
+  }) => void | Promise<void>;
+  onRuntimeOwnershipChanged?: (status: {
+    state: "owned" | "released";
+    sessionId: string;
+    projectId: string;
+    accountId: string;
+    path?: string;
   }) => void | Promise<void>;
 };
 
@@ -461,6 +473,7 @@ type CodexAppServerRuntime = {
   idleTimer?: NodeJS.Timeout;
   backgroundPollTimer?: NodeJS.Timeout;
   disposed: boolean;
+  publishedOwnershipSessionId?: string;
 };
 
 type RetryableAppServerFailureKind =
@@ -1790,6 +1803,7 @@ export class CodexAppServerAgent implements AcpAgent {
     if (runtime.disposed) return;
     runtime.disposed = true;
     this.removeRuntime(runtime);
+    await this.publishRuntimeOwnership(runtime, "released");
     logger.debug("codex app-server: disposing retained runtime", {
       threadId: runtime.threadId,
       projectId: runtime.projectId,
@@ -1809,6 +1823,46 @@ export class CodexAppServerAgent implements AcpAgent {
     }
     if (runtime.spawned.proc.exitCode == null && !runtime.spawned.proc.killed) {
       runtime.spawned.proc.kill("SIGKILL");
+    }
+  }
+
+  private async publishRuntimeOwnership(
+    runtime: CodexAppServerRuntime,
+    state: "owned" | "released",
+  ): Promise<void> {
+    if (!this.opts.onRuntimeOwnershipChanged) return;
+    const sessionId =
+      state === "owned"
+        ? runtime.threadId
+        : runtime.publishedOwnershipSessionId;
+    if (!sessionId) return;
+    if (
+      state === "owned" &&
+      runtime.publishedOwnershipSessionId === sessionId
+    ) {
+      return;
+    }
+    if (state === "released") {
+      runtime.publishedOwnershipSessionId = undefined;
+    }
+    try {
+      await this.opts.onRuntimeOwnershipChanged({
+        state,
+        sessionId,
+        projectId: runtime.projectId,
+        accountId: runtime.accountId,
+        path: runtime.chat?.path,
+      });
+      if (state === "owned") {
+        runtime.publishedOwnershipSessionId = sessionId;
+      }
+    } catch (err) {
+      logger.warn("codex app-server: failed publishing runtime ownership", {
+        state,
+        sessionId,
+        projectId: runtime.projectId,
+        err: `${err}`,
+      });
     }
   }
 
@@ -1941,8 +1995,20 @@ export class CodexAppServerAgent implements AcpAgent {
       managerState: runtime.managerState,
       activeDescendantThreadIds,
       backgroundTerminals: runtime.backgroundTerminalCount,
+      maxConcurrentSubagents: runtime.maxConcurrentSubagents,
     });
     if (signature === runtime.lastOutstandingSignature) return;
+    if (
+      runtime.maxConcurrentSubagents != null &&
+      runtime.activeDescendantCount > runtime.maxConcurrentSubagents
+    ) {
+      logger.warn("codex app-server: active subagent limit exceeded", {
+        threadId: runtime.threadId,
+        activeDescendants: runtime.activeDescendantCount,
+        maxConcurrentSubagents: runtime.maxConcurrentSubagents,
+        activeDescendantThreadIds,
+      });
+    }
     try {
       await this.opts.onOutstandingWorkChanged({
         sessionId: runtime.threadId,
@@ -1953,6 +2019,7 @@ export class CodexAppServerAgent implements AcpAgent {
         activeDescendantThreadIds,
         activeDescendants: runtime.activeDescendantCount,
         backgroundTerminals: runtime.backgroundTerminalCount,
+        maxConcurrentSubagents: runtime.maxConcurrentSubagents,
       });
       runtime.lastOutstandingSignature = signature;
     } catch (err) {
@@ -2110,6 +2177,7 @@ export class CodexAppServerAgent implements AcpAgent {
     spawned.proc.once("exit", () => {
       runtime!.disposed = true;
       this.removeRuntime(runtime!);
+      void this.publishRuntimeOwnership(runtime!, "released");
     });
     return { runtime, created: true };
   }
@@ -2434,6 +2502,7 @@ export class CodexAppServerAgent implements AcpAgent {
       }
       setRunningKey(actualThreadId);
       runtime.threadId = actualThreadId;
+      await this.publishRuntimeOwnership(runtime, "owned");
       this.registerRuntimeAlias(runtime, actualThreadId);
       this.registerRuntimeAlias(runtime, requestedThreadKey);
       const sessionEntry = { sessionId: actualThreadId, cwd };
