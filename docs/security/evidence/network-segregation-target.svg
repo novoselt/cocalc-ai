@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1300" viewBox="0 0 1800 1300" role="img" aria-labelledby="title desc">
-  <title id="title">CoCalc target network segregation architecture</title>
-  <desc id="desc">Target architecture showing separate GCP projects and VPCs for production core services, user dedicated VMs, operations, and development and staging. Public CoCalc ingress passes through Cloudflare. Dedicated VMs have public Internet connectivity but no east-west or cross-project private connectivity.</desc>
+  <title id="title">CoCalc current network segregation architecture</title>
+  <desc id="desc">Implemented architecture showing separate GCP projects and VPCs for production services, user dedicated VMs, and development and staging. Public CoCalc ingress passes through Cloudflare. Dedicated VMs have public Internet connectivity but no east-west or cross-project private connectivity. Production operations currently remain in the production project, with a separate operations project planned.</desc>
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
       <feDropShadow dx="0" dy="7" stdDeviation="10" flood-color="#12201c" flood-opacity="0.12"/>
@@ -40,15 +40,15 @@
   <circle cx="40" cy="1230" r="210" fill="#f4dfc9" opacity="0.55"/>
 
   <text x="64" y="54" class="eyebrow">SOC 2 • NETWORK SEGREGATION</text>
-  <text id="diagram-heading" x="64" y="102" class="title">CoCalc Network Segregation — Target Architecture</text>
-  <text x="64" y="136" class="subtitle">Independent cloud projects and VPCs isolate production, dedicated compute, operations, and non-production.</text>
+  <text id="diagram-heading" x="64" y="102" class="title">CoCalc Network Segregation — Current Architecture</text>
+  <text x="64" y="136" class="subtitle">Independent cloud projects and VPCs isolate production, dedicated compute, and non-production.</text>
 
   <g filter="url(#shadow)">
-    <rect x="1352" y="36" width="382" height="92" rx="16" fill="#fff6e7" stroke="#d27a2b" stroke-width="2"/>
-    <rect x="1352" y="36" width="11" height="92" rx="5" fill="#d27a2b"/>
-    <text x="1382" y="68" class="card-subtitle" fill="#985019">TARGET STATE • 2026-08-13</text>
-    <text x="1382" y="94" class="small">Pending: staging → cocalc-dev</text>
-    <text x="1382" y="116" class="small">and alpha.cocalc.ai → cocalc-ops</text>
+    <rect x="1352" y="36" width="382" height="92" rx="16" fill="#edf6f2" stroke="#2d685a" stroke-width="2"/>
+    <rect x="1352" y="36" width="11" height="92" rx="5" fill="#2d685a"/>
+    <text x="1382" y="68" class="card-subtitle" fill="#2d685a">IMPLEMENTED • 2026-08-17</text>
+    <text x="1382" y="94" class="small">Production ↔ non-production isolated</text>
+    <text x="1382" y="116" class="small">Operations-project split remains planned</text>
   </g>
 
   <!-- External and corporate endpoints -->
@@ -146,8 +146,8 @@
   <g filter="url(#shadow)">
     <rect x="775" y="184" width="965" height="790" rx="24" fill="#ffffff" stroke="#bfcac4" stroke-width="2.5"/>
   </g>
-  <text x="807" y="216" class="section">GOOGLE CLOUD PLATFORM • FOUR INDEPENDENT GCP PROJECTS</text>
-  <text x="807" y="239" class="small">Separate IAM • Separate VPCs • No Shared VPC, peering, or private cross-project routes</text>
+  <text x="807" y="216" class="section">GOOGLE CLOUD PLATFORM • THREE INDEPENDENT ACTIVE GCP PROJECTS</text>
+  <text x="807" y="239" class="small">Production, dedicated VMs, and non-production have separate IAM and VPCs • No Shared VPC or peering</text>
 
   <!-- Production core project -->
   <g>
@@ -192,25 +192,25 @@
     <text x="1416" y="651" class="small">Public IP; no private prod/VM path</text>
   </g>
 
-  <!-- Operations project -->
+  <!-- Production operations currently share the production project -->
   <g>
-    <rect x="810" y="738" width="425" height="200" rx="20" fill="#f1f5fa" stroke="#35658d" stroke-width="2.5"/>
-    <rect x="810" y="738" width="12" height="200" rx="6" fill="#35658d"/>
-    <text x="842" y="772" class="card-subtitle" fill="#35658d">GCP PROJECT • COCALC-OPS</text>
+    <rect x="810" y="738" width="425" height="200" rx="20" fill="#f3f7f6" stroke="#236353" stroke-width="2.5"/>
+    <rect x="810" y="738" width="12" height="200" rx="6" fill="#236353"/>
+    <text x="842" y="772" class="card-subtitle" fill="#236353">PRODUCTION OPS • PROJECT-HOSTS</text>
     <text x="842" y="806" class="card-title">Production operations</text>
     <text x="842" y="842" class="body-bold">alpha.cocalc.ai</text>
-    <text x="842" y="869" class="small">Cluster management only</text>
-    <text x="842" y="894" class="small">Uses public authenticated endpoints</text>
-    <text x="842" y="918" class="small">and GCP APIs; no private prod route</text>
+    <text x="842" y="869" class="small">Currently in the production project</text>
+    <text x="842" y="894" class="small">Public authenticated management</text>
+    <text x="842" y="918" class="small">Planned hardening: move to cocalc-ops</text>
   </g>
 
   <!-- Development project -->
   <g>
     <rect x="1280" y="738" width="425" height="200" rx="20" fill="#f4f8ee" stroke="#647e3d" stroke-width="2.5"/>
     <rect x="1280" y="738" width="12" height="200" rx="6" fill="#647e3d"/>
-    <text x="1312" y="772" class="card-subtitle" fill="#647e3d">GCP PROJECT • COCALC-DEV</text>
+    <text x="1312" y="772" class="card-subtitle" fill="#647e3d">ACTIVE GCP PROJECT • COCALC-DEV</text>
     <text x="1312" y="806" class="card-title">Non-production</text>
-    <text x="1312" y="842" class="body-bold">Staging + 3 development VMs</text>
+    <text x="1312" y="842" class="body-bold">Staging + development environments</text>
     <text x="1312" y="869" class="small">Test identities and test data</text>
     <text x="1312" y="894" class="small">Independent IAM and VPC</text>
     <text x="1312" y="918" class="small">No private production/ops route</text>
@@ -272,6 +272,6 @@
     <text x="1393" y="1175" class="white-small">• Revalidate after network changes</text>
   </g>
 
-  <text x="64" y="1260" class="small">Target design. Before submission as implemented SOC 2 evidence, complete the two pending migrations and attach current GCP firewall, route, IAM, and flow-log exports.</text>
+  <text x="64" y="1260" class="small">Implemented production/non-production segregation as of 2026-08-17. alpha.cocalc.ai remains in projecthosts pending the additional cocalc-ops separation.</text>
   <text x="1736" y="1260" text-anchor="end" class="small">SageMath, Inc. • CoCalc</text>
 </svg>
