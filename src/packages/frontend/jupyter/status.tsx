@@ -147,6 +147,14 @@ interface KernelProps {
   onLayoutChange?: (layout: StudioLayout) => void;
   onReadingModeChange?: (reading: boolean) => void;
   availableLayouts?: readonly StudioLayout[];
+  /**
+   * How much room the usage meters may take in the header. "hidden" only
+   * suppresses the header meters: `usage` itself keeps flowing so the kernel
+   * drawer still shows the numbers.
+   */
+  usageDisplay?: "full" | "mini" | "hidden";
+  /** Drop control text labels, keeping icons, for very narrow frames. */
+  iconsOnly?: boolean;
 }
 
 export function Kernel({
@@ -161,6 +169,8 @@ export function Kernel({
   onLayoutChange,
   onReadingModeChange,
   availableLayouts,
+  usageDisplay = "full",
+  iconsOnly,
 }: KernelProps) {
   const intl = useIntl();
   const name = actions.name;
@@ -830,6 +840,9 @@ export function Kernel({
 
   function renderUsage() {
     if (kernel == null) return;
+    // Checked before the startup estimate below, which has no usage of its own
+    // and would otherwise keep taking 300px in a frame with no room for it.
+    if (usageDisplay === "hidden") return;
 
     if (isSpwarning) {
       const usage_style: CSS = KERNEL_USAGE_STYLE;
@@ -865,6 +878,63 @@ export function Kernel({
       100 * (usage.cpu_runtime / expected_cell_runtime),
     );
 
+    const railColor = COLORS.GRAY_LL;
+
+    // Narrow frame: the same three readings stacked as unlabeled bars, so
+    // they cost ~50px instead of ~300px and the rest of the bar still fits.
+    if (usageDisplay === "mini") {
+      const meters: {
+        key: string;
+        label: string;
+        percent: number;
+        strokeColor?: string;
+      }[] = [
+        ...(runProgress != null
+          ? [{ key: "code", label: "Code", percent: runProgress }]
+          : []),
+        {
+          key: "cpu",
+          label: "CPU",
+          percent: cpu_val,
+          strokeColor: ALERT_COLS[usage.time_alert],
+        },
+        {
+          key: "ram",
+          label: "RAM",
+          percent: usage.mem_pct,
+          strokeColor: ALERT_COLS[usage.mem_alert],
+        },
+      ];
+      return (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            gap: "1px",
+            width: "50px",
+            borderLeft: `1px solid ${COLORS.GRAY}`,
+            paddingLeft: "6px",
+            cursor: "pointer",
+          }}
+        >
+          {meters.map(({ key, label, percent, strokeColor }) => (
+            <Tooltip key={key} title={`${label}: ${Math.round(percent)}%`}>
+              <Progress
+                aria-label={label}
+                style={{ margin: 0, lineHeight: 1 }}
+                showInfo={false}
+                percent={percent}
+                size="small"
+                railColor={railColor}
+                strokeColor={strokeColor}
+              />
+            </Tooltip>
+          ))}
+        </div>
+      );
+    }
+
     // same appearance in the regular and the studio status bar
     const style: CSS = {
       display: "flex",
@@ -877,7 +947,6 @@ export function Kernel({
       margin: "0 2px",
       width: "100%",
     };
-    const railColor = COLORS.GRAY_LL;
     const showLabel = true;
     const usage_style: CSS = {
       ...KERNEL_USAGE_STYLE,
@@ -1069,13 +1138,23 @@ export function Kernel({
             ...style,
           }}
         >
-          {/* Left: logo + kernel + trust */}
+          {/* Left: logo + kernel + trust. Shrinkable, and the first thing to
+              give way when the frame is narrow: the kernel name already
+              ellipsizes, so it costs the least. Without this the group is
+              rigid and the overflow lands on the controls at the far right,
+              cutting off Help and the switch back to Classic. */}
           <div
             style={{
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              flex: "0 0 auto",
+              flex: "0 1 auto",
+              minWidth: 0,
+              // the logo and the trust indicator have a min-content width of
+              // their own, so once the kernel name has ellipsized away they
+              // would spill out of the shrunken group and paint on top of the
+              // meters next to it; clip instead of overlapping.
+              overflow: "hidden",
             }}
           >
             {/* flex wrapper: a plain div adds baseline descender space below
@@ -1101,13 +1180,15 @@ export function Kernel({
             {renderKernelState()}
             {renderKernelStateAction()}
           </div>
-          {/* Right: bars + controls */}
+          {/* Right: bars + controls. Never shrinks, so the view switch stays
+              reachable however narrow the frame gets. */}
           {onLayoutChange && (
             <div
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "8px",
+                flex: "0 0 auto",
               }}
             >
               {!IS_MOBILE && (
@@ -1124,6 +1205,7 @@ export function Kernel({
                 onLayoutChange={onLayoutChange}
                 readingMode={readingMode}
                 onReadingModeChange={onReadingModeChange}
+                iconsOnly={iconsOnly}
               />
             </div>
           )}
@@ -1145,13 +1227,17 @@ export function Kernel({
             ...style,
           }}
         >
-          {/* Left: logo + kernel + trust, like the studio status bar */}
+          {/* Left: logo + kernel + trust, like the studio status bar — and
+              shrinking and clipping for the same reason, so a narrow frame
+              eats into the kernel name rather than the controls at the end. */}
           <div
             style={{
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              flex: "0 0 auto",
+              flex: "0 1 auto",
+              minWidth: 0,
+              overflow: "hidden",
             }}
           >
             {/* flex wrapper: see compact header — avoids baseline gap below
@@ -1203,7 +1289,7 @@ export function Kernel({
                 marginRight: "3px",
               }}
             >
-              <SwitchToStudioButton />
+              <SwitchToStudioButton iconsOnly={iconsOnly} />
             </div>
           )}
         </div>

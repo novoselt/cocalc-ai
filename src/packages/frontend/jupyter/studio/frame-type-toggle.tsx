@@ -22,11 +22,16 @@ function hasFrameOfType(actions: any, type: string): boolean {
   return false;
 }
 
+interface ToggleProps {
+  /** Very narrow frame: keep the icon, drop the text label. */
+  iconsOnly?: boolean;
+}
+
 function isMultiFrame(actions: any): boolean {
   return Object.keys(actions?._get_leaf_ids?.() ?? {}).length > 1;
 }
 
-export function SwitchToStudioButton() {
+export function SwitchToStudioButton({ iconsOnly }: ToggleProps = {}) {
   const { actions, id } = useFrameContext();
 
   if (isMultiFrame(actions) && hasFrameOfType(actions, "jupyter_studio")) {
@@ -38,15 +43,17 @@ export function SwitchToStudioButton() {
       <Button
         type="text"
         size="small"
+        aria-label={"Studio"}
         onClick={() => actions.set_frame_type(id, "jupyter_studio")}
       >
-        <Icon name="swap" /> Studio
+        <Icon name="swap" />
+        {!iconsOnly && <> Studio</>}
       </Button>
     </Tooltip>
   );
 }
 
-export function SwitchToClassicButton() {
+export function SwitchToClassicButton({ iconsOnly }: ToggleProps = {}) {
   const { actions, id } = useFrameContext();
 
   if (
@@ -61,9 +68,11 @@ export function SwitchToClassicButton() {
       <Button
         type="text"
         size="small"
+        aria-label={"Classic"}
         onClick={() => actions.set_frame_type(id, "jupyter_cell_notebook")}
       >
-        <Icon name="swap" /> Classic
+        <Icon name="swap" />
+        {!iconsOnly && <> Classic</>}
       </Button>
     </Tooltip>
   );

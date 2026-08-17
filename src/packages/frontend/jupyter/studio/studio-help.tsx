@@ -19,13 +19,18 @@ import { COLORS } from "@cocalc/util/theme";
 
 export const STUDIO_DOCS_SLUG = "jupyter/studio-view";
 
-export default function StudioNotebookHelp() {
+export default function StudioNotebookHelp({
+  iconsOnly,
+}: {
+  iconsOnly?: boolean;
+} = {}) {
   const intl = useIntl();
   const { project_id } = useFrameContext();
 
   return (
     <Tooltip title="Open the documentation for the Studio notebook view">
       <DocsLink
+        aria-label={iconsOnly ? intl.formatMessage(labels.help) : undefined}
         projectId={project_id ? project_id : undefined}
         slug={STUDIO_DOCS_SLUG}
         style={{
@@ -34,7 +39,8 @@ export default function StudioNotebookHelp() {
           whiteSpace: "nowrap",
         }}
       >
-        <Icon name="question-circle" /> {intl.formatMessage(labels.help)}
+        <Icon name="question-circle" />
+        {!iconsOnly && <> {intl.formatMessage(labels.help)}</>}
       </DocsLink>
     </Tooltip>
   );

@@ -335,6 +335,22 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
     if (w < 800 && studioLayout === "narrow") return "comfortable";
     return studioLayout;
   }, [cellViewMode, studioLayout, containerWidth]);
+  // How much room the usage meters may take. Full labelled meters need about
+  // 300px, which a split frame does not have; the stacked bars need about 50.
+  // The studio bar also carries the width control, the Reading switch, Help,
+  // and the switch back to Classic, so it runs out of room sooner than the
+  // classic bar, which only has to fit its own view switch.
+  const usageDisplay = useMemo((): "full" | "mini" | "hidden" => {
+    const w = containerWidth ?? 9999;
+    const [fullWidth, miniWidth] =
+      cellViewMode === "studio" ? [1000, 500] : [800, 400];
+    if (w < miniWidth) return "hidden";
+    if (w < fullWidth) return "mini";
+    return "full";
+  }, [cellViewMode, containerWidth]);
+  // Very narrow frames: keep the controls as icons so the switch back to the
+  // other view stays reachable, including at 320px and 200% browser zoom.
+  const iconsOnly = (containerWidth ?? 9999) < 480;
   // Which options are available at the current width
   const availableLayouts = useMemo(() => {
     const w = containerWidth ?? 9999;
@@ -532,16 +548,10 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
         {!read_only && (
           <Kernel
             actions={actions}
-            usage={
-              cellViewMode === "studio" && (containerWidth ?? 9999) < 800
-                ? undefined
-                : usage
-            }
-            expected_cell_runtime={
-              cellViewMode === "studio" && (containerWidth ?? 9999) < 800
-                ? undefined
-                : expected_cell_runtime
-            }
+            usage={usage}
+            expected_cell_runtime={expected_cell_runtime}
+            usageDisplay={usageDisplay}
+            iconsOnly={iconsOnly}
             compact={cellViewMode === "studio"}
             studioLayout={
               cellViewMode === "studio" ? effectiveLayout : undefined

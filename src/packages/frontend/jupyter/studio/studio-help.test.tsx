@@ -51,6 +51,21 @@ describe("Studio notebook help", () => {
     });
   });
 
+  it("keeps its name when the visible label is dropped in a narrow frame", () => {
+    render(<StudioNotebookHelp iconsOnly />);
+
+    // The visible text is gone, so the name has to come from the attribute.
+    expect(screen.queryByText("Help")).toBeNull();
+    const link = screen.getByRole("link", { name: "Help" });
+    expect(link.getAttribute("href")).toContain(STUDIO_DOCS_SLUG);
+
+    fireEvent.click(link, { button: 0 });
+    expect(openProjectDocs).toHaveBeenCalledWith({
+      projectId: "p1",
+      slug: STUDIO_DOCS_SLUG,
+    });
+  });
+
   it("leaves modified clicks to the browser so the docs can open in a new tab", () => {
     render(<StudioNotebookHelp />);
 

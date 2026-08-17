@@ -322,4 +322,121 @@ describe("Kernel", () => {
       jest.useRealTimers();
     }
   });
+  describe("usage meters", () => {
+    function renderUsage(extra: any) {
+      const actions = {
+        name: "jupyter-test",
+        project_id: "project-1",
+        show_select_kernel: jest.fn(),
+        hide_select_kernel: jest.fn(),
+        kernel_dont_ask_again: jest.fn(),
+        set_kernel: jest.fn(),
+      } as any;
+
+      useRedux.mockImplementation(([name, key]) => {
+        if (name !== "jupyter-test") return;
+        switch (key) {
+          case "trust":
+            return true;
+          case "read_only":
+            return false;
+          case "kernel":
+            return "python3";
+          case "kernels":
+            return immutable.List();
+          case "runProgress":
+            return 40;
+          case "project_id":
+            return "project-1";
+          case "kernel_info":
+            return immutable.fromJS({ display_name: "Python 3 (ipykernel)" });
+          case "show_kernel_selector":
+            return false;
+          case "backend_state":
+            return "running";
+          case "kernel_state":
+            return "idle";
+        }
+      });
+      getProjectActions.mockReturnValue({ project_id: "project-1" });
+
+      return render(
+        <IntlProvider locale="en" messages={{}}>
+          <Kernel
+            actions={actions}
+            compact
+            studioLayout="comfortable"
+            onLayoutChange={jest.fn()}
+            expected_cell_runtime={10}
+            usage={
+              {
+                cpu: 10,
+                cpu_runtime: 5,
+                mem: 100,
+                mem_pct: 30,
+                mem_alert: "none",
+                cpu_alert: "none",
+                time_alert: "none",
+              } as any
+            }
+            {...extra}
+          />
+        </IntlProvider>,
+      );
+    }
+
+    it("labels each meter when there is room for the full-size version", () => {
+      renderUsage({});
+      expect(screen.getByText("Code")).toBeTruthy();
+      expect(screen.getByText("CPU")).toBeTruthy();
+      expect(screen.getByText("RAM")).toBeTruthy();
+    });
+
+    it("plumbs the actual readings into the compact bars", () => {
+      const { container } = renderUsage({ usageDisplay: "mini" as const });
+      const valueOf = (label: string) =>
+        container
+          .querySelector(`[aria-label="${label}"]`)
+          ?.querySelector("[aria-valuenow]")
+          ?.getAttribute("aria-valuenow") ??
+        container
+          .querySelector(`[aria-label="${label}"]`)
+          ?.getAttribute("aria-valuenow");
+
+      // runProgress is 40, mem_pct is 30, cpu_runtime/expected_cell_runtime
+      // is 5/10 -> 50
+      expect(valueOf("Code")).toBe("40");
+      expect(valueOf("RAM")).toBe("30");
+      expect(valueOf("CPU")).toBe("50");
+    });
+
+    it("uses the same compact meters in the classic status bar", () => {
+      // the classic bar carries fewer controls, but it runs out of room too
+      const { container } = renderUsage({
+        compact: false,
+        studioLayout: undefined,
+        onLayoutChange: undefined,
+        usageDisplay: "mini" as const,
+      });
+
+      expect(screen.queryByText("CPU")).toBeNull();
+      expect(container.querySelectorAll('[aria-label="CPU"]').length).toBe(1);
+      expect(container.querySelectorAll('[aria-label="RAM"]').length).toBe(1);
+    });
+
+    it("drops the text labels but keeps every reading when narrow", () => {
+      const { container } = renderUsage({ usageDisplay: "mini" as const });
+
+      // The labels are what cost the horizontal space, so they go...
+      expect(screen.queryByText("CPU")).toBeNull();
+      expect(screen.queryByText("RAM")).toBeNull();
+      expect(screen.queryByText("Code")).toBeNull();
+
+      // ...but all three readings are still shown, and still named for
+      // assistive technology.
+      expect(container.querySelectorAll('[aria-label="Code"]').length).toBe(1);
+      expect(container.querySelectorAll('[aria-label="CPU"]').length).toBe(1);
+      expect(container.querySelectorAll('[aria-label="RAM"]').length).toBe(1);
+    });
+  });
 });

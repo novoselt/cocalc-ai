@@ -62,6 +62,18 @@ describe("studio notebook frame-type toggles", () => {
     );
   });
 
+  it("stays named when narrow frames drop the button text", () => {
+    frameContext = contextFor({ active: "jupyter_cell_notebook" });
+    const { rerender } = render(<SwitchToStudioButton iconsOnly />);
+    expect(screen.queryByText("Studio")).toBeNull();
+    expect(screen.getByRole("button", { name: "Studio" })).toBeTruthy();
+
+    frameContext = contextFor({ active: "jupyter_studio" });
+    rerender(<SwitchToClassicButton iconsOnly />);
+    expect(screen.queryByText("Classic")).toBeNull();
+    expect(screen.getByRole("button", { name: "Classic" })).toBeTruthy();
+  });
+
   it("hides a target that already exists in a split view", () => {
     frameContext = contextFor({
       active: "jupyter_cell_notebook",

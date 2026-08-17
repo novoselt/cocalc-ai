@@ -25,6 +25,8 @@ interface StudioControlsProps {
   onLayoutChange: (layout: StudioLayout) => void;
   readingMode?: boolean;
   onReadingModeChange?: (reading: boolean) => void;
+  /** Very narrow frame: keep the icons, drop the text labels. */
+  iconsOnly?: boolean;
 }
 
 function Divider() {
@@ -44,6 +46,7 @@ export function StudioControls({
   onLayoutChange,
   readingMode,
   onReadingModeChange,
+  iconsOnly,
 }: StudioControlsProps) {
   return (
     <>
@@ -102,17 +105,19 @@ export function StudioControls({
               aria-label={READING_MODE_LABEL}
               checked={readingMode}
             />
-            <span aria-hidden style={{ userSelect: "none" }}>
-              {READING_MODE_LABEL}
-            </span>
+            {!iconsOnly && (
+              <span aria-hidden style={{ userSelect: "none" }}>
+                {READING_MODE_LABEL}
+              </span>
+            )}
           </span>
         </Tooltip>
       )}
       <Divider />
-      <StudioNotebookHelp />
+      <StudioNotebookHelp iconsOnly={iconsOnly} />
       {/* direct flex child: blockified, so no baseline descender space; the
           header's own padding provides the gap to the frame edge */}
-      <SwitchToClassicButton />
+      <SwitchToClassicButton iconsOnly={iconsOnly} />
     </>
   );
 }
