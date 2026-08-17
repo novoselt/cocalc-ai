@@ -322,7 +322,9 @@ export function startProjectHardDeleteWorker({
       const purge = await processDueDeletedProjectBackupPurges({
         limit: BACKUP_PURGE_BATCH_SIZE,
       });
-      if (purge.processed > 0) {
+      if (purge.quarantined > 0) {
+        logger.warn("quarantined deleted-project backup purges", purge);
+      } else if (purge.processed > 0 || purge.recovered_stale > 0) {
         logger.info("processed deferred deleted-project backup purges", purge);
       }
     } catch (err) {
