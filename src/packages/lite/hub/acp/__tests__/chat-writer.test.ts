@@ -1639,11 +1639,10 @@ describe("ChatStreamWriter", () => {
     await writer.waitForLivePreviewFlush();
 
     const previewEvents = flattenLivePayloads(previewPayloads);
-    expect(
-      previewEvents.filter(
-        (event) => event.type === "event" && event.event.type === "message",
-      ),
-    ).toEqual([
+    const previewMessages = previewEvents.filter(
+      (event) => event.type === "event" && event.event.type === "message",
+    );
+    expect(previewMessages).toEqual([
       expect.objectContaining({
         type: "event",
         seq: 1,
@@ -1746,7 +1745,7 @@ describe("ChatStreamWriter", () => {
     } as AcpStreamMessage);
 
     expect(writer.livePreviewBatcher.snapshot().pendingItems).toBe(0);
-    await waitForCondition(() => previewPayloads.length > 0);
+    await waitForCondition(() => previewPayloads.length >= 1);
     const previewEvents = flattenLivePayloads(previewPayloads);
     expect(
       previewEvents.filter(
@@ -1755,6 +1754,70 @@ describe("ChatStreamWriter", () => {
     ).toHaveLength(1);
     expect(getLiveResponseMarkdown(previewEvents)).toBe(
       "capability ledger/schema, provider decisions, dependency DAG, and parallelizable priorities.",
+    );
+    writer.dispose?.(true);
+  });
+
+  it("publishes a final preview without requiring a successor after a slow publish", async () => {
+    const previewPayloads: Array<AcpStreamMessage | AcpStreamMessage[]> = [];
+    let publishCount = 0;
+    const { syncdb } = makeFakeSyncDB();
+    const writer: any = new ChatStreamWriter({
+      metadata: baseMetadata,
+      client: makeFakeClient(),
+      approverAccountId: "u",
+      syncdbOverride: syncdb as any,
+      logStoreFactory: () =>
+        ({
+          set: async () => {},
+        }) as any,
+      livePreviewStreamFactory: () =>
+        ({
+          publish: async (payload: AcpStreamMessage | AcpStreamMessage[]) => {
+            publishCount += 1;
+            if (publishCount === 1) {
+              await delay(600);
+            }
+            previewPayloads.push(payload);
+            return { seq: previewPayloads.length, time: Date.now() };
+          },
+          close: () => {},
+        }) as any,
+    });
+
+    await writer.handle({
+      type: "event",
+      event: {
+        type: "message",
+        text: "Reviewing config objects",
+        delta: true,
+      },
+      seq: 1,
+      time: 1000,
+    } as AcpStreamMessage);
+    await writer.waitForLivePreviewFlush();
+    expect(previewPayloads).toHaveLength(1);
+    expect(
+      writer.livePreviewBatcher.snapshot().nextDelayMs,
+    ).toBeLessThanOrEqual(250);
+
+    // There is intentionally no status, tool event, summary, or later token to
+    // force a flush. The final delta must publish on its own bounded timer.
+    await writer.handle({
+      type: "event",
+      event: {
+        type: "message",
+        text: " changed.",
+        delta: true,
+      },
+      seq: 2,
+      time: 1010,
+    } as AcpStreamMessage);
+    await waitForCondition(() => previewPayloads.length >= 2, 500);
+
+    expect(previewPayloads).toHaveLength(2);
+    expect(getLiveResponseMarkdown(flattenLivePayloads(previewPayloads))).toBe(
+      "Reviewing config objects changed.",
     );
     writer.dispose?.(true);
   });

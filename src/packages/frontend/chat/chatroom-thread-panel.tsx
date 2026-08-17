@@ -84,7 +84,7 @@ import {
   shouldOpenThreadSearchShortcut,
 } from "./chatroom-thread-panel-shortcuts";
 import { resolveAgentSessionIdForThread } from "./thread-session";
-import { getLatestEventTimeFromEvents, useCodexLog } from "./use-codex-log";
+import { useCodexLiveActivityStatus } from "./use-codex-log";
 import { CodexFullAccessNotice } from "./codex-full-access";
 import { getCodexPaymentSourceOptions } from "./use-codex-payment-source";
 import {
@@ -631,6 +631,7 @@ export function ChatRoomThreadPanel({
       key: derived?.key,
       subject: derived?.subject,
       liveStream: derived?.liveStream,
+      previewStream: derived?.previewStream,
     };
   }, [path, project_id, selectedRunningMessageId, selectedRunningThreadId]);
   const selectedRunningLogStore = useMemo(
@@ -657,20 +658,17 @@ export function ChatRoomThreadPanel({
       selectedRunningFallbackLogRefs.liveStream,
     [selectedRunningCodexMessage, selectedRunningFallbackLogRefs.liveStream],
   );
-  const selectedRunningCodexActivity = useCodexLog({
+  const selectedRunningLivePreviewStream = useMemo(
+    () =>
+      field<string>(selectedRunningCodexMessage, "acp_live_preview_stream") ??
+      selectedRunningFallbackLogRefs.previewStream,
+    [selectedRunningCodexMessage, selectedRunningFallbackLogRefs.previewStream],
+  );
+  const selectedRunningCodexActivity = useCodexLiveActivityStatus({
     projectId: project_id,
-    logStore: selectedRunningLogStore,
-    logKey: selectedRunningLogKey,
-    logSubject: selectedRunningLogSubject,
-    liveLogStream: selectedRunningLiveLogStream,
-    generating: true,
+    liveLogStream: selectedRunningLivePreviewStream,
     enabled: selectedRunningCodexMessage != null,
   });
-  const selectedRunningLastActivityAtMs = useMemo(
-    () =>
-      getLatestEventTimeFromEvents(selectedRunningCodexActivity.events ?? []),
-    [selectedRunningCodexActivity.events],
-  );
   const selectedRunningSessionIdForInterrupt = useMemo(() => {
     if (!selectedThreadId) return undefined;
     const resolved = resolveAgentSessionIdForThread({
@@ -1993,8 +1991,7 @@ export function ChatRoomThreadPanel({
                 path,
               }}
               activityLiveStatus={selectedRunningCodexActivity.liveStatus}
-              lastActivityAtMs={selectedRunningLastActivityAtMs}
-              logEvents={selectedRunningCodexActivity.events}
+              lastActivityAtMs={selectedRunningCodexActivity.lastActivityAtMs}
               notifyOnTurnFinish={notifyOnTurnFinish}
               onNotifyOnTurnFinishChange={onNotifyOnTurnFinishChange}
               interruptRequested={interruptRequested}

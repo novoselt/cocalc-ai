@@ -27,22 +27,40 @@ const LIVE_LOG_FLUSH_MS = 1000;
 const LIVE_ACTIVITY_STATUS_FLUSH_MS = 1000;
 const LIVE_STREAM_STALE_AFTER_MS = 30_000;
 const LIVE_STREAM_WATCHDOG_INTERVAL_MS = 10_000;
-const RECENT_LOG_CACHE_SIZE = 5;
+const RECENT_ACTIVITY_LOG_CACHE_SIZE = 5;
+const RECENT_PREVIEW_LOG_CACHE_SIZE = 20;
 
 type RecentLogCacheEntry = {
   events: any[];
   // This is the DStream transport sequence, not AcpStreamMessage.seq.
   liveStreamSeq?: number;
+  liveStreamName?: string;
 };
 
-const recentLogCache = new LRUCache<string, RecentLogCacheEntry>({
-  max: RECENT_LOG_CACHE_SIZE,
+const recentActivityLogCache = new LRUCache<string, RecentLogCacheEntry>({
+  max: RECENT_ACTIVITY_LOG_CACHE_SIZE,
+});
+const recentPreviewLogCache = new LRUCache<string, RecentLogCacheEntry>({
+  max: RECENT_PREVIEW_LOG_CACHE_SIZE,
 });
 
 function getRecentLogCacheEntry(
   cacheKey: string | undefined,
+  projection: boolean,
 ): RecentLogCacheEntry | undefined {
-  return cacheKey ? recentLogCache.get(cacheKey) : undefined;
+  if (!cacheKey) return undefined;
+  return (projection ? recentPreviewLogCache : recentActivityLogCache).get(
+    cacheKey,
+  );
+}
+
+function cachedLiveStreamSeq(
+  cached: RecentLogCacheEntry | undefined,
+  liveLogStream: string | null | undefined,
+): number | undefined {
+  return cached != null && cached.liveStreamName === liveLogStream
+    ? cached.liveStreamSeq
+    : undefined;
 }
 
 function latestDStreamSeq(stream: DStream<any>): number | undefined {
@@ -112,19 +130,12 @@ function recentLogCacheKey({
   projectId,
   logStore,
   logKey,
-  liveLogStream,
-  generating,
 }: {
   projectId?: string;
   logStore?: string | null;
   logKey?: string | null;
-  liveLogStream?: string | null;
-  generating?: boolean;
 }): string | undefined {
   if (!projectId || !logStore || !logKey) return undefined;
-  if (generating && liveLogStream) {
-    return `${projectId}:${logStore}:${logKey}:${liveLogStream}`;
-  }
   return `${projectId}:${logStore}:${logKey}`;
 }
 
@@ -286,8 +297,6 @@ export function useCodexLog({
     projectId,
     logStore,
     logKey,
-    liveLogStream,
-    generating,
   });
   const cachePrefix = recentLogCachePrefix({
     projectId,
@@ -296,15 +305,21 @@ export function useCodexLog({
   });
 
   const [fetchedLog, setFetchedLog] = useState<any[] | null>(() => {
-    return getRecentLogCacheEntry(cacheKey)?.events ?? null;
+    return (
+      getRecentLogCacheEntry(cacheKey, liveStreamIsProjection)?.events ?? null
+    );
   });
   const [akvLoaded, setAkvLoaded] = useState<boolean>(false);
   const [loadState, setLoadState] = useState<CodexPersistedLogLoadState>(() =>
-    getRecentLogCacheEntry(cacheKey)?.events.length ? "loaded" : "idle",
+    getRecentLogCacheEntry(cacheKey, liveStreamIsProjection)?.events.length
+      ? "loaded"
+      : "idle",
   );
   const [loadError, setLoadError] = useState<string | undefined>();
   const [liveLog, setLiveLog] = useState<any[]>(() => {
-    return getRecentLogCacheEntry(cacheKey)?.events ?? [];
+    return (
+      getRecentLogCacheEntry(cacheKey, liveStreamIsProjection)?.events ?? []
+    );
   });
   const [liveStatus, setLiveStatus] = useState<CodexLiveLogStatus>("idle");
   const [liveReconnectToken, setLiveReconnectToken] = useState(0);
@@ -315,7 +330,10 @@ export function useCodexLog({
     AcpStreamMessage | AcpStreamMessage[]
   > | null>(null);
   const appliedLiveStreamSeqRef = useRef<number | undefined>(
-    getRecentLogCacheEntry(cacheKey)?.liveStreamSeq,
+    cachedLiveStreamSeq(
+      getRecentLogCacheEntry(cacheKey, liveStreamIsProjection),
+      liveLogStream,
+    ),
   );
   const pendingLiveStreamSeqRef = useRef<number | undefined>(undefined);
   const reconnectResourceRef = useRef<RegisteredReconnectResource | null>(null);
@@ -393,12 +411,15 @@ export function useCodexLog({
   // Reset when log ref changes.
   useEffect(() => {
     if (cacheKey) {
-      const cached = getRecentLogCacheEntry(cacheKey);
+      const cached = getRecentLogCacheEntry(cacheKey, liveStreamIsProjection);
       setFetchedLog(cached?.events ?? null);
       setLiveLog(cached?.events ?? []);
       setLoadState(cached?.events.length ? "loaded" : "idle");
       setLoadError(undefined);
-      appliedLiveStreamSeqRef.current = cached?.liveStreamSeq;
+      appliedLiveStreamSeqRef.current = cachedLiveStreamSeq(
+        cached,
+        liveLogStream,
+      );
       pendingLiveStreamSeqRef.current = undefined;
       liveBufferRef.current = [];
       if (liveFlushTimerRef.current != null) {
@@ -422,7 +443,7 @@ export function useCodexLog({
       }
       setAkvLoaded(false);
     }
-  }, [cacheKey, logSubject]);
+  }, [cacheKey, liveLogStream, liveStreamIsProjection, logSubject]);
 
   const fetchPersistedLog = useCallback(
     async ({
@@ -684,11 +705,12 @@ export function useCodexLog({
         if (liveLogStream) {
           const cached =
             liveStreamIsProjection && cacheKey
-              ? getRecentLogCacheEntry(cacheKey)
+              ? getRecentLogCacheEntry(cacheKey, true)
               : undefined;
+          const cachedSeq = cachedLiveStreamSeq(cached, liveLogStream);
           const startSeq =
-            cached?.events.length && cached.liveStreamSeq != null
-              ? cached.liveStreamSeq + 1
+            cached?.events.length && cachedSeq != null
+              ? cachedSeq + 1
               : undefined;
           const lease = await acquireSharedProjectDStream<AcpStreamMessage>({
             project_id: projectId,
@@ -892,13 +914,19 @@ export function useCodexLog({
 
   useEffect(() => {
     if (!cacheKey || !events || !events.length) return;
-    recentLogCache.set(cacheKey, {
+    const cache = liveStreamIsProjection
+      ? recentPreviewLogCache
+      : recentActivityLogCache;
+    cache.set(cacheKey, {
       events,
       liveStreamSeq: liveStreamIsProjection
         ? appliedLiveStreamSeqRef.current
         : undefined,
+      liveStreamName: liveStreamIsProjection
+        ? (liveLogStream ?? undefined)
+        : undefined,
     });
-  }, [cacheKey, events, liveStreamIsProjection]);
+  }, [cacheKey, events, liveLogStream, liveStreamIsProjection]);
 
   const deleteLog = async () => {
     if (!hasLogRef || !projectId || !logStore || !logKey) return;
@@ -913,9 +941,11 @@ export function useCodexLog({
       console.warn("failed to delete acp log", err);
     }
     if (cachePrefix) {
-      for (const key of recentLogCache.keys()) {
-        if (key === cachePrefix || key.startsWith(`${cachePrefix}:`)) {
-          recentLogCache.delete(key);
+      for (const cache of [recentActivityLogCache, recentPreviewLogCache]) {
+        for (const key of cache.keys()) {
+          if (key === cachePrefix || key.startsWith(`${cachePrefix}:`)) {
+            cache.delete(key);
+          }
         }
       }
     }
