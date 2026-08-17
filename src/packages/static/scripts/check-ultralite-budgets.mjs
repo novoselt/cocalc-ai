@@ -58,6 +58,7 @@ const apps = findNamedGroup("ultralite-apps");
 const cli = findNamedGroup("ultralite-cli");
 const terminal = findNamedGroup("ultralite-terminal");
 const notifications = findNamedGroup("ultralite-notifications");
+const docs = findNamedGroup("ultralite-docs");
 const settings = findNamedGroup("ultralite-settings");
 const codeMirror = findNamedGroup("ultralite-codemirror");
 const katexComponent = findNamedGroup("ultralite-katex-component");
@@ -165,7 +166,9 @@ console.log(
 );
 
 const surfaces = [
-  { label: "shell", chunks: initial, max: 75 * KiB },
+  // Native route links and the shared accessible overflow control add less
+  // than 1 KiB while preserving the sub-80 KiB startup target.
+  { label: "shell", chunks: initial, max: 76 * KiB },
   { label: "projects", chunks: [...initial, ...projects], max: 400 * KiB },
   {
     label: "files and read-only Jupyter",
@@ -302,6 +305,11 @@ const surfaces = [
     label: "notifications",
     chunks: [...initial, ...notifications],
     max: 475 * KiB,
+  },
+  {
+    label: "Essential Docs",
+    chunks: [...initial, ...docs],
+    max: 300 * KiB,
   },
   {
     label: "minimal project settings",

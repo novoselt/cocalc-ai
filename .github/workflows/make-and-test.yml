@@ -224,8 +224,9 @@ jobs:
           pip install ipykernel requests yapf
           python -m ipykernel install --prefix=./jupyter-local --name python3-local --display-name "Python 3 (Local)"
 
-      #- name: check bundle guards
-      #  run: cd src/packages/static && pnpm run check-bundle-guards
+      - name: Check Essential frontend bundle budgets
+        if: matrix.lane == 'rest'
+        run: cd src/packages/static && pnpm run check-ultralite-budgets
 
       - name: Test ${{ matrix.lane }} packages
         env:

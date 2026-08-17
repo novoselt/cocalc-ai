@@ -120,16 +120,27 @@ function elementFor(token: Token): keyof JSX.IntrinsicElements | undefined {
   }
 }
 
-function renderTokens(tokens: Token[], prefix = "md"): ReactNode[] {
+function renderTokens(
+  tokens: Token[],
+  prefix = "md",
+  resolveHref?: (href: string) => string,
+  renderImages = true,
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     const key = `${prefix}-${i}`;
     if (token.nesting === 1) {
       const close = findClose(tokens, i);
-      const children = renderTokens(tokens.slice(i + 1, close), key);
+      const children = renderTokens(
+        tokens.slice(i + 1, close),
+        key,
+        resolveHref,
+        renderImages,
+      );
       if (token.type === "link_open") {
-        const href = safeHref(token.attrGet("href"));
+        const rawHref = token.attrGet("href") ?? "";
+        const href = safeHref(resolveHref?.(rawHref) ?? rawHref);
         nodes.push(
           href ? (
             <a
@@ -163,7 +174,12 @@ function renderTokens(tokens: Token[], prefix = "md"): ReactNode[] {
       case "inline":
         nodes.push(
           <Fragment key={key}>
-            {renderTokens(token.children ?? [], `${key}-inline`)}
+            {renderTokens(
+              token.children ?? [],
+              `${key}-inline`,
+              resolveHref,
+              renderImages,
+            )}
           </Fragment>,
         );
         break;
@@ -212,6 +228,7 @@ function renderTokens(tokens: Token[], prefix = "md"): ReactNode[] {
         );
         break;
       case "image": {
+        if (!renderImages) break;
         const href = safeHref(token.attrGet("src"));
         const label = token.content || token.attrGet("alt") || "image";
         nodes.push(
@@ -257,9 +274,21 @@ function createElementSafe(
   return createElement(tag, props, children);
 }
 
-export function Markdown({ source }: { source: string }) {
+export function Markdown({
+  renderImages = true,
+  resolveHref,
+  source,
+}: {
+  renderImages?: boolean;
+  resolveHref?: (href: string) => string;
+  source: string;
+}) {
   const tokens = useMemo(() => markdown.parse(source, {}), [source]);
-  return <div className="ul-markdown">{renderTokens(tokens)}</div>;
+  return (
+    <div className="ul-markdown">
+      {renderTokens(tokens, "md", resolveHref, renderImages)}
+    </div>
+  );
 }
 
 export { safeHref };

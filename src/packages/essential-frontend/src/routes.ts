@@ -8,6 +8,7 @@ import { getAppBasePath, siteUrl } from "./urls";
 export type UltraliteRoute =
   | { kind: "projects" }
   | { kind: "notifications" }
+  | { kind: "docs"; slug?: string }
   | { kind: "files"; projectId: string; path: string }
   | { kind: "file"; projectId: string; path: string }
   | { kind: "recent"; projectId: string }
@@ -59,6 +60,9 @@ function parseLegacyHash(hash: string): UltraliteRoute {
   const [pathname, query = ""] = raw.split("?", 2);
   const segments = pathname.split("/").filter(Boolean);
   if (segments[0] === "notifications") return { kind: "notifications" };
+  if (segments[0] === "docs") {
+    return { kind: "docs", slug: segments.slice(1).join("/") || undefined };
+  }
   if (segments[0] !== "project" || !UUID.test(segments[1] ?? "")) {
     return { kind: "projects" };
   }
@@ -125,6 +129,9 @@ export function parseEssentialRoute(
     return { kind: "projects" };
   }
   if (segments[0] === "notifications") return { kind: "notifications" };
+  if (segments[0] === "docs") {
+    return { kind: "docs", slug: segments.slice(1).join("/") || undefined };
+  }
   if (segments[0] !== "projects" || !UUID.test(segments[1] ?? "")) {
     return { kind: "projects" };
   }
@@ -181,6 +188,9 @@ export function parseRoute(
 export function routeHash(route: UltraliteRoute): string {
   if (route.kind === "projects") return "#/projects";
   if (route.kind === "notifications") return "#/notifications";
+  if (route.kind === "docs") {
+    return route.slug ? `#/docs/${route.slug}` : "#/docs";
+  }
   const root = `#/project/${route.projectId}`;
   switch (route.kind) {
     case "files":
@@ -226,6 +236,14 @@ export function essentialRouteUrl(
   const root = siteUrl("essential", basePath);
   if (route.kind === "projects") return `${root}/projects`;
   if (route.kind === "notifications") return `${root}/notifications`;
+  if (route.kind === "docs") {
+    const slug = route.slug
+      ?.split("/")
+      .filter(Boolean)
+      .map(encodeURIComponent)
+      .join("/");
+    return slug ? `${root}/docs/${slug}` : `${root}/docs`;
+  }
   const projectRoot = `${root}/projects/${route.projectId}`;
   switch (route.kind) {
     case "files":

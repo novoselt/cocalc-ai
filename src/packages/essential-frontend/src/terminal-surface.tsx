@@ -23,7 +23,7 @@ import {
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
-import { InlineAlert, LoadingState, SurfaceHeader } from "./ui";
+import { InlineAlert, LoadingState, OverflowMenu, SurfaceHeader } from "./ui";
 import { fullProjectUrl } from "./urls";
 
 type ConnectionState =
@@ -591,33 +591,7 @@ export default function TerminalSurface({
       <SurfaceHeader
         actions={
           <>
-            {connected ? (
-              <>
-                {historyOmitted ? (
-                  <button
-                    className="ul-button ul-button-secondary"
-                    onClick={() => void loadFullHistory()}
-                    type="button"
-                  >
-                    Load more history
-                  </button>
-                ) : null}
-                <button
-                  className="ul-button ul-button-secondary"
-                  onClick={resetDisplay}
-                  type="button"
-                >
-                  Reset display
-                </button>
-                <button
-                  className="ul-button ul-button-secondary"
-                  onClick={disconnect}
-                  type="button"
-                >
-                  Disconnect
-                </button>
-              </>
-            ) : (
+            {!connected ? (
               <button
                 className="ul-button"
                 disabled={busy}
@@ -632,14 +606,43 @@ export default function TerminalSurface({
                       ? "Restart shell"
                       : "Connect terminal"}
               </button>
-            )}
-            <a
-              className="ul-link-button ul-link-button-subtle"
-              data-ul-full-cocalc
-              href={fullProjectUrl({ projectId: project.project_id })}
-            >
-              Full CoCalc
-            </a>
+            ) : null}
+            <OverflowMenu label="Terminal actions">
+              {connected ? (
+                <>
+                  {historyOmitted ? (
+                    <button
+                      className="ul-menu-item"
+                      onClick={() => void loadFullHistory()}
+                      type="button"
+                    >
+                      Load more history
+                    </button>
+                  ) : null}
+                  <button
+                    className="ul-menu-item"
+                    onClick={resetDisplay}
+                    type="button"
+                  >
+                    Reset display
+                  </button>
+                  <button
+                    className="ul-menu-item"
+                    onClick={disconnect}
+                    type="button"
+                  >
+                    Disconnect
+                  </button>
+                </>
+              ) : null}
+              <a
+                className="ul-menu-item"
+                data-ul-full-cocalc
+                href={fullProjectUrl({ projectId: project.project_id })}
+              >
+                Full CoCalc
+              </a>
+            </OverflowMenu>
           </>
         }
         eyebrow="Project compute"

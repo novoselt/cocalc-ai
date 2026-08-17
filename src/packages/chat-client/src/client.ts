@@ -3,7 +3,11 @@
  * License: MS-RSL – see LICENSE.md for details
  */
 
-import { CHAT_PRIMARY_KEYS, CHAT_STRING_COLS } from "@cocalc/chat";
+import {
+  buildThreadConfigRecord,
+  CHAT_PRIMARY_KEYS,
+  CHAT_STRING_COLS,
+} from "@cocalc/chat";
 import type { AcpStreamMessage } from "@cocalc/conat/ai/acp/types";
 import type { Client as ConatClient } from "@cocalc/conat/core/client";
 import type { DStream } from "@cocalc/conat/sync/dstream";
@@ -149,6 +153,44 @@ export class CoCalcHeadlessChatClient implements HeadlessChatClient {
     if (!normalized || normalized === this.selectedThreadId) return;
     this.selectedThreadId = normalized;
     this.rebuild();
+  }
+
+  async createCodexThread(opts: {
+    thread_id: string;
+    name?: string;
+    acp_config: import("@cocalc/chat").CodexThreadConfig;
+  }): Promise<{ thread_id: string }> {
+    const db = this.db;
+    const threadId = opts.thread_id.trim();
+    if (!db?.isReady()) throw new Error("Chat is not ready.");
+    if (!threadId) throw new Error("thread_id is required");
+    const rows = db.get();
+    if (
+      Array.isArray(rows) &&
+      rows.some(
+        (row) =>
+          row?.event === "chat-thread-config" && row?.thread_id === threadId,
+      )
+    ) {
+      throw new Error(`thread '${threadId}' already exists`);
+    }
+    db.set(
+      buildThreadConfigRecord({
+        acp_config: opts.acp_config,
+        agent_kind: "acp",
+        agent_mode: "interactive",
+        agent_model: opts.acp_config.model,
+        name: opts.name?.trim() || "Codex chat",
+        thread_id: threadId,
+        updated_at: new Date().toISOString(),
+        updated_by: this.options.account_id,
+      }),
+    );
+    db.commit({ emitChangeImmediately: true });
+    await db.save();
+    this.selectedThreadId = threadId;
+    this.rebuild();
+    return { thread_id: threadId };
   }
 
   async sendToExistingCodexThread(opts: {

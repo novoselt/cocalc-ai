@@ -46,6 +46,19 @@ test("parses and serializes account notifications", () => {
   expect(parseRoute(routeHash(route))).toEqual(route);
 });
 
+test("parses and serializes Essential documentation", () => {
+  const route = { kind: "docs" as const, slug: "jupyter/custom-kernels" };
+  expect(parseRoute(routeHash(route))).toEqual(route);
+  expect(
+    parseEssentialRoute({
+      pathname: "/essential/docs/jupyter/custom-kernels",
+    }),
+  ).toEqual(route);
+  expect(essentialRouteUrl(route, "/cocalc")).toBe(
+    "/cocalc/essential/docs/jupyter/custom-kernels",
+  );
+});
+
 test("opens a bare project route at its home directory", () => {
   expect(parseRoute(`#/project/${projectId}`)).toEqual({
     kind: "files",

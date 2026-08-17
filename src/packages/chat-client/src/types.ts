@@ -74,6 +74,11 @@ export interface HeadlessChatClient {
   getSnapshot(): ChatSnapshot;
   subscribe(listener: (snapshot: ChatSnapshot) => void): () => void;
   selectThread(thread_id: string): void;
+  createCodexThread(opts: {
+    thread_id: string;
+    name?: string;
+    acp_config: CodexThreadConfig;
+  }): Promise<{ thread_id: string }>;
   sendToExistingCodexThread(opts: {
     thread_id: string;
     text: string;

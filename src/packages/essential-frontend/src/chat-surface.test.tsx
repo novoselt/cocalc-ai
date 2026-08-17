@@ -10,10 +10,16 @@ import {
   type ChatSnapshot,
   type HeadlessChatClient,
 } from "@cocalc/chat-client";
-import { Chat, SafeMessageContent } from "./chat-surface";
+import { AgentList, Chat, SafeMessageContent } from "./chat-surface";
 
 jest.mock("@cocalc/chat-client", () => ({
-  AgentSessionIndex: class {},
+  AgentSessionIndex: class {
+    subscribe() {
+      return () => undefined;
+    }
+    async open() {}
+    close() {}
+  },
   createRemoteHeadlessChatClient: jest.fn(),
 }));
 
@@ -50,6 +56,7 @@ const snapshot: ChatSnapshot = {
 function mockClient(): HeadlessChatClient {
   const client = {
     close: jest.fn(async () => undefined),
+    createCodexThread: jest.fn(async ({ thread_id }) => ({ thread_id })),
     getSnapshot: jest.fn(() => snapshot),
     interrupt: jest.fn(async () => undefined),
     loadOlderMessages: jest.fn(async () => undefined),
@@ -70,6 +77,58 @@ function mockClient(): HeadlessChatClient {
 }
 
 afterEach(() => jest.clearAllMocks());
+
+test("creates a new Essential Codex thread through the project-host service", async () => {
+  const client = mockClient();
+  window.history.replaceState(
+    {},
+    "",
+    `/essential/projects/${snapshot.project_id}/codex`,
+  );
+  const session = {
+    accountId: "22222222-2222-4222-8222-222222222222",
+    openProjectHost: jest.fn(async () => ({ client: {} })),
+  };
+  render(
+    <AgentList
+      project={
+        {
+          host_id: "host-1",
+          project_id: snapshot.project_id,
+          title: "Test",
+        } as any
+      }
+      session={session as any}
+    />,
+  );
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: "New Codex chat" }),
+  );
+  await waitFor(() => expect(client.createCodexThread).toHaveBeenCalled());
+  expect(client.createCodexThread).toHaveBeenCalledWith(
+    expect.objectContaining({
+      acp_config: expect.objectContaining({
+        paymentSource: "auto",
+        sessionMode: "workspace-write",
+        workingDirectory: "/home/user",
+      }),
+      name: "Codex chat",
+      thread_id: expect.any(String),
+    }),
+  );
+  expect(createRemoteHeadlessChatClient).toHaveBeenCalledWith(
+    expect.objectContaining({
+      path: expect.stringMatching(/^\/home\/user\/.*\.chat$/),
+      project_id: snapshot.project_id,
+    }),
+  );
+  await waitFor(() =>
+    expect(window.location.pathname).toContain(
+      `/essential/projects/${snapshot.project_id}/codex/chat`,
+    ),
+  );
+});
 
 test("renders approval links as safe visible links in their chat context", () => {
   render(

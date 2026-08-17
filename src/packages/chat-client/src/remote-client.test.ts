@@ -280,6 +280,43 @@ test("accepts lower server revisions after opening a replacement session", () =>
   expect(client.getSnapshot().messages[0].content).toBe("replacement update");
 });
 
+test("creates a thread without opening an existing chat session", async () => {
+  const request = jest.fn(async (_subject, [name, args]) => ({
+    data:
+      name === "createThread" ? { thread_id: args[0].thread_id } : undefined,
+  }));
+  const client = new RemoteHeadlessChatClient({
+    account_id: ACCOUNT_ID,
+    path: PATH,
+    projectHostClient: { request } as any,
+    project_id: PROJECT_ID,
+    selected_thread_id: THREAD_ID,
+  });
+
+  await expect(
+    client.createCodexThread({
+      acp_config: { model: "gpt-test" },
+      name: "New chat",
+      thread_id: THREAD_ID,
+    }),
+  ).resolves.toEqual({ thread_id: THREAD_ID });
+  expect(request).toHaveBeenCalledWith(
+    expect.any(String),
+    [
+      "createThread",
+      [
+        {
+          acp_config: { model: "gpt-test" },
+          name: "New chat",
+          path: PATH,
+          thread_id: THREAD_ID,
+        },
+      ],
+    ],
+    expect.objectContaining({ timeout: expect.any(Number) }),
+  );
+});
+
 function streamStub() {
   return {
     close: jest.fn(),

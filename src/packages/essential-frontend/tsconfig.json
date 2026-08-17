@@ -13,6 +13,7 @@
   "references": [
     { "path": "../chat-client" },
     { "path": "../conat" },
+    { "path": "../docs" },
     { "path": "../util" }
   ]
 }

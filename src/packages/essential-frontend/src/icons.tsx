@@ -12,9 +12,11 @@ export type UltraliteIconName =
   | "chat"
   | "chevron"
   | "code"
+  | "docs"
   | "external"
   | "file"
   | "folder"
+  | "more"
   | "notebook"
   | "projects"
   | "recent"
@@ -50,6 +52,12 @@ const PATHS: Record<UltraliteIconName, ReactNode> = {
       <path d="m14 5-4 14" />
     </>
   ),
+  docs: (
+    <>
+      <path d="M4 5a3 3 0 0 1 3-3h5v18H7a3 3 0 0 0-3 3Z" />
+      <path d="M20 5a3 3 0 0 0-3-3h-5v18h5a3 3 0 0 1 3 3Z" />
+    </>
+  ),
   external: (
     <>
       <path d="M15 3h6v6" />
@@ -64,6 +72,13 @@ const PATHS: Record<UltraliteIconName, ReactNode> = {
     </>
   ),
   folder: <path d="M3 6h7l2 2h9v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />,
+  more: (
+    <>
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </>
+  ),
   notebook: (
     <>
       <path d="M6 3h13v18H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />

@@ -6,9 +6,8 @@
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import { useState } from "react";
 import { UltraliteIcon } from "./icons";
-import { navigate } from "./routes";
 import { clearRecentFiles, readRecentFiles } from "./recent-files";
-import { EmptyState, SurfaceHeader } from "./ui";
+import { EmptyState, EssentialLink, SurfaceHeader } from "./ui";
 
 function parentPath(path: string): string {
   const index = path.lastIndexOf("/");
@@ -49,17 +48,14 @@ export default function RecentSurface({
       {files.length ? (
         <div className="ul-compact-list" key={revision}>
           {files.map((file) => (
-            <button
+            <EssentialLink
               className="ul-compact-row ul-row-grid"
               key={`${file.projectId}:${file.path}`}
-              onClick={() =>
-                navigate({
-                  kind: "file",
-                  path: file.path,
-                  projectId: file.projectId,
-                })
-              }
-              type="button"
+              route={{
+                kind: "file",
+                path: file.path,
+                projectId: file.projectId,
+              }}
             >
               <span className="ul-recent-file">
                 <span className="ul-row-title">
@@ -71,7 +67,7 @@ export default function RecentSurface({
               <span className="ul-row-detail">
                 {new Date(file.openedAt).toLocaleString()}
               </span>
-            </button>
+            </EssentialLink>
           ))}
         </div>
       ) : (

@@ -12,7 +12,8 @@ import {
   recordUltraliteOutcome,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
-import { UltraliteSession } from "./session";
+import type { UltraliteSession } from "./session";
+import { loadUltraliteSession } from "./session-loader";
 import {
   ChunkErrorBoundary,
   InlineAlert,
@@ -123,8 +124,9 @@ const RecentSurface = lazy(
 
 type ProjectRoute = Exclude<
   UltraliteRoute,
-  { kind: "notifications" | "projects" }
+  { kind: "docs" | "notifications" | "projects" }
 >;
+type ConnectedProjectRoute = Exclude<ProjectRoute, { kind: "cli" | "recent" }>;
 
 function MissingHost({ project }: { project: AccountProjectListWindowRow }) {
   return (
@@ -158,28 +160,16 @@ function ProjectSurface({
   session,
 }: {
   project: AccountProjectListWindowRow;
-  route: ProjectRoute;
+  route: ConnectedProjectRoute;
   session: UltraliteSession;
 }) {
   let surface: ReactNode;
-  if (
-    !project.host_id &&
-    route.kind !== "vms" &&
-    route.kind !== "recent" &&
-    route.kind !== "cli" &&
-    route.kind !== "settings"
-  ) {
+  if (!project.host_id && route.kind !== "vms" && route.kind !== "settings") {
     surface = <MissingHost project={project} />;
   } else if (route.kind === "files" || route.kind === "file") {
     surface = (
       <DeferredSurface label="Files">
         <FileSurface project={project} route={route} session={session} />
-      </DeferredSurface>
-    );
-  } else if (route.kind === "recent") {
-    surface = (
-      <DeferredSurface label="Recent files">
-        <RecentSurface accountId={session.accountId} project={project} />
       </DeferredSurface>
     );
   } else if (route.kind === "agents" || route.kind === "chat") {
@@ -218,12 +208,6 @@ function ProjectSurface({
         <SettingsSurface project={project} session={session} />
       </DeferredSurface>
     );
-  } else {
-    surface = (
-      <DeferredSurface label="CLI">
-        <CliSurface project={project} />
-      </DeferredSurface>
-    );
   }
   return (
     <ProjectLayout project={project} route={route}>
@@ -241,6 +225,7 @@ export default function Workspace({
   onProjectTitleChange: (title?: string) => void;
   route: ProjectRoute;
 }) {
+  const sessionless = route.kind === "recent" || route.kind === "cli";
   const [session, setSession] = useState<UltraliteSession>();
   const [project, setProject] = useState<AccountProjectListWindowRow>();
   const [error, setError] = useState<string>();
@@ -277,9 +262,15 @@ export default function Workspace({
   }, [bootstrap, route.projectId]);
 
   useEffect(() => {
+    if (sessionless) {
+      setSession(undefined);
+      return;
+    }
     let current: UltraliteSession | undefined;
     let cancelled = false;
-    void UltraliteSession.open(bootstrap)
+    setSession(undefined);
+    void loadUltraliteSession()
+      .then(({ UltraliteSession }) => UltraliteSession.open(bootstrap))
       .then((opened) => {
         current = opened;
         if (cancelled) opened.close();
@@ -296,13 +287,14 @@ export default function Workspace({
       cancelled = true;
       current?.close();
     };
-  }, [bootstrap]);
+  }, [bootstrap, sessionless]);
 
   useEffect(() => {
-    if (!session || !project) return;
+    if (!project) return;
+    if (!sessionless && !session) return;
     recordUltraliteSurfaceReady("project");
     recordUltraliteOutcome("project", "project_open");
-  }, [project, session]);
+  }, [project, route.kind, session, sessionless]);
 
   useEffect(() => {
     if (project) {
@@ -331,8 +323,27 @@ export default function Workspace({
       </main>
     );
   }
-  if (!session || !project) {
+  if (!project) {
     return <ShellLoading />;
   }
+  if (route.kind === "recent") {
+    return (
+      <ProjectLayout project={project} route={route}>
+        <DeferredSurface label="Recent files">
+          <RecentSurface accountId={bootstrap.account_id!} project={project} />
+        </DeferredSurface>
+      </ProjectLayout>
+    );
+  }
+  if (route.kind === "cli") {
+    return (
+      <ProjectLayout project={project} route={route}>
+        <DeferredSurface label="CLI">
+          <CliSurface project={project} />
+        </DeferredSurface>
+      </ProjectLayout>
+    );
+  }
+  if (!session) return <ShellLoading />;
   return <ProjectSurface project={project} route={route} session={session} />;
 }

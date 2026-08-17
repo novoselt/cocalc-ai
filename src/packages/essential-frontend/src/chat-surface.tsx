@@ -11,6 +11,10 @@ import {
   type HeadlessChatClient,
   type ProjectedChatMessage,
 } from "@cocalc/chat-client";
+import {
+  DEFAULT_CODEX_MODEL_NAME,
+  DEFAULT_CODEX_MODELS,
+} from "@cocalc/util/ai/codex";
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import {
   useCallback,
@@ -24,7 +28,14 @@ import { navigate, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
 import { Markdown } from "./markdown";
-import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
+import {
+  EmptyState,
+  EssentialLink,
+  InlineAlert,
+  LoadingState,
+  OverflowMenu,
+  SurfaceHeader,
+} from "./ui";
 import {
   markUltraliteBackend,
   markUltralitePhase,
@@ -58,7 +69,7 @@ function sessionSort(records: AgentSessionRecord[]): AgentSessionRecord[] {
   });
 }
 
-function AgentList({
+export function AgentList({
   project,
   session,
 }: {
@@ -67,6 +78,7 @@ function AgentList({
 }) {
   const [records, setRecords] = useState<AgentSessionRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -106,43 +118,104 @@ function AgentList({
     };
   }, [project.host_id, project.project_id, session]);
 
+  const createCodexChat = async () => {
+    if (creating) return;
+    setCreating(true);
+    setError(undefined);
+    let client: HeadlessChatClient | undefined;
+    try {
+      const threadId = crypto.randomUUID();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const chatPath = `/home/user/${timestamp}-${threadId.slice(0, 6)}.chat`;
+      const lease = await session.openProjectHost(
+        project.project_id,
+        project.host_id!,
+      );
+      client = createRemoteHeadlessChatClient({
+        account_id: session.accountId,
+        project_id: project.project_id,
+        path: chatPath,
+        projectHostClient: lease.client,
+        selected_thread_id: threadId,
+      });
+      const model = DEFAULT_CODEX_MODELS[0]?.name ?? DEFAULT_CODEX_MODEL_NAME;
+      const reasoning = DEFAULT_CODEX_MODELS[0]?.reasoning?.find(
+        ({ default: isDefault }) => isDefault,
+      )?.id;
+      await client.createCodexThread({
+        acp_config: {
+          allowWrite: true,
+          model,
+          paymentSource: "auto",
+          reasoning,
+          serviceTier: "standard",
+          sessionMode: "workspace-write",
+          workingDirectory: "/home/user",
+        },
+        name: "Codex chat",
+        thread_id: threadId,
+      });
+      navigate({
+        chatPath,
+        kind: "chat",
+        projectId: project.project_id,
+        threadId,
+      });
+    } catch (err) {
+      recordUltraliteFailure("chat", err);
+      setError(err instanceof Error ? err.message : `${err}`);
+    } finally {
+      await client?.close().catch(() => undefined);
+      setCreating(false);
+    }
+  };
+
   return (
     <main className="ul-page" id="main-content">
       <SurfaceHeader
         actions={
-          <a
-            className="ul-link-button ul-link-button-subtle"
-            data-ul-full-cocalc
-            href={fullProjectUrl({ projectId: project.project_id })}
-          >
-            Create in full CoCalc
-          </a>
+          <div className="ul-toolbar">
+            <button
+              className="ul-button"
+              disabled={creating}
+              onClick={() => void createCodexChat()}
+              type="button"
+            >
+              {creating ? "Creating..." : "New Codex chat"}
+            </button>
+            <OverflowMenu label="More Codex actions">
+              <a
+                className="ul-menu-item"
+                data-ul-full-cocalc
+                href={fullProjectUrl({ projectId: project.project_id })}
+              >
+                Open full CoCalc
+              </a>
+            </OverflowMenu>
+          </div>
         }
         eyebrow="Existing sessions"
         title="Codex"
       />
       <p className="ul-muted">
-        Essential CoCalc continues existing indexed sessions. Creating a new
-        Codex thread still uses the full workspace.
+        Start a focused Codex chat here, or continue an existing indexed session
+        below.
       </p>
       {loading ? <LoadingState label="Loading Codex sessions" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {records.length ? (
         <div className="ul-session-list">
           {records.map((record) => (
-            <button
+            <EssentialLink
               aria-label={`Open ${record.title || "Codex session"}, ${record.status}`}
               className="ul-session-row"
               key={`${record.chat_path}:${record.thread_key}`}
-              onClick={() =>
-                navigate({
-                  kind: "chat",
-                  projectId: project.project_id,
-                  chatPath: record.chat_path,
-                  threadId: record.thread_key,
-                })
-              }
-              type="button"
+              route={{
+                kind: "chat",
+                projectId: project.project_id,
+                chatPath: record.chat_path,
+                threadId: record.thread_key,
+              }}
             >
               <div className="ul-row-title">
                 {record.title || "Codex session"}
@@ -157,7 +230,7 @@ function AgentList({
                 {record.status} - updated{" "}
                 {new Date(record.updated_at).toLocaleString()}
               </span>
-            </button>
+            </EssentialLink>
           ))}
         </div>
       ) : !loading && !error ? (
@@ -461,18 +534,15 @@ export function Chat({
     <main className="ul-page" id="main-content">
       <SurfaceHeader
         actions={
-          <>
-            <button
-              className="ul-icon-button"
-              onClick={() =>
-                navigate({ kind: "agents", projectId: project.project_id })
-              }
-              type="button"
+          <OverflowMenu label="Codex chat actions">
+            <EssentialLink
+              className="ul-menu-item"
+              route={{ kind: "agents", projectId: project.project_id }}
             >
               Codex sessions
-            </button>
+            </EssentialLink>
             <button
-              className="ul-icon-button"
+              className="ul-menu-item"
               disabled={!client || reconnecting}
               onClick={() => void reconnect()}
               type="button"
@@ -480,7 +550,7 @@ export function Chat({
               {reconnecting ? "Catching up..." : "Catch up"}
             </button>
             <a
-              className="ul-link-button ul-link-button-subtle"
+              className="ul-menu-item"
               data-ul-full-cocalc
               href={fullProjectUrl({
                 projectId: project.project_id,
@@ -489,7 +559,7 @@ export function Chat({
             >
               Full CoCalc
             </a>
-          </>
+          </OverflowMenu>
         }
         eyebrow={status}
         title={selectedThread?.name || "Codex chat"}

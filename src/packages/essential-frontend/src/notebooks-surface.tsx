@@ -6,14 +6,20 @@
 import type { FilesystemClient } from "@cocalc/conat/files/fs";
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import { useEffect, useState } from "react";
-import { normalizeProjectPath, navigate } from "./routes";
+import { normalizeProjectPath } from "./routes";
 import type { UltraliteSession } from "./session";
 import {
   markUltraliteBackend,
   recordUltraliteFailure,
   recordUltraliteSurfaceReady,
 } from "./telemetry";
-import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
+import {
+  EmptyState,
+  EssentialLink,
+  InlineAlert,
+  LoadingState,
+  SurfaceHeader,
+} from "./ui";
 import { UltraliteIcon } from "./icons";
 
 const HOME = "/home/user";
@@ -166,18 +172,15 @@ export default function NotebooksSurface({
       {!loading && !error && notebooks.length ? (
         <div className="ul-compact-list">
           {notebooks.map((notebook) => (
-            <button
+            <EssentialLink
               aria-label={`Open notebook ${notebook.relativePath}`}
               className="ul-compact-row"
               key={notebook.path}
-              onClick={() =>
-                navigate({
-                  kind: "file",
-                  path: notebook.path,
-                  projectId: project.project_id,
-                })
-              }
-              type="button"
+              route={{
+                kind: "file",
+                path: notebook.path,
+                projectId: project.project_id,
+              }}
             >
               <div className="ul-row-title">
                 {notebook.relativePath.split("/").pop()}
@@ -186,7 +189,7 @@ export default function NotebooksSurface({
               <div className="ul-row-detail">
                 Modified {new Date(notebook.modified).toLocaleString()}
               </div>
-            </button>
+            </EssentialLink>
           ))}
         </div>
       ) : null}

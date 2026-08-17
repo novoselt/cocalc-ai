@@ -69,6 +69,17 @@ const NotificationsSurface = lazy(
       );
     }),
 );
+const DocsSurface = lazy(
+  () =>
+    new Promise((resolve, reject) => {
+      require.ensure(
+        [],
+        () => resolve(require("./docs-surface")),
+        reject,
+        "ultralite-docs",
+      );
+    }),
+);
 
 export function UltraliteApp() {
   const [bootstrap, setBootstrap] = useState<AuthBootstrap>();
@@ -128,7 +139,9 @@ export function UltraliteApp() {
       ? projectTitle || "Project"
       : route.kind === "notifications"
         ? "Notifications"
-        : "Projects";
+        : route.kind === "docs"
+          ? "Docs"
+          : "Projects";
     document.title = `${title} - CoCalc`;
   }, [projectRoute, projectTitle, route.kind]);
 
@@ -215,6 +228,8 @@ export function UltraliteApp() {
             <ProjectsWorkspace bootstrap={bootstrap} />
           ) : route.kind === "notifications" ? (
             <NotificationsSurface bootstrap={bootstrap} />
+          ) : route.kind === "docs" ? (
+            <DocsSurface route={route} />
           ) : (
             <Workspace
               bootstrap={bootstrap}
