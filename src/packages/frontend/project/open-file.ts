@@ -801,10 +801,7 @@ async function open_sagews_worksheet(
         type: "info",
         message: `Converting '${opts.path}' to a Jupyter notebook...`,
       });
-      const raw = await webapp_client.project_client.read_text_file({
-        project_id: actions.project_id,
-        path: opts.path,
-      });
+      const raw = await readSagewsWorksheetText(actions.project_id, opts.path);
       const { default: sagewsToIpynb } =
         await import("@cocalc/frontend/frame-editors/sagews-editor/sagews-to-ipynb");
       const ipynb = sagewsToIpynb(raw);
@@ -824,6 +821,17 @@ async function open_sagews_worksheet(
       message: `Error converting legacy worksheet -- ${err}`,
     });
   }
+}
+
+export async function readSagewsWorksheetText(
+  project_id: string,
+  path: string,
+): Promise<string> {
+  const content = await webapp_client.project_client.readFile({
+    project_id,
+    path,
+  });
+  return content.toString("utf8");
 }
 
 async function file_exists(project_id: string, path: string): Promise<boolean> {
