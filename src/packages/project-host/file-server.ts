@@ -239,6 +239,10 @@ import {
   type BackupBrowserSearchResponse,
   type BackupBrowserSearchResult,
 } from "./rustic-backup-browser";
+import {
+  archivePathIsAllowed,
+  decodePathCopyArchiveListing,
+} from "./path-copy-archive";
 
 type SshTarget = { type: "project"; project_id: string };
 
@@ -2806,32 +2810,6 @@ async function createPathCopyArchive({
   }
 }
 
-function archivePathIsAllowed({
-  entry,
-  allowedRoots,
-}: {
-  entry: string;
-  allowedRoots: Set<string>;
-}): boolean {
-  const normalized = path.posix.normalize(entry.replace(/\\/g, "/"));
-  if (
-    !normalized ||
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../") ||
-    path.posix.isAbsolute(normalized)
-  ) {
-    return false;
-  }
-  for (const root of allowedRoots) {
-    if (normalized === root || normalized.startsWith(`${root}/`)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 async function validatePathCopyArchiveListing({
   archivePath,
   roots,
@@ -2842,18 +2820,14 @@ async function validatePathCopyArchiveListing({
   const allowedRoots = new Set(roots.map((root) => root.archive_path));
   const result = await execSandbox({
     cmd: "/usr/bin/tar",
-    safety: ["-tzf", archivePath],
+    safety: ["--quoting-style=c", "-tzf", archivePath],
     maxSize: Math.max(1_000_000, allowedRoots.size * 1000),
     timeout: PATH_COPY_ARCHIVE_TIMEOUT_MS,
   });
   if (result.code || result.truncated) {
     throw new Error(result.stderr.toString() || "unable to list archive");
   }
-  const entries = result.stdout
-    .toString("utf8")
-    .split(/\r?\n/g)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const entries = decodePathCopyArchiveListing(result.stdout);
   for (const entry of entries) {
     if (!archivePathIsAllowed({ entry, allowedRoots })) {
       throw new Error(`archive contains unsafe path: ${entry}`);
