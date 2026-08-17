@@ -23,7 +23,8 @@ const LEASE_MS = 120_000;
 const HEARTBEAT_MS = 15_000;
 const TICK_MS = 5_000;
 const DEFAULT_MAX_PARALLEL = 1;
-const BACKUP_PURGE_BATCH_SIZE = 2;
+const SAFE_MAX_PARALLEL = 1;
+const BACKUP_PURGE_BATCH_SIZE = 1;
 
 const WORKER_ID = randomUUID();
 
@@ -37,6 +38,9 @@ const progressSteps: Record<string, number> = {
 
 let running = false;
 let inFlight = 0;
+let tickRunning = false;
+let tickRequested = false;
+let tickFn: (() => Promise<void>) | undefined;
 
 function publishSummary(summary: LroSummary) {
   return publishLroSummary({
@@ -263,6 +267,14 @@ export function startProjectHardDeleteWorker({
         return;
       }
     }
+    if (effectiveMaxParallel > SAFE_MAX_PARALLEL) {
+      logger.warn("clamping unsafe project hard-delete concurrency", {
+        configured_max_parallel: effectiveMaxParallel,
+        safe_max_parallel: SAFE_MAX_PARALLEL,
+      });
+      effectiveMaxParallel = SAFE_MAX_PARALLEL;
+    }
+    let claimedOps = 0;
     if (inFlight < effectiveMaxParallel) {
       let ops: LroSummary[] = [];
       try {
@@ -276,6 +288,7 @@ export function startProjectHardDeleteWorker({
       } catch (err) {
         logger.warn("hard-delete claim failed", { err: `${err}` });
       }
+      claimedOps = ops.length;
       for (const op of ops) {
         inFlight += 1;
         void handleHardDeleteOp(op)
@@ -299,6 +312,12 @@ export function startProjectHardDeleteWorker({
       }
     }
 
+    // Rustic backup scans are I/O intensive. Never overlap a deferred purge
+    // with hard-delete work owned by this bay maintenance worker.
+    if (inFlight > 0 || claimedOps > 0) {
+      return;
+    }
+
     try {
       const purge = await processDueDeletedProjectBackupPurges({
         limit: BACKUP_PURGE_BATCH_SIZE,
@@ -312,16 +331,37 @@ export function startProjectHardDeleteWorker({
       });
     }
   };
+  tickFn = tick;
 
   const timer = setInterval(() => {
-    void tick();
+    triggerProjectHardDeleteWorker();
   }, intervalMs);
   timer.unref?.();
 
-  void tick();
+  triggerProjectHardDeleteWorker();
 
   return () => {
     running = false;
+    tickFn = undefined;
+    tickRunning = false;
+    tickRequested = false;
     clearInterval(timer);
   };
+}
+
+export function triggerProjectHardDeleteWorker(): void {
+  if (!running || !tickFn) return;
+  tickRequested = true;
+  if (tickRunning) return;
+  tickRunning = true;
+  void (async () => {
+    try {
+      while (tickRequested && running && tickFn) {
+        tickRequested = false;
+        await tickFn();
+      }
+    } finally {
+      tickRunning = false;
+    }
+  })();
 }

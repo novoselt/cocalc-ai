@@ -108,7 +108,16 @@ export function startConatApiBackgroundWorkers(): void {
   startCopyLroWorker();
   startCourseCollectLroWorker();
   startCourseReconfigureLroWorker();
-  startProjectHardDeleteWorker();
+  if (isPrimaryBayWorker()) {
+    startProjectHardDeleteWorker();
+  } else {
+    logger.info(
+      "project hard-delete worker skipped on non-primary bay worker",
+      {
+        worker_id: process.env.COCALC_BAY_WORKER_ID,
+      },
+    );
+  }
   startMoveLroWorker();
   startBackgroundAutoGrowMaintenance();
   startDedicatedHostSpendMaintenance();
