@@ -35,7 +35,7 @@ import {
   CellChatButton,
   CellChatCompactButton,
 } from "@cocalc/frontend/jupyter/cell-chat-button";
-import { MinimalCodePreview } from "./minimal-code-preview";
+import { StudioCodePreview } from "./studio-code-preview";
 import {
   CODE_BAR_BTN_STYLE,
   RUN_ALL_CELLS_ABOVE_ICON,
@@ -43,12 +43,12 @@ import {
   SPLIT_CELL_ICON,
 } from "@cocalc/frontend/jupyter/consts";
 import {
-  MinimalGutter,
+  StudioGutter,
   type CellRunState,
   formatDuration,
   formatTimeAgo,
-} from "./minimal-gutter";
-import type { MinimalLayout } from "./types";
+} from "./studio-gutter";
+import type { StudioLayout } from "./types";
 import {
   CELL_ROW_STYLE,
   CODE_FLEX_DEFAULT,
@@ -58,7 +58,7 @@ import {
   OUTPUT_FLEX_EDITING,
 } from "./styles";
 
-interface MinimalCellProps {
+interface StudioCellProps {
   id: string;
   index: number;
   cell: Map<string, any>;
@@ -100,12 +100,12 @@ interface MinimalCellProps {
   sectionTitle?: string;
   blockHighlighted?: boolean;
   onHoverBlock?: (hover: boolean) => void;
-  minimalLayout?: MinimalLayout;
-  zenMode?: boolean;
+  studioLayout?: StudioLayout;
+  readingMode?: boolean;
   frameHeight?: number;
 }
 
-export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
+export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
   const {
     id,
     index,
@@ -138,8 +138,8 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     collapsedRunState,
     onToggleSection,
     sectionTitle,
-    minimalLayout = "comfortable",
-    zenMode = false,
+    studioLayout = "comfortable",
+    readingMode = false,
     frameHeight,
   } = props;
 
@@ -162,11 +162,11 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   const outputRef = useRef<HTMLDivElement>(null);
   const [outputHeight, setOutputHeight] = useState<number>(0);
 
-  // FileContext that suppresses CellButtonBar and other extras in minimal mode
-  const minimalFileContext = { ...fileContext, disableExtraButtons: true };
+  // FileContext that suppresses CellButtonBar and other extras in studio mode
+  const studioFileContext = { ...fileContext, disableExtraButtons: true };
 
   // Same URL transform as the regular CellInput markdown path, so that
-  // "attachment:name.png" images embedded in the notebook render in minimal
+  // "attachment:name.png" images embedded in the notebook render in studio
   // mode too.
   const cellAttachments = cell.get("attachments");
   const urlTransform = useCallback(
@@ -187,7 +187,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   const input = cell.get("input") || "";
   // Mount CellOutput not only for persisted output, but also while the kernel
   // is asking for stdin (input()) or an optimistic run overlay is pending;
-  // otherwise those transient states would be invisible in minimal mode.
+  // otherwise those transient states would be invisible in studio mode.
   const hasTransientOrPersistedOutput =
     cell.get("output") != null || stdin != null || runOverlay != null;
   const sourceHidden = !!cell.getIn(["metadata", "jupyter", "source_hidden"]);
@@ -465,7 +465,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   }
 
   // Cell is being edited when it's the current cell in edit mode.  This is
-  // possible in zen mode too (via double-click on the output or the pencil
+  // possible in reading mode too (via double-click on the output or the pencil
   // button): the cell temporarily reveals its code column just for editing.
   const isActiveEditing =
     is_current && (props.mode === "edit" || viewProtected) && isCode;
@@ -474,16 +474,16 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
     ? OUTPUT_FLEX_EDITING
     : OUTPUT_FLEX_DEFAULT;
   const codeFlex = isActiveEditing ? CODE_FLEX_EDITING : CODE_FLEX_DEFAULT;
-  const showCode = !zenMode || isActiveEditing;
-  // In zen + wide, don't render the empty code column — output goes full
+  const showCode = !readingMode || isActiveEditing;
+  // In reading mode at wide width, don't render the empty code column — output goes full
   // width — except while this cell is being edited.
-  const showCodeColumn = showCode || minimalLayout !== "wide";
+  const showCodeColumn = showCode || studioLayout !== "wide";
 
   // Layout spacers: to center the output, left spacer must offset the code column
-  const margin = minimalLayout === "narrow" ? 2 : 0;
+  const margin = studioLayout === "narrow" ? 2 : 0;
   const leftSpacerFlex =
-    minimalLayout === "wide" ? 0 : margin + CODE_FLEX_DEFAULT;
-  const rightSpacerFlex = minimalLayout === "wide" ? 0 : margin;
+    studioLayout === "wide" ? 0 : margin + CODE_FLEX_DEFAULT;
+  const rightSpacerFlex = studioLayout === "wide" ? 0 : margin;
   const hasSpacer = leftSpacerFlex > 0;
   const contentFlex = OUTPUT_FLEX_DEFAULT + CODE_FLEX_DEFAULT;
   const wrapCentered = (content: React.ReactNode) => {
@@ -530,7 +530,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
   }
 
   // Section divider bar — appears at the start of every section
-  // In zen mode, add an empty spacer matching the code column so the bar
+  // In reading mode, add an empty spacer matching the code column so the bar
   // doesn't stretch into the empty code area.
   const sectionRunButton =
     !read_only && blockCellIds ? handleRunSection : undefined;
@@ -542,11 +542,11 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
       sectionTitle={sectionTitle}
       onToggle={onToggleSection}
       onRunSection={sectionRunButton}
-      showCode={!zenMode}
+      showCode={!readingMode}
       codeFlex={CODE_FLEX_DEFAULT}
       outputFlex={OUTPUT_FLEX_DEFAULT}
-      zenMode={zenMode}
-      minimalLayout={minimalLayout}
+      readingMode={readingMode}
+      studioLayout={studioLayout}
     />
   ) : null;
 
@@ -594,7 +594,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
         onMouseEnter={() => setRowHovered(true)}
         onMouseLeave={() => setRowHovered(false)}
       >
-        <MinimalGutter
+        <StudioGutter
           id={id}
           index={index}
           isCode={isCode}
@@ -630,7 +630,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
           }}
         >
           {cell_toolbar && actions && (
-            <div className="minimal-cell-toolbar">
+            <div className="studio-cell-toolbar">
               <CellToolbar
                 actions={actions}
                 cell_toolbar={cell_toolbar}
@@ -658,18 +658,18 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                 position: "relative",
               }}
               onDoubleClick={
-                // Zen mode hides the code column; double-clicking the output
+                // Reading mode hides the code column; double-clicking the output
                 // opens the code editor for just this cell (same gesture as
                 // markdown cells).
-                zenMode && isCode && !read_only && !isActiveEditing
+                readingMode && isCode && !read_only && !isActiveEditing
                   ? handleActivateCode
                   : undefined
               }
             >
               <div ref={outputContentRef}>
-                {/* Zen mode: floating toolbar inside output area (hidden
+                {/* Reading mode: floating toolbar inside output area (hidden
                     while editing — the editor brings its own buttons) */}
-                {zenMode && !isActiveEditing && (
+                {readingMode && !isActiveEditing && (
                   <div
                     style={{
                       position: "absolute",
@@ -751,7 +751,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                   !hasTransientOrPersistedOutput &&
                   !input.trim() &&
                   !read_only &&
-                  !zenMode && (
+                  !readingMode && (
                     // The whole empty area is a click target that opens the
                     // code editor -- aiming for the tiny links is bad UX.
                     // Only the "text" link diverges (converts to markdown).
@@ -804,7 +804,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                       <FileContext.Provider
                         value={{ ...fileContext, urlTransform }}
                       >
-                        <div className="cocalc-jupyter-rendered cocalc-jupyter-rendered-md minimal-md-render">
+                        <div className="cocalc-jupyter-rendered cocalc-jupyter-rendered-md studio-md-render">
                           <MostlyStaticMarkdown
                             value={renderMarkdownValue()}
                             onChange={
@@ -855,9 +855,9 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                 {isMarkdown && is_markdown_edit && (
                   <div
                     style={{ position: "relative" }}
-                    className="minimal-code-editor"
+                    className="studio-code-editor"
                   >
-                    <FileContext.Provider value={minimalFileContext}>
+                    <FileContext.Provider value={studioFileContext}>
                       <CellInput
                         cell={cell}
                         actions={actions}
@@ -927,7 +927,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
               {/* end outputContentRef */}
             </div>
 
-            {/* Code column — hidden entirely in zen + wide mode */}
+            {/* Code column — hidden entirely in reading mode at wide width */}
             {showCodeColumn && (
               <div
                 style={{
@@ -937,7 +937,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                   transition: COLUMN_TRANSITION,
                   position: "relative",
                   zIndex: 1,
-                  borderLeft: zenMode ? "none" : "1px solid #eee",
+                  borderLeft: readingMode ? "none" : "1px solid #eee",
                 }}
               >
                 {showCode && (
@@ -992,7 +992,7 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                       </div>
                     )}
                     {isCode && !isActiveEditing && !sourceHidden && (
-                      <MinimalCodePreview
+                      <StudioCodePreview
                         value={input}
                         cmOptions={cmOpts}
                         fontSize={font_size}
@@ -1111,9 +1111,9 @@ export const MinimalCell: React.FC<MinimalCellProps> = React.memo((props) => {
                             overflowX: "hidden",
                           }}
                         >
-                          <FileContext.Provider value={minimalFileContext}>
+                          <FileContext.Provider value={studioFileContext}>
                             <div
-                              className="minimal-code-editor"
+                              className="studio-code-editor"
                               style={{ position: "relative" }}
                             >
                               <CellInput
@@ -1261,8 +1261,8 @@ function SectionDividerRow({
   showCode,
   codeFlex,
   outputFlex,
-  zenMode,
-  minimalLayout,
+  readingMode,
+  studioLayout,
 }: {
   isFirst?: boolean;
   sectionCollapsed?: boolean;
@@ -1275,8 +1275,8 @@ function SectionDividerRow({
   showCode?: boolean;
   codeFlex: number;
   outputFlex: number;
-  zenMode?: boolean;
-  minimalLayout?: string;
+  readingMode?: boolean;
+  studioLayout?: string;
 }) {
   const [hovered, setHovered] = useState(false);
   const bg =
@@ -1288,7 +1288,7 @@ function SectionDividerRow({
   const borderTop = isFirst ? undefined : `1px solid ${COLORS.GRAY_LL}`;
   const borderBottom = `1px solid ${COLORS.GRAY_LL}`;
   const segmentClass =
-    runState === "running" ? "minimal-section-running" : undefined;
+    runState === "running" ? "studio-section-running" : undefined;
   const segmentStyle: React.CSSProperties = {
     backgroundColor: bg,
     borderTop,
@@ -1349,7 +1349,7 @@ function SectionDividerRow({
         ) : (
           <span style={{ flex: 1 }} />
         )}
-        {/* Run button in zen mode (no code column) */}
+        {/* Run button in reading mode (no code column) */}
         {onRunSection && !showCode && (
           <Tooltip title="Run all code cells in this section">
             <Button
@@ -1405,8 +1405,8 @@ function SectionDividerRow({
           )}
         </div>
       )}
-      {/* Empty spacer for zen + non-wide — no background so bar ends at output column */}
-      {zenMode && minimalLayout !== "wide" && (
+      {/* Empty spacer for reading mode below wide width — no background so bar ends at output column */}
+      {readingMode && studioLayout !== "wide" && (
         <div style={{ flex: `${codeFlex} 1 0` }} />
       )}
     </div>

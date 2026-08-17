@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Переключить минимальный вид блокнота",
   "jupyter.commands.toggle_minimap.menu": "Переключить мини-карту",
   "jupyter.commands.toggle_minimap.tooltip": "Показать или скрыть мини-карту блокнота.",
+  "jupyter.commands.toggle_studio_view.label": "Переключить вид ноутбука Studio",
   "jupyter.commands.validate.body": "Проверка блокнота перезапустит ядро и выполнит все ячейки по порядку, даже те, которые содержат ошибки. Это обеспечит, что весь вывод точно соответствует результату выполнения всех ячеек по порядку.",
   "jupyter.commands.validate.label": "Проверить",
   "jupyter.commands.validate.title": "Проверить тетрадь?",

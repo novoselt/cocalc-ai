@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Wissel minimale notebookweergave in en uit",
   "jupyter.commands.toggle_minimap.menu": "Minimap in-/uitschakelen",
   "jupyter.commands.toggle_minimap.tooltip": "De minimap van het notitieblok tonen of verbergen.",
+  "jupyter.commands.toggle_studio_view.label": "Studio-notebookweergave omschakelen",
   "jupyter.commands.validate.body": "Het valideren van het notitieboek zal de kernel herstarten en alle cellen in volgorde uitvoeren, zelfs die met fouten. Dit zorgt ervoor dat alle uitvoer precies overeenkomt met het resultaat van het uitvoeren van alle cellen in volgorde.",
   "jupyter.commands.validate.label": "Valideren",
   "jupyter.commands.validate.title": "Notitieboek valideren?",

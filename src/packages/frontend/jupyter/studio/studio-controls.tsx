@@ -5,24 +5,26 @@
 
 /**
  * Right-hand controls of the compact kernel header while a notebook frame is
- * in minimal mode: layout width Segmented, Zen switch, help popover, and the
- * switch back to the regular notebook view.
+ * in studio mode: layout width Segmented, Reading switch, help popover, and the
+ * switch back to the classic notebook view.
  */
 
 import { Segmented, Switch } from "antd";
 
 import { Icon, Tooltip } from "@cocalc/frontend/components";
 import { COLORS } from "@cocalc/util/theme";
-import { SwitchToRegularButton } from "./frame-type-toggle";
-import MinimalNotebookHelp from "./minimal-help";
-import type { MinimalLayout } from "./types";
+import { SwitchToClassicButton } from "./frame-type-toggle";
+import StudioNotebookHelp from "./studio-help";
+import type { StudioLayout } from "./types";
 
-interface MinimalControlsProps {
-  minimalLayout?: MinimalLayout;
-  availableLayouts?: readonly MinimalLayout[];
-  onLayoutChange: (layout: MinimalLayout) => void;
-  zenMode?: boolean;
-  onZenModeChange?: (zen: boolean) => void;
+const READING_MODE_LABEL = "Reading";
+
+interface StudioControlsProps {
+  studioLayout?: StudioLayout;
+  availableLayouts?: readonly StudioLayout[];
+  onLayoutChange: (layout: StudioLayout) => void;
+  readingMode?: boolean;
+  onReadingModeChange?: (reading: boolean) => void;
 }
 
 function Divider() {
@@ -36,21 +38,21 @@ function Divider() {
   );
 }
 
-export function MinimalControls({
-  minimalLayout,
+export function StudioControls({
+  studioLayout,
   availableLayouts,
   onLayoutChange,
-  zenMode,
-  onZenModeChange,
-}: MinimalControlsProps) {
+  readingMode,
+  onReadingModeChange,
+}: StudioControlsProps) {
   return (
     <>
       <Divider />
       <Segmented
         size="small"
-        className="minimal-status-segmented"
-        value={minimalLayout ?? "comfortable"}
-        onChange={(v) => onLayoutChange(v as MinimalLayout)}
+        className="studio-status-segmented"
+        value={studioLayout ?? "comfortable"}
+        onChange={(v) => onLayoutChange(v as StudioLayout)}
         options={[
           {
             value: "wide",
@@ -80,8 +82,8 @@ export function MinimalControls({
           },
         ].filter((o) => availableLayouts?.includes(o.value as any) ?? true)}
       />
-      {onZenModeChange && (
-        <Tooltip title={zenMode ? "Show code cells" : "Hide code cells"}>
+      {onReadingModeChange && (
+        <Tooltip title={readingMode ? "Show code cells" : "Hide code cells"}>
           <span
             style={{
               display: "inline-flex",
@@ -89,18 +91,28 @@ export function MinimalControls({
               gap: "4px",
               cursor: "pointer",
             }}
-            onClick={() => onZenModeChange(!zenMode)}
+            onClick={() => onReadingModeChange(!readingMode)}
           >
-            <Switch size="small" checked={zenMode} />
-            <span style={{ userSelect: "none" }}>Zen</span>
+            {/* The visible label is a sibling of the switch, so name the
+                control explicitly rather than relying on proximity. */}
+            {/* The wrapper owns the toggle so the label is clickable too;
+                keyboard activation of the switch bubbles up to it. */}
+            <Switch
+              size="small"
+              aria-label={READING_MODE_LABEL}
+              checked={readingMode}
+            />
+            <span aria-hidden style={{ userSelect: "none" }}>
+              {READING_MODE_LABEL}
+            </span>
           </span>
         </Tooltip>
       )}
       <Divider />
-      <MinimalNotebookHelp />
+      <StudioNotebookHelp />
       {/* direct flex child: blockified, so no baseline descender space; the
           header's own padding provides the gap to the frame edge */}
-      <SwitchToRegularButton />
+      <SwitchToClassicButton />
     </>
   );
 }

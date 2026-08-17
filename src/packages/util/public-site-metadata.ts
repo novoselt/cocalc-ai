@@ -140,9 +140,9 @@ const PUBLIC_IMAGE_DIMENSIONS: Record<string, PublicImageDimensions> = {
     width: 1312,
   },
   "/public/features/julia-jupyter.png": { height: 802, width: 1400 },
-  "/public/features/jupyter-regular-20260730.png": {
-    height: 1063,
-    width: 1305,
+  "/public/features/jupyter-classic-20260817.png": {
+    height: 1068,
+    width: 1393,
   },
   "/public/features/latex-editor-main-20251003.png": {
     height: 1020,

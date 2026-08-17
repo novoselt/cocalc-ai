@@ -33,6 +33,18 @@ export interface JupyterEditorState extends CodeEditorState {
   };
 }
 
+// Frame types that no longer exist in EDITOR_SPEC, mapped to their
+// replacement. A saved frame tree still holding one of these throws while
+// rendering, and the generic recovery then resets the *whole* tree to the
+// default -- so the user loses their splits, terminals, and table-of-contents
+// panes, not just the stale frame. Migrating on load avoids that.
+const REMOVED_FRAME_TYPES: { readonly [type: string]: string } = {
+  "jupyter-singledoc": "jupyter_cell_notebook",
+  jupyter_slate_single_doc_notebook: "jupyter_cell_notebook",
+  // "Jupyter Minimal" was renamed to "Jupyter Studio" in August 2026.
+  jupyter_minimal: "jupyter_studio",
+} as const;
+
 export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
   protected doctype: string = "none"; // actual document is managed elsewhere
   public jupyter_actions: JupyterActions;
@@ -51,7 +63,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
   }
 
   _init2(): void {
-    this.normalizeRemovedSingleDocFrames();
+    this.normalizeRemovedFrameTypes();
     this.init_new_frame();
     this.init_changes_state();
 
@@ -72,7 +84,7 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
         return;
       }
       await delay(1);
-      // Toggling between jupyter_cell_notebook and jupyter_minimal uses
+      // Toggling between jupyter_cell_notebook and jupyter_studio uses
       // the same CellNotebook component and the same NotebookFrameActions
       // works for both types.  Closing and recreating on toggle just wipes
       // this.jupyter_actions/this.store on the instance that still-mounted
@@ -90,16 +102,26 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     });
   }
 
-  private normalizeRemovedSingleDocFrames(): void {
+  private normalizeRemovedFrameTypes(): void {
     for (const id in this._get_leaf_ids()) {
       const node = this._get_frame_node(id);
       const type = `${node?.get("type") ?? ""}`;
-      if (
-        type === "jupyter_slate_single_doc_notebook" ||
-        type === "jupyter-singledoc"
-      ) {
-        this.set_frame_type(id, "jupyter_cell_notebook");
+      const replacement = REMOVED_FRAME_TYPES[type];
+      if (replacement == null) continue;
+      if (type === "jupyter_minimal") {
+        // Carry the view's own persisted settings across the rename, so a
+        // saved frame keeps its width and reading state.
+        const layout = node?.get("data-minimalLayout");
+        const readingMode = node?.get("data-zenMode");
+        if (layout != null || readingMode != null) {
+          this.set_frame_data({
+            id,
+            ...(layout != null ? { studioLayout: layout } : {}),
+            ...(readingMode != null ? { readingMode } : {}),
+          });
+        }
       }
+      this.set_frame_type(id, replacement);
     }
   }
 
@@ -515,12 +537,12 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
     align: "center" | "top" = "center",
   ): Promise<void> {
     // Open or focus a notebook viewer and scroll to the given cell.
-    // Prefer an existing minimal frame over creating a new standard one.
+    // Prefer an existing studio frame over creating a new standard one.
     if (this._state === "closed") return;
-    const existingMinimal =
-      this._get_most_recent_active_frame_id_of_type("jupyter_minimal");
-    const frameType = existingMinimal
-      ? "jupyter_minimal"
+    const existingStudio =
+      this._get_most_recent_active_frame_id_of_type("jupyter_studio");
+    const frameType = existingStudio
+      ? "jupyter_studio"
       : "jupyter_cell_notebook";
     const id = this.show_focused_frame_of_type(frameType);
     const actions = this.get_frame_actions(id);
@@ -560,12 +582,12 @@ export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
   // Focus a notebook frame (preferring an existing one) and scroll to the
   // given cell.  Returns the frame id used, or undefined if none is ready.
   private async focusNotebookFrame(): Promise<string | undefined> {
-    // Prefer an existing notebook frame (minimal or default) rather than
+    // Prefer an existing notebook frame (studio or default) rather than
     // always creating a jupyter_cell_notebook which overrides the saved layout.
-    const existingMinimal =
-      this._get_most_recent_active_frame_id_of_type("jupyter_minimal");
-    const frameType = existingMinimal
-      ? "jupyter_minimal"
+    const existingStudio =
+      this._get_most_recent_active_frame_id_of_type("jupyter_studio");
+    const frameType = existingStudio
+      ? "jupyter_studio"
       : "jupyter_cell_notebook";
     const frameId = await this.waitUntilFrameReady({
       type: frameType,

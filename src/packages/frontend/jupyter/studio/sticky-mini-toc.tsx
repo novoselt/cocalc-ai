@@ -12,13 +12,13 @@ import {
   COLUMN_TRANSITION,
   OUTPUT_FLEX_DEFAULT,
 } from "./styles";
-import type { MinimalLayout, SectionBlock } from "./types";
+import type { StudioLayout, SectionBlock } from "./types";
 
 interface StickyMiniTOCProps {
   sectionBlocks: SectionBlock[];
   currentBlockIndex: number;
   cells: Map<string, any>;
-  minimalLayout?: MinimalLayout;
+  studioLayout?: StudioLayout;
   fontSize?: number;
   actions?: JupyterActions;
 }
@@ -28,13 +28,13 @@ export function StickyMiniTOC({
   sectionBlocks,
   currentBlockIndex,
   cells,
-  minimalLayout,
+  studioLayout,
   fontSize,
   actions,
 }: StickyMiniTOCProps) {
-  const margin = minimalLayout === "narrow" ? 2 : 0;
+  const margin = studioLayout === "narrow" ? 2 : 0;
   const contentFlex = OUTPUT_FLEX_DEFAULT + CODE_FLEX_DEFAULT;
-  const rightSpacerFlex = minimalLayout === "wide" ? 0 : margin;
+  const rightSpacerFlex = studioLayout === "wide" ? 0 : margin;
 
   return (
     <div
@@ -68,7 +68,7 @@ export function StickyMiniTOC({
             sectionBlocks={sectionBlocks}
             currentBlockIndex={currentBlockIndex}
             cells={cells}
-            minimalLayout={minimalLayout}
+            studioLayout={studioLayout}
             fontSize={fontSize}
             actions={actions}
           />

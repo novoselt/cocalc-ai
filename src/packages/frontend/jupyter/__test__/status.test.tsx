@@ -29,8 +29,8 @@ jest.mock("@cocalc/frontend/feature", () => ({
 
 jest.mock("../../components/progress-estimate", () => () => <div />);
 jest.mock("../logo", () => () => <div />);
-jest.mock("../minimal/minimal-controls", () => ({
-  MinimalControls: () => <div />,
+jest.mock("../studio/studio-controls", () => ({
+  StudioControls: () => <div />,
 }));
 jest.mock("../select-kernel", () => ({
   KernelSelector: () => <div />,
@@ -144,7 +144,7 @@ describe("Kernel", () => {
     expect(screen.queryByText(/\(halt/i)).toBeNull();
   });
 
-  it("shows the trust indicator in the minimal notebook status bar", () => {
+  it("shows the trust indicator in the studio notebook status bar", () => {
     const actions = {
       name: "jupyter-test",
       project_id: "project-1",
@@ -184,14 +184,14 @@ describe("Kernel", () => {
 
     getProjectActions.mockReturnValue({ project_id: "project-1" });
 
-    // the minimal notebook status bar is the compact header with layout
+    // the studio notebook status bar is the compact header with layout
     // controls; unlike other compact embeds it does show the trust state
     render(
       <IntlProvider locale="en" messages={{}}>
         <Kernel
           actions={actions}
           compact
-          minimalLayout="comfortable"
+          studioLayout="comfortable"
           onLayoutChange={jest.fn()}
         />
       </IntlProvider>,

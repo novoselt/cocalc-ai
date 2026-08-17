@@ -89,7 +89,7 @@ export function CodeBarDropdownMenu({
   // called with the dropdown's open state, e.g. so the parent button bar can
   // stay mounted while the menu is open even when the cell is not hovered.
   onOpenChange?: (open: boolean) => void;
-  // hide the "Split Cell at Cursor" entry.  Used by the minimal notebook,
+  // hide the "Split Cell at Cursor" entry.  Used by the studio notebook,
   // where this menu is only reachable while the cell's code editor is
   // closed — there is no cursor to split at (the open editor has its own
   // split button instead).

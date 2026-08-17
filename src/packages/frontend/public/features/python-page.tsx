@@ -172,7 +172,7 @@ python -c "import polars; print(polars.__version__)"`}
           alt="A Python Jupyter notebook in CoCalc with code, output, and a matplotlib plot"
           anchor="a-notebooks"
           icon="jupyter"
-          image="jupyter-regular-20260730.png"
+          image="jupyter-classic-20260817.png"
           title="Python in Jupyter notebooks"
         >
           <Paragraph>

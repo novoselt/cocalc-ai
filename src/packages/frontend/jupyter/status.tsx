@@ -43,9 +43,9 @@ import ProgressEstimate from "../components/progress-estimate";
 import { labels } from "../i18n";
 import { JupyterActions } from "./browser-actions";
 import Logo from "./logo";
-import { SwitchToMinimalButton } from "./minimal/frame-type-toggle";
-import { MinimalControls } from "./minimal/minimal-controls";
-import type { MinimalLayout } from "./minimal/types";
+import { SwitchToStudioButton } from "./studio/frame-type-toggle";
+import { StudioControls } from "./studio/studio-controls";
+import type { StudioLayout } from "./studio/types";
 import { KernelSelector } from "./select-kernel";
 import { ALERT_COLS } from "./usage";
 
@@ -141,12 +141,12 @@ interface KernelProps {
   style?: CSS;
   hideHeader?: boolean;
   compact?: boolean;
-  /** Minimal notebook layout controls */
-  minimalLayout?: MinimalLayout;
-  zenMode?: boolean;
-  onLayoutChange?: (layout: MinimalLayout) => void;
-  onZenModeChange?: (zen: boolean) => void;
-  availableLayouts?: readonly MinimalLayout[];
+  /** Studio notebook layout controls */
+  studioLayout?: StudioLayout;
+  readingMode?: boolean;
+  onLayoutChange?: (layout: StudioLayout) => void;
+  onReadingModeChange?: (reading: boolean) => void;
+  availableLayouts?: readonly StudioLayout[];
 }
 
 export function Kernel({
@@ -156,10 +156,10 @@ export function Kernel({
   usage,
   hideHeader,
   compact,
-  minimalLayout,
-  zenMode,
+  studioLayout,
+  readingMode,
   onLayoutChange,
-  onZenModeChange,
+  onReadingModeChange,
   availableLayouts,
 }: KernelProps) {
   const intl = useIntl();
@@ -425,7 +425,7 @@ export function Kernel({
 
   function render_trust() {
     // Keep non-notebook compact embeds (e.g. whiteboard code elements) free
-    // of the trust indicator; the minimal notebook status bar (compact with
+    // of the trust indicator; the studio notebook status bar (compact with
     // layout controls) shows it just like the regular status bar.
     if (compact && onLayoutChange == null) return;
     if (IS_MOBILE) return;
@@ -626,7 +626,7 @@ export function Kernel({
 
   function renderKernelState() {
     if (!backend_state) return <div></div>;
-    // Display the plain state word in both the regular and the minimal
+    // Display the plain state word in both the regular and the studio
     // status bar; interrupt/halt are separate borderless buttons next to it.
     const value = kernelStateCompact();
     return (
@@ -865,7 +865,7 @@ export function Kernel({
       100 * (usage.cpu_runtime / expected_cell_runtime),
     );
 
-    // same appearance in the regular and the minimal status bar
+    // same appearance in the regular and the studio status bar
     const style: CSS = {
       display: "flex",
       width: "300px",
@@ -1118,12 +1118,12 @@ export function Kernel({
                   {renderUsage()}
                 </div>
               )}
-              <MinimalControls
-                minimalLayout={minimalLayout}
+              <StudioControls
+                studioLayout={studioLayout}
                 availableLayouts={availableLayouts}
                 onLayoutChange={onLayoutChange}
-                zenMode={zenMode}
-                onZenModeChange={onZenModeChange}
+                readingMode={readingMode}
+                onReadingModeChange={onReadingModeChange}
               />
             </div>
           )}
@@ -1145,7 +1145,7 @@ export function Kernel({
             ...style,
           }}
         >
-          {/* Left: logo + kernel + trust, like the minimal status bar */}
+          {/* Left: logo + kernel + trust, like the studio status bar */}
           <div
             style={{
               display: "flex",
@@ -1203,7 +1203,7 @@ export function Kernel({
                 marginRight: "3px",
               }}
             >
-              <SwitchToMinimalButton />
+              <SwitchToStudioButton />
             </div>
           )}
         </div>

@@ -295,7 +295,7 @@ export const PUBLIC_FEATURE_PAGES: PublicFeaturePage[] = [
       "Use Python in Jupyter notebooks, scripts, terminals, JupyterLab, and VS Code, with package installs that persist and larger machines or GPUs when a computation gets heavy.",
     metadataSummary:
       "Use a full Python environment online in your browser: the scientific stack in Jupyter notebooks, .py files and terminals, uv, pip, conda, and apt installs that persist, JupyterLab and VS Code, GPU images for PyTorch and TensorFlow, and Python web apps behind an authenticated URL.",
-    image: "/public/features/jupyter-regular-20260730.png",
+    image: "/public/features/jupyter-classic-20260817.png",
     index: true,
     sections: [
       {
