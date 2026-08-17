@@ -33,10 +33,12 @@ describe("AgentMessageStatus activity loading", () => {
           liveStream: "acp-live-log/chat.chat/thread/turn",
         }}
         activityContext={{} as any}
+        activeDescendantThreadIds={["child-1", "child-2"]}
       />,
     );
 
     expect(mockCodexLogPanel).not.toHaveBeenCalled();
+    expect(screen.getByText(/2 subagents working/)).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Open Codex activity details" }),

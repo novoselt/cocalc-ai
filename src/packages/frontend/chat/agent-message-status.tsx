@@ -633,9 +633,10 @@ export function AgentMessageStatus({
       ),
     [activeDescendantThreadIds, generating, logEvents],
   );
-  const activeSubagents = summarizeSubagentEvents(
-    effectiveLogEvents ?? [],
-  ).active;
+  const activeSubagents =
+    activeDescendantThreadIds != null
+      ? new Set(activeDescendantThreadIds).size
+      : summarizeSubagentEvents(effectiveLogEvents ?? []).active;
   const backgroundCommands = Math.max(
     0,
     Number.isFinite(backgroundTerminalProcesses)
