@@ -2779,8 +2779,18 @@ const { serveDaemon, runDaemonRequestFromCommand } =
     contextForGlobals,
     closeCommandContext,
     globalsFrom,
-    daemonRequestGlobals: (globals) =>
-      effectiveDaemonGlobals(globals, { defaultApiBaseUrl }),
+    daemonRequestGlobals: (globals) => {
+      const applied = applyAuthProfile(globals, loadAuthConfig());
+      return effectiveDaemonGlobals(
+        {
+          ...globals,
+          profile: applied.profile,
+          disableEnvAuthDefaults:
+            globals.disableEnvAuthDefaults || applied.fromProfile,
+        },
+        { defaultApiBaseUrl },
+      );
+    },
     daemonContextMeta: (ctx) => ({
       api: ctx.apiBaseUrl,
       account_id: ctx.accountId,

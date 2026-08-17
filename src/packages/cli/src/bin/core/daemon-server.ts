@@ -25,6 +25,7 @@ import {
 
 export type DaemonServerState<Ctx> = {
   startedAtMs: number;
+  daemonFingerprint: string;
   socketPath: string;
   pidPath: string;
   contexts: Map<string, Ctx>;
@@ -119,7 +120,7 @@ export function createDaemonServerOps<Ctx>(deps: DaemonServerDeps<Ctx>) {
         Math.floor((Date.now() - state.startedAtMs) / 1000),
       ),
       started_at: new Date(state.startedAtMs).toISOString(),
-      daemon_fingerprint: currentDaemonFingerprint(),
+      daemon_fingerprint: state.daemonFingerprint,
     };
     try {
       switch (request.action) {
@@ -450,6 +451,7 @@ export function createDaemonServerOps<Ctx>(deps: DaemonServerDeps<Ctx>) {
     }
     const state: DaemonServerState<Ctx> = {
       startedAtMs: Date.now(),
+      daemonFingerprint: currentDaemonFingerprint(),
       socketPath,
       pidPath: daemonPidPath(),
       contexts: new Map(),
