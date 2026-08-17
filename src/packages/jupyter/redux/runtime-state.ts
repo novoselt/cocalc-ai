@@ -22,6 +22,17 @@ export interface JupyterRuntimeSettings {
   kernel_error?: string;
 }
 
+// The settings record is read field by field rather than through its DKO field
+// manifest, since the project's kernel and the browser's optimistic state write
+// it concurrently and would otherwise hide each other's values.  Keep in sync
+// with JupyterRuntimeSettings.
+export const JUPYTER_RUNTIME_SETTINGS_FIELDS = [
+  "backend_state",
+  "kernel_state",
+  "last_backend_state",
+  "kernel_error",
+] as const satisfies readonly (keyof JupyterRuntimeSettings)[];
+
 export interface JupyterRuntimeNbconvert {
   state?: string;
   args?: string[];

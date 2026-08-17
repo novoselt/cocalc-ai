@@ -27,6 +27,9 @@ import handleNbconvertChange from "./handle-nbconvert-change";
 
 const logger = getLogger("jupyter:project-actions");
 
+// How long the kernel must hold "running" before a previous error is cleared.
+const CLEAR_KERNEL_ERROR_MS = 3000;
+
 function isFilesystemJupyterUnsupported(err: unknown): boolean {
   const code = `${(err as any)?.code ?? ""}`.toUpperCase();
   const message = `${err instanceof Error ? err.message : err}`.toLowerCase();
@@ -38,6 +41,8 @@ function isFilesystemJupyterUnsupported(err: unknown): boolean {
 }
 
 export class JupyterActions extends JupyterActions0 {
+  private clearKernelErrorTimeout?: ReturnType<typeof setTimeout>;
+
   protected init2(): void {
     this.initIpywidgetsSupport();
   }
@@ -154,7 +159,42 @@ export class JupyterActions extends JupyterActions0 {
       path: this.path,
       actions: this,
     });
+    // Save the failure so it reaches the frontend and is surfaced to the user:
+    // https://github.com/sagemathinc/cocalc/issues/4847
+    this.jupyter_kernel.on("kernel_error", this.handleKernelError);
+    this.jupyter_kernel.on("state", this.handleKernelBackendState);
   };
+
+  private handleKernelError = (error: string): void => {
+    this.set_kernel_error(error);
+  };
+
+  // A kernel that fails and then comes back should not leave its warning up,
+  // so clear the error once it has held "running" for a while.  Any other
+  // transition cancels the pending clear.
+  private handleKernelBackendState = (state: string): void => {
+    if (this.clearKernelErrorTimeout != null) {
+      clearTimeout(this.clearKernelErrorTimeout);
+      delete this.clearKernelErrorTimeout;
+    }
+    if (state != "running" || this.is_closed()) {
+      return;
+    }
+    this.clearKernelErrorTimeout = setTimeout(() => {
+      delete this.clearKernelErrorTimeout;
+      if (this.is_closed()) {
+        return;
+      }
+      this.set_runtime_settings({ kernel_error: "" });
+    }, CLEAR_KERNEL_ERROR_MS);
+  };
+
+  public override close_project_only() {
+    if (this.clearKernelErrorTimeout != null) {
+      clearTimeout(this.clearKernelErrorTimeout);
+      delete this.clearKernelErrorTimeout;
+    }
+  }
 
   override ensure_backend_kernel_setup(): void {
     this.ensureKernelIsReady();
