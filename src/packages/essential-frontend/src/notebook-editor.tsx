@@ -59,6 +59,11 @@ import type {
   ExternalMergeHandle,
   ExternalMergeResult,
 } from "./external-merge";
+import {
+  essentialDiagnosticErrorDetails,
+  essentialDiagnosticsSnapshot,
+  recordEssentialDiagnostic,
+} from "./diagnostics";
 
 const MAX_OUTPUT_TEXT = 100_000;
 const MAX_OUTPUT_IMAGE = 7 * 1024 * 1024;
@@ -311,11 +316,34 @@ function NotebookEditor(
   const completedLiveRunIds = useRef(new Set<string>());
   const directRunId = useRef<string | undefined>(undefined);
   const dirtyRef = useRef(dirty);
+  const runningRef = useRef(running);
   const processLiveRuns = useRef<() => void>(() => undefined);
   const projectApi = useRef<
     Awaited<ReturnType<UltraliteSession["openProjectApi"]>>["api"] | undefined
   >(undefined);
   dirtyRef.current = dirty;
+  runningRef.current = running;
+  const runningCellIndex = notebook.cells.findIndex(
+    ({ id }) => id === runningCell,
+  );
+
+  useEffect(() => {
+    recordEssentialDiagnostic("notebook", "opened", {
+      cell_count: notebook.cells.length,
+      read_only: readOnly,
+    });
+    return () => recordEssentialDiagnostic("notebook", "closed");
+  }, []);
+
+  useEffect(() => {
+    recordEssentialDiagnostic("notebook", "state", {
+      dirty,
+      execution: running ? "running" : "idle",
+      kernel: kernelStatus,
+      running_cell: runningCellIndex >= 0 ? runningCellIndex + 1 : null,
+      saving,
+    });
+  }, [dirty, kernelStatus, running, runningCellIndex, saving]);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -701,8 +729,19 @@ function NotebookEditor(
           void opened.api.jupyter
             .getKernelStatus({ path: syncdbPath(path) })
             .then((status) => {
-              if (!disposed && !directRunId.current && !recovering) {
+              if (
+                !disposed &&
+                !runningRef.current &&
+                !directRunId.current &&
+                !recovering
+              ) {
                 setKernelStatus(kernelStatusLabel(status));
+              } else if (!disposed) {
+                recordEssentialDiagnostic(
+                  "notebook",
+                  "ignored_stale_kernel_status",
+                  { discovered: kernelStatusLabel(status) },
+                );
               }
             })
             .catch(() => {
@@ -752,6 +791,9 @@ function NotebookEditor(
     setError(undefined);
     setNotice(undefined);
     setKernelStatus("checking notebook");
+    recordEssentialDiagnostic("notebook", "run_requested", {
+      cell_count: indexes.length,
+    });
     const runId = crypto.randomUUID();
     let accepted = false;
     let completed = false;
@@ -805,6 +847,9 @@ function NotebookEditor(
         run_id: runId,
       });
       accepted = true;
+      recordEssentialDiagnostic("notebook", "run_accepted", {
+        cell_count: inputs.length,
+      });
       for await (const messages of iterator) {
         if (
           messages.some(
@@ -824,6 +869,7 @@ function NotebookEditor(
           "The direct execution connection closed. The kernel is still tracked on the project host; this view is reattaching without running cells again.",
         );
         processLiveRuns.current();
+        recordEssentialDiagnostic("notebook", "run_detached");
         return;
       }
       completedLiveRunIds.current.add(runId);
@@ -845,8 +891,13 @@ function NotebookEditor(
       setDirty(false);
       setKernelStatus("idle");
       setNotice("Execution finished and notebook outputs were saved.");
+      recordEssentialDiagnostic("notebook", "run_completed");
       recordUltraliteOutcome("notebook_execute", "notebook_execute");
     } catch (err: any) {
+      recordEssentialDiagnostic("notebook", "run_failed", {
+        accepted,
+        ...essentialDiagnosticErrorDetails(err),
+      });
       recordUltraliteFailure("notebook_execute", err);
       if (accepted && !completed && err?.code !== "ETAG_MISMATCH") {
         detached = true;
@@ -953,9 +1004,28 @@ function NotebookEditor(
       return next;
     });
   };
+  const copyDiagnostics = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        JSON.stringify(essentialDiagnosticsSnapshot(), null, 2),
+      );
+      setNotice("Essential diagnostics copied.");
+    } catch (err) {
+      recordEssentialDiagnostic("notebook", "copy_diagnostics_failed", {
+        ...essentialDiagnosticErrorDetails(err),
+      });
+      setError("Unable to copy Essential diagnostics.");
+    }
+  };
 
   return (
-    <div>
+    <div
+      data-dirty={dirty}
+      data-essential-surface="notebook"
+      data-execution-state={running ? "running" : "idle"}
+      data-kernel-status={kernelStatus}
+      data-testid="essential-notebook-state"
+    >
       <div className="ul-file-view-header">
         <div className="ul-toolbar">
           {onReadOnlyView ? (
@@ -1008,6 +1078,13 @@ function NotebookEditor(
               type="button"
             >
               {lineNumbers ? "Hide" : "Show"} line numbers
+            </button>
+            <button
+              className="ul-menu-item"
+              onClick={() => void copyDiagnostics()}
+              type="button"
+            >
+              Copy diagnostics
             </button>
           </OverflowMenu>
         </div>

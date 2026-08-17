@@ -90,13 +90,20 @@ const baseContents = JSON.stringify({
 async function setup({
   base = baseContents,
   editorRef,
+  ensureProjectRunning,
   jupyterLineNumbers = false,
+  kernelStatusPromise,
   latest = baseContents,
   snapshots = {},
 }: {
   base?: string;
   editorRef?: RefObject<ExternalMergeHandle | null>;
+  ensureProjectRunning?: jest.Mock;
   jupyterLineNumbers?: boolean;
+  kernelStatusPromise?: Promise<{
+    backend_state: "running";
+    kernel_state: "idle";
+  }>;
   latest?: string;
   snapshots?: Record<string, any>;
 } = {}) {
@@ -108,13 +115,18 @@ async function setup({
     writeFileIfUnchanged: jest.fn(async () => undefined),
   };
   const signal = jest.fn(async () => undefined);
-  const getKernelStatus = jest.fn(async () => ({
-    backend_state: "running",
-    kernel_state: "idle",
-  }));
+  const getKernelStatus = jest.fn(
+    async () =>
+      await (kernelStatusPromise ??
+        Promise.resolve({
+          backend_state: "running" as const,
+          kernel_state: "idle" as const,
+        })),
+  );
   const session = {
     accountId: "22222222-2222-4222-8222-222222222222",
-    ensureProjectRunning: jest.fn(async () => undefined),
+    ensureProjectRunning:
+      ensureProjectRunning ?? jest.fn(async () => undefined),
     jupyterLineNumbers,
     openProjectApi: jest.fn(async () => ({
       api: { jupyter: { getKernelStatus, signal } },
@@ -154,6 +166,35 @@ test("opening executable notebook controls does not start project compute", asyn
   expect(await screen.findByText("Kernel: idle")).toBeVisible();
   expect(filesystem.readFile).not.toHaveBeenCalled();
   expect(session.ensureProjectRunning).not.toHaveBeenCalled();
+});
+
+test("ignores delayed idle discovery after execution starts", async () => {
+  let resolveKernelStatus: ((status: any) => void) | undefined;
+  const kernelStatusPromise = new Promise<any>((resolve) => {
+    resolveKernelStatus = resolve;
+  });
+  const ensureProjectRunning = jest.fn(() => new Promise(() => undefined));
+  const { getKernelStatus } = await setup({
+    ensureProjectRunning,
+    kernelStatusPromise,
+  });
+  await waitFor(() => expect(getKernelStatus).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
+  expect(await screen.findByText("Kernel: starting project")).toBeVisible();
+  await act(async () => {
+    resolveKernelStatus?.({
+      backend_state: "running",
+      kernel_state: "idle",
+    });
+    await Promise.resolve();
+  });
+
+  expect(screen.getByText("Kernel: starting project")).toBeVisible();
+  expect(screen.getByTestId("essential-notebook-state")).toHaveAttribute(
+    "data-execution-state",
+    "running",
+  );
 });
 
 test("renders Markdown cells until explicitly edited", async () => {
@@ -197,6 +238,29 @@ test("keeps cell controls concise and omits raw-cell creation", async () => {
   expect(
     screen.queryByRole("button", { name: /add raw cell/i }),
   ).not.toBeInTheDocument();
+});
+
+test("copies content-free diagnostics from the notebook menu", async () => {
+  const writeText = jest.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  await setup();
+
+  fireEvent.click(screen.getByLabelText("More notebook actions"));
+  fireEvent.click(screen.getByRole("button", { name: "Copy diagnostics" }));
+
+  await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+  const copied = writeText.mock.calls[0][0];
+  expect(JSON.parse(copied)).toMatchObject({
+    version: 1,
+    events: expect.any(Array),
+  });
+  expect(copied).not.toContain("print('hello')");
+  expect(
+    await screen.findByText("Essential diagnostics copied."),
+  ).toBeVisible();
 });
 
 test("seeds line numbers from the account and toggles a notebook override", async () => {
