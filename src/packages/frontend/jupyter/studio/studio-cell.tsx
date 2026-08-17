@@ -14,6 +14,8 @@ import React, {
 } from "react";
 import { useIntl } from "react-intl";
 
+import { useAnimatedTransition } from "@cocalc/frontend/app/animations";
+
 import { Icon, isIconName, Tooltip } from "@cocalc/frontend/components";
 import { jupyter } from "@cocalc/frontend/i18n";
 import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
@@ -144,6 +146,7 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
   } = props;
 
   const intl = useIntl();
+  const columnTransition = useAnimatedTransition(COLUMN_TRANSITION);
   const frameActions = useNotebookFrameActions();
   const fileContext = useFileContext();
   const [mdHovered, setMdHovered] = useState(false);
@@ -493,14 +496,14 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
         <div
           style={{
             flex: `${leftSpacerFlex} 1 0`,
-            transition: COLUMN_TRANSITION,
+            transition: columnTransition,
           }}
         />
         <div
           style={{
             flex: `${contentFlex} 1 0`,
             minWidth: 0,
-            transition: COLUMN_TRANSITION,
+            transition: columnTransition,
           }}
         >
           {content}
@@ -509,7 +512,7 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
           <div
             style={{
               flex: `${rightSpacerFlex} 1 0`,
-              transition: COLUMN_TRANSITION,
+              transition: columnTransition,
             }}
           />
         )}
@@ -653,7 +656,7 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
                 flex: `${outputFlex} 1 0`,
                 minWidth: 0,
                 overflow: "hidden",
-                transition: COLUMN_TRANSITION,
+                transition: columnTransition,
                 padding: "4px 8px",
                 position: "relative",
               }}
@@ -934,7 +937,7 @@ export const StudioCell: React.FC<StudioCellProps> = React.memo((props) => {
                   flex: `${codeFlex} 1 0`,
                   minWidth: 0,
                   overflow: "visible",
-                  transition: COLUMN_TRANSITION,
+                  transition: columnTransition,
                   position: "relative",
                   zIndex: 1,
                   borderLeft: readingMode ? "none" : "1px solid #eee",

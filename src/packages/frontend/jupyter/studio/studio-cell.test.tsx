@@ -16,6 +16,8 @@ let mockMarkdownResolvedUrl: any;
 jest.mock("@cocalc/frontend/app-framework", () => ({
   React: require("react"),
   CSS: {},
+  // unset => the Animations preference defaults to enabled
+  useAccountOtherSetting: () => undefined,
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({

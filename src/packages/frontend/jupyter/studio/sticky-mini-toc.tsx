@@ -5,6 +5,7 @@
 
 import type { Map } from "immutable";
 
+import { useAnimatedTransition } from "@cocalc/frontend/app/animations";
 import type { JupyterActions } from "@cocalc/frontend/jupyter/browser-actions";
 import { MiniTOC } from "./mini-toc";
 import {
@@ -32,6 +33,7 @@ export function StickyMiniTOC({
   fontSize,
   actions,
 }: StickyMiniTOCProps) {
+  const columnTransition = useAnimatedTransition(COLUMN_TRANSITION);
   const margin = studioLayout === "narrow" ? 2 : 0;
   const contentFlex = OUTPUT_FLEX_DEFAULT + CODE_FLEX_DEFAULT;
   const rightSpacerFlex = studioLayout === "wide" ? 0 : margin;
@@ -52,14 +54,14 @@ export function StickyMiniTOC({
           <div
             style={{
               flex: `${rightSpacerFlex} 1 0`,
-              transition: COLUMN_TRANSITION,
+              transition: columnTransition,
             }}
           />
         )}
         <div
           style={{
             flex: `${CODE_FLEX_DEFAULT} 1 0`,
-            transition: COLUMN_TRANSITION,
+            transition: columnTransition,
             pointerEvents: "auto",
             overflow: "hidden",
           }}
@@ -78,7 +80,7 @@ export function StickyMiniTOC({
           <div
             style={{
               flex: `${rightSpacerFlex} 1 0`,
-              transition: COLUMN_TRANSITION,
+              transition: columnTransition,
             }}
           />
         )}

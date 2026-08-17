@@ -12,6 +12,7 @@ import { useAccountOtherSetting } from "@cocalc/frontend/app-framework";
 import { IntlMessage, isIntlMessage } from "@cocalc/frontend/i18n";
 import { useActivityBarPreferences } from "@cocalc/frontend/project/page/activity-bar-storage";
 import { COLORS } from "@cocalc/util/theme";
+import { useAnimationsEnabled } from "./animations";
 import { getBaseAntdTheme } from "./antd-base-theme";
 import { NARROW_THRESHOLD_PX, PageStyle } from "./top-nav-consts";
 import useAppContext, { AppContext, AppState, calcStyle } from "./use-context";
@@ -80,7 +81,7 @@ export function useAppContextProvider(): AppState {
 export function useAntdStyleProvider() {
   const baseTheme = getBaseAntdTheme();
   const rounded = useAccountOtherSetting<boolean>("antd_rounded") ?? true;
-  const animate = useAccountOtherSetting<boolean>("antd_animate") ?? true;
+  const animate = useAnimationsEnabled();
   const branded = useAccountOtherSetting<boolean>("antd_brandcolors") ?? false;
   const compact = useAccountOtherSetting<boolean>("antd_compact") ?? false;
 
