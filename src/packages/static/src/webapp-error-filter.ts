@@ -6,9 +6,25 @@ const IGNORED_BROWSER_ERROR_MESSAGES = new Set([
 ]);
 
 export function isIgnorableBrowserError(message: unknown): boolean {
+  if (typeof message !== "string") return false;
+  const normalized = message.trim();
   return (
-    typeof message === "string" &&
-    IGNORED_BROWSER_ERROR_MESSAGES.has(message.trim())
+    IGNORED_BROWSER_ERROR_MESSAGES.has(normalized) ||
+    /ChunkLoadError|Loading (?:CSS )?chunk|__webpack_require__|__webpack_modules__/i.test(
+      normalized,
+    )
+  );
+}
+
+export function isBrowserExtensionError({
+  file,
+  stacktrace,
+}: {
+  file?: unknown;
+  stacktrace?: unknown;
+}): boolean {
+  return /(?:chrome|moz|safari-web)-extension:\/\//i.test(
+    `${file ?? ""}\n${stacktrace ?? ""}`,
   );
 }
 

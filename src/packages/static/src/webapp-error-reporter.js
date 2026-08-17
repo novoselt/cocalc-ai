@@ -22,6 +22,7 @@
 let ENABLED;
 const already_reported = [];
 const {
+  isBrowserExtensionError,
   isIgnorableBrowserError,
   isIgnorableUnhandledRejection,
   isOpaqueCrossOriginScriptError,
@@ -73,7 +74,13 @@ const WHITELIST = [
   "Viewport.syncScrollArea",
 ];
 const isWhitelisted = function (opts) {
-  if (isIgnorableBrowserError(opts?.message)) {
+  if (
+    isIgnorableBrowserError(opts?.message) ||
+    isBrowserExtensionError({
+      file: opts?.file,
+      stacktrace: opts?.stacktrace,
+    })
+  ) {
     return true;
   }
   const s = JSON.stringify(opts);

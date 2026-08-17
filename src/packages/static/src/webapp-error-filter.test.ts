@@ -1,4 +1,5 @@
 import {
+  isBrowserExtensionError,
   isIgnorableBrowserError,
   isIgnorableUnhandledRejection,
   isOpaqueCrossOriginScriptError,
@@ -8,6 +9,8 @@ describe("isIgnorableBrowserError", () => {
   test.each([
     "ResizeObserver loop completed with undelivered notifications.",
     "ResizeObserver loop limit exceeded",
+    "ChunkLoadError: Loading chunk 123 failed",
+    "Failed to load create project dialog after 3 attempts: Loading CSS chunk 4 failed",
   ])("ignores the browser-generated delivery warning %p", (message) => {
     expect(isIgnorableBrowserError(message)).toBe(true);
   });
@@ -19,6 +22,25 @@ describe("isIgnorableBrowserError", () => {
     undefined,
   ])("preserves real or malformed errors %p", (message) => {
     expect(isIgnorableBrowserError(message)).toBe(false);
+  });
+});
+
+describe("isBrowserExtensionError", () => {
+  it.each([
+    { file: "chrome-extension://abc/content.js" },
+    { stacktrace: "at inject (moz-extension://abc/inject.js:1:2)" },
+    { stacktrace: "global code@safari-web-extension://abc/script.js:1:2" },
+  ])("ignores errors originating in extensions: %p", (value) => {
+    expect(isBrowserExtensionError(value)).toBe(true);
+  });
+
+  it("preserves CoCalc errors that only mention an extension in the message", () => {
+    expect(
+      isBrowserExtensionError({
+        file: "https://cocalc.ai/static/app.js",
+        stacktrace: "Error: failed to communicate with chrome extension",
+      }),
+    ).toBe(false);
   });
 });
 
