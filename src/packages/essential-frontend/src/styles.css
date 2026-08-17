@@ -1068,6 +1068,36 @@ textarea {
   position: relative;
 }
 
+.ul-codex-config {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns:
+    minmax(150px, 1fr) minmax(120px, 0.7fr) minmax(180px, 1fr)
+    auto;
+  margin: 0 auto 6px;
+  max-width: 980px;
+}
+
+.ul-codex-config label {
+  display: grid;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 3px;
+}
+
+.ul-codex-config .ul-select {
+  min-height: 32px;
+  padding-block: 4px;
+}
+
+.ul-codex-config-note {
+  color: var(--ul-muted);
+  font-size: 11px;
+  padding-bottom: 8px;
+  white-space: nowrap;
+}
+
 .ul-message {
   background: var(--ul-paper);
   border: 1px solid var(--ul-border);
@@ -1101,10 +1131,9 @@ textarea {
 }
 
 .ul-composer {
-  background: var(--ul-paper);
-  border: 1px solid var(--ul-border);
-  border-top-width: 2px;
-  padding: 10px;
+  background: transparent;
+  border: 0;
+  padding: 8px 4px 0;
   z-index: 2;
 }
 
@@ -1463,6 +1492,15 @@ textarea {
     height: calc(100dvh - 155px);
     min-height: 360px;
   }
+
+  .ul-codex-config {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .ul-codex-config-note {
+    align-self: center;
+    padding-bottom: 0;
+  }
 }
 
 @media (max-width: 480px) {
@@ -1503,6 +1541,14 @@ textarea {
 
   .ul-page {
     padding: 14px 9px;
+  }
+
+  .ul-codex-config {
+    grid-template-columns: 1fr;
+  }
+
+  .ul-codex-config-note {
+    display: none;
   }
 
   .ul-surface-header {

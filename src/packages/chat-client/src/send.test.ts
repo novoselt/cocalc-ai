@@ -91,6 +91,7 @@ describe("ChatSendPipeline", () => {
         yield { seq: 0, type: "status", state: "queued" };
       },
       interrupt: jest.fn(),
+      steer: jest.fn(),
     };
     const db = fakeDb(events);
     const client = pipeline({ db, transport });
@@ -140,6 +141,7 @@ describe("ChatSendPipeline", () => {
         }
       },
       interrupt: jest.fn(async () => ({ ok: true, state: "missing" })),
+      steer: jest.fn(),
     };
     const db = fakeDb(events);
     const client = pipeline({
@@ -178,6 +180,7 @@ describe("ChatSendPipeline", () => {
         yield { seq: 1, type: "status", state: "queued" } as AcpStreamMessage;
       },
       interrupt: jest.fn(),
+      steer: jest.fn(),
     };
 
     await expect(
@@ -207,6 +210,7 @@ describe("ChatSendPipeline", () => {
     const transport: ChatSendTransport = {
       stream: async function* () {},
       interrupt: jest.fn(async () => ({ ok: true, state: "interrupted" })),
+      steer: jest.fn(),
     };
     const client = pipeline({ db, transport });
 
@@ -223,6 +227,59 @@ describe("ChatSendPipeline", () => {
           state: "interrupted",
         }),
       ]),
+    );
+  });
+
+  it("persists guidance before steering the active Codex turn", async () => {
+    const events: string[] = [];
+    const db = fakeDb(events);
+    db.rows.push({
+      event: "chat",
+      sender_id: "openai-codex-agent",
+      date: "2026-01-01T00:00:03.000Z",
+      message_id: "running-message",
+      thread_id: "thread-1",
+      generating: true,
+      history: [],
+    });
+    let request: any;
+    const transport: ChatSendTransport = {
+      stream: async function* () {},
+      interrupt: jest.fn(),
+      steer: jest.fn(async (value) => {
+        events.push("steer");
+        request = value;
+        return { ok: true, state: "steered" };
+      }),
+    };
+
+    await expect(
+      pipeline({ db, transport }).sendGuidance({
+        thread_id: "thread-1",
+        text: "focus on the regression",
+      }),
+    ).resolves.toEqual({
+      message_id: "user-message",
+      thread_id: "thread-1",
+    });
+
+    expect(events.indexOf("save")).toBeLessThan(events.indexOf("steer"));
+    expect(request).toEqual(
+      expect.objectContaining({
+        prompt: "focus on the regression",
+        session_id: "codex-session-1",
+        chat: expect.objectContaining({
+          send_mode: "immediate",
+          parent_message_id: "user-message",
+        }),
+      }),
+    );
+    expect(db.rows.find((row) => row.message_id === "user-message")).toEqual(
+      expect.objectContaining({
+        acp_send_mode: "immediate",
+        acp_state: "sent",
+        parent_message_id: "running-message",
+      }),
     );
   });
 });

@@ -6,6 +6,8 @@
 import type { ChatThreadRuntimeState, CodexThreadConfig } from "@cocalc/chat";
 import type { AcpStreamMessage } from "@cocalc/conat/ai/acp/types";
 
+export type { CodexThreadConfig } from "@cocalc/chat";
+
 export type ChatConnectionState =
   | "closed"
   | "connecting"
@@ -25,7 +27,15 @@ export interface ProjectedChatMessage {
   date: string;
   revision_date?: string;
   generating: boolean;
-  state?: "queued" | "running" | "interrupted" | "complete" | "error";
+  guidance?: boolean;
+  state?:
+    | "sending"
+    | "sent"
+    | "queued"
+    | "running"
+    | "interrupted"
+    | "complete"
+    | "error";
   acp_events?: unknown[];
   acp_log_store?: string;
   acp_log_key?: string;
@@ -83,6 +93,14 @@ export interface HeadlessChatClient {
     thread_id: string;
     text: string;
   }): Promise<{ message_id: string; thread_id: string }>;
+  sendGuidanceToCodexThread(opts: {
+    thread_id: string;
+    text: string;
+  }): Promise<{ message_id: string; thread_id: string }>;
+  updateCodexThreadConfig(opts: {
+    thread_id: string;
+    acp_config: CodexThreadConfig;
+  }): Promise<void>;
   interrupt(thread_id: string): Promise<void>;
   loadOlderMessages?(limit: number): Promise<void>;
   reconnect(reason: string): Promise<void>;

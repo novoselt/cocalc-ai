@@ -149,6 +149,71 @@ test("reports service and stream open phases", async () => {
   await client.close();
 });
 
+test("routes guidance and thread configuration through the open session", async () => {
+  const request = jest.fn(async (_subject, [name, args]) => ({
+    data:
+      name === "open"
+        ? {
+            session_id: "session-1",
+            stream_name: "stream-1",
+            snapshot: snapshot(1, "ready"),
+          }
+        : name === "send"
+          ? { message_id: "guidance-1", thread_id: args[0].thread_id }
+          : null,
+  }));
+  const client = createClient({
+    request,
+    sync: { dstream: jest.fn(async () => streamStub()) },
+  });
+  await client.open();
+
+  await expect(
+    client.sendGuidanceToCodexThread({
+      thread_id: THREAD_ID,
+      text: "Check the edge case",
+    }),
+  ).resolves.toEqual({
+    message_id: "guidance-1",
+    thread_id: THREAD_ID,
+  });
+  await client.updateCodexThreadConfig({
+    thread_id: THREAD_ID,
+    acp_config: { model: "gpt-5.6-luna", reasoning: "medium" },
+  });
+
+  expect(request).toHaveBeenCalledWith(
+    expect.any(String),
+    [
+      "send",
+      [
+        {
+          session_id: "session-1",
+          send_mode: "immediate",
+          text: "Check the edge case",
+          thread_id: THREAD_ID,
+        },
+      ],
+    ],
+    expect.objectContaining({ timeout: expect.any(Number) }),
+  );
+  expect(request).toHaveBeenCalledWith(
+    expect.any(String),
+    [
+      "updateThread",
+      [
+        {
+          session_id: "session-1",
+          thread_id: THREAD_ID,
+          acp_config: { model: "gpt-5.6-luna", reasoning: "medium" },
+        },
+      ],
+    ],
+    expect.objectContaining({ timeout: expect.any(Number) }),
+  );
+  await client.close();
+});
+
 test("retains the selected thread and expanded message window on reconnect", async () => {
   let openCount = 0;
   const request = jest.fn(async (_subject, [name, args]) => {

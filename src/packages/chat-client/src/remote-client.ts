@@ -228,6 +228,48 @@ export class RemoteHeadlessChatClient implements HeadlessChatClient {
     );
   }
 
+  async sendGuidanceToCodexThread(opts: {
+    thread_id: string;
+    text: string;
+  }): Promise<{ message_id: string; thread_id: string }> {
+    return await this.withSessionRecovery(() =>
+      this.call(
+        "send",
+        [
+          {
+            session_id: this.requireSession(),
+            ...opts,
+            send_mode: "immediate",
+          },
+        ],
+        OPERATION_TIMEOUT_MS,
+      ),
+    );
+  }
+
+  async updateCodexThreadConfig(opts: {
+    thread_id: string;
+    acp_config: CodexThreadConfig;
+  }): Promise<void> {
+    try {
+      await this.withSessionRecovery(() =>
+        this.call(
+          "updateThread",
+          [{ session_id: this.requireSession(), ...opts }],
+          OPERATION_TIMEOUT_MS,
+        ),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `${err}`;
+      if (message.includes("unknown service method 'updateThread'")) {
+        throw new Error(
+          "Changing Codex settings requires restarting this project to update its backend.",
+        );
+      }
+      throw err;
+    }
+  }
+
   async createCodexThread(opts: {
     thread_id: string;
     name?: string;

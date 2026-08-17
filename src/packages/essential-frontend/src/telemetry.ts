@@ -33,6 +33,7 @@ export type UltraliteOutcome =
   | "create_folder"
   | "notebook_execute"
   | "codex_prompt"
+  | "codex_guidance"
   | "terminal_connect"
   | "full_cocalc"
   | "timeout"
