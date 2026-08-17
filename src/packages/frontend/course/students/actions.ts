@@ -65,9 +65,9 @@ export class StudentsActions {
       const y = x as SyncDBRecordStudent;
       y.table = "students";
       y.student_id = student_id;
-      this.course_actions.syncdb.set(y);
+      this.course_actions.set(y, false);
     }
-    this.course_actions.syncdb.commit();
+    this.course_actions.commit();
     const f: (student_id: string) => Promise<void> = async (student_id) => {
       let store = this.get_store();
       await callback2(store.wait, {
@@ -140,7 +140,7 @@ export class StudentsActions {
     for (const student of students) {
       this.doDeleteStudent(student, noTrash, false);
     }
-    this.course_actions.syncdb.commit();
+    this.course_actions.commit();
     await delay(1); // so store is updated, since it is used by configure
     await this.course_actions.student_projects.configure_all_projects();
   };
@@ -262,7 +262,7 @@ export class StudentsActions {
         );
       }
       if (rows.length > 0) {
-        this.course_actions.syncdb.commit();
+        this.course_actions.commit();
       }
     } catch (err) {
       // Non-fatal; expanded student rows still repair individually.
@@ -303,7 +303,7 @@ export class StudentsActions {
       changed = true;
     });
     if (changed) {
-      this.course_actions.syncdb.commit();
+      this.course_actions.commit();
     }
   };
 

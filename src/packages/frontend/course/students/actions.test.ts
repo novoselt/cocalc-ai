@@ -40,8 +40,10 @@ describe("StudentsActions.add_students", () => {
       wait: (opts) => opts.cb(undefined, opts.until(store)),
     };
     const courseActions = {
+      commit: jest.fn(),
       get_store: () => store,
       is_closed: () => false,
+      set: jest.fn(),
       set_activity: () => 1,
       set_error: jest.fn(),
       student_projects: {
@@ -86,8 +88,10 @@ describe("StudentsActions.add_students", () => {
       wait: (opts) => opts.cb(undefined, opts.until(store)),
     };
     const courseActions = {
+      commit: jest.fn(),
       get_store: () => store,
       is_closed: () => false,
+      set: jest.fn(),
       set_activity: () => 1,
       set_error: jest.fn(),
       student_projects: {
@@ -104,13 +108,13 @@ describe("StudentsActions.add_students", () => {
     await Promise.resolve();
 
     expect(syncdb.wait_until_ready).toHaveBeenCalledTimes(1);
-    expect(syncdb.set).not.toHaveBeenCalled();
-    expect(syncdb.commit).not.toHaveBeenCalled();
+    expect(courseActions.set).not.toHaveBeenCalled();
+    expect(courseActions.commit).not.toHaveBeenCalled();
 
     ready.resolve();
     await addingStudents;
 
-    expect(syncdb.set).toHaveBeenCalledTimes(1);
-    expect(syncdb.commit).toHaveBeenCalledTimes(1);
+    expect(courseActions.set).toHaveBeenCalledTimes(1);
+    expect(courseActions.commit).toHaveBeenCalledTimes(1);
   });
 });

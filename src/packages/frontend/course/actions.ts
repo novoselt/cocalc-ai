@@ -48,6 +48,8 @@ export class CourseActions extends Actions<CourseState> {
   public configuration: ConfigurationActions;
   public export: ExportActions;
   private state: "init" | "ready" | "closed" = "init";
+  private pendingSyncdbMutations: Array<(syncdb: SyncDB) => void> = [];
+  private syncdbMutationDrain?: Promise<void>;
 
   constructor(name, redux) {
     super(name, redux);
@@ -125,39 +127,84 @@ export class CourseActions extends Actions<CourseState> {
     return true;
   };
 
+  // Course panels can become interactive while SyncDB is still initializing.
+  // Keep all writes in one FIFO so commits cannot overtake queued mutations.
+  private mutateSyncdb = (mutation: (syncdb: SyncDB) => void): void => {
+    if (!this.is_loaded() || this.syncdb.get_state() === "closed") {
+      return;
+    }
+    if (
+      this.syncdbMutationDrain == null &&
+      this.syncdb.get_state() === "ready"
+    ) {
+      mutation(this.syncdb);
+      return;
+    }
+    this.pendingSyncdbMutations.push(mutation);
+    this.startSyncdbMutationDrain();
+  };
+
+  private startSyncdbMutationDrain = (): void => {
+    if (this.syncdbMutationDrain != null) return;
+    const syncdb = this.syncdb;
+    this.syncdbMutationDrain = (async () => {
+      await syncdb.wait_until_ready();
+      while (
+        this.pendingSyncdbMutations.length > 0 &&
+        syncdb.get_state() !== "closed"
+      ) {
+        this.pendingSyncdbMutations.shift()?.(syncdb);
+      }
+      if (syncdb.get_state() === "closed") {
+        this.pendingSyncdbMutations = [];
+      }
+    })()
+      .catch((err) => {
+        this.pendingSyncdbMutations = [];
+        if (syncdb.get_state() !== "closed" && !this.is_closed()) {
+          this.set_error(`Error waiting for course data -- ${err}`);
+        }
+      })
+      .finally(() => {
+        this.syncdbMutationDrain = undefined;
+        if (
+          this.pendingSyncdbMutations.length > 0 &&
+          syncdb.get_state() !== "closed"
+        ) {
+          this.startSyncdbMutationDrain();
+        }
+      });
+  };
+
   // Set one object in the syncdb
   set = (
     obj: SyncDBRecord,
     commit: boolean = true,
     emitChangeImmediately: boolean = false,
   ): void => {
-    if (
-      !this.is_loaded() ||
-      (this.syncdb != null ? this.syncdb.get_state() === "closed" : undefined)
-    ) {
-      return;
-    }
-    this.syncdb.set(obj);
-    if (commit) {
-      this.syncdb.commit({ emitChangeImmediately });
-    }
+    this.mutateSyncdb((syncdb) => {
+      syncdb.set(obj);
+      if (commit) {
+        syncdb.commit({ emitChangeImmediately });
+      }
+    });
   };
 
   delete = (obj: SyncDBRecord, commit: boolean = true): void => {
-    if (
-      !this.is_loaded() ||
-      (this.syncdb != null ? this.syncdb.get_state() === "closed" : undefined)
-    ) {
-      return;
-    }
     // put in similar checks for other tables?
     if (obj.table == "students" && obj.student_id == null) {
       console.warn("course: deleting student without primary key", obj);
     }
-    this.syncdb.delete(obj);
-    if (commit) {
-      this.syncdb.commit();
-    }
+    this.mutateSyncdb((syncdb) => {
+      syncdb.delete(obj);
+      if (commit) {
+        syncdb.commit();
+      }
+    });
+  };
+
+  commit = (): void => {
+    this.mutateSyncdb((syncdb) => syncdb.commit());
   };
 
   // Get one object from this.syncdb as a Javascript object (or undefined)
@@ -181,6 +228,7 @@ export class CourseActions extends Actions<CourseState> {
     const id = this.set_activity({ desc: "Saving..." });
     this.setState({ saving: true });
     try {
+      await this.syncdb.wait_until_ready();
       await this.syncdb.save_to_disk();
       this.setState({ show_save_button: false });
     } catch (err) {

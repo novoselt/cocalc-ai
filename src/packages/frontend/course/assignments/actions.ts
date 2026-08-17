@@ -2472,7 +2472,7 @@ ${details}
         this.get_store().get_nbgrader_parallel(),
         one_student,
       );
-      this.course_actions.syncdb.commit();
+      this.course_actions.commit();
     } finally {
       this.nbgrader_set_is_done(assignment_id);
     }
@@ -2498,7 +2498,7 @@ ${details}
       );
     }
     if (commit) {
-      this.course_actions.syncdb.commit();
+      this.course_actions.commit();
     }
   };
 
