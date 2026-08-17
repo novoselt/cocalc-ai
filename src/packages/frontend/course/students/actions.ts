@@ -53,6 +53,8 @@ export class StudentsActions {
       display_name?: string;
     }[],
   ): Promise<void> {
+    await this.course_actions.syncdb.wait_until_ready();
+
     // students = array of objects that may have an account_id or email_address field set
     // New student_id's will be constructed randomly for each student
     const student_ids: string[] = [];

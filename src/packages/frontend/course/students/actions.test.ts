@@ -52,6 +52,7 @@ describe("StudentsActions.add_students", () => {
         commit: jest.fn(),
         get_state: () => "ready",
         set: jest.fn(),
+        wait_until_ready: jest.fn(async () => undefined),
       },
     };
     const actions = new StudentsActions(courseActions as any);
@@ -68,5 +69,48 @@ describe("StudentsActions.add_students", () => {
 
     expect(createStudentProject).toHaveBeenCalledTimes(1);
     expect(configureAllProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the course document before writing student records", async () => {
+    const ready = deferred();
+    const syncdb = {
+      commit: jest.fn(),
+      get_state: () => "init",
+      set: jest.fn(),
+      wait_until_ready: jest.fn(() => ready.promise),
+    };
+    const store = {
+      get_copy_parallel: () => 1,
+      get_student: () => ({}),
+      getIn: () => "11111111-1111-4111-8111-111111111111",
+      wait: (opts) => opts.cb(undefined, opts.until(store)),
+    };
+    const courseActions = {
+      get_store: () => store,
+      is_closed: () => false,
+      set_activity: () => 1,
+      set_error: jest.fn(),
+      student_projects: {
+        configure_all_projects: jest.fn(async () => undefined),
+        create_student_project: jest.fn(async () => undefined),
+      },
+      syncdb,
+    };
+    const actions = new StudentsActions(courseActions as any);
+
+    const addingStudents = actions.add_students([
+      { email_address: "student@example.com" },
+    ]);
+    await Promise.resolve();
+
+    expect(syncdb.wait_until_ready).toHaveBeenCalledTimes(1);
+    expect(syncdb.set).not.toHaveBeenCalled();
+    expect(syncdb.commit).not.toHaveBeenCalled();
+
+    ready.resolve();
+    await addingStudents;
+
+    expect(syncdb.set).toHaveBeenCalledTimes(1);
+    expect(syncdb.commit).toHaveBeenCalledTimes(1);
   });
 });
