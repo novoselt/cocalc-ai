@@ -21,6 +21,7 @@ export interface AuthBootstrap {
   email_address_verified?: boolean;
   home_bay_id?: string;
   home_bay_url?: string;
+  jupyter_line_numbers?: boolean;
   project_window?: AccountProjectListWindowRow[];
   project_window_has_more?: boolean;
 }

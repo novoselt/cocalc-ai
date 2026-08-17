@@ -13,6 +13,7 @@ const mockGetBayPublicOriginForRequest = jest.fn();
 const mockGetImpersonationBootstrapInfo = jest.fn();
 const mockListAccountProjectWindow = jest.fn();
 const mockGetConfiguredBayId = jest.fn();
+const mockPoolQuery = jest.fn();
 
 jest.mock("@cocalc/http-api/lib/account/get-account", () => ({
   __esModule: true,
@@ -41,6 +42,11 @@ jest.mock("@cocalc/server/auth/impersonation", () => ({
     mockGetImpersonationBootstrapInfo(...args),
 }));
 
+jest.mock("@cocalc/database/pool", () => ({
+  __esModule: true,
+  default: () => ({ query: (...args) => mockPoolQuery(...args) }),
+}));
+
 jest.mock("@cocalc/backend/base-path", () => ({
   __esModule: true,
   default: "/tenant",
@@ -56,6 +62,9 @@ describe("/api/v2/auth/bootstrap", () => {
     mockGetImpersonationBootstrapInfo.mockReset().mockResolvedValue(null);
     mockGetConfiguredBayId.mockReset().mockReturnValue("bay-0");
     mockListAccountProjectWindow.mockReset().mockResolvedValue([]);
+    mockPoolQuery.mockReset().mockResolvedValue({
+      rows: [{ editor_settings: { jupyter_line_numbers: true } }],
+    });
   });
 
   it("uses display_name instead of stale legacy split names", async () => {
@@ -83,6 +92,7 @@ describe("/api/v2/auth/bootstrap", () => {
         display_name: "AdmiN",
         email_address: "admin@example.com",
         email_address_verified: true,
+        jupyter_line_numbers: true,
         signed_in: true,
         client_capabilities: {
           protocol_version: 1,
@@ -176,6 +186,7 @@ describe("/api/v2/auth/bootstrap", () => {
     await bootstrap(req, res);
 
     expect(mockListAccountProjectWindow).not.toHaveBeenCalled();
+    expect(mockPoolQuery).not.toHaveBeenCalled();
     expect(res._getJSONData()).toEqual(
       expect.not.objectContaining({ project_window: expect.anything() }),
     );

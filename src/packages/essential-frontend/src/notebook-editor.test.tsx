@@ -37,6 +37,7 @@ jest.mock("./codemirror-editor", () => {
     return (
       <textarea
         aria-label={props.ariaLabel}
+        data-line-numbers={`${props.lineNumbers}`}
         onChange={(event) => {
           setValue(event.target.value);
           props.onChange?.(event.target.value);
@@ -89,11 +90,13 @@ const baseContents = JSON.stringify({
 async function setup({
   base = baseContents,
   editorRef,
+  jupyterLineNumbers = false,
   latest = baseContents,
   snapshots = {},
 }: {
   base?: string;
   editorRef?: RefObject<ExternalMergeHandle | null>;
+  jupyterLineNumbers?: boolean;
   latest?: string;
   snapshots?: Record<string, any>;
 } = {}) {
@@ -110,7 +113,9 @@ async function setup({
     kernel_state: "idle",
   }));
   const session = {
+    accountId: "22222222-2222-4222-8222-222222222222",
     ensureProjectRunning: jest.fn(async () => undefined),
+    jupyterLineNumbers,
     openProjectApi: jest.fn(async () => ({
       api: { jupyter: { getKernelStatus, signal } },
       lease: { client: {} },
@@ -139,6 +144,9 @@ async function setup({
   });
   return { filesystem, getKernelStatus, liveRunStore, session, signal };
 }
+
+beforeEach(() => window.localStorage.clear());
+afterEach(() => jest.restoreAllMocks());
 
 test("opening executable notebook controls does not start project compute", async () => {
   const { filesystem, session } = await setup();
@@ -180,6 +188,25 @@ test("renders Markdown cells until explicitly edited", async () => {
   expect(
     await screen.findByRole("heading", { name: "Rendered heading" }),
   ).toBeVisible();
+});
+
+test("keeps cell controls concise and omits raw-cell creation", async () => {
+  await setup();
+
+  expect(screen.queryByText(/code cell 1/i)).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /add raw cell/i }),
+  ).not.toBeInTheDocument();
+});
+
+test("seeds line numbers from the account and toggles a notebook override", async () => {
+  await setup({ jupyterLineNumbers: true });
+
+  const source = screen.getByRole("textbox", { name: "Source for cell 1" });
+  expect(source).toHaveAttribute("data-line-numbers", "true");
+  fireEvent.click(screen.getByLabelText("More notebook actions"));
+  fireEvent.click(screen.getByRole("button", { name: "Hide line numbers" }));
+  expect(source).toHaveAttribute("data-line-numbers", "false");
 });
 
 test("saving uses a conflict-safe write without starting compute", async () => {
@@ -275,6 +302,7 @@ test("retains a notebook draft when both sides changed one cell", async () => {
 });
 
 test("a changed canonical notebook blocks execution before compute starts", async () => {
+  jest.spyOn(window, "confirm").mockReturnValueOnce(true);
   const { filesystem, session } = await setup({
     latest: `${baseContents}\n`,
   });
@@ -284,6 +312,17 @@ test("a changed canonical notebook blocks execution before compute starts", asyn
     await screen.findByText(/changed on the server.*Nothing was executed/i),
   ).toBeVisible();
   expect(filesystem.writeFileIfUnchanged).not.toHaveBeenCalled();
+  expect(session.ensureProjectRunning).not.toHaveBeenCalled();
+});
+
+test("Run all requires confirmation", async () => {
+  jest.spyOn(window, "confirm").mockReturnValueOnce(false);
+  const { filesystem, session } = await setup();
+
+  fireEvent.click(screen.getByRole("button", { name: "Run all" }));
+
+  expect(window.confirm).toHaveBeenCalledWith("Run all 1 code cell?");
+  expect(filesystem.readFile).not.toHaveBeenCalled();
   expect(session.ensureProjectRunning).not.toHaveBeenCalled();
 });
 
@@ -397,12 +436,15 @@ test("adds, moves, and deletes focused notebook cells", async () => {
     screen.getByRole("textbox", { name: "Source for cell 2" }),
   ).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Move cell 2 up" }));
-  expect(screen.getByText("markdown cell 1")).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "Finish editing markdown cell 1" }),
+  ).toBeVisible();
 
-  const confirm = jest.spyOn(window, "confirm").mockReturnValue(true);
+  jest.spyOn(window, "confirm").mockReturnValue(true);
   fireEvent.click(screen.getByRole("button", { name: "Delete cell 1" }));
-  expect(screen.queryByText("markdown cell 1")).not.toBeInTheDocument();
-  confirm.mockRestore();
+  expect(
+    screen.queryByRole("button", { name: "Finish editing markdown cell 1" }),
+  ).not.toBeInTheDocument();
 });
 
 test("inserts a code cell directly below the selected cell", () => {

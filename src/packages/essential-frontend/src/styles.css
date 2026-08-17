@@ -936,11 +936,13 @@ textarea {
 .ul-notebook {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .ul-cell {
   background: var(--ul-paper);
   border: 1px solid var(--ul-border);
+  min-width: 0;
 }
 
 .ul-cell-toolbar {
@@ -956,6 +958,10 @@ textarea {
 .ul-cell-label {
   color: var(--ul-muted);
   font-size: 11px;
+  margin-right: auto;
+}
+
+.ul-cell-toolbar-spacer {
   margin-right: auto;
 }
 
@@ -1011,7 +1017,10 @@ textarea {
 .ul-output {
   background: var(--ul-paper);
   border-width: 1px 0 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ul-output-image {

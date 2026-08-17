@@ -46,7 +46,7 @@ import {
   type NotebookOutput,
 } from "./notebook-view";
 import type { NotebookBlobResolver } from "./notebook-blobs";
-import { InlineAlert, LoadingState } from "./ui";
+import { InlineAlert, LoadingState, OverflowMenu } from "./ui";
 import useEditCheckpoint from "./use-edit-checkpoint";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
 import {
@@ -194,6 +194,7 @@ function NotebookCellEditor({
   editorRef,
   index,
   language,
+  lineNumbers,
   onChange,
   onSave,
   path,
@@ -205,6 +206,7 @@ function NotebookCellEditor({
   editorRef: RefCallback<CodeMirrorEditorHandle>;
   index: number;
   language?: ReturnType<typeof notebookCodeLanguage>;
+  lineNumbers: boolean;
   onChange: (value: string) => void;
   onSave: () => void;
   path: string;
@@ -220,6 +222,7 @@ function NotebookCellEditor({
       className="ul-notebook-cm"
       initialValue={initialValue}
       language={cell.cell_type === "markdown" ? "markdown" : language}
+      lineNumbers={lineNumbers}
       onChange={onChange}
       onCursorChange={() => undefined}
       onDirtyChange={() => undefined}
@@ -283,6 +286,17 @@ function NotebookEditor(
   const [kernelStatus, setKernelStatus] = useState("not started");
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [lineNumbers, setLineNumbers] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(
+        `cocalc-essential:jupyter-line-numbers:${session.accountId}:${project.project_id}:${path}`,
+      );
+      if (stored != null) return stored === "true";
+    } catch {
+      // Browser storage may be unavailable; the account preference still works.
+    }
+    return session.jupyterLineNumbers === true;
+  });
   const [editorEpoch, setEditorEpoch] = useState(0);
   const [editingMarkdownCells, setEditingMarkdownCells] = useState<Set<string>>(
     () => new Set(),
@@ -925,6 +939,20 @@ function NotebookEditor(
     .filter((index) => index >= 0);
   const codeLanguage = notebookCodeLanguage(notebook);
   const diskBlocked = conflict || externalChanged;
+  const toggleLineNumbers = () => {
+    setLineNumbers((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(
+          `cocalc-essential:jupyter-line-numbers:${session.accountId}:${project.project_id}:${path}`,
+          `${next}`,
+        );
+      } catch {
+        // Keep the in-memory preference when browser storage is unavailable.
+      }
+      return next;
+    });
+  };
 
   return (
     <div>
@@ -950,7 +978,15 @@ function NotebookEditor(
           <button
             className="ul-button ul-button-secondary"
             disabled={readOnly || running || diskBlocked || !codeIndexes.length}
-            onClick={() => void runCells(codeIndexes)}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Run all ${codeIndexes.length} code ${codeIndexes.length === 1 ? "cell" : "cells"}?`,
+                )
+              ) {
+                void runCells(codeIndexes);
+              }
+            }}
             type="button"
           >
             Run all
@@ -964,6 +1000,16 @@ function NotebookEditor(
               Interrupt
             </button>
           ) : null}
+          <OverflowMenu label="More notebook actions">
+            <button
+              aria-pressed={lineNumbers}
+              className="ul-menu-item"
+              onClick={toggleLineNumbers}
+              type="button"
+            >
+              {lineNumbers ? "Hide" : "Show"} line numbers
+            </button>
+          </OverflowMenu>
         </div>
         <span aria-live="polite" className="ul-editor-status">
           Kernel: {kernelStatus}
@@ -1001,10 +1047,11 @@ function NotebookEditor(
           return (
             <section className="ul-cell" key={`${editorEpoch}:${cellKey}`}>
               <div className="ul-cell-toolbar">
-                <span className="ul-cell-label">
-                  {cell.cell_type || "code"} cell {index + 1}
-                  {runningCell === cell.id ? " · running" : ""}
-                </span>
+                {runningCell === cell.id ? (
+                  <span className="ul-cell-label">Running</span>
+                ) : (
+                  <span className="ul-cell-toolbar-spacer" />
+                )}
                 {cell.cell_type === "code" ? (
                   <button
                     className="ul-icon-button"
@@ -1108,6 +1155,7 @@ function NotebookEditor(
                   }}
                   index={index}
                   language={codeLanguage}
+                  lineNumbers={lineNumbers}
                   onChange={(source) => updateCell(index, { source })}
                   onSave={() => void save()}
                   path={path}
@@ -1129,7 +1177,7 @@ function NotebookEditor(
       </div>
       {!readOnly ? (
         <div className="ul-toolbar ul-notebook-add">
-          {(["code", "markdown", "raw"] as const).map((cellType) => (
+          {(["code", "markdown"] as const).map((cellType) => (
             <button
               className="ul-button ul-button-secondary"
               disabled={running}
