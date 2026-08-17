@@ -34,6 +34,9 @@ describe("membership allocation analytics backfill", () => {
     const upgradeAccount = uuid();
     const downgradeAccount = uuid();
     const studentAccount = uuid();
+    const courseAccount = uuid();
+    const teamAccount = uuid();
+    const assignmentAccount = uuid();
     const trialAccount = uuid();
 
     for (const [id, priority] of [
@@ -142,6 +145,18 @@ describe("membership allocation analytics backfill", () => {
       account_id: studentAccount,
       membership_class: standard,
     });
+    await insertCoursePackagePurchase(client, {
+      account_id: courseAccount,
+      membership_class: standard,
+    });
+    await insertTeamLicensePurchase(client, {
+      account_id: teamAccount,
+      membership_class: pro,
+    });
+    await insertPackageAssignment(client, {
+      account_id: assignmentAccount,
+      membership_class: basic,
+    });
     await insertSubscription(client, {
       account_id: trialAccount,
       membership_class: standard,
@@ -178,6 +193,9 @@ describe("membership allocation analytics backfill", () => {
     expect(first.trials).toBeGreaterThanOrEqual(1);
     expect(first.personal_purchases).toBeGreaterThanOrEqual(4);
     expect(first.direct_student_purchases).toBeGreaterThanOrEqual(1);
+    expect(first.course_purchases).toBeGreaterThanOrEqual(1);
+    expect(first.team_license_purchases).toBeGreaterThanOrEqual(1);
+    expect(first.package_assignments).toBeGreaterThanOrEqual(1);
     expect(first.refunds).toBeGreaterThanOrEqual(2);
     expect(
       await backfillMembershipAllocationFacts({ limit: 100, client }),
@@ -185,6 +203,9 @@ describe("membership allocation analytics backfill", () => {
       trials: 0,
       personal_purchases: 0,
       direct_student_purchases: 0,
+      course_purchases: 0,
+      team_license_purchases: 0,
+      package_assignments: 0,
       refunds: 0,
     });
 
@@ -196,14 +217,32 @@ describe("membership allocation analytics backfill", () => {
               SUM(revenue_cents)::int AS revenue_cents,
               COUNT(*)::int AS facts
          FROM membership_allocation_facts
-        WHERE account_id IN ($1,$2,$3,$4)
+        WHERE account_id IN ($1,$2,$3,$4,$5,$6,$7)
         GROUP BY channel, lifecycle, tier_change,
                  previous_membership_class
         ORDER BY channel, lifecycle, tier_change,
                  previous_membership_class`,
-      [upgradeAccount, downgradeAccount, studentAccount, trialAccount],
+      [
+        upgradeAccount,
+        downgradeAccount,
+        studentAccount,
+        trialAccount,
+        courseAccount,
+        teamAccount,
+        assignmentAccount,
+      ],
     );
     expect(rows).toEqual([
+      {
+        channel: "course",
+        lifecycle: "first_paid",
+        tier_change: "none",
+        previous_membership_class: null,
+        active_memberships: 0,
+        purchased_capacity: 3,
+        revenue_cents: 5400,
+        facts: 1,
+      },
       {
         channel: "direct-student",
         lifecycle: "first_paid",
@@ -262,6 +301,26 @@ describe("membership allocation analytics backfill", () => {
         active_memberships: 1,
         purchased_capacity: 0,
         revenue_cents: 0,
+        facts: 1,
+      },
+      {
+        channel: "site",
+        lifecycle: "first_paid",
+        tier_change: "none",
+        previous_membership_class: null,
+        active_memberships: 1,
+        purchased_capacity: 0,
+        revenue_cents: 0,
+        facts: 1,
+      },
+      {
+        channel: "team",
+        lifecycle: "first_paid",
+        tier_change: "none",
+        previous_membership_class: null,
+        active_memberships: 0,
+        purchased_capacity: 4,
+        revenue_cents: 48000,
         facts: 1,
       },
     ]);
@@ -409,4 +468,96 @@ async function insertDirectStudentPurchase(
     ],
   );
   return rows[0].id;
+}
+
+async function insertCoursePackagePurchase(
+  client: PoolClient,
+  opts: { account_id: string; membership_class: string },
+): Promise<number> {
+  const startsAt = "2026-09-01T12:00:00Z";
+  const expiresAt = "2026-12-01T12:00:00Z";
+  const { rows } = await client.query<{ id: number }>(
+    `INSERT INTO purchases
+       (time, account_id, cost, service, description, period_start, period_end)
+     VALUES ($1,$2,54,'membership',$3::jsonb,$1,$4)
+     RETURNING id`,
+    [
+      startsAt,
+      opts.account_id,
+      JSON.stringify({
+        type: "membership-package",
+        package_id: uuid(),
+        kind: "course",
+        membership_class: opts.membership_class,
+        seat_count: 3,
+        seat_price: 18,
+        total_price: 54,
+        starts_at: startsAt,
+        expires_at: expiresAt,
+        interval: "year",
+        metadata: {},
+      }),
+      expiresAt,
+    ],
+  );
+  return rows[0].id;
+}
+
+async function insertTeamLicensePurchase(
+  client: PoolClient,
+  opts: { account_id: string; membership_class: string },
+): Promise<number> {
+  const startsAt = "2026-09-01T12:00:00Z";
+  const expiresAt = "2027-09-01T12:00:00Z";
+  await client.query(
+    `INSERT INTO team_licenses
+       (id, owner_account_id, status, current_period_start,
+        current_period_end, metadata, created, updated)
+     VALUES ($1,$2,'active',$3,$4,'{}'::jsonb,$3,$3)`,
+    [uuid(), opts.account_id, startsAt, expiresAt],
+  );
+  const { rows } = await client.query<{ id: number }>(
+    `INSERT INTO purchases
+       (time, account_id, cost, service, tag, description,
+        period_start, period_end)
+     VALUES ($1,$2,480,'membership','team-license-change',$3::jsonb,$1,$4)
+     RETURNING id`,
+    [
+      startsAt,
+      opts.account_id,
+      JSON.stringify({
+        type: "team-license-change",
+        interval: "year",
+        line_items: [
+          {
+            description: `4 ${opts.membership_class} team seats`,
+            amount: 480,
+          },
+        ],
+      }),
+      expiresAt,
+    ],
+  );
+  return rows[0].id;
+}
+
+async function insertPackageAssignment(
+  client: PoolClient,
+  opts: { account_id: string; membership_class: string },
+): Promise<void> {
+  const packageId = uuid();
+  await client.query(
+    `INSERT INTO membership_packages
+       (id, owner_account_id, kind, membership_class, seat_count,
+        starts_at, metadata, created, updated)
+     VALUES ($1,$2,'site',$3,1,NOW() - INTERVAL '2 days','{}'::jsonb,
+             NOW(),NOW())`,
+    [packageId, uuid(), opts.membership_class],
+  );
+  await client.query(
+    `INSERT INTO membership_package_assignments
+       (id, package_id, account_id, assigned_at, metadata, created, updated)
+     VALUES ($1,$2,$3,NOW() - INTERVAL '1 day','{}'::jsonb,NOW(),NOW())`,
+    [uuid(), packageId, opts.account_id],
+  );
 }
