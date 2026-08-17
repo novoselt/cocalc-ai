@@ -102,21 +102,29 @@ export interface MembershipPackagePurchase {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface TeamLicensePurchaseLineItem extends LineItem {
+  membership_class: MembershipClass;
+  seat_count: number;
+}
+
 export interface TeamLicenseChangePurchase {
   type: "team-license-change";
+  team_license_id?: string;
   // Credit purchase created from the external payment that funded this
   // team-license purchase. Undefined when it was paid from account balance.
   credit_id?: number;
   target_seats: Record<string, number>;
-  line_items?: LineItem[];
+  added_seats?: Record<string, number>;
+  line_items?: TeamLicensePurchaseLineItem[];
   interval?: "year";
+  lifecycle?: "first_paid" | "plan_change";
 }
 
 export interface TeamLicenseRenewalPurchase {
   type: "team-license-renewal";
   team_license_id: string;
   credit_id?: number;
-  line_items?: LineItem[];
+  line_items?: TeamLicensePurchaseLineItem[];
   interval?: "year";
 }
 

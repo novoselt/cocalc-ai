@@ -642,6 +642,8 @@ export interface TeamLicenseOverview extends TeamLicenseRecord {
 export interface TeamLicenseQuoteLineItem {
   description: string;
   amount: number;
+  membership_class: MembershipClass;
+  seat_count: number;
 }
 
 export interface TeamLicenseQuote {

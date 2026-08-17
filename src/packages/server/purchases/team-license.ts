@@ -32,6 +32,7 @@ import {
 } from "@cocalc/server/membership/team-licenses";
 import { refreshAccountBalanceAndPublishBestEffort } from "@cocalc/server/purchases/refresh-balance";
 import { formatTeamLicenseCreditPurchaseDescription } from "@cocalc/util/purchases/descriptions";
+import { recordTeamLicensePurchaseFacts } from "@cocalc/server/membership/team-license-allocation-analytics";
 
 const logger = getLogger("purchases:team-license");
 const ALLOWED_SLACK = 0.01;
@@ -99,10 +100,15 @@ export async function purchaseTeamLicenseChange({
       unrounded_cost: quote.total_price,
       description: {
         type: "team-license-change",
+        ...(quote.team_license_id
+          ? { team_license_id: quote.team_license_id }
+          : {}),
         ...(creditId != null ? { credit_id: creditId } : {}),
         target_seats: normalizedTargets,
+        added_seats: quote.added_seats,
         line_items: quote.line_items,
         interval: quote.interval,
+        lifecycle: quote.team_license_id ? "plan_change" : "first_paid",
       },
       tag: "team-license-change",
       period_start: new Date(quote.current_period_start),
@@ -113,6 +119,22 @@ export async function purchaseTeamLicenseChange({
       owner_account_id: account_id,
       target_seats: normalizedTargets,
       latest_purchase_id: purchase_id,
+      client,
+    });
+    await client.query(
+      `UPDATE purchases
+          SET description=description || $2::jsonb
+        WHERE id=$1`,
+      [purchase_id, { team_license_id: overview.id }],
+    );
+    await recordTeamLicensePurchaseFacts({
+      team_license_id: overview.id,
+      account_id,
+      purchase_id,
+      period_start: quote.current_period_start,
+      period_end: quote.current_period_end,
+      lifecycle: quote.team_license_id ? "plan_change" : "first_paid",
+      line_items: quote.line_items,
       client,
     });
     await client.query("COMMIT");
@@ -302,6 +324,16 @@ export async function processTeamLicenseRenewal({
       tag: "team-license-renewal",
       period_start: quote.next_period_start,
       period_end: quote.next_period_end,
+      client: dbClient,
+    });
+    await recordTeamLicensePurchaseFacts({
+      team_license_id,
+      account_id,
+      purchase_id,
+      period_start: quote.next_period_start,
+      period_end: quote.next_period_end,
+      lifecycle: "renewal",
+      line_items: quote.line_items,
       client: dbClient,
     });
     await dbClient.query(
