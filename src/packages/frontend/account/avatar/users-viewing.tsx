@@ -18,7 +18,12 @@ import {
   getDocumentPresenceUsers,
   subscribeToDocumentPresence,
 } from "@cocalc/frontend/document-presence/service";
-import { Avatar } from "./avatar";
+import {
+  AvatarStack,
+  DEFAULT_MAX_AVATARS,
+  type AvatarActivity,
+  type AvatarStackEntry,
+} from "./avatar-stack";
 import { isViewerProjectRole } from "@cocalc/frontend/project/realtime-access";
 
 // How frequently all UsersViewing components are completely updated.
@@ -31,11 +36,7 @@ const UPDATE_INTERVAL_S = 15;
 // longer than the default `mark_file` throttling window.
 const MAX_AGE_S = 600;
 
-interface Activity {
-  project_id: string;
-  path: string;
-  last_used: Date;
-}
+type Activity = AvatarActivity;
 
 function most_recent(activity: Activity[]): Activity {
   if (activity.length == 0) throw Error("must have some activity");
@@ -51,11 +52,12 @@ function most_recent(activity: Activity[]): Activity {
 }
 
 const USERS_VIEWING_STYLE: React.CSSProperties = {
-  overflowX: "auto",
-  overflowY: "hidden",
+  display: "flex",
+  alignItems: "center",
+  overflow: "hidden",
   zIndex: 1,
   whiteSpace: "nowrap",
-  padding: "1px", // if not set, Chrome draws scrollbars around it #5399
+  padding: "1px",
   height: "32px",
 } as const;
 
@@ -70,6 +72,7 @@ interface Props {
   size?: number;
   style?: React.CSSProperties;
   disabled?: boolean;
+  maxAvatars?: number;
 }
 
 function useUsersViewing(
@@ -117,6 +120,7 @@ export function UsersViewing(props: Readonly<Props>) {
     style = DEFAULT_STYLE,
     size = 24,
     disabled = false,
+    maxAvatars = DEFAULT_MAX_AVATARS,
   } = props;
 
   // so we can exclude ourselves from list of faces
@@ -146,13 +150,14 @@ export function UsersViewing(props: Readonly<Props>) {
       !publicDirectoryShareProjection,
   );
 
-  function render_active_users(users) {
-    const v: {
-      account_id: string;
-      activity: Activity;
-    }[] = [];
+  // Users with recent activity on this document, most recent first, excluding us.
+  const entries: AvatarStackEntry[] = useMemo(() => {
+    const v: AvatarStackEntry[] = [];
     if (users != null) {
       for (const account_id in users) {
+        if (account_id === our_account_id) {
+          continue; // only show other users
+        }
         const activity = users[account_id];
         if (!activity || activity.length == 0) {
           continue; // shouldn't happen, but just be extra careful
@@ -160,36 +165,23 @@ export function UsersViewing(props: Readonly<Props>) {
         v.push({ account_id, activity: most_recent(activity) });
       }
     }
-    v.sort((a, b) => cmp(b.activity.last_used, a.activity.last_used));
-    let i = 0;
-    const r: React.JSX.Element[] = [];
-    for (const { account_id, activity } of v) {
-      // only show other users
-      if (account_id !== our_account_id) {
-        i += 1;
-        r.push(
-          <Avatar
-            key={account_id + i}
-            account_id={account_id}
-            max_age_s={max_age_s}
-            project_id={project_id}
-            path={path}
-            size={size}
-            activity={activity}
-          />,
-        );
-      }
-    }
-    return r;
-  }
+    v.sort((a, b) => cmp(b.activity!.last_used, a.activity!.last_used));
+    return v;
+  }, [users, our_account_id]);
 
   if (our_account_id == null || isViewer) {
     return null;
   }
 
   return (
-    <div style={{ ...USERS_VIEWING_STYLE, ...style }}>
-      {render_active_users(users)}
-    </div>
+    <AvatarStack
+      entries={entries}
+      size={size}
+      maxAvatars={maxAvatars}
+      max_age_s={max_age_s}
+      project_id={project_id}
+      path={path}
+      style={{ ...USERS_VIEWING_STYLE, ...style }}
+    />
   );
 }
