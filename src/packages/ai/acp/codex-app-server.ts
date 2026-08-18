@@ -2072,9 +2072,12 @@ export class CodexAppServerAgent implements AcpAgent {
         activeDescendantCount = descendants.filter(
           (thread) => thread?.status?.type === "active",
         ).length;
-      } catch {
-        // Preserve the runtime when we cannot prove it owns no work.
-        backgroundTerminalCount = Math.max(1, backgroundTerminalCount);
+      } catch (err) {
+        // Preserve the runtime when we cannot prove it owns no work, but do
+        // not misreport a reconciliation failure as actual background work.
+        throw new Error(
+          `Unable to verify whether this Codex thread still has subagents or background commands running, so its runtime settings were not changed. Retry shortly. ${err}`,
+        );
       }
       if (backgroundTerminalCount > 0 || activeDescendantCount > 0) {
         throw new Error(
