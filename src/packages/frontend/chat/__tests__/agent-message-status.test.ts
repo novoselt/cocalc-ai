@@ -229,24 +229,13 @@ describe("AgentMessageStatus", () => {
         activityContext: {} as any,
         activeDescendantThreadIds: ["child-1"],
         backgroundTerminalProcesses: 1,
-        logEvents: [
-          {
-            type: "event",
-            seq: 1,
-            event: {
-              type: "subagent",
-              operationId: "spawn-1",
-              threadId: "child-1",
-              state: "running",
-            },
-          },
-        ] as any,
         onInterrupt,
         onContinue,
       }),
     );
 
     expect(screen.getByText(/Manager finished/)).toBeTruthy();
+    expect(screen.getByText(/1 subagent is still running/)).toBeTruthy();
     expect(screen.getByText(/background command/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(onContinue).toHaveBeenCalledTimes(1);

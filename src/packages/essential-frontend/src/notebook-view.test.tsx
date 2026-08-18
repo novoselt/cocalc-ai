@@ -86,6 +86,7 @@ test("highlights read-only code using notebook language metadata", () => {
     "data-language",
     "python",
   );
+  expect(screen.queryByText(/code cell 1/i)).not.toBeInTheDocument();
 });
 
 test("loads referenced image output from the notebook blob resolver", async () => {

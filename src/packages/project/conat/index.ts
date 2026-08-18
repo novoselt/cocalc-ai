@@ -16,6 +16,7 @@ import { init as initTerminalServer } from "./terminal-server";
 import { getIdentity } from "./connection";
 import { type Client as ConatClient } from "@cocalc/conat/core/client";
 import { init as initExecStream } from "@cocalc/project/exec-stream";
+import { init as initExecJobWatch } from "@cocalc/project/exec-job-watch";
 import { update as initAuthorizedKeys } from "./authorized-keys";
 import { startProjectConatAdmissionSettingsRefresh } from "./admission-settings";
 
@@ -52,5 +53,6 @@ export default async function init(opts?: {
     );
   }
   initExecStream(opts);
+  await initExecJobWatch(opts);
   await initAuthorizedKeys(opts);
 }

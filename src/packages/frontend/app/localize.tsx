@@ -23,6 +23,7 @@ import {
   sanitizeLocale,
 } from "@cocalc/frontend/i18n";
 import { unreachable } from "@cocalc/util/misc";
+import { useAnimationsRootAttribute } from "./animations";
 import { useAntdStyleProvider } from "./context";
 import { LOCALIZE_DEFAULT_ELEMENTS } from "./localize-default-elements";
 
@@ -44,6 +45,7 @@ export function Localize({ children }: { children: React.ReactNode }) {
   const [antdLoc, setAntdLoc] = useState<AntdLocale | undefined>(undefined);
   const [messages, setMessages] = useState<Messages | undefined>(undefined);
   const { antdTheme } = useAntdStyleProvider();
+  useAnimationsRootAttribute();
 
   useAsyncEffect(async () => {
     setMessages(await loadLocaleMessages(locale));

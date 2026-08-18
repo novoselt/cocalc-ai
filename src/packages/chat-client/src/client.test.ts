@@ -184,3 +184,51 @@ describe("headless chat activity recovery", () => {
     await client.close();
   });
 });
+
+test("creates a Codex thread config in the constrained chat document", async () => {
+  const rows: Record<string, any>[] = [];
+  const set = jest.fn((row) => rows.push(row));
+  const save = jest.fn(async () => undefined);
+  dbMock = Object.assign(new EventEmitter(), {
+    close: jest.fn(async () => undefined),
+    commit: jest.fn(() => true),
+    get: () => rows,
+    isReady: () => true,
+    save,
+    set,
+  });
+  const projectHostClient = new EventEmitter();
+  const client = createHeadlessChatClient({
+    account_id: "account-1",
+    path: "/home/user/new.chat",
+    projectHostClient: projectHostClient as any,
+    project_id: "project-1",
+    selected_thread_id: "thread-1",
+  });
+  await client.open();
+
+  await expect(
+    client.createCodexThread({
+      acp_config: {
+        model: "gpt-test",
+        sessionMode: "workspace-write",
+      },
+      name: "New chat",
+      thread_id: "thread-1",
+    }),
+  ).resolves.toEqual({ thread_id: "thread-1" });
+
+  expect(set).toHaveBeenCalledWith(
+    expect.objectContaining({
+      acp_config: expect.objectContaining({ model: "gpt-test" }),
+      agent_kind: "acp",
+      agent_mode: "interactive",
+      agent_model: "gpt-test",
+      event: "chat-thread-config",
+      name: "New chat",
+      thread_id: "thread-1",
+    }),
+  );
+  expect(save).toHaveBeenCalled();
+  await client.close();
+});

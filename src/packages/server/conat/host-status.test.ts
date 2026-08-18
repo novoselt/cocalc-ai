@@ -139,6 +139,8 @@ describe("listHostProjectMaintenanceSchedules", () => {
           {
             project_id: "proj-1",
             last_edited: new Date("2026-04-10T22:00:00.000Z"),
+            last_backup: null,
+            backup_due_since: new Date("2026-04-10T22:00:00.000Z"),
             snapshots: { daily: 5 },
             backups: { weekly: 2, disabled: true },
             owner_account_id: "owner-1",
@@ -158,6 +160,8 @@ describe("listHostProjectMaintenanceSchedules", () => {
       {
         project_id: "proj-1",
         last_edited: "2026-04-10T22:00:00.000Z",
+        last_backup: null,
+        backup_due_since: "2026-04-10T22:00:00.000Z",
         snapshots: { daily: 5 },
         backups: { weekly: 2, disabled: true },
         max_snapshots_per_project: 8,
@@ -173,13 +177,17 @@ describe("listHostProjectMaintenanceSchedules", () => {
     expect(queryMock).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining("provisioned IS TRUE"),
-      ["host-1", 2],
+      ["host-1", 2, 100],
     );
     const maintenanceSql = queryMock.mock.calls[1][0];
     expect(maintenanceSql).toContain("last_backup IS NULL");
     expect(maintenanceSql).toContain("> last_backup");
     expect(maintenanceSql).toContain("backups->>'disabled'");
     expect(maintenanceSql).toContain("INTERVAL '1 day'");
+    expect(maintenanceSql).toContain(
+      "ORDER BY backup_due_since ASC NULLS LAST",
+    );
+    expect(maintenanceSql).toContain("LIMIT $3");
   });
 });
 

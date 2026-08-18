@@ -2,8 +2,28 @@
 
 `@cocalc/essential-frontend` is CoCalc's focused web application for doing
 essential work with low startup, network, CPU, and interface overhead. It is a
-recognizable subset of CoCalc rather than a separate visual product or a
-preview of the full frontend.
+recognizable CoCalc experience rather than a separate visual product, a
+crippled demo, or a preview of the full frontend.
+
+The defining distinction is the interaction model:
+
+> Essential presents one project, file, or task at a time. Browser tabs provide
+> concurrency. Full CoCalc provides integrated multi-project, multi-document
+> workspace orchestration.
+
+Full CoCalc is intentionally closer to a desktop environment or tiled window
+manager: several projects can be open together, each project can contain many
+open documents and applications, and the surrounding UI coordinates all of
+that state. Essential is intentionally a conventional focused web application.
+Its URL identifies the current project, file, or task; browser history handles
+navigation; and ordinary browser tabs or windows provide parallel work.
+
+This boundary is especially important on phones, tablets, low-memory devices,
+and constrained networks. A small screen naturally demands one focused task,
+and opening another browser tab is preferable to reproducing a desktop window
+manager inside it. It also makes fast page loading a product requirement rather
+than a cosmetic optimization: switching projects or files must be cheap enough
+that users can rely on browser navigation for concurrency.
 
 The application is served at `/essential/projects`. Project files use clean,
 shareable paths such as
@@ -13,19 +33,54 @@ compatible and are converted to the clean route when opened.
 
 ## Product Test
 
-Every proposed surface and dependency must answer this question:
+Every proposed surface and dependency must answer these questions:
 
 > Is this essential to a CoCalc user completing real work?
 
-If the answer is no, it does not belong here. Essential does not mean the
-smallest possible implementation. It means the smallest coherent CoCalc that
-remains fast, reliable, understandable, and capable of serious work. A larger
-lazy-loaded component is correct when it provides materially better
-responsiveness or correctness without affecting users who do not invoke it.
+> Can it be presented as one focused, URL-addressable workflow without loading
+> or recreating the full workspace orchestrator?
 
-This is also a discovery shell for CoCalc's backend. It should make project
-files, terminals, Codex, notebooks, VMs, app servers, and the `cocalc` CLI easy
-to find and use without recreating the full desktop environment.
+If the answer to the first question is no, it does not belong here. If the
+answer to the second is no, the workflow belongs in Full CoCalc or must be
+redesigned before it belongs in Essential. Essential does not mean the smallest
+possible implementation or a short fixed feature list. It means the smallest
+coherent CoCalc that remains fast, reliable, understandable, and capable of
+serious work. A larger lazy-loaded component is correct when it provides
+materially better capability or correctness without affecting users who do not
+invoke it.
+
+Essential should support the common path for starting, doing, collaborating
+on, managing, and recovering work. Full CoCalc provides specialized creation
+tools, simultaneous multi-surface workflows, and advanced control. This avoids
+both extremes: a lightweight frontend that cannot complete real work and a
+second implementation of the entire desktop frontend.
+
+Essential is also a discovery shell for CoCalc's backend. It should make
+project files, terminals, Codex, notebooks, VMs, app servers, documentation,
+and the `cocalc` CLI easy to find and use without recreating the full desktop
+environment.
+
+## Navigation And Concurrency
+
+Essential owns one primary context per browser tab. A route should be
+shareable, reloadable, and meaningful without reconstructing hidden workspace
+state. For example:
+
+- a terminal route opens one retained project terminal; users who need several
+  shell sessions can use `tmux`, open another browser tab, or use Full CoCalc;
+- a file route opens one file, rather than adding it to an application-level
+  tab strip;
+- a project route replaces the current project context, rather than keeping
+  several projects mounted in one page; and
+- Recent provides lightweight return navigation, not another persistent
+  workspace model.
+
+Do not add application-level tabs, panes, virtual desktops, or background
+mounted project surfaces merely to imitate Full CoCalc. Independent browser
+tabs must remain safe and useful, including when they show different projects
+or files. Cross-surface actions should navigate to a stable route, open a new
+browser tab when parallel context is genuinely useful, or link to Full CoCalc
+when integrated orchestration is the feature.
 
 ## Essential Product Scope
 
@@ -184,24 +239,33 @@ Theme colors are semantic CSS variables rather than separate component trees.
 Images and scientific output retain a neutral light canvas when their pixels
 assume one, while the surrounding notebook follows the selected appearance.
 
-## Explicitly Out Of Scope
+## Product Boundaries
 
-- course creation and instructor course management;
-- administrative interfaces;
-- full account settings and billing management;
-- documentation browsing;
-- workspace management and many simultaneous editor tabs;
-- app-launcher configuration;
-- complete LaTeX editing and build management;
-- whiteboards, slides, tasks, and specialized editors;
-- full project settings and collaborator administration;
-- project-host management;
-- process-manager and project activity-log interfaces;
-- sophisticated full-text search and project-wide file finding; and
-- backup and snapshot management.
+Essential is not forbidden from supporting a capability merely because Full
+CoCalc already has a sophisticated interface for it. Course management,
+collaborators, secrets, SSH keys, account settings, human chat, and TimeTravel
+can have focused Essential workflows when they are important to completing,
+managing, or recovering real work. Those workflows should use narrow backend
+operations and simple pages rather than porting the full frontend's desktop UI.
 
-These remain available through the clearly visible Open Full CoCalc action.
-Their exclusion is intentional, not an invitation to add inert placeholders.
+Some capabilities remain Full CoCalc concerns by definition or by deliberate
+product choice:
+
+- application-level workspace management, tiled panes, and many simultaneous
+  editor tabs;
+- administrative and project-host operator interfaces;
+- app-launcher configuration and broad plugin registries;
+- specialized creation environments such as whiteboards and slides;
+- advanced process, activity-log, backup, snapshot, and project-wide search
+  interfaces; and
+- any workflow whose value comes primarily from coordinating several live
+  surfaces in one browser tab.
+
+Essential may still expose a focused read, status, recovery, or handoff path
+for an advanced capability without absorbing its full management UI. Missing
+workflows should link clearly to Full CoCalc rather than presenting inert
+placeholders. This boundary can evolve, but the one-context-per-browser-tab
+model and performance contract are permanent constraints.
 
 ## Architecture
 

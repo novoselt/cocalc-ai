@@ -12,6 +12,7 @@ import type {
   ProjectedChatMessage,
   ProjectedChatThread,
 } from "./types";
+import type { CodexThreadConfig } from "@cocalc/chat";
 
 export const PROJECT_CHAT_SESSION_SERVICE = "project-chat-session";
 export const PROJECT_CHAT_SESSION_NOT_FOUND =
@@ -225,6 +226,62 @@ export class RemoteHeadlessChatClient implements HeadlessChatClient {
         OPERATION_TIMEOUT_MS,
       ),
     );
+  }
+
+  async sendGuidanceToCodexThread(opts: {
+    thread_id: string;
+    text: string;
+  }): Promise<{ message_id: string; thread_id: string }> {
+    return await this.withSessionRecovery(() =>
+      this.call(
+        "send",
+        [
+          {
+            session_id: this.requireSession(),
+            ...opts,
+            send_mode: "immediate",
+          },
+        ],
+        OPERATION_TIMEOUT_MS,
+      ),
+    );
+  }
+
+  async updateCodexThreadConfig(opts: {
+    thread_id: string;
+    acp_config: CodexThreadConfig;
+  }): Promise<void> {
+    try {
+      await this.withSessionRecovery(() =>
+        this.call(
+          "updateThread",
+          [{ session_id: this.requireSession(), ...opts }],
+          OPERATION_TIMEOUT_MS,
+        ),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `${err}`;
+      if (message.includes("unknown service method 'updateThread'")) {
+        throw new Error(
+          "Changing Codex settings requires restarting this project to update its backend.",
+        );
+      }
+      throw err;
+    }
+  }
+
+  async createCodexThread(opts: {
+    thread_id: string;
+    name?: string;
+    acp_config: CodexThreadConfig;
+  }): Promise<{ thread_id: string }> {
+    const result = await this.call<{ thread_id: string }>(
+      "createThread",
+      [{ path: this.options.path, ...opts }],
+      OPERATION_TIMEOUT_MS,
+    );
+    this.selectedThreadId = result.thread_id;
+    return result;
   }
 
   async interrupt(thread_id: string): Promise<void> {

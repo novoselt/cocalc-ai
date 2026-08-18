@@ -69,3 +69,12 @@ const MyButton: React.FC<MyButtonProps> = (props) => {
 
 - Bootstrap:
   - CoCalc also used to use react-bootstrap, and sadly still does. Get rid of this.
+
+- Animations: respect the user's **Animations** preference (Account → Preferences → Theme, `other_settings.antd_animate`, on by default).
+  - What it is for: **motion**. Things sliding, resizing, or otherwise moving on screen can cause motion sickness, so those animations must stop when the preference is off.
+  - It is not a general "no visual change" switch. Colour and opacity changes — hover fades, a blinking status indicator — stay on: nothing moves, so nothing is making the user ill. Do not suppress them.
+  - Antd's own motion is already switched off through the theme token, so plain Antd components need nothing. Hand-written CSS is not covered and has to opt in.
+  - Inline styles: `useAnimatedTransition("flex-basis 200ms ease")` from `@cocalc/frontend/app/animations` returns `undefined` when the preference is off, so the layout change applies instantly instead of easing.
+  - Stylesheets: the document root carries `data-animations="off"`, so guard moving keyframes with `:root[data-animations="off"] .your-class { animation: none; }`.
+  - If a moving animation is also the only thing conveying state, give it a static equivalent rather than just removing it.
+  - This is separate from, and stricter than, `prefers-reduced-motion`: it is an explicit user choice, so honor it even when the OS reports no motion preference.

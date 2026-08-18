@@ -8,10 +8,18 @@ import {
   createRemoteHeadlessChatClient,
   type AgentSessionRecord,
   type ChatSnapshot,
+  type CodexThreadConfig,
   type HeadlessChatClient,
   type ProjectedChatMessage,
 } from "@cocalc/chat-client";
+import type { CodexPaymentSourceInfo } from "@cocalc/conat/hub/api/system";
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
+import {
+  DEFAULT_CODEX_MODEL_NAME,
+  DEFAULT_CODEX_MODELS,
+  resolveCodexServiceTier,
+  type CodexPaymentSourcePreference,
+} from "@cocalc/util/ai/codex";
 import {
   useCallback,
   useEffect,
@@ -24,7 +32,14 @@ import { navigate, type UltraliteRoute } from "./routes";
 import type { UltraliteSession } from "./session";
 import { fullProjectUrl } from "./urls";
 import { Markdown } from "./markdown";
-import { EmptyState, InlineAlert, LoadingState, SurfaceHeader } from "./ui";
+import {
+  EmptyState,
+  EssentialLink,
+  InlineAlert,
+  LoadingState,
+  OverflowMenu,
+  SurfaceHeader,
+} from "./ui";
 import {
   markUltraliteBackend,
   markUltralitePhase,
@@ -37,6 +52,48 @@ const ACTIVE_STATUS = new Set(["active", "running"]);
 const INITIAL_MESSAGE_LIMIT = 30;
 const MESSAGE_LIMIT_STEP = 30;
 const MAX_RENDERED_MESSAGE_LENGTH = 200_000;
+const PAYMENT_OPTIONS: {
+  value: CodexPaymentSourcePreference;
+  label: string;
+}[] = [
+  { value: "auto", label: "Automatic" },
+  { value: "subscription", label: "ChatGPT subscription" },
+  { value: "project-api-key", label: "Project API key" },
+  { value: "account-api-key", label: "Account API key" },
+  { value: "site-api-key", label: "CoCalc membership" },
+  { value: "shared-home", label: "Shared Codex login" },
+];
+
+function paymentSourceLabel(source: CodexPaymentSourceInfo["source"]): string {
+  return (
+    {
+      subscription: "ChatGPT subscription",
+      "project-api-key": "Project API key",
+      "account-api-key": "Account API key",
+      "site-api-key": "CoCalc membership",
+      "shared-home": "Shared Codex login",
+      none: "Unavailable",
+    } as const
+  )[source];
+}
+
+function paymentOptionAvailable(
+  value: CodexPaymentSourcePreference,
+  info?: CodexPaymentSourceInfo,
+): boolean {
+  if (!info || value === "auto") return true;
+  if (value === "subscription") return info.hasSubscription;
+  if (value === "project-api-key") return info.hasProjectApiKey;
+  if (value === "account-api-key") return info.hasAccountApiKey;
+  if (value === "site-api-key") {
+    return (
+      info.hasSiteApiKey &&
+      info.siteFundedCodex?.enabled === true &&
+      info.siteAiUsageLimitPositive !== false
+    );
+  }
+  return info.sharedHomeMode !== "disabled";
+}
 
 function boundedMessageContent(content: string): string {
   if (content.length <= MAX_RENDERED_MESSAGE_LENGTH) return content;
@@ -58,7 +115,7 @@ function sessionSort(records: AgentSessionRecord[]): AgentSessionRecord[] {
   });
 }
 
-function AgentList({
+export function AgentList({
   project,
   session,
 }: {
@@ -67,6 +124,7 @@ function AgentList({
 }) {
   const [records, setRecords] = useState<AgentSessionRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -106,43 +164,104 @@ function AgentList({
     };
   }, [project.host_id, project.project_id, session]);
 
+  const createCodexChat = async () => {
+    if (creating) return;
+    setCreating(true);
+    setError(undefined);
+    let client: HeadlessChatClient | undefined;
+    try {
+      const threadId = crypto.randomUUID();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const chatPath = `/home/user/${timestamp}-${threadId.slice(0, 6)}.chat`;
+      const lease = await session.openProjectHost(
+        project.project_id,
+        project.host_id!,
+      );
+      client = createRemoteHeadlessChatClient({
+        account_id: session.accountId,
+        project_id: project.project_id,
+        path: chatPath,
+        projectHostClient: lease.client,
+        selected_thread_id: threadId,
+      });
+      const model = DEFAULT_CODEX_MODELS[0]?.name ?? DEFAULT_CODEX_MODEL_NAME;
+      const reasoning = DEFAULT_CODEX_MODELS[0]?.reasoning?.find(
+        ({ default: isDefault }) => isDefault,
+      )?.id;
+      await client.createCodexThread({
+        acp_config: {
+          allowWrite: true,
+          model,
+          paymentSource: "auto",
+          reasoning,
+          serviceTier: "standard",
+          sessionMode: "workspace-write",
+          workingDirectory: "/home/user",
+        },
+        name: "Codex chat",
+        thread_id: threadId,
+      });
+      navigate({
+        chatPath,
+        kind: "chat",
+        projectId: project.project_id,
+        threadId,
+      });
+    } catch (err) {
+      recordUltraliteFailure("chat", err);
+      setError(err instanceof Error ? err.message : `${err}`);
+    } finally {
+      await client?.close().catch(() => undefined);
+      setCreating(false);
+    }
+  };
+
   return (
     <main className="ul-page" id="main-content">
       <SurfaceHeader
         actions={
-          <a
-            className="ul-link-button ul-link-button-subtle"
-            data-ul-full-cocalc
-            href={fullProjectUrl({ projectId: project.project_id })}
-          >
-            Create in full CoCalc
-          </a>
+          <div className="ul-toolbar">
+            <button
+              className="ul-button"
+              disabled={creating}
+              onClick={() => void createCodexChat()}
+              type="button"
+            >
+              {creating ? "Creating..." : "New Codex chat"}
+            </button>
+            <OverflowMenu label="More Codex actions">
+              <a
+                className="ul-menu-item"
+                data-ul-full-cocalc
+                href={fullProjectUrl({ projectId: project.project_id })}
+              >
+                Open full CoCalc
+              </a>
+            </OverflowMenu>
+          </div>
         }
         eyebrow="Existing sessions"
         title="Codex"
       />
       <p className="ul-muted">
-        Essential CoCalc continues existing indexed sessions. Creating a new
-        Codex thread still uses the full workspace.
+        Start a focused Codex chat here, or continue an existing indexed session
+        below.
       </p>
       {loading ? <LoadingState label="Loading Codex sessions" /> : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
       {records.length ? (
         <div className="ul-session-list">
           {records.map((record) => (
-            <button
+            <EssentialLink
               aria-label={`Open ${record.title || "Codex session"}, ${record.status}`}
               className="ul-session-row"
               key={`${record.chat_path}:${record.thread_key}`}
-              onClick={() =>
-                navigate({
-                  kind: "chat",
-                  projectId: project.project_id,
-                  chatPath: record.chat_path,
-                  threadId: record.thread_key,
-                })
-              }
-              type="button"
+              route={{
+                kind: "chat",
+                projectId: project.project_id,
+                chatPath: record.chat_path,
+                threadId: record.thread_key,
+              }}
             >
               <div className="ul-row-title">
                 {record.title || "Codex session"}
@@ -157,7 +276,7 @@ function AgentList({
                 {record.status} - updated{" "}
                 {new Date(record.updated_at).toLocaleString()}
               </span>
-            </button>
+            </EssentialLink>
           ))}
         </div>
       ) : !loading && !error ? (
@@ -201,7 +320,13 @@ export function Message({ message }: { message: ProjectedChatMessage }) {
   return (
     <article className={`ul-message ${human ? "ul-message-human" : ""}`}>
       <div className="ul-status">
-        {human ? "You" : message.role === "agent" ? "Codex" : "System"}
+        {human
+          ? message.guidance
+            ? "Guidance"
+            : "You"
+          : message.role === "agent"
+            ? "Codex"
+            : "System"}
         {message.state ? ` - ${message.state}` : ""}
       </div>
       {message.activity?.markdown ? (
@@ -235,7 +360,10 @@ export function Chat({
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
-  const [reconnecting, setReconnecting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [paymentInfo, setPaymentInfo] = useState<CodexPaymentSourceInfo>();
+  const [paymentLoading, setPaymentLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [showNewest, setShowNewest] = useState(false);
   const [status, setStatus] = useState("Connecting...");
@@ -324,13 +452,58 @@ export function Chat({
     (selectedThread?.agent_kind === "acp" ||
       selectedThread?.acp_config != null);
   const visibleMessages = snapshot.messages;
-  const generating = snapshot.messages.some((message) => message.generating);
-  const canContinue =
-    snapshot.ready &&
-    !submitting &&
-    !generating &&
-    (selectedThread?.agent_kind === "acp" ||
-      selectedThread?.acp_config != null);
+  const generating =
+    selectedThread?.state === "running" ||
+    snapshot.messages.some((message) => message.generating);
+  const configuredModel =
+    selectedThread?.acp_config?.model ??
+    selectedThread?.agent_model ??
+    DEFAULT_CODEX_MODELS[0]?.name ??
+    DEFAULT_CODEX_MODEL_NAME;
+  const configuredPayment = selectedThread?.acp_config?.paymentSource ?? "auto";
+  const sitePolicy =
+    paymentInfo?.source === "site-api-key"
+      ? paymentInfo?.siteFundedCodex?.policy
+      : undefined;
+  const displayedModel = sitePolicy?.model ?? configuredModel;
+  const modelInfo =
+    DEFAULT_CODEX_MODELS.find(({ name }) => name === displayedModel) ??
+    DEFAULT_CODEX_MODELS[0];
+  const configuredReasoning =
+    sitePolicy?.reasoning ??
+    selectedThread?.acp_config?.reasoning ??
+    modelInfo?.reasoning?.find(({ default: isDefault }) => isDefault)?.id ??
+    modelInfo?.reasoning?.[0]?.id;
+
+  useEffect(() => {
+    if (!snapshot.ready || !session.hubApi?.system?.getCodexPaymentSource) {
+      setPaymentInfo(undefined);
+      return;
+    }
+    let cancelled = false;
+    setPaymentInfo(undefined);
+    setPaymentLoading(true);
+    void session.hubApi.system
+      .getCodexPaymentSource({
+        project_id: project.project_id,
+        preference: configuredPayment,
+      })
+      .then((info) => {
+        if (!cancelled) setPaymentInfo(info);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          recordUltraliteFailure("chat", err);
+          setPaymentInfo(undefined);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPaymentLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configuredPayment, project.project_id, session, snapshot.ready]);
 
   const newestSignature = visibleMessages.length
     ? `${visibleMessages.at(-1)?.message_id}:${visibleMessages.at(-1)?.revision_date}:${visibleMessages.at(-1)?.content.length}:${visibleMessages.at(-1)?.activity?.markdown?.length ?? 0}`
@@ -403,13 +576,22 @@ export function Chat({
     setSubmitting(true);
     setError(undefined);
     try {
-      await active.sendToExistingCodexThread({
-        thread_id: route.threadId,
-        text: normalized,
-      });
+      if (generating) {
+        await active.sendGuidanceToCodexThread({
+          thread_id: route.threadId,
+          text: normalized,
+        });
+      } else {
+        await active.sendToExistingCodexThread({
+          thread_id: route.threadId,
+          text: normalized,
+        });
+      }
       if (clearDraft) setDraft("");
-      setStatus("Prompt accepted by Codex");
-      recordUltraliteOutcome("chat", "codex_prompt");
+      recordUltraliteOutcome(
+        "chat",
+        generating ? "codex_guidance" : "codex_prompt",
+      );
     } catch (err) {
       recordUltraliteFailure("chat", err);
       setError(err instanceof Error ? err.message : `${err}`);
@@ -423,12 +605,12 @@ export function Chat({
     await submitText(draft, true);
   };
 
-  const reconnect = async () => {
+  const refresh = async () => {
     const active = clientRef.current;
-    if (!active || reconnecting) return;
-    setReconnecting(true);
+    if (!active || refreshing) return;
+    setRefreshing(true);
     setError(undefined);
-    setStatus("Catching up...");
+    setStatus("Refreshing...");
     try {
       await active.reconnect("constrained-client-user-request");
       setStatus("Live Codex session");
@@ -437,7 +619,31 @@ export function Chat({
       setError(err instanceof Error ? err.message : `${err}`);
       setStatus("Disconnected");
     } finally {
-      setReconnecting(false);
+      setRefreshing(false);
+    }
+  };
+
+  const updateConfig = async (patch: Partial<CodexThreadConfig>) => {
+    const active = clientRef.current;
+    if (!active || !selectedThread || savingConfig) return;
+    const current: CodexThreadConfig = {
+      ...(selectedThread.acp_config ?? {}),
+      model: configuredModel,
+    };
+    const next = { ...current, ...patch };
+    next.serviceTier = resolveCodexServiceTier(next);
+    setSavingConfig(true);
+    setError(undefined);
+    try {
+      await active.updateCodexThreadConfig({
+        thread_id: route.threadId,
+        acp_config: next,
+      });
+    } catch (err) {
+      recordUltraliteFailure("chat", err);
+      setError(err instanceof Error ? err.message : `${err}`);
+    } finally {
+      setSavingConfig(false);
     }
   };
 
@@ -461,26 +667,23 @@ export function Chat({
     <main className="ul-page" id="main-content">
       <SurfaceHeader
         actions={
-          <>
-            <button
-              className="ul-icon-button"
-              onClick={() =>
-                navigate({ kind: "agents", projectId: project.project_id })
-              }
-              type="button"
+          <OverflowMenu label="Codex chat actions">
+            <EssentialLink
+              className="ul-menu-item"
+              route={{ kind: "agents", projectId: project.project_id }}
             >
               Codex sessions
-            </button>
+            </EssentialLink>
             <button
-              className="ul-icon-button"
-              disabled={!client || reconnecting}
-              onClick={() => void reconnect()}
+              className="ul-menu-item"
+              disabled={!client || refreshing}
+              onClick={() => void refresh()}
               type="button"
             >
-              {reconnecting ? "Catching up..." : "Catch up"}
+              {refreshing ? "Refreshing..." : "Refresh"}
             </button>
             <a
-              className="ul-link-button ul-link-button-subtle"
+              className="ul-menu-item"
               data-ul-full-cocalc
               href={fullProjectUrl({
                 projectId: project.project_id,
@@ -489,7 +692,7 @@ export function Chat({
             >
               Full CoCalc
             </a>
-          </>
+          </OverflowMenu>
         }
         eyebrow={status}
         title={selectedThread?.name || "Codex chat"}
@@ -497,7 +700,7 @@ export function Chat({
       {snapshot.connection === "disconnected" ||
       snapshot.connection === "error" ? (
         <InlineAlert kind="warning">
-          The live Codex connection was interrupted. Use Catch up to reconnect
+          The live Codex connection was interrupted. Use Refresh to reconnect
           and load current activity.
         </InlineAlert>
       ) : null}
@@ -505,6 +708,99 @@ export function Chat({
         <InlineAlert kind="error">{snapshot.error}</InlineAlert>
       ) : null}
       {error ? <InlineAlert kind="error">{error}</InlineAlert> : null}
+      <section aria-label="Codex settings" className="ul-codex-config">
+        <label>
+          <span>Model</span>
+          <select
+            aria-label="Model"
+            className="ul-select"
+            disabled={!snapshot.ready || savingConfig || !!sitePolicy}
+            onChange={(event) => {
+              const model = event.target.value;
+              const info = DEFAULT_CODEX_MODELS.find(
+                ({ name }) => name === model,
+              );
+              const reasoning =
+                info?.reasoning?.find(({ default: isDefault }) => isDefault)
+                  ?.id ?? info?.reasoning?.[0]?.id;
+              void updateConfig({ model, reasoning });
+            }}
+            value={displayedModel}
+          >
+            {!DEFAULT_CODEX_MODELS.some(
+              ({ name }) => name === displayedModel,
+            ) ? (
+              <option value={displayedModel}>{displayedModel}</option>
+            ) : null}
+            {DEFAULT_CODEX_MODELS.map(({ name }) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Reasoning</span>
+          <select
+            aria-label="Reasoning"
+            className="ul-select"
+            disabled={!snapshot.ready || savingConfig || !!sitePolicy}
+            onChange={(event) =>
+              void updateConfig({
+                reasoning: event.target.value as CodexThreadConfig["reasoning"],
+              })
+            }
+            value={configuredReasoning}
+          >
+            {modelInfo?.reasoning?.map(({ id, label }) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Paid by</span>
+          <select
+            aria-label="Paid by"
+            className="ul-select"
+            disabled={!snapshot.ready || savingConfig}
+            onChange={(event) =>
+              void updateConfig({
+                paymentSource: event.target
+                  .value as CodexPaymentSourcePreference,
+              })
+            }
+            value={configuredPayment}
+          >
+            {PAYMENT_OPTIONS.map(({ value, label }) => (
+              <option
+                disabled={
+                  value !== configuredPayment &&
+                  !paymentOptionAvailable(value, paymentInfo)
+                }
+                key={value}
+                value={value}
+              >
+                {value === "auto" &&
+                paymentInfo &&
+                paymentInfo.source !== "none"
+                  ? `${label} (${paymentSourceLabel(paymentInfo.source)})`
+                  : label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="ul-codex-config-note">
+          {savingConfig
+            ? "Saving..."
+            : paymentLoading
+              ? "Checking payment..."
+              : sitePolicy
+                ? "Membership model policy"
+                : (paymentInfo?.unavailableReason ?? "Next turn settings")}
+        </span>
+      </section>
       <div className="ul-chat-layout">
         <section
           aria-label="Chat messages"
@@ -532,7 +828,11 @@ export function Chat({
             <Message key={message.message_id} message={message} />
           ))}
           {!visibleMessages.length ? (
-            <EmptyState>Waiting for chat history...</EmptyState>
+            <EmptyState>
+              {snapshot.ready
+                ? "No messages yet. Send a message to begin."
+                : "Waiting for chat history..."}
+            </EmptyState>
           ) : null}
           <div aria-hidden="true" ref={messagesEndRef} />
         </section>
@@ -552,8 +852,8 @@ export function Chat({
             void send();
           }}
         >
-          <label htmlFor="ul-codex-prompt">
-            <strong>Message Codex</strong>
+          <label className="ul-visually-hidden" htmlFor="ul-codex-prompt">
+            Message Codex
           </label>
           <textarea
             className="ul-textarea"
@@ -569,23 +869,21 @@ export function Chat({
                 void send();
               }
             }}
-            placeholder="What should Codex do next?"
+            placeholder={
+              generating
+                ? "Send guidance to the running turn..."
+                : "What should Codex do next?"
+            }
             value={draft}
           />
           <div className="ul-toolbar">
             <button className="ul-button" disabled={!canSend} type="submit">
-              {submitting ? "Sending..." : "Send"}
+              {submitting
+                ? "Sending..."
+                : generating
+                  ? "Send guidance"
+                  : "Send"}
             </button>
-            {!generating ? (
-              <button
-                className="ul-button ul-button-secondary"
-                disabled={!canContinue}
-                onClick={() => void submitText("continue", false)}
-                type="button"
-              >
-                {submitting ? "Sending..." : "Continue Codex"}
-              </button>
-            ) : null}
             {generating ? (
               <button
                 className="ul-button ul-button-danger"

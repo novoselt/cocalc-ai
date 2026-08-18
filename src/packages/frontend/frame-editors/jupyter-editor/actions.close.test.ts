@@ -61,7 +61,7 @@ describe("JupyterEditorActions close-frame cleanup", () => {
     const store = new EventEmitter();
     const close = jest.fn();
     const target = {
-      normalizeRemovedSingleDocFrames: jest.fn(),
+      normalizeRemovedFrameTypes: jest.fn(),
       init_new_frame: jest.fn(),
       init_changes_state: jest.fn(),
       store,
@@ -79,29 +79,80 @@ describe("JupyterEditorActions close-frame cleanup", () => {
   });
 });
 
-describe("JupyterEditorActions removed single-document frame migration", () => {
-  it("converts saved experimental frames to the standard notebook", () => {
-    const frameTypes = {
-      classic: "jupyter_cell_notebook",
-      experimental: "jupyter_slate_single_doc_notebook",
-      legacy: "jupyter-singledoc",
-    };
-    const set_frame_type = jest.fn();
-    const target = {
-      _get_leaf_ids: () => frameTypes,
-      _get_frame_node: (id: keyof typeof frameTypes) => ({
-        get: () => frameTypes[id],
+describe("JupyterEditorActions removed frame type migration", () => {
+  function targetFor(nodes: { [id: string]: { [key: string]: any } }): any {
+    return {
+      _get_leaf_ids: () => nodes,
+      _get_frame_node: (id: string) => ({
+        get: (key: string) => nodes[id][key],
       }),
-      set_frame_type,
-    } as any;
+      set_frame_type: jest.fn(),
+      set_frame_data: jest.fn(),
+    };
+  }
 
-    (
-      JupyterEditorActions.prototype as any
-    ).normalizeRemovedSingleDocFrames.call(target);
+  function migrate(target: any): void {
+    (JupyterEditorActions.prototype as any).normalizeRemovedFrameTypes.call(
+      target,
+    );
+  }
 
-    expect(set_frame_type.mock.calls).toEqual([
+  it("converts saved experimental frames to the standard notebook", () => {
+    const target = targetFor({
+      classic: { type: "jupyter_cell_notebook" },
+      experimental: { type: "jupyter_slate_single_doc_notebook" },
+      legacy: { type: "jupyter-singledoc" },
+    });
+
+    migrate(target);
+
+    expect(target.set_frame_type.mock.calls).toEqual([
       ["experimental", "jupyter_cell_notebook"],
       ["legacy", "jupyter_cell_notebook"],
     ]);
+  });
+
+  it("converts a saved Minimal frame to Studio instead of resetting the tree", () => {
+    const target = targetFor({
+      terminal: { type: "terminal" },
+      renamed: { type: "jupyter_minimal" },
+    });
+
+    migrate(target);
+
+    // Only the stale frame is touched, so the surrounding layout survives.
+    expect(target.set_frame_type.mock.calls).toEqual([
+      ["renamed", "jupyter_studio"],
+    ]);
+  });
+
+  it("carries the saved width and reading state across the rename", () => {
+    const target = targetFor({
+      renamed: {
+        type: "jupyter_minimal",
+        "data-minimalLayout": "narrow",
+        "data-zenMode": true,
+      },
+    });
+
+    migrate(target);
+
+    expect(target.set_frame_data).toHaveBeenCalledWith({
+      id: "renamed",
+      studioLayout: "narrow",
+      readingMode: true,
+    });
+  });
+
+  it("does not invent frame data the saved frame never had", () => {
+    const target = targetFor({ renamed: { type: "jupyter_minimal" } });
+
+    migrate(target);
+
+    expect(target.set_frame_data).not.toHaveBeenCalled();
+    expect(target.set_frame_type).toHaveBeenCalledWith(
+      "renamed",
+      "jupyter_studio",
+    );
   });
 });

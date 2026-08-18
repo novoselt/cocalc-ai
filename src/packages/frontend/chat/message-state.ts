@@ -46,6 +46,25 @@ export function codexActivityBlocksToSelectableMarkdown(
     .join("\n\n");
 }
 
+export function resolveLiveCodexActivityBlocks({
+  previewBlocks,
+  cachedBlocks,
+}: {
+  previewBlocks?: InlineCodexActivityBlock[];
+  cachedBlocks?: InlineCodexActivityBlock[];
+}): InlineCodexActivityBlock[] | undefined {
+  let selected: InlineCodexActivityBlock[] | undefined;
+  let selectedLength = 0;
+  for (const blocks of [cachedBlocks, previewBlocks]) {
+    if (!Array.isArray(blocks) || blocks.length === 0) continue;
+    const length = codexActivityBlocksToSelectableMarkdown(blocks).length;
+    if (length < selectedLength) continue;
+    selected = blocks;
+    selectedLength = length;
+  }
+  return selected;
+}
+
 export function limitCodexActivityBlocks(
   blocks: InlineCodexActivityBlock[],
   visibleLimit: number,

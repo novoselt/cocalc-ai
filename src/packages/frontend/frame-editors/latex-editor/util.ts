@@ -5,12 +5,13 @@
 
 // data and functions specific to the latex editor.
 
-import { ExecOutput } from "@cocalc/frontend/frame-editors/generic/client";
+import type { ExecOutput } from "@cocalc/frontend/frame-editors/generic/client";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
-import { ExecOptsBlocking } from "@cocalc/util/db-schema/projects";
+import type { ExecOptsBlocking } from "@cocalc/util/db-schema/projects";
 import { separate_file_extension } from "@cocalc/util/misc";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { TITLE_BAR_BORDER } from "../frame-tree/style";
+import { buildJobGroup } from "../generic/project-builds";
 import { TIMEOUT_LATEX_JOB_S } from "./constants";
 
 export const OUTPUT_HEADER_STYLE = {
@@ -79,6 +80,8 @@ interface RunJobOpts {
   args?: string[];
   command: string;
   env?: { [key: string]: string };
+  jobGroup?: string;
+  jobKey: string;
   project_id: string;
   runDir: string; // a directory! (output_directory if in /tmp, or the directory of the file's path)
   set_job_info: (info: ExecuteCodeOutputAsync) => void;
@@ -92,6 +95,8 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     args,
     command,
     env,
+    jobGroup,
+    jobKey,
     project_id,
     runDir,
     set_job_info,
@@ -108,6 +113,8 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     command,
     env,
     err_on_exit: false,
+    job_group: jobGroup ?? buildJobGroup(path),
+    job_key: jobKey,
     path: runDir,
     project_id,
     timeout: TIMEOUT_LATEX_JOB_S,
@@ -116,6 +123,7 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
   });
 
   return new Promise((resolve, reject) => {
+    let completed = false;
     let current_job_info: ExecuteCodeOutputAsync | null = null;
     let pending_stdout = "";
     let pending_stderr = "";
@@ -171,10 +179,17 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     });
 
     stream.on("done", (result: ExecOutput) => {
+      completed = true;
       if (result.type === "async") {
         set_job_info(result);
       }
       resolve(result);
+    });
+
+    stream.on("end", () => {
+      if (!completed) {
+        reject(new Error("Compilation stream ended before completion."));
+      }
     });
 
     stream.on("error", (err) => {

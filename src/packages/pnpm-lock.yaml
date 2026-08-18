@@ -584,6 +584,9 @@ importers:
       '@cocalc/conat':
         specifier: workspace:*
         version: link:../conat
+      '@cocalc/docs':
+        specifier: workspace:*
+        version: link:../docs
       '@cocalc/util':
         specifier: workspace:*
         version: link:../util

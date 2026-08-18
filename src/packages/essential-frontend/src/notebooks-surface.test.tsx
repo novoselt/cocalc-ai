@@ -66,7 +66,7 @@ test("reuses the session cache until the user explicitly refreshes", async () =>
     rendered = render(<NotebooksSurface project={project} session={session} />);
   });
   expect(
-    await screen.findByRole("button", {
+    await screen.findByRole("link", {
       name: "Open notebook analysis.ipynb",
     }),
   ).toBeVisible();
@@ -94,7 +94,7 @@ test("reuses the session cache until the user explicitly refreshes", async () =>
     render(<NotebooksSurface project={project} session={session} />);
   });
   expect(
-    await screen.findByRole("button", {
+    await screen.findByRole("link", {
       name: "Open notebook analysis.ipynb",
     }),
   ).toBeVisible();

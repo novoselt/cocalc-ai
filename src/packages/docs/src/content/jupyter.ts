@@ -65,6 +65,14 @@ CoCalc notebooks are designed for shared and long-running work:
 5. Large notebooks and large outputs are handled with CoCalc-specific rendering.
 6. Side chat, agents, terminals, and project files live next to the notebook.
 
+## Choose a notebook view
+
+A notebook frame can use the classic cell-oriented layout or the content-first
+Studio view, which puts outputs and prose in the main column and adds a mini
+table of contents, a minimap, and a reading mode that hides code. Switch between
+them at any time on the same live notebook; see
+[The Studio notebook view](/docs/jupyter/studio-view).
+
 ## Kernels and environments
 
 Use the kernel selector to switch between available project kernels. If you need
@@ -85,6 +93,133 @@ notebook inspection and execution instead of editing \`.ipynb\` JSON directly.
 If a kernel stops, restarts, or the project runs out of memory, check the
 resource indicators and restart only the affected kernel when possible. For
 memory-specific failures, see [Troubleshoot project memory](/docs/troubleshooting/memory).
+`;
+
+export const JUPYTER_STUDIO_BODY = String.raw`
+## What the Studio view is for
+
+Every Jupyter notebook in CoCalc can be shown in two ways. The classic view is
+the familiar cell-oriented notebook. The **Studio** view is a content-first
+layout for the same live notebook: results and prose get the main column, source
+code moves into a narrow column beside them, and navigation aids make long
+notebooks easier to move through.
+
+Studio is a full editor, not a preview. Everything you can do in the classic
+view works here, including editing, running cells, collaborating, and chatting.
+
+Use Studio when you are reading through results, presenting a notebook, working
+on a long document-style notebook, or when the code matters less than what it
+produced.
+
+## Switch between the views
+
+Switch a notebook frame with the **Studio** and **Classic** buttons in the
+notebook header, or from **View → Switch to Studio Notebook View**.
+
+Both views act on the same notebook, so you can switch at any time without
+losing state. Because this is a frame in the frame editor, you can also split
+the view and keep a classic frame and a Studio frame open side by side on the
+same notebook, or combine either with a terminal or another editor.
+
+## Side-by-side layout
+
+Output is on the left, code on the right. This keeps the focus on results while
+the code stays accessible. Hover over the code column to reveal run and action
+buttons for that cell.
+
+## Reading mode
+
+Turn on **Reading mode** to hide code cells entirely and show only outputs and
+markdown. This is useful for presenting a notebook or reading through results.
+
+Reading mode does not make the notebook read-only. Double-click an output, or
+use the pencil button, to edit the cell behind it.
+
+## Layout widths
+
+Use the width control in the notebook header to switch between:
+
+1. **Wide** — full frame width.
+2. **Comfortable** — centered, with room for the mini table of contents.
+3. **Narrow** — compact and centered.
+
+Narrower widths trade horizontal space for line length that is easier to read.
+Which widths are offered depends on how much room the frame has.
+
+## Sections
+
+A markdown cell that begins with a heading — \`#\` through \`####\` — starts a
+**section**. The section holds that heading cell and every cell after it up to
+the next heading. Cells before the first heading form an opening section of
+their own.
+
+That is the whole mechanism. There is no section metadata, no special cell type,
+and nothing to configure: write headings as you go and the notebook gains
+structure. Sections are what make the rest of this page work, so a notebook with
+headings is markedly easier to navigate, run, and fold than one long
+undifferentiated run of cells.
+
+Once a notebook has headings you can:
+
+1. Jump to any section from the mini table of contents.
+2. Run a whole section at once.
+3. Run the cells above or below a cell without leaving its section.
+4. Fold a section down to its heading.
+5. See at a glance whether anything inside a folded section is running or
+   failed.
+
+## Navigate long notebooks
+
+At comfortable and narrow widths, a floating mini table of contents appears in
+the left margin, built from those headings. Click an entry to jump to that
+section. Double-click it to run every code cell in the section.
+
+A minimap on the right shows the shape of the whole notebook and the run state
+of each cell, so you can see which parts have run, failed, or are still running
+without scrolling.
+
+## Fold sections
+
+Fold a section down to its heading with the control on the heading itself, or by
+clicking the section line in the left gutter. Folding is a display choice and
+does not change the notebook: the cells are still there and still run.
+
+A folded section keeps reporting itself. Its heading and its minimap entry show
+when a cell inside is running or has raised an error, so long computations stay
+visible while folded away.
+
+## Run controls
+
+The run button on each cell has a dropdown. In a notebook with sections it
+offers both scopes:
+
+1. **Run above in section** and **Run cell and below in section** stop at the
+   section boundary.
+2. **Run all above** and **Run all below** cover the whole notebook.
+
+Section-scoped runs are the reason headings pay off while you work, not only
+when you read: they let you re-run the part of the notebook you are editing
+without waiting for everything before or after it.
+
+All standard Jupyter keyboard shortcuts work unchanged: Shift+Enter to run,
+Escape and Enter to switch between command and edit mode, arrow keys to
+navigate.
+
+## Agents in the Studio view
+
+The **Agent** button in the title bar opens an AI agent that works on the open
+notebook: ask questions about it, generate or fix cells, and debug errors.
+Hovering over a code cell also offers a per-cell agent action scoped to just
+that cell.
+
+For more on agents and notebooks, see [Use Jupyter notebooks](/docs/jupyter/use-jupyter).
+
+## Why this matters in CoCalc
+
+A notebook is used for two different things: writing computations and reading
+the results of them. The classic view is built for the first, and the Studio
+view is built for the second, without forking the document or exporting it. The
+notebook stays live, collaborative, and editable in both.
 `;
 
 export const JUPYTER_KERNEL_TERMINATED_BODY = String.raw`

@@ -15,6 +15,7 @@ import {
   type ProjectChatSessionStreamEvent,
   type HeadlessChatClient,
   type ProjectedChatMessage,
+  type CodexThreadConfig,
 } from "@cocalc/chat-client";
 import { isProjectCollaboratorGroup } from "@cocalc/conat/auth/subject-policy";
 import type { Client } from "@cocalc/conat/core/client";
@@ -305,6 +306,42 @@ export async function initProjectChatSessionService(client: Client) {
     subject: PROJECT_CHAT_SESSION_SUBJECT,
   });
   const service = await client.service(PROJECT_CHAT_SESSION_SUBJECT, {
+    async createThread(
+      this: { subject?: string },
+      opts: {
+        path: string;
+        thread_id: string;
+        name?: string;
+        acp_config: CodexThreadConfig;
+      },
+    ): Promise<{ thread_id: string }> {
+      const identity = parseSubject(this.subject);
+      assertCollaborator(identity);
+      const path = normalizeProjectChatPath(opts?.path);
+      const thread_id = `${opts?.thread_id ?? ""}`.trim();
+      if (!isValidUUID(thread_id)) throw new Error("valid thread id required");
+      if (!opts?.acp_config || typeof opts.acp_config !== "object") {
+        throw new Error("Codex configuration is required");
+      }
+      const backend = createHeadlessChatClient({
+        ...identity,
+        path,
+        projectHostClient: client,
+        selected_thread_id: thread_id,
+        activityLoadPolicy: "live-preview-only",
+      });
+      try {
+        await backend.open();
+        return await backend.createCodexThread({
+          acp_config: opts.acp_config,
+          name: `${opts.name ?? ""}`.trim().slice(0, 200) || "Codex chat",
+          thread_id,
+        });
+      } finally {
+        await backend.close().catch(() => undefined);
+      }
+    },
+
     async open(
       this: { subject?: string },
       opts: {
@@ -383,13 +420,43 @@ export async function initProjectChatSessionService(client: Client) {
 
     async send(
       this: { subject?: string },
-      opts: { session_id: string; thread_id: string; text: string },
+      opts: {
+        session_id: string;
+        thread_id: string;
+        text: string;
+        send_mode?: "immediate";
+      },
     ) {
       const session = getSession(this.subject, opts?.session_id);
+      if (opts?.send_mode === "immediate") {
+        return await session.backend.sendGuidanceToCodexThread({
+          thread_id: `${opts?.thread_id ?? ""}`,
+          text: `${opts?.text ?? ""}`,
+        });
+      }
       return await session.backend.sendToExistingCodexThread({
         thread_id: `${opts?.thread_id ?? ""}`,
         text: `${opts?.text ?? ""}`,
       });
+    },
+
+    async updateThread(
+      this: { subject?: string },
+      opts: {
+        session_id: string;
+        thread_id: string;
+        acp_config: CodexThreadConfig;
+      },
+    ): Promise<null> {
+      const session = getSession(this.subject, opts?.session_id);
+      if (!opts?.acp_config || typeof opts.acp_config !== "object") {
+        throw new Error("Codex configuration is required");
+      }
+      await session.backend.updateCodexThreadConfig({
+        thread_id: `${opts?.thread_id ?? ""}`,
+        acp_config: opts.acp_config,
+      });
+      return null;
     },
 
     async interrupt(

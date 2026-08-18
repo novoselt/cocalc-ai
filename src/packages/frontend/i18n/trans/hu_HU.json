@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Minimális jegyzetfüzetnézet váltása",
   "jupyter.commands.toggle_minimap.menu": "Minitérkép be- és kikapcsolása",
   "jupyter.commands.toggle_minimap.tooltip": "A jegyzetfüzet minitérképének megjelenítése vagy elrejtése.",
+  "jupyter.commands.toggle_studio_view.label": "Studio-jegyzetfüzet nézet váltása",
   "jupyter.commands.validate.body": "A jegyzetfüzet érvényesítése újraindítja a kernelt és sorrendben futtatja az összes cellát, még azokat is, amelyek hibákat tartalmaznak. Ez biztosítja, hogy az összes kimenet pontosan az legyen, ami az összes cella sorrendben történő futtatásából ered.",
   "jupyter.commands.validate.label": "Érvényesít",
   "jupyter.commands.validate.title": "Notebook érvényesítése?",

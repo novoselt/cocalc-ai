@@ -23,6 +23,10 @@ Table({
         name: "growth_account_profiles_home_bay_cohort_date_idx",
         query: "(home_bay_id, cohort_date)",
       },
+      {
+        name: "growth_account_profiles_banned_exclusion_idx",
+        query: "(home_bay_id, account_id) WHERE exclusion_reason = 'banned'",
+      },
     ],
   },
   fields: {

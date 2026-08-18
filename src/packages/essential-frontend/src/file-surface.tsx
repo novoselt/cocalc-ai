@@ -23,8 +23,10 @@ import { fullProjectUrl } from "./urls";
 import {
   ChunkErrorBoundary,
   EmptyState,
+  EssentialLink,
   InlineAlert,
   LoadingState,
+  OverflowMenu,
   ShellLoading,
   SurfaceHeader,
 } from "./ui";
@@ -183,27 +185,17 @@ function Breadcrumbs({ projectId, path }: { projectId: string; path: string }) {
   const names = relative ? relative.split("/") : [];
   return (
     <nav aria-label="File path" className="ul-breadcrumbs">
-      <button
-        onClick={() =>
-          navigate({ kind: "files", projectId, path: "/home/user" })
-        }
-        type="button"
-      >
+      <EssentialLink route={{ kind: "files", projectId, path: "/home/user" }}>
         <UltraliteIcon name="folder" size={15} /> Home
-      </button>
+      </EssentialLink>
       {names.map((name, index) => {
         const current = `/home/user/${names.slice(0, index + 1).join("/")}`;
         return (
           <span key={current}>
             <span aria-hidden="true">/</span>
-            <button
-              onClick={() =>
-                navigate({ kind: "files", projectId, path: current })
-              }
-              type="button"
-            >
+            <EssentialLink route={{ kind: "files", projectId, path: current }}>
               {name}
-            </button>
+            </EssentialLink>
           </span>
         );
       })}
@@ -250,40 +242,34 @@ export function DirectoryView({
           <span className="ul-file-meta">Size</span>
         </div>
         {path !== "/home/user" ? (
-          <button
+          <EssentialLink
             className="ul-file-row"
-            onClick={() =>
-              navigate({
-                kind: "files",
-                projectId: project.project_id,
-                path: parentPath(path),
-              })
-            }
-            type="button"
+            route={{
+              kind: "files",
+              projectId: project.project_id,
+              path: parentPath(path),
+            }}
           >
             <span className="ul-file-name ul-file-directory">
               <UltraliteIcon name="back" size={16} /> Parent directory
             </span>
             <span className="ul-file-meta ul-file-modified" />
             <span className="ul-file-meta">Folder</span>
-          </button>
+          </EssentialLink>
         ) : null}
         {entries.map(([name, data]) => {
           const directory = data.type === "d" || data.isDir;
           const target = childPath(path, name);
           return (
-            <button
+            <EssentialLink
               aria-label={`${directory ? "Open folder" : "Open file"} ${name}`}
               className="ul-file-row"
               key={name}
-              onClick={() =>
-                navigate({
-                  kind: directory ? "files" : "file",
-                  projectId: project.project_id,
-                  path: target,
-                })
-              }
-              type="button"
+              route={{
+                kind: directory ? "files" : "file",
+                projectId: project.project_id,
+                path: target,
+              }}
             >
               <span
                 className={`ul-file-name ${directory ? "ul-file-directory" : ""}`}
@@ -297,7 +283,7 @@ export function DirectoryView({
               <span className="ul-file-meta">
                 {directory ? "Folder" : formatBytes(data.size)}
               </span>
-            </button>
+            </EssentialLink>
           );
         })}
         {!entries.length ? (
@@ -655,9 +641,9 @@ export default function FileSurface({
     <main className="ul-page" id="main-content">
       <SurfaceHeader
         actions={
-          <>
+          <OverflowMenu label="File actions">
             <button
-              className="ul-icon-button"
+              className="ul-menu-item"
               onClick={refreshFile}
               type="button"
             >
@@ -665,16 +651,12 @@ export default function FileSurface({
               {route.kind === "files" ? "Reload listing" : "Reload from disk"}
             </button>
             {route.kind === "file" && (contents != null || notebook) ? (
-              <button
-                className="ul-icon-button"
-                onClick={download}
-                type="button"
-              >
+              <button className="ul-menu-item" onClick={download} type="button">
                 Download
               </button>
             ) : null}
             <a
-              className="ul-link-button ul-link-button-subtle"
+              className="ul-menu-item"
               data-ul-full-cocalc
               href={fullProjectUrl({
                 projectId: project.project_id,
@@ -683,7 +665,7 @@ export default function FileSurface({
             >
               Full CoCalc
             </a>
-          </>
+          </OverflowMenu>
         }
         eyebrow={route.kind === "files" ? "Project files" : "File"}
         title={

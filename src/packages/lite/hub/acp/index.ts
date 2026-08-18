@@ -388,6 +388,10 @@ const ACP_LIVE_LOG_BATCH_MAX_MS = envNumber(
   "COCALC_ACP_LIVE_LOG_BATCH_MAX_MS",
   1000,
 );
+const ACP_LIVE_PREVIEW_BATCH_MAX_MS = Math.max(
+  ACP_LIVE_LOG_BATCH_MIN_MS,
+  envNumber("COCALC_ACP_LIVE_PREVIEW_BATCH_MAX_MS", 250),
+);
 const ACP_LIVE_LOG_BATCH_EWMA_ALPHA = envNumber(
   "COCALC_ACP_LIVE_LOG_BATCH_EWMA_ALPHA",
   0.25,
@@ -830,6 +834,23 @@ function releaseStaleQueuedJobAffinity(job: AcpJobRow): AcpJobRow {
     worker_id: preferredWorkerId,
   });
   return { ...job, worker_id: null, worker_bundle_version: null };
+}
+
+function nextQueuedAcpJobForThread({
+  project_id,
+  path,
+  thread_id,
+}: {
+  project_id: string;
+  path: string;
+  thread_id: string;
+}): AcpJobRow | undefined {
+  const listed = listQueuedAcpJobsForThread({
+    project_id,
+    path,
+    thread_id,
+  })[0];
+  return listed ? releaseStaleQueuedJobAffinity(listed) : undefined;
 }
 
 function turnStillLikelyOwnedByLiveWorker(
@@ -3857,7 +3878,11 @@ export class ChatStreamWriter {
   private createLivePreviewBatcher(): AdaptiveAsyncBatcher<AcpStreamMessage> {
     return createAdaptiveAsyncBatcher<AcpStreamMessage>({
       minDelayMs: ACP_LIVE_LOG_BATCH_MIN_MS,
-      maxDelayMs: ACP_LIVE_LOG_BATCH_MAX_MS,
+      // Preview snapshots are the user-visible transcript. Unlike the full
+      // activity log, they are cumulative and compacted to the latest value,
+      // so persistence latency must not make the final token wait for the
+      // activity stream's much larger adaptive batching window.
+      maxDelayMs: ACP_LIVE_PREVIEW_BATCH_MAX_MS,
       ewmaAlpha: ACP_LIVE_LOG_BATCH_EWMA_ALPHA,
       latencyMultiplier: ACP_LIVE_LOG_BATCH_LATENCY_MULTIPLIER,
       maxItems: ACP_LIVE_LOG_BATCH_MAX_EVENTS,
@@ -3974,13 +3999,13 @@ export class ChatStreamWriter {
     if (event.type === "status") {
       if (this.livePreviewText) {
         this.livePreviewMessageBoundary = true;
-        void this.livePreviewBatcher.flush();
         // Status is transport/control-plane information. Once manager text has
         // started, publishing every repeated "running" status turns each Codex
         // agent-message item into a separate inline activity block. Keep the
         // paragraph boundary in the cumulative text, but leave raw statuses in
-        // the full activity stream only. Flush any trailing manager text so the
-        // inline preview cannot lag behind that activity stream.
+        // the full activity stream only. Flush trailing manager text before
+        // the status can become visible in the full activity stream.
+        void this.livePreviewBatcher.flush();
         return;
       }
       this.livePreviewBatcher.add(event, { flush: true });
@@ -9029,14 +9054,11 @@ async function pumpQueuedAcpJobsForThread({
   thread_id: string;
 }): Promise<void> {
   while (true) {
-    const listed = listQueuedAcpJobsForThread({
+    const nextQueued = nextQueuedAcpJobForThread({
       project_id,
       path,
       thread_id,
-    })[0];
-    const nextQueued = listed
-      ? releaseStaleQueuedJobAffinity(listed)
-      : undefined;
+    });
     if (!nextQueued) {
       return;
     }
@@ -9088,11 +9110,11 @@ function kickQueuedAcpJobsForThread({
   path: string;
   thread_id: string;
 }): void {
-  const nextQueued = listQueuedAcpJobsForThread({
+  const nextQueued = nextQueuedAcpJobForThread({
     project_id,
     path,
     thread_id,
-  })[0];
+  });
   if (!nextQueued || !detachedWorkerCanClaimQueuedJob(nextQueued)) return;
   const key = acpJobThreadKey({ project_id, path, thread_id });
   if (pumpingAcpJobThreads.has(key)) {
@@ -10433,6 +10455,7 @@ export function getAcpAgentRuntimeStatus(): {
 export const acpTestInternals = {
   detachedWorkerCanClaimQueuedJob,
   hasOtherWorkerRunningAcpTurn,
+  nextQueuedAcpJobForThread,
   noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,
   prepareQueuedUserMessageForExecution,

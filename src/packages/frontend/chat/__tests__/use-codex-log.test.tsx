@@ -651,6 +651,143 @@ describe("useCodexLog", () => {
     });
   });
 
+  it("restores a preview when its stream reference changes while offline", async () => {
+    const first = new FakeDstream(
+      [
+        {
+          type: "event",
+          seq: 10,
+          time: 10,
+          event: {
+            type: "message",
+            text: "Cached before switching threads.",
+            delta: false,
+          },
+        },
+      ],
+      "ready",
+      [71],
+    );
+    dstreamMock
+      .mockResolvedValueOnce(first)
+      .mockImplementationOnce(() => new Promise(() => {}));
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get: jest.fn() }),
+      },
+    });
+
+    const mounted = render(
+      <LiveResponseComponent
+        generating
+        logKey="log-key-stream-hydration"
+        liveLogStream="derived-preview-stream"
+        liveStreamIsProjection
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("live-response").textContent).toBe(
+        "Cached before switching threads.",
+      );
+    });
+    mounted.unmount();
+
+    render(
+      <LiveResponseComponent
+        generating
+        logKey="log-key-stream-hydration"
+        liveLogStream="explicit-preview-stream"
+        liveStreamIsProjection
+      />,
+    );
+
+    // The reconnect is intentionally unresolved, as it would be while the
+    // browser is offline. The stable per-turn cache must still render now.
+    expect(screen.getByTestId("live-response").textContent).toBe(
+      "Cached before switching threads.",
+    );
+    await waitFor(() => expect(dstreamMock).toHaveBeenCalledTimes(2));
+    expect(dstreamMock.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        name: "explicit-preview-stream",
+      }),
+    );
+    expect(dstreamMock.mock.calls[1][0]).not.toHaveProperty("start_seq");
+  });
+
+  it("does not let full activity logs evict a lightweight preview", async () => {
+    const preview = new FakeDstream(
+      [
+        {
+          type: "event",
+          seq: 10,
+          time: 10,
+          event: {
+            type: "message",
+            text: "Cached projection.",
+            delta: false,
+          },
+        },
+      ],
+      "ready",
+      [50],
+    );
+    dstreamMock.mockResolvedValueOnce(preview);
+    conatMock.mockReturnValue({
+      subscribe: jest.fn(),
+      sync: {
+        akv: () => ({ get: jest.fn() }),
+      },
+    });
+    const previewProps = {
+      generating: true,
+      logKey: "log-key-projection-cache-priority",
+      liveLogStream: "preview-stream-cache-priority",
+      liveStreamIsProjection: true,
+    } as const;
+
+    const mountedPreview = render(<LiveResponseComponent {...previewProps} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("live-response").textContent).toBe(
+        "Cached projection.",
+      );
+    });
+    mountedPreview.unmount();
+
+    for (let index = 0; index < 5; index += 1) {
+      dstreamMock.mockResolvedValueOnce(
+        new FakeDstream([
+          {
+            type: "event",
+            seq: index + 1,
+            time: index + 1,
+            event: { type: "message", text: `activity-${index}` },
+          },
+        ]),
+      );
+      const mountedActivity = render(
+        <TestComponent
+          generating={true}
+          logKey={`log-key-activity-cache-${index}`}
+          liveLogStream={`activity-stream-cache-${index}`}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId("latest-event").textContent).toBe(
+          `activity-${index}`,
+        );
+      });
+      mountedActivity.unmount();
+    }
+
+    dstreamMock.mockResolvedValueOnce(new FakeDstream([], "disconnected"));
+    render(<LiveResponseComponent {...previewProps} />);
+    expect(screen.getByTestId("live-response").textContent).toBe(
+      "Cached projection.",
+    );
+  });
+
   it("does not miss messages pushed after the shared dstream listener attaches", async () => {
     jest.useFakeTimers();
     const stream = new FakeDstream([

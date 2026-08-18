@@ -51,6 +51,30 @@ test("effectiveDaemonGlobals preserves explicit globals over env fallbacks", () 
   assert.equal(globals.hubPassword, "explicit-password");
 });
 
+test("effectiveDaemonGlobals does not leak ambient auth into named profiles", () => {
+  const globals = effectiveDaemonGlobals(
+    {
+      profile: "local-cookie",
+      disableEnvAuthDefaults: true,
+    },
+    {
+      env: {
+        COCALC_API_URL: "http://localhost:9100",
+        COCALC_ACCOUNT_ID: "11111111-1111-4111-8111-111111111111",
+        COCALC_BEARER_TOKEN: "unrelated-host-token",
+        COCALC_API_KEY: "unrelated-api-key",
+        COCALC_HUB_PASSWORD: "unrelated-hub-password",
+      },
+    },
+  );
+  assert.equal(globals.profile, "local-cookie");
+  assert.equal(globals.api, "http://localhost:9100");
+  assert.equal(globals.accountId, undefined);
+  assert.equal(globals.bearer, undefined);
+  assert.equal(globals.apiKey, undefined);
+  assert.equal(globals.hubPassword, undefined);
+});
+
 test("effectiveDaemonGlobals falls back to defaultApiBaseUrl and agent token", () => {
   const globals = effectiveDaemonGlobals(
     { noDaemon: true },

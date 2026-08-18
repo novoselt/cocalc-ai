@@ -24,6 +24,10 @@ test("exposes the lightweight shell navigation before authentication", async () 
     "href",
     "/essential/projects",
   );
+  expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
+    "href",
+    "/essential/docs",
+  );
   expect(screen.getByRole("link", { name: "Full CoCalc" })).toBeVisible();
   expect(
     await screen.findByRole("heading", { name: "Sign in to continue" }),

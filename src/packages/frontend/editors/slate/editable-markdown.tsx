@@ -125,6 +125,10 @@ import { ChangeContext } from "./use-change";
 import { buildCodeBlockDecorations } from "./elements/code-block/prism";
 import type { CodeBlock } from "./elements/code-block/types";
 import type { JupyterGapCursor } from "./jupyter-cell-context";
+import {
+  hasOnlySelectionOperations,
+  isLocalContentChange,
+} from "./change-origin";
 
 export type { SlateEditor };
 
@@ -2630,8 +2634,12 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
   // check editor.children itself explicitly.
   const onChange = (newEditorValue) => {
     const syncCausedUpdate = editor.syncCausedUpdate === true;
-    if (dirtyRef != null) {
-      // but see comment above
+    const onlySelectionOps = hasOnlySelectionOperations(editor.operations);
+    const localContentChange = isLocalContentChange({
+      operations: editor.operations,
+      syncCausedUpdate,
+    });
+    if (dirtyRef != null && localContentChange) {
       dirtyRef.current = true;
     }
     if (editor._hasUnsavedChanges === false) {
@@ -2671,9 +2679,6 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
       editor.lastSelection = ensureRange(editor, editor.lastSelection);
     }
 
-    const onlySelectionOps =
-      editor.operations.length > 0 &&
-      editor.operations.every((op) => op.type === "set_selection");
     if (editorValue === newEditorValue && onlySelectionOps) {
       // Selection-only update with no value change.
       return;
@@ -2682,7 +2687,7 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
     // Slate can mutate the same top-level children array in place (notably for
     // custom elements), which breaks pointer-based dirty checks. Mark local
     // content edits as dirty explicitly so debounced save always persists them.
-    if (!onlySelectionOps && !editor.syncCausedUpdate) {
+    if (localContentChange) {
       editor._hasUnsavedChanges = {};
     }
 

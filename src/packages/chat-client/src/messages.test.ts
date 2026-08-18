@@ -100,4 +100,38 @@ describe("projectChatRows", () => {
       }),
     );
   });
+
+  it("identifies durable guidance messages and their delivery state", () => {
+    const result = projectChatRows(
+      [
+        {
+          event: "chat",
+          sender_id: "account-1",
+          date: "2026-01-01T00:00:01.000Z",
+          message_id: "guidance-1",
+          thread_id: "thread-1",
+          acp_send_mode: "immediate",
+          acp_state: "sent",
+          generating: false,
+          history: [
+            {
+              author_id: "account-1",
+              content: "Check the edge case",
+              date: "2026-01-01T00:00:01.000Z",
+            },
+          ],
+        },
+      ],
+      "thread-1",
+    );
+
+    expect(result.messages[0]).toEqual(
+      expect.objectContaining({
+        content: "Check the edge case",
+        guidance: true,
+        role: "human",
+        state: "sent",
+      }),
+    );
+  });
 });

@@ -31,7 +31,15 @@ export async function loadWithRetry<T>(
       }
     }
   }
-  const error = new Error(`Failed to load ${name} after ${attempts} attempts`);
+  const causeMessage =
+    lastError != null && typeof lastError === "object" && "message" in lastError
+      ? `${lastError.message ?? ""}`.trim()
+      : `${lastError ?? ""}`.trim();
+  const error = new Error(
+    `Failed to load ${name} after ${attempts} attempts${
+      causeMessage ? `: ${causeMessage}` : ""
+    }`,
+  );
   (error as Error & { cause?: unknown }).cause = lastError;
   throw error;
 }

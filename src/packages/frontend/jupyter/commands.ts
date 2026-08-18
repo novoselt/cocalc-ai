@@ -1258,13 +1258,13 @@ export function commands(actions: AllActions): {
       r: true,
     },
 
-    "toggle minimal view": {
+    "toggle studio view": {
       i: "swap",
       m: defineMessage({
-        id: "jupyter.commands.toggle_minimal_view.label",
-        defaultMessage: "Toggle Minimal Notebook View",
+        id: "jupyter.commands.toggle_studio_view.label",
+        defaultMessage: "Toggle Studio Notebook View",
         description:
-          "Switch a Jupyter notebook frame between the regular and the minimal view",
+          "Switch a Jupyter notebook frame between the classic and the studio view",
       }),
       r: true,
       f: () => {
@@ -1274,9 +1274,9 @@ export function commands(actions: AllActions): {
         const type = editorActions._get_frame_type(frameId);
         editorActions.set_frame_type(
           frameId,
-          type === "jupyter_minimal"
+          type === "jupyter_studio"
             ? "jupyter_cell_notebook"
-            : "jupyter_minimal",
+            : "jupyter_studio",
         );
       },
     },

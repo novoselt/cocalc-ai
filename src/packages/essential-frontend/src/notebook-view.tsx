@@ -206,9 +206,6 @@ export default function NotebookView({
         if (cell.cell_type === "markdown") {
           return (
             <section className="ul-cell" key={index}>
-              <div className="ul-cell-label">
-                {cell.cell_type || "text"} cell {index + 1}
-              </div>
               <NotebookMarkdownCell source={source} />
             </section>
           );
@@ -216,19 +213,12 @@ export default function NotebookView({
         if (cell.cell_type === "raw") {
           return (
             <section className="ul-cell" key={index}>
-              <div className="ul-cell-label">raw cell {index + 1}</div>
               <pre className="ul-raw-cell">{source}</pre>
             </section>
           );
         }
         return (
           <section className="ul-cell" key={index}>
-            <div className="ul-cell-label">
-              Code cell {index + 1}
-              {cell.execution_count != null
-                ? ` - execution ${cell.execution_count}`
-                : ""}
-            </div>
             <HighlightedCode
               className="ul-code"
               contents={source}

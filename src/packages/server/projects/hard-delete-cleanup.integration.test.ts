@@ -11,6 +11,7 @@ const deleteProjectDataOnHostMock = jest.fn();
 const deleteAppSubdomainDnsMock = jest.fn();
 const releaseProjectBackupRepoAssignmentMock = jest.fn();
 const resolveProjectBackupRepoAssignmentMock = jest.fn();
+const getDeletedProjectBackupConfigForDeletionMock = jest.fn();
 
 jest.mock("@cocalc/backend/logger", () => ({
   __esModule: true,
@@ -59,7 +60,8 @@ jest.mock("@cocalc/server/cloud/dns", () => ({
 
 jest.mock("@cocalc/server/project-backup", () => ({
   __esModule: true,
-  getDeletedProjectBackupConfigForDeletion: jest.fn(),
+  getDeletedProjectBackupConfigForDeletion: (...args: any[]) =>
+    getDeletedProjectBackupConfigForDeletionMock(...args),
   getProjectBackupConfigForDeletion: jest.fn(),
   releaseProjectBackupRepoAssignment: (...args: any[]) =>
     releaseProjectBackupRepoAssignmentMock(...args),
@@ -346,6 +348,9 @@ describe("hard delete project cleanup", () => {
     deleteAppSubdomainDnsMock.mockResolvedValue(undefined);
     releaseProjectBackupRepoAssignmentMock.mockResolvedValue(undefined);
     resolveProjectBackupRepoAssignmentMock.mockResolvedValue(undefined);
+    getDeletedProjectBackupConfigForDeletionMock.mockResolvedValue({
+      toml: "",
+    });
   });
 
   afterEach(async () => {
@@ -463,5 +468,85 @@ describe("hard delete project cleanup", () => {
         [OTHER_PROJECT_ID],
       ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("backs off a failed purge so later work can proceed", async () => {
+    await getPool().query(
+      `INSERT INTO deleted_projects
+         (project_id, backup_purge_due_at, backup_purge_status)
+       VALUES
+         ($1, NOW() - INTERVAL '2 hours', 'scheduled'),
+         ($2, NOW() - INTERVAL '1 hour', 'scheduled')`,
+      [PROJECT_ID, OTHER_PROJECT_ID],
+    );
+    getDeletedProjectBackupConfigForDeletionMock
+      .mockRejectedValueOnce(new Error("damaged repository"))
+      .mockResolvedValue({ toml: "" });
+
+    const { processDueDeletedProjectBackupPurges } =
+      await import("./hard-delete");
+    await expect(
+      processDueDeletedProjectBackupPurges({ limit: 1 }),
+    ).resolves.toMatchObject({ processed: 1, failed: 1, quarantined: 0 });
+    await expect(
+      processDueDeletedProjectBackupPurges({ limit: 1 }),
+    ).resolves.toMatchObject({ processed: 1, purged: 1 });
+
+    const { rows } = await getPool().query<{
+      project_id: string;
+      backup_purge_status: string;
+      backup_purge_attempts: number;
+      backup_purge_next_attempt_at: Date | null;
+    }>(
+      `SELECT project_id, backup_purge_status, backup_purge_attempts,
+              backup_purge_next_attempt_at
+       FROM deleted_projects
+       ORDER BY backup_purge_due_at`,
+    );
+    expect(rows[0]).toMatchObject({
+      project_id: PROJECT_ID,
+      backup_purge_status: "failed",
+      backup_purge_attempts: 1,
+    });
+    expect(rows[0]?.backup_purge_next_attempt_at).toBeInstanceOf(Date);
+    expect(rows[1]).toMatchObject({
+      project_id: OTHER_PROJECT_ID,
+      backup_purge_status: "purged",
+      backup_purge_attempts: 1,
+    });
+  });
+
+  it("quarantines exhausted stale purges without blocking the queue", async () => {
+    await getPool().query(
+      `INSERT INTO deleted_projects
+         (project_id, backup_purge_due_at, backup_purge_status,
+          backup_purge_started_at, backup_purge_attempts)
+       VALUES
+         ($1, NOW() - INTERVAL '2 hours', 'running',
+          NOW() - INTERVAL '1 hour', 5),
+         ($2, NOW() - INTERVAL '1 hour', 'scheduled', NULL, 0)`,
+      [PROJECT_ID, OTHER_PROJECT_ID],
+    );
+
+    const { processDueDeletedProjectBackupPurges } =
+      await import("./hard-delete");
+    await expect(
+      processDueDeletedProjectBackupPurges({ limit: 1 }),
+    ).resolves.toMatchObject({
+      processed: 1,
+      purged: 1,
+      quarantined: 1,
+      recovered_stale: 1,
+    });
+    const { rows } = await getPool().query<{
+      backup_purge_status: string;
+      backup_purge_quarantined_at: Date | null;
+    }>(
+      `SELECT backup_purge_status, backup_purge_quarantined_at
+       FROM deleted_projects WHERE project_id=$1`,
+      [PROJECT_ID],
+    );
+    expect(rows[0]?.backup_purge_status).toBe("quarantined");
+    expect(rows[0]?.backup_purge_quarantined_at).toBeInstanceOf(Date);
   });
 });

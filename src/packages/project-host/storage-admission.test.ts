@@ -252,6 +252,49 @@ describe("storage admission controller", () => {
     });
   });
 
+  it("admits an overdue backup during lifecycle work but not an emergency", () => {
+    const controller = create("enforce");
+    starting = 1;
+    expect(
+      controller.admit({
+        operation_kind: "scheduled_snapshot",
+        project_id: "project-0",
+        allow_starvation_override: true,
+      }),
+    ).toMatchObject({
+      admitted: false,
+      starvation_override: false,
+    });
+    expect(
+      controller.admit({
+        operation_kind: "scheduled_backup",
+        project_id: "project-1",
+        allow_starvation_override: true,
+      }),
+    ).toMatchObject({
+      admitted: true,
+      would_defer: true,
+      reason: "lifecycle_active",
+      starvation_override: true,
+    });
+
+    starting = 0;
+    full = 10;
+    now += 5_000;
+    expect(
+      controller.admit({
+        operation_kind: "scheduled_backup",
+        project_id: "project-2",
+        allow_starvation_override: true,
+      }),
+    ).toMatchObject({
+      admitted: false,
+      would_defer: true,
+      reason: "io_pressure_emergency",
+      starvation_override: false,
+    });
+  });
+
   it("fails background admission closed when pressure cannot be sampled", () => {
     const controller = createStorageAdmissionController({
       mode: "enforce",

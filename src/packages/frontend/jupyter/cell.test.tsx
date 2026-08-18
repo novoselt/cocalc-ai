@@ -8,7 +8,7 @@
 import { fromJS, Map } from "immutable";
 import { render, screen } from "@testing-library/react";
 
-let mockMinimalCellProps: any;
+let mockStudioCellProps: any;
 let mockCellOutputProps: any;
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
@@ -49,10 +49,10 @@ jest.mock("./insert-cell", () => ({
   InsertCell: () => null,
 }));
 
-jest.mock("./minimal/minimal-cell", () => ({
-  MinimalCell: (props) => {
-    mockMinimalCellProps = props;
-    return <div data-testid="minimal-cell" />;
+jest.mock("./studio/studio-cell", () => ({
+  StudioCell: (props) => {
+    mockStudioCellProps = props;
+    return <div data-testid="studio-cell" />;
   },
 }));
 
@@ -66,15 +66,15 @@ jest.mock("./prompt/base", () => ({
 
 import { Cell } from "./cell";
 
-describe("Cell in minimal view mode", () => {
+describe("Cell in studio view mode", () => {
   beforeEach(() => {
-    mockMinimalCellProps = undefined;
+    mockStudioCellProps = undefined;
     mockCellOutputProps = undefined;
   });
 
   const cell = fromJS({ id: "cell-1", cell_type: "code", input: "1+1" });
 
-  it("forwards transient execution state (stdin, runOverlay, isDragging) to MinimalCell", () => {
+  it("forwards transient execution state (stdin, runOverlay, isDragging) to StudioCell", () => {
     const stdin = fromJS({ id: "cell-1", prompt: "value: " });
     const runOverlay = fromJS({ state: "pending" });
     render(
@@ -83,25 +83,25 @@ describe("Cell in minimal view mode", () => {
         cm_options={Map()}
         mode="escape"
         font_size={14}
-        cellViewMode="minimal"
+        cellViewMode="studio"
         stdin={stdin}
         runOverlay={runOverlay}
         isDragging={true}
       />,
     );
-    expect(screen.getByTestId("minimal-cell")).toBeInTheDocument();
-    expect(mockMinimalCellProps.stdin).toBe(stdin);
-    expect(mockMinimalCellProps.runOverlay).toBe(runOverlay);
-    expect(mockMinimalCellProps.isDragging).toBe(true);
+    expect(screen.getByTestId("studio-cell")).toBeInTheDocument();
+    expect(mockStudioCellProps.stdin).toBe(stdin);
+    expect(mockStudioCellProps.runOverlay).toBe(runOverlay);
+    expect(mockStudioCellProps.isDragging).toBe(true);
     // and the regular cell renderer is not used
     expect(screen.queryByTestId("cell-output")).toBeNull();
   });
 
-  it("uses the regular renderer when cellViewMode is not minimal", () => {
+  it("uses the regular renderer when cellViewMode is not studio", () => {
     render(
       <Cell cell={cell} cm_options={Map()} mode="escape" font_size={14} />,
     );
-    expect(screen.queryByTestId("minimal-cell")).toBeNull();
+    expect(screen.queryByTestId("studio-cell")).toBeNull();
     expect(screen.getByTestId("cell-output")).toBeInTheDocument();
     expect(mockCellOutputProps.stdin).toBeUndefined();
   });

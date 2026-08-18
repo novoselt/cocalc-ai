@@ -88,7 +88,7 @@ textarea {
   color: var(--ul-on-accent);
   display: grid;
   gap: 0.85rem;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
   min-height: 48px;
   padding: 0 14px;
   position: sticky;
@@ -250,7 +250,7 @@ textarea {
   align-items: center;
   background: var(--ul-accent);
   border: 1px solid var(--ul-accent);
-  border-radius: 3px;
+  border-radius: 6px;
   color: var(--ul-on-accent);
   cursor: pointer;
   display: inline-flex;
@@ -359,6 +359,47 @@ textarea {
   margin: 10px 0;
 }
 
+.ul-create-project {
+  background: var(--ul-paper);
+  border: 1px solid var(--ul-border);
+  border-radius: 10px;
+  margin: clamp(20px, 7vh, 68px) auto;
+  max-width: 560px;
+  padding: clamp(20px, 4vw, 36px);
+}
+
+.ul-create-project h2 {
+  color: var(--ul-heading);
+  font-size: 24px;
+  font-weight: 500;
+  margin: 3px 0 9px;
+}
+
+.ul-create-project p {
+  color: var(--ul-muted);
+  line-height: 1.5;
+  margin: 0 0 20px;
+}
+
+.ul-create-project-compact {
+  margin: 12px 0 18px;
+  max-width: none;
+  padding: 18px;
+}
+
+.ul-create-project-compact h2 {
+  font-size: 19px;
+  margin-top: 0;
+}
+
+.ul-field {
+  display: grid;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 6px;
+  margin: 14px 0;
+}
+
 .ul-search-wrap {
   margin: 0;
   width: min(320px, 45vw);
@@ -371,7 +412,7 @@ textarea {
 .ul-editor {
   background: var(--ul-paper);
   border: 1px solid var(--ul-border-dark);
-  border-radius: 3px;
+  border-radius: 6px;
   color: var(--ul-ink);
   min-height: 34px;
   padding: 6px 9px;
@@ -398,6 +439,7 @@ textarea {
   min-height: 62px;
   padding: 7px 12px;
   text-align: left;
+  text-decoration: none;
   width: 100%;
 }
 
@@ -411,6 +453,12 @@ textarea {
 .ul-file-row:hover,
 .ul-compact-row:hover {
   background: var(--ul-accent-soft);
+}
+
+.ul-compact-row,
+.ul-session-row {
+  color: var(--ul-ink);
+  text-decoration: none;
 }
 
 .ul-project-avatar {
@@ -476,7 +524,7 @@ textarea {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 3px;
+  border-radius: 6px;
   color: var(--ul-muted);
   cursor: pointer;
   display: flex;
@@ -506,6 +554,95 @@ textarea {
   margin: 3px 5px;
 }
 
+.ul-overflow {
+  position: relative;
+}
+
+.ul-overflow > summary {
+  align-items: center;
+  background: var(--ul-paper);
+  border: 1px solid var(--ul-border-dark);
+  border-radius: 6px;
+  color: var(--ul-heading);
+  cursor: pointer;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  list-style: none;
+  width: 34px;
+}
+
+.ul-overflow > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ul-overflow[open] > summary,
+.ul-overflow > summary:hover {
+  background: var(--ul-accent-soft);
+  border-color: var(--ul-link);
+}
+
+.ul-overflow-panel {
+  background: var(--ul-paper);
+  border: 1px solid var(--ul-border);
+  border-radius: 8px;
+  box-shadow: 0 7px 24px rgb(0 0 0 / 18%);
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+}
+
+.ul-menu-item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ul-ink);
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 9px;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+}
+
+.ul-menu-item:hover {
+  background: var(--ul-accent-soft);
+  color: var(--ul-link);
+}
+
+.ul-rail-more > summary {
+  background: transparent;
+  border: 0;
+  color: var(--ul-muted);
+  flex-direction: column;
+  font-size: 11px;
+  gap: 2px;
+  min-height: 52px;
+  padding: 4px;
+  width: 100%;
+}
+
+.ul-rail-more .ul-overflow-panel {
+  left: calc(100% + 6px);
+  right: auto;
+  top: 0;
+}
+
+.ul-rail-more-active > summary {
+  background: var(--ul-paper);
+  box-shadow: inset 3px 0 var(--ul-accent);
+  color: var(--ul-link);
+  font-weight: 600;
+}
+
 .ul-rail-full {
   margin-top: auto;
 }
@@ -523,13 +660,14 @@ textarea {
   margin-bottom: 10px;
 }
 
-.ul-breadcrumbs button {
+.ul-breadcrumbs a {
   background: transparent;
   border: 0;
   color: var(--ul-link);
   cursor: pointer;
   min-height: 32px;
   padding: 4px 5px;
+  text-decoration: none;
 }
 
 .ul-file-row {
@@ -545,6 +683,7 @@ textarea {
   min-height: 42px;
   padding: 7px 12px;
   text-align: left;
+  text-decoration: none;
   width: 100%;
 }
 
@@ -797,11 +936,13 @@ textarea {
 .ul-notebook {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .ul-cell {
   background: var(--ul-paper);
   border: 1px solid var(--ul-border);
+  min-width: 0;
 }
 
 .ul-cell-toolbar {
@@ -817,6 +958,10 @@ textarea {
 .ul-cell-label {
   color: var(--ul-muted);
   font-size: 11px;
+  margin-right: auto;
+}
+
+.ul-cell-toolbar-spacer {
   margin-right: auto;
 }
 
@@ -872,7 +1017,10 @@ textarea {
 .ul-output {
   background: var(--ul-paper);
   border-width: 1px 0 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ul-output-image {
@@ -926,13 +1074,46 @@ textarea {
   margin: 0 auto;
   max-width: 980px;
   min-height: 430px;
+  min-width: 0;
   position: relative;
+  width: 100%;
+}
+
+.ul-codex-config {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns:
+    minmax(150px, 1fr) minmax(120px, 0.7fr) minmax(180px, 1fr)
+    auto;
+  margin: 0 auto 6px;
+  max-width: 980px;
+}
+
+.ul-codex-config label {
+  display: grid;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 3px;
+}
+
+.ul-codex-config .ul-select {
+  min-height: 32px;
+  padding-block: 4px;
+}
+
+.ul-codex-config-note {
+  color: var(--ul-muted);
+  font-size: 11px;
+  padding-bottom: 8px;
+  white-space: nowrap;
 }
 
 .ul-message {
   background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   line-height: 1.5;
+  min-width: 0;
   padding: 10px 12px;
 }
 
@@ -952,6 +1133,8 @@ textarea {
   font-size: 12px;
   margin: 8px 0;
   max-height: 260px;
+  max-width: 100%;
+  min-width: 0;
   overflow: auto;
   padding: 8px;
 }
@@ -962,10 +1145,11 @@ textarea {
 }
 
 .ul-composer {
-  background: var(--ul-paper);
-  border: 1px solid var(--ul-border);
-  border-top-width: 2px;
-  padding: 10px;
+  background: transparent;
+  border: 0;
+  min-width: 0;
+  padding: 8px 4px 0;
+  width: 100%;
   z-index: 2;
 }
 
@@ -977,9 +1161,11 @@ textarea {
 .ul-chat-layout > .ul-messages {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
   padding: 4px 4px 14px;
   scroll-behavior: smooth;
+  width: 100%;
 }
 
 .ul-newest-button {
@@ -997,6 +1183,8 @@ textarea {
 }
 
 .ul-markdown {
+  max-width: 100%;
+  min-width: 0;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -1040,6 +1228,7 @@ textarea {
 .ul-markdown pre {
   background: var(--ul-code-bg);
   border: 1px solid var(--ul-border);
+  max-width: 100%;
   overflow: auto;
   padding: 10px;
 }
@@ -1052,6 +1241,7 @@ textarea {
 .ul-markdown table {
   border-collapse: collapse;
   display: block;
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -1063,6 +1253,7 @@ textarea {
 
 .ul-math-display {
   display: block;
+  max-width: 100%;
   overflow-x: auto;
   padding: 4px 0;
 }
@@ -1188,6 +1379,99 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.ul-docs-search .ul-search {
+  min-width: min(320px, 45vw);
+}
+
+.ul-docs-intro {
+  color: var(--ul-muted);
+  margin: 4px 0 16px;
+  max-width: 720px;
+}
+
+.ul-docs-list {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+}
+
+.ul-docs-entry {
+  background: var(--ul-paper);
+  border: 1px solid var(--ul-border);
+  border-radius: 6px;
+  color: var(--ul-ink);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 112px;
+  padding: 12px;
+  text-decoration: none;
+}
+
+.ul-docs-entry:hover {
+  border-color: var(--ul-accent);
+  box-shadow: 0 2px 8px rgb(15 23 42 / 8%);
+}
+
+.ul-docs-entry strong {
+  color: var(--ul-link);
+  font-size: 15px;
+}
+
+.ul-docs-entry > span:last-child,
+.ul-docs-entry-category,
+.ul-docs-summary {
+  color: var(--ul-muted);
+}
+
+.ul-docs-entry-category {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ul-docs-entry > span:last-child {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ul-docs-article {
+  margin: 0 auto;
+  max-width: 820px;
+}
+
+.ul-docs-title {
+  color: var(--ul-heading);
+  font-size: 25px;
+  font-weight: 500;
+  margin: 5px 0 4px;
+}
+
+.ul-docs-article .ul-markdown h2 {
+  font-size: 20px;
+  margin: 22px 0 8px;
+}
+
+.ul-docs-article .ul-markdown h3 {
+  font-size: 17px;
+  margin: 18px 0 7px;
+}
+
+.ul-docs-summary {
+  border-bottom: 1px solid var(--ul-border);
+  font-size: 15px;
+  line-height: 1.5;
+  margin: 0 0 18px;
+  padding-bottom: 14px;
+}
+
+.ul-back-link {
+  color: var(--ul-link);
+  display: inline-block;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
 .ul-visually-hidden {
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
@@ -1231,12 +1515,21 @@ textarea {
     height: calc(100dvh - 155px);
     min-height: 360px;
   }
+
+  .ul-codex-config {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .ul-codex-config-note {
+    align-self: center;
+    padding-bottom: 0;
+  }
 }
 
 @media (max-width: 480px) {
   .ul-topbar {
     gap: 0.45rem;
-    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
     padding-inline: 9px;
   }
 
@@ -1273,12 +1566,26 @@ textarea {
     padding: 14px 9px;
   }
 
+  .ul-codex-config {
+    grid-template-columns: 1fr;
+  }
+
+  .ul-codex-config-note {
+    display: none;
+  }
+
   .ul-surface-header {
     align-items: stretch;
     flex-direction: column;
   }
 
   .ul-search-wrap {
+    width: 100%;
+  }
+
+  .ul-docs-search,
+  .ul-docs-search .ul-search {
+    min-width: 0;
     width: 100%;
   }
 

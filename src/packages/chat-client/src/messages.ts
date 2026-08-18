@@ -39,12 +39,17 @@ function messageState(
   row: Omit<ChatMessage, "acp_state"> & {
     acp_state?: unknown;
     acp_interrupted?: unknown;
+    acp_send_mode?: unknown;
   },
 ): ProjectedChatMessage["state"] {
   if (row.acp_interrupted === true) return "interrupted";
   if (row.acp_state === "queued" || row.acp_state === "queue") return "queued";
   if (row.acp_state === "running" || row.generating) return "running";
   if (row.acp_state === "not-sent") return "error";
+  if (row.acp_send_mode === "immediate") {
+    if (row.acp_state === "sending") return "sending";
+    if (row.acp_state === "sent") return "sent";
+  }
   if (row.acp_state === "sending" || row.acp_state === "sent") {
     return "queued";
   }
@@ -71,6 +76,7 @@ function projectMessage(row: ChatMessage): ProjectedChatMessage | undefined {
     revision_date: isoDate(latest?.date),
     generating: row.generating === true,
     state: messageState(row),
+    guidance: (row as any).acp_send_mode === "immediate",
     acp_events: Array.isArray(row.acp_events) ? row.acp_events : undefined,
     acp_log_store: id(row.acp_log_store),
     acp_log_key: id(row.acp_log_key),

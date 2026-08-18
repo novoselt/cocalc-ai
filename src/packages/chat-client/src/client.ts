@@ -3,7 +3,12 @@
  * License: MS-RSL – see LICENSE.md for details
  */
 
-import { CHAT_PRIMARY_KEYS, CHAT_STRING_COLS } from "@cocalc/chat";
+import {
+  buildThreadConfigRecord,
+  CHAT_PRIMARY_KEYS,
+  CHAT_STRING_COLS,
+  type CodexThreadConfig,
+} from "@cocalc/chat";
 import type { AcpStreamMessage } from "@cocalc/conat/ai/acp/types";
 import type { Client as ConatClient } from "@cocalc/conat/core/client";
 import type { DStream } from "@cocalc/conat/sync/dstream";
@@ -151,12 +156,90 @@ export class CoCalcHeadlessChatClient implements HeadlessChatClient {
     this.rebuild();
   }
 
+  async createCodexThread(opts: {
+    thread_id: string;
+    name?: string;
+    acp_config: import("@cocalc/chat").CodexThreadConfig;
+  }): Promise<{ thread_id: string }> {
+    const db = this.db;
+    const threadId = opts.thread_id.trim();
+    if (!db?.isReady()) throw new Error("Chat is not ready.");
+    if (!threadId) throw new Error("thread_id is required");
+    const rows = db.get();
+    if (
+      Array.isArray(rows) &&
+      rows.some(
+        (row) =>
+          row?.event === "chat-thread-config" && row?.thread_id === threadId,
+      )
+    ) {
+      throw new Error(`thread '${threadId}' already exists`);
+    }
+    db.set(
+      buildThreadConfigRecord({
+        acp_config: opts.acp_config,
+        agent_kind: "acp",
+        agent_mode: "interactive",
+        agent_model: opts.acp_config.model,
+        name: opts.name?.trim() || "Codex chat",
+        thread_id: threadId,
+        updated_at: new Date().toISOString(),
+        updated_by: this.options.account_id,
+      }),
+    );
+    db.commit({ emitChangeImmediately: true });
+    await db.save();
+    this.selectedThreadId = threadId;
+    this.rebuild();
+    return { thread_id: threadId };
+  }
+
   async sendToExistingCodexThread(opts: {
     thread_id: string;
     text: string;
   }): Promise<{ message_id: string; thread_id: string }> {
     if (!this.sendPipeline) throw new Error("Chat is not ready.");
     return await this.sendPipeline.send(opts);
+  }
+
+  async sendGuidanceToCodexThread(opts: {
+    thread_id: string;
+    text: string;
+  }): Promise<{ message_id: string; thread_id: string }> {
+    if (!this.sendPipeline) throw new Error("Chat is not ready.");
+    return await this.sendPipeline.sendGuidance(opts);
+  }
+
+  async updateCodexThreadConfig(opts: {
+    thread_id: string;
+    acp_config: CodexThreadConfig;
+  }): Promise<void> {
+    const db = this.db;
+    const threadId = opts.thread_id.trim();
+    if (!db?.isReady()) throw new Error("Chat is not ready.");
+    const allRows = db.get();
+    const existing = Array.isArray(allRows)
+      ? allRows.find(
+          (row) =>
+            row?.event === "chat-thread-config" && row?.thread_id === threadId,
+        )
+      : undefined;
+    if (
+      !existing ||
+      (existing.agent_kind !== "acp" && existing.acp_config == null)
+    ) {
+      throw new Error("The selected thread is not an existing Codex thread.");
+    }
+    db.set({
+      ...existing,
+      acp_config: opts.acp_config,
+      agent_model: opts.acp_config.model ?? existing.agent_model,
+      updated_at: new Date().toISOString(),
+      updated_by: this.options.account_id,
+    });
+    this.commitOrThrow(db);
+    await db.save();
+    this.rebuild();
   }
 
   async interrupt(thread_id: string): Promise<void> {
@@ -194,6 +277,12 @@ export class CoCalcHeadlessChatClient implements HeadlessChatClient {
     this.sendPipeline = undefined;
     db?.removeListener("change", this.onChange);
     await db?.close();
+  }
+
+  private commitOrThrow(db: ImmerDB): void {
+    if (!db.commit({ emitChangeImmediately: true })) {
+      throw new Error("Unable to commit the chat change.");
+    }
   }
 
   private async waitUntilReady(db: ImmerDB): Promise<void> {

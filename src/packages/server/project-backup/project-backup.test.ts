@@ -7,6 +7,7 @@ let createBucketMock: jest.Mock;
 let listBucketsMock: jest.Mock;
 let deleteObjectMock: jest.Mock;
 let seedBackupConfigMock: jest.Mock;
+let rusticMock: jest.Mock;
 let settings: Record<string, any> = {};
 
 jest.mock("@cocalc/database/pool", () => ({
@@ -26,9 +27,20 @@ jest.mock("@cocalc/backend/data", () => ({
 }));
 
 jest.mock("fs/promises", () => ({
+  mkdtemp: jest.fn(async () => "/tmp/cocalc-backup-repo-init-test"),
   mkdir: jest.fn(async () => undefined),
   readFile: (...args: any[]) => readFileMock(...args),
+  rm: jest.fn(async () => undefined),
   writeFile: (...args: any[]) => writeFileMock(...args),
+}));
+
+jest.mock("@cocalc/backend/sandbox/rustic", () => ({
+  __esModule: true,
+  default: (...args: any[]) => rusticMock(...args),
+}));
+
+jest.mock("@cocalc/backend/sandbox/exec", () => ({
+  parseOutput: jest.fn((output) => output),
 }));
 
 jest.mock("./r2", () => ({
@@ -132,6 +144,11 @@ describe("project-backup", () => {
       toml: "seed-toml",
       ttl_seconds: 123,
       backup_repo_id: REPO_ID,
+    }));
+    rusticMock = jest.fn(async () => ({
+      stdout: "",
+      stderr: "",
+      code: 0,
     }));
     jest.doMock("@cocalc/database/settings/server-settings", () => ({
       __esModule: true,
@@ -638,6 +655,7 @@ describe("project-backup", () => {
       ),
     ).toBe(true);
     expect(settings.repos).toHaveLength(4);
+    expect(rusticMock).toHaveBeenCalledTimes(4);
     expect(settings.repos.map((repo: any) => repo.root)).toEqual([
       expect.stringMatching(/^rustic\/shared-wnam-0001-[0-9a-f-]{36}$/),
       expect.stringMatching(/^rustic\/shared-wnam-0002-[0-9a-f-]{36}$/),
@@ -645,6 +663,35 @@ describe("project-backup", () => {
       expect.stringMatching(/^rustic\/shared-wnam-0004-[0-9a-f-]{36}$/),
     ]);
     expect(result.toml).toContain('root = "rustic/shared-wnam-0001-');
+  });
+
+  it("does not publish a shared repo when initialization fails", async () => {
+    settings = {
+      r2_account_id: "account",
+      r2_api_token: "token",
+      r2_access_key_id: "access",
+      r2_secret_access_key: "secret",
+      r2_bucket_prefix: "cocalc-backups",
+      project_region: "wnam",
+      project_backup_repo_count: 0,
+      active_repo: false,
+      repo_secret: "repo-secret",
+      bucket_row_missing: true,
+    };
+    listBucketsMock = jest.fn(async () => []);
+    rusticMock.mockRejectedValueOnce(new Error("repository init failed"));
+    const { getBackupConfig } = await import("./index");
+
+    await expect(
+      getBackupConfig({ host_id: HOST_ID, project_id: PROJECT_ID }),
+    ).rejects.toThrow("repository init failed");
+    expect(
+      queryMock.mock.calls.some(
+        ([sql]) =>
+          typeof sql === "string" &&
+          sql.startsWith("INSERT INTO project_backup_repos"),
+      ),
+    ).toBe(false);
   });
 
   it("delegates project backup config to the seed bay from attached bays", async () => {

@@ -7,14 +7,14 @@ import { fromJS, List, Set } from "immutable";
 import { hash_string } from "@cocalc/util/misc";
 
 import {
-  buildMinimalMinimapEntries,
+  buildStudioMinimapEntries,
   computeMinimapLayout,
   getCellStatus,
   viewportFromSegments,
-} from "./minimal-minimap";
-import type { MinimalMinimapEntry, MinimapBarSegment } from "./minimal-minimap";
+} from "./studio-minimap";
+import type { StudioMinimapEntry, MinimapBarSegment } from "./studio-minimap";
 
-describe("minimal minimap cell state", () => {
+describe("studio minimap cell state", () => {
   it.each([
     [{ state: "busy" }, "running"],
     [{ state: "run" }, "queued"],
@@ -48,13 +48,13 @@ describe("minimal minimap cell state", () => {
   });
 });
 
-describe("buildMinimalMinimapEntries", () => {
+describe("buildStudioMinimapEntries", () => {
   it("uses cached heights and preserves current/selected state", () => {
     const cells = fromJS({
       a: { id: "a", cell_type: "code", input: "a", exec_count: 1 },
       b: { id: "b", cell_type: "markdown", input: "text" },
     });
-    const entries = buildMinimalMinimapEntries({
+    const entries = buildStudioMinimapEntries({
       cellList: List(["a", "b"]),
       cells,
       collapsedSections: new globalThis.Set(),
@@ -83,7 +83,7 @@ describe("buildMinimalMinimapEntries", () => {
       nested: { id: "nested", cell_type: "code", input: "2" },
       h2: { id: "h2", cell_type: "markdown", input: "# Two" },
     });
-    const entries = buildMinimalMinimapEntries({
+    const entries = buildStudioMinimapEntries({
       cellList: List(["h1", "code", "child", "nested", "h2"]),
       cells,
       collapsedSections: new globalThis.Set(["h1"]),
@@ -108,7 +108,7 @@ describe("buildMinimalMinimapEntries", () => {
       nested: { id: "nested", cell_type: "code", input: "2" },
       h2: { id: "h2", cell_type: "markdown", input: "# Two" },
     });
-    const entries = buildMinimalMinimapEntries({
+    const entries = buildStudioMinimapEntries({
       cellList: List(["h1", "code", "child", "nested", "h2"]),
       cells,
       collapsedSections: new globalThis.Set(["child"]),
@@ -128,7 +128,7 @@ describe("collapsed-section activity on the minimap", () => {
     h2: { id: "h2", cell_type: "markdown", input: "# Two" },
   };
   const build = (cells) =>
-    buildMinimalMinimapEntries({
+    buildStudioMinimapEntries({
       cellList: List(["h1", "a", "b", "h2"]),
       cells: fromJS(cells),
       collapsedSections: new globalThis.Set(["h1"]),
@@ -174,7 +174,7 @@ describe("collapsed-section activity on the minimap", () => {
 });
 
 describe("computeMinimapLayout", () => {
-  const entry = (id: string, pixelHeight: number): MinimalMinimapEntry => ({
+  const entry = (id: string, pixelHeight: number): StudioMinimapEntry => ({
     id,
     pixelHeight,
     status: "idle",

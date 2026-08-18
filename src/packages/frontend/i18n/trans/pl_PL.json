@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Przełącz minimalny widok notatnika",
   "jupyter.commands.toggle_minimap.menu": "Przełącz minimapę",
   "jupyter.commands.toggle_minimap.tooltip": "Pokaż lub ukryj minimapę notatnika.",
+  "jupyter.commands.toggle_studio_view.label": "Przełącz widok notatnika Studio",
   "jupyter.commands.validate.body": "Walidacja notatnika zrestartuje jądro i uruchomi wszystkie komórki po kolei, nawet te z błędami. Zapewni to, że wszystkie wyniki będą dokładnie takie, jakie wynikają z uruchomienia wszystkich komórek po kolei.",
   "jupyter.commands.validate.label": "Sprawdź",
   "jupyter.commands.validate.title": "Sprawdzić notebook?",

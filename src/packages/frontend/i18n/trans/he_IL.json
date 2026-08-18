@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "החלפת תצוגת מחברת מינימלית",
   "jupyter.commands.toggle_minimap.menu": "החלפת מצב מפת־מינימפה",
   "jupyter.commands.toggle_minimap.tooltip": "הצג או הסתר את מפת המינימפה של המחברת.",
+  "jupyter.commands.toggle_studio_view.label": "החלפת תצוגת מחברת Studio",
   "jupyter.commands.validate.body": "אימות המחברת יפעיל מחדש את הליבה ויריץ את כל התאים לפי הסדר, גם את אלו עם שגיאות. זה יבטיח שכל הפלט הוא בדיוק התוצאה של הרצת כל התאים לפי הסדר.",
   "jupyter.commands.validate.label": "אמת",
   "jupyter.commands.validate.title": "לאמת את המחברת?",

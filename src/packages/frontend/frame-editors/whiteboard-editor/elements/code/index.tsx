@@ -74,7 +74,7 @@ export default function Code({
 
   const renderInput = () => {
     if (hideInput) return;
-    if (!element.locked && (focused || cursors != null) && !readOnly) {
+    if (!element.locked && focused && !readOnly) {
       return (
         <div className="nodrag">
           <Input

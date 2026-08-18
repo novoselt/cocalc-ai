@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Minimal Defter Görünümünü Aç/Kapat",
   "jupyter.commands.toggle_minimap.menu": "Mini haritayı aç/kapat",
   "jupyter.commands.toggle_minimap.tooltip": "Defter mini haritasını göster veya gizle.",
+  "jupyter.commands.toggle_studio_view.label": "Studio Defter Görünümünü Değiştir",
   "jupyter.commands.validate.body": "Defteri doğrulamak, çekirdeği yeniden başlatacak ve hatalı olanlar da dahil olmak üzere tüm hücreleri sırasıyla çalıştıracaktır. Bu, tüm çıktıların tüm hücrelerin sırasıyla çalıştırılmasının sonuçlarıyla tam olarak aynı olmasını sağlayacaktır.",
   "jupyter.commands.validate.label": "Doğrula",
   "jupyter.commands.validate.title": "Defteri doğrula?",

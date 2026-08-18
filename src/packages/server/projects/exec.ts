@@ -12,7 +12,7 @@ import { inboxPrefix } from "@cocalc/conat/names";
 import { projectApiClient } from "@cocalc/conat/project/api";
 import type {
   ExecuteCodeOutput,
-  ExecuteCodeOptions,
+  ExecuteCodeRequest,
 } from "@cocalc/util/types/execute-code";
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
 import {
@@ -78,7 +78,7 @@ export default async function exec({
 }: {
   account_id: string;
   project_id: string;
-  execOpts: ExecuteCodeOptions;
+  execOpts: ExecuteCodeRequest;
 }): Promise<ExecuteCodeOutput> {
   const reference = await assertProjectCollaboratorAccessAllowRemote({
     account_id,
@@ -97,7 +97,10 @@ export default async function exec({
     const api = projectApiClient({
       client,
       project_id,
-      timeout: execOpts.timeout ? execOpts.timeout * 1000 + 2000 : undefined,
+      timeout:
+        "timeout" in execOpts && execOpts.timeout
+          ? execOpts.timeout * 1000 + 2000
+          : undefined,
     });
     return await api.system.exec(execOpts);
   } finally {

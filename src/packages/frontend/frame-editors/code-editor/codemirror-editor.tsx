@@ -27,6 +27,7 @@ import {
 } from "@cocalc/frontend/app-framework";
 import { initFold, saveFold } from "@cocalc/frontend/codemirror/util";
 import { MinimapHideButton } from "@cocalc/frontend/components/minimap-hide-button";
+import { canvasBackingStoreSize } from "@cocalc/frontend/components/canvas-backing-store";
 import { Cursors } from "@cocalc/frontend/jupyter/cursors";
 import { debounce, isEqual, throttle } from "lodash";
 import { cm_options } from "../codemirror/cm-options";
@@ -195,16 +196,21 @@ const CodeMirrorMinimap: React.FC<CodeMirrorMinimapProps> = React.memo(
         typeof window === "undefined"
           ? 1
           : Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-      const targetWidth = Math.max(1, Math.round(cssWidth * dpr));
-      const targetHeight = Math.max(1, Math.round(cssHeight * dpr));
-      if (canvas.width !== targetWidth) canvas.width = targetWidth;
-      if (canvas.height !== targetHeight) canvas.height = targetHeight;
+      const backingStore = canvasBackingStoreSize({
+        cssWidth,
+        cssHeight,
+        devicePixelRatio: dpr,
+      });
+      if (canvas.width !== backingStore.width)
+        canvas.width = backingStore.width;
+      if (canvas.height !== backingStore.height)
+        canvas.height = backingStore.height;
       canvas.style.width = `${cssWidth}px`;
       canvas.style.height = `${cssHeight}px`;
 
       const ctx = canvas.getContext("2d");
       if (ctx == null) return;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.setTransform(backingStore.scaleX, 0, 0, backingStore.scaleY, 0, 0);
       ctx.clearRect(0, 0, cssWidth, cssHeight);
       ctx.fillStyle = "rgba(248,250,252,0.96)";
       ctx.fillRect(0, 0, cssWidth, cssHeight);

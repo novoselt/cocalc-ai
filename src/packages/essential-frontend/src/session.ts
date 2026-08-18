@@ -32,6 +32,7 @@ export class UltraliteSession {
   readonly accountId: string;
   readonly browserId = crypto.randomUUID();
   readonly hubApi: HubApi;
+  readonly jupyterLineNumbers: boolean;
   private readonly hubClient: Client;
   private readonly projectHosts: ProjectHostClientManager;
 
@@ -39,16 +40,19 @@ export class UltraliteSession {
     accountId,
     hubClient,
     hubApi,
+    jupyterLineNumbers,
     projectHosts,
   }: {
     accountId: string;
     hubClient: Client;
     hubApi: HubApi;
+    jupyterLineNumbers: boolean;
     projectHosts: ProjectHostClientManager;
   }) {
     this.accountId = accountId;
     this.hubClient = hubClient;
     this.hubApi = hubApi;
+    this.jupyterLineNumbers = jupyterLineNumbers;
     this.projectHosts = projectHosts;
   }
 
@@ -115,6 +119,7 @@ export class UltraliteSession {
         accountId,
         hubClient,
         hubApi,
+        jupyterLineNumbers: bootstrap.jupyter_line_numbers === true,
         projectHosts,
       });
     } catch (err) {

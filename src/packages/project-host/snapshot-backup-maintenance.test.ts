@@ -83,16 +83,17 @@ describe("snapshot-backup-maintenance", () => {
     runScheduledBackupMaintenanceMock.mockResolvedValue(undefined);
     releaseStorageOperationMock.mockReset();
     admitStorageOperationMock.mockImplementation(
-      ({ operation_kind, project_id }) => ({
+      ({ operation_kind, project_id, allow_starvation_override }) => ({
         admitted: true,
         would_defer: false,
+        starvation_override: !!allow_starvation_override,
         operation_id: `${operation_kind}:${project_id}`,
         release: releaseStorageOperationMock,
       }),
     );
   });
 
-  it("defers the whole sweep once while admission enforces pressure", async () => {
+  it("keeps emergency sweeps bounded and fail-closed", async () => {
     getStorageAdmissionStatusMock.mockReturnValue({
       mode: "enforce",
       lifecycle_active: 0,
@@ -103,7 +104,11 @@ describe("snapshot-backup-maintenance", () => {
 
     await runProjectSnapshotBackupMaintenanceSweepOnce({ hostId: "host-1" });
 
-    expect(listProjectMaintenanceSchedulesMock).not.toHaveBeenCalled();
+    expect(listProjectMaintenanceSchedulesMock).toHaveBeenCalledWith({
+      host_id: "host-1",
+      active_days: 2,
+      limit: 32,
+    });
     expect(admitStorageOperationMock).not.toHaveBeenCalled();
   });
 
@@ -124,6 +129,7 @@ describe("snapshot-backup-maintenance", () => {
     expect(listProjectMaintenanceSchedulesMock).toHaveBeenCalledWith({
       host_id: "host-1",
       active_days: 2,
+      limit: 32,
     });
     expect(runScheduledSnapshotMaintenanceMock).toHaveBeenCalledTimes(1);
     expect(runScheduledSnapshotMaintenanceMock).toHaveBeenCalledWith({
@@ -150,10 +156,12 @@ describe("snapshot-backup-maintenance", () => {
     expect(admitStorageOperationMock).toHaveBeenCalledWith({
       operation_kind: "scheduled_snapshot",
       project_id: "proj-1",
+      allow_starvation_override: false,
     });
     expect(admitStorageOperationMock).toHaveBeenCalledWith({
       operation_kind: "scheduled_backup",
       project_id: "proj-2",
+      allow_starvation_override: false,
     });
     expect(releaseStorageOperationMock).toHaveBeenCalledTimes(2);
   });
@@ -358,5 +366,70 @@ describe("snapshot-backup-maintenance", () => {
     expect(runScheduledBackupMaintenanceMock).toHaveBeenCalledTimes(1);
     expect(admitStorageOperationMock).toHaveBeenCalledTimes(2);
     expect(releaseStorageOperationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits only one overdue backup during a lifecycle-restricted sweep", async () => {
+    getStorageAdmissionStatusMock.mockReturnValue({
+      mode: "enforce",
+      lifecycle_active: 1,
+      pressure_state: "normal",
+    });
+    listProjectMaintenanceSchedulesMock.mockResolvedValue([
+      {
+        project_id: "old-1",
+        backup_due_since: "2026-04-01T00:00:00.000Z",
+        snapshots: {},
+        backups: {},
+      },
+      {
+        project_id: "old-2",
+        backup_due_since: "2026-04-02T00:00:00.000Z",
+        snapshots: {},
+        backups: {},
+      },
+      {
+        project_id: "recent",
+        backup_due_since: new Date().toISOString(),
+        snapshots: {},
+        backups: {},
+      },
+    ]);
+    const { runProjectSnapshotBackupMaintenanceSweepOnce } =
+      await import("./snapshot-backup-maintenance");
+
+    await runProjectSnapshotBackupMaintenanceSweepOnce({ hostId: "host-1" });
+
+    expect(runScheduledSnapshotMaintenanceMock).not.toHaveBeenCalled();
+    expect(runScheduledBackupMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(runScheduledBackupMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ project_id: "old-1" }),
+    );
+    expect(admitStorageOperationMock).toHaveBeenCalledWith({
+      operation_kind: "scheduled_backup",
+      project_id: "old-1",
+      allow_starvation_override: true,
+    });
+  });
+
+  it("does not overlap sweeps", async () => {
+    let releaseRows!: (rows: any[]) => void;
+    listProjectMaintenanceSchedulesMock.mockReturnValue(
+      new Promise<any[]>((resolve) => {
+        releaseRows = resolve;
+      }),
+    );
+    const { runProjectSnapshotBackupMaintenanceSweepOnce } =
+      await import("./snapshot-backup-maintenance");
+
+    const first = runProjectSnapshotBackupMaintenanceSweepOnce({
+      hostId: "host-1",
+    });
+    const second = runProjectSnapshotBackupMaintenanceSweepOnce({
+      hostId: "host-1",
+    });
+    expect(listProjectMaintenanceSchedulesMock).toHaveBeenCalledTimes(1);
+
+    releaseRows([]);
+    await Promise.all([first, second]);
   });
 });

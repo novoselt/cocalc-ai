@@ -3,13 +3,88 @@
  * License: MS-RSL - see LICENSE.md for details
  */
 
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import {
+  Component,
+  type AnchorHTMLAttributes,
+  type ErrorInfo,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import type { AccountProjectListWindowRow } from "@cocalc/conat/hub/api/projects";
 import { essentialRouteUrl, navigate, type UltraliteRoute } from "./routes";
 import { fullProjectUrl, siteUrl } from "./urls";
 import { UltraliteIcon, type UltraliteIconName } from "./icons";
 import { recordUltraliteOutcome } from "./telemetry";
 import { useEssentialTheme } from "./theme-context";
+
+export function EssentialLink({
+  children,
+  route,
+  ...props
+}: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href" | "onClick"> & {
+  route: UltraliteRoute;
+}) {
+  return (
+    <a
+      {...props}
+      href={essentialRouteUrl(route)}
+      onClick={(event: MouseEvent<HTMLAnchorElement>) => {
+        if (
+          event.defaultPrevented ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey ||
+          (props.target != null && props.target !== "_self") ||
+          props.download !== undefined
+        ) {
+          return;
+        }
+        event.preventDefault();
+        navigate(route);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+export function OverflowMenu({
+  children,
+  className = "",
+  label = "More actions",
+  summary,
+}: {
+  children: ReactNode;
+  className?: string;
+  label?: string;
+  summary?: ReactNode;
+}) {
+  return (
+    <details
+      className={`ul-overflow ${className}`.trim()}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.currentTarget.removeAttribute("open");
+        event.currentTarget.querySelector<HTMLElement>("summary")?.focus();
+      }}
+    >
+      <summary aria-label={label} title={label}>
+        {summary ?? <UltraliteIcon name="more" />}
+      </summary>
+      <div
+        className="ul-overflow-panel"
+        onClick={(event) =>
+          event.currentTarget.parentElement?.removeAttribute("open")
+        }
+      >
+        {children}
+      </div>
+    </details>
+  );
+}
 
 export function ThemeControl() {
   const { preference, setPreference } = useEssentialTheme();
@@ -44,30 +119,26 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
           {projectTitle}
         </div>
       ) : (
-        <a
+        <EssentialLink
           className="ul-topbar-title ul-topbar-title-link"
-          href={essentialRouteUrl({ kind: "projects" })}
-          onClick={(event) => {
-            event.preventDefault();
-            navigate({ kind: "projects" });
-          }}
+          route={{ kind: "projects" }}
         >
           Projects
-        </a>
+        </EssentialLink>
       )}
       <span className="ul-mode">Essential</span>
-      <a
+      <EssentialLink className="ul-topbar-link" route={{ kind: "docs" }}>
+        <UltraliteIcon name="docs" size={16} />
+        Docs
+      </EssentialLink>
+      <EssentialLink
         aria-label="Notifications"
         className="ul-topbar-link"
-        href={essentialRouteUrl({ kind: "notifications" })}
-        onClick={(event) => {
-          event.preventDefault();
-          navigate({ kind: "notifications" });
-        }}
+        route={{ kind: "notifications" }}
       >
         <UltraliteIcon name="bell" size={16} />
         Notifications
-      </a>
+      </EssentialLink>
       <a className="ul-topbar-link" data-ul-full-cocalc href={siteUrl("app")}>
         Full CoCalc
         <UltraliteIcon name="external" size={15} />
@@ -77,7 +148,7 @@ export function TopBar({ projectTitle }: { projectTitle?: string }) {
   );
 }
 
-const NAV: Array<{
+interface PrimaryNavItem {
   icon: UltraliteIconName;
   kind:
     | "agents"
@@ -90,12 +161,21 @@ const NAV: Array<{
     | "terminal"
     | "vms";
   label: string;
-}> = [
+}
+
+const PRIMARY_NAV: PrimaryNavItem[] = [
   { icon: "folder", kind: "files", label: "Files" },
-  { icon: "recent", kind: "recent", label: "Recent" },
   { icon: "chat", kind: "agents", label: "Codex" },
   { icon: "notebook", kind: "notebooks", label: "Jupyter" },
   { icon: "terminal", kind: "terminal", label: "Terminal" },
+];
+
+const SECONDARY_NAV: Array<
+  Omit<PrimaryNavItem, "kind"> & {
+    kind: "apps" | "cli" | "recent" | "settings" | "vms";
+  }
+> = [
+  { icon: "recent", kind: "recent", label: "Recent" },
   { icon: "server", kind: "vms", label: "VMs" },
   { icon: "apps", kind: "apps", label: "Apps" },
   { icon: "code", kind: "cli", label: "CLI" },
@@ -109,43 +189,58 @@ export function ProjectRail({
   active: UltraliteRoute["kind"];
   project: AccountProjectListWindowRow;
 }) {
+  const secondarySelected = SECONDARY_NAV.some(({ kind }) => active === kind);
   return (
     <nav aria-label="Project tools" className="ul-project-rail">
-      <button
-        className="ul-rail-item"
-        onClick={() => navigate({ kind: "projects" })}
-        type="button"
-      >
+      <EssentialLink className="ul-rail-item" route={{ kind: "projects" }}>
         <UltraliteIcon name="projects" />
         <span>Projects</span>
-      </button>
+      </EssentialLink>
       <div aria-hidden="true" className="ul-rail-rule" />
-      {NAV.map(({ icon, kind, label }) => {
+      {PRIMARY_NAV.map(({ icon, kind, label }) => {
         const selected =
           active === kind || (kind === "files" && active === "file");
         return (
-          <button
+          <EssentialLink
             aria-current={selected ? "page" : undefined}
             className={`ul-rail-item ${selected ? "ul-rail-item-active" : ""}`}
             key={kind}
-            onClick={() =>
-              navigate(
-                kind === "files"
-                  ? {
-                      kind: "files",
-                      projectId: project.project_id,
-                      path: "/home/user",
-                    }
-                  : { kind, projectId: project.project_id },
-              )
+            route={
+              kind === "files"
+                ? {
+                    kind: "files",
+                    projectId: project.project_id,
+                    path: "/home/user",
+                  }
+                : { kind, projectId: project.project_id }
             }
-            type="button"
           >
             <UltraliteIcon name={icon} />
             <span>{label}</span>
-          </button>
+          </EssentialLink>
         );
       })}
+      <OverflowMenu
+        className={`ul-rail-more ${secondarySelected ? "ul-rail-more-active" : ""}`}
+        label="More project tools"
+        summary={
+          <>
+            <UltraliteIcon name="more" />
+            <span>More</span>
+          </>
+        }
+      >
+        {SECONDARY_NAV.map(({ icon, kind, label }) => (
+          <EssentialLink
+            className="ul-menu-item"
+            key={kind}
+            route={{ kind, projectId: project.project_id }}
+          >
+            <UltraliteIcon name={icon} size={16} />
+            {label}
+          </EssentialLink>
+        ))}
+      </OverflowMenu>
       <a
         className="ul-rail-item ul-rail-full"
         data-ul-full-cocalc

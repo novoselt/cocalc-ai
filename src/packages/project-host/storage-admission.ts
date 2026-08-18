@@ -54,12 +54,14 @@ type StorageAdmissionInputs = {
 export type StorageAdmissionRequest = {
   operation_kind: StorageOperationKind;
   project_id?: string;
+  allow_starvation_override?: boolean;
 };
 
 export type StorageAdmissionTicket = {
   admitted: boolean;
   would_defer: boolean;
   reason?: string;
+  starvation_override: boolean;
   operation_id: string;
   release: () => void;
 };
@@ -80,7 +82,9 @@ type StorageAdmissionControllerOptions = {
 export interface StorageAdmissionController {
   sample: () => HostStorageAdmissionMetrics;
   admit: (request: StorageAdmissionRequest) => StorageAdmissionTicket;
-  backgroundDeferralReason: () => string | undefined;
+  backgroundDeferralReason: (request?: {
+    allow_starvation_override?: boolean;
+  }) => string | undefined;
   getStatus: () => HostStorageAdmissionMetrics;
 }
 
@@ -400,13 +404,34 @@ export function createStorageAdmissionController(
     return undefined;
   };
 
-  const backgroundDeferralReason = (): string | undefined => {
-    return backgroundReason(sample());
+  const starvationOverrideAllowed = (
+    current: HostStorageAdmissionMetrics,
+    requested: boolean | undefined,
+  ): boolean => {
+    return (
+      requested === true &&
+      current.pressure_state !== "emergency" &&
+      !current.sample_error
+    );
+  };
+
+  const backgroundDeferralReason = ({
+    allow_starvation_override,
+  }: {
+    allow_starvation_override?: boolean;
+  } = {}): string | undefined => {
+    const current = sample();
+    const reason = backgroundReason(current);
+    return reason &&
+      starvationOverrideAllowed(current, allow_starvation_override)
+      ? undefined
+      : reason;
   };
 
   const admit = ({
     operation_kind,
     project_id,
+    allow_starvation_override,
   }: StorageAdmissionRequest): StorageAdmissionTicket => {
     const current = sample();
     const spec = getStorageOperationSpec(operation_kind);
@@ -414,7 +439,12 @@ export function createStorageAdmissionController(
       spec.priority === "scheduled" || spec.priority === "scavenger";
     const reason = background ? backgroundReason(current) : undefined;
     const wouldDefer = reason != null;
-    const admitted = mode !== "enforce" || !wouldDefer;
+    const starvationOverride =
+      background &&
+      operation_kind === "scheduled_backup" &&
+      wouldDefer &&
+      starvationOverrideAllowed(current, allow_starvation_override);
+    const admitted = mode !== "enforce" || !wouldDefer || starvationOverride;
     if (admitted) {
       admittedTotal += 1;
       activeByPriority[spec.priority] += 1;
@@ -441,6 +471,7 @@ export function createStorageAdmissionController(
       admitted,
       would_defer: wouldDefer,
       ...(reason ? { reason } : {}),
+      starvation_override: starvationOverride,
       operation_id: operationId,
       release: () => {
         if (released || !admitted) return;
@@ -506,8 +537,12 @@ export function startStorageAdmissionController(): () => void {
   activeController = createStorageAdmissionController({
     onPressureStateChange: setProjectPoolPressurePolicy,
   });
-  configureBtrfsBackgroundMutationGuard(() =>
-    activeController?.backgroundDeferralReason(),
+  configureBtrfsBackgroundMutationGuard((context) =>
+    activeController?.backgroundDeferralReason({
+      allow_starvation_override:
+        context.operation_class === "scheduled_backup" &&
+        context.starvation_override,
+    }),
   );
   // Reconcile even when the initial sample is normal; /run state may have
   // survived a project-host restart but not the controller's in-memory state.

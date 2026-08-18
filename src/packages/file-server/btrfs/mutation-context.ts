@@ -13,6 +13,7 @@ export type BtrfsMutationContext = {
   operation_class?: string;
   cgroup_path?: string;
   checkpointable?: boolean;
+  starvation_override?: boolean;
   yield_requested?: boolean;
   lifecycle_backlog?: number;
   // A short, indivisible Btrfs transaction currently owns the filesystem

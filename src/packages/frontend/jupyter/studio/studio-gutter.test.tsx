@@ -24,7 +24,7 @@ jest.mock("@cocalc/frontend/components/sortable-list", () => ({
   DragHandle: ({ children }) => <div data-testid="drag-handle">{children}</div>,
 }));
 
-import { MinimalGutter } from "./minimal-gutter";
+import { StudioGutter } from "./studio-gutter";
 
 function renderGutter(overrides: any = {}) {
   const props = {
@@ -40,11 +40,11 @@ function renderGutter(overrides: any = {}) {
     onInsertCell: jest.fn(),
     ...overrides,
   };
-  render(<MinimalGutter {...props} />);
+  render(<StudioGutter {...props} />);
   return props;
 }
 
-describe("MinimalGutter", () => {
+describe("StudioGutter", () => {
   it("runs idle cells and inserts a cell below", () => {
     const props = renderGutter();
     expect(screen.getByText("3")).toBeInTheDocument();
@@ -74,7 +74,7 @@ describe("MinimalGutter", () => {
   });
 
   it("installs a drag handle only for movable cells", () => {
-    // same rule as canShowCellDragHandle in the regular notebook view
+    // same rule as canShowCellDragHandle in the classic notebook view
     renderGutter();
     expect(screen.getByTestId("drag-handle")).toBeInTheDocument();
   });
