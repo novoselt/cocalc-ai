@@ -16,6 +16,7 @@ import { FakeSyncstring } from "./syncstring-fake";
 import { type UserSearchResult as User } from "@cocalc/util/db-schema/accounts";
 export { type User };
 import type { ExecOpts, ExecOutput } from "@cocalc/util/db-schema/projects";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 export type { ExecOpts, ExecOutput };
 import * as schema from "@cocalc/util/schema";
 import { DEFAULT_FONT_SIZE } from "@cocalc/util/db-schema";
@@ -31,6 +32,46 @@ export async function exec(
 ): Promise<ExecOutput> {
   void _filePath;
   return await webapp_client.project_client.exec(opts);
+}
+
+type CancelExecJobOptions<T> = {
+  project_id: string;
+  job: T;
+};
+
+export function cancel_exec_job(
+  opts: CancelExecJobOptions<ExecOutput>,
+): Promise<ExecOutput>;
+export function cancel_exec_job(
+  opts: CancelExecJobOptions<ExecuteCodeOutputAsync>,
+): Promise<ExecuteCodeOutputAsync>;
+export async function cancel_exec_job({
+  project_id,
+  job,
+}: CancelExecJobOptions<ExecOutput | ExecuteCodeOutputAsync>): Promise<
+  ExecOutput | ExecuteCodeOutputAsync
+> {
+  if (job.type !== "async" || job.status !== "running") return job;
+  try {
+    const output = await exec({ project_id, async_cancel: job.job_id });
+    if (output.type === "async") return output;
+    throw Error("async_cancel returned a blocking result");
+  } catch {
+    // Compatibility with project backends from before async_cancel existed.
+    if (typeof job.pid === "number") {
+      try {
+        await exec({
+          project_id,
+          command: `kill -9 -${job.pid}`,
+          bash: true,
+          err_on_exit: false,
+        });
+      } catch {
+        // The process may already have exited.
+      }
+    }
+    return { ...job, status: "killed", exit_code: job.exit_code || 1 };
+  }
 }
 
 export async function touch(project_id: string, path: string): Promise<void> {

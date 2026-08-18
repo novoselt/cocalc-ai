@@ -15,7 +15,7 @@ import {
   type CodeEditorState,
 } from "../base-editor/actions-text";
 import type { FrameTree } from "../frame-tree/types";
-import { exec, type ExecOutput } from "../generic/client";
+import { cancel_exec_job, type ExecOutput } from "../generic/client";
 import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Actions as MarkdownActions } from "../markdown-editor/actions";
 import { checkProducedFiles } from "../rmd-editor/utils";
@@ -140,21 +140,12 @@ export class Actions extends MarkdownActions {
       job_info.status === "running" &&
       typeof job_info.job_id === "string"
     ) {
-      try {
-        const output = await exec({
-          project_id: this.project_id,
-          async_cancel: job_info.job_id,
-        });
-        if (output.type === "async") {
-          this.setState({ job_info: output });
-        }
-      } catch (err) {
-        // Preserve the local stop result if the authoritative job disappeared.
-        const updated_job_info: ExecuteCodeOutputAsync = {
-          ...job_info,
-          status: "killed",
-        };
-        this.setState({ job_info: updated_job_info });
+      const output = await cancel_exec_job({
+        project_id: this.project_id,
+        job: job_info,
+      });
+      if (output.type === "async") {
+        this.setState({ job_info: output });
       }
     }
     this.set_status("");

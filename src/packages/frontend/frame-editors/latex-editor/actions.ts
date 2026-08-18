@@ -51,7 +51,7 @@ import { print_html } from "@cocalc/frontend/frame-editors/frame-tree/print";
 import { FrameTree } from "@cocalc/frontend/frame-editors/frame-tree/types";
 import { raw_url } from "@cocalc/frontend/frame-editors/frame-tree/util";
 import {
-  exec,
+  cancel_exec_job,
   project_api,
   server_time,
 } from "@cocalc/frontend/frame-editors/generic/client";
@@ -982,22 +982,10 @@ export class Actions extends BaseActions<LatexEditorState> {
   }
 
   private async kill(job: ExecOutput): Promise<ExecOutput> {
-    if (job.type !== "async") return job;
-    const { job_id, status } = job;
-    if (status === "running") {
-      try {
-        return await exec({
-          project_id: this.project_id,
-          async_cancel: job_id,
-        });
-      } catch (err) {
-        // likely "No such process", we just ignore it
-      } finally {
-        // set this build log to be no longer running
-        job.status = "killed";
-      }
-    }
-    return job;
+    return await cancel_exec_job({
+      project_id: this.project_id,
+      job,
+    });
   }
 
   // This stops all known jobs with a status "running" and resets the state.
