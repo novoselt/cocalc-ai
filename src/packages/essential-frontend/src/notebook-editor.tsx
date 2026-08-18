@@ -46,7 +46,7 @@ import {
   type NotebookOutput,
 } from "./notebook-view";
 import type { NotebookBlobResolver } from "./notebook-blobs";
-import { InlineAlert, LoadingState } from "./ui";
+import { InlineAlert, LoadingState, OverflowMenu } from "./ui";
 import useEditCheckpoint from "./use-edit-checkpoint";
 import { ULTRALITE_BEFORE_NAVIGATE } from "./routes";
 import {
@@ -59,6 +59,11 @@ import type {
   ExternalMergeHandle,
   ExternalMergeResult,
 } from "./external-merge";
+import {
+  essentialDiagnosticErrorDetails,
+  essentialDiagnosticsSnapshot,
+  recordEssentialDiagnostic,
+} from "./diagnostics";
 
 const MAX_OUTPUT_TEXT = 100_000;
 const MAX_OUTPUT_IMAGE = 7 * 1024 * 1024;
@@ -194,6 +199,7 @@ function NotebookCellEditor({
   editorRef,
   index,
   language,
+  lineNumbers,
   onChange,
   onSave,
   path,
@@ -205,6 +211,7 @@ function NotebookCellEditor({
   editorRef: RefCallback<CodeMirrorEditorHandle>;
   index: number;
   language?: ReturnType<typeof notebookCodeLanguage>;
+  lineNumbers: boolean;
   onChange: (value: string) => void;
   onSave: () => void;
   path: string;
@@ -220,6 +227,7 @@ function NotebookCellEditor({
       className="ul-notebook-cm"
       initialValue={initialValue}
       language={cell.cell_type === "markdown" ? "markdown" : language}
+      lineNumbers={lineNumbers}
       onChange={onChange}
       onCursorChange={() => undefined}
       onDirtyChange={() => undefined}
@@ -283,6 +291,17 @@ function NotebookEditor(
   const [kernelStatus, setKernelStatus] = useState("not started");
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [lineNumbers, setLineNumbers] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(
+        `cocalc-essential:jupyter-line-numbers:${session.accountId}:${project.project_id}:${path}`,
+      );
+      if (stored != null) return stored === "true";
+    } catch {
+      // Browser storage may be unavailable; the account preference still works.
+    }
+    return session.jupyterLineNumbers === true;
+  });
   const [editorEpoch, setEditorEpoch] = useState(0);
   const [editingMarkdownCells, setEditingMarkdownCells] = useState<Set<string>>(
     () => new Set(),
@@ -297,11 +316,34 @@ function NotebookEditor(
   const completedLiveRunIds = useRef(new Set<string>());
   const directRunId = useRef<string | undefined>(undefined);
   const dirtyRef = useRef(dirty);
+  const runningRef = useRef(running);
   const processLiveRuns = useRef<() => void>(() => undefined);
   const projectApi = useRef<
     Awaited<ReturnType<UltraliteSession["openProjectApi"]>>["api"] | undefined
   >(undefined);
   dirtyRef.current = dirty;
+  runningRef.current = running;
+  const runningCellIndex = notebook.cells.findIndex(
+    ({ id }) => id === runningCell,
+  );
+
+  useEffect(() => {
+    recordEssentialDiagnostic("notebook", "opened", {
+      cell_count: notebook.cells.length,
+      read_only: readOnly,
+    });
+    return () => recordEssentialDiagnostic("notebook", "closed");
+  }, []);
+
+  useEffect(() => {
+    recordEssentialDiagnostic("notebook", "state", {
+      dirty,
+      execution: running ? "running" : "idle",
+      kernel: kernelStatus,
+      running_cell: runningCellIndex >= 0 ? runningCellIndex + 1 : null,
+      saving,
+    });
+  }, [dirty, kernelStatus, running, runningCellIndex, saving]);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -687,8 +729,19 @@ function NotebookEditor(
           void opened.api.jupyter
             .getKernelStatus({ path: syncdbPath(path) })
             .then((status) => {
-              if (!disposed && !directRunId.current && !recovering) {
+              if (
+                !disposed &&
+                !runningRef.current &&
+                !directRunId.current &&
+                !recovering
+              ) {
                 setKernelStatus(kernelStatusLabel(status));
+              } else if (!disposed) {
+                recordEssentialDiagnostic(
+                  "notebook",
+                  "ignored_stale_kernel_status",
+                  { discovered: kernelStatusLabel(status) },
+                );
               }
             })
             .catch(() => {
@@ -738,6 +791,9 @@ function NotebookEditor(
     setError(undefined);
     setNotice(undefined);
     setKernelStatus("checking notebook");
+    recordEssentialDiagnostic("notebook", "run_requested", {
+      cell_count: indexes.length,
+    });
     const runId = crypto.randomUUID();
     let accepted = false;
     let completed = false;
@@ -791,6 +847,9 @@ function NotebookEditor(
         run_id: runId,
       });
       accepted = true;
+      recordEssentialDiagnostic("notebook", "run_accepted", {
+        cell_count: inputs.length,
+      });
       for await (const messages of iterator) {
         if (
           messages.some(
@@ -810,6 +869,7 @@ function NotebookEditor(
           "The direct execution connection closed. The kernel is still tracked on the project host; this view is reattaching without running cells again.",
         );
         processLiveRuns.current();
+        recordEssentialDiagnostic("notebook", "run_detached");
         return;
       }
       completedLiveRunIds.current.add(runId);
@@ -831,8 +891,13 @@ function NotebookEditor(
       setDirty(false);
       setKernelStatus("idle");
       setNotice("Execution finished and notebook outputs were saved.");
+      recordEssentialDiagnostic("notebook", "run_completed");
       recordUltraliteOutcome("notebook_execute", "notebook_execute");
     } catch (err: any) {
+      recordEssentialDiagnostic("notebook", "run_failed", {
+        accepted,
+        ...essentialDiagnosticErrorDetails(err),
+      });
       recordUltraliteFailure("notebook_execute", err);
       if (accepted && !completed && err?.code !== "ETAG_MISMATCH") {
         detached = true;
@@ -925,9 +990,42 @@ function NotebookEditor(
     .filter((index) => index >= 0);
   const codeLanguage = notebookCodeLanguage(notebook);
   const diskBlocked = conflict || externalChanged;
+  const toggleLineNumbers = () => {
+    setLineNumbers((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(
+          `cocalc-essential:jupyter-line-numbers:${session.accountId}:${project.project_id}:${path}`,
+          `${next}`,
+        );
+      } catch {
+        // Keep the in-memory preference when browser storage is unavailable.
+      }
+      return next;
+    });
+  };
+  const copyDiagnostics = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        JSON.stringify(essentialDiagnosticsSnapshot(), null, 2),
+      );
+      setNotice("Essential diagnostics copied.");
+    } catch (err) {
+      recordEssentialDiagnostic("notebook", "copy_diagnostics_failed", {
+        ...essentialDiagnosticErrorDetails(err),
+      });
+      setError("Unable to copy Essential diagnostics.");
+    }
+  };
 
   return (
-    <div>
+    <div
+      data-dirty={dirty}
+      data-essential-surface="notebook"
+      data-execution-state={running ? "running" : "idle"}
+      data-kernel-status={kernelStatus}
+      data-testid="essential-notebook-state"
+    >
       <div className="ul-file-view-header">
         <div className="ul-toolbar">
           {onReadOnlyView ? (
@@ -950,7 +1048,15 @@ function NotebookEditor(
           <button
             className="ul-button ul-button-secondary"
             disabled={readOnly || running || diskBlocked || !codeIndexes.length}
-            onClick={() => void runCells(codeIndexes)}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Run all ${codeIndexes.length} code ${codeIndexes.length === 1 ? "cell" : "cells"}?`,
+                )
+              ) {
+                void runCells(codeIndexes);
+              }
+            }}
             type="button"
           >
             Run all
@@ -964,6 +1070,23 @@ function NotebookEditor(
               Interrupt
             </button>
           ) : null}
+          <OverflowMenu label="More notebook actions">
+            <button
+              aria-pressed={lineNumbers}
+              className="ul-menu-item"
+              onClick={toggleLineNumbers}
+              type="button"
+            >
+              {lineNumbers ? "Hide" : "Show"} line numbers
+            </button>
+            <button
+              className="ul-menu-item"
+              onClick={() => void copyDiagnostics()}
+              type="button"
+            >
+              Copy diagnostics
+            </button>
+          </OverflowMenu>
         </div>
         <span aria-live="polite" className="ul-editor-status">
           Kernel: {kernelStatus}
@@ -1001,10 +1124,11 @@ function NotebookEditor(
           return (
             <section className="ul-cell" key={`${editorEpoch}:${cellKey}`}>
               <div className="ul-cell-toolbar">
-                <span className="ul-cell-label">
-                  {cell.cell_type || "code"} cell {index + 1}
-                  {runningCell === cell.id ? " · running" : ""}
-                </span>
+                {runningCell === cell.id ? (
+                  <span className="ul-cell-label">Running</span>
+                ) : (
+                  <span className="ul-cell-toolbar-spacer" />
+                )}
                 {cell.cell_type === "code" ? (
                   <button
                     className="ul-icon-button"
@@ -1108,6 +1232,7 @@ function NotebookEditor(
                   }}
                   index={index}
                   language={codeLanguage}
+                  lineNumbers={lineNumbers}
                   onChange={(source) => updateCell(index, { source })}
                   onSave={() => void save()}
                   path={path}
@@ -1129,7 +1254,7 @@ function NotebookEditor(
       </div>
       {!readOnly ? (
         <div className="ul-toolbar ul-notebook-add">
-          {(["code", "markdown", "raw"] as const).map((cellType) => (
+          {(["code", "markdown"] as const).map((cellType) => (
             <button
               className="ul-button ul-button-secondary"
               disabled={running}

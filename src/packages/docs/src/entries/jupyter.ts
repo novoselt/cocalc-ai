@@ -8,6 +8,7 @@ import { docsIcon, projectActionParameters } from "../helpers";
 import {
   CREATE_JUPYTER_BODY,
   CUSTOM_JUPYTER_KERNELS_BODY,
+  JUPYTER_STUDIO_BODY,
   OCTAVE_JUPYTER_KERNEL_BODY,
   USE_JUPYTER_BODY,
 } from "../content";
@@ -62,6 +63,22 @@ export const JUPYTER_ENTRIES: DocsEntry[] = [
     summary:
       "Use collaborative durable Jupyter notebooks inside CoCalc projects.",
     title: "Use Jupyter notebooks",
+  },
+  {
+    audiences: ["instructors", "researchers", "students", "teams"],
+    body: JUPYTER_STUDIO_BODY.trim(),
+    category: "Jupyter",
+    id: "jupyter.studio-view",
+    lastReviewed: "2026-08-17",
+    noActionReason:
+      "The Studio view is a per-frame layout choice made inside an open notebook.",
+    searchKeywords:
+      "studio view reading mode notebook layout minimap table of contents sections markdown headings fold collapse run section presentation output focused classic view frame",
+    slug: "jupyter/studio-view",
+    status: "ready",
+    summary:
+      "Navigate, run, and present a notebook in the content-first Studio view, with markdown headings as sections.",
+    title: "The Studio notebook view",
   },
   {
     audiences: ["agents", "instructors", "researchers", "students"],

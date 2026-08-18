@@ -12,6 +12,21 @@ When doing development, use `pnpm run tsc` to watch for typescript errors \(or j
 pnpm run tsc
 ```
 
+### Essential browser integration tests
+
+With the local hub running, the Essential Jupyter tests create a hidden
+notebook fixture in the development project and execute it through Chromium
+and the real project kernel:
+
+```sh
+pnpm essential:test:e2e
+```
+
+The test command discovers the local hub environment, creates an authenticated
+browser state, and retains a Playwright trace plus sanitized Essential
+diagnostics when a test fails. Set `COCALC_ESSENTIAL_E2E_BASE_URL` or
+`COCALC_ESSENTIAL_E2E_PROJECT_ID` to override the discovered targets.
+
 ALSO, run `pnpm run tsc` in the `packages/frontend` directory, if you are editing that code, which is likely if you're reading this file.
 
 Use `pnpm webpack-prod` to build and test the production version:
@@ -53,7 +68,7 @@ Set the env variable `NO_WEBPACK_DEV_SERVER:`
 ~/cocalc/src$ NO_WEBPACK_DEV_SERVER=true pnpm hub
 ```
 
-You will need to manually build the webpack assets, e.g., via 
+You will need to manually build the webpack assets, e.g., via
 
 ```sh
 ~/cocalc/src/packages/static$ pnpm webpack

@@ -11,15 +11,20 @@ R Markdown Editor Actions
 
 import { debounce } from "lodash";
 import { openProjectDocs } from "@cocalc/frontend/docs/navigation";
+import type { ExecJobGroupWatcher } from "@cocalc/frontend/client/exec-job-watcher";
 import { markdown_to_html_frontmatter } from "@cocalc/frontend/markdown";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import {
   Actions as BaseActions,
-  CodeEditorState,
+  type CodeEditorState,
 } from "../base-editor/actions-text";
-import { FrameTree } from "../frame-tree/types";
-import { exec, ExecOutput } from "../generic/client";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { FrameTree } from "../frame-tree/types";
+import { cancel_exec_job, type ExecOutput } from "../generic/client";
+import {
+  jobAggregateValue,
+  watchProjectBuilds,
+} from "../generic/project-builds";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Actions as MarkdownActions } from "../markdown-editor/actions";
 import { convert } from "./rmd-converter";
 import { checkProducedFiles } from "./utils";
@@ -64,6 +69,7 @@ output: html_document
 export class Actions extends MarkdownActions {
   private _last_rmd_hash: number | undefined = undefined;
   private is_building: boolean = false;
+  private build_job_watcher?: ExecJobGroupWatcher;
   public run_rmd_converter: Function;
 
   _init2(): void {
@@ -72,6 +78,7 @@ export class Actions extends MarkdownActions {
     // one extra thing after markdown.
     this._syncstring.once("ready", () => {
       this._init_rmd_converter();
+      this._init_build_job_watcher();
     });
     this._check_produced_files();
     this.setState({ custom_pdf_error_message });
@@ -112,6 +119,35 @@ export class Actions extends MarkdownActions {
     // Initial run with current hash if available
     const initial_hash = this._syncstring.hash_of_saved_version();
     this.run_rmd_converter(initial_hash);
+  }
+
+  private _init_build_job_watcher(): void {
+    this.build_job_watcher = watchProjectBuilds({
+      onBuild: (job) => void this.follow_project_build(job),
+      path: this.path,
+      project_id: this.project_id,
+    });
+  }
+
+  private async follow_project_build(
+    job: ExecuteCodeOutputAsync,
+  ): Promise<void> {
+    const aggregate = jobAggregateValue(job);
+    if (this.is_building || this.store.get("building") || aggregate == null) {
+      return;
+    }
+    this.is_building = true;
+    try {
+      await this._run_rmd_converter(aggregate);
+    } finally {
+      this.is_building = false;
+    }
+  }
+
+  close(): void {
+    this.build_job_watcher?.close();
+    this.build_job_watcher = undefined;
+    super.close();
   }
 
   async build(id?: string, force: boolean = false): Promise<void> {
@@ -164,30 +200,14 @@ export class Actions extends MarkdownActions {
       job_info &&
       job_info.type === "async" &&
       job_info.status === "running" &&
-      typeof job_info.pid === "number"
+      typeof job_info.job_id === "string"
     ) {
-      try {
-        // Kill the process using the same approach as LaTeX editor
-        await exec(
-          {
-            project_id: this.project_id,
-            // negative PID, to kill the entire process group
-            command: `kill -9 -${job_info.pid}`,
-            // bash:true is necessary. kill + array does not work.
-            bash: true,
-            err_on_exit: false,
-          },
-          this.path,
-        );
-      } catch (err) {
-        // likely "No such process", we just ignore it
-      } finally {
-        // Update the job status to killed
-        const updated_job_info: ExecuteCodeOutputAsync = {
-          ...job_info,
-          status: "killed",
-        };
-        this.setState({ job_info: updated_job_info });
+      const output = await cancel_exec_job({
+        project_id: this.project_id,
+        job: job_info,
+      });
+      if (output.type === "async") {
+        this.setState({ job_info: output });
       }
     }
     this.set_status("");

@@ -9,6 +9,13 @@ import { joinUrlPath } from "@cocalc/util/url-path";
 import { normalizeDocsSlug, openAppDocs, openProjectDocs } from "./navigation";
 
 interface DocsLinkProps {
+  /**
+   * Name the link when its children carry no text, e.g. an icon-only link in
+   * a narrow toolbar. Declared explicitly because JSX skips excess-property
+   * checking for hyphenated attributes, so an unforwarded `aria-label` would
+   * be dropped silently rather than failing to compile.
+   */
+  "aria-label"?: string;
   children: ReactNode;
   className?: string;
   href?: string;
@@ -37,6 +44,7 @@ function docsHref(slug: string, href?: string): string {
 }
 
 export function DocsLink({
+  "aria-label": ariaLabel,
   children,
   className,
   href,
@@ -47,6 +55,7 @@ export function DocsLink({
 }: DocsLinkProps) {
   return (
     <a
+      aria-label={ariaLabel}
       className={className}
       href={docsHref(slug, href)}
       style={style}

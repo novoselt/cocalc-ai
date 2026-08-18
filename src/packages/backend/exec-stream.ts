@@ -4,13 +4,14 @@
  */
 
 import { unreachable } from "@cocalc/util/misc";
-import {
+import type {
   ExecuteCodeOutput,
   ExecuteCodeOutputAsync,
+  ExecuteCodeOptions,
   ExecuteCodeStats,
   ExecuteCodeStreamEvent,
 } from "@cocalc/util/types/execute-code";
-import { asyncCache, executeCode } from "./execute-code";
+import { attachToAsyncJob, executeCode } from "./execute-code";
 import getLogger from "./logger";
 import { abspath } from "./misc_node";
 
@@ -36,6 +37,9 @@ export interface ExecuteStreamOptions {
   env?: { [key: string]: string };
   timeout?: number;
   max_output?: number;
+  aggregate?: ExecuteCodeOptions["aggregate"];
+  job_key?: string;
+  job_group?: string;
   verbose?: boolean;
   project_id?: string;
   debug?: string;
@@ -59,7 +63,7 @@ export async function executeStream(
     let done = false;
     let stats: ExecuteCodeStats = [];
 
-    // Create streaming callback, passed into execute-code::executeCode call
+    let unsubscribe = () => {};
     const streamCB = (event: ExecuteCodeStreamEvent) => {
       if (done) {
         logger.debug(
@@ -106,14 +110,17 @@ export async function executeStream(
 
         case "done":
           logger.debug(`executeStream: processing done event`);
-          const result = event.data as ExecuteCodeOutputAsync;
-          // Include accumulated stats in final result
-          result.stats = truncStats(stats);
+          const result: ExecuteCodeOutputAsync = {
+            ...(event.data as ExecuteCodeOutputAsync),
+            // Do not mutate the shared event/cache object for other subscribers.
+            stats: truncStats(stats),
+          };
           stream({
             type: "done",
             data: result,
           });
           done = true;
+          unsubscribe();
           stream(null); // End the stream
           break;
 
@@ -121,6 +128,7 @@ export async function executeStream(
           logger.debug(`executeStream: processing error event`);
           stream({ error: event.data as string });
           done = true;
+          unsubscribe();
           stream(null);
           break;
 
@@ -129,13 +137,12 @@ export async function executeStream(
       }
     };
 
-    // Start an async execution job with streaming callback
+    // Atomically start or join the authoritative async job.
     job = await executeCode({
       command: opts.command || "",
       path: abspath(opts.path ?? ""),
       ...opts,
       async_call: true, // Force async mode for streaming
-      streamCB, // Add the streaming callback
     });
 
     if (job?.type !== "async") {
@@ -144,20 +151,12 @@ export async function executeStream(
       return undefined;
     }
 
-    // Send initial job info with full async structure
-    // Get the current job status from cache in case it completed immediately
-    const currentJob = asyncCache.get(job.job_id);
-    const initialJobInfo: ExecuteCodeOutputAsync = {
-      type: "async",
-      job_id: job.job_id,
-      pid: job.pid,
-      status: currentJob?.status ?? job.status,
-      start: job.start,
-      stdout: currentJob?.stdout ?? "",
-      stderr: currentJob?.stderr ?? "",
-      exit_code: currentJob?.exit_code ?? 0, // Default to 0, will be updated when job completes
-      stats: currentJob?.stats ?? [],
-    };
+    // Subscribe before taking the snapshot, so output cannot fall into a gap
+    // between replay and live delivery.
+    const attached = attachToAsyncJob(job.job_id, streamCB);
+    unsubscribe = attached.unsubscribe;
+    const initialJobInfo = attached.output;
+    stats = [...(initialJobInfo.stats ?? [])];
 
     stream({
       type: "job",
@@ -165,17 +164,17 @@ export async function executeStream(
     });
 
     // If job already completed, send done event immediately
-    if (currentJob && currentJob.status !== "running") {
+    if (initialJobInfo.status !== "running") {
       logger.debug(
-        `executeStream: job ${job.job_id} already completed, sending done event`,
+        `executeStream: job ${job.job_id} already finished, sending done event`,
       );
       stream({
         type: "done",
-        data: currentJob,
+        data: initialJobInfo,
       });
       done = true;
       stream(null);
-      return currentJob;
+      return initialJobInfo;
     }
 
     // Stats monitoring is now handled by execute-code.ts via streamCB

@@ -9,7 +9,7 @@ Convert Quarto Markdown file (similar to Rmd) to html or pdf
 
 import { path_split } from "@cocalc/util/misc";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
-import { ExecOutput } from "../generic/client";
+import type { ExecOutput } from "../generic/client";
 import { runJob } from "../rmd-editor/utils";
 
 export const convert: (opts: Opts) => Promise<ExecOutput> =
@@ -35,6 +35,7 @@ async function _convert(opts: Opts): Promise<ExecOutput> {
     aggregate: hash ? { value: hash } : undefined,
     args,
     command: "quarto",
+    jobKey: `qmd:${path}`,
     project_id,
     runDir: x.head,
     set_job_info,

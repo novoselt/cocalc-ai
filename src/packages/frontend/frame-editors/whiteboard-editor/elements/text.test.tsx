@@ -16,6 +16,11 @@ jest.mock("@cocalc/frontend/editors/markdown-input/multimode", () => ({
   },
 }));
 
+jest.mock("./text-mostly-static", () => ({
+  __esModule: true,
+  default: () => <div data-testid="static-text" />,
+}));
+
 jest.mock("../hooks", () => ({
   useFrameContext: () => ({
     actions: {
@@ -73,5 +78,29 @@ describe("whiteboard text editor", () => {
     expect(screen.getByTestId("markdown-input")).toBeInTheDocument();
     expect(latestMarkdownProps.autoGrow).toBe(true);
     expect(latestMarkdownProps.unboundedAutoGrow).toBe(true);
+  });
+
+  it("does not mount a writable editor for a passive remote cursor", () => {
+    render(
+      <Text
+        canvasScale={1}
+        focused={false}
+        cursors={{ remote: [{ x: 1, y: 0 }] }}
+        element={{
+          id: "text-1",
+          type: "text",
+          str: "remote text",
+          x: 0,
+          y: 0,
+          w: 300,
+          h: 100,
+          z: 0,
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("static-text")).toBeInTheDocument();
+    expect(screen.queryByTestId("markdown-input")).not.toBeInTheDocument();
+    expect(latestMarkdownProps).toBeUndefined();
   });
 });

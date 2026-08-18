@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Alternar vista mínima del cuaderno",
   "jupyter.commands.toggle_minimap.menu": "Alternar minimapa",
   "jupyter.commands.toggle_minimap.tooltip": "Mostrar u ocultar el minimapa del cuaderno.",
+  "jupyter.commands.toggle_studio_view.label": "Cambiar vista del cuaderno Studio",
   "jupyter.commands.validate.body": "La validación del cuaderno reiniciará el kernel y ejecutará todas las celdas en orden, incluidas aquellas con errores. Esto asegurará que toda la salida sea exactamente el resultado de ejecutar todas las celdas en orden.",
   "jupyter.commands.validate.label": "Validar",
   "jupyter.commands.validate.title": "¿Validar cuaderno?",

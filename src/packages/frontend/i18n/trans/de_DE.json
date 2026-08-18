@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Minimale Notizbuchansicht umschalten",
   "jupyter.commands.toggle_minimap.menu": "Minimap umschalten",
   "jupyter.commands.toggle_minimap.tooltip": "Notebook-Minimap ein- oder ausblenden.",
+  "jupyter.commands.toggle_studio_view.label": "Studio-Notebook-Ansicht umschalten",
   "jupyter.commands.validate.body": "Die Validierung des Notebooks wird den Kernel neu starten und alle Zellen der Reihe nach ausführen, auch solche mit Fehlern. Dies stellt sicher, dass alle Ausgaben genau das Ergebnis des Ausführens aller Zellen in der richtigen Reihenfolge sind.",
   "jupyter.commands.validate.label": "Validieren",
   "jupyter.commands.validate.title": "Notebook validieren?",

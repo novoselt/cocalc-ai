@@ -7,23 +7,43 @@
  */
 
 import { delay } from "awaiting";
-import { ExecuteCodeStreamEvent } from "@cocalc/util/types/execute-code";
+import type { ExecuteCodeStreamEvent } from "@cocalc/util/types/execute-code";
 
 describe("executeStream function - unit tests", () => {
   const mockExecuteCode = jest.fn();
+  let capturedStreamCB: ((event: ExecuteCodeStreamEvent) => void) | undefined;
   const mockAsyncCache = {
     get: jest.fn(),
     set: jest.fn(),
   };
+  const mockAttachToAsyncJob = jest.fn((job_id, listener) => {
+    capturedStreamCB = listener;
+    return {
+      output: mockAsyncCache.get(job_id) ?? {
+        type: "async",
+        job_id,
+        pid: 1234,
+        status: "running",
+        start: Date.now(),
+        stdout: "",
+        stderr: "",
+        exit_code: 0,
+        stats: [],
+      },
+      unsubscribe: jest.fn(),
+    };
+  });
 
   beforeEach(() => {
     // Reset modules and mocks for proper test isolation
     jest.resetModules();
     jest.clearAllMocks();
+    capturedStreamCB = undefined;
 
     // Re-mock for each test to ensure clean state
     jest.doMock("./execute-code", () => ({
       executeCode: mockExecuteCode,
+      attachToAsyncJob: mockAttachToAsyncJob,
       asyncCache: mockAsyncCache,
     }));
 
@@ -32,8 +52,6 @@ describe("executeStream function - unit tests", () => {
   });
 
   it("streams stdout in batches", async () => {
-    let capturedStreamCB: ((event: ExecuteCodeStreamEvent) => void) | undefined;
-
     // Mock executeCode to capture the streamCB that executeStream passes to it
     mockExecuteCode.mockImplementation(async (options) => {
       capturedStreamCB = options.streamCB;
@@ -64,7 +82,6 @@ describe("executeStream function - unit tests", () => {
     expect(mockExecuteCode).toHaveBeenCalledWith(
       expect.objectContaining({
         async_call: true,
-        streamCB: expect.any(Function),
       }),
     );
 
@@ -198,13 +215,12 @@ describe("executeStream function - unit tests", () => {
     // Re-mock for subsequent tests
     jest.doMock("./execute-code", () => ({
       executeCode: mockExecuteCode,
+      attachToAsyncJob: mockAttachToAsyncJob,
       asyncCache: mockAsyncCache,
     }));
   });
 
   it("streams stderr in batches", async () => {
-    let capturedStreamCB: ((event: ExecuteCodeStreamEvent) => void) | undefined;
-
     mockExecuteCode.mockImplementation(async (options) => {
       capturedStreamCB = options.streamCB;
       return {
@@ -269,8 +285,6 @@ describe("executeStream function - unit tests", () => {
   });
 
   it("streams mixed stdout and stderr with stats", async () => {
-    let capturedStreamCB: ((event: ExecuteCodeStreamEvent) => void) | undefined;
-
     mockExecuteCode.mockImplementation(async (options) => {
       capturedStreamCB = options.streamCB;
       return {
@@ -351,8 +365,6 @@ describe("executeStream function - unit tests", () => {
   });
 
   it("handles streaming errors", async () => {
-    let capturedStreamCB: ((event: ExecuteCodeStreamEvent) => void) | undefined;
-
     mockExecuteCode.mockImplementation(async (options) => {
       capturedStreamCB = options.streamCB;
       return {
@@ -483,8 +495,6 @@ describe("executeStream function - unit tests", () => {
   });
 
   it("handles error exit codes with streaming", async () => {
-    let capturedStreamCB: ((event: ExecuteCodeStreamEvent) => void) | undefined;
-
     mockExecuteCode.mockImplementation(async (options) => {
       capturedStreamCB = options.streamCB;
       return {
@@ -653,6 +663,7 @@ describe("executeStream function - unit tests", () => {
     // Re-mock for subsequent tests
     jest.doMock("./execute-code", () => ({
       executeCode: mockExecuteCode,
+      attachToAsyncJob: mockAttachToAsyncJob,
       asyncCache: mockAsyncCache,
     }));
   });
@@ -772,6 +783,67 @@ describe("exec-stream integration tests", () => {
     const doneIndex = streamEvents.findIndex((e) => e.type === "done");
     expect(jobIndex).toBe(0); // Job event should be first
     expect(doneIndex).toBe(streamEvents.length - 1); // Done event should be last
+  });
+
+  it("replays output and continues streaming to a second keyed subscriber", async () => {
+    const { executeStream } = await import("./exec-stream");
+    const job_key = `exec-stream-test:${Date.now()}:${Math.random()}`;
+    const options = {
+      project_id: "test-project-id",
+      command: "printf first; sleep .5; printf second",
+      bash: true,
+      aggregate: 1,
+      job_key,
+    };
+    const collect = () => {
+      const events: any[] = [];
+      let resolveEnded!: () => void;
+      const ended = new Promise<void>((resolve) => {
+        resolveEnded = resolve;
+      });
+      return {
+        ended,
+        events,
+        stream: (event: any) => {
+          if (event == null) {
+            resolveEnded();
+          } else {
+            events.push(event);
+          }
+        },
+      };
+    };
+
+    const first = collect();
+    const firstJob = await executeStream({ ...options, stream: first.stream });
+    while (
+      !first.events.some(
+        (event) => event.type === "stdout" && event.data.includes("first"),
+      )
+    ) {
+      await delay(10);
+    }
+
+    const second = collect();
+    const secondJob = await executeStream({
+      ...options,
+      stream: second.stream,
+    });
+    await Promise.all([first.ended, second.ended]);
+
+    expect(firstJob?.type).toBe("async");
+    expect(secondJob?.type).toBe("async");
+    if (firstJob?.type !== "async" || secondJob?.type !== "async") return;
+    expect(secondJob.job_id).toBe(firstJob.job_id);
+    const replay = second.events.find((event) => event.type === "job");
+    expect(replay?.data.stdout).toContain("first");
+    expect(
+      second.events
+        .filter((event) => event.type === "stdout")
+        .map((event) => event.data)
+        .join(""),
+    ).toContain("second");
+    expect(second.events.at(-1)?.type).toBe("done");
   });
 
   it("handles process monitoring with stats streaming", async () => {

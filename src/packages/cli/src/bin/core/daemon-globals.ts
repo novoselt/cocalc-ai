@@ -1,6 +1,7 @@
 import { resolveAgentTokenFromEnv } from "../../core/agent-token";
 
 export type DaemonGlobalAuthOptions = {
+  profile?: string;
   api?: string;
   accountId?: string;
   account_id?: string;
@@ -9,6 +10,7 @@ export type DaemonGlobalAuthOptions = {
   bearer?: string;
   hubPassword?: string;
   noDaemon?: boolean;
+  disableEnvAuthDefaults?: boolean;
 };
 
 export function effectiveDaemonGlobals<T extends DaemonGlobalAuthOptions>(
@@ -30,6 +32,10 @@ export function effectiveDaemonGlobals<T extends DaemonGlobalAuthOptions>(
     } else if (defaultApiBaseUrl) {
       next.api = defaultApiBaseUrl();
     }
+  }
+
+  if (next.disableEnvAuthDefaults) {
+    return next;
   }
 
   if (!next.accountId && !next.account_id) {

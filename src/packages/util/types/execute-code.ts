@@ -1,4 +1,9 @@
-export const ASYNC_STATES = ["running", "completed", "error"] as const;
+export const ASYNC_STATES = [
+  "running",
+  "completed",
+  "error",
+  "killed",
+] as const;
 
 export type AsyncStatus = (typeof ASYNC_STATES)[number];
 
@@ -23,10 +28,13 @@ export interface ExecuteCodeOutputAsync extends ExecuteCodeBase {
   type: "async";
   start: number;
   job_id: string;
-  status: AsyncStatus | "killed"; // killed is only set by the frontend (latex)
+  status: AsyncStatus;
   elapsed_s?: number; // how long it took, async execution
   pid?: number; // in case you want to kill it remotely, good to know the PID
   stats?: ExecuteCodeStats;
+  job_key?: string;
+  job_group?: string;
+  aggregate?: ExecuteCodeAggregate;
 }
 
 export type ExecuteCodeOutput =
@@ -36,6 +44,21 @@ export type ExecuteCodeOutput =
 export interface ExecuteCodeStreamEvent {
   type: "stdout" | "stderr" | "done" | "stats" | "error";
   data?: string | ExecuteCodeOutputAsync | ExecuteCodeStats[0];
+}
+
+export interface ExecuteCodeJobGroupEvent {
+  aggregate?: ExecuteCodeAggregate;
+  data: ExecuteCodeOutputAsync;
+  job_group: string;
+  job_id: string;
+  job_key?: string;
+  seq: number;
+  type: "job" | "done";
+}
+
+export interface ExecuteCodeJobGroupSnapshot {
+  output: ExecuteCodeOutputAsync;
+  seq: number;
 }
 
 export interface ExecuteCodeOptions {
@@ -53,7 +76,13 @@ export interface ExecuteCodeOptions {
   uid?: number;
   gid?: number;
   env?: object; // if given, added to exec environment
-  aggregate?: string | number; // if given, aggregates multiple calls with same sequence number into one -- see @cocalc/util/aggregate; typically make this a timestamp for compiling code (e.g., latex).
+  aggregate?: ExecuteCodeAggregate; // freshness value for aggregation; typically a timestamp or content hash.
+  // Stable logical slot for an async job.  Calls with the same key share one
+  // active execution, with aggregate determining whether a newer run is needed.
+  job_key?: string;
+  // Optional higher-level activity shared by related job slots.  This does not
+  // affect execution ownership; it only makes their lifecycle observable.
+  job_group?: string;
   verbose?: boolean; // default true -- impacts amount of logging
   async_call?: boolean; // default false -- if true, return right after the process started (to get the PID) or when it fails.
   // in the filesystem container (if available)
@@ -68,13 +97,20 @@ export interface ExecuteCodeOptionsAsyncGet {
   async_await?: boolean; // if set, the call returns when the job finishes (status "complete" or "error")
 }
 
+export interface ExecuteCodeOptionsAsyncCancel {
+  async_cancel: string;
+}
+
+export type ExecuteCodeAggregate = string | number | { value: string | number };
+
 export type ExecuteCodeRequest =
   | ExecuteCodeOptions
-  | ExecuteCodeOptionsAsyncGet;
+  | ExecuteCodeOptionsAsyncGet
+  | ExecuteCodeOptionsAsyncCancel;
 
-export interface ExecuteCodeOptionsWithCallback extends ExecuteCodeOptions {
+export type ExecuteCodeOptionsWithCallback = ExecuteCodeRequest & {
   cb?: (err: undefined | Error, output?: ExecuteCodeOutput) => void;
-}
+};
 
 export type ExecuteCodeFunctionWithCallback = (
   opts: ExecuteCodeOptionsWithCallback,
@@ -84,4 +120,10 @@ export function isExecuteCodeOptionsAsyncGet(
   opts: unknown,
 ): opts is ExecuteCodeOptionsAsyncGet {
   return typeof (opts as any)?.async_get === "string";
+}
+
+export function isExecuteCodeOptionsAsyncCancel(
+  opts: unknown,
+): opts is ExecuteCodeOptionsAsyncCancel {
+  return typeof (opts as any)?.async_cancel === "string";
 }

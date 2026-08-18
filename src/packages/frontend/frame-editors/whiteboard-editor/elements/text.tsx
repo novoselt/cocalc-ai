@@ -53,12 +53,11 @@ export default function Text(props: Props) {
 // This is less specialized to the whiteboard.  E.g., it is
 // more reusable, for speaker notes.
 export function TextEditor(props: Props) {
-  if (
-    (props.readOnly || !props.focused || props.element.locked) &&
-    props.cursors == null
-  ) {
+  if (props.readOnly || !props.focused || props.element.locked) {
     // NOTE: not using static whenever possible (e.g., when not focused) results
     // in massive performance problems when there are many notes.
+    // Remote cursors are rendered by the canvas and must not turn a passive
+    // viewer into a writer for this element.
     return <TextStatic element={props.element} style={props.style} />;
   }
   return <EditText {...props} />;

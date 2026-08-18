@@ -5,7 +5,7 @@
 
 /**
  * Returns true if the given frame type is any Jupyter notebook frame
- * (standard or minimal).
+ * (standard or studio).
  */
 export function isJupyterNotebookFrameType(type: string | undefined): boolean {
   // Frame-tree node types are editor-spec keys (not EditorDescription.type);
@@ -13,6 +13,6 @@ export function isJupyterNotebookFrameType(type: string | undefined): boolean {
   return (
     type === "jupyter_cell_notebook" ||
     type === "jupyter" ||
-    type === "jupyter_minimal"
+    type === "jupyter_studio"
   );
 }

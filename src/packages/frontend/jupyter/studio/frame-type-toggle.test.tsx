@@ -19,8 +19,8 @@ jest.mock("@cocalc/frontend/frame-editors/frame-tree/frame-context", () => ({
 }));
 
 import {
-  SwitchToMinimalButton,
-  SwitchToRegularButton,
+  SwitchToStudioButton,
+  SwitchToClassicButton,
 } from "./frame-type-toggle";
 
 function contextFor(types: Record<string, string>) {
@@ -37,23 +37,23 @@ function contextFor(types: Record<string, string>) {
   };
 }
 
-describe("minimal notebook frame-type toggles", () => {
+describe("studio notebook frame-type toggles", () => {
   it("switches a single frame in either direction", () => {
     const context = contextFor({ active: "jupyter_cell_notebook" });
     frameContext = context;
     render(
       <>
-        <SwitchToMinimalButton />
-        <SwitchToRegularButton />
+        <SwitchToStudioButton />
+        <SwitchToClassicButton />
       </>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Minimal" }));
-    fireEvent.click(screen.getByRole("button", { name: "Regular" }));
+    fireEvent.click(screen.getByRole("button", { name: "Studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Classic" }));
     expect(context.set_frame_type).toHaveBeenNthCalledWith(
       1,
       "active",
-      "jupyter_minimal",
+      "jupyter_studio",
     );
     expect(context.set_frame_type).toHaveBeenNthCalledWith(
       2,
@@ -62,19 +62,31 @@ describe("minimal notebook frame-type toggles", () => {
     );
   });
 
+  it("stays named when narrow frames drop the button text", () => {
+    frameContext = contextFor({ active: "jupyter_cell_notebook" });
+    const { rerender } = render(<SwitchToStudioButton iconsOnly />);
+    expect(screen.queryByText("Studio")).toBeNull();
+    expect(screen.getByRole("button", { name: "Studio" })).toBeTruthy();
+
+    frameContext = contextFor({ active: "jupyter_studio" });
+    rerender(<SwitchToClassicButton iconsOnly />);
+    expect(screen.queryByText("Classic")).toBeNull();
+    expect(screen.getByRole("button", { name: "Classic" })).toBeTruthy();
+  });
+
   it("hides a target that already exists in a split view", () => {
     frameContext = contextFor({
       active: "jupyter_cell_notebook",
-      other: "jupyter_minimal",
+      other: "jupyter_studio",
     });
-    const { rerender } = render(<SwitchToMinimalButton />);
-    expect(screen.queryByRole("button", { name: "Minimal" })).toBeNull();
+    const { rerender } = render(<SwitchToStudioButton />);
+    expect(screen.queryByRole("button", { name: "Studio" })).toBeNull();
 
     frameContext = contextFor({
-      active: "jupyter_minimal",
+      active: "jupyter_studio",
       other: "jupyter_cell_notebook",
     });
-    rerender(<SwitchToRegularButton />);
-    expect(screen.queryByRole("button", { name: "Regular" })).toBeNull();
+    rerender(<SwitchToClassicButton />);
+    expect(screen.queryByRole("button", { name: "Classic" })).toBeNull();
   });
 });

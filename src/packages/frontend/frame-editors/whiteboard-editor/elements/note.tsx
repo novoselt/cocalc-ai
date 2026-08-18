@@ -6,10 +6,7 @@ import { Props } from "./render";
 
 export default function Note(props: Props) {
   const { element } = props;
-  if (
-    (props.readOnly || !props.focused || props.element.locked) &&
-    props.cursors == null
-  ) {
+  if (props.readOnly || !props.focused || props.element.locked) {
     return <NoteStatic {...props} />;
   }
   const data = {

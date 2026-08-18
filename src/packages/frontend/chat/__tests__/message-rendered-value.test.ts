@@ -7,12 +7,36 @@ import {
   resolveInlineCodexActivityMode,
   resolveMountedCodexRenderedValue,
   resolveRenderedMessageValue,
+  resolveLiveCodexActivityBlocks,
   canUseCompletedCachedCodexActivity,
   resolveCodexShowActivityButtonState,
   shouldLoadCodexPreviewBody,
   shouldShowCodexShowActivityButton,
   shouldSuppressAcpPlaceholderBody,
 } from "../message-state";
+
+describe("resolveLiveCodexActivityBlocks", () => {
+  it("retains cached output while both network streams are unavailable", () => {
+    expect(
+      resolveLiveCodexActivityBlocks({
+        cachedBlocks: [
+          { kind: "agent", text: "Output retained while offline." },
+        ],
+      }),
+    ).toEqual([{ kind: "agent", text: "Output retained while offline." }]);
+  });
+
+  it("does not replace a newer preview with an older cached snapshot", () => {
+    expect(
+      resolveLiveCodexActivityBlocks({
+        previewBlocks: [
+          { kind: "agent", text: "The complete projected response." },
+        ],
+        cachedBlocks: [{ kind: "agent", text: "The complete" }],
+      }),
+    ).toEqual([{ kind: "agent", text: "The complete projected response." }]);
+  });
+});
 
 describe("resolveRenderedMessageValue", () => {
   it("prefers row content when not generating and row has text", () => {

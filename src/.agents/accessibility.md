@@ -55,6 +55,13 @@ with a keyboard and reviewing behavior at narrow widths and browser zoom.
   persistent, and dismissible, including with Escape.
 - Persistent nonessential animation must provide a pause/stop mechanism or
   honor reduced-motion preferences.
+- Honor the account **Animations** preference (`other_settings.antd_animate`)
+  for hand-written **motion** — anything that slides, resizes, or moves — not
+  only `prefers-reduced-motion`. Colour and opacity changes such as hover fades
+  and blinking status indicators are not motion and stay on. Use
+  `useAnimatedTransition` from `@cocalc/frontend/app/animations` for inline
+  styles and the `:root[data-animations="off"]` guard in stylesheets. See the
+  Animations entry in `docs/STYLE.md`.
 
 ## Focused Tests
 

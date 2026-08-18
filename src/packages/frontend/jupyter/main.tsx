@@ -44,7 +44,7 @@ import * as toolComponents from "./ai";
 import { NBConvert } from "./nbconvert";
 import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
 import { Kernel } from "./status";
-import type { MinimalLayout } from "./minimal/types";
+import type { StudioLayout } from "./studio/types";
 
 const JUPYTER_TEST_SET_KERNEL_ERROR_EVENT =
   "cocalc:jupyter:set-kernel-error-for-test";
@@ -85,9 +85,9 @@ interface Props {
 
   scrollTop?: number;
   hook_offset?: number;
-  cellViewMode?: "default" | "minimal";
-  minimalLayout?: MinimalLayout;
-  zenMode?: boolean;
+  cellViewMode?: "default" | "studio";
+  studioLayout?: StudioLayout;
+  readingMode?: boolean;
 }
 
 export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
@@ -107,8 +107,8 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
     scrollTop,
     hook_offset,
     cellViewMode,
-    minimalLayout = "comfortable",
-    zenMode = false,
+    studioLayout = "comfortable",
+    readingMode = false,
   } = props;
   // status of tab completion
   const complete: undefined | immutable.Map<any, any> = useRedux([
@@ -315,11 +315,11 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
   const { usage, expected_cell_runtime } = useKernelUsage(name, project_id);
 
   const frameActions = useNotebookFrameActions();
-  const handleLayoutChange = useCallback((layout: MinimalLayout) => {
-    frameActions.current?.setState({ minimalLayout: layout });
+  const handleLayoutChange = useCallback((layout: StudioLayout) => {
+    frameActions.current?.setState({ studioLayout: layout });
   }, []);
-  const handleZenModeChange = useCallback((zen: boolean) => {
-    frameActions.current?.setState({ zenMode: zen });
+  const handleReadingModeChange = useCallback((reading: boolean) => {
+    frameActions.current?.setState({ readingMode: reading });
   }, []);
 
   // Responsive layout: force wider layouts when frame is narrow
@@ -329,12 +329,28 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
     height: containerHeight,
   } = useResizeObserver<HTMLDivElement>();
   const effectiveLayout = useMemo(() => {
-    if (cellViewMode !== "minimal") return minimalLayout;
+    if (cellViewMode !== "studio") return studioLayout;
     const w = containerWidth ?? 9999;
     if (w < 500) return "wide";
-    if (w < 800 && minimalLayout === "narrow") return "comfortable";
-    return minimalLayout;
-  }, [cellViewMode, minimalLayout, containerWidth]);
+    if (w < 800 && studioLayout === "narrow") return "comfortable";
+    return studioLayout;
+  }, [cellViewMode, studioLayout, containerWidth]);
+  // How much room the usage meters may take. Full labelled meters need about
+  // 300px, which a split frame does not have; the stacked bars need about 50.
+  // The studio bar also carries the width control, the Reading switch, Help,
+  // and the switch back to Classic, so it runs out of room sooner than the
+  // classic bar, which only has to fit its own view switch.
+  const usageDisplay = useMemo((): "full" | "mini" | "hidden" => {
+    const w = containerWidth ?? 9999;
+    const [fullWidth, miniWidth] =
+      cellViewMode === "studio" ? [1000, 500] : [800, 400];
+    if (w < miniWidth) return "hidden";
+    if (w < fullWidth) return "mini";
+    return "full";
+  }, [cellViewMode, containerWidth]);
+  // Very narrow frames: keep the controls as icons so the switch back to the
+  // other view stays reachable, including at 320px and 200% browser zoom.
+  const iconsOnly = (containerWidth ?? 9999) < 480;
   // Which options are available at the current width
   const availableLayouts = useMemo(() => {
     const w = containerWidth ?? 9999;
@@ -422,8 +438,8 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
         pendingCells={pendingCells}
         runCellOverlays={runCellOverlays}
         cellViewMode={cellViewMode}
-        minimalLayout={effectiveLayout as MinimalLayout}
-        zenMode={zenMode}
+        studioLayout={effectiveLayout as StudioLayout}
+        readingMode={readingMode}
         frameHeight={containerHeight}
       />
     );
@@ -532,29 +548,23 @@ export const JupyterEditor: React.FC<Props> = React.memo((props: Props) => {
         {!read_only && (
           <Kernel
             actions={actions}
-            usage={
-              cellViewMode === "minimal" && (containerWidth ?? 9999) < 800
-                ? undefined
-                : usage
+            usage={usage}
+            expected_cell_runtime={expected_cell_runtime}
+            usageDisplay={usageDisplay}
+            iconsOnly={iconsOnly}
+            compact={cellViewMode === "studio"}
+            studioLayout={
+              cellViewMode === "studio" ? effectiveLayout : undefined
             }
-            expected_cell_runtime={
-              cellViewMode === "minimal" && (containerWidth ?? 9999) < 800
-                ? undefined
-                : expected_cell_runtime
-            }
-            compact={cellViewMode === "minimal"}
-            minimalLayout={
-              cellViewMode === "minimal" ? effectiveLayout : undefined
-            }
-            zenMode={cellViewMode === "minimal" ? zenMode : undefined}
+            readingMode={cellViewMode === "studio" ? readingMode : undefined}
             onLayoutChange={
-              cellViewMode === "minimal" ? handleLayoutChange : undefined
+              cellViewMode === "studio" ? handleLayoutChange : undefined
             }
-            onZenModeChange={
-              cellViewMode === "minimal" ? handleZenModeChange : undefined
+            onReadingModeChange={
+              cellViewMode === "studio" ? handleReadingModeChange : undefined
             }
             availableLayouts={
-              cellViewMode === "minimal" ? availableLayouts : undefined
+              cellViewMode === "studio" ? availableLayouts : undefined
             }
           />
         )}

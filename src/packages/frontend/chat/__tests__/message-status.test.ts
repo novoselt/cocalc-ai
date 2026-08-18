@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 
+import { getLiveResponseBlocks } from "@cocalc/chat";
 import {
   codexActivityBlocksToSelectableMarkdown,
   computeAcpStateToRender,
@@ -11,6 +12,28 @@ import { markdown_to_slate } from "../../editors/slate/markdown-to-slate";
 import { slate_to_markdown } from "../../editors/slate/slate-to-markdown";
 
 describe("codexActivityBlocksToSelectableMarkdown", () => {
+  it("keeps the latest suffix from cumulative live projection events", () => {
+    const blocks = getLiveResponseBlocks([
+      {
+        type: "event",
+        seq: 1,
+        event: { type: "message", text: "Reviewing config objects" },
+      },
+      {
+        type: "event",
+        seq: 2,
+        event: {
+          type: "message",
+          text: "Reviewing config objects changed.",
+        },
+      },
+    ]);
+
+    expect(codexActivityBlocksToSelectableMarkdown(blocks)).toBe(
+      "Reviewing config objects changed.",
+    );
+  });
+
   it("keeps agent and multi-paragraph guidance in one Markdown document", () => {
     const markdown = codexActivityBlocksToSelectableMarkdown([
       { kind: "agent", text: "Inspecting the project." },

@@ -28,7 +28,7 @@ jest.mock("../edit-focus", () => ({
 }));
 
 jest.mock("./control", () => () => null);
-jest.mock("./input", () => () => null);
+jest.mock("./input", () => () => <div data-testid="code-input" />);
 jest.mock("./input-prompt", () => () => null);
 jest.mock("./output", () => () => null);
 jest.mock("./style", () => ({
@@ -115,5 +115,29 @@ describe("Code", () => {
     await waitFor(() => {
       expect(screen.getByTestId("mode").textContent).toBe("second-mode");
     });
+  });
+
+  it("does not mount a writable input for a passive remote cursor", () => {
+    getMode.mockResolvedValue("python");
+    useFrameContext.mockReturnValue({
+      actions: {
+        in_undo_mode: jest.fn(() => false),
+        setElement: jest.fn(),
+      },
+      project_id: "project-1",
+      path: "/board.slides",
+    });
+
+    render(
+      <Code
+        element={{ id: "e1", data: {}, h: 100, str: "2 + 2" } as any}
+        canvasScale={1}
+        focused={false}
+        cursors={{ remote: [{ x: 1, y: 0 }] }}
+      />,
+    );
+
+    expect(screen.getByTestId("mode")).toBeInTheDocument();
+    expect(screen.queryByTestId("code-input")).not.toBeInTheDocument();
   });
 });

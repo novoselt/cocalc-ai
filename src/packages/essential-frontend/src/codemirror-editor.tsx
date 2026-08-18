@@ -36,7 +36,7 @@ import {
   highlightActiveLineGutter,
   highlightSpecialChars,
   keymap,
-  lineNumbers,
+  lineNumbers as codeMirrorLineNumbers,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
@@ -102,6 +102,7 @@ interface Props {
   className?: string;
   initialValue: string;
   language?: UltraliteLanguage;
+  lineNumbers?: boolean;
   onChange?: (value: string) => void;
   onDirtyChange: (dirty: boolean) => void;
   onCursorChange: (position: string) => void;
@@ -128,6 +129,7 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
       className,
       initialValue,
       language,
+      lineNumbers = true,
       onChange,
       onDirtyChange,
       onCursorChange,
@@ -148,6 +150,7 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
     const suppressJournalRef = useRef(false);
     const journalRef = useRef(new CodeMirrorEditJournal(initialValue));
     const languageCompartmentRef = useRef(new Compartment());
+    const lineNumbersCompartmentRef = useRef(new Compartment());
     const readOnlyCompartmentRef = useRef(new Compartment());
     const wrapCompartmentRef = useRef(new Compartment());
     const callbacksRef = useRef({
@@ -245,8 +248,6 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
         },
       }));
       const extensions: Extension[] = [
-        lineNumbers(),
-        highlightActiveLineGutter(),
         highlightSpecialChars(),
         history(),
         drawSelection(),
@@ -289,6 +290,11 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
           }
         }),
         languageCompartmentRef.current.of([]),
+        lineNumbersCompartmentRef.current.of(
+          lineNumbers
+            ? [codeMirrorLineNumbers(), highlightActiveLineGutter()]
+            : [],
+        ),
         readOnlyCompartmentRef.current.of([
           EditorState.readOnly.of(readOnly),
           EditorView.editable.of(!readOnly),
@@ -322,6 +328,18 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, Props>(
         ]),
       });
     }, [readOnly]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: lineNumbersCompartmentRef.current.reconfigure(
+          lineNumbers
+            ? [codeMirrorLineNumbers(), highlightActiveLineGutter()]
+            : [],
+        ),
+      });
+    }, [lineNumbers]);
 
     useEffect(() => {
       const view = viewRef.current;

@@ -75,7 +75,7 @@ const STATUS_COLORS: Record<CellStatus, string> = {
 // placeholder box is min-height 96 plus padding and margin.
 const DEFAULT_CELL_HEIGHT = 120;
 
-export interface MinimalMinimapEntry {
+export interface StudioMinimapEntry {
   id: string;
   pixelHeight: number;
   status: CellStatus;
@@ -92,7 +92,7 @@ const COLLAPSED_STATUS_RANK: Partial<Record<CellStatus, number>> = {
   running: 3,
 };
 
-export function buildMinimalMinimapEntries({
+export function buildStudioMinimapEntries({
   cellList,
   cells,
   collapsedSections,
@@ -108,8 +108,8 @@ export function buildMinimalMinimapEntries({
   lastExecInputHash: Record<string, number>;
   curId?: string;
   selIds?: ImmutableSet<string>;
-}): MinimalMinimapEntry[] {
-  const entries: MinimalMinimapEntry[] = [];
+}): StudioMinimapEntry[] {
+  const entries: StudioMinimapEntry[] = [];
   let inCollapsed = false;
   let collapsedEntryIdx: number | null = null;
 
@@ -178,7 +178,7 @@ export function buildMinimalMinimapEntries({
 }
 
 export interface MinimapBarSegment {
-  entry: MinimalMinimapEntry;
+  entry: StudioMinimapEntry;
   top: number;
   height: number;
 }
@@ -192,7 +192,7 @@ export interface MinimapBarSegment {
  * rectangle.
  */
 export function computeMinimapLayout(
-  entries: MinimalMinimapEntry[],
+  entries: StudioMinimapEntry[],
   height: number,
 ): MinimapBarSegment[] {
   if (entries.length === 0 || height <= 0) return [];
@@ -247,7 +247,7 @@ export function viewportFromSegments(
   return { top, bottom };
 }
 
-interface MinimalMinimapProps {
+interface StudioMinimapProps {
   cellList: List<string>;
   cells: Map<string, any>;
   collapsedSections: Set<string>;
@@ -258,7 +258,7 @@ interface MinimalMinimapProps {
   selIds?: ImmutableSet<string>;
 }
 
-export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
+export const StudioMinimap: React.FC<StudioMinimapProps> = React.memo(
   ({
     cellList,
     cells,
@@ -456,7 +456,7 @@ export const MinimalMinimap: React.FC<MinimalMinimapProps> = React.memo(
     });
 
     // Build visible cell entries, respecting collapsed sections
-    const entries = buildMinimalMinimapEntries({
+    const entries = buildStudioMinimapEntries({
       cellList,
       cells,
       collapsedSections,

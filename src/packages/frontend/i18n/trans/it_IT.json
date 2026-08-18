@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Attiva/disattiva la visualizzazione minimale del notebook",
   "jupyter.commands.toggle_minimap.menu": "Mostra/nascondi minimappa",
   "jupyter.commands.toggle_minimap.tooltip": "Mostra o nasconde la minimappa del notebook.",
+  "jupyter.commands.toggle_studio_view.label": "Alterna visualizzazione notebook Studio",
   "jupyter.commands.validate.body": "La convalida del notebook riavvierà il kernel ed eseguirà tutte le celle in ordine, anche quelle con errori. Questo garantirà che tutti i risultati siano esattamente quelli derivanti dall'esecuzione di tutte le celle in ordine.",
   "jupyter.commands.validate.label": "Convalida",
   "jupyter.commands.validate.title": "Convalidare il notebook?",

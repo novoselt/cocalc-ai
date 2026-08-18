@@ -10,7 +10,7 @@ Convert LaTeX file to PDF using latexmk.
 import { exec } from "@cocalc/frontend/frame-editors/generic/client";
 import type { ExecOutput } from "@cocalc/util/db-schema/projects";
 import { change_filename_extension, path_split } from "@cocalc/util/misc";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { pdf_path, runJob } from "./util";
 
 export async function latexmk(
@@ -39,6 +39,7 @@ export async function latexmk(
   const output = await runJob({
     project_id,
     command,
+    jobKey: `latex:${path}`,
     args,
     runDir: head,
     aggregate: time,

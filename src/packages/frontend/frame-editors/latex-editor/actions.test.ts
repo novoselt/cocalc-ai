@@ -2,12 +2,25 @@ import { List, Map } from "immutable";
 import * as CodeMirror from "codemirror";
 import { Actions } from "./actions";
 import { EventEmitter } from "events";
+import { ChatMarkerManager } from "./chat-marker-manager";
+
+// The chat markers/bookmarks live in a delegate (chat-marker-manager.ts).
+// These tests build Actions with Object.create, so no field initializers run;
+// wire up an equally bare manager and the closed-state helper by hand.
+function createActionsFixture(): any {
+  const actions: any = Object.create(Actions.prototype);
+  const chat: any = Object.create(ChatMarkerManager.prototype);
+  chat.actions = actions;
+  actions.chat = chat;
+  actions.isClosed = () => false;
+  return actions;
+}
 
 describe("LaTeX persisted source change builds", () => {
   function createActions() {
     const build = jest.fn(async () => undefined);
     const parentBuild = jest.fn(async () => undefined);
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.redux = {
       getStore: () =>
         Map({
@@ -52,26 +65,26 @@ describe("LaTeX persisted source change builds", () => {
 
 describe("LaTeX included-file chat ownership", () => {
   it("yields standalone marker rendering to the parent editor", () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "chapter.tex";
     actions.parent_file = undefined;
-    actions._chatMarkersOwnedByParent = false;
-    actions._yieldChatMarkersToParent = jest.fn();
+    actions.chat.ownedByParent = false;
+    actions.chat.yieldToParent = jest.fn();
 
     actions.set_parent_file("master.tex");
 
     expect(actions.parent_file).toBe("master.tex");
-    expect(actions._yieldChatMarkersToParent).toHaveBeenCalledTimes(1);
+    expect(actions.chat.yieldToParent).toHaveBeenCalledTimes(1);
   });
 
   it("keeps marker ownership when the file is its own parent", () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "master.tex";
-    actions._yieldChatMarkersToParent = jest.fn();
+    actions.chat.yieldToParent = jest.fn();
 
     actions.set_parent_file("master.tex");
 
-    expect(actions._yieldChatMarkersToParent).not.toHaveBeenCalled();
+    expect(actions.chat.yieldToParent).not.toHaveBeenCalled();
   });
 });
 
@@ -99,11 +112,11 @@ describe("LaTeX empty anchor reconciliation", () => {
       setThreadAnchor,
       renameThread,
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "main.tex";
-    actions._getChatActionsForMarkerReconciliation = () => chatActions;
+    actions.chat._getChatActionsForMarkerReconciliation = () => chatActions;
 
-    actions._reconcileEmptyAnchorThread(
+    actions.chat._reconcileEmptyAnchorThread(
       "123.tex",
       [{ hash: "old-hash", line: 0, col: 0 }],
       [{ hash: "new-hash", line: 0, col: 0 }],
@@ -137,12 +150,12 @@ describe("LaTeX included-file table of contents", () => {
     let state = Map({
       switch_to_files: List([main, subfile]),
     });
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = main;
     actions.project_id = "project-1";
     actions.canonical_paths = {};
     actions._state = "open";
-    actions._chatMarkerScanners = {};
+    actions.chat._chatMarkerScanners = {};
     actions.store = {
       get: (key: string) => state.get(key),
     };
@@ -156,7 +169,7 @@ describe("LaTeX included-file table of contents", () => {
         fs: () => ({ readFile }),
       })),
     };
-    actions._getAnchoredThreadRows = () => rows;
+    actions.chat.getAnchoredThreadRows = () => rows;
     return {
       actions,
       main,
@@ -169,7 +182,7 @@ describe("LaTeX included-file table of contents", () => {
   }
 
   it("lists build-discovered subfiles even without headings or annotations", () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "/home/user/project/main.tex";
     actions.project_id = "project-1";
     actions.canonical_paths = {};
@@ -241,7 +254,7 @@ describe("LaTeX included-file table of contents", () => {
       ],
     });
 
-    await actions._scanDiskChatSubfiles();
+    await actions.chat._scanDiskChatSubfiles();
 
     expect(readFile).toHaveBeenCalledTimes(1);
     expect(getState().getIn(["chat_markers", subfile]).toJS()).toEqual([
@@ -284,7 +297,7 @@ describe("LaTeX included-file table of contents", () => {
     const { actions, subfile } = createDiskScanActions({
       readFile: jest.fn(async () => "\\section{Disk section}"),
     });
-    await actions._scanDiskChatSubfiles();
+    await actions.chat._scanDiskChatSubfiles();
     actions.redux.getEditorActions.mockReturnValue({
       _syncstring: {
         to_str: () => "\\section{Live section}",
@@ -317,9 +330,9 @@ describe("LaTeX included-file table of contents", () => {
     );
     const { actions, subfile, getState } = createDiskScanActions({ readFile });
 
-    const scan = actions._scanDiskChatSubfiles();
+    const scan = actions.chat._scanDiskChatSubfiles();
     await Promise.resolve();
-    actions._chatMarkerScanners[subfile] = {
+    actions.chat._chatMarkerScanners[subfile] = {
       dispose: jest.fn(),
       rescan: jest.fn(),
     };
@@ -327,7 +340,7 @@ describe("LaTeX included-file table of contents", () => {
     await scan;
 
     expect(getState().get("chat_markers")).toBeUndefined();
-    expect(actions._diskSubfileHeadings?.has(subfile) ?? false).toBe(false);
+    expect(actions.chat.diskSubfileHeadings?.has(subfile) ?? false).toBe(false);
   });
 
   it("keeps a failed disk read header-only", async () => {
@@ -346,7 +359,7 @@ describe("LaTeX included-file table of contents", () => {
       ],
     });
 
-    await actions._scanDiskChatSubfiles();
+    await actions.chat._scanDiskChatSubfiles();
     const entries: any[] = [];
     actions._appendSubfileTocEntries(entries, "\\include{123}");
 
@@ -358,19 +371,19 @@ describe("LaTeX included-file table of contents", () => {
       createDiskScanActions({
         readFile: jest.fn(async () => "% chat: live-one"),
       });
-    await actions._scanDiskChatSubfiles();
+    await actions.chat._scanDiskChatSubfiles();
     expect(getState().hasIn(["chat_markers", subfile])).toBe(true);
 
     setState({ switch_to_files: List([main]) });
-    await actions._scanDiskChatSubfiles();
+    await actions.chat._scanDiskChatSubfiles();
 
     expect(getState().hasIn(["chat_markers", subfile])).toBe(false);
     expect(getState().hasIn(["chat_bookmarks", subfile])).toBe(false);
-    expect(actions._diskSubfileHeadings.has(subfile)).toBe(false);
+    expect(actions.chat.diskSubfileHeadings.has(subfile)).toBe(false);
   });
 
   it("trusts a loaded subfile scan over remote thread metadata", () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "/home/user/project/main.tex";
     actions.project_id = "project-1";
     actions.canonical_paths = {};
@@ -386,7 +399,7 @@ describe("LaTeX included-file table of contents", () => {
     actions.redux = {
       getEditorActions: jest.fn(() => undefined),
     };
-    actions._getAnchoredThreadRows = () => [
+    actions.chat.getAnchoredThreadRows = () => [
       {
         thread_id: "thread-1",
         anchor: {
@@ -410,7 +423,7 @@ describe("LaTeX initial build", () => {
       commit: jest.fn(),
       save_to_disk: jest.fn(async () => undefined),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions._syncdb = syncdb;
     actions._state = "open";
     actions.isClosed = () => false;
@@ -437,7 +450,7 @@ describe("LaTeX initial build", () => {
       set: jest.fn(),
       commit: jest.fn(),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions._syncdb = syncdb;
     actions.path = "paper.tex";
     actions.knitr = false;
@@ -483,7 +496,7 @@ describe("LaTeX initial build", () => {
     syncdb.on = jest.fn();
 
     const forceBuild = jest.fn(async () => undefined);
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions._state = "open";
     actions._syncstring = syncstring;
     actions._syncdb = syncdb;
@@ -510,12 +523,12 @@ describe("LaTeX initial build", () => {
 
 describe("LaTeX chat marker resolution", () => {
   function createResolutionActions(chatActions: any) {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions._state = "open";
     actions.path = "paper.tex";
     actions.project_id = "project-1";
-    actions.getAnchorLabel = () => "anchor (paper.tex:4)";
-    actions._waitForReadyChatActions = jest.fn(async () => chatActions);
+    actions.chat.getAnchorLabel = () => "anchor (paper.tex:4)";
+    actions.chat._waitForReadyChatActions = jest.fn(async () => chatActions);
     actions.store = {
       get: (key: string) =>
         key === "chat_markers"
@@ -524,7 +537,7 @@ describe("LaTeX chat marker resolution", () => {
             })
           : undefined,
     };
-    actions._removeChatMarkersForHash = jest.fn(async () => true);
+    actions.chat._removeChatMarkersForHash = jest.fn(async () => true);
     return actions;
   }
 
@@ -557,12 +570,12 @@ describe("LaTeX chat marker resolution", () => {
     expect(resolveAnchoredThread).toHaveBeenCalledWith("thread-1", {
       label: "anchor (paper.tex:4)",
     });
-    expect(actions._removeChatMarkersForHash).toHaveBeenCalledWith(
+    expect(actions.chat._removeChatMarkersForHash).toHaveBeenCalledWith(
       "paper.tex",
       "anchor-1",
     );
     expect(
-      actions._removeChatMarkersForHash.mock.invocationCallOrder[0],
+      actions.chat._removeChatMarkersForHash.mock.invocationCallOrder[0],
     ).toBeLessThan(resolveAnchoredThread.mock.invocationCallOrder[0]);
   });
 
@@ -577,7 +590,7 @@ describe("LaTeX chat marker resolution", () => {
     await actions.resolveChatMarker("anchor-1", false);
 
     expect(chatActions.resolveAnchoredThread).not.toHaveBeenCalled();
-    expect(actions._removeChatMarkersForHash).toHaveBeenCalledWith(
+    expect(actions.chat._removeChatMarkersForHash).toHaveBeenCalledWith(
       "paper.tex",
       "anchor-1",
     );
@@ -591,7 +604,7 @@ describe("LaTeX chat marker resolution", () => {
       resolveAnchoredThread: jest.fn(),
     };
     const actions = createResolutionActions(chatActions);
-    actions._removeChatMarkersForHash.mockResolvedValue(false);
+    actions.chat._removeChatMarkersForHash.mockResolvedValue(false);
 
     await actions.resolveChatMarker("anchor-1", true);
 
@@ -612,7 +625,7 @@ describe("LaTeX chat marker resolution", () => {
       }),
       chat_bookmarks: Map(),
     });
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "/home/user/project/main.tex";
     actions.project_id = "project-1";
     actions.redux = {
@@ -628,7 +641,7 @@ describe("LaTeX chat marker resolution", () => {
     actions.updateTableOfContents = jest.fn();
 
     await expect(
-      actions._removeChatMarkersForHash(path, "anchor-1"),
+      actions.chat._removeChatMarkersForHash(path, "anchor-1"),
     ).resolves.toBe(true);
 
     expect(writeFileDelta).toHaveBeenCalledWith(
@@ -660,15 +673,15 @@ describe("LaTeX chat marker resolution", () => {
       getWrapperElement: jest.fn(() => ({ isConnected: true })),
       setValueNoJump: jest.fn(),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = path;
     actions._syncstring = {
       to_str: jest.fn(() => syncText),
     };
     actions._cm = { older: olderCm, "cm-1": cm };
     actions._get_cm = jest.fn(() => cm);
-    actions._chatMarkerScanners = {};
-    actions._clearChatTextDecorations = jest.fn();
+    actions.chat._chatMarkerScanners = {};
+    actions.chat._clearChatTextDecorations = jest.fn();
     actions.set_value = jest.fn((value: string) => {
       syncText = value;
       liveText = value;
@@ -676,7 +689,7 @@ describe("LaTeX chat marker resolution", () => {
     actions.syncstring_commit = jest.fn();
 
     await expect(
-      actions._removeChatMarkersForHash(path, "anchor-1"),
+      actions.chat._removeChatMarkersForHash(path, "anchor-1"),
     ).resolves.toBe(true);
 
     expect(actions.set_value).toHaveBeenCalledWith("pending local edit");
@@ -687,42 +700,48 @@ describe("LaTeX chat marker resolution", () => {
 
 describe("LaTeX anchor pane targeting", () => {
   it("switches the last focused subfile pane back to the master", async () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "main.tex";
     actions._get_most_recent_active_frame_id_of_type = jest.fn(() => "cm-1");
     actions._get_frame_node = jest.fn(() => Map({ path: "123.tex" }));
     actions.switch_to_file = jest.fn(async () => "cm-1");
-    actions._waitForSourcePane = jest.fn();
+    actions.chat._waitForSourcePane = jest.fn();
 
-    const frameId = await actions._switchFocusedSourceTo("main.tex");
+    const frameId = await actions.chat.switchFocusedSourceTo("main.tex");
 
     expect(frameId).toBe("cm-1");
     expect(actions.switch_to_file).toHaveBeenCalledWith("main.tex", "cm-1");
-    expect(actions._waitForSourcePane).toHaveBeenCalledWith("main.tex", "cm-1");
+    expect(actions.chat._waitForSourcePane).toHaveBeenCalledWith(
+      "main.tex",
+      "cm-1",
+    );
   });
 
   it("reuses the focused pane when it already shows the target file", async () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "main.tex";
     actions._get_most_recent_active_frame_id_of_type = jest.fn(() => "cm-1");
     actions._get_frame_node = jest.fn(() => Map({ path: "main.tex" }));
     actions.switch_to_file = jest.fn();
-    actions._waitForSourcePane = jest.fn();
+    actions.chat._waitForSourcePane = jest.fn();
 
-    const frameId = await actions._switchFocusedSourceTo("main.tex");
+    const frameId = await actions.chat.switchFocusedSourceTo("main.tex");
 
     expect(frameId).toBe("cm-1");
     expect(actions.switch_to_file).not.toHaveBeenCalled();
-    expect(actions._waitForSourcePane).toHaveBeenCalledWith("main.tex", "cm-1");
+    expect(actions.chat._waitForSourcePane).toHaveBeenCalledWith(
+      "main.tex",
+      "cm-1",
+    );
   });
 });
 
 describe("LaTeX TOC pane targeting", () => {
   it("switches a subfile pane to the master for a master bookmark", async () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "main.tex";
-    actions._switchFocusedSourceTo = jest.fn(async () => "cm-1");
-    actions._gotoSourceLine = jest.fn();
+    actions.chat.switchFocusedSourceTo = jest.fn(async () => "cm-1");
+    actions.chat.gotoSourceLine = jest.fn();
 
     await actions.scrollToHeading({
       id: "12-bookmark-review",
@@ -730,8 +749,8 @@ describe("LaTeX TOC pane targeting", () => {
       level: 6,
     });
 
-    expect(actions._switchFocusedSourceTo).toHaveBeenCalledWith("main.tex");
-    expect(actions._gotoSourceLine).toHaveBeenCalledWith(
+    expect(actions.chat.switchFocusedSourceTo).toHaveBeenCalledWith("main.tex");
+    expect(actions.chat.gotoSourceLine).toHaveBeenCalledWith(
       "main.tex",
       12,
       "cm-1",
@@ -739,10 +758,10 @@ describe("LaTeX TOC pane targeting", () => {
   });
 
   it("targets the same focused pane for a subfile bookmark", async () => {
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions.path = "main.tex";
-    actions._switchFocusedSourceTo = jest.fn(async () => "cm-1");
-    actions._gotoSourceLine = jest.fn();
+    actions.chat.switchFocusedSourceTo = jest.fn(async () => "cm-1");
+    actions.chat.gotoSourceLine = jest.fn();
 
     await actions.scrollToHeading({
       id: "sub:123.tex:5-bookmark-review",
@@ -751,19 +770,23 @@ describe("LaTeX TOC pane targeting", () => {
       extra: { kind: "line", path: "123.tex", line: 4 },
     });
 
-    expect(actions._switchFocusedSourceTo).toHaveBeenCalledWith("123.tex");
-    expect(actions._gotoSourceLine).toHaveBeenCalledWith("123.tex", 5, "cm-1");
+    expect(actions.chat.switchFocusedSourceTo).toHaveBeenCalledWith("123.tex");
+    expect(actions.chat.gotoSourceLine).toHaveBeenCalledWith(
+      "123.tex",
+      5,
+      "cm-1",
+    );
   });
 
   it("moves and focuses through the actions that own the target file", async () => {
     const targetActions = {
       programmatically_goto_line: jest.fn(async () => undefined),
     };
-    const actions: any = Object.create(Actions.prototype);
-    actions._actionsForChatPath = jest.fn(() => targetActions);
+    const actions: any = createActionsFixture();
+    actions.chat._actionsForChatPath = jest.fn(() => targetActions);
     actions.set_active_id = jest.fn();
 
-    await actions._gotoSourceLine("123.tex", 5, "cm-1");
+    await actions.chat.gotoSourceLine("123.tex", 5, "cm-1");
 
     expect(actions.set_active_id).toHaveBeenCalledWith("cm-1", true);
     expect(targetActions.programmatically_goto_line).toHaveBeenCalledWith(
@@ -791,7 +814,7 @@ describe("LaTeX invalid chat marker timing", () => {
     syncstring.get_state = () => "ready";
     syncstring.to_str = () => text;
 
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions._state = "open";
     actions.path = "123.tex";
     actions._syncstring = syncstring;
@@ -801,16 +824,16 @@ describe("LaTeX invalid chat marker timing", () => {
         state = state.set(key, value);
       }
     };
-    actions._chatMarkerScanners = {};
-    actions._reconcileEmptyAnchorThread = jest.fn();
-    actions._updateChatGutters = jest.fn();
-    actions._refreshChatMarkerText = jest.fn();
-    actions._refreshCursorInsert = jest.fn();
-    actions._ensureChatGutterUI = jest.fn();
+    actions.chat._chatMarkerScanners = {};
+    actions.chat._reconcileEmptyAnchorThread = jest.fn();
+    actions.chat._updateChatGutters = jest.fn();
+    actions.chat._refreshChatMarkerText = jest.fn();
+    actions.chat._refreshCursorInsert = jest.fn();
+    actions.chat._ensureChatGutterUI = jest.fn();
     const invalidMarkers = () =>
       state.get("invalid_chat_markers")?.get("123.tex") ?? List();
 
-    actions._attachChatMarkerScanner(actions, "123.tex");
+    actions.chat._attachChatMarkerScanner(actions, "123.tex");
 
     text = "% chat: su";
     syncstring.emit("change");
@@ -828,7 +851,7 @@ describe("LaTeX invalid chat marker timing", () => {
       { hash: "subfile-123", line: 0, col: 0 },
     ]);
 
-    actions._chatMarkerScanners["123.tex"].dispose();
+    actions.chat._chatMarkerScanners["123.tex"].dispose();
   });
 
   it("scans the mounted CodeMirror buffer instead of a stale syncstring", () => {
@@ -844,7 +867,7 @@ describe("LaTeX invalid chat marker timing", () => {
       getWrapperElement: () => ({ isConnected: true }),
     };
 
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
     actions._state = "open";
     actions.path = "123.tex";
     actions._syncstring = syncstring;
@@ -855,19 +878,19 @@ describe("LaTeX invalid chat marker timing", () => {
         state = state.set(key, value);
       }
     };
-    actions._chatMarkerScanners = {};
-    actions._reconcileEmptyAnchorThread = jest.fn();
-    actions._updateChatGutters = jest.fn();
-    actions._refreshChatMarkerText = jest.fn();
-    actions._refreshCursorInsert = jest.fn();
-    actions._ensureChatGutterUI = jest.fn();
+    actions.chat._chatMarkerScanners = {};
+    actions.chat._reconcileEmptyAnchorThread = jest.fn();
+    actions.chat._updateChatGutters = jest.fn();
+    actions.chat._refreshChatMarkerText = jest.fn();
+    actions.chat._refreshCursorInsert = jest.fn();
+    actions.chat._ensureChatGutterUI = jest.fn();
 
-    actions._attachChatMarkerScanner(actions, "123.tex");
+    actions.chat._attachChatMarkerScanner(actions, "123.tex");
 
     expect(state.getIn(["chat_markers", "123.tex"]).toJS()).toEqual([
       { hash: "live-anchor", line: 1, col: 0 },
     ]);
-    actions._chatMarkerScanners["123.tex"].dispose();
+    actions.chat._chatMarkerScanners["123.tex"].dispose();
   });
 });
 
@@ -877,9 +900,9 @@ describe("LaTeX chat marker locking", () => {
     const cm = {
       markText: jest.fn(() => textMarker),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
 
-    const result = actions._createChatTextMarker({
+    const result = actions.chat._createChatTextMarker({
       cm,
       hash: "20260727-abcdefgh",
       path: "123.tex",
@@ -906,9 +929,9 @@ describe("LaTeX chat marker locking", () => {
     const cm = {
       markText: doc.markText.bind(doc),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
 
-    actions._createChatTextMarker({
+    actions.chat._createChatTextMarker({
       cm,
       hash: "HASH",
       path: "123.tex",
@@ -928,9 +951,9 @@ describe("LaTeX chat marker locking", () => {
     const cm = {
       markText: jest.fn(() => ({})),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
 
-    actions._createChatTextMarker({
+    actions.chat._createChatTextMarker({
       cm,
       hash: "draft-anchor",
       path: "123.tex",
@@ -964,11 +987,11 @@ describe("LaTeX chat tail tracking", () => {
         onChanges = callback;
       }),
     };
-    const actions: any = Object.create(Actions.prototype);
-    actions._chatTailTrackingInstalled = new WeakSet();
-    actions._syncChatTailPositions = jest.fn();
+    const actions: any = createActionsFixture();
+    actions.chat._chatTailTrackingInstalled = new WeakSet();
+    actions.chat._syncChatTailPositions = jest.fn();
 
-    actions._ensureChatTailTracking(cm, "123.tex");
+    actions.chat._ensureChatTailTracking(cm, "123.tex");
 
     expect(eventName).toBe("changes");
     onChanges?.(cm, [
@@ -983,7 +1006,7 @@ describe("LaTeX chat tail tracking", () => {
         text: [""],
       },
     ]);
-    expect(actions._syncChatTailPositions).toHaveBeenCalledWith(
+    expect(actions.chat._syncChatTailPositions).toHaveBeenCalledWith(
       "123.tex",
       cm,
       3,
@@ -991,8 +1014,8 @@ describe("LaTeX chat tail tracking", () => {
   });
 
   it("reuses decorations when typing only moves unchanged markers", () => {
-    const actions: any = Object.create(Actions.prototype);
-    actions._anchorHasMessages = jest.fn(() => true);
+    const actions: any = createActionsFixture();
+    actions.chat._anchorHasMessages = jest.fn(() => true);
     const existing = [
       {
         chatHash: "20260727-abcdefgh",
@@ -1014,7 +1037,7 @@ describe("LaTeX chat tail tracking", () => {
     ];
 
     expect(
-      actions._canReuseChatTextDecorations({
+      actions.chat._canReuseChatTextDecorations({
         existing,
         // Scanned line numbers changed after inserting text above, but the
         // live TextMarkers have already tracked those movements.
@@ -1025,7 +1048,7 @@ describe("LaTeX chat tail tracking", () => {
     ).toBe(true);
 
     expect(
-      actions._canReuseChatTextDecorations({
+      actions.chat._canReuseChatTextDecorations({
         existing,
         markers: [{ hash: "20260727-abcdefgh", line: 20, col: 0 }],
         invalidMarkers: [{ text: "different id", line: 24, col: 0 }],
@@ -1043,9 +1066,9 @@ describe("LaTeX chat tail tracking", () => {
         querySelectorAll: () => [liveHost, staleHost],
       }),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
 
-    actions._sweepStaleChatTailHosts(cm, [{ host: liveHost }]);
+    actions.chat._sweepStaleChatTailHosts(cm, [{ host: liveHost }]);
 
     expect(liveHost.parentNode.removeChild).not.toHaveBeenCalled();
     expect(staleParent.removeChild).toHaveBeenCalledWith(staleHost);
@@ -1070,9 +1093,9 @@ describe("LaTeX chat gutter movement", () => {
         ],
       ]),
     };
-    const actions: any = Object.create(Actions.prototype);
+    const actions: any = createActionsFixture();
 
-    actions._updateNativeGutterHosts({
+    actions.chat._updateNativeGutterHosts({
       path: "123.tex",
       cms: [cm],
       targets: [{ line: 10 }, { line: 15 }],
@@ -1116,8 +1139,8 @@ describe("LaTeX marker insertion", () => {
       getLine: jest.fn(() => "% chat: locked-anchor"),
       replaceRange: jest.fn(),
     };
-    const actions: any = Object.create(Actions.prototype);
-    actions._activeSourceTarget = jest.fn(() => ({
+    const actions: any = createActionsFixture();
+    actions.chat._activeSourceTarget = jest.fn(() => ({
       cm,
       actions: ownerActions,
       path: "123.tex",
@@ -1125,7 +1148,10 @@ describe("LaTeX marker insertion", () => {
     }));
 
     expect(
-      actions._insertMarkerText("% chat: new-anchor", "  % chat: new-anchor"),
+      actions.chat._insertMarkerText(
+        "% chat: new-anchor",
+        "  % chat: new-anchor",
+      ),
     ).toBeUndefined();
     expect(cm.replaceRange).toHaveBeenCalled();
     expect(ownerActions.set_syncstring_to_codemirror).not.toHaveBeenCalled();
@@ -1160,11 +1186,11 @@ describe("LaTeX marker/tail pairing", () => {
     const cm = {};
     const markerMap = new globalThis.Map([[cm, [deadMarker, liveMarker]]]);
     const tailMap = new globalThis.Map([[cm, [deadTail, liveTail]]]);
-    const actions: any = Object.create(Actions.prototype);
-    actions._chatTextMarkers = { "123.tex": markerMap };
-    actions._chatTailHosts = { "123.tex": tailMap };
+    const actions: any = createActionsFixture();
+    actions.chat._chatTextMarkers = { "123.tex": markerMap };
+    actions.chat._chatTailHosts = { "123.tex": tailMap };
 
-    actions._refreshChatMarkerLocks();
+    actions.chat._refreshChatMarkerLocks();
 
     expect(markerMap.get(cm)).toEqual([liveMarker]);
     expect(tailMap.get(cm)).toEqual([liveTail]);

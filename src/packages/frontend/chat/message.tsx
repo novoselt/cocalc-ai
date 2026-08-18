@@ -119,6 +119,7 @@ import {
   resolveEditedMessageForSave,
   resolveEffectiveGenerating,
   resolveInlineCodexActivityMode,
+  resolveLiveCodexActivityBlocks,
   resolveMessageBodyMode,
   resolveRenderedMessageValue,
   shouldLoadCodexPreviewBody,
@@ -875,6 +876,14 @@ export default function Message({
     effectiveGenerating,
     showCodexActivity,
   ]);
+  const resolvedLiveInterleavedCodexBlocks = useMemo(
+    () =>
+      resolveLiveCodexActivityBlocks({
+        previewBlocks: liveInterleavedCodexBlocks,
+        cachedBlocks: cachedCodexActivityBlocks,
+      }),
+    [cachedCodexActivityBlocks, liveInterleavedCodexBlocks],
+  );
   const completedCodexActivityBlocksFromEvents = useMemo(() => {
     if (
       !Array.isArray(codexPreviewLog.events) ||
@@ -931,13 +940,13 @@ export default function Message({
   ]);
   useEffect(() => {
     if (
-      liveInterleavedCodexBlocks == null ||
+      resolvedLiveInterleavedCodexBlocks == null ||
       !onCachedCodexActivityBlocksChange
     ) {
       return;
     }
-    onCachedCodexActivityBlocksChange(liveInterleavedCodexBlocks);
-  }, [liveInterleavedCodexBlocks, onCachedCodexActivityBlocksChange]);
+    onCachedCodexActivityBlocksChange(resolvedLiveInterleavedCodexBlocks);
+  }, [onCachedCodexActivityBlocksChange, resolvedLiveInterleavedCodexBlocks]);
   const lastCodexActivityAtMs = useMemo(
     () => getLatestCodexActivityAtMs(codexPreviewLog.events),
     [codexPreviewLog.events],
@@ -2054,7 +2063,7 @@ export default function Message({
     );
     const activityBlocksToRender =
       inlineCodexActivityMode === "live"
-        ? liveInterleavedCodexBlocks
+        ? resolvedLiveInterleavedCodexBlocks
         : inlineCodexActivityMode === "completed"
           ? completedCodexActivityBlocks
           : undefined;
@@ -2159,7 +2168,7 @@ export default function Message({
           }
           deleteLog={codexPreviewLog.deleteLog}
           activityLiveStatus={codexPreviewLog.liveStatus}
-          logEvents={codexPreviewLog.events}
+          logEvents={effectiveGenerating ? undefined : codexPreviewLog.events}
           activeDescendantThreadIds={activeDescendantThreadIds}
           backgroundTerminalProcesses={backgroundTerminalProcesses}
           interruptRequested={retainedWorkStopRequested}

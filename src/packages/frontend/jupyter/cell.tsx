@@ -27,8 +27,8 @@ import { CellInput } from "./cell-input";
 import { CellOutput } from "./cell-output";
 import { InsertCell } from "./insert-cell";
 import { Position } from "./insert-cell/types";
-import { MinimalCell } from "./minimal/minimal-cell";
-import type { MinimalLayout } from "./minimal/types";
+import { StudioCell } from "./studio/studio-cell";
+import type { StudioLayout } from "./studio/types";
 import { NBGraderMetadata } from "./nbgrader/cell-metadata";
 import { INPUT_PROMPT_COLOR } from "./prompt/base";
 
@@ -66,7 +66,7 @@ interface Props {
   isPending?: boolean;
   name?: string;
   runOverlay?: Map<string, any>;
-  cellViewMode?: "default" | "minimal";
+  cellViewMode?: "default" | "studio";
   blockInfo?: {
     blockIndex: number;
     positionInBlock: number;
@@ -83,8 +83,8 @@ interface Props {
   sectionTitle?: string;
   blockHighlighted?: boolean;
   onHoverBlock?: (hover: boolean) => void;
-  minimalLayout?: MinimalLayout;
-  zenMode?: boolean;
+  studioLayout?: StudioLayout;
+  readingMode?: boolean;
   frameHeight?: number;
 }
 
@@ -153,10 +153,10 @@ function getRenderChangeReasons(props: Props, nextProps: Props): string[] {
   if (nextProps.blockHighlighted !== props.blockHighlighted) {
     reasons.push("blockHighlighted");
   }
-  if (nextProps.minimalLayout !== props.minimalLayout) {
-    reasons.push("minimalLayout");
+  if (nextProps.studioLayout !== props.studioLayout) {
+    reasons.push("studioLayout");
   }
-  if (nextProps.zenMode !== props.zenMode) reasons.push("zenMode");
+  if (nextProps.readingMode !== props.readingMode) reasons.push("readingMode");
   if (nextProps.frameHeight !== props.frameHeight) reasons.push("frameHeight");
   return reasons;
 }
@@ -196,8 +196,8 @@ function areEqual(props: Props, nextProps: Props): boolean {
     nextProps.sectionCollapsed !== props.sectionCollapsed ||
     nextProps.collapsedRunState !== props.collapsedRunState ||
     nextProps.blockHighlighted !== props.blockHighlighted ||
-    nextProps.minimalLayout !== props.minimalLayout ||
-    nextProps.zenMode !== props.zenMode ||
+    nextProps.studioLayout !== props.studioLayout ||
+    nextProps.readingMode !== props.readingMode ||
     nextProps.frameHeight !== props.frameHeight;
 
   if (changed && shouldLogRenderAudit()) {
@@ -221,14 +221,14 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
     return <></>;
   }
 
-  if (props.cellViewMode === "minimal") {
+  if (props.cellViewMode === "studio") {
     const blockInfo = props.blockInfo ?? {
       blockIndex: 0,
       positionInBlock: 0,
       blockSize: 1,
     };
     return (
-      <MinimalCell
+      <StudioCell
         id={id}
         index={props.index ?? 0}
         cell={props.cell}
@@ -266,8 +266,8 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
         sectionTitle={props.sectionTitle}
         blockHighlighted={props.blockHighlighted}
         onHoverBlock={props.onHoverBlock}
-        minimalLayout={props.minimalLayout}
-        zenMode={props.zenMode}
+        studioLayout={props.studioLayout}
+        readingMode={props.readingMode}
         frameHeight={props.frameHeight}
       />
     );
