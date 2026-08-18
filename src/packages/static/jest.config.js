@@ -8,7 +8,7 @@ module.exports = {
     // See https://jestjs.io/docs/configuration#testenvironment-string
     customExportConditions: ["node", "node-addons"],
   },
-  testMatch: ["**/?(*.)+(spec|test).ts?(x)"],
+  testMatch: ["**/?(*.)+(spec|test).ts?(x)", "!**/playwright/**"],
   setupFilesAfterEnv: ["./test/setup.js"],
   moduleNameMapper: {
     ".+\\.(svg|css)$": "identity-obj-proxy",
