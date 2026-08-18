@@ -239,6 +239,95 @@ async function backfillProfiles(
   return result.rowCount ?? 0;
 }
 
+// Cohort attributes are snapshots, but administrative exclusions remain mutable.
+async function reconcileProfileExclusions(
+  client: PoolClient,
+  scopeId: string,
+): Promise<number> {
+  const { rows } = await client.query<{ changed: number }>(
+    `WITH candidate_ids AS MATERIALIZED (
+       SELECT account_id FROM accounts WHERE banned IS TRUE
+       UNION
+       SELECT account_id FROM growth_account_profiles
+        WHERE home_bay_id=$1 AND exclusion_reason='banned'
+     ), desired AS MATERIALIZED (
+       SELECT profile.account_id, profile.account_created_at,
+              profile.cohort_date, profile.cohort_week,
+              profile.legacy_status,
+              CASE
+                WHEN account.ephemeral IS NOT NULL
+                  OR COALESCE(account.banned, FALSE)
+                  OR COALESCE(account.groups, ARRAY[]::text[])
+                       && ARRAY['admin']::text[]
+                  OR COALESCE(account.tags, ARRAY[]::text[])
+                       && ARRAY['test']::text[]
+                THEN TRUE ELSE FALSE
+              END AS excluded_from_growth,
+              CASE
+                WHEN account.ephemeral IS NOT NULL THEN 'ephemeral'
+                WHEN COALESCE(account.banned, FALSE) THEN 'banned'
+                WHEN COALESCE(account.groups, ARRAY[]::text[])
+                       && ARRAY['admin']::text[] THEN 'staff'
+                WHEN COALESCE(account.tags, ARRAY[]::text[])
+                       && ARRAY['test']::text[] THEN 'test'
+                ELSE NULL
+              END AS exclusion_reason
+         FROM candidate_ids
+         JOIN growth_account_profiles AS profile USING (account_id)
+         JOIN accounts AS account USING (account_id)
+        WHERE profile.home_bay_id=$1
+     ), changed AS MATERIALIZED (
+       UPDATE growth_account_profiles AS profile
+          SET excluded_from_growth=desired.excluded_from_growth,
+              exclusion_reason=desired.exclusion_reason,
+              updated_at=NOW()
+         FROM desired
+        WHERE profile.account_id=desired.account_id
+          AND (
+            profile.excluded_from_growth IS DISTINCT FROM
+              desired.excluded_from_growth
+            OR profile.exclusion_reason IS DISTINCT FROM
+              desired.exclusion_reason
+          )
+       RETURNING profile.account_id, profile.account_created_at,
+                 profile.cohort_date, profile.cohort_week,
+                 profile.legacy_status
+     ), dirtied AS (
+       INSERT INTO growth_dirty_periods
+         (metric_version, scope_id, period_grain, period_start, reason)
+       SELECT $2, $1, dirty.grain, dirty.period_start,
+              'profile_exclusion_reconciled'
+         FROM (
+           SELECT 'calendar_day'::text AS grain, cohort_date AS period_start
+             FROM changed WHERE legacy_status='new'
+           UNION
+           SELECT 'cohort_day', cohort_date
+             FROM changed WHERE legacy_status='new'
+           UNION
+           SELECT 'cohort_week', cohort_week
+             FROM changed WHERE legacy_status='new'
+           UNION
+           SELECT 'calendar_day', activity.activity_date
+             FROM changed
+             JOIN growth_account_activity_daily AS activity USING (account_id)
+            WHERE activity.metric_contract_version=$2
+           UNION
+           SELECT 'calendar_week',
+                  date_trunc('week', activity.activity_date::timestamp)::date
+             FROM changed
+             JOIN growth_account_activity_daily AS activity USING (account_id)
+            WHERE activity.metric_contract_version=$2
+         ) AS dirty
+       ON CONFLICT (metric_version, scope_id, period_grain, period_start)
+       DO UPDATE SET reason=EXCLUDED.reason, updated_at=NOW()
+       RETURNING 1
+     )
+     SELECT COUNT(*)::int AS changed FROM changed`,
+    [scopeId, GROWTH_METRIC_VERSION],
+  );
+  return rows[0]?.changed ?? 0;
+}
+
 async function selectEventBatch(
   client: PoolClient,
   scopeId: string,
@@ -847,6 +936,7 @@ export type GrowthMaterializationResult =
   | {
       status: "ok";
       profiles: number;
+      profile_exclusions: number;
       events: number;
       dirty_periods: number;
       pruned_events: number;
@@ -882,6 +972,7 @@ export async function runGrowthMaterializationOnce(): Promise<GrowthMaterializat
       scopeId,
       state.rows[0].coverage_started_at,
     );
+    const profileExclusions = await reconcileProfileExclusions(client, scopeId);
     const events = await selectEventBatch(
       client,
       scopeId,
@@ -926,6 +1017,7 @@ export async function runGrowthMaterializationOnce(): Promise<GrowthMaterializat
     return {
       status: "ok",
       profiles,
+      profile_exclusions: profileExclusions,
       events: events.length,
       dirty_periods: dirtyPeriods,
       pruned_events: prunedEvents,

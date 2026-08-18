@@ -30,7 +30,10 @@ async function tick(): Promise<void> {
   running = true;
   try {
     const result = await runGrowthMaterializationOnce();
-    if (result.status === "ok" && (result.events || result.profiles)) {
+    if (
+      result.status === "ok" &&
+      (result.events || result.profiles || result.profile_exclusions)
+    ) {
       logger.info("growth analytics materialized", result);
     }
   } catch (err) {
