@@ -47,6 +47,7 @@ import { chooseOnboardingRootfs, type OnboardingProjectKind } from "./rootfs";
 import {
   isRetryableOnboardingArtifactError,
   onboardingArtifactCreationForProject,
+  waitForOnboardingArtifactAndRuntime,
 } from "./artifact";
 import {
   buildCodexOnboardingPrompt,
@@ -778,17 +779,25 @@ export function FirstRunOnboarding({
         restore_session: false,
       });
       setProgress(68);
+      const artifactSetup = await waitForOnboardingArtifactAndRuntime({
+        createArtifact: () =>
+          createArtifactWhenReady({
+            project_id,
+            kind: path.kind,
+            preferred_jupyter_kernel: prepared.default_jupyter_kernel,
+          }),
+        waitForRuntime: () =>
+          webapp_client.conat_client
+            .projectApi({ project_id })
+            .waitUntilReady({ timeout: 60_000 }),
+      });
       let artifact: string | undefined;
-      try {
-        artifact = await createArtifactWhenReady({
-          project_id,
-          kind: path.kind,
-          preferred_jupyter_kernel: prepared.default_jupyter_kernel,
-        });
-      } catch (err) {
+      if ("error" in artifactSetup) {
         void message.warning(
-          `Your project is ready, but CoCalc could not create the first file automatically: ${err}`,
+          `Your project is ready, but CoCalc could not create the first file automatically: ${artifactSetup.error}`,
         );
+      } else {
+        artifact = artifactSetup.artifact;
       }
       setProgress(88);
       complete(intent, project_id);

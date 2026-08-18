@@ -16,6 +16,25 @@ export type OnboardingArtifactCreation = {
   relative_path: string;
 };
 
+export type OnboardingArtifactSetupResult<T> =
+  | { artifact: T }
+  | { error: unknown };
+
+export async function waitForOnboardingArtifactAndRuntime<T>({
+  createArtifact,
+  waitForRuntime,
+}: {
+  createArtifact: () => Promise<T>;
+  waitForRuntime: () => Promise<void>;
+}): Promise<OnboardingArtifactSetupResult<T>> {
+  const artifactResult: Promise<OnboardingArtifactSetupResult<T>> =
+    createArtifact()
+      .then((artifact) => ({ artifact }))
+      .catch((error) => ({ error }));
+  const [setup] = await Promise.all([artifactResult, waitForRuntime()]);
+  return setup;
+}
+
 export function onboardingArtifactCreation(
   kind: OnboardingProjectKind,
   homeDirectory: string,
