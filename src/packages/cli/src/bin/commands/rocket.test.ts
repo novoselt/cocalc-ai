@@ -6,7 +6,11 @@ import test from "node:test";
 
 import { Command } from "commander";
 
-import { registerRocketCommand, type RocketCommandDeps } from "./rocket";
+import {
+  __test__,
+  registerRocketCommand,
+  type RocketCommandDeps,
+} from "./rocket";
 
 type CapturedRun = {
   command: string;
@@ -14,6 +18,22 @@ type CapturedRun = {
 };
 
 const releaseArch = process.arch === "arm64" ? "arm64" : "x64";
+
+test("rocket invokes generated JavaScript CLIs through Node", () => {
+  assert.deepEqual(__test__.cliInvocation("/tmp/cocalc.js", ["host", "list"]), {
+    command: process.execPath,
+    args: ["/tmp/cocalc.js", "host", "list"],
+  });
+  assert.deepEqual(__test__.cliInvocation("/opt/cocalc/bin/cocalc", ["host"]), {
+    command: "/opt/cocalc/bin/cocalc",
+    args: ["host"],
+  });
+});
+
+test("rocket safely formats missing child-process output", () => {
+  assert.equal(__test__.trimCommandOutput(undefined), "");
+  assert.equal(__test__.trimCommandOutput("first\nsecond\n"), "first\nsecond");
+});
 
 function createProgram({
   runs,

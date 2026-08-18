@@ -1251,6 +1251,17 @@ test("host deploy rollout-fleet queues one canary-first durable campaign", async
         bay_id: "bay-1",
         last_seen: "2026-01-01T00:00:00.000Z",
       },
+      {
+        id: "pinned-host",
+        name: "pinned-host",
+        status: "running",
+        bay_id: "bay-1",
+        last_seen: now,
+        runtime_exception_summary: {
+          host_override_count: 1,
+          host_override_targets: ["project-host"],
+        },
+      },
     ],
   });
   const program = new Command();
@@ -1293,6 +1304,9 @@ test("host deploy rollout-fleet queues one canary-first durable campaign", async
   ]);
   assert.equal(capture.data.status, "succeeded");
   assert.equal(capture.data.op_id, "fleet-op-1");
+  assert.deepEqual(capture.data.excluded_pinned_hosts, [
+    { host_id: "pinned-host", name: "pinned-host" },
+  ]);
 });
 
 test("host upgrade --wait emits progress on stderr in json output mode", async () => {

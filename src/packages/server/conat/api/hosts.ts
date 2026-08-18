@@ -169,6 +169,12 @@ import {
   setProjectHostRuntimeDeployments,
 } from "@cocalc/database/postgres/project-host-runtime-deployments";
 import {
+  hostOverridesAnyRolloutTarget,
+  hostOverridesEveryRolloutTarget,
+  loadHostRuntimeDeploymentTargetKeys,
+  runtimeFleetDeploymentTargetKeys,
+} from "@cocalc/server/hosts/runtime-fleet-overrides";
+import {
   deleteCloudflareTunnel,
   hasCloudflareTunnel,
 } from "@cocalc/server/cloud/cloudflare-tunnel";
@@ -8187,6 +8193,35 @@ export async function rolloutHostRuntimeFleet({
       `runtime fleet rollout is bay-local; create a separate campaign on the authoritative bay for: ${remote.join(", ")}`,
     );
   }
+  const rolloutTargetKeys =
+    runtimeFleetDeploymentTargetKeys(normalizedComponents);
+  let fleetRows = rows;
+  if (promote_global === true) {
+    ({ rows: fleetRows } = await pool().query(
+      `SELECT * FROM project_hosts WHERE deleted IS NULL`,
+    ));
+  }
+  const localFleetRows = fleetRows.filter((row) => {
+    const bayId = `${row.bay_id ?? ""}`.trim();
+    return !bayId || bayId === localBayId;
+  });
+  const overrideKeysByHost = await loadHostRuntimeDeploymentTargetKeys(
+    localFleetRows.map((row) => `${row.id}`),
+  );
+  const pinnedCohortHosts = uniqueHostIds
+    .filter((hostId) =>
+      hostOverridesAnyRolloutTarget({
+        hostId,
+        overrideKeysByHost,
+        rolloutTargetKeys,
+      }),
+    )
+    .map((hostId) => `${rowsById.get(hostId)?.name ?? hostId}`);
+  if (pinnedCohortHosts.length) {
+    throw new Error(
+      `runtime fleet rollout would overwrite host-scoped deployment overrides: ${pinnedCohortHosts.join(", ")}`,
+    );
+  }
   const unavailable = uniqueHostIds.flatMap((id) => {
     const row = rowsById.get(id);
     const availability = computeHostOperationalAvailability(row);
@@ -8202,16 +8237,18 @@ export async function rolloutHostRuntimeFleet({
     );
   }
   if (promote_global === true) {
-    const { rows: fleetRows } = await pool().query(
-      `SELECT * FROM project_hosts WHERE deleted IS NULL`,
-    );
-    const omittedHealthyHosts = fleetRows
+    const omittedHealthyHosts = localFleetRows
       .filter((row) => {
-        const bayId = `${row.bay_id ?? ""}`.trim();
-        return (!bayId || bayId === localBayId) &&
-          computeHostOperationalAvailability(row).operational
-          ? !rowsById.has(`${row.id}`)
-          : false;
+        const hostId = `${row.id}`;
+        return (
+          computeHostOperationalAvailability(row).operational &&
+          !rowsById.has(hostId) &&
+          !hostOverridesEveryRolloutTarget({
+            hostId,
+            overrideKeysByHost,
+            rolloutTargetKeys,
+          })
+        );
       })
       .map((row) => `${row.name ?? row.id}`);
     if (omittedHealthyHosts.length) {
