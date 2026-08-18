@@ -127,6 +127,34 @@ describe("detached worker queue liveness", () => {
 
     expect(context.last_queue_progress_at).toBe(42_000);
   });
+
+  it("releases stale affinity before the outer queue kick checks it", () => {
+    const queued = enqueueAcpJob(makeRequest() as any, {
+      preferred_worker_id: "worker-dead",
+    });
+    (workers.getAcpWorker as jest.Mock).mockReturnValue({
+      worker_id: "worker-dead",
+      state: "stopped",
+      last_heartbeat_at: Date.now(),
+    });
+
+    const next = acpTestInternals.nextQueuedAcpJobForThread({
+      project_id: queued.project_id,
+      path: queued.path,
+      thread_id: queued.thread_id,
+    });
+
+    expect(next?.op_id).toBe(queued.op_id);
+    expect(next?.worker_id).toBeNull();
+    expect(next?.worker_bundle_version).toBeNull();
+    expect(
+      getAcpJob({
+        project_id: queued.project_id,
+        path: queued.path,
+        user_message_id: queued.user_message_id,
+      })?.worker_id,
+    ).toBeNull();
+  });
 });
 
 function makeRequest() {

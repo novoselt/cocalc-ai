@@ -291,5 +291,86 @@ describePglite("growth analytics pipeline", () => {
       { metric_name: "eligible_signups", value: 1 },
       { metric_name: "verified_accounts", value: 1 },
     ]);
+
+    await getPool().query(
+      "UPDATE accounts SET banned=TRUE WHERE account_id=$1",
+      [NEW_ACCOUNT_ID],
+    );
+    await expect(runGrowthMaterializationOnce()).resolves.toMatchObject({
+      status: "ok",
+      events: 0,
+      profile_exclusions: 1,
+    });
+    const bannedProfile = await getPool().query(
+      `SELECT excluded_from_growth, exclusion_reason
+         FROM growth_account_profiles WHERE account_id=$1`,
+      [NEW_ACCOUNT_ID],
+    );
+    expect(bannedProfile.rows).toEqual([
+      { excluded_from_growth: true, exclusion_reason: "banned" },
+    ]);
+    const metricsAfterBan = await getPool().query(
+      `SELECT metric_name, value
+         FROM growth_metric_series
+        WHERE period_start=(NOW() AT TIME ZONE 'UTC')::date
+          AND metric_name IN ('eligible_signups', 'verified_accounts')
+        ORDER BY metric_name`,
+    );
+    expect(metricsAfterBan.rows).toEqual([
+      { metric_name: "eligible_signups", value: 0 },
+      { metric_name: "verified_accounts", value: 0 },
+    ]);
+    const retentionAfterBan = await getPool().query(
+      `SELECT cohort_size
+         FROM growth_retention_cells
+        WHERE cohort_grain='day'
+          AND cohort_start=(NOW() AT TIME ZONE 'UTC')::date
+          AND activity_signal='project_engaged_v1'
+          AND period_index=0`,
+    );
+    expect(retentionAfterBan.rows).toEqual([{ cohort_size: 0 }]);
+
+    await getPool().query(
+      "UPDATE accounts SET banned=FALSE WHERE account_id=$1",
+      [NEW_ACCOUNT_ID],
+    );
+    await expect(runGrowthMaterializationOnce()).resolves.toMatchObject({
+      status: "ok",
+      events: 0,
+      profile_exclusions: 1,
+    });
+    const restoredProfile = await getPool().query(
+      `SELECT excluded_from_growth, exclusion_reason
+         FROM growth_account_profiles WHERE account_id=$1`,
+      [NEW_ACCOUNT_ID],
+    );
+    expect(restoredProfile.rows).toEqual([
+      { excluded_from_growth: false, exclusion_reason: null },
+    ]);
+    const metricsAfterUnban = await getPool().query(
+      `SELECT metric_name, value
+         FROM growth_metric_series
+        WHERE period_start=(NOW() AT TIME ZONE 'UTC')::date
+          AND metric_name IN ('eligible_signups', 'verified_accounts')
+        ORDER BY metric_name`,
+    );
+    expect(metricsAfterUnban.rows).toEqual([
+      { metric_name: "eligible_signups", value: 1 },
+      { metric_name: "verified_accounts", value: 1 },
+    ]);
+    const retentionAfterUnban = await getPool().query(
+      `SELECT cohort_size
+         FROM growth_retention_cells
+        WHERE cohort_grain='day'
+          AND cohort_start=(NOW() AT TIME ZONE 'UTC')::date
+          AND activity_signal='project_engaged_v1'
+          AND period_index=0`,
+    );
+    expect(retentionAfterUnban.rows).toEqual([{ cohort_size: 1 }]);
+    await expect(runGrowthMaterializationOnce()).resolves.toMatchObject({
+      status: "ok",
+      events: 0,
+      profile_exclusions: 0,
+    });
   });
 });

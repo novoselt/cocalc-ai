@@ -4,10 +4,13 @@ import {
   randomBytes,
   randomUUID,
 } from "crypto";
-import { readFile, writeFile } from "fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
 import { join } from "path";
 import { secrets } from "@cocalc/backend/data";
 import getLogger from "@cocalc/backend/logger";
+import rustic from "@cocalc/backend/sandbox/rustic";
+import { parseOutput } from "@cocalc/backend/sandbox/exec";
 import getPool from "@cocalc/database/pool";
 import { markProjectBackedUp } from "@cocalc/server/projects/change-tracking";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
@@ -525,6 +528,15 @@ async function createProjectBackupRepoTx({
     existingCount: existing[0]?.count ?? 0,
     repoId,
   });
+  const toml = await buildTomlForBucket({
+    bucket,
+    password: sharedSecret,
+    root,
+  });
+  if (!toml) {
+    throw new Error("unable to build shared project backup repository config");
+  }
+  await initializeSharedProjectBackupRepo({ repoId, toml });
   const { rows } = await client.query<ProjectBackupRepoRow>(
     `INSERT INTO project_backup_repos
       (id, region, bucket_id, root, secret, status, created, updated)
@@ -553,6 +565,28 @@ async function createProjectBackupRepoTx({
     throw new Error("failed to create shared project backup repository");
   }
   return row;
+}
+
+async function initializeSharedProjectBackupRepo({
+  repoId,
+  toml,
+}: {
+  repoId: string;
+  toml: string;
+}): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "cocalc-backup-repo-init-"));
+  const profile = join(dir, `repo-${repoId}.toml`);
+  try {
+    await writeFile(profile, toml, { mode: 0o600 });
+    parseOutput(
+      await rustic(["init"], {
+        repo: profile,
+        timeout: 30_000,
+      }),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 async function withProjectBackupRegionAssignmentLock<T>(

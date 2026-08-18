@@ -33,6 +33,14 @@ const RUSTIC_FORGET_BATCH_SIZE = 100;
 const RUSTIC_NICE = 15;
 const DEFAULT_BACKUP_RETENTION_DAYS = 7;
 const MAX_BACKUP_RETENTION_DAYS = 365;
+const BACKUP_PURGE_MAX_ATTEMPTS = 5;
+const BACKUP_PURGE_STALE_AFTER_MINUTES = 15;
+const BACKUP_PURGE_RETRY_DELAYS_MS = [
+  60_000,
+  5 * 60_000,
+  30 * 60_000,
+  2 * 60 * 60_000,
+] as const;
 let deletedProjectsSchemaReady: Promise<void> | undefined;
 
 function backupIndexHost(project_id: string): string {
@@ -170,6 +178,9 @@ async function ensureDeletedProjectsSchema(): Promise<void> {
           backups_purged_at TIMESTAMPTZ,
           backup_purge_status TEXT,
           backup_purge_error TEXT,
+          backup_purge_attempts INTEGER NOT NULL DEFAULT 0,
+          backup_purge_next_attempt_at TIMESTAMPTZ,
+          backup_purge_quarantined_at TIMESTAMPTZ,
           metadata JSONB DEFAULT '{}'::jsonb
         )
       `);
@@ -193,6 +204,15 @@ async function ensureDeletedProjectsSchema(): Promise<void> {
       );
       await pool().query(
         "ALTER TABLE deleted_projects ADD COLUMN IF NOT EXISTS backup_purge_error TEXT",
+      );
+      await pool().query(
+        "ALTER TABLE deleted_projects ADD COLUMN IF NOT EXISTS backup_purge_attempts INTEGER NOT NULL DEFAULT 0",
+      );
+      await pool().query(
+        "ALTER TABLE deleted_projects ADD COLUMN IF NOT EXISTS backup_purge_next_attempt_at TIMESTAMPTZ",
+      );
+      await pool().query(
+        "ALTER TABLE deleted_projects ADD COLUMN IF NOT EXISTS backup_purge_quarantined_at TIMESTAMPTZ",
       );
       await pool().query(
         "CREATE INDEX IF NOT EXISTS deleted_projects_deleted_at_idx ON deleted_projects(deleted_at)",
@@ -332,10 +352,13 @@ function extractSnapshotIds(payload: any): string[] {
 async function forgetAllSnapshotsForHost({
   repo,
   host,
+  onProgress,
 }: {
   repo: string;
   host: string;
+  onProgress?: () => Promise<void>;
 }): Promise<number> {
+  await onProgress?.();
   const { stdout } = parseOutput(
     await rustic(["snapshots", "--json"], {
       repo,
@@ -359,6 +382,7 @@ async function forgetAllSnapshotsForHost({
   }
   for (let i = 0; i < ids.length; i += RUSTIC_FORGET_BATCH_SIZE) {
     const batch = ids.slice(i, i + RUSTIC_FORGET_BATCH_SIZE);
+    await onProgress?.();
     parseOutput(
       await rustic(["forget", ...batch], {
         repo,
@@ -381,9 +405,11 @@ type BackupDeletionResult = {
 async function deleteProjectBackupsWithToml({
   project_id,
   toml,
+  onProgress,
 }: {
   project_id: string;
   toml: string;
+  onProgress?: () => Promise<void>;
 }): Promise<BackupDeletionResult> {
   if (!toml.trim()) {
     return {
@@ -401,10 +427,12 @@ async function deleteProjectBackupsWithToml({
     const deletedSnapshots = await forgetAllSnapshotsForHost({
       repo: repoToml,
       host: `project-${project_id}`,
+      onProgress,
     });
     const deletedIndexSnapshots = await forgetAllSnapshotsForHost({
       repo: repoToml,
       host: backupIndexHost(project_id),
+      onProgress,
     });
     return {
       skipped: false,
@@ -427,17 +455,19 @@ async function deleteProjectBackupsForDeletedProject({
   project_id,
   host_id,
   backup_repo_id,
+  onProgress,
 }: {
   project_id: string;
   host_id: string | null;
   backup_repo_id: string | null;
+  onProgress?: () => Promise<void>;
 }): Promise<BackupDeletionResult> {
   const { toml } = await getDeletedProjectBackupConfigForDeletion({
     project_id,
     host_id,
     backup_repo_id,
   });
-  return await deleteProjectBackupsWithToml({ project_id, toml });
+  return await deleteProjectBackupsWithToml({ project_id, toml, onProgress });
 }
 
 async function runDeleteMaybeMissingTable({
@@ -505,10 +535,12 @@ async function purgeProjectRows({
             project_id, title, description, owner_account_id, host_id, backup_repo_id,
             created, last_edited, deleted_at, deleted_by, backup_retention_days,
             backup_purge_due_at, backups_purged_at, backup_purge_status, backup_purge_started_at,
-            backup_purge_error, metadata
+            backup_purge_error, backup_purge_attempts, backup_purge_next_attempt_at,
+            backup_purge_quarantined_at, metadata
           )
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11, $12, $13, NULL, NULL, $14::jsonb)
+          ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11, $12, $13,
+           NULL, NULL, 0, NULL, NULL, $14::jsonb)
         ON CONFLICT (project_id)
         DO UPDATE SET
           title = EXCLUDED.title,
@@ -526,6 +558,9 @@ async function purgeProjectRows({
           backup_purge_status = EXCLUDED.backup_purge_status,
           backup_purge_started_at = EXCLUDED.backup_purge_started_at,
           backup_purge_error = EXCLUDED.backup_purge_error,
+          backup_purge_attempts = EXCLUDED.backup_purge_attempts,
+          backup_purge_next_attempt_at = EXCLUDED.backup_purge_next_attempt_at,
+          backup_purge_quarantined_at = EXCLUDED.backup_purge_quarantined_at,
           metadata = EXCLUDED.metadata
       `,
       [
@@ -652,7 +687,54 @@ type DeletedProjectBackupPurgeRow = {
   backup_purge_due_at: Date | null;
   backup_purge_status: string | null;
   backup_purge_started_at: Date | null;
+  backup_purge_attempts: number;
 };
+
+function backupPurgeRetryAt(attempts: number): Date | null {
+  const delay = BACKUP_PURGE_RETRY_DELAYS_MS[attempts - 1];
+  return delay == null ? null : new Date(Date.now() + delay);
+}
+
+async function recoverStaleDeletedProjectBackupPurges(): Promise<{
+  recovered: number;
+  quarantined: number;
+}> {
+  const { rows } = await pool().query<{ status: string }>(
+    `
+      UPDATE deleted_projects
+      SET
+        backup_purge_status = CASE
+          WHEN backup_purge_attempts >= $1 THEN 'quarantined'
+          ELSE 'failed'
+        END,
+        backup_purge_started_at = NULL,
+        backup_purge_next_attempt_at = CASE
+          WHEN backup_purge_attempts >= $1 THEN NULL
+          ELSE NOW()
+        END,
+        backup_purge_quarantined_at = CASE
+          WHEN backup_purge_attempts >= $1 THEN NOW()
+          ELSE NULL
+        END,
+        backup_purge_error = COALESCE(
+          backup_purge_error,
+          'backup purge worker stopped before reporting a result'
+        )
+      WHERE backups_purged_at IS NULL
+        AND backup_purge_status='running'
+        AND (
+          backup_purge_started_at IS NULL
+          OR backup_purge_started_at < NOW() - ($2 * INTERVAL '1 minute')
+        )
+      RETURNING backup_purge_status AS status
+    `,
+    [BACKUP_PURGE_MAX_ATTEMPTS, BACKUP_PURGE_STALE_AFTER_MINUTES],
+  );
+  return {
+    recovered: rows.length,
+    quarantined: rows.filter(({ status }) => status === "quarantined").length,
+  };
+}
 
 async function claimDeletedProjectBackupPurge(
   project_id: string,
@@ -663,19 +745,23 @@ async function claimDeletedProjectBackupPurge(
       SET
         backup_purge_status='running',
         backup_purge_started_at=NOW(),
-        backup_purge_error=NULL
+        backup_purge_error=NULL,
+        backup_purge_attempts=backup_purge_attempts + 1,
+        backup_purge_next_attempt_at=NULL,
+        backup_purge_quarantined_at=NULL
       WHERE project_id=$1
         AND backups_purged_at IS NULL
         AND backup_purge_due_at IS NOT NULL
         AND backup_purge_due_at <= NOW()
         AND (
           backup_purge_status IS NULL
-          OR backup_purge_status IN ('scheduled', 'failed')
+          OR backup_purge_status='scheduled'
           OR (
-            backup_purge_status='running'
+            backup_purge_status='failed'
+            AND backup_purge_attempts < $2
             AND (
-              backup_purge_started_at IS NULL
-              OR backup_purge_started_at < NOW() - INTERVAL '15 minutes'
+              backup_purge_next_attempt_at IS NULL
+              OR backup_purge_next_attempt_at <= NOW()
             )
           )
         )
@@ -685,9 +771,10 @@ async function claimDeletedProjectBackupPurge(
         backup_repo_id,
         backup_purge_due_at,
         backup_purge_status,
-        backup_purge_started_at
+        backup_purge_started_at,
+        backup_purge_attempts
     `,
-    [project_id],
+    [project_id, BACKUP_PURGE_MAX_ATTEMPTS],
   );
   return rows[0] ?? null;
 }
@@ -695,11 +782,13 @@ async function claimDeletedProjectBackupPurge(
 async function markDeletedProjectBackupPurgeSuccess({
   project_id,
   result,
+  attempts,
 }: {
   project_id: string;
   result: BackupDeletionResult;
-}): Promise<void> {
-  await pool().query(
+  attempts: number;
+}): Promise<boolean> {
+  const { rowCount } = await pool().query(
     `
       UPDATE deleted_projects
       SET
@@ -707,6 +796,8 @@ async function markDeletedProjectBackupPurgeSuccess({
         backups_purged_at=NOW(),
         backup_purge_started_at=NULL,
         backup_purge_error=NULL,
+        backup_purge_next_attempt_at=NULL,
+        backup_purge_quarantined_at=NULL,
         metadata = jsonb_set(
           COALESCE(metadata, '{}'::jsonb),
           '{backup_purge_result}',
@@ -714,29 +805,70 @@ async function markDeletedProjectBackupPurgeSuccess({
           true
         )
       WHERE project_id=$1
+        AND backup_purge_status='running'
+        AND backup_purge_attempts=$3
     `,
-    [project_id, JSON.stringify(result)],
+    [project_id, JSON.stringify(result), attempts],
   );
+  return (rowCount ?? 0) > 0;
+}
+
+async function touchDeletedProjectBackupPurge({
+  project_id,
+  attempts,
+}: {
+  project_id: string;
+  attempts: number;
+}): Promise<void> {
+  const { rowCount } = await pool().query(
+    `UPDATE deleted_projects
+     SET backup_purge_started_at=NOW()
+     WHERE project_id=$1
+       AND backup_purge_status='running'
+       AND backup_purge_attempts=$2`,
+    [project_id, attempts],
+  );
+  if ((rowCount ?? 0) === 0) {
+    throw new Error("deleted-project backup purge lease was lost");
+  }
 }
 
 async function markDeletedProjectBackupPurgeFailure({
   project_id,
   error,
+  attempts,
 }: {
   project_id: string;
   error: string;
-}): Promise<void> {
-  await pool().query(
+  attempts: number;
+}): Promise<{ updated: boolean; quarantined: boolean }> {
+  const quarantined = attempts >= BACKUP_PURGE_MAX_ATTEMPTS;
+  const { rows } = await pool().query<{ status: string }>(
     `
       UPDATE deleted_projects
       SET
-        backup_purge_status='failed',
+        backup_purge_status=$3,
         backup_purge_started_at=NULL,
-        backup_purge_error=$2
+        backup_purge_error=$2,
+        backup_purge_next_attempt_at=$4,
+        backup_purge_quarantined_at=CASE WHEN $3='quarantined' THEN NOW() ELSE NULL END
       WHERE project_id=$1
+        AND backup_purge_status='running'
+        AND backup_purge_attempts=$5
+      RETURNING backup_purge_status AS status
     `,
-    [project_id, error.slice(0, 2000)],
+    [
+      project_id,
+      error.slice(0, 2000),
+      quarantined ? "quarantined" : "failed",
+      quarantined ? null : backupPurgeRetryAt(attempts),
+      attempts,
+    ],
   );
+  return {
+    updated: rows.length > 0,
+    quarantined: rows[0]?.status === "quarantined",
+  };
 }
 
 export async function processDueDeletedProjectBackupPurges({
@@ -747,8 +879,11 @@ export async function processDueDeletedProjectBackupPurges({
   processed: number;
   purged: number;
   failed: number;
+  quarantined: number;
+  recovered_stale: number;
 }> {
   await ensureDeletedProjectsSchema();
+  const stale = await recoverStaleDeletedProjectBackupPurges();
   const batchSize = Math.max(1, Math.floor(limit));
   const { rows } = await pool().query<DeletedProjectBackupPurgeRow>(
     `
@@ -758,30 +893,33 @@ export async function processDueDeletedProjectBackupPurges({
         backup_repo_id,
         backup_purge_due_at,
         backup_purge_status,
-        backup_purge_started_at
+        backup_purge_started_at,
+        backup_purge_attempts
       FROM deleted_projects
       WHERE backup_purge_due_at IS NOT NULL
         AND backups_purged_at IS NULL
         AND backup_purge_due_at <= NOW()
         AND (
           backup_purge_status IS NULL
-          OR backup_purge_status IN ('scheduled', 'failed')
+          OR backup_purge_status='scheduled'
           OR (
-            backup_purge_status='running'
+            backup_purge_status='failed'
+            AND backup_purge_attempts < $2
             AND (
-              backup_purge_started_at IS NULL
-              OR backup_purge_started_at < NOW() - INTERVAL '15 minutes'
+              backup_purge_next_attempt_at IS NULL
+              OR backup_purge_next_attempt_at <= NOW()
             )
           )
         )
       ORDER BY backup_purge_due_at ASC
       LIMIT $1
     `,
-    [batchSize],
+    [batchSize, BACKUP_PURGE_MAX_ATTEMPTS],
   );
   let purged = 0;
   let failed = 0;
   let processed = 0;
+  let quarantined = stale.quarantined;
   for (const row of rows) {
     const claimed = await claimDeletedProjectBackupPurge(row.project_id);
     if (!claimed) {
@@ -793,21 +931,43 @@ export async function processDueDeletedProjectBackupPurges({
         project_id: claimed.project_id,
         host_id: claimed.host_id,
         backup_repo_id: claimed.backup_repo_id,
+        onProgress: async () => {
+          await touchDeletedProjectBackupPurge({
+            project_id: claimed.project_id,
+            attempts: claimed.backup_purge_attempts,
+          });
+        },
       });
-      await markDeletedProjectBackupPurgeSuccess({
-        project_id: claimed.project_id,
-        result,
-      });
-      purged += 1;
+      if (
+        await markDeletedProjectBackupPurgeSuccess({
+          project_id: claimed.project_id,
+          result,
+          attempts: claimed.backup_purge_attempts,
+        })
+      ) {
+        purged += 1;
+      }
     } catch (err) {
-      await markDeletedProjectBackupPurgeFailure({
+      const failure = await markDeletedProjectBackupPurgeFailure({
         project_id: claimed.project_id,
         error: `${err}`,
+        attempts: claimed.backup_purge_attempts,
       });
-      failed += 1;
+      if (failure.quarantined) {
+        quarantined += 1;
+      }
+      if (failure.updated) {
+        failed += 1;
+      }
     }
   }
-  return { processed, purged, failed };
+  return {
+    processed,
+    purged,
+    failed,
+    quarantined,
+    recovered_stale: stale.recovered,
+  };
 }
 
 export async function hardDeleteProject({

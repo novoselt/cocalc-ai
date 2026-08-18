@@ -41,7 +41,7 @@ describe("loadWithRetry", () => {
       }),
     ).rejects.toMatchObject({
       cause: chunkError,
-      message: "Failed to load test panel after 2 attempts",
+      message: "Failed to load test panel after 2 attempts: chunk unavailable",
     });
     expect(loader).toHaveBeenCalledTimes(2);
   });
