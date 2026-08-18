@@ -1,7 +1,7 @@
 import getLogger from "@cocalc/backend/logger";
 import type { HostCurrentMetrics } from "@cocalc/conat/hub/api/hosts";
 import { cpus, loadavg, totalmem } from "node:os";
-import { readFile } from "node:fs/promises";
+import { readFile, statfs } from "node:fs/promises";
 import { getProjectStateCounts } from "./sqlite/projects";
 import {
   computeDiskAdmissionAvailableBytes,
@@ -146,12 +146,69 @@ function readProjectCounts(): Pick<
   };
 }
 
+type RootFilesystemStat = {
+  bsize: number | bigint;
+  blocks: number | bigint;
+  bfree: number | bigint;
+  bavail: number | bigint;
+};
+
+export function rootFilesystemMetricsFromStatfs(
+  stats: RootFilesystemStat,
+): Pick<
+  HostCurrentMetrics,
+  | "root_disk_total_bytes"
+  | "root_disk_used_bytes"
+  | "root_disk_available_bytes"
+  | "root_disk_used_percent"
+> {
+  const blockSize = Number(stats.bsize);
+  const blocks = Number(stats.blocks);
+  const freeBlocks = Number(stats.bfree);
+  const availableBlocks = Number(stats.bavail);
+  if (
+    ![blockSize, blocks, freeBlocks, availableBlocks].every(
+      (value) => Number.isFinite(value) && value >= 0,
+    ) ||
+    blockSize <= 0 ||
+    blocks <= 0 ||
+    freeBlocks > blocks
+  ) {
+    return {};
+  }
+  const root_disk_total_bytes = blockSize * blocks;
+  const root_disk_used_bytes = blockSize * (blocks - freeBlocks);
+  const root_disk_available_bytes = blockSize * availableBlocks;
+  const usableBytes = root_disk_used_bytes + root_disk_available_bytes;
+  return {
+    root_disk_total_bytes,
+    root_disk_used_bytes,
+    root_disk_available_bytes,
+    root_disk_used_percent:
+      usableBytes > 0
+        ? round1((root_disk_used_bytes / usableBytes) * 100)
+        : undefined,
+  };
+}
+
+async function readRootFilesystemMetrics(): Promise<
+  Partial<HostCurrentMetrics>
+> {
+  try {
+    return rootFilesystemMetricsFromStatfs(await statfs("/"));
+  } catch (err) {
+    logger.debug("failed to read root filesystem metrics", { err: `${err}` });
+    return {};
+  }
+}
+
 async function collectSnapshot(
   prevCpuSample: CpuSample | undefined,
 ): Promise<{ snapshot: HostCurrentMetrics; cpuSample: CpuSample }> {
   const cpuSample = readCpuSample();
   const [
     memory,
+    rootFilesystem,
     disk,
     sharedScratch,
     kernel_sysctls,
@@ -160,6 +217,7 @@ async function collectSnapshot(
     conat_persist,
   ] = await Promise.all([
     readMeminfo(),
+    readRootFilesystemMetrics(),
     readDiskMetrics(),
     readSharedScratchMetrics(),
     readProjectHostKernelSysctls(),
@@ -183,6 +241,7 @@ async function collectSnapshot(
       load_5: round2(loadavg()[1]),
       load_15: round2(loadavg()[2]),
       ...memory,
+      ...rootFilesystem,
       ...disk,
       ...sharedScratch,
       disk_available_for_admission_bytes,
@@ -238,4 +297,5 @@ export const _test = {
   computeDiskAdmissionAvailableBytes,
   parseBtrfsUsageOutput,
   parseDfOutput,
+  rootFilesystemMetricsFromStatfs,
 };

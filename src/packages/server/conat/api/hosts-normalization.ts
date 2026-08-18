@@ -1059,6 +1059,40 @@ export function parseRow(
                 ),
               }
             : {}),
+          ...(parseNonNegativeNumber(rawCurrentMetrics.root_disk_total_bytes) !=
+          null
+            ? {
+                root_disk_total_bytes: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_total_bytes,
+                ),
+              }
+            : {}),
+          ...(parseNonNegativeNumber(rawCurrentMetrics.root_disk_used_bytes) !=
+          null
+            ? {
+                root_disk_used_bytes: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_used_bytes,
+                ),
+              }
+            : {}),
+          ...(parseNonNegativeNumber(
+            rawCurrentMetrics.root_disk_available_bytes,
+          ) != null
+            ? {
+                root_disk_available_bytes: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_available_bytes,
+                ),
+              }
+            : {}),
+          ...(parseNonNegativeNumber(
+            rawCurrentMetrics.root_disk_used_percent,
+          ) != null
+            ? {
+                root_disk_used_percent: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_used_percent,
+                ),
+              }
+            : {}),
           ...(parseNonNegativeNumber(rawCurrentMetrics.swap_used_bytes) != null
             ? {
                 swap_used_bytes: parseNonNegativeNumber(

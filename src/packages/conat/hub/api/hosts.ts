@@ -1025,6 +1025,10 @@ export interface HostCurrentMetrics {
   memory_used_percent?: number;
   swap_total_bytes?: number;
   swap_used_bytes?: number;
+  root_disk_total_bytes?: number;
+  root_disk_used_bytes?: number;
+  root_disk_available_bytes?: number;
+  root_disk_used_percent?: number;
   disk_device_total_bytes?: number;
   disk_device_used_bytes?: number;
   disk_unallocated_bytes?: number;
