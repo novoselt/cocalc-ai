@@ -23,6 +23,7 @@ describe("notification preferences", () => {
         ai: "off",
         course: "immediate",
         maintenance: "digest",
+        onboarding: "immediate",
         product: "off",
       },
       digest: {
@@ -58,6 +59,7 @@ describe("notification preferences", () => {
         ai: "immediate",
         course: "none",
         maintenance: "digest",
+        onboarding: "immediate",
         product: "off",
       },
       digest: {
@@ -93,5 +95,26 @@ describe("notification preferences", () => {
       membership_requests: "digest",
       access_requests: "off",
     });
+  });
+
+  it("keeps the one-time onboarding status available in-app", () => {
+    expect(
+      normalizeNotificationPreferences({
+        email: { onboarding: "none" },
+      }).email.onboarding,
+    ).toBe("immediate");
+    expect(
+      normalizeNotificationPreferences({
+        email: { onboarding: "off" },
+      }).email.onboarding,
+    ).toBe("off");
+  });
+
+  it("preserves preferences supplied through an Immutable-style value", () => {
+    expect(
+      normalizeNotificationPreferences({
+        toJS: () => ({ email: { mentions: "none", onboarding: "off" } }),
+      }).email,
+    ).toMatchObject({ mentions: "none", onboarding: "off" });
   });
 });

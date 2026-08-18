@@ -25,6 +25,10 @@ import type { InviteInboxState } from "@cocalc/frontend/collaborators/invite-inb
 import { Icon, Loading } from "@cocalc/frontend/components";
 import type { IconName } from "@cocalc/frontend/components/icon";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import {
+  FIRST_RUN_ONBOARDING_INTENT_SETTING,
+  normalizeProjectOnboardingIntent,
+} from "@cocalc/util/accounts/onboarding-intent";
 import { COLORS } from "@cocalc/util/theme";
 import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 import { markFirstRunCompletedThisSession } from "@cocalc/frontend/app/onboarding-session";
@@ -317,7 +321,14 @@ export function FirstRunOnboarding({
 }) {
   const runtime = useProjectRuntimeCapabilities();
   const accountId = `${useTypedRedux("account", "account_id") ?? ""}`;
+  const rawOtherSettings = useTypedRedux("account", "other_settings");
+  const otherSettings =
+    (rawOtherSettings as any)?.toJS?.() ?? rawOtherSettings ?? {};
+  const landingIntent = normalizeProjectOnboardingIntent(
+    (otherSettings as any)?.[FIRST_RUN_ONBOARDING_INTENT_SETTING],
+  );
   const [step, setStep] = useState<WizardStep>("home");
+  const [showLandingSuggestion, setShowLandingSuggestion] = useState(true);
   const [selectedPath, setSelectedPath] = useState<ProjectPath>();
   const [projectTitle, setProjectTitle] = useState("");
   const [codexPrompt, setCodexPrompt] = useState("");
@@ -327,11 +338,15 @@ export function FirstRunOnboarding({
   const recordedDecision = useRef("");
   const { context, rootfsImages, rootfsLoading, rootfsError, isAdmin } =
     useProjectCreateDraft({ defaultValue: "" });
-  const { paymentSource: codexPaymentSource } = useCodexPaymentSource({
+  const {
+    paymentSource: codexPaymentSource,
+    loading: codexPaymentSourceLoading,
+  } = useCodexPaymentSource({
     enabled:
       decision.kind === "intent" ||
       step === "home-create" ||
-      selectedPath?.kind === "codex",
+      selectedPath != null ||
+      landingIntent != null,
   });
   const codexAvailable = codexAvailableForOnboarding(codexPaymentSource);
   const codexFundingDescription =
@@ -345,6 +360,10 @@ export function FirstRunOnboarding({
     !rootfsLoading &&
     (selectedPath?.kind !== "codex" ||
       (!!codexPrompt.trim() && codexAvailable));
+
+  useEffect(() => {
+    setShowLandingSuggestion(true);
+  }, [accountId]);
 
   useEffect(() => {
     if (
@@ -384,6 +403,25 @@ export function FirstRunOnboarding({
       dedupe_key: selectedPath.kind,
     });
   }, [configurationReady, selectedPath?.kind]);
+
+  useEffect(() => {
+    if (
+      decision.kind !== "intent" ||
+      step !== "home" ||
+      !landingIntent ||
+      !showLandingSuggestion
+    ) {
+      return;
+    }
+    recordProductActivity({
+      event_name: "onboarding_configuration_seen",
+      properties: {
+        onboarding_path: landingIntent,
+        outcome: "landing-intent",
+      },
+      dedupe_key: `landing:${landingIntent}`,
+    });
+  }, [decision.kind, landingIntent, showLandingSuggestion, step]);
 
   async function persist(
     status: StoredFirstRunOnboarding["status"],
@@ -513,26 +551,44 @@ export function FirstRunOnboarding({
     }
   }
 
-  async function createProject() {
-    if (!selectedPath || !projectTitle.trim()) return;
+  async function createProject(overrides?: {
+    path?: ProjectPath;
+    title?: string;
+    prompt?: string;
+    selectionOutcome?: string;
+  }) {
+    const path = overrides?.path ?? selectedPath;
+    const title = `${overrides?.title ?? projectTitle}`.trim();
+    const prompt = `${overrides?.prompt ?? codexPrompt}`.trim();
+    if (!path || !title) return;
     if (createDisabled) {
       setError("Verify your email address before creating a project.");
       return;
     }
-    if (selectedPath.kind === "codex" && !codexPrompt.trim()) {
+    if (path.kind === "codex" && !prompt) {
       setError("Describe what you want Codex to help you build.");
       return;
     }
-    if (selectedPath.kind === "codex" && !codexAvailable) {
+    if (prompt && !codexAvailable) {
       setError(
         "Codex access is not currently available for this account. Choose another project type or connect a ChatGPT plan in Account settings.",
       );
       return;
     }
+    if (overrides?.selectionOutcome) {
+      recordProductActivity({
+        event_name: "onboarding_path_selected",
+        properties: {
+          onboarding_path: path.kind,
+          outcome: overrides.selectionOutcome,
+        },
+        dedupe_key: path.kind,
+      });
+    }
     setBusy("create");
     setError("");
     setProgress(12);
-    const intent = selectedPath.kind as OnboardingIntent;
+    const intent = path.kind as OnboardingIntent;
     recordProductActivity({
       event_name: "project_create_started",
       properties: { onboarding_path: intent },
@@ -541,14 +597,14 @@ export function FirstRunOnboarding({
     try {
       let fallbackDraft = createInitialProjectDraft({
         ...context,
-        defaultTitle: projectTitle.trim(),
+        defaultTitle: title,
       });
-      if (selectedPath.kind === "teaching") {
+      if (path.kind === "teaching") {
         fallbackDraft = applyProjectPreset(fallbackDraft, "teaching", context);
       }
       const rootfs = chooseOnboardingRootfs({
         images: rootfsImages,
-        kind: selectedPath.kind,
+        kind: path.kind,
         fallback: {
           image: fallbackDraft.rootfs_image,
           image_id: fallbackDraft.rootfs_image_id,
@@ -556,7 +612,7 @@ export function FirstRunOnboarding({
         isAdmin,
       });
       const project_id = await redux.getActions("projects").create_project({
-        title: projectTitle.trim(),
+        title,
         start: true,
         ...(runtime.rootfs && rootfs?.image
           ? {
@@ -579,7 +635,7 @@ export function FirstRunOnboarding({
       try {
         artifact = await createArtifactWhenReady({
           project_id,
-          kind: selectedPath.kind,
+          kind: path.kind,
         });
       } catch (err) {
         void message.warning(
@@ -591,20 +647,25 @@ export function FirstRunOnboarding({
       recordProductActivity({
         event_name: "project_ready",
         project_id,
-        properties: { onboarding_path: intent },
+        properties: {
+          onboarding_path: intent,
+          outcome: prompt ? "codex-requested" : "starter-only",
+        },
       });
-      if (selectedPath.kind === "codex") {
+      if (prompt) {
         await redux.getActions("projects").open_project({
           project_id,
-          target: "files",
+          target: artifact ? `files/${artifact}` : "files",
           switch_to: true,
           restore_session: false,
         });
-        const visiblePrompt = codexPrompt.trim();
         const submitted = await submitNavigatorPromptInWorkspaceChat({
           project_id,
-          prompt: buildCodexOnboardingPrompt(visiblePrompt),
-          visiblePrompt,
+          prompt: buildCodexOnboardingPrompt(prompt, {
+            kind: path.kind,
+            artifact,
+          }),
+          visiblePrompt: prompt,
           title: "Getting started",
           tag: "intent:onboarding",
           forceCodex: true,
@@ -634,7 +695,10 @@ export function FirstRunOnboarding({
       recordProductActivity({
         event_name: "guided_activation_done",
         project_id,
-        properties: { onboarding_path: intent, outcome: "opened" },
+        properties: {
+          onboarding_path: intent,
+          outcome: prompt ? "opened-with-codex" : "opened",
+        },
       });
     } catch (err) {
       if (createdProjectId) {
@@ -849,6 +913,111 @@ export function FirstRunOnboarding({
     );
   }
 
+  if (
+    decision.kind === "intent" &&
+    step === "home" &&
+    landingIntent &&
+    showLandingSuggestion
+  ) {
+    const path = PROJECT_PATHS[landingIntent];
+    const promptRequired = landingIntent === "codex";
+    return (
+      <WizardFrame
+        title={path.heading}
+        description={`${path.description} Your project name and software environment are already selected.`}
+        footer={
+          <Space wrap>
+            <Button
+              type="primary"
+              size="large"
+              onClick={() =>
+                void createProject({
+                  path,
+                  title: path.title,
+                  prompt: codexPrompt,
+                  selectionOutcome: "landing-intent",
+                })
+              }
+              loading={busy === "create" || rootfsLoading}
+              disabled={
+                createDisabled ||
+                !!busy ||
+                rootfsLoading ||
+                (promptRequired && (!codexAvailable || !codexPrompt.trim()))
+              }
+            >
+              Create {path.title}
+            </Button>
+            <Button
+              onClick={() => setShowLandingSuggestion(false)}
+              disabled={!!busy}
+            >
+              Choose something else
+            </Button>
+          </Space>
+        }
+      >
+        <Card style={{ borderRadius: 12, margin: "0 auto", maxWidth: 680 }}>
+          <Space orientation="vertical" size="large" style={{ width: "100%" }}>
+            {error ? <Alert type="error" showIcon title={error} /> : null}
+            {createDisabled ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Verify your email before creating a project"
+              />
+            ) : null}
+            {promptRequired && codexPaymentSourceLoading ? (
+              <Loading theme="medium" />
+            ) : codexAvailable ? (
+              <>
+                <Alert
+                  type="info"
+                  showIcon
+                  title={
+                    promptRequired
+                      ? "Tell Codex what you want to accomplish"
+                      : "Optional: start with help from Codex"
+                  }
+                  description={codexFundingDescription}
+                />
+                <label>
+                  <Text strong>
+                    {promptRequired
+                      ? "What would you like to make or accomplish?"
+                      : "What should Codex help you do first? (optional)"}
+                  </Text>
+                  <Input.TextArea
+                    autoFocus={promptRequired}
+                    rows={4}
+                    value={codexPrompt}
+                    onChange={(event) => setCodexPrompt(event.target.value)}
+                    placeholder="For example: compare a few number theory algorithms and explain the results."
+                    disabled={!!busy}
+                    style={{ marginTop: 7 }}
+                  />
+                </label>
+              </>
+            ) : promptRequired ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Codex is not available for this account"
+                description="Choose another project type or connect a ChatGPT plan in Account settings."
+              />
+            ) : null}
+            {busy === "create" ? (
+              <div aria-live="polite">
+                <Progress percent={progress} status="active" />
+                <Text type="secondary">Preparing your first workspace...</Text>
+              </div>
+            ) : null}
+          </Space>
+        </Card>
+      </WizardFrame>
+    );
+  }
+
   if (step === "notebook") {
     return (
       <WizardFrame
@@ -968,7 +1137,7 @@ export function FirstRunOnboarding({
                 style={{ marginTop: 7 }}
               />
             </label>
-            {step === "codex" ? (
+            {codexAvailable ? (
               <Space
                 orientation="vertical"
                 size="middle"
@@ -981,9 +1150,13 @@ export function FirstRunOnboarding({
                   description={codexFundingDescription}
                 />
                 <label>
-                  <Text strong>What would you like to make or accomplish?</Text>
+                  <Text strong>
+                    {step === "codex"
+                      ? "What would you like to make or accomplish?"
+                      : "What should Codex help you do first? (optional)"}
+                  </Text>
                   <Input.TextArea
-                    autoFocus
+                    autoFocus={step === "codex"}
                     rows={5}
                     value={codexPrompt}
                     onChange={(event) => setCodexPrompt(event.target.value)}

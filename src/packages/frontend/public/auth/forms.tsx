@@ -48,6 +48,10 @@ import {
   type SignupEmailDomainPublicPolicy,
 } from "@cocalc/util/accounts/signup-email-domain-policy";
 import {
+  normalizeProjectOnboardingIntent,
+  projectOnboardingIntentFromPublicPath,
+} from "@cocalc/util/accounts/onboarding-intent";
+import {
   is_valid_email_address as isValidEmailAddress,
   len,
 } from "@cocalc/util/misc";
@@ -67,6 +71,20 @@ const FIELD_STYLE: CSSProperties = {
   flexDirection: "column",
   gap: "6px",
 } as const;
+
+function onboardingIntentFromBrowser() {
+  const explicit = normalizeProjectOnboardingIntent(
+    new URL(window.location.href).searchParams.get("intent"),
+  );
+  if (explicit) return explicit;
+  try {
+    return projectOnboardingIntentFromPublicPath(
+      new URL(document.referrer).pathname,
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 const LABEL_STYLE: CSSProperties = {
   color: COLORS.GRAY_D,
@@ -856,6 +874,7 @@ export function PublicEmailFirstForm({
   view: "sign-in" | "sign-up";
 }) {
   const [requiresToken, setRequiresToken] = useState<boolean>();
+  const onboardingIntent = useMemo(onboardingIntentFromBrowser, []);
   const [registrationToken, setRegistrationToken] = useState(
     new URL(window.location.href).searchParams.get("registrationToken") ?? "",
   );
@@ -1047,6 +1066,7 @@ export function PublicEmailFirstForm({
         endpoint: "auth/email/start",
         body: {
           email: normalizedEmailAddress(email),
+          onboarding_intent: onboardingIntent,
           ...(view === "sign-up" && registrationToken.trim()
             ? { registration_token: registrationToken.trim() }
             : {}),
@@ -1186,6 +1206,7 @@ export function PublicEmailFirstForm({
                     view === "sign-up"
                       ? registrationToken.trim() || undefined
                       : undefined,
+                  onboarding_intent: onboardingIntent,
                 })}
               >
                 Continue with {googleStrategy.display}
@@ -1219,6 +1240,7 @@ export function PublicEmailFirstForm({
                 href={ssoLoginHref(requiredSso.name, {
                   target: resolveAuthRedirectPath(redirectToPath),
                   terms: policiesVisible ? true : undefined,
+                  onboarding_intent: onboardingIntent,
                 })}
                 style={LINK_STYLE}
               >
@@ -2117,6 +2139,7 @@ export function PublicSignUpForm({
   signupEmailDomainPolicy?: SignupEmailDomainPublicPolicy;
 }) {
   const [requiresToken, setRequiresToken] = useState<boolean>();
+  const onboardingIntent = useMemo(onboardingIntentFromBrowser, []);
   const [registrationToken, setRegistrationToken] = useState(
     initialRegistrationToken ??
       new URL(window.location.href).searchParams.get("registrationToken") ??
@@ -2258,6 +2281,7 @@ export function PublicSignUpForm({
         body: {
           terms: true,
           marketing_consent: false,
+          onboardingIntent,
           email,
           password,
           displayName,
@@ -2378,6 +2402,7 @@ export function PublicSignUpForm({
               target: resolveAuthRedirectPath(redirectToPath),
               terms: policiesVisible ? true : undefined,
               marketing_consent: false,
+              onboarding_intent: onboardingIntent,
               registration_token: registrationToken.trim(),
             })}
           >

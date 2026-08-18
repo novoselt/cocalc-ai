@@ -11,6 +11,7 @@ import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureSignUpPath,
   featureAsset,
   LinkButton,
 } from "./page-components";
@@ -31,7 +32,7 @@ export default function OctaveFeaturePage({
 }) {
   const primaryHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("code");
   const primaryLabel = isAuthenticated ? "Open projects" : "Create account";
   const finalLabel = isAuthenticated ? "Open projects" : "Start using Octave";
 

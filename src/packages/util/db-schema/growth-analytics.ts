@@ -337,3 +337,64 @@ Table({
     created_at: { type: "timestamp" },
   },
 });
+
+Table({
+  name: "growth_onboarding_continuations",
+  rules: {
+    primary_key: "account_id",
+    pg_indexes: ["home_bay_id", "eligible_at", "status"],
+    pg_custom_indexes: [
+      {
+        name: "growth_onboarding_continuations_due_idx",
+        query: "(eligible_at, account_id) WHERE status = 'pending'",
+      },
+    ],
+  },
+  fields: {
+    account_id: { type: "uuid" },
+    home_bay_id: {
+      type: "string",
+      pg_type: "VARCHAR(64)",
+      not_null: true,
+    },
+    project_id: { type: "uuid", not_null: true },
+    onboarding_path: {
+      type: "string",
+      pg_type: "VARCHAR(48)",
+      not_null: true,
+    },
+    source_event_id: { type: "uuid", not_null: true },
+    notification_event_id: { type: "uuid", not_null: true },
+    notification_id: { type: "uuid", not_null: true },
+    eligible_at: { type: "timestamp", not_null: true },
+    status: {
+      type: "string",
+      pg_type: "VARCHAR(24)",
+      pg_default: "'pending'::varchar",
+      not_null: true,
+      pg_null_backfill: "'pending'::varchar",
+    },
+    attempt_count: {
+      type: "integer",
+      pg_default: "0",
+      not_null: true,
+      pg_null_backfill: "0",
+    },
+    last_error: { type: "string" },
+    sent_at: { type: "timestamp" },
+    suppressed_at: { type: "timestamp" },
+    suppression_reason: { type: "string", pg_type: "VARCHAR(64)" },
+    created_at: {
+      type: "timestamp",
+      pg_default: "now()",
+      not_null: true,
+      pg_null_backfill: "now()",
+    },
+    updated_at: {
+      type: "timestamp",
+      pg_default: "now()",
+      not_null: true,
+      pg_null_backfill: "now()",
+    },
+  },
+});

@@ -13,7 +13,11 @@ import {
   PUBLIC_RADIUS,
   PUBLIC_TYPE,
 } from "@cocalc/frontend/public/theme";
-import { BulletList, featureAppPath as appPath } from "./page-components";
+import {
+  BulletList,
+  featureAppPath as appPath,
+  featureSignUpPath,
+} from "./page-components";
 import { FeatureFinalBand, IconBadge } from "./feature-visuals";
 import { FEATURE_ACCENTS } from "./feature-accents";
 
@@ -242,7 +246,7 @@ export default function AIFeaturePage({
 }) {
   const primaryHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("codex");
   const primaryLabel = isAuthenticated ? "Open projects" : "Create account";
 
   return (

@@ -15,6 +15,7 @@ import {
 } from "@cocalc/frontend/public/theme";
 import {
   featureAppPath as appPath,
+  featureSignUpPath,
   featureAsset,
   LinkButton,
 } from "./page-components";
@@ -136,7 +137,7 @@ export default function LatexEditorFeaturePage({
 }) {
   const primaryCtaHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("latex");
   const primaryCtaLabel = isAuthenticated ? "Open projects" : "Create account";
   const finalCtaLabel = isAuthenticated
     ? "Open projects"

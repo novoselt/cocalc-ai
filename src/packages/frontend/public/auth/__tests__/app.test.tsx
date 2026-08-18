@@ -66,6 +66,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/auth/sign-up");
   mockedApi.mockReset();
   mockedGetControlPlaneAuthBootstrap.mockReset();
   mockedGetControlPlaneAuthBootstrap.mockRejectedValue(
@@ -501,9 +502,11 @@ describe("PublicAuthApp", () => {
     fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
       target: { value: "Person@Example.EDU" },
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    const continueButton = screen.getByRole("button", {
+      name: "Continue with email",
+    });
+    await waitFor(() => expect(continueButton).not.toBeDisabled());
+    fireEvent.click(continueButton);
 
     expect(await screen.findByText("Check your email")).not.toBeNull();
     expect(mockedPostAuthApi).toHaveBeenCalledWith({
@@ -514,6 +517,47 @@ describe("PublicAuthApp", () => {
         target: "/projects",
         terms: true,
       },
+    });
+  });
+
+  it("carries acquisition intent into email-first account creation", async () => {
+    window.history.replaceState({}, "", "/auth/sign-up?intent=jupyter-python");
+    mockedApi.mockResolvedValueOnce(false);
+    mockedPostAuthApi.mockResolvedValueOnce({
+      challenge_id: "11111111-1111-4111-8111-111111111111",
+      state: "pending",
+      masked_email: "pe…@example.edu",
+      expires_at: "2026-07-29T01:15:00.000Z",
+      resend_available_at: "2026-07-29T01:00:30.000Z",
+      send_count: 1,
+      message_sent: true,
+      message_failed: false,
+    });
+    render(
+      <PublicAuthApp
+        config={config({ email_authentication_mode: "email_first" })}
+        initialRoute={{ kind: "auth-form", view: "sign-up" }}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
+      target: { value: "Person@Example.EDU" },
+    });
+    const continueButton = screen.getByRole("button", {
+      name: "Continue with email",
+    });
+    await waitFor(() => expect(continueButton).not.toBeDisabled());
+    fireEvent.click(continueButton);
+
+    await waitFor(() => {
+      expect(mockedPostAuthApi).toHaveBeenCalledWith(
+        expect.objectContaining({
+          endpoint: "auth/email/start",
+          body: expect.objectContaining({
+            onboarding_intent: "jupyter-python",
+          }),
+        }),
+      );
     });
   });
 

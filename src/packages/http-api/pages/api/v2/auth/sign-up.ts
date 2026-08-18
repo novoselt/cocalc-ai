@@ -76,6 +76,10 @@ import {
 } from "@cocalc/util/misc";
 import { buildMarketingConsentOtherSettings } from "@cocalc/util/notification-preferences";
 import { normalizeEmailAuthenticationMode } from "@cocalc/util/auth/email-auth";
+import {
+  normalizeProjectOnboardingIntent,
+  onboardingIntentOtherSettings,
+} from "@cocalc/util/accounts/onboarding-intent";
 
 import getAccountId from "@cocalc/http-api/lib/account/get-account";
 import { apiRoute, apiRouteOperation } from "@cocalc/http-api/lib/api";
@@ -116,7 +120,10 @@ export async function signUp(req, res) {
     lastName,
     registrationToken,
     marketing_consent,
+    onboardingIntent: rawOnboardingIntent,
   } = getParams(req);
+  const onboardingIntent =
+    normalizeProjectOnboardingIntent(rawOnboardingIntent);
 
   password = (password ?? "").trim();
   email = (email ?? "").toLowerCase().trim();
@@ -343,9 +350,11 @@ export async function signUp(req, res) {
       home_bay_id: selected_home_bay_id,
       owner_id,
       ephemeral: tokenInfo?.ephemeral,
-      other_settings: buildMarketingConsentOtherSettings(
-        marketing_consent === true,
-      ),
+      other_settings: {
+        ...buildMarketingConsentOtherSettings(marketing_consent === true),
+        ...onboardingIntentOtherSettings(onboardingIntent),
+      },
+      signup_reason: onboardingIntent,
       trusted_product_access: requiresRegistrationToken,
       trusted_product_access_reason: requiresRegistrationToken
         ? "registration_token"

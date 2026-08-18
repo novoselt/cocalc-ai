@@ -33,6 +33,19 @@ describe("getFeaturesRouteFromPath", () => {
 });
 
 describe("PublicFeaturesApp", () => {
+  it("carries feature intent into unauthenticated signup links", () => {
+    const { container } = render(
+      <PublicFeaturesApp
+        config={{ site_name: "Launchpad" }}
+        initialRoute={{ slug: "jupyter-notebook", view: "detail" }}
+      />,
+    );
+
+    expect(
+      container.querySelector('a[href="/auth/sign-up?intent=jupyter-python"]'),
+    ).not.toBeNull();
+  });
+
   it("renders the features index", () => {
     const { container } = render(
       <PublicFeaturesApp

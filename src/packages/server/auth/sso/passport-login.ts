@@ -76,6 +76,7 @@ import {
   ssoAuditProviderType,
 } from "./audit";
 import { buildMarketingConsentOtherSettings } from "@cocalc/util/notification-preferences";
+import { onboardingIntentOtherSettings } from "@cocalc/util/accounts/onboarding-intent";
 import {
   displayNameFromParts,
   normalizeDisplayName,
@@ -697,14 +698,15 @@ export class PassportLogin {
       created_by: `${opts.req?.ip ?? ""}`.trim() || undefined,
       ephemeral: creationContext.tokenInfo?.ephemeral,
       customize: creationContext.tokenInfo?.customize,
-      other_settings: buildMarketingConsentOtherSettings(
-        opts.marketing_consent === true,
-      ),
+      other_settings: {
+        ...buildMarketingConsentOtherSettings(opts.marketing_consent === true),
+        ...onboardingIntentOtherSettings(opts.onboarding_intent),
+      },
       trusted_product_access: creationContext.trustedProductAccess,
       trusted_product_access_reason: creationContext.trustedProductAccess
         ? "registration_token"
         : undefined,
-      signup_reason: `SSO account creation via ${opts.strategyName}`,
+      signup_reason: opts.onboarding_intent,
     });
     await this.database.create_passport({
       account_id: created.account_id,

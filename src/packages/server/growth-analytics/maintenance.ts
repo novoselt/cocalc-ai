@@ -5,6 +5,7 @@
 
 import getLogger from "@cocalc/backend/logger";
 import { runGrowthMaterializationOnce } from "./materialize";
+import { runOnboardingContinuationOnce } from "./onboarding-continuation";
 
 const logger = getLogger("server:growth-analytics:maintenance");
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
@@ -38,6 +39,14 @@ async function tick(): Promise<void> {
     }
   } catch (err) {
     logger.warn("growth analytics maintenance tick failed", { err: `${err}` });
+  }
+  try {
+    const continuation = await runOnboardingContinuationOnce();
+    if (continuation.scheduled || continuation.claimed || continuation.failed) {
+      logger.info("onboarding continuation processed", continuation);
+    }
+  } catch (err) {
+    logger.warn("onboarding continuation tick failed", { err: `${err}` });
   } finally {
     running = false;
   }

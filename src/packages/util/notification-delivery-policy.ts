@@ -19,6 +19,7 @@ export interface ResolveNotificationDeliveryPolicyOptions {
   summary?: Record<string, any> | null;
   event_payload?: Record<string, any> | null;
   preferences?: unknown;
+  onboarding_email_declined?: boolean;
 }
 
 export interface NotificationDeliveryPolicy {
@@ -47,6 +48,12 @@ function accountNoticeCategory(opts: {
   );
   if (noticeType === "codex_turn_completion") {
     return "ai";
+  }
+  if (noticeType.startsWith("onboarding_")) {
+    return "onboarding";
+  }
+  if (noticeType.startsWith("product_")) {
+    return "product";
   }
   if (noticeType.startsWith("billing_") || noticeType.includes("spend")) {
     return "billing";
@@ -115,6 +122,7 @@ function laneForCategory(category: NotificationCategory): EmailLane {
     case "maintenance":
     case "membership_requests":
     case "access_requests":
+    case "onboarding":
       return "transactional";
     case "product":
       return "marketing";
@@ -160,10 +168,23 @@ export function resolveNotificationDeliveryPolicy(
         : "support";
   const definition = getNotificationCategoryDefinition(category);
   const preferences = normalizeNotificationPreferences(opts.preferences);
+  const hasExplicitOnboardingPreference =
+    opts.preferences != null &&
+    typeof opts.preferences === "object" &&
+    (opts.preferences as { email?: unknown }).email != null &&
+    typeof (opts.preferences as { email?: unknown }).email === "object" &&
+    Object.prototype.hasOwnProperty.call(
+      (opts.preferences as { email: object }).email,
+      "onboarding",
+    );
   const required = definition.requiredEmailMode != null;
   const delivery_mode = required
     ? definition.requiredEmailMode!
-    : preferences.email[category];
+    : category === "onboarding" &&
+        opts.onboarding_email_declined === true &&
+        !hasExplicitOnboardingPreference
+      ? "off"
+      : preferences.email[category];
   const lane = laneForCategory(category);
   return {
     category,

@@ -3,6 +3,8 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import type { ProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
+
 import { MAX_INTEREST_TIMEOUT, type Client } from "@cocalc/conat/core/client";
 import {
   createServiceClient,
@@ -684,12 +686,14 @@ export interface EmailAuthChallengeStartRequest {
   email_address: string;
   browser_binding: string;
   request_ip?: string;
+  registration_token?: string;
   analytics_token?: string;
   purpose?: "sign_in_or_sign_up" | "email_fresh_auth";
   prospective_home_bay_id?: string;
   terms_accepted?: boolean;
   terms_version?: string;
   continuation_target?: string;
+  onboarding_intent?: ProjectOnboardingIntent;
   expected_account_id?: string;
 }
 

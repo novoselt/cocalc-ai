@@ -10,6 +10,7 @@ import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureSignUpPath,
   featureAsset,
   LinkButton,
 } from "./page-components";
@@ -27,7 +28,7 @@ export default function TerminalFeaturePage({
 }) {
   const primaryCtaHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("code");
   const finalCtaLabel = isAuthenticated ? "Open projects" : "Create account";
 
   return (

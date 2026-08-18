@@ -9,6 +9,7 @@ import { Button } from "antd";
 
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { PUBLIC_COLORS } from "@cocalc/frontend/public/theme";
+import type { ProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
 // The one shared copyable-code component lives in ../common; re-export it so
@@ -17,6 +18,11 @@ export { CodeBlock } from "../common";
 
 export function featureAppPath(path: string): string {
   return joinUrlPath(appBasePath, path);
+}
+
+export function featureSignUpPath(intent: ProjectOnboardingIntent): string {
+  const params = new URLSearchParams({ intent });
+  return `${featureAppPath("auth/sign-up")}?${params.toString()}`;
 }
 
 // URL for a screenshot/video served by the assets package

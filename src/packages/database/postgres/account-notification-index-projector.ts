@@ -149,6 +149,10 @@ async function applyNotificationEventToAccountNotificationIndex(opts: {
     summary: payload.summary,
     event_payload: payload.event_payload,
     preferences: account.other_settings?.notification_preferences,
+    onboarding_email_declined:
+      account.other_settings?.marketing_email_consent_record?.source ===
+        "first-project-open" &&
+      account.other_settings?.marketing_email_consent_record?.enabled === false,
   });
   const delivery_mode = policy.delivery_mode;
   if (!notificationModeCreatesInApp(delivery_mode)) {

@@ -96,6 +96,12 @@ describe("OnboardingEmailPrompt", () => {
           source: "first-project-open",
           recorded_at: expect.any(String),
         }),
+        notification_preferences: expect.objectContaining({
+          email: expect.objectContaining({
+            onboarding: "immediate",
+            product: "digest",
+          }),
+        }),
       }),
     );
     expect(screen.queryByText("Get productive with CoCalc faster")).toBeNull();
@@ -112,6 +118,11 @@ describe("OnboardingEmailPrompt", () => {
   });
 
   it("records a declined offer so it is not shown again", () => {
+    values["account.other_settings"] = otherSettings({
+      notification_preferences: Map({
+        email: Map({ mentions: "none" }),
+      }),
+    });
     const view = render(<OnboardingEmailPrompt />);
     values["projects.project_map"] = Map([[PROJECT_ID, Map()]]);
     values["page.active_top_tab"] = PROJECT_ID;
@@ -126,6 +137,13 @@ describe("OnboardingEmailPrompt", () => {
         marketing_email_consent_record: expect.objectContaining({
           enabled: false,
           source: "first-project-open",
+        }),
+        notification_preferences: expect.objectContaining({
+          email: expect.objectContaining({
+            mentions: "none",
+            onboarding: "off",
+            product: "off",
+          }),
         }),
       }),
     );

@@ -89,6 +89,7 @@ describe("/api/v2/auth/email/start", () => {
       },
       body: {
         email: "Person@Example.EDU",
+        onboarding_intent: "jupyter-python",
         target: "/projects/project-id/files?path=README.md#preview",
       },
     });
@@ -111,6 +112,7 @@ describe("/api/v2/auth/email/start", () => {
         browser_binding: expect.any(String),
         continuation_target:
           "/projects/project-id/files?path=README.md#preview",
+        onboarding_intent: "jupyter-python",
       }),
     );
     expect(

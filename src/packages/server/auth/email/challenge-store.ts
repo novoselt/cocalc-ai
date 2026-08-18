@@ -36,6 +36,10 @@ import {
 } from "@cocalc/server/inter-bay/accounts";
 import { is_valid_email_address as isValidEmailAddress } from "@cocalc/util/misc";
 import { buildMarketingConsentOtherSettings } from "@cocalc/util/notification-preferences";
+import {
+  onboardingIntentOtherSettings,
+  normalizeProjectOnboardingIntent,
+} from "@cocalc/util/accounts/onboarding-intent";
 
 import { sendEmailAuthChallengeMessage } from "./delivery";
 import {
@@ -106,7 +110,7 @@ type ChallengeRow = {
   registration_token_reservation_id?: string | null;
   registration_token_encrypted?: string | null;
   registration_token_validated_at?: Date | null;
-  continuation?: { target?: string } | null;
+  continuation?: { target?: string; onboarding_intent?: string } | null;
   email_proved_at?: Date | null;
   account_created_at?: Date | null;
   expires_at: Date;
@@ -555,8 +559,11 @@ export async function startEmailAuthChallengeDirect(
           registrationTokenReservationId ?? null,
           registrationTokenEncrypted ?? null,
           registrationTokenValidatedAt ?? null,
-          opts.continuation_target
-            ? JSON.stringify({ target: opts.continuation_target })
+          opts.continuation_target || opts.onboarding_intent
+            ? JSON.stringify({
+                target: opts.continuation_target,
+                onboarding_intent: opts.onboarding_intent,
+              })
             : null,
           MAX_ATTEMPTS,
           resendAvailableAt,
@@ -1051,13 +1058,20 @@ async function resolveChallengeAccount(
   }
   let account;
   let accountCreated = false;
+  const onboardingIntent = normalizeProjectOnboardingIntent(
+    row.continuation?.onboarding_intent,
+  );
   try {
     account = await createClusterAccount({
       email_address: row.normalized_email,
       display_name: "CoCalc User",
       home_bay_id,
       ephemeral: tokenInfo?.ephemeral,
-      other_settings: buildMarketingConsentOtherSettings(false),
+      other_settings: {
+        ...buildMarketingConsentOtherSettings(false),
+        ...onboardingIntentOtherSettings(onboardingIntent),
+      },
+      signup_reason: onboardingIntent,
       trusted_product_access: requiresRegistrationToken,
       trusted_product_access_reason: requiresRegistrationToken
         ? "registration_token"

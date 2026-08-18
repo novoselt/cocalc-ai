@@ -19,6 +19,7 @@ export type NotificationCategory =
   | "mentions"
   | "chat_replies"
   | "ai"
+  | "onboarding"
   | "product"
   | "maintenance"
   | "course";
@@ -121,6 +122,14 @@ export const NOTIFICATION_CATEGORIES: NotificationCategoryDefinition[] = [
     defaultEmailMode: "off",
   },
   {
+    key: "onboarding",
+    label: "Project onboarding",
+    description:
+      "One-time project readiness and first-workflow continuation notices.",
+    defaultEmailMode: "immediate",
+    allowedEmailModes: ["immediate", "off"],
+  },
+  {
     key: "course",
     label: "Course",
     description:
@@ -189,13 +198,19 @@ export function notificationModeCreatesInApp(
 export function normalizeNotificationPreferences(
   raw: unknown,
 ): NotificationPreferences {
-  const defaults = getDefaultNotificationPreferences();
-  const rawEmail =
+  const normalizedRaw =
     raw != null &&
     typeof raw === "object" &&
-    (raw as { email?: unknown }).email != null &&
-    typeof (raw as { email?: unknown }).email === "object"
-      ? ((raw as { email: Record<string, unknown> }).email ?? {})
+    typeof (raw as { toJS?: unknown }).toJS === "function"
+      ? (raw as { toJS: () => unknown }).toJS()
+      : raw;
+  const defaults = getDefaultNotificationPreferences();
+  const rawEmail =
+    normalizedRaw != null &&
+    typeof normalizedRaw === "object" &&
+    (normalizedRaw as { email?: unknown }).email != null &&
+    typeof (normalizedRaw as { email?: unknown }).email === "object"
+      ? ((normalizedRaw as { email: Record<string, unknown> }).email ?? {})
       : {};
   const legacyCollaborationMode = isNotificationEmailMode(
     rawEmail.collaboration,
@@ -282,6 +297,20 @@ export function setProductMarketingEmailMode(
     email: {
       ...preferences.email,
       product: enabled ? "digest" : "off",
+    },
+  };
+}
+
+export function setOnboardingEmailMode(
+  raw: unknown,
+  enabled: boolean,
+): NotificationPreferences {
+  const preferences = normalizeNotificationPreferences(raw);
+  return {
+    ...preferences,
+    email: {
+      ...preferences.email,
+      onboarding: enabled ? "immediate" : "off",
     },
   };
 }

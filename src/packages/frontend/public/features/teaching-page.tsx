@@ -14,7 +14,11 @@ import {
   PUBLIC_TYPE,
 } from "@cocalc/frontend/public/theme";
 import { FEATURE_ACCENTS } from "./feature-accents";
-import { BulletList, featureAppPath as appPath } from "./page-components";
+import {
+  BulletList,
+  featureAppPath as appPath,
+  featureSignUpPath,
+} from "./page-components";
 import { FeatureFinalBand, IconBadge } from "./feature-visuals";
 
 const { Paragraph, Text, Title } = Typography;
@@ -260,7 +264,7 @@ export default function TeachingFeaturePage({
 }) {
   const primaryCtaHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("teaching");
   const primaryCtaLabel = isAuthenticated ? "Open projects" : "Create account";
   const finalCtaLabel = isAuthenticated
     ? "Open projects"

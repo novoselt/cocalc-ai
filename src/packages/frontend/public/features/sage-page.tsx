@@ -11,6 +11,7 @@ import { COLORS } from "@cocalc/util/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureSignUpPath,
   featureAsset,
   LinkButton,
 } from "./page-components";
@@ -28,7 +29,7 @@ export default function SageFeaturePage({
 }) {
   const primaryCtaHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("sage");
   const primaryCtaLabel = isAuthenticated ? "Open projects" : "Create account";
   const finalCtaLabel = isAuthenticated
     ? "Open projects"

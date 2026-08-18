@@ -17,6 +17,7 @@ import {
 import {
   BulletList,
   featureAppPath as appPath,
+  featureSignUpPath,
   LinkButton,
 } from "./page-components";
 import { FEATURE_ACCENTS } from "./feature-accents";
@@ -100,7 +101,7 @@ export default function LinuxFeaturePage({
 }) {
   const primaryCtaHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("code");
   const primaryCtaLabel = isAuthenticated ? "Open projects" : "Create account";
   const finalCtaLabel = isAuthenticated
     ? "Open projects"
