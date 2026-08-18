@@ -8,7 +8,6 @@ let publishLroSummaryMock: jest.Mock;
 let publishLroEventMock: jest.Mock;
 let triggerCopyLroWorkerMock: jest.Mock;
 let triggerCourseCollectLroWorkerMock: jest.Mock;
-let getProjectOwnerAccountIdMock: jest.Mock;
 let assertCanIncreaseAccountStorageMock: jest.Mock;
 let resolveProjectAccessAllowRemoteMock: jest.Mock;
 let assertCollabAllowRemoteProjectAccessMock: jest.Mock;
@@ -18,6 +17,8 @@ let resolveProjectBayMock: jest.Mock;
 
 const COURSE_PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const STUDENT_PROJECT_ID = "22222222-2222-4222-8222-222222222222";
+const OWNER_ACCOUNT_ID = "33333333-3333-4333-8333-333333333333";
+const SECOND_OWNER_ACCOUNT_ID = "44444444-4444-4444-8444-444444444444";
 
 jest.mock("@cocalc/server/projects/create", () => ({
   __esModule: true,
@@ -132,8 +133,6 @@ jest.mock("@cocalc/server/projects/course-collect-worker", () => ({
 
 jest.mock("@cocalc/server/membership/project-limits", () => ({
   __esModule: true,
-  getProjectOwnerAccountId: (...args: any[]) =>
-    getProjectOwnerAccountIdMock(...args),
   assertCanIncreaseAccountStorage: (...args: any[]) =>
     assertCanIncreaseAccountStorageMock(...args),
 }));
@@ -182,13 +181,17 @@ describe("projects.copyPathBetweenProjects", () => {
     publishLroEventMock = jest.fn(async () => undefined);
     triggerCopyLroWorkerMock = jest.fn();
     triggerCourseCollectLroWorkerMock = jest.fn();
-    getProjectOwnerAccountIdMock = jest.fn(async () => "owner-1");
     assertCanIncreaseAccountStorageMock = jest.fn(async () => undefined);
     resolveProjectAccessAllowRemoteMock = jest.fn(async () => ({
       role: "collaborator",
       capabilities: { writeProjectFiles: true },
     }));
-    assertCollabAllowRemoteProjectAccessMock = jest.fn(async () => undefined);
+    assertCollabAllowRemoteProjectAccessMock = jest.fn(
+      async ({ project_id }) => ({
+        project_id,
+        users: { [OWNER_ACCOUNT_ID]: { group: "owner" } },
+      }),
+    );
     ensureCourseManagerAccessLocalMock = jest.fn(async ({ project_ids }) =>
       project_ids.map((project_id) => ({
         project_id,
@@ -220,7 +223,7 @@ describe("projects.copyPathBetweenProjects", () => {
       dest: { project_id: "dest-project", path: "/root/b.txt" },
     });
 
-    expect(assertCollabMock).toHaveBeenCalledTimes(2);
+    expect(assertCollabMock).toHaveBeenCalledTimes(1);
     expect(resolveProjectAccessAllowRemoteMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "src-project",
@@ -229,7 +232,7 @@ describe("projects.copyPathBetweenProjects", () => {
       account_id: "acct-1",
       project_id: "src-project",
     });
-    expect(assertCollabMock).toHaveBeenNthCalledWith(2, {
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-project",
     });
@@ -243,6 +246,10 @@ describe("projects.copyPathBetweenProjects", () => {
       dest: { project_id: "src-project", path: "/root/b.txt" },
     });
     expect(assertCollabMock).toHaveBeenCalledTimes(1);
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
+      account_id: "acct-1",
+      project_id: "src-project",
+    });
   });
 
   it("allows viewer source copy-out only to collaborator destination projects", async () => {
@@ -259,8 +266,8 @@ describe("projects.copyPathBetweenProjects", () => {
       dest: { project_id: "dest-project", path: "copied/a.txt" },
     });
 
-    expect(assertCollabMock).toHaveBeenCalledTimes(1);
-    expect(assertCollabMock).toHaveBeenCalledWith({
+    expect(assertCollabMock).not.toHaveBeenCalled();
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-project",
     });
@@ -305,9 +312,8 @@ describe("projects.copyPathBetweenProjects", () => {
     expect(publishLroSummaryMock).toHaveBeenCalledTimes(1);
     expect(publishLroEventMock).toHaveBeenCalledTimes(1);
     expect(triggerCopyLroWorkerMock).toHaveBeenCalledTimes(1);
-    expect(getProjectOwnerAccountIdMock).toHaveBeenCalledWith("dest-project");
     expect(assertCanIncreaseAccountStorageMock).toHaveBeenCalledWith({
-      account_id: "owner-1",
+      account_id: OWNER_ACCOUNT_ID,
     });
     expect(result).toEqual({
       op_id: "op-1",
@@ -319,8 +325,15 @@ describe("projects.copyPathBetweenProjects", () => {
   });
 
   it("accepts multiple destinations and stores canonical dests in one LRO", async () => {
-    getProjectOwnerAccountIdMock = jest.fn(async (project_id: string) =>
-      project_id === "dest-a" ? "owner-a" : "owner-b",
+    assertCollabAllowRemoteProjectAccessMock = jest.fn(
+      async ({ project_id }) => ({
+        project_id,
+        users: {
+          [project_id === "dest-a"
+            ? OWNER_ACCOUNT_ID
+            : SECOND_OWNER_ACCOUNT_ID]: { group: "owner" },
+        },
+      }),
     );
     const { copyPathBetweenProjects } = await import("./projects");
     await copyPathBetweenProjects({
@@ -341,16 +354,16 @@ describe("projects.copyPathBetweenProjects", () => {
       options: { recursive: true, force: true },
     });
 
-    expect(assertCollabMock).toHaveBeenCalledTimes(3);
+    expect(assertCollabMock).toHaveBeenCalledTimes(1);
     expect(assertCollabMock).toHaveBeenNthCalledWith(1, {
       account_id: "acct-1",
       project_id: "src-project",
     });
-    expect(assertCollabMock).toHaveBeenNthCalledWith(2, {
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-a",
     });
-    expect(assertCollabMock).toHaveBeenNthCalledWith(3, {
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-b",
     });
@@ -374,8 +387,42 @@ describe("projects.copyPathBetweenProjects", () => {
         },
       }),
     );
-    expect(getProjectOwnerAccountIdMock).toHaveBeenCalledTimes(2);
     expect(assertCanIncreaseAccountStorageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("authorizes fanout destinations concurrently", async () => {
+    let releaseFirst!: () => void;
+    const firstDestinationGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    assertCollabAllowRemoteProjectAccessMock = jest.fn(
+      async ({ project_id }) => {
+        if (project_id === "dest-a") {
+          await firstDestinationGate;
+        }
+        return {
+          project_id,
+          users: { [OWNER_ACCOUNT_ID]: { group: "owner" } },
+        };
+      },
+    );
+    const { copyPathBetweenProjects } = await import("./projects");
+    const copy = copyPathBetweenProjects({
+      account_id: "acct-1",
+      src: { project_id: "src-project", path: "/root/assignment" },
+      dests: [
+        { project_id: "dest-a", path: "/root/assignment" },
+        { project_id: "dest-b", path: "/root/assignment" },
+      ],
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const callsBeforeFirstDestinationFinished =
+      assertCollabAllowRemoteProjectAccessMock.mock.calls.length;
+    releaseFirst();
+    await copy;
+
+    expect(callsBeforeFirstDestinationFinished).toBe(2);
   });
 
   it("deduplicates repeated destinations before authorization and LRO creation", async () => {
@@ -389,8 +436,8 @@ describe("projects.copyPathBetweenProjects", () => {
       ],
     });
 
-    expect(assertCollabMock).toHaveBeenCalledTimes(2);
-    expect(getProjectOwnerAccountIdMock).toHaveBeenCalledTimes(1);
+    expect(assertCollabMock).toHaveBeenCalledTimes(1);
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledTimes(1);
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({
         input: {
@@ -511,7 +558,7 @@ describe("projects.copyPathBetweenProjects", () => {
       account_id: "acct-1",
       project_id: COURSE_PROJECT_ID,
     });
-    expect(assertCollabMock).toHaveBeenNthCalledWith(2, {
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: STUDENT_PROJECT_ID,
     });
@@ -597,7 +644,7 @@ describe("projects.copyPathBetweenProjects", () => {
       account_id: "acct-1",
       project_id: COURSE_PROJECT_ID,
     });
-    expect(assertCollabMock).toHaveBeenCalledWith({
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: STUDENT_PROJECT_ID,
     });
