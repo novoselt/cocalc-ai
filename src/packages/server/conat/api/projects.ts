@@ -39,6 +39,7 @@ import {
 } from "@cocalc/server/projects/collaborators";
 import { ensureCourseManagerAccessLocal } from "@cocalc/server/projects/course/ensure-manager-access";
 import {
+  getProjectOwnerAccountIdFromUsers,
   leaveOrDeleteProjectsForAccount,
   type ProjectLeaveOrDeleteResult,
 } from "@cocalc/server/projects/ownership";
@@ -76,6 +77,7 @@ import {
   resolvePublicViewerDns,
 } from "@cocalc/util/public-viewer-origin";
 import { isValidUUID } from "@cocalc/util/misc";
+import { mapParallelLimit } from "@cocalc/util/async-utils";
 import { membershipPackageCoversCourseProject } from "@cocalc/util/membership-package-product";
 import { projectStartFailureFromError } from "@cocalc/util/project-start-errors";
 import type { CodexUsageStatusInfo } from "@cocalc/conat/hub/api/system";
@@ -113,7 +115,6 @@ import {
 import {
   assertCanIncreaseAccountStorage,
   getProjectCollaboratorInviteUsage as getProjectCollaboratorInviteUsageLocal,
-  getProjectOwnerAccountId,
 } from "@cocalc/server/membership/project-limits";
 import { assertCanPerformDestructiveStorageAction } from "@cocalc/server/projects/destructive-storage-actions";
 import {
@@ -546,31 +547,36 @@ export async function copyPathBetweenProjects({
     account_id,
     project_id: src.project_id,
   });
-  const authorizedCollabProjectIds = new Set<string>();
-  if (!src_read_policy) {
-    authorizedCollabProjectIds.add(src.project_id);
-  }
   const destProjectIds = Array.from(
     new Set(normalizedDests.map((dest) => dest.project_id)),
   );
-  for (const project_id of destProjectIds) {
-    if (!authorizedCollabProjectIds.has(project_id)) {
-      await assertCollab({ account_id, project_id });
-      authorizedCollabProjectIds.add(project_id);
-    }
-  }
+  const destReferences = await mapParallelLimit(
+    destProjectIds,
+    async (project_id) =>
+      await assertCollabAllowRemoteProjectAccess({
+        account_id,
+        project_id,
+        warmRoute: false,
+      }),
+    COPY_ADMISSION_CONCURRENCY,
+  );
   const destOwnerAccountIds = new Set<string>();
-  for (const project_id of destProjectIds) {
-    const destOwnerAccountId = await getProjectOwnerAccountId(project_id);
+  for (const reference of destReferences) {
+    const destOwnerAccountId = getProjectOwnerAccountIdFromUsers(
+      reference.users,
+    );
     if (destOwnerAccountId) {
       destOwnerAccountIds.add(destOwnerAccountId);
     }
   }
-  for (const ownerAccountId of destOwnerAccountIds) {
-    await assertCanIncreaseAccountStorage({
-      account_id: ownerAccountId,
-    });
-  }
+  await mapParallelLimit(
+    Array.from(destOwnerAccountIds),
+    async (ownerAccountId) =>
+      await assertCanIncreaseAccountStorage({
+        account_id: ownerAccountId,
+      }),
+    COPY_ADMISSION_CONCURRENCY,
+  );
   const op = await createLro({
     kind: "copy-path-between-projects",
     scope_type: "project",
@@ -631,6 +637,7 @@ export async function copyPathBetweenProjects({
 }
 
 const MAX_COURSE_COLLECT_ITEMS = 500;
+const COPY_ADMISSION_CONCURRENCY = 20;
 
 function normalizeCourseCollectItems(
   items: CourseCollectAssignmentItem[],
@@ -696,9 +703,16 @@ export async function collectAssignment({
     course_project_id,
     project_ids: studentProjectIds,
   });
-  for (const project_id of studentProjectIds) {
-    await assertCollab({ account_id, project_id });
-  }
+  await mapParallelLimit(
+    studentProjectIds,
+    async (project_id) =>
+      await assertCollabAllowRemoteProjectAccess({
+        account_id,
+        project_id,
+        warmRoute: false,
+      }),
+    COPY_ADMISSION_CONCURRENCY,
+  );
   let normalizedRunAt: string | undefined;
   if (run_at != null) {
     const date = new Date(run_at);
@@ -4247,8 +4261,14 @@ export async function ensureCourseManagerAccess({
   const localProjectIds: string[] = [];
   const remoteProjectIdsByBay = new Map<string, string[]>();
   const resultsByProjectId = new Map<string, CourseManagerAccessResult>();
-  for (const project_id of projectIds) {
-    const ownership = await resolveProjectBay(project_id);
+  const projectOwnership = await mapParallelLimit(
+    projectIds,
+    async (project_id) => await resolveProjectBay(project_id),
+    COPY_ADMISSION_CONCURRENCY,
+  );
+  for (let i = 0; i < projectIds.length; i++) {
+    const project_id = projectIds[i];
+    const ownership = projectOwnership[i];
     if (ownership == null) {
       resultsByProjectId.set(project_id, {
         project_id,
