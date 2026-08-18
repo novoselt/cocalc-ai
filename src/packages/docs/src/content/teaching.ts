@@ -312,6 +312,10 @@ Course datastore configuration and environment variables are pushed to it so
 shared-project software can see the same course-level settings that student
 projects see.
 
+The shared project uses the same RootFS choice as new student projects. When an
+instructor applies a new course RootFS image to existing course projects, CoCalc
+also applies it to the shared project.
+
 Student-project restrictions do not apply to the shared project. The shared
 project is intentionally collaborative and writable by everyone in the course.
 
@@ -338,10 +342,10 @@ resources, or project host placement before class starts.
 export const COURSE_STUDENT_PROJECT_ROOTFS_BODY = String.raw`
 ## What this setting controls
 
-**Student Project RootFS Image** controls the base software image used by
-student projects. The RootFS image is the visible ${CODE_TICK}/${CODE_TICK}
-filesystem and provides system packages, language runtimes, command line tools,
-and other managed software.
+**Course Project RootFS Image** controls the base software image used by student
+projects and the course shared project. The RootFS image is the visible
+${CODE_TICK}/${CODE_TICK} filesystem and provides system packages, language
+runtimes, command line tools, and other managed software.
 
 By default, new student projects follow the RootFS image configured on the
 instructor project that contains the course file. Set an override only when the
@@ -360,15 +364,16 @@ RootFS choice into that project:
 This makes it possible to prepare a course against a known software stack and
 avoid per-student environment drift.
 
-## Existing student projects
+## Existing course projects
 
-Existing student projects do not change automatically just because you save a
-new RootFS choice. Use **Apply To Existing Student Projects...** when you are
-ready to roll the image out to already-created projects.
+Existing course projects do not change automatically just because you save a
+new RootFS choice. Use **Apply To Existing Course Projects...** when you are
+ready to roll the image out to already-created student projects and the shared
+project, if one exists.
 
-Applying to existing projects updates each student project's RootFS image. Any
-student project that is currently running is restarted so the new image takes
-effect immediately.
+Applying to existing projects updates each student project's RootFS image and
+the shared project's image, if it exists. Any affected project that is currently
+running is restarted so the new image takes effect immediately.
 
 ## Data safety
 
