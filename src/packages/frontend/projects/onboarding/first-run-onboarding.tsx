@@ -32,7 +32,7 @@ import {
 import { COLORS } from "@cocalc/util/theme";
 import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 import { markFirstRunCompletedThisSession } from "@cocalc/frontend/app/onboarding-session";
-import { submitNavigatorPromptInWorkspaceChat } from "@cocalc/frontend/project/new/navigator-intents";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 import { useCodexPaymentSource } from "@cocalc/frontend/chat/use-codex-payment-source";
 import { getLogger } from "@cocalc/frontend/logger";
@@ -44,7 +44,10 @@ import {
 } from "../create/project-create-draft";
 import { useProjectCreateDraft } from "../create/use-project-create-draft";
 import { chooseOnboardingRootfs, type OnboardingProjectKind } from "./rootfs";
-import { onboardingArtifactCreationForProject } from "./artifact";
+import {
+  isRetryableOnboardingArtifactError,
+  onboardingArtifactCreationForProject,
+} from "./artifact";
 import {
   buildCodexOnboardingPrompt,
   codexAvailableForOnboarding,
@@ -309,9 +312,7 @@ async function createArtifactWhenReady({
     });
     lastError = `${actions.get_store()?.get("file_creation_error") ?? ""}`;
     if (!lastError) return artifact.relative_path;
-    if (
-      !/not running|closed|initializ|file server|connect|route/i.test(lastError)
-    ) {
+    if (!isRetryableOnboardingArtifactError(lastError)) {
       break;
     }
     await delay(1_000);
@@ -403,6 +404,16 @@ export function FirstRunOnboarding({
 
   useEffect(() => {
     if (!configurationVisible || !selectedPath) return;
+    // The full project workspace is deliberately not a prerequisite for
+    // rendering onboarding. Start loading it once the user reaches project
+    // configuration so download/evaluation overlaps project startup and user
+    // think time.
+    void ensureProjectReduxRuntime().catch((err) => {
+      logger.warn("unable to preload project runtime during onboarding", {
+        kind: selectedPath.kind,
+        err: `${err}`,
+      });
+    });
     recordProductActivity({
       event_name: "onboarding_configuration_seen",
       properties: {
@@ -796,6 +807,8 @@ export function FirstRunOnboarding({
           switch_to: true,
           restore_session: false,
         });
+        const { submitNavigatorPromptInWorkspaceChat } =
+          await import("@cocalc/frontend/project/new/navigator-intents");
         const submitted = await submitNavigatorPromptInWorkspaceChat({
           project_id,
           prompt: buildCodexOnboardingPrompt(prompt, {

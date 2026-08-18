@@ -6,6 +6,7 @@
 import { resolveProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
 
 import {
+  isRetryableOnboardingArtifactError,
   onboardingArtifactCreation,
   onboardingArtifactCreationForProject,
 } from "./artifact";
@@ -57,5 +58,18 @@ describe("first-run onboarding artifact creation", () => {
 
   it("does not create a starter artifact for Codex projects", () => {
     expect(onboardingArtifactCreation("codex", "/home/user")).toBeUndefined();
+  });
+
+  it("retries starter creation while the RootFS is still mounting", () => {
+    expect(
+      isRetryableOnboardingArtifactError(
+        new Error(
+          "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isRetryableOnboardingArtifactError(new Error("permission denied")),
+    ).toBe(false);
   });
 });
