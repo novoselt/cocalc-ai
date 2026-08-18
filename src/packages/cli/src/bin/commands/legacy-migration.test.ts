@@ -5,6 +5,38 @@ import { Command } from "commander";
 
 import { registerLegacyMigrationCommand } from "./legacy-migration";
 
+test("legacy restore retry validates and forwards the project id", async () => {
+  const calls: any[] = [];
+  const program = new Command();
+  registerLegacyMigrationCommand(program, {
+    isValidUUID: (value) => value === "00000000-0000-4000-8000-000000000001",
+    hubCallByName: async (_ctx, name, args, timeoutMs) => {
+      calls.push({ name, args, timeoutMs });
+      return { status: "queued" };
+    },
+    withContext: async (_command, label, fn) => {
+      assert.equal(label, "legacy-migration retry");
+      return await fn({ timeoutMs: 30_000 });
+    },
+  });
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "legacy-migration",
+    "retry",
+    "00000000-0000-4000-8000-000000000001",
+  ]);
+
+  assert.deepEqual(calls, [
+    {
+      name: "legacyMigration.retryProjectRestore",
+      args: [{ legacy_project_id: "00000000-0000-4000-8000-000000000001" }],
+      timeoutMs: 30_000,
+    },
+  ]);
+});
+
 test("legacy public-share catch-up defaults to one dry-run batch", async () => {
   const calls: any[] = [];
   let result: any;

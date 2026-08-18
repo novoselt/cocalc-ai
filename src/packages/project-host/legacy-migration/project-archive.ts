@@ -6,7 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -57,6 +57,7 @@ const PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT = Math.max(
   0,
   envToInt("COCALC_PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT", 100),
 );
+const PROJECT_ARCHIVE_MAX_EXCLUDE_ARG_BYTES = 128 * 1024;
 const LEGACY_PROJECT_REMEDIATION_DIFF_REPORT_LIMIT = Math.max(
   1,
   envToInt("COCALC_LEGACY_PROJECT_REMEDIATION_DIFF_REPORT_LIMIT", 500),
@@ -221,8 +222,27 @@ function shouldRestoreArchivePath({
   return true;
 }
 
-function rsyncExcludeArgs(exclude?: string[]): string[] {
-  return (exclude ?? []).map((root) => `--exclude=${root}`);
+export function projectArchiveRsyncExcludeArgs(exclude?: string[]): string[] {
+  return (exclude ?? []).map(
+    (root) => `--exclude=/${root.replace(/^\.\//, "")}`,
+  );
+}
+
+export function projectArchiveTarExcludeArgs(exclude?: string[]): string[] {
+  const args = (exclude ?? []).flatMap((path) => {
+    const normalized = path.replace(/^\.\//, "");
+    return [`--exclude=${normalized}`, `--exclude=./${normalized}`];
+  });
+  const bytes = args.reduce(
+    (total, arg) => total + Buffer.byteLength(arg) + 1,
+    0,
+  );
+  if (bytes > PROJECT_ARCHIVE_MAX_EXCLUDE_ARG_BYTES) {
+    throw new Error(
+      `legacy project archive requires ${bytes} bytes of extraction exclusions; limit is ${PROJECT_ARCHIVE_MAX_EXCLUDE_ARG_BYTES}`,
+    );
+  }
+  return args;
 }
 
 function runProjectArchiveTarCommand({
@@ -353,13 +373,11 @@ function runProjectArchiveTarCommand({
 async function scanProjectArchiveTar({
   archivePath,
   exclude,
-  member_list_path,
   max_uncompressed_bytes,
   lro,
 }: {
   archivePath: string;
   exclude?: string[];
-  member_list_path?: string;
   max_uncompressed_bytes?: number;
   lro?: LroRef;
 }): Promise<{
@@ -368,6 +386,7 @@ async function scanProjectArchiveTar({
   skipped_file_count: number;
   skipped_bytes: number;
   skipped_files: ProjectArchiveEntry[];
+  extraction_excludes: string[];
   unsafe_path_count: number;
   unsafe_paths: string[];
 }> {
@@ -376,108 +395,96 @@ async function scanProjectArchiveTar({
   let skipped_file_count = 0;
   let skipped_bytes = 0;
   const skipped_files: ProjectArchiveEntry[] = [];
+  const extraction_excludes: string[] = [];
   let unsafe_path_count = 0;
   const unsafe_paths: string[] = [];
-  const memberList =
-    member_list_path != null ? createWriteStream(member_list_path) : undefined;
   let lastProgress = 0;
-  const closeMemberList = async () => {
-    if (memberList == null) return;
-    await new Promise<void>((resolve, reject) => {
-      const onError = (err: Error) => reject(err);
-      memberList.once("error", onError);
-      memberList.end(() => {
-        memberList.off("error", onError);
-        resolve();
-      });
-    });
-  };
-  try {
-    await runProjectArchiveTarCommand({
-      archivePath,
-      // C quoting keeps control characters from splitting listing records.
-      args: ["--quoting-style=c", "-tvf", "-"],
-      onStdoutLine: (line) => {
-        const parsed = parseTarVerboseLine(line);
-        if (parsed == null) {
-          if (line.trim()) {
-            throw new Error(`unable to parse tar listing line: ${line}`);
-          }
-          return;
+  await runProjectArchiveTarCommand({
+    archivePath,
+    // C quoting keeps control characters from splitting listing records.
+    args: ["--quoting-style=c", "-tvf", "-"],
+    onStdoutLine: (line) => {
+      const parsed = parseTarVerboseLine(line);
+      if (parsed == null) {
+        if (line.trim()) {
+          throw new Error(`unable to parse tar listing line: ${line}`);
         }
-        if (unsafeArchiveMemberPathReason(parsed.path)) {
-          unsafe_path_count += 1;
-          if (
-            PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT === 0 ||
-            unsafe_paths.length < PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT
-          ) {
-            unsafe_paths.push(parsed.path);
-          }
-          return;
-        }
+        return;
+      }
+      if (unsafeArchiveMemberPathReason(parsed.path)) {
+        unsafe_path_count += 1;
         if (
-          !shouldRestoreArchivePath({
-            archivePath: parsed.path,
-            exclude,
-          })
+          PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT === 0 ||
+          unsafe_paths.length < PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT
         ) {
-          return;
+          unsafe_paths.push(parsed.path);
         }
-        const normalized = normalizeProjectArchiveMemberPath(parsed.path);
+        return;
+      }
+      if (
+        !shouldRestoreArchivePath({
+          archivePath: parsed.path,
+          exclude,
+        })
+      ) {
+        return;
+      }
+      const normalized = normalizeProjectArchiveMemberPath(parsed.path);
+      if (
+        parsed.type === "file" &&
+        parsed.size > PROJECT_ARCHIVE_MAX_FILE_BYTES
+      ) {
+        skipped_file_count += 1;
+        skipped_bytes += parsed.size;
+        extraction_excludes.push(normalized);
         if (
-          parsed.type === "file" &&
-          parsed.size > PROJECT_ARCHIVE_MAX_FILE_BYTES
+          PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT === 0 ||
+          skipped_files.length < PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT
         ) {
-          skipped_file_count += 1;
-          skipped_bytes += parsed.size;
-          if (
-            PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT === 0 ||
-            skipped_files.length < PROJECT_ARCHIVE_SKIPPED_FILE_REPORT_LIMIT
-          ) {
-            skipped_files.push({
-              path: normalized,
-              size: parsed.size,
-              type: parsed.type,
-              mtime: parsed.mtime,
-            });
-          }
-          return;
-        }
-        if (parsed.path.trim()) {
-          file_count += 1;
-          memberList?.write(parsed.path);
-          memberList?.write("\0");
-        }
-        uncompressed_bytes += parsed.size;
-        const now = Date.now();
-        if (now - lastProgress >= PROJECT_ARCHIVE_PROGRESS_INTERVAL_MS) {
-          lastProgress = now;
-          publishArchiveProgress({
-            lro,
-            phase: "scan",
-            message: "checking archive contents",
-            progress: 55,
-            detail: {
-              file_count,
-              uncompressed_bytes,
-              skipped_file_count,
-              skipped_bytes,
-              unsafe_path_count,
-            },
+          skipped_files.push({
+            path: normalized,
+            size: parsed.size,
+            type: parsed.type,
+            mtime: parsed.mtime,
           });
         }
-        if (
-          max_uncompressed_bytes != null &&
-          uncompressed_bytes > max_uncompressed_bytes
-        ) {
-          throw new Error(
-            `legacy project archive is too large for current storage quota (${uncompressed_bytes} > ${max_uncompressed_bytes} bytes)`,
-          );
-        }
-      },
-    });
-  } finally {
-    await closeMemberList();
+        return;
+      }
+      if (parsed.path.trim()) {
+        file_count += 1;
+      }
+      uncompressed_bytes += parsed.size;
+      const now = Date.now();
+      if (now - lastProgress >= PROJECT_ARCHIVE_PROGRESS_INTERVAL_MS) {
+        lastProgress = now;
+        publishArchiveProgress({
+          lro,
+          phase: "scan",
+          message: "checking archive contents",
+          progress: 55,
+          detail: {
+            file_count,
+            uncompressed_bytes,
+            skipped_file_count,
+            skipped_bytes,
+            unsafe_path_count,
+          },
+        });
+      }
+      if (
+        max_uncompressed_bytes != null &&
+        uncompressed_bytes > max_uncompressed_bytes
+      ) {
+        throw new Error(
+          `legacy project archive is too large for current storage quota (${uncompressed_bytes} > ${max_uncompressed_bytes} bytes)`,
+        );
+      }
+    },
+  });
+  if (unsafe_path_count > 0) {
+    throw new Error(
+      `legacy project archive contains ${unsafe_path_count} unsafe path${unsafe_path_count === 1 ? "" : "s"}: ${unsafe_paths.join(", ")}`,
+    );
   }
   return {
     file_count,
@@ -485,6 +492,7 @@ async function scanProjectArchiveTar({
     skipped_file_count,
     skipped_bytes,
     skipped_files,
+    extraction_excludes,
     unsafe_path_count,
     unsafe_paths,
   };
@@ -494,7 +502,8 @@ async function extractProjectArchiveTar({
   archivePath,
   dest,
   owner,
-  member_list_path,
+  exclude,
+  extraction_excludes,
   expected_file_count,
   expected_uncompressed_bytes,
   lro,
@@ -502,7 +511,8 @@ async function extractProjectArchiveTar({
   archivePath: string;
   dest: string;
   owner: { uid: number; gid: number };
-  member_list_path?: string;
+  exclude?: string[];
+  extraction_excludes?: string[];
   expected_file_count?: number;
   expected_uncompressed_bytes?: number;
   lro?: LroRef;
@@ -518,21 +528,17 @@ async function extractProjectArchiveTar({
     "--no-same-owner",
     "--no-overwrite-dir",
     "--no-wildcards",
+    "--anchored",
     "--quoting-style=c",
+    ...projectArchiveTarExcludeArgs([
+      ...(exclude ?? []),
+      ...(extraction_excludes ?? []),
+    ]),
     "-xvf",
     "-",
     "-C",
     dest,
   ];
-  if (member_list_path != null) {
-    args.push(
-      "--null",
-      "--verbatim-files-from",
-      "--no-recursion",
-      "-T",
-      member_list_path,
-    );
-  }
   const currentUid =
     typeof process.getuid === "function" ? process.getuid() : undefined;
   const runAs = currentUid === owner.uid ? undefined : owner;
@@ -570,6 +576,14 @@ async function extractProjectArchiveTar({
         });
       },
     });
+    if (
+      expected_file_count != null &&
+      extracted_count !== expected_file_count
+    ) {
+      throw new Error(
+        `legacy project archive extracted ${extracted_count} entries; expected ${expected_file_count}`,
+      );
+    }
     return { missing_archive_files: [] };
   } catch (err) {
     const stderr = (err as any)?.tarStderr;
@@ -799,46 +813,36 @@ async function runRsyncItemized({ args }: { args: string[] }): Promise<{
   };
 }
 
-async function createSelectedMemberList({
-  project_id,
+async function scanRestorableProjectArchive({
   archivePath,
   exclude,
   max_uncompressed_bytes,
   lro,
 }: {
-  project_id: string;
   archivePath: string;
   exclude?: string[];
   max_uncompressed_bytes?: number;
   lro?: LroRef;
 }): Promise<{
-  memberListTmpDir: string;
-  member_list_path: string;
   file_count: number;
   uncompressed_bytes: number;
   skipped_file_count: number;
   skipped_bytes: number;
   skipped_files: ProjectArchiveEntry[];
+  extraction_excludes: string[];
   unsafe_path_count: number;
   unsafe_paths: string[];
 }> {
-  const tmpRoot = archiveRestoreTmpRoot();
-  await mkdir(tmpRoot, { recursive: true });
-  const memberListTmpDir = await mkdtemp(join(tmpRoot, `${project_id}-list-`));
-  await chmod(memberListTmpDir, 0o711);
-  const member_list_path = join(memberListTmpDir, "selected-members.nul");
   const scan = await scanProjectArchiveTar({
     archivePath,
     exclude,
-    member_list_path,
     max_uncompressed_bytes,
     lro,
   });
   if (exclude != null && scan.file_count === 0) {
     throw new Error("legacy project archive matched no restorable files");
   }
-  await chmod(member_list_path, 0o644);
-  return { memberListTmpDir, member_list_path, ...scan };
+  return scan;
 }
 
 function defaultSafetySnapshotName(): string {
@@ -903,12 +907,11 @@ export function createLegacyProjectArchiveHandlers({
       const snapshotsDir = join(home, ".snapshots");
       const finalSnapshotPath = join(snapshotsDir, snapshot_name);
       let tmpDir: string | undefined;
-      let memberListTmpDir: string | undefined;
       let workSnapshotPath: string | undefined;
       const exclude = normalizeProjectArchivePathRoots(
         LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS,
       );
-      const rsyncExclude = rsyncExcludeArgs(exclude);
+      const rsyncExclude = projectArchiveRsyncExcludeArgs(exclude);
       let downloaded: { bytes: number; sha256: string } | undefined;
       let scan:
         | {
@@ -917,6 +920,7 @@ export function createLegacyProjectArchiveHandlers({
             skipped_file_count: number;
             skipped_bytes: number;
             skipped_files: ProjectArchiveEntry[];
+            extraction_excludes: string[];
             unsafe_path_count: number;
             unsafe_paths: string[];
           }
@@ -937,21 +941,20 @@ export function createLegacyProjectArchiveHandlers({
             dest: archivePath,
             lro,
           });
-          const selected = await createSelectedMemberList({
-            project_id,
+          const selected = await scanRestorableProjectArchive({
             archivePath,
             exclude,
             max_uncompressed_bytes,
             lro,
           });
-          memberListTmpDir = selected.memberListTmpDir;
           scan = selected;
           const homeStat = await stat(home);
           const extraction = await extractProjectArchiveTar({
             archivePath,
             dest: extractedPath,
             owner: { uid: homeStat.uid, gid: homeStat.gid },
-            member_list_path: selected.member_list_path,
+            exclude,
+            extraction_excludes: selected.extraction_excludes,
             expected_file_count: selected.file_count,
             expected_uncompressed_bytes: selected.uncompressed_bytes,
             lro,
@@ -1013,11 +1016,6 @@ export function createLegacyProjectArchiveHandlers({
       } finally {
         setProjectArchiveRestoreActive?.(project_id, false);
         await deleteSubvolumeTree(workSnapshotPath).catch(() => {});
-        if (memberListTmpDir) {
-          await rm(memberListTmpDir, { recursive: true, force: true }).catch(
-            () => {},
-          );
-        }
         if (tmpDir) {
           await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
         }
@@ -1055,7 +1053,7 @@ export function createLegacyProjectArchiveHandlers({
       const exclude = normalizeProjectArchivePathRoots(
         LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS,
       );
-      const rsyncExclude = rsyncExcludeArgs(exclude);
+      const rsyncExclude = projectArchiveRsyncExcludeArgs(exclude);
       try {
         setProjectArchiveRestoreActive?.(project_id, true);
         await createReadonlySnapshot(home, safetySnapshotPath);
@@ -1104,7 +1102,7 @@ export function createLegacyProjectArchiveHandlers({
       await getOrEnsureVolume(project_id);
       const home = projectMountpoint(project_id);
       let tmpDir: string | undefined;
-      let memberListTmpDir: string | undefined;
+      let workSnapshotPath: string | undefined;
       let archivePath: string;
       let savedQuotaSize: number | undefined;
       let quotaSizeToRestore: number | undefined;
@@ -1125,39 +1123,23 @@ export function createLegacyProjectArchiveHandlers({
         const exclude = normalizeProjectArchivePathRoots(
           LEGACY_PROJECT_ARCHIVE_MANAGED_EXCLUDE_ROOTS,
         );
-        let member_list_path: string | undefined;
-        if (exclude != null) {
-          const tmpRoot = archiveRestoreTmpRoot();
-          await mkdir(tmpRoot, { recursive: true });
-          memberListTmpDir = await mkdtemp(
-            join(tmpRoot, `${project_id}-list-`),
-          );
-          // The tar extractor runs as the project volume owner. Keep only the
-          // member list readable/traversable by that user; the archive itself
-          // is still streamed over stdin from the project-host process.
-          await chmod(memberListTmpDir, 0o711);
-          member_list_path = join(memberListTmpDir, "selected-members.nul");
-        }
         const {
           file_count,
           uncompressed_bytes,
           skipped_file_count,
           skipped_bytes,
           skipped_files,
+          extraction_excludes,
           unsafe_path_count,
           unsafe_paths,
         } = await scanProjectArchiveTar({
           archivePath,
           exclude,
-          member_list_path,
           max_uncompressed_bytes,
           lro,
         });
         if (exclude != null && file_count === 0) {
           throw new Error("legacy project archive matched no restorable files");
-        }
-        if (member_list_path != null) {
-          await chmod(member_list_path, 0o644);
         }
         if (temporary_quota_grace) {
           if (getProjectQuota == null || beginProjectQuotaOverride == null) {
@@ -1203,17 +1185,76 @@ export function createLegacyProjectArchiveHandlers({
             throw err;
           }
         }
-        const homeStat = await stat(home);
+        workSnapshotPath = join(
+          tmpRoot,
+          `${project_id}-restore-work-${randomUUID()}`,
+        );
+        // Validate and extract away from the live home. Passing every accepted
+        // member back to tar with -T makes extraction superlinear on large
+        // archives; the completed scan plus bounded negative exclusions gives
+        // the same safety boundary without that matching workload.
+        await createWritableSnapshot(home, workSnapshotPath);
+        const emptyPath = join(tmpDir, "empty");
+        await mkdir(emptyPath, { recursive: true });
+        await runRsyncItemized({
+          args: [
+            "-a",
+            "--delete",
+            ...projectArchiveRsyncExcludeArgs(exclude),
+            slashDir(emptyPath),
+            slashDir(workSnapshotPath),
+          ],
+        });
+        const homeStat = await stat(workSnapshotPath);
         const extraction = await extractProjectArchiveTar({
           archivePath,
-          dest: home,
+          dest: workSnapshotPath,
           owner: { uid: homeStat.uid, gid: homeStat.gid },
-          member_list_path,
+          exclude,
+          extraction_excludes,
           expected_file_count: file_count,
           expected_uncompressed_bytes: uncompressed_bytes,
           lro,
         });
         const missingArchiveFiles = extraction.missing_archive_files;
+        const safetySnapshotName = assertValidSnapshotName(
+          `before-legacy-restore-${new Date().toISOString()}`,
+        );
+        const safetySnapshotPath = join(home, ".snapshots", safetySnapshotName);
+        await createReadonlySnapshot(home, safetySnapshotPath);
+        // Apply only after extraction succeeds. Managed service state remains
+        // in the live home, and the snapshot makes a failed rsync reversible.
+        try {
+          await runRsyncItemized({
+            args: [
+              "-aHS",
+              "--delete",
+              ...projectArchiveRsyncExcludeArgs(exclude),
+              slashDir(workSnapshotPath),
+              slashDir(home),
+            ],
+          });
+        } catch (applyErr) {
+          try {
+            await runRsyncItemized({
+              args: [
+                "-aHS",
+                "--delete",
+                ...projectArchiveRsyncExcludeArgs(exclude),
+                slashDir(safetySnapshotPath),
+                slashDir(home),
+              ],
+            });
+          } catch (rollbackErr) {
+            const error = new Error(
+              `legacy project restore apply and rollback both failed: apply=${applyErr}; rollback=${rollbackErr}`,
+            );
+            (error as any).cause = applyErr;
+            (error as any).rollbackError = rollbackErr;
+            throw error;
+          }
+          throw applyErr;
+        }
         let quotaUsedBytes: number | undefined;
         let quotaSizeBytes: number | undefined;
         if (quotaGraceEnabled) {
@@ -1310,17 +1351,13 @@ export function createLegacyProjectArchiveHandlers({
             });
           });
         }
-        if (memberListTmpDir) {
-          await rm(memberListTmpDir, { recursive: true, force: true }).catch(
-            (err) => {
-              logger.warn("legacy project archive member-list cleanup failed", {
-                project_id,
-                memberListTmpDir,
-                err: `${err}`,
-              });
-            },
-          );
-        }
+        await deleteSubvolumeTree(workSnapshotPath).catch((err) => {
+          logger.warn("legacy project archive staging cleanup failed", {
+            project_id,
+            workSnapshotPath,
+            err: `${err}`,
+          });
+        });
       }
     },
   };
