@@ -16,6 +16,7 @@ import { refreshResourcePressureMetrics } from "./resource-pressure";
 import { readIoContainmentMetrics } from "./io-metrics";
 import { readConatPersistMetrics } from "./conat-persist-metrics";
 import { getStorageAdmissionStatus } from "./storage-admission";
+import { getRusticCacheMaintenanceMetrics } from "./rustic-cache-maintenance";
 
 const logger = getLogger("project-host:host-metrics");
 
@@ -242,6 +243,7 @@ async function collectSnapshot(
       load_15: round2(loadavg()[2]),
       ...memory,
       ...rootFilesystem,
+      ...getRusticCacheMaintenanceMetrics(),
       ...disk,
       ...sharedScratch,
       disk_available_for_admission_bytes,

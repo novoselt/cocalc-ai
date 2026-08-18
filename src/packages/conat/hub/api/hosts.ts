@@ -1029,6 +1029,22 @@ export interface HostCurrentMetrics {
   root_disk_used_bytes?: number;
   root_disk_available_bytes?: number;
   root_disk_used_percent?: number;
+  rustic_cache_bytes?: number;
+  rustic_cache_repository_count?: number;
+  rustic_cache_limit_bytes?: number;
+  rustic_cache_target_bytes?: number;
+  rustic_cache_hard_limit_bytes?: number;
+  rustic_cache_last_sweep_at?: string;
+  rustic_cache_last_cleanup_at?: string;
+  rustic_cache_last_cleanup_freed_bytes?: number;
+  rustic_cache_maintenance_status?:
+    | "idle"
+    | "measured"
+    | "cleaned"
+    | "skipped_active"
+    | "blocked_recent"
+    | "error";
+  rustic_cache_maintenance_error?: string;
   disk_device_total_bytes?: number;
   disk_device_used_bytes?: number;
   disk_unallocated_bytes?: number;
