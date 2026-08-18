@@ -13,8 +13,12 @@ export type OnboardingArtifactCreation = {
   ext: string;
   current_path: string;
   switch_over: false;
-  relative_path: string;
+  path: string;
 };
+
+export function onboardingArtifactRouteTarget(path: string): string {
+  return `files/${path.replace(/^\/+/, "")}`;
+}
 
 export type OnboardingArtifactSetupResult<T> =
   | { artifact: T }
@@ -69,7 +73,7 @@ export function onboardingArtifactCreation(
     ext,
     current_path: homeDirectory,
     switch_over: false,
-    relative_path: `${name}.${ext}`,
+    path: `${homeDirectory.replace(/\/+$/, "")}/${name}.${ext}`,
   };
 }
 

@@ -63,8 +63,11 @@ export function buildCodexOnboardingPrompt(
   const goal = userRequest.trim();
   const formatGuidance = modeInstructions(detectCodexOnboardingMode(goal));
   const artifact = `${context?.artifact ?? ""}`.trim();
+  const artifactPath = artifact.startsWith("/")
+    ? artifact
+    : `/home/user/${artifact}`;
   const workspaceState = artifact
-    ? `The onboarding flow already created /home/user/${artifact}. Start by opening and improving that artifact when it fits the goal; replace it only when a different deliverable is clearly better.`
+    ? `The onboarding flow already created ${artifactPath}. Start by opening and improving that artifact when it fits the goal; replace it only when a different deliverable is clearly better.`
     : "This project was just created by the onboarding flow and is intentionally empty.";
   return `You are helping a brand-new CoCalc user complete their first useful task.
 

@@ -47,6 +47,7 @@ import { chooseOnboardingRootfs, type OnboardingProjectKind } from "./rootfs";
 import {
   isRetryableOnboardingArtifactError,
   onboardingArtifactCreationForProject,
+  onboardingArtifactRouteTarget,
   waitForOnboardingArtifactAndRuntime,
 } from "./artifact";
 import {
@@ -312,7 +313,7 @@ async function createArtifactWhenReady({
       discover_jupyter_kernel: false,
     });
     lastError = `${actions.get_store()?.get("file_creation_error") ?? ""}`;
-    if (!lastError) return artifact.relative_path;
+    if (!lastError) return artifact.path;
     if (!isRetryableOnboardingArtifactError(lastError)) {
       break;
     }
@@ -812,7 +813,7 @@ export function FirstRunOnboarding({
       if (prompt) {
         await redux.getActions("projects").open_project({
           project_id,
-          target: artifact ? `files/${artifact}` : "files",
+          target: artifact ? onboardingArtifactRouteTarget(artifact) : "files",
           switch_to: true,
           restore_session: false,
         });
@@ -840,7 +841,7 @@ export function FirstRunOnboarding({
       } else {
         await redux.getActions("projects").open_project({
           project_id,
-          target: artifact ? `files/${artifact}` : "files",
+          target: artifact ? onboardingArtifactRouteTarget(artifact) : "files",
           switch_to: true,
           restore_session: false,
         });

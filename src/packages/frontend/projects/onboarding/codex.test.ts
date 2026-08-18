@@ -56,7 +56,7 @@ describe("Codex onboarding availability", () => {
   it("points Codex at the starter artifact for contextual onboarding", () => {
     const prompt = buildCodexOnboardingPrompt("Add a chart of the results", {
       kind: "jupyter-python",
-      artifact: "Welcome.ipynb",
+      artifact: "/home/user/Welcome.ipynb",
     });
     expect(prompt).toContain("/home/user/Welcome.ipynb");
     expect(prompt).toContain("opening and improving that artifact");

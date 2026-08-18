@@ -9,6 +9,7 @@ import {
   isRetryableOnboardingArtifactError,
   onboardingArtifactCreation,
   onboardingArtifactCreationForProject,
+  onboardingArtifactRouteTarget,
   waitForOnboardingArtifactAndRuntime,
 } from "./artifact";
 
@@ -35,8 +36,14 @@ describe("first-run onboarding artifact creation", () => {
       ext: path.slice(path.lastIndexOf(".") + 1),
       current_path: "/home/user",
       switch_over: false,
-      relative_path: path,
+      path: `/home/user/${path}`,
     });
+  });
+
+  it("opens starter artifacts using their rootfs-aware absolute route", () => {
+    expect(onboardingArtifactRouteTarget("/home/user/Welcome.ipynb")).toBe(
+      "files/home/user/Welcome.ipynb",
+    );
   });
 
   it("uses the runtime-provided home instead of assuming /home/user", () => {
