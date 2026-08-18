@@ -362,7 +362,8 @@ export class ProjectClient {
         subject,
         { ...opts, debug },
         {
-          maxWait: (opts.timeout ?? 300) * 1000,
+          // Leave time for process termination, final stream flush, and reply.
+          maxWait: (opts.timeout ?? 300) * 1000 + 5000,
           waitForInterest: true,
         },
       );
@@ -424,7 +425,6 @@ export class ProjectClient {
             break;
           case "done":
             execStream.emit("done", data);
-            execStream.emit("end");
             break;
           default:
             console.warn("Unknown execStream response type:", type);
@@ -461,6 +461,14 @@ export class ProjectClient {
         timeout: 30,
         cb: undefined,
       });
+    } else if ("async_cancel" in opts) {
+      opts = defaults(opts, {
+        project_id: required,
+        async_cancel: required,
+        post: false,
+        timeout: 30,
+        cb: undefined,
+      });
     } else {
       opts = defaults(opts, {
         project_id: required,
@@ -483,7 +491,9 @@ export class ProjectClient {
     const intl = await getIntl();
     const msg = intl.formatMessage(dialogs.client_project_exec_msg, {
       blocking: isExecOptsBlocking(opts),
-      arg: isExecOptsBlocking(opts) ? opts.command : opts.async_get,
+      arg: isExecOptsBlocking(opts)
+        ? opts.command
+        : (opts.async_get ?? opts.async_cancel),
     });
 
     const readyTimer = startUxTimer();
@@ -508,7 +518,9 @@ export class ProjectClient {
         path_ext: filename_extension(`${(opts as any).path ?? ""}`),
         segment: readiness.segment,
         details: {
-          command: isExecOptsBlocking(opts) ? opts.command : opts.async_get,
+          command: isExecOptsBlocking(opts)
+            ? opts.command
+            : (opts.async_get ?? opts.async_cancel),
           stream: false,
           initial_project_state: readiness.initial_state ?? "unknown",
           provisioned: readiness.provisioned as any,

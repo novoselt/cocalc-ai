@@ -6,8 +6,9 @@
 import { callback2 } from "@cocalc/util/async-utils";
 import { State } from "@cocalc/util/compute-states";
 import { PROJECT_GROUPS } from "@cocalc/util/misc";
-import {
+import type {
   ExecuteCodeOptions,
+  ExecuteCodeOptionsAsyncCancel,
   ExecuteCodeOptionsAsyncGet,
   ExecuteCodeOutput,
 } from "@cocalc/util/types/execute-code";
@@ -910,6 +911,7 @@ export type ExecOptsBlocking = ExecOptsCommon & {
   max_output?: number;
   bash?: boolean;
   aggregate?: string | number | { value: string | number };
+  job_key?: ExecuteCodeOptions["job_key"];
   err_on_exit?: boolean;
   env?: { [key: string]: string }; // custom environment variables.
   async_call?: ExecuteCodeOptions["async_call"];
@@ -917,6 +919,7 @@ export type ExecOptsBlocking = ExecOptsCommon & {
 
 export type ExecOptsAsync = ExecOptsCommon & {
   async_get?: ExecuteCodeOptionsAsyncGet["async_get"];
+  async_cancel?: ExecuteCodeOptionsAsyncCancel["async_cancel"];
   async_stats?: ExecuteCodeOptionsAsyncGet["async_stats"];
   async_await?: ExecuteCodeOptionsAsyncGet["async_await"];
 };

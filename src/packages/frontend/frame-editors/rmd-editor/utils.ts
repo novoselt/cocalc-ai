@@ -7,8 +7,8 @@ import { join } from "path";
 import { Set } from "immutable";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { change_filename_extension, path_split } from "@cocalc/util/misc";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
-import { ExecOutput } from "../generic/client";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { ExecOutput } from "../generic/client";
 
 // something in the rmarkdown source code replaces all spaces by dashes
 // [hsy] I think this is because of calling pandoc.
@@ -55,6 +55,7 @@ interface RunJobOpts {
   args?: string[];
   command: string;
   env?: { [key: string]: string };
+  jobKey?: string;
   project_id: string;
   runDir: string;
   set_job_info?: (info: ExecuteCodeOutputAsync) => void;
@@ -69,6 +70,7 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     args,
     command,
     env,
+    jobKey,
     project_id,
     runDir,
     set_job_info,
@@ -106,6 +108,7 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     command,
     env,
     err_on_exit: false,
+    job_key: jobKey,
     path: runDir,
     project_id,
     timeout,
@@ -113,6 +116,7 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
   });
 
   return new Promise((resolve, reject) => {
+    let completed = false;
     let current_job_info: ExecuteCodeOutputAsync | null = null;
     let pending_stdout = "";
     let pending_stderr = "";
@@ -165,24 +169,17 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     });
 
     stream.on("done", (result: ExecOutput) => {
+      completed = true;
       if (result.type === "async") {
         set_job_info(result);
       }
       resolve(result);
     });
 
-    stream.on("end", (output: ExecOutput) => {
-      if (current_job_info) {
-        // Final update with complete output
-        const final_job_info: ExecuteCodeOutputAsync = {
-          ...current_job_info,
-          stdout: (output.stdout || "").toString(),
-          stderr: (output.stderr || "").toString(),
-          exit_code: output.exit_code,
-        };
-        set_job_info(final_job_info);
+    stream.on("end", () => {
+      if (!completed) {
+        reject(new Error("Conversion stream ended before completion."));
       }
-      // Note: resolve() is now handled by the "done" event handler
     });
 
     stream.on("error", (err) => {

@@ -21,7 +21,11 @@ process.env.COCALC_PROJECT_MONITOR_INTERVAL_S = "1";
 // default is much lower, might fail if you have more procs than the default
 process.env.COCALC_PROJECT_INFO_PROC_LIMIT = "10000";
 
-import { executeCode, setMonitorIntervalSeconds } from "./execute-code";
+import {
+  attachToAsyncJob,
+  executeCode,
+  setMonitorIntervalSeconds,
+} from "./execute-code";
 
 describe("hello world", () => {
   it("runs hello world", async () => {
@@ -268,8 +272,7 @@ describe("async", () => {
     expect(s.status).toEqual("error");
     expect(s.stdout).toEqual("");
     expect(s.stderr).toEqual("baz\n");
-    // any error is code 1 it seems?
-    expect(s.exit_code).toEqual(1);
+    expect(s.exit_code).toEqual(3);
   });
 
   // without err_on_exit, the call is "completed" and we get the correct exit code
@@ -316,7 +319,7 @@ describe("async", () => {
     expect(s.type).toEqual("async");
     if (s.type !== "async") return;
     expect(s.status).toEqual("error");
-    expect(s.stdout).toEqual("");
+    expect(s.stdout).toEqual("foo\n");
     expect(s.elapsed_s).toBeGreaterThan(0.01);
     expect(s.elapsed_s).toBeLessThan(3);
     expect(s.start).toBeGreaterThan(1);
@@ -511,6 +514,147 @@ describe("await", () => {
     expect(s.stdout).toEqual("foo\n");
     expect(s.exit_code).toEqual(0);
     expect(s.status).toEqual("completed");
+  });
+});
+
+describe("keyed async jobs", () => {
+  const key = (name: string) =>
+    `execute-code-test:${name}:${Date.now()}:${Math.random()}`;
+
+  it("atomically shares one execution and replays its completed result", async () => {
+    const job_key = key("share");
+    const opts = {
+      command: "sh",
+      args: ["-c", "echo shared; sleep .2"],
+      async_call: true as const,
+      aggregate: 1,
+      job_key,
+    };
+    const [first, second] = await Promise.all([
+      executeCode({ ...opts }),
+      executeCode({ ...opts }),
+    ]);
+    expect(first.type).toBe("async");
+    expect(second.type).toBe("async");
+    if (first.type !== "async" || second.type !== "async") return;
+    expect(second.job_id).toBe(first.job_id);
+
+    const finished = await executeCode({
+      async_get: first.job_id,
+      async_await: true,
+    });
+    expect(finished.type).toBe("async");
+    if (finished.type !== "async") return;
+    expect(finished.stdout).toBe("shared\n");
+
+    const replay = await executeCode({ ...opts });
+    expect(replay.type).toBe("async");
+    if (replay.type !== "async") return;
+    expect(replay.job_id).toBe(first.job_id);
+    expect(replay.status).toBe("completed");
+    expect(replay.stdout).toBe("shared\n");
+  });
+
+  it("replays accumulated output before delivering new stream events", async () => {
+    const started = await executeCode({
+      command: "sh",
+      args: ["-c", "printf first; sleep .4; printf second"],
+      async_call: true,
+      aggregate: 1,
+      job_key: key("attach"),
+    });
+    expect(started.type).toBe("async");
+    if (started.type !== "async") return;
+
+    while (true) {
+      const current = await executeCode({ async_get: started.job_id });
+      if (current.type === "async" && current.stdout.includes("first")) break;
+      await delay(10);
+    }
+
+    const events: any[] = [];
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const attached = attachToAsyncJob(started.job_id, (event) => {
+      events.push(event);
+      if (event.type === "done") resolveDone();
+    });
+    expect(attached.output.stdout).toBe("first");
+    await done;
+    attached.unsubscribe();
+    expect(
+      events.some(
+        (event) => event.type === "stdout" && event.data.includes("second"),
+      ),
+    ).toBe(true);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  it("coalesces newer queued generations to the latest request", async () => {
+    const job_key = key("queue");
+    const first = await executeCode({
+      command: "sh",
+      args: ["-c", "echo one; sleep .3"],
+      async_call: true,
+      aggregate: 1,
+      job_key,
+    });
+    expect(first.type).toBe("async");
+    if (first.type !== "async") return;
+
+    const secondPromise = executeCode({
+      command: "sh",
+      args: ["-c", "echo two"],
+      async_call: true,
+      aggregate: 2,
+      job_key,
+    });
+    const thirdPromise = executeCode({
+      command: "sh",
+      args: ["-c", "echo three"],
+      async_call: true,
+      aggregate: 3,
+      job_key,
+    });
+    const [second, third] = await Promise.all([secondPromise, thirdPromise]);
+    expect(second.type).toBe("async");
+    expect(third.type).toBe("async");
+    if (second.type !== "async" || third.type !== "async") return;
+    expect(second.job_id).toBe(third.job_id);
+    expect(second.job_id).not.toBe(first.job_id);
+    expect(second.aggregate).toBe(3);
+
+    const finished = await executeCode({
+      async_get: second.job_id,
+      async_await: true,
+    });
+    expect(finished.type).toBe("async");
+    if (finished.type !== "async") return;
+    expect(finished.stdout).toBe("three\n");
+  });
+
+  it("cancels the authoritative process group", async () => {
+    const started = await executeCode({
+      command: "sh",
+      args: ["-c", "echo started; sleep 10"],
+      async_call: true,
+      aggregate: 1,
+      job_key: key("cancel"),
+    });
+    expect(started.type).toBe("async");
+    if (started.type !== "async") return;
+
+    const cancelled = await executeCode({ async_cancel: started.job_id });
+    expect(cancelled.type).toBe("async");
+    if (cancelled.type !== "async") return;
+    expect(cancelled.status).toBe("killed");
+    expect(cancelled.exit_code).not.toBe(0);
+    const current = await executeCode({ async_get: started.job_id });
+    expect(current.type).toBe("async");
+    if (current.type !== "async") return;
+    expect(current.status).toBe("killed");
   });
 });
 

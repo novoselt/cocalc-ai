@@ -10,11 +10,11 @@ Run Knitr on rnw/rtex files
 import { parse_path } from "@cocalc/frontend/frame-editors/frame-tree/util";
 import {
   exec,
-  ExecOutput,
+  type ExecOutput,
 } from "@cocalc/frontend/frame-editors/generic/client";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Error as ErrorLog, ProcessedLatexLog } from "./latex-log-parser";
-import { BuildLog } from "./types";
+import type { BuildLog } from "./types";
 import { runJob } from "./util";
 
 // this still respects the environment variables and init files
@@ -41,6 +41,7 @@ export async function knitr(
   return runJob({
     project_id,
     command: R_CMD,
+    jobKey: `knitr:${path}`,
     args: [...R_ARGS, expr],
     runDir: directory,
     aggregate: time ? { value: time } : undefined,

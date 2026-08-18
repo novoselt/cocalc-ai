@@ -80,6 +80,15 @@ const ExecInputSchemaBlocking = ExecInputCommon.merge(
          multiple callbacks to be executed against the output of the same command
          (given identical arguments) within a 60-second window.`,
       ),
+    job_key: z
+      .string()
+      .min(1)
+      .max(8192)
+      .optional()
+      .describe(
+        `Stable logical slot for an asynchronous job. Concurrent calls with the same key
+         attach to one authoritative execution; \`aggregate\` controls freshness.`,
+      ),
     err_on_exit: z
       .boolean()
       .optional()
@@ -141,11 +150,27 @@ Note: If it times out, you have to reconnect on your end.`),
   }),
 );
 
+const ExecInputSchemaAsyncCancel = ExecInputCommon.merge(
+  z.object({
+    async_cancel: z
+      .string()
+      .describe(
+        "Cancel the process group for a previously returned async job_id.",
+      ),
+  }),
+);
+
 export const ExecInputSchema = z
-  .union([ExecInputSchemaBlocking, ExecInputSchemaAsync])
+  .union([
+    ExecInputSchemaBlocking,
+    ExecInputSchemaAsync,
+    ExecInputSchemaAsyncCancel,
+  ])
   .refine((data) => {
     if ("async_get" in data) {
       return ExecInputSchemaAsync.safeParse(data).success;
+    } else if ("async_cancel" in data) {
+      return ExecInputSchemaAsyncCancel.safeParse(data).success;
     } else {
       return ExecInputSchemaBlocking.safeParse(data).success;
     }
@@ -167,10 +192,24 @@ const ExecOutputAsync = ExecOutputBlocking.extend({
   type: z.literal("async"),
   job_id: z.string().describe("The ID identifying the async operation"),
   start: z.number().describe("UNIX timestamp, when the execution started"),
-  elapsed_s: z.string().optional().describe("How long the execution took"),
+  elapsed_s: z.number().optional().describe("How long the execution took"),
   status: z // AsyncStatus
-    .union([z.literal("running"), z.literal("completed"), z.literal("error")])
+    .union([
+      z.literal("running"),
+      z.literal("completed"),
+      z.literal("error"),
+      z.literal("killed"),
+    ])
     .describe("Status of the async operation"),
+  job_key: z.string().optional().describe("Logical async job slot"),
+  aggregate: z
+    .union([
+      z.number(),
+      z.string(),
+      z.object({ value: z.union([z.string(), z.number()]) }),
+    ])
+    .optional()
+    .describe("Freshness value associated with the job"),
   pid: z
     .number()
     .min(0)

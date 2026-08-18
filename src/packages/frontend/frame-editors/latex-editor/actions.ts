@@ -55,7 +55,7 @@ import {
   project_api,
   server_time,
 } from "@cocalc/frontend/frame-editors/generic/client";
-import { ExecOutput } from "@cocalc/util/db-schema/projects";
+import type { ExecOutput } from "@cocalc/util/db-schema/projects";
 import {
   change_filename_extension,
   hash_string,
@@ -983,20 +983,13 @@ export class Actions extends BaseActions<LatexEditorState> {
 
   private async kill(job: ExecOutput): Promise<ExecOutput> {
     if (job.type !== "async") return job;
-    const { pid, status } = job;
-    if (status === "running" && typeof pid === "number") {
+    const { job_id, status } = job;
+    if (status === "running") {
       try {
-        await exec(
-          {
-            project_id: this.project_id,
-            // negative PID, to kill the entire process group
-            command: `kill -9 -${pid}`,
-            // bash:true is necessary. kill + array does not work. IDK why.
-            bash: true,
-            err_on_exit: false,
-          },
-          this.path,
-        );
+        return await exec({
+          project_id: this.project_id,
+          async_cancel: job_id,
+        });
       } catch (err) {
         // likely "No such process", we just ignore it
       } finally {

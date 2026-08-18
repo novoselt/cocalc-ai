@@ -9,8 +9,8 @@ Convert R Markdown file to hidden Markdown file, then read.
 
 import { path_split } from "@cocalc/util/misc";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
-import { ExecOutput } from "../generic/client";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { ExecOutput } from "../generic/client";
 import { runJob } from "./utils";
 
 export const convert = reuseInFlight(_convert);
@@ -42,6 +42,7 @@ async function _convert(
     aggregate: hash ? { value: hash } : undefined,
     args: ["-e", cmd],
     command: "Rscript",
+    jobKey: `rmd:${path}`,
     env: { MPLBACKEND: "Agg" }, // for python plots -- https://github.com/sagemathinc/cocalc/issues/4202
     project_id: project_id,
     runDir: x.head,

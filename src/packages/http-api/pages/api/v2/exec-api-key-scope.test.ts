@@ -113,13 +113,52 @@ describe("/api/v2/exec API-key scope", () => {
         max_output: undefined,
         bash: undefined,
         aggregate: undefined,
+        job_key: undefined,
         err_on_exit: undefined,
         env: undefined,
         async_call: undefined,
         async_get: undefined,
+        async_cancel: undefined,
         async_stats: undefined,
         async_await: undefined,
       },
+    });
+  });
+
+  it("passes authoritative async cancellation through the HTTP API", async () => {
+    mockExec.mockResolvedValue({
+      type: "async",
+      job_id: "job-1",
+      start: Date.now(),
+      status: "killed",
+      stdout: "",
+      stderr: "",
+      exit_code: 1,
+    });
+    const { req, res } = createMocks({
+      method: "POST",
+      headers: {
+        Authorization: "Bearer cocalc_api_key_test",
+        "Content-Type": "application/json",
+      },
+      body: {
+        project_id,
+        async_cancel: "job-1",
+      },
+    });
+
+    const { default: handler } = await import("./exec");
+    await handler(req, res);
+
+    expect(res._getJSONData()).toMatchObject({
+      type: "async",
+      job_id: "job-1",
+      status: "killed",
+    });
+    expect(mockExec).toHaveBeenCalledWith({
+      account_id: "acct-1",
+      project_id,
+      execOpts: expect.objectContaining({ async_cancel: "job-1" }),
     });
   });
 });

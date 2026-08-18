@@ -12,11 +12,11 @@ Run sagetex
 import { parse_path } from "@cocalc/frontend/frame-editors/frame-tree/util";
 import {
   exec,
-  ExecOutput,
+  type ExecOutput,
 } from "@cocalc/frontend/frame-editors/generic/client";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Error as ErrorLog, ProcessedLatexLog } from "./latex-log-parser";
-import { BuildLog } from "./types";
+import type { BuildLog } from "./types";
 import { runJob } from "./util";
 
 function sagetex_file(base: string): string {
@@ -63,6 +63,7 @@ export async function sagetex(
   return runJob({
     project_id,
     command: "sage",
+    jobKey: `sagetex:${path}`,
     args: [s],
     set_job_info,
     runDir: output_directory || directory,

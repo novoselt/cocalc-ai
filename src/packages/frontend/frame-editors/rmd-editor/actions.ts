@@ -15,11 +15,11 @@ import { markdown_to_html_frontmatter } from "@cocalc/frontend/markdown";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import {
   Actions as BaseActions,
-  CodeEditorState,
+  type CodeEditorState,
 } from "../base-editor/actions-text";
-import { FrameTree } from "../frame-tree/types";
-import { exec, ExecOutput } from "../generic/client";
-import { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import type { FrameTree } from "../frame-tree/types";
+import { exec, type ExecOutput } from "../generic/client";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Actions as MarkdownActions } from "../markdown-editor/actions";
 import { convert } from "./rmd-converter";
 import { checkProducedFiles } from "./utils";
@@ -164,25 +164,18 @@ export class Actions extends MarkdownActions {
       job_info &&
       job_info.type === "async" &&
       job_info.status === "running" &&
-      typeof job_info.pid === "number"
+      typeof job_info.job_id === "string"
     ) {
       try {
-        // Kill the process using the same approach as LaTeX editor
-        await exec(
-          {
-            project_id: this.project_id,
-            // negative PID, to kill the entire process group
-            command: `kill -9 -${job_info.pid}`,
-            // bash:true is necessary. kill + array does not work.
-            bash: true,
-            err_on_exit: false,
-          },
-          this.path,
-        );
+        const output = await exec({
+          project_id: this.project_id,
+          async_cancel: job_info.job_id,
+        });
+        if (output.type === "async") {
+          this.setState({ job_info: output });
+        }
       } catch (err) {
-        // likely "No such process", we just ignore it
-      } finally {
-        // Update the job status to killed
+        // Preserve the local stop result if the authoritative job disappeared.
         const updated_job_info: ExecuteCodeOutputAsync = {
           ...job_info,
           status: "killed",
