@@ -553,7 +553,11 @@ export async function copyPathBetweenProjects({
   const destReferences = await mapParallelLimit(
     destProjectIds,
     async (project_id) =>
-      await assertCollabAllowRemoteProjectAccess({ account_id, project_id }),
+      await assertCollabAllowRemoteProjectAccess({
+        account_id,
+        project_id,
+        warmRoute: false,
+      }),
     COPY_ADMISSION_CONCURRENCY,
   );
   const destOwnerAccountIds = new Set<string>();
@@ -633,7 +637,7 @@ export async function copyPathBetweenProjects({
 }
 
 const MAX_COURSE_COLLECT_ITEMS = 500;
-const COPY_ADMISSION_CONCURRENCY = 50;
+const COPY_ADMISSION_CONCURRENCY = 20;
 
 function normalizeCourseCollectItems(
   items: CourseCollectAssignmentItem[],
@@ -702,7 +706,11 @@ export async function collectAssignment({
   await mapParallelLimit(
     studentProjectIds,
     async (project_id) =>
-      await assertCollabAllowRemoteProjectAccess({ account_id, project_id }),
+      await assertCollabAllowRemoteProjectAccess({
+        account_id,
+        project_id,
+        warmRoute: false,
+      }),
     COPY_ADMISSION_CONCURRENCY,
   );
   let normalizedRunAt: string | undefined;
