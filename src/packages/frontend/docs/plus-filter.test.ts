@@ -29,6 +29,9 @@ describe("CoCalc Plus docs filter", () => {
         "projects.tasks",
         "jupyter.create-notebook",
         "jupyter.use-jupyter",
+        // the Studio view is a frontend layout choice, so it applies to the
+        // single local project the same as anywhere else
+        "jupyter.studio-view",
         "troubleshooting.jupyter-kernel-terminated",
         "jupyter.custom-kernels",
         "python.use-python",

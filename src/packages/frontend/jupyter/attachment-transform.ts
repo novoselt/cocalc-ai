@@ -9,7 +9,7 @@ import { filename_extension, startswith } from "@cocalc/util/misc";
 
 // Resolve "attachment:<name>" URLs against the cell's stored attachments,
 // returning a data: URI. Used by both the regular CellInput markdown path and
-// the minimal cell renderer.
+// the studio cell renderer.
 export function attachmentTransform(
   cell: Map<string, any>,
   href?: string,

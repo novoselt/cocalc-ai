@@ -87,9 +87,9 @@ export default function JupyterNotebookFeaturePage({
       <PublicSection>
         <div style={{ margin: "0 auto", maxWidth: 940 }}>
           <ZoomableImage
-            alt="A Jupyter notebook in CoCalc with code cells, printed output, and a matplotlib plot"
+            alt="A Jupyter notebook in CoCalc with code cells, printed output, a matplotlib plot, and a minimap of the notebook on the right"
             priority
-            src={featureAsset("jupyter-regular-20260730.png")}
+            src={featureAsset("jupyter-classic-20260817.png")}
           />
         </div>
       </PublicSection>
@@ -195,28 +195,29 @@ export default function JupyterNotebookFeaturePage({
       <PublicSection>
         <FeatureInfo
           accent="#f37726"
-          alt="A Jupyter notebook in the Minimal view, with a mini table of contents on the left, rendered cells in the middle, and collapsed source code with a minimap on the right"
-          anchor="a-minimal"
+          alt="A Jupyter notebook in the Studio view, with a mini table of contents on the left, rendered cells in the middle, and collapsed source code with a minimap on the right"
+          anchor="a-studio"
           caption={
             <>
-              The Minimal view of a notebook: mini table of contents on the
-              left, content in the middle, collapsed source code and a minimap
-              on the right.
+              The Studio view of a notebook: mini table of contents on the left,
+              content in the middle, collapsed source code and a minimap on the
+              right.
             </>
           }
           icon="layout"
-          image="jupyter-minimal-20260730.png"
-          title="Jupyter Minimal: a focused notebook view"
+          image="jupyter-studio-20260817.png"
+          title="Jupyter Studio: a content-first notebook view"
         >
           <Paragraph>
-            Every notebook can switch between the regular interface and{" "}
-            <strong>Jupyter Minimal</strong>, a calm, distraction-free view that
-            puts the content first. A sticky mini table of contents and a
-            minimap keep long notebooks navigable, and a zen mode removes the
-            remaining chrome when you want to read or present.
+            Every notebook can switch between the classic interface and{" "}
+            <strong>Jupyter Studio</strong>, a calm view that puts results
+            first: outputs and prose get the main column, while the source code
+            stays one glance away. A sticky mini table of contents and a minimap
+            keep long notebooks navigable, and reading mode hides the code
+            entirely when you want to read or present.
           </Paragraph>
           <Paragraph>
-            Toggle between the views at any time; both work on the same live
+            Switch between the views at any time; both work on the same live
             notebook, together with collaborators and anchored chats.
           </Paragraph>
         </FeatureInfo>

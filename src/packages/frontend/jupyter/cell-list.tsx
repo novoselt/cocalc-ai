@@ -29,15 +29,15 @@ import { JupyterActions } from "./browser-actions";
 import { Cell } from "./cell";
 import HeadingTagComponent from "./heading-tag";
 import { useNotebookMinimap } from "./minimap";
-import { MinimalMinimap } from "./minimal/minimal-minimap";
+import { StudioMinimap } from "./studio/studio-minimap";
 import {
   computeSectionBlocks,
   computeSectionRunState,
   buildBlockLookup,
   sectionBlocksEqual,
-} from "./minimal/section-blocks";
-import { StickyMiniTOC } from "./minimal/sticky-mini-toc";
-import type { MinimalLayout, SectionBlock } from "./minimal/types";
+} from "./studio/section-blocks";
+import { StickyMiniTOC } from "./studio/sticky-mini-toc";
+import type { StudioLayout, SectionBlock } from "./studio/types";
 import { INPUT_PROMPT_COLOR, OUTPUT_STYLE } from "./prompt/base";
 import { getDisplayedCellExecCount } from "./run-cell-overlay";
 
@@ -167,9 +167,9 @@ interface CellListProps {
   read_only?: boolean;
   pendingCells?: immutable.Set<string>;
   runCellOverlays?: immutable.Map<string, immutable.Map<string, any>>;
-  cellViewMode?: "default" | "minimal";
-  minimalLayout?: MinimalLayout;
-  zenMode?: boolean;
+  cellViewMode?: "default" | "studio";
+  studioLayout?: StudioLayout;
+  readingMode?: boolean;
   frameHeight?: number;
 }
 
@@ -239,8 +239,8 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     pendingCells,
     runCellOverlays,
     cellViewMode = "default",
-    minimalLayout,
-    zenMode,
+    studioLayout,
+    readingMode,
     frameHeight,
   } = props;
 
@@ -380,7 +380,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
   // stay stable and memoized cells don't all rerender.
   const prevSectionBlocksRef = useRef<SectionBlock[] | null>(null);
   const sectionBlocks = useMemo(() => {
-    if (cellViewMode !== "minimal" || cell_list == null || cells == null) {
+    if (cellViewMode !== "studio" || cell_list == null || cells == null) {
       prevSectionBlocksRef.current = null;
       return null;
     }
@@ -421,7 +421,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
 
   // Update current block index on scroll (for mini TOC)
   useEffect(() => {
-    if (cellViewMode !== "minimal" || !sectionBlocks || !blockLookup) return;
+    if (cellViewMode !== "studio" || !sectionBlocks || !blockLookup) return;
     const el = cellListDivRef.current;
     if (!el) return;
     const update = () => {
@@ -448,10 +448,10 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     return () => el.removeEventListener("scroll", update);
   }, [cellViewMode, sectionBlocks, blockLookup, cellListDivRef.current]);
 
-  // MinimalMinimap expects cell heights keyed by index; our lazy-render
+  // StudioMinimap expects cell heights keyed by index; our lazy-render
   // bookkeeping is keyed by cell id, so adapt via a derived ref.
-  const minimalCellHeightsRef = useRef<{ [index: number]: number }>({});
-  if (cellViewMode === "minimal") {
+  const studioCellHeightsRef = useRef<{ [index: number]: number }>({});
+  if (cellViewMode === "studio") {
     const byIndex: { [index: number]: number } = {};
     cell_list.forEach((id: string, i: number) => {
       const h = lazyHeightsRef.current[id];
@@ -459,7 +459,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
         byIndex[i] = h;
       }
     });
-    minimalCellHeightsRef.current = byIndex;
+    studioCellHeightsRef.current = byIndex;
   }
 
   async function restore_scroll(): Promise<void> {
@@ -496,7 +496,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     const cellListElement = cellListDivRef.current;
     if (cellListElement == null) return;
     // If the clicked element was unmounted by React before this window-level
-    // handler ran (e.g. clicking the minimal code preview replaces it with
+    // handler ran (e.g. clicking the studio code preview replaces it with
     // the editor), it can't be located in the DOM anymore.  Treating that as
     // "outside" would blur and disable the keyboard handler right after the
     // editor opened, silently killing Shift+Enter.  Do nothing instead.
@@ -708,8 +708,8 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
                   )
               : undefined
           }
-          minimalLayout={minimalLayout}
-          zenMode={zenMode}
+          studioLayout={studioLayout}
+          readingMode={readingMode}
           frameHeight={frameHeight}
         />
       </div>
@@ -981,12 +981,12 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
     saveScrollDebounce,
   });
 
-  // The minimal view uses the same persisted minimap preference as the
+  // The studio view uses the same persisted minimap preference as the
   // standard notebook view. Keep its native scrollbar when the map is hidden.
   useEffect(() => {
     const node = cellListDivRef.current;
     if (!node) return;
-    if (cellViewMode === "minimal" && minimap.enabled) {
+    if (cellViewMode === "studio" && minimap.enabled) {
       node.classList.add("minimap-hide-scrollbar");
     } else {
       node.classList.remove("minimap-hide-scrollbar");
@@ -1037,7 +1037,7 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
         <div
           key="cells"
           className={`smc-vfill${
-            cellViewMode === "minimal" && minimap.enabled
+            cellViewMode === "studio" && minimap.enabled
               ? " minimap-hide-scrollbar"
               : ""
           }`}
@@ -1061,29 +1061,29 @@ const LoadedCellList: React.FC<LoadedCellListProps> = (
         >
           {v}
         </div>
-        {cellViewMode === "minimal" &&
-          !zenMode &&
-          minimalLayout !== "wide" &&
+        {cellViewMode === "studio" &&
+          !readingMode &&
+          studioLayout !== "wide" &&
           sectionBlocks != null && (
             <StickyMiniTOC
               sectionBlocks={sectionBlocks}
               currentBlockIndex={currentBlockIndex}
               cells={cells}
-              minimalLayout={minimalLayout}
+              studioLayout={studioLayout}
               fontSize={font_size}
               actions={!read_only ? actions : undefined}
             />
           )}
       </div>
-      {cellViewMode === "minimal"
+      {cellViewMode === "studio"
         ? minimap.enabled &&
           frameHeight != null && (
-            <MinimalMinimap
+            <StudioMinimap
               cellList={cell_list}
               cells={cells}
               collapsedSections={collapsedSections}
               scrollerRef={cellListDivRef}
-              cellHeights={minimalCellHeightsRef}
+              cellHeights={studioCellHeightsRef}
               // use the actual scroller height (the minimap's flex row), not
               // frameHeight, which includes the status bar above and would
               // make the minimap overflow the bottom of the frame

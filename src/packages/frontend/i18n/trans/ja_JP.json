@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "最小ノートブック表示を切り替え",
   "jupyter.commands.toggle_minimap.menu": "ミニマップの切り替え",
   "jupyter.commands.toggle_minimap.tooltip": "ノートブックのミニマップを表示または非表示にする",
+  "jupyter.commands.toggle_studio_view.label": "Studioノートブック表示を切り替え",
   "jupyter.commands.validate.body": "ノートブックを検証するとカーネルが再起動し、すべてのセルが順番に実行されます。エラーがあるセルも含まれます。これにより、すべての出力がすべてのセルを順番に実行した結果と正確に一致することが保証されます。",
   "jupyter.commands.validate.label": "検証",
   "jupyter.commands.validate.title": "ノートブックを検証しますか？",

@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "تبديل العرض المختصر لدفتر الملاحظات",
   "jupyter.commands.toggle_minimap.menu": "تبديل الخريطة المصغّرة",
   "jupyter.commands.toggle_minimap.tooltip": "إظهار أو إخفاء الخريطة المصغّرة لدفتر الملاحظات.",
+  "jupyter.commands.toggle_studio_view.label": "تبديل عرض دفتر Studio",
   "jupyter.commands.validate.body": "التحقق من الدفتر سيعيد تشغيل النواة ويشغل جميع الخلايا بالترتيب، حتى تلك التي تحتوي على أخطاء. هذا سيضمن أن جميع النتائج هي بالضبط ما ينتج عن تشغيل جميع الخلايا بالترتيب.",
   "jupyter.commands.validate.label": "التحقق",
   "jupyter.commands.validate.title": "التحقق من الدفتر؟",

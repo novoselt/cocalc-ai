@@ -825,6 +825,7 @@
   "jupyter.commands.toggle_minimal_view.label": "Basculer vers la vue minimale du notebook",
   "jupyter.commands.toggle_minimap.menu": "Afficher/masquer la mini-carte",
   "jupyter.commands.toggle_minimap.tooltip": "Afficher ou masquer la mini-carte du notebook.",
+  "jupyter.commands.toggle_studio_view.label": "Basculer vers la vue Studio du notebook",
   "jupyter.commands.validate.body": "La validation du notebook redémarrera le noyau et exécutera toutes les cellules dans l'ordre, même celles contenant des erreurs. Cela garantira que toutes les sorties sont exactement celles résultant de l'exécution de toutes les cellules dans l'ordre.",
   "jupyter.commands.validate.label": "Valider",
   "jupyter.commands.validate.title": "Valider le carnet ?",

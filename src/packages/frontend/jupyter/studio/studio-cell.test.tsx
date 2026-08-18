@@ -16,6 +16,8 @@ let mockMarkdownResolvedUrl: any;
 jest.mock("@cocalc/frontend/app-framework", () => ({
   React: require("react"),
   CSS: {},
+  // unset => the Animations preference defaults to enabled
+  useAccountOtherSetting: () => undefined,
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({
@@ -86,19 +88,19 @@ jest.mock("@cocalc/frontend/jupyter/cell-buttonbar-menu", () => ({
   CodeBarDropdownMenu: () => null,
 }));
 
-jest.mock("./minimal-code-preview", () => ({
-  MinimalCodePreview: () => null,
+jest.mock("./studio-code-preview", () => ({
+  StudioCodePreview: () => null,
 }));
 
-jest.mock("./minimal-gutter", () => ({
-  MinimalGutter: () => null,
+jest.mock("./studio-gutter", () => ({
+  StudioGutter: () => null,
   formatDuration: () => "",
   formatTimeAgo: () => "",
 }));
 
-import { MinimalCell } from "./minimal-cell";
+import { StudioCell } from "./studio-cell";
 
-function renderMinimalCell(overrides: any = {}) {
+function renderStudioCell(overrides: any = {}) {
   const props = {
     id: "cell-1",
     index: 0,
@@ -113,12 +115,12 @@ function renderMinimalCell(overrides: any = {}) {
   };
   return render(
     <IntlProvider locale="en" messages={{}} onError={() => {}}>
-      <MinimalCell {...props} />
+      <StudioCell {...props} />
     </IntlProvider>,
   );
 }
 
-describe("MinimalCell transient output states", () => {
+describe("StudioCell transient output states", () => {
   beforeEach(() => {
     mockCellOutputProps = undefined;
     mockMarkdownProps = undefined;
@@ -126,20 +128,20 @@ describe("MinimalCell transient output states", () => {
   });
 
   it("does not mount CellOutput for a code cell with no output at all", () => {
-    renderMinimalCell();
+    renderStudioCell();
     expect(screen.queryByTestId("cell-output")).toBeNull();
   });
 
   it("mounts CellOutput and forwards stdin when the kernel requests input", () => {
     const stdin = fromJS({ id: "cell-1", prompt: "value: " });
-    renderMinimalCell({ stdin });
+    renderStudioCell({ stdin });
     expect(screen.getByTestId("cell-output")).toBeInTheDocument();
     expect(mockCellOutputProps.stdin).toBe(stdin);
   });
 
   it("mounts CellOutput and forwards a pending runOverlay", () => {
     const runOverlay = fromJS({ state: "pending" });
-    renderMinimalCell({ runOverlay, isDragging: true });
+    renderStudioCell({ runOverlay, isDragging: true });
     expect(screen.getByTestId("cell-output")).toBeInTheDocument();
     expect(mockCellOutputProps.runOverlay).toBe(runOverlay);
     expect(mockCellOutputProps.isDragging).toBe(true);
@@ -152,7 +154,7 @@ describe("MinimalCell transient output states", () => {
       input: "1+1",
       output: { 0: { data: { "text/plain": "2" } } },
     });
-    renderMinimalCell({
+    renderStudioCell({
       cell,
       is_current: true,
       complete: fromJS({ matches: [] }),
@@ -163,13 +165,13 @@ describe("MinimalCell transient output states", () => {
 
 describe.each([
   ["standard", false],
-  ["zen", true],
-])("MinimalCell compact chat affordance in %s mode", (_label, zenMode) => {
+  ["reading", true],
+])("StudioCell compact chat affordance in %s mode", (_label, readingMode) => {
   it("shows only compact chat until the cell is hovered", () => {
-    renderMinimalCell({
+    renderStudioCell({
       actions: {},
       read_only: true,
-      zenMode,
+      readingMode,
     });
 
     expect(screen.getByTestId("cell-chat-compact-button")).toBeInTheDocument();
@@ -182,7 +184,7 @@ describe.each([
   });
 });
 
-describe("MinimalCell markdown rendering", () => {
+describe("StudioCell markdown rendering", () => {
   beforeEach(() => {
     mockCellOutputProps = undefined;
     mockMarkdownProps = undefined;
@@ -202,7 +204,7 @@ describe("MinimalCell markdown rendering", () => {
     const processRenderedMarkdown = jest.fn(
       ({ value }) => `${value} [processed]`,
     );
-    renderMinimalCell({
+    renderStudioCell({
       cell: mdCell,
       actions: { processRenderedMarkdown } as any,
     });
@@ -216,7 +218,7 @@ describe("MinimalCell markdown rendering", () => {
   });
 
   it("provides a urlTransform that resolves notebook attachments", () => {
-    renderMinimalCell({ cell: mdCell });
+    renderStudioCell({ cell: mdCell });
     expect(screen.getByTestId("mostly-static-markdown")).toBeInTheDocument();
     expect(mockMarkdownResolvedUrl).toBe("data:image/png;base64,AAAA");
   });

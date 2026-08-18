@@ -49,7 +49,7 @@ const RUN_STATE_COLORS: Record<CellRunState, string> = {
   markdown: COLORS.GRAY_L0,
 };
 
-interface MinimalGutterProps {
+interface StudioGutterProps {
   id: string;
   index: number;
   isCode: boolean;
@@ -81,7 +81,7 @@ interface MinimalGutterProps {
 
 const CURRENT_COLOR = "#42a5f5"; // blue, same as default notebook
 
-export const MinimalGutter: React.FC<MinimalGutterProps> = React.memo(
+export const StudioGutter: React.FC<StudioGutterProps> = React.memo(
   ({
     id,
     index,
@@ -106,7 +106,7 @@ export const MinimalGutter: React.FC<MinimalGutterProps> = React.memo(
   }) => {
     const [hovered, setHovered] = useState(false);
 
-    // Same rule as canShowCellDragHandle in the regular view: protected
+    // Same rule as canShowCellDragHandle in the classic view: protected
     // (metadata.editable=false) cells must not be reorderable.
     const draggable = !read_only && !isNotEditable;
 

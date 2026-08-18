@@ -5,6 +5,7 @@
 
 import type { Map } from "immutable";
 
+import { useAnimatedTransition } from "@cocalc/frontend/app/animations";
 import type { JupyterActions } from "@cocalc/frontend/jupyter/browser-actions";
 import { MiniTOC } from "./mini-toc";
 import {
@@ -12,13 +13,13 @@ import {
   COLUMN_TRANSITION,
   OUTPUT_FLEX_DEFAULT,
 } from "./styles";
-import type { MinimalLayout, SectionBlock } from "./types";
+import type { StudioLayout, SectionBlock } from "./types";
 
 interface StickyMiniTOCProps {
   sectionBlocks: SectionBlock[];
   currentBlockIndex: number;
   cells: Map<string, any>;
-  minimalLayout?: MinimalLayout;
+  studioLayout?: StudioLayout;
   fontSize?: number;
   actions?: JupyterActions;
 }
@@ -28,13 +29,14 @@ export function StickyMiniTOC({
   sectionBlocks,
   currentBlockIndex,
   cells,
-  minimalLayout,
+  studioLayout,
   fontSize,
   actions,
 }: StickyMiniTOCProps) {
-  const margin = minimalLayout === "narrow" ? 2 : 0;
+  const columnTransition = useAnimatedTransition(COLUMN_TRANSITION);
+  const margin = studioLayout === "narrow" ? 2 : 0;
   const contentFlex = OUTPUT_FLEX_DEFAULT + CODE_FLEX_DEFAULT;
-  const rightSpacerFlex = minimalLayout === "wide" ? 0 : margin;
+  const rightSpacerFlex = studioLayout === "wide" ? 0 : margin;
 
   return (
     <div
@@ -52,14 +54,14 @@ export function StickyMiniTOC({
           <div
             style={{
               flex: `${rightSpacerFlex} 1 0`,
-              transition: COLUMN_TRANSITION,
+              transition: columnTransition,
             }}
           />
         )}
         <div
           style={{
             flex: `${CODE_FLEX_DEFAULT} 1 0`,
-            transition: COLUMN_TRANSITION,
+            transition: columnTransition,
             pointerEvents: "auto",
             overflow: "hidden",
           }}
@@ -68,7 +70,7 @@ export function StickyMiniTOC({
             sectionBlocks={sectionBlocks}
             currentBlockIndex={currentBlockIndex}
             cells={cells}
-            minimalLayout={minimalLayout}
+            studioLayout={studioLayout}
             fontSize={fontSize}
             actions={actions}
           />
@@ -78,7 +80,7 @@ export function StickyMiniTOC({
           <div
             style={{
               flex: `${rightSpacerFlex} 1 0`,
-              transition: COLUMN_TRANSITION,
+              transition: columnTransition,
             }}
           />
         )}

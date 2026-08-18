@@ -5,7 +5,7 @@
 
 /*
  * Floating mini table of contents for the left spacer column in
- * comfortable/narrow layouts (not zen, not wide).
+ * comfortable/narrow layouts (not reading mode, not wide).
  *
  * Shows up to 5 section entries centred on the current section,
  * with the active one highlighted darker. Each entry is a click-to-jump link.
@@ -15,7 +15,7 @@ import React, { useMemo } from "react";
 import type * as immutable from "immutable";
 import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
 import type { JupyterActions } from "@cocalc/frontend/jupyter/browser-actions";
-import type { MinimalLayout, SectionBlock } from "./types";
+import type { StudioLayout, SectionBlock } from "./types";
 import { COLORS } from "@cocalc/util/theme";
 
 const MAX_VISIBLE = 20;
@@ -24,7 +24,7 @@ interface MiniTOCProps {
   sectionBlocks: SectionBlock[];
   currentBlockIndex: number;
   cells: immutable.Map<string, any>;
-  minimalLayout?: MinimalLayout;
+  studioLayout?: StudioLayout;
   fontSize?: number;
   actions?: JupyterActions;
 }

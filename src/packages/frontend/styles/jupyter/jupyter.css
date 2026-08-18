@@ -124,32 +124,32 @@ cocalc-lumino-adapter {
   position: relative;
 }
 
-/* Jupyter Minimal notebook frame styles */
-.minimal-md-render h1 {
+/* Jupyter Studio notebook frame styles */
+.studio-md-render h1 {
   font-size: 1.4em;
   margin: 4px 0;
 }
-.minimal-md-render h2 {
+.studio-md-render h2 {
   font-size: 1.2em;
   margin: 3px 0;
 }
-.minimal-md-render h3 {
+.studio-md-render h3 {
   font-size: 1.1em;
   margin: 2px 0;
 }
-.minimal-md-render h4 {
+.studio-md-render h4 {
   font-size: 1.05em;
   margin: 2px 0;
 }
-.minimal-md-render p {
+.studio-md-render p {
   margin: 4px 0;
 }
 
-.minimal-code-editor [cocalc-test="cell-input"] > .hidden-xs {
+.studio-code-editor [cocalc-test="cell-input"] > .hidden-xs {
   display: none !important;
 }
 
-.minimal-cell-toolbar > div {
+.studio-cell-toolbar > div {
   margin-left: 0 !important;
 }
 
@@ -182,13 +182,13 @@ cocalc-lumino-adapter {
   color: #999 !important;
 }
 
-.minimal-status-segmented .ant-segmented-item {
+.studio-status-segmented .ant-segmented-item {
   margin-bottom: 0 !important;
 }
 
 /* Folded section with running/queued cells inside: pulse the divider bar
    green (CSS animations override the inline hover background). */
-@keyframes minimal-section-run-blink {
+@keyframes studio-section-run-blink {
   0%,
   100% {
     background-color: #f6ffed;
@@ -197,6 +197,6 @@ cocalc-lumino-adapter {
     background-color: #b7eb8f;
   }
 }
-.minimal-section-running {
-  animation: minimal-section-run-blink 1.2s ease-in-out infinite;
+.studio-section-running {
+  animation: studio-section-run-blink 1.2s ease-in-out infinite;
 }

@@ -14,7 +14,7 @@ import {
 
 const MIN_HEIGHT = 50;
 
-interface MinimalCodePreviewProps {
+interface StudioCodePreviewProps {
   value: string;
   cmOptions: { mode?: string | { name?: string }; theme?: string };
   fontSize: number;
@@ -28,7 +28,7 @@ interface MinimalCodePreviewProps {
   blocked?: boolean;
 }
 
-export const MinimalCodePreview: React.FC<MinimalCodePreviewProps> = React.memo(
+export const StudioCodePreview: React.FC<StudioCodePreviewProps> = React.memo(
   ({
     value,
     cmOptions,

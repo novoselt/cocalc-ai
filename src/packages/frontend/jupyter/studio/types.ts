@@ -3,10 +3,10 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-export type CellViewMode = "default" | "minimal";
+export type CellViewMode = "default" | "studio";
 
-/** Width/layout modes of the minimal notebook view */
-export type MinimalLayout = "wide" | "comfortable" | "narrow";
+/** Width/layout modes of the studio notebook view */
+export type StudioLayout = "wide" | "comfortable" | "narrow";
 
 export interface SectionBlock {
   /** Cell ID that starts this block (the heading markdown cell, or first cell for the implicit block) */

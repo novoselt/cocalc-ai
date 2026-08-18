@@ -206,7 +206,7 @@ describe("PublicFeaturesApp", () => {
     ).not.toBeNull();
     expect(
       screen.getByRole("heading", {
-        name: "Jupyter Minimal: a focused notebook view",
+        name: "Jupyter Studio: a content-first notebook view",
       }),
     ).not.toBeNull();
     expect(
