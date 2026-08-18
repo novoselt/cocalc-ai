@@ -530,7 +530,7 @@ async function insertTeamLicensePurchase(
         interval: "year",
         line_items: [
           {
-            description: `4 ${opts.membership_class} team seats`,
+            description: `4 ${opts.membership_class} annual team seats at $120/seat`,
             amount: 480,
           },
         ],

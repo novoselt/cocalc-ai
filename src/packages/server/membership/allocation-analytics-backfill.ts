@@ -90,6 +90,7 @@ interface TeamLicensePurchaseRow {
   lifecycle?: string | null;
   team_license_id: string;
   line_items: unknown;
+  billing_interval: Interval;
   has_earlier_purchase: boolean;
   period_start: Date;
   period_end: Date;
@@ -487,11 +488,11 @@ function normalizeTeamLicenseLineItems(
         const description = `${row.description ?? ""}`.trim();
         const match = description.match(/^(\d+)\s+(.+)$/);
         const tier = match
-          ? labels.find(({ label }) =>
-              match[2].startsWith(
-                `${label} team seat${Number(match[1]) === 1 ? "" : "s"}`,
-              ),
-            )
+          ? labels.find(({ label }) => {
+              if (!match[2].startsWith(`${label} `)) return false;
+              const qualifier = match[2].slice(label.length + 1);
+              return /(^|\s)team seats?(\s|$)/.test(qualifier);
+            })
           : undefined;
         if (match && tier) {
           membershipClass = tier.id;
@@ -534,6 +535,7 @@ async function backfillTeamLicensePurchases({
             COALESCE(NULLIF(p.description->>'team_license_id', ''),
                      tl.id::text) AS team_license_id,
             p.description->'line_items' AS line_items,
+            p.description->>'interval' AS billing_interval,
             EXISTS (
               SELECT 1
                 FROM purchases earlier
@@ -552,6 +554,7 @@ async function backfillTeamLicensePurchases({
         AND COALESCE(NULLIF(p.description->>'team_license_id', ''),
                      tl.id::text) IS NOT NULL
         AND jsonb_typeof(p.description->'line_items')='array'
+        AND p.description->>'interval' IN ('month', 'year')
         AND p.period_start IS NOT NULL
         AND p.period_end IS NOT NULL
         AND NOT EXISTS (
@@ -575,6 +578,7 @@ async function backfillTeamLicensePurchases({
       occurred_at: row.time,
       period_start: row.period_start,
       period_end: row.period_end,
+      billing_interval: row.billing_interval,
       lifecycle:
         row.purchase_type === "team-license-renewal"
           ? "renewal"

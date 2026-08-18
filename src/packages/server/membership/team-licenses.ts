@@ -567,6 +567,7 @@ export async function getTeamLicenseRenewalQuote({
 }): Promise<{
   license: TeamLicenseRecord;
   line_items: TeamLicenseQuote["line_items"];
+  interval: TeamLicenseQuote["interval"];
   total_price: MoneyValue;
   next_period_start: Date;
   next_period_end: Date;
@@ -618,6 +619,7 @@ export async function getTeamLicenseRenewalQuote({
   return {
     license,
     line_items: lineItems,
+    interval: TEAM_LICENSE_INTERVAL,
     total_price: moneyRound2Up(
       lineItems.reduce(
         (sum, item) => sum.add(toDecimal(item.amount)),

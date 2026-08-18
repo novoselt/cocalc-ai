@@ -5,6 +5,7 @@
 
 import type { PoolClient } from "@cocalc/database/pool";
 import type {
+  MembershipAllocationBillingInterval,
   MembershipAllocationLifecycle,
   TeamLicenseQuoteLineItem,
 } from "@cocalc/conat/hub/api/purchases";
@@ -17,6 +18,7 @@ export async function recordTeamLicensePurchaseFacts({
   occurred_at = new Date(),
   period_start,
   period_end,
+  billing_interval,
   lifecycle,
   line_items,
   client,
@@ -27,6 +29,7 @@ export async function recordTeamLicensePurchaseFacts({
   occurred_at?: Date;
   period_start: Date | string;
   period_end: Date | string;
+  billing_interval: MembershipAllocationBillingInterval;
   lifecycle: MembershipAllocationLifecycle;
   line_items: TeamLicenseQuoteLineItem[];
   client: PoolClient;
@@ -44,7 +47,7 @@ export async function recordTeamLicensePurchaseFacts({
         channel: "team",
         source_kind: "purchase",
         membership_class: line.membership_class,
-        billing_interval: "year",
+        billing_interval,
         lifecycle,
         allocation_start: period_start,
         allocation_end: period_end,
