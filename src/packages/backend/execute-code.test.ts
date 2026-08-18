@@ -24,6 +24,8 @@ process.env.COCALC_PROJECT_INFO_PROC_LIMIT = "10000";
 import {
   attachToAsyncJob,
   executeCode,
+  getAsyncJobGroupSnapshot,
+  onAsyncJobGroupEvent,
   setMonitorIntervalSeconds,
 } from "./execute-code";
 
@@ -655,6 +657,104 @@ describe("keyed async jobs", () => {
     expect(current.type).toBe("async");
     if (current.type !== "async") return;
     expect(current.status).toBe("killed");
+  });
+
+  it("publishes sequenced lifecycle events and active group snapshots", async () => {
+    const job_group = key("group");
+    const events: any[] = [];
+    const unsubscribe = onAsyncJobGroupEvent((event) => {
+      if (event.job_group === job_group) events.push(event);
+    });
+    try {
+      const started = await executeCode({
+        command: "sh",
+        args: ["-c", "printf first; sleep .2; printf second"],
+        async_call: true,
+        aggregate: 17,
+        job_group,
+        job_key: key("group-job"),
+      });
+      expect(started.type).toBe("async");
+      if (started.type !== "async") return;
+
+      const snapshots = getAsyncJobGroupSnapshot(job_group);
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0].output.job_id).toBe(started.job_id);
+      expect(snapshots[0].output.aggregate).toBe(17);
+      expect(snapshots[0].seq).toBeGreaterThanOrEqual(1);
+
+      await executeCode({ async_get: started.job_id, async_await: true });
+      expect(events[0]).toMatchObject({
+        aggregate: 17,
+        job_group,
+        job_id: started.job_id,
+        seq: 1,
+        type: "job",
+      });
+      expect(events.at(-1)).toMatchObject({
+        job_group,
+        job_id: started.job_id,
+        type: "done",
+      });
+      expect(events.map(({ seq }) => seq)).toEqual(
+        events.map((_, index) => index + 1),
+      );
+      expect(getAsyncJobGroupSnapshot(job_group)).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not treat observation groups as part of keyed job ownership", async () => {
+    const job_key = key("group-fingerprint");
+    const first = await executeCode({
+      command: "sh",
+      args: ["-c", "sleep .2"],
+      async_call: true,
+      aggregate: 1,
+      job_group: key("first-group"),
+      job_key,
+    });
+    const second = await executeCode({
+      command: "sh",
+      args: ["-c", "sleep .2"],
+      async_call: true,
+      aggregate: 1,
+      job_key,
+    });
+    expect(first.type).toBe("async");
+    expect(second.type).toBe("async");
+    if (first.type !== "async" || second.type !== "async") return;
+    expect(second.job_id).toBe(first.job_id);
+    await executeCode({ async_get: first.job_id, async_await: true });
+  });
+
+  it("does not let a failing observer break job execution", async () => {
+    const job_group = key("failing-observer");
+    const unsubscribe = onAsyncJobGroupEvent((event) => {
+      if (event.job_group === job_group) throw new Error("observer failed");
+    });
+    try {
+      const started = await executeCode({
+        command: "printf",
+        args: ["ok"],
+        async_call: true,
+        job_group,
+        job_key: key("observed-job"),
+      });
+      expect(started.type).toBe("async");
+      if (started.type !== "async") return;
+      const finished = await executeCode({
+        async_get: started.job_id,
+        async_await: true,
+      });
+      expect(finished.type).toBe("async");
+      if (finished.type !== "async") return;
+      expect(finished.stdout).toBe("ok");
+      expect(finished.status).toBe("completed");
+    } finally {
+      unsubscribe();
+    }
   });
 });
 

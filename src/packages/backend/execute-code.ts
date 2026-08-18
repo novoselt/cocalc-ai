@@ -35,6 +35,8 @@ import {
   isExecuteCodeOptionsAsyncGet,
   type ExecuteCodeAggregate,
   type ExecuteCodeFunctionWithCallback,
+  type ExecuteCodeJobGroupEvent,
+  type ExecuteCodeJobGroupSnapshot,
   type ExecuteCodeOptions,
   type ExecuteCodeOptionsWithCallback,
   type ExecuteCodeOutput,
@@ -77,8 +79,10 @@ log.debug("configuration:", {
 
 type AsyncAwait = "finished" | "stream";
 const updates = new EventEmitter();
+const jobGroupUpdates = new EventEmitter();
 const eventKey = (type: AsyncAwait, job_id: string): string =>
   `${type}-${job_id}`;
+const JOB_GROUP_EVENT = "event";
 
 interface ActiveKeyedJob {
   aggregate?: ExecuteCodeAggregate;
@@ -112,6 +116,7 @@ const completedKeyedJobs = new LRU<string, CompletedKeyedJob>({
   // remains available by job_id for ASYNC_CACHE_TTL_S.
   ttl: 1000 * KEYED_DONE_CACHE_TTL_S,
 });
+const jobGroupSequences = new Map<string, number>();
 
 export const asyncCache = new LRU<string, ExecuteCodeOutputAsync>({
   max: ASYNC_CACHE_MAX,
@@ -157,8 +162,68 @@ export function attachToAsyncJob(
   return { output, unsubscribe };
 }
 
+export function getAsyncJobGroupSnapshot(
+  job_group: string,
+): ExecuteCodeJobGroupSnapshot[] {
+  const snapshots: ExecuteCodeJobGroupSnapshot[] = [];
+  for (const output of activeAsyncOutputs.values()) {
+    if (output.job_group !== job_group) continue;
+    snapshots.push({
+      output: cloneAsyncOutput(output),
+      seq: jobGroupSequences.get(output.job_id) ?? 0,
+    });
+  }
+  return snapshots;
+}
+
+export function onAsyncJobGroupEvent(
+  listener: (event: ExecuteCodeJobGroupEvent) => void,
+): () => void {
+  jobGroupUpdates.on(JOB_GROUP_EVENT, listener);
+  return () => jobGroupUpdates.off(JOB_GROUP_EVENT, listener);
+}
+
+function emitAsyncJobGroupEvent(
+  opts: Pick<ExecuteCodeOptions, "job_group" | "job_key"> & {
+    job_id?: string;
+  },
+  event: {
+    type: "job" | "done";
+    data: ExecuteCodeOutputAsync;
+  },
+) {
+  if (!opts.job_id) return;
+  const output = getAsyncJob(opts.job_id);
+  const job_group = opts.job_group ?? output?.job_group;
+  if (!job_group) return;
+  const seq = (jobGroupSequences.get(opts.job_id) ?? 0) + 1;
+  jobGroupSequences.set(opts.job_id, seq);
+  const update: ExecuteCodeJobGroupEvent = {
+    aggregate: output?.aggregate,
+    data: event.data,
+    job_group,
+    job_id: opts.job_id,
+    job_key: opts.job_key ?? output?.job_key,
+    seq,
+    type: event.type,
+  };
+  for (const listener of jobGroupUpdates.listeners(JOB_GROUP_EVENT)) {
+    try {
+      (listener as (event: ExecuteCodeJobGroupEvent) => void)(update);
+    } catch (err) {
+      log.warn("async job group observer failed", { err: `${err}` });
+    }
+  }
+  if (event.type === "done") {
+    jobGroupSequences.delete(opts.job_id);
+  }
+}
+
 function emitAsyncStreamEvent(
-  opts: Pick<ExecuteCodeOptions, "async_call" | "streamCB"> & {
+  opts: Pick<
+    ExecuteCodeOptions,
+    "async_call" | "job_group" | "job_key" | "streamCB"
+  > & {
     job_id?: string;
   },
   event: ExecuteCodeStreamEvent,
@@ -181,6 +246,12 @@ function emitAsyncStreamEvent(
   opts.streamCB?.(event);
   if (opts.async_call && opts.job_id) {
     updates.emit(eventKey("stream", opts.job_id), event);
+  }
+  if (event.type === "done") {
+    emitAsyncJobGroupEvent(opts, {
+      type: "done",
+      data: event.data as ExecuteCodeOutputAsync,
+    });
   }
 }
 
@@ -271,7 +342,8 @@ function executionFingerprint(opts: ExecuteCodeOptions): string {
     aggregate: _,
     async_call: __,
     job_key: ___,
-    streamCB: ____,
+    job_group: ____,
+    streamCB: _____,
     ...execution
   } = opts;
   return JSON.stringify(stableValue(execution));
@@ -448,6 +520,7 @@ function createAsyncJobOutput(
     status: "running",
     stats: [],
     job_key: opts.job_key,
+    job_group: opts.job_group,
     aggregate: opts.aggregate,
   };
 }
@@ -507,6 +580,14 @@ async function startAsyncJob(
     timeout: opts.timeout ?? PROJECT_EXEC_DEFAULT_TIMEOUT_S,
   };
   setAsyncOutput(job_config);
+  emitAsyncJobGroupEvent(
+    {
+      job_group: job_config.job_group,
+      job_id: job_config.job_id,
+      job_key: job_config.job_key,
+    },
+    { type: "job", data: cloneAsyncOutput(job_config) },
+  );
 
   let tempDir: string | undefined;
   let finished = false;
@@ -552,6 +633,7 @@ async function startAsyncJob(
             start,
             status: failed ? "error" : "completed",
             job_key: job_config.job_key,
+            job_group: job_config.job_group,
             aggregate: job_config.aggregate,
           });
           emitAsyncStreamEvent(
@@ -731,6 +813,14 @@ async function executeCodeNoAggregate(
   opts.ulimit_timeout ??= true;
   opts.err_on_exit ??= true;
   opts.verbose ??= false;
+
+  if (opts.job_group != null) {
+    opts.job_group = opts.job_group.trim();
+    if (!opts.job_group) throw new Error("job_group must not be empty");
+    if (opts.job_group.length > 8192) {
+      throw new Error("job_group is too long");
+    }
+  }
 
   if (opts.verbose) {
     log.debug(`input: ${opts.command} ${opts.args?.join(" ")}`);

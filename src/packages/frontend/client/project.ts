@@ -64,6 +64,7 @@ import { resolveExplicitStreamStart } from "./stream-start";
 
 const TOUCH_THROTTLE = 30_000;
 import { ExecStream } from "./types";
+import { ExecJobGroupWatcher } from "./exec-job-watcher";
 
 export class ProjectClient {
   private client: WebappClient;
@@ -75,6 +76,20 @@ export class ProjectClient {
   conatApi = (project_id: string): ProjectApi => {
     return this.client.conat_client.projectApi({
       project_id,
+    });
+  };
+
+  watchExecJobGroup = (opts: {
+    job_group: string;
+    project_id: string;
+  }): ExecJobGroupWatcher => {
+    return new ExecJobGroupWatcher({
+      ...opts,
+      getClient: async () =>
+        await this.client.conat_client.projectConat({
+          project_id: opts.project_id,
+          caller: "ProjectClient.watchExecJobGroup",
+        }),
     });
   };
 

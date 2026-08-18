@@ -33,6 +33,7 @@ export interface ExecuteCodeOutputAsync extends ExecuteCodeBase {
   pid?: number; // in case you want to kill it remotely, good to know the PID
   stats?: ExecuteCodeStats;
   job_key?: string;
+  job_group?: string;
   aggregate?: ExecuteCodeAggregate;
 }
 
@@ -43,6 +44,21 @@ export type ExecuteCodeOutput =
 export interface ExecuteCodeStreamEvent {
   type: "stdout" | "stderr" | "done" | "stats" | "error";
   data?: string | ExecuteCodeOutputAsync | ExecuteCodeStats[0];
+}
+
+export interface ExecuteCodeJobGroupEvent {
+  aggregate?: ExecuteCodeAggregate;
+  data: ExecuteCodeOutputAsync;
+  job_group: string;
+  job_id: string;
+  job_key?: string;
+  seq: number;
+  type: "job" | "done";
+}
+
+export interface ExecuteCodeJobGroupSnapshot {
+  output: ExecuteCodeOutputAsync;
+  seq: number;
 }
 
 export interface ExecuteCodeOptions {
@@ -64,6 +80,9 @@ export interface ExecuteCodeOptions {
   // Stable logical slot for an async job.  Calls with the same key share one
   // active execution, with aggregate determining whether a newer run is needed.
   job_key?: string;
+  // Optional higher-level activity shared by related job slots.  This does not
+  // affect execution ownership; it only makes their lifecycle observable.
+  job_group?: string;
   verbose?: boolean; // default true -- impacts amount of logging
   async_call?: boolean; // default false -- if true, return right after the process started (to get the PID) or when it fails.
   // in the filesystem container (if available)

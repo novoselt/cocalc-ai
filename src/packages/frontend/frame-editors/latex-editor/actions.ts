@@ -43,6 +43,7 @@ import {
   TableOfContentsEntryList,
 } from "@cocalc/frontend/components";
 import { saveToDiskWithFileServerRetry } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
+import type { ExecJobGroupWatcher } from "@cocalc/frontend/client/exec-job-watcher";
 import {
   Actions as BaseActions,
   CodeEditorState,
@@ -55,6 +56,10 @@ import {
   project_api,
   server_time,
 } from "@cocalc/frontend/frame-editors/generic/client";
+import {
+  jobAggregateValue,
+  watchProjectBuilds,
+} from "@cocalc/frontend/frame-editors/generic/project-builds";
 import type { ExecOutput } from "@cocalc/util/db-schema/projects";
 import {
   change_filename_extension,
@@ -67,6 +72,7 @@ import {
 } from "@cocalc/util/misc";
 import { normalizeAbsolutePath } from "@cocalc/util/path-model";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
+import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import * as tree_ops from "../frame-tree/tree-ops";
 import { bibtex } from "./bibtex";
 import type {
@@ -200,6 +206,7 @@ export class Actions extends BaseActions<LatexEditorState> {
 
   // PDF file watcher - watches directory for PDF file changes
   private pdf_watcher?: PDFWatcher;
+  private build_job_watcher?: ExecJobGroupWatcher;
 
   // Debounced version - initialized in _init2()
   update_pdf: (time: number, force: boolean) => void;
@@ -276,6 +283,7 @@ export class Actions extends BaseActions<LatexEditorState> {
       debounce(this.ensureNonempty.bind(this), 1500),
     );
     this._init_pdf_directory_watcher();
+    this._init_build_job_watcher();
     this.word_count = reuseInFlight(this._word_count.bind(this));
     this._initChatMarkers();
   }
@@ -293,6 +301,14 @@ export class Actions extends BaseActions<LatexEditorState> {
       },
     );
     await this.pdf_watcher.init();
+  }
+
+  private _init_build_job_watcher(): void {
+    this.build_job_watcher = watchProjectBuilds({
+      onBuild: (job) => void this.follow_project_build(job),
+      path: this.path,
+      project_id: this.project_id,
+    });
   }
 
   // similar to jupyter, where an empty document is really
@@ -787,6 +803,8 @@ export class Actions extends BaseActions<LatexEditorState> {
       this.pdf_watcher.close();
       this.pdf_watcher = undefined;
     }
+    this.build_job_watcher?.close();
+    this.build_job_watcher = undefined;
     for (const handle of Object.values(this._chatMarkerScanners)) {
       handle.dispose();
     }
@@ -975,6 +993,23 @@ export class Actions extends BaseActions<LatexEditorState> {
       this.is_building = false;
     }
   };
+
+  private async follow_project_build(
+    job: ExecuteCodeOutputAsync,
+  ): Promise<void> {
+    const aggregate = jobAggregateValue(job);
+    if (this.is_building || this.is_stopping || typeof aggregate !== "number") {
+      return;
+    }
+    this.is_building = true;
+    try {
+      await this.run_build(aggregate, false);
+    } catch (err) {
+      this.set_error(`${err}`);
+    } finally {
+      this.is_building = false;
+    }
+  }
 
   async clean(): Promise<void> {
     if (this.is_read_only_preview()) return;

@@ -11,6 +11,7 @@ import type { ExecOptsBlocking } from "@cocalc/util/db-schema/projects";
 import { separate_file_extension } from "@cocalc/util/misc";
 import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { TITLE_BAR_BORDER } from "../frame-tree/style";
+import { buildJobGroup } from "../generic/project-builds";
 import { TIMEOUT_LATEX_JOB_S } from "./constants";
 
 export const OUTPUT_HEADER_STYLE = {
@@ -79,6 +80,7 @@ interface RunJobOpts {
   args?: string[];
   command: string;
   env?: { [key: string]: string };
+  jobGroup?: string;
   jobKey: string;
   project_id: string;
   runDir: string; // a directory! (output_directory if in /tmp, or the directory of the file's path)
@@ -93,6 +95,7 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     args,
     command,
     env,
+    jobGroup,
     jobKey,
     project_id,
     runDir,
@@ -110,6 +113,7 @@ export async function runJob(opts: RunJobOpts): Promise<ExecOutput> {
     command,
     env,
     err_on_exit: false,
+    job_group: jobGroup ?? buildJobGroup(path),
     job_key: jobKey,
     path: runDir,
     project_id,

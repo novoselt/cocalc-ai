@@ -89,6 +89,12 @@ const ExecInputSchemaBlocking = ExecInputCommon.merge(
         `Stable logical slot for an asynchronous job. Concurrent calls with the same key
          attach to one authoritative execution; \`aggregate\` controls freshness.`,
       ),
+    job_group: z
+      .string()
+      .min(1)
+      .max(8192)
+      .optional()
+      .describe("Higher-level activity used to observe related async jobs"),
     err_on_exit: z
       .boolean()
       .optional()
@@ -202,6 +208,7 @@ const ExecOutputAsync = ExecOutputBlocking.extend({
     ])
     .describe("Status of the async operation"),
   job_key: z.string().optional().describe("Logical async job slot"),
+  job_group: z.string().optional().describe("Observable async job group"),
   aggregate: z
     .union([
       z.number(),

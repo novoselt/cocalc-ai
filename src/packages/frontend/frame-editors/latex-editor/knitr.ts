@@ -13,9 +13,11 @@ import {
   type ExecOutput,
 } from "@cocalc/frontend/frame-editors/generic/client";
 import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
+import { change_filename_extension } from "@cocalc/util/misc";
 import { Error as ErrorLog, ProcessedLatexLog } from "./latex-log-parser";
 import type { BuildLog } from "./types";
 import { runJob } from "./util";
+import { buildJobGroup } from "../generic/project-builds";
 
 // this still respects the environment variables and init files
 const R_CMD = "R";
@@ -41,6 +43,7 @@ export async function knitr(
   return runJob({
     project_id,
     command: R_CMD,
+    jobGroup: buildJobGroup(change_filename_extension(path, "tex")),
     jobKey: `knitr:${path}`,
     args: [...R_ARGS, expr],
     runDir: directory,

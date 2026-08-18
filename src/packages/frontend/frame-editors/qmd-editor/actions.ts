@@ -8,6 +8,7 @@ Quarto Editor Actions
 */
 
 import { debounce } from "lodash";
+import type { ExecJobGroupWatcher } from "@cocalc/frontend/client/exec-job-watcher";
 import { markdown_to_html_frontmatter } from "@cocalc/frontend/markdown";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import {
@@ -16,6 +17,10 @@ import {
 } from "../base-editor/actions-text";
 import type { FrameTree } from "../frame-tree/types";
 import { cancel_exec_job, type ExecOutput } from "../generic/client";
+import {
+  jobAggregateValue,
+  watchProjectBuilds,
+} from "../generic/project-builds";
 import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Actions as MarkdownActions } from "../markdown-editor/actions";
 import { checkProducedFiles } from "../rmd-editor/utils";
@@ -41,12 +46,16 @@ plot(rnorm(100))
 export class Actions extends MarkdownActions {
   private _last_qmd_hash: number | undefined = undefined;
   private is_building: boolean = false;
+  private build_job_watcher?: ExecJobGroupWatcher;
   private run_qmd_converter: Function;
 
   _init2(): void {
     super._init2(); // that's the one in markdown-editor/actions.ts
     // one extra thing after markdown.
-    this._syncstring.once("ready", this._init_qmd_converter.bind(this));
+    this._syncstring.once("ready", () => {
+      this._init_qmd_converter();
+      this._init_build_job_watcher();
+    });
     this._check_produced_files();
     this.setState({ custom_pdf_error_message });
     this._syncstring.on(
@@ -86,6 +95,35 @@ export class Actions extends MarkdownActions {
     // Initial run with current hash if available
     const initial_hash = this._syncstring.hash_of_saved_version();
     this.run_qmd_converter(initial_hash);
+  }
+
+  private _init_build_job_watcher(): void {
+    this.build_job_watcher = watchProjectBuilds({
+      onBuild: (job) => void this.follow_project_build(job),
+      path: this.path,
+      project_id: this.project_id,
+    });
+  }
+
+  private async follow_project_build(
+    job: ExecuteCodeOutputAsync,
+  ): Promise<void> {
+    const aggregate = jobAggregateValue(job);
+    if (this.is_building || this.store.get("building") || aggregate == null) {
+      return;
+    }
+    this.is_building = true;
+    try {
+      await this._run_qmd_converter(aggregate);
+    } finally {
+      this.is_building = false;
+    }
+  }
+
+  close(): void {
+    this.build_job_watcher?.close();
+    this.build_job_watcher = undefined;
+    super.close();
   }
 
   async build(id?: string, force: boolean = false): Promise<void> {

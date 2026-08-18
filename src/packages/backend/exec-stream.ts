@@ -39,6 +39,7 @@ export interface ExecuteStreamOptions {
   max_output?: number;
   aggregate?: ExecuteCodeOptions["aggregate"];
   job_key?: string;
+  job_group?: string;
   verbose?: boolean;
   project_id?: string;
   debug?: string;

@@ -912,6 +912,7 @@ export type ExecOptsBlocking = ExecOptsCommon & {
   bash?: boolean;
   aggregate?: string | number | { value: string | number };
   job_key?: ExecuteCodeOptions["job_key"];
+  job_group?: ExecuteCodeOptions["job_group"];
   err_on_exit?: boolean;
   env?: { [key: string]: string }; // custom environment variables.
   async_call?: ExecuteCodeOptions["async_call"];
