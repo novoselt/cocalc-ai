@@ -4485,7 +4485,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           ...(opts.autostart ? { autostart: true } : {}),
           wait: false,
-          foreground_wait_ms: 5_000,
         });
         const rpcReturnedAtMs = Date.now();
         uxMilestones.start_rpc_returned_at = new Date(

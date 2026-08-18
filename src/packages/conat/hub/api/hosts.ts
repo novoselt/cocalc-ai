@@ -1121,6 +1121,12 @@ export interface HostMetrics {
   history?: HostMetricsHistory;
 }
 
+export interface HostPlacementSnapshot {
+  observed_at: string;
+  cached_rootfs_images: string[];
+  rootfs_cache_truncated?: boolean;
+}
+
 export interface HostRuntimeExceptionSummary {
   host_override_count: number;
   host_override_targets: HostRuntimeDeploymentTarget[];
@@ -1209,6 +1215,7 @@ export interface Host {
   bees?: HostBeesStatus;
   metrics?: HostMetrics;
   pressure?: HostPressureState;
+  placement?: HostPlacementSnapshot;
   machine?: HostMachine;
   provider_instance_id?: string;
   public_ip?: string;

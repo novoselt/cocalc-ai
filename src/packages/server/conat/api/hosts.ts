@@ -3474,6 +3474,7 @@ function sanitizeHostForPlacement(host: Host): Host {
     updated: host.updated,
     metrics: host.metrics,
     pressure: host.pressure,
+    placement: host.placement,
     machine: sanitizeMachineForPlacement(host.machine),
     projects: host.projects,
     last_seen: host.last_seen,

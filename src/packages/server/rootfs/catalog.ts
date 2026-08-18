@@ -43,6 +43,7 @@ import {
   isManagedRootfsImageName,
   normalizeRootfsContentManifest,
   normalizeRootfsEntry,
+  rootfsEntryRequiresPrepull,
   ROOTFS_IMAGE_MANIFEST_VERSION,
   ROOTFS_TAG_PROJECT_PUBLISH,
   ROOTFS_TAG_SNAPSHOT_PREFIX,
@@ -1605,7 +1606,13 @@ async function upsertRootfsRow({
       ? body.size_gb
       : null;
   const official = admin && body.official === true;
-  const prepull = admin && body.prepull === true;
+  const prepull =
+    admin &&
+    rootfsEntryRequiresPrepull({
+      official,
+      prepull: body.prepull,
+      tags,
+    });
   const hidden = admin && body.hidden === true;
   const blocked = admin && body.blocked === true;
   const blocked_reason = trimString(body.blocked_reason) ?? null;
@@ -1858,7 +1865,13 @@ export async function saveRootfsImage({
       : null;
   const admin = await isAdmin(account_id);
   const official = admin && body.official === true;
-  const prepull = admin && body.prepull === true;
+  const prepull =
+    admin &&
+    rootfsEntryRequiresPrepull({
+      official,
+      prepull: body.prepull,
+      tags,
+    });
   const hidden = admin && body.hidden === true;
   const blocked = admin && body.blocked === true;
   const contentResult =

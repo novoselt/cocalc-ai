@@ -256,6 +256,22 @@ export type RootfsImageManifest = {
   images: RootfsImageEntry[];
 };
 
+export function isRootfsOnboardingTag(tag: unknown): boolean {
+  return `${tag ?? ""}`
+    .trim()
+    .toLowerCase()
+    .startsWith(ROOTFS_TAG_ONBOARDING_PREFIX);
+}
+
+export function rootfsEntryRequiresPrepull(
+  entry: Pick<RootfsImageEntry, "official" | "prepull" | "tags">,
+): boolean {
+  return (
+    entry.prepull === true ||
+    (entry.official === true && (entry.tags ?? []).some(isRootfsOnboardingTag))
+  );
+}
+
 function trimmed(value?: string | null): string {
   return `${value ?? ""}`.trim();
 }

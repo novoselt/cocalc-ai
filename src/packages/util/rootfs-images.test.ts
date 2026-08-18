@@ -4,10 +4,35 @@
  */
 
 import {
+  isRootfsOnboardingTag,
   normalizeRootfsContentManifest,
   parseRootfsConfigExport,
+  rootfsEntryRequiresPrepull,
   validateRootfsSlug,
 } from "./rootfs-images";
+
+describe("RootFS onboarding pre-pull policy", () => {
+  it("recognizes onboarding tags case-insensitively", () => {
+    expect(isRootfsOnboardingTag(" Onboarding:Jupyter-Python ")).toBe(true);
+    expect(isRootfsOnboardingTag("preset:standard")).toBe(false);
+  });
+
+  it("pre-pulls explicit entries and official onboarding entries", () => {
+    expect(rootfsEntryRequiresPrepull({ prepull: true })).toBe(true);
+    expect(
+      rootfsEntryRequiresPrepull({
+        official: true,
+        tags: ["onboarding:latex"],
+      }),
+    ).toBe(true);
+    expect(
+      rootfsEntryRequiresPrepull({
+        official: false,
+        tags: ["onboarding:latex"],
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("normalizeRootfsContentManifest", () => {
   it("keeps safe discovery content", () => {

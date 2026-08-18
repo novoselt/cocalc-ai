@@ -37,6 +37,7 @@ import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-
 import { useCodexPaymentSource } from "@cocalc/frontend/chat/use-codex-payment-source";
 import { getLogger } from "@cocalc/frontend/logger";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import { setProjectRootfsImage } from "@cocalc/frontend/rootfs/manifest";
 import {
   applyProjectPreset,
   createInitialProjectDraft,
@@ -77,6 +78,13 @@ type ProjectPath = {
   heading: string;
   description: string;
   icon: IconName;
+};
+
+type PreparedOnboardingProject = {
+  project_id: string;
+  kind: OnboardingProjectKind;
+  rootfs_image?: string;
+  rootfs_image_id?: string;
 };
 
 const PROJECT_PATHS: Record<OnboardingProjectKind, ProjectPath> = {
@@ -335,6 +343,13 @@ export function FirstRunOnboarding({
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [progress, setProgress] = useState(0);
+  const [preparationStatus, setPreparationStatus] = useState<
+    "idle" | "creating" | "starting" | "error"
+  >("idle");
+  const preparedProject = useRef<PreparedOnboardingProject | undefined>(
+    undefined,
+  );
+  const preparationQueue = useRef<Promise<void>>(Promise.resolve());
   const recordedDecision = useRef("");
   const { context, rootfsImages, rootfsLoading, rootfsError, isAdmin } =
     useProjectCreateDraft({ defaultValue: "" });
@@ -403,6 +418,27 @@ export function FirstRunOnboarding({
       dedupe_key: selectedPath.kind,
     });
   }, [configurationReady, selectedPath?.kind]);
+
+  useEffect(() => {
+    if (
+      !configurationVisible ||
+      !selectedPath ||
+      createDisabled ||
+      rootfsLoading
+    ) {
+      return;
+    }
+    void prepareOnboardingProject({
+      path: selectedPath,
+      title: selectedPath.title,
+      speculative: true,
+    }).catch((err) => {
+      logger.warn("speculative onboarding project preparation failed", {
+        kind: selectedPath.kind,
+        err: `${err}`,
+      });
+    });
+  }, [configurationVisible, createDisabled, rootfsLoading, selectedPath?.kind]);
 
   useEffect(() => {
     if (
@@ -551,6 +587,116 @@ export function FirstRunOnboarding({
     }
   }
 
+  function rootfsForPath(path: ProjectPath, title: string) {
+    let fallbackDraft = createInitialProjectDraft({
+      ...context,
+      defaultTitle: title,
+    });
+    if (path.kind === "teaching") {
+      fallbackDraft = applyProjectPreset(fallbackDraft, "teaching", context);
+    }
+    return chooseOnboardingRootfs({
+      images: rootfsImages,
+      kind: path.kind,
+      fallback: {
+        image: fallbackDraft.rootfs_image,
+        image_id: fallbackDraft.rootfs_image_id,
+      },
+      isAdmin,
+    });
+  }
+
+  function prepareOnboardingProject({
+    path,
+    title,
+    speculative,
+  }: {
+    path: ProjectPath;
+    title: string;
+    speculative: boolean;
+  }): Promise<PreparedOnboardingProject> {
+    const task = preparationQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const rootfs = rootfsForPath(path, title);
+          let prepared = preparedProject.current;
+          if (!prepared) {
+            setPreparationStatus("creating");
+            recordProductActivity({
+              event_name: "project_create_started",
+              properties: {
+                onboarding_path: path.kind,
+                outcome: speculative ? "configuration-prefetch" : "submit",
+              },
+            });
+            const project_id = await redux
+              .getActions("projects")
+              .create_project({
+                title,
+                start: true,
+                ...(runtime.rootfs && rootfs?.image
+                  ? {
+                      rootfs_image: rootfs.image,
+                      rootfs_image_id: rootfs.image_id,
+                    }
+                  : undefined),
+              });
+            prepared = {
+              project_id,
+              kind: path.kind,
+              rootfs_image: runtime.rootfs ? rootfs?.image : undefined,
+              rootfs_image_id: runtime.rootfs ? rootfs?.image_id : undefined,
+            };
+            preparedProject.current = prepared;
+            await persist("in_progress", path.kind, project_id);
+          } else {
+            await redux
+              .getActions("projects")
+              .set_project_title(prepared.project_id, title);
+            const nextImage = runtime.rootfs ? rootfs?.image : undefined;
+            const nextImageId = runtime.rootfs ? rootfs?.image_id : undefined;
+            const runtimeImageChanged =
+              !!nextImage && nextImage !== prepared.rootfs_image;
+            if (
+              nextImage &&
+              (runtimeImageChanged || nextImageId !== prepared.rootfs_image_id)
+            ) {
+              await setProjectRootfsImage({
+                project_id: prepared.project_id,
+                image: nextImage,
+                image_id: nextImageId,
+              });
+              // The project is still empty during onboarding, so restarting is
+              // safe and makes a path change take effect immediately.
+              if (runtimeImageChanged) {
+                await redux
+                  .getActions("projects")
+                  .restart_project(prepared.project_id);
+              }
+            }
+            prepared = {
+              ...prepared,
+              kind: path.kind,
+              rootfs_image: nextImage,
+              rootfs_image_id: nextImageId,
+            };
+            preparedProject.current = prepared;
+          }
+          setPreparationStatus("starting");
+          return prepared;
+        } catch (err) {
+          setPreparationStatus("error");
+          throw err;
+        }
+      });
+    preparationQueue.current = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
   async function createProject(overrides?: {
     path?: ProjectPath;
     title?: string;
@@ -589,38 +735,14 @@ export function FirstRunOnboarding({
     setError("");
     setProgress(12);
     const intent = path.kind as OnboardingIntent;
-    recordProductActivity({
-      event_name: "project_create_started",
-      properties: { onboarding_path: intent },
-    });
     let createdProjectId: string | undefined;
     try {
-      let fallbackDraft = createInitialProjectDraft({
-        ...context,
-        defaultTitle: title,
-      });
-      if (path.kind === "teaching") {
-        fallbackDraft = applyProjectPreset(fallbackDraft, "teaching", context);
-      }
-      const rootfs = chooseOnboardingRootfs({
-        images: rootfsImages,
-        kind: path.kind,
-        fallback: {
-          image: fallbackDraft.rootfs_image,
-          image_id: fallbackDraft.rootfs_image_id,
-        },
-        isAdmin,
-      });
-      const project_id = await redux.getActions("projects").create_project({
+      const prepared = await prepareOnboardingProject({
+        path,
         title,
-        start: true,
-        ...(runtime.rootfs && rootfs?.image
-          ? {
-              rootfs_image: rootfs.image,
-              rootfs_image_id: rootfs.image_id,
-            }
-          : undefined),
+        speculative: false,
       });
+      const project_id = prepared.project_id;
       createdProjectId = project_id;
       await persist("in_progress", intent, project_id);
       setProgress(42);
@@ -701,6 +823,7 @@ export function FirstRunOnboarding({
         },
       });
     } catch (err) {
+      createdProjectId ??= preparedProject.current?.project_id;
       if (createdProjectId) {
         await complete(intent, createdProjectId);
         recordProductActivity({
@@ -1111,7 +1234,9 @@ export function FirstRunOnboarding({
               loading={busy === "create"}
               disabled={!configurationReady}
             >
-              Create project and continue
+              {preparationStatus === "idle" || preparationStatus === "error"
+                ? "Create project and continue"
+                : "Continue"}
             </Button>
           </Space>
         }
@@ -1125,6 +1250,32 @@ export function FirstRunOnboarding({
                 showIcon
                 title="The image catalog is temporarily unavailable"
                 description="CoCalc will use the site's default project image."
+              />
+            ) : null}
+            {busy !== "create" && preparationStatus === "creating" ? (
+              <Alert
+                type="info"
+                showIcon
+                title="Creating your project now"
+                description="You can keep configuring it while CoCalc prepares the software environment."
+                role="status"
+              />
+            ) : null}
+            {busy !== "create" && preparationStatus === "starting" ? (
+              <Alert
+                type="success"
+                showIcon
+                title="Your software environment is starting"
+                description="Finish the options below while CoCalc starts the project in the background."
+                role="status"
+              />
+            ) : null}
+            {busy !== "create" && preparationStatus === "error" ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Background preparation paused"
+                description="CoCalc will retry when you continue. Your choices have not been lost."
               />
             ) : null}
             <label>

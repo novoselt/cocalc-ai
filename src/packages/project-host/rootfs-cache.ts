@@ -1077,9 +1077,7 @@ async function deleteCachedRootfsPath(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true, maxRetries: 3 });
 }
 
-export async function listRootfsCacheEntries(): Promise<
-  HostRootfsCacheEntry[]
-> {
+export async function listRootfsCacheImageNames(): Promise<string[]> {
   const images = new Set<string>();
   if (await exists(IMAGE_CACHE)) {
     for (const entry of await readdir(IMAGE_CACHE, { withFileTypes: true })) {
@@ -1103,9 +1101,17 @@ export async function listRootfsCacheEntries(): Promise<
     }
   }
 
+  return Array.from(images).sort();
+}
+
+export async function listRootfsCacheEntries(): Promise<
+  HostRootfsCacheEntry[]
+> {
+  const images = await listRootfsCacheImageNames();
+
   const usage = rootfsUsageByImage();
   const rows = await Promise.all(
-    Array.from(images).map((image) =>
+    images.map((image) =>
       buildEntry(
         image,
         usage.get(normalizeRootfsImageName(image)) ?? {

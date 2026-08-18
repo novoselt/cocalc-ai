@@ -172,6 +172,72 @@ describe("host placement pressure helpers", () => {
     expect(selected?.id).toBe("host-normal");
   });
 
+  it("prefers a host that already cached the requested RootFS", () => {
+    const observed_at = new Date().toISOString();
+    const selected = choosePlacementHostRow(
+      [
+        {
+          id: "host-cache-miss",
+          metadata: {
+            pressure: { zone: "normal" },
+            placement: {
+              observed_at,
+              cached_rootfs_images: ["cocalc.local/rootfs/other"],
+            },
+          },
+        },
+        {
+          id: "host-cache-hit",
+          metadata: {
+            pressure: { zone: "normal" },
+            placement: {
+              observed_at,
+              cached_rootfs_images: ["cocalc.local/rootfs/python"],
+            },
+          },
+        },
+      ],
+      () => 0,
+      undefined,
+      "cocalc.local/rootfs/python",
+    );
+    expect(selected?.id).toBe("host-cache-hit");
+  });
+
+  it("does not send a project to a cache hit with a backed-up start queue", () => {
+    const observed_at = new Date().toISOString();
+    const selected = choosePlacementHostRow(
+      [
+        {
+          id: "host-busy-cache-hit",
+          metadata: {
+            pressure: { zone: "normal" },
+            metrics: { current: { starting_project_count: 3 } },
+            placement: {
+              observed_at,
+              cached_rootfs_images: ["cocalc.local/rootfs/python"],
+            },
+          },
+        },
+        {
+          id: "host-idle-cache-miss",
+          metadata: {
+            pressure: { zone: "normal" },
+            metrics: { current: { starting_project_count: 0 } },
+            placement: {
+              observed_at,
+              cached_rootfs_images: [],
+            },
+          },
+        },
+      ],
+      () => 0,
+      undefined,
+      "cocalc.local/rootfs/python",
+    );
+    expect(selected?.id).toBe("host-idle-cache-miss");
+  });
+
   it("falls back to the least stressed remaining host class", () => {
     const selected = choosePlacementHostRow(
       [

@@ -139,7 +139,17 @@ async function listPrepullRootfsImages(row: any): Promise<string[]> {
           COALESCE(created, updated) AS release_created,
           COALESCE(updated, created) AS release_updated
         FROM rootfs_images
-       WHERE COALESCE(prepull, false) = true
+       WHERE (
+         COALESCE(prepull, false) = true
+         OR (
+           COALESCE(official, false) = true
+           AND EXISTS (
+             SELECT 1
+               FROM unnest(COALESCE(tags, ARRAY[]::TEXT[])) AS tag
+              WHERE LOWER(BTRIM(tag)) LIKE 'onboarding:%'
+           )
+         )
+       )
          AND COALESCE(deleted, false) = false
          AND COALESCE(hidden, false) = false
          AND COALESCE(blocked, false) = false
