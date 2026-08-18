@@ -85,6 +85,7 @@ type PreparedOnboardingProject = {
   kind: OnboardingProjectKind;
   rootfs_image?: string;
   rootfs_image_id?: string;
+  default_jupyter_kernel?: string;
 };
 
 const PROJECT_PATHS: Record<OnboardingProjectKind, ProjectPath> = {
@@ -282,9 +283,11 @@ function WizardFrame({
 async function createArtifactWhenReady({
   project_id,
   kind,
+  preferred_jupyter_kernel,
 }: {
   project_id: string;
   kind: OnboardingProjectKind;
+  preferred_jupyter_kernel?: string;
 }): Promise<string | undefined> {
   const artifact = await onboardingArtifactCreationForProject({
     kind,
@@ -301,6 +304,8 @@ async function createArtifactWhenReady({
       ext: artifact.ext,
       current_path: artifact.current_path,
       switch_over: artifact.switch_over,
+      preferred_jupyter_kernel,
+      discover_jupyter_kernel: false,
     });
     lastError = `${actions.get_store()?.get("file_creation_error") ?? ""}`;
     if (!lastError) return artifact.relative_path;
@@ -350,6 +355,7 @@ export function FirstRunOnboarding({
     undefined,
   );
   const preparationQueue = useRef<Promise<void>>(Promise.resolve());
+  const persistenceQueue = useRef<Promise<void>>(Promise.resolve());
   const recordedDecision = useRef("");
   const { context, rootfsImages, rootfsLoading, rootfsError, isAdmin } =
     useProjectCreateDraft({ defaultValue: "" });
@@ -459,11 +465,11 @@ export function FirstRunOnboarding({
     });
   }, [decision.kind, landingIntent, showLandingSuggestion, step]);
 
-  async function persist(
+  function persist(
     status: StoredFirstRunOnboarding["status"],
     intent?: OnboardingIntent,
     project_id?: string,
-  ) {
+  ): Promise<void> {
     const value: StoredFirstRunOnboarding = {
       version: FIRST_RUN_ONBOARDING_VERSION,
       status,
@@ -471,39 +477,47 @@ export function FirstRunOnboarding({
       project_id,
       updated_at: new Date().toISOString(),
     };
-    const actions = redux.getActions("account");
-    try {
-      await actions.set_other_settings_and_wait(
-        FIRST_RUN_ONBOARDING_SETTING,
-        value,
-      );
-    } catch (err) {
-      // Onboarding metadata must not block a successfully created project or
-      // accepted invitation. The ordinary project/invite state still prevents
-      // duplicate onboarding, while diagnostics retain this failure.
-      logger.warn("failed to persist first-run onboarding state", {
-        status,
-        intent,
-        project_id,
-        err: `${err}`,
-      });
-    }
-    if (intent) {
-      void webapp_client
-        .async_query({ query: signUpUsageIntentQuery(intent) })
-        .catch((err) => {
-          // Usage intent is optional telemetry and must not block onboarding.
-          logger.warn("failed to persist sign-up usage intent", {
+    const task = persistenceQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        const actions = redux.getActions("account");
+        try {
+          await actions.set_other_settings_and_wait(
+            FIRST_RUN_ONBOARDING_SETTING,
+            value,
+          );
+        } catch (err) {
+          // Onboarding metadata must not block a successfully created project
+          // or accepted invitation. Project and invite state still prevent a
+          // duplicate first-run experience.
+          logger.warn("failed to persist first-run onboarding state", {
+            status,
             intent,
+            project_id,
             err: `${err}`,
           });
-        });
-    }
+        }
+        if (intent) {
+          void webapp_client
+            .async_query({ query: signUpUsageIntentQuery(intent) })
+            .catch((err) => {
+              logger.warn("failed to persist sign-up usage intent", {
+                intent,
+                err: `${err}`,
+              });
+            });
+        }
+      });
+    persistenceQueue.current = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
-  async function complete(intent: OnboardingIntent, project_id?: string) {
+  function complete(intent: OnboardingIntent, project_id?: string): void {
     markFirstRunCompletedThisSession();
-    await persist("completed", intent, project_id);
+    void persist("completed", intent, project_id);
   }
 
   function chooseProject(kind: OnboardingProjectKind, next?: WizardStep) {
@@ -535,7 +549,7 @@ export function FirstRunOnboarding({
     setBusy(project.project_id);
     setError("");
     try {
-      await complete(intent, project.project_id);
+      complete(intent, project.project_id);
       recordProductActivity({
         event_name: "project_entered",
         project_id: project.project_id,
@@ -563,10 +577,7 @@ export function FirstRunOnboarding({
       await (
         redux.getActions("projects") as any
       )?.ensureRealtimeFeedForCurrentAccount?.();
-      await complete(
-        course ? "course-invite" : "project-invite",
-        invite.project_id,
-      );
+      complete(course ? "course-invite" : "project-invite", invite.project_id);
       recordProductActivity({
         event_name: "project_entered",
         project_id: invite.project_id,
@@ -647,9 +658,11 @@ export function FirstRunOnboarding({
               kind: path.kind,
               rootfs_image: runtime.rootfs ? rootfs?.image : undefined,
               rootfs_image_id: runtime.rootfs ? rootfs?.image_id : undefined,
+              default_jupyter_kernel:
+                rootfs?.entry?.default_jupyter_kernel?.trim() || undefined,
             };
             preparedProject.current = prepared;
-            await persist("in_progress", path.kind, project_id);
+            void persist("in_progress", path.kind, project_id);
           } else {
             await redux
               .getActions("projects")
@@ -680,6 +693,8 @@ export function FirstRunOnboarding({
               kind: path.kind,
               rootfs_image: nextImage,
               rootfs_image_id: nextImageId,
+              default_jupyter_kernel:
+                rootfs?.entry?.default_jupyter_kernel?.trim() || undefined,
             };
             preparedProject.current = prepared;
           }
@@ -744,7 +759,6 @@ export function FirstRunOnboarding({
       });
       const project_id = prepared.project_id;
       createdProjectId = project_id;
-      await persist("in_progress", intent, project_id);
       setProgress(42);
       await redux.getActions("projects").open_project({
         project_id,
@@ -758,6 +772,7 @@ export function FirstRunOnboarding({
         artifact = await createArtifactWhenReady({
           project_id,
           kind: path.kind,
+          preferred_jupyter_kernel: prepared.default_jupyter_kernel,
         });
       } catch (err) {
         void message.warning(
@@ -765,7 +780,7 @@ export function FirstRunOnboarding({
         );
       }
       setProgress(88);
-      await complete(intent, project_id);
+      complete(intent, project_id);
       recordProductActivity({
         event_name: "project_ready",
         project_id,
@@ -825,7 +840,7 @@ export function FirstRunOnboarding({
     } catch (err) {
       createdProjectId ??= preparedProject.current?.project_id;
       if (createdProjectId) {
-        await complete(intent, createdProjectId);
+        complete(intent, createdProjectId);
         recordProductActivity({
           event_name: "guided_activation_done",
           project_id: createdProjectId,
