@@ -36,6 +36,24 @@ jest.mock("@cocalc/frontend/webapp-client", () => ({
     },
     project_client: {
       create: jest.fn(async () => "project-created"),
+      createWithBootstrap: jest.fn(async (opts: any) => ({
+        project_id: "project-created",
+        project: {
+          project_id: "project-created",
+          title: opts.title,
+          description: opts.description,
+          theme: null,
+          labels: {},
+          host_id: "host-1",
+          rootfs_image_id: opts.rootfs_image_id ?? null,
+          owning_bay_id: "bay-0",
+          users: { "acct-1": { group: "owner" } },
+          state: opts.start ? { state: "starting" } : { state: "opened" },
+          last_active: {},
+          last_edited: "2026-05-03T00:00:00.000Z",
+          last_backup: null,
+        },
+      })),
     },
     project_collaborators: {
       set_role: jest.fn(async () => undefined),
@@ -114,6 +132,24 @@ describe("ProjectsActions project metadata updates", () => {
     window.sessionStorage.clear();
     mockedWebappClient.async_query.mockReset();
     mockedWebappClient.async_query.mockResolvedValue(undefined);
+    mockedWebappClient.project_client.createWithBootstrap.mockResolvedValue({
+      project_id: "project-created",
+      project: {
+        project_id: "project-created",
+        title: "New project",
+        description: "No Description",
+        theme: null,
+        labels: {},
+        host_id: "host-1",
+        rootfs_image_id: null,
+        owning_bay_id: "bay-0",
+        users: { "acct-1": { group: "owner" } },
+        state: { state: "starting" },
+        last_active: {},
+        last_edited: "2026-05-03T00:00:00.000Z",
+        last_backup: null,
+      },
+    });
     mockedStore.get.mockImplementation((key) =>
       key === "project_map" ? baseProjectMap : undefined,
     );
@@ -631,83 +667,55 @@ describe("ProjectsActions project metadata updates", () => {
     expect(projectApi.system.updateSshKeys).toHaveBeenCalled();
   });
 
-  it("returns the created project once the local feed catches up", async () => {
-    const { actions } = makeActions();
-    mockedWebappClient.project_client.create.mockResolvedValueOnce(
-      "project-created-1",
+  it("installs the authoritative create bootstrap without waiting for projections", async () => {
+    mockedWebappClient.project_client.createWithBootstrap.mockResolvedValueOnce(
+      {
+        project_id: "project-created-1",
+        project: {
+          project_id: "project-created-1",
+          title: "New project",
+          description: "No Description",
+          theme: null,
+          labels: {},
+          host_id: "host-1",
+          rootfs_image_id: null,
+          owning_bay_id: "bay-0",
+          users: { "acct-1": { group: "owner" } },
+          state: { state: "starting" },
+          last_active: {},
+          last_edited: "2026-05-03T00:00:00.000Z",
+          last_backup: null,
+        },
+      },
     );
+    const { actions, redux } = makeActions();
 
     await expect(
       actions.create_project({ title: "New project", start: true }),
     ).resolves.toBe("project-created-1");
 
-    expect(mockedWebappClient.project_client.create).toHaveBeenCalledWith(
+    expect(
+      mockedWebappClient.project_client.createWithBootstrap,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "New project",
         start: true,
       }),
     );
-    expect(mockedStore.async_wait).toHaveBeenCalled();
+    expect(mockedStore.async_wait).not.toHaveBeenCalled();
     expect(mockedWebappClient.async_query).not.toHaveBeenCalled();
+    expect(
+      redux._set_state.mock.calls[0][0].projects.project_map.getIn([
+        "project-created-1",
+        "host_id",
+      ]),
+    ).toBe("host-1");
     expect(isProjectRecentlyCreated({ project_id: "project-created-1" })).toBe(
       true,
     );
   });
 
-  it("falls back to a direct project query when feed wait times out", async () => {
-    mockedStore.get.mockImplementation((key) =>
-      key === "project_map" ? undefined : undefined,
-    );
-    mockedStore.getIn.mockReturnValue(undefined);
-    mockedStore.async_wait.mockRejectedValueOnce("timeout");
-    mockedWebappClient.project_client.create.mockResolvedValueOnce(
-      "project-created-2",
-    );
-    mockedWebappClient.async_query.mockResolvedValueOnce({
-      query: {
-        projects: [
-          {
-            project_id: "project-created-2",
-            title: "Recovered project",
-            description: "Recovered description",
-            theme: null,
-            host_id: "host-1",
-            owning_bay_id: "bay-0",
-            users: { "acct-1": { group: "owner" } },
-            state: { state: "opened" },
-            last_active: {},
-            last_edited: "2026-05-03T00:00:00.000Z",
-            last_backup: null,
-            deleted: false,
-          },
-        ],
-      },
-    });
-    const { actions, redux } = makeActions();
-
-    await expect(
-      actions.create_project({ title: "Recovered project", start: true }),
-    ).resolves.toBe("project-created-2");
-
-    expect(mockedWebappClient.async_query).toHaveBeenCalledWith({
-      query: {
-        projects: [
-          expect.objectContaining({
-            project_id: "project-created-2",
-          }),
-        ],
-      },
-    });
-    expect(redux._set_state).toHaveBeenCalled();
-    expect(
-      redux._set_state.mock.calls[0][0].projects.project_map.getIn([
-        "project-created-2",
-        "title",
-      ]),
-    ).toBe("Recovered project");
-  });
-
-  it("keeps a newer local last_edited when direct bootstrap rows are older", async () => {
+  it("keeps newer local fields when installing the create bootstrap", async () => {
     let projectMap = ImmutableMap<string, any>();
     mockedStore.get.mockImplementation((key) =>
       key === "project_map" ? projectMap : undefined,
@@ -718,41 +726,35 @@ describe("ProjectsActions project metadata updates", () => {
       }
       return projectMap.getIn(path.slice(1) as any);
     });
-    mockedStore.async_wait.mockRejectedValueOnce("timeout");
-    mockedWebappClient.project_client.create.mockResolvedValueOnce(
-      "project-created-4",
-    );
-    mockedWebappClient.async_query.mockImplementationOnce(async () => {
-      projectMap = ImmutableMap<string, any>([
-        [
-          "project-created-4",
-          ImmutableMap({
-            title: "Live Feed Title",
-            last_edited: new Date("2026-05-03T00:05:00.000Z"),
-          }),
-        ],
-      ]);
-      return {
-        query: {
-          projects: [
-            {
-              project_id: "project-created-4",
-              title: "Recovered project",
-              description: "Recovered description",
-              theme: null,
-              host_id: "host-1",
-              owning_bay_id: "bay-0",
-              users: { "acct-1": { group: "owner" } },
-              state: { state: "opened" },
-              last_active: {},
-              last_edited: "2026-05-03T00:00:00.000Z",
-              last_backup: null,
-              deleted: false,
-            },
-          ],
+    projectMap = ImmutableMap<string, any>([
+      [
+        "project-created-4",
+        ImmutableMap({
+          title: "Live Feed Title",
+          last_edited: new Date("2026-05-03T00:05:00.000Z"),
+        }),
+      ],
+    ]);
+    mockedWebappClient.project_client.createWithBootstrap.mockResolvedValueOnce(
+      {
+        project_id: "project-created-4",
+        project: {
+          project_id: "project-created-4",
+          title: "Recovered project",
+          description: "Recovered description",
+          theme: null,
+          labels: {},
+          host_id: "host-1",
+          rootfs_image_id: null,
+          owning_bay_id: "bay-0",
+          users: { "acct-1": { group: "owner" } },
+          state: { state: "opened" },
+          last_active: {},
+          last_edited: "2026-05-03T00:00:00.000Z",
+          last_backup: null,
         },
-      };
-    });
+      },
+    );
     const { actions, redux } = makeActions();
 
     await expect(
@@ -761,74 +763,8 @@ describe("ProjectsActions project metadata updates", () => {
 
     expect(redux._set_state).toHaveBeenCalled();
     expect(
-      redux._set_state.mock.calls[0][0].projects.project_map.getIn([
-        "project-created-4",
-        "title",
-      ]),
-    ).toBe("Recovered project");
-    expect(
       redux._set_state.mock.calls[0][0].projects.project_map
         .getIn(["project-created-4", "last_edited"])
-        .toISOString(),
-    ).toBe("2026-05-03T00:05:00.000Z");
-  });
-
-  it("keeps a newer local last_backup when direct bootstrap rows are older", async () => {
-    let projectMap = ImmutableMap<string, any>();
-    mockedStore.get.mockImplementation((key) =>
-      key === "project_map" ? projectMap : undefined,
-    );
-    mockedStore.getIn.mockImplementation((path) => {
-      if (path[0] !== "project_map") {
-        return undefined;
-      }
-      return projectMap.getIn(path.slice(1) as any);
-    });
-    mockedStore.async_wait.mockRejectedValueOnce("timeout");
-    mockedWebappClient.project_client.create.mockResolvedValueOnce(
-      "project-created-5",
-    );
-    mockedWebappClient.async_query.mockImplementationOnce(async () => {
-      projectMap = ImmutableMap<string, any>([
-        [
-          "project-created-5",
-          ImmutableMap({
-            title: "Live Feed Title",
-            last_backup: new Date("2026-05-03T00:05:00.000Z"),
-          }),
-        ],
-      ]);
-      return {
-        query: {
-          projects: [
-            {
-              project_id: "project-created-5",
-              title: "Recovered project",
-              description: "Recovered description",
-              theme: null,
-              host_id: "host-1",
-              owning_bay_id: "bay-0",
-              users: { "acct-1": { group: "owner" } },
-              state: { state: "opened" },
-              last_active: {},
-              last_edited: "2026-05-03T00:00:00.000Z",
-              last_backup: "2026-05-03T00:00:00.000Z",
-              deleted: false,
-            },
-          ],
-        },
-      };
-    });
-    const { actions, redux } = makeActions();
-
-    await expect(
-      actions.create_project({ title: "Recovered project", start: true }),
-    ).resolves.toBe("project-created-5");
-
-    expect(redux._set_state).toHaveBeenCalled();
-    expect(
-      redux._set_state.mock.calls[0][0].projects.project_map
-        .getIn(["project-created-5", "last_backup"])
         .toISOString(),
     ).toBe("2026-05-03T00:05:00.000Z");
   });
@@ -1380,18 +1316,14 @@ describe("ProjectsActions project metadata updates", () => {
     );
   });
 
-  it("still fails when feed wait times out and direct bootstrap finds nothing", async () => {
-    mockedStore.async_wait.mockRejectedValueOnce("timeout");
-    mockedWebappClient.project_client.create.mockResolvedValueOnce(
-      "project-created-3",
+  it("surfaces an authoritative create failure without creating local state", async () => {
+    mockedWebappClient.project_client.createWithBootstrap.mockRejectedValueOnce(
+      new Error("create failed"),
     );
-    mockedWebappClient.async_query.mockResolvedValueOnce({
-      query: { projects: [] },
-    });
     const { actions } = makeActions();
 
     await expect(
       actions.create_project({ title: "Missing project", start: true }),
-    ).rejects.toBe("timeout");
+    ).rejects.toThrow("create failed");
   });
 });

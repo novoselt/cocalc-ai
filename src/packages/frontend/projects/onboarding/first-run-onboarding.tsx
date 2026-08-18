@@ -36,6 +36,11 @@ import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/projec
 import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 import { useCodexPaymentSource } from "@cocalc/frontend/chat/use-codex-payment-source";
 import { getLogger } from "@cocalc/frontend/logger";
+import {
+  elapsedUxMs,
+  recordUxLatencyEvent,
+  startUxTimer,
+} from "@cocalc/frontend/monitoring/ux-latency";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { setProjectRootfsImage } from "@cocalc/frontend/rootfs/manifest";
 import {
@@ -763,7 +768,22 @@ export function FirstRunOnboarding({
     setProgress(12);
     const intent = path.kind as OnboardingIntent;
     let createdProjectId: string | undefined;
+    const flowStart = startUxTimer();
+    const recordPhase = (
+      metric: string,
+      start: number,
+      project_id?: string,
+    ) => {
+      recordUxLatencyEvent({
+        event_type: "first_run_onboarding",
+        metric,
+        duration_ms: elapsedUxMs(start),
+        project_id,
+        segment: path.kind,
+      });
+    };
     try {
+      let phaseStart = startUxTimer();
       const prepared = await prepareOnboardingProject({
         path,
         title,
@@ -771,15 +791,19 @@ export function FirstRunOnboarding({
       });
       const project_id = prepared.project_id;
       createdProjectId = project_id;
+      recordPhase("project_prepared_ms", phaseStart, project_id);
       setProgress(42);
+      phaseStart = startUxTimer();
       await redux.getActions("projects").open_project({
         project_id,
         target: "files",
         switch_to: false,
         restore_session: false,
       });
+      recordPhase("background_workspace_open_ms", phaseStart, project_id);
       setProgress(68);
       let artifact: string | undefined;
+      phaseStart = startUxTimer();
       try {
         artifact = await createArtifactWhenReady({
           project_id,
@@ -791,6 +815,7 @@ export function FirstRunOnboarding({
           `Your project is ready, but CoCalc could not create the first file automatically: ${err}`,
         );
       }
+      recordPhase("starter_artifact_ms", phaseStart, project_id);
       setProgress(88);
       complete(intent, project_id);
       recordProductActivity({
@@ -802,14 +827,17 @@ export function FirstRunOnboarding({
         },
       });
       if (prompt) {
+        phaseStart = startUxTimer();
         await redux.getActions("projects").open_project({
           project_id,
           target: artifact ? onboardingArtifactRouteTarget(artifact) : "files",
           switch_to: true,
           restore_session: false,
         });
+        recordPhase("foreground_workspace_open_ms", phaseStart, project_id);
         const { submitNavigatorPromptInWorkspaceChat } =
           await import("@cocalc/frontend/project/new/navigator-intents");
+        phaseStart = startUxTimer();
         const submitted = await submitNavigatorPromptInWorkspaceChat({
           project_id,
           prompt: buildCodexOnboardingPrompt(prompt, {
@@ -822,20 +850,23 @@ export function FirstRunOnboarding({
           forceCodex: true,
           createNewThread: true,
           openFloating: true,
-          waitForAgent: true,
+          waitForAgent: false,
         });
+        recordPhase("codex_handoff_ms", phaseStart, project_id);
         if (!submitted) {
           void message.warning(
             "The project is ready, but Codex did not open automatically. Open Codex from the project to continue.",
           );
         }
       } else {
+        phaseStart = startUxTimer();
         await redux.getActions("projects").open_project({
           project_id,
           target: artifact ? onboardingArtifactRouteTarget(artifact) : "files",
           switch_to: true,
           restore_session: false,
         });
+        recordPhase("foreground_workspace_open_ms", phaseStart, project_id);
       }
       setProgress(100);
       recordProductActivity({
@@ -851,7 +882,9 @@ export function FirstRunOnboarding({
           outcome: prompt ? "opened-with-codex" : "opened",
         },
       });
+      recordPhase("complete_ms", flowStart, project_id);
     } catch (err) {
+      recordPhase("failed_ms", flowStart, createdProjectId);
       createdProjectId ??= preparedProject.current?.project_id;
       if (createdProjectId) {
         complete(intent, createdProjectId);

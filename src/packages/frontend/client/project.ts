@@ -57,6 +57,7 @@ import type {
   CourseAssignmentPatchResult,
   CourseCollectAssignmentItem,
   CourseCollectAssignmentResult,
+  CreatedProjectBootstrap,
   ProjectCopyDestination,
   ProjectCopyRow,
 } from "@cocalc/conat/hub/api/projects";
@@ -737,6 +738,22 @@ export class ProjectClient {
             timeout,
           });
     return project_id;
+  };
+
+  createWithBootstrap = async (opts: {
+    title: string;
+    description: string;
+    course?: CourseInfo;
+    rootfs_image?: string;
+    rootfs_image_id?: string;
+    start?: boolean;
+    host_id?: string;
+    region?: string;
+    license?: string;
+  }): Promise<CreatedProjectBootstrap> => {
+    return await this.client.conat_client.hub.projects.createProjectWithBootstrap(
+      opts,
+    );
   };
 
   realpath = async (opts: {

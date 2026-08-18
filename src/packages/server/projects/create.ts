@@ -41,6 +41,7 @@ import {
 import { createLro, updateLro } from "@cocalc/server/lro/lro-db";
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
+import type { CreatedProjectBootstrap } from "@cocalc/conat/hub/api/projects";
 import {
   ensurePlacement,
   takeStartProjectPhaseTimings,
@@ -51,7 +52,10 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { assertBayAcceptsProjectOwnership } from "@cocalc/server/bay-registry";
 import { assertLocalProjectCollaborator } from "@cocalc/server/conat/project-local-access";
 import { assertProjectCollaboratorAccessAllowRemote } from "@cocalc/server/conat/project-remote-access";
-import { appendProjectOutboxEventForProject } from "@cocalc/database/postgres/project-events-outbox";
+import {
+  appendProjectOutboxEventForProject,
+  loadProjectOutboxPayload,
+} from "@cocalc/database/postgres/project-events-outbox";
 import { publishProjectAccountFeedEventsBestEffort } from "@cocalc/server/account/project-feed";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import { resolveProjectBackupRepoAssignment } from "@cocalc/server/project-backup";
@@ -251,6 +255,67 @@ export async function createProjectWithInternalProjectId(
 
 export default async function createProject(opts: CreateProjectOptions) {
   return await createProjectImpl(opts, { allowExplicitProjectId: false });
+}
+
+export async function createProjectWithBootstrap(
+  opts: CreateProjectOptions,
+): Promise<CreatedProjectBootstrap> {
+  const project_id = await createProjectImpl(opts, {
+    allowExplicitProjectId: false,
+  });
+  try {
+    const payload = await loadProjectOutboxPayload({
+      project_id,
+      default_bay_id: getConfiguredBayId(),
+    });
+    return {
+      project_id,
+      project: {
+        project_id,
+        title: payload.title ?? "",
+        description: payload.description ?? "",
+        theme: payload.theme ?? null,
+        labels: payload.labels ?? {},
+        host_id: payload.host_id ?? null,
+        rootfs_image_id: payload.rootfs_image_id ?? null,
+        owning_bay_id: payload.owning_bay_id,
+        manage_users_owner_only: payload.manage_users_owner_only ?? null,
+        deletion_protection: payload.deletion_protection ?? null,
+        users: payload.users_summary ?? {},
+        state: payload.state_summary ?? {},
+        last_active: payload.last_activity_by_account ?? {},
+        last_edited: payload.last_edited_at ?? null,
+        last_backup: payload.last_backup_at ?? null,
+      },
+    };
+  } catch (err) {
+    // Creation is irreversible from the caller's perspective. Never report a
+    // failed create merely because this optimization could not load details,
+    // since a retry could create a duplicate project.
+    log.warn("createProjectWithBootstrap: unable to load created project row", {
+      project_id,
+      err: `${err}`,
+    });
+    const account_id = `${opts.account_id ?? ""}`.trim();
+    return {
+      project_id,
+      project: {
+        project_id,
+        title: opts.title ?? "No Title",
+        description: opts.description ?? "",
+        theme: null,
+        labels: {},
+        host_id: opts.host_id ?? null,
+        rootfs_image_id: opts.rootfs_image_id ?? null,
+        owning_bay_id: getConfiguredBayId(),
+        users: account_id ? { [account_id]: { group: "owner" } } : {},
+        state: { state: opts.start ? "starting" : "opened" },
+        last_active: {},
+        last_edited: new Date().toISOString(),
+        last_backup: null,
+      },
+    };
+  }
 }
 
 async function createProjectImpl(
