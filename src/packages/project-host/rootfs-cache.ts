@@ -168,7 +168,11 @@ function createRusticStreamHooks({
 }
 
 function decodeInspectFileImage(name: string): string | undefined {
-  if (!name.startsWith(".") || !name.endsWith(".json")) {
+  if (
+    !name.startsWith(".") ||
+    !name.endsWith(".json") ||
+    name.endsWith(".normalized.json")
+  ) {
     return undefined;
   }
   try {
