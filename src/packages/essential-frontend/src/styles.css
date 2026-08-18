@@ -1074,7 +1074,9 @@ textarea {
   margin: 0 auto;
   max-width: 980px;
   min-height: 430px;
+  min-width: 0;
   position: relative;
+  width: 100%;
 }
 
 .ul-codex-config {
@@ -1111,6 +1113,7 @@ textarea {
   background: var(--ul-paper);
   border: 1px solid var(--ul-border);
   line-height: 1.5;
+  min-width: 0;
   padding: 10px 12px;
 }
 
@@ -1130,6 +1133,8 @@ textarea {
   font-size: 12px;
   margin: 8px 0;
   max-height: 260px;
+  max-width: 100%;
+  min-width: 0;
   overflow: auto;
   padding: 8px;
 }
@@ -1142,7 +1147,9 @@ textarea {
 .ul-composer {
   background: transparent;
   border: 0;
+  min-width: 0;
   padding: 8px 4px 0;
+  width: 100%;
   z-index: 2;
 }
 
@@ -1154,9 +1161,11 @@ textarea {
 .ul-chat-layout > .ul-messages {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
   padding: 4px 4px 14px;
   scroll-behavior: smooth;
+  width: 100%;
 }
 
 .ul-newest-button {
@@ -1174,6 +1183,8 @@ textarea {
 }
 
 .ul-markdown {
+  max-width: 100%;
+  min-width: 0;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -1217,6 +1228,7 @@ textarea {
 .ul-markdown pre {
   background: var(--ul-code-bg);
   border: 1px solid var(--ul-border);
+  max-width: 100%;
   overflow: auto;
   padding: 10px;
 }
@@ -1229,6 +1241,7 @@ textarea {
 .ul-markdown table {
   border-collapse: collapse;
   display: block;
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -1240,6 +1253,7 @@ textarea {
 
 .ul-math-display {
   display: block;
+  max-width: 100%;
   overflow-x: auto;
   padding: 4px 0;
 }
