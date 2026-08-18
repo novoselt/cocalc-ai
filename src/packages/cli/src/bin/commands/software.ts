@@ -186,9 +186,7 @@ const INFO_COMPONENT_ARGUMENT = `software component (${INFO_COMPONENTS_HELP})`;
 const PROFILE_OR_CHANNEL_ARGUMENT =
   "site profile (see cocalc auth list) or release channel (dev, candidate or stable)";
 const KNOWN_ROCKET_REMOTES: Record<string, string> = {
-  "https://staging.cocalc.ai": "ubuntu@10.206.0.27",
   "https://cocalc.ai": "ubuntu@10.206.0.38",
-  "https://delta.cocalc.ai": "ubuntu@10.206.15.209",
 };
 
 type SoftwareInfoComponent = SoftwareBuildComponent | SoftwareDeployComponent;
