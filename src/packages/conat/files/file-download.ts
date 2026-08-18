@@ -226,6 +226,7 @@ export async function handleFileDownload({
   let headersSent = false;
   let bytesWritten = 0;
   let partial = false;
+  let streamCompleted = false;
   res.on("finish", () => {
     headersSent = true;
   });
@@ -250,6 +251,19 @@ export async function handleFileDownload({
         await once(res, "drain");
       }
     }
+    streamCompleted = !partial && !res.destroyed;
+    if (cleanupClient && streamCompleted) {
+      // A browser may cancel the iframe navigation and retry it in the download
+      // manager. Keep the archive until this response actually finishes so the
+      // retry does not race an unconditional cleanup.
+      res.once("finish", async () => {
+        await cleanupTemporaryDownloadArchive({
+          client: cleanupClient,
+          project_id,
+          path,
+        });
+      });
+    }
     res.end();
     if (explicitDownload && onExplicitDownloadComplete && bytesWritten > 0) {
       await onExplicitDownloadComplete({
@@ -269,14 +283,6 @@ export async function handleFileDownload({
     } else {
       // Data sent, forcibly kill the connection
       res.destroy(err);
-    }
-  } finally {
-    if (cleanupClient) {
-      await cleanupTemporaryDownloadArchive({
-        client: cleanupClient,
-        project_id,
-        path,
-      });
     }
   }
 }

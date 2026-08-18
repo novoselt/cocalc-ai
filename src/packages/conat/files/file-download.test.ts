@@ -234,6 +234,7 @@ describe("handleFileDownload", () => {
       method: "GET",
       url: "/project-123/files/tmp/.cocalc-download-archive-token-selection.zip?download&deleteAfterDownload=1&downloadFilename=selection.zip",
     };
+    let onFinish: (() => Promise<void>) | undefined;
     const res: any = {
       statusCode: undefined,
       setHeader: jest.fn((key, value) => {
@@ -242,6 +243,11 @@ describe("handleFileDownload", () => {
       write: jest.fn(() => true),
       end: jest.fn(),
       on: jest.fn(),
+      once: jest.fn((event, callback) => {
+        if (event === "finish") {
+          onFinish = callback;
+        }
+      }),
       writableEnded: false,
       destroyed: false,
     };
@@ -261,10 +267,48 @@ describe("handleFileDownload", () => {
       path: "/tmp/.cocalc-download-archive-token-selection.zip",
       maxWait: 1000 * 60 * 60,
     });
+    expect(mockFsRm).not.toHaveBeenCalled();
+    expect(onFinish).toBeDefined();
+    await onFinish?.();
     expect(mockFsRm).toHaveBeenCalledWith(
       "/tmp/.cocalc-download-archive-token-selection.zip",
       { force: true },
     );
+  });
+
+  it("keeps a temporary archive when the browser interrupts the download", async () => {
+    async function* interruptedDownload() {
+      yield Buffer.from("first chunk");
+      yield Buffer.from("second chunk");
+    }
+    mockReadFile.mockResolvedValue(interruptedDownload());
+    const req: any = {
+      method: "GET",
+      url: "/project-123/files/tmp/.cocalc-download-archive-token-selection.zip?download&deleteAfterDownload=1&downloadFilename=selection.zip",
+    };
+    const res: any = {
+      statusCode: undefined,
+      setHeader: jest.fn(),
+      write: jest.fn(() => {
+        res.destroyed = true;
+        return true;
+      }),
+      end: jest.fn(),
+      on: jest.fn(),
+      once: jest.fn(),
+      writableEnded: false,
+      destroyed: false,
+    };
+
+    await handleFileDownload({
+      req,
+      res,
+      client: { id: "client-1" } as any,
+    });
+
+    expect(res.write).toHaveBeenCalledTimes(1);
+    expect(res.once).not.toHaveBeenCalledWith("finish", expect.any(Function));
+    expect(mockFsRm).not.toHaveBeenCalled();
   });
 
   it("ignores delete-after-download for non-temporary paths", async () => {
