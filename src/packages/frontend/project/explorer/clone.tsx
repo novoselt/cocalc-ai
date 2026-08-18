@@ -53,30 +53,32 @@ export default function CloneProject({ project_id, flyout, disabled }: Props) {
       okText="Create Clone"
       cancelText="Cancel"
     >
-      <Tooltip
-        title={
-          <>
-            Cloning will copy "
-            <ProjectTitle project_id={project_id} noClick />
-            ", including changes to the root filesystem / (e.g., systemwide
-            software install) and TimeTravel edit history, but without
-            collaborators.
-          </>
-        }
-        mouseEnterDelay={0}
-        mouseLeaveDelay={0}
-      >
-        <Button disabled={saving || disabled}>
-          <Icon name="fork-outlined" />
-          {!flyout && <> Clone</>}
-          {saving && (
+      <span>
+        <Tooltip
+          title={
             <>
-              {" "}
-              <Spin />
+              Cloning will copy "
+              <ProjectTitle project_id={project_id} noClick />
+              ", including changes to the root filesystem / (e.g., systemwide
+              software install) and TimeTravel edit history, but without
+              collaborators.
             </>
-          )}
-        </Button>
-      </Tooltip>
+          }
+          mouseEnterDelay={0}
+          mouseLeaveDelay={0}
+        >
+          <Button disabled={saving || disabled}>
+            <Icon name="fork-outlined" />
+            {!flyout && <> Clone</>}
+            {saving && (
+              <>
+                {" "}
+                <Spin />
+              </>
+            )}
+          </Button>
+        </Tooltip>
+      </span>
     </Popconfirm>
   );
 }
