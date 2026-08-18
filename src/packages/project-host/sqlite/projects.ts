@@ -255,7 +255,7 @@ export function upsertProject(row: ProjectRow) {
   const existingProjectsRow =
     db
       .prepare(
-        "SELECT state, state_reported, state_updated_at, runtime_exit_reason, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects WHERE project_id=?",
+        "SELECT state, state_reported, state_updated_at, runtime_exit_reason, image, http_port, ssh_port, project_bundle_version, tools_version, secret_token, authorized_keys, run_quota, run_quota_revision, secret_names, local_only, exam_run_id, usage_account_id FROM projects WHERE project_id=?",
       )
       .get(row.project_id) || {};
   const existing = getRow("projects", pk) || {};
@@ -273,7 +273,11 @@ export function upsertProject(row: ProjectRow) {
     : row.state !== undefined
       ? null
       : (existingProjectsRow.runtime_exit_reason ?? null);
-  const image = row.image ?? (existing as any).image ?? null;
+  const image =
+    row.image ??
+    (existingProjectsRow as any).image ??
+    (existing as any).image ??
+    null;
   const incomingRunQuota = parseRunQuota(row.run_quota);
   const existingRunQuota = parseRunQuota(
     (existingProjectsRow as any).run_quota ?? (existing as any).run_quota,
@@ -495,6 +499,7 @@ export function upsertProject(row: ProjectRow) {
     ...existing,
     project_id: row.project_id,
     title: title ?? row.project_id,
+    image,
     state: state
       ? {
           state,

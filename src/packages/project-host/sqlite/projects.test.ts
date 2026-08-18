@@ -240,6 +240,26 @@ describe("project sqlite runtime ports", () => {
     expect(getProject(project_id)?.users).toEqual(users);
   });
 
+  it("preserves the RootFS image across unrelated metadata updates", () => {
+    const image = "cocalc.local/rootfs/onboarding";
+    upsertProject({
+      project_id,
+      state: "running",
+      image,
+    });
+
+    // These are the metadata-only writes performed after a successful start.
+    upsertProject({ project_id, authorized_keys: "ssh-ed25519 test" });
+    upsertProject({ project_id, users: {} });
+
+    expect(getProject(project_id)?.image).toBe(image);
+    expect(
+      getDatabase()
+        .prepare("SELECT image FROM projects WHERE project_id=?")
+        .get(project_id),
+    ).toEqual({ image });
+  });
+
   it("repairs legacy quota columns and ledgers from versioned run_quota", () => {
     const run_quota = { disk_quota: 100_000, memory_limit: 16_000 };
     ensureProjectsTable();
