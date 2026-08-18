@@ -116,6 +116,7 @@ export interface StorageAnalysisResult {
       label: string;
       bytes: number;
       detail?: string;
+      snapshot_count?: number;
     } | null;
     shared_scratch: {
       label: string;
@@ -408,32 +409,43 @@ function buildStorageAnalysis({
     });
   }
   if ((retained?.bytes ?? 0) > 0) {
-    findings.push({
-      id: "retained_present",
-      severity:
-        quota && retained && retained.bytes > quota.size * 0.25
-          ? "warning"
-          : "info",
-      message: `Retained snapshot/history data is estimated at ${formatBytes(retained?.bytes)}.`,
-    });
-    recommendations.push({
-      id: "review_snapshots",
-      priority: 100,
-      message:
-        "Review or delete old snapshots when retained historical data is large.",
-      actions: [
-        {
-          type: "open_path",
-          path: snapshotPath,
-          reason: "Browse snapshots and delete old snapshot directories.",
-        },
-        {
-          type: "run_command",
-          command: `cocalc project file list --project ${quoteCliArg(project_id)} ${quoteCliArg(snapshotPath)}`,
-          reason: "List snapshot directories from the CLI.",
-        },
-      ],
-    });
+    const severity =
+      quota && retained && retained.bytes > quota.size * 0.25
+        ? "warning"
+        : "info";
+    if (retained?.snapshotCount === 0) {
+      // No snapshots exist, so recommending snapshot cleanup would send the
+      // user to an empty directory.
+      findings.push({
+        id: "retained_without_snapshots",
+        severity,
+        message: `Quota used exceeds live files by ${formatBytes(retained?.bytes)}, and this project has no snapshots.`,
+      });
+    } else {
+      findings.push({
+        id: "retained_present",
+        severity,
+        message: `Retained snapshot/history data is estimated at ${formatBytes(retained?.bytes)}.`,
+      });
+      recommendations.push({
+        id: "review_snapshots",
+        priority: 100,
+        message:
+          "Review or delete old snapshots when retained historical data is large.",
+        actions: [
+          {
+            type: "open_path",
+            path: snapshotPath,
+            reason: "Browse snapshots and delete old snapshot directories.",
+          },
+          {
+            type: "run_command",
+            command: `cocalc project file list --project ${quoteCliArg(project_id)} ${quoteCliArg(snapshotPath)}`,
+            reason: "List snapshot directories from the CLI.",
+          },
+        ],
+      });
+    }
   }
   if (
     environment &&
@@ -561,6 +573,7 @@ function buildStorageAnalysis({
             label: retained.label,
             bytes: retained.bytes,
             detail: retained.detail,
+            snapshot_count: retained.snapshotCount,
           }
         : null,
       shared_scratch: sharedScratch
@@ -633,9 +646,9 @@ function renderStorageAnalysisHuman(analysis: StorageAnalysisResult): string {
     lines.push(`- Environment: ${formatBytes(visible.environment.bytes)}`);
   }
   if (retained) {
-    lines.push(
-      `- Retained snapshot/history data: ${formatBytes(retained.bytes)}`,
-    );
+    // Use the server-supplied label so the CLI reflects the same wording as the
+    // UI, including the no-snapshots case.
+    lines.push(`- ${retained.label}: ${formatBytes(retained.bytes)}`);
   }
   if (sharedScratch) {
     lines.push(
