@@ -450,6 +450,7 @@ export function LegacyMigrationRestoreBanner({
   const labeledError = labelValue(labels[LEGACY_RESTORE_ERROR_LABEL]);
   const opId = labelValue(labels[LEGACY_RESTORE_LRO_LABEL]);
   const [summary, setSummary] = useState<LroSummary>();
+  const [loadedSummaryOpId, setLoadedSummaryOpId] = useState("");
   const [progress, setProgress] =
     useState<Extract<LroEvent, { type: "progress" }>>();
   const [retrying, setRetrying] = useState(false);
@@ -554,14 +555,20 @@ export function LegacyMigrationRestoreBanner({
   useEffect(() => {
     setSummary(undefined);
     setProgress(undefined);
-    if (!effectiveOpId) return;
+    if (!effectiveOpId) {
+      setLoadedSummaryOpId("");
+      return;
+    }
     let closed = false;
     async function watch() {
       try {
         const current = await webapp_client.conat_client.hub.lro.get({
           op_id: effectiveOpId,
         });
-        if (!closed) setSummary(current);
+        if (!closed) {
+          setSummary(current);
+          setLoadedSummaryOpId(effectiveOpId);
+        }
         await webapp_client.conat_client.lroWait({
           op_id: effectiveOpId,
           scope_type: "project",
@@ -575,7 +582,11 @@ export function LegacyMigrationRestoreBanner({
             if (!closed) setSummary(nextSummary);
           },
         });
-      } catch {}
+      } catch {
+        // If the LRO lookup itself fails, fall back to the durable project
+        // labels rather than hiding restore status indefinitely.
+        if (!closed) setLoadedSummaryOpId(effectiveOpId);
+      }
     }
     void watch();
     return () => {
@@ -593,9 +604,11 @@ export function LegacyMigrationRestoreBanner({
     effectiveStatus === "restored" ||
     summary?.status === "succeeded";
   const skippedText = skippedRestoreText({ summary, progress });
+  const waitingForSummary =
+    !!effectiveOpId && loadedSummaryOpId !== effectiveOpId;
 
   useEffect(() => {
-    if (!legacyProjectId || restored || failed) return;
+    if (waitingForSummary || !legacyProjectId || restored || failed) return;
     if (
       isActiveRestoreStatus(effectiveStatus) ||
       summary?.status === "queued" ||
@@ -611,7 +624,13 @@ export function LegacyMigrationRestoreBanner({
     legacyProjectId,
     restored,
     summary?.status,
+    waitingForSummary,
   ]);
+
+  // Project labels are available before the authoritative LRO summary. A
+  // terminal operation may already be dismissed, so rendering from labels
+  // during this lookup causes a stale error banner to flash on every open.
+  if (waitingForSummary) return null;
 
   async function openFinalArchiveSnapshot() {
     try {
