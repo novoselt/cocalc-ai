@@ -62,14 +62,19 @@ const DEFAULT_MAX_PARALLEL_PER_HOST = Math.max(
   1,
   envToInt("COCALC_LEGACY_PROJECT_RESTORE_MAX_PARALLEL_PER_HOST", 3),
 );
-const RESTORE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_PROJECT_HOST_RESTORE_RPC_TIMEOUT_MS = DAY_MS;
 const PROJECT_HOST_RESTORE_RPC_TIMEOUT_MS = Math.max(
   5 * 60 * 1000,
   envToInt(
     "COCALC_LEGACY_PROJECT_RESTORE_HOST_RPC_TIMEOUT_MS",
-    3 * 60 * 60 * 1000,
+    DEFAULT_PROJECT_HOST_RESTORE_RPC_TIMEOUT_MS,
   ),
 );
+// Let the explicit restore timeout report the useful error instead of racing
+// the lower-level Conat request timeout.
+const RESTORE_CLIENT_TIMEOUT_MS =
+  PROJECT_HOST_RESTORE_RPC_TIMEOUT_MS + 5 * 60 * 1000;
 const LEGACY_INITIAL_BACKUP_STALE_MS = Math.max(
   60_000,
   envToInt("COCALC_LEGACY_PROJECT_INITIAL_BACKUP_STALE_MS", 10 * 60 * 1000),
@@ -1084,7 +1089,7 @@ async function restoreOne(row: LegacyRestoreRow): Promise<void> {
     const client = await getProjectFileServerClient({
       project_id: row.project_id,
       account_id: row.owner_account_id,
-      timeout: RESTORE_TIMEOUT_MS,
+      timeout: RESTORE_CLIENT_TIMEOUT_MS,
     });
     await ensureProjectFileServerClientReady({
       project_id: row.project_id,
@@ -1261,5 +1266,8 @@ export function startLegacyMigrationProjectRestoreWorker({
 }
 
 export const __test__ = {
+  DEFAULT_PROJECT_HOST_RESTORE_RPC_TIMEOUT_MS,
+  PROJECT_HOST_RESTORE_RPC_TIMEOUT_MS,
+  RESTORE_CLIENT_TIMEOUT_MS,
   restoredProjectDiskQuotaMbFromLegacyDiskMb,
 };

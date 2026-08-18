@@ -63,6 +63,9 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
     currentImageId || (!currentImage ? inheritedImageId : "");
   const existingStudentProjectCount =
     store?.get_student_project_ids().length ?? 0;
+  const hasSharedProject = !!store?.get_shared_project_id();
+  const existingCourseProjectCount =
+    existingStudentProjectCount + (hasSharedProject ? 1 : 0);
   const [rootfsSearch, setRootfsSearch] = useState("");
   const {
     images: rootfsImages,
@@ -132,17 +135,18 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
     const targetEntry = currentEntry;
     const targetLabel = targetEntry?.label?.trim() || effectiveCurrentImage;
     Modal.confirm({
-      title: "Apply RootFS image to existing student projects?",
+      title: "Apply RootFS image to existing course projects?",
       width: 680,
-      okText: `Change ${existingStudentProjectCount} student project${
-        existingStudentProjectCount === 1 ? "" : "s"
+      okText: `Change ${existingCourseProjectCount} course project${
+        existingCourseProjectCount === 1 ? "" : "s"
       }`,
       okButtonProps: { danger: true },
       content: (
         <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             {existingStudentProjectCount} existing student project
-            {existingStudentProjectCount === 1 ? "" : "s"} will have their
+            {existingStudentProjectCount === 1 ? "" : "s"}
+            {hasSharedProject ? " and the shared project" : ""} will have their
             RootFS image changed to{" "}
             <Typography.Text strong>{targetLabel}</Typography.Text>.
           </Typography.Paragraph>
@@ -174,8 +178,8 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
         try {
           await actions.student_projects.set_all_student_project_rootfs();
           message.success(
-            `Changed the RootFS image for ${existingStudentProjectCount} student project${
-              existingStudentProjectCount === 1 ? "" : "s"
+            `Changed the RootFS image for ${existingCourseProjectCount} course project${
+              existingCourseProjectCount === 1 ? "" : "s"
             }.`,
           );
         } finally {
@@ -190,7 +194,7 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
       <Card
         title={
           <>
-            <Icon name="cube" /> Student Project RootFS Image (
+            <Icon name="cube" /> Course Project RootFS Image (
             <Button
               type="link"
               size="small"
@@ -210,9 +214,10 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
       >
         <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            By default, new student projects use the same RootFS image as this
-            instructor project. Set an override here only when this course
-            should use a different managed image.
+            By default, new student projects and a newly created shared project
+            use the same RootFS image as this instructor project. Set an
+            override here only when this course should use a different managed
+            image.
           </Typography.Paragraph>
 
           <Alert
@@ -224,7 +229,7 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
 
           <Form layout="vertical">
             <Form.Item
-              label="Managed RootFS image for new student projects"
+              label="Managed RootFS image for new course projects"
               style={{ marginBottom: "12px" }}
             >
               <Select
@@ -281,8 +286,8 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
               {currentEntry ? (
                 <>
                   No course-specific override is configured. New student
-                  projects will use this instructor project&apos;s current
-                  RootFS image:
+                  projects and a newly created shared project will use this
+                  instructor project&apos;s current RootFS image:
                   <Typography.Text strong>
                     {" "}
                     {currentEntry.label || effectiveCurrentImage}
@@ -292,8 +297,8 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
               ) : (
                 <>
                   No course-specific override is configured. New student
-                  projects will follow this instructor project&apos;s current
-                  RootFS setting.
+                  projects and a newly created shared project will follow this
+                  instructor project&apos;s current RootFS setting.
                 </>
               )}
             </Typography.Paragraph>
@@ -330,7 +335,7 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
                 needSave ||
                 applying ||
                 !effectiveCurrentImage ||
-                existingStudentProjectCount === 0
+                existingCourseProjectCount === 0
               }
               onClick={confirmApply}
             >
@@ -339,7 +344,7 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
               ) : (
                 <Icon name="refresh" />
               )}{" "}
-              Apply To Existing Student Projects...
+              Apply To Existing Course Projects...
             </Button>
             <Button type="link" onClick={() => setHelpOpen(true)}>
               What does this change?
@@ -348,7 +353,7 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
 
           {needSave ? (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              Save this course setting before applying it to existing student
+              Save this course setting before applying it to existing course
               projects.
             </Typography.Paragraph>
           ) : null}
@@ -364,14 +369,14 @@ export function StudentProjectRootfsConfig({ actions, name, settings }: Props) {
           <Alert
             type="info"
             showIcon
-            title="New student projects"
-            description="If you leave this unset, new student projects use the same RootFS image as the instructor project that contains this .course file. If you set an override here, that managed image is used instead."
+            title="New course projects"
+            description="If you leave this unset, new student projects and a newly created shared project use the same RootFS image as the instructor project that contains this .course file. If you set an override here, that managed image is used instead."
           />
           <Alert
             type="warning"
             showIcon
-            title="Existing student projects"
-            description="Existing student projects do not change automatically. Use “Apply To Existing Student Projects...” when you want to switch them."
+            title="Existing course projects"
+            description="Existing student projects and the shared project do not change automatically. Use “Apply To Existing Course Projects...” when you want to switch them."
           />
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             Changing the RootFS image switches the project&apos;s visible
