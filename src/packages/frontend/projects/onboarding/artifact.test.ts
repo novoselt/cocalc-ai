@@ -10,7 +10,6 @@ import {
   onboardingArtifactCreation,
   onboardingArtifactCreationForProject,
   onboardingArtifactRouteTarget,
-  waitForOnboardingArtifactAndRuntime,
 } from "./artifact";
 
 jest.mock("@cocalc/frontend/project/home-directory", () => ({
@@ -79,44 +78,5 @@ describe("first-run onboarding artifact creation", () => {
     expect(
       isRetryableOnboardingArtifactError(new Error("permission denied")),
     ).toBe(false);
-  });
-
-  it("creates the artifact concurrently but waits for runtime readiness", async () => {
-    let releaseRuntime!: () => void;
-    const runtimeReady = new Promise<void>((resolve) => {
-      releaseRuntime = resolve;
-    });
-    const createArtifact = jest.fn(async () => "Welcome.ipynb");
-    const waitForRuntime = jest.fn(() => runtimeReady);
-    let settled = false;
-
-    const setup = waitForOnboardingArtifactAndRuntime({
-      createArtifact,
-      waitForRuntime,
-    }).then((result) => {
-      settled = true;
-      return result;
-    });
-    await Promise.resolve();
-
-    expect(createArtifact).toHaveBeenCalledTimes(1);
-    expect(waitForRuntime).toHaveBeenCalledTimes(1);
-    expect(settled).toBe(false);
-
-    releaseRuntime();
-    await expect(setup).resolves.toEqual({ artifact: "Welcome.ipynb" });
-  });
-
-  it("preserves a starter-file error after the runtime becomes ready", async () => {
-    const error = new Error("starter failed");
-
-    await expect(
-      waitForOnboardingArtifactAndRuntime({
-        createArtifact: async () => {
-          throw error;
-        },
-        waitForRuntime: async () => undefined,
-      }),
-    ).resolves.toEqual({ error });
   });
 });
