@@ -35,6 +35,7 @@ import {
   open_new_tab,
   open_popup_window,
 } from "@cocalc/frontend/misc";
+import type { ProgrammaticallyGotoLine } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
 import Fragment, { FragmentId } from "@cocalc/frontend/misc/fragment-id";
 import * as project_file from "@cocalc/frontend/project-file";
 import { ProjectEvent } from "@cocalc/frontend/project/history/types";
@@ -1939,8 +1940,14 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   // moves to the given line.  Otherwise, does nothing.
   public goto_line(path, line, cursor?: boolean, focus?: boolean): void {
     const sync_path = this.get_sync_path(path);
-    const actions: any = redux.getEditorActions(this.project_id, sync_path);
-    actions?.programmatical_goto_line?.(line, cursor, focus);
+    // getEditorActions is untyped, so name the one capability we need here.
+    // Plenty of editors (terminals, images, ...) legitimately lack it, hence
+    // the optional call -- but the *name* is now checked against the real
+    // method, so a rename or typo fails to compile instead of doing nothing.
+    const actions:
+      | { programmatically_goto_line?: ProgrammaticallyGotoLine }
+      | undefined = redux.getEditorActions(this.project_id, sync_path);
+    actions?.programmatically_goto_line?.(line, cursor, focus);
   }
 
   // Called when a file tab is shown.

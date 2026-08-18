@@ -1,3 +1,4 @@
+import type { GotoUserActions } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
 /*
  *  This file is part of CoCalc: Copyright © 2022 Sagemath, Inc.
  *  License: MS-RSL – see LICENSE.md for details
@@ -88,7 +89,10 @@ export interface State extends CodeEditorState {
   contents?: TableOfContentsEntryList; // table of contents data.
 }
 
-export class Actions<T extends State = State> extends BaseActions<T | State> {
+export class Actions<T extends State = State>
+  extends BaseActions<T | State>
+  implements GotoUserActions
+{
   private keyHandler?: (event) => void;
   private initialPageCreationScheduled = false;
   readonly mainFrameType: MainFrameType = "whiteboard";
@@ -1172,6 +1176,7 @@ export class Actions<T extends State = State> extends BaseActions<T | State> {
       ?.toJS();
     if (cursors == null) return; // no info
     const locs = cursors[account_id]?.locs;
+    if (locs == null) return; // this user has no retained cursor position
     for (const loc of locs) {
       if (loc.id != null) {
         this.scrollElementIntoView(loc.id, frameId);

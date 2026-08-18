@@ -1,3 +1,4 @@
+import type { ProgrammaticallyGotoLine } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
 import { Range } from "slate";
 import type { Descendant } from "slate";
 
@@ -54,13 +55,9 @@ export interface Actions {
   syncstring_commit?: () => void;
   get_syncstring?: () => SyncString;
   get_matching_frame?: (obj: object) => string | undefined;
-  programmatical_goto_line?: (
-    line: number,
-    cursor?: boolean,
-    focus?: boolean,
-    id?: string,
-    ch?: number,
-  ) => Promise<void>;
+  // Derived from the real implementation rather than re-declared here, so a
+  // rename there is a compile error instead of a silently absent member.
+  programmatically_goto_line?: ProgrammaticallyGotoLine;
   save?: (explicit: boolean) => Promise<void>;
   change_font_size?: (delta?: number, id?: string, zoom?: number) => void;
   undo?: (id: string) => void;

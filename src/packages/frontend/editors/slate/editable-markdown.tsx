@@ -2618,7 +2618,7 @@ const FullEditableMarkdown: React.FC<Props> = React.memo((props: Props) => {
     }
     const pos = nearestMarkdownPositionForSlatePoint(editor, point);
     if (pos == null) return;
-    actions.programmatical_goto_line?.(
+    actions.programmatically_goto_line?.(
       pos.line + 1, // 1 based (TODO: could use codemirror option)
       true,
       false, // it is REALLY annoying to switch focus to be honest, e.g., because double click to select a word is common in WYSIWYG editing.  If change this to true, make sure to put an extra always 50ms delay above due to focus even order.
