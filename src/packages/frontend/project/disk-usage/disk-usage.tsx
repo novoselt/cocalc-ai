@@ -1376,7 +1376,7 @@ export default function DiskUsage({
                           {retained.detail}
                         </div>
                       ) : null}
-                      {retained.bytes > 0 ? (
+                      {retained.bytes > 0 && retained.snapshotCount !== 0 ? (
                         <div style={{ color: COLORS.GRAY_M, marginTop: "6px" }}>
                           Review or delete old snapshots to reduce this number.
                           It can also go down automatically when older snapshots
