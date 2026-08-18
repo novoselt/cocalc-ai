@@ -828,7 +828,11 @@ export function Chat({
             <Message key={message.message_id} message={message} />
           ))}
           {!visibleMessages.length ? (
-            <EmptyState>Waiting for chat history...</EmptyState>
+            <EmptyState>
+              {snapshot.ready
+                ? "No messages yet. Send a message to begin."
+                : "Waiting for chat history..."}
+            </EmptyState>
           ) : null}
           <div aria-hidden="true" ref={messagesEndRef} />
         </section>

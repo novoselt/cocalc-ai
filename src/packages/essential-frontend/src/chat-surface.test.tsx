@@ -197,6 +197,38 @@ test("refreshes an idle Codex thread without sending a synthetic prompt", async 
   );
 });
 
+test("shows that a ready empty Codex thread can accept its first message", async () => {
+  mockClient({ ...snapshot, messages: [] });
+  const session = {
+    accountId: "22222222-2222-4222-8222-222222222222",
+    openProjectHost: jest.fn(async () => ({ client: {} })),
+  };
+  render(
+    <Chat
+      project={
+        {
+          host_id: "host-1",
+          project_id: snapshot.project_id,
+          title: "Test",
+        } as any
+      }
+      route={{
+        chatPath: snapshot.path,
+        kind: "chat",
+        projectId: snapshot.project_id,
+        threadId: "thread-1",
+      }}
+      session={session as any}
+    />,
+  );
+
+  expect(
+    await screen.findByText("No messages yet. Send a message to begin."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("Waiting for chat history...")).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Message Codex" })).toBeEnabled();
+});
+
 test("sends the current prompt with Shift+Enter", async () => {
   const client = mockClient();
   const session = {
