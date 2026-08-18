@@ -84,4 +84,19 @@ describe("jupyter ipynb watch initial-load policy", () => {
       reason: "disk_newer_but_content_equal",
     });
   });
+
+  it("marks newer RTC as equivalent when disk content matches", () => {
+    expect(
+      refineInitialWatchSourceDecision({
+        decision: {
+          loadFromDisk: false,
+          reason: "rtc_newer_or_equal",
+        },
+        diskContentMatchesRtc: true,
+      }),
+    ).toEqual({
+      loadFromDisk: false,
+      reason: "rtc_newer_but_content_equal",
+    });
+  });
 });

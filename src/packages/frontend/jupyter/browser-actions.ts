@@ -1419,6 +1419,7 @@ export class JupyterActions extends JupyterActions0 {
     this.set_save_status = debounce(f, 1000, { leading: true, trailing: true });
     this.syncdb.on("metadata-change", this.set_save_status);
     this.syncdb.on("connected", this.set_save_status);
+    this.syncdb.on("has-uncommitted-changes", this.set_save_status);
     this.syncdb.on("disconnected", this.handleSyncdbDisconnected);
     this.syncdb.on("open-phase", this.handleSyncdbOpenPhase);
 
@@ -4204,7 +4205,7 @@ export class JupyterActions extends JupyterActions0 {
       return;
     }
     await this.setToIpynb(ipynb);
-    this.hasUnsavedChanges = false;
+    this.markIpynbSaved();
     this.runDebug("ipynb.load.done", { bytes: read.bytes });
     // good time to refresh status
     await this.refreshKernelStatus();
@@ -4224,6 +4225,15 @@ export class JupyterActions extends JupyterActions0 {
       this.hasUnsavedChanges ||
       this.syncdb?.has_uncommitted_changes?.() === true
     );
+  };
+
+  private markIpynbSaved = (): void => {
+    this.hasUnsavedChanges = false;
+    const has_uncommitted_changes =
+      this.syncdb?.has_uncommitted_changes?.() === true;
+    const has_unsaved_changes = has_uncommitted_changes;
+    this.setState({ has_unsaved_changes, has_uncommitted_changes });
+    this.store.emit("has-unsaved-changes", has_unsaved_changes);
   };
 
   private saveIpynbOnce = async (): Promise<void> => {
@@ -4265,9 +4275,7 @@ export class JupyterActions extends JupyterActions0 {
       await this.setToIpynb(result.ipynb);
       if (this.isClosed()) return;
     }
-    this.hasUnsavedChanges = false;
-    this.setState({ has_unsaved_changes: false });
-    this.store.emit("has-unsaved-changes", false);
+    this.markIpynbSaved();
     this.runDebug("ipynb.save.done", { bytes: result.bytes });
   };
 
@@ -4421,17 +4429,28 @@ export class JupyterActions extends JupyterActions0 {
       diskMtimeMs,
     });
     let preloadedDiskRead: DiskIpynbRead | undefined = undefined;
-    if (decision.reason === "disk_newer_than_rtc") {
+    if (
+      decision.reason === "disk_newer_than_rtc" ||
+      (decision.reason === "rtc_newer_or_equal" && this.hasUnsavedChanges)
+    ) {
+      const expectedRtcVersion = this.getRtcVersion();
       try {
         const { matches, diskRead } = await this.diskContentMatchesRtc();
         preloadedDiskRead = diskRead;
-        decision = refineInitialWatchSourceDecision({
-          decision,
-          diskContentMatchesRtc: matches,
-        });
+        const rtcVersionStable = this.getRtcVersion() === expectedRtcVersion;
+        if (rtcVersionStable) {
+          decision = refineInitialWatchSourceDecision({
+            decision,
+            diskContentMatchesRtc: matches,
+          });
+          if (matches) {
+            this.markIpynbSaved();
+          }
+        }
         this.runDebug("watch.initial_load.disk_compare", {
           matched: matches,
           bytes: diskRead.bytes,
+          rtcVersionStable,
         });
       } catch (err) {
         this.runDebug("watch.initial_load.disk_compare.failed", {

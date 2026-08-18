@@ -202,4 +202,34 @@ describe("Jupyter browser disk-save reconciliation", () => {
     expect(actions.setToIpynb).not.toHaveBeenCalled();
     expect(actions.saveIpynb).not.toHaveBeenCalled();
   });
+
+  it("publishes a clean disk state after initial import commits", async () => {
+    const actions = createActions();
+    actions.syncdb = {
+      fs: {
+        jupyterImportIpynb: jest.fn(async (ipynb) => ({ ipynb })),
+      },
+      has_uncommitted_changes: () => false,
+    };
+    actions.hasUnsavedChanges = true;
+
+    await actions.watchLoadFromDisk({
+      initial: true,
+      diskRead: {
+        bytes: 100,
+        text: "notebook",
+        ipynb: { cells: [{ cell_type: "code", source: [] }] },
+      },
+    });
+
+    expect(actions.hasUnsavedChanges).toBe(false);
+    expect(actions.setState).toHaveBeenLastCalledWith({
+      has_uncommitted_changes: false,
+      has_unsaved_changes: false,
+    });
+    expect(actions.store.emit).toHaveBeenCalledWith(
+      "has-unsaved-changes",
+      false,
+    );
+  });
 });
