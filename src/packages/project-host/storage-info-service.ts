@@ -464,6 +464,9 @@ function buildRetainedSummary({
     bytes,
     detail:
       "Estimate computed as project quota used minus current live files. This usually comes from snapshots retaining deleted or modified data, and can decrease automatically as older snapshots expire.",
+    // Carried when known so consumers can distinguish "has snapshots" from
+    // "unknown"; omitted entirely when we could not determine it.
+    ...(snapshotCount == null ? {} : { snapshotCount }),
   };
 }
 

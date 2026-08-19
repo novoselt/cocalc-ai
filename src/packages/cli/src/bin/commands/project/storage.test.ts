@@ -150,6 +150,12 @@ test("buildStorageAnalysis does not recommend snapshot review when there are no 
       },
       visible: [],
     },
+    history: {
+      window_minutes: 24 * 60,
+      point_count: 0,
+      points: [],
+    },
+    breakdowns: [],
   });
 
   assert.equal(analysis.summary.retained?.snapshot_count, 0);
