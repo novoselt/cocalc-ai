@@ -208,9 +208,13 @@ export class SharedProjectActions {
     });
     let project_id: string;
     try {
-      project_id = await redux
-        .getActions("projects")
-        .create_project(this.settings());
+      const courseRootfs =
+        await this.actions.student_projects.get_student_project_rootfs();
+      project_id = await redux.getActions("projects").create_project({
+        ...this.settings(),
+        rootfs_image: courseRootfs?.image,
+        rootfs_image_id: courseRootfs?.image_id,
+      });
     } catch (err) {
       this.actions.set_error(`error creating shared project -- ${err}`);
       return;

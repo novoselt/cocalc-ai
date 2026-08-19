@@ -807,6 +807,8 @@ export interface HostProjectMaintenanceSchedule {
   project_id: string;
   last_edited: string | null;
   last_changed?: string | null;
+  last_backup?: string | null;
+  backup_due_since?: string | null;
   snapshots: SnapshotSchedule | null;
   backups: SnapshotSchedule | null;
   max_snapshots_per_project?: number | null;
@@ -921,6 +923,7 @@ export interface HostStatusApi {
   listProjectMaintenanceSchedules: (opts: {
     host_id: string;
     active_days?: number;
+    limit?: number;
   }) => Promise<HostProjectMaintenanceSchedule[]>;
   registerOnPremTunnel: (
     opts: HostRegisterOnPremTunnelRequest,

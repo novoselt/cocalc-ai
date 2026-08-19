@@ -110,8 +110,8 @@ export const TEACHING_ENTRIES: DocsEntry[] = [
       "course student project rootfs image software environment managed image apply existing projects restart",
     slug: "teaching/student-project-rootfs",
     status: "ready",
-    summary: "Choose and roll out managed images for course student projects.",
-    title: "Student project images",
+    summary: "Choose and roll out managed images for course projects.",
+    title: "Course project images",
   },
   {
     audiences: ["agents", "instructors"],

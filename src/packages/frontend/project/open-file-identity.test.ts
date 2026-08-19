@@ -11,6 +11,7 @@ import {
   log_opened_time,
   mark_open_phase,
   open_file,
+  readSagewsWorksheetText,
   resolveSyncPath,
   resolveSyncPathWithRetry,
 } from "./open-file";
@@ -71,6 +72,31 @@ function makeOpenFilesHarness(extraStoreValues: Record<string, unknown> = {}) {
   };
   return { open_files, openFilesState, store };
 }
+
+describe("legacy worksheet reads", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("streams sagews contents instead of using the bounded text RPC", async () => {
+    const readFile = jest
+      .spyOn(webapp_client.project_client, "readFile")
+      .mockResolvedValue(Buffer.from("worksheet contents"));
+    const readTextFile = jest.spyOn(
+      webapp_client.project_client,
+      "read_text_file",
+    );
+
+    await expect(
+      readSagewsWorksheetText("project-id", "large.sagews"),
+    ).resolves.toBe("worksheet contents");
+    expect(readFile).toHaveBeenCalledWith({
+      project_id: "project-id",
+      path: "large.sagews",
+    });
+    expect(readTextFile).not.toHaveBeenCalled();
+  });
+});
 
 describe("canonicalPath", () => {
   const HOME = "/home/wstein/work";

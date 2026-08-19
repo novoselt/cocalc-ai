@@ -128,7 +128,7 @@ export class StudentProjectsActions {
     }
   };
 
-  private get_student_project_rootfs = async (): Promise<
+  get_student_project_rootfs = async (): Promise<
     | {
         image: string;
         image_id?: string;
@@ -791,13 +791,17 @@ export class StudentProjectsActions {
     if (!courseRootfs?.image) {
       throw Error("No course RootFS image is configured.");
     }
-    const project_ids = store.get_student_project_ids();
+    const studentProjectIds = store.get_student_project_ids();
+    const sharedProjectId = store.get_shared_project_id();
+    const project_ids = sharedProjectId
+      ? [...studentProjectIds, sharedProjectId]
+      : studentProjectIds;
     if (project_ids.length === 0) {
       return;
     }
     const projectsActions = redux.getActions("projects");
     const overallId = this.course_actions.set_activity({
-      desc: `Changing RootFS image for ${project_ids.length} student projects...`,
+      desc: `Changing RootFS image for ${project_ids.length} course projects...`,
     });
     try {
       let i = 0;
@@ -805,7 +809,7 @@ export class StudentProjectsActions {
         if (this.course_actions.is_closed()) return;
         i += 1;
         const activityId = this.course_actions.set_activity({
-          desc: `Changing RootFS image for student project ${i} of ${project_ids.length}`,
+          desc: `Changing RootFS image for course project ${i} of ${project_ids.length}`,
         });
         try {
           await setProjectRootfsImage({
@@ -824,7 +828,7 @@ export class StudentProjectsActions {
       await this.set_all_student_project_course_info();
     } catch (err) {
       this.course_actions.set_error(
-        `Error changing student project RootFS images - ${err}`,
+        `Error changing course project RootFS images - ${err}`,
       );
       throw err;
     } finally {

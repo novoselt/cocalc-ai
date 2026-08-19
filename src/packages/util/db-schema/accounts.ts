@@ -464,6 +464,12 @@ Table({
       "((passports IS NOT NULL))",
       "((ssh_keys IS NOT NULL))", // used by ssh-gateway to speed up getting all users
     ],
+    pg_custom_indexes: [
+      {
+        name: "accounts_banned_account_idx",
+        query: "(account_id) WHERE banned IS TRUE",
+      },
+    ],
     crm_indexes: [
       "(lower(display_name) text_pattern_ops)",
       "(lower(first_name) text_pattern_ops)",

@@ -614,6 +614,7 @@ async function getValidPath(project_id, target) {
 function CreateDirectory({ project_id, path, toggleSelection }) {
   const [error, setError] = useState<string>("");
   const [open, setOpen] = useState<boolean>(false);
+  const [creating, setCreating] = useState<boolean>(false);
   const [value, setValue] = useState<string>(NEW_FOLDER);
   const input_ref = useRef<InputRef>(null);
 
@@ -636,16 +637,23 @@ function CreateDirectory({ project_id, path, toggleSelection }) {
   }, [open]);
 
   const createFolder = async () => {
-    setOpen(false);
-    if (!value?.trim()) return;
+    if (creating) return;
+    if (!value?.trim()) {
+      setOpen(false);
+      return;
+    }
+    setCreating(true);
     try {
       const actions = redux.getProjectActions(project_id);
       const fs = actions.fs();
       await fs.mkdir(join(path, value));
       toggleSelection(join(path, value));
+      setOpen(false);
     } catch (err) {
       setError(`${err}`);
+      setOpen(false);
     } finally {
+      setCreating(false);
       setValue(NEW_FOLDER);
     }
   };
@@ -660,8 +668,15 @@ function CreateDirectory({ project_id, path, toggleSelection }) {
           </>
         }
         open={open}
+        confirmLoading={creating}
+        closable={!creating}
+        keyboard={!creating}
+        mask={{ closable: !creating }}
+        cancelButtonProps={{ disabled: creating }}
         onOk={createFolder}
-        onCancel={() => setOpen(false)}
+        onCancel={() => {
+          if (!creating) setOpen(false);
+        }}
       >
         <Input
           ref={input_ref}

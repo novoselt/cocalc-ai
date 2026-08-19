@@ -22,5 +22,8 @@ export async function assertCollabAllowRemoteProjectAccess({
   account_id?: string;
   project_id: string;
 }) {
-  await assertProjectCollaboratorAccessAllowRemote({ account_id, project_id });
+  return await assertProjectCollaboratorAccessAllowRemote({
+    account_id,
+    project_id,
+  });
 }

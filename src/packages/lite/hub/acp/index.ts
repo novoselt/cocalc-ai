@@ -836,6 +836,23 @@ function releaseStaleQueuedJobAffinity(job: AcpJobRow): AcpJobRow {
   return { ...job, worker_id: null, worker_bundle_version: null };
 }
 
+function nextQueuedAcpJobForThread({
+  project_id,
+  path,
+  thread_id,
+}: {
+  project_id: string;
+  path: string;
+  thread_id: string;
+}): AcpJobRow | undefined {
+  const listed = listQueuedAcpJobsForThread({
+    project_id,
+    path,
+    thread_id,
+  })[0];
+  return listed ? releaseStaleQueuedJobAffinity(listed) : undefined;
+}
+
 function turnStillLikelyOwnedByLiveWorker(
   turn: Pick<
     AcpTurnLeaseRow,
@@ -9037,14 +9054,11 @@ async function pumpQueuedAcpJobsForThread({
   thread_id: string;
 }): Promise<void> {
   while (true) {
-    const listed = listQueuedAcpJobsForThread({
+    const nextQueued = nextQueuedAcpJobForThread({
       project_id,
       path,
       thread_id,
-    })[0];
-    const nextQueued = listed
-      ? releaseStaleQueuedJobAffinity(listed)
-      : undefined;
+    });
     if (!nextQueued) {
       return;
     }
@@ -9096,11 +9110,11 @@ function kickQueuedAcpJobsForThread({
   path: string;
   thread_id: string;
 }): void {
-  const nextQueued = listQueuedAcpJobsForThread({
+  const nextQueued = nextQueuedAcpJobForThread({
     project_id,
     path,
     thread_id,
-  })[0];
+  });
   if (!nextQueued || !detachedWorkerCanClaimQueuedJob(nextQueued)) return;
   const key = acpJobThreadKey({ project_id, path, thread_id });
   if (pumpingAcpJobThreads.has(key)) {
@@ -10441,6 +10455,7 @@ export function getAcpAgentRuntimeStatus(): {
 export const acpTestInternals = {
   detachedWorkerCanClaimQueuedJob,
   hasOtherWorkerRunningAcpTurn,
+  nextQueuedAcpJobForThread,
   noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,
   prepareQueuedUserMessageForExecution,

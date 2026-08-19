@@ -33,9 +33,11 @@ const logger = getLogger("server:conat:host-status");
 export async function listHostProjectMaintenanceSchedules({
   host_id,
   active_days,
+  limit,
 }: {
   host_id: string;
   active_days?: number;
+  limit?: number;
 }): Promise<HostProjectMaintenanceSchedule[]> {
   if (!host_id) {
     throw Error("host_id is required");
@@ -67,10 +69,18 @@ export async function listHostProjectMaintenanceSchedules({
       )
     )`;
   }
+  const normalizedLimit = Math.max(
+    1,
+    Math.min(500, Math.floor(Number(limit ?? 100) || 100)),
+  );
+  params.push(normalizedLimit);
+  const limitParam = `$${params.length}`;
   const { rows } = await getPool().query<{
     project_id: string;
     last_edited: Date | string | null;
     last_changed: Date | string | null;
+    last_backup: Date | string | null;
+    backup_due_since: Date | string | null;
     snapshots: HostProjectMaintenanceSchedule["snapshots"];
     backups: HostProjectMaintenanceSchedule["backups"];
     owner_account_id: string | null;
@@ -79,6 +89,20 @@ export async function listHostProjectMaintenanceSchedules({
        project_id,
        last_edited,
        (to_jsonb(projects)->>'last_changed')::TIMESTAMP AS last_changed,
+       last_backup,
+       CASE
+         WHEN COALESCE(backups->>'disabled', 'false') <> 'true'
+           AND (
+             last_backup IS NULL
+             OR COALESCE((to_jsonb(projects)->>'last_changed')::TIMESTAMP, last_edited) > last_backup
+           )
+         THEN COALESCE(
+           (to_jsonb(projects)->>'last_changed')::TIMESTAMP,
+           last_edited,
+           created
+         )
+         ELSE NULL
+       END AS backup_due_since,
        snapshots,
        backups,
        (
@@ -91,7 +115,10 @@ export async function listHostProjectMaintenanceSchedules({
      WHERE host_id=$1
        AND provisioned IS TRUE
        AND deleted IS NOT TRUE${activeWhere}
-     ORDER BY last_edited DESC NULLS LAST, project_id ASC`,
+     ORDER BY backup_due_since ASC NULLS LAST,
+              last_edited ASC NULLS LAST,
+              project_id ASC
+     LIMIT ${limitParam}`,
     params,
   );
   const limitsByOwner = new Map<
@@ -146,6 +173,18 @@ export async function listHostProjectMaintenanceSchedules({
           ? row.last_changed.toISOString()
           : `${row.last_changed}`;
     }
+    schedule.last_backup =
+      row.last_backup == null
+        ? null
+        : row.last_backup instanceof Date
+          ? row.last_backup.toISOString()
+          : `${row.last_backup}`;
+    schedule.backup_due_since =
+      row.backup_due_since == null
+        ? null
+        : row.backup_due_since instanceof Date
+          ? row.backup_due_since.toISOString()
+          : `${row.backup_due_since}`;
     return schedule;
   });
 }
@@ -443,10 +482,11 @@ export async function initHostStatusService() {
           next_cursor_account_id: last?.account_id,
         };
       },
-      async listProjectMaintenanceSchedules({ host_id, active_days }) {
+      async listProjectMaintenanceSchedules({ host_id, active_days, limit }) {
         return await listHostProjectMaintenanceSchedules({
           host_id,
           active_days,
+          limit,
         });
       },
     },

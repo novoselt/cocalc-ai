@@ -32,6 +32,11 @@ const DEFAULT_SWEEP_MS = 15 * 60 * 1000;
 // mutation lock is global). Operators can raise this only after qualification.
 const DEFAULT_PARALLELISM = 1;
 const DEFAULT_INITIAL_DELAY_MS = DEFAULT_SWEEP_MS;
+const DEFAULT_CANDIDATE_LIMIT = 32;
+const MAX_CANDIDATE_LIMIT = 500;
+const DEFAULT_STARVATION_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_STARVATION_OVERRIDES_PER_SWEEP = 1;
+const MAX_STARVATION_OVERRIDES_PER_SWEEP = 4;
 const GIB = 1024 ** 3;
 const DEFAULT_MEMORY_AVAILABLE_RATIO = 0.25;
 const DEFAULT_MEMORY_AVAILABLE_MIN_BYTES = 2 * GIB;
@@ -40,6 +45,7 @@ const DEFAULT_MEMORY_AVAILABLE_HARD_MIN_BYTES = 4 * GIB;
 const DEFAULT_MEMORY_PSI_FULL_AVG10_MAX = 5;
 
 const inFlightProjects = new Set<string>();
+let sweepRunning = false;
 
 function parsePositiveInteger(value: string | undefined, fallback: number) {
   const parsed = Math.floor(Number(value));
@@ -264,6 +270,7 @@ async function runScheduledStorageOperation({
   hostId,
   project_id,
   operation_kind,
+  allowStarvationOverride = false,
   run,
 }: {
   hostId: string;
@@ -272,9 +279,14 @@ async function runScheduledStorageOperation({
     StorageOperationKind,
     "scheduled_snapshot" | "scheduled_backup"
   >;
+  allowStarvationOverride?: boolean;
   run: () => Promise<void>;
-}): Promise<boolean> {
-  const ticket = admitStorageOperation({ operation_kind, project_id });
+}): Promise<{ ran: boolean; starvationOverride: boolean }> {
+  const ticket = admitStorageOperation({
+    operation_kind,
+    project_id,
+    allow_starvation_override: allowStarvationOverride,
+  });
   if (!ticket.admitted) {
     logger.info("deferring scheduled project storage operation", {
       hostId,
@@ -282,7 +294,15 @@ async function runScheduledStorageOperation({
       operation_kind,
       reason: ticket.reason,
     });
-    return false;
+    return { ran: false, starvationOverride: false };
+  }
+  if (ticket.starvation_override) {
+    logger.info("admitting overdue backup maintenance at low priority", {
+      hostId,
+      project_id,
+      operation_kind,
+      reason: ticket.reason,
+    });
   }
   if (ticket.would_defer) {
     logger.info("scheduled project storage operation would be deferred", {
@@ -303,10 +323,14 @@ async function runScheduledStorageOperation({
           operation_class: operation_kind,
           cgroup_path: "/sys/fs/cgroup/cocalc-maintenance",
           checkpointable: true,
+          starvation_override: ticket.starvation_override,
         },
         run,
       );
-      return true;
+      return {
+        ran: true,
+        starvationOverride: ticket.starvation_override,
+      };
     } catch (err) {
       if (!(err instanceof BtrfsMutationDeferredError)) throw err;
       logger.info("deferred scheduled storage operation at mutation boundary", {
@@ -315,29 +339,52 @@ async function runScheduledStorageOperation({
         operation_kind,
         reason: err.reason,
       });
-      return false;
+      return { ran: false, starvationOverride: false };
     }
   } finally {
     ticket.release();
   }
 }
 
-export async function runProjectSnapshotBackupMaintenanceSweepOnce({
+function parseTimestampMs(
+  value: string | null | undefined,
+): number | undefined {
+  const parsed = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function backupIsStarved({
+  backupDueSince,
+  nowMs = Date.now(),
+  starvationAgeMs,
+}: {
+  backupDueSince: string | null | undefined;
+  nowMs?: number;
+  starvationAgeMs: number;
+}): boolean {
+  const dueSinceMs = parseTimestampMs(backupDueSince);
+  return dueSinceMs != null && nowMs - dueSinceMs >= starvationAgeMs;
+}
+
+async function runProjectSnapshotBackupMaintenanceSweepUnlocked({
   hostId,
 }: {
   hostId: string;
 }) {
   const admission = getStorageAdmissionStatus();
-  if (
+  const sweepRestricted =
     admission?.mode === "enforce" &&
-    (admission.lifecycle_active > 0 || admission.pressure_state !== "normal")
-  ) {
-    logger.info("deferring snapshot/backup maintenance sweep", {
+    (admission.lifecycle_active > 0 || admission.pressure_state !== "normal");
+  const starvationOverrideEligible =
+    admission == null ||
+    (admission.pressure_state !== "emergency" && !admission.sample_error);
+  if (sweepRestricted) {
+    logger.info("restricting snapshot/backup maintenance sweep", {
       hostId,
       lifecycle_active: admission.lifecycle_active,
       pressure_state: admission.pressure_state,
+      policy: "overdue-backup-only",
     });
-    return;
   }
   const configuredParallelism = parsePositiveInteger(
     process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_PARALLELISM,
@@ -368,6 +415,25 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
     process.env.COCALC_PROJECT_HOST_MAINTENANCE_ACTIVE_DAYS,
     DEFAULT_ACTIVE_DAYS,
   );
+  const candidateLimit = Math.min(
+    MAX_CANDIDATE_LIMIT,
+    parsePositiveInteger(
+      process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_CANDIDATE_LIMIT,
+      DEFAULT_CANDIDATE_LIMIT,
+    ),
+  );
+  const starvationAgeMs = parseNonNegativeInteger(
+    process.env.COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_STARVATION_AGE_MS,
+    DEFAULT_STARVATION_AGE_MS,
+  );
+  const starvationOverrideLimit = Math.min(
+    MAX_STARVATION_OVERRIDES_PER_SWEEP,
+    parsePositiveInteger(
+      process.env
+        .COCALC_PROJECT_HOST_SNAPSHOT_BACKUP_STARVATION_OVERRIDES_PER_SWEEP,
+      DEFAULT_STARVATION_OVERRIDES_PER_SWEEP,
+    ),
+  );
   const parallelism = memoryDecision.parallelism;
   if (parallelism < configuredParallelism) {
     logger.info("reducing snapshot/backup maintenance parallelism", {
@@ -382,11 +448,13 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
   const rows = await statusClient.listProjectMaintenanceSchedules({
     host_id: hostId,
     active_days: activeDays,
+    limit: candidateLimit,
   });
   if (!rows.length) {
     logger.debug("no active projects eligible for maintenance", { hostId });
     return;
   }
+  let starvationOverrideReservations = 0;
   await runWithParallelism(rows, parallelism, async (row) => {
     const project_id = `${row.project_id ?? ""}`.trim();
     if (!project_id) {
@@ -402,7 +470,7 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
         DEFAULT_SNAPSHOT_COUNTS,
         row.snapshots,
       );
-      if (!snapshotSchedule.disabled) {
+      if (!snapshotSchedule.disabled && !sweepRestricted) {
         try {
           await runScheduledStorageOperation({
             hostId,
@@ -425,11 +493,26 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
       }
       const backupSchedule = mergeSchedule(DEFAULT_BACKUP_COUNTS, row.backups);
       if (!backupSchedule.disabled) {
+        const starved = backupIsStarved({
+          backupDueSince: row.backup_due_since,
+          starvationAgeMs,
+        });
+        const allowStarvationOverride =
+          starved &&
+          starvationOverrideEligible &&
+          starvationOverrideReservations < starvationOverrideLimit;
+        if (sweepRestricted && !allowStarvationOverride) {
+          return;
+        }
+        if (allowStarvationOverride) {
+          starvationOverrideReservations += 1;
+        }
         try {
           await runScheduledStorageOperation({
             hostId,
             project_id,
             operation_kind: "scheduled_backup",
+            allowStarvationOverride,
             run: async () =>
               await runScheduledBackupMaintenance({
                 project_id,
@@ -457,6 +540,25 @@ export async function runProjectSnapshotBackupMaintenanceSweepOnce({
       inFlightProjects.delete(project_id);
     }
   });
+}
+
+export async function runProjectSnapshotBackupMaintenanceSweepOnce({
+  hostId,
+}: {
+  hostId: string;
+}) {
+  if (sweepRunning) {
+    logger.debug("skipping overlapping snapshot/backup maintenance sweep", {
+      hostId,
+    });
+    return;
+  }
+  sweepRunning = true;
+  try {
+    await runProjectSnapshotBackupMaintenanceSweepUnlocked({ hostId });
+  } finally {
+    sweepRunning = false;
+  }
 }
 
 export function startProjectSnapshotBackupMaintenance({
@@ -525,5 +627,6 @@ export const _test = {
   parseMeminfo,
   parsePressureFullAvg10,
   maintenanceMemoryDecision,
+  backupIsStarved,
   runScheduledStorageOperation,
 };
