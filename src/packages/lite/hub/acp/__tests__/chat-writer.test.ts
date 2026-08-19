@@ -1474,9 +1474,20 @@ describe("ChatStreamWriter", () => {
       time: 3575,
     } as AcpStreamMessage);
     await writer.handle({
+      type: "event",
+      event: {
+        type: "subagent",
+        operationId: "spawn-1",
+        threadId: "child-1",
+        state: "running",
+      } as any,
+      seq: 5,
+      time: 3590,
+    } as AcpStreamMessage);
+    await writer.handle({
       type: "summary",
       finalResponse: "done",
-      seq: 5,
+      seq: 6,
       time: 3600,
     } as AcpStreamMessage);
     await flush(writer);
@@ -1519,8 +1530,17 @@ describe("ChatStreamWriter", () => {
         }),
       }),
       expect.objectContaining({
-        type: "summary",
+        type: "event",
         seq: 5,
+        event: expect.objectContaining({
+          type: "subagent",
+          threadId: "child-1",
+          state: "running",
+        }),
+      }),
+      expect.objectContaining({
+        type: "summary",
+        seq: 6,
         finalResponse: "done",
       }),
     ]);
@@ -4223,5 +4243,23 @@ describe("recoverCurrentWorkerStuckAcpTurns", () => {
         ],
       ]),
     );
+  });
+});
+
+describe("terminal storage recovery candidates", () => {
+  it("retries explicit storage failures without polling ordinary errors", () => {
+    expect(
+      acpTestInternals.terminalTurnNeedsPeriodicRepair({
+        state: "error",
+        reason:
+          "This project ran out of storage while saving the Codex turn. Free project disk space and retry.",
+      } as any),
+    ).toBe(true);
+    expect(
+      acpTestInternals.terminalTurnNeedsPeriodicRepair({
+        state: "error",
+        reason: "model request failed",
+      } as any),
+    ).toBe(false);
   });
 });

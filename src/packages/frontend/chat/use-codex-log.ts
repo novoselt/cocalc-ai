@@ -111,6 +111,7 @@ export interface CodexLiveActivityStatusOptions {
 export interface CodexLiveActivityStatusResult {
   lastActivityAtMs?: number;
   liveStatus: CodexLiveLogStatus;
+  activeDescendantThreadIds: string[];
 }
 
 export type CodexLiveLogStatus =
@@ -180,6 +181,36 @@ function normalizeLiveStreamPayload(
   payload: AcpStreamMessage | AcpStreamMessage[] | null | undefined,
 ): AcpStreamMessage[] {
   return normalizeIncomingLogPayload(payload).map(normalizeLiveStreamEvent);
+}
+
+function updateActiveSubagentThreads(
+  active: Map<string, boolean>,
+  events: readonly AcpStreamMessage[],
+): boolean {
+  let changed = false;
+  for (const message of events) {
+    if (message.type !== "event" || message.event.type !== "subagent") {
+      continue;
+    }
+    const isActive =
+      message.event.state === "pending" || message.event.state === "running";
+    if (isActive) {
+      if (active.get(message.event.threadId) !== true) {
+        active.set(message.event.threadId, true);
+        changed = true;
+      }
+    } else if (active.delete(message.event.threadId)) {
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function activeSubagentThreadIds(active: Map<string, boolean>): string[] {
+  return [...active]
+    .filter(([, isActive]) => isActive)
+    .map(([threadId]) => threadId)
+    .sort();
 }
 
 export function getLatestEventTimeFromEvents(
@@ -964,6 +995,9 @@ export function useCodexLiveActivityStatus({
 }: CodexLiveActivityStatusOptions): CodexLiveActivityStatusResult {
   const [lastActivityAtMs, setLastActivityAtMs] = useState<number>();
   const [liveStatus, setLiveStatus] = useState<CodexLiveLogStatus>("idle");
+  const [activeDescendantThreadIds, setActiveDescendantThreadIds] = useState<
+    string[]
+  >([]);
   const [liveReconnectToken, setLiveReconnectToken] = useState(0);
   const mountedRef = useRef<boolean>(true);
   const liveConnectedRef = useRef<boolean>(false);
@@ -973,6 +1007,7 @@ export function useCodexLiveActivityStatus({
   const reconnectResourceRef = useRef<RegisteredReconnectResource | null>(null);
   const lastLiveReceiptAtRef = useRef(Date.now());
   const latestPendingActivityAtMsRef = useRef<number | undefined>(undefined);
+  const activeSubagentThreadsRef = useRef(new Map<string, boolean>());
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasLiveSource = Boolean(projectId && (liveLogStream || logSubject));
   const canReconnectLive = enabled === true && hasLiveSource;
@@ -1036,9 +1071,15 @@ export function useCodexLiveActivityStatus({
       payload: AcpStreamMessage | AcpStreamMessage[] | null | undefined,
       immediate: boolean = false,
     ) => {
-      const latest = getLatestEventTimeFromEvents(
-        normalizeLiveStreamPayload(payload),
-      );
+      const events = normalizeLiveStreamPayload(payload);
+      if (
+        updateActiveSubagentThreads(activeSubagentThreadsRef.current, events)
+      ) {
+        setActiveDescendantThreadIds(
+          activeSubagentThreadIds(activeSubagentThreadsRef.current),
+        );
+      }
+      const latest = getLatestEventTimeFromEvents(events);
       if (latest == null) return;
       latestPendingActivityAtMsRef.current =
         latestPendingActivityAtMsRef.current == null
@@ -1051,6 +1092,8 @@ export function useCodexLiveActivityStatus({
 
   useEffect(() => {
     setLastActivityAtMs(undefined);
+    activeSubagentThreadsRef.current.clear();
+    setActiveDescendantThreadIds([]);
     latestPendingActivityAtMsRef.current = undefined;
     if (flushTimerRef.current != null) {
       clearTimeout(flushTimerRef.current);
@@ -1108,6 +1151,14 @@ export function useCodexLiveActivityStatus({
                 .flatMap((payload) =>
                   normalizeLiveStreamPayload(payload as any),
                 );
+              activeSubagentThreadsRef.current.clear();
+              updateActiveSubagentThreads(
+                activeSubagentThreadsRef.current,
+                replay,
+              );
+              setActiveDescendantThreadIds(
+                activeSubagentThreadIds(activeSubagentThreadsRef.current),
+              );
               const latest = getLatestEventTimeFromEvents(replay);
               if (latest != null) {
                 setLastActivityAtMs((prev) =>
@@ -1228,6 +1279,16 @@ export function useCodexLiveActivityStatus({
           const initial = liveStream
             .getAll()
             .flatMap((payload) => normalizeLiveStreamPayload(payload as any));
+          if (!stopped) {
+            activeSubagentThreadsRef.current.clear();
+            updateActiveSubagentThreads(
+              activeSubagentThreadsRef.current,
+              initial,
+            );
+            setActiveDescendantThreadIds(
+              activeSubagentThreadIds(activeSubagentThreadsRef.current),
+            );
+          }
           if (!stopped && initial.length > 0) {
             const latest = getLatestEventTimeFromEvents(initial);
             if (latest != null) {
@@ -1315,5 +1376,5 @@ export function useCodexLiveActivityStatus({
     setLiveConnectionState,
   ]);
 
-  return { lastActivityAtMs, liveStatus };
+  return { activeDescendantThreadIds, lastActivityAtMs, liveStatus };
 }

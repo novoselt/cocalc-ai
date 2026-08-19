@@ -499,6 +499,10 @@ const ACP_TERMINAL_STALE_TURN_RECOVERY_LIMIT = envNumber(
   "COCALC_ACP_TERMINAL_STALE_TURN_RECOVERY_LIMIT",
   200,
 );
+const ACP_TERMINAL_STALE_TURN_RECOVERY_POLL_MS = envNumber(
+  "COCALC_ACP_TERMINAL_STALE_TURN_RECOVERY_POLL_MS",
+  30_000,
+);
 const ACP_AUTO_RECOVERY_MAX_RETRIES = envNumber(
   "COCALC_ACP_AUTO_RECOVERY_MAX_RETRIES",
   2,
@@ -4044,6 +4048,12 @@ export class ChatStreamWriter {
       }
       return;
     }
+    if (event.type === "event" && event.event.type === "subagent") {
+      // Subagent lifecycle is small but user-visible cost state. Keep it in
+      // the lightweight projection without exposing raw tools or commands.
+      this.livePreviewBatcher.add(event, { flush: true });
+      return;
+    }
     if (event.type === "event" && this.livePreviewText) {
       // The complete activity stream can publish tool and reasoning events
       // independently. Flush text queued before that activity so the inline
@@ -6067,6 +6077,7 @@ export async function recoverTerminalStaleAcpTurns(
     interruptedNotice?: string;
     sinceMs?: number;
     limit?: number;
+    periodicCandidatesOnly?: boolean;
   } = {},
 ): Promise<number> {
   const recoveryReason =
@@ -6089,6 +6100,12 @@ export async function recoverTerminalStaleAcpTurns(
   let recovered = 0;
   for (const turn of terminalTurns) {
     try {
+      if (
+        opts.periodicCandidatesOnly === true &&
+        !terminalTurnNeedsPeriodicRepair(turn)
+      ) {
+        continue;
+      }
       if (turn.state === "completed") {
         const job = turn.message_id
           ? getAcpJobByOpId(turn.message_id)
@@ -6164,6 +6181,47 @@ export async function recoverTerminalStaleAcpTurns(
     });
   }
   return recovered;
+}
+
+function terminalTurnNeedsPeriodicRepair(turn: AcpTurnLeaseRow): boolean {
+  if (turn.state === "completed") {
+    return hasQueuedCompletedAcpPayloads(turn);
+  }
+  const reason = `${turn.reason ?? ""}`.toLowerCase();
+  return (
+    reason.includes("ran out of storage") ||
+    reason.includes("storage became read-only") ||
+    reason.includes("synchronization database is damaged") ||
+    reason.includes("storage was temporarily unavailable")
+  );
+}
+
+let acpTerminalRecoveryPollerStarted = false;
+let acpTerminalRecoveryPollInFlight = false;
+
+function startAcpTerminalRecoveryPoller(client: ConatClient): void {
+  if (acpTerminalRecoveryPollerStarted) return;
+  acpTerminalRecoveryPollerStarted = true;
+  const poll = async () => {
+    if (acpTerminalRecoveryPollInFlight) return;
+    acpTerminalRecoveryPollInFlight = true;
+    try {
+      await recoverTerminalStaleAcpTurns(client, {
+        recoveryReason: "terminal ACP storage recovery",
+        periodicCandidatesOnly: true,
+      });
+    } catch (err) {
+      logger.warn("ACP terminal recovery poll failed", err);
+    } finally {
+      acpTerminalRecoveryPollInFlight = false;
+    }
+  };
+  const timer = setInterval(
+    () => void poll(),
+    ACP_TERMINAL_STALE_TURN_RECOVERY_POLL_MS,
+  );
+  timer.unref?.();
+  void poll();
 }
 
 export function shouldStopDetachedWorkerForIdle({
@@ -10013,6 +10071,9 @@ export async function init(
     },
     client,
   );
+  // Detached workers exit while idle, so terminal chat writes that failed
+  // under temporary storage pressure need a project-host-owned retry path.
+  startAcpTerminalRecoveryPoller(client);
   startAcpAutomationPoller();
   void republishAcpAutomationProjectIndexes().catch((err) => {
     logger.warn("failed to republish ACP automation project indexes", err);
@@ -10520,5 +10581,6 @@ export const acpTestInternals = {
   noteDetachedWorkerQueuePoll,
   persistQueuedUserMessageProjection,
   prepareQueuedUserMessageForExecution,
+  terminalTurnNeedsPeriodicRepair,
   waitForChatWriterDisposal,
 };

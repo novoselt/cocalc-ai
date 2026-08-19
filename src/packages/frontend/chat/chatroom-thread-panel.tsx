@@ -1992,6 +1992,9 @@ export function ChatRoomThreadPanel({
               }}
               activityLiveStatus={selectedRunningCodexActivity.liveStatus}
               lastActivityAtMs={selectedRunningCodexActivity.lastActivityAtMs}
+              activeDescendantThreadIds={
+                selectedRunningCodexActivity.activeDescendantThreadIds
+              }
               notifyOnTurnFinish={notifyOnTurnFinish}
               onNotifyOnTurnFinishChange={onNotifyOnTurnFinishChange}
               interruptRequested={interruptRequested}
