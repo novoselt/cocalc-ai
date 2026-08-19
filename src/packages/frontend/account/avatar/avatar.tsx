@@ -13,6 +13,7 @@ import {
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
 import { Gap, Tooltip } from "@cocalc/frontend/components";
+import type { GotoUserActions } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
 import { LanguageModelVendorAvatar } from "@cocalc/frontend/components/language-model-icon";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import { DEFAULT_COLOR } from "@cocalc/frontend/users/store";
@@ -148,14 +149,17 @@ const Avatar0: React.FC<Props> = (props) => {
         redux.getProjectActions(project_id).open_file({ path });
         return;
       case "file":
-        const actions = redux.getEditorActions(project_id, path);
-        // actions could be undefined, if file is closed
-        const gotoUser = actions?.["gotoUser"];
-        if (gotoUser != null) {
-          // This is at least implemented for the whiteboard (which doesn't
-          // have a good notion of lines), but should be done more
-          // generally, replacing the stuff below about cursor_line...
-          gotoUser(props.account_id);
+        // getEditorActions is untyped, so name the capability we want; that
+        // keeps the lookup checked against the editors that implement it.
+        // actions could be undefined, if file is closed.
+        const actions: Partial<GotoUserActions> | undefined =
+          redux.getEditorActions(project_id, path);
+        if (actions?.gotoUser != null && props.account_id != null) {
+          // Editors with a notion of position richer than a line -- jupyter
+          // cells, whiteboard elements -- jump to the user themselves. Call it
+          // as a method rather than through an extracted reference, so `this`
+          // is bound.
+          actions.gotoUser(props.account_id);
           return;
         }
         var line = get_cursor_line();
@@ -163,6 +167,18 @@ const Avatar0: React.FC<Props> = (props) => {
           redux.getProjectActions(project_id).goto_line(path, line);
         }
         return;
+    }
+  }
+
+  // click_avatar is a no-op without activity, so only those avatars become
+  // focusable -- this deliberately does not add a tab stop to every avatar in
+  // the app (chat, collaborator lists, ...), only to the ones that navigate.
+  const isClickable = props.activity != null;
+
+  function key_avatar(event: React.KeyboardEvent) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      click_avatar();
     }
   }
 
@@ -356,6 +372,14 @@ const Avatar0: React.FC<Props> = (props) => {
         ...props.style,
       }}
       onClick={click_avatar}
+      {...(isClickable
+        ? {
+            role: "button",
+            tabIndex: 0,
+            "aria-label": `Go to ${get_name()}`,
+            onKeyDown: key_avatar,
+          }
+        : {})}
     >
       {render_inside()}
     </span>

@@ -340,6 +340,29 @@ function getActiveDisplayPathForEditor(actions: {
   return displayPath ?? actions.path;
 }
 
+/*
+The signature of `BaseEditorActions.programmatically_goto_line`, for the callers
+that only have loosely typed editor actions -- `AppRedux.getEditorActions` has
+no declared return type, so it hands back `any`.
+
+Callers should type their local against this rather than hand-writing the
+signature.  Then renaming or re-signaturing the method below is a compile error
+at every call site, instead of silently turning an optional call into a no-op.
+*/
+/*
+Optional capability of editor actions: scroll to where another user is working.
+Implemented by editors with a notion of position richer than a line number --
+jupyter (cells) and the whiteboard (elements).  Those classes `implements` this,
+so renaming the method there is a compile error rather than a silently missing
+member at the (untyped) call site in the avatar click handler.
+*/
+export interface GotoUserActions {
+  gotoUser(account_id: string, frameId?: string): void;
+}
+
+export type ProgrammaticallyGotoLine =
+  BaseEditorActions["programmatically_goto_line"];
+
 export class BaseEditorActions<
   T extends CodeEditorState = CodeEditorState,
 > extends BaseActions<T | CodeEditorState> {

@@ -1,3 +1,4 @@
+import type { GotoUserActions } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
 /*
  *  This file is part of CoCalc: Copyright © 2020 Sagemath, Inc.
  *  License: MS-RSL – see LICENSE.md for details
@@ -45,7 +46,10 @@ const REMOVED_FRAME_TYPES: { readonly [type: string]: string } = {
   jupyter_minimal: "jupyter_studio",
 } as const;
 
-export class JupyterEditorActions extends BaseActions<JupyterEditorState> {
+export class JupyterEditorActions
+  extends BaseActions<JupyterEditorState>
+  implements GotoUserActions
+{
   protected doctype: string = "none"; // actual document is managed elsewhere
   public jupyter_actions: JupyterActions;
   private frame_actions: { [id: string]: NotebookFrameActions } = {};

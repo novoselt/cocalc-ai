@@ -450,10 +450,10 @@ export class TimeTravelActions extends CodeEditorActions<TimeTravelState> {
     });
   };
 
-  // We have not implemented any way to do programmatical_goto_line this for time travel yet.
+  // We have not implemented any way to do programmatically_goto_line this for time travel yet.
   // It will be very interesting and useful, because it will allow for
   // linking to a specific line/cell at a **specific point in time**.
-  // async programmatical_goto_line() {}
+  // async programmatically_goto_line() {}
 
   private gitCommand = async (args: string[], commit?: string) => {
     // log("gitCommand", { args, commit });
