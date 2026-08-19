@@ -16,6 +16,7 @@ import {
   createHostControlService,
   type HostControlApi,
   type HostAbuseProcessSnapshotResponse,
+  type HostAbuseFilesystemSnapshotResponse,
   type HostDiagnosticCommandOutput,
   type HostFilesystemSnapshotResponse,
   type HostNetworkSnapshotResponse,
@@ -25,6 +26,7 @@ import {
   type HostRuntimeLogSource,
 } from "@cocalc/conat/project-host/api";
 import { collectAbuseProcessSnapshot } from "./abuse-process-snapshot";
+import { collectAbuseFilesystemSnapshot } from "./abuse-filesystem-snapshot";
 import { createCachedPodmanSnapshotReader } from "./podman-diagnostics";
 import type {
   HostPressureState,
@@ -1681,6 +1683,11 @@ export async function startMasterRegistration({
       opts,
     ): Promise<HostAbuseProcessSnapshotResponse> {
       return await collectAbuseProcessSnapshot(opts);
+    },
+    async getAbuseFilesystemSnapshot(
+      opts,
+    ): Promise<HostAbuseFilesystemSnapshotResponse> {
+      return await collectAbuseFilesystemSnapshot(opts);
     },
     async getNetworkSnapshot(opts) {
       return await readNetworkSnapshot(opts);

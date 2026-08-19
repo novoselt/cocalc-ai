@@ -12,6 +12,8 @@ import isAdmin from "@cocalc/server/accounts/is-admin";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 import { isValidUUID, uuid } from "@cocalc/util/misc";
 import type {
+  AdminHostAbuseFilesystemsRequest,
+  AdminHostAbuseFilesystemsResponse,
   AdminHostAbuseProcessesRequest,
   AdminHostAbuseProcessesResponse,
   AdminHostDescribeRequest,
@@ -138,6 +140,7 @@ async function recordAudit({
   audit_id: string;
   account_id: string;
   mode:
+    | "abuse-filesystems"
     | "abuse-processes"
     | "describe"
     | "events"
@@ -647,7 +650,13 @@ async function runLiveHostDiagnostic<T>({
   account_id?: string;
   host?: string;
   host_id?: string;
-  mode: "abuse-processes" | "filesystem" | "net" | "podman" | "ps";
+  mode:
+    | "abuse-filesystems"
+    | "abuse-processes"
+    | "filesystem"
+    | "net"
+    | "podman"
+    | "ps";
   reason?: string;
   timeout?: number;
   run: (
@@ -684,9 +693,15 @@ async function runLiveHostDiagnostic<T>({
       server_time: new Date().toISOString(),
       snapshot,
     };
+    const diagnostic = snapshot as {
+      coverage?: string;
+      skipped_large_project_count?: number;
+      truncated?: Record<string, boolean>;
+    };
     const snapshotTruncated =
-      mode === "abuse-processes" &&
-      (snapshot as { coverage?: string }).coverage !== "complete";
+      (diagnostic.coverage != null && diagnostic.coverage !== "complete") ||
+      Number(diagnostic.skipped_large_project_count ?? 0) > 0 ||
+      Object.values(diagnostic.truncated ?? {}).some(Boolean);
     await recordAudit({
       audit_id,
       account_id: accountId,
@@ -710,6 +725,61 @@ async function runLiveHostDiagnostic<T>({
     });
     throw err;
   }
+}
+
+export async function scanAbuseFilesystems({
+  account_id,
+  host,
+  host_id,
+  max_projects,
+  max_entries_per_project,
+  max_total_entries,
+  max_depth,
+  timeout_ms,
+  reason,
+}: AdminAuthOpts &
+  AdminHostAbuseFilesystemsRequest): Promise<AdminHostAbuseFilesystemsResponse> {
+  const maxProjects = normalizePositiveInt({
+    value: max_projects,
+    fallback: 2_000,
+    max: 5_000,
+  });
+  const maxEntriesPerProject = normalizePositiveInt({
+    value: max_entries_per_project,
+    fallback: 2_000,
+    max: 10_000,
+  });
+  const maxTotalEntries = normalizePositiveInt({
+    value: max_total_entries,
+    fallback: 50_000,
+    max: 250_000,
+  });
+  const maxDepth = normalizePositiveInt({
+    value: max_depth,
+    fallback: 4,
+    max: 8,
+  });
+  const timeoutMs = normalizePositiveInt({
+    value: timeout_ms,
+    fallback: 10_000,
+    max: 30_000,
+  });
+  return await runLiveHostDiagnostic({
+    account_id,
+    host,
+    host_id,
+    mode: "abuse-filesystems",
+    reason,
+    timeout: timeoutMs + 15_000,
+    run: async (client) =>
+      await client.getAbuseFilesystemSnapshot({
+        max_projects: maxProjects,
+        max_entries_per_project: maxEntriesPerProject,
+        max_total_entries: maxTotalEntries,
+        max_depth: maxDepth,
+        timeout_ms: timeoutMs,
+      }),
+  });
 }
 
 export async function scanAbuseProcesses({

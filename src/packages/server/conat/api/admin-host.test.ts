@@ -8,7 +8,11 @@ import centralLog from "@cocalc/database/postgres/central-log";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 
-import { describe as describeHost, scanAbuseProcesses } from "./admin-host";
+import {
+  describe as describeHost,
+  scanAbuseFilesystems,
+  scanAbuseProcesses,
+} from "./admin-host";
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -147,6 +151,67 @@ describe("admin host API", () => {
         value: expect.objectContaining({
           mode: "abuse-processes",
           reason: "abuse triage",
+        }),
+      }),
+    );
+  });
+
+  it("returns an audited bounded abuse filesystem snapshot", async () => {
+    const hostId = "7843c648-86e4-45d3-9ed2-85ebe9faf9ee";
+    mockGetPool.mockReturnValue({
+      query: jest.fn(async () => ({
+        rows: [{ id: hostId, name: "host", status: "running" }],
+      })),
+    } as any);
+    const getAbuseFilesystemSnapshot = jest.fn(async () => ({
+      version: 1 as const,
+      fingerprint_version: "tree-metadata-v1" as const,
+      coverage: "complete" as const,
+      captured_at: "2026-08-19T00:00:00.000Z",
+      duration_ms: 4,
+      project_count: 1,
+      fingerprint_count: 1,
+      total_entry_count: 10,
+      missing_project_count: 0,
+      skipped_large_project_count: 0,
+      projects: [],
+      issues: [],
+      truncated: {
+        projects: false,
+        total_entries: false,
+        deadline: false,
+        issues: false,
+      },
+    }));
+    mockGetRoutedHostControlClient.mockResolvedValue({
+      getAbuseFilesystemSnapshot,
+    } as any);
+
+    const result = await scanAbuseFilesystems({
+      account_id: "account-id",
+      host_id: hostId,
+      max_projects: 999_999,
+      max_entries_per_project: 999_999,
+      max_total_entries: 999_999,
+      max_depth: 999_999,
+      timeout_ms: 999_999,
+      reason: "filesystem fingerprint triage",
+    });
+
+    expect(getAbuseFilesystemSnapshot).toHaveBeenCalledWith({
+      max_projects: 5_000,
+      max_entries_per_project: 10_000,
+      max_total_entries: 250_000,
+      max_depth: 8,
+      timeout_ms: 30_000,
+    });
+    expect(result.snapshot.coverage).toBe("complete");
+    expect(mockCentralLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "admin_host_operator",
+        value: expect.objectContaining({
+          mode: "abuse-filesystems",
+          reason: "filesystem fingerprint triage",
         }),
       }),
     );

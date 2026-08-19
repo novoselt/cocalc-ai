@@ -2506,6 +2506,7 @@ export type HostControlMethod =
   | "get-runtime-log"
   | "get-process-snapshot"
   | "get-abuse-process-snapshot"
+  | "get-abuse-filesystem-snapshot"
   | "get-network-snapshot"
   | "get-filesystem-snapshot"
   | "get-podman-snapshot"
@@ -3733,6 +3734,12 @@ export interface InterBayHostControlApi {
     host_id: string;
     get?: HostControlArg<"getAbuseProcessSnapshot">;
   }) => Promise<Awaited<ReturnType<HostControlApi["getAbuseProcessSnapshot"]>>>;
+  getAbuseFilesystemSnapshot: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getAbuseFilesystemSnapshot">;
+  }) => Promise<
+    Awaited<ReturnType<HostControlApi["getAbuseFilesystemSnapshot"]>>
+  >;
   getNetworkSnapshot: (opts: {
     host_id: string;
     get?: HostControlArg<"getNetworkSnapshot">;
@@ -4651,6 +4658,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   {
     name: "getAbuseProcessSnapshot",
     method: "get-abuse-process-snapshot",
+  },
+  {
+    name: "getAbuseFilesystemSnapshot",
+    method: "get-abuse-filesystem-snapshot",
   },
   { name: "getNetworkSnapshot", method: "get-network-snapshot" },
   { name: "getFilesystemSnapshot", method: "get-filesystem-snapshot" },

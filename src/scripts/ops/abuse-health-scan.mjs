@@ -2,11 +2,10 @@
 /*
  * Read-only abuse triage for the standard production health check.
  *
- * Control-plane rules run through audited admin SQL. Filesystem rules inspect
- * only recent top-level file metadata on site-funded hosts; they never read
- * file contents. Process rules consume only project ids and sanitized process
- * basenames from a bounded project-host RPC. Detection and containment are
- * intentionally separate.
+ * Control-plane rules run through audited admin SQL. Filesystem rules consume
+ * only bounded project-tree hashes and counts; file paths and contents remain
+ * on the host. Process rules consume only project ids and sanitized process
+ * basenames. Detection and containment are intentionally separate.
  */
 
 import { execFile, execFileSync } from "node:child_process";
@@ -102,9 +101,9 @@ Options:
   --bay <id>                          scan one bay; repeatable
   --hours <n>                         lookback in hours (default: 24)
   --min-accounts <n>                  cluster threshold (default: 3)
-  --min-fingerprint-projects <n>      repeated file threshold (default: 3)
-  --host-concurrency <n>              concurrent host metadata scans (default: 4)
-  --skip-files                        skip project-host metadata scans
+  --min-fingerprint-projects <n>      repeated tree threshold (default: 3)
+  --host-concurrency <n>              concurrent host fingerprint scans (default: 4)
+  --skip-files                        skip project-host tree fingerprints
   --skip-processes                    skip project-host process scans
   --node <path>                       Node executable for the CoCalc CLI
   --cli <path>                        CoCalc CLI script
@@ -549,28 +548,12 @@ async function scanControlPlane(opts) {
   };
 }
 
-export function parseFindMetadata(buffer, host) {
-  const fields = buffer.toString("utf8").split("\0");
-  if (fields.at(-1) === "") fields.pop();
-  const rows = [];
-  for (let i = 0; i + 3 < fields.length; i += 4) {
-    const directory = fields[i];
-    const match = /\/project-([0-9a-f-]{36})$/i.exec(directory);
-    if (!match) continue;
-    rows.push({
-      host_id: host.host_id,
-      host_name: host.name,
-      project_id: match[1],
-      name: fields[i + 1],
-      size: Number(fields[i + 2]),
-      mtime_epoch: Number(fields[i + 3]),
-    });
-  }
-  return rows;
-}
-
-export function buildFileFingerprints(rows, minimumProjects = 3) {
-  const groups = groupBy(rows, ({ name, size }) => `${name}\0${size}`);
+export function buildTreeFingerprints(rows, minimumProjects = 3) {
+  const eligible = rows.filter(
+    ({ complete, entry_count, file_count }) =>
+      complete && entry_count >= 3 && file_count >= 1,
+  );
+  const groups = groupBy(eligible, ({ structure_sha256 }) => structure_sha256);
   const fingerprints = [];
   for (const members of groups.values()) {
     const byProject = new Map(
@@ -578,63 +561,98 @@ export function buildFileFingerprints(rows, minimumProjects = 3) {
     );
     if (byProject.size < minimumProjects) continue;
     const unique = [...byProject.values()];
+    const metadataVariants = new Set(
+      unique.map(({ metadata_sha256 }) => metadata_sha256),
+    );
     fingerprints.push({
-      name: unique[0].name,
-      size: unique[0].size,
+      fingerprint_version: unique[0].fingerprint_version,
+      structure_sha256: unique[0].structure_sha256,
       project_count: unique.length,
       host_count: new Set(unique.map(({ host_id }) => host_id)).size,
+      entry_count_min: Math.min(
+        ...unique.map(({ entry_count }) => entry_count),
+      ),
+      entry_count_max: Math.max(
+        ...unique.map(({ entry_count }) => entry_count),
+      ),
+      metadata_variant_count: metadataVariants.size,
+      exact_metadata: metadataVariants.size === 1,
       project_ids: unique.map(({ project_id }) => project_id),
       hosts: [...new Set(unique.map(({ host_name }) => host_name))],
-      newest_mtime_epoch: Math.max(
-        ...unique.map(({ mtime_epoch }) => mtime_epoch),
-      ),
     });
   }
   return fingerprints.sort(
-    (a, b) => b.project_count - a.project_count || b.size - a.size,
+    (a, b) =>
+      Number(b.exact_metadata) - Number(a.exact_metadata) ||
+      b.project_count - a.project_count ||
+      b.entry_count_max - a.entry_count_max,
   );
 }
 
 async function scanHostFiles(opts, host) {
   try {
-    const endpoint = await runCliAsync(opts, [
+    const response = await runCliAsync(opts, [
+      "admin",
       "host",
-      "ssh",
+      "abuse-filesystems",
       host.host_id,
-      "--print",
-      "--no-connect",
+      "--max-projects",
+      "5000",
+      "--max-entries-per-project",
+      "2000",
+      "--max-total-entries",
+      "50000",
+      "--max-depth",
+      "4",
+      "--timeout-ms",
+      "10000",
+      "--reason",
+      "standard abuse health scan: bounded project tree fingerprints",
     ]);
-    const minutes = opts.hours * 60;
-    const command =
-      "sudo find /mnt/cocalc/project-* -xdev -maxdepth 1 -type f " +
-      `! -name '.*' -mmin -${minutes} -size +1023c -size -10485761c ` +
-      "-printf '%h\\0%f\\0%s\\0%T@\\0' 2>/dev/null";
-    const { stdout } = await execFileAsync(
-      "ssh",
-      [
-        "-n",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=5",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-p",
-        `${endpoint.ssh_port}`,
-        endpoint.ssh_target,
-        command,
-      ],
-      { encoding: "buffer", maxBuffer: 32 * 1024 * 1024 },
-    );
-    return { host, rows: parseFindMetadata(stdout, host) };
+    const snapshot = response.snapshot ?? {};
+    return {
+      host,
+      coverage: snapshot.coverage ?? "unavailable",
+      entry_count: Number(snapshot.total_entry_count ?? 0),
+      skipped_large_project_count: Number(
+        snapshot.skipped_large_project_count ?? 0,
+      ),
+      rows: (snapshot.projects ?? []).map((project) => ({
+        ...project,
+        fingerprint_version: snapshot.fingerprint_version,
+        host_id: host.host_id,
+        host_name: host.name,
+      })),
+      issues: snapshot.issues ?? [],
+      truncated: snapshot.truncated ?? {},
+    };
   } catch (err) {
-    return { host, rows: [], error: `${err}` };
+    return {
+      host,
+      coverage: "unavailable",
+      entry_count: 0,
+      skipped_large_project_count: 0,
+      rows: [],
+      issues: [],
+      truncated: {},
+      error: `${err}`,
+    };
   }
 }
 
 async function scanFileMetadata(opts) {
   if (opts.skipFiles) {
-    return { skipped: true, hosts: 0, files: 0, fingerprints: [], errors: [] };
+    return {
+      skipped: true,
+      hosts: 0,
+      projects: 0,
+      entries: 0,
+      fingerprintable_projects: 0,
+      skipped_large_projects: 0,
+      fingerprints: [],
+      partial_hosts: [],
+      errors: [],
+    };
   }
   const hosts = runCli(opts, ["host", "list", "--admin-view"]).filter(
     (host) =>
@@ -649,14 +667,28 @@ async function scanFileMetadata(opts) {
   return {
     skipped: false,
     hosts: hosts.length,
-    files: rows.length,
-    fingerprints: buildFileFingerprints(rows, opts.minFingerprintProjects),
+    projects: rows.length,
+    entries: scans.reduce((sum, scan) => sum + scan.entry_count, 0),
+    fingerprintable_projects: rows.filter(({ complete }) => complete).length,
+    skipped_large_projects: scans.reduce(
+      (sum, scan) => sum + scan.skipped_large_project_count,
+      0,
+    ),
+    fingerprints: buildTreeFingerprints(rows, opts.minFingerprintProjects),
+    partial_hosts: scans
+      .filter(({ coverage }) => coverage === "partial")
+      .map(({ host, issues, truncated }) => ({
+        host_id: host.host_id,
+        name: host.name,
+        issues,
+        truncated,
+      })),
     errors: scans
-      .filter(({ error }) => error)
+      .filter(({ error, coverage }) => error || coverage === "unavailable")
       .map(({ host, error }) => ({
         host_id: host.host_id,
         name: host.name,
-        error,
+        error: error ?? "project-host reported unavailable filesystem coverage",
       })),
   };
 }
@@ -778,19 +810,22 @@ function printHuman(report) {
     console.log("Project files: skipped");
   } else {
     console.log(
-      `Project files: ${report.files.files} recent top-level files across ` +
+      `Project trees: ${report.files.entries} entries in ` +
+        `${report.files.projects} active project(s) across ` +
         `${report.files.hosts} site-funded host(s)`,
     );
     if (!report.files.fingerprints.length) {
-      console.log("  No repeated filename/size fingerprints.");
+      console.log("  No repeated project-tree fingerprints.");
     }
     for (const fingerprint of report.files.fingerprints) {
       const correlation = fingerprint.control_plane_candidates.length
         ? "[CORRELATED] "
         : "";
       console.log(
-        `  ${correlation}${JSON.stringify(fingerprint.name)} size=${fingerprint.size} ` +
-          `projects=${fingerprint.project_count} hosts=${fingerprint.host_count}`,
+        `  ${correlation}tree=${fingerprint.structure_sha256.slice(0, 16)} ` +
+          `projects=${fingerprint.project_count} hosts=${fingerprint.host_count} ` +
+          `entries=${fingerprint.entry_count_min}-${fingerprint.entry_count_max} ` +
+          `metadata_variants=${fingerprint.metadata_variant_count}`,
       );
       if (fingerprint.control_plane_candidates.length) {
         console.log(
@@ -798,6 +833,16 @@ function printHuman(report) {
         );
       }
       console.log(`    projects: ${fingerprint.project_ids.join(", ")}`);
+    }
+    if (report.files.skipped_large_projects) {
+      console.log(
+        `  Oversized project trees excluded: ${report.files.skipped_large_projects}`,
+      );
+    }
+    if (report.files.partial_hosts.length) {
+      console.log(
+        `  Partial filesystem coverage: ${report.files.partial_hosts.length} host(s)`,
+      );
     }
     if (report.files.errors.length) {
       console.log(`  Incomplete host scans: ${report.files.errors.length}`);
@@ -907,6 +952,7 @@ async function main() {
   else printHuman(report);
   if (
     report.control_plane.errors.length > 0 ||
+    report.files.partial_hosts.length > 0 ||
     report.files.errors.length > 0 ||
     report.processes.partial_hosts.length > 0 ||
     report.processes.errors.length > 0

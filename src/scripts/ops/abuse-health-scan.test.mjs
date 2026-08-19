@@ -3,10 +3,9 @@ import test from "node:test";
 
 import {
   buildAccountCandidates,
-  buildFileFingerprints,
   buildProcessCandidates,
+  buildTreeFingerprints,
   looksRandomLocalPart,
-  parseFindMetadata,
 } from "./abuse-health-scan.mjs";
 
 test("recognizes generated email local parts conservatively", () => {
@@ -105,31 +104,27 @@ test("keeps a small same-network institutional cohort at watch severity", () => 
   assert.equal(candidates[0].status, "watch");
 });
 
-test("parses NUL-delimited top-level metadata and groups fingerprints", () => {
-  const host = { host_id: "host-1", name: "host one" };
+test("groups complete project trees without exposing path data", () => {
   const ids = [
     "11111111-1111-4111-8111-111111111111",
     "22222222-2222-4222-8222-222222222222",
     "33333333-3333-4333-8333-333333333333",
   ];
-  const raw = Buffer.from(
-    ids
-      .map((id, index) =>
-        [
-          `/mnt/cocalc/project-${id}`,
-          "aaa.py",
-          "45325",
-          `${100 + index}`,
-          "",
-        ].join("\0"),
-      )
-      .join(""),
-  );
-  const rows = parseFindMetadata(raw, host);
-  const fingerprints = buildFileFingerprints(rows, 3);
-  assert.equal(rows.length, 3);
+  const rows = ids.map((project_id, index) => ({
+    project_id,
+    host_id: index === 2 ? "host-2" : "host-1",
+    host_name: index === 2 ? "host two" : "host one",
+    fingerprint_version: "tree-metadata-v1",
+    structure_sha256: "structure-hash",
+    metadata_sha256: index === 2 ? "metadata-b" : "metadata-a",
+    entry_count: 12,
+    file_count: 4,
+    complete: true,
+  }));
+  const fingerprints = buildTreeFingerprints(rows, 3);
   assert.equal(fingerprints.length, 1);
-  assert.equal(fingerprints[0].name, "aaa.py");
-  assert.equal(fingerprints[0].size, 45325);
+  assert.equal(fingerprints[0].structure_sha256, "structure-hash");
+  assert.equal(fingerprints[0].metadata_variant_count, 2);
+  assert.equal(fingerprints[0].host_count, 2);
   assert.deepEqual(fingerprints[0].project_ids, ids);
 });

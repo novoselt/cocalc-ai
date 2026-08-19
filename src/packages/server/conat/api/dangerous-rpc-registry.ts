@@ -106,6 +106,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason:
       "admin-only bounded and audited per-project process-name inspection without argv, environment, paths, or process ids",
   },
+  "adminHost.scanAbuseFilesystems": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "admin-only bounded and audited project tree fingerprint inspection without file contents, paths, or symlink targets",
+  },
   "adminSupport.update": {
     decision: "fresh-auth-required",
     reason: "posts comments or changes customer-visible Zendesk ticket state",
