@@ -356,6 +356,7 @@ export class JupyterKernel
 
   private updateSettings = (settings: {
     backend_state?: BackendState;
+    last_backend_state?: number;
     kernel_state?: KernelState;
   }): void => {
     const actions = this._actions;
@@ -384,7 +385,14 @@ export class JupyterKernel
     this._state = state;
     this.emit("state", this._state);
     this.emit(this._state); // we *SHOULD* use this everywhere, not above.
-    this.updateSettings({ backend_state: state });
+    // last_backend_state records when the backend state last changed, so the
+    // frontend can tell which cells ran since the kernel entered "running".
+    // It must be written together with backend_state: without it the run
+    // progress meter has no baseline and stays stuck at 0.
+    this.updateSettings({
+      backend_state: state,
+      last_backend_state: Date.now(),
+    });
   };
 
   private setFailed = (error: string): void => {

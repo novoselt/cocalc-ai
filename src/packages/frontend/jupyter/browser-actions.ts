@@ -1827,6 +1827,7 @@ export class JupyterActions extends JupyterActions0 {
       ?.removeListener("change", this.account_change);
     this.syncdb?.removeListener("open-phase", this.handleSyncdbOpenPhase);
     this.store?.removeListener("cell_change", this.reconcileRunCellOverlay);
+    this.updateRunProgressSoon.cancel();
   }
 
   private syncdb_cursor_activity = (): void => {
@@ -2476,6 +2477,25 @@ export class JupyterActions extends JupyterActions0 {
       this._state = "ready";
     }
     this.check_select_kernel();
+  }
+
+  // Runtime state changes on every state transition of every cell, so this is
+  // debounced: updateRunProgress walks all cells.  maxWait matters -- during a
+  // run-all of fast cells the transitions never pause for 500ms, so a
+  // trailing-only debounce would not fire until the whole run finished.
+  private updateRunProgressSoon = debounce(
+    () => {
+      if (this.isClosed()) {
+        return;
+      }
+      this.updateRunProgress();
+    },
+    500,
+    { maxWait: 1500 },
+  );
+
+  protected __runtime_state_change_post_hook(): void {
+    this.updateRunProgressSoon();
   }
 
   waitUntilProjectIsRunning = reuseInFlight(async () => {

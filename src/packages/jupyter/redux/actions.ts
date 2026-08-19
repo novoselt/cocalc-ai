@@ -59,6 +59,7 @@ import {
   JUPYTER_RUNTIME_CELL_KEY_PREFIX,
   JUPYTER_RUNTIME_LIMITS_KEY,
   JUPYTER_RUNTIME_NBCONVERT_KEY,
+  JUPYTER_RUNTIME_SETTINGS_FIELDS,
   JUPYTER_RUNTIME_SETTINGS_KEY,
   JUPYTER_RUNTIME_USER_KEY,
   normalizeJupyterRuntimeCellState,
@@ -291,11 +292,13 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     this.reconcilePendingRuntimeRecord(change.key);
     if (isJupyterRuntimeCellKey(change.key)) {
       this.applyRuntimeCellToStore(jupyterRuntimeCellIdFromKey(change.key));
+      this.__runtime_state_change_post_hook();
       return;
     }
     switch (change.key) {
       case JUPYTER_RUNTIME_SETTINGS_KEY:
         this.applyRuntimeSettingsToStore();
+        this.__runtime_state_change_post_hook();
         return;
       case JUPYTER_RUNTIME_NBCONVERT_KEY:
         this.applyRuntimeNbconvertToStore();
@@ -303,10 +306,19 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     }
   };
 
+  // Called after runtime state (per-cell state/start/end, backend_state,
+  // last_backend_state) has been copied into the store.  Both inputs of the
+  // run progress meter arrive over this path rather than over the syncdb, so
+  // anything derived from them has to recompute here.
+  protected __runtime_state_change_post_hook(): void {
+    // no-op in the base class -- overridden in the browser.
+  }
+
   private applyRuntimeStateSnapshot = (): void => {
     this.applyRuntimeSettingsToStore();
     this.applyRuntimeNbconvertToStore();
     this.applyRuntimeCellsSnapshot();
+    this.__runtime_state_change_post_hook();
   };
 
   private getRuntimeRecord<T extends object>(key: string): T | undefined {
@@ -339,11 +351,6 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     if (this.runtimeState != null) {
       this.runtimeState.delete(key);
     }
-  };
-
-  private patchRuntimeRecord = (key: string, patch: object): void => {
-    const cur = this.getRuntimeRecord<object>(key) ?? {};
-    this.setRuntimeRecordValue(key, { ...cur, ...patch });
   };
 
   private setRuntimeRecord = (key: string, value: object): void => {
@@ -541,19 +548,42 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     }
   };
 
-  private applyRuntimeSettingsToStore = (): void => {
-    const runtimeSettings =
-      this.getRuntimeRecord<JupyterRuntimeSettings>(
+  // Reads each settings field by its own path instead of through the record's
+  // field manifest.  A DKO object replaces its manifest on every write, so a
+  // writer that merged against the manifest-filtered record could publish a
+  // manifest missing a field another writer had just set, hiding it until the
+  // next write.  Going per field makes a stale manifest unable to hide values,
+  // the same recovery the cell records use for their terminal `end` field.
+  private getRuntimeSettingsRecord = (): JupyterRuntimeSettings => {
+    if (this.pendingDeletedRuntimeRecords.has(JUPYTER_RUNTIME_SETTINGS_KEY)) {
+      return {};
+    }
+    const pending = this.pendingRuntimeRecords.get(
+      JUPYTER_RUNTIME_SETTINGS_KEY,
+    );
+    if (pending != null) {
+      return pending as JupyterRuntimeSettings;
+    }
+    const record: JupyterRuntimeSettings = {};
+    for (const key of JUPYTER_RUNTIME_SETTINGS_FIELDS) {
+      const value = this.runtimeState?.getField?.(
         JUPYTER_RUNTIME_SETTINGS_KEY,
-      ) ?? {};
+        key,
+      );
+      if (value != null) {
+        (record as any)[key] = value;
+      }
+    }
+    return record;
+  };
+
+  private applyRuntimeSettingsToStore = (): void => {
+    const runtimeSettings = this.getRuntimeSettingsRecord();
     const obj: Partial<JupyterRuntimeSettings> = {};
-    for (const key of [
-      "backend_state",
-      "kernel_state",
-      "last_backend_state",
-      "kernel_error",
-    ] as const) {
-      if (runtimeSettings[key] !== undefined) {
+    for (const key of JUPYTER_RUNTIME_SETTINGS_FIELDS) {
+      // Skip null as well as undefined: the record carries a fixed manifest,
+      // so an unset field is written as null and must not clobber the store.
+      if (runtimeSettings[key] != null) {
         (obj as any)[key] = runtimeSettings[key];
       }
     }
@@ -593,20 +623,35 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   };
 
   public set_runtime_settings = (settings: JupyterRuntimeSettings): void => {
-    this.patchRuntimeRecord(JUPYTER_RUNTIME_SETTINGS_KEY, settings);
+    if (this.is_closed()) {
+      return;
+    }
+    const merged = { ...this.getRuntimeSettingsRecord(), ...settings };
+    // Write only fields we actually have a value for.  Materializing the rest
+    // as null -- to publish a complete manifest, the way the cell records do
+    // -- would destroy a concurrent writer's value: getField sees only the
+    // local replica, so a field that has not propagated yet, or any patch
+    // queued before the DKO opened, reads as absent, and DKO resolves the
+    // conflict in favour of the local write.  A cell record can use a fixed
+    // manifest because one writer owns all three of its fields; the settings
+    // record is shared between the project's kernel and the browser's
+    // optimistic state.  Leaving the manifest incomplete is harmless here
+    // because every settings read goes through getRuntimeSettingsRecord,
+    // which bypasses the manifest.
+    const next: JupyterRuntimeSettings = {};
+    for (const key of JUPYTER_RUNTIME_SETTINGS_FIELDS) {
+      if (merged[key] != null) {
+        (next as any)[key] = merged[key];
+      }
+    }
+    this.setRuntimeRecord(JUPYTER_RUNTIME_SETTINGS_KEY, next);
     this.applyRuntimeSettingsToStore();
   };
 
   public get_runtime_setting = <K extends keyof JupyterRuntimeSettings>(
     key: K,
   ): JupyterRuntimeSettings[K] | undefined => {
-    const runtimeSettings = this.getRuntimeRecord<JupyterRuntimeSettings>(
-      JUPYTER_RUNTIME_SETTINGS_KEY,
-    );
-    if (runtimeSettings?.[key] !== undefined) {
-      return runtimeSettings[key];
-    }
-    return undefined;
+    return this.getRuntimeSettingsRecord()[key] ?? undefined;
   };
 
   public set_runtime_nbconvert = (nbconvert: JupyterRuntimeNbconvert): void => {
@@ -2572,7 +2617,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
     // count a currently running cell as 0.5.
     let total = 0;
     let ran = 0;
-    for (const [_, cell] of cells) {
+    for (const [id, cell] of cells) {
       if (
         cell.get("cell_type", "code") != "code" ||
         !cell.get("input")?.trim()
@@ -2581,8 +2626,15 @@ export class JupyterActions extends Actions<JupyterStoreState> {
         continue;
       }
       total += 1;
-      if ((cell.get("start") ?? 0) >= last) {
-        if (cell.get("end")) {
+      // Timestamps must come from the runtime record rather than the store
+      // cell.  Optimistic browser rendering overlays the store with
+      // browser-clock start/end values (set_local_runtime_cell_state), which
+      // are not comparable with last_backend_state -- that one is stamped by
+      // the project.  Comparing across the two clocks miscounts whenever they
+      // disagree, and nothing later repairs it.
+      const runtimeCell = this.getRuntimeCell(id);
+      if ((runtimeCell?.start ?? 0) >= last) {
+        if (runtimeCell?.end) {
           ran += 1;
         } else {
           ran += 0.5;
