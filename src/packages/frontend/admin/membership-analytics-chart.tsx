@@ -14,8 +14,8 @@ import type {
   MembershipAnalyticsBreakdown,
   MembershipAnalyticsSeries,
   MembershipAnalyticsView,
-} from "./personal-membership-analytics-view";
-import { totalMembershipAnalyticsPoints } from "./personal-membership-analytics-view";
+} from "./membership-analytics-view";
+import { totalMembershipAnalyticsPoints } from "./membership-analytics-view";
 
 export type MembershipAnalyticsChartMode = "stacked" | "lines";
 export type MembershipAnalyticsMetric = "revenue" | "memberships";
@@ -377,11 +377,13 @@ export function MembershipAnalyticsLegend({
   chartMode: MembershipAnalyticsChartMode;
 }) {
   const grouped =
-    breakdown === "tier-interval" || breakdown === "tier-lifecycle";
+    breakdown === "tier-interval" ||
+    breakdown === "tier-lifecycle" ||
+    breakdown === "channel-tier";
   const tierGroups = new Map<string, MembershipAnalyticsSeriesVisual[]>();
   if (grouped) {
     for (const visual of visuals) {
-      const key = visual.series.tierId ?? visual.series.key;
+      const key = visual.series.groupKey ?? visual.series.key;
       tierGroups.set(key, [...(tierGroups.get(key) ?? []), visual]);
     }
   }

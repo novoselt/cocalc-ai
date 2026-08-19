@@ -18,8 +18,10 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type {
   AdminMembershipTierRow,
+  MembershipAllocationChannel,
   MembershipAllocationSeries,
 } from "@cocalc/conat/hub/api/purchases";
+import { Tooltip } from "@cocalc/frontend/components";
 import ShowError from "@cocalc/frontend/components/error";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
@@ -31,14 +33,14 @@ import {
   MembershipAnalyticsSeriesSwatch,
   type MembershipAnalyticsChartMode,
   type MembershipAnalyticsSeriesVisual,
-} from "./personal-membership-analytics-chart";
+} from "./membership-analytics-chart";
 import {
   buildMembershipAnalyticsView,
   shiftMembershipAnalyticsDay,
   type MembershipAnalyticsBreakdown,
   type MembershipAnalyticsSummaryRow,
   type MembershipAnalyticsTier,
-} from "./personal-membership-analytics-view";
+} from "./membership-analytics-view";
 
 const { Text, Title } = Typography;
 const DAYS_IN_YEAR_COMPARISON = 364;
@@ -47,16 +49,44 @@ const MONTHLY_EQUIVALENT_DAYS = 365.25 / 12;
 type Period = "year" | "all";
 type Comparison = 0 | 7 | 28 | 364;
 
-const BREAKDOWN_OPTIONS: Array<{
+export type MembershipAnalyticsBreakdownOption = {
   value: MembershipAnalyticsBreakdown;
   label: string;
-}> = [
+};
+
+const PERSONAL_MEMBERSHIP_BREAKDOWN_OPTIONS: MembershipAnalyticsBreakdownOption[] =
+  [
+    { value: "tier", label: "Tier" },
+    { value: "tier-interval", label: "Tier and billing period" },
+    { value: "tier-lifecycle", label: "Tier and lifecycle" },
+    { value: "interval", label: "Billing period" },
+    { value: "lifecycle", label: "Lifecycle" },
+  ];
+
+const MULTI_CHANNEL_BREAKDOWN_OPTIONS: MembershipAnalyticsBreakdownOption[] = [
+  { value: "channel", label: "Channel" },
+  { value: "channel-tier", label: "Channel and tier" },
   { value: "tier", label: "Tier" },
-  { value: "tier-interval", label: "Tier and billing period" },
-  { value: "tier-lifecycle", label: "Tier and lifecycle" },
-  { value: "interval", label: "Billing period" },
-  { value: "lifecycle", label: "Lifecycle" },
 ];
+
+const SINGLE_CHANNEL_BREAKDOWN_OPTIONS: MembershipAnalyticsBreakdownOption[] = [
+  { value: "tier", label: "Tier" },
+];
+
+export function membershipBreakdownOptions(
+  channels: MembershipAllocationChannel[],
+): MembershipAnalyticsBreakdownOption[] {
+  if (channels.length !== 1) return MULTI_CHANNEL_BREAKDOWN_OPTIONS;
+  return channels[0] === "personal"
+    ? PERSONAL_MEMBERSHIP_BREAKDOWN_OPTIONS
+    : SINGLE_CHANNEL_BREAKDOWN_OPTIONS;
+}
+
+function defaultBreakdown(
+  channels: MembershipAllocationChannel[],
+): MembershipAnalyticsBreakdown {
+  return channels.length === 1 ? "tier" : "channel";
+}
 
 const COMPARISON_OPTIONS: Array<{ value: Comparison; label: string }> = [
   { value: 0, label: "None" },
@@ -153,13 +183,23 @@ function AnalyticsTable({
   chartMode,
   latestDay,
   comparison,
+  teamOnly,
+  breakdown,
 }: {
   rows: MembershipAnalyticsSummaryRow[];
   visualByKey: Map<string, MembershipAnalyticsSeriesVisual>;
   chartMode: MembershipAnalyticsChartMode;
   latestDay: string;
   comparison?: string;
+  teamOnly: boolean;
+  breakdown: MembershipAnalyticsBreakdown;
 }) {
+  const categoryTitle =
+    breakdown === "channel"
+      ? "Channel"
+      : breakdown === "channel-tier"
+        ? "Channel and membership"
+        : "Membership";
   return (
     <Space vertical style={{ width: "100%" }}>
       <Title level={4} style={{ margin: 0 }}>
@@ -173,7 +213,7 @@ function AnalyticsTable({
         size="small"
         columns={[
           {
-            title: "Membership",
+            title: categoryTitle,
             dataIndex: "label",
             render: (label: string, row) => {
               const visual = visualByKey.get(row.key);
@@ -194,12 +234,39 @@ function AnalyticsTable({
             title: "Active memberships",
             dataIndex: "activeMemberships",
             align: "right",
-            render: formatInteger,
+            render: (value: number, row) => {
+              const assigned = formatInteger(value);
+              if (
+                (row.channel !== "team" && !teamOnly) ||
+                row.purchasedCapacity <= 0
+              ) {
+                return assigned;
+              }
+              const paid = formatInteger(row.purchasedCapacity);
+              return (
+                <Tooltip
+                  title={
+                    <Space vertical size={0}>
+                      <span>Assigned: {assigned}</span>
+                      <span>Paid: {paid}</span>
+                    </Space>
+                  }
+                >
+                  <span
+                    aria-label={`${assigned} assigned memberships out of ${paid} paid seats`}
+                    style={{ whiteSpace: "nowrap" }}
+                    tabIndex={0}
+                  >
+                    {assigned} / {paid}
+                  </span>
+                </Tooltip>
+              );
+            },
           },
           ...(comparison
             ? [
                 {
-                  title: "Membership change",
+                  title: "Change",
                   key: "membershipChange",
                   align: "right" as const,
                   render: (_: unknown, row: MembershipAnalyticsSummaryRow) => (
@@ -247,7 +314,11 @@ function AnalyticsTable({
   );
 }
 
-export function MembershipAnalyticsAdmin() {
+export function MembershipAnalyticsDashboard({
+  channels,
+}: {
+  channels: MembershipAllocationChannel[];
+}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [allocation, setAllocation] =
@@ -256,7 +327,7 @@ export function MembershipAnalyticsAdmin() {
   const [period, setPeriod] = useState<Period>("year");
   const [comparison, setComparison] = useState<Comparison>(364);
   const [breakdown, setBreakdown] =
-    useState<MembershipAnalyticsBreakdown>("tier");
+    useState<MembershipAnalyticsBreakdown>("channel");
   const [chartMode, setChartMode] =
     useState<MembershipAnalyticsChartMode>("stacked");
   const [hoverDay, setHoverDay] = useState<string>();
@@ -273,7 +344,6 @@ export function MembershipAnalyticsAdmin() {
         webapp_client.conat_client.hub.purchases.getMembershipAllocationSeries({
           start,
           end,
-          channels: ["personal", "direct-student"],
         }),
         webapp_client.conat_client.hub.purchases.getMembershipTierAdminOverview(
           {},
@@ -305,29 +375,40 @@ export function MembershipAnalyticsAdmin() {
     }
   }
 
-  const earliest = allocation?.rows.length
-    ? allocation.rows
+  const selectedChannels = new Set(channels);
+  const selectedRows =
+    allocation?.rows.filter(({ channel }) => selectedChannels.has(channel)) ??
+    [];
+  const breakdownOptions = membershipBreakdownOptions(channels);
+  const effectiveBreakdown = breakdownOptions.some(
+    ({ value }) => value === breakdown,
+  )
+    ? breakdown
+    : defaultBreakdown(channels);
+  const earliest = selectedRows.length
+    ? selectedRows
         .map(({ day }) => new Date(day).toISOString().slice(0, 10))
         .sort()[0]
     : queryStart();
   const start = displayedStart(period, earliest);
   const end = todayUtc();
-  const view = allocation
-    ? buildMembershipAnalyticsView({
-        rows: allocation.rows,
-        tiers,
-        breakdown,
-        start,
-        end,
-        historyStart: allocation.start,
-        comparisonDays: comparison,
-      })
-    : undefined;
+  const view =
+    allocation && channels.length
+      ? buildMembershipAnalyticsView({
+          rows: selectedRows,
+          tiers,
+          breakdown: effectiveBreakdown,
+          start,
+          end,
+          historyStart: allocation.start,
+          comparisonDays: comparison,
+        })
+      : undefined;
   const visuals = view
     ? buildMembershipAnalyticsSeriesVisuals({
         series: view.series,
         tiers,
-        breakdown,
+        breakdown: effectiveBreakdown,
       })
     : [];
   const comparisonText =
@@ -345,9 +426,10 @@ export function MembershipAnalyticsAdmin() {
         <Space>
           <Text>Breakdown:</Text>
           <Select
-            value={breakdown}
-            options={BREAKDOWN_OPTIONS}
+            value={effectiveBreakdown}
+            options={breakdownOptions}
             onChange={setBreakdown}
+            disabled={!channels.length}
             style={{ minWidth: 190 }}
           />
         </Space>
@@ -387,7 +469,7 @@ export function MembershipAnalyticsAdmin() {
       </Space>
 
       {loading ? (
-        <Spin description="Loading personal membership history..." />
+        <Spin description="Loading membership revenue history..." />
       ) : null}
       {error ? <ShowError error={error} /> : null}
       {failedBays.length ? (
@@ -412,7 +494,7 @@ export function MembershipAnalyticsAdmin() {
         <Space vertical size="middle" style={{ width: "100%" }}>
           <MembershipAnalyticsLegend
             visuals={visuals}
-            breakdown={breakdown}
+            breakdown={effectiveBreakdown}
             comparisonLabel={comparisonText}
             chartMode={chartMode}
           />
@@ -453,12 +535,18 @@ export function MembershipAnalyticsAdmin() {
             chartMode={chartMode}
             latestDay={view.latestDay}
             comparison={comparisonText}
+            teamOnly={channels.length === 1 && channels[0] === "team"}
+            breakdown={effectiveBreakdown}
           />
         </Space>
       ) : allocation && !loading ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No personal membership allocation data is available."
+          description={
+            channels.length
+              ? "No membership allocation data is available for the selected channels."
+              : "Select at least one membership channel."
+          }
         />
       ) : null}
     </Space>

@@ -7,8 +7,8 @@ import {
   buildMembershipAnalyticsHoverModel,
   buildMembershipAnalyticsSeriesVisuals,
   nearestMembershipAnalyticsHoverPointIndex,
-} from "./personal-membership-analytics-chart";
-import type { MembershipAnalyticsSeries } from "./personal-membership-analytics-view";
+} from "./membership-analytics-chart";
+import type { MembershipAnalyticsSeries } from "./membership-analytics-view";
 
 function series(
   key: string,
@@ -128,6 +128,7 @@ describe("personal membership analytics chart", () => {
               displayDay: "2026-06-17",
               actualDay: "2026-06-17",
               activeMemberships: 8,
+              purchasedCapacity: 0,
               revenueCents: 97800,
             },
           ],
@@ -136,6 +137,7 @@ describe("personal membership analytics chart", () => {
               displayDay: "2026-06-17",
               actualDay: "2025-06-18",
               activeMemberships: 5,
+              purchasedCapacity: 0,
               revenueCents: 53000,
             },
           ],

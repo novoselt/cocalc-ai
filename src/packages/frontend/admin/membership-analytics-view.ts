@@ -5,11 +5,19 @@
 
 import type {
   MembershipAllocationBillingInterval,
+  MembershipAllocationChannel,
   MembershipAllocationDailyRow,
   MembershipAllocationLifecycle,
 } from "@cocalc/conat/hub/api/purchases";
 
+import {
+  membershipChannelLabel,
+  membershipChannelOrder,
+} from "./membership-analytics-channels";
+
 export type MembershipAnalyticsBreakdown =
+  | "channel"
+  | "channel-tier"
   | "tier"
   | "tier-interval"
   | "tier-lifecycle"
@@ -26,6 +34,7 @@ export interface MembershipAnalyticsPoint {
   displayDay: string;
   actualDay: string;
   activeMemberships: number;
+  purchasedCapacity: number;
   revenueCents: number;
 }
 
@@ -35,6 +44,8 @@ export interface MembershipAnalyticsSeries {
   groupLabel?: string;
   detailLabel?: string;
   tierId?: string;
+  channel?: MembershipAllocationChannel;
+  groupKey?: string;
   variant?: MembershipAllocationBillingInterval | MembershipAllocationLifecycle;
   priority: number;
   order: number;
@@ -46,8 +57,11 @@ export interface MembershipAnalyticsSummaryRow {
   key: string;
   label: string;
   total?: boolean;
+  channel?: MembershipAllocationChannel;
   activeMemberships: number;
   comparisonActiveMemberships: number;
+  purchasedCapacity: number;
+  comparisonPurchasedCapacity: number;
   revenueCents: number;
   comparisonRevenueCents: number;
 }
@@ -93,6 +107,7 @@ const LIFECYCLE_ORDER: Record<MembershipAllocationLifecycle, number> = {
 
 interface DailyValue {
   activeMemberships: number;
+  purchasedCapacity: number;
   revenueCents: number;
 }
 
@@ -102,6 +117,9 @@ interface Category {
   groupLabel?: string;
   detailLabel?: string;
   tierId?: string;
+  channel?: MembershipAllocationChannel;
+  groupKey?: string;
+  groupOrder?: number;
   variant?: MembershipAllocationBillingInterval | MembershipAllocationLifecycle;
   priority: number;
   order: number;
@@ -151,7 +169,29 @@ function categoryForRow(
   const tier = tierMetadata(row, tiers);
   const interval = row.billing_interval;
   const lifecycle = row.lifecycle;
+  const channel = row.channel;
   switch (breakdown) {
+    case "channel":
+      return {
+        key: `channel:${channel}`,
+        label: membershipChannelLabel(channel),
+        channel,
+        priority: 0,
+        order: membershipChannelOrder(channel),
+      };
+    case "channel-tier":
+      return {
+        key: `channel:${channel}:tier:${tier.id}`,
+        label: `${membershipChannelLabel(channel)} · ${tier.label}`,
+        groupLabel: membershipChannelLabel(channel),
+        detailLabel: tier.label,
+        groupKey: `channel:${channel}`,
+        groupOrder: membershipChannelOrder(channel),
+        channel,
+        tierId: tier.id,
+        priority: tier.priority,
+        order: 0,
+      };
     case "tier":
       return {
         key: `tier:${tier.id}`,
@@ -166,6 +206,8 @@ function categoryForRow(
         label: `${tier.label} · ${INTERVAL_LABELS[interval]}`,
         groupLabel: tier.label,
         detailLabel: INTERVAL_LABELS[interval],
+        groupKey: `tier:${tier.id}`,
+        groupOrder: -tier.priority,
         tierId: tier.id,
         variant: interval,
         priority: tier.priority,
@@ -177,6 +219,8 @@ function categoryForRow(
         label: `${tier.label} · ${LIFECYCLE_LABELS[lifecycle]}`,
         groupLabel: tier.label,
         detailLabel: LIFECYCLE_LABELS[lifecycle],
+        groupKey: `tier:${tier.id}`,
+        groupOrder: -tier.priority,
         tierId: tier.id,
         variant: lifecycle,
         priority: tier.priority,
@@ -202,6 +246,8 @@ function categoryForRow(
 }
 
 function categorySort(a: Category, b: Category): number {
+  const groupOrder = (a.groupOrder ?? 0) - (b.groupOrder ?? 0);
+  if (groupOrder !== 0) return groupOrder;
   const priorityOrder = b.priority - a.priority;
   if (priorityOrder !== 0) return priorityOrder;
   if (a.tierId != null && b.tierId != null && a.tierId !== b.tierId) {
@@ -215,11 +261,18 @@ function categorySort(a: Category, b: Category): number {
 }
 
 function valueAt(values: Map<string, DailyValue>, day: string): DailyValue {
-  return values.get(day) ?? { activeMemberships: 0, revenueCents: 0 };
+  return (
+    values.get(day) ?? {
+      activeMemberships: 0,
+      purchasedCapacity: 0,
+      revenueCents: 0,
+    }
+  );
 }
 
 function addValues(target: DailyValue, value: DailyValue): void {
   target.activeMemberships += value.activeMemberships;
+  target.purchasedCapacity += value.purchasedCapacity;
   target.revenueCents += value.revenueCents;
 }
 
@@ -262,9 +315,11 @@ export function buildMembershipAnalyticsView({
     const values = valuesByCategory.get(category.key) ?? new Map();
     const value = values.get(day) ?? {
       activeMemberships: 0,
+      purchasedCapacity: 0,
       revenueCents: 0,
     };
     value.activeMemberships += Number(row.active_memberships) || 0;
+    value.purchasedCapacity += Number(row.purchased_capacity) || 0;
     value.revenueCents += Number(row.revenue_cents) || 0;
     values.set(day, value);
     valuesByCategory.set(category.key, values);
@@ -276,7 +331,8 @@ export function buildMembershipAnalyticsView({
   const latestDay = endDay;
   const comparisonDay = shiftMembershipAnalyticsDay(latestDay, -comparisonDays);
   const comparisonAvailable =
-    comparisonDays > 0 && dayNumber(comparisonDay) >= dayNumber(historyStartDay);
+    comparisonDays > 0 &&
+    dayNumber(comparisonDay) >= dayNumber(historyStartDay);
 
   const series = [...categories.values()].sort(categorySort).map((category) => {
     const values = valuesByCategory.get(category.key) ?? new Map();
@@ -311,8 +367,11 @@ export function buildMembershipAnalyticsView({
     return {
       key: item.key,
       label: item.label,
+      ...(item.channel ? { channel: item.channel } : {}),
       activeMemberships: current.activeMemberships,
       comparisonActiveMemberships: comparison.activeMemberships,
+      purchasedCapacity: current.purchasedCapacity,
+      comparisonPurchasedCapacity: comparison.purchasedCapacity,
       revenueCents: current.revenueCents,
       comparisonRevenueCents: comparison.revenueCents,
     };
@@ -323,12 +382,16 @@ export function buildMembershipAnalyticsView({
     total: true,
     activeMemberships: 0,
     comparisonActiveMemberships: 0,
+    purchasedCapacity: 0,
+    comparisonPurchasedCapacity: 0,
     revenueCents: 0,
     comparisonRevenueCents: 0,
   };
   for (const row of summary) {
     total.activeMemberships += row.activeMemberships;
     total.comparisonActiveMemberships += row.comparisonActiveMemberships;
+    total.purchasedCapacity += row.purchasedCapacity;
+    total.comparisonPurchasedCapacity += row.comparisonPurchasedCapacity;
     total.revenueCents += row.revenueCents;
     total.comparisonRevenueCents += row.comparisonRevenueCents;
   }
@@ -354,6 +417,7 @@ export function totalMembershipAnalyticsPoints(
         displayDay: point.displayDay,
         actualDay: point.actualDay,
         activeMemberships: 0,
+        purchasedCapacity: 0,
         revenueCents: 0,
       };
       addValues(total, point);
