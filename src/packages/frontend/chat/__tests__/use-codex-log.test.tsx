@@ -231,16 +231,20 @@ function ActivityStatusComponent({
   logSubject?: string;
   liveLogStream?: string;
 }) {
-  const { lastActivityAtMs, liveStatus } = useCodexLiveActivityStatus({
-    enabled: true,
-    projectId: "project-1",
-    logSubject,
-    liveLogStream,
-  });
+  const { activeDescendantThreadIds, lastActivityAtMs, liveStatus } =
+    useCodexLiveActivityStatus({
+      enabled: true,
+      projectId: "project-1",
+      logSubject,
+      liveLogStream,
+    });
   return (
     <>
       <div data-testid="activity-last-time">{`${lastActivityAtMs ?? ""}`}</div>
       <div data-testid="activity-live-status">{liveStatus}</div>
+      <div data-testid="activity-subagents">
+        {activeDescendantThreadIds.join(",")}
+      </div>
     </>
   );
 }
@@ -1155,6 +1159,47 @@ describe("useCodexLog", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("activity-last-time").textContent).toBe("20");
+    });
+  });
+
+  it("tracks active subagents from the lightweight preview stream", async () => {
+    const stream = new FakeDstream([
+      {
+        type: "event",
+        seq: 1,
+        event: {
+          type: "subagent",
+          operationId: "spawn-1",
+          threadId: "child-1",
+          state: "running",
+        },
+      },
+    ]);
+    dstreamMock.mockResolvedValue(stream);
+
+    render(<ActivityStatusComponent liveLogStream="live-stream-subagents" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("activity-subagents").textContent).toBe(
+        "child-1",
+      );
+    });
+
+    act(() => {
+      stream.push({
+        type: "event",
+        seq: 2,
+        event: {
+          type: "subagent",
+          operationId: "wait-1",
+          threadId: "child-1",
+          state: "completed",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("activity-subagents").textContent).toBe("");
     });
   });
 

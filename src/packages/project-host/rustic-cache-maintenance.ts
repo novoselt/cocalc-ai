@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { lstat, readdir, readFile, rm, stat, statfs } from "node:fs/promises";
+import { lstat, readdir, readFile, rm, statfs } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import getLogger from "@cocalc/backend/logger";
@@ -18,7 +18,7 @@ const DEFAULT_HARD_MAX_BYTES = 6 * GIB;
 const DEFAULT_MIN_ROOT_FREE_BYTES = 5 * GIB;
 const DEFAULT_TARGET_ROOT_FREE_BYTES = 6 * GIB;
 const DEFAULT_CRITICAL_ROOT_FREE_BYTES = 2 * GIB;
-const DEFAULT_MIN_ENTRY_AGE_MS = 60 * MINUTE_MS;
+const DEFAULT_MIN_ENTRY_AGE_MS = 24 * 60 * MINUTE_MS;
 const DEFAULT_INTERVAL_MS = 10 * MINUTE_MS;
 
 export type RusticCacheMaintenanceStatus =
@@ -162,20 +162,37 @@ export function readRusticCacheMaintenanceConfig(): RusticCacheMaintenanceConfig
   };
 }
 
-async function directoryBytes(path: string): Promise<number> {
+function parseDirectoryUsage(output: string): {
+  bytes: number;
+  mtimeMs: number;
+} {
+  const [bytesText, modifiedSecondsText] = output.trim().split(/\s+/u, 3);
+  const bytes = Number(bytesText);
+  const modifiedSeconds = Number(modifiedSecondsText);
+  if (
+    !Number.isFinite(bytes) ||
+    bytes < 0 ||
+    !Number.isFinite(modifiedSeconds) ||
+    modifiedSeconds < 0
+  ) {
+    throw new Error(`invalid du output: ${output.trim()}`);
+  }
+  return { bytes, mtimeMs: modifiedSeconds * 1000 };
+}
+
+async function directoryUsage(path: string): Promise<{
+  bytes: number;
+  mtimeMs: number;
+}> {
   const { stdout } = await execFileAsync(
     "du",
-    ["-s", "--block-size=1", "--", path],
+    ["-s", "--block-size=1", "--time", "--time-style=+%s.%N", "--", path],
     {
       maxBuffer: 1024 * 1024,
       timeout: 5 * MINUTE_MS,
     },
   );
-  const bytes = Number(stdout.trim().split(/\s+/u)[0]);
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    throw new Error(`invalid du output for ${path}`);
-  }
-  return bytes;
+  return parseDirectoryUsage(stdout);
 }
 
 async function listCacheEntries(
@@ -204,12 +221,15 @@ async function listCacheEntries(
   for (const child of children) {
     if (!child.isDirectory() || child.isSymbolicLink()) continue;
     const path = join(cacheRoot, child.name);
-    const [info, bytes] = await Promise.all([stat(path), directoryBytes(path)]);
+    // GNU du reports the newest descendant mtime while traversing for size.
+    // The repository directory itself is not touched when Rustic updates
+    // nested indexes or snapshots, so its own mtime is not a useful LRU key.
+    const { bytes, mtimeMs } = await directoryUsage(path);
     entries.push({
       name: child.name,
       path,
       bytes,
-      mtimeMs: info.mtimeMs,
+      mtimeMs,
     });
   }
   return entries;
@@ -443,5 +463,6 @@ export function getRusticCacheMaintenanceMetrics(): RusticCacheMaintenanceMetric
 export const _test = {
   defaultDependencies,
   parseBytesFromGib,
+  parseDirectoryUsage,
   parseMinutes,
 };

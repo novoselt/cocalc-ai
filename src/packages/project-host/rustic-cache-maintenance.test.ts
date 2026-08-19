@@ -1,4 +1,5 @@
 import {
+  _test,
   readRusticCacheMaintenanceConfig,
   runRusticCacheSweep,
   type RusticCacheEntry,
@@ -71,6 +72,17 @@ function dependencies({
 }
 
 describe("Rustic cache maintenance", () => {
+  it("parses repository size and newest descendant time from du", () => {
+    expect(
+      _test.parseDirectoryUsage(
+        "1751293952\t1787101858.053035092\t/cache/repo with spaces\n",
+      ),
+    ).toEqual({
+      bytes: 1_751_293_952,
+      mtimeMs: 1_787_101_858_053.035,
+    });
+  });
+
   it("rejects a cache root that could broaden recursive deletion", () => {
     const original = process.env.COCALC_RUSTIC_CACHE_DIR;
     process.env.COCALC_RUSTIC_CACHE_DIR = "/";
@@ -85,6 +97,10 @@ describe("Rustic cache maintenance", () => {
         process.env.COCALC_RUSTIC_CACHE_DIR = original;
       }
     }
+  });
+
+  it("preserves one backup cycle by default", () => {
+    expect(readRusticCacheMaintenanceConfig().minEntryAgeMs).toBe(24 * HOUR_MS);
   });
 
   it("does nothing below both pressure thresholds", async () => {
