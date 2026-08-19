@@ -25,23 +25,47 @@ describe("file-editors save", () => {
     unregister_file_editor("chat");
   });
 
-  it("skips save for unopened background tabs", () => {
+  it("skips save for unopened background tabs", async () => {
     redux.getProjectStore.mockReturnValue({
       has_file_been_viewed: () => false,
     });
 
-    save(path, redux, project_id);
+    await save(path, redux, project_id);
 
     expect(saveHandler).not.toHaveBeenCalled();
   });
 
-  it("saves viewed files", () => {
+  it("saves viewed files", async () => {
     redux.getProjectStore.mockReturnValue({
       has_file_been_viewed: () => true,
     });
 
-    save(path, redux, project_id);
+    await save(path, redux, project_id);
 
     expect(saveHandler).toHaveBeenCalledWith(path, redux, project_id);
+  });
+
+  it("waits for an asynchronous editor save", async () => {
+    redux.getProjectStore.mockReturnValue({
+      has_file_been_viewed: () => true,
+    });
+    let finishSave: () => void = () => {};
+    saveHandler.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+
+    let finished = false;
+    const saving = save(path, redux, project_id).then(() => {
+      finished = true;
+    });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+
+    finishSave();
+    await saving;
+    expect(finished).toBe(true);
   });
 });

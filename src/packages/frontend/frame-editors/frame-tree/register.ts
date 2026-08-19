@@ -248,10 +248,10 @@ function register(
       return name;
     },
 
-    save(path: string, redux, project_id: string): void {
+    async save(path: string, redux, project_id: string): Promise<void> {
       const name = redux_name(project_id, path);
       const actions = redux.getActions(name);
-      actions?.save?.();
+      await actions?.save?.();
     },
   };
 
