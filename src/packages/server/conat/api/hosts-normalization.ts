@@ -37,6 +37,7 @@ import type {
   HostFundingMode,
   HostMachine,
   HostPressureState,
+  HostPlacementSnapshot,
   HostInterruptionRestorePolicy,
   HostIoContainmentMetrics,
   HostMetricsHistory,
@@ -176,6 +177,33 @@ function normalizeStorageAdmissionMetrics(
     return undefined;
   }
   return value as HostStorageAdmissionMetrics;
+}
+
+function normalizeHostPlacementSnapshot(
+  value: unknown,
+): HostPlacementSnapshot | undefined {
+  if (value == null || typeof value !== "object") return undefined;
+  const snapshot = value as Record<string, unknown>;
+  if (
+    typeof snapshot.observed_at !== "string" ||
+    !Number.isFinite(Date.parse(snapshot.observed_at)) ||
+    !Array.isArray(snapshot.cached_rootfs_images)
+  ) {
+    return undefined;
+  }
+  const cached_rootfs_images = Array.from(
+    new Set(
+      snapshot.cached_rootfs_images
+        .filter((image): image is string => typeof image === "string")
+        .map((image) => image.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 128);
+  return {
+    observed_at: snapshot.observed_at,
+    cached_rootfs_images,
+    rootfs_cache_truncated: snapshot.rootfs_cache_truncated === true,
+  };
 }
 
 function normalizeManagedComponentUpgradePolicy(
@@ -1031,6 +1059,40 @@ export function parseRow(
                 ),
               }
             : {}),
+          ...(parseNonNegativeNumber(rawCurrentMetrics.root_disk_total_bytes) !=
+          null
+            ? {
+                root_disk_total_bytes: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_total_bytes,
+                ),
+              }
+            : {}),
+          ...(parseNonNegativeNumber(rawCurrentMetrics.root_disk_used_bytes) !=
+          null
+            ? {
+                root_disk_used_bytes: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_used_bytes,
+                ),
+              }
+            : {}),
+          ...(parseNonNegativeNumber(
+            rawCurrentMetrics.root_disk_available_bytes,
+          ) != null
+            ? {
+                root_disk_available_bytes: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_available_bytes,
+                ),
+              }
+            : {}),
+          ...(parseNonNegativeNumber(
+            rawCurrentMetrics.root_disk_used_percent,
+          ) != null
+            ? {
+                root_disk_used_percent: parseNonNegativeNumber(
+                  rawCurrentMetrics.root_disk_used_percent,
+                ),
+              }
+            : {}),
           ...(parseNonNegativeNumber(rawCurrentMetrics.swap_used_bytes) != null
             ? {
                 swap_used_bytes: parseNonNegativeNumber(
@@ -1466,6 +1528,7 @@ export function parseRow(
           }
         : undefined,
     pressure: normalizeHostPressureState(metadata.pressure),
+    placement: normalizeHostPlacementSnapshot(metadata.placement),
     machine,
     provider_instance_id: metadata.runtime?.instance_id,
     public_ip: metadata.runtime?.public_ip,

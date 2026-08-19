@@ -4115,21 +4115,35 @@ rejected instead of routing a fleet mutation through a non-authoritative bay.
             }
             return parsed;
           };
-          const hosts = (
+          const components = opts.component?.length
+            ? parseManagedComponentKindsOption(opts.component)
+            : (["project-host"] as const);
+          const allHosts = (
             (await listHosts(ctx, {
               include_deleted: false,
               catalog: false,
               admin_view: true,
             })) as HostRow[]
           ).filter(isHostOnlineForUpgrade);
-          const components = opts.component?.length
-            ? parseManagedComponentKindsOption(opts.component)
-            : (["project-host"] as const);
+          const pinnedHosts = allHosts.filter((host) => {
+            const targets =
+              host.runtime_exception_summary?.host_override_targets ?? [];
+            return components.some((component) => targets.includes(component));
+          });
+          const hosts = allHosts.filter(
+            (host) => !pinnedHosts.some((pinned) => pinned.id === host.id),
+          );
           if (!hosts.length) {
             return {
               status: "skipped",
-              reason: "no online hosts matched",
+              reason: pinnedHosts.length
+                ? "all online hosts are pinned for the selected components"
+                : "no online hosts matched",
               hosts: [],
+              excluded_pinned_hosts: pinnedHosts.map((host) => ({
+                host_id: host.id,
+                name: host.name,
+              })),
             };
           }
           const bayIds = new Set(
@@ -4207,6 +4221,10 @@ rejected instead of routing a fleet mutation through a non-authoritative bay.
               status: "queued",
               ...rollout,
               canary_host_id: canary.id,
+              excluded_pinned_hosts: pinnedHosts.map((host) => ({
+                host_id: host.id,
+                name: host.name,
+              })),
             };
           }
           const summary = await waitForLro(ctx, rollout.op_id, {
@@ -4234,6 +4252,10 @@ rejected instead of routing a fleet mutation through a non-authoritative bay.
             status: summary.status,
             op_id: rollout.op_id,
             canary_host_id: canary.id,
+            excluded_pinned_hosts: pinnedHosts.map((host) => ({
+              host_id: host.id,
+              name: host.name,
+            })),
             result: summary.result,
           };
         });

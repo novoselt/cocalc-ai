@@ -208,6 +208,7 @@ describe("AccountPreferencesCommunication", () => {
       "mentions",
       "chat_replies",
       "ai",
+      "onboarding",
       "course",
       "support",
       "maintenance",

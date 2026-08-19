@@ -820,22 +820,26 @@ describe("cloud host start failures", () => {
     await getPool().query(
       `
         INSERT INTO rootfs_images
-          (image_id, runtime_image, label, family, version, visibility, prepull, arch,
-           deleted, hidden, blocked, created, updated)
+          (image_id, runtime_image, label, family, version, visibility, official,
+           prepull, tags, arch, deleted, hidden, blocked, created, updated)
         VALUES
           ('test-prepull-amd64-v1', 'cocalc.local/rootfs/catalog-amd64-v1', 'amd64 image v1',
-           'test-family', '1.0', 'public', true, 'amd64', false, false, false, NOW() - interval '1 day', NOW() - interval '1 day'),
+           'test-family', '1.0', 'public', false, true, ARRAY[]::TEXT[], 'amd64', false, false, false, NOW() - interval '1 day', NOW() - interval '1 day'),
           ('test-prepull-amd64-v2', 'cocalc.local/rootfs/catalog-amd64-v2', 'amd64 image v2',
-           'test-family', '1.1', 'public', true, 'amd64', false, false, false, NOW(), NOW()),
+           'test-family', '1.1', 'public', false, true, ARRAY[]::TEXT[], 'amd64', false, false, false, NOW(), NOW()),
           ('test-prepull-arm64', 'cocalc.local/rootfs/catalog-arm64', 'arm64 image',
-           'test-family', '1.1', 'public', true, 'arm64', false, false, false, NOW(), NOW()),
+           'test-family', '1.1', 'public', false, true, ARRAY[]::TEXT[], 'arm64', false, false, false, NOW(), NOW()),
           ('test-prepull-hidden', 'cocalc.local/rootfs/hidden', 'hidden image',
-           'hidden-family', '1.0', 'public', true, 'amd64', false, true, false, NOW(), NOW())
+           'hidden-family', '1.0', 'public', false, true, ARRAY[]::TEXT[], 'amd64', false, true, false, NOW(), NOW()),
+          ('test-onboarding', 'cocalc.local/rootfs/onboarding', 'onboarding image',
+           'onboarding-family', '1.0', 'public', true, false, ARRAY['Onboarding:Jupyter-Python'], 'amd64', false, false, false, NOW(), NOW())
         ON CONFLICT (image_id) DO UPDATE SET
           runtime_image = EXCLUDED.runtime_image,
           family = EXCLUDED.family,
           version = EXCLUDED.version,
+          official = EXCLUDED.official,
           prepull = EXCLUDED.prepull,
+          tags = EXCLUDED.tags,
           arch = EXCLUDED.arch,
           deleted = EXCLUDED.deleted,
           hidden = EXCLUDED.hidden,
@@ -852,11 +856,18 @@ describe("cloud host start failures", () => {
       payload: {},
     } as any);
 
-    expect(pullRootfsImage.mock.calls.map(([arg]) => arg.image)).toEqual([
-      "default/rootfs:latest",
-      "extra/rootfs:one",
-      "cocalc.local/rootfs/catalog-amd64-v2",
-    ]);
+    const pulled = pullRootfsImage.mock.calls.map(([arg]) => arg.image);
+    expect(pulled).toEqual(
+      expect.arrayContaining([
+        "default/rootfs:latest",
+        "extra/rootfs:one",
+        "cocalc.local/rootfs/catalog-amd64-v2",
+        "cocalc.local/rootfs/onboarding",
+      ]),
+    );
+    expect(pulled).not.toContain("cocalc.local/rootfs/catalog-amd64-v1");
+    expect(pulled).not.toContain("cocalc.local/rootfs/catalog-arm64");
+    expect(pulled).not.toContain("cocalc.local/rootfs/hidden");
     expect(getRoutedHostControlClientMock).toHaveBeenCalledWith({
       host_id: hostId,
       timeout: 30 * 60 * 1000,

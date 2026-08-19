@@ -768,28 +768,28 @@ async function listHostsForRouteHealth({
   allHosts: boolean;
   requestTimeoutMs: number;
 }): Promise<Array<{ host_id: string; name?: string; status?: string }>> {
-  const result = spawnSync(
-    cliPath,
-    [
-      "--api",
-      api,
-      "--disable-env-auth-defaults",
-      "--cookie",
-      authCookie,
-      "--output",
-      "json",
-      "host",
-      "list",
-      "--admin-view",
-      "--route-health",
-      "--limit",
-      "10000",
-    ],
-    {
-      encoding: "utf8",
-      timeout: requestTimeoutMs,
-    },
-  );
+  const invocation = cliInvocation(cliPath, [
+    "--api",
+    api,
+    "--disable-env-auth-defaults",
+    "--cookie",
+    authCookie,
+    "--output",
+    "json",
+    "host",
+    "list",
+    "--admin-view",
+    "--route-health",
+    "--limit",
+    "10000",
+  ]);
+  const result = spawnSync(invocation.command, invocation.args, {
+    encoding: "utf8",
+    timeout: requestTimeoutMs,
+  });
+  if (result.error) {
+    throw new Error(`host list failed: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     throw new Error(
       `host list failed: ${trimCommandOutput(result.stderr || result.stdout)}`,
@@ -848,25 +848,26 @@ async function runHostRouteProbe({
 }): Promise<HostRouteProbe> {
   const started = Date.now();
   const cookie = appendCookieHeader(authCookie, affinityCookie);
+  const invocation = cliInvocation(cliPath, [
+    "--api",
+    api,
+    "--disable-env-auth-defaults",
+    "--cookie",
+    cookie,
+    "--rpc-timeout",
+    rpcTimeout,
+    "--timeout",
+    `${Math.max(1, Math.ceil(requestTimeoutMs / 1000))}s`,
+    "--output",
+    "json",
+    "host",
+    "get",
+    "--route-health",
+    host.host_id,
+  ]);
   const result = await execFileResult(
-    cliPath,
-    [
-      "--api",
-      api,
-      "--disable-env-auth-defaults",
-      "--cookie",
-      cookie,
-      "--rpc-timeout",
-      rpcTimeout,
-      "--timeout",
-      `${Math.max(1, Math.ceil(requestTimeoutMs / 1000))}s`,
-      "--output",
-      "json",
-      "host",
-      "get",
-      "--route-health",
-      host.host_id,
-    ],
+    invocation.command,
+    invocation.args,
     requestTimeoutMs + 2_000,
   );
   const ms = Date.now() - started;
@@ -976,8 +977,17 @@ function normalizeCliDataArray(stdout: string, label: string): any[] {
   return data;
 }
 
-function trimCommandOutput(output: string): string {
-  return output.trim().split(/\r?\n/).slice(-8).join("\n");
+function cliInvocation(
+  cliPath: string,
+  args: string[],
+): { command: string; args: string[] } {
+  return extname(cliPath).toLowerCase() === ".js"
+    ? { command: process.execPath, args: [cliPath, ...args] }
+    : { command: cliPath, args };
+}
+
+function trimCommandOutput(output?: string | null): string {
+  return `${output ?? ""}`.trim().split(/\r?\n/).slice(-8).join("\n");
 }
 
 function requestJson({
@@ -1886,3 +1896,8 @@ function shellQuote(value: string): string {
   }
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
+
+export const __test__ = {
+  cliInvocation,
+  trimCommandOutput,
+};

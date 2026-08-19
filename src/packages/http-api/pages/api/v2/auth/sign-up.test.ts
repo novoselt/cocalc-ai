@@ -699,6 +699,7 @@ describe("/api/v2/auth/sign-up", () => {
         password: "correct horse battery staple 12345!",
         firstName: "New",
         lastName: "User",
+        onboardingIntent: "latex",
       },
     });
 
@@ -709,12 +710,14 @@ describe("/api/v2/auth/sign-up", () => {
       expect.objectContaining({
         other_settings: expect.objectContaining({
           newsletter: false,
+          first_run_onboarding_intent_v1: "latex",
           notification_preferences: expect.objectContaining({
             email: expect.objectContaining({ product: "off" }),
           }),
         }),
         trusted_product_access: false,
         trusted_product_access_reason: undefined,
+        signup_reason: "latex",
       }),
     );
     expect(mockSendEmailVerification).toHaveBeenCalledWith({

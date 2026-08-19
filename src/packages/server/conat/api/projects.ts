@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import createProject from "@cocalc/server/projects/create";
-export { createProject };
+import createProject, {
+  createProjectWithBootstrap,
+} from "@cocalc/server/projects/create";
+export { createProject, createProjectWithBootstrap };
 export * from "./project-site-migration";
 import execProject from "@cocalc/server/projects/exec";
 import { takeStartProjectPhaseTimings } from "@cocalc/server/project-host/control";
@@ -553,7 +555,11 @@ export async function copyPathBetweenProjects({
   const destReferences = await mapParallelLimit(
     destProjectIds,
     async (project_id) =>
-      await assertCollabAllowRemoteProjectAccess({ account_id, project_id }),
+      await assertCollabAllowRemoteProjectAccess({
+        account_id,
+        project_id,
+        warmRoute: false,
+      }),
     COPY_ADMISSION_CONCURRENCY,
   );
   const destOwnerAccountIds = new Set<string>();
@@ -633,7 +639,7 @@ export async function copyPathBetweenProjects({
 }
 
 const MAX_COURSE_COLLECT_ITEMS = 500;
-const COPY_ADMISSION_CONCURRENCY = 50;
+const COPY_ADMISSION_CONCURRENCY = 20;
 
 function normalizeCourseCollectItems(
   items: CourseCollectAssignmentItem[],
@@ -702,7 +708,11 @@ export async function collectAssignment({
   await mapParallelLimit(
     studentProjectIds,
     async (project_id) =>
-      await assertCollabAllowRemoteProjectAccess({ account_id, project_id }),
+      await assertCollabAllowRemoteProjectAccess({
+        account_id,
+        project_id,
+        warmRoute: false,
+      }),
     COPY_ADMISSION_CONCURRENCY,
   );
   let normalizedRunAt: string | undefined;

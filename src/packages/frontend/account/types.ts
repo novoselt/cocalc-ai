@@ -15,6 +15,7 @@ import {
   NewFilenameTypes,
 } from "@cocalc/util/db-schema/defaults";
 import type { MarketingEmailConsentRecord } from "@cocalc/util/notification-preferences";
+import type { ProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
 import type { CodexReasoningId, CodexSessionMode } from "@cocalc/util/ai/codex";
 import { PassportStrategyFrontend } from "@cocalc/util/types/passport-types";
 
@@ -62,6 +63,7 @@ export interface AccountState {
     notification_preferences?: Record<string, any>;
     newsletter?: boolean;
     marketing_email_consent_record?: MarketingEmailConsentRecord;
+    first_run_onboarding_intent_v1?: ProjectOnboardingIntent;
     use_balance_toward_subscriptions?: boolean;
     use_balance_toward_team_licenses?: boolean;
     hide_button_tooltips?: boolean;

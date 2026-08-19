@@ -71,4 +71,25 @@ describe("createInitialIpynbContent", () => {
     });
     expect(ipynb.metadata.language_info).toEqual({ name: "python" });
   });
+
+  it("can create a starter notebook without live kernel discovery", async () => {
+    const content = await createInitialIpynbContent(
+      "project-1",
+      "ir",
+      {
+        name: "ir",
+        display_name: "R",
+        language: "R",
+      },
+      { discoverKernel: false },
+    );
+    const ipynb = JSON.parse(content);
+
+    expect(getKernelSpec).not.toHaveBeenCalled();
+    expect(ipynb.metadata.kernelspec).toEqual({
+      name: "ir",
+      display_name: "R",
+      language: "R",
+    });
+  });
 });

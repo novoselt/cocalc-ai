@@ -235,6 +235,7 @@ describe("projects.copyPathBetweenProjects", () => {
     expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-project",
+      warmRoute: false,
     });
   });
 
@@ -249,6 +250,7 @@ describe("projects.copyPathBetweenProjects", () => {
     expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "src-project",
+      warmRoute: false,
     });
   });
 
@@ -270,6 +272,7 @@ describe("projects.copyPathBetweenProjects", () => {
     expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-project",
+      warmRoute: false,
     });
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -362,10 +365,12 @@ describe("projects.copyPathBetweenProjects", () => {
     expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-a",
+      warmRoute: false,
     });
     expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: "dest-b",
+      warmRoute: false,
     });
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -423,6 +428,45 @@ describe("projects.copyPathBetweenProjects", () => {
     await copy;
 
     expect(callsBeforeFirstDestinationFinished).toBe(2);
+  });
+
+  it("bounds destination authorization fanout", async () => {
+    let releaseAuthorizations!: () => void;
+    const authorizationGate = new Promise<void>((resolve) => {
+      releaseAuthorizations = resolve;
+    });
+    let active = 0;
+    let maximumActive = 0;
+    assertCollabAllowRemoteProjectAccessMock = jest.fn(
+      async ({ project_id }) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await authorizationGate;
+        active -= 1;
+        return {
+          project_id,
+          users: { [OWNER_ACCOUNT_ID]: { group: "owner" } },
+        };
+      },
+    );
+    const { copyPathBetweenProjects } = await import("./projects");
+    const copy = copyPathBetweenProjects({
+      account_id: "acct-1",
+      src: { project_id: "src-project", path: "/root/assignment" },
+      dests: Array.from({ length: 25 }, (_, index) => ({
+        project_id: `dest-${index}`,
+        path: "/root/assignment",
+      })),
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledTimes(20);
+    expect(maximumActive).toBe(20);
+    releaseAuthorizations();
+    await copy;
+
+    expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledTimes(25);
+    expect(maximumActive).toBe(20);
   });
 
   it("deduplicates repeated destinations before authorization and LRO creation", async () => {
@@ -561,6 +605,7 @@ describe("projects.copyPathBetweenProjects", () => {
     expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: STUDENT_PROJECT_ID,
+      warmRoute: false,
     });
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -647,6 +692,7 @@ describe("projects.copyPathBetweenProjects", () => {
     expect(assertCollabAllowRemoteProjectAccessMock).toHaveBeenCalledWith({
       account_id: "acct-1",
       project_id: STUDENT_PROJECT_ID,
+      warmRoute: false,
     });
     expect(createLroMock).toHaveBeenCalledWith(
       expect.objectContaining({

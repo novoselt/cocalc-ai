@@ -18,7 +18,10 @@ import {
 beforeAll(() => {
   closeAcpDatabase();
   initAcpDatabase({ filename: ":memory:" });
-  getAcpRuntimeOwner("initialize-table");
+  getAcpRuntimeOwner({
+    project_id: "initialize-project",
+    session_id: "initialize-table",
+  });
 });
 
 beforeEach(() => {
@@ -51,11 +54,43 @@ describe("ACP retained runtime ownership", () => {
     expect(second.created_at).toBe(first.created_at);
     expect(
       releaseAcpRuntimeOwner({
+        project_id: "project-1",
         session_id: "session-1",
         worker_id: "worker-old",
       }),
     ).toBe(false);
-    expect(getAcpRuntimeOwner("session-1")?.worker_id).toBe("worker-new");
+    expect(
+      getAcpRuntimeOwner({
+        project_id: "project-1",
+        session_id: "session-1",
+      })?.worker_id,
+    ).toBe("worker-new");
+  });
+
+  it("keeps cloned project sessions independently owned", () => {
+    for (const [project_id, worker_id] of [
+      ["project-1", "worker-1"],
+      ["project-2", "worker-2"],
+    ]) {
+      upsertAcpRuntimeOwner({
+        session_id: "cloned-session",
+        worker_id,
+        project_id,
+      });
+    }
+
+    expect(
+      getAcpRuntimeOwner({
+        project_id: "project-1",
+        session_id: "cloned-session",
+      })?.worker_id,
+    ).toBe("worker-1");
+    expect(
+      getAcpRuntimeOwner({
+        project_id: "project-2",
+        session_id: "cloned-session",
+      })?.worker_id,
+    ).toBe("worker-2");
   });
 
   it("releases every session owned by a stopped worker", () => {
@@ -73,8 +108,23 @@ describe("ACP retained runtime ownership", () => {
     });
 
     expect(releaseAcpRuntimeOwnersForWorker("worker-old")).toBe(2);
-    expect(getAcpRuntimeOwner("session-a")).toBeUndefined();
-    expect(getAcpRuntimeOwner("session-b")).toBeUndefined();
-    expect(getAcpRuntimeOwner("session-c")?.worker_id).toBe("worker-live");
+    expect(
+      getAcpRuntimeOwner({
+        project_id: "project-1",
+        session_id: "session-a",
+      }),
+    ).toBeUndefined();
+    expect(
+      getAcpRuntimeOwner({
+        project_id: "project-1",
+        session_id: "session-b",
+      }),
+    ).toBeUndefined();
+    expect(
+      getAcpRuntimeOwner({
+        project_id: "project-1",
+        session_id: "session-c",
+      })?.worker_id,
+    ).toBe("worker-live");
   });
 });

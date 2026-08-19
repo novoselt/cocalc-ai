@@ -18,6 +18,7 @@ export async function createInitialIpynbContent(
     display_name: string;
     language: string;
   },
+  { discoverKernel = true }: { discoverKernel?: boolean } = {},
 ): Promise<string> {
   let kernelspec = preferredKernel
     ? {
@@ -25,21 +26,23 @@ export async function createInitialIpynbContent(
         name: preferredKernel,
       }
     : { ...(fallbackKernel ?? DEFAULT_NOTEBOOK_KERNEL) };
-  try {
-    const kernels = await getKernelSpec({ project_id });
-    const match =
-      kernels.find((spec) => spec.name === preferredKernel) ??
-      kernels.find((spec) => spec.name === DEFAULT_NOTEBOOK_KERNEL.name) ??
-      kernels[0];
-    if (match != null) {
-      kernelspec = {
-        name: match.name,
-        display_name: match.display_name,
-        language: match.language,
-      };
+  if (discoverKernel) {
+    try {
+      const kernels = await getKernelSpec({ project_id });
+      const match =
+        kernels.find((spec) => spec.name === preferredKernel) ??
+        kernels.find((spec) => spec.name === DEFAULT_NOTEBOOK_KERNEL.name) ??
+        kernels[0];
+      if (match != null) {
+        kernelspec = {
+          name: match.name,
+          display_name: match.display_name,
+          language: match.language,
+        };
+      }
+    } catch {
+      // If kernel discovery fails, still create a valid notebook.
     }
-  } catch {
-    // If kernel discovery fails, still create a valid Python notebook.
   }
   return JSON.stringify(
     {

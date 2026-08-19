@@ -79,6 +79,7 @@ import {
   sentProjectInvite,
   whenSentProjectInvite,
 } from "./postgres/project/invites";
+import { getScopedQueryClient } from "./postgres/query-client-context";
 import { setRunQuota } from "./postgres/project/set-run-quota";
 
 // TODO is set_account_info_if_possible used here?!
@@ -503,6 +504,10 @@ export class PostgreSQL extends EventEmitter implements PostgreSQLMethods {
   }
 
   async _get_query_client(): Promise<PoolClient> {
+    const scopedClient = getScopedQueryClient(this);
+    if (scopedClient) {
+      return scopedClient;
+    }
     if (this._query_client) {
       return this._query_client;
     }

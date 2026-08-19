@@ -47,6 +47,10 @@ describe("project host metrics history", () => {
         collected_at: first.toISOString(),
         cpu_percent: 10,
         memory_used_percent: 40,
+        root_disk_total_bytes: 25 * 1024 ** 3,
+        root_disk_used_bytes: 15 * 1024 ** 3,
+        root_disk_available_bytes: 10 * 1024 ** 3,
+        root_disk_used_percent: 60,
         disk_device_total_bytes: 1000,
         disk_device_used_bytes: 400,
         disk_available_conservative_bytes: 600,
@@ -129,6 +133,12 @@ describe("project host metrics history", () => {
     expect(entry?.point_count).toBe(2);
     expect(entry?.points).toHaveLength(2);
     expect(entry?.points[0].cpu_percent).toBe(10);
+    expect(entry?.points[0]).toMatchObject({
+      root_disk_total_bytes: 25 * 1024 ** 3,
+      root_disk_used_bytes: 15 * 1024 ** 3,
+      root_disk_available_bytes: 10 * 1024 ** 3,
+      root_disk_used_percent: 60,
+    });
     expect(entry?.points[0].io_containment?.policy.profile).toBe(
       "test-profile",
     );

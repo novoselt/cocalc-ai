@@ -9,6 +9,32 @@ import {
 } from "./hosts-normalization";
 
 describe("parseRow host metrics normalization", () => {
+  it("preserves a bounded RootFS placement cache snapshot", () => {
+    const observed_at = new Date().toISOString();
+    const host = parseRow({
+      id: "host-placement",
+      name: "Placement host",
+      status: "running",
+      metadata: {
+        placement: {
+          observed_at,
+          cached_rootfs_images: [
+            " cocalc.local/rootfs/python ",
+            "cocalc.local/rootfs/python",
+            5,
+          ],
+          rootfs_cache_truncated: true,
+        },
+      },
+    });
+
+    expect(host.placement).toEqual({
+      observed_at,
+      cached_rootfs_images: ["cocalc.local/rootfs/python"],
+      rootfs_cache_truncated: true,
+    });
+  });
+
   it("preserves sampled shared scratch metrics", () => {
     const host = parseRow({
       id: "host-1",

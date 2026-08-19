@@ -3,6 +3,7 @@ export type InitialWatchSourceReason =
   | "rtc_timestamp_missing"
   | "disk_newer_than_rtc"
   | "disk_newer_but_content_equal"
+  | "rtc_newer_but_content_equal"
   | "rtc_newer_or_equal"
   | "disk_mtime_unavailable";
 
@@ -78,6 +79,12 @@ export function refineInitialWatchSourceDecision({
     return {
       loadFromDisk: false,
       reason: "disk_newer_but_content_equal",
+    };
+  }
+  if (decision.reason === "rtc_newer_or_equal" && diskContentMatchesRtc) {
+    return {
+      loadFromDisk: false,
+      reason: "rtc_newer_but_content_equal",
     };
   }
   return decision;

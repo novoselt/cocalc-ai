@@ -69,6 +69,8 @@ import {
   PassportTypes,
 } from "@cocalc/database/settings/auth-sso-types";
 import type { Strategy as PublicSsoStrategy } from "@cocalc/util/types/sso";
+import { normalizeProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
+import type { ProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
 import { signInUsingImpersonateToken } from "@cocalc/server/auth/impersonate";
 import {
   BLACKLISTED_STRATEGIES,
@@ -162,6 +164,7 @@ interface GoogleOidcState {
   termsAccepted?: boolean;
   marketingConsent?: boolean;
   registrationToken?: string;
+  onboardingIntent?: ProjectOnboardingIntent;
 }
 
 const GOOGLE_OIDC_BROWSER_STATE_COOKIE = `${base_path}google_oidc_state`;
@@ -942,6 +945,9 @@ export class PassportManager {
             termsAccepted: booleanQueryFlag(req.query.terms),
             marketingConsent: booleanQueryFlag(req.query.marketing_consent),
             registrationToken: stringQueryValue(req.query.registration_token),
+            onboardingIntent: normalizeProjectOnboardingIntent(
+              req.query.onboarding_intent,
+            ),
           };
           await stateCache.saveAsync(state, JSON.stringify(savedState));
           new Cookies(req, res).set(
@@ -1062,6 +1068,7 @@ export class PassportManager {
           terms_accepted: savedState.termsAccepted,
           marketing_consent: savedState.marketingConsent,
           registration_token: savedState.registrationToken,
+          onboarding_intent: savedState.onboardingIntent,
           req,
           res,
           site_url: this.site_url,

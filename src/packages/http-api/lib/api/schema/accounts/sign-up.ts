@@ -4,6 +4,7 @@ import { z } from "../../framework";
 import { FailedAPIOperationSchema } from "../common";
 
 import { AccountIdSchema } from "./common";
+import { PROJECT_ONBOARDING_INTENTS } from "@cocalc/util/accounts/onboarding-intent";
 
 // OpenAPI spec
 //
@@ -31,6 +32,10 @@ export const SignUpInputSchema = z
       .describe(
         "Optional consent for product tips, updates, and onboarding cadences.",
       ),
+    onboardingIntent: z
+      .enum(PROJECT_ONBOARDING_INTENTS)
+      .optional()
+      .describe("First project requested by the acquisition landing page."),
     registrationToken: z
       .string()
       .optional()

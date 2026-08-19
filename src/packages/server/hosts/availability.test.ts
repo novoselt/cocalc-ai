@@ -358,6 +358,75 @@ describe("classifyHostAvailabilitySnapshot", () => {
     });
   });
 
+  it("classifies fresh root filesystem pressure", () => {
+    const now = 2_000_000;
+    const warning = _test.rootFilesystemAlertRow(
+      {
+        id: "root-warning-host",
+        status: "running",
+        metadata: { name: "los-angeles-1" },
+        metric_collected_at: new Date(now - 30_000),
+        root_disk_total_bytes: 25 * 1024 ** 3,
+        root_disk_used_bytes: 21 * 1024 ** 3,
+        root_disk_available_bytes: 4 * 1024 ** 3,
+        root_disk_used_percent: 84,
+      },
+      now,
+    );
+    expect(warning).toMatchObject({
+      root_filesystem_level: "warning",
+      root_filesystem_reason: expect.stringContaining("84.0% used"),
+    });
+
+    const critical = _test.rootFilesystemAlertRow(
+      {
+        id: "root-critical-host",
+        status: "running",
+        metric_collected_at: new Date(now - 30_000),
+        root_disk_used_bytes: 24 * 1024 ** 3,
+        root_disk_available_bytes: 1024 ** 3,
+      },
+      now,
+    );
+    expect(critical).toMatchObject({
+      root_filesystem_level: "critical",
+      root_filesystem_reason: expect.stringContaining("1.00 GiB available"),
+    });
+    expect(
+      _test.formatRootFilesystemAlertBody([warning!, critical!]),
+    ).toContain("distinct from the project-data filesystem");
+  });
+
+  it("ignores healthy or stale root filesystem samples", () => {
+    const now = 2_000_000;
+    expect(
+      _test.rootFilesystemAlertRow(
+        {
+          id: "healthy-root-host",
+          status: "running",
+          metric_collected_at: new Date(now - 30_000),
+          root_disk_used_bytes: 15 * 1024 ** 3,
+          root_disk_available_bytes: 10 * 1024 ** 3,
+          root_disk_used_percent: 60,
+        },
+        now,
+      ),
+    ).toBeUndefined();
+    expect(
+      _test.rootFilesystemAlertRow(
+        {
+          id: "stale-root-host",
+          status: "running",
+          metric_collected_at: new Date(now - 10 * 60_000),
+          root_disk_used_bytes: 24 * 1024 ** 3,
+          root_disk_available_bytes: 1024 ** 3,
+          root_disk_used_percent: 96,
+        },
+        now,
+      ),
+    ).toBeUndefined();
+  });
+
   it("classifies project-host persistence RSS at the 2/4 GiB defaults", () => {
     const now = 2_000_000;
     const makeRow = (rss_bytes: number) =>

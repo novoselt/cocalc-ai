@@ -66,6 +66,51 @@ describe("notification delivery policy", () => {
     });
   });
 
+  it("routes onboarding continuations through transactional status delivery", () => {
+    expect(
+      resolveNotificationDeliveryPolicy({
+        kind: "account_notice",
+        target_account_id: "target",
+        summary: { notice_type: "onboarding_day_one" },
+        preferences: { email: { onboarding: "off" } },
+      }),
+    ).toEqual({
+      category: "onboarding",
+      lane: "transactional",
+      delivery_mode: "off",
+      required: false,
+      responsible_account_id: null,
+    });
+  });
+
+  it("honors a legacy first-project email decline", () => {
+    expect(
+      resolveNotificationDeliveryPolicy({
+        kind: "account_notice",
+        target_account_id: "target",
+        summary: { notice_type: "onboarding_day_one" },
+        preferences: { email: { product: "off" } },
+        onboarding_email_declined: true,
+      }),
+    ).toMatchObject({
+      category: "onboarding",
+      delivery_mode: "off",
+    });
+
+    expect(
+      resolveNotificationDeliveryPolicy({
+        kind: "account_notice",
+        target_account_id: "target",
+        summary: { notice_type: "onboarding_day_one" },
+        preferences: { email: { onboarding: "immediate" } },
+        onboarding_email_declined: true,
+      }),
+    ).toMatchObject({
+      category: "onboarding",
+      delivery_mode: "immediate",
+    });
+  });
+
   it("allows optional mention categories to disable all delivery", () => {
     expect(
       resolveNotificationDeliveryPolicy({

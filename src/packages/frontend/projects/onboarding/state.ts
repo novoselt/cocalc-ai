@@ -4,19 +4,13 @@
  */
 
 import type { ProjectCollabInviteRow } from "@cocalc/conat/hub/api/projects";
+import type { ProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
 
 export const FIRST_RUN_ONBOARDING_SETTING = "first_run_onboarding_v1";
 export const FIRST_RUN_ONBOARDING_VERSION = 1;
 
 export type OnboardingIntent =
-  | "jupyter-python"
-  | "jupyter-r"
-  | "jupyter-julia"
-  | "sage"
-  | "code"
-  | "codex"
-  | "latex"
-  | "teaching"
+  | ProjectOnboardingIntent
   | "membership-self"
   | "license-team"
   | "license-site"

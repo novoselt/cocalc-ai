@@ -11,6 +11,7 @@ import { COLORS } from "@cocalc/util/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureSignUpPath,
   featureAsset,
   LinkButton,
 } from "./page-components";
@@ -28,7 +29,7 @@ export default function RStatisticalSoftwareFeaturePage({
 }) {
   const primaryHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("jupyter-r");
   const primaryLabel = isAuthenticated ? "Open projects" : "Create account";
   const finalLabel = isAuthenticated ? "Open projects" : "Start using R";
 

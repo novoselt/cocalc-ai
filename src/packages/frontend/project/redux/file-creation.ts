@@ -88,6 +88,8 @@ export async function createFile({
   ensureContainingDirectoryExists,
   log,
   getPreferredKernel,
+  preferredJupyterKernel,
+  discoverJupyterKernel = true,
   addCreatedTag,
   openFile,
 }: {
@@ -111,6 +113,8 @@ export async function createFile({
     | null
     | undefined
     | Promise<string | null | undefined>;
+  preferredJupyterKernel?: string | null;
+  discoverJupyterKernel?: boolean;
   addCreatedTag: (tag: string) => void;
   openFile: (opts: {
     path: string;
@@ -162,11 +166,19 @@ export async function createFile({
       }
     }
   }
+  const notebookKernel =
+    ext === "ipynb"
+      ? discoverJupyterKernel
+        ? (preferredJupyterKernel ?? (await getPreferredKernel()))
+        : preferredJupyterKernel
+      : undefined;
   const content =
     ext === "ipynb"
       ? await (
           await import("@cocalc/frontend/jupyter/new-notebook")
-        ).createInitialIpynbContent(projectId, await getPreferredKernel())
+        ).createInitialIpynbContent(projectId, notebookKernel, undefined, {
+          discoverKernel: discoverJupyterKernel,
+        })
       : getFileTemplate(ext);
   try {
     await ensureContainingDirectoryExists(path);

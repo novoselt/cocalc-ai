@@ -408,21 +408,6 @@ function projectHardDeletingMessage(): string {
   return "This project is being permanently deleted. It cannot be opened or started.";
 }
 
-type DirectProjectBootstrapRow = {
-  project_id: string;
-  title?: string | null;
-  description?: string | null;
-  theme?: Record<string, any> | null;
-  host_id?: string | null;
-  rootfs_image_id?: string | null;
-  owning_bay_id?: string | null;
-  users?: Record<string, any> | null;
-  state?: Record<string, any> | null;
-  last_active?: Record<string, any> | null;
-  last_edited?: string | Date | null;
-  last_backup?: string | Date | null;
-};
-
 // Define projects actions
 export class ProjectsActions extends Actions<ProjectsState> {
   private static HOST_INFO_TTL_MS = 60_000;
@@ -431,7 +416,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
   private static HOST_RECOVERY_WAIT_MS = 10 * 60_000;
   private static ARCHIVE_RPC_TIMEOUT_MS = 30_000;
   private static REALTIME_FEED_BATCH_MS = 50;
-  private static CREATE_PROJECT_FEED_WAIT_TIMEOUT_S = 5;
   private static PROJECT_ROW_RECONCILE_DELAYS_MS = [1_000, 5_000] as const;
   private static PROJECT_LIFECYCLE_RECONCILE_DELAYS_MS = [
     1_000, 5_000, 15_000, 30_000, 60_000, 120_000,
@@ -2363,61 +2347,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
     }
   }
 
-  private async bootstrapCreatedProjectDirectly(
-    project_id: string,
-  ): Promise<boolean> {
-    let resp: any;
-    try {
-      resp = await webapp_client.async_query({
-        query: {
-          projects: [
-            {
-              project_id,
-              title: null,
-              description: null,
-              theme: null,
-              host_id: null,
-              rootfs_image_id: null,
-              owning_bay_id: null,
-              users: null,
-              state: null,
-              last_active: null,
-              last_edited: null,
-              last_backup: null,
-            },
-          ],
-        },
-      });
-    } catch (err) {
-      console.warn("bootstrapCreatedProjectDirectly failed", {
-        project_id,
-        err: `${err}`,
-      });
-      return false;
-    }
-    const row = resp?.query?.projects?.[0] as
-      | DirectProjectBootstrapRow
-      | undefined;
-    if (!row?.project_id) {
-      return false;
-    }
-    this.upsertProjectMapFromRow({
-      project_id: row.project_id,
-      title: row.title ?? "",
-      description: row.description ?? "",
-      theme: row.theme ?? null,
-      host_id: row.host_id ?? null,
-      rootfs_image_id: row.rootfs_image_id ?? null,
-      owning_bay_id: `${row.owning_bay_id ?? ""}`.trim() || DEFAULT_BAY_ID,
-      users: row.users ?? {},
-      state: row.state ?? {},
-      last_active: row.last_active ?? {},
-      last_edited: dateOrNull(row.last_edited)?.toISOString() ?? null,
-      last_backup: dateOrNull(row.last_backup)?.toISOString() ?? null,
-    });
-    return true;
-  }
-
   private handleOpenProjectHostChange({
     project_id,
     source_host_id,
@@ -3309,28 +3238,19 @@ export class ProjectsActions extends Actions<ProjectsState> {
       delete opts2.course;
     }
 
-    const project_id = await webapp_client.project_client.create(opts2);
+    const createStart = startUxTimer();
+    const { project_id, project } =
+      await webapp_client.project_client.createWithBootstrap(opts2);
     markProjectRecentlyCreated(project_id);
-
-    // At this point we know the project_id and that the project exists.
-    // However, various code (e.g., setting the title) depends on the
-    // project_map also having the project in it, which requires some
-    // changefeeds to fire off and get handled. Under heavy account churn that
-    // local feed processing can lag even though create already succeeded, so
-    // fall back to a targeted direct row bootstrap instead of timing out.
-    try {
-      await store.async_wait({
-        until: () => store.getIn(["project_map", project_id]) != null,
-        timeout: ProjectsActions.CREATE_PROJECT_FEED_WAIT_TIMEOUT_S,
-      });
-    } catch (err) {
-      if (
-        `${err}` !== "timeout" ||
-        !(await this.bootstrapCreatedProjectDirectly(project_id))
-      ) {
-        throw err;
-      }
-    }
+    this.upsertProjectMapFromRow(project);
+    recordUxLatencyEvent({
+      event_type: "project_create",
+      metric: "create_with_bootstrap_ms",
+      duration_ms: elapsedUxMs(createStart),
+      project_id,
+      host_id: project.host_id ?? undefined,
+      segment: opts2.start ? "start_requested" : "created_stopped",
+    });
     return project_id;
   }
 
@@ -4485,7 +4405,6 @@ export class ProjectsActions extends Actions<ProjectsState> {
           project_id,
           ...(opts.autostart ? { autostart: true } : {}),
           wait: false,
-          foreground_wait_ms: 5_000,
         });
         const rpcReturnedAtMs = Date.now();
         uxMilestones.start_rpc_returned_at = new Date(

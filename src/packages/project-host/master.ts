@@ -74,6 +74,7 @@ import { matchAppRequest } from "./app-public-access";
 import {
   deleteRootfsCacheEntry,
   gcDeletedManagedRootfsCacheEntries,
+  listRootfsCacheImageNames,
   listRootfsCacheEntries,
   pullRootfsCacheEntry,
 } from "./rootfs-cache";
@@ -275,6 +276,7 @@ const SHUTDOWN_NOTICE_TIMEOUT_MS = Math.max(
   250,
   Number(process.env.COCALC_PROJECT_HOST_SHUTDOWN_NOTICE_TIMEOUT_MS ?? 1500),
 );
+const PLACEMENT_ROOTFS_CACHE_LIMIT = 128;
 
 export interface MasterRegistrationHandle {
   stop: () => void;
@@ -1898,6 +1900,21 @@ export async function startMasterRegistration({
   });
 
   const hostMetrics = startHostMetricsCollector();
+  let placementSnapshot:
+    | {
+        observed_at: string;
+        cached_rootfs_images: string[];
+        rootfs_cache_truncated: boolean;
+      }
+    | undefined;
+  const refreshPlacementSnapshot = async () => {
+    const images = await listRootfsCacheImageNames();
+    placementSnapshot = {
+      observed_at: new Date().toISOString(),
+      cached_rootfs_images: images.slice(0, PLACEMENT_ROOTFS_CACHE_LIMIT),
+      rootfs_cache_truncated: images.length > PLACEMENT_ROOTFS_CACHE_LIMIT,
+    };
+  };
   let stopPolicyMirrorReady = false;
   let pressureController:
     | ReturnType<typeof startHostPressureController>
@@ -1954,6 +1971,7 @@ export async function startMasterRegistration({
             }
           : {}),
         ...(pressureState ? { pressure: pressureState } : {}),
+        ...(placementSnapshot ? { placement: placementSnapshot } : {}),
         ...(bootstrapLifecycle
           ? {
               bootstrap_lifecycle: bootstrapLifecycle,
@@ -1972,6 +1990,11 @@ export async function startMasterRegistration({
 
   const send = async (fn: "register" | "heartbeat") => {
     await runtimeHealth.refresh();
+    try {
+      await refreshPlacementSnapshot();
+    } catch (err) {
+      logger.debug("unable to refresh placement cache inventory", { err });
+    }
     void refreshCloudflaredDiagnostic().catch((err) => {
       logger.debug("cloudflared diagnostic refresh failed", { err });
     });

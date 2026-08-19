@@ -4,6 +4,7 @@
  */
 
 import { PostgreSQL } from "@cocalc/database/postgres/types";
+import type { ProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
 
 export interface PassportLoginOpts {
   passports: { [k: string]: PassportStrategyDB };
@@ -26,6 +27,7 @@ export interface PassportLoginOpts {
   authenticated_account_id?: string;
   terms_accepted?: boolean;
   marketing_consent?: boolean;
+  onboarding_intent?: ProjectOnboardingIntent;
   registration_token?: string;
   cb?: (err) => void;
 }

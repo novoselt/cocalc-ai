@@ -125,13 +125,16 @@ async function warmProjectRoute(project_id: string): Promise<void> {
 export async function resolveProjectReferenceAllowRemote({
   account_id,
   project_id,
+  warmRoute = true,
 }: {
   account_id: string;
   project_id: string;
+  warmRoute?: boolean;
 }): Promise<ProjectReference | null> {
   const reference = await resolveProjectReferenceForProjectUserAllowRemote({
     account_id,
     project_id,
+    warmRoute,
   });
   if (!isProjectCollaboratorRole(reference?.users?.[account_id]?.group)) {
     return null;
@@ -142,9 +145,11 @@ export async function resolveProjectReferenceAllowRemote({
 async function resolveProjectReferenceForProjectUserAllowRemote({
   account_id,
   project_id,
+  warmRoute = true,
 }: {
   account_id: string;
   project_id: string;
+  warmRoute?: boolean;
 }): Promise<ProjectReference | null> {
   const access = await getLocalProjectCollaboratorAccessStatus({
     account_id,
@@ -152,7 +157,7 @@ async function resolveProjectReferenceForProjectUserAllowRemote({
   });
   if (access === "local-collaborator") {
     const local = await loadLocalProjectReference({ account_id, project_id });
-    if (local != null) {
+    if (local != null && warmRoute) {
       await warmProjectRoute(project_id);
     }
     return local;
@@ -166,6 +171,7 @@ async function resolveProjectReferenceForProjectUserAllowRemote({
     .projectReference(ownership.bay_id)
     .get({ account_id, project_id });
   if (
+    warmRoute &&
     remote != null &&
     isProjectCollaboratorRole(remote.users?.[account_id]?.group)
   ) {
@@ -267,9 +273,11 @@ export async function hasProjectCollaboratorAccessAllowRemote({
 export async function assertProjectCollaboratorAccessAllowRemote({
   account_id,
   project_id,
+  warmRoute = true,
 }: {
   account_id?: string;
   project_id: string;
+  warmRoute?: boolean;
 }): Promise<ProjectReference> {
   if (!account_id) {
     throw Error("must be signed in");
@@ -277,6 +285,7 @@ export async function assertProjectCollaboratorAccessAllowRemote({
   const reference = await resolveProjectReferenceAllowRemote({
     account_id,
     project_id,
+    warmRoute,
   });
   if (reference == null) {
     throw Error(PROJECT_COLLABORATOR_REQUIRED_ERROR);

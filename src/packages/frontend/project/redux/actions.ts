@@ -3244,11 +3244,15 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     ext,
     current_path,
     switch_over = true,
+    preferred_jupyter_kernel,
+    discover_jupyter_kernel = true,
   }: {
     name: string;
     ext?: string;
     current_path?: string;
     switch_over?: boolean;
+    preferred_jupyter_kernel?: string | null;
+    discover_jupyter_kernel?: boolean;
   }) => {
     const store = this.get_store();
     await createProjectFile({
@@ -3268,6 +3272,8 @@ export class ProjectActions extends Actions<ProjectStoreState> {
         this.ensureContainingDirectoryExists(path),
       log: (event) => this.log(event),
       getPreferredKernel: () => this.getPreferredJupyterKernel(),
+      preferredJupyterKernel: preferred_jupyter_kernel,
+      discoverJupyterKernel: discover_jupyter_kernel,
       addCreatedTag: (tag) => redux.getActions("account")?.addTag(tag),
       openFile: (opts) => this.open_file(opts),
     });

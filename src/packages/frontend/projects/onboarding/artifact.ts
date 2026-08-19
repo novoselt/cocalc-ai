@@ -4,6 +4,7 @@
  */
 
 import { resolveProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
+import { isProjectRootfsUnavailable } from "@cocalc/frontend/project/listing/project-host-errors";
 
 import type { OnboardingProjectKind } from "./rootfs";
 
@@ -12,8 +13,12 @@ export type OnboardingArtifactCreation = {
   ext: string;
   current_path: string;
   switch_over: false;
-  relative_path: string;
+  path: string;
 };
+
+export function onboardingArtifactRouteTarget(path: string): string {
+  return `files/${path.replace(/^\/+/, "")}`;
+}
 
 export function onboardingArtifactCreation(
   kind: OnboardingProjectKind,
@@ -49,7 +54,7 @@ export function onboardingArtifactCreation(
     ext,
     current_path: homeDirectory,
     switch_over: false,
-    relative_path: `${name}.${ext}`,
+    path: `${homeDirectory.replace(/\/+$/, "")}/${name}.${ext}`,
   };
 }
 
@@ -63,5 +68,12 @@ export async function onboardingArtifactCreationForProject({
   return onboardingArtifactCreation(
     kind,
     await resolveProjectHomeDirectory(project_id),
+  );
+}
+
+export function isRetryableOnboardingArtifactError(error: unknown): boolean {
+  return (
+    isProjectRootfsUnavailable(error) ||
+    /not running|closed|initializ|file server|connect|route/i.test(`${error}`)
   );
 }

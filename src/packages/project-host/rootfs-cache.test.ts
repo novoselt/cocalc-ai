@@ -53,6 +53,7 @@ import { getProjectsUsingRootfsImage, listProjects } from "./sqlite/projects";
 
 import {
   __test__,
+  listRootfsCacheImageNames,
   pullRootfsCacheEntry,
   withManagedRootfsPullInFlight,
 } from "./rootfs-cache";
@@ -117,6 +118,19 @@ describe("rootfs-cache", () => {
       }),
     ).resolves.toBe(11);
     expect(calls).toBe(2);
+  });
+
+  it("lists cached images without treating normalization metadata as images", async () => {
+    const image = `cocalc.local/rootfs/${"e".repeat(64)}`;
+    const encoded = encodeURIComponent(image);
+    await mkdir(join(mockTestImageCache, encoded));
+    await writeFile(join(mockTestImageCache, `.${encoded}.json`), "{}");
+    await writeFile(
+      join(mockTestImageCache, `.${encoded}.normalized.json`),
+      "{}",
+    );
+
+    await expect(listRootfsCacheImageNames()).resolves.toEqual([image]);
   });
 
   it("treats btrfs ioctl failures on plain filesystems as non-btrfs", () => {

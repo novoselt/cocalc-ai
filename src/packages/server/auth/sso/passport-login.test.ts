@@ -189,6 +189,7 @@ describe("PassportLogin SSO account creation", () => {
       update_on_login: false,
       host: "",
       site_url: "https://cocalc.test",
+      onboarding_intent: "jupyter-python",
     };
     const login = new PassportLogin(opts as any);
 
@@ -208,8 +209,9 @@ describe("PassportLogin SSO account creation", () => {
       ephemeral: undefined,
       other_settings: expect.objectContaining({
         newsletter: false,
+        first_run_onboarding_intent_v1: "jupyter-python",
       }),
-      signup_reason: "SSO account creation via google",
+      signup_reason: "jupyter-python",
       trusted_product_access: false,
       trusted_product_access_reason: undefined,
     });

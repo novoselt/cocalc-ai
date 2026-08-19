@@ -3,6 +3,8 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import type { ProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
+
 export type EmailAuthPurpose = "sign_in_or_sign_up" | "email_fresh_auth";
 
 export class EmailAuthChallengeError extends Error {
@@ -59,6 +61,7 @@ export interface StartEmailAuthChallengeOptions {
   terms_accepted?: boolean;
   terms_version?: string;
   continuation_target?: string;
+  onboarding_intent?: ProjectOnboardingIntent;
   expected_account_id?: string;
 }
 

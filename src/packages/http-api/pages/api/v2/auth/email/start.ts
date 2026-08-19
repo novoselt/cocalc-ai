@@ -13,6 +13,7 @@ import {
 import { checkRequiredSSO } from "@cocalc/server/auth/sso/check-required-sso";
 import { startEmailAuthChallenge } from "@cocalc/server/inter-bay/email-auth";
 import { selectSignupHomeBay } from "@cocalc/server/accounts/select-home-bay";
+import { normalizeProjectOnboardingIntent } from "@cocalc/util/accounts/onboarding-intent";
 
 import {
   assertEmailAuthStartEnabled,
@@ -54,6 +55,7 @@ export async function start(req, res) {
       target,
       terms,
       terms_version,
+      onboarding_intent,
     } = getParams(req);
     const email = `${rawEmail ?? ""}`.trim().toLowerCase();
     const strategy = checkRequiredSSO({
@@ -81,6 +83,7 @@ export async function start(req, res) {
         terms_accepted: terms === true,
         terms_version: `${terms_version ?? ""}`.trim() || undefined,
         continuation_target: safeContinuationTarget(target),
+        onboarding_intent: normalizeProjectOnboardingIntent(onboarding_intent),
       }),
     );
   } catch (err) {

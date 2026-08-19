@@ -56,6 +56,7 @@ import { reconcileProjectAppPrivateHostnamesForProject } from "@cocalc/server/ap
 import { getProjectSecretsRuntimeCache } from "@cocalc/server/projects/project-secrets";
 import type { ProjectEnv } from "@cocalc/conat/hub/api/projects";
 import type { ProjectSecretsRuntimeCache } from "@cocalc/util/project-secrets";
+import { normalizeRootfsImageName } from "@cocalc/util/rootfs-images";
 
 const log = getLogger("server:project-host:control");
 // Project starts can include large restores, so allow a long RPC timeout.
@@ -148,9 +149,11 @@ function hostToRegistryRow(host: Host): HostRegistryRow {
     tier: host.tier ?? null,
     metadata: {
       owner: host.owner,
+      host_cpu_count: host.host_cpu_count,
       machine: host.machine,
       pressure: host.pressure,
       metrics: host.metrics,
+      placement: host.placement,
       billing: {
         enforcement: host.billing_enforcement,
       },
@@ -217,10 +220,68 @@ export function hostPlacementPressureRank(
   );
 }
 
+function placementRootfsCachePenalty(
+  row: HostRegistryRow,
+  requestedRootfsImage?: string,
+): number {
+  const requested = normalizeRootfsImageName(requestedRootfsImage);
+  if (!requested) return 0;
+  const snapshot = row.metadata?.placement;
+  const observedAt = Date.parse(`${snapshot?.observed_at ?? ""}`);
+  const fresh =
+    Number.isFinite(observedAt) && Date.now() - observedAt <= 3 * 60_000;
+  if (!fresh || !Array.isArray(snapshot?.cached_rootfs_images)) {
+    return 25;
+  }
+  const cached = snapshot.cached_rootfs_images.some(
+    (image: unknown) =>
+      normalizeRootfsImageName(`${image ?? ""}`) === requested,
+  );
+  if (cached) return 0;
+  return snapshot.rootfs_cache_truncated === true ? 25 : 50;
+}
+
+function hostPlacementLoadPenalty(row: HostRegistryRow): number {
+  const metrics = row.metadata?.metrics?.current ?? {};
+  const starting = Math.max(
+    0,
+    Math.min(20, Math.floor(Number(metrics.starting_project_count) || 0)),
+  );
+  const cpuCount = Math.max(
+    1,
+    Math.floor(Number(row.metadata?.host_cpu_count) || 1),
+  );
+  const loadRatio = Math.max(
+    0,
+    Math.min(10, (Number(metrics.load_1) || 0) / cpuCount),
+  );
+  const memoryUsedPercent = Math.max(
+    0,
+    Math.min(100, Number(metrics.memory_used_percent) || 0),
+  );
+  const memoryPenalty = Math.max(0, memoryUsedPercent - 70);
+  return starting * 20 + Math.round(loadRatio * 10) + memoryPenalty;
+}
+
+export function hostPlacementScore(
+  row: HostRegistryRow,
+  requestedRootfsImage?: string,
+): number {
+  return (
+    hostPlacementPressureRank(
+      normalizeHostPressureZone(row.metadata?.pressure?.zone),
+    ) *
+      10_000 +
+    placementRootfsCachePenalty(row, requestedRootfsImage) +
+    hostPlacementLoadPenalty(row)
+  );
+}
+
 export function choosePlacementHostRow<T extends HostRegistryRow>(
   rows: T[],
   random: () => number = Math.random,
   project_region?: string,
+  requested_rootfs_image?: string,
 ): T | undefined {
   const eligibleRows = rows.filter(
     (row) =>
@@ -230,19 +291,19 @@ export function choosePlacementHostRow<T extends HostRegistryRow>(
         mapCloudRegionToR2Region(row.region ?? "") === project_region),
   );
   if (eligibleRows.length === 0) return;
-  let bestRank = Number.POSITIVE_INFINITY;
-  const rankedRows: Array<{ row: T; rank: number }> = [];
+  let bestScore = Number.POSITIVE_INFINITY;
+  const rankedRows: Array<{ row: T; score: number }> = [];
   for (const row of eligibleRows) {
-    const rank = hostPlacementPressureRank(
-      normalizeHostPressureZone(row.metadata?.pressure?.zone),
-    );
-    rankedRows.push({ row, rank });
-    if (rank < bestRank) {
-      bestRank = rank;
+    const score = hostPlacementScore(row, requested_rootfs_image);
+    rankedRows.push({ row, score });
+    if (score < bestScore) {
+      bestScore = score;
     }
   }
+  // Keep a little randomness among effectively equivalent hosts so a burst of
+  // first projects does not stampede the single best heartbeat snapshot.
   const bestRows = rankedRows
-    .filter(({ rank }) => rank === bestRank)
+    .filter(({ score }) => score <= bestScore + 5)
     .map(({ row }) => row);
   if (bestRows.length === 0) return;
   const index = Math.min(
@@ -256,9 +317,17 @@ function chooseNearestRegionHostRow<T extends HostRegistryRow>(
   rows: T[],
   projectRegion: string,
   random: () => number = Math.random,
+  requestedRootfsImage?: string,
 ): T | undefined {
   const parsedProjectRegion = parseR2Region(projectRegion);
-  if (!parsedProjectRegion) return choosePlacementHostRow(rows, random);
+  if (!parsedProjectRegion) {
+    return choosePlacementHostRow(
+      rows,
+      random,
+      undefined,
+      requestedRootfsImage,
+    );
+  }
   let nearestRank = Number.POSITIVE_INFINITY;
   const nearestRows: T[] = [];
   for (const row of rows) {
@@ -274,7 +343,12 @@ function chooseNearestRegionHostRow<T extends HostRegistryRow>(
       nearestRows.push(row);
     }
   }
-  return choosePlacementHostRow(nearestRows, random);
+  return choosePlacementHostRow(
+    nearestRows,
+    random,
+    undefined,
+    requestedRootfsImage,
+  );
 }
 
 function mapHostRegistryRow(row: HostRegistryRow) {
@@ -641,12 +715,14 @@ export async function selectActiveHost({
   bay_id,
   project_region,
   account_id,
+  rootfs_image,
   allow_region_fallback = false,
 }: {
   exclude_host_id?: string;
   bay_id?: string;
   project_region?: string;
   account_id?: string;
+  rootfs_image?: string;
   allow_region_fallback?: boolean;
 } = {}) {
   const targetBayId = effectiveBayId(bay_id);
@@ -748,7 +824,12 @@ export async function selectActiveHost({
       rows,
       account_id,
     });
-    return choosePlacementHostRow(placeableRows, Math.random, project_region);
+    return choosePlacementHostRow(
+      placeableRows,
+      Math.random,
+      project_region,
+      rootfs_image,
+    );
   };
 
   const sameBayRows = await loadCandidateRows();
@@ -778,7 +859,12 @@ export async function selectActiveHost({
   const fallbackRows = await filterPlaceableRows([
     ...fallbackRowsById.values(),
   ]);
-  const fallbackRow = chooseNearestRegionHostRow(fallbackRows, project_region);
+  const fallbackRow = chooseNearestRegionHostRow(
+    fallbackRows,
+    project_region,
+    Math.random,
+    rootfs_image,
+  );
   return fallbackRow ? mapHostRegistryRow(fallbackRow) : undefined;
 }
 
@@ -885,6 +971,7 @@ export async function ensurePlacement(
     bay_id: projectBayId,
     project_region: projectRegion,
     account_id,
+    rootfs_image: meta.image,
     allow_region_fallback: true,
   });
   if (!chosen) {

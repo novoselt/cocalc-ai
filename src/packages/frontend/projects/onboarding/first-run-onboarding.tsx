@@ -25,21 +25,35 @@ import type { InviteInboxState } from "@cocalc/frontend/collaborators/invite-inb
 import { Icon, Loading } from "@cocalc/frontend/components";
 import type { IconName } from "@cocalc/frontend/components/icon";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import {
+  FIRST_RUN_ONBOARDING_INTENT_SETTING,
+  normalizeProjectOnboardingIntent,
+} from "@cocalc/util/accounts/onboarding-intent";
 import { COLORS } from "@cocalc/util/theme";
 import { recordProductActivity } from "@cocalc/frontend/monitoring/product-activity";
 import { markFirstRunCompletedThisSession } from "@cocalc/frontend/app/onboarding-session";
-import { submitNavigatorPromptInWorkspaceChat } from "@cocalc/frontend/project/new/navigator-intents";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { useProjectRuntimeCapabilities } from "@cocalc/frontend/project/runtime-capabilities";
 import { useCodexPaymentSource } from "@cocalc/frontend/chat/use-codex-payment-source";
 import { getLogger } from "@cocalc/frontend/logger";
+import {
+  elapsedUxMs,
+  recordUxLatencyEvent,
+  startUxTimer,
+} from "@cocalc/frontend/monitoring/ux-latency";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
+import { setProjectRootfsImage } from "@cocalc/frontend/rootfs/manifest";
 import {
   applyProjectPreset,
   createInitialProjectDraft,
 } from "../create/project-create-draft";
 import { useProjectCreateDraft } from "../create/use-project-create-draft";
 import { chooseOnboardingRootfs, type OnboardingProjectKind } from "./rootfs";
-import { onboardingArtifactCreationForProject } from "./artifact";
+import {
+  isRetryableOnboardingArtifactError,
+  onboardingArtifactCreationForProject,
+  onboardingArtifactRouteTarget,
+} from "./artifact";
 import {
   buildCodexOnboardingPrompt,
   codexAvailableForOnboarding,
@@ -73,6 +87,14 @@ type ProjectPath = {
   heading: string;
   description: string;
   icon: IconName;
+};
+
+type PreparedOnboardingProject = {
+  project_id: string;
+  kind: OnboardingProjectKind;
+  rootfs_image?: string;
+  rootfs_image_id?: string;
+  default_jupyter_kernel?: string;
 };
 
 const PROJECT_PATHS: Record<OnboardingProjectKind, ProjectPath> = {
@@ -270,9 +292,11 @@ function WizardFrame({
 async function createArtifactWhenReady({
   project_id,
   kind,
+  preferred_jupyter_kernel,
 }: {
   project_id: string;
   kind: OnboardingProjectKind;
+  preferred_jupyter_kernel?: string;
 }): Promise<string | undefined> {
   const artifact = await onboardingArtifactCreationForProject({
     kind,
@@ -289,12 +313,12 @@ async function createArtifactWhenReady({
       ext: artifact.ext,
       current_path: artifact.current_path,
       switch_over: artifact.switch_over,
+      preferred_jupyter_kernel,
+      discover_jupyter_kernel: false,
     });
     lastError = `${actions.get_store()?.get("file_creation_error") ?? ""}`;
-    if (!lastError) return artifact.relative_path;
-    if (
-      !/not running|closed|initializ|file server|connect|route/i.test(lastError)
-    ) {
+    if (!lastError) return artifact.path;
+    if (!isRetryableOnboardingArtifactError(lastError)) {
       break;
     }
     await delay(1_000);
@@ -317,21 +341,40 @@ export function FirstRunOnboarding({
 }) {
   const runtime = useProjectRuntimeCapabilities();
   const accountId = `${useTypedRedux("account", "account_id") ?? ""}`;
+  const rawOtherSettings = useTypedRedux("account", "other_settings");
+  const otherSettings =
+    (rawOtherSettings as any)?.toJS?.() ?? rawOtherSettings ?? {};
+  const landingIntent = normalizeProjectOnboardingIntent(
+    (otherSettings as any)?.[FIRST_RUN_ONBOARDING_INTENT_SETTING],
+  );
   const [step, setStep] = useState<WizardStep>("home");
+  const [showLandingSuggestion, setShowLandingSuggestion] = useState(true);
   const [selectedPath, setSelectedPath] = useState<ProjectPath>();
   const [projectTitle, setProjectTitle] = useState("");
   const [codexPrompt, setCodexPrompt] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [progress, setProgress] = useState(0);
+  const [preparationStatus, setPreparationStatus] = useState<
+    "idle" | "creating" | "starting" | "error"
+  >("idle");
+  const preparedProject = useRef<PreparedOnboardingProject | undefined>(
+    undefined,
+  );
+  const preparationQueue = useRef<Promise<void>>(Promise.resolve());
+  const persistenceQueue = useRef<Promise<void>>(Promise.resolve());
   const recordedDecision = useRef("");
   const { context, rootfsImages, rootfsLoading, rootfsError, isAdmin } =
     useProjectCreateDraft({ defaultValue: "" });
-  const { paymentSource: codexPaymentSource } = useCodexPaymentSource({
+  const {
+    paymentSource: codexPaymentSource,
+    loading: codexPaymentSourceLoading,
+  } = useCodexPaymentSource({
     enabled:
       decision.kind === "intent" ||
       step === "home-create" ||
-      selectedPath?.kind === "codex",
+      selectedPath != null ||
+      landingIntent != null,
   });
   const codexAvailable = codexAvailableForOnboarding(codexPaymentSource);
   const codexFundingDescription =
@@ -345,6 +388,10 @@ export function FirstRunOnboarding({
     !rootfsLoading &&
     (selectedPath?.kind !== "codex" ||
       (!!codexPrompt.trim() && codexAvailable));
+
+  useEffect(() => {
+    setShowLandingSuggestion(true);
+  }, [accountId]);
 
   useEffect(() => {
     if (
@@ -363,6 +410,16 @@ export function FirstRunOnboarding({
 
   useEffect(() => {
     if (!configurationVisible || !selectedPath) return;
+    // The full project workspace is deliberately not a prerequisite for
+    // rendering onboarding. Start loading it once the user reaches project
+    // configuration so download/evaluation overlaps project startup and user
+    // think time.
+    void ensureProjectReduxRuntime().catch((err) => {
+      logger.warn("unable to preload project runtime during onboarding", {
+        kind: selectedPath.kind,
+        err: `${err}`,
+      });
+    });
     recordProductActivity({
       event_name: "onboarding_configuration_seen",
       properties: {
@@ -385,11 +442,51 @@ export function FirstRunOnboarding({
     });
   }, [configurationReady, selectedPath?.kind]);
 
-  async function persist(
+  useEffect(() => {
+    if (
+      !configurationVisible ||
+      !selectedPath ||
+      createDisabled ||
+      rootfsLoading
+    ) {
+      return;
+    }
+    void prepareOnboardingProject({
+      path: selectedPath,
+      title: selectedPath.title,
+      speculative: true,
+    }).catch((err) => {
+      logger.warn("speculative onboarding project preparation failed", {
+        kind: selectedPath.kind,
+        err: `${err}`,
+      });
+    });
+  }, [configurationVisible, createDisabled, rootfsLoading, selectedPath?.kind]);
+
+  useEffect(() => {
+    if (
+      decision.kind !== "intent" ||
+      step !== "home" ||
+      !landingIntent ||
+      !showLandingSuggestion
+    ) {
+      return;
+    }
+    recordProductActivity({
+      event_name: "onboarding_configuration_seen",
+      properties: {
+        onboarding_path: landingIntent,
+        outcome: "landing-intent",
+      },
+      dedupe_key: `landing:${landingIntent}`,
+    });
+  }, [decision.kind, landingIntent, showLandingSuggestion, step]);
+
+  function persist(
     status: StoredFirstRunOnboarding["status"],
     intent?: OnboardingIntent,
     project_id?: string,
-  ) {
+  ): Promise<void> {
     const value: StoredFirstRunOnboarding = {
       version: FIRST_RUN_ONBOARDING_VERSION,
       status,
@@ -397,39 +494,47 @@ export function FirstRunOnboarding({
       project_id,
       updated_at: new Date().toISOString(),
     };
-    const actions = redux.getActions("account");
-    try {
-      await actions.set_other_settings_and_wait(
-        FIRST_RUN_ONBOARDING_SETTING,
-        value,
-      );
-    } catch (err) {
-      // Onboarding metadata must not block a successfully created project or
-      // accepted invitation. The ordinary project/invite state still prevents
-      // duplicate onboarding, while diagnostics retain this failure.
-      logger.warn("failed to persist first-run onboarding state", {
-        status,
-        intent,
-        project_id,
-        err: `${err}`,
-      });
-    }
-    if (intent) {
-      void webapp_client
-        .async_query({ query: signUpUsageIntentQuery(intent) })
-        .catch((err) => {
-          // Usage intent is optional telemetry and must not block onboarding.
-          logger.warn("failed to persist sign-up usage intent", {
+    const task = persistenceQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        const actions = redux.getActions("account");
+        try {
+          await actions.set_other_settings_and_wait(
+            FIRST_RUN_ONBOARDING_SETTING,
+            value,
+          );
+        } catch (err) {
+          // Onboarding metadata must not block a successfully created project
+          // or accepted invitation. Project and invite state still prevent a
+          // duplicate first-run experience.
+          logger.warn("failed to persist first-run onboarding state", {
+            status,
             intent,
+            project_id,
             err: `${err}`,
           });
-        });
-    }
+        }
+        if (intent) {
+          void webapp_client
+            .async_query({ query: signUpUsageIntentQuery(intent) })
+            .catch((err) => {
+              logger.warn("failed to persist sign-up usage intent", {
+                intent,
+                err: `${err}`,
+              });
+            });
+        }
+      });
+    persistenceQueue.current = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
-  async function complete(intent: OnboardingIntent, project_id?: string) {
+  function complete(intent: OnboardingIntent, project_id?: string): void {
     markFirstRunCompletedThisSession();
-    await persist("completed", intent, project_id);
+    void persist("completed", intent, project_id);
   }
 
   function chooseProject(kind: OnboardingProjectKind, next?: WizardStep) {
@@ -461,7 +566,7 @@ export function FirstRunOnboarding({
     setBusy(project.project_id);
     setError("");
     try {
-      await complete(intent, project.project_id);
+      complete(intent, project.project_id);
       recordProductActivity({
         event_name: "project_entered",
         project_id: project.project_id,
@@ -489,10 +594,7 @@ export function FirstRunOnboarding({
       await (
         redux.getActions("projects") as any
       )?.ensureRealtimeFeedForCurrentAccount?.();
-      await complete(
-        course ? "course-invite" : "project-invite",
-        invite.project_id,
-      );
+      complete(course ? "course-invite" : "project-invite", invite.project_id);
       recordProductActivity({
         event_name: "project_entered",
         project_id: invite.project_id,
@@ -513,117 +615,258 @@ export function FirstRunOnboarding({
     }
   }
 
-  async function createProject() {
-    if (!selectedPath || !projectTitle.trim()) return;
+  function rootfsForPath(path: ProjectPath, title: string) {
+    let fallbackDraft = createInitialProjectDraft({
+      ...context,
+      defaultTitle: title,
+    });
+    if (path.kind === "teaching") {
+      fallbackDraft = applyProjectPreset(fallbackDraft, "teaching", context);
+    }
+    return chooseOnboardingRootfs({
+      images: rootfsImages,
+      kind: path.kind,
+      fallback: {
+        image: fallbackDraft.rootfs_image,
+        image_id: fallbackDraft.rootfs_image_id,
+      },
+      isAdmin,
+    });
+  }
+
+  function prepareOnboardingProject({
+    path,
+    title,
+    speculative,
+  }: {
+    path: ProjectPath;
+    title: string;
+    speculative: boolean;
+  }): Promise<PreparedOnboardingProject> {
+    const task = preparationQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const rootfs = rootfsForPath(path, title);
+          let prepared = preparedProject.current;
+          if (!prepared) {
+            setPreparationStatus("creating");
+            recordProductActivity({
+              event_name: "project_create_started",
+              properties: {
+                onboarding_path: path.kind,
+                outcome: speculative ? "configuration-prefetch" : "submit",
+              },
+            });
+            const project_id = await redux
+              .getActions("projects")
+              .create_project({
+                title,
+                start: true,
+                ...(runtime.rootfs && rootfs?.image
+                  ? {
+                      rootfs_image: rootfs.image,
+                      rootfs_image_id: rootfs.image_id,
+                    }
+                  : undefined),
+              });
+            prepared = {
+              project_id,
+              kind: path.kind,
+              rootfs_image: runtime.rootfs ? rootfs?.image : undefined,
+              rootfs_image_id: runtime.rootfs ? rootfs?.image_id : undefined,
+              default_jupyter_kernel:
+                rootfs?.entry?.default_jupyter_kernel?.trim() || undefined,
+            };
+            preparedProject.current = prepared;
+            void persist("in_progress", path.kind, project_id);
+          } else {
+            await redux
+              .getActions("projects")
+              .set_project_title(prepared.project_id, title);
+            const nextImage = runtime.rootfs ? rootfs?.image : undefined;
+            const nextImageId = runtime.rootfs ? rootfs?.image_id : undefined;
+            const runtimeImageChanged =
+              !!nextImage && nextImage !== prepared.rootfs_image;
+            if (
+              nextImage &&
+              (runtimeImageChanged || nextImageId !== prepared.rootfs_image_id)
+            ) {
+              await setProjectRootfsImage({
+                project_id: prepared.project_id,
+                image: nextImage,
+                image_id: nextImageId,
+              });
+              // The project is still empty during onboarding, so restarting is
+              // safe and makes a path change take effect immediately.
+              if (runtimeImageChanged) {
+                await redux
+                  .getActions("projects")
+                  .restart_project(prepared.project_id);
+              }
+            }
+            prepared = {
+              ...prepared,
+              kind: path.kind,
+              rootfs_image: nextImage,
+              rootfs_image_id: nextImageId,
+              default_jupyter_kernel:
+                rootfs?.entry?.default_jupyter_kernel?.trim() || undefined,
+            };
+            preparedProject.current = prepared;
+          }
+          setPreparationStatus("starting");
+          return prepared;
+        } catch (err) {
+          setPreparationStatus("error");
+          throw err;
+        }
+      });
+    preparationQueue.current = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
+  async function createProject(overrides?: {
+    path?: ProjectPath;
+    title?: string;
+    prompt?: string;
+    selectionOutcome?: string;
+  }) {
+    const path = overrides?.path ?? selectedPath;
+    const title = `${overrides?.title ?? projectTitle}`.trim();
+    const prompt = `${overrides?.prompt ?? codexPrompt}`.trim();
+    if (!path || !title) return;
     if (createDisabled) {
       setError("Verify your email address before creating a project.");
       return;
     }
-    if (selectedPath.kind === "codex" && !codexPrompt.trim()) {
+    if (path.kind === "codex" && !prompt) {
       setError("Describe what you want Codex to help you build.");
       return;
     }
-    if (selectedPath.kind === "codex" && !codexAvailable) {
+    if (prompt && !codexAvailable) {
       setError(
         "Codex access is not currently available for this account. Choose another project type or connect a ChatGPT plan in Account settings.",
       );
       return;
     }
+    if (overrides?.selectionOutcome) {
+      recordProductActivity({
+        event_name: "onboarding_path_selected",
+        properties: {
+          onboarding_path: path.kind,
+          outcome: overrides.selectionOutcome,
+        },
+        dedupe_key: path.kind,
+      });
+    }
     setBusy("create");
     setError("");
     setProgress(12);
-    const intent = selectedPath.kind as OnboardingIntent;
-    recordProductActivity({
-      event_name: "project_create_started",
-      properties: { onboarding_path: intent },
-    });
+    const intent = path.kind as OnboardingIntent;
     let createdProjectId: string | undefined;
+    const flowStart = startUxTimer();
+    const recordPhase = (
+      metric: string,
+      start: number,
+      project_id?: string,
+    ) => {
+      recordUxLatencyEvent({
+        event_type: "first_run_onboarding",
+        metric,
+        duration_ms: elapsedUxMs(start),
+        project_id,
+        segment: path.kind,
+      });
+    };
     try {
-      let fallbackDraft = createInitialProjectDraft({
-        ...context,
-        defaultTitle: projectTitle.trim(),
+      let phaseStart = startUxTimer();
+      const prepared = await prepareOnboardingProject({
+        path,
+        title,
+        speculative: false,
       });
-      if (selectedPath.kind === "teaching") {
-        fallbackDraft = applyProjectPreset(fallbackDraft, "teaching", context);
-      }
-      const rootfs = chooseOnboardingRootfs({
-        images: rootfsImages,
-        kind: selectedPath.kind,
-        fallback: {
-          image: fallbackDraft.rootfs_image,
-          image_id: fallbackDraft.rootfs_image_id,
-        },
-        isAdmin,
-      });
-      const project_id = await redux.getActions("projects").create_project({
-        title: projectTitle.trim(),
-        start: true,
-        ...(runtime.rootfs && rootfs?.image
-          ? {
-              rootfs_image: rootfs.image,
-              rootfs_image_id: rootfs.image_id,
-            }
-          : undefined),
-      });
+      const project_id = prepared.project_id;
       createdProjectId = project_id;
-      await persist("in_progress", intent, project_id);
+      recordPhase("project_prepared_ms", phaseStart, project_id);
       setProgress(42);
+      phaseStart = startUxTimer();
       await redux.getActions("projects").open_project({
         project_id,
         target: "files",
         switch_to: false,
         restore_session: false,
       });
+      recordPhase("background_workspace_open_ms", phaseStart, project_id);
       setProgress(68);
       let artifact: string | undefined;
+      phaseStart = startUxTimer();
       try {
         artifact = await createArtifactWhenReady({
           project_id,
-          kind: selectedPath.kind,
+          kind: path.kind,
+          preferred_jupyter_kernel: prepared.default_jupyter_kernel,
         });
       } catch (err) {
         void message.warning(
           `Your project is ready, but CoCalc could not create the first file automatically: ${err}`,
         );
       }
+      recordPhase("starter_artifact_ms", phaseStart, project_id);
       setProgress(88);
-      await complete(intent, project_id);
+      complete(intent, project_id);
       recordProductActivity({
         event_name: "project_ready",
         project_id,
-        properties: { onboarding_path: intent },
+        properties: {
+          onboarding_path: intent,
+          outcome: prompt ? "codex-requested" : "starter-only",
+        },
       });
-      if (selectedPath.kind === "codex") {
+      if (prompt) {
+        phaseStart = startUxTimer();
         await redux.getActions("projects").open_project({
           project_id,
-          target: "files",
+          target: artifact ? onboardingArtifactRouteTarget(artifact) : "files",
           switch_to: true,
           restore_session: false,
         });
-        const visiblePrompt = codexPrompt.trim();
+        recordPhase("foreground_workspace_open_ms", phaseStart, project_id);
+        const { submitNavigatorPromptInWorkspaceChat } =
+          await import("@cocalc/frontend/project/new/navigator-intents");
+        phaseStart = startUxTimer();
         const submitted = await submitNavigatorPromptInWorkspaceChat({
           project_id,
-          prompt: buildCodexOnboardingPrompt(visiblePrompt),
-          visiblePrompt,
+          prompt: buildCodexOnboardingPrompt(prompt, {
+            kind: path.kind,
+            artifact,
+          }),
+          visiblePrompt: prompt,
           title: "Getting started",
           tag: "intent:onboarding",
           forceCodex: true,
           createNewThread: true,
           openFloating: true,
-          waitForAgent: true,
+          waitForAgent: false,
         });
+        recordPhase("codex_handoff_ms", phaseStart, project_id);
         if (!submitted) {
           void message.warning(
             "The project is ready, but Codex did not open automatically. Open Codex from the project to continue.",
           );
         }
       } else {
+        phaseStart = startUxTimer();
         await redux.getActions("projects").open_project({
           project_id,
-          target: artifact ? `files/${artifact}` : "files",
+          target: artifact ? onboardingArtifactRouteTarget(artifact) : "files",
           switch_to: true,
           restore_session: false,
         });
+        recordPhase("foreground_workspace_open_ms", phaseStart, project_id);
       }
       setProgress(100);
       recordProductActivity({
@@ -634,11 +877,17 @@ export function FirstRunOnboarding({
       recordProductActivity({
         event_name: "guided_activation_done",
         project_id,
-        properties: { onboarding_path: intent, outcome: "opened" },
+        properties: {
+          onboarding_path: intent,
+          outcome: prompt ? "opened-with-codex" : "opened",
+        },
       });
+      recordPhase("complete_ms", flowStart, project_id);
     } catch (err) {
+      recordPhase("failed_ms", flowStart, createdProjectId);
+      createdProjectId ??= preparedProject.current?.project_id;
       if (createdProjectId) {
-        await complete(intent, createdProjectId);
+        complete(intent, createdProjectId);
         recordProductActivity({
           event_name: "guided_activation_done",
           project_id: createdProjectId,
@@ -849,6 +1098,111 @@ export function FirstRunOnboarding({
     );
   }
 
+  if (
+    decision.kind === "intent" &&
+    step === "home" &&
+    landingIntent &&
+    showLandingSuggestion
+  ) {
+    const path = PROJECT_PATHS[landingIntent];
+    const promptRequired = landingIntent === "codex";
+    return (
+      <WizardFrame
+        title={path.heading}
+        description={`${path.description} Your project name and software environment are already selected.`}
+        footer={
+          <Space wrap>
+            <Button
+              type="primary"
+              size="large"
+              onClick={() =>
+                void createProject({
+                  path,
+                  title: path.title,
+                  prompt: codexPrompt,
+                  selectionOutcome: "landing-intent",
+                })
+              }
+              loading={busy === "create" || rootfsLoading}
+              disabled={
+                createDisabled ||
+                !!busy ||
+                rootfsLoading ||
+                (promptRequired && (!codexAvailable || !codexPrompt.trim()))
+              }
+            >
+              Create {path.title}
+            </Button>
+            <Button
+              onClick={() => setShowLandingSuggestion(false)}
+              disabled={!!busy}
+            >
+              Choose something else
+            </Button>
+          </Space>
+        }
+      >
+        <Card style={{ borderRadius: 12, margin: "0 auto", maxWidth: 680 }}>
+          <Space orientation="vertical" size="large" style={{ width: "100%" }}>
+            {error ? <Alert type="error" showIcon title={error} /> : null}
+            {createDisabled ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Verify your email before creating a project"
+              />
+            ) : null}
+            {promptRequired && codexPaymentSourceLoading ? (
+              <Loading theme="medium" />
+            ) : codexAvailable ? (
+              <>
+                <Alert
+                  type="info"
+                  showIcon
+                  title={
+                    promptRequired
+                      ? "Tell Codex what you want to accomplish"
+                      : "Optional: start with help from Codex"
+                  }
+                  description={codexFundingDescription}
+                />
+                <label>
+                  <Text strong>
+                    {promptRequired
+                      ? "What would you like to make or accomplish?"
+                      : "What should Codex help you do first? (optional)"}
+                  </Text>
+                  <Input.TextArea
+                    autoFocus={promptRequired}
+                    rows={4}
+                    value={codexPrompt}
+                    onChange={(event) => setCodexPrompt(event.target.value)}
+                    placeholder="For example: compare a few number theory algorithms and explain the results."
+                    disabled={!!busy}
+                    style={{ marginTop: 7 }}
+                  />
+                </label>
+              </>
+            ) : promptRequired ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Codex is not available for this account"
+                description="Choose another project type or connect a ChatGPT plan in Account settings."
+              />
+            ) : null}
+            {busy === "create" ? (
+              <div aria-live="polite">
+                <Progress percent={progress} status="active" />
+                <Text type="secondary">Preparing your first workspace...</Text>
+              </div>
+            ) : null}
+          </Space>
+        </Card>
+      </WizardFrame>
+    );
+  }
+
   if (step === "notebook") {
     return (
       <WizardFrame
@@ -942,7 +1296,9 @@ export function FirstRunOnboarding({
               loading={busy === "create"}
               disabled={!configurationReady}
             >
-              Create project and continue
+              {preparationStatus === "idle" || preparationStatus === "error"
+                ? "Create project and continue"
+                : "Continue"}
             </Button>
           </Space>
         }
@@ -958,6 +1314,32 @@ export function FirstRunOnboarding({
                 description="CoCalc will use the site's default project image."
               />
             ) : null}
+            {busy !== "create" && preparationStatus === "creating" ? (
+              <Alert
+                type="info"
+                showIcon
+                title="Creating your project now"
+                description="You can keep configuring it while CoCalc prepares the software environment."
+                role="status"
+              />
+            ) : null}
+            {busy !== "create" && preparationStatus === "starting" ? (
+              <Alert
+                type="success"
+                showIcon
+                title="Your software environment is starting"
+                description="Finish the options below while CoCalc starts the project in the background."
+                role="status"
+              />
+            ) : null}
+            {busy !== "create" && preparationStatus === "error" ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Background preparation paused"
+                description="CoCalc will retry when you continue. Your choices have not been lost."
+              />
+            ) : null}
             <label>
               <Text strong>Project name</Text>
               <Input
@@ -968,7 +1350,7 @@ export function FirstRunOnboarding({
                 style={{ marginTop: 7 }}
               />
             </label>
-            {step === "codex" ? (
+            {codexAvailable ? (
               <Space
                 orientation="vertical"
                 size="middle"
@@ -981,9 +1363,13 @@ export function FirstRunOnboarding({
                   description={codexFundingDescription}
                 />
                 <label>
-                  <Text strong>What would you like to make or accomplish?</Text>
+                  <Text strong>
+                    {step === "codex"
+                      ? "What would you like to make or accomplish?"
+                      : "What should Codex help you do first? (optional)"}
+                  </Text>
                   <Input.TextArea
-                    autoFocus
+                    autoFocus={step === "codex"}
                     rows={5}
                     value={codexPrompt}
                     onChange={(event) => setCodexPrompt(event.target.value)}

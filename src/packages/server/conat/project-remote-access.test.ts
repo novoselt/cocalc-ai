@@ -113,6 +113,27 @@ describe("project remote access", () => {
     expect(access.capabilities.useProjectRuntime).toBe(false);
   });
 
+  it("can authorize a remote collaborator without warming runtime routing", async () => {
+    projectReferenceGetMock = jest.fn(async () => ({
+      project_id: PROJECT_ID,
+      title: "Project",
+      host_id: "33333333-3333-4333-8333-333333333333",
+      owning_bay_id: "bay-remote",
+      users: { [ACCOUNT_ID]: { group: "collaborator" } },
+    }));
+    const { assertProjectCollaboratorAccessAllowRemote } =
+      await import("./project-remote-access");
+
+    await expect(
+      assertProjectCollaboratorAccessAllowRemote({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        warmRoute: false,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ project_id: PROJECT_ID }));
+    expect(materializeProjectHostMock).not.toHaveBeenCalled();
+  });
+
   it("resolves temporary public-share grants as viewer access", async () => {
     resolveProjectBayMock = jest.fn(async () => null);
     getLocalProjectAccessStatusMock = jest.fn(async () => "missing-project");

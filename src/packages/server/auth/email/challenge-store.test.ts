@@ -400,6 +400,7 @@ describe("seed-global email authentication challenges", () => {
       prospective_home_bay_id: "bay-new",
       terms_accepted: true,
       terms_version: "2026-07",
+      onboarding_intent: "sage",
     });
     const sent = sendEmailAuthChallengeMessageMock.mock.calls[0][0];
     await redeemEmailAuthLinkDirect({
@@ -417,6 +418,10 @@ describe("seed-global email authentication challenges", () => {
         email_address: "new@example.edu",
         display_name: "CoCalc User",
         home_bay_id: "bay-new",
+        signup_reason: "sage",
+        other_settings: expect.objectContaining({
+          first_run_onboarding_intent_v1: "sage",
+        }),
         verified_email: expect.objectContaining({
           address: "new@example.edu",
           method: "email_link",

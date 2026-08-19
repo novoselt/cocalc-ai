@@ -319,6 +319,7 @@ export function setGeneratedImageBlobWriter(
 }
 
 const agents = new Map<string, AcpAgent>();
+const agentProjectIds = new WeakMap<AcpAgent, string>();
 let conatClient: ConatClient | null = null;
 let cachedMockScriptPromise: Promise<AcpMockScript> | null = null;
 const pumpingAcpJobThreads = new Set<string>();
@@ -789,11 +790,16 @@ function workerRowStillLikelyOwnsTurns({
 }
 
 function preferredWorkerForRetainedSession(
+  project_id: string,
   session_id?: string | null,
 ): string | undefined {
+  const projectId = `${project_id ?? ""}`.trim();
   const sessionId = `${session_id ?? ""}`.trim();
-  if (!sessionId) return;
-  const owner = getAcpRuntimeOwner(sessionId);
+  if (!projectId || !sessionId) return;
+  const owner = getAcpRuntimeOwner({
+    project_id: projectId,
+    session_id: sessionId,
+  });
   if (!owner) return;
   const worker = getAcpWorker(owner.worker_id);
   const currentHostId = currentDetachedWorkerContext?.host_id;
@@ -809,6 +815,7 @@ function preferredWorkerForRetainedSession(
       }));
   if (live) return owner.worker_id;
   releaseAcpRuntimeOwner({
+    project_id: projectId,
     session_id: sessionId,
     worker_id: owner.worker_id,
   });
@@ -1723,16 +1730,25 @@ function findChatWriter({
   threadId?: string;
   chat?: AcpChatContext;
 }): ChatStreamWriter | undefined {
-  if (threadId) {
-    const writer = chatWritersByThreadId.get(threadId);
+  if (chat != null) {
+    const writer = chatWritersByChatKey.get(chatKey(chat));
     if (writer != null) {
       return writer;
     }
-  }
-  if (chat != null) {
-    return chatWritersByChatKey.get(chatKey(chat));
+    if (threadId) {
+      const writer = chatWritersByThreadId.get(
+        projectThreadKey(chat.project_id, threadId),
+      );
+      if (writer != null) {
+        return writer;
+      }
+    }
   }
   return undefined;
+}
+
+function projectThreadKey(projectId: string, threadId: string): string {
+  return JSON.stringify([projectId, threadId]);
 }
 
 function compactLivePreviewBatch(
@@ -3494,9 +3510,10 @@ export class ChatStreamWriter {
     chatWritersByChatKey.delete(this.chatKey);
     logWriterCounts("dispose", { chatKey: this.chatKey });
     for (const key of this.threadKeys) {
-      const writer = chatWritersByThreadId.get(key);
+      const scopedKey = projectThreadKey(this.metadata.project_id, key);
+      const writer = chatWritersByThreadId.get(scopedKey);
       if (writer === this) {
-        chatWritersByThreadId.delete(key);
+        chatWritersByThreadId.delete(scopedKey);
         logWriterCounts("dispose-thread", { threadId: key });
       }
     }
@@ -3747,7 +3764,10 @@ export class ChatStreamWriter {
     if (!key) return;
     this.lastActivityAt = Date.now();
     this.threadKeys.add(key);
-    chatWritersByThreadId.set(key, this);
+    chatWritersByThreadId.set(
+      projectThreadKey(this.metadata.project_id, key),
+      this,
+    );
     logWriterCounts("register-thread", { threadId: key });
     try {
       updateAcpTurnLeaseSessionId({
@@ -4529,7 +4549,9 @@ function findChatWriterForTurn(turn: {
   if (threadId) ids.add(threadId);
   if (sessionId) ids.add(sessionId);
   for (const id of ids) {
-    const writer = chatWritersByThreadId.get(id);
+    const writer = chatWritersByThreadId.get(
+      projectThreadKey(turn.project_id, id),
+    );
     if (writer != null) {
       return writer;
     }
@@ -4568,6 +4590,7 @@ function hasRecentChatWriterForTurn(
 }
 
 function liveAgentRunningForTurn(turn: {
+  project_id: string;
   thread_id?: string | null;
   session_id?: string | null;
 }): boolean | undefined {
@@ -4580,7 +4603,7 @@ function liveAgentRunningForTurn(turn: {
     return undefined;
   }
   let inspected = false;
-  for (const agent of agents.values()) {
+  for (const agent of agentsForProject(turn.project_id)) {
     if (typeof agent.hasRunningTurn !== "function") {
       continue;
     }
@@ -6932,10 +6955,15 @@ function buildExecutorAdapters(
 }
 
 async function ensureAgent(
+  projectId: string,
   useNativeTerminal: boolean,
   bindings: ExecutorAdapters,
 ): Promise<AcpAgent> {
-  const key = `${useNativeTerminal ? "native" : "proxy"}:${bindings.workspaceRoot}`;
+  const key = JSON.stringify([
+    projectId,
+    useNativeTerminal ? "native" : "proxy",
+    bindings.workspaceRoot,
+  ]);
   const existing = agents.get(key);
   if (existing != null) return existing;
   const mode = process.env.COCALC_ACP_MODE;
@@ -6944,6 +6972,7 @@ async function ensureAgent(
     logger.debug("ensureAgent: creating echo agent");
     const echo = new EchoAgent();
     agents.set(key, echo);
+    agentProjectIds.set(echo, projectId);
     return echo;
   }
   if (mode === "mock") {
@@ -6951,6 +6980,7 @@ async function ensureAgent(
     const script = await loadAcpMockScript();
     const mock = new MockAgent(script);
     agents.set(key, mock);
+    agentProjectIds.set(mock, projectId);
     return mock;
   }
   try {
@@ -7066,6 +7096,7 @@ async function ensureAgent(
           });
         } else {
           releaseAcpRuntimeOwner({
+            project_id: projectId,
             session_id: sessionId,
             worker_id: worker.worker_id,
           });
@@ -7074,6 +7105,7 @@ async function ensureAgent(
     });
     logger.info("codex agent ready", { key, backend: "app-server" });
     agents.set(key, created);
+    agentProjectIds.set(created, projectId);
     return created;
   } catch (err) {
     // Fail loudly: use an echo agent that emits an explicit error to the user.
@@ -7082,8 +7114,15 @@ async function ensureAgent(
       `ERROR: codex failed to start (${(err as Error)?.message ?? "unknown error"})`,
     );
     agents.set(key, echo);
+    agentProjectIds.set(echo, projectId);
     return echo;
   }
+}
+
+function agentsForProject(projectId: string): AcpAgent[] {
+  return [...agents.values()].filter(
+    (agent) => agentProjectIds.get(agent) === projectId,
+  );
 }
 
 type AcpExecutionResult = {
@@ -7204,7 +7243,11 @@ async function executeAcpRequest({
     throw Error("conat client must be initialized");
   }
   const bindings = buildExecutorAdapters(executor, workspaceRoot, hostRoot);
-  const currentAgent = await ensureAgent(useNativeTerminal, bindings);
+  const currentAgent = await ensureAgent(
+    projectId,
+    useNativeTerminal,
+    bindings,
+  );
   const { prompt, local_images, cleanup } = await materializeBlobs(
     request.prompt ?? "",
   );
@@ -7736,6 +7779,7 @@ async function enqueueAutomationRun(
   );
   const job = enqueueAcpJob(request, {
     preferred_worker_id: preferredWorkerForRetainedSession(
+      row.project_id,
       request.request_kind === "command" ? undefined : request.session_id,
     ),
   });
@@ -8701,7 +8745,10 @@ async function enqueueRecoveryContinuationForJob({
     "recovery",
   );
   const queued = enqueueAcpJob(resumedRequest, {
-    preferred_worker_id: preferredWorkerForRetainedSession(session_id),
+    preferred_worker_id: preferredWorkerForRetainedSession(
+      project_id,
+      session_id,
+    ),
   });
   await persistQueuedUserMessageProjection({
     client,
@@ -9254,11 +9301,13 @@ type AcpSteerAttemptResult = {
 };
 
 async function trySteerCandidateIds({
+  projectId,
   threadId,
   chat,
   request,
   candidateIds,
 }: {
+  projectId: string;
   threadId?: string;
   chat?: AcpChatContext;
   request: AcpSteerRequest;
@@ -9285,7 +9334,7 @@ async function trySteerCandidateIds({
   let firstError: unknown;
   let sawNotSteerable = false;
   for (const id of ids) {
-    for (const agent of agents.values()) {
+    for (const agent of agentsForProject(projectId)) {
       if (typeof agent.steer !== "function") {
         continue;
       }
@@ -9362,11 +9411,13 @@ function hasOtherWorkerRunningAcpTurn({
 }
 
 async function tryInterruptCandidateIds({
+  projectId,
   threadId,
   chat,
   candidateIds,
   notifyText = INTERRUPT_STATUS_TEXT,
 }: {
+  projectId: string;
   threadId?: string;
   chat?: AcpChatContext;
   candidateIds?: string[];
@@ -9387,7 +9438,7 @@ async function tryInterruptCandidateIds({
   });
 
   for (const id of ids) {
-    if (await interruptCodexSession(id)) {
+    if (await interruptCodexSession(id, projectId)) {
       writer?.notifyInterrupted(notifyText);
       return true;
     }
@@ -9438,6 +9489,7 @@ async function processPendingAcpInterruptsOnce(): Promise<void> {
       const ageMs = Date.now() - row.created_at;
       const chat = decodeAcpInterruptChat(row);
       const handled = await tryInterruptCandidateIds({
+        projectId: row.project_id,
         threadId: row.thread_id,
         chat,
         candidateIds: [
@@ -9489,6 +9541,7 @@ async function processPendingAcpSteersOnce(): Promise<void> {
           chat: request.chat,
         }).concat(decodeAcpSteerCandidateIds(row));
         const result = await trySteerCandidateIds({
+          projectId: row.project_id,
           threadId: row.thread_id,
           chat: request.chat,
           request,
@@ -9577,7 +9630,10 @@ async function enqueueChatAcpTurn({
   );
   await acknowledgeAutomationFromHumanTurn(request);
   const row = enqueueAcpJob(request, {
-    preferred_worker_id: preferredWorkerForRetainedSession(request.session_id),
+    preferred_worker_id: preferredWorkerForRetainedSession(
+      request.chat.project_id ?? request.project_id,
+      request.session_id,
+    ),
   });
   const projectedState = await persistQueuedUserMessageProjection({
     client: conatClient,
@@ -9681,7 +9737,7 @@ async function attemptAcpSteerRequest(
       : workspaceRoot;
   const useNativeTerminal = useContainer ? false : sessionMode === "auto";
   const bindings = buildExecutorAdapters(executor, workspaceRoot, hostRoot);
-  const agent = await ensureAgent(useNativeTerminal, bindings);
+  const agent = await ensureAgent(projectId, useNativeTerminal, bindings);
   if (typeof agent.steer !== "function") {
     return { state: "not_steerable" };
   }
@@ -9694,6 +9750,7 @@ async function attemptAcpSteerRequest(
     chat: request.chat,
   });
   const result = await trySteerCandidateIds({
+    projectId,
     threadId,
     chat: request.chat,
     request,
@@ -10205,6 +10262,7 @@ async function handleInterruptRequest(
 
   if (
     await tryInterruptCandidateIds({
+      projectId: project_id,
       threadId,
       chat: request.chat,
       candidateIds,
@@ -10376,8 +10434,11 @@ async function handleTruncateSessionRequest(
   };
 }
 
-async function interruptCodexSession(threadId: string): Promise<boolean> {
-  for (const agent of agents.values()) {
+async function interruptCodexSession(
+  threadId: string,
+  projectId: string,
+): Promise<boolean> {
+  for (const agent of agentsForProject(projectId)) {
     if (
       "interruptOutstanding" in agent &&
       typeof (agent as any).interruptOutstanding === "function"

@@ -12,6 +12,9 @@ import {
   buildMarketingEmailConsentRecord,
   MARKETING_CONSENT_OTHER_SETTINGS_KEY,
   MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
+  OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
+  setOnboardingEmailMode,
+  setProductMarketingEmailMode,
 } from "@cocalc/util/notification-preferences";
 import { COLORS } from "@cocalc/util/theme";
 import type { CSS } from "@cocalc/frontend/app-framework";
@@ -117,6 +120,13 @@ export function OnboardingEmailPrompt(): React.JSX.Element | null {
           enabled,
           source: "first-project-open",
         }),
+      [OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY]: setOnboardingEmailMode(
+        setProductMarketingEmailMode(
+          otherSettings?.get?.(OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY),
+          enabled,
+        ),
+        enabled,
+      ),
     });
     setVisible(false);
   }

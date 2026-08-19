@@ -85,6 +85,33 @@ System,DUP: Size:8388608, Used:16384 (0.20%)
     expect(parsed.disk_available_conservative_bytes).toBe(248127594496);
   });
 
+  it("derives root filesystem usage from statfs without counting reserved blocks as available", () => {
+    const parsed = _test.rootFilesystemMetricsFromStatfs({
+      bsize: 4096,
+      blocks: 6_000_000,
+      bfree: 1_500_000,
+      bavail: 1_250_000,
+    });
+
+    expect(parsed).toEqual({
+      root_disk_total_bytes: 24_576_000_000,
+      root_disk_used_bytes: 18_432_000_000,
+      root_disk_available_bytes: 5_120_000_000,
+      root_disk_used_percent: 78.3,
+    });
+  });
+
+  it("rejects invalid root filesystem samples", () => {
+    expect(
+      _test.rootFilesystemMetricsFromStatfs({
+        bsize: 4096,
+        blocks: 100,
+        bfree: 101,
+        bavail: 50,
+      }),
+    ).toEqual({});
+  });
+
   it("uses effective device headroom for admission when btrfs conservative headroom is low", () => {
     const gib = 1024 ** 3;
     const available = _test.computeDiskAdmissionAvailableBytes(

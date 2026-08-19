@@ -9,6 +9,7 @@ import {
   type CreateProjectOptions,
   type ProjectTheme,
 } from "@cocalc/util/db-schema/projects";
+import type { AccountFeedProjectRow } from "@cocalc/conat/hub/api/account-feed";
 import type {
   MembershipPackageDetails,
   ProjectDefaultOverrides,
@@ -1121,6 +1122,7 @@ export interface BackupProjectToExternalRepositoryResponse {
 
 export const projects = {
   createProject: authFirstRequireAccount,
+  createProjectWithBootstrap: authFirstRequireAccount,
   copyPathBetweenProjects: authFirstRequireAccount,
   collectAssignment: authFirstRequireAccount,
   reconfigureCourseProjects: authFirstRequireAccount,
@@ -1288,9 +1290,17 @@ export type AddCollaborator =
     }
   | { project_id: string[]; account_id: string[] }; // for adding more than one at once
 
+export interface CreatedProjectBootstrap {
+  project_id: string;
+  project: AccountFeedProjectRow;
+}
+
 export interface Projects {
   // request to have conat permissions to project subjects.
   createProject: (opts: CreateProjectOptions) => Promise<string>;
+  createProjectWithBootstrap: (
+    opts: CreateProjectOptions,
+  ) => Promise<CreatedProjectBootstrap>;
 
   copyPathBetweenProjects: (opts: {
     src: ProjectCopySource;

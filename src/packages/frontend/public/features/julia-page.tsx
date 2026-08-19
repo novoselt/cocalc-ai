@@ -12,6 +12,7 @@ import { PUBLIC_TYPE } from "@cocalc/frontend/public/theme";
 import {
   BulletList,
   featureAppPath as appPath,
+  featureSignUpPath,
   LinkButton,
 } from "./page-components";
 import { FEATURE_ACCENTS } from "./feature-accents";
@@ -31,7 +32,7 @@ export default function JuliaFeaturePage({
 }) {
   const primaryHref = isAuthenticated
     ? appPath("projects")
-    : appPath("auth/sign-up");
+    : featureSignUpPath("jupyter-julia");
   const primaryLabel = isAuthenticated ? "Open projects" : "Create account";
   const finalLabel = isAuthenticated ? "Open projects" : "Start using Julia";
 

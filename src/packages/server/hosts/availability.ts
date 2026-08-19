@@ -75,7 +75,34 @@ const RUNNING_STALE_REPAIR_SUPPRESS_MS = Math.max(
 );
 const PRESSURE_ALERT_LIMIT = 25;
 const CONAT_PERSIST_ALERT_LIMIT = 25;
+const ROOT_FILESYSTEM_ALERT_LIMIT = 25;
 const GIB = 1024 ** 3;
+const ROOT_FILESYSTEM_WARNING_PERCENT = envPercent(
+  "COCALC_HOST_ROOT_FILESYSTEM_WARNING_PERCENT",
+  80,
+);
+const ROOT_FILESYSTEM_CRITICAL_PERCENT = Math.max(
+  ROOT_FILESYSTEM_WARNING_PERCENT,
+  envPercent("COCALC_HOST_ROOT_FILESYSTEM_CRITICAL_PERCENT", 90),
+);
+const ROOT_FILESYSTEM_WARNING_AVAILABLE_BYTES = envNumberAtLeast(
+  "COCALC_HOST_ROOT_FILESYSTEM_WARNING_AVAILABLE_BYTES",
+  5 * GIB,
+  128 * 1024 ** 2,
+);
+const ROOT_FILESYSTEM_CRITICAL_AVAILABLE_BYTES = Math.min(
+  ROOT_FILESYSTEM_WARNING_AVAILABLE_BYTES,
+  envNumberAtLeast(
+    "COCALC_HOST_ROOT_FILESYSTEM_CRITICAL_AVAILABLE_BYTES",
+    2 * GIB,
+    128 * 1024 ** 2,
+  ),
+);
+const ROOT_FILESYSTEM_ALERT_FRESH_METRICS_MS = envNumberAtLeast(
+  "COCALC_HOST_ROOT_FILESYSTEM_ALERT_FRESH_METRICS_MS",
+  5 * 60_000,
+  60_000,
+);
 const CONAT_PERSIST_WARNING_RSS_BYTES = envNumberAtLeast(
   "COCALC_HOST_CONAT_PERSIST_WARNING_RSS_BYTES",
   2 * GIB,
@@ -201,6 +228,17 @@ type ConatPersistAlertRow = ProjectHostAvailabilitySnapshot & {
   persist_reason: string;
 };
 
+type RootFilesystemAlertRow = ProjectHostAvailabilitySnapshot & {
+  public_url?: string | null;
+  metric_collected_at?: Date | string | null;
+  root_disk_total_bytes?: number | string | null;
+  root_disk_used_bytes?: number | string | null;
+  root_disk_available_bytes?: number | string | null;
+  root_disk_used_percent?: number | string | null;
+  root_filesystem_level: "warning" | "critical";
+  root_filesystem_reason: string;
+};
+
 function envNumberAtLeast(
   name: string,
   fallback: number,
@@ -209,6 +247,12 @@ function envNumberAtLeast(
   const parsed = Number(process.env[name]);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(minimum, parsed);
+}
+
+function envPercent(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(100, parsed));
 }
 
 function pool() {
@@ -1176,6 +1220,173 @@ function formatBytes(value: number): string {
   return `${(value / 1024 ** 2).toFixed(0)} MiB`;
 }
 
+function rootFilesystemAlertRow(
+  row: ProjectHostAvailabilitySnapshot & {
+    public_url?: string | null;
+    metric_collected_at?: Date | string | null;
+    root_disk_total_bytes?: number | string | null;
+    root_disk_used_bytes?: number | string | null;
+    root_disk_available_bytes?: number | string | null;
+    root_disk_used_percent?: number | string | null;
+  },
+  now = Date.now(),
+): RootFilesystemAlertRow | undefined {
+  const collectedAt = timestampMs(row.metric_collected_at);
+  if (
+    collectedAt == null ||
+    now - collectedAt > ROOT_FILESYSTEM_ALERT_FRESH_METRICS_MS
+  ) {
+    return undefined;
+  }
+  const total = numericValue(row.root_disk_total_bytes);
+  const used = numericValue(row.root_disk_used_bytes);
+  const available = numericValue(row.root_disk_available_bytes);
+  const reportedPercent = numericValue(row.root_disk_used_percent);
+  const usedPercent =
+    reportedPercent ??
+    (used != null && available != null && used + available > 0
+      ? (used / (used + available)) * 100
+      : undefined);
+  if (usedPercent == null && available == null) return undefined;
+
+  const criticalReasons: string[] = [];
+  const warningReasons: string[] = [];
+  if (usedPercent != null && usedPercent >= ROOT_FILESYSTEM_CRITICAL_PERCENT) {
+    criticalReasons.push(
+      `${usedPercent.toFixed(1)}% used >= ${ROOT_FILESYSTEM_CRITICAL_PERCENT}%`,
+    );
+  } else if (
+    usedPercent != null &&
+    usedPercent >= ROOT_FILESYSTEM_WARNING_PERCENT
+  ) {
+    warningReasons.push(
+      `${usedPercent.toFixed(1)}% used >= ${ROOT_FILESYSTEM_WARNING_PERCENT}%`,
+    );
+  }
+  if (
+    available != null &&
+    available <= ROOT_FILESYSTEM_CRITICAL_AVAILABLE_BYTES
+  ) {
+    criticalReasons.push(
+      `${formatBytes(available)} available <= ${formatBytes(ROOT_FILESYSTEM_CRITICAL_AVAILABLE_BYTES)}`,
+    );
+  } else if (
+    available != null &&
+    available <= ROOT_FILESYSTEM_WARNING_AVAILABLE_BYTES
+  ) {
+    warningReasons.push(
+      `${formatBytes(available)} available <= ${formatBytes(ROOT_FILESYSTEM_WARNING_AVAILABLE_BYTES)}`,
+    );
+  }
+  const root_filesystem_level = criticalReasons.length
+    ? "critical"
+    : warningReasons.length
+      ? "warning"
+      : undefined;
+  if (!root_filesystem_level) return undefined;
+  const reasons = [...criticalReasons, ...warningReasons];
+  return {
+    ...row,
+    ...(total != null ? { root_disk_total_bytes: total } : {}),
+    ...(used != null ? { root_disk_used_bytes: used } : {}),
+    ...(available != null ? { root_disk_available_bytes: available } : {}),
+    ...(usedPercent != null ? { root_disk_used_percent: usedPercent } : {}),
+    root_filesystem_level,
+    root_filesystem_reason: reasons.join(", "),
+  };
+}
+
+function formatRootFilesystemAlertBody(rows: RootFilesystemAlertRow[]): string {
+  const critical = rows.filter(
+    ({ root_filesystem_level }) => root_filesystem_level === "critical",
+  ).length;
+  return [
+    `${rows.length} project host${rows.length === 1 ? " has" : "s have"} low space on the operating-system root filesystem (${critical} critical).`,
+    "",
+    "This is distinct from the project-data filesystem. Exhausting it can prevent project starts and host maintenance even when project storage has headroom.",
+    "",
+    "Hosts:",
+    "",
+    ...rows
+      .slice(0, ROOT_FILESYSTEM_ALERT_LIMIT)
+      .map((row) =>
+        [
+          `- ${pressureAlertHostName(row)}`,
+          `level=${row.root_filesystem_level}`,
+          `reason=${row.root_filesystem_reason}`,
+          row.public_url ? `url=${row.public_url}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      ),
+    rows.length > ROOT_FILESYSTEM_ALERT_LIMIT
+      ? `- ... ${rows.length - ROOT_FILESYSTEM_ALERT_LIMIT} more`
+      : undefined,
+  ]
+    .filter((line) => line != null)
+    .join("\n");
+}
+
+async function getRootFilesystemAlertRows(): Promise<RootFilesystemAlertRow[]> {
+  await ensureProjectHostMetricsSamplesSchema();
+  const { rows } = await pool().query<
+    ProjectHostAvailabilitySnapshot & {
+      public_url?: string | null;
+      metric_collected_at?: Date | string | null;
+      root_disk_total_bytes?: number | string | null;
+      root_disk_used_bytes?: number | string | null;
+      root_disk_available_bytes?: number | string | null;
+      root_disk_used_percent?: number | string | null;
+    }
+  >(
+    `
+      SELECT
+        h.id,
+        h.status,
+        h.deleted,
+        h.last_seen,
+        h.metadata,
+        h.public_url,
+        m.collected_at AS metric_collected_at,
+        m.root_disk_total_bytes,
+        m.root_disk_used_bytes,
+        m.root_disk_available_bytes,
+        m.root_disk_used_percent
+      FROM project_hosts h
+      LEFT JOIN LATERAL (
+        SELECT
+          collected_at,
+          root_disk_total_bytes,
+          root_disk_used_bytes,
+          root_disk_available_bytes,
+          root_disk_used_percent
+        FROM project_host_metrics_samples
+        WHERE host_id = h.id
+        ORDER BY collected_at DESC
+        LIMIT 1
+      ) m ON true
+      WHERE h.deleted IS NULL
+        AND h.status = 'running'
+        AND m.root_disk_available_bytes IS NOT NULL
+      ORDER BY h.last_seen DESC NULLS LAST
+      LIMIT 1000
+    `,
+  );
+  return rows.map(rootFilesystemAlertRow).filter((row) => row != null);
+}
+
+export async function runRootFilesystemAlertCheck(): Promise<number> {
+  const rows = await getRootFilesystemAlertRows();
+  if (!rows.length) return 0;
+  await adminAlert({
+    subject: "Project-host root filesystems are low on space",
+    body: formatRootFilesystemAlertBody(rows),
+    dedupMinutes: 30,
+    dedupBySubject: true,
+  });
+  return rows.length;
+}
+
 function conatPersistAlertRow(
   row: ProjectHostAvailabilitySnapshot & {
     public_url?: string | null;
@@ -1416,6 +1627,7 @@ export function startHostAvailabilityMaintenance({
       const count = await reconcileCurrentHostAvailability();
       const staleRunning = await runRunningStaleHostAlertCheck();
       const pressureProblems = await runHostPressureAlertCheck();
+      const rootFilesystemProblems = await runRootFilesystemAlertCheck();
       const persistProblems = await runConatPersistAlertCheck();
       const runtimeProblems = await runRuntimeDegradedHostAlertCheck();
       void runProjectHostRuntimeMaintenance().catch((err) => {
@@ -1432,6 +1644,11 @@ export function startHostAvailabilityMaintenance({
       if (pressureProblems) {
         logger.warn("project hosts have unresolved pressure actions", {
           count: pressureProblems,
+        });
+      }
+      if (rootFilesystemProblems) {
+        logger.warn("project hosts have low root filesystem space", {
+          count: rootFilesystemProblems,
         });
       }
       if (persistProblems) {
@@ -1745,9 +1962,11 @@ export const _test = {
   conatPersistAlertRow,
   formatConatPersistAlertBody,
   formatHostPressureAlertBody,
+  formatRootFilesystemAlertBody,
   formatRuntimeDegradedHostAlertBody,
   formatRunningStaleHostAlertBody,
   formatStaleDuration,
   pressureAlertRow,
+  rootFilesystemAlertRow,
   runningStaleEscalationSuppressionReason,
 };

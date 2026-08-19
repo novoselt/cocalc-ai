@@ -56,12 +56,22 @@ function modeInstructions(mode: CodexOnboardingMode): string {
   }
 }
 
-export function buildCodexOnboardingPrompt(userRequest: string): string {
+export function buildCodexOnboardingPrompt(
+  userRequest: string,
+  context?: { kind?: string; artifact?: string },
+): string {
   const goal = userRequest.trim();
   const formatGuidance = modeInstructions(detectCodexOnboardingMode(goal));
+  const artifact = `${context?.artifact ?? ""}`.trim();
+  const artifactPath = artifact.startsWith("/")
+    ? artifact
+    : `/home/user/${artifact}`;
+  const workspaceState = artifact
+    ? `The onboarding flow already created ${artifactPath}. Start by opening and improving that artifact when it fits the goal; replace it only when a different deliverable is clearly better.`
+    : "This project was just created by the onboarding flow and is intentionally empty.";
   return `You are helping a brand-new CoCalc user complete their first useful task.
 
-This project was just created by the onboarding flow and is intentionally empty. Work directly in /home/user. Treat the user's goal below as a request to create a useful result, not as a request to locate files that should already exist.
+${workspaceState} Work directly in /home/user. Treat the user's goal below as a request to create a useful result, not as a request to locate files that should already exist.
 
 <user_goal>
 ${goal}
@@ -74,7 +84,7 @@ Complete the goal autonomously and make the first experience successful:
 - If data or exact requirements are missing, use a clearly labeled, representative example and reasonable defaults. Do not stop merely to ask for clarification when a useful first version can be made.
 - Actually run or otherwise validate what you create, inspect the result, and fix obvious errors.
 - Keep the scope focused enough to finish during this onboarding turn. Favor a working demonstration that the user can extend over a broad unfinished scaffold.
-- Do not search browser tabs, inspect account or project metadata, or use CoCalc CLI discovery commands. The empty workspace is expected; there is no preexisting material to find unless the user explicitly says otherwise.
+- Do not search browser tabs, inspect account or project metadata, or use CoCalc CLI discovery commands. Only the onboarding artifact named above, when present, should be assumed to exist.
 - Finish with a concise explanation of what you created, the exact filenames to open, and one or two useful next steps.
 
 Begin by creating the deliverable rather than investigating the empty project.`;

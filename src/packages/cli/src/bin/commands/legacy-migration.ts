@@ -16,6 +16,35 @@ export function registerLegacyMigrationCommand(
     .command("legacy-migration")
     .description("legacy cocalc.com migration operations");
 
+  legacyMigration
+    .command("retry <legacy_project_id>")
+    .description("retry a failed legacy project restore")
+    .action(
+      async (
+        legacy_project_id: string,
+        _opts: Record<string, never>,
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "legacy-migration retry",
+          async (ctx: any) => {
+            if (!isValidUUID(legacy_project_id)) {
+              throw new Error(
+                `invalid legacy_project_id: ${legacy_project_id}`,
+              );
+            }
+            return await hubCallByName(
+              ctx,
+              "legacyMigration.retryProjectRestore",
+              [{ legacy_project_id }],
+              ctx.timeoutMs,
+            );
+          },
+        );
+      },
+    );
+
   const remediation = legacyMigration
     .command("remediation")
     .description("final archive remediation operations");

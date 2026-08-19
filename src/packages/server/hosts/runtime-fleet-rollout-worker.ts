@@ -16,6 +16,11 @@ import {
   upgradeHostSoftware,
 } from "@cocalc/server/conat/api/hosts";
 import { computeHostOperationalAvailability } from "@cocalc/server/conat/api/hosts-normalization";
+import {
+  hostOverridesEveryRolloutTarget,
+  loadHostRuntimeDeploymentTargetKeys,
+  runtimeFleetDeploymentTargetKeys,
+} from "./runtime-fleet-overrides";
 import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import {
   claimLroOps,
@@ -463,19 +468,34 @@ function buildRolloutWaves({
 
 async function assertPromotionCohortStillComplete(
   hostIds: string[],
+  components: ManagedComponentKind[],
 ): Promise<void> {
   const { rows } = await getPool().query(
     `SELECT * FROM project_hosts WHERE deleted IS NULL`,
   );
   const localBayId = getConfiguredBayId();
   const cohort = new Set(hostIds);
+  const localRows = rows.filter((row) => {
+    const bayId = `${row.bay_id ?? ""}`.trim();
+    return !bayId || bayId === localBayId;
+  });
+  const overrideKeysByHost = await loadHostRuntimeDeploymentTargetKeys(
+    localRows.map((row) => `${row.id}`),
+  );
+  const rolloutTargetKeys = runtimeFleetDeploymentTargetKeys(components);
   const omittedHealthyHosts = rows
     .filter((row) => {
       const bayId = `${row.bay_id ?? ""}`.trim();
+      const hostId = `${row.id}`;
       return (
         (!bayId || bayId === localBayId) &&
-        !cohort.has(`${row.id}`) &&
-        computeHostOperationalAvailability(row).operational
+        !cohort.has(hostId) &&
+        computeHostOperationalAvailability(row).operational &&
+        !hostOverridesEveryRolloutTarget({
+          hostId,
+          overrideKeysByHost,
+          rolloutTargetKeys,
+        })
       );
     })
     .map((row) => `${row.name ?? row.id}`);
@@ -638,7 +658,7 @@ async function handleRollout(op: LroSummary): Promise<void> {
         phase: "promoting",
         message: "promoting successful rollout as the bay default",
       });
-      await assertPromotionCohortStillComplete(hostIds);
+      await assertPromotionCohortStillComplete(hostIds, components);
       const component_runtime_versions =
         await observePromotionComponentRuntimeVersions({
           account_id,

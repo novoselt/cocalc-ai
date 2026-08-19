@@ -14,6 +14,7 @@ import validator from "validator";
 import * as misc from "@cocalc/util/misc";
 
 import { do_query_with_pg_params } from "../set-pg-params";
+import { isScopedQueryClient } from "../query-client-context";
 import type { PostgreSQL, QueryOptions } from "../types";
 import { quote_field } from "../utils/quote-field";
 
@@ -474,7 +475,8 @@ export function doQuery(db: PostgreSQL, opts: QueryOptions): void {
     }
     const client = await db._get_query_client();
     let released = false;
-    const shouldRelease = db._query_client !== client;
+    const shouldRelease =
+      db._query_client !== client && !isScopedQueryClient(db, client);
     const releaseClient = (err?: unknown): void => {
       if (released || !shouldRelease) {
         return;

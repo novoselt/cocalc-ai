@@ -10,10 +10,15 @@ import {
 } from "./file-creation";
 
 jest.mock("@cocalc/frontend/jupyter/new-notebook", () => ({
-  createInitialIpynbContent: jest.fn(async (_projectId, kernel) =>
-    JSON.stringify({ kernel }),
+  createInitialIpynbContent: jest.fn(
+    async (_projectId, kernel, _fallback, options) =>
+      JSON.stringify({ kernel, options }),
   ),
 }));
+
+const createInitialIpynbContent = jest.requireMock(
+  "@cocalc/frontend/jupyter/new-notebook",
+).createInitialIpynbContent as jest.Mock;
 
 describe("project redux file creation", () => {
   it("constructs absolute paths and appends missing extensions", () => {
@@ -154,7 +159,42 @@ describe("project redux file creation", () => {
     expect(preferredKernel).toHaveBeenCalled();
     expect(writeFile).toHaveBeenCalledWith(
       "/home/user/demo.ipynb",
-      JSON.stringify({ kernel: "sagemath" }),
+      JSON.stringify({
+        kernel: "sagemath",
+        options: { discoverKernel: true },
+      }),
+    );
+  });
+
+  it("skips preferred-kernel lookup and discovery for starter notebooks", async () => {
+    const writeFile = jest.fn().mockResolvedValue(undefined);
+    const preferredKernel = jest.fn(async () => "slow-kernel");
+
+    await createFile({
+      name: "Welcome",
+      ext: "ipynb",
+      currentPath: "/home/user",
+      projectId: "project-id",
+      fs: () => ({ writeFile }) as any,
+      toAbsoluteCurrentPath: (path) => path,
+      setFileCreationError: jest.fn(),
+      createFolder: jest.fn(),
+      newFileFromWeb: jest.fn(),
+      ensureContainingDirectoryExists: jest.fn(),
+      log: jest.fn(),
+      getPreferredKernel: preferredKernel,
+      preferredJupyterKernel: "ir",
+      discoverJupyterKernel: false,
+      addCreatedTag: jest.fn(),
+      openFile: jest.fn(),
+    });
+
+    expect(preferredKernel).not.toHaveBeenCalled();
+    expect(createInitialIpynbContent).toHaveBeenLastCalledWith(
+      "project-id",
+      "ir",
+      undefined,
+      { discoverKernel: false },
     );
   });
 

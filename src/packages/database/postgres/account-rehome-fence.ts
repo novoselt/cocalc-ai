@@ -7,6 +7,11 @@ import getPool from "@cocalc/database/pool";
 import type { PostgreSQLMethods } from "@cocalc/database/postgres/types";
 import { DEFAULT_BAY_ID } from "@cocalc/util/bay";
 
+import {
+  getScopedQueryClient,
+  runWithScopedQueryClient,
+} from "./query-client-context";
+
 type Queryable = {
   query: (
     sql: string,
@@ -158,7 +163,8 @@ export async function withAccountRehomeUserQueryFence<T>({
   action?: string;
   fn: () => Promise<T>;
 }): Promise<T> {
-  const existingClient = database._query_client;
+  const existingClient =
+    getScopedQueryClient(database) ?? database._query_client;
   if (existingClient) {
     await assertAccountNotRehoming({ db: existingClient, account_id, action });
     await assertAccountWriteOnHomeBay({
@@ -172,19 +178,21 @@ export async function withAccountRehomeUserQueryFence<T>({
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    database._query_client = client;
-    await assertAccountNotRehoming({ db: client, account_id, action });
-    await assertAccountWriteOnHomeBay({ db: client, account_id, action });
-    const result = await fn();
+    const result = await runWithScopedQueryClient({
+      owner: database,
+      client,
+      fn: async () => {
+        await assertAccountNotRehoming({ db: client, account_id, action });
+        await assertAccountWriteOnHomeBay({ db: client, account_id, action });
+        return await fn();
+      },
+    });
     await client.query("COMMIT");
     return result;
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
   } finally {
-    if (database._query_client === client) {
-      delete database._query_client;
-    }
     client.release();
   }
 }

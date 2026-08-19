@@ -62,6 +62,10 @@ type ProjectHostMetricsSampleRow = {
   memory_used_percent: number | string | null;
   swap_total_bytes: number | string | null;
   swap_used_bytes: number | string | null;
+  root_disk_total_bytes: number | string | null;
+  root_disk_used_bytes: number | string | null;
+  root_disk_available_bytes: number | string | null;
+  root_disk_used_percent: number | string | null;
   disk_device_total_bytes: number | string | null;
   disk_device_used_bytes: number | string | null;
   disk_unallocated_bytes: number | string | null;
@@ -264,6 +268,10 @@ function toPoint(row: ProjectHostMetricsSampleRow): HostMetricsHistoryPoint {
     memory_used_percent: toFloat(row.memory_used_percent),
     swap_total_bytes: toInteger(row.swap_total_bytes),
     swap_used_bytes: toInteger(row.swap_used_bytes),
+    root_disk_total_bytes: toInteger(row.root_disk_total_bytes),
+    root_disk_used_bytes: toInteger(row.root_disk_used_bytes),
+    root_disk_available_bytes: toInteger(row.root_disk_available_bytes),
+    root_disk_used_percent: toFloat(row.root_disk_used_percent),
     disk_device_total_bytes: toInteger(row.disk_device_total_bytes),
     disk_device_used_bytes: toInteger(row.disk_device_used_bytes),
     disk_unallocated_bytes: toInteger(row.disk_unallocated_bytes),
@@ -734,6 +742,10 @@ export async function ensureProjectHostMetricsSamplesSchema(): Promise<void> {
           memory_used_percent DOUBLE PRECISION,
           swap_total_bytes BIGINT,
           swap_used_bytes BIGINT,
+          root_disk_total_bytes BIGINT,
+          root_disk_used_bytes BIGINT,
+          root_disk_available_bytes BIGINT,
+          root_disk_used_percent DOUBLE PRECISION,
           disk_device_total_bytes BIGINT,
           disk_device_used_bytes BIGINT,
           disk_unallocated_bytes BIGINT,
@@ -778,6 +790,18 @@ export async function ensureProjectHostMetricsSamplesSchema(): Promise<void> {
       await pool().query(
         "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS conat_persist JSONB",
       );
+      await pool().query(
+        "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS root_disk_total_bytes BIGINT",
+      );
+      await pool().query(
+        "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS root_disk_used_bytes BIGINT",
+      );
+      await pool().query(
+        "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS root_disk_available_bytes BIGINT",
+      );
+      await pool().query(
+        "ALTER TABLE project_host_metrics_samples ADD COLUMN IF NOT EXISTS root_disk_used_percent DOUBLE PRECISION",
+      );
     })().catch((err) => {
       schemaReady = undefined;
       throw err;
@@ -814,6 +838,10 @@ export async function recordProjectHostMetricsSample({
         memory_used_percent,
         swap_total_bytes,
         swap_used_bytes,
+        root_disk_total_bytes,
+        root_disk_used_bytes,
+        root_disk_available_bytes,
+        root_disk_used_percent,
         disk_device_total_bytes,
         disk_device_used_bytes,
         disk_unallocated_bytes,
@@ -839,12 +867,12 @@ export async function recordProjectHostMetricsSample({
         conat_persist
       )
       SELECT
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
       WHERE NOT EXISTS (
         SELECT 1
         FROM project_host_metrics_samples
         WHERE host_id = $1
-          AND collected_at >= $2::timestamptz - ($36::bigint * INTERVAL '1 millisecond')
+          AND collected_at >= $2::timestamptz - ($40::bigint * INTERVAL '1 millisecond')
       )
     `,
     [
@@ -860,6 +888,10 @@ export async function recordProjectHostMetricsSample({
       metrics.memory_used_percent ?? null,
       metrics.swap_total_bytes ?? null,
       metrics.swap_used_bytes ?? null,
+      metrics.root_disk_total_bytes ?? null,
+      metrics.root_disk_used_bytes ?? null,
+      metrics.root_disk_available_bytes ?? null,
+      metrics.root_disk_used_percent ?? null,
       metrics.disk_device_total_bytes ?? null,
       metrics.disk_device_used_bytes ?? null,
       metrics.disk_unallocated_bytes ?? null,

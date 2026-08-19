@@ -119,6 +119,7 @@ import { ensureProjectHostKernelSysctls } from "./host-sysctl";
 import { startRuntimePostureMonitor } from "./runtime-posture";
 import { startProjectSnapshotBackupMaintenance } from "./snapshot-backup-maintenance";
 import { rusticBackupBrowser } from "./rustic-backup-browser";
+import { startRusticCacheMaintenance } from "./rustic-cache-maintenance";
 import { startStorageAdmissionController } from "./storage-admission";
 import {
   assertLocalBindOrInsecure,
@@ -1589,6 +1590,7 @@ export async function main(
   logger.info("File-server (local btrfs + optional ssh proxy if enabled)");
   let stopRuntimePostureMonitor: () => void = () => {};
   let stopSnapshotBackupMaintenance: () => void = () => {};
+  let stopRusticCacheMaintenance: () => void = () => {};
   let stopStorageAdmissionController: () => void = () => {};
   try {
     await initFileServer({ client: conatClient });
@@ -1602,6 +1604,7 @@ export async function main(
     stopSnapshotBackupMaintenance = startProjectSnapshotBackupMaintenance({
       hostId,
     });
+    stopRusticCacheMaintenance = startRusticCacheMaintenance();
   } catch (err) {
     reportFatalStartupError("FATAL: Failed to init file server", err);
     process.exit(1);
@@ -1667,6 +1670,7 @@ export async function main(
     stopRuntimeConformanceMonitor?.();
     stopRuntimePostureMonitor?.();
     stopSnapshotBackupMaintenance?.();
+    stopRusticCacheMaintenance?.();
     rusticBackupBrowser.close();
     stopStorageAdmissionController?.();
     stopRawNetworkEgressLoop?.();

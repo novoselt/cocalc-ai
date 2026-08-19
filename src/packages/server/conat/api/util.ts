@@ -18,12 +18,15 @@ export async function assertCollab({ account_id, project_id }) {
 export async function assertCollabAllowRemoteProjectAccess({
   account_id,
   project_id,
+  warmRoute,
 }: {
   account_id?: string;
   project_id: string;
+  warmRoute?: boolean;
 }) {
   return await assertProjectCollaboratorAccessAllowRemote({
     account_id,
     project_id,
+    warmRoute,
   });
 }

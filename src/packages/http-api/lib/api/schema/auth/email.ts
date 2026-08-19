@@ -4,6 +4,7 @@
  */
 
 import { z } from "@cocalc/http-api/lib/api";
+import { PROJECT_ONBOARDING_INTENTS } from "@cocalc/util/accounts/onboarding-intent";
 
 export const EmailAuthChallengeStateSchema = z.enum([
   "pending",
@@ -50,6 +51,7 @@ export const EmailAuthExchangeSchema = z.object({
 
 export const EmailAuthStartInputSchema = z.object({
   email: z.string().email(),
+  onboarding_intent: z.enum(PROJECT_ONBOARDING_INTENTS).optional(),
   registration_token: z.string().max(4096).optional(),
   analytics_token: z.string().uuid().optional(),
   terms: z.boolean().optional(),

@@ -6,8 +6,10 @@
 import { resolveProjectHomeDirectory } from "@cocalc/frontend/project/home-directory";
 
 import {
+  isRetryableOnboardingArtifactError,
   onboardingArtifactCreation,
   onboardingArtifactCreationForProject,
+  onboardingArtifactRouteTarget,
 } from "./artifact";
 
 jest.mock("@cocalc/frontend/project/home-directory", () => ({
@@ -33,8 +35,14 @@ describe("first-run onboarding artifact creation", () => {
       ext: path.slice(path.lastIndexOf(".") + 1),
       current_path: "/home/user",
       switch_over: false,
-      relative_path: path,
+      path: `/home/user/${path}`,
     });
+  });
+
+  it("opens starter artifacts using their rootfs-aware absolute route", () => {
+    expect(onboardingArtifactRouteTarget("/home/user/Welcome.ipynb")).toBe(
+      "files/home/user/Welcome.ipynb",
+    );
   });
 
   it("uses the runtime-provided home instead of assuming /home/user", () => {
@@ -57,5 +65,18 @@ describe("first-run onboarding artifact creation", () => {
 
   it("does not create a starter artifact for Codex projects", () => {
     expect(onboardingArtifactCreation("codex", "/home/user")).toBeUndefined();
+  });
+
+  it("retries starter creation while the RootFS is still mounting", () => {
+    expect(
+      isRetryableOnboardingArtifactError(
+        new Error(
+          "rootfs is not mounted; cannot access absolute path '/home'. Start the project and try again.",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isRetryableOnboardingArtifactError(new Error("permission denied")),
+    ).toBe(false);
   });
 });
