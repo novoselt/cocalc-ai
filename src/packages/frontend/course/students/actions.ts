@@ -311,6 +311,7 @@ export class StudentsActions {
   // account still exists, and if not, mark it as deleted.  This is rare, but happens
   // despite all attempts otherwise: https://github.com/sagemathinc/cocalc/issues/3243
   updateDeletedAccounts = async () => {
+    if (this.course_actions.is_closed()) return;
     const store = this.get_store();
     const account_ids: string[] = [];
     const student_ids: { [account_id: string]: string } = {};
@@ -326,6 +327,7 @@ export class StudentsActions {
     }
     // note: there is no notion of undeleting an account in cocalc
     const users = await webapp_client.users_client.getNames(account_ids);
+    if (this.course_actions.is_closed()) return;
     for (const account_id of account_ids) {
       if (users[account_id] == null) {
         this.course_actions.set({
@@ -339,6 +341,11 @@ export class StudentsActions {
   };
 
   updateStudentStatus = async () => {
+    if (this.course_actions.is_closed()) {
+      clearInterval(this.updateInterval);
+      delete this.updateInterval;
+      return;
+    }
     const state = this.course_actions.syncdb?.get_state();
     if (state == "init") {
       return;
@@ -350,7 +357,9 @@ export class StudentsActions {
     }
     this.repairLegacyStudentDisplayNames();
     await this.repairAcceptedInviteAccounts();
+    if (this.course_actions.is_closed()) return;
     await this.lookupNonregisteredStudents();
+    if (this.course_actions.is_closed()) return;
     await this.updateDeletedAccounts();
   };
 

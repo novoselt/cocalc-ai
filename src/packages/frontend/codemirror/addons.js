@@ -1,3 +1,6 @@
+const CodeMirror = require("codemirror");
+const { makeSafeIndentFold } = require("./addon/fold/safe-indent-fold");
+
 require("codemirror/addon/mode/overlay.js");
 require("codemirror/addon/selection/active-line.js");
 require("codemirror/addon/comment/comment.js");
@@ -27,6 +30,12 @@ require("codemirror/addon/fold/foldgutter.css");
 require("codemirror/addon/fold/markdown-fold.js");
 require("codemirror/addon/fold/comment-fold.js");
 require("codemirror/addon/fold/indent-fold.js");
+
+// A fold-gutter click can outlive the line it targeted when remote edits
+// replace the document. CodeMirror's indent helper assumes the line exists.
+const indentFold = CodeMirror.fold.indent;
+CodeMirror.registerHelper("fold", "indent", makeSafeIndentFold(indentFold));
+
 require("codemirror/addon/fold/xml-fold.js");
 require("codemirror/addon/hint/anyword-hint.js");
 require("codemirror/addon/hint/css-hint.js");
@@ -47,4 +56,3 @@ require("./addon/smc-search.js");
 // Various extentions that I wrote since I needed them to implement CoCalc
 require("./addon/delete-trailing-whitespace");
 require("./addon/fill-paragraph");
-

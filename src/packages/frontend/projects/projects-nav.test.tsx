@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { List, Map as ImmutableMap } from "immutable";
 
 import { ProjectsNav } from "./projects-nav";
@@ -11,8 +11,10 @@ const pageActions = {
 };
 const projectActions = {
   move_project_tab: jest.fn(),
+  open_file: jest.fn(),
   open_project: jest.fn(),
 };
+const mockEnsureProjectReduxRuntime = jest.fn(async () => undefined);
 const mockSetProjectBookmarked = jest.fn();
 let mockBookmarkedProjects: string[] = [];
 
@@ -51,6 +53,9 @@ jest.mock("antd", () => ({
 }));
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
+  redux: {
+    getProjectActions: () => projectActions,
+  },
   useActions: (name: string) =>
     name === "page" ? pageActions : projectActions,
   useAccountOtherSetting: (key: string) =>
@@ -85,6 +90,10 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
     }
     return undefined;
   },
+}));
+
+jest.mock("@cocalc/frontend/app-framework/project-runtime", () => ({
+  ensureProjectReduxRuntime: () => mockEnsureProjectReduxRuntime(),
 }));
 
 jest.mock("@cocalc/frontend/browser", () => ({
@@ -151,7 +160,9 @@ describe("ProjectsNav", () => {
     pageActions.close_project_tab.mockReset();
     pageActions.set_active_tab.mockReset();
     projectActions.move_project_tab.mockReset();
+    projectActions.open_file.mockReset();
     projectActions.open_project.mockReset();
+    mockEnsureProjectReduxRuntime.mockClear();
     mockSetProjectBookmarked.mockReset();
     mockBookmarkedProjects = [];
   });
@@ -197,5 +208,22 @@ describe("ProjectsNav", () => {
     rerender(<ProjectsNav height={42} />);
     fireEvent.keyDown(screen.getByRole("tab"), { key: "Delete" });
     expect(pageActions.close_project_tab).toHaveBeenCalledWith("project-1");
+  });
+
+  it("loads the project runtime before opening a modified tab click", async () => {
+    render(<ProjectsNav height={42} />);
+
+    fireEvent.click(screen.getByText("Alpha"), { shiftKey: true });
+
+    await waitFor(() => {
+      expect(mockEnsureProjectReduxRuntime).toHaveBeenCalledTimes(1);
+      expect(projectActions.open_file).toHaveBeenCalledWith({
+        path: "",
+        new_browser_window: true,
+      });
+    });
+    expect(
+      mockEnsureProjectReduxRuntime.mock.invocationCallOrder[0],
+    ).toBeLessThan(projectActions.open_file.mock.invocationCallOrder[0]);
   });
 });

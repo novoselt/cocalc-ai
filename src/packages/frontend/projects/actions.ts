@@ -1800,7 +1800,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
     ) {
       return false;
     }
-    const projectStore = this.redux.getProjectStore?.(project_id);
+    const projectStore = this.getExistingProjectStore(project_id);
     const moveLro = projectStore?.get?.("move_lro");
     if (!moveLro) {
       return false;
@@ -1883,9 +1883,8 @@ export class ProjectsActions extends Actions<ProjectsState> {
   }
 
   private getProjectStartLroStatus(project_id: string): string | undefined {
-    const startLro = this.redux
-      .getProjectStore?.(project_id)
-      ?.get?.("start_lro");
+    const startLro =
+      this.getExistingProjectStore(project_id)?.get?.("start_lro");
     const status =
       readMaybeImmutableIn(startLro, ["summary", "status"]) ??
       readMaybeImmutable(startLro, "status");
@@ -2504,7 +2503,7 @@ export class ProjectsActions extends Actions<ProjectsState> {
   }
 
   private isProjectMoveInProgress(project_id: string): boolean {
-    const projectStore = this.redux.getProjectStore?.(project_id);
+    const projectStore = this.getExistingProjectStore(project_id);
     const moveLro = projectStore?.get?.("move_lro");
     if (!moveLro) {
       return false;
@@ -2533,6 +2532,14 @@ export class ProjectsActions extends Actions<ProjectsState> {
       updatedMs != null &&
       updatedMs + ProjectsActions.MOVE_TRANSITION_GRACE_MS > Date.now()
     );
+  }
+
+  private getExistingProjectStore(project_id: string) {
+    const storeName = project_redux_name(project_id);
+    if (!this.redux.hasStore(storeName)) {
+      return;
+    }
+    return this.redux.getStore(storeName);
   }
 
   private setProjectOpen = (project_id: string): void => {

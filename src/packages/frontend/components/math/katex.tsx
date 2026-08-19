@@ -9,9 +9,11 @@ Right now it is *just* katex, so in fact is synchronous.
 
 import "katex/dist/katex.min.css";
 import { useEffect, useRef } from "react";
+import $ from "jquery";
 import { math_escape, math_unescape } from "@cocalc/util/markdown-utils";
 import { remove_math, replace_math } from "@cocalc/util/mathjax-utils";
 import { latexMathToHtmlOrError } from "@cocalc/frontend/misc/math-to-html";
+import { ensureJqueryPluginsInitialized } from "@cocalc/frontend/jquery-plugins/ensure-init";
 import { replace_all } from "@cocalc/util/misc";
 import { replaceMathBracketDelims } from "./util";
 
@@ -28,11 +30,21 @@ export default function KaTeX({ data, inMarkdown }: Props) {
   useEffect(() => {
     // be no-op when math.length == 0.
     if (ref.current == null) return;
-    // There was an error during attemptKatex below, so will fallback to the old
-    // katex + mathjaxv2 via an old jquery plugin.
-    ref.current.innerHTML = data;
-    // @ts-ignore
-    $(ref.current).katex({ preProcess: true }); // this also calls mathjax as a fallback.
+    let active = true;
+    void ensureJqueryPluginsInitialized()
+      .then(() => {
+        if (!active || ref.current == null) return;
+        // This path processes mixed text/math nodes that are not already Markdown.
+        ref.current.innerHTML = data;
+        $(ref.current).katex({ preProcess: true });
+      })
+      .catch(() => {
+        if (!active || ref.current == null) return;
+        ref.current.textContent = data;
+      });
+    return () => {
+      active = false;
+    };
   }, [data]);
 
   if (math.length == 0) {
@@ -61,15 +73,25 @@ function attemptKatex(text: string, math: string[]): undefined | string {
     if (!err) {
       math[i] = __html;
     } else {
-      // there was an error
-      const div = $("<div>")
-        .text(math[i])
-        .css("color", "red")
-        .attr("title", `${err}`);
-      const htmlString = div.prop("outerHTML");
-      math[i] = htmlString;
+      math[i] = `<div style="color:red" title="${escapeHtml(
+        `${err}`,
+      )}">${escapeHtml(math[i])}</div>`;
     }
   }
   // Substitute processed math back in.
   return replace_all(math_unescape(replace_math(text, math)), "\\$", "$");
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (char) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char]!,
+  );
 }

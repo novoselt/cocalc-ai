@@ -57,4 +57,22 @@ describe("JupyterActions sync document lifecycle", () => {
 
     expect(deleteRecord).not.toHaveBeenCalled();
   });
+
+  it("uses a no-op logger after the client disappears", () => {
+    const actions = createActions({});
+    (actions as any)._state = "ready";
+    (actions as any)._client = undefined;
+
+    expect(() =>
+      (actions as any).dbg("late-callback")("message"),
+    ).not.toThrow();
+  });
+
+  it("accepts an empty runtime-state snapshot during reconnect", () => {
+    const actions = createActions({});
+    (actions as any).store = { get: () => ({}) };
+    (actions as any).runtimeState = { getAll: () => undefined };
+
+    expect(() => (actions as any).applyRuntimeCellsSnapshot()).not.toThrow();
+  });
 });

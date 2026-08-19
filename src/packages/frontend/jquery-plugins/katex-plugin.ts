@@ -18,7 +18,7 @@ let renderToString: any = undefined;
 
 declare global {
   interface JQuery {
-    katex(): JQuery;
+    katex(opts?: { preProcess?: boolean }): JQuery;
   }
 }
 

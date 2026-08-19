@@ -4,6 +4,7 @@
  */
 
 import { ConfigProvider as AntdConfigProvider } from "antd";
+import { LoadingOutlined } from "@ant-design/icons";
 import type { Locale as AntdLocale } from "antd/lib/locale";
 import enUS from "antd/locale/en_US";
 import { isEmpty } from "lodash";
@@ -89,7 +90,11 @@ export function Localize({ children }: { children: React.ReactNode }) {
         locale,
       }}
     >
-      <AntdConfigProvider theme={antdTheme} locale={antdLoc}>
+      <AntdConfigProvider
+        button={{ loadingIcon: <LoadingOutlined spin /> }}
+        theme={antdTheme}
+        locale={antdLoc}
+      >
         <IntlProvider
           locale={locale}
           messages={messages}

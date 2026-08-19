@@ -117,4 +117,21 @@ describe("StudentsActions.add_students", () => {
     expect(courseActions.set).toHaveBeenCalledTimes(1);
     expect(courseActions.commit).toHaveBeenCalledTimes(1);
   });
+
+  it("stops status polling after the course document closes", async () => {
+    const getStore = jest.fn(() => {
+      throw Error("store is closed");
+    });
+    const courseActions = {
+      get_store: getStore,
+      is_closed: () => true,
+      syncdb: { get_state: () => "closed" },
+    };
+    const actions = new StudentsActions(courseActions as any);
+
+    await expect(actions.updateStudentStatus()).resolves.toBeUndefined();
+    await expect(actions.updateDeletedAccounts()).resolves.toBeUndefined();
+
+    expect(getStore).not.toHaveBeenCalled();
+  });
 });

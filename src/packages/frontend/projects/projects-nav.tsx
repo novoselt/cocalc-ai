@@ -51,6 +51,7 @@ import {
 import { useBookmarkedProjects } from "./use-bookmarked-projects";
 import { CocalcErrorBoundary } from "@cocalc/frontend/app/error-boundary";
 import { lazyWithRetry } from "@cocalc/frontend/app/lazy-with-retry";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 
 const NewProjectCreator = lazyWithRetry(
   async () => ({
@@ -177,11 +178,12 @@ function ProjectTab({ project_id }: ProjectTabProps) {
     return <Loading key={project_id} />;
   }
 
-  function click_title(e) {
+  async function click_title(e) {
     // we intercept a click with a modification key in order to open that project in a new window
     if (e.ctrlKey || e.shiftKey || e.metaKey) {
       e.stopPropagation();
       e.preventDefault();
+      await ensureProjectReduxRuntime();
       const actions = redux.getProjectActions(project_id);
       actions.open_file({ path: "", new_browser_window: true });
     }
@@ -202,10 +204,11 @@ function ProjectTab({ project_id }: ProjectTabProps) {
     );
   }
 
-  function openProjectInfo(event?: React.MouseEvent<HTMLElement>) {
+  async function openProjectInfo(event?: React.MouseEvent<HTMLElement>) {
     event?.stopPropagation();
     event?.preventDefault();
-    void pageActions.set_active_tab(project_id);
+    await pageActions.set_active_tab(project_id);
+    await ensureProjectReduxRuntime();
     redux.getProjectActions(project_id)?.set_active_tab("info");
   }
 

@@ -266,6 +266,9 @@ export class JupyterActions extends Actions<JupyterStoreState> {
           path: this.path,
           client: this.requireConatClient("initRuntimeState"),
         });
+        if (runtimeState == null) {
+          return;
+        }
         if (this.is_closed()) {
           await runtimeState.close();
           return;
@@ -362,7 +365,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
       return;
     }
     if (this.runtimeState != null) {
-      for (const key of Object.keys(this.runtimeState.getAll())) {
+      for (const key of Object.keys(this.runtimeState.getAll() ?? {})) {
         if (!key.startsWith(JUPYTER_RUNTIME_CELL_KEY_PREFIX)) {
           continue;
         }
@@ -380,7 +383,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   protected clearStaleActiveRuntimeCellState = (): void => {
     const keys = new Set<string>();
     if (this.runtimeState != null) {
-      for (const key of Object.keys(this.runtimeState.getAll())) {
+      for (const key of Object.keys(this.runtimeState.getAll() ?? {})) {
         if (key.startsWith(JUPYTER_RUNTIME_CELL_KEY_PREFIX)) {
           keys.add(key);
         }
@@ -530,7 +533,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
 
   private clear_all_runtime_cell_state = () => {
     if (this.runtimeState != null) {
-      for (const key of Object.keys(this.runtimeState.getAll())) {
+      for (const key of Object.keys(this.runtimeState.getAll() ?? {})) {
         if (key.startsWith(JUPYTER_RUNTIME_CELL_KEY_PREFIX)) {
           this.runtimeState.delete(key);
         }
@@ -822,7 +825,7 @@ export class JupyterActions extends Actions<JupyterStoreState> {
   };
 
   protected dbg(f: string) {
-    if (this.is_closed()) {
+    if (this.is_closed() || typeof this._client?.dbg !== "function") {
       // calling dbg after the actions are closed is possible; this.store would
       // be undefined, and then this log message would crash, which sucks.  It happened to me.
       // See https://github.com/sagemathinc/cocalc/issues/6788
