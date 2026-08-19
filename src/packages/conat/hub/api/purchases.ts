@@ -1,4 +1,4 @@
-import { authFirst } from "./util";
+import { authFirst, authFirstRequireAccount } from "./util";
 import type { MoneyValue } from "@cocalc/util/money";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
@@ -269,6 +269,12 @@ export interface MembershipDetails {
   candidates: MembershipCandidate[];
   usage_status?: MembershipUsageStatus;
   admin_override?: MembershipAdminOverrideSummary;
+}
+
+export interface MembershipTrialOffer {
+  membership_class: MembershipClass;
+  label: string;
+  trial_days: number;
 }
 
 export interface AdminMembershipTierPayload {
@@ -1481,6 +1487,9 @@ export interface Purchases {
   getMembership: (opts?: {
     account_id?: string;
   }) => Promise<MembershipResolution>;
+  getMembershipTrialOffers: (opts?: {
+    account_id?: string;
+  }) => Promise<MembershipTrialOffer[]>;
   getMembershipDetails: (opts?: {
     account_id?: string;
     user_account_id?: string;
@@ -1881,6 +1890,7 @@ export const purchases = {
   getMinBalance: authFirst,
   setAutoBalance: authFirst,
   getMembership: authFirst,
+  getMembershipTrialOffers: authFirstRequireAccount,
   getMembershipDetails: authFirst,
   getMembershipTierAdminOverview: authFirst,
   getMembershipAnalyticsOverview: authFirst,

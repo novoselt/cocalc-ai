@@ -23,6 +23,7 @@ import { PassportStrategyFrontend } from "@cocalc/util/types/passport-types";
 
 export interface AccountState {
   active_page: string;
+  membership_plan_chooser_requested?: boolean;
   user_type: string;
   account_id: string;
   groups?: List<string>;
@@ -63,6 +64,7 @@ export interface AccountState {
     notification_preferences?: Record<string, any>;
     newsletter?: boolean;
     marketing_email_consent_record?: MarketingEmailConsentRecord;
+    membership_trial_banner_dismissed?: boolean;
     first_run_onboarding_intent_v1?: ProjectOnboardingIntent;
     use_balance_toward_subscriptions?: boolean;
     use_balance_toward_team_licenses?: boolean;
