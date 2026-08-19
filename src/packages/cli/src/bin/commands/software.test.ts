@@ -1621,8 +1621,6 @@ test("software deploy static invokes Rocket with a local remote-backed bundle", 
     file.url,
     "--bundle-sha256",
     file.sha256,
-    "--remote",
-    "ubuntu@10.206.0.27",
     "--api",
     "https://staging.cocalc.ai",
     "--yes",
@@ -1719,13 +1717,7 @@ test("software deploy static accepts comma-separated profiles", async () => {
   const firstRocket = runs[0].args.slice(runs[0].args.indexOf("rocket"));
   const secondRocket = runs[1].args.slice(runs[1].args.indexOf("rocket"));
   assert.equal(firstRocket[2], "staging");
-  assert.deepEqual(
-    firstRocket.slice(
-      firstRocket.indexOf("--remote"),
-      firstRocket.indexOf("--remote") + 2,
-    ),
-    ["--remote", "ubuntu@10.206.0.27"],
-  );
+  assert.equal(firstRocket.includes("--remote"), false);
   assert.equal(secondRocket[2], "prod");
   assert.deepEqual(
     secondRocket.slice(
@@ -2274,8 +2266,6 @@ test("software deploy latest chooses the newest remote artifact", async () => {
   assert.equal(rocketArgs[7], "--bundle-sha256");
   assert.equal(rocketArgs[8], "abc");
   assert.deepEqual(rocketArgs.slice(9), [
-    "--remote",
-    "ubuntu@10.206.0.27",
     "--api",
     "https://staging.cocalc.ai",
     "--yes",
@@ -2370,7 +2360,7 @@ test("software deploy component tag chooses the newest duplicate remote tag", as
   assert.equal(rocketArgs[8], "new");
 });
 
-test("software deploy resolves API from auth profile and infers known bay remote", async () => {
+test("software deploy resolves API from auth profile without a hardcoded bay remote", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-deploy-profile-"));
   const localStore = join(dir, "store");
   const source = join(dir, "static.tar.xz");
@@ -2432,13 +2422,7 @@ test("software deploy resolves API from auth profile and infers known bay remote
   const rocketIndex = runs[0].args.indexOf("rocket");
   assert.notEqual(rocketIndex, -1);
   const rocketArgs = runs[0].args.slice(rocketIndex);
-  assert.deepEqual(
-    rocketArgs.slice(
-      rocketArgs.indexOf("--remote"),
-      rocketArgs.indexOf("--remote") + 2,
-    ),
-    ["--remote", "ubuntu@10.206.0.27"],
-  );
+  assert.equal(rocketArgs.includes("--remote"), false);
   assert.deepEqual(
     rocketArgs.slice(
       rocketArgs.indexOf("--api"),
