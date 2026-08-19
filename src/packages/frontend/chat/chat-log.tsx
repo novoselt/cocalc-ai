@@ -279,6 +279,11 @@ const MESSAGE_LIST_CONTAINER_STYLE: CSSProperties = {
   position: "relative",
 } as const;
 
+const CHAT_VIRTUOSO_STYLE: CSSProperties = {
+  flex: "1 1 0",
+  minHeight: 0,
+} as const;
+
 const NEWEST_MESSAGES_BUTTON_STYLE: CSSProperties = {
   position: "absolute",
   left: "50%",
@@ -295,6 +300,13 @@ const CHAT_VIRTUOSO_INCREASE_VIEWPORT_BY = {
 } as const;
 
 const INSTANT_SCROLL_BEHAVIOR = "auto" as const;
+
+export function measureChatVirtuosoItemHeight(element: HTMLElement): number {
+  // Virtuoso compares measurements exactly. Subpixel values can alternate as
+  // its spacer layout changes, so never feed fractional heights back through
+  // DivTempHeight and the ResizeObserver measurement cycle.
+  return Math.ceil(element.getBoundingClientRect().height);
+}
 
 function isEditableOrOverlayInteractionTarget(
   target: EventTarget | null,
@@ -1364,6 +1376,99 @@ export function MessageList({
     );
   };
 
+  // react-virtuoso republishes changed function props synchronously from a
+  // layout effect. Chat messages can rerender several times per second while
+  // streaming, so keep the functions stable and forward them to current state
+  // through this ref instead of restarting Virtuoso's measurement graph.
+  const virtuosoCallbackStateRef = useRef({
+    keepBottomAnchoredRef,
+    manualScrollRef,
+    markManualScrollAway,
+    onAtTopStateChange,
+    renderMessage,
+    scheduleAnchorCapture,
+    setManualScroll,
+    sortedDatesLength: sortedDates.length,
+  });
+  virtuosoCallbackStateRef.current = {
+    keepBottomAnchoredRef,
+    manualScrollRef,
+    markManualScrollAway,
+    onAtTopStateChange,
+    renderMessage,
+    scheduleAnchorCapture,
+    setManualScroll,
+    sortedDatesLength: sortedDates.length,
+  };
+
+  const handleVirtuosoScrollerRef = useCallback(
+    (node: HTMLElement | Window | null) => {
+      scrollerRef.current = node instanceof HTMLElement ? node : null;
+    },
+    [],
+  );
+  const measureVirtuosoItem = useCallback((element: HTMLElement) => {
+    const height = measureChatVirtuosoItemHeight(element);
+    const data = element.getAttribute("data-item-index");
+    if (data != null) {
+      const index = parseInt(data);
+      virtuosoHeightsRef.current[index] = height;
+    }
+    return height;
+  }, []);
+  const renderVirtuosoItem = useCallback((index: number) => {
+    const { renderMessage, sortedDatesLength } =
+      virtuosoCallbackStateRef.current;
+    if (sortedDatesLength === index) {
+      return <div style={{ height: "25px" }} />;
+    }
+    return renderMessage(index);
+  }, []);
+  const handleVirtuosoRangeChanged = useCallback(
+    ({ endIndex }: { endIndex: number }) => {
+      const {
+        manualScrollRef,
+        markManualScrollAway,
+        scheduleAnchorCapture,
+        sortedDatesLength,
+      } = virtuosoCallbackStateRef.current;
+      if (!manualScrollRef) return;
+      scheduleAnchorCapture();
+      if (endIndex < sortedDatesLength - 1 && userScrollIntentRef.current) {
+        markManualScrollAway();
+      }
+    },
+    [],
+  );
+  const handleVirtuosoAtBottomStateChange = useCallback((atBottom: boolean) => {
+    const {
+      keepBottomAnchoredRef,
+      manualScrollRef,
+      markManualScrollAway,
+      scheduleAnchorCapture,
+      setManualScroll,
+    } = virtuosoCallbackStateRef.current;
+    if (!manualScrollRef) return;
+    if (atBottom) {
+      scheduleAnchorCapture(true);
+      if (keepBottomAnchoredRef) {
+        keepBottomAnchoredRef.current = true;
+      }
+      manualScrollRef.current = false;
+      setManualScroll?.(false);
+    } else if (userScrollIntentRef.current) {
+      markManualScrollAway();
+      scheduleAnchorCapture();
+    }
+    setAtBottom(atBottom);
+  }, []);
+  const handleVirtuosoAtTopStateChange = useCallback((atTop: boolean) => {
+    virtuosoCallbackStateRef.current.onAtTopStateChange?.(atTop);
+  }, []);
+  const handleVirtuosoScroll = useCallback(() => {
+    virtuosoCallbackStateRef.current.scheduleAnchorCapture();
+  }, []);
+
   useEffect(() => {
     if (!scrollToBottomRef || useVirtuoso) return;
     scrollToBottomRef.current = () => {
@@ -1498,65 +1603,26 @@ export function MessageList({
       onPointerDownCapture={markUserScrollIntent}
     >
       <StatefulVirtuoso
-        style={{ flex: "1 1 0", minHeight: 0 }}
+        style={CHAT_VIRTUOSO_STYLE}
         ref={listVirtuosoRef}
-        scrollerRef={(node) => {
-          scrollerRef.current = node instanceof HTMLElement ? node : null;
-        }}
+        scrollerRef={handleVirtuosoScrollerRef}
         totalCount={sortedDates.length + 1}
+        context={virtuosoCallbackStateRef.current}
         cacheId={cacheId}
         persistState={false}
         increaseViewportBy={CHAT_VIRTUOSO_INCREASE_VIEWPORT_BY}
         initialTopMostItemIndex={initialIndex}
         atTopThreshold={240}
-        itemSize={(el) => {
-          const h = el.getBoundingClientRect().height;
-          const data = el.getAttribute("data-item-index");
-          if (data != null) {
-            const index = parseInt(data);
-            virtuosoHeightsRef.current[index] = h;
-          }
-          return h;
-        }}
-        itemContent={(index) => {
-          if (sortedDates.length == index) {
-            return <div style={{ height: "25px" }} />;
-          }
-          return renderMessage(index);
-        }}
-        rangeChanged={
-          manualScrollRef
-            ? ({ endIndex }) => {
-                scheduleAnchorCapture();
-                if (
-                  endIndex < sortedDates.length - 1 &&
-                  userScrollIntentRef.current
-                ) {
-                  markManualScrollAway();
-                }
-              }
-            : undefined
-        }
+        itemSize={measureVirtuosoItem}
+        itemContent={renderVirtuosoItem}
+        rangeChanged={manualScrollRef ? handleVirtuosoRangeChanged : undefined}
         atBottomStateChange={
-          manualScrollRef
-            ? (atBottom: boolean) => {
-                if (atBottom) {
-                  scheduleAnchorCapture(true);
-                  if (keepBottomAnchoredRef) {
-                    keepBottomAnchoredRef.current = true;
-                  }
-                  manualScrollRef.current = false;
-                  setManualScroll?.(false);
-                } else if (!atBottom && userScrollIntentRef.current) {
-                  markManualScrollAway();
-                  scheduleAnchorCapture();
-                }
-                setAtBottom(atBottom);
-              }
-            : undefined
+          manualScrollRef ? handleVirtuosoAtBottomStateChange : undefined
         }
-        atTopStateChange={onAtTopStateChange}
-        onScroll={() => scheduleAnchorCapture()}
+        atTopStateChange={
+          onAtTopStateChange ? handleVirtuosoAtTopStateChange : undefined
+        }
+        onScroll={handleVirtuosoScroll}
         followOutput={isVisible && !manualScroll && atBottom && !anyOverlayOpen}
       />
       {showNewestMessagesButton ? (
