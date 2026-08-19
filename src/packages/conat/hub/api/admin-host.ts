@@ -5,6 +5,8 @@
 
 import { authFirstRequireAccount } from "./util";
 import type {
+  HostAbuseFilesystemSnapshotResponse,
+  HostAbuseProcessSnapshotResponse,
   HostFilesystemSnapshotResponse,
   HostNetworkSnapshotResponse,
   HostPodmanSnapshotResponse,
@@ -118,6 +120,40 @@ export interface AdminHostProcessResponse {
   snapshot: HostProcessSnapshotResponse;
 }
 
+export interface AdminHostAbuseProcessesRequest {
+  host?: string;
+  host_id?: string;
+  max_projects?: number;
+  max_processes?: number;
+  timeout_ms?: number;
+  reason?: string;
+}
+
+export interface AdminHostAbuseProcessesResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: HostAbuseProcessSnapshotResponse;
+}
+
+export interface AdminHostAbuseFilesystemsRequest {
+  host?: string;
+  host_id?: string;
+  max_projects?: number;
+  max_entries_per_project?: number;
+  max_total_entries?: number;
+  max_depth?: number;
+  timeout_ms?: number;
+  reason?: string;
+}
+
+export interface AdminHostAbuseFilesystemsResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: HostAbuseFilesystemSnapshotResponse;
+}
+
 export interface AdminHostNetworkRequest {
   host?: string;
   host_id?: string;
@@ -160,6 +196,8 @@ export interface AdminHostPodmanResponse {
 }
 
 export const adminHost = {
+  scanAbuseFilesystems: authFirstRequireAccount,
+  scanAbuseProcesses: authFirstRequireAccount,
   describe: authFirstRequireAccount,
   events: authFirstRequireAccount,
   filesystem: authFirstRequireAccount,
@@ -171,6 +209,12 @@ export const adminHost = {
 };
 
 export interface AdminHostApi {
+  scanAbuseFilesystems: (
+    opts: AdminHostAbuseFilesystemsRequest,
+  ) => Promise<AdminHostAbuseFilesystemsResponse>;
+  scanAbuseProcesses: (
+    opts: AdminHostAbuseProcessesRequest,
+  ) => Promise<AdminHostAbuseProcessesResponse>;
   describe: (
     opts: AdminHostDescribeRequest,
   ) => Promise<AdminHostDescribeResponse>;
