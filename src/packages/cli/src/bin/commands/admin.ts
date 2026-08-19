@@ -2373,6 +2373,57 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     );
 
   adminHost
+    .command("abuse-processes <host>")
+    .description(
+      "show an audited, sanitized per-project process snapshot for abuse triage",
+    )
+    .option("--max-projects <n>", "max project cgroups", "2000")
+    .option("--max-processes <n>", "max project processes", "10000")
+    .option("--timeout-ms <n>", "host-side scan deadline", "5000")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          maxProjects?: string;
+          maxProcesses?: string;
+          timeoutMs?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "admin host abuse-processes",
+          async (ctx) => {
+            return await ctx.hub.adminHost.scanAbuseProcesses({
+              host,
+              max_projects: parsePositiveIntegerOption({
+                name: "--max-projects",
+                value: opts.maxProjects,
+                fallback: 2_000,
+                max: 5_000,
+              }),
+              max_processes: parsePositiveIntegerOption({
+                name: "--max-processes",
+                value: opts.maxProcesses,
+                fallback: 10_000,
+                max: 50_000,
+              }),
+              timeout_ms: parsePositiveIntegerOption({
+                name: "--timeout-ms",
+                value: opts.timeoutMs,
+                fallback: 5_000,
+                max: 15_000,
+              }),
+              reason: opts.reason,
+            });
+          },
+        );
+      },
+    );
+
+  adminHost
     .command("ps <host>")
     .description("show audited project-host process snapshot")
     .option("--limit <n>", "max process rows", "50")

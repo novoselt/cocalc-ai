@@ -2505,6 +2505,7 @@ export type HostControlMethod =
   | "unmount-shared-scratch"
   | "get-runtime-log"
   | "get-process-snapshot"
+  | "get-abuse-process-snapshot"
   | "get-network-snapshot"
   | "get-filesystem-snapshot"
   | "get-podman-snapshot"
@@ -3728,6 +3729,10 @@ export interface InterBayHostControlApi {
     host_id: string;
     get?: HostControlArg<"getProcessSnapshot">;
   }) => Promise<Awaited<ReturnType<HostControlApi["getProcessSnapshot"]>>>;
+  getAbuseProcessSnapshot: (opts: {
+    host_id: string;
+    get?: HostControlArg<"getAbuseProcessSnapshot">;
+  }) => Promise<Awaited<ReturnType<HostControlApi["getAbuseProcessSnapshot"]>>>;
   getNetworkSnapshot: (opts: {
     host_id: string;
     get?: HostControlArg<"getNetworkSnapshot">;
@@ -4643,6 +4648,10 @@ const HOST_CONTROL_METHOD_SPECS = [
   { name: "unmountSharedScratch", method: "unmount-shared-scratch" },
   { name: "getRuntimeLog", method: "get-runtime-log" },
   { name: "getProcessSnapshot", method: "get-process-snapshot" },
+  {
+    name: "getAbuseProcessSnapshot",
+    method: "get-abuse-process-snapshot",
+  },
   { name: "getNetworkSnapshot", method: "get-network-snapshot" },
   { name: "getFilesystemSnapshot", method: "get-filesystem-snapshot" },
   { name: "getPodmanSnapshot", method: "get-podman-snapshot" },

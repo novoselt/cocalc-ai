@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildAccountCandidates,
   buildFileFingerprints,
+  buildProcessCandidates,
   looksRandomLocalPart,
   parseFindMetadata,
 } from "./abuse-health-scan.mjs";
@@ -12,6 +13,48 @@ test("recognizes generated email local parts conservatively", () => {
   assert.equal(looksRandomLocalPart("z0olbyyg"), true);
   assert.equal(looksRandomLocalPart("william.stein"), false);
   assert.equal(looksRandomLocalPart("student"), false);
+});
+
+test("classifies combined remote access and tunnel signals as high", () => {
+  const candidates = buildProcessCandidates([
+    {
+      project_id: "11111111-1111-4111-8111-111111111111",
+      host_id: "host-1",
+      host_name: "host one",
+      process_count: 4,
+      processes: [
+        { name: "sshx", count: 1 },
+        { name: "cloudflared", count: 1 },
+        { name: "dropbear", count: 2 },
+      ],
+    },
+  ]);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].status, "high");
+  assert.deepEqual(candidates[0].reason_codes, [
+    "remote_access",
+    "tunnel_or_proxy",
+  ]);
+  assert.deepEqual(candidates[0].process_names, ["cloudflared", "sshx"]);
+});
+
+test("keeps a single tunnel tool review-only and ignores dropbear", () => {
+  const candidates = buildProcessCandidates([
+    {
+      project_id: "11111111-1111-4111-8111-111111111111",
+      processes: [
+        { name: "cloudflared", count: 1 },
+        { name: "dropbear", count: 1 },
+      ],
+    },
+    {
+      project_id: "22222222-2222-4222-8222-222222222222",
+      processes: [{ name: "dropbear", count: 1 }],
+    },
+  ]);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].status, "review");
+  assert.deepEqual(candidates[0].reason_codes, ["tunnel_or_proxy"]);
 });
 
 test("scores a coordinated signup and runtime cluster as high", () => {

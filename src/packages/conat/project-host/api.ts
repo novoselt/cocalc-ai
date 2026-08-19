@@ -97,6 +97,40 @@ export interface HostProcessSnapshotResponse {
   output: HostDiagnosticCommandOutput;
 }
 
+export interface HostAbuseProcessSnapshotRequest {
+  max_projects?: number;
+  max_processes?: number;
+  timeout_ms?: number;
+}
+
+export interface HostAbuseProcessSnapshotResponse {
+  version: 1;
+  captured_at: string;
+  duration_ms: number;
+  coverage: "complete" | "partial" | "unavailable";
+  project_count: number;
+  active_project_count: number;
+  cgroup_count: number;
+  process_count: number;
+  vanished_process_count: number;
+  projects: Array<{
+    project_id: string;
+    process_count: number;
+    processes: Array<{ name: string; count: number }>;
+  }>;
+  issues: Array<{
+    scope: "project_pool" | "project" | "cgroup";
+    code: string;
+    project_id?: string;
+  }>;
+  truncated: {
+    projects: boolean;
+    processes: boolean;
+    deadline: boolean;
+    issues: boolean;
+  };
+}
+
 export interface HostNetworkSnapshotRequest {
   limit?: number;
 }
@@ -661,6 +695,9 @@ export interface HostControlApi {
   getProcessSnapshot: (
     opts?: HostProcessSnapshotRequest,
   ) => Promise<HostProcessSnapshotResponse>;
+  getAbuseProcessSnapshot: (
+    opts?: HostAbuseProcessSnapshotRequest,
+  ) => Promise<HostAbuseProcessSnapshotResponse>;
   getNetworkSnapshot: (
     opts?: HostNetworkSnapshotRequest,
   ) => Promise<HostNetworkSnapshotResponse>;

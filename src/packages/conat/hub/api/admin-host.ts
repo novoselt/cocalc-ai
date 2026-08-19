@@ -5,6 +5,7 @@
 
 import { authFirstRequireAccount } from "./util";
 import type {
+  HostAbuseProcessSnapshotResponse,
   HostFilesystemSnapshotResponse,
   HostNetworkSnapshotResponse,
   HostPodmanSnapshotResponse,
@@ -118,6 +119,22 @@ export interface AdminHostProcessResponse {
   snapshot: HostProcessSnapshotResponse;
 }
 
+export interface AdminHostAbuseProcessesRequest {
+  host?: string;
+  host_id?: string;
+  max_projects?: number;
+  max_processes?: number;
+  timeout_ms?: number;
+  reason?: string;
+}
+
+export interface AdminHostAbuseProcessesResponse {
+  audit_id: string;
+  host_id: string;
+  server_time: string;
+  snapshot: HostAbuseProcessSnapshotResponse;
+}
+
 export interface AdminHostNetworkRequest {
   host?: string;
   host_id?: string;
@@ -160,6 +177,7 @@ export interface AdminHostPodmanResponse {
 }
 
 export const adminHost = {
+  scanAbuseProcesses: authFirstRequireAccount,
   describe: authFirstRequireAccount,
   events: authFirstRequireAccount,
   filesystem: authFirstRequireAccount,
@@ -171,6 +189,9 @@ export const adminHost = {
 };
 
 export interface AdminHostApi {
+  scanAbuseProcesses: (
+    opts: AdminHostAbuseProcessesRequest,
+  ) => Promise<AdminHostAbuseProcessesResponse>;
   describe: (
     opts: AdminHostDescribeRequest,
   ) => Promise<AdminHostDescribeResponse>;

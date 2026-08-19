@@ -4,7 +4,9 @@
  *
  * Control-plane rules run through audited admin SQL. Filesystem rules inspect
  * only recent top-level file metadata on site-funded hosts; they never read
- * file contents. Detection and containment are intentionally separate.
+ * file contents. Process rules consume only project ids and sanitized process
+ * basenames from a bounded project-host RPC. Detection and containment are
+ * intentionally separate.
  */
 
 import { execFile, execFileSync } from "node:child_process";
@@ -46,6 +48,7 @@ export function parseArgs(argv) {
     minFingerprintProjects: 3,
     hostConcurrency: 4,
     skipFiles: false,
+    skipProcesses: false,
     json: false,
     bays: [],
   };
@@ -80,6 +83,7 @@ export function parseArgs(argv) {
         16,
       );
     } else if (arg === "--skip-files") opts.skipFiles = true;
+    else if (arg === "--skip-processes") opts.skipProcesses = true;
     else if (arg === "--json") opts.json = true;
     else if (arg === "--help" || arg === "-h") opts.help = true;
     else throw new Error(`unknown option ${arg}`);
@@ -101,12 +105,87 @@ Options:
   --min-fingerprint-projects <n>      repeated file threshold (default: 3)
   --host-concurrency <n>              concurrent host metadata scans (default: 4)
   --skip-files                        skip project-host metadata scans
+  --skip-processes                    skip project-host process scans
   --node <path>                       Node executable for the CoCalc CLI
   --cli <path>                        CoCalc CLI script
   --json                              emit JSON
 
 The command requires admin fresh auth. It reports candidates only and never
 bans accounts, stops projects, reads file contents, or changes host services.`;
+}
+
+const PROCESS_SIGNAL_RULES = [
+  {
+    code: "tunnel_or_proxy",
+    names: new Set([
+      "bore",
+      "chisel",
+      "cloudflared",
+      "frpc",
+      "frps",
+      "gost",
+      "ngrok",
+      "sing-box",
+      "tailscaled",
+      "xray",
+      "zerotier-one",
+    ]),
+  },
+  {
+    code: "remote_access",
+    names: new Set([
+      "sshx",
+      "wayvnc",
+      "x11vnc",
+      "xrdp",
+      "xrdp-sesman",
+      "xtigervnc",
+      "xvnc",
+    ]),
+  },
+  {
+    code: "game_server",
+    names: new Set(["bedrock_server", "minetestserver", "steamcmd"]),
+  },
+  {
+    code: "hosting_panel",
+    names: new Set(["pufferpanel", "wings"]),
+  },
+];
+
+export function buildProcessCandidates(rows) {
+  const candidates = [];
+  for (const row of rows) {
+    const matched = new Map();
+    for (const process of row.processes ?? []) {
+      const name = `${process.name ?? ""}`.trim().toLowerCase();
+      if (!name || name === "dropbear") continue;
+      for (const rule of PROCESS_SIGNAL_RULES) {
+        if (!rule.names.has(name)) continue;
+        const names = matched.get(rule.code) ?? new Set();
+        names.add(name);
+        matched.set(rule.code, names);
+      }
+    }
+    if (matched.size === 0) continue;
+    const reason_codes = [...matched.keys()].sort();
+    candidates.push({
+      status: matched.size >= 2 ? "high" : "review",
+      project_id: row.project_id,
+      host_id: row.host_id,
+      host_name: row.host_name,
+      process_count: row.process_count,
+      reason_codes,
+      process_names: [
+        ...new Set([...matched.values()].flatMap((x) => [...x])),
+      ].sort(),
+    });
+  }
+  return candidates.sort(
+    (a, b) =>
+      Number(b.status === "high") - Number(a.status === "high") ||
+      a.project_id.localeCompare(b.project_id),
+  );
 }
 
 function parseEnvelope(output, command) {
@@ -582,6 +661,94 @@ async function scanFileMetadata(opts) {
   };
 }
 
+async function scanHostProcesses(opts, host) {
+  try {
+    const response = await runCliAsync(opts, [
+      "admin",
+      "host",
+      "abuse-processes",
+      host.host_id,
+      "--max-projects",
+      "5000",
+      "--max-processes",
+      "50000",
+      "--timeout-ms",
+      "15000",
+      "--reason",
+      "standard abuse health scan: sanitized project process names",
+    ]);
+    const snapshot = response.snapshot ?? {};
+    return {
+      host,
+      coverage: snapshot.coverage ?? "unavailable",
+      process_count: Number(snapshot.process_count ?? 0),
+      rows: (snapshot.projects ?? []).map((project) => ({
+        ...project,
+        host_id: host.host_id,
+        host_name: host.name,
+      })),
+      issues: snapshot.issues ?? [],
+      truncated: snapshot.truncated ?? {},
+    };
+  } catch (err) {
+    return {
+      host,
+      coverage: "unavailable",
+      process_count: 0,
+      rows: [],
+      issues: [],
+      truncated: {},
+      error: `${err}`,
+    };
+  }
+}
+
+async function scanProcessMetadata(opts) {
+  if (opts.skipProcesses) {
+    return {
+      skipped: true,
+      hosts: 0,
+      projects: 0,
+      processes: 0,
+      candidates: [],
+      partial_hosts: [],
+      errors: [],
+    };
+  }
+  const hosts = runCli(opts, ["host", "list", "--admin-view"]).filter(
+    (host) =>
+      host.status === "running" &&
+      host.funding_mode === "site-funded" &&
+      host.scope === "owned",
+  );
+  const scans = await mapLimit(hosts, opts.hostConcurrency, (host) =>
+    scanHostProcesses(opts, host),
+  );
+  const rows = scans.flatMap(({ rows }) => rows);
+  return {
+    skipped: false,
+    hosts: hosts.length,
+    projects: rows.length,
+    processes: scans.reduce((sum, scan) => sum + scan.process_count, 0),
+    candidates: buildProcessCandidates(rows),
+    partial_hosts: scans
+      .filter(({ coverage }) => coverage === "partial")
+      .map(({ host, issues, truncated }) => ({
+        host_id: host.host_id,
+        name: host.name,
+        issues,
+        truncated,
+      })),
+    errors: scans
+      .filter(({ error, coverage }) => error || coverage === "unavailable")
+      .map(({ host, error }) => ({
+        host_id: host.host_id,
+        name: host.name,
+        error: error ?? "project-host reported unavailable process coverage",
+      })),
+  };
+}
+
 function printHuman(report) {
   console.log(`Abuse health scan: ${report.checked_at}`);
   console.log(
@@ -609,42 +776,75 @@ function printHuman(report) {
 
   if (report.files.skipped) {
     console.log("Project files: skipped");
+  } else {
+    console.log(
+      `Project files: ${report.files.files} recent top-level files across ` +
+        `${report.files.hosts} site-funded host(s)`,
+    );
+    if (!report.files.fingerprints.length) {
+      console.log("  No repeated filename/size fingerprints.");
+    }
+    for (const fingerprint of report.files.fingerprints) {
+      const correlation = fingerprint.control_plane_candidates.length
+        ? "[CORRELATED] "
+        : "";
+      console.log(
+        `  ${correlation}${JSON.stringify(fingerprint.name)} size=${fingerprint.size} ` +
+          `projects=${fingerprint.project_count} hosts=${fingerprint.host_count}`,
+      );
+      if (fingerprint.control_plane_candidates.length) {
+        console.log(
+          `    signup clusters: ${fingerprint.control_plane_candidates.join(", ")}`,
+        );
+      }
+      console.log(`    projects: ${fingerprint.project_ids.join(", ")}`);
+    }
+    if (report.files.errors.length) {
+      console.log(`  Incomplete host scans: ${report.files.errors.length}`);
+      for (const { name, error } of report.files.errors) {
+        console.log(`    ${name}: ${error.slice(0, 300)}`);
+      }
+    }
+  }
+
+  if (report.processes.skipped) {
+    console.log("Project processes: skipped");
     return;
   }
   console.log(
-    `Project files: ${report.files.files} recent top-level files across ` +
-      `${report.files.hosts} site-funded host(s)`,
+    `Project processes: ${report.processes.processes} sanitized processes in ` +
+      `${report.processes.projects} active project(s) across ` +
+      `${report.processes.hosts} site-funded host(s)`,
   );
-  if (!report.files.fingerprints.length) {
-    console.log("  No repeated filename/size fingerprints.");
-  }
-  for (const fingerprint of report.files.fingerprints) {
-    const correlation = fingerprint.control_plane_candidates.length
-      ? "[CORRELATED] "
-      : "";
+  for (const candidate of report.processes.candidates) {
     console.log(
-      `  ${correlation}${JSON.stringify(fingerprint.name)} size=${fingerprint.size} ` +
-        `projects=${fingerprint.project_count} hosts=${fingerprint.host_count}`,
+      `  [${candidate.status.toUpperCase()}] project=${candidate.project_id} ` +
+        `host=${candidate.host_name} signals=${candidate.reason_codes.join(",")}`,
     );
-    if (fingerprint.control_plane_candidates.length) {
+    console.log(`    processes: ${candidate.process_names.join(", ")}`);
+    if (candidate.control_plane_candidates.length) {
       console.log(
-        `    signup clusters: ${fingerprint.control_plane_candidates.join(", ")}`,
+        `    signup clusters: ${candidate.control_plane_candidates.join(", ")}`,
       );
     }
-    console.log(`    projects: ${fingerprint.project_ids.join(", ")}`);
   }
-  if (report.files.errors.length) {
-    console.log(`  Incomplete host scans: ${report.files.errors.length}`);
-    for (const { name, error } of report.files.errors) {
-      console.log(`    ${name}: ${error.slice(0, 300)}`);
-    }
+  if (report.processes.partial_hosts.length) {
+    console.log(
+      `  Partial process coverage: ${report.processes.partial_hosts.length} host(s)`,
+    );
+  }
+  if (report.processes.errors.length) {
+    console.log(
+      `  Unavailable process coverage: ${report.processes.errors.length} host(s)`,
+    );
   }
 }
 
 export async function run(opts) {
-  const [controlPlane, files] = await Promise.all([
+  const [controlPlane, files, processes] = await Promise.all([
     scanControlPlane(opts),
     scanFileMetadata(opts),
+    scanProcessMetadata(opts),
   ]);
   const clusterByProject = new Map();
   for (const candidate of controlPlane.candidates) {
@@ -672,12 +872,27 @@ export async function run(opts) {
           Number(a.control_plane_candidates.length > 0) ||
         b.project_count - a.project_count,
     );
+  processes.candidates = processes.candidates
+    .map((candidate) => ({
+      ...candidate,
+      control_plane_candidates: [
+        ...(clusterByProject.get(candidate.project_id) ?? []),
+      ],
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.status === "high") - Number(a.status === "high") ||
+        Number(b.control_plane_candidates.length > 0) -
+          Number(a.control_plane_candidates.length > 0) ||
+        a.project_id.localeCompare(b.project_id),
+    );
   return {
     checked_at: new Date().toISOString(),
     lookback_hours: opts.hours,
     report_only: true,
     control_plane: controlPlane,
     files,
+    processes,
   };
 }
 
@@ -692,7 +907,9 @@ async function main() {
   else printHuman(report);
   if (
     report.control_plane.errors.length > 0 ||
-    report.files.errors.length > 0
+    report.files.errors.length > 0 ||
+    report.processes.partial_hosts.length > 0 ||
+    report.processes.errors.length > 0
   ) {
     process.exitCode = 2;
   }

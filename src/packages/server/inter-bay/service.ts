@@ -2846,6 +2846,8 @@ async function startHostControlService(): Promise<void> {
       await (await getHostClient(host_id, 30_000)).getRuntimeLog(get),
     getProcessSnapshot: async ({ host_id, get }) =>
       await (await getHostClient(host_id, 30_000)).getProcessSnapshot(get),
+    getAbuseProcessSnapshot: async ({ host_id, get }) =>
+      await (await getHostClient(host_id, 30_000)).getAbuseProcessSnapshot(get),
     getNetworkSnapshot: async ({ host_id, get }) =>
       await (await getHostClient(host_id, 30_000)).getNetworkSnapshot(get),
     getFilesystemSnapshot: async ({ host_id }) =>

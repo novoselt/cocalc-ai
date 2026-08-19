@@ -8,7 +8,7 @@ import centralLog from "@cocalc/database/postgres/central-log";
 import isAdmin from "@cocalc/server/accounts/is-admin";
 import { getRoutedHostControlClient } from "@cocalc/server/project-host/client";
 
-import { describe as describeHost } from "./admin-host";
+import { describe as describeHost, scanAbuseProcesses } from "./admin-host";
 
 jest.mock("@cocalc/database/pool", () => ({
   __esModule: true,
@@ -94,5 +94,61 @@ describe("admin host API", () => {
     expect(projectCountSql).not.toContain("WHERE state='running'");
     expect(result.project_counts).toMatchObject({ running: 1, stopped: 2 });
     expect(mockGetRoutedHostControlClient).not.toHaveBeenCalled();
+  });
+
+  it("returns an audited bounded abuse process snapshot", async () => {
+    const hostId = "7843c648-86e4-45d3-9ed2-85ebe9faf9ee";
+    mockGetPool.mockReturnValue({
+      query: jest.fn(async () => ({
+        rows: [{ id: hostId, name: "host", status: "running" }],
+      })),
+    } as any);
+    const getAbuseProcessSnapshot = jest.fn(async () => ({
+      version: 1 as const,
+      coverage: "complete" as const,
+      captured_at: "2026-08-19T00:00:00.000Z",
+      duration_ms: 4,
+      project_count: 1,
+      active_project_count: 1,
+      cgroup_count: 1,
+      process_count: 1,
+      vanished_process_count: 0,
+      projects: [],
+      issues: [],
+      truncated: {
+        projects: false,
+        processes: false,
+        deadline: false,
+        issues: false,
+      },
+    }));
+    mockGetRoutedHostControlClient.mockResolvedValue({
+      getAbuseProcessSnapshot,
+    } as any);
+
+    const result = await scanAbuseProcesses({
+      account_id: "account-id",
+      host_id: hostId,
+      max_projects: 999_999,
+      max_processes: 999_999,
+      timeout_ms: 999_999,
+      reason: "abuse triage",
+    });
+
+    expect(getAbuseProcessSnapshot).toHaveBeenCalledWith({
+      max_projects: 5_000,
+      max_processes: 50_000,
+      timeout_ms: 15_000,
+    });
+    expect(result.snapshot.coverage).toBe("complete");
+    expect(mockCentralLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "admin_host_operator",
+        value: expect.objectContaining({
+          mode: "abuse-processes",
+          reason: "abuse triage",
+        }),
+      }),
+    );
   });
 });

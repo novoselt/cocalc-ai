@@ -101,6 +101,11 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     reason:
       "admin-only bounded and audited host log inspection with server-side caps and redaction",
   },
+  "adminHost.scanAbuseProcesses": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "admin-only bounded and audited per-project process-name inspection without argv, environment, paths, or process ids",
+  },
   "adminSupport.update": {
     decision: "fresh-auth-required",
     reason: "posts comments or changes customer-visible Zendesk ticket state",
