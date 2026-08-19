@@ -8,6 +8,10 @@ import { defineMessage, useIntl } from "react-intl";
 import type { Entries } from "type-fest";
 
 import { Tooltip } from "@cocalc/frontend/components";
+import {
+  agentFileLocation,
+  describeAgentFileLocation,
+} from "@cocalc/frontend/frame-editors/ai/agent-file-context";
 import { useProjectContext } from "@cocalc/frontend/project/context";
 import { submitNavigatorPromptInWorkspaceChat } from "@cocalc/frontend/project/new/navigator-intents";
 import AIAvatar from "@cocalc/frontend/components/ai-avatar";
@@ -360,6 +364,7 @@ export function buildVisiblePrompt(opts: {
 
 export function buildHiddenPrompt(opts: {
   mode: Mode;
+  project_id?: string;
   path: string;
   cellId: string;
   cellType: "code" | "markdown";
@@ -368,12 +373,17 @@ export function buildHiddenPrompt(opts: {
   extra: string;
   targetLanguage: string;
 }): string {
+  const location = agentFileLocation({
+    project_id: opts.project_id,
+    path: opts.path,
+  });
   const parts = [
-    `Jupyter notebook path: ${opts.path}`,
+    `Jupyter notebook: ${describeAgentFileLocation(location)}`,
     `Selected cell id: ${opts.cellId}`,
     `Selected cell type: ${opts.cellType}`,
     `Kernel language: ${opts.kernelLanguage}`,
     `Kernel display name: ${opts.kernelDisplay}`,
+    "The cell content is not included here on purpose: read the selected cell (and its outputs) via the live notebook API using the cell id above before doing anything else.",
     "Treat the live in-memory notebook state as the source of truth, even if the file on disk is stale.",
     "Do not read or edit the `.ipynb` JSON directly for this task unless the user explicitly asks for filesystem-level work.",
     "Prefer `cocalc project jupyter ...` for notebook cell edits and execution because it remains available if the browser refreshes or disconnects.",
@@ -532,6 +542,7 @@ export function AgentCellTool({
       });
       const prompt = buildHiddenPrompt({
         mode,
+        project_id,
         path,
         cellId: id,
         cellType,

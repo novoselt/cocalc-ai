@@ -6,16 +6,30 @@ import {
   submitNavigatorPromptInWorkspaceChat,
 } from "@cocalc/frontend/project/new/navigator-intents";
 import { getMaxTokens as getModelMaxTokens } from "@cocalc/util/db-schema/ai-models";
-import { capitalize } from "@cocalc/util/misc";
+import { backtickSequence } from "@cocalc/frontend/markdown/util";
+import { capitalize, trunc_middle } from "@cocalc/util/misc";
 import type {
   BaseEditorActions as Actions,
   CodeEditorState,
 } from "../base-editor/actions-base";
-import { AI_ASSIST_TAG } from "./consts";
+import {
+  agentFileLocation,
+  describeAgentFileLocation,
+  describeLineRange,
+  resolveAgentAbsolutePath,
+} from "./agent-file-context";
+import { AGENT_CONTEXT_CUTOFF, AI_ASSIST_TAG } from "./consts";
+import type { ContextInfo } from "./types";
 import type { AgentSessionRecord } from "@cocalc/frontend/chat/agent-session-index";
 
 export interface Options {
   codegen?: boolean;
+  // Type of the frame the request comes from, as known by the frame-tree
+  // actions. A cm frame can show a different file than the main editor (a
+  // LaTeX `\input`'ed subfile); the request is then built from that file's
+  // actions, which do not own the parent frame tree and therefore cannot
+  // resolve the frame id themselves.
+  frameType?: string;
   command: string;
   allowEmpty?: boolean;
   tag?: string;
@@ -23,6 +37,16 @@ export interface Options {
   agentSession?: AssistantAgentSessionTarget;
   submitToAgent?: boolean;
   createNewThread?: boolean;
+}
+
+// The frame's type: from the frame-tree actions when they told us (see
+// Options.frameType), otherwise resolved against the actions we were given.
+function resolveFrameType(
+  actions: Actions<CodeEditorState>,
+  frameId: string,
+  options: Options,
+): string | undefined {
+  return options.frameType ?? actions._get_frame_type(frameId);
 }
 
 export type AssistantAgentSessionTarget = Pick<
@@ -78,7 +102,7 @@ export default async function createChat({
   options: Options;
   input?: string;
 }): Promise<void> {
-  const frameType = actions._get_frame_type(frameId);
+  const frameType = resolveFrameType(actions, frameId, options);
   const { model } = options;
 
   const { message } = await createChatMessage(actions, frameId, options, input);
@@ -180,7 +204,7 @@ export async function createChatMessage(
   let { codegen } = options;
   const { command, model } = options;
 
-  const frameType = actions._get_frame_type(frameId);
+  const frameType = resolveFrameType(actions, frameId, options);
   const terminalContext =
     frameType === "terminal"
       ? getTerminalAssistantContext(actions, frameId)
@@ -189,15 +213,37 @@ export async function createChatMessage(
     context = "";
     codegen = false;
   }
-  const input = sanitizeInput(actions, frameId, options, context);
+  const contextInfo = sanitizeInput(actions, frameId, options, context);
+  const input = contextInfo.text;
 
   // Truncate input (also this MUST lazy import):
   const { truncateMessage } =
     await import("@cocalc/frontend/misc/ai-model-tokens");
   const maxTokens = Math.max(2048, getAssistantMaxTokens(model) - 1000); // reserve output and routing metadata
   const inputOriginalLen = input.length;
-  const truncatedInput = truncateMessage(input, maxTokens);
+  // hard token cap first, then the (much smaller) agent context cutoff: the
+  // agent can read the rest of the file itself.
+  const truncatedInput = trunc_middle(
+    truncateMessage(input, maxTokens),
+    AGENT_CONTEXT_CUTOFF,
+    "\n\n[... truncated ...]\n\n",
+  );
   const inputTruncatedLen = truncatedInput.length;
+  // trunc_middle appends its marker to the slices, so the result can be
+  // slightly longer than the cutoff -- compare content, not lengths.
+  const contextTruncated = truncatedInput !== input;
+  // resolve the file once: re-resolving from a location object would lose
+  // the project id and fall back to the default project's home directory
+  const location = agentFileLocation({
+    project_id: actions.project_id,
+    path: actions.path,
+    line: contextInfo.lineStart,
+    line_end: contextInfo.lineEnd,
+  });
+  const docLocation = {
+    path: location.path,
+    absolute_path: location.absolute_path,
+  };
   const request = createAssistantVisiblePrompt(command);
   const message = [
     `Codex: ${capitalize(command)}.`,
@@ -205,6 +251,25 @@ export async function createChatMessage(
     frameType === "terminal"
       ? "Use the current CoCalc terminal context as the live source of truth."
       : "Inspect the current document through CoCalc live document APIs before editing.",
+    frameType !== "terminal"
+      ? `The document is ${describeAgentFileLocation(docLocation)}.`
+      : undefined,
+    frameType !== "terminal" &&
+    contextInfo.scope !== "selection" &&
+    contextInfo.cursorLine != null
+      ? `Nothing is selected; the user's cursor is at line ${contextInfo.cursorLine}${
+          contextInfo.cursorColumn != null
+            ? `, column ${contextInfo.cursorColumn}`
+            : ""
+        }, so a vague reference such as "this" most likely means that line or the code around it.`
+      : undefined,
+    ...describeContextForAgent({
+      contextInfo,
+      truncatedInput,
+      contextTruncated,
+      language: actions.languageModelGetLanguage(),
+      location,
+    }),
     frameType === "terminal" && terminalContext?.terminal_session_id
       ? `This terminal tab is attached to live terminal session \`${terminalContext.terminal_session_id}\`. Use \`cocalc project terminal history <id>\`, \`state <id>\`, \`cwd <id>\`, and \`write <id> ...\` when you need to inspect or interact with this exact session. When sending a shell command, prefer \`cocalc project terminal write <id> --enter -- ...\` so the command actually runs. Use plain \`write\` without \`--enter\` only when you intentionally want to leave input pending at the prompt or inside an interactive program.`
       : undefined,
@@ -225,6 +290,14 @@ export async function createChatMessage(
         terminal_session_id: terminalContext?.terminal_session_id,
         language: actions.languageModelGetLanguage(),
         extra_file_info: actions.languageModelExtraFileInfo(codegen),
+        absolute_path: location.absolute_path || undefined,
+        context_scope: frameType === "terminal" ? undefined : contextInfo.scope,
+        context_line_start: location.line,
+        context_line_end: location.line_end,
+        cursor_line:
+          frameType === "terminal" ? undefined : contextInfo.cursorLine,
+        cursor_column:
+          frameType === "terminal" ? undefined : contextInfo.cursorColumn,
         context_chars: inputOriginalLen,
         truncated_context_chars: inputTruncatedLen,
       },
@@ -251,7 +324,7 @@ function createNavigatorAssistantPrompt({
   options: Options;
   codexModel: string;
 }): string {
-  const frameType = actions._get_frame_type(frameId);
+  const frameType = resolveFrameType(actions, frameId, options);
   const terminalContext =
     frameType === "terminal"
       ? getTerminalAssistantContext(actions, frameId)
@@ -272,6 +345,8 @@ function createNavigatorAssistantPrompt({
     context: {
       project_id: actions.project_id,
       path: actions.path,
+      absolute_path:
+        resolveAgentAbsolutePath(actions.project_id, actions.path) || undefined,
       frame_type: frameType,
       terminal_file_path: terminalContext?.terminal_file_path,
       terminal_session_id: terminalContext?.terminal_session_id,
@@ -324,22 +399,60 @@ function sanitizeInput(
   frameId: string,
   options: Options,
   input: string | undefined,
-): string {
-  let { allowEmpty } = options;
-  const frameType = actions._get_frame_type(frameId);
+): ContextInfo {
+  const { allowEmpty } = options;
+  const frameType = resolveFrameType(actions, frameId, options);
   if (frameType == "terminal") {
-    input = "";
-    allowEmpty = true;
-  } else {
-    if (input == null) {
-      input = actions.languageModelGetContext(frameId);
-    }
-    if (!input && !allowEmpty) {
-      throw Error("Please write or select something.");
-    }
+    return { text: "", scope: "none" };
   }
+  // Ask the editor where the context comes from (scope + line range); only
+  // trust that location if it describes the text we are actually sending.
+  const info: ContextInfo | undefined =
+    typeof actions.languageModelGetContextInfo === "function"
+      ? actions.languageModelGetContextInfo(frameId)
+      : undefined;
   if (input == null) {
-    throw Error("bug");
+    input = info?.text ?? actions.languageModelGetContext(frameId);
   }
-  return input;
+  if (!input && !allowEmpty) {
+    throw Error("Please write or select something.");
+  }
+  if (info != null && info.text === input) {
+    return info;
+  }
+  return { text: input, scope: info?.scope ?? "all" };
+}
+
+// Lines describing the document context for the agent: the (possibly
+// truncated) text itself plus a precise pointer to where it lives.
+function describeContextForAgent({
+  contextInfo,
+  truncatedInput,
+  contextTruncated,
+  language,
+  location,
+}: {
+  contextInfo: ContextInfo;
+  truncatedInput: string;
+  contextTruncated: boolean;
+  language: string;
+  location: { line?: number; line_end?: number };
+}): string[] {
+  if (!truncatedInput) return [];
+  const range = describeLineRange(location);
+  const what =
+    contextInfo.scope === "selection"
+      ? "The user's current selection"
+      : contextInfo.scope === "all"
+        ? "The document content"
+        : `The current ${contextInfo.scope}`;
+  const where = range ? ` (${range} of the document)` : "";
+  const note = contextTruncated
+    ? " It is truncated in the middle; read the file for the full content."
+    : "";
+  const delim = backtickSequence(truncatedInput);
+  return [
+    `${what}${where} is:${note}`,
+    `${delim}${language}\n${truncatedInput}\n${delim}`,
+  ];
 }

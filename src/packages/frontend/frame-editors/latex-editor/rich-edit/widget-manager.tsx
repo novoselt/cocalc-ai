@@ -222,6 +222,9 @@ export function attachWidgetManager(
           await openFormulaAgent({
             project_id: frameContext.project_id,
             path: frameContext.path,
+            // the frame context path is the main document; this cm frame may
+            // show a subfile, which is what its own actions point at
+            filePath: frameContext.actions?.path,
             source,
             from: range.from,
             to: range.to,

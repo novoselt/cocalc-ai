@@ -25,16 +25,24 @@ interface Opts {
   set_job_info?: (info: any) => void;
 }
 
+// The exact command used to render the Quarto file; exported so the build
+// log can report it to the agent.
+export function qmdRenderCommand(path: string): {
+  command: string;
+  args: string[];
+} {
+  return { command: "quarto", args: ["render", path_split(path).tail, ...LOG] };
+}
+
 async function _convert(opts: Opts): Promise<ExecOutput> {
   const { project_id, path, hash, set_job_info } = opts;
   const x = path_split(path);
-  const infile = x.tail;
-  const args = ["render", infile, ...LOG];
+  const { command, args } = qmdRenderCommand(path);
 
   return await runJob({
     aggregate: hash ? { value: hash } : undefined,
     args,
-    command: "quarto",
+    command,
     jobKey: `qmd:${path}`,
     project_id,
     runDir: x.head,

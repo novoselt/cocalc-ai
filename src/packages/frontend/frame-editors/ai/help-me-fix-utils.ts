@@ -4,6 +4,11 @@ import {
   submitNavigatorPromptInWorkspaceChat,
 } from "@cocalc/frontend/project/new/navigator-intents";
 import { trunc, trunc_left, trunc_middle } from "@cocalc/util/misc";
+import {
+  agentFileLocation,
+  describeAgentFileLocation,
+  type AgentFileLocation,
+} from "./agent-file-context";
 import { CUTOFF } from "./consts";
 import shortenError from "./shorten-error";
 
@@ -21,6 +26,11 @@ export interface GetHelpOptions {
   prioritize?: "start" | "start-end" | "end";
   model?: string;
   isHint?: boolean;
+  // where the error is located (file + line); agents have full project
+  // access, so a precise pointer matters more than pasted context.
+  location?: AgentFileLocation;
+  // the command that produced the error (e.g. the LaTeX build command)
+  buildCommand?: string;
 }
 
 export interface CreateMessageOpts {
@@ -33,10 +43,9 @@ export interface CreateMessageOpts {
   extraFileInfo?: string;
   prioritize?: "start" | "start-end" | "end";
   model?: string;
-  open: boolean;
-  full: boolean;
   isHint?: boolean;
   includeModelMention?: boolean;
+  location?: AgentFileLocation;
 }
 
 export async function getHelp({
@@ -52,7 +61,10 @@ export async function getHelp({
   redux: _redux,
   prioritize,
   isHint = false,
+  location,
+  buildCommand,
 }: GetHelpOptions) {
+  const resolvedLocation = location ?? agentFileLocation({ project_id, path });
   const messageText = createMessage({
     error,
     task,
@@ -61,9 +73,8 @@ export async function getHelp({
     language,
     extraFileInfo,
     prioritize,
-    open: true,
-    full: true,
     isHint,
+    location: resolvedLocation,
   });
 
   try {
@@ -77,6 +88,8 @@ export async function getHelp({
       path,
       isHint,
       sourceTag: `help-me-fix-${tagSuffix}${tag ? `:${tag}` : ""}`,
+      location: resolvedLocation,
+      buildCommand,
     });
     const sent = await submitNavigatorPromptInWorkspaceChat({
       project_id,
@@ -112,9 +125,8 @@ export function createMessage({
   task,
   extraFileInfo,
   prioritize,
-  open,
-  full,
   isHint = false,
+  location,
 }: CreateMessageOpts): string {
   const message: string[] = [];
   if (isHint) {
@@ -125,15 +137,16 @@ export function createMessage({
     message.push("Help me fix my code.");
   }
 
-  if (full)
-    message.push(`<details${open ? " open" : ""}><summary>Context</summary>`);
-
   if (task) {
     message.push(`I ${task}.`);
   }
 
   error = trimStr(error, language);
   line = trimStr(line, language);
+
+  if (location?.path) {
+    message.push(`The problem is in ${describeAgentFileLocation(location)}.`);
+  }
 
   message.push(`I received the following error:`);
   const delimE = backtickSequence(error);
@@ -172,8 +185,6 @@ export function createMessage({
     message.push(`${delimI}${language}\n${input}\n${delimI}`);
   }
 
-  if (full) message.push("</details>");
-
   return message.join("\n\n");
 }
 
@@ -184,6 +195,8 @@ interface CreateNavigatorIntentMessageOpts {
   model?: string;
   isHint: boolean;
   sourceTag: string;
+  location?: AgentFileLocation;
+  buildCommand?: string;
 }
 
 export function createNavigatorIntentMessage({
@@ -192,7 +205,11 @@ export function createNavigatorIntentMessage({
   path,
   isHint,
   sourceTag,
+  location,
+  buildCommand,
 }: CreateNavigatorIntentMessageOpts): string {
+  const docLocation = agentFileLocation({ project_id, path });
+  const errorLocation = location ?? docLocation;
   const metadata = {
     source: "help-me-fix",
     intent: "intent:error-fix",
@@ -202,6 +219,12 @@ export function createNavigatorIntentMessage({
     context: {
       project_id,
       path,
+      absolute_path: docLocation.absolute_path,
+      error_file: errorLocation.path,
+      error_absolute_path: errorLocation.absolute_path,
+      error_line: errorLocation.line,
+      error_line_end: errorLocation.line_end,
+      build_command: `${buildCommand ?? ""}`.trim() || undefined,
       source_tag: sourceTag,
     },
     mutation_mode: "in-place-edit",
@@ -209,16 +232,23 @@ export function createNavigatorIntentMessage({
   };
   return [
     "Handle this CoCalc help-me-fix request as an agent.",
+    `The document being edited is ${describeAgentFileLocation(docLocation)}.`,
+    errorLocation.path && errorLocation.path !== docLocation.path
+      ? `The error itself is reported in ${describeAgentFileLocation(errorLocation)}.`
+      : undefined,
     "Treat the live in-memory sync version of the document as the source of truth.",
     "Do not rely on the filesystem copy being current; use live document APIs when available.",
     "Apply edits directly when safe, run checks as needed, and summarize exactly what changed.",
-    "<details><summary>Intent metadata</summary>",
-    "```json",
-    JSON.stringify(metadata, null, 2),
-    "```",
-    "</details>",
+    [
+      "Intent metadata:",
+      "```json",
+      JSON.stringify(metadata, null, 2),
+      "```",
+    ].join("\n"),
     message,
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function trimStr(s: string, language): string {

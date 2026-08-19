@@ -47,6 +47,7 @@ interface MarkdownEditorState extends CodeEditorState {
   build_err: string; // for Rmd
   build_exit: number; // for Rmd
   job_info?: ExecuteCodeOutputAsync; // for Rmd streaming with stats
+  build_command?: { command: string; args: string[] }; // for Rmd/Qmd: the exact command that was run
   contents?: TableOfContentsEntryList; // table of contents data.
   show_slate_help?: boolean;
 }

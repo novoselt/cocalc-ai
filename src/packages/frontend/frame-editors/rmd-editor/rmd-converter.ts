@@ -15,16 +15,13 @@ import { runJob } from "./utils";
 
 export const convert = reuseInFlight(_convert);
 
-async function _convert(
-  project_id: string,
+// The exact command used to render the R Markdown file; exported so the
+// build log can report it to the agent.
+export function rmdRenderCommand(
   path: string,
   frontmatter: string,
-  hash,
-  set_job_info?: (info: ExecuteCodeOutputAsync) => void,
-): Promise<ExecOutput> {
-  const x = path_split(path);
-  const infile = x.tail;
-  // console.log("frontmatter", frontmatter);
+): { command: string; args: string[] } {
+  const infile = path_split(path).tail;
   let cmd: string;
   // https://www.rdocumentation.org/packages/rmarkdown/versions/1.10/topics/render
   // unless user specifies some self_contained value or user did set an explicit "output: ..." mode,
@@ -37,11 +34,23 @@ async function _convert(
   } else {
     cmd = `rmarkdown::render('${infile}', output_format = NULL, run_pandoc = TRUE, output_options = list(self_contained = FALSE))`;
   }
+  return { command: "Rscript", args: ["-e", cmd] };
+}
+
+async function _convert(
+  project_id: string,
+  path: string,
+  frontmatter: string,
+  hash,
+  set_job_info?: (info: ExecuteCodeOutputAsync) => void,
+): Promise<ExecOutput> {
+  const x = path_split(path);
+  const { command, args } = rmdRenderCommand(path, frontmatter);
 
   return await runJob({
     aggregate: hash ? { value: hash } : undefined,
-    args: ["-e", cmd],
-    command: "Rscript",
+    args,
+    command,
     jobKey: `rmd:${path}`,
     env: { MPLBACKEND: "Agg" }, // for python plots -- https://github.com/sagemathinc/cocalc/issues/4202
     project_id: project_id,

@@ -11,8 +11,13 @@ import {
   AgentSessionSelect,
   usePersistentAgentSessionSelection,
 } from "@cocalc/frontend/frame-editors/ai/agent-session-selector";
+import {
+  agentFileLocation,
+  describeAgentFileLocation,
+} from "@cocalc/frontend/frame-editors/ai/agent-file-context";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
 import { submitNavigatorPromptInWorkspaceChat } from "@cocalc/frontend/project/new/navigator-intents";
+import { kernelInfoField } from "../kernel-info-field";
 
 const NOTEBOOK_FIX_VISIBLE_PROMPT =
   "Investigate and fix this Jupyter notebook error.";
@@ -20,6 +25,9 @@ const NOTEBOOK_FIX_VISIBLE_PROMPT =
 interface Props {
   input: string;
   traceback: string;
+  // id of the cell whose output contains the error
+  cellId?: string;
+  style?: React.CSSProperties;
 }
 
 function trimForPrompt(value: string, maxLen: number): string {
@@ -28,16 +36,27 @@ function trimForPrompt(value: string, maxLen: number): string {
   return `${trimmed.slice(0, maxLen)}\n\n[truncated]`;
 }
 
-function buildNotebookErrorPrompt(opts: {
+export function buildNotebookErrorPrompt(opts: {
+  project_id?: string;
   path: string;
+  cellId?: string;
   traceback: string;
   input: string;
+  kernelLanguage?: string;
 }): string {
   const traceback = trimForPrompt(opts.traceback, 12000);
   const input = trimForPrompt(opts.input, 12000);
+  const location = agentFileLocation({
+    project_id: opts.project_id,
+    path: opts.path,
+  });
+  const cellId = `${opts.cellId ?? ""}`.trim();
   const parts = [
     "Investigate and fix this Jupyter notebook error.",
-    `Notebook path: ${opts.path}`,
+    `Notebook: ${describeAgentFileLocation(location)}`,
+    cellId
+      ? `The error is in the cell with id \`${cellId}\`. Use this id with \`cocalc project jupyter ...\` to read, edit, or run exactly that cell.`
+      : undefined,
     "Treat the live in-memory notebook state as the source of truth, even if the file on disk is stale.",
     "Do not read or edit the `.ipynb` JSON directly for this task unless the user explicitly asks for filesystem-level work.",
     "Prefer `cocalc project jupyter ...` for notebook cell edits and execution because it remains available if the browser refreshes or disconnects.",
@@ -50,12 +69,13 @@ function buildNotebookErrorPrompt(opts: {
     "```",
   ];
   if (input) {
-    parts.push("Cell input:", "```python", input, "```");
+    const lang = `${opts.kernelLanguage ?? ""}`.trim() || "python";
+    parts.push("Cell input:", "```" + lang, input, "```");
   }
-  return parts.join("\n\n");
+  return parts.filter(Boolean).join("\n\n");
 }
 
-export default function AIError({ traceback, input }: Props) {
+export default function AIError({ traceback, input, cellId, style }: Props) {
   const { actions: frameActions, project_id, path } = useFrameContext();
   const [modalOpen, setModalOpen] = useState(false);
   const [routing, setRouting] = useState(false);
@@ -67,9 +87,21 @@ export default function AIError({ traceback, input }: Props) {
     enabled: frameActions != null,
   });
 
+  const kernelInfo = (frameActions as any)?.jupyter_actions?.store?.get?.(
+    "kernel_info",
+  );
+  const kernelLanguage = kernelInfoField(kernelInfo, "language", "python");
+
   const intentPrompt = useMemo(() => {
-    return buildNotebookErrorPrompt({ path, traceback, input });
-  }, [input, path, traceback]);
+    return buildNotebookErrorPrompt({
+      project_id,
+      path,
+      cellId,
+      traceback,
+      input,
+      kernelLanguage,
+    });
+  }, [cellId, input, kernelLanguage, path, project_id, traceback]);
 
   if (frameActions == null) return null;
 
@@ -102,7 +134,7 @@ export default function AIError({ traceback, input }: Props) {
   }
 
   return (
-    <div>
+    <div style={style}>
       <Tooltip title="Opens the workspace agent thread and submits this notebook error to the Agent.">
         <Button
           size="small"
@@ -149,10 +181,10 @@ export default function AIError({ traceback, input }: Props) {
       >
         <Space vertical size="middle" style={{ width: "100%" }}>
           <div>
-            The selected agent session will receive this notebook error, the
-            traceback, and the cell input. The agent will use the live notebook
-            state as the source of truth, investigate the failure, and apply a
-            fix when it can do so safely.
+            The selected agent session will receive the notebook path, the cell
+            id, the traceback, and the cell input. The agent will use the live
+            notebook state as the source of truth, investigate the failure, and
+            apply a fix when it can do so safely.
           </div>
           <AgentSessionSelect
             selection={agentSessionSelection}
