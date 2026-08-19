@@ -221,6 +221,18 @@ export const TABLE_OWNERSHIP = {
       "Admin-authored growth timeline annotations retained on the bay where they are created.",
   }),
 
+  ...entries(["growth_onboarding_continuations"], {
+    ownership: "account-home",
+    authority: "account_id",
+    portability: "unsupported",
+    secondary_reference_fields: {
+      project_id:
+        "Continuation target for the account-home notification workflow, not project placement authority.",
+    },
+    notes:
+      "Account-home onboarding continuation delivery state. Scheduling and delivery must route to the account home bay; account rehome is unsafe until this state has explicit migration support.",
+  }),
+
   ...entries(["purchases"], {
     ownership: "account-home",
     authority: "account_id",
