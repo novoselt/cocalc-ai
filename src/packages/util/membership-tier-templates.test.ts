@@ -158,6 +158,16 @@ describe("membership tier templates", () => {
     expect(applyMembershipTierTemplateFallbacks(localTier)).toBe(localTier);
   });
 
+  it("allows Basic members to send bounded invitation email", () => {
+    expect(TIER_TEMPLATES.basic.usage_limits).toEqual(
+      expect.objectContaining({
+        invite_email_send_enabled: true,
+        invite_email_hourly_count: 10,
+        invite_email_daily_count: 20,
+      }),
+    );
+  });
+
   it("keeps the student template price without exposing course checkout", () => {
     const tier = applyMembershipTierTemplateFallbacks({
       id: "student",
