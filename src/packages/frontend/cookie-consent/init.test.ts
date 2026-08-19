@@ -41,3 +41,42 @@ it("centers the consent dialog and becomes ready after initialization", async ()
 
   expect(isBannerReady()).toBe(true);
 });
+
+it("offers marketing email consent as its own section", () => {
+  // initCookieConsent only runs once per module instance.
+  jest.isolateModules(() => {
+    const { initCookieConsent: init } = require("./init");
+    init({ enabled: true, categoryDefaults: { marketing: true } });
+  });
+
+  const config = run.mock.calls[run.mock.calls.length - 1][0] as {
+    categories: Record<string, { enabled: boolean; readOnly: boolean }>;
+    language: {
+      translations: {
+        en: {
+          consentModal: { description: string };
+          preferencesModal: { sections: { title?: string }[] };
+        };
+      };
+    };
+  };
+  // Signed-in subscribers must not see their existing choice as switched off.
+  expect(config.categories.marketing).toEqual({
+    enabled: true,
+    readOnly: false,
+  });
+  expect(config.categories.analytics.enabled).toBe(false);
+  expect(config.language.translations.en.consentModal.description).toContain(
+    "Accept all",
+  );
+  expect(
+    config.language.translations.en.preferencesModal.sections.map(
+      (section) => section.title,
+    ),
+  ).toEqual(
+    expect.arrayContaining([
+      "Communication preferences",
+      "Onboarding and marketing emails",
+    ]),
+  );
+});
