@@ -1100,8 +1100,13 @@ export const AddCollaborators: React.FC<Props> = ({
   }
 
   function render_manual_invite_result(): React.JSX.Element {
+    const membershipUpgradeAvailable = manual_invite_links.some(
+      ({ reason }) => reason === "tier_disallows_email",
+    );
     return (
       <div
+        aria-live="polite"
+        role="status"
         style={{
           background: COLORS.BLUE_LLLL,
           border: `1px solid ${COLORS.BLUE_LLL}`,
@@ -1144,8 +1149,17 @@ export const AddCollaborators: React.FC<Props> = ({
               Invitation link created
             </div>
             <div style={{ color: COLORS.GRAY_D, marginBottom: 14 }}>
-              Send this link through email, Canvas, Slack, chat, or another
-              trusted channel.
+              <b>No email was sent.</b> You must copy and send this link through
+              email, Canvas, Slack, chat, or another trusted channel.
+              {membershipUpgradeAvailable ? (
+                <>
+                  {" "}
+                  <a href={joinUrlPath(appBasePath, "settings", "membership")}>
+                    Upgrade to Basic
+                  </a>{" "}
+                  to enable a limited number of automatic invitation emails.
+                </>
+              ) : undefined}
             </div>
             <div
               style={{
@@ -1235,6 +1249,7 @@ export const AddCollaborators: React.FC<Props> = ({
             </div>
           </div>
           <Button
+            aria-label="Dismiss invitation result"
             onClick={reset}
             style={{ flex: "0 0 auto" }}
             title="Dismiss"

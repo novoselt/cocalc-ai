@@ -41,6 +41,8 @@ import {
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import { COLORS } from "@cocalc/util/theme";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
+import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
+import { joinUrlPath } from "@cocalc/util/url-path";
 import {
   beginUnreadIncomingInviteCountRefresh,
   setUnreadIncomingInviteCount,
@@ -818,11 +820,44 @@ export const InviteInboxPanel: React.FC<Props> = ({
                   <div style={{ fontSize: "12px", opacity: 0.75 }}>
                     Created by <strong>{createdByMe ? "you" : inviter}</strong>
                   </div>
-                  {invite.invite_source === "email" && (
-                    <div style={{ fontSize: "12px", opacity: 0.75 }}>
-                      Waiting for this email invite to be claimed or revoked.
-                    </div>
-                  )}
+                  {invite.invite_source === "email" &&
+                    (invite.last_sent ? (
+                      <div style={{ fontSize: "12px", opacity: 0.75 }}>
+                        Waiting for this emailed invite to be claimed or
+                        revoked.
+                      </div>
+                    ) : (
+                      <div
+                        aria-label="Invitation email delivery status"
+                        role="status"
+                        style={{
+                          color: COLORS.FEATURE_ORANGE,
+                          fontSize: "12px",
+                          marginTop: "4px",
+                        }}
+                      >
+                        <b>No email was sent.</b>{" "}
+                        {canCopyEmailLink ? (
+                          <>
+                            You must use Copy Link and send the invitation
+                            manually. A{" "}
+                            <a
+                              href={joinUrlPath(
+                                appBasePath,
+                                "settings",
+                                "membership",
+                              )}
+                            >
+                              Basic membership
+                            </a>{" "}
+                            enables a limited number of automatic invitation
+                            emails.
+                          </>
+                        ) : (
+                          "Ask the invite creator or a project owner to copy and send the link manually."
+                        )}
+                      </div>
+                    ))}
                   {!!invite.project_description?.trim() && (
                     <div style={{ marginTop: "4px" }}>
                       {invite.project_description.trim()}
@@ -845,7 +880,8 @@ export const InviteInboxPanel: React.FC<Props> = ({
                     </div>
                   )}
                   <div style={{ fontSize: "12px", opacity: 0.75 }}>
-                    Sent <TimeAgo date={invite.created} />
+                    {invite.last_sent ? "Email sent" : "Invite created"}{" "}
+                    <TimeAgo date={invite.last_sent ?? invite.created} />
                   </div>
                   {!!invite.expires && (
                     <div style={{ fontSize: "12px", opacity: 0.75 }}>
