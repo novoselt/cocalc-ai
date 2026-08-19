@@ -35,7 +35,7 @@ function row(
   };
 }
 
-describe("personal membership analytics view", () => {
+describe("membership analytics view", () => {
   it("aggregates default series by tier and compares aligned days", () => {
     const view = buildMembershipAnalyticsView({
       rows: [
@@ -147,6 +147,62 @@ describe("personal membership analytics view", () => {
         activeMemberships: 7,
         purchasedCapacity: 0,
       }),
+    ]);
+  });
+
+  it("groups tiers first and orders channels within each tier", () => {
+    const view = buildMembershipAnalyticsView({
+      rows: [
+        row("2026-08-08", {
+          channel: "team",
+          membership_class: "pro",
+        }),
+        row("2026-08-08", {
+          channel: "direct-student",
+          membership_class: "pro",
+        }),
+        row("2026-08-08", {
+          channel: "personal",
+          membership_class: "pro",
+        }),
+        row("2026-08-08", {
+          channel: "site",
+          membership_class: "standard",
+        }),
+      ],
+      tiers,
+      breakdown: "tier-channel",
+      start: "2026-08-08",
+      end: "2026-08-08",
+    });
+
+    expect(
+      view.series.map(({ label, groupLabel, detailLabel }) => ({
+        label,
+        groupLabel,
+        detailLabel,
+      })),
+    ).toEqual([
+      {
+        label: "Pro · Personal",
+        groupLabel: "Pro",
+        detailLabel: "Personal",
+      },
+      {
+        label: "Pro · Student-pay",
+        groupLabel: "Pro",
+        detailLabel: "Student-pay",
+      },
+      {
+        label: "Pro · Team license",
+        groupLabel: "Pro",
+        detailLabel: "Team license",
+      },
+      {
+        label: "Standard · Site license",
+        groupLabel: "Standard",
+        detailLabel: "Site license",
+      },
     ]);
   });
 

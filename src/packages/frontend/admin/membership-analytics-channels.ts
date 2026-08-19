@@ -10,7 +10,7 @@ export const MEMBERSHIP_CHANNEL_OPTIONS: ReadonlyArray<{
   value: MembershipAllocationChannel;
 }> = [
   { value: "personal", label: "Personal" },
-  { value: "direct-student", label: "Student-paid course" },
+  { value: "direct-student", label: "Student-pay" },
   { value: "course", label: "Course packages" },
   { value: "team", label: "Team license" },
   { value: "site", label: "Site license" },

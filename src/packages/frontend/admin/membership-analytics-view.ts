@@ -18,6 +18,7 @@ import {
 export type MembershipAnalyticsBreakdown =
   | "channel"
   | "channel-tier"
+  | "tier-channel"
   | "tier"
   | "tier-interval"
   | "tier-lifecycle"
@@ -191,6 +192,19 @@ function categoryForRow(
         tierId: tier.id,
         priority: tier.priority,
         order: 0,
+      };
+    case "tier-channel":
+      return {
+        key: `tier:${tier.id}:channel:${channel}`,
+        label: `${tier.label} · ${membershipChannelLabel(channel)}`,
+        groupLabel: tier.label,
+        detailLabel: membershipChannelLabel(channel),
+        groupKey: `tier:${tier.id}`,
+        groupOrder: -tier.priority,
+        channel,
+        tierId: tier.id,
+        priority: tier.priority,
+        order: membershipChannelOrder(channel),
       };
     case "tier":
       return {

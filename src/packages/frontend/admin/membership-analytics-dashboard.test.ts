@@ -26,6 +26,6 @@ describe("membership analytics breakdown choices", () => {
       membershipBreakdownOptions(["personal", "team"]).map(
         ({ value }) => value,
       ),
-    ).toEqual(["channel", "channel-tier", "tier"]);
+    ).toEqual(["channel", "channel-tier", "tier", "tier-channel"]);
   });
 });

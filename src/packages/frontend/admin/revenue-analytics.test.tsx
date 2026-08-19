@@ -25,7 +25,7 @@ describe("revenue analytics membership channel selector", () => {
     const all = screen.getByRole("checkbox", { name: "All" });
     const personal = screen.getByRole("checkbox", { name: "Personal" });
     const student = screen.getByRole("checkbox", {
-      name: "Student-paid course",
+      name: "Student-pay",
     });
 
     expect(all).toBeChecked();

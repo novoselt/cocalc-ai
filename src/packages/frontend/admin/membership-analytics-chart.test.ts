@@ -8,6 +8,7 @@ import {
   buildMembershipAnalyticsSeriesVisuals,
   nearestMembershipAnalyticsHoverPointIndex,
 } from "./membership-analytics-chart";
+import { ALL_MEMBERSHIP_CHANNELS } from "./membership-analytics-channels";
 import type { MembershipAnalyticsSeries } from "./membership-analytics-view";
 
 function series(
@@ -19,6 +20,8 @@ function series(
     key,
     label: key,
     tierId,
+    groupKey: `tier:${tierId}`,
+    groupLabel: tierId,
     variant,
     priority: tierId === "pro" ? 30 : 20,
     order: 0,
@@ -27,7 +30,7 @@ function series(
   };
 }
 
-describe("personal membership analytics chart", () => {
+describe("membership analytics chart", () => {
   it("selects the line nearest the pointer in x-axis hover mode", () => {
     const points = [
       {
@@ -116,6 +119,98 @@ describe("personal membership analytics chart", () => {
     });
 
     expect(visuals.every(({ lineDash }) => lineDash === "solid")).toBe(true);
+  });
+
+  it("uses channel colors with consistent tier variants", () => {
+    const visuals = buildMembershipAnalyticsSeriesVisuals({
+      series: [
+        {
+          ...series("personal-basic", "basic", undefined),
+          channel: "personal",
+          groupKey: "channel:personal",
+        },
+        {
+          ...series("team-pro", "pro", undefined),
+          channel: "team",
+          groupKey: "channel:team",
+        },
+        {
+          ...series("team-basic", "basic", undefined),
+          channel: "team",
+          groupKey: "channel:team",
+        },
+      ],
+      tiers: [
+        { id: "pro", priority: 30 },
+        { id: "basic", priority: 10 },
+      ],
+      breakdown: "channel-tier",
+    });
+
+    expect(visuals[0].color).not.toBe(visuals[1].color);
+    expect(visuals[1].color).toBe(visuals[2].color);
+    expect(visuals.map(({ lineDash }) => lineDash)).toEqual([
+      "dash",
+      "solid",
+      "dash",
+    ]);
+    expect(visuals[0].fillColor).not.toBe(visuals[0].color);
+    expect(visuals[1].fillColor).toBe(visuals[1].color);
+    expect(visuals[2].fillColor).not.toBe(visuals[2].color);
+  });
+
+  it("uses tier colors with consistent channel variants", () => {
+    const visuals = buildMembershipAnalyticsSeriesVisuals({
+      series: [
+        {
+          ...series("pro-personal", "pro", undefined),
+          channel: "personal",
+        },
+        {
+          ...series("pro-team", "pro", undefined),
+          channel: "team",
+        },
+        {
+          ...series("basic-team", "basic", undefined),
+          channel: "team",
+        },
+      ],
+      tiers: [
+        { id: "pro", priority: 30 },
+        { id: "basic", priority: 10 },
+      ],
+      breakdown: "tier-channel",
+    });
+
+    expect(visuals[0].color).toBe(visuals[1].color);
+    expect(visuals[1].color).not.toBe(visuals[2].color);
+    expect(visuals.map(({ lineDash }) => lineDash)).toEqual([
+      "solid",
+      "dash",
+      "dash",
+    ]);
+    expect(visuals[0].fillColor).toBe(visuals[0].color);
+    expect(visuals[1].fillColor).not.toBe(visuals[1].color);
+    expect(visuals[2].fillColor).not.toBe(visuals[2].color);
+  });
+
+  it("provides distinct patterns for every current channel", () => {
+    const visuals = buildMembershipAnalyticsSeriesVisuals({
+      series: ALL_MEMBERSHIP_CHANNELS.map((channel) => ({
+        ...series(`pro-${channel}`, "pro", undefined),
+        channel,
+      })),
+      tiers: [{ id: "pro", priority: 30 }],
+      breakdown: "tier-channel",
+    });
+
+    expect(visuals.map(({ lineDash }) => lineDash)).toEqual([
+      "solid",
+      "dash",
+      "dot",
+      "dashdot",
+      "longdash",
+    ]);
   });
 
   it("aligns current and comparison values for a custom hover overlay", () => {

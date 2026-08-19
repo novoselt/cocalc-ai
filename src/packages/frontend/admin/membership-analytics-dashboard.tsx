@@ -67,6 +67,7 @@ const MULTI_CHANNEL_BREAKDOWN_OPTIONS: MembershipAnalyticsBreakdownOption[] = [
   { value: "channel", label: "Channel" },
   { value: "channel-tier", label: "Channel and tier" },
   { value: "tier", label: "Tier" },
+  { value: "tier-channel", label: "Tier and channel" },
 ];
 
 const SINGLE_CHANNEL_BREAKDOWN_OPTIONS: MembershipAnalyticsBreakdownOption[] = [
@@ -198,8 +199,10 @@ function AnalyticsTable({
     breakdown === "channel"
       ? "Channel"
       : breakdown === "channel-tier"
-        ? "Channel and membership"
-        : "Membership";
+        ? "Channel and tier"
+        : breakdown === "tier-channel"
+          ? "Tier and channel"
+          : "Membership";
   return (
     <Space vertical style={{ width: "100%" }}>
       <Title level={4} style={{ margin: 0 }}>
