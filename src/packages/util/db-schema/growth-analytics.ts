@@ -370,9 +370,9 @@ Table({
     status: {
       type: "string",
       pg_type: "VARCHAR(24)",
-      pg_default: "'pending'::varchar",
+      pg_default: "'pending'::character varying",
       not_null: true,
-      pg_null_backfill: "'pending'::varchar",
+      pg_null_backfill: "'pending'::character varying",
     },
     attempt_count: {
       type: "integer",

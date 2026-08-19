@@ -719,7 +719,6 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
-      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -765,7 +764,6 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
-      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -809,7 +807,6 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
-      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -930,7 +927,7 @@ describe("ProjectsActions archive flow", () => {
     }
   });
 
-  it("converges directly from a bounded foreground start acknowledgement", async () => {
+  it("converges directly when start returns a terminal acknowledgement", async () => {
     jest.useFakeTimers();
     try {
       configureProject({
@@ -963,12 +960,7 @@ describe("ProjectsActions archive flow", () => {
       expect(started).toBe(true);
       expect(
         mockedWebappClient.conat_client.hub.projects.start,
-      ).toHaveBeenCalledWith(
-        expect.objectContaining({
-          wait: false,
-          foreground_wait_ms: 5_000,
-        }),
-      );
+      ).toHaveBeenCalledWith({ project_id, wait: false });
       expect(mockedWebappClient.conat_client.lroWait).not.toHaveBeenCalled();
       expect(
         redux._set_state.mock.calls.some(
@@ -1061,7 +1053,6 @@ describe("ProjectsActions archive flow", () => {
     expect(
       mockedWebappClient.conat_client.hub.projects.start,
     ).toHaveBeenCalledWith({
-      foreground_wait_ms: 5000,
       project_id,
       wait: false,
     });
@@ -1125,7 +1116,6 @@ describe("ProjectsActions archive flow", () => {
       expect(
         mockedWebappClient.conat_client.hub.projects.start,
       ).toHaveBeenCalledWith({
-        foreground_wait_ms: 5000,
         project_id,
         wait: false,
       });
