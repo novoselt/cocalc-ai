@@ -493,6 +493,36 @@ export interface MembershipAllocationDailyRow {
   fact_count: number;
 }
 
+export const MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT =
+  "cocalc-membership-allocation-daily";
+export const MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION = 1;
+
+export type MembershipAllocationDailyExportRow = Omit<
+  MembershipAllocationDailyRow,
+  "day"
+> & {
+  day: string;
+};
+
+export interface MembershipAllocationDailyExportTier {
+  id: string;
+  label: string;
+  priority: number;
+}
+
+export interface MembershipAllocationDailyExport {
+  format: typeof MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT;
+  version: typeof MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION;
+  exported_at: string;
+  range: {
+    start_day: string;
+    end_day: string;
+  };
+  channels: MembershipAllocationChannel[];
+  tiers: MembershipAllocationDailyExportTier[];
+  rows: MembershipAllocationDailyExportRow[];
+}
+
 export interface MembershipAllocationSeriesQuery {
   account_id?: string;
   start?: Date | string;

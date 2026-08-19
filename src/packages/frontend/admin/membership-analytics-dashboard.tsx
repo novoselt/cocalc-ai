@@ -35,6 +35,10 @@ import {
   type MembershipAnalyticsSeriesVisual,
 } from "./membership-analytics-chart";
 import {
+  buildMembershipAllocationDailyExport,
+  MembershipAnalyticsExport,
+} from "./membership-analytics-export";
+import {
   buildMembershipAnalyticsView,
   shiftMembershipAnalyticsDay,
   type MembershipAnalyticsBreakdown,
@@ -419,6 +423,16 @@ export function MembershipAnalyticsDashboard({
       ? comparisonLabel(comparison)
       : undefined;
   const failedBays = allocation?.bays.filter(({ ok }) => !ok) ?? [];
+  const exportPayload =
+    allocation && channels.length && !failedBays.length
+      ? buildMembershipAllocationDailyExport({
+          rows: selectedRows,
+          tiers,
+          channels,
+          startDay: start,
+          endDay: end,
+        })
+      : undefined;
   const visualByKey = new Map(
     visuals.map((visual) => [visual.series.key, visual]),
   );
@@ -469,6 +483,7 @@ export function MembershipAnalyticsDashboard({
             }
           />
         </Space>
+        <MembershipAnalyticsExport payload={exportPayload} disabled={loading} />
       </Space>
 
       {loading ? (
