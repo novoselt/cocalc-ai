@@ -4,6 +4,7 @@ import {
   doesPersistentCellSatisfyRunCellOverlay,
   getDisplayedCellExecCount,
   getDisplayedCellOutput,
+  withDisplayedCellRuntime,
 } from "../run-cell-overlay";
 
 describe("jupyter run cell overlay helpers", () => {
@@ -87,5 +88,50 @@ describe("jupyter run cell overlay helpers", () => {
       false,
     );
     expect(doesPersistentCellSatisfyRunCellOverlay(after, overlay)).toBe(true);
+  });
+
+  it("keeps local running state visible across persistent cell updates", () => {
+    const persistent = fromJS({
+      id: "c1",
+      exec_count: 9,
+      output: null,
+    });
+    const overlay = fromJS({
+      state: "busy",
+      start: 100,
+      end: null,
+      exec_count: 9,
+      output: null,
+    });
+
+    const displayed = withDisplayedCellRuntime(persistent, overlay);
+    expect(displayed.get("state")).toBe("busy");
+    expect(displayed.get("start")).toBe(100);
+    expect(displayed.get("end")).toBeNull();
+    expect(doesPersistentCellSatisfyRunCellOverlay(persistent, overlay)).toBe(
+      false,
+    );
+  });
+
+  it("accepts authoritative completion timestamps from the project", () => {
+    const overlay = fromJS({
+      state: "done",
+      start: 100,
+      end: 200,
+      exec_count: 9,
+      output: null,
+    });
+    const persistent = fromJS({
+      id: "c1",
+      state: "done",
+      start: 110,
+      end: 220,
+      exec_count: 9,
+      output: null,
+    });
+
+    expect(doesPersistentCellSatisfyRunCellOverlay(persistent, overlay)).toBe(
+      true,
+    );
   });
 });

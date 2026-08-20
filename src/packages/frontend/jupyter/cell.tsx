@@ -31,6 +31,7 @@ import { StudioCell } from "./studio/studio-cell";
 import type { StudioLayout } from "./studio/types";
 import { NBGraderMetadata } from "./nbgrader/cell-metadata";
 import { INPUT_PROMPT_COLOR } from "./prompt/base";
+import { withDisplayedCellRuntime } from "./run-cell-overlay";
 
 interface Props {
   cell: Map<string, any>; // TODO: types
@@ -216,6 +217,7 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
   const id: string = props.id ?? props.cell.get("id");
   const frameActions = useNotebookFrameActions();
   const render = useDelayedRender(props.delayRendering ?? 0);
+  const displayedCell = withDisplayedCellRuntime(props.cell, props.runOverlay);
 
   if (!render) {
     return <></>;
@@ -231,7 +233,7 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
       <StudioCell
         id={id}
         index={props.index ?? 0}
-        cell={props.cell}
+        cell={displayedCell}
         stdin={props.stdin}
         runOverlay={props.runOverlay}
         isDragging={props.isDragging}
@@ -574,8 +576,8 @@ export const Cell: React.FC<Props> = React.memo((props: Props) => {
         cocalc-test={"jupyter-cell"}
       >
         {render_metadata_state()}
-        {render_cell_input(props.cell)}
-        {render_cell_output(props.cell)}
+        {render_cell_input(displayedCell)}
+        {render_cell_output(displayedCell)}
       </div>
       {!props.read_only && render_insert_cell("below")}
     </>
