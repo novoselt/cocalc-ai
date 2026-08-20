@@ -2232,6 +2232,7 @@ export class GcpProvider implements CloudProvider {
       metadata: {
         gcp_instance_id: instance.id?.toString(),
         machine_type: `${instance.machineType ?? ""}`.split("/").pop(),
+        pricing_model: pricingModelFromInstance(instance),
         provider_status: instance.status ?? undefined,
         gcp_security: {
           service_account_count: instance?.serviceAccounts?.length ?? 0,

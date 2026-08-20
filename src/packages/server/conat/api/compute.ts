@@ -44,6 +44,7 @@ import {
   deleteOrphanProviderComputeBootDisk,
   deleteOrphanProviderComputeInstance,
   getProviderComputeRegions,
+  getNebiusComputeCapacityAdvice,
   requireProviderComputeSubnetwork,
   stopOrphanProviderComputeInstance,
 } from "@cocalc/server/compute/provider";
@@ -604,6 +605,16 @@ export async function getCatalog(opts: {
       account_id: accountId,
       provider: "nebius",
     });
+    try {
+      const capacity = await getNebiusComputeCapacityAdvice();
+      providerCatalogs.nebius.entries.push({
+        kind: "capacity_advice",
+        scope: "global",
+        payload: capacity,
+      });
+    } catch {
+      // Capacity advice is best effort and must not make the catalog unusable.
+    }
   } catch {
     // Nebius is omitted until its provider credentials/catalog are configured.
   }
@@ -2381,6 +2392,79 @@ export async function setVmMachineType(opts: {
     },
   });
   return await publicVm(next);
+}
+
+export async function setVmPricingModel(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  pricing_model: "spot" | "on_demand";
+  idempotency_key: string;
+  agent_auth?: ComputeAgentAuth;
+}) {
+  const accountId = requireAccount(
+    opts.agent_auth?.account_id ?? opts.account_id,
+  );
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  if (vm.state !== "stopped" || vm.desired_state !== "stopped") {
+    throw new Error("stop the VM before changing its pricing model");
+  }
+  if (opts.pricing_model !== "spot" && opts.pricing_model !== "on_demand") {
+    throw new Error("pricing_model must be spot or on_demand");
+  }
+  if (vm.desired_pricing_model === opts.pricing_model) {
+    return await publicVm(vm);
+  }
+  if (
+    opts.pricing_model === "spot" &&
+    vm.metadata?.billing?.spot_supported === false
+  ) {
+    throw new Error(`machine '${vm.machine_type}' does not support Spot`);
+  }
+  const hourlyRate = Number(
+    opts.pricing_model === "spot"
+      ? vm.spot_hourly_price
+      : vm.on_demand_hourly_price,
+  );
+  if (!Number.isFinite(hourlyRate) || hourlyRate < 0) {
+    throw new Error(`pricing is unavailable for '${vm.machine_type}'`);
+  }
+  await authorizeComputeMutation({
+    actor: opts,
+    action: "billable",
+    project_id: vm.project_id,
+    vm_id: vm.id,
+    request: {
+      operation: "change-vm-pricing",
+      operation_id: opts.idempotency_key,
+      provider: vm.provider,
+      machine_class: vm.machine_type,
+      funding_mode: vm.funding_mode,
+      hourly_usd: hourlyRate,
+      total_authorized_usd: hourlyRate * 24,
+    },
+    require_fresh_auth: true,
+  });
+  const next = (await updateComputeVm(vm.id, {
+    desired_pricing_model: opts.pricing_model,
+    effective_pricing_model: opts.pricing_model,
+    spot_recovery_state: { phase: "idle" },
+    error: null,
+  }))!;
+  await appendComputeEvent({
+    vm: next,
+    actor_account_id: accountId,
+    actor_kind: actorKind,
+    action: "pricing-model-change",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: vm.desired_pricing_model,
+    new_state: opts.pricing_model,
+    status: "success",
+    details: { from: vm.desired_pricing_model, to: opts.pricing_model },
+  });
+  return publicVm(next);
 }
 
 export async function deleteVm(opts: {
