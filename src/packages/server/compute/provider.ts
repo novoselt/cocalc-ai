@@ -727,8 +727,9 @@ ${keys}
 COCALC_MANAGED_VM_KEYS
 chown user:user /home/user/.ssh/authorized_keys
 chmod 0600 /home/user/.ssh/authorized_keys
-install -d -m 0755 /run/cocalc-managed-vm
-printf '%s\n' '${vm.bootstrap_revision}' >/run/cocalc-managed-vm/bootstrap-ready
+install -d -m 0755 /var/lib/cocalc-managed-vm /run/cocalc-managed-vm
+printf '%s\n' '${vm.bootstrap_revision}' >/var/lib/cocalc-managed-vm/bootstrap-ready
+cp /var/lib/cocalc-managed-vm/bootstrap-ready /run/cocalc-managed-vm/bootstrap-ready
 `;
 }
 

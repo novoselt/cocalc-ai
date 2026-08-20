@@ -5,6 +5,7 @@
 
 import {
   computeWorkFailureState,
+  computeVmProviderObservationAge,
   computeRuntimeMetadata,
   computePostStopTransition,
   isSpotCapacityError,
@@ -52,6 +53,31 @@ describe("managed VM readiness command", () => {
     expect(command).toMatch(/'$/);
   });
 
+  it("accepts a previously verified persistent boot disk after reboot", () => {
+    const command = managedVmReadinessCommand({
+      bootstrap_revision: 2,
+      observed_bootstrap_revision: 2,
+    } as any);
+
+    expect(command).toContain(
+      "test ! -e /var/lib/cocalc-managed-vm/bootstrap-ready",
+    );
+    expect(command).not.toContain(
+      "|| cat /run/cocalc-managed-vm/bootstrap-ready",
+    );
+  });
+
+  it("requires a readiness marker for a new boot disk", () => {
+    const command = managedVmReadinessCommand({
+      bootstrap_revision: 2,
+      observed_bootstrap_revision: null,
+    } as any);
+
+    expect(command).toContain(
+      "cat /var/lib/cocalc-managed-vm/bootstrap-ready 2>/dev/null || cat /run/cocalc-managed-vm/bootstrap-ready",
+    );
+  });
+
   it("uses a PowerShell readiness contract for Windows", () => {
     const command = managedVmReadinessCommand({
       operating_system: "windows",
@@ -65,6 +91,27 @@ describe("managed VM readiness command", () => {
     expect(script).toContain("bootstrap-ready.txt");
     expect(script).toContain("Get-Service sshd");
     expect(command).not.toContain("bash -lc");
+  });
+});
+
+describe("managed VM provider observations", () => {
+  it("prioritizes VMs with missing or old cloud checks", () => {
+    const now = Date.parse("2026-08-20T05:00:00.000Z");
+    expect(computeVmProviderObservationAge({ metadata: {} } as any, now)).toBe(
+      Infinity,
+    );
+    expect(
+      computeVmProviderObservationAge(
+        {
+          metadata: {
+            provider_observation: {
+              checked_at: "2026-08-20T04:59:15.000Z",
+            },
+          },
+        } as any,
+        now,
+      ),
+    ).toBe(45_000);
   });
 });
 

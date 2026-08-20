@@ -15,6 +15,13 @@ export const COMPUTE_AGENT_GRANTS_PROJECT_DETAIL_FIELD = "compute_agent_grants";
 
 export type ComputeVmPricingModel = "spot" | "on_demand";
 export type ComputeVmDesiredState = "running" | "stopped" | "deleted";
+export type ComputeVmProviderState =
+  | "missing"
+  | "starting"
+  | "running"
+  | "stopped"
+  | "error"
+  | "unknown";
 export type ManagedComputeProviderId = "gcp" | "nebius";
 export type ManagedComputeOperatingSystem = "linux" | "windows";
 export type ManagedComputeVolumeDiskType =
@@ -110,6 +117,10 @@ export interface ComputeVm {
   home_volume_id?: string | null;
   state: string;
   desired_state: ComputeVmDesiredState;
+  provider_state?: ComputeVmProviderState;
+  provider_observed_at?: string | Date | null;
+  provider_checked_at?: string | Date | null;
+  provider_observation_error?: string | null;
   instance_generation: number;
   provider_instance_id: string;
   public_address_id?: string | null;

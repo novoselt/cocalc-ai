@@ -23,6 +23,7 @@ import {
   listOwnedComputeVms,
   resolveProjectComputeVm,
   updateComputeVmEgressMetadata,
+  updateComputeVmProviderObservation,
 } from "./db";
 import type { ComputeVmRow } from "./types";
 import type { ComputeVolumeRow } from "./types";
@@ -580,6 +581,37 @@ describe("compute VM durable state", () => {
         },
       },
       runtime: { provider_status: "RUNNING" },
+    });
+  });
+
+  it("retains the last cloud state when a later provider check fails", async () => {
+    const vm = await insertComputeVm(
+      vmInput({
+        metadata: {
+          runtime: { provider_status: "RUNNING" },
+          provider_observation: {
+            state: "running",
+            observed_at: "2026-08-20T04:00:00.000Z",
+            checked_at: "2026-08-20T04:00:00.000Z",
+            error: null,
+          },
+        },
+      }),
+    );
+
+    const updated = await updateComputeVmProviderObservation(vm.id, {
+      checked_at: "2026-08-20T04:01:00.000Z",
+      error: "provider API timeout",
+    });
+
+    expect(updated?.metadata).toEqual({
+      runtime: { provider_status: "RUNNING" },
+      provider_observation: {
+        state: "running",
+        observed_at: "2026-08-20T04:00:00.000Z",
+        checked_at: "2026-08-20T04:01:00.000Z",
+        error: "provider API timeout",
+      },
     });
   });
 

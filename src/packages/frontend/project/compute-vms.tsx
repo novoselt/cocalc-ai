@@ -2784,52 +2784,110 @@ export function ProjectComputeVms({
     {
       title: "Status",
       dataIndex: "state",
-      width: 160,
-      render: (state: string, vm) => (
-        <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
-          <Tag
-            color={state === "ready" ? "green" : undefined}
-            style={{ marginInlineEnd: 0, width: "fit-content" }}
-          >
-            {state}
-          </Tag>
-          {vm.expires_at && (
-            <Text type="secondary">
-              Deletes <TimeAgo date={new Date(vm.expires_at)} />
-            </Text>
-          )}
-          {vmSpotRecoverySummary(vm) && (
-            <Text type="secondary">{vmSpotRecoverySummary(vm)}</Text>
-          )}
-          {state === "failed" && vm.error && (
-            <Popover
-              trigger="click"
-              title={providerErrorSummary(vm.error)}
-              content={
-                <Space direction="vertical" size={8} style={{ maxWidth: 430 }}>
-                  {/ZONE_RESOURCE_POOL_EXHAUSTED|not enough resources/i.test(
-                    vm.error,
-                  ) && (
-                    <Text>
-                      Stop this VM, choose another machine type, then start it
-                      again. If the zone remains out of capacity, create a VM in
-                      another zone.
-                    </Text>
-                  )}
-                  <Text type="secondary" copyable={{ text: vm.error }}>
-                    {vm.error}
-                  </Text>
-                </Space>
+      width: 190,
+      render: (state: string, vm) => {
+        const providerState = vm.provider_state;
+        const displayState = providerState ?? state;
+        const providerObservationStale =
+          vm.provider_observed_at != null &&
+          Date.now() - new Date(vm.provider_observed_at).valueOf() > 2 * 60_000;
+        const setupDiffers =
+          providerState === "running"
+            ? state !== "ready"
+            : providerState === "stopped"
+              ? state !== "stopped"
+              : false;
+        return (
+          <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
+            <Tag
+              color={
+                providerObservationStale
+                  ? "orange"
+                  : displayState === "running" || displayState === "ready"
+                    ? "green"
+                    : displayState === "error" || displayState === "failed"
+                      ? "red"
+                      : undefined
               }
+              style={{ marginInlineEnd: 0, width: "fit-content" }}
             >
-              <Button danger size="small" type="link" style={{ padding: 0 }}>
-                {providerErrorSummary(vm.error)}
-              </Button>
-            </Popover>
-          )}
-          {!vm.expires_at && <Text type="secondary">No deletion deadline</Text>}
-        </Space>
-      ),
+              {displayState}
+            </Tag>
+            {providerState && vm.provider_observed_at && (
+              <Text type={providerObservationStale ? "danger" : "secondary"}>
+                {providerObservationStale
+                  ? "Cloud status stale: "
+                  : "Cloud observed "}
+                <TimeAgo date={new Date(vm.provider_observed_at)} />
+              </Text>
+            )}
+            {setupDiffers && (
+              <Text type={state === "failed" ? "danger" : "secondary"}>
+                CoCalc setup: {state}
+              </Text>
+            )}
+            {vm.provider_observation_error && (
+              <Popover
+                trigger="click"
+                title="Cloud status check failed"
+                content={
+                  <Text
+                    type="secondary"
+                    copyable={{ text: vm.provider_observation_error }}
+                  >
+                    {vm.provider_observation_error}
+                  </Text>
+                }
+              >
+                <Button danger size="small" type="link" style={{ padding: 0 }}>
+                  Cloud check issue
+                </Button>
+              </Popover>
+            )}
+            {vm.expires_at && (
+              <Text type="secondary">
+                Deletes <TimeAgo date={new Date(vm.expires_at)} />
+              </Text>
+            )}
+            {vmSpotRecoverySummary(vm) && (
+              <Text type="secondary">{vmSpotRecoverySummary(vm)}</Text>
+            )}
+            {state === "failed" && vm.error && (
+              <Popover
+                trigger="click"
+                title={providerErrorSummary(vm.error)}
+                content={
+                  <Space
+                    direction="vertical"
+                    size={8}
+                    style={{ maxWidth: 430 }}
+                  >
+                    {/ZONE_RESOURCE_POOL_EXHAUSTED|not enough resources/i.test(
+                      vm.error,
+                    ) && (
+                      <Text>
+                        Stop this VM, choose another machine type, then start it
+                        again. If the zone remains out of capacity, create a VM
+                        in another zone.
+                      </Text>
+                    )}
+                    <Text type="secondary" copyable={{ text: vm.error }}>
+                      {vm.error}
+                    </Text>
+                  </Space>
+                }
+              >
+                <Button danger size="small" type="link" style={{ padding: 0 }}>
+                  {providerErrorSummary(vm.error)}
+                </Button>
+              </Popover>
+            )}
+            {!vm.expires_at && (
+              <Text type="secondary">No deletion deadline</Text>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: "Configuration",

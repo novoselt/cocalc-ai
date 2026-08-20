@@ -36,6 +36,7 @@ import {
   listComputeVmsForEgressMetering,
   listComputeVmsForInventory,
   updateComputeInstance,
+  updateComputeVmProviderObservation,
   updateComputeVmEgressMetadata,
   updateComputeVm,
 } from "./db";
@@ -110,6 +111,11 @@ const logger = getLogger("server:compute:worker");
 const COMPUTE_PUBLIC_EGRESS_USD_PER_GB = 0.1;
 const COMPUTE_EGRESS_FINALIZATION_DELAY_MS = 5 * 60_000;
 const COMPUTE_EGRESS_METER_LOCK_KEY = "managed-compute-egress-meter";
+const COMPUTE_PROVIDER_OBSERVATION_LOCK_KEY =
+  "managed-compute-provider-observation";
+const COMPUTE_PROVIDER_OBSERVATION_INTERVAL_MS = 30_000;
+const COMPUTE_PROVIDER_OBSERVATION_BATCH_SIZE = 100;
+const COMPUTE_PROVIDER_OBSERVATION_CONCURRENCY = 8;
 const COMPUTE_ORPHAN_GRACE_MS = 24 * 60 * 60_000;
 const COMPUTE_ORPHAN_BOOT_DISK_GRACE_MS = 7 * COMPUTE_ORPHAN_GRACE_MS;
 const execFileAsync = promisify(execFile);
@@ -1262,13 +1268,19 @@ export function managedVmReadinessCommand(
     const encoded = Buffer.from(script, "utf16le").toString("base64");
     return `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
   }
+  // Older verified VMs wrote only to /run, which is erased on reboot. Their
+  // durable boot disk may be trusted after the remaining invariants pass.
+  const bootstrapCheck =
+    vm.observed_bootstrap_revision === vm.bootstrap_revision
+      ? `(test ! -e /var/lib/cocalc-managed-vm/bootstrap-ready || test "$(cat /var/lib/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision})`
+      : `(test "$(cat /var/lib/cocalc-managed-vm/bootstrap-ready 2>/dev/null || cat /run/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision})`;
   const checks = [
     'test "$(id -un)" = user',
     'test "$(id -u)" = 1001',
     'test "$(id -gn)" = user',
     'test "$HOME" = /home/user',
     "! id ubuntu >/dev/null 2>&1",
-    `test "$(cat /run/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision}`,
+    bootstrapCheck,
     ...(expectedHomeDevice
       ? [
           `test "$(readlink -f "$(findmnt -n -o SOURCE /home/user)")" = "$(readlink -f ${expectedHomeDevice})"`,
@@ -1276,6 +1288,79 @@ export function managedVmReadinessCommand(
       : []),
   ].join(" && ");
   return `bash -lc ${shellQuote(checks)}`;
+}
+
+async function inspectAndRecordProviderComputeVm(vm: ComputeVmRow) {
+  const checkedAt = new Date().toISOString();
+  try {
+    const observed = await inspectProviderComputeVm(vm);
+    const updated = await updateComputeVmProviderObservation(vm.id, {
+      state: observed.status,
+      checked_at: checkedAt,
+      observed_at: checkedAt,
+      error: null,
+      instance_id: observed.instance?.instance_id ?? null,
+      public_ip: observed.instance?.public_ip ?? null,
+      pricing_model: observed.instance?.metadata?.pricing_model ?? null,
+    });
+    if (updated) vm.metadata = updated.metadata;
+    return observed;
+  } catch (err) {
+    const updated = await updateComputeVmProviderObservation(vm.id, {
+      checked_at: checkedAt,
+      error: `${err}`.slice(0, 4000),
+    });
+    if (updated) vm.metadata = updated.metadata;
+    throw err;
+  }
+}
+
+export function computeVmProviderObservationAge(
+  vm: Pick<ComputeVmRow, "metadata">,
+  now = Date.now(),
+): number {
+  const checkedAt = Date.parse(
+    `${vm.metadata?.provider_observation?.checked_at ?? ""}`,
+  );
+  return Number.isFinite(checkedAt) ? Math.max(0, now - checkedAt) : Infinity;
+}
+
+async function refreshComputeProviderObservations() {
+  const candidates = (await listComputeVmsForInventory())
+    .filter(isComputeVmV2)
+    .sort(
+      (left, right) =>
+        computeVmProviderObservationAge(right) -
+        computeVmProviderObservationAge(left),
+    )
+    .slice(0, COMPUTE_PROVIDER_OBSERVATION_BATCH_SIZE);
+  let cursor = 0;
+  const observeNext = async () => {
+    while (cursor < candidates.length) {
+      const vm = candidates[cursor++];
+      try {
+        await inspectAndRecordProviderComputeVm(vm);
+      } catch (err) {
+        logger.warn("managed compute provider observation failed", {
+          vm_id: vm.id,
+          provider: vm.provider,
+          err,
+        });
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      {
+        length: Math.min(
+          COMPUTE_PROVIDER_OBSERVATION_CONCURRENCY,
+          candidates.length,
+        ),
+      },
+      () => observeNext(),
+    ),
+  );
+  return candidates.length;
 }
 
 async function waitForSsh(
@@ -1546,8 +1631,8 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
     state: "ready",
     public_ip: publicIp,
     metadata: {
-      ...(vm.metadata ?? {}),
-      runtime: computeRuntimeMetadata(vm.metadata?.runtime, runtime),
+      ...(current.metadata ?? {}),
+      runtime: computeRuntimeMetadata(current.metadata?.runtime, runtime),
       provider_generation_provisioning: false,
     },
     ready_at: new Date(),
@@ -1555,14 +1640,14 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
     error: null,
     observed_bootstrap_revision: vm.bootstrap_revision,
     spot_recovery_state:
-      vm.effective_pricing_model === "spot"
+      current.effective_pricing_model === "spot"
         ? {
-            ...(vm.spot_recovery_state ?? {}),
+            ...(current.spot_recovery_state ?? {}),
             phase: "idle",
             attempt: 0,
             last_recovered_at: new Date().toISOString(),
           }
-        : vm.spot_recovery_state,
+        : current.spot_recovery_state,
   });
   next = await ensureVmDns(next!);
   next = await syncVmProjectSshConfig(next!, true);
@@ -1595,6 +1680,9 @@ async function provision(vm: ComputeVmRow) {
     state: "provisioning",
     instance_generation:
       vm.instance_generation + (beginningNewGeneration ? 1 : 0),
+    observed_bootstrap_revision: beginningNewGeneration
+      ? null
+      : vm.observed_bootstrap_revision,
     error: null,
     metadata: {
       ...vm.metadata,
@@ -1719,7 +1807,7 @@ async function start(vm: ComputeVmRow) {
     return await remove(vm);
   }
   if (vm.desired_state === "stopped") return await reconcile(vm);
-  let observed = await inspectProviderComputeVm(vm);
+  let observed = await inspectAndRecordProviderComputeVm(vm);
   if (observed.status === "missing") return await provision(vm);
   const observedPricingModel = observed.instance?.metadata?.pricing_model;
   if (
@@ -1729,7 +1817,7 @@ async function start(vm: ComputeVmRow) {
     await observeVmPhase(vm, "provider_set_pricing", async () =>
       setProviderComputePricing(vm, vm.effective_pricing_model),
     );
-    observed = await inspectProviderComputeVm(vm);
+    observed = await inspectAndRecordProviderComputeVm(vm);
     if (observed.status === "missing") return await provision(vm);
   }
   await observeVmPhase(vm, "provider_set_machine_type", async () =>
@@ -1745,7 +1833,7 @@ async function start(vm: ComputeVmRow) {
     await observeVmPhase(vm, "provider_start", async () =>
       startProviderComputeVm(vm),
     );
-    const observed = await inspectProviderComputeVm(vm);
+    const observed = await inspectAndRecordProviderComputeVm(vm);
     if (vm.home_volume_id) {
       const volume = await getComputeVolumeById(vm.home_volume_id);
       if (!volume) throw new Error("attached compute volume is unavailable");
@@ -2096,7 +2184,7 @@ async function reconcile(vm: ComputeVmRow) {
   ) {
     return await remove(vm);
   }
-  const observed = await inspectProviderComputeVm(vm);
+  const observed = await inspectAndRecordProviderComputeVm(vm);
   if (vm.desired_state === "stopped") {
     if (observed.status === "running" || observed.status === "starting") {
       return await stop(vm);
@@ -2257,6 +2345,8 @@ export function startComputeVmWorker(
   let lastReconcile = 0;
   let lastEgressMeter = 0;
   let lastProviderInventory = 0;
+  let lastProviderObservation = 0;
+  let providerObservationRunning = false;
   let queueSchemaReady = false;
   const activeWork = new Set<Promise<void>>();
 
@@ -2393,6 +2483,26 @@ export function startComputeVmWorker(
         logger.info("managed compute work queue schema is ready");
       }
       await enqueueExpiredComputeVms();
+      if (
+        !providerObservationRunning &&
+        Date.now() - lastProviderObservation >=
+          COMPUTE_PROVIDER_OBSERVATION_INTERVAL_MS
+      ) {
+        lastProviderObservation = Date.now();
+        providerObservationRunning = true;
+        void withSessionAdvisoryLock({
+          lockKey: COMPUTE_PROVIDER_OBSERVATION_LOCK_KEY,
+          fn: refreshComputeProviderObservations,
+        })
+          .catch((err) =>
+            logger.warn("managed compute provider observation pass failed", {
+              err,
+            }),
+          )
+          .finally(() => {
+            providerObservationRunning = false;
+          });
+      }
       if (Date.now() - lastReconcile >= 15_000) {
         lastReconcile = Date.now();
         const config = await getComputeVmConfig();

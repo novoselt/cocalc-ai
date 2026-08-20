@@ -330,7 +330,22 @@ async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
     metadata,
     ...result
   } = vm;
-  const { ssh_public_keys: _sshPublicKeys, ...publicMetadata } = metadata ?? {};
+  const {
+    ssh_public_keys: _sshPublicKeys,
+    provider_observation: _providerObservation,
+    ...publicMetadata
+  } = metadata ?? {};
+  const providerObservation = vm.metadata?.provider_observation ?? {};
+  const providerState = [
+    "missing",
+    "starting",
+    "running",
+    "stopped",
+    "error",
+    "unknown",
+  ].includes(providerObservation.state)
+    ? providerObservation.state
+    : undefined;
   return {
     ...result,
     operating_system: vm.operating_system ?? "linux",
@@ -340,6 +355,10 @@ async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
     internal_hostname: vm.metadata?.runtime?.internal_hostname ?? null,
     egress_summary: await egressSummary(vm),
     ssh_alias: managedVmSshAlias(vm),
+    provider_state: providerState,
+    provider_observed_at: providerObservation.observed_at ?? null,
+    provider_checked_at: providerObservation.checked_at ?? null,
+    provider_observation_error: providerObservation.error ?? null,
     metadata: publicMetadata,
   };
 }

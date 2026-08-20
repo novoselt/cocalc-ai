@@ -378,6 +378,26 @@ export async function updateComputeVmEgressMetadata(
   return rows[0];
 }
 
+export async function updateComputeVmProviderObservation(
+  id: string,
+  observation: Record<string, unknown>,
+): Promise<ComputeVmRow | undefined> {
+  const { rows } = await pool().query<ComputeVmRow>(
+    `UPDATE compute_vms
+        SET metadata=jsonb_set(
+              COALESCE(metadata, '{}'::jsonb),
+              '{provider_observation}',
+              COALESCE(metadata->'provider_observation', '{}'::jsonb) || $2::jsonb,
+              true
+            ),
+            updated_at=NOW()
+      WHERE id=$1
+      RETURNING *`,
+    [id, observation],
+  );
+  return rows[0];
+}
+
 export async function updateComputeVm(
   id: string,
   updates: Partial<ComputeVmRow>,
