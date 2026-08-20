@@ -5,6 +5,7 @@
 
 import { CSSProperties, useRef, useState } from "react";
 
+import { getLogger } from "@cocalc/conat/logger";
 import { isChatBot } from "@cocalc/frontend/account/chatbot";
 import {
   React,
@@ -12,6 +13,7 @@ import {
   useAsyncEffect,
   useTypedRedux,
 } from "@cocalc/frontend/app-framework";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { Gap, Tooltip } from "@cocalc/frontend/components";
 import type { GotoUserActions } from "@cocalc/frontend/frame-editors/base-editor/actions-base";
 import { LanguageModelVendorAvatar } from "@cocalc/frontend/components/language-model-icon";
@@ -23,6 +25,8 @@ import { isCodexModelName } from "@cocalc/util/ai/codex";
 import { ensure_bound, startswith, trunc_middle } from "@cocalc/util/misc";
 import { displayNameFromAccount } from "@cocalc/util/accounts/display-name";
 import { avatar_fontcolor } from "./font-color";
+
+const logger = getLogger("frontend:account:avatar");
 
 const CIRCLE_OUTER_STYLE: CSSProperties = {
   textAlign: "center",
@@ -132,7 +136,7 @@ const Avatar0: React.FC<Props> = (props) => {
     ],
   );
 
-  function click_avatar() {
+  async function click_avatar(): Promise<void> {
     if (props.activity == null) {
       return;
     }
@@ -146,7 +150,12 @@ const Avatar0: React.FC<Props> = (props) => {
         });
         return;
       case "project":
-        redux.getProjectActions(project_id).open_file({ path });
+        try {
+          await ensureProjectReduxRuntime();
+          await redux.getProjectActions(project_id).open_file({ path });
+        } catch (err) {
+          logger.warn("Unable to open avatar activity", err);
+        }
         return;
       case "file":
         // getEditorActions is untyped, so name the capability we want; that
@@ -164,7 +173,12 @@ const Avatar0: React.FC<Props> = (props) => {
         }
         var line = get_cursor_line();
         if (line != null) {
-          redux.getProjectActions(project_id).goto_line(path, line);
+          try {
+            await ensureProjectReduxRuntime();
+            redux.getProjectActions(project_id).goto_line(path, line);
+          } catch (err) {
+            logger.warn("Unable to open avatar cursor", err);
+          }
         }
         return;
     }
@@ -178,7 +192,7 @@ const Avatar0: React.FC<Props> = (props) => {
   function key_avatar(event: React.KeyboardEvent) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      click_avatar();
+      void click_avatar();
     }
   }
 
@@ -371,7 +385,7 @@ const Avatar0: React.FC<Props> = (props) => {
         ...CIRCLE_OUTER_STYLE,
         ...props.style,
       }}
-      onClick={click_avatar}
+      onClick={() => void click_avatar()}
       {...(isClickable
         ? {
             role: "button",

@@ -2837,7 +2837,7 @@ export default function RootFilesystemImage({
         accept="application/json,.json"
         style={{ display: "none" }}
         onChange={(e) => {
-          const file = e.target.files?.[0];
+          const file = e.currentTarget.files?.[0];
           if (file) {
             void importRootfsConfigFile(file);
           }

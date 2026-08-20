@@ -10,12 +10,17 @@ const mark = jest.fn();
 const markMany = jest.fn();
 const respondAccessRequest = jest.fn();
 const listAccessRequests = jest.fn();
+const mockEnsureProjectReduxRuntime = jest.fn();
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   redux: {
     getProjectActions: () => ({ open_file }),
     getActions: () => ({ mark, markMany }),
   },
+}));
+
+jest.mock("@cocalc/frontend/app-framework/project-runtime", () => ({
+  ensureProjectReduxRuntime: () => mockEnsureProjectReduxRuntime(),
 }));
 
 jest.mock("@cocalc/frontend/components", () => ({
@@ -63,6 +68,8 @@ describe("NotificationRow", () => {
     respondAccessRequest.mockResolvedValue(undefined);
     listAccessRequests.mockReset();
     listAccessRequests.mockResolvedValue([]);
+    mockEnsureProjectReduxRuntime.mockReset();
+    mockEnsureProjectReduxRuntime.mockResolvedValue(undefined);
   });
 
   it("does not mark account notices read when they do not target a file", () => {
@@ -145,7 +152,7 @@ describe("NotificationRow", () => {
     },
   );
 
-  it("opens file-target notifications and marks them read", () => {
+  it("loads the project runtime before opening file-target notifications", async () => {
     render(
       <NotificationRow
         id="notice-1"
@@ -169,11 +176,19 @@ describe("NotificationRow", () => {
 
     fireEvent.click(screen.getByText("Codex turn finished"));
 
-    expect(open_file).toHaveBeenCalledWith({
-      path: "work/chat.chat",
-      chat: true,
-      fragmentId: { chat: "1234" },
-    });
+    await waitFor(() =>
+      expect(mockEnsureProjectReduxRuntime).toHaveBeenCalled(),
+    );
+    await waitFor(() =>
+      expect(open_file).toHaveBeenCalledWith({
+        path: "work/chat.chat",
+        chat: true,
+        fragmentId: { chat: "1234" },
+      }),
+    );
+    expect(
+      mockEnsureProjectReduxRuntime.mock.invocationCallOrder[0],
+    ).toBeLessThan(open_file.mock.invocationCallOrder[0]);
     expect(mark).toHaveBeenCalledWith(expect.anything(), "notice-1", "read");
     expect(markMany).not.toHaveBeenCalled();
   });

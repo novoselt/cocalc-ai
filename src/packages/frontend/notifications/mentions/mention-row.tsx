@@ -4,7 +4,9 @@
  */
 
 import { Avatar } from "@cocalc/frontend/account/avatar/avatar";
+import { getLogger } from "@cocalc/conat/logger";
 import { CSS, redux, useState } from "@cocalc/frontend/app-framework";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { Icon, IconName, TimeAgo, Tooltip } from "@cocalc/frontend/components";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
@@ -13,6 +15,8 @@ import { User } from "@cocalc/frontend/users";
 import { COLORS } from "@cocalc/util/theme";
 import { NotificationFilter, MentionInfo } from "./types";
 import { BOOKMARK_ICON_NAME } from "./util";
+
+const logger = getLogger("frontend:notifications:mention-row");
 
 const DESCRIPTION_STYLE: CSS = {
   flex: "1 1 auto",
@@ -99,23 +103,27 @@ export function MentionRow(props: Props) {
     actions.markSaved(mention, id, is_saved ? "unsaved" : "saved");
   }
 
-  function clickRow(): void {
+  async function clickRow(): Promise<void> {
     // Regarding chat -- if no fragment, assume chat.
     // If fragment given, then it can explicitly specify chat, e.g.,
     //    file.txt#chat=true,id=092ab039
-    redux.getProjectActions(project_id).open_file({
-      path: path,
-      chat: !!fragmentId?.chat,
-      fragmentId,
-    });
-
-    markReadState("read");
+    try {
+      await ensureProjectReduxRuntime();
+      await redux.getProjectActions(project_id).open_file({
+        path: path,
+        chat: !!fragmentId?.chat,
+        fragmentId,
+      });
+      markReadState("read");
+    } catch (err) {
+      logger.warn("Unable to open mention target", err);
+    }
   }
 
   return (
     <li
       className="cocalc-notification-row-entry"
-      onClick={() => clickRow()}
+      onClick={() => void clickRow()}
       style={row_style}
     >
       <div style={ACTION_ICONS_WRAPPING_STYLE}>
