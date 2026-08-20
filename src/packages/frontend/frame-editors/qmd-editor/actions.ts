@@ -24,7 +24,7 @@ import {
 import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Actions as MarkdownActions } from "../markdown-editor/actions";
 import { checkProducedFiles } from "../rmd-editor/utils";
-import { convert } from "./qmd-converter";
+import { convert, qmdRenderCommand } from "./qmd-converter";
 
 const custom_pdf_error_message: string = `
 No PDF file has been generated.
@@ -235,6 +235,8 @@ export class Actions extends MarkdownActions {
     try {
       const { frontmatter, html } = markdown_to_html_frontmatter(md);
       markdown = html;
+      // remembered so the build log can tell the agent exactly what ran
+      this.setState({ build_command: qmdRenderCommand(this.path) });
       output = await convert({
         project_id: this.project_id,
         path: this.path,

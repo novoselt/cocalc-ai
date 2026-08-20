@@ -10,7 +10,9 @@ import { Button } from "@cocalc/frontend/antd-bootstrap";
 import { Rendered, useRedux } from "@cocalc/frontend/app-framework";
 import { Icon } from "@cocalc/frontend/components";
 import Ansi from "@cocalc/frontend/components/ansi-to-react";
+import { shellJoin } from "@cocalc/frontend/frame-editors/ai/agent-file-context";
 import HelpMeFix from "@cocalc/frontend/frame-editors/ai/help-me-fix";
+import { extractLineNumbers } from "./error-lines";
 import { Actions } from "./actions";
 import {
   STYLE_ERR,
@@ -38,6 +40,7 @@ export const BuildLog: React.FC<BuildLogProps> = React.memo(
     const build_err = useRedux([name, "build_err"]) || "";
     const have_err = (useRedux([name, "build_exit"]) || 0) != 0;
     const stats = useRedux([name, "job_info"])?.get("stats")?.toJS();
+    const buildCommand = useRedux([name, "build_command"])?.toJS?.();
     const [showStdout, setShowStdout] = useState(false);
     const [shownLog, setShownLog] = useState("");
     const logContainerRef = useRef<HTMLDivElement>(null);
@@ -78,6 +81,7 @@ export const BuildLog: React.FC<BuildLogProps> = React.memo(
       ) : undefined;
 
       const errorStr = Anser.ansiToText(build_err.trim());
+      const lineRange = extractLineNumbers(errorStr);
       return (
         <div style={isInformational ? style("log") : style("err")}>
           {header}
@@ -90,26 +94,14 @@ export const BuildLog: React.FC<BuildLogProps> = React.memo(
               outerStyle={{ textAlign: "center" }}
               task={"compiled RMarkdown in R using rmarkdown::render()"}
               error={errorStr}
-              input={() => {
-                const lineNo = extractLineNumbers(errorStr);
-                if (lineNo) {
-                  const [_from, to] = lineNo;
-                  const s = actions._syncstring.to_str();
-                  const lineNoStr = `  # this is line ${to}`;
-                  // line numbers are 1-based
-                  return (
-                    s
-                      .split("\n")
-                      .slice(0, to - 1)
-                      .join("\n") + lineNoStr
-                  );
-                }
-                return "";
-              }}
+              // No document excerpt: the agent reads the live file itself and only
+              // needs the location (the log reports "lines A-B") and the command.
+              lineNumber={lineRange?.[0]}
+              lineNumberEnd={lineRange?.[1]}
+              buildCommand={shellJoin(buildCommand)}
               language={"rmd"}
               extraFileInfo={actions.languageModelExtraFileInfo(false)}
               tag={"help-me-fix:rmd"}
-              prioritize="start-end"
             />
           )}
         </div>
@@ -233,19 +225,3 @@ export const BuildLog: React.FC<BuildLogProps> = React.memo(
     }
   },
 );
-
-function extractLineNumbers(input: string): [number, number] | null {
-  // Regex to match the pattern "lines 58-79"
-  const regex = /lines\s+(\d+)-(\d+)/;
-  const match = input.match(regex);
-
-  if (match) {
-    // Extract the line numbers from the capturing groups
-    const fromLine = parseInt(match[1], 10);
-    const toLine = parseInt(match[2], 10);
-    return [fromLine, toLine];
-  }
-
-  // Return null if the pattern is not found
-  return null;
-}

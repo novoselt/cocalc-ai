@@ -15,7 +15,7 @@ import HelpMeFix from "@cocalc/frontend/frame-editors/ai/help-me-fix";
 import { capitalize } from "@cocalc/util/misc";
 import type { Actions } from "./actions";
 import { SPEC, SpecItem } from "./errors-and-warnings";
-import { getLatexHelpInput } from "./help-input";
+import { latexBuildCommandString, resolveErrorFile } from "./agent-help";
 import { Error, IProcessedLatexLog } from "./latex-log-parser";
 import { useFrameContext } from "@cocalc/frontend/frame-editors/frame-tree/frame-context";
 
@@ -43,6 +43,7 @@ export function update_gutters(opts: {
           actions={opts.actions}
           group={group}
           line={item.line}
+          file={resolveErrorFile(opts.actions.path, item.file)}
         />,
       );
     }
@@ -56,6 +57,7 @@ function Component({
   actions,
   group,
   line,
+  file,
 }: {
   level: string;
   message: string;
@@ -63,6 +65,9 @@ function Component({
   actions: Actions;
   group: string;
   line: number;
+  // project-relative path of the file this marker is in (the gutter may be
+  // rendered in a subfile frame of the main document's frame tree)
+  file?: string;
 }) {
   const { desc } = useFrameContext();
   const fontSize = desc?.get("font_size");
@@ -90,11 +95,14 @@ function Component({
                   task={"ran latex"}
                   error={message}
                   line={content}
-                  input={() => getLatexHelpInput(actions._syncstring, line)}
+                  file={file}
+                  lineNumber={line}
+                  buildCommand={latexBuildCommandString(
+                    actions.store.get("build_command"),
+                  )}
                   language={"latex"}
                   extraFileInfo={actions.languageModelExtraFileInfo()}
                   tag={"latex-error-popover"}
-                  prioritize="start-end"
                 />
               </>
             )}

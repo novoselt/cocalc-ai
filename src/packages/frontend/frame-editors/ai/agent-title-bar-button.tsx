@@ -31,7 +31,12 @@ interface Props {
   id: string;
   path: string;
   type: string;
+  // Frame/UI owner: focus, blur, frame type. This is the frame-tree actions.
   actions: Actions;
+  // Actions of the file the frame actually shows, when that differs from the
+  // main editor (a LaTeX `\input`'ed subfile in a cm frame). Content and the
+  // request itself come from these.
+  documentActions?: Actions;
   buttonSize;
   buttonStyle: CSS;
   visible?: boolean;
@@ -47,6 +52,7 @@ export default function AgentTitleBarButton({
   path,
   type,
   actions,
+  documentActions,
   buttonSize,
   buttonStyle,
   visible,
@@ -150,8 +156,15 @@ export default function AgentTitleBarButton({
     setError("");
     setQuerying(true);
     try {
-      const input = actions.languageModelGetContext(id);
-      await actions.languageModel(id, options, input);
+      // Content comes from the file the frame shows; the frame type has to
+      // come from the actions that own the frame tree.
+      const docActions = documentActions ?? actions;
+      const input = docActions.languageModelGetContext(id);
+      await docActions.languageModel(
+        id,
+        { ...options, frameType: actions._get_frame_type?.(id) },
+        input,
+      );
       setCommand("");
       LS.del(promptLsKey);
     } catch (err) {
