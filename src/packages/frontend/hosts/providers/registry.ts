@@ -163,8 +163,56 @@ type NebiusImage = {
   architecture?: string | null;
   recommended_platforms?: string[];
   region?: string | null;
+  minimum_disk_size_gb?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
+};
+type NebiusCapacityAvailability = {
+  available: number;
+  limit: number;
+  availability_level: string;
+  data_state: string;
+  effective_at?: string;
+};
+type NebiusCapacityAdvice = {
+  region: string;
+  fabric: string;
+  platform: string;
+  machine_type: string;
+  spot?: NebiusCapacityAvailability;
+  on_demand?: NebiusCapacityAvailability;
+};
+
+export const getNebiusMinimumBootDiskGb = (
+  catalog: HostCatalog | undefined,
+  selection: Pick<ProviderSelection, "region" | "machine_type">,
+): number => {
+  const instances =
+    getCatalogEntryPayload<NebiusInstance[]>(
+      catalog,
+      "instance_types",
+      "global",
+    ) ?? [];
+  const machine = instances.find(
+    (entry) => entry.name === selection.machine_type,
+  );
+  const wantsGpu = Number(machine?.gpus ?? 0) > 0;
+  const fallback = wantsGpu ? 40 : 20;
+  if (!machine?.platform) return fallback;
+  const images =
+    getCatalogEntryPayload<NebiusImage[]>(catalog, "images", "global") ?? [];
+  const minimums = images
+    .filter(
+      (image) =>
+        (!selection.region ||
+          !image.region ||
+          image.region === selection.region) &&
+        (image.recommended_platforms?.includes(machine.platform!) ?? false) &&
+        isNebiusGpuFamily(image.family) === wantsGpu,
+    )
+    .map((image) => Number(image.minimum_disk_size_gb ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return Math.max(fallback, ...minimums);
 };
 
 const MIN_USABLE_RAM_GIB = 8;
@@ -2072,6 +2120,42 @@ const getNebiusPricingProductsByRegion = (
   return { gpu: gpuProducts, cpu: cpuProducts };
 };
 
+const getNebiusCapacityLabel = (
+  catalog: HostCatalog | undefined,
+  selection: ProviderSelection,
+  entry: NebiusInstance,
+): string | undefined => {
+  if (!selection.region) return;
+  const advice =
+    getCatalogEntryPayload<NebiusCapacityAdvice[]>(
+      catalog,
+      "capacity_advice",
+      "global",
+    ) ?? [];
+  const pricing = selection.pricing_model === "spot" ? "spot" : "on_demand";
+  const candidates = advice
+    .filter(
+      (item) =>
+        item.region === selection.region &&
+        item.machine_type === entry.name &&
+        (!entry.platform || item.platform === entry.platform),
+    )
+    .map((item) => item[pricing])
+    .filter((item): item is NebiusCapacityAvailability => !!item)
+    .sort((a, b) => {
+      const freshness = (value: NebiusCapacityAvailability) =>
+        value.data_state === "fresh" ? 2 : value.data_state === "stale" ? 1 : 0;
+      return freshness(b) - freshness(a) || b.available - a.available;
+    });
+  const capacity = candidates[0];
+  if (!capacity) return;
+  const model = pricing === "spot" ? "Spot" : "Standard";
+  const level = capacity.availability_level.replaceAll("_", " ");
+  const freshness =
+    capacity.data_state === "fresh" ? "" : `, ${capacity.data_state} data`;
+  return `${model} capacity: ${level}, ${capacity.available} available${freshness}`;
+};
+
 const matchesNebiusPricing = (
   entry: NebiusInstance,
   products: Set<string>,
@@ -2200,6 +2284,7 @@ export const getNebiusInstanceTypeOptions = (
       hourlyRate,
       selectionLabel: entry.name,
       mainLabel: label.mainLabel ?? machineLabel.mainLabel,
+      detailLabel: getNebiusCapacityLabel(catalog, selection, entry),
       entry,
     };
   });

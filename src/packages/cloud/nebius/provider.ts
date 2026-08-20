@@ -60,6 +60,17 @@ import {
   SecurityRuleSpec,
 } from "@nebius/js-sdk/api/nebius/vpc/v1/index";
 import { Long } from "@nebius/js-sdk/runtime/protos/index";
+import {
+  ListResourceAdviceRequest,
+  ResourceAdviceStatus_Availability_AvailabilityLevel,
+  ResourceAdviceStatus_Availability_DataState,
+  type ResourceAdviceStatus_Availability,
+} from "@nebius/js-sdk/api/nebius/capacity/v1/index";
+import { GetProjectRequest } from "@nebius/js-sdk/api/nebius/iam/v2/index";
+import type {
+  NebiusCapacityAdvice,
+  NebiusCapacityAvailability,
+} from "../catalog/types";
 
 const logger = getLogger("cloud:nebius:provider");
 
@@ -80,6 +91,71 @@ function hasProvisionalInstanceId(runtime: HostRuntime): boolean {
     (runtime.metadata as NebiusRuntimeMeta | undefined)
       ?.provisional_instance_id === true
   );
+}
+
+function instanceIsPreemptible(instance: {
+  spec?: { preemptible?: PreemptibleSpec };
+}): boolean {
+  const preemptible = instance.spec?.preemptible;
+  return (
+    preemptible?.onPreemption === PreemptibleSpec_PreemptionPolicy.STOP ||
+    Number(preemptible?.priority ?? 0) > 0
+  );
+}
+
+function normalizeAvailabilityLevel(
+  value: ResourceAdviceStatus_Availability["availabilityLevel"],
+): NebiusCapacityAvailability["availability_level"] {
+  if (
+    value ===
+    ResourceAdviceStatus_Availability_AvailabilityLevel.AVAILABILITY_LEVEL_HIGH
+  ) {
+    return "high";
+  }
+  if (
+    value ===
+    ResourceAdviceStatus_Availability_AvailabilityLevel.AVAILABILITY_LEVEL_MEDIUM
+  ) {
+    return "medium";
+  }
+  if (
+    value ===
+    ResourceAdviceStatus_Availability_AvailabilityLevel.AVAILABILITY_LEVEL_LOW
+  ) {
+    return "low";
+  }
+  if (
+    value ===
+    ResourceAdviceStatus_Availability_AvailabilityLevel.AVAILABILITY_LEVEL_LIMIT_REACHED
+  ) {
+    return "limit_reached";
+  }
+  return "unknown";
+}
+
+function normalizeDataState(
+  value: ResourceAdviceStatus_Availability["dataState"],
+): NebiusCapacityAvailability["data_state"] {
+  if (value === ResourceAdviceStatus_Availability_DataState.DATA_STATE_FRESH) {
+    return "fresh";
+  }
+  if (value === ResourceAdviceStatus_Availability_DataState.DATA_STATE_STALE) {
+    return "stale";
+  }
+  return "unknown";
+}
+
+function normalizeCapacityAvailability(
+  value?: ResourceAdviceStatus_Availability,
+): NebiusCapacityAvailability | undefined {
+  if (!value) return;
+  return {
+    available: Number(value.available ?? 0),
+    limit: Number(value.limit ?? 0),
+    availability_level: normalizeAvailabilityLevel(value.availabilityLevel),
+    data_state: normalizeDataState(value.dataState),
+    effective_at: value.effectiveAt?.toISOString(),
+  };
 }
 
 const DISK_DELETE_MAX_ATTEMPTS = 12;
@@ -951,6 +1027,12 @@ export class NebiusProvider implements CloudProvider {
           `existing Nebius instance '${name}' has a cloud service account`,
         );
       }
+      const requestedPreemptible = spec.pricing_model === "spot";
+      if (instanceIsPreemptible(existing) !== requestedPreemptible) {
+        throw new Error(
+          `existing Nebius instance '${name}' has an unexpected pricing model`,
+        );
+      }
       const bootDiskId =
         existing.spec?.bootDisk?.type?.$case === "existingDisk"
           ? existing.spec.bootDisk.type.existingDisk.id
@@ -1328,35 +1410,66 @@ export class NebiusProvider implements CloudProvider {
   async setPricingModel(
     runtime: HostRuntime,
     pricingModel: "spot" | "on_demand",
-    creds: NebiusProviderCreds,
+    _creds: NebiusProviderCreds,
   ) {
+    // Nebius defines preemptible as immutable. Callers must preserve the disks,
+    // replace the instance, and create the replacement with the new class.
+    throw new Error(
+      `Nebius pricing model is immutable; replace instance '${runtime.instance_id}' to use '${pricingModel}'`,
+    );
+  }
+
+  async listCapacityAdvice(
+    creds: NebiusProviderCreds,
+  ): Promise<NebiusCapacityAdvice[]> {
     const client = new NebiusClient(creds);
-    const instance = await client.instances.get(
-      GetInstanceRequest.create({ id: runtime.instance_id }),
+    const project = await client.projects.get(
+      GetProjectRequest.create({ id: creds.parentId }),
     );
-    const operation = await client.instances.update(
-      UpdateInstanceRequest.create({
-        metadata: ResourceMetadata.create({
-          id: runtime.instance_id,
-          name: instance.metadata?.name,
+    const tenantId = `${project.metadata?.parentId ?? ""}`.trim();
+    if (!tenantId) {
+      throw new Error(
+        `Nebius project '${creds.parentId}' has no tenant parent`,
+      );
+    }
+    const advice: NebiusCapacityAdvice[] = [];
+    let pageToken = "";
+    const seenPageTokens = new Set<string>();
+    do {
+      if (seenPageTokens.has(pageToken)) {
+        throw new Error("Nebius Capacity Advisor repeated a page token");
+      }
+      seenPageTokens.add(pageToken);
+      const response = await client.resourceAdvice.list(
+        ListResourceAdviceRequest.create({
+          parentId: tenantId,
+          pageSize: Long.fromNumber(200),
+          pageToken,
         }),
-        spec: InstanceSpec.create({
-          ...(instance.spec ?? {}),
-          recoveryPolicy:
-            pricingModel === "spot"
-              ? InstanceRecoveryPolicy.FAIL
-              : InstanceRecoveryPolicy.RECOVER,
-          preemptible:
-            pricingModel === "spot"
-              ? PreemptibleSpec.create({
-                  onPreemption: PreemptibleSpec_PreemptionPolicy.STOP,
-                  priority: 3,
-                })
-              : undefined,
-        }),
-      }),
-    );
-    await operation.wait();
+      );
+      for (const item of response.items ?? []) {
+        const details =
+          item.spec?.resourceDetails?.$case === "computeInstance"
+            ? item.spec.resourceDetails.computeInstance
+            : undefined;
+        const machineType = `${details?.preset?.name ?? ""}`.trim();
+        if (!details || !machineType) continue;
+        advice.push({
+          region: item.spec?.region ?? "",
+          fabric: item.spec?.fabric ?? "",
+          platform: details.platform,
+          machine_type: machineType,
+          gpu_count: details.preset?.resources?.gpuCount,
+          spot: normalizeCapacityAvailability(item.status?.preemptible),
+          on_demand: normalizeCapacityAvailability(item.status?.onDemand),
+        });
+      }
+      pageToken = response.nextPageToken ?? "";
+      if (advice.length > 5_000) {
+        throw new Error("Nebius Capacity Advisor returned too many entries");
+      }
+    } while (pageToken);
+    return advice;
   }
 
   async restartHost(runtime: HostRuntime, creds: NebiusProviderCreds) {
@@ -1597,10 +1710,7 @@ export class NebiusProvider implements CloudProvider {
     const machineType =
       resources?.size?.$case === "preset" ? resources.size.preset : undefined;
     const platform = resources?.platform || undefined;
-    const preemptibleSpec = instance.spec?.preemptible;
-    const preemptible =
-      preemptibleSpec?.onPreemption === PreemptibleSpec_PreemptionPolicy.STOP ||
-      Number(preemptibleSpec?.priority ?? 0) > 0;
+    const preemptible = instanceIsPreemptible(instance);
     const securityGroupIds =
       instance.spec?.networkInterfaces?.[0]?.securityGroups
         ?.map((group) => `${group.id ?? ""}`.trim())

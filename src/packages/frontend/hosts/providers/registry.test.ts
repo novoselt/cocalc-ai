@@ -6,6 +6,8 @@ import {
   getHostPriceEstimate,
   getGcpPersistentDiskPriceEstimate,
   getNebiusPersistentDiskPriceEstimate,
+  getNebiusMinimumBootDiskGb,
+  getNebiusInstanceTypeOptions,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
   getGcpRegionOptions,
@@ -24,6 +26,98 @@ function testCatalog(entries: HostCatalog["entries"]): HostCatalog {
     provider_capabilities: {},
   };
 }
+
+describe("Nebius boot disks", () => {
+  const gpuCatalog = testCatalog([
+    {
+      kind: "instance_types",
+      scope: "global",
+      payload: [
+        {
+          name: "1gpu-8vcpu-32gb",
+          platform: "gpu-l40s-d",
+          gpus: 1,
+        },
+      ],
+    },
+    {
+      kind: "images",
+      scope: "global",
+      payload: [
+        {
+          id: "cuda-13",
+          family: "ubuntu24.04-cuda13.0",
+          region: "eu-north1",
+          recommended_platforms: ["gpu-l40s-d"],
+          minimum_disk_size_gb: 48,
+        },
+      ],
+    },
+  ]);
+
+  it("uses the selected GPU image minimum", () => {
+    expect(
+      getNebiusMinimumBootDiskGb(gpuCatalog, {
+        region: "eu-north1",
+        machine_type: "1gpu-8vcpu-32gb",
+      }),
+    ).toBe(48);
+  });
+
+  it("falls back to 40GB when old catalog rows omit the image minimum", () => {
+    expect(
+      getNebiusMinimumBootDiskGb(testCatalog(gpuCatalog.entries.slice(0, 1)), {
+        region: "eu-north1",
+        machine_type: "1gpu-8vcpu-32gb",
+      }),
+    ).toBe(40);
+  });
+});
+
+describe("Nebius capacity advice", () => {
+  it("shows fresh Spot availability on the matching machine", () => {
+    const catalog = testCatalog([
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [
+          {
+            name: "1gpu-24vcpu-218gb",
+            platform: "gpu-rtx6000",
+            vcpus: 24,
+            memory_gib: 218,
+            gpus: 1,
+          },
+        ],
+      },
+      {
+        kind: "capacity_advice",
+        scope: "global",
+        payload: [
+          {
+            region: "us-central1",
+            fabric: "fabric-1",
+            platform: "gpu-rtx6000",
+            machine_type: "1gpu-24vcpu-218gb",
+            spot: {
+              available: 0,
+              limit: 4,
+              availability_level: "low",
+              data_state: "fresh",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      getNebiusInstanceTypeOptions(catalog, {
+        region: "us-central1",
+        pricing_model: "spot",
+      })[0]?.detailLabel,
+    ).toBe("Spot capacity: low, 0 available");
+  });
+});
 
 describe("provider enablement", () => {
   const enabledCustomize = {

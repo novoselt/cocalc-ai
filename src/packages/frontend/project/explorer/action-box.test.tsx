@@ -42,6 +42,13 @@ jest.mock("@cocalc/frontend/components", () => ({
 
 jest.mock("@cocalc/frontend/project_store", () => ({
   file_actions: {
+    copy: {
+      name: {
+        id: "file_actions.copy.name",
+        defaultMessage: "Copy",
+      },
+      icon: "files",
+    },
     delete: {
       name: {
         id: "file_actions.delete.name",
@@ -58,7 +65,9 @@ jest.mock("@cocalc/frontend/projects/select-project", () => ({
 
 jest.mock("../directory-selector", () => ({
   __esModule: true,
-  default: () => <div>Directory selector</div>,
+  default: ({ onSelect }) => (
+    <button onClick={() => onSelect("/home/user/target")}>Choose target</button>
+  ),
 }));
 
 jest.mock("../utils", () => ({
@@ -211,5 +220,51 @@ describe("crossProjectCopySourcePath", () => {
   it("keeps array semantics for multiple selected paths", () => {
     const paths = ["/home/user/a.txt", "/home/user/b.txt"];
     expect(crossProjectCopySourcePath(paths)).toEqual(paths);
+  });
+});
+
+describe("ActionBox copy", () => {
+  it("waits for open files to save before copying from disk", async () => {
+    let finishSave: () => void = () => {};
+    const save_all_files = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    const copyPaths = jest.fn();
+    const copyActions = {
+      ...actions,
+      save_all_files,
+      copyPaths,
+      copyPathBetweenProjects: jest.fn(),
+    } as any;
+
+    render(
+      <IntlProvider locale="en">
+        <ActionBox
+          display="modal"
+          file_action="copy"
+          checked_files={ImmutableSet(["/home/user/source/test.ipynb"])}
+          current_path="/home/user/source"
+          project_id="project-1"
+          actions={copyActions}
+        />
+      </IntlProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose target" }));
+    fireEvent.click(screen.getByRole("button", { name: /Copy 1 Item/i }));
+
+    expect(save_all_files).toHaveBeenCalledTimes(1);
+    expect(copyPaths).not.toHaveBeenCalled();
+
+    finishSave();
+    await waitFor(() =>
+      expect(copyPaths).toHaveBeenCalledWith({
+        src: ["/home/user/source/test.ipynb"],
+        dest: "/home/user/target",
+      }),
+    );
   });
 });

@@ -77,6 +77,7 @@ export type NebiusImage = {
   architecture?: string | null;
   recommended_platforms?: string[];
   region?: string | null;
+  minimum_disk_size_gb?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -88,4 +89,22 @@ export type NebiusPriceItem = {
   price_usd: string;
   unit: string;
   valid_from: string;
+};
+
+export type NebiusCapacityAvailability = {
+  available: number;
+  limit: number;
+  availability_level: "high" | "medium" | "low" | "limit_reached" | "unknown";
+  data_state: "fresh" | "stale" | "unknown";
+  effective_at?: string;
+};
+
+export type NebiusCapacityAdvice = {
+  region: string;
+  fabric: string;
+  platform: string;
+  machine_type: string;
+  gpu_count?: number;
+  spot?: NebiusCapacityAvailability;
+  on_demand?: NebiusCapacityAvailability;
 };

@@ -9,10 +9,6 @@ import { dateValue, field, parentMessageId } from "./access";
 import type { ChatMessageTyped, ChatMessages, NumChildren } from "./types";
 import { orderLinearThreadMessages } from "./utils";
 
-function isImmediateAcpSteerMessage(message: ChatMessageTyped): boolean {
-  return field<string>(message, "acp_send_mode") === "immediate";
-}
-
 // Messages are sorted using each message record's `date` value. Avoid relying
 // on Map key shape, since cache internals are migrating away from date keys.
 export function getSortedDates(
@@ -37,7 +33,6 @@ export function getSortedDates(
     const messageKey = `${messageDate.valueOf()}`;
     if (visibleKeys && !visibleKeys.has(messageKey)) continue;
     const messageId = `${field<string>(message, "message_id") ?? ""}`.trim();
-    if (isImmediateAcpSteerMessage(message)) continue;
     visibleMessages.push(message);
     if (messageId) visibleById.set(messageId, message);
   }

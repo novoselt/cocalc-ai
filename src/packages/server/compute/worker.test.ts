@@ -13,6 +13,7 @@ import {
   providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
   runtimeIdentityChanged,
+  spotCapacityRecoveryDecision,
   volumeAttachedToVm,
 } from "./worker";
 import {
@@ -102,6 +103,16 @@ describe("compute VM work failure state", () => {
     expect(retry.retryAt.toISOString()).toBe("2026-08-04T00:00:00.000Z");
   });
 
+  it("keeps volume dependency retries in provisioning state", () => {
+    const retry = new RetryableComputeWorkError(
+      "waiting for home volume",
+      new Date("2026-08-04T00:00:02.000Z"),
+      "provisioning",
+    );
+
+    expect(computeWorkFailureState(retry)).toBe("provisioning");
+  });
+
   it("matches Nebius inventory by opaque ID or stable provider name", () => {
     const vm = {
       provider: "nebius",
@@ -173,6 +184,35 @@ describe("compute VM work failure state", () => {
       ),
     ).toBe(true);
     expect(isSpotCapacityError(new Error("invalid machine type"))).toBe(false);
+  });
+
+  it("uses the configured Spot retry threshold before Standard fallback", () => {
+    const first = spotCapacityRecoveryDecision(
+      {
+        allow_on_demand_fallback: true,
+        spot_recovery_policy: {
+          max_restore_attempts_before_fallback: 2,
+          spot_restore_backoff_seconds: 15,
+        },
+        spot_recovery_state: { phase: "idle", attempt: 0 },
+      } as any,
+      Date.parse("2026-08-20T00:00:00.000Z"),
+    );
+    expect(first).toMatchObject({ attempt: 1, fallback: false });
+    expect(first.retryAt.toISOString()).toBe("2026-08-20T00:00:15.000Z");
+
+    const second = spotCapacityRecoveryDecision(
+      {
+        allow_on_demand_fallback: true,
+        spot_recovery_policy: {
+          max_restore_attempts_before_fallback: 2,
+          spot_restore_backoff_seconds: 15,
+        },
+        spot_recovery_state: { phase: "retrying_spot", attempt: 1 },
+      } as any,
+      Date.parse("2026-08-20T00:00:00.000Z"),
+    );
+    expect(second).toMatchObject({ attempt: 2, fallback: true });
   });
 
   it("preserves and refreshes provider network identity", () => {

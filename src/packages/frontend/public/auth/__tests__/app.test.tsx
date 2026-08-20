@@ -1592,6 +1592,50 @@ describe("PublicAuthApp", () => {
     consoleError.mockRestore();
   });
 
+  it("requires the inviter to switch accounts instead of accepting", async () => {
+    mockedApi.mockResolvedValueOnce({
+      invite: {
+        invite_id: "77777777-7777-4777-8777-777777777777",
+        inviter_account_id: "acct-owner",
+        inviter_name: "Owner Example",
+        project_id: "22222222-2222-4222-8222-222222222222",
+        project_title: "Research Project",
+        status: "pending",
+      },
+    } as any);
+    mockedGetControlPlaneAuthBootstrap.mockResolvedValueOnce({
+      account_id: "acct-owner",
+      display_name: "Owner Example",
+      email_address: "owner@example.com",
+      signed_in: true,
+    });
+
+    render(
+      <PublicAuthApp
+        config={config({ is_authenticated: true })}
+        initialRoute={{
+          kind: "project-invite",
+          token: "secret",
+        }}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Switch accounts to accept this invite"),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(
+        "You created this invitation, so this account cannot accept it. Sign out and open the same link using the CoCalc account you want to add.",
+      ),
+    ).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Accept invite" })).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Sign out to use a different account",
+      }),
+    ).not.toBeNull();
+  });
+
   it("accepts project invite links only after clicking Accept", async () => {
     mockedApi
       .mockResolvedValueOnce({

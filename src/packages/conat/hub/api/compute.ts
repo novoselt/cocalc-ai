@@ -284,6 +284,7 @@ export const compute = {
   setVmTtl: authFirstRequireAccountOrComputeAgent,
   setVmFundingMode: authFirstRequireAccountOrComputeAgent,
   setVmMachineType: authFirstRequireAccountOrComputeAgent,
+  setVmPricingModel: authFirstRequireAccountOrComputeAgent,
   createVolume: authFirstRequireAccountOrComputeAgent,
   listVolumes: authFirstRequireAccount,
   getVolume: authFirstRequireAccount,
@@ -390,6 +391,14 @@ export interface ComputeApi {
     session_hash?: string;
     id_or_name: string;
     machine_type: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVm>;
+  setVmPricingModel: (opts: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
+    id_or_name: string;
+    pricing_model: ComputeVmPricingModel;
     idempotency_key: string;
   }) => Promise<ComputeVm>;
   createVolume: (opts: CreateComputeVolumeRequest) => Promise<ComputeVolume>;

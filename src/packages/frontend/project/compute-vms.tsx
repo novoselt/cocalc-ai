@@ -64,6 +64,7 @@ import {
   getGcpPersistentDiskPriceEstimate,
   getGcpRegionOptions,
   getGcpZoneOptions,
+  getNebiusMinimumBootDiskGb,
   getProviderDescriptor,
   getProviderOptions,
   getProviderPriceEstimate,
@@ -76,6 +77,7 @@ import {
   markRecommendedRegionOption,
   sortRegionOptionsByPreference,
 } from "../hosts/utils/region-ranking";
+import { normalizeSpotRecoveryPolicy } from "../hosts/utils/spot-recovery-policy";
 import {
   vmCreateCli,
   volumeCreateCli,
@@ -265,6 +267,32 @@ function providerErrorSummary(error: string): string {
   }
   if (/QUOTA/i.test(error)) return "Provider quota exhausted";
   return "Provider operation failed";
+}
+
+export function vmSpotRecoverySummary(vm: ComputeVm): string | undefined {
+  if (vm.desired_pricing_model !== "spot") return;
+  if (vm.effective_pricing_model === "on_demand") {
+    return "Using Standard fallback while Spot is unavailable";
+  }
+  const phase = vm.spot_recovery_state?.phase;
+  const attempt = Number(vm.spot_recovery_state?.attempt ?? 0);
+  const policy = normalizeSpotRecoveryPolicy(vm.spot_recovery_policy);
+  const maximum = policy?.max_restore_attempts_before_fallback ?? 2;
+  if (phase === "retrying_spot" || vm.state === "recovering") {
+    const count = attempt > 0 ? ` (${attempt}/${maximum})` : "";
+    return vm.allow_on_demand_fallback
+      ? `Waiting for Spot capacity${count}; Standard fallback is automatic`
+      : `Waiting for Spot capacity${count}`;
+  }
+  if (
+    vm.state === "requested" ||
+    vm.state === "provisioning" ||
+    vm.state === "starting"
+  ) {
+    return vm.allow_on_demand_fallback
+      ? `Requesting Spot capacity; Standard fallback after ${maximum} failed checks`
+      : "Requesting Spot capacity; availability is not guaranteed";
+  }
 }
 
 function regionFromZone(zone?: string): string {
@@ -521,7 +549,18 @@ function VmCreateModal({
       ? 50
       : provider === "gcp" && draft.machine_type
         ? gcpMinimumBootDiskGb(draft.machine_type)
-        : 10;
+        : getNebiusMinimumBootDiskGb(hostCatalog, selection);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = Number(form.getFieldValue("boot_disk_gb") ?? 0);
+    if (current >= minimumBootDiskGb) return;
+    form.setFieldValue("boot_disk_gb", minimumBootDiskGb);
+    setDraft((value) => ({
+      ...value,
+      boot_disk_gb: minimumBootDiskGb,
+    }));
+  }, [form, minimumBootDiskGb, open]);
 
   const patchDraft = (patch: Partial<VmDraft>) => {
     form.setFieldsValue(patch);
@@ -776,6 +815,17 @@ function VmCreateModal({
                   gpu_count: 0,
                   home_volume: undefined,
                   create_home_volume: false,
+                  boot_disk_gb: Math.max(
+                    Number(draft.boot_disk_gb ?? 20),
+                    nextProvider === "nebius"
+                      ? getNebiusMinimumBootDiskGb(nextCatalog, {
+                          region,
+                          machine_type,
+                        })
+                      : machine_type
+                        ? gcpMinimumBootDiskGb(machine_type)
+                        : 10,
+                  ),
                   new_home_volume_size_gb: normalizedVolumeSizeGb(
                     nextProvider,
                     draft.new_home_volume_size_gb,
@@ -901,7 +951,15 @@ function VmCreateModal({
                           zone: nextZone,
                         }),
                       )
-                    : {};
+                    : {
+                        boot_disk_gb: Math.max(
+                          Number(draft.boot_disk_gb ?? 20),
+                          getNebiusMinimumBootDiskGb(hostCatalog, {
+                            region,
+                            machine_type: draft.machine_type,
+                          }),
+                        ),
+                      };
                 patchDraft({ region, zone: nextZone, ...machinePatch });
               }}
             />
@@ -1031,7 +1089,16 @@ function VmCreateModal({
                 patchDraft(
                   provider === "gcp"
                     ? gcpMachinePatch(machine_type)
-                    : { machine_type },
+                    : {
+                        machine_type,
+                        boot_disk_gb: Math.max(
+                          Number(draft.boot_disk_gb ?? 20),
+                          getNebiusMinimumBootDiskGb(hostCatalog, {
+                            region: draft.region,
+                            machine_type,
+                          }),
+                        ),
+                      },
                 );
               }}
             />
@@ -2345,27 +2412,6 @@ export function ProjectComputeVms({
     }
   };
 
-  const waitForVolumeReady = async (idOrName: string) => {
-    const deadline = Date.now() + 5 * 60_000;
-    let state = "requested";
-    while (Date.now() < deadline) {
-      const volume = await webapp_client.conat_client.hub.compute.getVolume({
-        id_or_name: idOrName,
-      });
-      state = volume.state;
-      if (state === "ready") return volume;
-      if (state === "failed" || state === "deleted") {
-        throw new Error(
-          volume.error || "Volume creation failed (state=" + state + ").",
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-    }
-    throw new Error(
-      "Timed out waiting for the home volume (state=" + state + ").",
-    );
-  };
-
   const createVm = async (values: VmDraft) => {
     setSaving(true);
     setVmCreateError(undefined);
@@ -2390,7 +2436,6 @@ export function ProjectComputeVms({
               browser_id: webapp_client.browser_id,
             });
           createdVolumeName = createdVolume.name;
-          await waitForVolumeReady(createdVolume.id);
           homeVolume = createdVolume.name;
         }
         await webapp_client.conat_client.hub.compute.createVm({
@@ -2487,6 +2532,29 @@ export function ProjectComputeVms({
         await execute();
       }
       setNotice(`VM '${vm.name}' is ${running ? "starting" : "stopping"}.`);
+      await load();
+    } catch (err) {
+      setError(`${err}`);
+    }
+  };
+
+  const changeVmPricing = async (vm: ComputeVm) => {
+    const pricing_model =
+      vm.desired_pricing_model === "spot" ? "on_demand" : "spot";
+    setError(undefined);
+    try {
+      const completed = await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.compute.setVmPricingModel({
+          id_or_name: vm.id,
+          pricing_model,
+          idempotency_key: uuid(),
+          browser_id: webapp_client.browser_id,
+        });
+      });
+      if (!completed) return;
+      setNotice(
+        `VM '${vm.name}' will use ${pricingLabel(pricing_model)} when it starts.`,
+      );
       await load();
     } catch (err) {
       setError(`${err}`);
@@ -2696,6 +2764,8 @@ export function ProjectComputeVms({
     }
   };
 
+  const volumesById = new Map(volumes.map((volume) => [volume.id, volume]));
+
   const vmColumns: ColumnsType<ComputeVm> = [
     {
       title: "VM",
@@ -2728,8 +2798,8 @@ export function ProjectComputeVms({
               Deletes <TimeAgo date={new Date(vm.expires_at)} />
             </Text>
           )}
-          {state === "recovering" && (
-            <Text type="secondary">Spot unavailable; retrying</Text>
+          {vmSpotRecoverySummary(vm) && (
+            <Text type="secondary">{vmSpotRecoverySummary(vm)}</Text>
           )}
           {state === "failed" && vm.error && (
             <Popover
@@ -2763,23 +2833,36 @@ export function ProjectComputeVms({
     },
     {
       title: "Configuration",
-      width: 175,
-      render: (_, vm) => (
-        <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
-          <Text strong>{vm.machine_type}</Text>
-          <Text type="secondary">
-            {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
-            {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
-          </Text>
-          <Text type="secondary">{vm.zone ?? vm.region}</Text>
-          <Text type="secondary">Boot disk · {vm.boot_disk_gb} GB</Text>
-          {vm.gpu_type && (
+      width: 220,
+      render: (_, vm) => {
+        const homeVolume = vm.home_volume_id
+          ? volumesById.get(vm.home_volume_id)
+          : undefined;
+        return (
+          <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+            <Text strong>{vm.machine_type}</Text>
             <Text type="secondary">
-              {vm.gpu_count}× {vm.gpu_type}
+              {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
+              {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
             </Text>
-          )}
-        </Space>
-      ),
+            <Text type="secondary">{vm.zone ?? vm.region}</Text>
+            <Text type="secondary">Boot disk · {vm.boot_disk_gb} GB</Text>
+            <Text type="secondary">
+              Home volume ·{" "}
+              {homeVolume
+                ? `${homeVolume.name} · ${homeVolume.effective_size_gb} GB · ${homeVolume.attachment_state}`
+                : vm.home_volume_id
+                  ? `ID ${vm.home_volume_id.slice(0, 8)}`
+                  : "none"}
+            </Text>
+            {vm.gpu_type && (
+              <Text type="secondary">
+                {vm.gpu_count}× {vm.gpu_type}
+              </Text>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: "Cost & usage",
@@ -2865,6 +2948,7 @@ export function ProjectComputeVms({
         const transitioning = ["starting", "stopping", "deleting"].includes(
           vm.state,
         );
+        const stopDisabled = ["stopping", "deleting"].includes(vm.state);
         const running =
           vm.desired_state === "running" && vm.state !== "stopped";
         const cliCommand = `cocalc vm ssh ${vm.name}`;
@@ -2995,7 +3079,7 @@ export function ProjectComputeVms({
                 cancelText="Keep running"
                 onConfirm={() => void setVmRunning(vm, false)}
               >
-                <Button size="small" disabled={transitioning}>
+                <Button size="small" disabled={stopDisabled}>
                   Stop
                 </Button>
               </Popconfirm>
@@ -3021,6 +3105,16 @@ export function ProjectComputeVms({
                         : "Change machine type (stop first)",
                   },
                   {
+                    key: "pricing-model",
+                    disabled: vm.state !== "stopped",
+                    label:
+                      vm.state === "stopped"
+                        ? vm.desired_pricing_model === "spot"
+                          ? "Use Standard pricing"
+                          : "Use Spot pricing"
+                        : "Change pricing (stop first)",
+                  },
+                  {
                     key: "deadline",
                     label: vm.expires_at
                       ? "Change deletion deadline"
@@ -3040,6 +3134,19 @@ export function ProjectComputeVms({
                   if (key === "machine-type") {
                     setMachineTypeError(undefined);
                     setMachineTypeVm(vm);
+                  } else if (key === "pricing-model") {
+                    Modal.confirm({
+                      title:
+                        vm.desired_pricing_model === "spot"
+                          ? `Use Standard pricing for ${vm.name}?`
+                          : `Use Spot pricing for ${vm.name}?`,
+                      content:
+                        vm.desired_pricing_model === "spot"
+                          ? "The next start uses more reliable Standard capacity at the displayed Standard rate."
+                          : "The next start uses interruptible Spot capacity, which may be unavailable or stop at any time.",
+                      okText: "Change pricing",
+                      onOk: () => changeVmPricing(vm),
+                    });
                   } else if (key === "deadline") {
                     setTtlVm(vm);
                   } else if (key === "similar") {

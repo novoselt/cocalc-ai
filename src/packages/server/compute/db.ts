@@ -208,7 +208,13 @@ export async function insertComputeVm(
           "compute volume and VM must use the same provider location",
         );
       }
-      if (volume.state !== "ready" || volume.desired_state !== "ready") {
+      const initialProvisioning =
+        volume.ready_at == null &&
+        (volume.state === "requested" || volume.state === "provisioning");
+      if (
+        volume.desired_state !== "ready" ||
+        (volume.state !== "ready" && !initialProvisioning)
+      ) {
         throw new Error(`compute volume is not ready (state=${volume.state})`);
       }
       if (volume.attached_vm_id && volume.attached_vm_id !== row.id) {
@@ -678,6 +684,18 @@ export async function finishComputeWork(opts: {
      SET state=$2, error=$3, locked_by=NULL, locked_at=NULL, updated_at=NOW()
      WHERE id=$1`,
     [opts.id, opts.state, opts.error?.slice(0, 4000) ?? null],
+  );
+}
+
+export async function heartbeatComputeWork(opts: {
+  id: string;
+  worker_id: string;
+}) {
+  await pool().query(
+    `UPDATE compute_resource_work
+     SET locked_at=NOW(), updated_at=NOW()
+     WHERE id=$1 AND state='in_progress' AND locked_by=$2`,
+    [opts.id, opts.worker_id],
   );
 }
 
