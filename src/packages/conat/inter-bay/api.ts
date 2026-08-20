@@ -336,6 +336,7 @@ export interface ProjectControlStartAdmission {
 
 export interface ProjectControlStopRequest {
   project_id: string;
+  sole_owner_account_id?: string;
   epoch?: number;
 }
 
