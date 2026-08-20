@@ -3069,7 +3069,7 @@ export function AppServerPanel({ project_id }: { project_id: string }) {
         accept="application/json,.json"
         style={{ display: "none" }}
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          const file = event.currentTarget.files?.[0];
           if (!file) return;
           void onImportFile(file);
         }}
