@@ -154,15 +154,16 @@ async function stopOwnedDedicatedHosts({
   return { count: host_ids.length, host_ids };
 }
 
-type RuntimeSlotProjectRow = {
+type QuarantineProjectRow = {
   project_id: string;
   owning_bay_id: string;
+  sole_owner_account_id?: string;
 };
 
 async function listRuntimeSlotProjects(
   account_id: string,
-): Promise<RuntimeSlotProjectRow[]> {
-  const { rows } = await getPool().query<RuntimeSlotProjectRow>(
+): Promise<QuarantineProjectRow[]> {
+  const { rows } = await getPool().query<QuarantineProjectRow>(
     `
       SELECT DISTINCT ON (project_id)
              project_id,
@@ -177,6 +178,55 @@ async function listRuntimeSlotProjects(
   return rows;
 }
 
+async function listSoleOwnerActiveProjects(
+  account_id: string,
+): Promise<QuarantineProjectRow[]> {
+  const currentBayId = getConfiguredBayId();
+  const { rows } = await getPool().query<QuarantineProjectRow>(
+    `
+      WITH candidates AS (
+        SELECT project_id,
+               COALESCE(NULLIF(BTRIM(owning_bay_id), ''), $2::TEXT)
+                 AS owning_bay_id,
+               1 AS source_priority
+          FROM account_project_index
+         WHERE account_id=$1
+           AND users_summary #>> ARRAY[$1::TEXT, 'group'] = 'owner'
+           AND COALESCE(state_summary->>'state', '')
+                 IN ('opened', 'running', 'starting')
+           AND NOT EXISTS (
+                 SELECT 1
+                   FROM jsonb_each(COALESCE(users_summary, '{}'::JSONB)) member
+                  WHERE member.value->>'group' = 'owner'
+                    AND member.key <> $1::TEXT
+               )
+        UNION ALL
+        SELECT project_id,
+               COALESCE(NULLIF(BTRIM(owning_bay_id), ''), $2::TEXT)
+                 AS owning_bay_id,
+               0 AS source_priority
+          FROM projects
+         WHERE users #>> ARRAY[$1::TEXT, 'group'] = 'owner'
+           AND COALESCE(state->>'state', '')
+                 IN ('opened', 'running', 'starting')
+           AND NOT EXISTS (
+                 SELECT 1
+                   FROM jsonb_each(COALESCE(users, '{}'::JSONB)) member
+                  WHERE member.value->>'group' = 'owner'
+                    AND member.key <> $1::TEXT
+               )
+      )
+      SELECT DISTINCT ON (project_id)
+             project_id,
+             owning_bay_id
+        FROM candidates
+       ORDER BY project_id, source_priority
+    `,
+    [account_id, currentBayId],
+  );
+  return rows;
+}
+
 async function listRemoteRuntimeSlotProjects({
   account_id,
   actor_account_id,
@@ -185,7 +235,7 @@ async function listRemoteRuntimeSlotProjects({
   account_id: string;
   actor_account_id?: string | null;
   bay_id: string;
-}): Promise<RuntimeSlotProjectRow[]> {
+}): Promise<QuarantineProjectRow[]> {
   if (!actor_account_id) {
     throw new Error(
       "actor_account_id is required to enumerate remote runtime slots",
@@ -211,10 +261,10 @@ async function listClusterRuntimeSlotProjects({
 }: {
   account_id: string;
   actor_account_id?: string | null;
-}): Promise<{ projects: RuntimeSlotProjectRow[]; errors: string[] }> {
+}): Promise<{ projects: QuarantineProjectRow[]; errors: string[] }> {
   const currentBayId = getConfiguredBayId();
   const bays = await listClusterBayInfos();
-  const projects = new Map<string, RuntimeSlotProjectRow>();
+  const projects = new Map<string, QuarantineProjectRow>();
   const errors: string[] = [];
   for (const bay of bays.length > 0 ? bays : [{ bay_id: currentBayId }]) {
     const bay_id = `${bay.bay_id ?? ""}`.trim() || currentBayId;
@@ -239,7 +289,7 @@ async function listClusterRuntimeSlotProjects({
   return { projects: [...projects.values()], errors };
 }
 
-async function stopRuntimeSlotProjects({
+async function stopQuarantinedProjects({
   account_id,
   actor_account_id,
 }: {
@@ -247,18 +297,43 @@ async function stopRuntimeSlotProjects({
   actor_account_id?: string | null;
 }): Promise<{ count: number; project_ids: string[]; errors: string[] }> {
   const stopped: string[] = [];
-  const { projects, errors } = await listClusterRuntimeSlotProjects({
-    account_id,
-    actor_account_id,
-  });
-  for (const { project_id, owning_bay_id } of projects) {
+  const { projects: runtimeSlotProjects, errors } =
+    await listClusterRuntimeSlotProjects({
+      account_id,
+      actor_account_id,
+    });
+  const projects = new Map(
+    runtimeSlotProjects.map((project) => [project.project_id, project]),
+  );
+  try {
+    // The home-bay projection discovers remote projects; projectControl
+    // rechecks sole ownership authoritatively on the owning bay before stop.
+    for (const project of await listSoleOwnerActiveProjects(account_id)) {
+      projects.set(project.project_id, {
+        ...project,
+        sole_owner_account_id: account_id,
+      });
+    }
+  } catch (err) {
+    const message = `list solely owned active projects: ${err}`;
+    errors.push(message);
+    logger.warn(message);
+  }
+  for (const {
+    project_id,
+    owning_bay_id,
+    sole_owner_account_id,
+  } of projects.values()) {
     try {
       await getInterBayBridge()
         .projectControl(owning_bay_id)
-        .stop({ project_id });
+        .stop({
+          project_id,
+          ...(sole_owner_account_id ? { sole_owner_account_id } : {}),
+        });
       stopped.push(project_id);
     } catch (err) {
-      const message = `stop runtime slot project ${project_id}: ${err}`;
+      const message = `stop quarantined project ${project_id}: ${err}`;
       errors.push(message);
       logger.warn(message);
     }
@@ -341,10 +416,10 @@ export async function quarantineAccountBillingResourcesLocal({
   });
   const stoppedProjects = await attempt({
     errors,
-    label: "stop projects using account runtime slots",
+    label: "stop quarantined projects",
     fallback: { count: 0, project_ids: [], errors: [] },
     fn: async () =>
-      await stopRuntimeSlotProjects({ account_id, actor_account_id }),
+      await stopQuarantinedProjects({ account_id, actor_account_id }),
   });
   errors.push(...stoppedProjects.errors);
 

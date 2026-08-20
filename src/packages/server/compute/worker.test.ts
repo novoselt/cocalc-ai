@@ -5,6 +5,7 @@
 
 import {
   computeWorkFailureState,
+  computeVmNeedsProviderObservation,
   computeVmProviderObservationAge,
   computeRuntimeMetadata,
   computePostStopTransition,
@@ -13,6 +14,7 @@ import {
   managedVmProjectSshConfigNeedsSync,
   providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
+  stoppedVmProviderInstanceNeedsReconciliation,
   runtimeIdentityChanged,
   spotCapacityRecoveryDecision,
   volumeAttachedToVm,
@@ -112,6 +114,40 @@ describe("managed VM provider observations", () => {
         now,
       ),
     ).toBe(45_000);
+  });
+
+  it("does not poll intentionally stopped Nebius instances", () => {
+    expect(
+      computeVmNeedsProviderObservation({
+        provider: "nebius",
+        desired_state: "stopped",
+        state: "stopped",
+      }),
+    ).toBe(false);
+    expect(
+      computeVmNeedsProviderObservation({
+        provider: "nebius",
+        desired_state: "stopped",
+        state: "stopping",
+      }),
+    ).toBe(true);
+    expect(
+      computeVmNeedsProviderObservation({
+        provider: "gcp",
+        desired_state: "stopped",
+        state: "stopped",
+      }),
+    ).toBe(true);
+  });
+
+  it("reconciles unexpected active instances for stopped VMs", () => {
+    expect(stoppedVmProviderInstanceNeedsReconciliation("RUNNING")).toBe(true);
+    expect(stoppedVmProviderInstanceNeedsReconciliation("STARTING")).toBe(true);
+    expect(stoppedVmProviderInstanceNeedsReconciliation(undefined)).toBe(true);
+    expect(stoppedVmProviderInstanceNeedsReconciliation("STOPPED")).toBe(false);
+    expect(stoppedVmProviderInstanceNeedsReconciliation("TERMINATED")).toBe(
+      false,
+    );
   });
 });
 

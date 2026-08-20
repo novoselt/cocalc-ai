@@ -82,6 +82,7 @@ import {
   rehomeProjectOnOwningBay,
 } from "@cocalc/server/projects/rehome";
 import { assertProjectNotHardDeleting } from "@cocalc/server/projects/hard-delete-state";
+import { assertProjectSoleOwner } from "@cocalc/server/projects/sole-owner";
 import { mergeStartProjectTimings } from "@cocalc/server/projects/start-timings";
 import { assertFreeProjectStartAllowed } from "@cocalc/server/launch/kill-switches";
 import { countsTowardManagedCpuBudgetForHost } from "@cocalc/server/membership/managed-cpu-scope";
@@ -415,6 +416,12 @@ export async function handleProjectControlStop(
     epoch: req.epoch,
   });
   await assertProjectNotHardDeleting({ project_id: req.project_id });
+  if (req.sole_owner_account_id) {
+    await assertProjectSoleOwner({
+      project_id: req.project_id,
+      account_id: req.sole_owner_account_id,
+    });
+  }
   const project = await getProject(req.project_id);
   const sponsor = await loadProjectRuntimeSponsor(req.project_id);
   await upsertProjectActiveOperation({
