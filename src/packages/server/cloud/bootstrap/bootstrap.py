@@ -81,7 +81,15 @@ APT_UPDATE_TIMEOUT_S = 180
 APT_INSTALL_TIMEOUT_S = 600
 RUNTIME_USERNS_MAP_PROBE_TIMEOUT_S = 10
 APPARMOR_PROFILE_PROBE_TIMEOUT_S = 2
-PODMAN_STALE_BOOT_ERROR = "current system boot ID differs from cached boot ID"
+PODMAN_STALE_BOOT_ERROR_PATTERNS = (
+    re.compile(r"current system boot ID differs from cached boot ID", re.IGNORECASE),
+    re.compile(
+        r"cannot re-exec process to join the existing user namespace", re.IGNORECASE
+    ),
+    re.compile(r"cannot join.*user namespace", re.IGNORECASE),
+    re.compile(r"failed to reexec", re.IGNORECASE),
+    re.compile(r"invalid internal status", re.IGNORECASE),
+)
 NODE_RUNTIME_APT_PACKAGES = ("libatomic1",)
 GCE_UBUNTU_MIRROR_RE = re.compile(
     r"https?://[A-Za-z0-9.-]*gce(?:\.clouds)?\.archive\.ubuntu\.com/ubuntu/?"
@@ -1518,7 +1526,8 @@ def podman_probe_error(proc: subprocess.CompletedProcess[str]) -> str:
 
 
 def podman_has_stale_boot_state(proc: subprocess.CompletedProcess[str]) -> bool:
-    return PODMAN_STALE_BOOT_ERROR.lower() in podman_probe_error(proc).lower()
+    error = podman_probe_error(proc)
+    return any(pattern.search(error) for pattern in PODMAN_STALE_BOOT_ERROR_PATTERNS)
 
 
 def repair_stale_podman_boot_state(
@@ -8835,6 +8844,23 @@ project_runtime_processes_active() {
   return 1
 }
 
+wait_for_project_runtime_processes_idle() {
+  local active deadline
+  if ! active="$(project_runtime_processes_active 2>&1)"; then
+    return 0
+  fi
+  echo "project runtime process observed during boot preparation; waiting for transient startup work" >&2
+  deadline="$((SECONDS + 30))"
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    sleep 1
+    if ! active="$(project_runtime_processes_active 2>&1)"; then
+      return 0
+    fi
+  done
+  printf '%s\n' "${active}" >&2
+  return 1
+}
+
 migrate_podman_database_runroot() {
   local db_path="$1" desired_runroot="$2" legacy_runroot="$3"
   if [ ! -f "${db_path}" ]; then
@@ -8907,7 +8933,7 @@ prepare_podman_boot() {
     echo "/mnt/cocalc is not mounted; refusing Podman boot preparation" >&2
     return 1
   fi
-  if project_runtime_processes_active; then
+  if ! wait_for_project_runtime_processes_idle; then
     echo "project runtime processes are active; refusing Podman boot preparation" >&2
     return 1
   fi
