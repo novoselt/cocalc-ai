@@ -17,6 +17,8 @@ Scope (Phase 5):
    \href{url}{text}
  - Inline verbatim: \verb<DELIM>...<DELIM>
  - Math (single-line): $…$ \(…\) \[…\] $$…$$
+ - Math (multi-line): \[…\], $$…$$ and $\begin{aligned}…\end{aligned}$
+   (inline `$…$` spans lines only around an inner math env)
  - Math envs (multi-line): \begin{equation|align|gather|multline|displaymath|eqnarray}…
  - List envs (multi-line, nested-aware): \begin{itemize|enumerate|description}…
    emitted as three descriptor types: list-env-begin, list-env-end, list-item
@@ -170,6 +172,41 @@ const MATH_ENV_NAMES: ReadonlySet<string> = new Set([
   "eqnarray",
   "eqnarray*",
 ]);
+
+/**
+ * Math environments that are NOT standalone display environments:
+ * they only make sense INSIDE math mode (`$…$`, `\[…\]`,
+ * `\begin{equation}…`). `scanMathEnvs` deliberately ignores them (a
+ * bare `\begin{aligned}` is a LaTeX error, so it must not be treated
+ * as its own display env), but they are the one construct for which
+ * authors routinely let inline `$…$` math span several lines — so
+ * `scanInlineDollarMath` keys off exactly this list.
+ *
+ * Starred variants (`cases*`, `pmatrix*`, … from mathtools) match via
+ * a trailing-`*` strip in `isInnerMathEnv`.
+ */
+const INNER_MATH_ENV_NAMES: ReadonlySet<string> = new Set([
+  "aligned",
+  "alignedat",
+  "gathered",
+  "split",
+  "cases",
+  "dcases",
+  "rcases",
+  "array",
+  "subarray",
+  "matrix",
+  "pmatrix",
+  "bmatrix",
+  "Bmatrix",
+  "vmatrix",
+  "Vmatrix",
+  "smallmatrix",
+]);
+
+function isInnerMathEnv(envName: string): boolean {
+  return INNER_MATH_ENV_NAMES.has(envName.replace(/\*$/, ""));
+}
 
 const LIST_ENV_NAMES: ReadonlySet<string> = new Set([
   "itemize",
@@ -526,11 +563,20 @@ function scanZeroArgCommand(
  *    commands. The point of this scanner is to clean up the most
  *    common visual noise (`\foo{some content}` chunks); covering
  *    every macro form would need a full TeX-aware lexer.
- *  - Math-mode commands stay rendered by KaTeX because the math
- *    widget's covering descriptor subsumes anything inside it via
- *    `dropOverlaps`. Verbatim / lstlisting bodies are filtered out
- *    via `protectedRanges`. So inside-math/inside-code don't need
- *    to be in the skip list.
+ *  - All immediately-adjacent brace groups are consumed, so a
+ *    multi-argument macro (`\frac{a}{b}`, `\binom{n}{k}`,
+ *    `\overset{x}{y}`, …) yields ONE chip covering the whole call.
+ *    Arity is unknowable for a macro we don't recognize — the user
+ *    may well have `\newcommand{\pair}[2]{…}` in the preamble — and
+ *    covering only the first group is strictly worse: it hides half
+ *    the call and leaves `{b}` sitting in the prose as raw text.
+ *  - Math-mode commands are USUALLY rendered by KaTeX instead,
+ *    because the math widget's covering descriptor subsumes anything
+ *    inside it via `dropOverlaps`; that is why they aren't in the
+ *    skip list. But that only holds when the math widget was
+ *    detected, so this fallback still has to produce a sane chip on
+ *    its own. Verbatim / lstlisting bodies are filtered out via
+ *    `protectedRanges`.
  */
 /**
  * Braced font-size groups: `{\Large …}`, `{\small …}`, etc. — the
@@ -608,19 +654,34 @@ function scanCustomMacro(
     // `m[0]` ends with `{` (possibly with whitespace before it).
     // The `{` itself is the last char of the match.
     const braceOpen = cmdStart + m[0].length - 1;
-    const close = findMatchingBrace(text, braceOpen);
-    if (close === -1) continue;
+    // Consume EVERY immediately-adjacent brace group, not just the
+    // first: a chip that covers only half of `\frac{a}{b}` leaves a
+    // dangling `{b}` as raw text. Adjacency (no whitespace between
+    // groups) is required so a following, unrelated group — `\foo{x}
+    // {\itshape y}` — is not swallowed as a second argument.
+    const args: string[] = [];
+    let end = braceOpen;
+    while (text[end] === "{") {
+      const close = findMatchingBrace(text, end);
+      if (close === -1) break;
+      args.push(text.slice(end + 1, close));
+      end = close + 1;
+    }
+    if (args.length === 0) continue;
     out.push({
       type: "custom-macro",
       from: { line, ch: cmdStart },
-      to: { line, ch: close + 1 },
-      source: text.slice(cmdStart, close + 1),
+      to: { line, ch: end },
+      source: text.slice(cmdStart, end),
       payload: {
         cmdName,
-        content: text.slice(braceOpen + 1, close),
+        // `content` stays the FIRST argument (the chip's excerpt);
+        // `args` carries the whole call for multi-argument macros.
+        content: args[0],
+        args,
       },
     });
-    RE.lastIndex = close + 1;
+    RE.lastIndex = end;
   }
 }
 
@@ -709,56 +770,257 @@ function scanVerb(text: string, line: number, out: WidgetDescriptor[]): void {
 }
 
 /**
- * Inline `$…$` math on a single line. `$$…$$` (display) and
- * multi-line forms are handled by `scanDoubleDollarMath` and
- * `scanBracketDisplayMath`, which run BEFORE this scanner and emit
- * outer descriptors that `dropOverlaps` uses to subsume any inner
- * matches we might emit here.
+ * Index of the next unescaped inline-math `$` in `text` at or after
+ * `start`, or -1. Outside inline math, `$$` pairs are skipped for the
+ * display-math scanner; inside inline math, the first `$` closes it,
+ * even when another `$` immediately follows.
  */
-function scanInlineDollarMath(
+function findInlineDollar(
   text: string,
-  line: number,
-  out: WidgetDescriptor[],
-): void {
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] === "\\") {
-      i += 2;
+  start: number,
+  inInlineMath: boolean,
+): number {
+  let k = start;
+  while (k < text.length) {
+    if (text[k] === "\\") {
+      k += 2;
       continue;
     }
-    if (text[i] !== "$") {
-      i++;
-      continue;
-    }
-    if (text[i + 1] === "$") {
-      // Inside or adjacent to a `$$` — skip past it; the multi-line
-      // scanner has either already emitted the outer descriptor (so
-      // dropOverlaps will subsume us) or there's no matching `$$`
-      // (so we don't want to misread it as two empty $…$ matches).
-      i += 2;
-      continue;
-    }
-    let j = i + 1;
-    while (j < text.length) {
-      if (text[j] === "\\") {
-        j += 2;
+    if (text[k] === "$") {
+      if (!inInlineMath && text[k + 1] === "$") {
+        k += 2;
         continue;
       }
-      if (text[j] === "$") break;
-      j++;
+      return k;
     }
-    if (j >= text.length) break;
-    const content = text.slice(i + 1, j);
-    if (content.length > 0) {
-      out.push({
-        type: "math-inline",
-        from: { line, ch: i },
-        to: { line, ch: j + 1 },
-        source: text.slice(i, j + 1),
-        payload: { content },
-      });
+    k++;
+  }
+  return -1;
+}
+
+/**
+ * Determine whether `line` starts inside inline `$…$` math. A dollar
+ * formula cannot cross a blank line, so only the current paragraph
+ * needs to be inspected. This gives viewport-scoped parses the same
+ * delimiter state as a parse that started at the formula's opener.
+ */
+function startsInsideInlineDollarMath(src: LineSource, line: number): boolean {
+  let paragraphStart = line;
+  while (paragraphStart > 0 && src.getLine(paragraphStart - 1).trim() !== "") {
+    paragraphStart--;
+  }
+
+  let inInlineMath = false;
+  for (let l = paragraphStart; l < line; l++) {
+    const text = getLineStripped(src, l);
+    let i = 0;
+    while (i < text.length) {
+      const dollar = findInlineDollar(text, i, inInlineMath);
+      if (dollar === -1) break;
+      inInlineMath = !inInlineMath;
+      i = dollar + 1;
     }
-    i = j + 1;
+  }
+  return inInlineMath;
+}
+
+/**
+ * Walk forward from `(line, ch)` over whitespace — across line ends
+ * too — and return the first non-whitespace position, or null.
+ *
+ * Stops (returns null) at the search bound and at a BLANK line: a
+ * paragraph break terminates `$…$` math in LaTeX itself, so it must
+ * terminate our search as well. Comment tails are ignored (the lines
+ * are read stripped), so a `% …` line is crossed rather than treated
+ * as a break — which matches LaTeX.
+ */
+function skipWhitespaceForward(
+  src: LineSource,
+  line: number,
+  ch: number,
+  maxLine: number,
+): { line: number; ch: number } | null {
+  let l = line;
+  let c = ch;
+  while (true) {
+    const text = getLineStripped(src, l);
+    while (c < text.length && /\s/.test(text[c])) c++;
+    if (c < text.length) return { line: l, ch: c };
+    if (l >= maxLine) return null;
+    if (src.getLine(l + 1).trim() === "") return null;
+    l++;
+    c = 0;
+  }
+}
+
+/**
+ * Given an opening `$` at `(line, dollarCh)`, decide whether it starts
+ * a multi-line inline formula of the `$\begin{aligned}…\end{aligned}$`
+ * shape, and if so return the position just past the closing `$`.
+ *
+ * Requirements (all of them, so prose can't trigger this):
+ *  - the `$` is followed, ignoring whitespace, by `\begin{env}` with
+ *    `env` an INNER math env (see INNER_MATH_ENV_NAMES);
+ *  - that env's matching `\end{env}` is found (same-name nesting is
+ *    counted) within `maxSearchLine` and without crossing a blank
+ *    line;
+ *  - the closing `$` follows the `\end{env}` with only whitespace in
+ *    between.
+ */
+function matchInnerEnvDollarMath(
+  src: LineSource,
+  line: number,
+  dollarCh: number,
+  maxSearchLine: number,
+): CodeMirror.Position | null {
+  const begin = skipWhitespaceForward(src, line, dollarCh + 1, maxSearchLine);
+  if (begin == null) return null;
+  const beginLineText = getLineStripped(src, begin.line);
+  const m = /^\\begin\{([^}]*)\}/.exec(beginLineText.slice(begin.ch));
+  if (m == null || !isInnerMathEnv(m[1])) return null;
+  const beginStr = `\\begin{${m[1]}}`;
+  const endStr = `\\end{${m[1]}}`;
+  let depth = 0;
+  let l = begin.line;
+  let c = begin.ch;
+  while (true) {
+    const text = getLineStripped(src, l);
+    while (c < text.length) {
+      if (text.startsWith(beginStr, c) && !isEscaped(text, c)) {
+        depth++;
+        c += beginStr.length;
+        continue;
+      }
+      if (text.startsWith(endStr, c) && !isEscaped(text, c)) {
+        depth--;
+        c += endStr.length;
+        if (depth > 0) continue;
+        const closer = skipWhitespaceForward(src, l, c, maxSearchLine);
+        if (closer == null) return null;
+        const closerText = getLineStripped(src, closer.line);
+        // A `\$` can't reach here: skipWhitespaceForward would have
+        // stopped on the backslash instead.
+        if (closerText[closer.ch] !== "$") return null;
+        if (closerText[closer.ch + 1] === "$") return null;
+        return { line: closer.line, ch: closer.ch + 1 };
+      }
+      c++;
+    }
+    if (l >= maxSearchLine) return null;
+    if (src.getLine(l + 1).trim() === "") return null;
+    l++;
+    c = 0;
+  }
+}
+
+/**
+ * Inline `$…$` math, including the deliberately narrow multi-line
+ * inner-environment form.
+ *
+ * LaTeX lets `$…$` span lines (only a paragraph break ends it), and
+ * the construct authors routinely write that way is an inner math
+ * environment:
+ *
+ *     $\begin{aligned}
+ *        f(x) &= \frac{(1-x)^3}{1-x^2} \\
+ *             &= \frac{(1-x)^2}{1+x}
+ *      \end{aligned}$
+ *
+ * `scanMathEnvs` skips `aligned` & co. on purpose (they are not
+ * standalone display envs). So the whole block used to stay raw and,
+ * worse, the per-line catch-all scanners chipped away at its innards.
+ *
+ * The trigger is deliberately narrow (see `matchInnerEnvDollarMath`)
+ * so ordinary prose with stray dollar signs on different lines can
+ * never merge into one widget. A single stateful pass handles both
+ * the normal single-line form and the supported multi-line form. That
+ * state matters when a line contains the closing `$` of an unsupported
+ * multi-line formula followed by the opening `$` of a supported one,
+ * or when the first closer belongs to a formula above the viewport.
+ */
+function scanInlineDollarMath(
+  src: LineSource,
+  fromLine: number,
+  toLine: number,
+  out: WidgetDescriptor[],
+): void {
+  const maxSearchLine = Math.min(
+    src.lineCount() - 1,
+    toLine + ENV_SEARCH_MAX_LINES,
+  );
+  let inInlineMath = startsInsideInlineDollarMath(src, fromLine);
+  let ordinaryOpen: CodeMirror.Position | null = null;
+  // Where a matched inner-environment formula ended. Scanning resumes
+  // exactly there, so its body and closing `$` are not re-scanned.
+  let resume = { line: fromLine, ch: 0 };
+  for (let line = fromLine; line < toLine; line++) {
+    if (line < resume.line) continue;
+    if (src.getLine(line).trim() === "") {
+      // A paragraph break terminates `$…$` math in LaTeX.
+      inInlineMath = false;
+      ordinaryOpen = null;
+      continue;
+    }
+    const text = getLineStripped(src, line);
+    let i = line === resume.line ? resume.ch : 0;
+    while (i < text.length) {
+      const dollar = findInlineDollar(text, i, inInlineMath);
+      if (dollar === -1) break;
+
+      if (inInlineMath) {
+        // Only same-line ordinary `$…$` is rendered. Other multi-line
+        // dollar math remains raw, but its delimiter state still has
+        // to be tracked so its closer cannot consume a later opener.
+        if (ordinaryOpen?.line === line) {
+          const to = { line, ch: dollar + 1 };
+          const content = text.slice(ordinaryOpen.ch + 1, dollar);
+          if (content.length > 0) {
+            out.push({
+              type: "math-inline",
+              from: ordinaryOpen,
+              to,
+              source: getRangeFromSource(src, ordinaryOpen, to),
+              payload: { content },
+            });
+          }
+        }
+        inInlineMath = false;
+        ordinaryOpen = null;
+        i = dollar + 1;
+        continue;
+      }
+
+      const to = matchInnerEnvDollarMath(src, line, dollar, maxSearchLine);
+      if (to != null) {
+        const from = { line, ch: dollar };
+        out.push({
+          type: "math-inline",
+          from,
+          to,
+          source: getRangeFromSource(src, from, to),
+          // Raw (un-stripped) body, like the other multi-line scanners:
+          // KaTeX understands `%` comments in math mode itself.
+          payload: {
+            content: getRangeFromSource(
+              src,
+              { line, ch: dollar + 1 },
+              { line: to.line, ch: to.ch - 1 },
+            ),
+          },
+        });
+        resume = to;
+        if (to.line === line) {
+          i = to.ch;
+          continue;
+        }
+        // The outer loop picks up at `resume`, just after the closer.
+        break;
+      }
+
+      inInlineMath = true;
+      ordinaryOpen = { line, ch: dollar };
+      i = dollar + 1;
+    }
   }
 }
 
@@ -1643,6 +1905,7 @@ export function parseLines(
   scanMathEnvs(src, fromLine, toLine, out);
   scanBracketDisplayMath(src, fromLine, toLine, out);
   scanDoubleDollarMath(src, fromLine, toLine, out);
+  scanInlineDollarMath(src, fromLine, toLine, out);
   scanEnvBlocks(src, fromLine, toLine, out, protectedRanges);
   for (let line = fromLine; line < toLine; line++) {
     const raw = src.getLine(line);
@@ -1663,7 +1926,6 @@ export function parseLines(
     }
     scanIncludegraphics(text, line, out);
     scanVerb(text, line, out);
-    scanInlineDollarMath(text, line, out);
     scanParenMath(text, line, out);
     scanFontSizeGroup(text, line, out);
     // Custom-macro fallback runs LAST among per-line scanners so
