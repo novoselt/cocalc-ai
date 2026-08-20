@@ -64,6 +64,7 @@ export interface LroApi {
   get: (opts: {
     account_id?: string;
     op_id: string;
+    timeout?: number;
   }) => Promise<LroSummary | undefined>;
   list: (opts: {
     account_id?: string;

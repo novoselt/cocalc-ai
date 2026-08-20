@@ -22,7 +22,33 @@ import {
   type ProjectAccess,
   type ProjectViewerReadPolicy,
 } from "@cocalc/util/project-access";
+import { isValidUUID } from "@cocalc/util/misc";
 import * as publicDirectoryShares from "@cocalc/server/conat/api/public-directory-shares";
+
+type LocalProjectReferenceRow = {
+  project_id: string;
+  title: string | null;
+  host_id: string | null;
+  owning_bay_id: string | null;
+  usage_account_id: string | null;
+  users: Record<string, any> | null;
+  allow_collaborator_destructive_storage_actions: boolean | null;
+};
+
+function projectReferenceFromLocalRow(
+  row: LocalProjectReferenceRow,
+): ProjectReference {
+  return {
+    project_id: row.project_id,
+    title: row.title ?? "",
+    host_id: row.host_id ?? null,
+    owning_bay_id: row.owning_bay_id ?? getConfiguredBayId(),
+    usage_account_id: row.usage_account_id ?? null,
+    users: row.users ?? {},
+    allow_collaborator_destructive_storage_actions:
+      row.allow_collaborator_destructive_storage_actions,
+  };
+}
 
 async function loadLocalProjectReference({
   account_id,
@@ -33,20 +59,14 @@ async function loadLocalProjectReference({
   project_id: string;
   requireProjectUser?: boolean;
 }): Promise<ProjectReference | null> {
-  const { rows } = await getPool().query<{
-    project_id: string;
-    title: string | null;
-    host_id: string | null;
-    owning_bay_id: string | null;
-    users: Record<string, any> | null;
-    allow_collaborator_destructive_storage_actions: boolean | null;
-  }>(
+  const { rows } = await getPool().query<LocalProjectReferenceRow>(
     `
       SELECT
         project_id,
         title,
         host_id,
         COALESCE(owning_bay_id, $3) AS owning_bay_id,
+        usage_account_id,
         COALESCE(users, '{}'::jsonb) AS users,
         allow_collaborator_destructive_storage_actions
       FROM projects
@@ -61,15 +81,34 @@ async function loadLocalProjectReference({
   if (!row?.project_id) {
     return null;
   }
-  return {
-    project_id: row.project_id,
-    title: row.title ?? "",
-    host_id: row.host_id ?? null,
-    owning_bay_id: row.owning_bay_id ?? getConfiguredBayId(),
-    users: row.users ?? {},
-    allow_collaborator_destructive_storage_actions:
-      row.allow_collaborator_destructive_storage_actions,
-  };
+  return projectReferenceFromLocalRow(row);
+}
+
+async function loadLocalProjectReferences(
+  project_ids: string[],
+): Promise<Map<string, ProjectReference>> {
+  if (project_ids.length === 0) {
+    return new Map();
+  }
+  const { rows } = await getPool().query<LocalProjectReferenceRow>(
+    `
+      SELECT
+        project_id,
+        title,
+        host_id,
+        COALESCE(owning_bay_id, $2) AS owning_bay_id,
+        usage_account_id,
+        COALESCE(users, '{}'::jsonb) AS users,
+        allow_collaborator_destructive_storage_actions
+      FROM projects
+      WHERE project_id = ANY($1::uuid[])
+        AND deleted IS NOT TRUE
+    `,
+    [project_ids, getConfiguredBayId()],
+  );
+  return new Map(
+    rows.map((row) => [row.project_id, projectReferenceFromLocalRow(row)]),
+  );
 }
 
 export async function resolveProjectReferenceCollaboratorOrAdminAllowRemote({
@@ -291,4 +330,42 @@ export async function assertProjectCollaboratorAccessAllowRemote({
     throw Error(PROJECT_COLLABORATOR_REQUIRED_ERROR);
   }
   return reference;
+}
+
+export async function assertProjectCollaboratorAccessAllowRemoteBatch({
+  account_id,
+  project_ids,
+  warmRoute = true,
+}: {
+  account_id?: string;
+  project_ids: string[];
+  warmRoute?: boolean;
+}): Promise<ProjectReference[]> {
+  if (!account_id) {
+    throw Error("must be signed in");
+  }
+  const uniqueProjectIds = Array.from(new Set(project_ids));
+  if (uniqueProjectIds.some((project_id) => !isValidUUID(project_id))) {
+    throw Error("invalid project_id -- all must be valid uuid's");
+  }
+  const local = await loadLocalProjectReferences(uniqueProjectIds);
+  return await Promise.all(
+    uniqueProjectIds.map(async (project_id) => {
+      const reference = local.get(project_id);
+      if (
+        reference?.owning_bay_id === getConfiguredBayId() &&
+        isProjectCollaboratorRole(reference.users?.[account_id]?.group)
+      ) {
+        if (warmRoute) {
+          await warmProjectRoute(project_id);
+        }
+        return reference;
+      }
+      return await assertProjectCollaboratorAccessAllowRemote({
+        account_id,
+        project_id,
+        warmRoute,
+      });
+    }),
+  );
 }

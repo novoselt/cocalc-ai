@@ -1308,6 +1308,8 @@ export interface Projects {
     dest?: ProjectCopyDestination;
     dests?: ProjectCopyDestination[];
     options?: CopyOptions;
+    request_id?: string;
+    timeout?: number;
   }) => Promise<{
     op_id: string;
     scope_type: "project";
@@ -1381,6 +1383,7 @@ export interface Projects {
   listCopyRowsByOpId: (opts: {
     account_id?: string;
     op_id: string;
+    timeout?: number;
   }) => Promise<ProjectCopyRow[]>;
 
   getProjectRegion: (opts: {

@@ -703,11 +703,13 @@ export async function handleProjectReferenceGet(
   }
   const { rows } = await getPool().query<{
     users: Record<string, any> | null;
+    usage_account_id: string | null;
     allow_collaborator_destructive_storage_actions: boolean | null;
   }>(
     `
       SELECT
         COALESCE(users, '{}'::jsonb) AS users,
+        usage_account_id,
         allow_collaborator_destructive_storage_actions
       FROM projects
       WHERE project_id = $1
@@ -721,6 +723,7 @@ export async function handleProjectReferenceGet(
     title: project.title,
     host_id: project.host_id,
     owning_bay_id: project.owning_bay_id,
+    usage_account_id: rows[0]?.usage_account_id ?? null,
     users: rows[0]?.users ?? {},
     allow_collaborator_destructive_storage_actions:
       rows[0]?.allow_collaborator_destructive_storage_actions ?? null,

@@ -12,9 +12,11 @@ import { getConfiguredBayId } from "@cocalc/server/bay-config";
 import { getConfiguredClusterBayIdsForStaticEnumerationOnly } from "@cocalc/server/cluster-config";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
+import { mapParallelLimit } from "@cocalc/util/async-utils";
 
 const LOCAL_EPOCH = 0;
 const DIRECTORY_FALLBACK_TIMEOUT_MS = 2_000;
+const DIRECTORY_BATCH_FALLBACK_CONCURRENCY = 20;
 
 export async function resolveProjectBay(
   project_id: string,
@@ -47,6 +49,50 @@ export async function resolveProjectBayDirect(
     return null;
   }
   return { bay_id, epoch: LOCAL_EPOCH };
+}
+
+export async function resolveProjectBays(
+  project_ids: string[],
+): Promise<Map<string, BayOwnership | null>> {
+  const uniqueProjectIds = Array.from(new Set(project_ids));
+  if (uniqueProjectIds.length === 0) {
+    return new Map();
+  }
+  const defaultBayId = getConfiguredBayId();
+  const { rows } = await getPool().query<{
+    project_id: string;
+    bay_id: string | null;
+  }>(
+    `
+      SELECT project_id::text,
+             COALESCE(owning_bay_id, $2) AS bay_id
+      FROM projects
+      WHERE project_id = ANY($1::uuid[])
+    `,
+    [uniqueProjectIds, defaultBayId],
+  );
+  const result = new Map<string, BayOwnership | null>();
+  for (const row of rows) {
+    const bay_id = `${row.bay_id ?? ""}`.trim();
+    if (bay_id) {
+      result.set(row.project_id, { bay_id, epoch: LOCAL_EPOCH });
+    }
+  }
+  const missing = uniqueProjectIds.filter(
+    (project_id) => !result.has(project_id),
+  );
+  const directory = createInterBayDirectoryClient({
+    client: getInterBayFabricClient(),
+  });
+  const fallback = await mapParallelLimit(
+    missing,
+    async (project_id) => await directory.resolveProjectBay({ project_id }),
+    DIRECTORY_BATCH_FALLBACK_CONCURRENCY,
+  );
+  for (let i = 0; i < missing.length; i += 1) {
+    result.set(missing[i], fallback[i] ?? null);
+  }
+  return result;
 }
 
 export async function resolveProjectBayAcrossCluster(

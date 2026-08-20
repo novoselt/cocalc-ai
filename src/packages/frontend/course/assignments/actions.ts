@@ -80,8 +80,11 @@ import type {
   ProjectCopyDestination,
 } from "@cocalc/conat/hub/api/projects";
 import {
+  courseCopyDestinationsFromSummary,
   courseCollectResultByStudent,
   type CourseCopyDestination,
+  type CourseCopyLro,
+  reconcileCourseCopyLro,
   waitForCourseCopyLro,
 } from "../copy-lro";
 import { projectRelativeCoursePath } from "./paths";
@@ -978,7 +981,7 @@ ${details}
     if (a == null) return;
     const x = a[type] ? a[type] : {};
     if (err) {
-      x[student_id] = { error: err };
+      x[student_id] = { error: `${err}` };
     } else {
       x[student_id] = { time: webapp_client.server_time() };
     }
@@ -1264,6 +1267,17 @@ ${details}
       assignment_id,
     });
     if (!assignment) return;
+    const previousOpId = assignment.get("last_assignment_op_id");
+    if (previousOpId) {
+      const reconciled = await this.reconcile_assignment_distribution({
+        assignment_id,
+        op_id: previousOpId,
+      });
+      if (!reconciled) {
+        finish("An assignment copy is already running in the background.");
+        return;
+      }
+    }
     if (assignment.get("nbgrader") && !assignment.get("has_student_subdir")) {
       finish(
         "Assignment contains Jupyter notebooks with nbgrader metadata but there is no student/ subdirectory. The student/ subdirectory gets created when you generate the student version of the assignment. Please generate the student versions of your notebooks, or remove any nbgrader metadata.",
@@ -1331,6 +1345,7 @@ ${details}
     }
 
     if (dests.length) {
+      let op: CourseCopyLro | undefined;
       try {
         await this.course_actions.student_projects.ensure_course_manager_access(
           {
@@ -1341,7 +1356,7 @@ ${details}
           id,
           desc: `Copying assignment to ${dests.length} students`,
         });
-        const op = await webapp_client.project_client.copyPathBetweenProjects({
+        op = await webapp_client.project_client.copyPathBetweenProjects({
           src: await courseDirectoryCopySource({
             project_id: store.get("course_project_id"),
             path: src_path,
@@ -1349,6 +1364,11 @@ ${details}
           dests,
           options: { recursive: true, force: !!overwrite },
         });
+        this.set_assignment_field(
+          assignment_id,
+          "last_assignment_op_id",
+          op.op_id,
+        );
         const result = await waitForCourseCopyLro({
           op,
           dests: courseCopyDests,
@@ -1370,15 +1390,95 @@ ${details}
             result[student_id] ?? "",
           );
         }
+        this.set_assignment_field(assignment_id, "last_assignment_op_id", null);
       } catch (err) {
-        for (const student_id of startedStudentIds) {
-          this.finish_copy(assignment_id, student_id, "last_assignment", err);
+        if (op) {
+          const reconciled = await this.reconcile_assignment_distribution({
+            assignment_id,
+            op_id: op.op_id,
+          }).catch(() => false);
+          if (!reconciled) {
+            errors +=
+              "\n The copy is continuing in the background and its status will be reconciled when the course is reopened.";
+          }
+        } else {
+          for (const student_id of startedStudentIds) {
+            this.finish_copy(
+              assignment_id,
+              student_id,
+              "last_assignment",
+              `${err}`,
+            );
+          }
+          errors += `\n ${err}`;
         }
-        errors += `\n ${err}`;
       }
     }
 
     finish(errors);
+  };
+
+  private reconcile_assignment_distribution = async ({
+    assignment_id,
+    op_id,
+  }: {
+    assignment_id: string;
+    op_id: string;
+  }): Promise<boolean> => {
+    const summary = await webapp_client.conat_client.hub.lro.get({
+      op_id,
+      timeout: 60_000,
+    });
+    if (!summary || !TERMINAL_LRO_STATUSES.has(summary.status)) {
+      return false;
+    }
+    const dests = courseCopyDestinationsFromSummary(summary);
+    if (dests.length === 0) {
+      return false;
+    }
+    const result = await reconcileCourseCopyLro({
+      op: {
+        op_id,
+        scope_type: "project",
+        scope_id: summary.scope_id,
+      },
+      dests,
+    });
+    if (result == null) {
+      return false;
+    }
+    for (const { student_id } of dests) {
+      this.finish_copy(
+        assignment_id,
+        student_id,
+        "last_assignment",
+        result[student_id] ?? "",
+      );
+    }
+    this.set_assignment_field(assignment_id, "last_assignment_op_id", null);
+    return true;
+  };
+
+  reconcile_assignment_distributions = async (): Promise<void> => {
+    const assignments = this.get_store().get("assignments");
+    const pending = assignments
+      .valueSeq()
+      .map((assignment) => ({
+        assignment_id: assignment.get("assignment_id"),
+        op_id: assignment.get("last_assignment_op_id"),
+      }))
+      .filter(({ assignment_id, op_id }) => !!assignment_id && !!op_id)
+      .toArray();
+    await map(pending, 4, async ({ assignment_id, op_id }) => {
+      try {
+        await this.reconcile_assignment_distribution({
+          assignment_id,
+          op_id,
+        });
+      } catch {
+        // A later course reload or explicit assignment action retries recovery.
+      }
+    });
   };
 
   private record_assignment_update = (

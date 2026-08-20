@@ -120,6 +120,41 @@ describe("inter-bay directory", () => {
     expect(queryMock).toHaveBeenCalled();
   });
 
+  it("resolves a batch of local projects with one database query", async () => {
+    queryMock.mockResolvedValue({
+      rows: [
+        { project_id: "proj-1", bay_id: "bay-1" },
+        { project_id: "proj-2", bay_id: "bay-2" },
+      ],
+    });
+    const { resolveProjectBays } = await import("./directory");
+    await expect(
+      resolveProjectBays(["proj-1", "proj-2", "proj-1"]),
+    ).resolves.toEqual(
+      new Map([
+        ["proj-1", { bay_id: "bay-1", epoch: 0 }],
+        ["proj-2", { bay_id: "bay-2", epoch: 0 }],
+      ]),
+    );
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("uses directory fallback only for projects missing locally", async () => {
+    queryMock.mockResolvedValue({
+      rows: [{ project_id: "proj-1", bay_id: "bay-1" }],
+    });
+    requestMock.mockResolvedValue({ data: { bay_id: "bay-remote", epoch: 7 } });
+    const { resolveProjectBays } = await import("./directory");
+    await expect(resolveProjectBays(["proj-1", "proj-2"])).resolves.toEqual(
+      new Map([
+        ["proj-1", { bay_id: "bay-1", epoch: 0 }],
+        ["proj-2", { bay_id: "bay-remote", epoch: 7 }],
+      ]),
+    );
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back across configured bays for project resolution", async () => {
     queryMock.mockResolvedValue({ rows: [] });
     directoryResolveProjectBayMock

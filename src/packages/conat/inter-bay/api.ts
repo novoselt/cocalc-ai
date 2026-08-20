@@ -248,6 +248,7 @@ export interface ProjectReference {
   title: string;
   host_id: string | null;
   owning_bay_id: string;
+  usage_account_id?: string | null;
   users?: Record<string, any>;
   allow_collaborator_destructive_storage_actions?: boolean | null;
 }

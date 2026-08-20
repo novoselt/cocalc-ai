@@ -162,6 +162,43 @@ describe("createLroDetailed", () => {
     );
     expect(sql).toContain("COMMIT");
   });
+
+  it("can reuse a terminal operation for an idempotent request", async () => {
+    const existing = {
+      op_id: "11111111-1111-4111-8111-111111111111",
+      kind: "copy-path-between-projects",
+      scope_type: "project",
+      scope_id: "22222222-2222-4222-8222-222222222222",
+      status: "succeeded",
+    };
+    connectQueryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT *") && sql.includes("dedupe_key=$3")) {
+        return { rows: [existing] };
+      }
+      return { rows: [] };
+    });
+    const { createLroDetailed } = await import("./lro-db");
+
+    await expect(
+      createLroDetailed({
+        kind: "copy-path-between-projects",
+        scope_type: "project",
+        scope_id: existing.scope_id,
+        dedupe_key: "copy-path-between-projects:request-1",
+        reuse_terminal_dedupe: true,
+      }),
+    ).resolves.toEqual({ lro: existing, created: false });
+
+    const select = connectQueryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("dedupe_key=$3"),
+    );
+    expect(select?.[0]).not.toContain("status <> ALL");
+    expect(select?.[1]).toEqual([
+      "project",
+      existing.scope_id,
+      "copy-path-between-projects:request-1",
+    ]);
+  });
 });
 
 describe("updateLro", () => {
