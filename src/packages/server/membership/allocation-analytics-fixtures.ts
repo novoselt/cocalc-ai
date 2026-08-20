@@ -7,12 +7,16 @@ import getPool, {
   getTransactionClient,
   type PoolClient,
 } from "@cocalc/database/pool";
-import type {
-  MembershipAllocationBillingInterval,
-  MembershipAllocationChannel,
-  MembershipAllocationLifecycle,
-  MembershipAllocationTierChange,
+import {
+  MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT,
+  MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION,
+  type MembershipAllocationDailyExport,
+  type MembershipAllocationBillingInterval,
+  type MembershipAllocationChannel,
+  type MembershipAllocationLifecycle,
+  type MembershipAllocationTierChange,
 } from "@cocalc/conat/hub/api/purchases";
+import { readFile } from "node:fs/promises";
 import { allocateWholeCentsByDay } from "./allocation-analytics";
 
 export const MEMBERSHIP_ALLOCATION_FIXTURE_BAY = "dev-fixture";
@@ -93,6 +97,7 @@ interface PersonalTier extends MembershipAllocationFixtureTier {
 interface CliOptions {
   apply: boolean;
   confirmation?: string;
+  importFile?: string;
   asOf?: string;
   months: number;
   futureDays: number;
@@ -111,6 +116,243 @@ function utcDay(value: Date | string): Date {
 
 function dateKey(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+const ALLOCATION_CHANNELS = new Set<MembershipAllocationChannel>([
+  "personal",
+  "direct-student",
+  "course",
+  "team",
+  "site",
+]);
+const BILLING_INTERVALS = new Set<MembershipAllocationBillingInterval>([
+  "trial",
+  "month",
+  "year",
+  "fixed",
+]);
+const LIFECYCLES = new Set<MembershipAllocationLifecycle>([
+  "trial",
+  "first_paid",
+  "renewal",
+  "plan_change",
+]);
+const TIER_CHANGES = new Set<MembershipAllocationTierChange>([
+  "none",
+  "upgrade",
+  "downgrade",
+  "same",
+]);
+
+function recordValue(value: unknown, name: string): Record<string, unknown> {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    throw Error(`${name} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function stringValue(value: unknown, name: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw Error(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function nullableStringValue(value: unknown, name: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw Error(`${name} must be a string or null`);
+  }
+  return value || null;
+}
+
+function safeIntegerValue(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw Error(`${name} must be a safe integer`);
+  }
+  return value;
+}
+
+function enumValue<T extends string>(
+  value: unknown,
+  name: string,
+  allowed: Set<T>,
+): T {
+  if (typeof value !== "string" || !allowed.has(value as T)) {
+    throw Error(`${name} has unsupported value ${value}`);
+  }
+  return value as T;
+}
+
+function dayValue(value: unknown, name: string): string {
+  const day = stringValue(value, name);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || dateKey(utcDay(day)) !== day) {
+    throw Error(`${name} must be a valid YYYY-MM-DD date`);
+  }
+  return day;
+}
+
+function importRowKey(
+  row: MembershipAllocationDailyExport["rows"][number],
+): string {
+  return [
+    row.day,
+    row.channel,
+    row.membership_class,
+    row.billing_interval,
+    row.lifecycle,
+    row.previous_membership_class ?? "",
+    row.previous_billing_interval ?? "",
+    row.tier_change,
+  ].join("\0");
+}
+
+export function parseMembershipAllocationDailyExport(
+  value: unknown,
+): MembershipAllocationDailyExport {
+  const input = recordValue(value, "membership allocation export");
+  if (input.format !== MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT) {
+    throw Error(
+      `unsupported membership allocation export format ${input.format}`,
+    );
+  }
+  if (input.version !== MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION) {
+    throw Error(
+      `unsupported membership allocation export version ${input.version}`,
+    );
+  }
+  const exportedAt = stringValue(input.exported_at, "exported_at");
+  if (!Number.isFinite(new Date(exportedAt).valueOf())) {
+    throw Error("exported_at must be a valid timestamp");
+  }
+  const range = recordValue(input.range, "range");
+  const startDay = dayValue(range.start_day, "range.start_day");
+  const endDay = dayValue(range.end_day, "range.end_day");
+  if (startDay > endDay) throw Error("export range starts after it ends");
+
+  if (!Array.isArray(input.channels)) throw Error("channels must be an array");
+  const channels = input.channels.map((channel, index) =>
+    enumValue(channel, `channels[${index}]`, ALLOCATION_CHANNELS),
+  );
+  if (new Set(channels).size !== channels.length) {
+    throw Error("channels must not contain duplicates");
+  }
+  const selectedChannels = new Set(channels);
+
+  if (!Array.isArray(input.tiers)) throw Error("tiers must be an array");
+  const tiers = input.tiers.map((value, index) => {
+    const tier = recordValue(value, `tiers[${index}]`);
+    const priority = tier.priority;
+    if (typeof priority !== "number" || !Number.isFinite(priority)) {
+      throw Error(`tiers[${index}].priority must be a finite number`);
+    }
+    return {
+      id: stringValue(tier.id, `tiers[${index}].id`),
+      label: stringValue(tier.label, `tiers[${index}].label`),
+      priority,
+    };
+  });
+  if (new Set(tiers.map(({ id }) => id)).size !== tiers.length) {
+    throw Error("tiers must not contain duplicate ids");
+  }
+
+  if (!Array.isArray(input.rows)) throw Error("rows must be an array");
+  const rows = input.rows.map((value, index) => {
+    const row = recordValue(value, `rows[${index}]`);
+    const day = dayValue(row.day, `rows[${index}].day`);
+    if (day < startDay || day > endDay) {
+      throw Error(`rows[${index}].day is outside the export range`);
+    }
+    const channel = enumValue(
+      row.channel,
+      `rows[${index}].channel`,
+      ALLOCATION_CHANNELS,
+    );
+    if (!selectedChannels.has(channel)) {
+      throw Error(`rows[${index}].channel is not listed in channels`);
+    }
+    const previousBillingInterval = nullableStringValue(
+      row.previous_billing_interval,
+      `rows[${index}].previous_billing_interval`,
+    );
+    if (
+      previousBillingInterval != null &&
+      !BILLING_INTERVALS.has(
+        previousBillingInterval as MembershipAllocationBillingInterval,
+      )
+    ) {
+      throw Error(
+        `rows[${index}].previous_billing_interval has unsupported value ${previousBillingInterval}`,
+      );
+    }
+    return {
+      day,
+      channel,
+      membership_class: stringValue(
+        row.membership_class,
+        `rows[${index}].membership_class`,
+      ),
+      billing_interval: enumValue(
+        row.billing_interval,
+        `rows[${index}].billing_interval`,
+        BILLING_INTERVALS,
+      ),
+      lifecycle: enumValue(
+        row.lifecycle,
+        `rows[${index}].lifecycle`,
+        LIFECYCLES,
+      ),
+      previous_membership_class: nullableStringValue(
+        row.previous_membership_class,
+        `rows[${index}].previous_membership_class`,
+      ),
+      previous_billing_interval:
+        previousBillingInterval as MembershipAllocationBillingInterval | null,
+      tier_change: enumValue(
+        row.tier_change,
+        `rows[${index}].tier_change`,
+        TIER_CHANGES,
+      ),
+      active_memberships: safeIntegerValue(
+        row.active_memberships,
+        `rows[${index}].active_memberships`,
+      ),
+      purchased_capacity: safeIntegerValue(
+        row.purchased_capacity,
+        `rows[${index}].purchased_capacity`,
+      ),
+      revenue_cents: safeIntegerValue(
+        row.revenue_cents,
+        `rows[${index}].revenue_cents`,
+      ),
+      fact_count: safeIntegerValue(row.fact_count, `rows[${index}].fact_count`),
+    } satisfies MembershipAllocationDailyExport["rows"][number];
+  });
+  const rowKeys = rows.map(importRowKey);
+  if (new Set(rowKeys).size !== rowKeys.length) {
+    throw Error("rows must not contain duplicate daily allocation keys");
+  }
+  return {
+    format: MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT,
+    version: MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION,
+    exported_at: exportedAt,
+    range: { start_day: startDay, end_day: endDay },
+    channels,
+    tiers,
+    rows,
+  };
+}
+
+export function membershipAllocationFixtureRowsFromExport(
+  payload: MembershipAllocationDailyExport,
+): MembershipAllocationFixtureRow[] {
+  return payload.rows.map((row) => ({
+    ...row,
+    bay_id: MEMBERSHIP_ALLOCATION_FIXTURE_BAY,
+    source_kind: FIXTURE_SOURCE_KIND,
+    previous_membership_class: row.previous_membership_class ?? "",
+    previous_billing_interval: row.previous_billing_interval ?? "",
+  }));
 }
 
 function positiveInteger(value: number, name: string): number {
@@ -875,6 +1117,8 @@ function usage(): never {
 Options:
   --apply                         Replace dev-fixture daily allocation rows.
   --confirm ${CONFIRMATION}   Required with --apply.
+  --import <path>                 Import a daily-bucket JSON export instead of
+                                  generating synthetic data.
   --months <count>                Historical calendar months. Default: 30.
   --as-of <YYYY-MM-DD>            Current/reference day. Default: today.
   --future-days <count>           Days after as-of to generate. Default: 365.
@@ -907,6 +1151,8 @@ function parseCliOptions(argv: string[]): CliOptions {
     }
     if (arg === "--confirm") {
       options.confirmation = value;
+    } else if (arg === "--import") {
+      options.importFile = value;
     } else if (arg === "--months") {
       options.months = positiveInteger(Number(value), arg);
     } else if (arg === "--as-of") {
@@ -963,6 +1209,44 @@ async function main(): Promise<void> {
   try {
     await assertLocalDatabase(client);
     const tiers = await configuredTiers(client);
+    if (options.importFile != null) {
+      let input: unknown;
+      try {
+        input = JSON.parse(await readFile(options.importFile, "utf8"));
+      } catch (err) {
+        throw Error(`unable to read membership analytics export: ${err}`);
+      }
+      const payload = parseMembershipAllocationDailyExport(input);
+      const rows = membershipAllocationFixtureRowsFromExport(payload);
+      const configuredTierIds = new Set(tiers.map(({ id }) => id));
+      const missingTierIds = [
+        ...new Set(
+          rows
+            .map(({ membership_class }) => membership_class)
+            .filter((id) => !configuredTierIds.has(id)),
+        ),
+      ].sort();
+      process.stdout.write(
+        `${options.apply ? "Replacing" : "Would replace"} ${rows.length.toLocaleString()} daily allocation rows from ${options.importFile}\n` +
+          `Range: ${payload.range.start_day} through ${payload.range.end_day}\n` +
+          `Channels: ${payload.channels.join(", ") || "none"}\n`,
+      );
+      if (missingTierIds.length) {
+        process.stderr.write(
+          `Warning: the local database does not define imported tiers: ${missingTierIds.join(", ")}\n`,
+        );
+      }
+      if (options.apply) {
+        await replaceMembershipAllocationFixture({ rows, client });
+        await client.query("COMMIT");
+        process.stdout.write(
+          "Development membership analytics fixture imported.\n",
+        );
+      } else {
+        await client.query("ROLLBACK");
+      }
+      return;
+    }
     const fixture = generateMembershipAllocationFixture({
       tiers,
       asOf: options.asOf,

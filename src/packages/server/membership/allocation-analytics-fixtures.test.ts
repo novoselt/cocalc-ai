@@ -10,7 +10,9 @@ import {
 } from "@cocalc/database/pool";
 import {
   generateMembershipAllocationFixture,
+  membershipAllocationFixtureRowsFromExport,
   MEMBERSHIP_ALLOCATION_FIXTURE_BAY,
+  parseMembershipAllocationDailyExport,
   replaceMembershipAllocationFixture,
   type MembershipAllocationFixtureRow,
   type MembershipAllocationFixtureTier,
@@ -196,6 +198,79 @@ describe("membership allocation analytics fixtures", () => {
         futureDays: 366,
       }),
     ).toThrow("futureDays must not exceed 365");
+  });
+
+  it("validates and converts aggregate exports into isolated fixture rows", () => {
+    const payload = parseMembershipAllocationDailyExport({
+      format: "cocalc-membership-allocation-daily",
+      version: 1,
+      exported_at: "2026-08-18T12:00:00.000Z",
+      range: { start_day: "2026-08-01", end_day: "2026-08-02" },
+      channels: ["personal", "team"],
+      tiers: [
+        { id: "standard", label: "Standard", priority: 20 },
+        { id: "pro", label: "Pro", priority: 30 },
+      ],
+      rows: [
+        {
+          day: "2026-08-02",
+          channel: "team",
+          membership_class: "pro",
+          billing_interval: "year",
+          lifecycle: "renewal",
+          previous_membership_class: null,
+          previous_billing_interval: null,
+          tier_change: "none",
+          active_memberships: 3,
+          purchased_capacity: 5,
+          revenue_cents: 493,
+          fact_count: 1,
+        },
+      ],
+    });
+
+    expect(membershipAllocationFixtureRowsFromExport(payload)).toEqual([
+      {
+        ...payload.rows[0],
+        bay_id: MEMBERSHIP_ALLOCATION_FIXTURE_BAY,
+        source_kind: "external-import",
+        previous_membership_class: "",
+        previous_billing_interval: "",
+      },
+    ]);
+  });
+
+  it("rejects malformed aggregate exports before replacing fixture data", () => {
+    const input = {
+      format: "cocalc-membership-allocation-daily",
+      version: 1,
+      exported_at: "2026-08-18T12:00:00.000Z",
+      range: { start_day: "2026-08-01", end_day: "2026-08-01" },
+      channels: ["personal"],
+      tiers: [{ id: "standard", label: "Standard", priority: 20 }],
+      rows: [
+        {
+          day: "2026-08-01",
+          channel: "personal",
+          membership_class: "standard",
+          billing_interval: "month",
+          lifecycle: "first_paid",
+          previous_membership_class: null,
+          previous_billing_interval: null,
+          tier_change: "none",
+          active_memberships: 1,
+          purchased_capacity: 0,
+          revenue_cents: 58.5,
+          fact_count: 1,
+        },
+      ],
+    };
+    expect(() => parseMembershipAllocationDailyExport(input)).toThrow(
+      "rows[0].revenue_cents must be a safe integer",
+    );
+    expect(() =>
+      parseMembershipAllocationDailyExport({ ...input, version: 2 }),
+    ).toThrow("unsupported membership allocation export version 2");
   });
 
   describe("database replacement", () => {

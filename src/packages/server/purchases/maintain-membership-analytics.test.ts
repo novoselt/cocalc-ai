@@ -57,6 +57,9 @@ describe("maintainMembershipAnalytics", () => {
       trials: 0,
       personal_purchases: 0,
       direct_student_purchases: 0,
+      course_purchases: 0,
+      team_license_purchases: 0,
+      package_assignments: 0,
       refunds: 0,
     });
     mockProjectOutstandingMembershipAllocationFacts
@@ -139,6 +142,9 @@ describe("maintainMembershipAnalytics", () => {
       trials: 0,
       personal_purchases: 1,
       direct_student_purchases: 0,
+      course_purchases: 0,
+      team_license_purchases: 0,
+      package_assignments: 0,
       refunds: 0,
     });
 

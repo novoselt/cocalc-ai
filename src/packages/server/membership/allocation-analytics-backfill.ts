@@ -10,6 +10,7 @@ import type {
   Interval,
   MembershipMetadata,
 } from "@cocalc/util/db-schema/subscriptions";
+import type { TeamLicenseQuoteLineItem } from "@cocalc/conat/hub/api/purchases";
 import {
   recordMembershipAllocationFact,
   recordMembershipAllocationRefund,
@@ -19,6 +20,12 @@ import {
   recordPersonalMembershipPeriod,
   recordPersonalMembershipUpgradeCredit,
 } from "./personal-allocation-analytics";
+import { recordTeamLicensePurchaseFacts } from "./team-license-allocation-analytics";
+import {
+  packageAssignmentAllocationMonths,
+  packageAssignmentAllocationSource,
+  recordPackageAssignmentMonth,
+} from "./package-assignment-analytics";
 
 const MAX_BACKFILL_BATCH = 1000;
 
@@ -75,10 +82,49 @@ interface RefundRow {
   original_purchase_id: number;
 }
 
+interface TeamLicensePurchaseRow {
+  id: number;
+  time: Date;
+  account_id: string;
+  purchase_type: "team-license-change" | "team-license-renewal";
+  lifecycle?: string | null;
+  team_license_id: string;
+  line_items: unknown;
+  billing_interval: Interval;
+  has_earlier_purchase: boolean;
+  period_start: Date;
+  period_end: Date;
+}
+
+interface TeamLicenseTierRow {
+  id: string;
+  label: string;
+}
+
+interface PackageAssignmentBackfillRow {
+  assignment_id: string;
+  package_id: string;
+  account_id: string;
+  assigned_at: Date;
+  revoked_at?: Date | null;
+  assignment_metadata?: Record<string, unknown> | null;
+  grant_expires_at?: Date | null;
+  owner_account_id: string;
+  package_kind: "course" | "team" | "site";
+  membership_class: string;
+  seat_count: number;
+  package_starts_at?: Date | null;
+  package_expires_at?: Date | null;
+  package_metadata?: Record<string, unknown> | null;
+}
+
 export interface MembershipAllocationBackfillResult {
   trials: number;
   personal_purchases: number;
   direct_student_purchases: number;
+  course_purchases: number;
+  team_license_purchases: number;
+  package_assignments: number;
   refunds: number;
 }
 
@@ -353,12 +399,14 @@ async function backfillPersonalPurchases({
   return recorded;
 }
 
-async function backfillDirectStudentPurchases({
+async function backfillCoursePurchases({
   client,
   limit,
+  directStudent,
 }: {
   client: PoolClient;
   limit: number;
+  directStudent: boolean;
 }): Promise<number> {
   const { rows } = await client.query<DirectStudentPurchaseRow>(
     `SELECT p.id, p.time, p.account_id, p.cost,
@@ -372,7 +420,12 @@ async function backfillDirectStudentPurchases({
       WHERE p.service='membership'
         AND p.description->>'type'='membership-package'
         AND p.description->>'kind'='course'
-        AND p.description->'metadata'->>'direct_student_purchase'='true'
+        AND (($2::boolean AND
+              p.description->'metadata'->>'direct_student_purchase'='true')
+             OR
+             (NOT $2::boolean AND
+              COALESCE(p.description->'metadata'->>'direct_student_purchase',
+                       'false') <> 'true'))
         AND COALESCE(p.description->>'membership_class', '') <> ''
         AND COALESCE(p.description->>'seat_count', '') ~ '^[0-9]+$'
         AND COALESCE(p.period_start,
@@ -384,27 +437,28 @@ async function backfillDirectStudentPurchases({
           SELECT 1
             FROM membership_allocation_facts f
            WHERE f.purchase_id=p.id
-             AND f.channel='direct-student'
+             AND f.channel=$3
         )
       ORDER BY p.time, p.id
       LIMIT $1`,
-    [limit],
+    [limit, directStudent, directStudent ? "direct-student" : "course"],
   );
   let recorded = 0;
+  const channel = directStudent ? "direct-student" : "course";
   for (const row of rows) {
     if (
       await recordMembershipAllocationFact({
-        fact_key: `direct-student:purchase:${row.id}`,
+        fact_key: `${channel}:purchase:${row.id}`,
         occurred_at: row.time,
         account_id: row.account_id,
-        channel: "direct-student",
+        channel,
         source_kind: "purchase",
         membership_class: row.membership_class,
         billing_interval: "fixed",
         lifecycle: "first_paid",
         allocation_start: row.starts_at,
         allocation_end: row.expires_at,
-        active_memberships: row.seat_count,
+        active_memberships: directStudent ? row.seat_count : 0,
         purchased_capacity: row.seat_count,
         revenue: row.cost,
         purchase_id: row.id,
@@ -412,6 +466,230 @@ async function backfillDirectStudentPurchases({
       })
     ) {
       recorded += 1;
+    }
+  }
+  return recorded;
+}
+
+function normalizeTeamLicenseLineItems(
+  value: unknown,
+  tiers: TeamLicenseTierRow[],
+): TeamLicenseQuoteLineItem[] {
+  if (!Array.isArray(value)) return [];
+  const labels = [...tiers].sort((a, b) => b.label.length - a.label.length);
+  return value
+    .map((item): TeamLicenseQuoteLineItem | undefined => {
+      if (item == null || typeof item !== "object") return;
+      const row = item as Record<string, unknown>;
+      let membershipClass = `${row.membership_class ?? ""}`.trim();
+      let seatCount = Number(row.seat_count);
+      const amount = Number(row.amount);
+      if (!membershipClass || !Number.isSafeInteger(seatCount)) {
+        const description = `${row.description ?? ""}`.trim();
+        const match = description.match(/^(\d+)\s+(.+)$/);
+        const tier = match
+          ? labels.find(({ label }) => {
+              if (!match[2].startsWith(`${label} `)) return false;
+              const qualifier = match[2].slice(label.length + 1);
+              return /(^|\s)team seats?(\s|$)/.test(qualifier);
+            })
+          : undefined;
+        if (match && tier) {
+          membershipClass = tier.id;
+          seatCount = Number(match[1]);
+        }
+      }
+      if (
+        !membershipClass ||
+        !Number.isSafeInteger(seatCount) ||
+        seatCount <= 0 ||
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return;
+      }
+      return {
+        description: `${row.description ?? ""}`,
+        amount,
+        membership_class: membershipClass,
+        seat_count: seatCount,
+      };
+    })
+    .filter((item): item is TeamLicenseQuoteLineItem => item != null);
+}
+
+async function backfillTeamLicensePurchases({
+  client,
+  limit,
+}: {
+  client: PoolClient;
+  limit: number;
+}): Promise<number> {
+  const { rows: tiers } = await client.query<TeamLicenseTierRow>(
+    "SELECT id, COALESCE(NULLIF(label, ''), id) AS label FROM membership_tiers",
+  );
+  const { rows } = await client.query<TeamLicensePurchaseRow>(
+    `SELECT p.id, p.time, p.account_id,
+            p.description->>'type' AS purchase_type,
+            p.description->>'lifecycle' AS lifecycle,
+            COALESCE(NULLIF(p.description->>'team_license_id', ''),
+                     tl.id::text) AS team_license_id,
+            p.description->'line_items' AS line_items,
+            p.description->>'interval' AS billing_interval,
+            EXISTS (
+              SELECT 1
+                FROM purchases earlier
+               WHERE earlier.account_id=p.account_id
+                 AND earlier.service='membership'
+                 AND earlier.description->>'type' IN
+                     ('team-license-change', 'team-license-renewal')
+                 AND (earlier.time, earlier.id) < (p.time, p.id)
+            ) AS has_earlier_purchase,
+            p.period_start, p.period_end
+       FROM purchases p
+       LEFT JOIN team_licenses tl ON tl.owner_account_id=p.account_id
+      WHERE p.service='membership'
+        AND p.description->>'type' IN
+            ('team-license-change', 'team-license-renewal')
+        AND COALESCE(NULLIF(p.description->>'team_license_id', ''),
+                     tl.id::text) IS NOT NULL
+        AND jsonb_typeof(p.description->'line_items')='array'
+        AND p.description->>'interval' IN ('month', 'year')
+        AND p.period_start IS NOT NULL
+        AND p.period_end IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+            FROM membership_allocation_facts f
+           WHERE f.purchase_id=p.id
+             AND f.channel='team'
+        )
+      ORDER BY p.time, p.id
+      LIMIT $1`,
+    [limit],
+  );
+  let recorded = 0;
+  for (const row of rows) {
+    const lineItems = normalizeTeamLicenseLineItems(row.line_items, tiers);
+    if (lineItems.length === 0) continue;
+    recorded += await recordTeamLicensePurchaseFacts({
+      team_license_id: row.team_license_id,
+      account_id: row.account_id,
+      purchase_id: row.id,
+      occurred_at: row.time,
+      period_start: row.period_start,
+      period_end: row.period_end,
+      billing_interval: row.billing_interval,
+      lifecycle:
+        row.purchase_type === "team-license-renewal"
+          ? "renewal"
+          : row.lifecycle === "plan_change"
+            ? "plan_change"
+            : row.has_earlier_purchase
+              ? "plan_change"
+              : "first_paid",
+      line_items: lineItems,
+      client,
+    });
+  }
+  return recorded;
+}
+
+async function backfillPackageAssignments({
+  client,
+  limit,
+}: {
+  client: PoolClient;
+  limit: number;
+}): Promise<number> {
+  const { rows } = await client.query<PackageAssignmentBackfillRow>(
+    `SELECT a.id AS assignment_id, a.package_id, a.account_id,
+            a.assigned_at, a.revoked_at,
+            a.metadata AS assignment_metadata,
+            g.expires_at AS grant_expires_at,
+            p.owner_account_id,
+            CASE WHEN p.kind='domain' THEN 'site' ELSE p.kind END
+              AS package_kind,
+            p.membership_class, p.seat_count,
+            p.starts_at AS package_starts_at,
+            p.expires_at AS package_expires_at,
+            p.metadata AS package_metadata
+       FROM membership_package_assignments a
+       JOIN membership_packages p ON p.id=a.package_id
+       LEFT JOIN membership_grants g
+         ON g.package_id=a.package_id
+        AND g.account_id=a.account_id
+        AND g.revoked_at IS NULL
+        AND (g.metadata->>'assignment_id'=a.id::text OR
+             g.metadata->>'assignment_id' IS NULL)
+      WHERE a.account_id IS NOT NULL
+        AND p.kind IN ('course', 'team', 'site', 'domain')
+        AND NOT (
+          p.kind='course' AND
+          (COALESCE(p.metadata->>'direct_student_purchase', 'false')='true' OR
+           COALESCE(a.metadata->>'direct_student_purchase', 'false')='true')
+        )
+        AND (
+          NOT EXISTS (
+            SELECT 1
+              FROM membership_allocation_facts f
+             WHERE f.fact_key LIKE
+                   'package-assignment:' || a.id::text || ':%'
+               AND f.source_kind='assignment'
+          )
+          OR (
+            a.revoked_at IS NULL
+            AND (p.starts_at IS NULL OR
+                 p.starts_at < date_trunc('month', NOW()) + INTERVAL '1 month')
+            AND (p.expires_at IS NULL OR
+                 p.expires_at > date_trunc('month', NOW()))
+            AND (NULLIF(a.metadata->>'grant_expires_at', '') IS NULL OR
+                 (a.metadata->>'grant_expires_at')::timestamptz >
+                   date_trunc('month', NOW()))
+            AND NOT EXISTS (
+              SELECT 1
+                FROM membership_allocation_facts current_fact
+               WHERE current_fact.fact_key=
+                     'package-assignment:' || a.id::text || ':' ||
+                     to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM')
+                 AND current_fact.source_kind='assignment'
+            )
+          )
+        )
+      ORDER BY a.assigned_at, a.id
+      LIMIT $1`,
+    [limit],
+  );
+  let recorded = 0;
+  for (const row of rows) {
+    const source = packageAssignmentAllocationSource({
+      pkg: {
+        id: row.package_id,
+        owner_account_id: row.owner_account_id,
+        kind: row.package_kind,
+        membership_class: row.membership_class,
+        seat_count: Number(row.seat_count),
+        starts_at: row.package_starts_at ?? undefined,
+        expires_at: row.package_expires_at,
+        metadata: row.package_metadata,
+      },
+      assignment: {
+        id: row.assignment_id,
+        package_id: row.package_id,
+        account_id: row.account_id,
+        assigned_at: row.assigned_at,
+        revoked_at: row.revoked_at,
+        metadata: row.assignment_metadata,
+        grant_expires_at: row.grant_expires_at,
+      },
+    });
+    if (!source) continue;
+    for (const month of packageAssignmentAllocationMonths({ source })) {
+      const result = await recordPackageAssignmentMonth({
+        source,
+        month,
+        client,
+      });
+      recorded += Number(result.assignment) + Number(result.correction);
     }
   }
   return recorded;
@@ -475,7 +753,21 @@ export async function backfillMembershipAllocationFacts({
       client,
       limit: maxRows,
     });
-    const direct_student_purchases = await backfillDirectStudentPurchases({
+    const direct_student_purchases = await backfillCoursePurchases({
+      client,
+      limit: maxRows,
+      directStudent: true,
+    });
+    const course_purchases = await backfillCoursePurchases({
+      client,
+      limit: maxRows,
+      directStudent: false,
+    });
+    const team_license_purchases = await backfillTeamLicensePurchases({
+      client,
+      limit: maxRows,
+    });
+    const package_assignments = await backfillPackageAssignments({
       client,
       limit: maxRows,
     });
@@ -487,6 +779,9 @@ export async function backfillMembershipAllocationFacts({
       trials,
       personal_purchases,
       direct_student_purchases,
+      course_purchases,
+      team_license_purchases,
+      package_assignments,
       refunds,
     };
   } catch (err) {
