@@ -57,6 +57,7 @@ import {
   HostOptionsSelect,
   sortMachineTypeOptions,
 } from "../hosts/components/host-options-select";
+import { NebiusCapacityNotice } from "../hosts/components/nebius-capacity-notice";
 import { HostPriceBreakdown } from "../hosts/components/host-price-breakdown";
 import { useHostPricingSettings } from "../hosts/hooks/use-host-pricing-settings";
 import {
@@ -96,6 +97,7 @@ const COPYABLE_PROPS = {
 const NEBIUS_VOLUME_INCREMENT_GB = 93;
 const VM_REFRESH_BASE_MS = 12_000;
 const VM_REFRESH_JITTER_MS = 6_000;
+const VM_CATALOG_REFRESH_MS = 60_000;
 
 function hasProjectVmAvailabilityScope(grant: ComputeAgentGrant): boolean {
   return (
@@ -648,7 +650,7 @@ function VmCreateModal({
                       Boot disk: {confirmedDraft.boot_disk_gb} GB
                     </Text>
                     <Text>
-                      Capacity: {pricingLabel(confirmedDraft.pricing_model)}
+                      Pricing: {pricingLabel(confirmedDraft.pricing_model)}
                       {price
                         ? ` · ${price.hourly_label} (${price.monthly_label})`
                         : " · price unavailable"}
@@ -1133,6 +1135,13 @@ function VmCreateModal({
             Boot disks cannot currently be enlarged after VM creation.
           </Text>
         </Flex>
+        {provider === "nebius" && draft.machine_type && (
+          <NebiusCapacityNotice
+            catalog={hostCatalog}
+            selection={selection}
+            style={{ marginBottom: 16 }}
+          />
+        )}
         {operatingSystem === "linux" && (
           <>
             <Form.Item name="create_home_volume" hidden valuePropName="checked">
@@ -1347,11 +1356,11 @@ function VmCreateModal({
               forceRender: true,
               children: (
                 <>
-                  <Title level={5}>Capacity and lifetime</Title>
+                  <Title level={5}>Pricing and lifetime</Title>
                   <Flex gap={12} wrap>
                     <Form.Item
                       name="pricing_model"
-                      label="Capacity"
+                      label="Pricing model"
                       style={{ flex: "1 1 320px" }}
                     >
                       <Radio.Group
@@ -2084,6 +2093,13 @@ function VmMachineTypeModal({
           style={{ width: "100%" }}
         />
       </div>
+      {vm.provider === "nebius" && machineType && (
+        <NebiusCapacityNotice
+          catalog={hostCatalog}
+          selection={selection}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       {estimate && (
         <HostPriceBreakdown
           estimate={estimate}
@@ -2107,6 +2123,61 @@ function VmMachineTypeModal({
           style={{ marginTop: 12 }}
         />
       )}
+    </Modal>
+  );
+}
+
+function VmStartModal({
+  vm,
+  catalog,
+  onCancel,
+  onStart,
+}: {
+  vm?: ComputeVm;
+  catalog: ComputeCatalog;
+  onCancel: () => void;
+  onStart: (vm: ComputeVm) => Promise<boolean>;
+}) {
+  const [starting, setStarting] = useState(false);
+
+  useEffect(() => setStarting(false), [vm]);
+
+  if (!vm) return null;
+  const hostCatalog = providerCatalog(catalog, vm.provider);
+  const selection: ProviderSelection = {
+    region: vm.region,
+    machine_type: vm.machine_type,
+    pricing_model: vm.desired_pricing_model,
+  };
+
+  return (
+    <Modal
+      open
+      title={`Start ${vm.name}?`}
+      okText="Start VM"
+      cancelText="Cancel"
+      confirmLoading={starting}
+      onCancel={onCancel}
+      onOk={async () => {
+        setStarting(true);
+        try {
+          await onStart(vm);
+        } finally {
+          setStarting(false);
+        }
+      }}
+    >
+      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Text>
+          {vm.machine_type} · {vm.region} ·{" "}
+          {pricingLabel(vm.desired_pricing_model)}
+        </Text>
+        <NebiusCapacityNotice catalog={hostCatalog} selection={selection} />
+        <Text type="secondary">
+          To choose a different machine or pricing model, cancel and use the
+          Manage menu while this VM is stopped.
+        </Text>
+      </Space>
     </Modal>
   );
 }
@@ -2146,6 +2217,7 @@ export function ProjectComputeVms({
   const [resizeVolumeTarget, setResizeVolumeTarget] = useState<ComputeVolume>();
   const [ttlVm, setTtlVm] = useState<ComputeVm>();
   const [machineTypeVm, setMachineTypeVm] = useState<ComputeVm>();
+  const [startVm, setStartVm] = useState<ComputeVm>();
   const [machineTypeError, setMachineTypeError] = useState<string>();
   const [vmInitial, setVmInitial] = useState<VmDraft>();
   const [projectSshPublicKey, setProjectSshPublicKey] = useState<string | null>(
@@ -2203,7 +2275,9 @@ export function ProjectComputeVms({
   useEffect(() => {
     if (!isVisible) return;
     let disposed = false;
+    let firstRun = true;
     let inFlight = false;
+    let nextCatalogRefreshAt = 0;
     let refreshCatalogNext = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -2222,15 +2296,20 @@ export function ProjectComputeVms({
         return;
       }
       inFlight = true;
-      const refreshCatalogAndGrants = refreshCatalogNext;
+      const refreshCatalogAndGrants =
+        refreshCatalogNext || Date.now() >= nextCatalogRefreshAt;
       refreshCatalogNext = false;
+      if (refreshCatalogAndGrants) {
+        nextCatalogRefreshAt = Date.now() + VM_CATALOG_REFRESH_MS;
+      }
       try {
         await load({
           refreshCatalogAndGrants,
-          showLoading: refreshCatalogAndGrants,
+          showLoading: firstRun,
           projectOnly: !refreshCatalogAndGrants,
         });
       } finally {
+        firstRun = false;
         inFlight = false;
         if (disposed || !documentIsVisible()) return;
         if (refreshCatalogNext) {
@@ -2514,7 +2593,10 @@ export function ProjectComputeVms({
     }
   };
 
-  const setVmRunning = async (vm: ComputeVm, running: boolean) => {
+  const setVmRunning = async (
+    vm: ComputeVm,
+    running: boolean,
+  ): Promise<boolean> => {
     setError(undefined);
     try {
       const action = running ? "startVm" : "stopVm";
@@ -2527,14 +2609,16 @@ export function ProjectComputeVms({
       };
       if (running) {
         const completed = await runFreshAuthAction(execute);
-        if (!completed) return;
+        if (!completed) return false;
       } else {
         await execute();
       }
       setNotice(`VM '${vm.name}' is ${running ? "starting" : "stopping"}.`);
       await load();
+      return true;
     } catch (err) {
       setError(`${err}`);
+      return false;
     }
   };
 
@@ -3145,7 +3229,13 @@ export function ProjectComputeVms({
               <Button
                 size="small"
                 disabled={transitioning}
-                onClick={() => void setVmRunning(vm, true)}
+                onClick={() => {
+                  if (vm.provider === "nebius") {
+                    setStartVm(vm);
+                  } else {
+                    void setVmRunning(vm, true);
+                  }
+                }}
               >
                 Start
               </Button>
@@ -3599,6 +3689,18 @@ export function ProjectComputeVms({
             setMachineTypeError(undefined);
           }}
           onSave={saveVmMachineType}
+        />
+      )}
+      {catalog && (
+        <VmStartModal
+          vm={startVm}
+          catalog={catalog}
+          onCancel={() => setStartVm(undefined)}
+          onStart={async (vm) => {
+            const started = await setVmRunning(vm, true);
+            if (started) setStartVm(undefined);
+            return started;
+          }}
         />
       )}
       {catalog && (

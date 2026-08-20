@@ -316,10 +316,8 @@ export function HostOptionsSelect({
                   color: COLORS.GRAY_M,
                   fontSize: "12px",
                   lineHeight: 1.3,
-                  overflow: "hidden",
                   textAlign: "left",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  whiteSpace: "normal",
                 }}
                 title={detailLabel}
               >

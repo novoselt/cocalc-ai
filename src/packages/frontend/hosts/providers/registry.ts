@@ -183,6 +183,20 @@ type NebiusCapacityAdvice = {
   on_demand?: NebiusCapacityAvailability;
 };
 
+export type NebiusCapacityInfo = {
+  available?: number;
+  availabilityLevel: string;
+  dataState: string;
+  effectiveAt?: string;
+  fabric?: string;
+  limit?: number;
+  modelLabel: "Spot" | "Standard";
+  pricingModel: "spot" | "on_demand";
+  reported: boolean;
+  summary: string;
+  supported: boolean;
+};
+
 export const getNebiusMinimumBootDiskGb = (
   catalog: HostCatalog | undefined,
   selection: Pick<ProviderSelection, "region" | "machine_type">,
@@ -2120,40 +2134,105 @@ const getNebiusPricingProductsByRegion = (
   return { gpu: gpuProducts, cpu: cpuProducts };
 };
 
-const getNebiusCapacityLabel = (
+export const getNebiusCapacityInfo = (
   catalog: HostCatalog | undefined,
   selection: ProviderSelection,
-  entry: NebiusInstance,
-): string | undefined => {
-  if (!selection.region) return;
+): NebiusCapacityInfo => {
+  const pricingModel =
+    selection.pricing_model === "spot" ? "spot" : "on_demand";
+  const modelLabel = pricingModel === "spot" ? "Spot" : "Standard";
+  const instances =
+    getCatalogEntryPayload<NebiusInstance[]>(
+      catalog,
+      "instance_types",
+      "global",
+    ) ?? [];
+  const machine = instances.find(
+    (entry) => entry.name === selection.machine_type,
+  );
+  const unsupported =
+    pricingModel === "spot" && machine?.allowed_for_preemptibles === false;
+  if (unsupported) {
+    return {
+      availabilityLevel: "unsupported",
+      dataState: "unknown",
+      modelLabel,
+      pricingModel,
+      reported: false,
+      summary: `${modelLabel} capacity: not supported`,
+      supported: false,
+    };
+  }
+  if (!selection.region) {
+    return {
+      availabilityLevel: "unknown",
+      dataState: "unknown",
+      modelLabel,
+      pricingModel,
+      reported: false,
+      summary: `Select a region to see ${modelLabel} capacity`,
+      supported: true,
+    };
+  }
   const advice =
     getCatalogEntryPayload<NebiusCapacityAdvice[]>(
       catalog,
       "capacity_advice",
       "global",
     ) ?? [];
-  const pricing = selection.pricing_model === "spot" ? "spot" : "on_demand";
   const candidates = advice
     .filter(
       (item) =>
         item.region === selection.region &&
-        item.machine_type === entry.name &&
-        (!entry.platform || item.platform === entry.platform),
+        item.machine_type === selection.machine_type &&
+        (!machine?.platform || item.platform === machine.platform),
     )
-    .map((item) => item[pricing])
-    .filter((item): item is NebiusCapacityAvailability => !!item)
+    .map((item) => ({ advice: item, capacity: item[pricingModel] }))
+    .filter(
+      (
+        item,
+      ): item is {
+        advice: NebiusCapacityAdvice;
+        capacity: NebiusCapacityAvailability;
+      } => !!item.capacity,
+    )
     .sort((a, b) => {
       const freshness = (value: NebiusCapacityAvailability) =>
         value.data_state === "fresh" ? 2 : value.data_state === "stale" ? 1 : 0;
-      return freshness(b) - freshness(a) || b.available - a.available;
+      return (
+        freshness(b.capacity) - freshness(a.capacity) ||
+        b.capacity.available - a.capacity.available
+      );
     });
-  const capacity = candidates[0];
-  if (!capacity) return;
-  const model = pricing === "spot" ? "Spot" : "Standard";
+  const selected = candidates[0];
+  if (!selected) {
+    return {
+      availabilityLevel: "unknown",
+      dataState: "unknown",
+      modelLabel,
+      pricingModel,
+      reported: false,
+      summary: `${modelLabel} capacity: not reported for this machine and region`,
+      supported: true,
+    };
+  }
+  const { advice: selectedAdvice, capacity } = selected;
   const level = capacity.availability_level.replace(/_/g, " ");
   const freshness =
     capacity.data_state === "fresh" ? "" : `, ${capacity.data_state} data`;
-  return `${model} capacity: ${level}, ${capacity.available} available${freshness}`;
+  return {
+    available: capacity.available,
+    availabilityLevel: capacity.availability_level,
+    dataState: capacity.data_state,
+    effectiveAt: capacity.effective_at,
+    fabric: selectedAdvice.fabric,
+    limit: capacity.limit,
+    modelLabel,
+    pricingModel,
+    reported: true,
+    summary: `${modelLabel} capacity: ${level}, ${capacity.available} available, quota ${capacity.limit}${freshness}`,
+    supported: true,
+  };
 };
 
 const matchesNebiusPricing = (
@@ -2284,7 +2363,10 @@ export const getNebiusInstanceTypeOptions = (
       hourlyRate,
       selectionLabel: entry.name,
       mainLabel: label.mainLabel ?? machineLabel.mainLabel,
-      detailLabel: getNebiusCapacityLabel(catalog, selection, entry),
+      detailLabel: getNebiusCapacityInfo(catalog, {
+        ...selection,
+        machine_type: entry.name,
+      }).summary,
       entry,
     };
   });

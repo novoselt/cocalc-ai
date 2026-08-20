@@ -7,6 +7,7 @@ import {
   getGcpPersistentDiskPriceEstimate,
   getNebiusPersistentDiskPriceEstimate,
   getNebiusMinimumBootDiskGb,
+  getNebiusCapacityInfo,
   getNebiusInstanceTypeOptions,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
@@ -115,7 +116,117 @@ describe("Nebius capacity advice", () => {
         region: "us-central1",
         pricing_model: "spot",
       })[0]?.detailLabel,
-    ).toBe("Spot capacity: low, 0 available");
+    ).toBe("Spot capacity: low, 0 available, quota 4");
+  });
+
+  it("shows an explicit status for every machine when advice is incomplete", () => {
+    const catalog = testCatalog([
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [
+          {
+            name: "1gpu-24vcpu-218gb",
+            platform: "gpu-rtx6000",
+            memory_gib: 218,
+          },
+          {
+            name: "1gpu-8vcpu-32gb",
+            platform: "gpu-l40s-d",
+            memory_gib: 32,
+          },
+        ],
+      },
+      {
+        kind: "capacity_advice",
+        scope: "global",
+        payload: [
+          {
+            region: "us-central1",
+            fabric: "fabric-1",
+            platform: "gpu-rtx6000",
+            machine_type: "1gpu-24vcpu-218gb",
+            on_demand: {
+              available: 2,
+              limit: 4,
+              availability_level: "medium",
+              data_state: "fresh",
+            },
+          },
+        ],
+      },
+    ]);
+
+    const options = getNebiusInstanceTypeOptions(catalog, {
+      region: "us-central1",
+      pricing_model: "on_demand",
+    });
+    expect(options).toHaveLength(2);
+    expect(options.every((option) => !!option.detailLabel)).toBe(true);
+    expect(options[0]?.detailLabel).toContain("Standard capacity:");
+    expect(options[1]?.detailLabel).toContain("not reported");
+  });
+
+  it("distinguishes stale data and unsupported Spot machines", () => {
+    const staleCatalog = testCatalog([
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [
+          {
+            name: "cpu-d3",
+            platform: "cpu-d3",
+            memory_gib: 16,
+          },
+        ],
+      },
+      {
+        kind: "capacity_advice",
+        scope: "global",
+        payload: [
+          {
+            region: "eu-north1",
+            fabric: "fabric-2",
+            platform: "cpu-d3",
+            machine_type: "cpu-d3",
+            spot: {
+              available: 3,
+              limit: 8,
+              availability_level: "medium",
+              data_state: "stale",
+            },
+          },
+        ],
+      },
+    ]);
+    expect(
+      getNebiusCapacityInfo(staleCatalog, {
+        region: "eu-north1",
+        machine_type: "cpu-d3",
+        pricing_model: "spot",
+      }).summary,
+    ).toContain("stale data");
+
+    const unsupportedCatalog = testCatalog([
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [
+          {
+            name: "cpu-only-standard",
+            allowed_for_preemptibles: false,
+            memory_gib: 16,
+          },
+        ],
+      },
+    ]);
+    expect(
+      getNebiusCapacityInfo(unsupportedCatalog, {
+        region: "eu-north1",
+        machine_type: "cpu-only-standard",
+        pricing_model: "spot",
+      }).summary,
+    ).toBe("Spot capacity: not supported");
   });
 });
 
