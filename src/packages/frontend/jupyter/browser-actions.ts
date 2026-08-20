@@ -288,7 +288,13 @@ export class JupyterActions extends JupyterActions0 {
 
   private setRunCellOverlay = (
     id: string,
-    patch: { output?: any; exec_count?: number | null },
+    patch: {
+      output?: any;
+      exec_count?: number | null;
+      state?: string | null;
+      start?: number | null;
+      end?: number | null;
+    },
   ): boolean => {
     if (!id || this.isClosed()) {
       return false;
@@ -308,6 +314,11 @@ export class JupyterActions extends JupyterActions0 {
       patch.exec_count != null
     ) {
       nextPatch = nextPatch.set("exec_count", patch.exec_count);
+    }
+    for (const key of ["state", "start", "end"] as const) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        nextPatch = nextPatch.set(key, patch[key]);
+      }
     }
     if (nextPatch.size === 0) {
       return false;
@@ -2934,7 +2945,13 @@ export class JupyterActions extends JupyterActions0 {
     const writeCell = (): boolean => {
       const { id, state, output, start, end, exec_count } = cell;
       this.set_local_runtime_cell_state(id, { state, start, end });
-      const patch: { output?: any; exec_count?: number | null } = {};
+      const patch: {
+        output?: any;
+        exec_count?: number | null;
+        state?: string | null;
+        start?: number | null;
+        end?: number | null;
+      } = { state, start, end };
       if (
         output != null ||
         wroteFirstVisibleChange ||
