@@ -2384,6 +2384,9 @@ describe("ChatStreamWriter", () => {
         row.acp_thread_id === "automation-session-1",
     );
     expect(metadataUpdate).toBeTruthy();
+    expect(
+      syncdb.get_one({ event: "chat", message_id: "msg-0" })?.acp_automation_id,
+    ).toBe("auto-1");
     // ...but the shared thread config must NOT be re-bound to it, or the next
     // interactive turn would resume the automation's session instead of the
     // user's own.

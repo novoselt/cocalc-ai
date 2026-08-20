@@ -31,6 +31,24 @@ describe("resolveAgentSessionIdForThread", () => {
     ).toBe("codex-session-live");
   });
 
+  it("does not infer an interactive session from automation messages", () => {
+    expect(
+      resolveAgentSessionIdForThread({
+        actions: {
+          getMessagesInThread: () => [
+            { acp_thread_id: "codex-session-interactive" } as any,
+            {
+              acp_thread_id: "codex-session-automation",
+              acp_automation_id: "automation-1",
+            } as any,
+          ],
+        } as any,
+        threadId: "thread-automation",
+        threadKey: "thread-automation",
+      }),
+    ).toBe("codex-session-interactive");
+  });
+
   it("falls back to thread key when neither config nor assistant rows expose a session", () => {
     expect(
       resolveAgentSessionIdForThread({

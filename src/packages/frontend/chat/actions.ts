@@ -81,6 +81,7 @@ import {
 import {
   field,
   historyArray,
+  isAcpAutomationMessage,
   dateValue,
   editingArray,
   parentMessageId,
@@ -2865,6 +2866,7 @@ export class ChatActions extends Actions<ChatState> {
       sourceMetadata.acp_config ?? this.getCodexConfig(sourceThreadId);
     const inferredSourceSessionId = (() => {
       for (let i = threadMessages.length - 1; i >= 0; i -= 1) {
+        if (isAcpAutomationMessage(threadMessages[i])) continue;
         const sessionId = field<string>(threadMessages[i], "acp_thread_id");
         if (typeof sessionId === "string" && sessionId.trim().length > 0) {
           return sessionId.trim();

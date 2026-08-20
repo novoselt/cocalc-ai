@@ -2577,6 +2577,7 @@ export class ChatStreamWriter {
         acp_log_subject: this.logSubject,
         acp_live_log_stream: this.liveLogStreamName,
         acp_live_preview_stream: this.livePreviewStreamName,
+        acp_automation_id: this.metadata.automation_id,
         message_id: this.metadata.message_id,
         thread_id: this.metadata.thread_id,
         parent_message_id: (this.metadata as any).parent_message_id,
@@ -2951,6 +2952,7 @@ export class ChatStreamWriter {
         ? this.livePreviewStreamName
         : undefined,
       acp_thread_id: this.threadId,
+      acp_automation_id: this.metadata.automation_id,
       acp_started_at_ms:
         Number(this.metadata.started_at_ms) > 0
           ? Number(this.metadata.started_at_ms)
