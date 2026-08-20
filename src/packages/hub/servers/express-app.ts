@@ -43,6 +43,7 @@ import initRobots from "./robots";
 import initSitemap from "./sitemap";
 import { applyBaselineSecurityHeaders } from "./security-headers";
 import getServerSettings from "./server-settings";
+import { expiresAfterSeconds } from "./cache-headers";
 import basePath from "@cocalc/backend/base-path";
 import { conatSocketioCount, root } from "@cocalc/backend/data";
 import { createApiV2Router, createConatRouter } from "@cocalc/http-api";
@@ -367,10 +368,7 @@ function cacheShortTerm(res) {
     "Cache-Control",
     `public, max-age=${SHORT_AGE}, must-revalidate`,
   );
-  res.setHeader(
-    "Expires",
-    new Date(Date.now().valueOf() + SHORT_AGE).toUTCString(),
-  );
+  res.setHeader("Expires", expiresAfterSeconds(SHORT_AGE));
 }
 
 function cacheNoStore(res) {
@@ -403,10 +401,7 @@ function setPublicViewerShellHeaders(res) {
 // and we use this function to set appropriate headers at various points below.
 function cacheLongTerm(res) {
   res.setHeader("Cache-Control", `public, max-age=${MAX_AGE}, must-revalidate`);
-  res.setHeader(
-    "Expires",
-    new Date(Date.now().valueOf() + MAX_AGE).toUTCString(),
-  );
+  res.setHeader("Expires", expiresAfterSeconds(MAX_AGE));
 }
 
 function resolvePublicAssetsPath(): string | undefined {
@@ -485,6 +480,14 @@ async function initStatic(router) {
   router.get("/static/frontend-build.json", (_req, res) => {
     cacheNoStore(res);
     res.sendFile(join(staticPath, "frontend-build.json"), (err) => {
+      if (err && !res.headersSent) {
+        res.status(404).end();
+      }
+    });
+  });
+  router.get("/static/frontend-build-history.json", (_req, res) => {
+    cacheNoStore(res);
+    res.sendFile(join(staticPath, "frontend-build-history.json"), (err) => {
       if (err && !res.headersSent) {
         res.status(404).end();
       }

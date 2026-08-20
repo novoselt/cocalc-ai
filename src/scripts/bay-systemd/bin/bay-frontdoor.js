@@ -388,6 +388,9 @@ function prepareResponseHeaders(req, headers, worker, changed) {
   return {
     ...headers,
     "cache-control": `public, max-age=${immutableStaticMaxAgeSeconds}, immutable`,
+    expires: new Date(
+      Date.now() + immutableStaticMaxAgeSeconds * 1000,
+    ).toUTCString(),
   };
 }
 

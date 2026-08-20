@@ -96,6 +96,45 @@ if [[ "$(cat "${TARGET_CDN}/codemirror-0.9/content.txt")" != "historic" ]]; then
   exit 1
 fi
 
+ASSET_RELEASES="${TMP_ROOT}/asset-releases"
+ASSET_PREVIOUS="${ASSET_RELEASES}/previous"
+ASSET_TARGET="${ASSET_RELEASES}/target"
+CURRENT_LINK="${TMP_ROOT}/asset-current"
+TARGET_RELEASE="$ASSET_TARGET"
+mkdir -p \
+  "${ASSET_PREVIOUS}/runtime/control-plane/static" \
+  "${ASSET_TARGET}/runtime/control-plane/static"
+ln -s "$ASSET_PREVIOUS" "$CURRENT_LINK"
+printf '%s\n' previous > \
+  "${ASSET_PREVIOUS}/runtime/control-plane/static/previous-0123456789abcdef.js"
+cat >"${ASSET_PREVIOUS}/runtime/control-plane/static/frontend-build.json" <<'EOF'
+{"schema":1,"fingerprint":"previous","build_timestamp":1}
+EOF
+printf '%s\n' current > \
+  "${ASSET_TARGET}/runtime/control-plane/static/current-fedcba9876543210.js"
+cat >"${ASSET_TARGET}/runtime/control-plane/static/frontend-build.json" <<'EOF'
+{"schema":1,"fingerprint":"current","build_timestamp":2,"assets":["current-fedcba9876543210.js"]}
+EOF
+
+preserve_previous_static_assets
+prepare_frontend_asset_history >/dev/null
+
+if [[ ! -f "${ASSET_TARGET}/runtime/control-plane/static/previous-0123456789abcdef.js" ]]; then
+  echo "previous frontend asset was not retained" >&2
+  exit 1
+fi
+node - "${ASSET_TARGET}/runtime/control-plane/static/frontend-build-history.json" <<'NODE'
+const fs = require("node:fs");
+const history = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (history.builds.length !== 2) throw new Error("expected two frontend builds");
+if (!history.builds[0].assets.includes("current-fedcba9876543210.js")) {
+  throw new Error("current frontend assets missing from history");
+}
+if (!history.builds[1].assets.includes("previous-0123456789abcdef.js")) {
+  throw new Error("previous frontend assets missing from history");
+}
+NODE
+
 VALIDATION_RELEASE="${TMP_ROOT}/validation-release"
 TARGET_RELEASE="$VALIDATION_RELEASE"
 OVERLAY_MODE="rocket-bundle"

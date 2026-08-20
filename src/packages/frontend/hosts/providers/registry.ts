@@ -2150,7 +2150,7 @@ const getNebiusCapacityLabel = (
   const capacity = candidates[0];
   if (!capacity) return;
   const model = pricing === "spot" ? "Spot" : "Standard";
-  const level = capacity.availability_level.replaceAll("_", " ");
+  const level = capacity.availability_level.replace(/_/g, " ");
   const freshness =
     capacity.data_state === "fresh" ? "" : `, ${capacity.data_state} data`;
   return `${model} capacity: ${level}, ${capacity.available} available${freshness}`;
