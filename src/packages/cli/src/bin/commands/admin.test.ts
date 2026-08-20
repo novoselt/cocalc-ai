@@ -1041,6 +1041,94 @@ test("admin host ps forwards process snapshot options", async () => {
   });
 });
 
+test("admin host abuse-processes forwards bounded snapshot options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        scanAbuseProcesses: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-abuse-processes", snapshot: {} };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "abuse-processes",
+    "montreal-1",
+    "--max-projects",
+    "300",
+    "--max-processes",
+    "4000",
+    "--timeout-ms",
+    "6000",
+    "--reason",
+    "standard abuse health scan",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    max_projects: 300,
+    max_processes: 4000,
+    timeout_ms: 6000,
+    reason: "standard abuse health scan",
+  });
+});
+
+test("admin host abuse-filesystems forwards bounded snapshot options", async () => {
+  let capturedArgs: any;
+  const program = new Command();
+  registerAdminCommand(
+    program,
+    adminDeps({
+      adminHost: {
+        scanAbuseFilesystems: async (opts: any) => {
+          capturedArgs = opts;
+          return { audit_id: "audit-abuse-filesystems", snapshot: {} };
+        },
+      },
+    }) as any,
+  );
+
+  await program.parseAsync([
+    "node",
+    "test",
+    "admin",
+    "host",
+    "abuse-filesystems",
+    "montreal-1",
+    "--max-projects",
+    "300",
+    "--max-entries-per-project",
+    "4000",
+    "--max-total-entries",
+    "80000",
+    "--max-depth",
+    "6",
+    "--timeout-ms",
+    "12000",
+    "--reason",
+    "standard abuse health scan",
+  ]);
+
+  assert.deepEqual(capturedArgs, {
+    host: "montreal-1",
+    max_projects: 300,
+    max_entries_per_project: 4000,
+    max_total_entries: 80000,
+    max_depth: 6,
+    timeout_ms: 12000,
+    reason: "standard abuse health scan",
+  });
+});
+
 test("admin host net forwards network snapshot options", async () => {
   let capturedArgs: any;
   const program = new Command();

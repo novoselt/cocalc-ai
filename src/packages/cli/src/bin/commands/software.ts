@@ -4324,6 +4324,9 @@ Supported deploy/smoke components:
                 }
               }
             } else if (hostBootstrapTarget) {
+              const bootstrapSha256 = remoteBundleFile(
+                artifact.remote_entry,
+              ).sha256;
               targetKind = "project-host-fleet";
               commandArgsList = [
                 [
@@ -4337,7 +4340,7 @@ Supported deploy/smoke components:
                   "--artifact",
                   "bootstrap-environment",
                   "--desired-version",
-                  artifact.artifact_id,
+                  bootstrapSha256,
                   "--reason",
                   "software-deploy-host-bootstrap",
                 ],

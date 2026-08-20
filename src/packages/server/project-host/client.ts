@@ -96,6 +96,10 @@ export async function getRoutedHostControlClient({
         await bridge.getRuntimeLog({ host_id, get }),
       getProcessSnapshot: async (get) =>
         await bridge.getProcessSnapshot({ host_id, get }),
+      getAbuseProcessSnapshot: async (get) =>
+        await bridge.getAbuseProcessSnapshot({ host_id, get }),
+      getAbuseFilesystemSnapshot: async (get) =>
+        await bridge.getAbuseFilesystemSnapshot({ host_id, get }),
       getNetworkSnapshot: async (get) =>
         await bridge.getNetworkSnapshot({ host_id, get }),
       getFilesystemSnapshot: async () =>

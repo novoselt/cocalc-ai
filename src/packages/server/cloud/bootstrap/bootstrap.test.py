@@ -2305,6 +2305,20 @@ class BootstrapWrapperScriptTest(unittest.TestCase):
                 script,
             )
             self.assertIn(
+                'PRIVILEGED_RUSTIC_CACHE="/root/.cache/rustic"', script
+            )
+            self.assertIn(
+                'PRIVILEGED_RUSTIC_CACHE_LOCK="/run/lock/cocalc-privileged-rustic-cache.lock"',
+                script,
+            )
+            self.assertIn("maintain_privileged_rustic_cache()", script)
+            self.assertIn("prepare_privileged_rustic_cache()", script)
+            self.assertEqual(script.count("prepare_privileged_rustic_cache"), 5)
+            self.assertIn("flock -n -x 7", script)
+            self.assertIn("flock -s -w 120 7", script)
+            self.assertIn("rm -rf --one-file-system", script)
+            self.assertIn("PRIVILEGED_RUSTIC_CACHE_MIN_AGE_SECONDS", script)
+            self.assertIn(
                 '"${rustic_cmd[@]}" backup -x --json --no-scan --host "$host_name" "${tag_args[@]}" "${parent_args[@]}" --glob "!.snapshots" --glob "!.snapshots/**" . || backup_status="$?"',
                 script,
             )

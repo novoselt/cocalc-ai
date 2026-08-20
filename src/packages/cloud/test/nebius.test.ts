@@ -5,6 +5,10 @@ import {
   InstanceRecoveryPolicy,
   PreemptibleSpec_PreemptionPolicy,
 } from "@nebius/js-sdk/api/nebius/compute/v1/index";
+import {
+  ResourceAdviceStatus_Availability_AvailabilityLevel,
+  ResourceAdviceStatus_Availability_DataState,
+} from "@nebius/js-sdk/api/nebius/capacity/v1/index";
 
 const disksCreateMock = jest.fn();
 const disksListMock = jest.fn();
@@ -21,6 +25,8 @@ const allocationsCreateMock = jest.fn();
 const allocationsGetMock = jest.fn();
 const allocationsGetByNameMock = jest.fn();
 const allocationsDeleteMock = jest.fn();
+const projectsGetMock = jest.fn();
+const resourceAdviceListMock = jest.fn();
 
 jest.mock("../nebius/client", () => {
   class NebiusClient {
@@ -45,6 +51,8 @@ jest.mock("../nebius/client", () => {
       getByName: allocationsGetByNameMock,
       delete: allocationsDeleteMock,
     };
+    readonly projects = { get: projectsGetMock };
+    readonly resourceAdvice = { list: resourceAdviceListMock };
 
     constructor(private creds: any) {}
 
@@ -106,6 +114,8 @@ describe("NebiusProvider", () => {
     allocationsGetMock.mockReset();
     allocationsGetByNameMock.mockReset();
     allocationsDeleteMock.mockReset();
+    projectsGetMock.mockReset();
+    resourceAdviceListMock.mockReset();
     disksListMock.mockResolvedValue({ items: [], nextPageToken: "" });
     disksGetMock.mockResolvedValue({
       metadata: {
@@ -307,6 +317,121 @@ describe("NebiusProvider", () => {
         diskIds: { boot: "boot-existing", scratch: "home-existing" },
       },
     });
+  });
+
+  it("refuses to adopt an instance with a different immutable pricing model", async () => {
+    instancesListMock.mockResolvedValue({
+      items: [
+        {
+          metadata: { id: "instance-existing", name: "spot-host" },
+          spec: { networkInterfaces: [] },
+        },
+      ],
+      nextPageToken: "",
+    });
+
+    await expect(
+      new NebiusProvider().createHost(buildSpec({ pricing_model: "spot" }), {
+        parentId: "project-1",
+        serviceAccountId: "svc-1",
+        publicKeyId: "pub-1",
+        privateKeyPem: "key",
+        sshPublicKey: "ssh-ed25519 AAAA",
+        subnetId: "subnet-1",
+      }),
+    ).rejects.toThrow(/unexpected pricing model/);
+    expect(instancesCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes paginated Capacity Advisor data for Spot and Standard", async () => {
+    projectsGetMock.mockResolvedValue({
+      metadata: { id: "project-1", parentId: "tenant-1" },
+    });
+    resourceAdviceListMock
+      .mockResolvedValueOnce({
+        items: [
+          {
+            spec: {
+              region: "us-central1",
+              fabric: "fabric-1",
+              resourceDetails: {
+                $case: "computeInstance",
+                computeInstance: {
+                  platform: "gpu-l40s-a",
+                  preset: {
+                    name: "1gpu-24vcpu-218gb",
+                    resources: { gpuCount: 1 },
+                  },
+                },
+              },
+            },
+            status: {
+              preemptible: {
+                available: 0,
+                limit: 4,
+                availabilityLevel:
+                  ResourceAdviceStatus_Availability_AvailabilityLevel.AVAILABILITY_LEVEL_LOW,
+                dataState:
+                  ResourceAdviceStatus_Availability_DataState.DATA_STATE_FRESH,
+                effectiveAt: {
+                  toISOString: () => "2026-08-20T00:00:00.000Z",
+                },
+              },
+            },
+          },
+        ],
+        nextPageToken: "next",
+      })
+      .mockResolvedValueOnce({ items: [], nextPageToken: "" });
+
+    await expect(
+      new NebiusProvider().listCapacityAdvice({
+        parentId: "project-1",
+        serviceAccountId: "svc-1",
+        publicKeyId: "pub-1",
+        privateKeyPem: "key",
+        sshPublicKey: "ssh-ed25519 AAAA",
+        subnetId: "subnet-1",
+      }),
+    ).resolves.toEqual([
+      {
+        region: "us-central1",
+        fabric: "fabric-1",
+        platform: "gpu-l40s-a",
+        machine_type: "1gpu-24vcpu-218gb",
+        gpu_count: 1,
+        spot: {
+          available: 0,
+          limit: 4,
+          availability_level: "low",
+          data_state: "fresh",
+          effective_at: "2026-08-20T00:00:00.000Z",
+        },
+        on_demand: undefined,
+      },
+    ]);
+    expect(resourceAdviceListMock).toHaveBeenCalledTimes(2);
+    expect(resourceAdviceListMock.mock.calls[0][0].parentId).toBe("tenant-1");
+  });
+
+  it("rejects repeated Capacity Advisor page tokens", async () => {
+    projectsGetMock.mockResolvedValue({
+      metadata: { id: "project-1", parentId: "tenant-1" },
+    });
+    resourceAdviceListMock
+      .mockResolvedValueOnce({ items: [], nextPageToken: "repeated" })
+      .mockResolvedValueOnce({ items: [], nextPageToken: "repeated" });
+
+    await expect(
+      new NebiusProvider().listCapacityAdvice({
+        parentId: "project-1",
+        serviceAccountId: "svc-1",
+        publicKeyId: "pub-1",
+        privateKeyPem: "key",
+        sshPublicKey: "ssh-ed25519 AAAA",
+        subnetId: "subnet-1",
+      }),
+    ).rejects.toThrow(/repeated a page token/);
   });
 
   it("creates and attaches a shared scratch disk", async () => {
