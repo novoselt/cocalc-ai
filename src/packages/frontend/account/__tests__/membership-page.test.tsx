@@ -20,14 +20,21 @@ const mockMembershipPurchaseModal = jest.fn();
 const getSiteLicenseAffiliationReverificationStatus = jest.fn();
 const refreshSiteLicenseAffiliationVerification = jest.fn();
 const refresh = jest.fn();
+const setAccountState = jest.fn();
+let planChooserRequested = false;
 
 jest.mock("../membership-settings-data", () => ({
   useMembershipSettingsData: () => useMembershipSettingsData(),
 }));
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
-  useTypedRedux: (store: string, key: string) =>
-    store === "customize" && key === "stripe_enabled",
+  useActions: () => ({ setState: setAccountState }),
+  useTypedRedux: (store: string, key: string) => {
+    if (store === "account" && key === "membership_plan_chooser_requested") {
+      return planChooserRequested;
+    }
+    return store === "customize" && key === "stripe_enabled";
+  },
 }));
 
 jest.mock("react-intl", () => ({
@@ -170,12 +177,43 @@ function baseData(overrides: Record<string, unknown>) {
 describe("MembershipPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    planChooserRequested = false;
     getSiteLicenseAffiliationReverificationStatus.mockResolvedValue({
       grace_expired_count: 0,
       pending_count: 0,
       seats: [],
     });
     refreshSiteLicenseAffiliationVerification.mockResolvedValue([]);
+  });
+
+  it("opens the personal plan chooser from a pending navigation intent", async () => {
+    planChooserRequested = true;
+    let membershipData = baseData({
+      details: undefined,
+      loading: true,
+      membership: undefined,
+    });
+    useMembershipSettingsData.mockImplementation(() => membershipData);
+
+    const { rerender } = render(<MembershipPage />);
+    expect(mockMembershipPurchaseModal).not.toHaveBeenCalled();
+
+    membershipData = baseData({
+      membership: { class: "free", source: "free" },
+    });
+    rerender(<MembershipPage />);
+
+    await waitFor(() => {
+      expect(mockMembershipPurchaseModal.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          currentClassOverride: "free",
+          open: true,
+        }),
+      );
+    });
+    expect(setAccountState).toHaveBeenCalledWith({
+      membership_plan_chooser_requested: false,
+    });
   });
 
   afterEach(() => {

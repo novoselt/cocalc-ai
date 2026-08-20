@@ -3,17 +3,15 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Button, Modal, Space, Spin, Tag, Typography } from "antd";
-import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
+import { Button, ConfigProvider, theme } from "antd";
+import { type ReactElement, useEffect, useState } from "react";
 
-import api from "@cocalc/frontend/client/api";
 import { useAsyncEffect, useTypedRedux } from "@cocalc/frontend/app-framework";
-import { Icon } from "@cocalc/frontend/components";
-import { capitalize } from "@cocalc/util/misc";
+import api from "@cocalc/frontend/client/api";
+import { openAccountSettings } from "@cocalc/frontend/account/settings-routing";
+import { Tooltip } from "@cocalc/frontend/components";
 import type { MembershipResolution } from "@cocalc/conat/hub/api/purchases";
-import { MembershipStatusPanel } from "./membership-status";
-
-const { Text } = Typography;
+import { capitalize } from "@cocalc/util/misc";
 
 interface MembershipTier {
   id: string;
@@ -24,114 +22,116 @@ interface MembershipTiersResponse {
   tiers?: MembershipTier[];
 }
 
+interface MembershipBadgeData {
+  accountId: string;
+  membership: MembershipResolution;
+  tiers: MembershipTier[];
+}
+
 export default function MembershipBadge(): ReactElement | null {
-  const account_id = useTypedRedux("account", "account_id");
-  const [open, setOpen] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string>("");
+  const accountId = useTypedRedux("account", "account_id");
+  const stripeEnabled = !!useTypedRedux("customize", "stripe_enabled");
+  const { token } = theme.useToken();
+  const [data, setData] = useState<MembershipBadgeData>();
   const [refreshToken, setRefreshToken] = useState<number>(0);
-  const [membership, setMembership] = useState<MembershipResolution | null>(
-    null,
-  );
-  const [tiers, setTiers] = useState<MembershipTier[]>([]);
-  const previousAccountIdRef = useRef(account_id);
 
   useAsyncEffect(
     async (isMounted) => {
-      const accountChanged = previousAccountIdRef.current !== account_id;
-      previousAccountIdRef.current = account_id;
-      if (!account_id) {
-        setError("");
-        setMembership(null);
-        setTiers([]);
-        setLoading(false);
+      if (!accountId) {
+        setData(undefined);
         return;
       }
-      if (accountChanged) {
-        setMembership(null);
-        setTiers([]);
-      }
-      setLoading(true);
-      setError("");
       try {
-        const [membershipResult, tiersResult] = await Promise.all([
+        const [membership, tiersResult] = await Promise.all([
           api("purchases/get-membership"),
           api("purchases/get-membership-tiers"),
         ]);
         if (!isMounted()) return;
-        setMembership(membershipResult as MembershipResolution);
-        setTiers((tiersResult as MembershipTiersResponse)?.tiers ?? []);
-      } catch (err) {
-        if (!isMounted()) return;
-        console.warn("Issue loading membership badge data", err);
-        setError(`${err}`);
-      } finally {
+        setData({
+          accountId,
+          membership: membership as MembershipResolution,
+          tiers: (tiersResult as MembershipTiersResponse)?.tiers ?? [],
+        });
+      } catch {
         if (isMounted()) {
-          setLoading(false);
+          setData(undefined);
         }
       }
     },
-    [account_id, refreshToken],
+    [accountId, refreshToken],
   );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const handler = () => setRefreshToken((value) => value + 1);
-    window.addEventListener("cocalc:membership-changed", handler);
+    const refresh = () => setRefreshToken((value) => value + 1);
+    window.addEventListener("cocalc:membership-changed", refresh);
     return () => {
-      window.removeEventListener("cocalc:membership-changed", handler);
+      window.removeEventListener("cocalc:membership-changed", refresh);
     };
   }, []);
 
-  const tierById = useMemo(() => {
-    return tiers.reduce(
-      (acc, tier) => {
-        acc[tier.id] = tier;
-        return acc;
-      },
-      {} as Record<string, MembershipTier>,
-    );
-  }, [tiers]);
-
-  if (!account_id) {
+  if (!accountId || data?.accountId !== accountId) {
     return null;
   }
 
-  const membershipClass = membership?.class;
+  const membershipClass = data.membership.class;
   const tierLabel =
-    membershipClass != null
-      ? (tierById[membershipClass]?.label ?? capitalize(membershipClass))
-      : undefined;
-  const tagLabel = error
-    ? "Unavailable"
-    : loading && !membership
-      ? "Loading..."
-      : (tierLabel ?? "Free");
-  const tagColor = membershipClass === "free" ? "default" : "blue";
+    data.tiers.find(({ id }) => id === membershipClass)?.label ??
+    capitalize(membershipClass);
+  const showUpgrade = data.membership.source === "free" && stripeEnabled;
+  const buttonLabel = showUpgrade ? "Upgrade" : tierLabel;
+  const actionDescription = showUpgrade
+    ? "View plans or claim a site license."
+    : "View details and change plans.";
+  const description = showUpgrade
+    ? `Upgrade. Current membership: ${tierLabel}. ${actionDescription}`
+    : `Current membership: ${tierLabel}. ${actionDescription}`;
 
   return (
-    <>
-      <Button type="text" onClick={() => setOpen(true)}>
-        <Space size={6}>
-          <Icon name="user" />
-          <Text type="secondary">Membership:</Text>
-          <Tag color={tagColor} style={{ marginInlineEnd: 0 }}>
-            {tagLabel}
-          </Tag>
-          {loading && <Spin size="small" />}
-        </Space>
-      </Button>
-      {open && (
-        <Modal
-          width={800}
-          title="Membership"
-          open
-          onCancel={() => setOpen(false)}
-          onOk={() => setOpen(false)}
+    <ConfigProvider
+      theme={{
+        token: {
+          colorPrimary: token.green6,
+          colorPrimaryBg: token.green2,
+          colorPrimaryBgHover: token.green3,
+          colorPrimaryBorder: token.green4,
+        },
+      }}
+    >
+      <Tooltip
+        title={
+          <>
+            <div>Current membership: {tierLabel}</div>
+            <div>{actionDescription}</div>
+          </>
+        }
+        placement="bottom"
+      >
+        <Button
+          aria-label={description}
+          color="primary"
+          onClick={() => openAccountSettings({ page: "membership" })}
+          size="small"
+          variant="filled"
+          style={{
+            color: token.colorText,
+            fontWeight: token.fontWeightStrong,
+            marginInline: token.marginXXS,
+            maxWidth: 120,
+          }}
         >
-          <MembershipStatusPanel showHeader={false} />
-        </Modal>
-      )}
-    </>
+          <span
+            style={{
+              display: "block",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {buttonLabel}
+          </span>
+        </Button>
+      </Tooltip>
+    </ConfigProvider>
   );
 }
