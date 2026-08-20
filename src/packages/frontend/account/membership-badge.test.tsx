@@ -1,25 +1,44 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import MembershipBadge from "./membership-badge";
 
 const api = jest.fn();
+const openAccountSettings = jest.fn();
 
 let accountId = "account-1";
+let stripeEnabled = true;
 
 jest.mock("antd", () => {
-  const Button = ({ children, onClick }: any) => (
-    <button type="button" onClick={onClick}>
+  const Button = ({ children, onClick, ...props }: any) => (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={props["aria-label"]}
+      style={props.style}
+    >
       {children}
     </button>
   );
-  const Div = ({ children }: any) => <div>{children}</div>;
   return {
     Button,
-    Modal: Div,
-    Space: Div,
-    Spin: () => <div>spin</div>,
-    Tag: Div,
-    Typography: {
-      Text: Div,
+    ConfigProvider: ({ children }: any) => children,
+    theme: {
+      useToken: () => ({
+        token: {
+          colorText: "black",
+          fontWeightStrong: 600,
+          green2: "green-2",
+          green3: "green-3",
+          green4: "green-4",
+          green6: "green-6",
+          marginXXS: 4,
+        },
+      }),
     },
   };
 });
@@ -41,16 +60,27 @@ jest.mock("@cocalc/frontend/app-framework", () => {
         };
       }, deps);
     },
-    useTypedRedux: () => accountId,
+    useTypedRedux: (store: string, field: string) => {
+      if (store === "account" && field === "account_id") return accountId;
+      if (store === "customize" && field === "stripe_enabled") {
+        return stripeEnabled;
+      }
+      return undefined;
+    },
   };
 });
 
 jest.mock("@cocalc/frontend/components", () => ({
-  Icon: () => null,
+  Tooltip: ({ children, title }: any) => (
+    <>
+      {children}
+      {title}
+    </>
+  ),
 }));
 
-jest.mock("./membership-status", () => ({
-  MembershipStatusPanel: () => null,
+jest.mock("@cocalc/frontend/account/settings-routing", () => ({
+  openAccountSettings: (...args: any[]) => openAccountSettings(...args),
 }));
 
 function deferred<T>() {
@@ -65,6 +95,7 @@ describe("MembershipBadge", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     accountId = "account-1";
+    stripeEnabled = true;
   });
 
   it("clears the previous tier label immediately when the account changes", async () => {
@@ -81,8 +112,8 @@ describe("MembershipBadge", () => {
     const { rerender } = render(<MembershipBadge />);
 
     await act(async () => {
-      firstMembership.resolve({ class: "pro" });
-      firstTiers.resolve([{ id: "pro", label: "Pro" }]);
+      firstMembership.resolve({ class: "pro", source: "subscription" });
+      firstTiers.resolve({ tiers: [{ id: "pro", label: "Pro" }] });
       await Promise.all([firstMembership.promise, firstTiers.promise]);
     });
 
@@ -93,19 +124,60 @@ describe("MembershipBadge", () => {
     accountId = "account-2";
     rerender(<MembershipBadge />);
 
-    await waitFor(() => {
-      expect(screen.queryByText("Pro")).toBeNull();
-      expect(screen.getByText("Loading...")).toBeTruthy();
-    });
+    expect(screen.queryByText("Pro")).toBeNull();
 
     await act(async () => {
-      secondMembership.resolve({ class: "free" });
-      secondTiers.resolve([{ id: "free", label: "Free" }]);
+      secondMembership.resolve({ class: "free", source: "free" });
+      secondTiers.resolve({ tiers: [{ id: "free", label: "Free" }] });
       await Promise.all([secondMembership.promise, secondTiers.promise]);
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Free")).toBeTruthy();
+      expect(
+        screen.getByRole("button", {
+          name: "Upgrade. Current membership: Free. View plans or claim a site license.",
+        }),
+      ).toBeTruthy();
     });
+  });
+
+  it("opens membership settings from the current tier button", async () => {
+    api
+      .mockResolvedValueOnce({ class: "advanced", source: "subscription" })
+      .mockResolvedValueOnce({
+        tiers: [{ id: "advanced", label: "Advanced Researcher" }],
+      });
+
+    render(<MembershipBadge />);
+
+    const button = await screen.findByRole("button", {
+      name: "Current membership: Advanced Researcher. View details and change plans.",
+    });
+    expect(
+      screen.getByText("Current membership: Advanced Researcher"),
+    ).toBeTruthy();
+    expect(screen.getByText("View details and change plans.")).toBeTruthy();
+    expect((button as HTMLElement).style.maxWidth).toBe("120px");
+    fireEvent.click(button);
+
+    expect(openAccountSettings).toHaveBeenCalledWith({ page: "membership" });
+  });
+
+  it("shows the Free tier name when commercial billing is disabled", async () => {
+    stripeEnabled = false;
+    api
+      .mockResolvedValueOnce({ class: "free", source: "free" })
+      .mockResolvedValueOnce({
+        tiers: [{ id: "free", label: "Free" }],
+      });
+
+    render(<MembershipBadge />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Current membership: Free. View details and change plans.",
+      }),
+    ).toHaveTextContent("Free");
+    expect(screen.queryByText("Upgrade")).toBeNull();
   });
 });

@@ -44,6 +44,7 @@ import {
   queueMembershipGrantSyncEffect,
   queueMembershipProjectUsageSyncEffect,
 } from "./side-effects";
+import { recordMembershipPackageAssignmentMonth } from "./package-assignment-analytics";
 import {
   getMembershipPrice,
   getSeedMembershipTierById,
@@ -2292,12 +2293,18 @@ export async function assignMembershipPackageSeat(
               });
             }
           }
-          return {
+          const assignment = {
             ...existingAssignment,
             grant_id: grantInfo.grant_id,
             grant_source: grantInfo.grant_source,
             grant_purchase_id: grantInfo.grant_purchase_id ?? undefined,
           };
+          await recordMembershipPackageAssignmentMonth({
+            pkg,
+            assignment,
+            client: dbClient,
+          });
+          return assignment;
         }
         return existingAssignment;
       }
@@ -2331,12 +2338,13 @@ export async function assignMembershipPackageSeat(
             }
           : {}),
       };
-      await pool.query(
+      const { rows } = await pool.query<{ assigned_at: Date | string }>(
         `
           INSERT INTO membership_package_assignments
             (id, package_id, account_id, email_address, assigned_by_account_id, assigned_at, metadata, created, updated)
           VALUES
             ($1, $2, $3, $4, $5, NOW(), $6::jsonb, NOW(), NOW())
+          RETURNING assigned_at
         `,
         [
           assignment_id,
@@ -2360,20 +2368,27 @@ export async function assignMembershipPackageSeat(
           });
         }
       }
-
-      return {
+      const assignment = {
         id: assignment_id,
         package_id,
         account_id: normalizedAccountId,
         email_address: normalizedEmailAddress,
         assigned_by_account_id,
-        assigned_at: new Date(),
+        assigned_at: asDate(rows[0]?.assigned_at) ?? new Date(),
         revoked_at: undefined,
         metadata: assignmentMetadata,
         grant_id: grantInfo?.grant_id,
         grant_source: grantInfo?.grant_source,
         grant_purchase_id: grantInfo?.grant_purchase_id,
       };
+      if (normalizedAccountId) {
+        await recordMembershipPackageAssignmentMonth({
+          pkg,
+          assignment,
+          client: dbClient,
+        });
+      }
+      return assignment;
     },
   });
 }
@@ -2428,14 +2443,23 @@ export async function revokeMembershipPackageSeat(
           client: dbClient,
         });
       }
-      await pool.query(
+      const { rows } = await pool.query<{ revoked_at: Date | string }>(
         `
           UPDATE membership_package_assignments
           SET revoked_at = NOW(), updated = NOW()
           WHERE id = $1
+          RETURNING revoked_at
         `,
         [assignment.id],
       );
+      await recordMembershipPackageAssignmentMonth({
+        pkg,
+        assignment: {
+          ...assignment,
+          revoked_at: asDate(rows[0]?.revoked_at) ?? new Date(),
+        },
+        client: dbClient,
+      });
       if (assignment.account_id && assignment.grant_id) {
         if (currentGrantHomeBayId === getConfiguredBayId()) {
           await revokeMembershipGrantById(
@@ -3135,7 +3159,7 @@ export async function claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay({
               client: dbClient,
             });
           }
-          return {
+          const assignment = {
             ...pendingAssignment,
             account_id,
             metadata: nextMetadata,
@@ -3143,6 +3167,12 @@ export async function claimMembershipPackageSeatWithVerifiedEmailsOnLocalBay({
             grant_source: grantInfo.grant_source,
             grant_purchase_id: grantInfo.grant_purchase_id,
           };
+          await recordMembershipPackageAssignmentMonth({
+            pkg,
+            assignment,
+            client: dbClient,
+          });
+          return assignment;
         }
 
         if (pkg.kind !== "site") {

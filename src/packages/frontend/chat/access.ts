@@ -73,6 +73,11 @@ export function isAcpAssistantMessage(msg: ChatMessage | undefined): boolean {
   return Number.isFinite(startedAt) && startedAt > 0;
 }
 
+export function isAcpAutomationMessage(msg: ChatMessage | undefined): boolean {
+  const automationId = field<string>(msg, "acp_automation_id");
+  return typeof automationId === "string" && automationId.trim().length > 0;
+}
+
 // Return list of account IDs currently editing the message.
 export function editingArray(msg: ChatMessage | undefined): string[] {
   const editing = msg?.editing;

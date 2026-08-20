@@ -4,4 +4,6 @@
  */
 
 // Shared so server-side consent enforcement cannot drift from the banner.
-export const COOKIE_CONSENT_REVISION = 2;
+// Revision 3 added the optional marketing email consent section, so every
+// existing consent must be collected again.
+export const COOKIE_CONSENT_REVISION = 3;

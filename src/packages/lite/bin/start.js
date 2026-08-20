@@ -35,8 +35,15 @@ function configureProcessMaxListeners() {
   configureProcessMaxListeners();
 
   if (`${process.env.COCALC_LITE_ACP_WORKER ?? ""}`.trim() === "1") {
-    await require("@cocalc/lite/acp-worker").main();
-    return;
+    // Exit explicitly: lingering Codex app-server children would otherwise
+    // keep the worker process alive after its queue loop has stopped.
+    try {
+      await require("@cocalc/lite/acp-worker").main();
+      process.exit(0);
+    } catch (err) {
+      console.error("ACP worker failed", err);
+      process.exit(1);
+    }
   }
 
   // Lite always uses one canonical local account/project identity.

@@ -261,6 +261,7 @@ export const MARKETING_EMAIL_CONSENT_RECORD_VERSION = 1;
 
 export type MarketingEmailConsentSource =
   | "communication-settings"
+  | "cookie-banner"
   | "first-project-open";
 
 export interface MarketingEmailConsentRecord {
@@ -322,6 +323,33 @@ export function buildMarketingConsentOtherSettings(
     [MARKETING_CONSENT_OTHER_SETTINGS_KEY]: enabled,
     [OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY]: setProductMarketingEmailMode(
       getDefaultNotificationPreferences(),
+      enabled,
+    ),
+  };
+}
+
+// An answer to the marketing question recorded against an existing account:
+// unlike buildMarketingConsentOtherSettings (sign-up, where a `false` may only
+// mean the question was never asked), `enabled: false` here is an explicit
+// decline, so both optional email modes follow it.  Keeps the account's other
+// notification preferences intact.
+export function buildMarketingConsentUpdate({
+  enabled,
+  source,
+  notificationPreferences,
+  recordedAt,
+}: {
+  enabled: boolean;
+  source: MarketingEmailConsentSource;
+  notificationPreferences?: unknown;
+  recordedAt?: Date;
+}): Record<string, unknown> {
+  return {
+    [MARKETING_CONSENT_OTHER_SETTINGS_KEY]: enabled,
+    [MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY]:
+      buildMarketingEmailConsentRecord({ enabled, recordedAt, source }),
+    [OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY]: setOnboardingEmailMode(
+      setProductMarketingEmailMode(notificationPreferences, enabled),
       enabled,
     ),
   };

@@ -413,6 +413,12 @@ describe("processAcpLLM", () => {
           message_id: "assistant-msg-1",
           acp_thread_id: "codex-session-123",
         },
+        {
+          date: new Date(2002),
+          message_id: "automation-msg-1",
+          acp_thread_id: "codex-automation-session-1",
+          acp_automation_id: "automation-1",
+        },
       ]),
       getCodexConfig: jest.fn(() => ({
         model: "gpt-5.3-codex",

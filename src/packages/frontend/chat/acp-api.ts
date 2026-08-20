@@ -15,7 +15,13 @@ import {
   normalizeCodexMention,
   type CodexThreadConfig,
 } from "@cocalc/chat";
-import { dateValue, field, historyArray, parentMessageId } from "./access";
+import {
+  dateValue,
+  field,
+  historyArray,
+  isAcpAutomationMessage,
+  parentMessageId,
+} from "./access";
 import { type ChatActions } from "./actions";
 import {
   markCodexResponseTrace,
@@ -343,6 +349,7 @@ export async function processAcpLLM({
   const inferredSessionId = (() => {
     const threadMessages = actions.getMessagesInThread?.(thread_id) ?? [];
     for (let i = threadMessages.length - 1; i >= 0; i--) {
+      if (isAcpAutomationMessage(threadMessages[i])) continue;
       const sessionId = field<string>(threadMessages[i], "acp_thread_id");
       if (typeof sessionId === "string" && sessionId.trim().length > 0) {
         return sessionId.trim();

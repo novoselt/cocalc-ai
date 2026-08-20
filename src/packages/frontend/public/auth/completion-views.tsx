@@ -50,6 +50,9 @@ function friendlyProjectInviteError(err: unknown): string {
   if (message.includes("project invite link is incomplete")) {
     return "This project invite link is incomplete.";
   }
+  if (message.includes("created this project invitation")) {
+    return "You created this project invitation. Sign out and open the link using the CoCalc account you want to add.";
+  }
   if (message.includes("not found")) {
     return "This project invite link was not found.";
   }
@@ -402,6 +405,8 @@ export function PublicRedeemProjectInviteView({
   }
 
   const resolvedProjectId = invite?.project_id ?? projectId;
+  const isInviter =
+    accountId != null && invite?.inviter_account_id === accountId;
 
   return (
     <Flex vertical gap={16}>
@@ -438,18 +443,30 @@ export function PublicRedeemProjectInviteView({
       ) : !error ? (
         <Flex vertical gap={12}>
           <Alert
-            title="Confirm project invite"
+            title={
+              isInviter
+                ? "Switch accounts to accept this invite"
+                : "Confirm project invite"
+            }
             description={
               <Flex vertical gap={8}>
-                <span>
-                  Only accept this invite if you trust the person who sent it.
-                  You can accept with this signed-in CoCalc account even if the
-                  email address that received the link is different.
-                </span>
+                {isInviter ? (
+                  <span>
+                    You created this invitation, so this account cannot accept
+                    it. Sign out and open the same link using the CoCalc account
+                    you want to add.
+                  </span>
+                ) : (
+                  <span>
+                    Only accept this invite if you trust the person who sent it.
+                    You can accept with this signed-in CoCalc account even if
+                    the email address that received the link is different.
+                  </span>
+                )}
               </Flex>
             }
             showIcon
-            type="info"
+            type={isInviter ? "warning" : "info"}
           />
           <Card size="small" title="Signed-in account">
             <Flex vertical gap={8}>
@@ -530,7 +547,7 @@ export function PublicRedeemProjectInviteView({
         />
       )}
       <Flex wrap gap={12}>
-        {state === "preview" && !loading && !error ? (
+        {state === "preview" && !loading && !error && !isInviter ? (
           <>
             <Button
               disabled={!!submitting}

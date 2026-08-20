@@ -145,25 +145,24 @@ export async function createMembershipPackagePurchase(
     );
   }
 
-  if (
-    quote.kind === "course" &&
-    quote.metadata?.direct_student_purchase === true
-  ) {
+  if (quote.kind === "course") {
     if (!quote.starts_at || !quote.expires_at) {
-      throw Error("direct student membership period is required");
+      throw Error("course membership period is required");
     }
+    const directStudent = quote.metadata?.direct_student_purchase === true;
+    const channel = directStudent ? "direct-student" : "course";
     await recordMembershipAllocationFact({
-      fact_key: `direct-student:purchase:${purchase_id}`,
+      fact_key: `${channel}:purchase:${purchase_id}`,
       occurred_at: quote.starts_at,
       account_id,
-      channel: "direct-student",
+      channel,
       source_kind: "purchase",
       membership_class: quote.membership_class,
       billing_interval: "fixed",
       lifecycle: "first_paid",
       allocation_start: quote.starts_at,
       allocation_end: quote.expires_at,
-      active_memberships: quote.seat_count,
+      active_memberships: directStudent ? quote.seat_count : 0,
       purchased_capacity: quote.seat_count,
       revenue: quote.total_price,
       purchase_id,

@@ -408,10 +408,8 @@ export const Page: React.FC = () => {
         }}
       >
         {render_admin_tab()}
-        {render_docs_tab()}
         {render_sign_in_tab()}
         {is_logged_in ? render_account_tab() : undefined}
-        {render_support()}
         {showPostSurfaceNavigation ? (
           <PostSurfaceSlot scope="app.post-surface-right-nav">
             <PostSurfaceRightNav
@@ -421,6 +419,8 @@ export const Page: React.FC = () => {
             />
           </PostSurfaceSlot>
         ) : undefined}
+        {render_docs_tab()}
+        {render_support()}
         <ConnectionIndicator height={pageStyle.height} pageStyle={pageStyle} />
         {render_fullscreen()}
       </div>

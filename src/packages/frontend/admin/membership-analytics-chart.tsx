@@ -10,16 +10,23 @@ import { Empty, Space, theme, Typography } from "antd";
 import Plot from "@cocalc/frontend/components/plotly";
 import { COLORS } from "@cocalc/util/theme";
 
+import { membershipChannelOrder } from "./membership-analytics-channels";
 import type {
   MembershipAnalyticsBreakdown,
   MembershipAnalyticsSeries,
   MembershipAnalyticsView,
-} from "./personal-membership-analytics-view";
-import { totalMembershipAnalyticsPoints } from "./personal-membership-analytics-view";
+} from "./membership-analytics-view";
+import { totalMembershipAnalyticsPoints } from "./membership-analytics-view";
 
 export type MembershipAnalyticsChartMode = "stacked" | "lines";
 export type MembershipAnalyticsMetric = "revenue" | "memberships";
-export type MembershipAnalyticsLineDash = "solid" | "dash" | "dot" | "dashdot";
+export type MembershipAnalyticsLineDash =
+  | "solid"
+  | "dash"
+  | "dot"
+  | "dashdot"
+  | "longdash"
+  | "longdashdot";
 
 export interface MembershipAnalyticsSeriesVisual {
   series: MembershipAnalyticsSeries;
@@ -100,7 +107,25 @@ export function nearestMembershipAnalyticsHoverPointIndex(
   return nearestIndex < 0 ? 0 : nearestIndex;
 }
 
-const TIER_COLORS = COLORS.CATEGORICAL;
+const SERIES_COLORS = COLORS.CATEGORICAL;
+const SECONDARY_TINTS = [0, 0.18, 0.34, 0.5, 0.62, 0.72];
+const SECONDARY_LINE_DASHES: MembershipAnalyticsLineDash[] = [
+  "solid",
+  "dash",
+  "dot",
+  "dashdot",
+  "longdash",
+  "longdashdot",
+];
+
+function isCompoundBreakdown(breakdown: MembershipAnalyticsBreakdown): boolean {
+  return (
+    breakdown === "tier-interval" ||
+    breakdown === "tier-lifecycle" ||
+    breakdown === "channel-tier" ||
+    breakdown === "tier-channel"
+  );
+}
 
 function variantLineDash(
   variant: MembershipAnalyticsSeries["variant"],
@@ -152,6 +177,19 @@ function variantTint(
   return 0;
 }
 
+function secondaryTint(index: number): number {
+  if (index < 0) return 0;
+  return (
+    SECONDARY_TINTS[index] ??
+    Math.min(0.82, SECONDARY_TINTS.at(-1)! + 0.08 * (index - 5))
+  );
+}
+
+function secondaryLineDash(index: number): MembershipAnalyticsLineDash {
+  if (index < 0) return "solid";
+  return SECONDARY_LINE_DASHES[index % SECONDARY_LINE_DASHES.length];
+}
+
 function tintMembershipAnalyticsColor(color: string, amount: number): string {
   const match = /^#([0-9a-f]{6})$/i.exec(color);
   if (match == null || amount <= 0) return color;
@@ -184,27 +222,59 @@ export function buildMembershipAnalyticsSeriesVisuals({
   for (const tierId of usedTierIds) {
     if (!sortedTierIds.includes(tierId)) sortedTierIds.push(tierId);
   }
-  const tierColors = new Map(
-    sortedTierIds.map((tierId, index) => [
-      tierId,
-      TIER_COLORS[index % TIER_COLORS.length],
+  const usedChannels = [
+    ...new Set(
+      series.map(({ channel }) => channel).filter((channel) => channel != null),
+    ),
+  ].sort((a, b) => membershipChannelOrder(a) - membershipChannelOrder(b));
+  const compound = isCompoundBreakdown(breakdown);
+  const primaryKeys: string[] = [];
+  for (const item of series) {
+    const key = compound
+      ? (item.groupKey ?? item.key)
+      : item.tierId != null
+        ? `tier:${item.tierId}`
+        : item.key;
+    if (!primaryKeys.includes(key)) primaryKeys.push(key);
+  }
+  const primaryColors = new Map(
+    primaryKeys.map((key, index) => [
+      key,
+      SERIES_COLORS[index % SERIES_COLORS.length],
     ]),
   );
-  return series.map((item, index) => {
-    const color =
-      (item.tierId == null ? undefined : tierColors.get(item.tierId)) ??
-      TIER_COLORS[index % TIER_COLORS.length];
+  return series.map((item) => {
+    const primaryKey = compound
+      ? (item.groupKey ?? item.key)
+      : item.tierId != null
+        ? `tier:${item.tierId}`
+        : item.key;
+    const color = primaryColors.get(primaryKey) ?? SERIES_COLORS[0];
+    const secondaryIndex =
+      breakdown === "channel-tier"
+        ? sortedTierIds.indexOf(item.tierId ?? "")
+        : breakdown === "tier-channel"
+          ? item.channel == null
+            ? -1
+            : usedChannels.indexOf(item.channel)
+          : -1;
+    const tint =
+      breakdown === "tier-interval" || breakdown === "tier-lifecycle"
+        ? variantTint(breakdown, item.variant)
+        : compound
+          ? secondaryTint(secondaryIndex)
+          : 0;
+    const lineDash =
+      breakdown === "tier-interval" || breakdown === "tier-lifecycle"
+        ? variantLineDash(item.variant)
+        : compound
+          ? secondaryLineDash(secondaryIndex)
+          : "solid";
     return {
       series: item,
       color,
-      fillColor: tintMembershipAnalyticsColor(
-        color,
-        variantTint(breakdown, item.variant),
-      ),
-      lineDash:
-        breakdown === "tier-interval" || breakdown === "tier-lifecycle"
-          ? variantLineDash(item.variant)
-          : "solid",
+      fillColor: tintMembershipAnalyticsColor(color, tint),
+      lineDash,
       opacity: 1,
     };
   });
@@ -221,6 +291,10 @@ function lineDashArray(
       return `1 ${Math.max(5, width + 4)}`;
     case "dashdot":
       return `6 3 1 ${Math.max(5, width + 3)}`;
+    case "longdash":
+      return "10 4";
+    case "longdashdot":
+      return `10 3 1 ${Math.max(5, width + 3)}`;
     case "solid":
       return;
   }
@@ -376,19 +450,18 @@ export function MembershipAnalyticsLegend({
   comparisonLabel?: string;
   chartMode: MembershipAnalyticsChartMode;
 }) {
-  const grouped =
-    breakdown === "tier-interval" || breakdown === "tier-lifecycle";
-  const tierGroups = new Map<string, MembershipAnalyticsSeriesVisual[]>();
+  const grouped = isCompoundBreakdown(breakdown);
+  const groups = new Map<string, MembershipAnalyticsSeriesVisual[]>();
   if (grouped) {
     for (const visual of visuals) {
-      const key = visual.series.tierId ?? visual.series.key;
-      tierGroups.set(key, [...(tierGroups.get(key) ?? []), visual]);
+      const key = visual.series.groupKey ?? visual.series.key;
+      groups.set(key, [...(groups.get(key) ?? []), visual]);
     }
   }
   return (
     <Space wrap>
       {grouped
-        ? [...tierGroups.entries()].map(([key, group]) => (
+        ? [...groups.entries()].map(([key, group]) => (
             <Space key={key}>
               <Typography.Text strong>
                 {group[0].series.groupLabel}

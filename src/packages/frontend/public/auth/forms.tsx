@@ -12,7 +12,10 @@ import {
   setStoredControlPlaneOrigin,
 } from "@cocalc/frontend/control-plane-origin";
 import {
+  hasMarketingConsent,
+  MARKETING_CONSENT_CATEGORY,
   requireEssentialConsent,
+  useCategoryConsent,
   useEssentialConsent,
 } from "@cocalc/frontend/cookie-consent";
 import type { AuthView } from "@cocalc/frontend/auth/types";
@@ -2167,6 +2170,12 @@ export function PublicSignUpForm({
     ) !== "password_required";
   const consentReady = useEssentialConsent();
   const cookieConsentReady = !cookieBannerEnabled || consentReady;
+  // The banner collects the optional marketing email choice before sign-up, so
+  // the new account starts with the consent the visitor actually gave.
+  const marketingCategoryConsent = useCategoryConsent(
+    MARKETING_CONSENT_CATEGORY,
+  );
+  const marketingConsent = cookieBannerEnabled && marketingCategoryConsent;
   const policiesVisible = arePublicPoliciesVisible(publicConfig);
   const { termsUrl, privacyUrl } = policyUrls(publicConfig);
   const emailAllowedByDomainPolicy = emailAllowedByPublicSignupPolicy({
@@ -2280,7 +2289,7 @@ export function PublicSignUpForm({
         endpoint: "auth/sign-up",
         body: {
           terms: true,
-          marketing_consent: false,
+          marketing_consent: cookieBannerEnabled && hasMarketingConsent(),
           onboardingIntent,
           email,
           password,
@@ -2401,7 +2410,7 @@ export function PublicSignUpForm({
             href={ssoLoginHref("google", {
               target: resolveAuthRedirectPath(redirectToPath),
               terms: policiesVisible ? true : undefined,
-              marketing_consent: false,
+              marketing_consent: marketingConsent,
               onboarding_intent: onboardingIntent,
               registration_token: registrationToken.trim(),
             })}

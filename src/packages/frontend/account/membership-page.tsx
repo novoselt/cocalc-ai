@@ -7,7 +7,7 @@ import { Alert, Button, Modal, Space, Tag, Table, Typography } from "antd";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { defineMessage } from "react-intl";
 
-import { useTypedRedux } from "@cocalc/frontend/app-framework";
+import { useActions, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { Loading, Tooltip } from "@cocalc/frontend/components";
 import { TimeAgo } from "@cocalc/frontend/components/time-ago";
 import { labels } from "@cocalc/frontend/i18n";
@@ -75,6 +75,7 @@ export function MembershipPage() {
 }
 
 function MembershipSettingsContent() {
+  const accountActions = useActions("account");
   const {
     account_id,
     candidateRows,
@@ -85,6 +86,10 @@ function MembershipSettingsContent() {
     refresh,
     tierById,
   } = useMembershipSettingsData();
+  const planChooserRequested = useTypedRedux(
+    "account",
+    "membership_plan_chooser_requested",
+  );
   const stripeEnabled = !!useTypedRedux("customize", "stripe_enabled");
   const [purchaseOpen, setPurchaseOpen] = useState<boolean>(false);
   const [purchaseCurrentClass, setPurchaseCurrentClass] = useState<
@@ -115,6 +120,33 @@ function MembershipSettingsContent() {
     .map((row) => `${row.siteLicenseId ?? ""}:${row.grantPackageId}`)
     .sort()
     .join("|");
+  const personalMembership = details?.candidates.find(
+    (candidate) => candidate.source === "subscription",
+  );
+  const personalMembershipRenewing =
+    personalMembership?.subscription_renewal_state != null;
+  const currentPersonalRow = candidateRows.find(
+    (row) =>
+      row.sourceKind === "subscription" &&
+      row.subscriptionStatus !== "canceled",
+  );
+
+  useEffect(() => {
+    if (!planChooserRequested || loading || !membership) return;
+    accountActions.setState({ membership_plan_chooser_requested: false });
+    if (personalMembershipRenewing) return;
+    setPurchaseCurrentClass(currentPersonalRow?.class ?? "free");
+    setPurchaseCurrentInterval(currentPersonalRow?.subscriptionInterval);
+    setPurchaseOpen(true);
+  }, [
+    accountActions,
+    currentPersonalRow?.class,
+    currentPersonalRow?.subscriptionInterval,
+    loading,
+    membership,
+    personalMembershipRenewing,
+    planChooserRequested,
+  ]);
 
   useEffect(() => {
     let canceled = false;
@@ -157,11 +189,6 @@ function MembershipSettingsContent() {
   const hasSiteLicenseRow = candidateRows.some(
     (row) => row.action === "site-license",
   );
-  const personalMembership = details?.candidates.find(
-    (candidate) => candidate.source === "subscription",
-  );
-  const personalMembershipRenewing =
-    personalMembership?.subscription_renewal_state != null;
   const refreshMembership = () => {
     window.dispatchEvent(new Event("cocalc:membership-changed"));
     refresh();
@@ -187,11 +214,6 @@ function MembershipSettingsContent() {
   };
   const openPersonalMembershipManage = () => {
     if (personalMembershipRenewing) return;
-    const currentPersonalRow = candidateRows.find(
-      (row) =>
-        row.sourceKind === "subscription" &&
-        row.subscriptionStatus !== "canceled",
-    );
     openPurchase(
       currentPersonalRow?.class ?? "free",
       currentPersonalRow?.subscriptionInterval,

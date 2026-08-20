@@ -35,6 +35,7 @@ export type SettingsTargetPath = AccountSettingsPagePath | NavigatePath;
 
 type AccountSettingsState = {
   active_page: SettingsPageType;
+  membership_plan_chooser_requested?: boolean;
 };
 
 type AccountSettingsLegacyState = {
@@ -190,10 +191,18 @@ export function getSettingsPushStatePath(route: AccountSettingsRoute): string {
 export function applyAccountSettingsRoute(
   actions: AccountSettingsActionsLike,
   route: AccountSettingsRoute,
-  opts?: { pushHistory?: boolean },
+  opts?: {
+    openMembershipPlanChooser?: boolean;
+    pushHistory?: boolean;
+  },
 ): void {
   const pushHistory = opts?.pushHistory ?? true;
-  actions.setState(getAccountSettingsState(route));
+  actions.setState({
+    ...getAccountSettingsState(route),
+    ...(opts?.openMembershipPlanChooser
+      ? { membership_plan_chooser_requested: true }
+      : undefined),
+  });
   if (pushHistory) {
     actions.push_state(getSettingsPushStatePath(route));
   }
@@ -201,11 +210,15 @@ export function applyAccountSettingsRoute(
 
 export function openAccountSettings(
   route: AccountSettingsRoute,
-  opts?: { changeHistory?: boolean },
+  opts?: {
+    changeHistory?: boolean;
+    openMembershipPlanChooser?: boolean;
+  },
 ): void {
   const changeHistory = opts?.changeHistory ?? true;
   redux.getActions("page").set_active_tab("account", changeHistory);
   applyAccountSettingsRoute(redux.getActions("account"), route, {
+    openMembershipPlanChooser: opts?.openMembershipPlanChooser,
     pushHistory: changeHistory,
   });
 }

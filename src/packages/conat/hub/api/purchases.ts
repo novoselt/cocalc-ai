@@ -1,4 +1,4 @@
-import { authFirst } from "./util";
+import { authFirst, authFirstRequireAccount } from "./util";
 import type { MoneyValue } from "@cocalc/util/money";
 import type { AutoBalanceConfig } from "@cocalc/util/db-schema/accounts";
 import type { MembershipPackageProduct } from "@cocalc/util/membership-package-product";
@@ -271,6 +271,12 @@ export interface MembershipDetails {
   admin_override?: MembershipAdminOverrideSummary;
 }
 
+export interface MembershipTrialOffer {
+  membership_class: MembershipClass;
+  label: string;
+  trial_days: number;
+}
+
 export interface AdminMembershipTierPayload {
   id: MembershipClass;
   label?: string | null;
@@ -493,6 +499,36 @@ export interface MembershipAllocationDailyRow {
   fact_count: number;
 }
 
+export const MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT =
+  "cocalc-membership-allocation-daily";
+export const MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION = 1;
+
+export type MembershipAllocationDailyExportRow = Omit<
+  MembershipAllocationDailyRow,
+  "day"
+> & {
+  day: string;
+};
+
+export interface MembershipAllocationDailyExportTier {
+  id: string;
+  label: string;
+  priority: number;
+}
+
+export interface MembershipAllocationDailyExport {
+  format: typeof MEMBERSHIP_ALLOCATION_DAILY_EXPORT_FORMAT;
+  version: typeof MEMBERSHIP_ALLOCATION_DAILY_EXPORT_VERSION;
+  exported_at: string;
+  range: {
+    start_day: string;
+    end_day: string;
+  };
+  channels: MembershipAllocationChannel[];
+  tiers: MembershipAllocationDailyExportTier[];
+  rows: MembershipAllocationDailyExportRow[];
+}
+
 export interface MembershipAllocationSeriesQuery {
   account_id?: string;
   start?: Date | string;
@@ -642,6 +678,8 @@ export interface TeamLicenseOverview extends TeamLicenseRecord {
 export interface TeamLicenseQuoteLineItem {
   description: string;
   amount: number;
+  membership_class: MembershipClass;
+  seat_count: number;
 }
 
 export interface TeamLicenseQuote {
@@ -1481,6 +1519,9 @@ export interface Purchases {
   getMembership: (opts?: {
     account_id?: string;
   }) => Promise<MembershipResolution>;
+  getMembershipTrialOffers: (opts?: {
+    account_id?: string;
+  }) => Promise<MembershipTrialOffer[]>;
   getMembershipDetails: (opts?: {
     account_id?: string;
     user_account_id?: string;
@@ -1881,6 +1922,7 @@ export const purchases = {
   getMinBalance: authFirst,
   setAutoBalance: authFirst,
   getMembership: authFirst,
+  getMembershipTrialOffers: authFirstRequireAccount,
   getMembershipDetails: authFirst,
   getMembershipTierAdminOverview: authFirst,
   getMembershipAnalyticsOverview: authFirst,

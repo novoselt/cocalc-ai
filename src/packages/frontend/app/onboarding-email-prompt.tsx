@@ -9,12 +9,10 @@ import { useEffect, useRef, useState } from "react";
 import { useActions, useTypedRedux } from "@cocalc/frontend/app-framework";
 import { lite } from "@cocalc/frontend/lite";
 import {
-  buildMarketingEmailConsentRecord,
+  buildMarketingConsentUpdate,
   MARKETING_CONSENT_OTHER_SETTINGS_KEY,
   MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
   OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
-  setOnboardingEmailMode,
-  setProductMarketingEmailMode,
 } from "@cocalc/util/notification-preferences";
 import { COLORS } from "@cocalc/util/theme";
 import type { CSS } from "@cocalc/frontend/app-framework";
@@ -113,21 +111,15 @@ export function OnboardingEmailPrompt(): React.JSX.Element | null {
   ]);
 
   function respond(enabled: boolean): void {
-    accountActions.set_other_settings_many({
-      [MARKETING_CONSENT_OTHER_SETTINGS_KEY]: enabled,
-      [MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY]:
-        buildMarketingEmailConsentRecord({
-          enabled,
-          source: "first-project-open",
-        }),
-      [OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY]: setOnboardingEmailMode(
-        setProductMarketingEmailMode(
-          otherSettings?.get?.(OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY),
-          enabled,
-        ),
+    accountActions.set_other_settings_many(
+      buildMarketingConsentUpdate({
         enabled,
-      ),
-    });
+        notificationPreferences: otherSettings?.get?.(
+          OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
+        ),
+        source: "first-project-open",
+      }),
+    );
     setVisible(false);
   }
 

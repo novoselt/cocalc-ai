@@ -11,7 +11,11 @@ import {
   clearChatViewportAnchorCacheForTests,
   saveChatViewportAnchor,
 } from "../chat-scroll-anchor";
-import { ChatLog, MessageList } from "../chat-log";
+import {
+  ChatLog,
+  measureChatVirtuosoItemHeight,
+  MessageList,
+} from "../chat-log";
 
 const mockScrollToIndex = jest.fn();
 let activeTopTab = "project-2";
@@ -93,6 +97,87 @@ describe("ChatLog sidechat search jumps", () => {
     latestVirtuosoProps = undefined;
     activeTopTab = "project-2";
     activeProjectTab = "editor-some-other.chat";
+  });
+
+  it("quantizes Virtuoso item measurements to stable CSS pixels", () => {
+    const element = document.createElement("div");
+    jest.spyOn(element, "getBoundingClientRect").mockReturnValue({
+      bottom: 101.25,
+      height: 100.25,
+      left: 0,
+      right: 100,
+      top: 1,
+      width: 100,
+      x: 0,
+      y: 1,
+      toJSON: () => ({}),
+    });
+
+    expect(measureChatVirtuosoItemHeight(element)).toBe(101);
+  });
+
+  it("keeps Virtuoso callbacks stable while chat messages rerender", async () => {
+    const manualScrollRef = { current: false };
+    const setManualScroll = jest.fn();
+    const firstMessages = new Map([
+      [
+        "1000",
+        {
+          date: 1000,
+          sender_id: "acct-1",
+          history: [{ content: "first message" }],
+        },
+      ],
+    ]) as any;
+    const commonProps = {
+      account_id: "acct-1",
+      manualScrollRef,
+      mode: "standalone" as const,
+      scrollCacheId: "stable-virtuoso-chat",
+      setManualScroll,
+      user_map: undefined,
+    };
+    const { rerender } = render(
+      <MessageList
+        {...commonProps}
+        messages={firstMessages}
+        sortedDates={["1000"]}
+      />,
+    );
+    await waitFor(() => expect(latestVirtuosoProps).toBeDefined());
+    const firstCallbacks = {
+      atBottomStateChange: latestVirtuosoProps.atBottomStateChange,
+      itemContent: latestVirtuosoProps.itemContent,
+      itemSize: latestVirtuosoProps.itemSize,
+      onScroll: latestVirtuosoProps.onScroll,
+      rangeChanged: latestVirtuosoProps.rangeChanged,
+      scrollerRef: latestVirtuosoProps.scrollerRef,
+    };
+    const firstContext = latestVirtuosoProps.context;
+
+    rerender(
+      <MessageList
+        {...commonProps}
+        messages={
+          new Map([
+            [
+              "1000",
+              {
+                date: 1000,
+                sender_id: "acct-1",
+                history: [{ content: "first message with streamed suffix" }],
+              },
+            ],
+          ]) as any
+        }
+        sortedDates={["1000"]}
+      />,
+    );
+
+    expect(latestVirtuosoProps).toEqual(
+      expect.objectContaining(firstCallbacks),
+    );
+    expect(latestVirtuosoProps.context).not.toBe(firstContext);
   });
 
   it("restores saved scroll state without a parent Virtuoso ref", async () => {

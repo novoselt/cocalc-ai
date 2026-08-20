@@ -1145,6 +1145,25 @@ describe("deleteThread identity targeting", () => {
           ],
         },
       ],
+      [
+        `${rootMs + 2}`,
+        {
+          event: "chat",
+          sender_id: "openai-codex-agent",
+          date: new Date(rootMs + 2),
+          message_id: "automation-msg-2",
+          thread_id: "thread-source-2",
+          acp_thread_id: "codex-automation-session-2",
+          acp_automation_id: "automation-2",
+          history: [
+            {
+              author_id: "openai-codex-agent",
+              content: "scheduled work",
+              date: new Date(rootMs + 2).toISOString(),
+            },
+          ],
+        },
+      ],
     ]);
     const actions = makeActions(messages);
     const sourceConfig = {

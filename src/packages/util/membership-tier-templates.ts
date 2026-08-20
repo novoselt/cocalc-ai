@@ -176,7 +176,7 @@ export const TIER_TEMPLATES = {
       blob_account_count: 1000,
       blob_project_total_bytes: 500000000,
       blob_project_count: 500,
-      invite_email_send_enabled: false,
+      invite_email_send_enabled: true,
       invite_email_daily_count: 20,
       invite_email_hourly_count: 10,
       invite_email_recipients_per_batch: 10,
