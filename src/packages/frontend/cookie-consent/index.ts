@@ -9,8 +9,13 @@ import * as CookieConsent from "vanilla-cookieconsent";
 
 import { COLORS } from "@cocalc/util/theme";
 import { COOKIE_CONSENT_REVISION } from "@cocalc/util/cookie-consent";
+import type { MarketingEmailConsentSource } from "@cocalc/util/notification-preferences";
 
-import { COOKIE_CATEGORIES, type CookieCategoryKey } from "./categories";
+import {
+  COOKIE_CATEGORIES,
+  MARKETING_CONSENT_CATEGORY,
+  type CookieCategoryKey,
+} from "./categories";
 import {
   BANNER_READY_EVENT,
   BANNER_STATE_EVENT,
@@ -19,7 +24,7 @@ import {
   isBannerReady,
 } from "./state";
 
-export { COOKIE_CATEGORIES };
+export { COOKIE_CATEGORIES, MARKETING_CONSENT_CATEGORY };
 export type { CookieCategoryKey };
 
 export { COOKIE_CONSENT_REVISION };
@@ -51,6 +56,72 @@ export function hasCategoryConsent(key: CookieCategoryKey): boolean {
 
 export function hasTrackingConsent(): boolean {
   return hasCategoryConsent("analytics");
+}
+
+// Optional marketing email consent, collected by the banner alongside the
+// optional cookie categories.
+export function hasMarketingConsent(): boolean {
+  return hasCategoryConsent(MARKETING_CONSENT_CATEGORY);
+}
+
+// "changed" means the banner will emit a consent event, and the listener that
+// mirrors consent onto the account performs the resulting write.  Anything else
+// means the caller has to write the account setting itself.
+export type ConsentWriteResult = "changed" | "unchanged" | "unavailable";
+
+// Flips a single optional category while leaving the other choices alone, so
+// account settings can write back into the banner's consent record.
+export function setCategoryConsent(
+  key: CookieCategoryKey,
+  enabled: boolean,
+): ConsentWriteResult {
+  if (typeof window === "undefined") return "unavailable";
+  if (!isBannerActive()) return "unavailable";
+  try {
+    if (!CookieConsent.validConsent()) return "unavailable";
+    const accepted = new Set<string>(["necessary"]);
+    for (const category of COOKIE_CATEGORIES) {
+      if (CookieConsent.acceptedCategory(category.key)) {
+        accepted.add(category.key);
+      }
+    }
+    if (accepted.has(key) === enabled) return "unchanged";
+    if (enabled) {
+      accepted.add(key);
+    } else {
+      accepted.delete(key);
+    }
+    CookieConsent.acceptCategory([...accepted]);
+    return "changed";
+  } catch {
+    return "unavailable";
+  }
+}
+
+// Set when the marketing category is changed from somewhere other than the
+// banner, so the consent record keeps the origin of the decision.
+let pendingMarketingSource: MarketingEmailConsentSource | null = null;
+
+export function setMarketingConsent(
+  enabled: boolean,
+  source: MarketingEmailConsentSource,
+): ConsentWriteResult {
+  // acceptCategory dispatches cc:onChange synchronously, so the listener that
+  // records the decision runs before setCategoryConsent returns: the source has
+  // to be in place first, and cleared again when no event followed so it cannot
+  // mislabel an unrelated later decision made in the banner.
+  pendingMarketingSource = source;
+  const result = setCategoryConsent(MARKETING_CONSENT_CATEGORY, enabled);
+  if (result !== "changed") {
+    pendingMarketingSource = null;
+  }
+  return result;
+}
+
+export function takePendingMarketingConsentSource(): MarketingEmailConsentSource | null {
+  const source = pendingMarketingSource;
+  pendingMarketingSource = null;
+  return source;
 }
 
 export function showConsentModal(): void {
@@ -302,6 +373,24 @@ export function useEssentialConsent(): boolean {
       window.removeEventListener(BANNER_STATE_EVENT, update);
     };
   }, []);
+  return accepted;
+}
+
+export function useCategoryConsent(key: CookieCategoryKey): boolean {
+  const [accepted, setAccepted] = useState<boolean>(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => setAccepted(hasCategoryConsent(key));
+    update();
+    window.addEventListener("cc:onConsent", update);
+    window.addEventListener("cc:onChange", update);
+    window.addEventListener(BANNER_STATE_EVENT, update);
+    return () => {
+      window.removeEventListener("cc:onConsent", update);
+      window.removeEventListener("cc:onChange", update);
+      window.removeEventListener(BANNER_STATE_EVENT, update);
+    };
+  }, [key]);
   return accepted;
 }
 
