@@ -523,6 +523,12 @@ function isNewerImage(next: NebiusImage, current: NebiusImage): boolean {
   return false;
 }
 
+function imageMinimumDiskSizeGb(image: Image): number | null {
+  const bytes = Number(image.status?.minDiskSizeBytes ?? 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return null;
+  return Math.ceil(bytes / 2 ** 30);
+}
+
 async function listAllPlatforms(client: NebiusClient): Promise<Platform[]> {
   const items: Platform[] = [];
   let pageToken = "";
@@ -727,6 +733,7 @@ export async function fetchNebiusCatalog(
       architecture: image.spec?.cpuArchitecture?.name ?? null,
       recommended_platforms: image.spec?.recommendedPlatforms ?? [],
       region: entry.region ?? null,
+      minimum_disk_size_gb: imageMinimumDiskSizeGb(image),
       created_at: createdAt,
       updated_at: updatedAt,
     });

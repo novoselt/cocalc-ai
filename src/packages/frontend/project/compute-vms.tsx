@@ -64,6 +64,7 @@ import {
   getGcpPersistentDiskPriceEstimate,
   getGcpRegionOptions,
   getGcpZoneOptions,
+  getNebiusMinimumBootDiskGb,
   getProviderDescriptor,
   getProviderOptions,
   getProviderPriceEstimate,
@@ -521,7 +522,18 @@ function VmCreateModal({
       ? 50
       : provider === "gcp" && draft.machine_type
         ? gcpMinimumBootDiskGb(draft.machine_type)
-        : 10;
+        : getNebiusMinimumBootDiskGb(hostCatalog, selection);
+
+  useEffect(() => {
+    if (!open) return;
+    const current = Number(form.getFieldValue("boot_disk_gb") ?? 0);
+    if (current >= minimumBootDiskGb) return;
+    form.setFieldValue("boot_disk_gb", minimumBootDiskGb);
+    setDraft((value) => ({
+      ...value,
+      boot_disk_gb: minimumBootDiskGb,
+    }));
+  }, [form, minimumBootDiskGb, open]);
 
   const patchDraft = (patch: Partial<VmDraft>) => {
     form.setFieldsValue(patch);
@@ -776,6 +788,17 @@ function VmCreateModal({
                   gpu_count: 0,
                   home_volume: undefined,
                   create_home_volume: false,
+                  boot_disk_gb: Math.max(
+                    Number(draft.boot_disk_gb ?? 20),
+                    nextProvider === "nebius"
+                      ? getNebiusMinimumBootDiskGb(nextCatalog, {
+                          region,
+                          machine_type,
+                        })
+                      : machine_type
+                        ? gcpMinimumBootDiskGb(machine_type)
+                        : 10,
+                  ),
                   new_home_volume_size_gb: normalizedVolumeSizeGb(
                     nextProvider,
                     draft.new_home_volume_size_gb,
@@ -901,7 +924,15 @@ function VmCreateModal({
                           zone: nextZone,
                         }),
                       )
-                    : {};
+                    : {
+                        boot_disk_gb: Math.max(
+                          Number(draft.boot_disk_gb ?? 20),
+                          getNebiusMinimumBootDiskGb(hostCatalog, {
+                            region,
+                            machine_type: draft.machine_type,
+                          }),
+                        ),
+                      };
                 patchDraft({ region, zone: nextZone, ...machinePatch });
               }}
             />
@@ -1031,7 +1062,16 @@ function VmCreateModal({
                 patchDraft(
                   provider === "gcp"
                     ? gcpMachinePatch(machine_type)
-                    : { machine_type },
+                    : {
+                        machine_type,
+                        boot_disk_gb: Math.max(
+                          Number(draft.boot_disk_gb ?? 20),
+                          getNebiusMinimumBootDiskGb(hostCatalog, {
+                            region: draft.region,
+                            machine_type,
+                          }),
+                        ),
+                      },
                 );
               }}
             />

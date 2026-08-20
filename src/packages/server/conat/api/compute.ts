@@ -88,6 +88,7 @@ import {
 } from "@cocalc/util/project-host-pricing";
 import { getCatalog as getHostCatalog } from "./hosts";
 import { loadNebiusInstanceTypes } from "@cocalc/server/cloud/providers";
+import { getNebiusMinimumBootDiskGb } from "@cocalc/server/cloud/host-util";
 import { getManagedVmProjectSshPublicKey } from "@cocalc/server/projects/managed-vm-ssh-config";
 import {
   defaultComputeZone,
@@ -459,13 +460,20 @@ async function getComputeMachine(opts: {
         `machine '${opts.machine_type}' is not available in ${opts.region}`,
       );
     }
+    const gpuCount = machine.gpus ?? 0;
     return {
       machine_type: machine.name,
       architecture: "x86_64" as const,
       cpu: machine.vcpus,
       ram_gb: machine.memory_gib,
       gpu_type: machine.gpus ? (machine.gpu_label ?? machine.platform) : null,
-      gpu_count: machine.gpus ?? 0,
+      gpu_count: gpuCount,
+      minimum_boot_disk_gb: await getNebiusMinimumBootDiskGb({
+        region: opts.region,
+        platform: machine.platform,
+        arch: "x86_64",
+        wantsGpu: gpuCount > 0,
+      }),
       provider_spec: {
         platform: machine.platform,
         platform_label: machine.platform_label,
@@ -494,6 +502,7 @@ async function getComputeMachine(opts: {
     ram_gb: machine.memoryMb / 1024,
     gpu_type: gpu?.type ?? null,
     gpu_count: gpu?.count ?? 0,
+    minimum_boot_disk_gb: gcpMinimumBootDiskGb(machine.name),
     provider_spec: {},
   };
 }
@@ -808,7 +817,7 @@ export async function createVm(
       ? 50
       : provider === "gcp"
         ? gcpMinimumBootDiskGb(machine.machine_type)
-        : 10;
+        : machine.minimum_boot_disk_gb;
   if (
     !Number.isInteger(bootDiskGb) ||
     bootDiskGb < minimumBootDiskGb ||

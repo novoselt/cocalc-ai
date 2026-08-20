@@ -163,8 +163,41 @@ type NebiusImage = {
   architecture?: string | null;
   recommended_platforms?: string[];
   region?: string | null;
+  minimum_disk_size_gb?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export const getNebiusMinimumBootDiskGb = (
+  catalog: HostCatalog | undefined,
+  selection: Pick<ProviderSelection, "region" | "machine_type">,
+): number => {
+  const instances =
+    getCatalogEntryPayload<NebiusInstance[]>(
+      catalog,
+      "instance_types",
+      "global",
+    ) ?? [];
+  const machine = instances.find(
+    (entry) => entry.name === selection.machine_type,
+  );
+  const wantsGpu = Number(machine?.gpus ?? 0) > 0;
+  const fallback = wantsGpu ? 40 : 20;
+  if (!machine?.platform) return fallback;
+  const images =
+    getCatalogEntryPayload<NebiusImage[]>(catalog, "images", "global") ?? [];
+  const minimums = images
+    .filter(
+      (image) =>
+        (!selection.region ||
+          !image.region ||
+          image.region === selection.region) &&
+        (image.recommended_platforms?.includes(machine.platform!) ?? false) &&
+        isNebiusGpuFamily(image.family) === wantsGpu,
+    )
+    .map((image) => Number(image.minimum_disk_size_gb ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return Math.max(fallback, ...minimums);
 };
 
 const MIN_USABLE_RAM_GIB = 8;

@@ -1,4 +1,8 @@
-import { buildHostSpec, getGcpAcceleratorImage } from "./host-util";
+import {
+  buildHostSpec,
+  getGcpAcceleratorImage,
+  getNebiusMinimumBootDiskGb,
+} from "./host-util";
 
 const loadGcpImagesMock = jest.fn();
 const loadNebiusImagesMock = jest.fn();
@@ -161,6 +165,50 @@ describe("buildHostSpec", () => {
     });
 
     expect(spec.metadata?.source_image_family).toBe("ubuntu24.04-cuda13.0");
+  });
+
+  it("uses the selected Nebius image minimum for GPU boot disks", async () => {
+    loadNebiusImagesMock.mockResolvedValue([
+      {
+        id: "cuda-13",
+        family: "ubuntu24.04-cuda13.0",
+        version: "0.2.711",
+        architecture: "AMD64",
+        recommended_platforms: ["gpu-l40s-d"],
+        region: "eu-north1",
+        minimum_disk_size_gb: 48,
+      },
+    ]);
+
+    await expect(
+      getNebiusMinimumBootDiskGb({
+        region: "eu-north1",
+        platform: "gpu-l40s-d",
+        arch: "x86_64",
+        wantsGpu: true,
+      }),
+    ).resolves.toBe(48);
+  });
+
+  it("keeps a 40GB GPU fallback for older Nebius catalog rows", async () => {
+    loadNebiusImagesMock.mockResolvedValue([
+      {
+        id: "cuda-13",
+        family: "ubuntu24.04-cuda13.0",
+        architecture: "AMD64",
+        recommended_platforms: ["gpu-l40s-d"],
+        region: "eu-north1",
+      },
+    ]);
+
+    await expect(
+      getNebiusMinimumBootDiskGb({
+        region: "eu-north1",
+        platform: "gpu-l40s-d",
+        arch: "x86_64",
+        wantsGpu: true,
+      }),
+    ).resolves.toBe(40);
   });
 
   it("filters GCP accelerator images to the machine type architecture", async () => {

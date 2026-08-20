@@ -6,6 +6,7 @@ import {
   getHostPriceEstimate,
   getGcpPersistentDiskPriceEstimate,
   getNebiusPersistentDiskPriceEstimate,
+  getNebiusMinimumBootDiskGb,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
   getGcpRegionOptions,
@@ -24,6 +25,53 @@ function testCatalog(entries: HostCatalog["entries"]): HostCatalog {
     provider_capabilities: {},
   };
 }
+
+describe("Nebius boot disks", () => {
+  const gpuCatalog = testCatalog([
+    {
+      kind: "instance_types",
+      scope: "global",
+      payload: [
+        {
+          name: "1gpu-8vcpu-32gb",
+          platform: "gpu-l40s-d",
+          gpus: 1,
+        },
+      ],
+    },
+    {
+      kind: "images",
+      scope: "global",
+      payload: [
+        {
+          id: "cuda-13",
+          family: "ubuntu24.04-cuda13.0",
+          region: "eu-north1",
+          recommended_platforms: ["gpu-l40s-d"],
+          minimum_disk_size_gb: 48,
+        },
+      ],
+    },
+  ]);
+
+  it("uses the selected GPU image minimum", () => {
+    expect(
+      getNebiusMinimumBootDiskGb(gpuCatalog, {
+        region: "eu-north1",
+        machine_type: "1gpu-8vcpu-32gb",
+      }),
+    ).toBe(48);
+  });
+
+  it("falls back to 40GB when old catalog rows omit the image minimum", () => {
+    expect(
+      getNebiusMinimumBootDiskGb(testCatalog(gpuCatalog.entries.slice(0, 1)), {
+        region: "eu-north1",
+        machine_type: "1gpu-8vcpu-32gb",
+      }),
+    ).toBe(40);
+  });
+});
 
 describe("provider enablement", () => {
   const enabledCustomize = {
