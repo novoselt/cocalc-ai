@@ -107,8 +107,10 @@ mkdir -p \
 ln -s "$ASSET_PREVIOUS" "$CURRENT_LINK"
 printf '%s\n' previous > \
   "${ASSET_PREVIOUS}/runtime/control-plane/static/previous-0123456789abcdef.js"
+printf '%s\n' historic > \
+  "${ASSET_PREVIOUS}/runtime/control-plane/static/historic-aaaaaaaaaaaaaaaa.js"
 cat >"${ASSET_PREVIOUS}/runtime/control-plane/static/frontend-build.json" <<'EOF'
-{"schema":1,"fingerprint":"previous","build_timestamp":1}
+{"schema":1,"fingerprint":"previous","build_timestamp":1,"assets":["previous-0123456789abcdef.js"]}
 EOF
 printf '%s\n' current > \
   "${ASSET_TARGET}/runtime/control-plane/static/current-fedcba9876543210.js"
@@ -132,6 +134,9 @@ if (!history.builds[0].assets.includes("current-fedcba9876543210.js")) {
 }
 if (!history.builds[1].assets.includes("previous-0123456789abcdef.js")) {
   throw new Error("previous frontend assets missing from history");
+}
+if (!history.builds[1].assets.includes("historic-aaaaaaaaaaaaaaaa.js")) {
+  throw new Error("historic retained frontend assets missing from history");
 }
 NODE
 

@@ -524,11 +524,10 @@ function scanAssets(root, directory = root) {
 
 function normalizeBuild(manifest, root, allowScan) {
   if (!manifest) return;
-  const rawAssets = Array.isArray(manifest.assets)
-    ? manifest.assets
-    : allowScan
-      ? scanAssets(root)
-      : undefined;
+  const manifestAssets = Array.isArray(manifest.assets) ? manifest.assets : [];
+  const rawAssets = allowScan
+    ? [...manifestAssets, ...scanAssets(root)]
+    : manifestAssets;
   if (!rawAssets?.length) {
     throw new Error(`frontend manifest in ${root} has no asset inventory`);
   }
@@ -560,7 +559,8 @@ const builds = [current];
 if (
   previous &&
   (previous.fingerprint !== current.fingerprint ||
-    previous.build_timestamp !== current.build_timestamp)
+    previous.build_timestamp !== current.build_timestamp ||
+    previous.assets.some((asset) => !current.assets.includes(asset)))
 ) {
   builds.push(previous);
 }
@@ -953,9 +953,10 @@ main() {
   else
     stage_source_release
   fi
-  if [[
-    -n "$STATIC_BUNDLE_PATH" ||
-      -n "$BUNDLE_PATH" ||
+  if [[ -n "$STATIC_BUNDLE_PATH" || -n "$BUNDLE_PATH" ]]; then
+    prepare_frontend_asset_history
+  elif [[
+    -z "$HUB_BUNDLE_PATH" &&
       -f "${TARGET_RELEASE}/runtime/control-plane/static/frontend-build.json"
   ]]; then
     prepare_frontend_asset_history
