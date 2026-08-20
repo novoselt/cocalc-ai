@@ -8,11 +8,11 @@ import type { TableColumnsType } from "antd";
 import { defineMessage } from "react-intl";
 
 import { redux, useTypedRedux } from "@cocalc/frontend/app-framework";
-import { setMarketingConsent as setMarketingBannerConsent } from "@cocalc/frontend/cookie-consent";
 import { labels } from "@cocalc/frontend/i18n";
 import {
-  buildMarketingConsentUpdate,
+  buildMarketingEmailConsentRecord,
   MARKETING_CONSENT_OTHER_SETTINGS_KEY,
+  MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
   NOTIFICATION_CATEGORIES,
   NOTIFICATION_EMAIL_MODES,
   OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
@@ -21,7 +21,7 @@ import {
   type NotificationCategory,
   type NotificationEmailMode,
 } from "@cocalc/util/notification-preferences";
-import { CookieConsentSection } from "./cookie-consent-settings";
+import { CookieConsentSettings } from "./cookie-consent-settings";
 import { SettingsCard } from "./settings-card";
 import type { SettingsPageDefinition } from "./settings-page";
 
@@ -63,10 +63,6 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
   );
   const marketingConsent =
     other_settings?.get?.(MARKETING_CONSENT_OTHER_SETTINGS_KEY) === true;
-  const cookieBannerEnabled = useTypedRedux(
-    "customize",
-    "cookie_banner_enabled",
-  );
 
   function setNotificationEmailMode(
     category: NotificationCategory,
@@ -78,21 +74,14 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
   }
 
   function setMarketingConsent(enabled: boolean): void {
-    // Same consent, two entry points.  When the banner takes the change it
-    // emits a consent event, and the app's consent listener performs the single
-    // account write; writing here as well would race it.
-    if (
-      setMarketingBannerConsent(enabled, "communication-settings") === "changed"
-    ) {
-      return;
-    }
-    redux.getActions("account").set_other_settings_many(
-      buildMarketingConsentUpdate({
-        enabled,
-        notificationPreferences: rawNotificationPreferences(),
-        source: "communication-settings",
-      }),
-    );
+    redux.getActions("account").set_other_settings_many({
+      [MARKETING_CONSENT_OTHER_SETTINGS_KEY]: enabled,
+      [MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY]:
+        buildMarketingEmailConsentRecord({
+          enabled,
+          source: "communication-settings",
+        }),
+    });
   }
 
   function deliveryOptions(category: NotificationCategoryRow) {
@@ -157,30 +146,18 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
     );
   }
 
-  // One card for both halves of the same consent: the banner collects them
-  // together, so presenting them apart would read as two separate settings.
-  function render_communication_and_privacy() {
+  function render_marketing_email_preferences() {
     return (
-      <SettingsCard
-        title={
-          cookieBannerEnabled
-            ? "Communication and privacy"
-            : "Onboarding and marketing emails"
-        }
-      >
-        <Space vertical size="middle" style={{ width: "100%" }}>
-          <Space>
-            <Switch
-              aria-label="Allow optional onboarding and marketing emails"
-              checked={marketingConsent}
-              onChange={setMarketingConsent}
-            />
-            <span>
-              Allow optional onboarding help, product tips, and marketing
-              emails.
-            </span>
-          </Space>
-          <CookieConsentSection />
+      <SettingsCard title="Onboarding and marketing emails">
+        <Space>
+          <Switch
+            aria-label="Allow optional onboarding and marketing emails"
+            checked={marketingConsent}
+            onChange={setMarketingConsent}
+          />
+          <span>
+            Allow optional onboarding help, product tips, and marketing emails.
+          </span>
         </Space>
       </SettingsCard>
     );
@@ -188,10 +165,11 @@ export function AccountPreferencesCommunication(): React.JSX.Element {
 
   return (
     <Space vertical size="middle" style={{ width: "100%" }}>
-      {render_communication_and_privacy()}
+      {render_marketing_email_preferences()}
       <SettingsCard title="Notifications">
         {render_notification_email_preferences()}
       </SettingsCard>
+      <CookieConsentSettings />
     </Space>
   );
 }

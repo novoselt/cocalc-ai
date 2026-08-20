@@ -5,20 +5,15 @@ import {
   COOKIE_CONSENT_REVISION,
   enableForceConsent,
   restoreConsentCookieFromSnapshot,
-  setMarketingConsent,
-  takePendingMarketingConsentSource,
   type ConsentSnapshot,
 } from "./index";
 import { markBannerActive, markBannerReady } from "./state";
 
 const show = jest.fn();
-const acceptCategory = jest.fn();
 let validConsent = false;
-let acceptedCategories = new Set<string>();
 
 jest.mock("vanilla-cookieconsent", () => ({
-  acceptCategory: (...args: any[]) => acceptCategory(...args),
-  acceptedCategory: (name: string) => acceptedCategories.has(name),
+  acceptedCategory: jest.fn(() => false),
   getCookie: jest.fn(() => null),
   show: (...args: any[]) => show(...args),
   showPreferences: jest.fn(),
@@ -51,10 +46,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.className = "";
   validConsent = false;
-  acceptedCategories = new Set<string>();
   show.mockClear();
-  acceptCategory.mockReset();
-  takePendingMarketingConsentSource();
   markBannerActive();
 });
 
@@ -64,7 +56,6 @@ describe("cookie consent snapshots", () => {
       necessary: true,
       analytics: false,
       usage: true,
-      marketing: true,
       revision: COOKIE_CONSENT_REVISION,
       timestamp: "2026-05-19T12:00:00.000Z",
     };
@@ -74,7 +65,7 @@ describe("cookie consent snapshots", () => {
     const raw = getCookieValue("cc_cookie");
     expect(raw).toBeDefined();
     const restored = JSON.parse(decodeURIComponent(raw!));
-    expect(restored.categories).toEqual(["necessary", "usage", "marketing"]);
+    expect(restored.categories).toEqual(["necessary", "usage"]);
     expect(restored.revision).toBe(COOKIE_CONSENT_REVISION);
     expect(restored.lastConsentTimestamp).toBe(snap.timestamp);
   });
@@ -84,7 +75,6 @@ describe("cookie consent snapshots", () => {
       necessary: true,
       analytics: true,
       usage: true,
-      marketing: true,
       revision: COOKIE_CONSENT_REVISION - 1,
       timestamp: "2026-05-19T12:00:00.000Z",
     };
@@ -114,74 +104,6 @@ describe("cookie consent snapshots", () => {
     expect(getCookieValue("_ga")).toBeUndefined();
     expect(getCookieValue("_gid")).toBeUndefined();
     expect(getCookieValue("CC_ANA")).toBeUndefined();
-  });
-});
-
-describe("marketing consent", () => {
-  it("flips only the marketing category and keeps the other choices", () => {
-    validConsent = true;
-    acceptedCategories = new Set(["necessary", "analytics"]);
-
-    expect(setMarketingConsent(true, "communication-settings")).toBe("changed");
-    expect(acceptCategory).toHaveBeenCalledWith([
-      "necessary",
-      "analytics",
-      "marketing",
-    ]);
-
-    acceptCategory.mockClear();
-    acceptedCategories = new Set(["necessary", "analytics", "marketing"]);
-    expect(setMarketingConsent(false, "communication-settings")).toBe(
-      "changed",
-    );
-    expect(acceptCategory).toHaveBeenCalledWith(["necessary", "analytics"]);
-  });
-
-  it("hands the origin to the listener that runs during acceptCategory", () => {
-    validConsent = true;
-    acceptedCategories = new Set(["necessary"]);
-    // vanilla-cookieconsent dispatches cc:onChange synchronously, so the
-    // decision is consumed before setMarketingConsent returns.
-    let observed: string | null | undefined;
-    acceptCategory.mockImplementation(() => {
-      observed = takePendingMarketingConsentSource();
-    });
-
-    setMarketingConsent(true, "communication-settings");
-
-    expect(observed).toBe("communication-settings");
-    expect(takePendingMarketingConsentSource()).toBeNull();
-  });
-
-  it("does not leave a stale origin behind when nothing changed", () => {
-    validConsent = true;
-    acceptedCategories = new Set(["necessary", "marketing"]);
-
-    setMarketingConsent(true, "communication-settings");
-
-    // Otherwise the next decision made in the banner is mislabelled.
-    expect(takePendingMarketingConsentSource()).toBeNull();
-  });
-
-  it("reports when the banner already holds the requested value", () => {
-    validConsent = true;
-    acceptedCategories = new Set(["necessary", "marketing"]);
-
-    // No consent event follows, so the caller must write the account itself.
-    expect(setMarketingConsent(true, "communication-settings")).toBe(
-      "unchanged",
-    );
-    expect(acceptCategory).not.toHaveBeenCalled();
-    expect(takePendingMarketingConsentSource()).toBeNull();
-  });
-
-  it("does not write consent before the visitor decided", () => {
-    validConsent = false;
-
-    expect(setMarketingConsent(true, "communication-settings")).toBe(
-      "unavailable",
-    );
-    expect(acceptCategory).not.toHaveBeenCalled();
   });
 });
 

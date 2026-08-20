@@ -401,9 +401,8 @@ export const privacyPolicy: PublicPolicy = {
                     <td> cc_cookie </td>
                     <td>
                       {" "}
-                      Stores consent banner choices, including consent
-                      categories, the optional onboarding and marketing email
-                      preference, and the revision.{" "}
+                      Stores cookie banner choices, including consent categories
+                      and revision.{" "}
                     </td>
                   </tr>
                   <tr>
@@ -433,15 +432,6 @@ export const privacyPolicy: PublicPolicy = {
                 If enabled and consented to, first-party usage metrics may
                 record product interactions in our own systems. These usage
                 metrics are not managed as browser cookies.
-              </p>
-              <p>
-                {" "}
-                The same banner also asks for your consent to optional
-                onboarding help, product tips, and marketing emails. That choice
-                is an email preference rather than a cookie: it is stored with
-                your account and can be changed at any time in your account
-                settings. Declining it does not affect transactional email about
-                security, billing, and your account.
               </p>
             </li>{" "}
             <li>
@@ -1175,13 +1165,6 @@ export const privacyPolicy: PublicPolicy = {
             <tr>
               <td>Update: clarify automated abuse detection safeguards</td>
               <td> 2026-06-30 </td>
-            </tr>
-            <tr>
-              <td>
-                Update: consent banner also records optional marketing email
-                consent
-              </td>
-              <td> 2026-08-19 </td>
             </tr>
           </tbody>
         </table>

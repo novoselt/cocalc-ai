@@ -14,11 +14,7 @@ import {
   postAuthApi,
   signOutAuthSession,
 } from "@cocalc/frontend/auth/api";
-import {
-  enableForceConsent,
-  hasMarketingConsent,
-  useCategoryConsent,
-} from "@cocalc/frontend/cookie-consent";
+import { enableForceConsent } from "@cocalc/frontend/cookie-consent";
 import type { PublicConfig } from "@cocalc/frontend/public/common";
 import PublicAuthApp, { getPublicAuthRouteFromPath } from "../app";
 import { getPublicAuthRedirectTargetFromSearch } from "../routes";
@@ -35,10 +31,7 @@ jest.mock("@cocalc/frontend/auth/api", () => ({
 }));
 jest.mock("@cocalc/frontend/cookie-consent", () => ({
   enableForceConsent: jest.fn(() => jest.fn()),
-  hasMarketingConsent: jest.fn(() => false),
-  MARKETING_CONSENT_CATEGORY: "marketing",
   requireEssentialConsent: jest.fn(() => true),
-  useCategoryConsent: jest.fn(() => false),
   useEssentialConsent: jest.fn(() => true),
 }));
 
@@ -50,8 +43,6 @@ const mockedPostAuthApi = jest.mocked(postAuthApi);
 const mockedSignOutAuthSession = jest.mocked(signOutAuthSession);
 const mockedIsMfaRequiredAuthResponse = jest.mocked(isMfaRequiredAuthResponse);
 const mockedEnableForceConsent = jest.mocked(enableForceConsent);
-const mockedHasMarketingConsent = jest.mocked(hasMarketingConsent);
-const mockedUseCategoryConsent = jest.mocked(useCategoryConsent);
 const config = (overrides: Partial<PublicConfig> = {}): PublicConfig => ({
   site_name: "Launchpad",
   strategies: [],
@@ -87,10 +78,6 @@ beforeEach(() => {
   mockedIsMfaRequiredAuthResponse.mockReturnValue(false);
   mockedEnableForceConsent.mockReset();
   mockedEnableForceConsent.mockReturnValue(jest.fn());
-  mockedHasMarketingConsent.mockReset();
-  mockedHasMarketingConsent.mockReturnValue(false);
-  mockedUseCategoryConsent.mockReset();
-  mockedUseCategoryConsent.mockReturnValue(false);
 });
 
 describe("getPublicAuthRouteFromPath", () => {
@@ -788,38 +775,6 @@ describe("PublicAuthApp", () => {
     expect(googleLink).toHaveAttribute("aria-disabled", "false");
   });
 
-  it("carries the banner's marketing consent into Google sign-up", async () => {
-    mockedApi.mockResolvedValueOnce(false);
-    mockedUseCategoryConsent.mockReturnValue(true);
-
-    const { unmount } = render(
-      <PublicAuthApp
-        config={config({ cookie_banner_enabled: true })}
-        initialRoute={{ kind: "auth-form", view: "sign-up" }}
-        initialSSOStrategies={[{ name: "google", display: "Google" }]}
-      />,
-    );
-
-    expect(
-      await screen.findByRole("link", { name: /sign up with Google/i }),
-    ).toHaveProperty("href", expect.stringContaining("marketing_consent=1"));
-    unmount();
-
-    mockedApi.mockResolvedValueOnce(false);
-    mockedUseCategoryConsent.mockReturnValue(false);
-    render(
-      <PublicAuthApp
-        config={config({ cookie_banner_enabled: true })}
-        initialRoute={{ kind: "auth-form", view: "sign-up" }}
-        initialSSOStrategies={[{ name: "google", display: "Google" }]}
-      />,
-    );
-
-    expect(
-      await screen.findByRole("link", { name: /sign up with Google/i }),
-    ).not.toHaveProperty("href", expect.stringContaining("marketing_consent"));
-  });
-
   it("includes policy acceptance on generic Google sign-in", async () => {
     render(
       <PublicAuthApp
@@ -890,80 +845,6 @@ describe("PublicAuthApp", () => {
       );
       expect(mockedPostAuthApi.mock.calls[0][0].body).not.toHaveProperty(
         "lastName",
-      );
-    });
-  });
-
-  it("carries the banner's marketing consent into sign-up", async () => {
-    mockedApi.mockResolvedValueOnce(false);
-    mockedHasMarketingConsent.mockReturnValue(true);
-    mockedUseCategoryConsent.mockReturnValue(true);
-
-    render(
-      <PublicAuthApp
-        config={config({ cookie_banner_enabled: true })}
-        initialRoute={{ kind: "auth-form", view: "sign-up" }}
-      />,
-    );
-
-    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
-      target: { value: "new-user@example.edu" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("At least 8 characters"), {
-      target: { value: "correct horse battery staple 12345!" },
-    });
-    fireEvent.change(
-      screen.getByPlaceholderText("Enter the same password again"),
-      { target: { value: "correct horse battery staple 12345!" } },
-    );
-    fireEvent.change(screen.getByPlaceholderText("Your name"), {
-      target: { value: "New User" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
-
-    await waitFor(() => {
-      expect(mockedPostAuthApi).toHaveBeenCalledWith(
-        expect.objectContaining({
-          endpoint: "auth/sign-up",
-          body: expect.objectContaining({ marketing_consent: true }),
-        }),
-      );
-    });
-  });
-
-  it("ignores the marketing category when the banner is disabled", async () => {
-    mockedApi.mockResolvedValueOnce(false);
-    mockedHasMarketingConsent.mockReturnValue(true);
-    mockedUseCategoryConsent.mockReturnValue(true);
-
-    render(
-      <PublicAuthApp
-        config={config()}
-        initialRoute={{ kind: "auth-form", view: "sign-up" }}
-      />,
-    );
-
-    fireEvent.change(screen.getByPlaceholderText("you@example.com"), {
-      target: { value: "new-user@example.edu" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("At least 8 characters"), {
-      target: { value: "correct horse battery staple 12345!" },
-    });
-    fireEvent.change(
-      screen.getByPlaceholderText("Enter the same password again"),
-      { target: { value: "correct horse battery staple 12345!" } },
-    );
-    fireEvent.change(screen.getByPlaceholderText("Your name"), {
-      target: { value: "New User" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
-
-    await waitFor(() => {
-      expect(mockedPostAuthApi).toHaveBeenCalledWith(
-        expect.objectContaining({
-          endpoint: "auth/sign-up",
-          body: expect.objectContaining({ marketing_consent: false }),
-        }),
       );
     });
   });

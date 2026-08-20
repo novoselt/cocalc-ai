@@ -669,7 +669,7 @@ export const site_settings_conf: SiteSettings = {
   },
   cookie_banner_enabled: {
     name: "Cookie banner",
-    desc: "Show a GDPR-style consent banner with strictly necessary cookies, optional analytics cookies, first-party usage metrics, and optional onboarding/marketing email consent. Visitors must acknowledge it before signing up or signing in, and the marketing choice is applied to the account.",
+    desc: "Show a GDPR-style cookie consent banner with strictly necessary cookies, optional analytics cookies, and first-party usage metrics.",
     default: "no",
     valid: only_booleans,
     to_val: to_bool,
@@ -679,7 +679,7 @@ export const site_settings_conf: SiteSettings = {
   },
   cookie_banner_text: {
     name: "Cookie banner text",
-    desc: 'Markdown body shown in the consent banner and preferences modal. Links to the privacy policy and terms of service are rendered separately, and the notice about what "Accept all" means for optional email is always shown, so neither needs to be repeated here.',
+    desc: "Markdown body shown in the cookie banner and preferences modal. Links to the privacy policy and terms of service are rendered separately and do not need to be repeated here.",
     default:
       "We use cookies that are strictly necessary for sign-in and session management. With your consent, we use optional analytics cookies and first-party usage metrics to understand how the site is used. Signed-in users can manage these preferences in Account settings; signed-out visitors can manage cookie choices from the footer.",
     clearable: true,

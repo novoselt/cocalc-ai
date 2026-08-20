@@ -16,17 +16,10 @@ import {
   enableForceConsent,
   hasEssentialConsent,
   hasTrackingConsent,
-  MARKETING_CONSENT_CATEGORY,
   onConsentChange,
   restoreConsentCookieFromSnapshot,
-  takePendingMarketingConsentSource,
   type ConsentSnapshot,
 } from "@cocalc/frontend/cookie-consent";
-import {
-  ACCOUNT_COOKIE_CONSENT_KEY,
-  buildConsentAccountUpdate,
-  consentDecisionKey,
-} from "@cocalc/frontend/cookie-consent/account-sync";
 import { linkFirstPartyAnalyticsAccount } from "@cocalc/frontend/cookie-consent/analytics";
 import { initCookieConsent } from "@cocalc/frontend/cookie-consent/init";
 import {
@@ -35,11 +28,6 @@ import {
   sanitizeLocale,
 } from "@cocalc/frontend/i18n";
 import { QueryParams } from "@cocalc/frontend/misc/query-params";
-import {
-  MARKETING_CONSENT_OTHER_SETTINGS_KEY,
-  MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
-  OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
-} from "@cocalc/util/notification-preferences";
 import { createRoot } from "react-dom/client";
 import { setAntdNotificationInstance } from "./antd-notification";
 import { AppContext, useAppContextProvider } from "./context";
@@ -108,15 +96,6 @@ function CocalcApp({ children }) {
       initCookieConsent({
         enabled: !!cookieBannerEnabled,
         textMarkdown: cookieBannerText,
-        // Do not present an existing subscriber's marketing email preference
-        // as switched off just because the consent revision changed.
-        categoryDefaults: {
-          [MARKETING_CONSENT_CATEGORY]:
-            accountStore.getIn([
-              "other_settings",
-              MARKETING_CONSENT_OTHER_SETTINGS_KEY,
-            ]) === true,
-        },
       });
     };
 
@@ -176,38 +155,22 @@ function CocalcApp({ children }) {
     };
   }, [customizeReady, cookieBannerEnabled]);
 
-  // Single writer for everything the banner mirrors onto the account: the
-  // stored snapshot and the marketing email choice it now also collects.
   useEffect(() => {
     if (!cookieBannerEnabled || !isLoggedIn) return;
-    let lastDecision = "";
     return onConsentChange((snap: ConsentSnapshot | null) => {
-      const decision = consentDecisionKey(snap);
-      if (decision === "" || decision === lastDecision) return;
-      const otherSettings: any = redux
+      if (snap == null) return;
+      const stored: any = redux
         .getStore("account")
-        .get("other_settings");
-      const storedRaw = otherSettings?.get?.(ACCOUNT_COOKIE_CONSENT_KEY);
-      const preferencesRaw = otherSettings?.get?.(
-        OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
-      );
-      const update = buildConsentAccountUpdate({
-        account: {
-          hasMarketingRecord:
-            otherSettings?.get?.(
-              MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
-            ) != null,
-          marketingEnabled:
-            otherSettings?.get?.(MARKETING_CONSENT_OTHER_SETTINGS_KEY) === true,
-          notificationPreferences: preferencesRaw?.toJS?.() ?? preferencesRaw,
-          storedSnapshot: storedRaw?.toJS?.() ?? storedRaw,
-        },
-        marketingSource: takePendingMarketingConsentSource() ?? "cookie-banner",
-        snapshot: snap,
-      });
-      lastDecision = decision;
-      if (update == null) return;
-      redux.getActions("account").set_other_settings_many(update);
+        .getIn(["other_settings", "cookie_consent"]);
+      if (
+        stored != null &&
+        typeof stored?.get === "function" &&
+        stored.get("timestamp") === snap.timestamp &&
+        stored.get("revision") === snap.revision
+      ) {
+        return;
+      }
+      redux.getActions("account").set_other_settings("cookie_consent", snap);
     });
   }, [cookieBannerEnabled, isLoggedIn]);
 

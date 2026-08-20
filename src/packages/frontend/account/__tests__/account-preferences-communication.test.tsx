@@ -15,8 +15,6 @@ import {
 const useTypedRedux = jest.fn();
 const setOtherSettings = jest.fn();
 const setOtherSettingsMany = jest.fn();
-const setMarketingBannerConsent = jest.fn(() => "unavailable" as string);
-const getConsentSnapshot = jest.fn(() => null as unknown);
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
   redux: {
@@ -145,21 +143,6 @@ jest.mock("@cocalc/frontend/i18n", () => ({
     communication: { defaultMessage: "Communication" },
   },
 }));
-
-jest.mock("@cocalc/frontend/cookie-consent", () => {
-  const categories = jest.requireActual(
-    "@cocalc/frontend/cookie-consent/categories",
-  );
-  return {
-    COOKIE_CATEGORIES: categories.COOKIE_CATEGORIES,
-    MARKETING_CONSENT_CATEGORY: categories.MARKETING_CONSENT_CATEGORY,
-    getConsentSnapshot: (...args: unknown[]) => getConsentSnapshot(...args),
-    onConsentChange: () => () => {},
-    setMarketingConsent: (...args: unknown[]) =>
-      setMarketingBannerConsent(...args),
-    showPreferences: jest.fn(),
-  };
-});
 
 function immutableLike(values: Record<string, unknown>) {
   return {
@@ -346,7 +329,6 @@ describe("AccountPreferencesCommunication", () => {
   });
 
   it("persists onboarding and marketing email consent separately", () => {
-    setMarketingBannerConsent.mockReturnValue("unavailable");
     render(<AccountPreferencesCommunication />);
 
     fireEvent.click(
@@ -363,77 +345,6 @@ describe("AccountPreferencesCommunication", () => {
         }),
       }),
     );
-  });
-
-  it("writes the account setting itself when the banner cannot take it", () => {
-    setMarketingBannerConsent.mockReturnValue("unavailable");
-    render(<AccountPreferencesCommunication />);
-
-    fireEvent.click(
-      screen.getByLabelText("Allow optional onboarding and marketing emails"),
-    );
-
-    expect(setMarketingBannerConsent).toHaveBeenCalledWith(
-      true,
-      "communication-settings",
-    );
-    expect(setOtherSettingsMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        [MARKETING_CONSENT_OTHER_SETTINGS_KEY]: true,
-      }),
-    );
-  });
-
-  it("leaves the single consent writer to persist a banner-accepted change", () => {
-    setMarketingBannerConsent.mockReturnValue("changed");
-    render(<AccountPreferencesCommunication />);
-
-    fireEvent.click(
-      screen.getByLabelText("Allow optional onboarding and marketing emails"),
-    );
-
-    // Writing here as well would race the consent listener's write and one of
-    // the two would silently lose its keys.
-    expect(setOtherSettingsMany).not.toHaveBeenCalled();
-  });
-
-  it("shows cookie consent and the marketing switch in one card", () => {
-    useTypedRedux.mockImplementation((store: string, key: string) => {
-      if (store === "customize" && key === "cookie_banner_enabled") {
-        return true;
-      }
-      if (store === "account" && key === "other_settings") {
-        return immutableLike({});
-      }
-      if (store === "account" && key === "email_address") {
-        return "user@example.com";
-      }
-      if (store === "account" && key === "email_address_verified") {
-        return immutableLike({ "user@example.com": new Date() });
-      }
-      return undefined;
-    });
-    getConsentSnapshot.mockReturnValue({
-      necessary: true,
-      analytics: false,
-      usage: false,
-      marketing: true,
-      revision: 3,
-      timestamp: "2026-08-19T10:00:00.000Z",
-    });
-
-    render(<AccountPreferencesCommunication />);
-
-    expect(screen.getByText("Communication and privacy")).toBeTruthy();
-    expect(screen.getByText("Cookies and usage data")).toBeTruthy();
-    expect(
-      screen.getByLabelText("Allow optional onboarding and marketing emails"),
-    ).toBeTruthy();
-    // One consent, one control: the banner's marketing category must not also
-    // appear as a read-only status row next to the switch.
-    expect(screen.queryByText("Onboarding and marketing emails")).toBeNull();
-    expect(screen.queryByText("Communication preferences")).toBeNull();
-    expect(screen.getByText("Analytics cookies")).toBeTruthy();
   });
 
   it("persists none delivery mode for optional notification categories", () => {

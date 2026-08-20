@@ -10,11 +10,7 @@ import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
 import { loadFirstPartyAnalytics } from "./analytics";
-import {
-  COOKIE_CATEGORIES,
-  type CookieCategory,
-  type CookieCategoryKey,
-} from "./categories";
+import { COOKIE_CATEGORIES, type CookieCategory } from "./categories";
 import { COOKIE_CONSENT_REVISION } from "./index";
 import {
   markBannerActive,
@@ -23,15 +19,12 @@ import {
 } from "./state";
 import { buildTranslation } from "./translations";
 
-function buildCategoriesConfig(
-  defaults: CategoryDefaults,
-): Record<string, CookieConsent.Category> {
+function buildCategoriesConfig(): Record<string, CookieConsent.Category> {
   const result: Record<string, CookieConsent.Category> = {};
   for (const raw of COOKIE_CATEGORIES) {
     const category: CookieCategory = raw;
-    const override = defaults[category.key as CookieCategoryKey];
     const entry: CookieConsent.Category = {
-      enabled: override ?? category.defaultEnabled,
+      enabled: category.defaultEnabled,
       readOnly: category.readOnly,
     };
     if (
@@ -51,14 +44,9 @@ function buildCategoriesConfig(
 
 let initialized = false;
 
-export type CategoryDefaults = Partial<Record<CookieCategoryKey, boolean>>;
-
 export interface InitOptions {
   enabled?: boolean;
   textMarkdown?: string;
-  // Pre-checks optional categories, e.g. so a signed-in subscriber does not see
-  // their existing marketing email preference presented as switched off.
-  categoryDefaults?: CategoryDefaults;
 }
 
 function escapeHtml(text: string): string {
@@ -87,7 +75,6 @@ function markdownToHtml(text: string): string {
 export function initCookieConsent({
   enabled,
   textMarkdown,
-  categoryDefaults = {},
 }: InitOptions): void {
   if (initialized) return;
   if (typeof window === "undefined") return;
@@ -126,7 +113,7 @@ export function initCookieConsent({
           flipButtons: false,
         },
       },
-      categories: buildCategoriesConfig(categoryDefaults),
+      categories: buildCategoriesConfig(),
       // CookieConsent normally hides from WebDriver. CoCalc's signup flow
       // requires consent, so hiding the modal would deadlock browser automation.
       hideFromBots: navigator.webdriver !== true,

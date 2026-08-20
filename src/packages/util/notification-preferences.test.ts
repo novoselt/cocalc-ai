@@ -4,12 +4,8 @@
  */
 
 import {
-  buildMarketingConsentUpdate,
   getDefaultNotificationPreferences,
-  MARKETING_CONSENT_OTHER_SETTINGS_KEY,
-  MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY,
   normalizeNotificationPreferences,
-  OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY,
 } from "./notification-preferences";
 
 describe("notification preferences", () => {
@@ -120,42 +116,5 @@ describe("notification preferences", () => {
         toJS: () => ({ email: { mentions: "none", onboarding: "off" } }),
       }).email,
     ).toMatchObject({ mentions: "none", onboarding: "off" });
-  });
-});
-
-describe("marketing consent updates", () => {
-  it("records the banner decision without discarding other preferences", () => {
-    const update = buildMarketingConsentUpdate({
-      enabled: true,
-      notificationPreferences: { email: { mentions: "none" } },
-      recordedAt: new Date("2026-08-19T10:00:00.000Z"),
-      source: "cookie-banner",
-    });
-
-    expect(update[MARKETING_CONSENT_OTHER_SETTINGS_KEY]).toBe(true);
-    expect(update[MARKETING_EMAIL_CONSENT_RECORD_OTHER_SETTINGS_KEY]).toEqual({
-      version: 1,
-      enabled: true,
-      source: "cookie-banner",
-      recorded_at: "2026-08-19T10:00:00.000Z",
-    });
-    expect(update[OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY]).toMatchObject({
-      email: { mentions: "none", onboarding: "immediate", product: "digest" },
-    });
-  });
-
-  it("turns every optional email off when marketing consent is declined", () => {
-    const update = buildMarketingConsentUpdate({
-      enabled: false,
-      notificationPreferences: { email: { product: "digest" } },
-      source: "cookie-banner",
-    });
-
-    expect(update[MARKETING_CONSENT_OTHER_SETTINGS_KEY]).toBe(false);
-    // Onboarding defaults to "immediate", so declining has to switch it off
-    // explicitly or a decline still receives the day-one onboarding email.
-    expect(update[OTHER_SETTINGS_NOTIFICATION_PREFERENCES_KEY]).toMatchObject({
-      email: { onboarding: "off", product: "off" },
-    });
   });
 });

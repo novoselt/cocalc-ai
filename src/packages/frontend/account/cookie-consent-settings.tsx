@@ -14,9 +14,9 @@ import {
   showPreferences,
   type ConsentSnapshot,
 } from "@cocalc/frontend/cookie-consent";
-import { COOKIES_SECTION_TITLE } from "@cocalc/frontend/cookie-consent/categories";
+import { SettingsCard } from "./settings-card";
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 function formatTimestamp(timestamp: string): string {
   const date = new Date(timestamp);
@@ -41,11 +41,7 @@ function CategoryStatus({
   );
 }
 
-// Cookie half of the combined communication card.  The banner's communication
-// categories are deliberately left out: they are the same choice as the
-// marketing switch shown next to this section, and showing both would present
-// one setting twice.
-export function CookieConsentSection(): React.JSX.Element | null {
+export function CookieConsentSettings(): React.JSX.Element | null {
   const cookieBannerEnabled = useTypedRedux(
     "customize",
     "cookie_banner_enabled",
@@ -59,33 +55,30 @@ export function CookieConsentSection(): React.JSX.Element | null {
   if (!cookieBannerEnabled) return null;
 
   return (
-    <Space vertical style={{ width: "100%" }}>
-      <Title level={5} style={{ margin: 0 }}>
-        {COOKIES_SECTION_TITLE}
-      </Title>
-      {snap == null ? (
-        <Alert
-          type="warning"
-          showIcon
-          title="You have not yet acknowledged the cookie banner."
-        />
-      ) : (
-        COOKIE_CATEGORIES.filter((category) => category.kind === "cookies").map(
-          (category) => (
+    <SettingsCard title="Cookie preferences">
+      <Space vertical style={{ width: "100%" }}>
+        {snap == null ? (
+          <Alert
+            type="warning"
+            showIcon
+            title="You have not yet acknowledged the cookie banner."
+          />
+        ) : (
+          COOKIE_CATEGORIES.map((category) => (
             <CategoryStatus
               key={category.key}
               accepted={!!snap[category.key]}
               label={category.label}
             />
-          ),
-        )
-      )}
-      <Button onClick={() => showPreferences()}>Manage</Button>
-      {snap?.timestamp && (
-        <Text type="secondary">
-          Last updated: {formatTimestamp(snap.timestamp)}
-        </Text>
-      )}
-    </Space>
+          ))
+        )}
+        <Button onClick={() => showPreferences()}>Manage</Button>
+        {snap?.timestamp && (
+          <Text type="secondary">
+            Last updated: {formatTimestamp(snap.timestamp)}
+          </Text>
+        )}
+      </Space>
+    </SettingsCard>
   );
 }
