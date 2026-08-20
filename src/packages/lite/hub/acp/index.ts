@@ -4248,6 +4248,16 @@ export class ChatStreamWriter {
   public async persistSessionId(sessionId: string): Promise<void> {
     await this.ready;
     if (this.closed || !this.syncdb) return;
+    if (this.metadata.automation_id) {
+      // Automation runs deliberately get their own Codex session --
+      // buildAutomationAcpConfig strips the interactive sessionId so scheduled
+      // runs cannot contaminate later human turns.  Writing the automation's
+      // session id back into the shared thread config would undo that on the
+      // way out: the thread would be re-bound to the automation's session, and
+      // the next interactive turn would resume it instead of the user's own.
+      // The run is still tracked via upsertSessionRegistry.
+      return;
+    }
     const threadId = this.resolvedThreadId();
     if (!threadId) return;
     const currentRow = preferredThreadConfigRow(this.syncdb, threadId);
