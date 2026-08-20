@@ -1,24 +1,25 @@
 /*
-Kernel spec discovery without `jupyter-paths` or `kernelspecs`.
+Kernel spec discovery without `jupyter-paths`, `kernelspecs`, Python, or the
+`jupyter` executable.
 
 Search order (mirrors the data dirs used by `jupyter kernelspec list`):
 1) JUPYTER_PATH (path-delimited list)
-2) JUPYTER_DATA_DIR or the platform default user data dir:
-   - Linux: ~/.local/share/jupyter
-   - macOS: ~/Library/Jupyter
-   - Windows: %APPDATA%\\jupyter
-3) sys-prefix/share/jupyter, where sys-prefix is:
+2) Environment and user data dirs, ordered by JUPYTER_PREFER_ENV_PATH:
+   - user: JUPYTER_DATA_DIR or the current platform/XDG default
+   - environment: sys-prefix/share/jupyter
+3) sys-prefix is:
    - CONDA_PREFIX or VIRTUAL_ENV when set
    - otherwise the prefix of the first python/python3 on PATH
 4) system dirs:
-   - Linux: /usr/local/share/jupyter, /usr/share/jupyter
-   - Windows: %PROGRAMDATA%\\jupyter (if set)
+   - Linux/macOS: /usr/local/share/jupyter, /usr/share/jupyter
+   - Windows: %PROGRAMDATA%\\jupyter only with JUPYTER_USE_PROGRAMDATA
 
-We do not shell out to `jupyter --paths`, so results can differ if PATH/ENV
-do not match the environment that `jupyter` would use.
+This is deliberately Python-free. Results can still differ from a Python
+installation when Python contributes an implicit version-specific userbase;
+an explicit PYTHONUSERBASE is supported.
 */
 
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -30,11 +31,30 @@ type KernelResources = {
   spec: any;
 };
 
-let cachedSysPrefix: string | null | undefined;
+export interface JupyterPathOptions {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+}
 
-function splitEnvPaths(value?: string): string[] {
+function environmentFlag(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return !new Set(["", "0", "0.0", "false", "n", "no", "off"]).has(
+    value.trim().toLowerCase(),
+  );
+}
+
+function pathsForPlatform(platform: NodeJS.Platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function splitEnvPaths(
+  value: string | undefined,
+  platform: NodeJS.Platform,
+): string[] {
   if (!value) return [];
-  return value.split(path.delimiter).filter((entry) => entry.trim() !== "");
+  const delimiter = platform === "win32" ? ";" : ":";
+  return value.split(delimiter).filter((entry) => entry.trim() !== "");
 }
 
 function isExecutable(filePath: string): boolean {
@@ -46,92 +66,126 @@ function isExecutable(filePath: string): boolean {
   }
 }
 
-function guessSysPrefix(): string | null {
-  if (cachedSysPrefix !== undefined) {
-    return cachedSysPrefix;
-  }
+export function guessSysPrefix(
+  options: JupyterPathOptions = {},
+): string | null {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const paths = pathsForPlatform(platform);
+  const envPrefix = env.CONDA_PREFIX ?? env.VIRTUAL_ENV;
+  if (envPrefix) return paths.resolve(envPrefix);
 
-  const envPrefix = process.env.CONDA_PREFIX ?? process.env.VIRTUAL_ENV;
-  if (envPrefix) {
-    cachedSysPrefix = envPrefix;
-    return cachedSysPrefix;
-  }
+  const searchPath = splitEnvPaths(env.PATH, platform);
+  if (searchPath.length === 0) return null;
 
-  const searchPath = splitEnvPaths(process.env.PATH);
-  if (searchPath.length === 0) {
-    cachedSysPrefix = null;
-    return cachedSysPrefix;
-  }
-
-  const pythonNames =
-    process.platform === "win32" ? ["python"] : ["python3", "python"];
+  const pythonNames = platform === "win32" ? ["python"] : ["python3", "python"];
   const pathext =
-    process.platform === "win32" ? splitEnvPaths(process.env.PATHEXT) : [""];
-  if (pathext.length === 0) {
-    pathext.push("");
-  }
+    platform === "win32" ? splitEnvPaths(env.PATHEXT, platform) : [""];
+  if (pathext.length === 0) pathext.push("");
 
   for (const bin of searchPath) {
-    const resolvedBin = path.resolve(bin);
+    const resolvedBin = paths.resolve(bin);
     for (const pythonName of pythonNames) {
-      const base = path.join(resolvedBin, pythonName);
+      const base = paths.join(resolvedBin, pythonName);
       for (const ext of pathext) {
         const exe = base + ext;
         if (isExecutable(exe)) {
-          cachedSysPrefix =
-            process.platform === "win32"
-              ? path.dirname(path.resolve(exe))
-              : path.dirname(path.dirname(path.resolve(exe)));
-          return cachedSysPrefix;
+          const resolvedExecutable = realpathSync(exe);
+          return platform === "win32"
+            ? paths.dirname(resolvedExecutable)
+            : paths.dirname(paths.dirname(resolvedExecutable));
         }
       }
     }
   }
-
-  cachedSysPrefix = null;
-  return cachedSysPrefix;
+  return null;
 }
 
-function userDataDir(): string {
-  if (process.env.JUPYTER_DATA_DIR) {
-    return process.env.JUPYTER_DATA_DIR;
+export function userDataDir(options: JupyterPathOptions = {}): string {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const home = options.home ?? homedir();
+  const paths = pathsForPlatform(platform);
+  if (env.JUPYTER_DATA_DIR) return paths.resolve(env.JUPYTER_DATA_DIR);
+
+  const usePlatformDirs = environmentFlag(env.JUPYTER_PLATFORM_DIRS);
+  if (platform === "darwin") {
+    if (usePlatformDirs) {
+      return env.XDG_DATA_HOME
+        ? paths.join(env.XDG_DATA_HOME, "jupyter")
+        : paths.join(home, "Library", "Application Support", "jupyter");
+    }
+    return paths.join(home, "Library", "Jupyter");
   }
-  if (process.platform === "darwin") {
-    return path.join(homedir(), "Library", "Jupyter");
+  if (platform === "win32") {
+    if (usePlatformDirs) {
+      return paths.join(
+        env.LOCALAPPDATA ?? paths.join(home, "AppData", "Local"),
+        "jupyter",
+      );
+    }
+    if (env.APPDATA) return paths.join(env.APPDATA, "jupyter");
+    return paths.join(
+      env.JUPYTER_CONFIG_DIR ?? paths.join(home, ".jupyter"),
+      "data",
+    );
   }
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA ?? homedir();
-    return path.resolve(path.join(appData, "jupyter"));
-  }
-  return path.join(homedir(), ".local", "share", "jupyter");
+  return paths.join(
+    env.XDG_DATA_HOME ?? paths.join(home, ".local", "share"),
+    "jupyter",
+  );
 }
 
-function systemDataDirs(): string[] {
-  if (process.platform === "win32") {
-    if (!process.env.PROGRAMDATA) {
+function systemDataDirs(options: JupyterPathOptions = {}): string[] {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const paths = pathsForPlatform(platform);
+  if (platform === "win32") {
+    if (!environmentFlag(env.JUPYTER_USE_PROGRAMDATA) || !env.PROGRAMDATA) {
       return [];
     }
-    return [path.resolve(path.join(process.env.PROGRAMDATA, "jupyter"))];
+    return [paths.resolve(paths.join(env.PROGRAMDATA, "jupyter"))];
   }
   return ["/usr/local/share/jupyter", "/usr/share/jupyter"];
 }
 
-function getJupyterDataDirs(): string[] {
-  const dirs: string[] = [];
-  dirs.push(...splitEnvPaths(process.env.JUPYTER_PATH));
-  dirs.push(userDataDir());
-  const sysPrefix = guessSysPrefix();
-  if (sysPrefix) {
-    dirs.push(path.join(sysPrefix, "share", "jupyter"));
+function preferEnvironmentPath(options: JupyterPathOptions): boolean {
+  const env = options.env ?? process.env;
+  if (env.JUPYTER_PREFER_ENV_PATH !== undefined) {
+    return environmentFlag(env.JUPYTER_PREFER_ENV_PATH);
   }
-  dirs.push(...systemDataDirs());
+  if (env.VIRTUAL_ENV) return true;
+  return Boolean(
+    env.CONDA_PREFIX && (env.CONDA_DEFAULT_ENV ?? "base") !== "base",
+  );
+}
+
+export function getJupyterDataDirs(options: JupyterPathOptions = {}): string[] {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const paths = pathsForPlatform(platform);
+  const dirs = splitEnvPaths(env.JUPYTER_PATH, platform);
+  const user = [userDataDir(options)];
+  if (env.PYTHONUSERBASE) {
+    user.push(
+      paths.join(paths.resolve(env.PYTHONUSERBASE), "share", "jupyter"),
+    );
+  }
+  const sysPrefix = guessSysPrefix(options);
+  const environment = sysPrefix
+    ? [paths.join(sysPrefix, "share", "jupyter")]
+    : [];
+  const preferEnvironment = preferEnvironmentPath(options);
+  dirs.push(
+    ...(preferEnvironment ? environment : user),
+    ...(preferEnvironment ? user : environment),
+    ...systemDataDirs(options),
+  );
 
   const seen = new Set<string>();
   return dirs.filter((dir) => {
-    const resolved = path.resolve(dir);
-    if (seen.has(resolved)) {
-      return false;
-    }
+    const resolved = paths.resolve(dir);
+    if (seen.has(resolved)) return false;
     seen.add(resolved);
     return true;
   });
@@ -143,9 +197,7 @@ async function getKernelResources(kernelInfo: {
 }): Promise<KernelResources | undefined> {
   try {
     const files = await readdir(kernelInfo.resourceDir);
-    if (!files.includes("kernel.json")) {
-      return undefined;
-    }
+    if (!files.includes("kernel.json")) return undefined;
     const data = await readFile(
       path.join(kernelInfo.resourceDir, "kernel.json"),
     );
@@ -174,32 +226,31 @@ async function getKernelInfos(directory: string) {
   }
 }
 
-export async function findAllKernelSpecs(): Promise<
-  Record<string, KernelResources>
-> {
-  const dataDirs = getJupyterDataDirs();
+export async function findAllKernelSpecs(
+  options: JupyterPathOptions = {},
+): Promise<Record<string, KernelResources>> {
+  const dataDirs = getJupyterDataDirs(options);
   const kernelDirs = dataDirs.map((dir) => path.join(dir, "kernels"));
   const kernelInfos = (
     await Promise.all(kernelDirs.map((dir) => getKernelInfos(dir)))
   ).flat();
-
   const kernelResources = await Promise.all(
     kernelInfos.map((info) => getKernelResources(info)),
   );
-
   return kernelResources.reduce<Record<string, KernelResources>>(
     (kernels, kernel) => {
-      if (kernel && !kernels[kernel.name]) {
-        kernels[kernel.name] = kernel;
-      }
+      if (kernel && !kernels[kernel.name]) kernels[kernel.name] = kernel;
       return kernels;
     },
     {},
   );
 }
 
-export async function findKernelSpec(name: string): Promise<KernelResources> {
-  const specs = await findAllKernelSpecs();
+export async function findKernelSpec(
+  name: string,
+  options: JupyterPathOptions = {},
+): Promise<KernelResources> {
+  const specs = await findAllKernelSpecs(options);
   const spec = specs[name];
   if (!spec) {
     throw new Error(
