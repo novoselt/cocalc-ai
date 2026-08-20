@@ -8,6 +8,7 @@ const interruptAllMock = jest.fn();
 const messageSuccessMock = jest.fn();
 const messageWarningMock = jest.fn();
 const ensureProjectIsOpenMock = jest.fn();
+const ensureProjectReduxRuntimeMock = jest.fn();
 const openFileMock = jest.fn();
 
 jest.mock("@cocalc/frontend/app-framework", () => ({
@@ -17,6 +18,11 @@ jest.mock("@cocalc/frontend/app-framework", () => ({
       open_file: (...args: any[]) => openFileMock(...args),
     })),
   },
+}));
+
+jest.mock("@cocalc/frontend/app-framework/project-runtime", () => ({
+  ensureProjectReduxRuntime: (...args: any[]) =>
+    ensureProjectReduxRuntimeMock(...args),
 }));
 
 jest.mock("@cocalc/frontend/webapp-client", () => ({
@@ -108,6 +114,7 @@ function runningSession(overrides: Record<string, unknown> = {}) {
 describe("CodexSessionsPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    ensureProjectReduxRuntimeMock.mockResolvedValue(undefined);
   });
 
   it("opens the chat file internally for a session", async () => {
@@ -121,6 +128,9 @@ describe("CodexSessionsPanel", () => {
     await waitFor(() =>
       expect(ensureProjectIsOpenMock).toHaveBeenCalledWith(true),
     );
+    expect(
+      ensureProjectReduxRuntimeMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(ensureProjectIsOpenMock.mock.invocationCallOrder[0]);
     expect(openFileMock).toHaveBeenCalledWith({
       path: "sage/sage.chat",
       foreground: true,

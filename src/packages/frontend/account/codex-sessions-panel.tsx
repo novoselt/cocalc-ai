@@ -14,6 +14,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 
 import { redux } from "@cocalc/frontend/app-framework";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import {
   buildProjectFilesTarget,
   getProjectUrlPath,
@@ -343,6 +344,7 @@ export default function CodexSessionsPanel() {
     if (!session.project_id || !session.path) return;
     const path = projectRelativePath(session.path);
     try {
+      await ensureProjectReduxRuntime();
       const actions = redux.getProjectActions(session.project_id);
       await actions.ensureProjectIsOpen(true);
       await actions.open_file({ path, foreground: true });
