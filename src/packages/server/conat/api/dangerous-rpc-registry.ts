@@ -67,6 +67,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "changes a managed compute VM's recurring machine cost",
   },
+  "compute.setVmPricingModel": {
+    decision: "fresh-auth-required",
+    reason: "changes a managed compute VM's recurring pricing model and cost",
+  },
   "compute.setVolumeFundingMode": {
     decision: "fresh-auth-required",
     reason: "changes who funds recurring managed compute storage costs",
