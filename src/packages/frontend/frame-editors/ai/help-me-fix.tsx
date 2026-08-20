@@ -19,6 +19,7 @@ import {
   AgentSessionSelect,
   usePersistentAgentSessionSelection,
 } from "./agent-session-selector";
+import { agentFileLocation } from "./agent-file-context";
 import HelpMeFixButton from "./help-me-fix-button";
 import {
   createMessage,
@@ -41,6 +42,14 @@ interface Props {
   tag?: string;
   language?: string;
   extraFileInfo?: string;
+  // project-relative path of the file the error refers to; defaults to the
+  // frame's own path (e.g. LaTeX errors can point into an \input'ed file)
+  file?: string;
+  // 1-based line number (and optional end line) the error refers to
+  lineNumber?: number;
+  lineNumberEnd?: number;
+  // the command that produced the error (e.g. "latexmk -pdf paper.tex")
+  buildCommand?: string;
   style?: CSSProperties;
   outerStyle?: CSSProperties;
   size?;
@@ -61,12 +70,25 @@ export default function HelpMeFix({
   tag,
   language,
   extraFileInfo,
+  file,
+  lineNumber,
+  lineNumberEnd,
+  buildCommand,
   style,
   outerStyle,
   size,
   prioritize,
 }: Props) {
-  const { redux, project_id, path } = useFrameContext();
+  const { redux, project_id, path, actions: frameActions } = useFrameContext();
+  // The frame context path is the main editor's path; a frame can show a
+  // different file (e.g. a LaTeX subfile), which is what its actions point at.
+  const framePath = `${frameActions?.path ?? ""}`.trim() || path;
+  const location = agentFileLocation({
+    project_id,
+    path: `${file ?? ""}`.trim() || framePath,
+    line: lineNumber,
+    line_end: lineNumberEnd,
+  });
   const [gettingHelp, setGettingHelp] = useState<boolean>(false);
   const [errorGettingHelp, setErrorGettingHelp] = useState<string>("");
   const projectsStore: ProjectsStore = redux.getStore("projects");
@@ -116,10 +138,7 @@ export default function HelpMeFix({
     enabled: shouldRender,
   });
 
-  function createMessageMode(
-    mode: "solution" | "hint",
-    full: boolean = false,
-  ): string {
+  function createMessageMode(mode: "solution" | "hint"): string {
     return createMessage({
       error: get(error),
       line: get(line),
@@ -128,9 +147,8 @@ export default function HelpMeFix({
       language,
       extraFileInfo,
       prioritize,
-      open: true,
-      full,
       isHint: mode === "hint",
+      location,
     });
   }
 
@@ -142,7 +160,7 @@ export default function HelpMeFix({
     setGettingHelp(true);
     setErrorGettingHelp("");
     try {
-      const inputText = createMessageMode(mode, true);
+      const inputText = createMessageMode(mode);
       const tagSuffix = mode === "hint" ? "hint" : "solution";
       const sourceTag = `help-me-fix-${tagSuffix}${tag ? `:${tag}` : ""}`;
       const prompt = createNavigatorIntentMessage({
@@ -151,6 +169,8 @@ export default function HelpMeFix({
         path,
         isHint: mode === "hint",
         sourceTag,
+        location,
+        buildCommand,
       });
       const sent = await submitNavigatorPromptInWorkspaceChat({
         project_id,

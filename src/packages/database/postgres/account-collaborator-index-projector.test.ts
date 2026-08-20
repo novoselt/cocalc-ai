@@ -9,6 +9,7 @@ import {
   drainAccountCollaboratorIndexProjection,
   getAccountCollaboratorIndexProjectionBacklogStatus,
 } from "./account-collaborator-index-projector";
+import { drainAccountProjectIndexProjection } from "./account-project-index-projector";
 import { listProjectedCollaboratorsForAccount } from "./account-collaborator-index";
 import { appendProjectOutboxEventForProject } from "./project-events-outbox";
 
@@ -96,11 +97,90 @@ describe("account_collaborator_index projector", () => {
     expect(indexRows.rows).toHaveLength(0);
 
     const outboxRows = await getPool().query(
-      "SELECT published_at FROM project_events_outbox WHERE project_id = $1",
+      `SELECT published_at, collaborator_index_pending, collaborator_index_published_at
+         FROM project_events_outbox
+        WHERE project_id = $1`,
       [PROJECT_ID],
     );
-    expect(outboxRows.rows).toEqual([{ published_at: null }]);
+    expect(outboxRows.rows).toEqual([
+      {
+        published_at: null,
+        collaborator_index_pending: true,
+        collaborator_index_published_at: null,
+      },
+    ]);
   });
+
+  it.each(["project", "collaborator"] as const)(
+    "does not lose either delivery when the %s projector runs first",
+    async (firstProjector) => {
+      await seedBaseRows();
+      await appendProjectOutboxEventForProject({
+        event_type: "project.created",
+        project_id: PROJECT_ID,
+        default_bay_id: LOCAL_BAY_ID,
+      });
+
+      const drainProject = async () =>
+        await drainAccountProjectIndexProjection({
+          bay_id: LOCAL_BAY_ID,
+          limit: 10,
+          dry_run: false,
+        });
+      const drainCollaborator = async () =>
+        await drainAccountCollaboratorIndexProjection({
+          bay_id: LOCAL_BAY_ID,
+          limit: 10,
+          dry_run: false,
+        });
+      if (firstProjector === "project") {
+        await drainProject();
+        await drainCollaborator();
+      } else {
+        await drainCollaborator();
+        await drainProject();
+      }
+
+      const projectRows = await getPool().query(
+        `SELECT account_id
+           FROM account_project_index
+          WHERE project_id = $1
+          ORDER BY account_id`,
+        [PROJECT_ID],
+      );
+      expect(projectRows.rows).toEqual([
+        { account_id: ACCOUNT_A },
+        { account_id: ACCOUNT_B },
+      ]);
+      await expect(
+        listProjectedCollaboratorsForAccount({
+          account_id: ACCOUNT_A,
+          limit: 10,
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            collaborator_account_id: ACCOUNT_B,
+            common_project_count: 1,
+          }),
+        ]),
+      );
+
+      const outboxRows = await getPool().query(
+        `SELECT published_at, collaborator_index_pending, collaborator_index_published_at
+           FROM project_events_outbox
+          WHERE project_id = $1`,
+        [PROJECT_ID],
+      );
+      expect(outboxRows.rows).toEqual([
+        {
+          published_at: expect.any(Date),
+          collaborator_index_pending: false,
+          collaborator_index_published_at: expect.any(Date),
+        },
+      ]);
+    },
+  );
 
   it("reports unpublished collaborator projector lag and per-type counts", async () => {
     await seedBaseRows();

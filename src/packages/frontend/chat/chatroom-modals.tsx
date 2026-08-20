@@ -945,7 +945,7 @@ export function ChatRoomModals({
               type="file"
               accept=".zip,application/zip"
               onChange={(event) => {
-                const nextFile = event.target.files?.[0] ?? null;
+                const nextFile = event.currentTarget.files?.[0] ?? null;
                 setImportFile(nextFile);
               }}
               style={{ width: "100%" }}

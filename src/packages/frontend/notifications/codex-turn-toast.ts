@@ -5,7 +5,9 @@
 
 import type { DKV } from "@cocalc/conat/sync/dkv";
 import type { NotificationListRow } from "@cocalc/conat/hub/api/notifications";
+import { getLogger } from "@cocalc/conat/logger";
 import { redux } from "@cocalc/frontend/app-framework";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { getAntdNotificationInstance } from "@cocalc/frontend/app/antd-notification";
 import { getSharedAccountDkv } from "@cocalc/frontend/conat/account-dkv";
 import Fragment from "@cocalc/frontend/misc/fragment-id";
@@ -13,6 +15,7 @@ import { webapp_client } from "@cocalc/frontend/webapp-client";
 
 const TOAST_STATE_DKV_NAME = "notification-toast-state";
 const CODEX_TURN_TOAST_PREFIX = "codex-turn.";
+const logger = getLogger("frontend:notifications:codex-turn-toast");
 
 const seenCodexTurnToastIds = new Set<string>();
 const openCodexTurnToastIds = new Set<string>();
@@ -155,6 +158,7 @@ async function openCodexTurnNoticeTarget(
         ? row.summary.fragment_id
         : undefined,
     );
+    await ensureProjectReduxRuntime();
     await redux.getProjectActions(project_id)?.open_file({
       path,
       foreground: true,
@@ -206,13 +210,17 @@ export function showLocalCodexTurnCompletionToast(opts: {
           ? `chat=${Math.floor(messageDate)}`
           : undefined,
       );
-      void redux.getProjectActions(opts.project_id)?.open_file({
-        path: opts.path,
-        foreground: true,
-        foreground_project: true,
-        chat: !!fragmentId,
-        fragmentId,
-      });
+      void ensureProjectReduxRuntime()
+        .then(() =>
+          redux.getProjectActions(opts.project_id)?.open_file({
+            path: opts.path,
+            foreground: true,
+            foreground_project: true,
+            chat: !!fragmentId,
+            fragmentId,
+          }),
+        )
+        .catch((err) => logger.warn("Unable to open Codex notification", err));
     },
   });
 }

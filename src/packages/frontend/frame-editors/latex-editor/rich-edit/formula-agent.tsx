@@ -15,6 +15,10 @@ import { useState } from "react";
 import { show_react_modal } from "@cocalc/frontend/misc";
 import mathToHtml from "@cocalc/frontend/misc/math-to-html";
 import {
+  agentFileLocation,
+  describeAgentFileLocation,
+} from "@cocalc/frontend/frame-editors/ai/agent-file-context";
+import {
   dispatchNavigatorPromptIntent,
   submitNavigatorPromptInWorkspaceChat,
 } from "@cocalc/frontend/project/new/navigator-intents";
@@ -29,7 +33,11 @@ interface Position {
 
 interface FormulaAgentOpts {
   project_id: string;
+  // path of the main document being edited
   path: string;
+  // project-relative path of the file this frame actually shows; for a LaTeX
+  // subfile (\input'ed from the main document) this differs from `path`.
+  filePath?: string;
   source: string;
   from: Position;
   to: Position;
@@ -47,23 +55,44 @@ function formulaMarkdown(opts: FormulaAgentOpts): string {
   return ["$$", content, "$$"].join("\n");
 }
 
-export function createFormulaAgentPrompt(opts: FormulaAgentOpts): string {
-  const { project_id, path, source, from, to, instruction } = opts;
+// What the user sees in the chat thread: the formula and the requested
+// change. The operational instructions and metadata go into the hidden agent
+// prompt (acp_prompt) built by createFormulaAgentPrompt.
+export function createFormulaAgentVisiblePrompt(
+  opts: FormulaAgentOpts,
+): string {
   return [
     "**Edit this LaTeX formula:**",
     formulaMarkdown(opts),
     "",
     "**Requested change:**",
-    instruction ?? "",
-    "",
-    "<details><summary>Agent instructions and context</summary>",
-    "",
+    opts.instruction ?? "",
+  ].join("\n");
+}
+
+export function createFormulaAgentPrompt(opts: FormulaAgentOpts): string {
+  const { project_id, path, source, from, to } = opts;
+  const filePath = `${opts.filePath ?? ""}`.trim() || path;
+  const location = agentFileLocation({
+    project_id,
+    path: filePath,
+    line: from.line + 1,
+    line_end: to.line + 1,
+  });
+  const mainDocument = agentFileLocation({ project_id, path });
+  return [
     "Handle this CoCalc LaTeX rich-editor formula-edit request as an agent.",
     "The user has already described the requested formula change below. Do not ask them to repeat it.",
+    filePath !== path
+      ? `The document being edited is ${describeAgentFileLocation(mainDocument)}.`
+      : undefined,
+    `The formula is in ${describeAgentFileLocation(location)}.`,
     "Treat the live in-memory sync document as authoritative. Do not assume the filesystem copy is current.",
     "Perform the requested edit now: open the exact file and edit only the intended formula. Do not merely reply with proposed LaTeX or describe an edit.",
     "Preserve the formula's existing LaTeX delimiters/style, verify the saved live-document result, then briefly report what changed.",
     "If you cannot access or edit the live document, state that specific blocker instead of claiming the formula was changed.",
+    "",
+    createFormulaAgentVisiblePrompt(opts),
     "",
     "**Selected formula (raw TeX):**",
     "~~~tex",
@@ -78,8 +107,10 @@ export function createFormulaAgentPrompt(opts: FormulaAgentOpts): string {
         intent: "intent:latex-formula-edit",
         project_id,
         path,
-        line: from.line + 1,
-        line_end: to.line + 1,
+        formula_file: filePath !== path ? filePath : undefined,
+        absolute_path: location.absolute_path,
+        line: location.line,
+        line_end: location.line_end,
         ch: from.ch,
         ch_end: to.ch,
       },
@@ -87,8 +118,9 @@ export function createFormulaAgentPrompt(opts: FormulaAgentOpts): string {
       2,
     ),
     "~~~",
-    "</details>",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function FormulaPreview({ opts }: { opts: FormulaAgentOpts }) {
@@ -180,13 +212,16 @@ export async function openFormulaAgent(opts: FormulaAgentOpts): Promise<void> {
   if (!instruction) return;
   const request = { ...opts, instruction };
   const prompt = createFormulaAgentPrompt(request);
-  const basename = opts.path.split("/").filter(Boolean).pop() ?? "LaTeX file";
+  const visiblePrompt = createFormulaAgentVisiblePrompt(request);
+  const basename =
+    (opts.filePath || opts.path).split("/").filter(Boolean).pop() ??
+    "LaTeX file";
   const title = "Edit formula in " + basename;
   const sent = await submitNavigatorPromptInWorkspaceChat({
     project_id: opts.project_id,
     path: opts.path,
     prompt,
-    visiblePrompt: prompt,
+    visiblePrompt,
     title,
     tag: "intent:latex-formula-edit",
     forceCodex: true,
@@ -196,7 +231,7 @@ export async function openFormulaAgent(opts: FormulaAgentOpts): Promise<void> {
   if (!sent) {
     dispatchNavigatorPromptIntent({
       prompt,
-      visiblePrompt: prompt,
+      visiblePrompt,
       title,
       tag: "intent:latex-formula-edit",
       forceCodex: true,

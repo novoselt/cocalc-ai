@@ -679,7 +679,9 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
     }
     return (
       <AgentTitleBarButton
-        path={props.path}
+        // A cm frame can show a different file than the main editor (e.g. a
+        // LaTeX \input'ed subfile); editor_actions belongs to that file.
+        path={props.editor_actions?.path ?? props.path}
         type={props.type}
         showDialog={showAIDialogs[where]}
         setShowDialog={(value: boolean) => {
@@ -694,6 +696,7 @@ export function FrameTitleBar(props: FrameTitleBarProps) {
         key={`ai-button-${where}`}
         id={props.id}
         actions={props.actions}
+        documentActions={props.editor_actions}
         buttonSize={button_size()}
         buttonStyle={button_style()}
         visible={props.tab_is_visible && props.is_visible}

@@ -19,6 +19,15 @@ function parse(lines: string[]): WidgetDescriptor[] {
   return parseLines(source(lines), 0, lines.length);
 }
 
+/** Parse a viewport-like subrange while retaining the full line source. */
+function parseRange(
+  lines: string[],
+  fromLine: number,
+  toLine: number,
+): WidgetDescriptor[] {
+  return parseLines(source(lines), fromLine, toLine);
+}
+
 /** Parse a single line. */
 function parse1(line: string): WidgetDescriptor[] {
   return parse([line]);
@@ -252,6 +261,247 @@ describe("parseLines — representative cases per family", () => {
     const d = first(ds, "custom-macro")!;
     expect(d).toBeDefined();
     expect(d.payload).toMatchObject({ cmdName: "\\mycmd", content: "x" });
+  });
+});
+
+describe("multi-line inline math $\\begin{aligned}…\\end{aligned}$", () => {
+  const ALIGNED_BODY = [
+    "f(x) &= \\frac{(1-x)^3}{1-x^2} \\\\",
+    "     &= \\frac{(1-x)^2}{1+x}",
+  ];
+
+  it("is one math-inline widget spanning the whole block", () => {
+    const lines = [
+      "before $\\begin{aligned}",
+      ...ALIGNED_BODY,
+      "\\end{aligned}$ after",
+    ];
+    const ds = parse(lines);
+    const d = first(ds, "math-inline")!;
+    expect(d).toBeDefined();
+    expect(d.from).toEqual({ line: 0, ch: 7 });
+    // closing `$` is right after `\end{aligned}` (13 chars) on line 3
+    expect(d.to).toEqual({ line: 3, ch: 14 });
+    expect(d.source).toBe(
+      ["$\\begin{aligned}", ...ALIGNED_BODY, "\\end{aligned}$"].join("\n"),
+    );
+    expect(d.payload?.content).toBe(
+      ["\\begin{aligned}", ...ALIGNED_BODY, "\\end{aligned}"].join("\n"),
+    );
+    // the inner \frac calls must be subsumed by the math widget
+    expect(first(ds, "custom-macro")).toBeUndefined();
+  });
+
+  it("works with the \\begin on the line after the opening $", () => {
+    const ds = parse([
+      "$",
+      "\\begin{aligned}",
+      ...ALIGNED_BODY,
+      "\\end{aligned}",
+      "$",
+    ]);
+    const d = first(ds, "math-inline")!;
+    expect(d).toBeDefined();
+    expect(d.from).toEqual({ line: 0, ch: 0 });
+    expect(d.to).toEqual({ line: 5, ch: 1 });
+  });
+
+  it("covers the other inner envs (cases, pmatrix, starred variants)", () => {
+    for (const env of ["cases", "pmatrix", "cases*", "smallmatrix"]) {
+      const ds = parse([`$\\begin{${env}}`, "a & b \\\\", `\\end{${env}}$`]);
+      const d = first(ds, "math-inline");
+      expect([env, d?.from]).toEqual([env, { line: 0, ch: 0 }]);
+      expect(d!.to).toEqual({ line: 2, ch: `\\end{${env}}$`.length });
+    }
+  });
+
+  it("same content as $$…$$ display math keeps working", () => {
+    const ds = parse([
+      "$$\\begin{aligned}",
+      ...ALIGNED_BODY,
+      "\\end{aligned}$$",
+    ]);
+    const d = first(ds, "math-display")!;
+    expect(d).toBeDefined();
+    expect(d.from).toEqual({ line: 0, ch: 0 });
+    expect(d.to).toEqual({ line: 3, ch: 15 });
+    expect(first(ds, "math-inline")).toBeUndefined();
+    expect(first(ds, "custom-macro")).toBeUndefined();
+  });
+
+  it("same content as \\[…\\] display math keeps working", () => {
+    const ds = parse([
+      "\\[\\begin{aligned}",
+      ...ALIGNED_BODY,
+      "\\end{aligned}\\]",
+    ]);
+    const d = first(ds, "math-display")!;
+    expect(d).toBeDefined();
+    expect(d.from).toEqual({ line: 0, ch: 0 });
+    expect(d.to).toEqual({ line: 3, ch: 15 });
+    expect(first(ds, "math-inline")).toBeUndefined();
+    expect(first(ds, "custom-macro")).toBeUndefined();
+  });
+
+  it("single-line $\\begin{aligned}…\\end{aligned}$ still matches (one widget)", () => {
+    const ds = parse1("$\\begin{aligned}a &= b\\end{aligned}$");
+    const maths = ds.filter((d) => d.type === "math-inline");
+    expect(maths.length).toBe(1);
+    expect(maths[0].from).toEqual({ line: 0, ch: 0 });
+    expect(maths[0].to).toEqual({ line: 0, ch: 36 });
+  });
+
+  it("an unterminated $ does not swallow the rest of the document", () => {
+    const ds = parse([
+      "an unterminated $\\begin{aligned}",
+      "a &= b",
+      "\\section{Later}",
+      "\\textbf{bold}",
+    ]);
+    expect(first(ds, "math-inline")).toBeUndefined();
+    expect(first(ds, "section")).toBeDefined();
+    expect(first(ds, "textbf")).toBeDefined();
+  });
+
+  it("the closing $ must directly follow \\end{env}", () => {
+    const ds = parse(["$\\begin{aligned}", "a &= b", "\\end{aligned} tail $"]);
+    expect(first(ds, "math-inline")).toBeUndefined();
+  });
+
+  it("a blank line (paragraph break) stops the scan", () => {
+    const ds = parse(["$\\begin{aligned}", "a &= b", "", "\\end{aligned}$"]);
+    expect(first(ds, "math-inline")).toBeUndefined();
+  });
+
+  it("prose with a stray $ on two different lines is not one widget", () => {
+    const ds = parse([
+      "costs $5 for the first item",
+      "and $7 for the second one",
+    ]);
+    expect(first(ds, "math-inline")).toBeUndefined();
+  });
+
+  it("prose $…$ before an aligned block picks the right opening $", () => {
+    const ds = parse([
+      "Since $x$ is small, $\\begin{aligned}",
+      "a &= b",
+      "\\end{aligned}$",
+    ]);
+    const maths = ds.filter((d) => d.type === "math-inline");
+    expect(maths.length).toBe(2);
+    expect(maths[0].from).toEqual({ line: 0, ch: 6 });
+    expect(maths[0].to).toEqual({ line: 0, ch: 9 });
+    expect(maths[1].from).toEqual({ line: 0, ch: 20 });
+    expect(maths[1].to).toEqual({ line: 2, ch: 14 });
+  });
+
+  it("two blocks meeting on one line are two widgets", () => {
+    // The closing `$` of the first block sits on the same line as the
+    // opening `$` of the second; the scanner must resume just past the
+    // former instead of pairing the two.
+    const ds = parse([
+      "$\\begin{cases}",
+      "1 & x > 0",
+      "\\end{cases}$ and $\\begin{pmatrix}",
+      "1 & 2",
+      "\\end{pmatrix}$",
+    ]);
+    const maths = ds.filter((d) => d.type === "math-inline");
+    expect(maths.length).toBe(2);
+    expect(maths[0].from).toEqual({ line: 0, ch: 0 });
+    expect(maths[0].to).toEqual({ line: 2, ch: 12 });
+    expect(maths[1].from).toEqual({ line: 2, ch: 17 });
+    expect(maths[1].to).toEqual({ line: 4, ch: 14 });
+  });
+
+  it("finds a block after unsupported multi-line dollar math", () => {
+    // The first formula is valid LaTeX but outside this parser's narrow
+    // multi-line widget shape. Its closing `$` must not pair with and
+    // hide the opening `$` of the supported matrix that follows.
+    const ds = parse([
+      "Some $x +",
+      "y$ and $\\begin{pmatrix}",
+      "1 & 2",
+      "\\end{pmatrix}$",
+    ]);
+    const maths = ds.filter((d) => d.type === "math-inline");
+    expect(maths).toHaveLength(1);
+    expect(maths[0].from).toEqual({ line: 1, ch: 7 });
+    expect(maths[0].to).toEqual({ line: 3, ch: 14 });
+    expect(maths[0].source).toBe(
+      ["$\\begin{pmatrix}", "1 & 2", "\\end{pmatrix}$"].join("\n"),
+    );
+  });
+
+  it("finds a block after a closer whose opener is above the viewport", () => {
+    const lines = [
+      "$\\begin{cases}",
+      "1 & x > 0",
+      "\\end{cases}$ and $\\begin{pmatrix}",
+      "1 & 2",
+      "\\end{pmatrix}$",
+    ];
+    // Simulate a viewport whose lookback starts on the first block's
+    // closing line: only the second opener is in the parsed range.
+    const ds = parseRange(lines, 2, lines.length);
+    const maths = ds.filter((d) => d.type === "math-inline");
+    expect(maths).toHaveLength(1);
+    expect(maths[0].from).toEqual({ line: 2, ch: 17 });
+    expect(maths[0].to).toEqual({ line: 4, ch: 14 });
+  });
+
+  it("does not reuse a single-line formula's closer as an opener", () => {
+    const ds = parse(["$x$", "\\begin{aligned}", "a &= b", "\\end{aligned}$"]);
+    const maths = ds.filter((d) => d.type === "math-inline");
+    expect(maths).toHaveLength(1);
+    expect(maths[0].source).toBe("$x$");
+  });
+
+  it("a bare multi-line \\begin{aligned} without $ is not a widget", () => {
+    // `aligned` is not a standalone display env — a bare one is a
+    // LaTeX error, so scanMathEnvs must keep ignoring it.
+    const ds = parse(["\\begin{aligned}", "a &= b", "\\end{aligned}"]);
+    expect(first(ds, "math-env")).toBeUndefined();
+    expect(first(ds, "math-inline")).toBeUndefined();
+  });
+});
+
+describe("multi-argument macros in the custom-macro fallback", () => {
+  it("\\frac{a}{b} outside math is ONE chip covering both groups", () => {
+    const ds = parse1("\\frac{a}{b}");
+    const d = first(ds, "custom-macro")!;
+    expect(d).toBeDefined();
+    expect(d.from).toEqual({ line: 0, ch: 0 });
+    expect(d.to).toEqual({ line: 0, ch: 11 });
+    expect(d.source).toBe("\\frac{a}{b}");
+    expect(d.payload).toMatchObject({
+      cmdName: "\\frac",
+      content: "a",
+      args: ["a", "b"],
+    });
+    // no dangling second group left as its own descriptor
+    expect(ds.filter((x) => x.type === "custom-macro").length).toBe(1);
+  });
+
+  it("\\frac with nested braces keeps the whole call in one chip", () => {
+    const ds = parse1("x \\frac{(1-x)^3}{1-x^{2}} y");
+    const d = first(ds, "custom-macro")!;
+    expect(d.source).toBe("\\frac{(1-x)^3}{1-x^{2}}");
+    expect(d.payload).toMatchObject({ args: ["(1-x)^3", "1-x^{2}"] });
+  });
+
+  it("single-argument unknown macros are unchanged", () => {
+    const ds = parse1("\\mycmd{body} tail");
+    const d = first(ds, "custom-macro")!;
+    expect(d.to).toEqual({ line: 0, ch: 12 });
+    expect(d.payload).toMatchObject({ content: "body", args: ["body"] });
+  });
+
+  it("a whitespace-separated group is NOT swallowed as a second argument", () => {
+    const ds = parse1("\\mycmd{a} {b}");
+    const d = first(ds, "custom-macro")!;
+    expect(d.source).toBe("\\mycmd{a}");
+    expect(d.payload).toMatchObject({ args: ["a"] });
   });
 });
 

@@ -1,5 +1,8 @@
 import { set, get, del } from "@cocalc/frontend/misc/local-storage-typed";
+import { getLogger } from "@cocalc/conat/logger";
 import { isEqual } from "lodash";
+
+const logger = getLogger("frontend:codemirror:fold-state");
 
 export function getFoldedLines(cm): number[] {
   if (cm?.foldCode == null) {
@@ -12,15 +15,21 @@ export function getFoldedLines(cm): number[] {
     .map((mark) => mark.find().from.line);
 }
 
-export function setFoldedLines(cm, lines: number[]) {
+export function setFoldedLines(cm, lines: number[]): boolean {
   if (cm?.foldCode == null) {
     // not enabled
-    return;
+    return true;
   }
-  lines.reverse();
-  for (const n of lines) {
-    cm.foldCode(n);
+  let restored = true;
+  for (const n of [...lines].reverse()) {
+    try {
+      cm.foldCode(n);
+    } catch (err) {
+      restored = false;
+      logger.warn(`Unable to restore code fold at line ${n}`, err);
+    }
   }
+  return restored;
 }
 
 function toKey(key: string): string {
@@ -32,9 +41,11 @@ export function initFold(cm, key: string) {
   const lines = get<number[]>(k);
   if (lines != null) {
     try {
-      setFoldedLines(cm, lines);
+      if (!setFoldedLines(cm, lines)) {
+        del(k);
+      }
     } catch (err) {
-      console.warn(`error setting cold folding for ${key}: `, err);
+      logger.warn(`Unable to restore code folding for ${key}`, err);
       del(k);
     }
   }

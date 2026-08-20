@@ -432,7 +432,9 @@ export async function drainAccountProjectIndexProjection(opts?: {
          event_type,
          payload_json,
          created_at,
-         published_at
+         published_at,
+         collaborator_index_pending,
+         collaborator_index_published_at
        FROM project_events_outbox
       WHERE COALESCE(NULLIF(BTRIM(owning_bay_id), ''), $1::TEXT) = $1::TEXT
         AND published_at IS NULL

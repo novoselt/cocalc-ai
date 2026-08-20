@@ -217,6 +217,7 @@ export async function createLroDetailed({
   routing,
   input,
   dedupe_key,
+  reuse_terminal_dedupe = false,
   parent_id,
   expires_at,
   status = "queued",
@@ -230,6 +231,7 @@ export async function createLroDetailed({
   routing?: string;
   input?: any;
   dedupe_key?: string;
+  reuse_terminal_dedupe?: boolean;
   parent_id?: string;
   expires_at?: Date;
   status?: LroStatus;
@@ -269,6 +271,9 @@ export async function createLroDetailed({
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
       `cocalc:lro-dedupe:${scope_type}:${scope_id}:${dedupe_key}`,
     ]);
+    const terminalClause = reuse_terminal_dedupe
+      ? ""
+      : "AND status <> ALL($4::text[])";
     const existing = await client.query(
       `
         SELECT *
@@ -276,10 +281,13 @@ export async function createLroDetailed({
         WHERE scope_type=$1
           AND scope_id=$2
           AND dedupe_key=$3
-          AND status <> ALL($4::text[])
+          ${terminalClause}
+        ORDER BY created_at DESC
         LIMIT 1
       `,
-      [scope_type, scope_id, dedupe_key, TERMINAL_STATUSES],
+      reuse_terminal_dedupe
+        ? [scope_type, scope_id, dedupe_key]
+        : [scope_type, scope_id, dedupe_key, TERMINAL_STATUSES],
     );
     if (existing.rows[0]) {
       await client.query("COMMIT");

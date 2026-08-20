@@ -59,6 +59,7 @@ jest.mock("@cocalc/server/conat/api/public-directory-shares", () => ({
 
 const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
 const PROJECT_ID = "22222222-2222-4222-8222-222222222222";
+const SECOND_PROJECT_ID = "33333333-3333-4333-8333-333333333333";
 
 describe("project remote access", () => {
   beforeEach(() => {
@@ -132,6 +133,44 @@ describe("project remote access", () => {
       }),
     ).resolves.toEqual(expect.objectContaining({ project_id: PROJECT_ID }));
     expect(materializeProjectHostMock).not.toHaveBeenCalled();
+  });
+
+  it("authorizes local project fanout with one database query", async () => {
+    const query = jest.fn(async () => ({
+      rows: [PROJECT_ID, SECOND_PROJECT_ID].map((project_id) => ({
+        project_id,
+        title: "Student project",
+        host_id: null,
+        owning_bay_id: "bay-local",
+        usage_account_id: ACCOUNT_ID,
+        users: { [ACCOUNT_ID]: { group: "collaborator" } },
+        allow_collaborator_destructive_storage_actions: null,
+      })),
+    }));
+    const pool = (await import("@cocalc/database/pool")).default as jest.Mock;
+    pool.mockReturnValue({ query });
+    const { assertProjectCollaboratorAccessAllowRemoteBatch } =
+      await import("./project-remote-access");
+
+    await expect(
+      assertProjectCollaboratorAccessAllowRemoteBatch({
+        account_id: ACCOUNT_ID,
+        project_ids: [PROJECT_ID, SECOND_PROJECT_ID],
+        warmRoute: false,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        project_id: PROJECT_ID,
+        usage_account_id: ACCOUNT_ID,
+      }),
+      expect.objectContaining({
+        project_id: SECOND_PROJECT_ID,
+        usage_account_id: ACCOUNT_ID,
+      }),
+    ]);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(getLocalProjectCollaboratorAccessStatusMock).not.toHaveBeenCalled();
+    expect(resolveProjectBayMock).not.toHaveBeenCalled();
   });
 
   it("resolves temporary public-share grants as viewer access", async () => {

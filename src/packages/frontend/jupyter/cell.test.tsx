@@ -76,7 +76,7 @@ describe("Cell in studio view mode", () => {
 
   it("forwards transient execution state (stdin, runOverlay, isDragging) to StudioCell", () => {
     const stdin = fromJS({ id: "cell-1", prompt: "value: " });
-    const runOverlay = fromJS({ state: "pending" });
+    const runOverlay = fromJS({ state: "busy", start: 100, end: null });
     render(
       <Cell
         cell={cell}
@@ -93,6 +93,8 @@ describe("Cell in studio view mode", () => {
     expect(mockStudioCellProps.stdin).toBe(stdin);
     expect(mockStudioCellProps.runOverlay).toBe(runOverlay);
     expect(mockStudioCellProps.isDragging).toBe(true);
+    expect(mockStudioCellProps.cell.get("state")).toBe("busy");
+    expect(mockStudioCellProps.cell.get("start")).toBe(100);
     // and the regular cell renderer is not used
     expect(screen.queryByTestId("cell-output")).toBeNull();
   });

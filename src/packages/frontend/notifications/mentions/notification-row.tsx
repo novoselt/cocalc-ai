@@ -6,9 +6,11 @@
 import { Alert, Button, Modal, Space, Tag } from "antd";
 import { useEffect, useState } from "react";
 
+import { getLogger } from "@cocalc/conat/logger";
 import { A } from "@cocalc/frontend/components";
 import { Avatar } from "@cocalc/frontend/account/avatar/avatar";
 import { CSS, redux } from "@cocalc/frontend/app-framework";
+import { ensureProjectReduxRuntime } from "@cocalc/frontend/app-framework/project-runtime";
 import { Icon, IconName, TimeAgo } from "@cocalc/frontend/components";
 import StaticMarkdown from "@cocalc/frontend/editors/slate/static-markdown";
 import { IS_MOBILE } from "@cocalc/frontend/feature";
@@ -18,6 +20,8 @@ import { User } from "@cocalc/frontend/users";
 import { MentionInfo } from "./types";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import type { ProjectAccessRequestStatus } from "@cocalc/conat/hub/api/projects";
+
+const logger = getLogger("frontend:notifications:notification-row");
 
 const DESCRIPTION_STYLE: CSS = {
   flex: "1 1 auto",
@@ -151,14 +155,19 @@ export function NotificationRow(props: Props) {
     markReadState(is_read ? "unread" : "read");
   }
 
-  function clickNotificationTarget(): void {
+  async function clickNotificationTarget(): Promise<void> {
     if (!project_id || !path) return;
-    redux.getProjectActions(project_id).open_file({
-      path,
-      chat: !!fragmentId?.chat,
-      fragmentId,
-    });
-    markReadState("read");
+    try {
+      await ensureProjectReduxRuntime();
+      await redux.getProjectActions(project_id).open_file({
+        path,
+        chat: !!fragmentId?.chat,
+        fragmentId,
+      });
+      markReadState("read");
+    } catch (err) {
+      logger.warn("Unable to open notification target", err);
+    }
   }
 
   function renderActionLink() {
@@ -429,7 +438,8 @@ export function NotificationRow(props: Props) {
     );
   }
 
-  const onClick = project_id && path ? clickNotificationTarget : undefined;
+  const onClick =
+    project_id && path ? () => void clickNotificationTarget() : undefined;
 
   return (
     <li
