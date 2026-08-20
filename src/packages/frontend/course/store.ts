@@ -97,6 +97,7 @@ export type AssignmentRecord = TypedMap<{
   last_peer_assignment?: { [student_id: string]: LastCopyInfo };
   last_peer_collect?: { [student_id: string]: LastCopyInfo };
   last_return_graded?: { [student_id: string]: LastCopyInfo };
+  last_assignment_op_id?: string | null;
   assignment_updates?: { [update_id: string]: AssignmentUpdateRecord };
 
   skip_assignment: boolean;

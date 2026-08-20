@@ -93,6 +93,7 @@ export interface SyncDBRecordAssignment {
   auto_collect_op_id?: string | null;
   auto_collect_run_at?: string | null;
   auto_collect_error?: string | null;
+  last_assignment_op_id?: string | null;
   assignment_updates?: { [update_id: string]: AssignmentUpdateRecord };
   status?: {
     [student_id: string]: { start?: number; time?: number; error?: string };

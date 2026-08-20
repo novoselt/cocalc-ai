@@ -5,6 +5,7 @@
 
 import type { LroSummary } from "@cocalc/conat/hub/api/lro";
 import type { ProjectCopyRow } from "@cocalc/conat/hub/api/projects";
+import { isLroTerminalStatus } from "@cocalc/conat/lro/status";
 import { webapp_client } from "../webapp-client";
 
 export interface CourseCopyLro {
@@ -48,6 +49,34 @@ function allRowsTerminal(rows: ProjectCopyRow[]): boolean {
   return rows.every((row) => TERMINAL_COPY_STATUSES.has(row.status));
 }
 
+function isTransientReadError(err: unknown): boolean {
+  const code = Number((err as any)?.code);
+  if (code === 408 || code === 429 || code === 503) {
+    return true;
+  }
+  return /timeout|timed out|connection|disconnected|temporarily unavailable/i.test(
+    `${(err as any)?.message ?? err ?? ""}`,
+  );
+}
+
+async function retryDurableRead<T>(read: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await read();
+    } catch (err) {
+      lastError = err;
+      if (!isTransientReadError(err) || attempt === 4) {
+        throw err;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(4_000, 250 * 2 ** attempt)),
+      );
+    }
+  }
+  throw lastError;
+}
+
 function summarizeRows({
   summary,
   rows,
@@ -87,23 +116,69 @@ export async function waitForCourseCopyLro({
   dests: CourseCopyDestination[];
   onSummary?: (summary: LroSummary) => void;
 }): Promise<CourseCopyResultByStudent> {
-  const summary = await webapp_client.conat_client.lroWait({
-    op_id: op.op_id,
-    scope_type: op.scope_type,
-    scope_id: op.scope_id,
-    timeout_ms: 2 * 60 * 60 * 1000,
-    onSummary,
-  });
-  const rows = await webapp_client.project_client.listCopyRowsByOpId({
-    op_id: op.op_id,
-  });
-  if (rows.length === 0 || allRowsTerminal(rows)) {
-    return summarizeRows({ summary, rows, dests });
+  try {
+    await webapp_client.conat_client.lroWait({
+      op_id: op.op_id,
+      scope_type: op.scope_type,
+      scope_id: op.scope_id,
+      timeout_ms: 2 * 60 * 60 * 1000,
+      onSummary,
+    });
+  } catch (err) {
+    const reconciled = await reconcileCourseCopyLro({ op, dests });
+    if (reconciled != null) {
+      return reconciled;
+    }
+    throw err;
   }
-  const currentSummary =
-    (await webapp_client.conat_client.hub.lro.get({ op_id: op.op_id })) ??
-    summary;
-  return summarizeRows({ summary: currentSummary, rows, dests });
+  const reconciled = await reconcileCourseCopyLro({ op, dests });
+  if (reconciled == null) {
+    throw new Error("copy operation did not reach a terminal state");
+  }
+  return reconciled;
+}
+
+export async function reconcileCourseCopyLro({
+  op,
+  dests,
+}: {
+  op: CourseCopyLro;
+  dests: CourseCopyDestination[];
+}): Promise<CourseCopyResultByStudent | undefined> {
+  const summary = await retryDurableRead(
+    async () =>
+      await webapp_client.conat_client.hub.lro.get({
+        op_id: op.op_id,
+        timeout: 60_000,
+      }),
+  );
+  if (!summary || !isLroTerminalStatus(summary.status)) {
+    return;
+  }
+  const rows = await retryDurableRead(
+    async () =>
+      await webapp_client.project_client.listCopyRowsByOpId({
+        op_id: op.op_id,
+      }),
+  );
+  if (rows.length > 0 && !allRowsTerminal(rows)) {
+    return;
+  }
+  return summarizeRows({ summary, rows, dests });
+}
+
+export function courseCopyDestinationsFromSummary(
+  summary: LroSummary,
+): CourseCopyDestination[] {
+  if (!Array.isArray(summary.input?.dests)) {
+    return [];
+  }
+  return summary.input.dests
+    .map((dest: any) => ({
+      student_id: `${dest?.metadata?.student_id ?? ""}`,
+      project_id: `${dest?.project_id ?? ""}`,
+    }))
+    .filter((dest) => dest.student_id && dest.project_id);
 }
 
 export function courseCollectResultByStudent(

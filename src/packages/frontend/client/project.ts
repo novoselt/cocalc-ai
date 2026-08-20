@@ -43,6 +43,7 @@ import {
   filename_extension,
   is_valid_uuid_string,
   required,
+  uuid,
 } from "@cocalc/util/misc";
 import { reuseInFlight } from "@cocalc/util/reuse-in-flight";
 import { DirectoryListingEntry } from "@cocalc/util/types";
@@ -66,6 +67,12 @@ import { resolveExplicitStreamStart } from "./stream-start";
 const TOUCH_THROTTLE = 30_000;
 import { ExecStream } from "./types";
 import { ExecJobGroupWatcher } from "./exec-job-watcher";
+
+const COPY_ADMISSION_TIMEOUT_MS = 2 * 60 * 1000;
+
+function isRequestTimeout(err: unknown): boolean {
+  return Number((err as any)?.code) === 408;
+}
 
 export class ProjectClient {
   private client: WebappClient;
@@ -163,6 +170,8 @@ export class ProjectClient {
     dest?: ProjectCopyDestination;
     dests?: ProjectCopyDestination[];
     options?: CopyOptions;
+    request_id?: string;
+    timeout?: number;
   }): Promise<{
     op_id: string;
     scope_type: "project";
@@ -170,15 +179,33 @@ export class ProjectClient {
     service: string;
     stream_name: string;
   }> => {
-    return await this.client.conat_client.hub.projects.copyPathBetweenProjects(
-      opts,
-    );
+    const request = {
+      ...opts,
+      request_id: opts.request_id ?? uuid(),
+      timeout: opts.timeout ?? COPY_ADMISSION_TIMEOUT_MS,
+    };
+    try {
+      return await this.client.conat_client.hub.projects.copyPathBetweenProjects(
+        request,
+      );
+    } catch (err) {
+      if (!isRequestTimeout(err)) {
+        throw err;
+      }
+      return await this.client.conat_client.hub.projects.copyPathBetweenProjects(
+        request,
+      );
+    }
   };
 
   listCopyRowsByOpId = async (opts: {
     op_id: string;
+    timeout?: number;
   }): Promise<ProjectCopyRow[]> => {
-    return await this.client.conat_client.hub.projects.listCopyRowsByOpId(opts);
+    return await this.client.conat_client.hub.projects.listCopyRowsByOpId({
+      ...opts,
+      timeout: opts.timeout ?? 60_000,
+    });
   };
 
   collectAssignment = async (opts: {

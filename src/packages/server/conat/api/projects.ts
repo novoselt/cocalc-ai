@@ -41,7 +41,6 @@ import {
 } from "@cocalc/server/projects/collaborators";
 import { ensureCourseManagerAccessLocal } from "@cocalc/server/projects/course/ensure-manager-access";
 import {
-  getProjectOwnerAccountIdFromUsers,
   leaveOrDeleteProjectsForAccount,
   type ProjectLeaveOrDeleteResult,
 } from "@cocalc/server/projects/ownership";
@@ -54,7 +53,10 @@ import { updateAuthorizedKeysOnHost as updateAuthorizedKeysOnHostControl } from 
 import { supersedeOlderProjectStartLros } from "@cocalc/server/projects/start-lro-cleanup";
 import { getExplicitProjectRoutedClient } from "@cocalc/server/conat/route-client";
 import { getProjectFileServerClient } from "@cocalc/server/conat/file-server-client";
-import { resolveProjectBay } from "@cocalc/server/inter-bay/directory";
+import {
+  resolveProjectBay,
+  resolveProjectBays,
+} from "@cocalc/server/inter-bay/directory";
 import { getInterBayBridge } from "@cocalc/server/inter-bay/bridge";
 import { createInterBayAccountLocalClient } from "@cocalc/conat/inter-bay/api";
 import { getInterBayFabricClient } from "@cocalc/server/inter-bay/fabric";
@@ -79,7 +81,6 @@ import {
   resolvePublicViewerDns,
 } from "@cocalc/util/public-viewer-origin";
 import { isValidUUID } from "@cocalc/util/misc";
-import { mapParallelLimit } from "@cocalc/util/async-utils";
 import { membershipPackageCoversCourseProject } from "@cocalc/util/membership-package-product";
 import { projectStartFailureFromError } from "@cocalc/util/project-start-errors";
 import type { CodexUsageStatusInfo } from "@cocalc/conat/hub/api/system";
@@ -114,10 +115,7 @@ import {
   makeOfflineMoveConfirmationPayload,
   offlineMoveConfirmationError,
 } from "@cocalc/server/projects/offline-move-confirmation";
-import {
-  assertCanIncreaseAccountStorage,
-  getProjectCollaboratorInviteUsage as getProjectCollaboratorInviteUsageLocal,
-} from "@cocalc/server/membership/project-limits";
+import { getProjectCollaboratorInviteUsage as getProjectCollaboratorInviteUsageLocal } from "@cocalc/server/membership/project-limits";
 import { assertCanPerformDestructiveStorageAction } from "@cocalc/server/projects/destructive-storage-actions";
 import {
   drainProjectRehome as drainProjectRehomeControl,
@@ -138,6 +136,7 @@ import {
   PROJECT_NOT_FOUND_ERROR,
 } from "@cocalc/server/conat/project-local-access";
 import {
+  assertProjectCollaboratorAccessAllowRemoteBatch,
   resolveProjectAccessAllowRemote,
   resolveProjectReferenceCollaboratorOrAdminAllowRemote,
 } from "@cocalc/server/conat/project-remote-access";
@@ -526,6 +525,7 @@ export async function copyPathBetweenProjects({
   dest,
   dests,
   options,
+  request_id,
   account_id,
 }: {
   src: ProjectCopySource;
@@ -533,6 +533,7 @@ export async function copyPathBetweenProjects({
   dest?: ProjectCopyDestination;
   dests?: ProjectCopyDestination[];
   options?: CopyOptions;
+  request_id?: string;
   account_id?: string;
 }): Promise<{
   op_id: string;
@@ -549,37 +550,10 @@ export async function copyPathBetweenProjects({
     account_id,
     project_id: src.project_id,
   });
-  const destProjectIds = Array.from(
-    new Set(normalizedDests.map((dest) => dest.project_id)),
-  );
-  const destReferences = await mapParallelLimit(
-    destProjectIds,
-    async (project_id) =>
-      await assertCollabAllowRemoteProjectAccess({
-        account_id,
-        project_id,
-        warmRoute: false,
-      }),
-    COPY_ADMISSION_CONCURRENCY,
-  );
-  const destOwnerAccountIds = new Set<string>();
-  for (const reference of destReferences) {
-    const destOwnerAccountId = getProjectOwnerAccountIdFromUsers(
-      reference.users,
-    );
-    if (destOwnerAccountId) {
-      destOwnerAccountIds.add(destOwnerAccountId);
-    }
+  if (request_id != null && !isValidUUID(request_id)) {
+    throw new Error("request_id must be a valid uuid");
   }
-  await mapParallelLimit(
-    Array.from(destOwnerAccountIds),
-    async (ownerAccountId) =>
-      await assertCanIncreaseAccountStorage({
-        account_id: ownerAccountId,
-      }),
-    COPY_ADMISSION_CONCURRENCY,
-  );
-  const op = await createLro({
+  const { lro: op, created } = await createLroDetailed({
     kind: "copy-path-between-projects",
     scope_type: "project",
     scope_id: src.project_id,
@@ -592,42 +566,53 @@ export async function copyPathBetweenProjects({
       dests: normalizedDests,
       options,
     },
+    ...(request_id
+      ? {
+          dedupe_key: `copy-path-between-projects:${account_id}:${request_id}`,
+          reuse_terminal_dedupe: true,
+        }
+      : {}),
     status: "queued",
   });
-  try {
-    await publishLroSummary({
+  if (created) {
+    try {
+      await publishLroSummary({
+        scope_type: op.scope_type,
+        scope_id: op.scope_id,
+        summary: op,
+      });
+    } catch (err) {
+      log.warn(
+        "copyPathBetweenProjects: unable to publish initial LRO summary",
+        {
+          op_id: op.op_id,
+          project_id: src.project_id,
+          err,
+        },
+      );
+    }
+    publishLroEvent({
       scope_type: op.scope_type,
       scope_id: op.scope_id,
-      summary: op,
-    });
-  } catch (err) {
-    log.warn("copyPathBetweenProjects: unable to publish initial LRO summary", {
       op_id: op.op_id,
-      project_id: src.project_id,
-      err,
+      event: {
+        type: "progress",
+        ts: Date.now(),
+        phase: "queued",
+        message: "queued",
+        progress: 0,
+      },
+    }).catch((err) => {
+      log.warn(
+        "copyPathBetweenProjects: unable to publish queued progress event",
+        {
+          op_id: op.op_id,
+          project_id: src.project_id,
+          err,
+        },
+      );
     });
   }
-  publishLroEvent({
-    scope_type: op.scope_type,
-    scope_id: op.scope_id,
-    op_id: op.op_id,
-    event: {
-      type: "progress",
-      ts: Date.now(),
-      phase: "queued",
-      message: "queued",
-      progress: 0,
-    },
-  }).catch((err) => {
-    log.warn(
-      "copyPathBetweenProjects: unable to publish queued progress event",
-      {
-        op_id: op.op_id,
-        project_id: src.project_id,
-        err,
-      },
-    );
-  });
   triggerCopyLroWorker();
   return {
     op_id: op.op_id,
@@ -639,7 +624,6 @@ export async function copyPathBetweenProjects({
 }
 
 const MAX_COURSE_COLLECT_ITEMS = 500;
-const COPY_ADMISSION_CONCURRENCY = 20;
 
 function normalizeCourseCollectItems(
   items: CourseCollectAssignmentItem[],
@@ -705,16 +689,11 @@ export async function collectAssignment({
     course_project_id,
     project_ids: studentProjectIds,
   });
-  await mapParallelLimit(
-    studentProjectIds,
-    async (project_id) =>
-      await assertCollabAllowRemoteProjectAccess({
-        account_id,
-        project_id,
-        warmRoute: false,
-      }),
-    COPY_ADMISSION_CONCURRENCY,
-  );
+  await assertProjectCollaboratorAccessAllowRemoteBatch({
+    account_id,
+    project_ids: studentProjectIds,
+    warmRoute: false,
+  });
   let normalizedRunAt: string | undefined;
   if (run_at != null) {
     const date = new Date(run_at);
@@ -1342,10 +1321,6 @@ export async function sendCourseAssignmentPatch({
     course_project_id,
     project_ids: studentProjectIds,
   });
-  for (const project_id of studentProjectIds) {
-    await assertCollab({ account_id, project_id });
-  }
-
   return await copyPathBetweenProjects({
     account_id,
     src: {
@@ -4263,14 +4238,9 @@ export async function ensureCourseManagerAccess({
   const localProjectIds: string[] = [];
   const remoteProjectIdsByBay = new Map<string, string[]>();
   const resultsByProjectId = new Map<string, CourseManagerAccessResult>();
-  const projectOwnership = await mapParallelLimit(
-    projectIds,
-    async (project_id) => await resolveProjectBay(project_id),
-    COPY_ADMISSION_CONCURRENCY,
-  );
-  for (let i = 0; i < projectIds.length; i++) {
-    const project_id = projectIds[i];
-    const ownership = projectOwnership[i];
+  const projectOwnership = await resolveProjectBays(projectIds);
+  for (const project_id of projectIds) {
+    const ownership = projectOwnership.get(project_id);
     if (ownership == null) {
       resultsByProjectId.set(project_id, {
         project_id,

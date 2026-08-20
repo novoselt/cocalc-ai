@@ -10,6 +10,7 @@ import {
 } from "@cocalc/server/lro/lro-db";
 import { publishLroEvent, publishLroSummary } from "@cocalc/server/lro/stream";
 import { COPY_CANCELED_CODE, copyProjectFiles } from "./copy";
+import { admitCopyDestinations } from "./copy-admission";
 import { listCopiesByOpId } from "./copy-db";
 
 const logger = getLogger("server:projects:copy-worker");
@@ -172,6 +173,11 @@ async function handleCopyOp(op: LroSummary): Promise<void> {
   };
 
   try {
+    await admitCopyDestinations({
+      account_id,
+      dests,
+      progress,
+    });
     const existing = await listCopiesByOpId({ op_id });
     const existingSnapshot = existing[0]?.snapshot_id;
     const storedSnapshot = (op.result ?? {}).snapshot_id;
