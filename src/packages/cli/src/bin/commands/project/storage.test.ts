@@ -120,6 +120,60 @@ test("buildStorageAnalysis highlights retained data and environment-heavy projec
   );
 });
 
+test("buildStorageAnalysis does not recommend snapshot review when there are no snapshots", () => {
+  const analysis = testOnly.buildStorageAnalysis({
+    project_id: "project-id",
+    title: "Project",
+    homePath: "/root",
+    overview: {
+      collected_at: "2026-04-01T10:00:00.000Z",
+      quotas: [
+        {
+          key: "project",
+          label: "Project quota",
+          used: 18 * 1024 ** 3,
+          size: 20 * 1024 ** 3,
+        },
+      ],
+      live: {
+        key: "live",
+        label: "Live files",
+        path: "/root",
+        bytes: 15 * 1024 ** 3,
+      },
+      retained: {
+        key: "retained",
+        label: "Quota used beyond live files",
+        bytes: 3 * 1024 ** 3,
+        detail: "estimate",
+        snapshotCount: 0,
+      },
+      visible: [],
+    },
+    history: {
+      window_minutes: 24 * 60,
+      point_count: 0,
+      points: [],
+    },
+    breakdowns: [],
+  });
+
+  assert.equal(analysis.summary.retained?.snapshot_count, 0);
+  assert.ok(
+    analysis.findings.some(
+      (finding) => finding.id === "retained_without_snapshots",
+    ),
+  );
+  assert.ok(
+    !analysis.findings.some((finding) => finding.id === "retained_present"),
+  );
+  assert.ok(
+    !analysis.recommendations.some(
+      (recommendation) => recommendation.id === "review_snapshots",
+    ),
+  );
+});
+
 test("parseHistoryWindowMinutes converts duration strings into bounded minutes", () => {
   assert.equal(
     testOnly.parseHistoryWindowMinutes((value: string) => {

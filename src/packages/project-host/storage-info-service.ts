@@ -24,6 +24,7 @@ import type {
 } from "@cocalc/conat/project/storage-info";
 import { dstream, type DStream } from "@cocalc/conat/sync/dstream";
 import { PROJECT_IMAGE_PATH } from "@cocalc/util/db-schema/defaults";
+import { SNAPSHOTS } from "@cocalc/util/consts/snapshots";
 import { fileServerClient, getSharedScratchMountpoint } from "./file-server";
 import { getStorageAdmissionStatus } from "./storage-admission";
 
@@ -433,20 +434,39 @@ function isIgnorableDuFailure(errText: string): boolean {
 function buildRetainedSummary({
   quotaUsed,
   liveBytes,
+  snapshotCount,
 }: {
   quotaUsed?: number;
   liveBytes: number;
+  snapshotCount?: number;
 }): ProjectStorageRetainedSummary {
   const bytes =
     quotaUsed == null || !Number.isFinite(quotaUsed)
       ? 0
       : Math.max(0, quotaUsed - liveBytes);
+  if (snapshotCount === 0) {
+    // We know there are no snapshots, so the difference cannot be snapshot
+    // retention and pointing the user at snapshot cleanup would waste their
+    // time.  We deliberately do not assert what *is* holding the space: the
+    // overview has no cheap way to tell.
+    return {
+      key: "retained",
+      label: "Quota used beyond live files",
+      bytes,
+      detail:
+        "Estimate computed as project quota used minus current live files. This project currently has no snapshots, so deleting snapshots will not reduce it.",
+      snapshotCount,
+    };
+  }
   return {
     key: "retained",
     label: "Retained snapshot/history data",
     bytes,
     detail:
       "Estimate computed as project quota used minus current live files. This usually comes from snapshots retaining deleted or modified data, and can decrease automatically as older snapshots expire.",
+    // Carried when known so consumers can distinguish "has snapshots" from
+    // "unknown"; omitted entirely when we could not determine it.
+    ...(snapshotCount == null ? {} : { snapshotCount }),
   };
 }
 
@@ -688,6 +708,56 @@ function localFs({
   });
 }
 
+// How long we are willing to wait for the snapshot count.  This runs inside the
+// same Promise.all as the quota lookup, so it must not be able to hold the whole
+// overview open; the default fs timeout is minutes, which is far too long here.
+const SNAPSHOT_COUNT_TIMEOUT_MS = 5_000;
+
+// Number of entries in the project's .snapshots directory, or undefined when we
+// cannot tell.  This is deliberately a plain readdir rather than the file
+// server's allSnapshotUsage: that runs one `btrfs qgroup show` per snapshot, and
+// snapshot scans were removed from this path on purpose (5e84b90d62) to keep the
+// overview cheap.  We only need "are there any", not per-snapshot bytes.
+//
+// The path is relative so it resolves against the project home mount for every
+// caller; an absolute path would resolve under the rootfs mount unless it is
+// exactly a home alias.  Entries beginning with "." (e.g. the file server's
+// .<name>.lock files) are skipped, mirroring
+// file-server/btrfs/subvolume-snapshots.ts, but unlike that code we do not
+// verify each entry is a read-only subvolume -- that needs the btrfs calls this
+// path avoids.  The bias is therefore toward over-counting, which fails safe:
+// it keeps the existing snapshot wording rather than wrongly claiming there are
+// none.
+async function countProjectSnapshots({
+  client,
+  project_id,
+}: {
+  client: Client;
+  project_id: string;
+}): Promise<number | undefined> {
+  try {
+    const fs = fsClient({
+      client,
+      subject: fsSubject({ project_id }),
+      waitForInterest: false,
+      timeout: SNAPSHOT_COUNT_TIMEOUT_MS,
+    });
+    const entries = await fs.readdir(SNAPSHOTS);
+    return entries.filter((name) => !name.startsWith(".")).length;
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      // The file server creates .snapshots lazily, so a missing directory
+      // means the project has no snapshots.
+      return 0;
+    }
+    logger.debug("countProjectSnapshots: unable to count snapshots", {
+      project_id,
+      err,
+    });
+    return undefined;
+  }
+}
+
 async function getStorageBreakdownImpl({
   client,
   project_id,
@@ -881,7 +951,7 @@ async function getStorageOverviewImpl({
   const load = (async () => {
     const environmentPath = posix.join(homePath, PROJECT_IMAGE_PATH);
     const fileServer = fileServerClient(client);
-    const [quota, sharedScratch] = await Promise.all([
+    const [quota, sharedScratch, snapshotCount] = await Promise.all([
       fileServer.getQuota({ project_id }),
       getSharedScratchSummary().catch((err) => {
         logger.warn("getStorageOverview: unable to sample shared scratch", {
@@ -890,6 +960,7 @@ async function getStorageOverviewImpl({
         });
         return undefined;
       }),
+      countProjectSnapshots({ client, project_id }),
     ]);
     // A project overview previously launched two host-wide `du` traversals at
     // once. Serialize them so the host-wide scan cap can remain one without
@@ -981,6 +1052,7 @@ async function getStorageOverviewImpl({
       retained: buildRetainedSummary({
         quotaUsed: quota.used,
         liveBytes,
+        snapshotCount,
       }),
       ...(sharedScratch ? { shared_scratch: sharedScratch } : {}),
       visible,
