@@ -103,7 +103,9 @@ async function loadLatestProjectOutboxEvent(opts: {
        event_type,
        payload_json,
        created_at,
-       published_at
+       published_at,
+       collaborator_index_pending,
+       collaborator_index_published_at
      FROM project_events_outbox
      WHERE project_id = $1
      ORDER BY created_at DESC, event_id DESC

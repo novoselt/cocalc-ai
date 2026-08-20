@@ -16,13 +16,12 @@ import type {
   ProjectOutboxEventType,
   ProjectOutboxPayload,
 } from "./project-events-outbox";
+import { PROJECT_OUTBOX_COLLABORATOR_EVENT_TYPES } from "./project-events-outbox";
 
 const DEFAULT_SINGLE_BAY_ID = "bay-0";
-const RELEVANT_EVENT_TYPES: ProjectOutboxEventType[] = [
-  "project.created",
-  "project.membership_changed",
-  "project.deleted",
-];
+const RELEVANT_EVENT_TYPES: ProjectOutboxEventType[] = Array.from(
+  PROJECT_OUTBOX_COLLABORATOR_EVENT_TYPES,
+);
 const DEFAULT_DEADLOCK_RETRIES = 3;
 
 export interface DrainAccountCollaboratorIndexProjectionResult {
@@ -262,7 +261,9 @@ export async function loadLatestCollaboratorProjectionEvent(opts: {
        event_type,
        payload_json,
        created_at,
-       published_at
+       published_at,
+       collaborator_index_pending,
+       collaborator_index_published_at
      FROM project_events_outbox
      WHERE project_id = $1
        AND event_type = ANY($2::TEXT[])
@@ -360,7 +361,7 @@ export async function getAccountCollaboratorIndexProjectionBacklogStatus(opts?: 
        MAX(created_at) AS newest_unpublished_event_at
      FROM project_events_outbox
      WHERE COALESCE(NULLIF(BTRIM(owning_bay_id), ''), $1::TEXT) = $1::TEXT
-       AND published_at IS NULL
+       AND collaborator_index_pending = TRUE
        AND event_type = ANY($2::TEXT[])
      GROUP BY event_type
      ORDER BY event_type ASC`,
@@ -434,10 +435,12 @@ async function drainAccountCollaboratorIndexProjectionOnce(opts?: {
          event_type,
          payload_json,
          created_at,
-         published_at
+         published_at,
+         collaborator_index_pending,
+         collaborator_index_published_at
        FROM project_events_outbox
        WHERE COALESCE(NULLIF(BTRIM(owning_bay_id), ''), $1::TEXT) = $1::TEXT
-         AND published_at IS NULL
+         AND collaborator_index_pending = TRUE
          AND event_type = ANY($2::TEXT[])
        ORDER BY created_at ASC, event_id ASC
        LIMIT $3
@@ -472,7 +475,8 @@ async function drainAccountCollaboratorIndexProjectionOnce(opts?: {
       if (!dry_run) {
         await client.query(
           `UPDATE project_events_outbox
-              SET published_at = NOW()
+              SET collaborator_index_pending = FALSE,
+                  collaborator_index_published_at = NOW()
             WHERE event_id = $1`,
           [event.event_id],
         );

@@ -15,6 +15,7 @@ Table({
       "event_type",
       "created_at",
       "published_at",
+      "collaborator_index_pending",
     ],
   },
   fields: {
@@ -45,7 +46,17 @@ Table({
     },
     published_at: {
       type: "timestamp",
-      desc: "When this outbox event was successfully published downstream.",
+      desc: "When this outbox event was successfully applied to the account project index.",
+    },
+    collaborator_index_pending: {
+      type: "boolean",
+      pg_default: "FALSE",
+      not_null: true,
+      desc: "Whether this event still needs to be applied to the account collaborator index.",
+    },
+    collaborator_index_published_at: {
+      type: "timestamp",
+      desc: "When this outbox event was successfully applied to the account collaborator index.",
     },
   },
 });

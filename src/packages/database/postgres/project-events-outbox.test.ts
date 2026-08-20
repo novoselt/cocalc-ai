@@ -102,7 +102,8 @@ describe("project events outbox", () => {
     );
 
     const { rows } = await getPool().query(
-      `SELECT project_id, owning_bay_id, event_type, payload_json, published_at
+      `SELECT project_id, owning_bay_id, event_type, payload_json, published_at,
+              collaborator_index_pending, collaborator_index_published_at
          FROM project_events_outbox
         WHERE event_id = $1`,
       [event_id],
@@ -131,6 +132,8 @@ describe("project events outbox", () => {
           deleted: false,
         }),
         published_at: null,
+        collaborator_index_pending: true,
+        collaborator_index_published_at: null,
       },
     ]);
   });

@@ -17,6 +17,9 @@ export type ProjectOutboxEventType =
   | "project.host_changed"
   | "project.deleted";
 
+export const PROJECT_OUTBOX_COLLABORATOR_EVENT_TYPES: ReadonlySet<ProjectOutboxEventType> =
+  new Set(["project.created", "project.membership_changed", "project.deleted"]);
+
 export interface ProjectOutboxPayload {
   project_id: string;
   owning_bay_id: string;
@@ -45,6 +48,8 @@ export interface ProjectOutboxEventRow {
   payload_json: ProjectOutboxPayload;
   created_at: Date;
   published_at: Date | null;
+  collaborator_index_pending: boolean;
+  collaborator_index_published_at: Date | null;
 }
 
 type Queryable = {
@@ -166,17 +171,21 @@ export async function appendProjectOutboxEvent(opts: {
   db?: Queryable;
 }): Promise<string> {
   const db = queryable(opts.db);
+  const collaborator_index_pending =
+    PROJECT_OUTBOX_COLLABORATOR_EVENT_TYPES.has(opts.event_type);
   const result = await db.query(
     `INSERT INTO project_events_outbox
-       (event_id, project_id, owning_bay_id, event_type, payload_json, created_at, published_at)
+       (event_id, project_id, owning_bay_id, event_type, payload_json, created_at, published_at,
+        collaborator_index_pending, collaborator_index_published_at)
      VALUES
-       (gen_random_uuid(), $1, $2, $3, $4::JSONB, NOW(), NULL)
+       (gen_random_uuid(), $1, $2, $3, $4::JSONB, NOW(), NULL, $5, NULL)
      RETURNING event_id`,
     [
       opts.payload.project_id,
       normalizeBayId(opts.payload.owning_bay_id),
       opts.event_type,
       JSON.stringify(opts.payload),
+      collaborator_index_pending,
     ],
   );
   const { rows } = result as { rows: Array<{ event_id: string }> };
