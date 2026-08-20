@@ -2577,6 +2577,7 @@ export class ChatStreamWriter {
         acp_log_subject: this.logSubject,
         acp_live_log_stream: this.liveLogStreamName,
         acp_live_preview_stream: this.livePreviewStreamName,
+        acp_automation_id: this.metadata.automation_id,
         message_id: this.metadata.message_id,
         thread_id: this.metadata.thread_id,
         parent_message_id: (this.metadata as any).parent_message_id,
@@ -2951,6 +2952,7 @@ export class ChatStreamWriter {
         ? this.livePreviewStreamName
         : undefined,
       acp_thread_id: this.threadId,
+      acp_automation_id: this.metadata.automation_id,
       acp_started_at_ms:
         Number(this.metadata.started_at_ms) > 0
           ? Number(this.metadata.started_at_ms)
@@ -4248,6 +4250,16 @@ export class ChatStreamWriter {
   public async persistSessionId(sessionId: string): Promise<void> {
     await this.ready;
     if (this.closed || !this.syncdb) return;
+    if (this.metadata.automation_id) {
+      // Automation runs deliberately get their own Codex session --
+      // buildAutomationAcpConfig strips the interactive sessionId so scheduled
+      // runs cannot contaminate later human turns.  Writing the automation's
+      // session id back into the shared thread config would undo that on the
+      // way out: the thread would be re-bound to the automation's session, and
+      // the next interactive turn would resume it instead of the user's own.
+      // The run is still tracked via upsertSessionRegistry.
+      return;
+    }
     const threadId = this.resolvedThreadId();
     if (!threadId) return;
     const currentRow = preferredThreadConfigRow(this.syncdb, threadId);

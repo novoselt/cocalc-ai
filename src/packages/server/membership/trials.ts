@@ -36,6 +36,22 @@ async function ensureMembershipTrialClaimsTable(
   client?: PoolClient,
 ): Promise<void> {
   const pool = client ?? getPool("medium");
+  if (!client) {
+    ensureMembershipTrialClaimsTablePromise ??=
+      ensureMembershipTrialClaimsTableWithClient(pool).catch((err) => {
+        ensureMembershipTrialClaimsTablePromise = undefined;
+        throw err;
+      });
+    return await ensureMembershipTrialClaimsTablePromise;
+  }
+  await ensureMembershipTrialClaimsTableWithClient(pool);
+}
+
+let ensureMembershipTrialClaimsTablePromise: Promise<void> | undefined;
+
+async function ensureMembershipTrialClaimsTableWithClient(
+  pool: Pick<PoolClient, "query">,
+): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS membership_trial_claims (
       id SERIAL PRIMARY KEY,

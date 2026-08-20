@@ -622,4 +622,125 @@ describe("project storage info service", () => {
       ),
     ).rejects.toThrow("invalid project storage subject");
   });
+
+  it("does not attribute retained bytes to snapshots when there are none", async () => {
+    const stream = makeStream();
+    const duMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: Buffer.from("120 /root\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      })
+      .mockRejectedValueOnce(new Error("not found"));
+    dstreamMock.mockResolvedValue(stream);
+    fileServerClientMock.mockReturnValue({
+      getQuota: jest.fn(async () => ({
+        used: 5000,
+        size: 10000,
+        qgroupid: "0/2",
+        scope: "subvolume",
+      })),
+    });
+    const readdirMock = jest.fn(async () => []);
+    fsClientMock.mockReturnValue({ du: duMock, readdir: readdirMock });
+
+    const { handleProjectStorageOverviewRequest } =
+      await import("./storage-info-service");
+    const overview = await handleProjectStorageOverviewRequest.call(
+      {
+        subject: "project.11111111-1111-4111-8111-111111111111.storage-info.-",
+      },
+      { home: "/root" },
+      {} as any,
+    );
+
+    expect(readdirMock).toHaveBeenCalledWith(".snapshots");
+    expect(overview.retained.snapshotCount).toBe(0);
+    expect(overview.retained.bytes).toBe(4880);
+    expect(overview.retained.label).toBe("Quota used beyond live files");
+    expect(overview.retained.detail).toContain("no snapshots");
+  });
+
+  it("keeps snapshot attribution when snapshots exist", async () => {
+    const stream = makeStream();
+    const duMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: Buffer.from("120 /root\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      })
+      .mockRejectedValueOnce(new Error("not found"));
+    dstreamMock.mockResolvedValue(stream);
+    fileServerClientMock.mockReturnValue({
+      getQuota: jest.fn(async () => ({
+        used: 5000,
+        size: 10000,
+        qgroupid: "0/2",
+        scope: "subvolume",
+      })),
+    });
+    fsClientMock.mockReturnValue({
+      du: duMock,
+      // the leading-dot entry is a file server lock file, not a snapshot
+      readdir: jest.fn(async () => [
+        "2026-08-16T19:31:13.901Z",
+        ".2026-08-16T19:31:13.901Z.lock",
+      ]),
+    });
+
+    const { handleProjectStorageOverviewRequest } =
+      await import("./storage-info-service");
+    const overview = await handleProjectStorageOverviewRequest.call(
+      {
+        subject: "project.11111111-1111-4111-8111-111111111111.storage-info.-",
+      },
+      { home: "/root" },
+      {} as any,
+    );
+
+    expect(overview.retained.snapshotCount).toBe(1);
+    expect(overview.retained.label).toBe("Retained snapshot/history data");
+  });
+
+  it("leaves snapshot count unknown when it cannot be determined", async () => {
+    const stream = makeStream();
+    const duMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: Buffer.from("120 /root\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      })
+      .mockRejectedValueOnce(new Error("not found"));
+    dstreamMock.mockResolvedValue(stream);
+    fileServerClientMock.mockReturnValue({
+      getQuota: jest.fn(async () => ({
+        used: 5000,
+        size: 10000,
+        qgroupid: "0/2",
+        scope: "subvolume",
+      })),
+    });
+    fsClientMock.mockReturnValue({
+      du: duMock,
+      readdir: jest.fn(async () => {
+        throw new Error("fs service unavailable");
+      }),
+    });
+
+    const { handleProjectStorageOverviewRequest } =
+      await import("./storage-info-service");
+    const overview = await handleProjectStorageOverviewRequest.call(
+      {
+        subject: "project.11111111-1111-4111-8111-111111111111.storage-info.-",
+      },
+      { home: "/root" },
+      {} as any,
+    );
+
+    expect(overview.retained.snapshotCount).toBeUndefined();
+    expect(overview.retained.label).toBe("Retained snapshot/history data");
+  });
 });

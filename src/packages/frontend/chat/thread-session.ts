@@ -1,4 +1,4 @@
-import { field } from "./access";
+import { field, isAcpAutomationMessage } from "./access";
 import type { ChatActions } from "./actions";
 
 export function getLatestAcpThreadIdForThread({
@@ -11,6 +11,7 @@ export function getLatestAcpThreadIdForThread({
   if (!threadId) return undefined;
   const threadMessages = actions?.getMessagesInThread?.(threadId) ?? [];
   for (let i = threadMessages.length - 1; i >= 0; i -= 1) {
+    if (isAcpAutomationMessage(threadMessages[i])) continue;
     const sessionId = field<string>(threadMessages[i], "acp_thread_id");
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
       return sessionId.trim();

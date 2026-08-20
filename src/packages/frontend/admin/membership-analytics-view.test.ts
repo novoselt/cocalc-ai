@@ -7,7 +7,7 @@ import type { MembershipAllocationDailyRow } from "@cocalc/conat/hub/api/purchas
 import {
   buildMembershipAnalyticsView,
   totalMembershipAnalyticsPoints,
-} from "./personal-membership-analytics-view";
+} from "./membership-analytics-view";
 
 const tiers = [
   { id: "standard", label: "Standard", priority: 20 },
@@ -35,7 +35,7 @@ function row(
   };
 }
 
-describe("personal membership analytics view", () => {
+describe("membership analytics view", () => {
   it("aggregates default series by tier and compares aligned days", () => {
     const view = buildMembershipAnalyticsView({
       rows: [
@@ -75,6 +75,8 @@ describe("personal membership analytics view", () => {
         total: true,
         activeMemberships: 9,
         comparisonActiveMemberships: 6,
+        purchasedCapacity: 0,
+        comparisonPurchasedCapacity: 0,
         revenueCents: 1300,
         comparisonRevenueCents: 700,
       },
@@ -83,6 +85,8 @@ describe("personal membership analytics view", () => {
         label: "Pro",
         activeMemberships: 2,
         comparisonActiveMemberships: 1,
+        purchasedCapacity: 0,
+        comparisonPurchasedCapacity: 0,
         revenueCents: 800,
         comparisonRevenueCents: 400,
       },
@@ -91,8 +95,113 @@ describe("personal membership analytics view", () => {
         label: "Standard",
         activeMemberships: 7,
         comparisonActiveMemberships: 5,
+        purchasedCapacity: 0,
+        comparisonPurchasedCapacity: 0,
         revenueCents: 500,
         comparisonRevenueCents: 300,
+      },
+    ]);
+  });
+
+  it("groups cross-channel counts, capacity, and revenue", () => {
+    const view = buildMembershipAnalyticsView({
+      rows: [
+        row("2026-08-08", {
+          channel: "team",
+          membership_class: "pro",
+          active_memberships: 3,
+          purchased_capacity: 5,
+          revenue_cents: 1200,
+        }),
+        row("2026-08-08", {
+          channel: "site",
+          active_memberships: 7,
+          purchased_capacity: 0,
+          revenue_cents: 0,
+        }),
+      ],
+      tiers,
+      breakdown: "channel",
+      start: "2026-08-08",
+      end: "2026-08-08",
+    });
+
+    expect(view.summary).toEqual([
+      expect.objectContaining({
+        key: "total",
+        activeMemberships: 10,
+        purchasedCapacity: 5,
+        revenueCents: 1200,
+      }),
+      expect.objectContaining({
+        key: "channel:team",
+        label: "Team license",
+        channel: "team",
+        activeMemberships: 3,
+        purchasedCapacity: 5,
+      }),
+      expect.objectContaining({
+        key: "channel:site",
+        label: "Site license",
+        channel: "site",
+        activeMemberships: 7,
+        purchasedCapacity: 0,
+      }),
+    ]);
+  });
+
+  it("groups tiers first and orders channels within each tier", () => {
+    const view = buildMembershipAnalyticsView({
+      rows: [
+        row("2026-08-08", {
+          channel: "team",
+          membership_class: "pro",
+        }),
+        row("2026-08-08", {
+          channel: "direct-student",
+          membership_class: "pro",
+        }),
+        row("2026-08-08", {
+          channel: "personal",
+          membership_class: "pro",
+        }),
+        row("2026-08-08", {
+          channel: "site",
+          membership_class: "standard",
+        }),
+      ],
+      tiers,
+      breakdown: "tier-channel",
+      start: "2026-08-08",
+      end: "2026-08-08",
+    });
+
+    expect(
+      view.series.map(({ label, groupLabel, detailLabel }) => ({
+        label,
+        groupLabel,
+        detailLabel,
+      })),
+    ).toEqual([
+      {
+        label: "Pro · Personal",
+        groupLabel: "Pro",
+        detailLabel: "Personal",
+      },
+      {
+        label: "Pro · Student-pay",
+        groupLabel: "Pro",
+        detailLabel: "Student-pay",
+      },
+      {
+        label: "Pro · Team license",
+        groupLabel: "Pro",
+        detailLabel: "Team license",
+      },
+      {
+        label: "Standard · Site license",
+        groupLabel: "Standard",
+        detailLabel: "Site license",
       },
     ]);
   });
@@ -217,6 +326,7 @@ describe("personal membership analytics view", () => {
         displayDay: "2026-08-08",
         actualDay: "2026-08-01",
         activeMemberships: 1,
+        purchasedCapacity: 0,
         revenueCents: 125,
       },
     ]);

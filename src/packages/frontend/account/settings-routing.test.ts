@@ -127,6 +127,16 @@ describe("settings-routing", () => {
     expect(actions.setState).toHaveBeenCalledWith({
       active_page: "editor",
     });
+
+    applyAccountSettingsRoute(
+      actions,
+      { page: "membership" },
+      { openMembershipPlanChooser: true },
+    );
+    expect(actions.setState).toHaveBeenCalledWith({
+      active_page: "membership",
+      membership_plan_chooser_requested: true,
+    });
   });
 
   it("validates settings page keys centrally", () => {

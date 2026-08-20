@@ -99,6 +99,23 @@ describe("team license renewal payments", () => {
       [owner_account_id],
     );
     expect(Number(purchases.rows[0].cost)).toBe(240);
+    const facts = await getPool().query(
+      `SELECT channel, membership_class, lifecycle, active_memberships,
+              purchased_capacity, revenue_cents
+         FROM membership_allocation_facts
+        WHERE account_id=$1 AND channel='team'`,
+      [owner_account_id],
+    );
+    expect(facts.rows).toEqual([
+      {
+        channel: "team",
+        membership_class: teamTier,
+        lifecycle: "renewal",
+        active_memberships: 0,
+        purchased_capacity: 2,
+        revenue_cents: "24000",
+      },
+    ]);
   });
 
   it("records the funding credit id on team license purchases", async () => {
@@ -121,7 +138,30 @@ describe("team license renewal payments", () => {
     expect(rows[0].description).toMatchObject({
       credit_id: 123,
       type: "team-license-change",
+      added_seats: { [teamTier]: 1 },
+      line_items: [
+        expect.objectContaining({
+          amount: 120,
+          membership_class: teamTier,
+          seat_count: 1,
+        }),
+      ],
     });
+    expect(rows[0].description.team_license_id).toEqual(expect.any(String));
+    const facts = await getPool().query(
+      `SELECT membership_class, lifecycle, purchased_capacity, revenue_cents
+         FROM membership_allocation_facts
+        WHERE account_id=$1 AND channel='team'`,
+      [owner_account_id],
+    );
+    expect(facts.rows).toEqual([
+      {
+        membership_class: teamTier,
+        lifecycle: "first_paid",
+        purchased_capacity: 1,
+        revenue_cents: "12000",
+      },
+    ]);
   });
 
   it("does not fail a committed renewal when the success notification fails", async () => {
@@ -234,6 +274,13 @@ describe("team license renewal payments", () => {
       [owner_account_id],
     );
     expect(count.rows[0].count).toBe(1);
+    const facts = await getPool().query(
+      `SELECT COUNT(*)::int AS count
+         FROM membership_allocation_facts
+        WHERE account_id=$1 AND channel='team'`,
+      [owner_account_id],
+    );
+    expect(facts.rows[0].count).toBe(1);
     const purchase = await getPool().query(
       `
         SELECT description

@@ -40,6 +40,9 @@ const image = (id: string, recommendedPlatforms: string[]) => ({
     cpuArchitecture: { name: "AMD64" },
     recommendedPlatforms,
   },
+  status: {
+    minDiskSizeBytes: 40 * 2 ** 30,
+  },
 });
 
 describe("Nebius catalog", () => {
@@ -123,5 +126,6 @@ describe("Nebius catalog", () => {
         }),
       ]),
     );
+    expect(catalog.images[0]?.minimum_disk_size_gb).toBe(40);
   });
 });

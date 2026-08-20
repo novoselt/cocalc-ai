@@ -36,6 +36,7 @@ describe("managedVmBootstrapScript", () => {
     expect(script).toContain("/home/user/.ssh/authorized_keys");
     expect(script).toContain("ssh-ed25519 AAAAOWNER owner");
     expect(script).toContain("ssh-ed25519 AAAACONTROLLER controller");
+    expect(script).toContain("/var/lib/cocalc-managed-vm/bootstrap-ready");
     expect(script).toContain("/run/cocalc-managed-vm/bootstrap-ready");
     expect(script).toContain("'2'");
     expect(script).not.toContain("/work");

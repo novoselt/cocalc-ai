@@ -15,6 +15,7 @@ import type { HostRuntime, RemoteInstance } from "@cocalc/cloud";
 import {
   computeSpotRetryDelayMs,
   DEFAULT_SPOT_RECOVERY_POLICY,
+  normalizeSpotRecoveryPolicy,
   normalizeSpotRecoveryState,
   recordProviderSpotPreemption,
   spotProbeIntervalMs,
@@ -28,12 +29,14 @@ import {
   enqueueComputeWork,
   enqueueExpiredComputeVms,
   finishComputeWork,
+  heartbeatComputeWork,
   getComputeVmById,
   insertComputeInstance,
   listComputeVmsForBillingEnforcement,
   listComputeVmsForEgressMetering,
   listComputeVmsForInventory,
   updateComputeInstance,
+  updateComputeVmProviderObservation,
   updateComputeVmEgressMetadata,
   updateComputeVm,
 } from "./db";
@@ -108,6 +111,11 @@ const logger = getLogger("server:compute:worker");
 const COMPUTE_PUBLIC_EGRESS_USD_PER_GB = 0.1;
 const COMPUTE_EGRESS_FINALIZATION_DELAY_MS = 5 * 60_000;
 const COMPUTE_EGRESS_METER_LOCK_KEY = "managed-compute-egress-meter";
+const COMPUTE_PROVIDER_OBSERVATION_LOCK_KEY =
+  "managed-compute-provider-observation";
+const COMPUTE_PROVIDER_OBSERVATION_INTERVAL_MS = 30_000;
+const COMPUTE_PROVIDER_OBSERVATION_BATCH_SIZE = 100;
+const COMPUTE_PROVIDER_OBSERVATION_CONCURRENCY = 8;
 const COMPUTE_ORPHAN_GRACE_MS = 24 * 60 * 60_000;
 const COMPUTE_ORPHAN_BOOT_DISK_GRACE_MS = 7 * COMPUTE_ORPHAN_GRACE_MS;
 const execFileAsync = promisify(execFile);
@@ -1187,6 +1195,7 @@ export class RetryableComputeWorkError extends Error {
   constructor(
     message: string,
     readonly retryAt: Date,
+    readonly failureState: "provisioning" | "recovering" = "recovering",
   ) {
     super(message);
     this.name = "RetryableComputeWorkError";
@@ -1194,7 +1203,7 @@ export class RetryableComputeWorkError extends Error {
 }
 
 export function computeWorkFailureState(err: unknown) {
-  return err instanceof RetryableComputeWorkError ? "recovering" : "failed";
+  return err instanceof RetryableComputeWorkError ? err.failureState : "failed";
 }
 
 export function isSpotCapacityError(err: unknown): boolean {
@@ -1212,6 +1221,32 @@ function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
   );
+}
+
+export function spotCapacityRecoveryDecision(
+  vm: Pick<
+    ComputeVmRow,
+    "allow_on_demand_fallback" | "spot_recovery_policy" | "spot_recovery_state"
+  >,
+  now = Date.now(),
+) {
+  const policy =
+    normalizeSpotRecoveryPolicy(vm.spot_recovery_policy) ??
+    DEFAULT_SPOT_RECOVERY_POLICY;
+  const attempt = Number(vm.spot_recovery_state?.attempt ?? 0) + 1;
+  return {
+    attempt,
+    fallback:
+      vm.allow_on_demand_fallback &&
+      attempt >= policy.max_restore_attempts_before_fallback,
+    retryAt: new Date(
+      now +
+        computeSpotRetryDelayMs({
+          attempt,
+          policy,
+        }),
+    ),
+  };
 }
 
 function shellQuote(value: string): string {
@@ -1233,13 +1268,19 @@ export function managedVmReadinessCommand(
     const encoded = Buffer.from(script, "utf16le").toString("base64");
     return `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
   }
+  // Older verified VMs wrote only to /run, which is erased on reboot. Their
+  // durable boot disk may be trusted after the remaining invariants pass.
+  const bootstrapCheck =
+    vm.observed_bootstrap_revision === vm.bootstrap_revision
+      ? `(test ! -e /var/lib/cocalc-managed-vm/bootstrap-ready || test "$(cat /var/lib/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision})`
+      : `(test "$(cat /var/lib/cocalc-managed-vm/bootstrap-ready 2>/dev/null || cat /run/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision})`;
   const checks = [
     'test "$(id -un)" = user',
     'test "$(id -u)" = 1001',
     'test "$(id -gn)" = user',
     'test "$HOME" = /home/user',
     "! id ubuntu >/dev/null 2>&1",
-    `test "$(cat /run/cocalc-managed-vm/bootstrap-ready)" = ${vm.bootstrap_revision}`,
+    bootstrapCheck,
     ...(expectedHomeDevice
       ? [
           `test "$(readlink -f "$(findmnt -n -o SOURCE /home/user)")" = "$(readlink -f ${expectedHomeDevice})"`,
@@ -1247,6 +1288,79 @@ export function managedVmReadinessCommand(
       : []),
   ].join(" && ");
   return `bash -lc ${shellQuote(checks)}`;
+}
+
+async function inspectAndRecordProviderComputeVm(vm: ComputeVmRow) {
+  const checkedAt = new Date().toISOString();
+  try {
+    const observed = await inspectProviderComputeVm(vm);
+    const updated = await updateComputeVmProviderObservation(vm.id, {
+      state: observed.status,
+      checked_at: checkedAt,
+      observed_at: checkedAt,
+      error: null,
+      instance_id: observed.instance?.instance_id ?? null,
+      public_ip: observed.instance?.public_ip ?? null,
+      pricing_model: observed.instance?.metadata?.pricing_model ?? null,
+    });
+    if (updated) vm.metadata = updated.metadata;
+    return observed;
+  } catch (err) {
+    const updated = await updateComputeVmProviderObservation(vm.id, {
+      checked_at: checkedAt,
+      error: `${err}`.slice(0, 4000),
+    });
+    if (updated) vm.metadata = updated.metadata;
+    throw err;
+  }
+}
+
+export function computeVmProviderObservationAge(
+  vm: Pick<ComputeVmRow, "metadata">,
+  now = Date.now(),
+): number {
+  const checkedAt = Date.parse(
+    `${vm.metadata?.provider_observation?.checked_at ?? ""}`,
+  );
+  return Number.isFinite(checkedAt) ? Math.max(0, now - checkedAt) : Infinity;
+}
+
+async function refreshComputeProviderObservations() {
+  const candidates = (await listComputeVmsForInventory())
+    .filter(isComputeVmV2)
+    .sort(
+      (left, right) =>
+        computeVmProviderObservationAge(right) -
+        computeVmProviderObservationAge(left),
+    )
+    .slice(0, COMPUTE_PROVIDER_OBSERVATION_BATCH_SIZE);
+  let cursor = 0;
+  const observeNext = async () => {
+    while (cursor < candidates.length) {
+      const vm = candidates[cursor++];
+      try {
+        await inspectAndRecordProviderComputeVm(vm);
+      } catch (err) {
+        logger.warn("managed compute provider observation failed", {
+          vm_id: vm.id,
+          provider: vm.provider,
+          err,
+        });
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      {
+        length: Math.min(
+          COMPUTE_PROVIDER_OBSERVATION_CONCURRENCY,
+          candidates.length,
+        ),
+      },
+      () => observeNext(),
+    ),
+  );
+  return candidates.length;
 }
 
 async function waitForSsh(
@@ -1507,13 +1621,18 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
   await observeVmPhase(vm, "verify_bootstrap", async () =>
     waitForSsh(vm, publicIp),
   );
+  const current = await getComputeVmById(vm.id);
+  if (!current || current.desired_state !== "running") {
+    if (current?.desired_state === "stopped") return await stop(current);
+    if (current?.desired_state === "deleted") return await remove(current);
+    return;
+  }
   let next = await updateComputeVm(vm.id, {
     state: "ready",
-    desired_state: "running",
     public_ip: publicIp,
     metadata: {
-      ...(vm.metadata ?? {}),
-      runtime: computeRuntimeMetadata(vm.metadata?.runtime, runtime),
+      ...(current.metadata ?? {}),
+      runtime: computeRuntimeMetadata(current.metadata?.runtime, runtime),
       provider_generation_provisioning: false,
     },
     ready_at: new Date(),
@@ -1521,14 +1640,14 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
     error: null,
     observed_bootstrap_revision: vm.bootstrap_revision,
     spot_recovery_state:
-      vm.effective_pricing_model === "spot"
+      current.effective_pricing_model === "spot"
         ? {
-            ...(vm.spot_recovery_state ?? {}),
+            ...(current.spot_recovery_state ?? {}),
             phase: "idle",
             attempt: 0,
             last_recovered_at: new Date().toISOString(),
           }
-        : vm.spot_recovery_state,
+        : current.spot_recovery_state,
   });
   next = await ensureVmDns(next!);
   next = await syncVmProjectSshConfig(next!, true);
@@ -1561,6 +1680,9 @@ async function provision(vm: ComputeVmRow) {
     state: "provisioning",
     instance_generation:
       vm.instance_generation + (beginningNewGeneration ? 1 : 0),
+    observed_bootstrap_revision: beginningNewGeneration
+      ? null
+      : vm.observed_bootstrap_revision,
     error: null,
     metadata: {
       ...vm.metadata,
@@ -1573,9 +1695,14 @@ async function provision(vm: ComputeVmRow) {
     if (!volume || volume.deleted_at || volume.desired_state !== "ready") {
       throw new Error("attached compute volume is unavailable");
     }
-    const disk = volume.ready_at
-      ? await inspectProviderComputeVolume(volume)
-      : await ensureProviderComputeVolume(volume);
+    if (!volume.ready_at) {
+      throw new RetryableComputeWorkError(
+        `waiting for home volume '${volume.name}'`,
+        new Date(Date.now() + 2_000),
+        "provisioning",
+      );
+    }
+    const disk = await inspectProviderComputeVolume(volume);
     if (!disk) {
       throw new Error(
         `previously ready compute volume '${volume.name}' is missing at the provider`,
@@ -1602,67 +1729,62 @@ async function provision(vm: ComputeVmRow) {
       provisioning.effective_pricing_model === "spot" &&
       isSpotCapacityError(err)
     ) {
-      const attempt =
-        Number(provisioning.spot_recovery_state?.attempt ?? 0) + 1;
-      const retryAt = new Date(
-        Date.now() +
-          computeSpotRetryDelayMs({
-            attempt,
-            policy: provisioning.spot_recovery_policy,
-          }),
-      );
-      if (
-        attempt >=
-          DEFAULT_SPOT_RECOVERY_POLICY.max_restore_attempts_before_fallback &&
-        provisioning.allow_on_demand_fallback
-      ) {
-        const fallback = (await updateComputeVm(provisioning.id, {
-          state: "provisioning",
-          effective_pricing_model: "on_demand",
-          error: null,
-          spot_recovery_state: {
-            ...(provisioning.spot_recovery_state ?? {}),
-            phase: "running_standard_fallback",
-            attempt: 0,
-            fallback_started_at: new Date().toISOString(),
-            standard_hold_until: new Date(
-              Date.now() +
-                DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_standard_hold_minutes *
-                  60_000,
-            ).toISOString(),
-          },
-        }))!;
-        return await provision(fallback);
-      }
-      await updateComputeVm(provisioning.id, {
-        state: "recovering",
-        error: `${err}`.slice(0, 4000),
-        spot_recovery_state: {
-          ...(provisioning.spot_recovery_state ?? {}),
-          phase: "retrying_spot",
-          attempt,
-          next_retry_at: retryAt.toISOString(),
-        },
-      });
-      throw new RetryableComputeWorkError(`${err}`, retryAt);
+      return await recoverFromSpotCapacityFailure(provisioning, err);
     }
     throw err;
+  }
+  const latest = await getComputeVmById(provisioning.id);
+  if (!latest) return;
+  provisioning = latest;
+  const runtimeMetadata = {
+    ...(provisioning.metadata ?? {}),
+    runtime: computeRuntimeMetadata(provisioning.metadata?.runtime, runtime),
+  };
+  if (provisioning.desired_state !== "running") {
+    const interrupted = (await updateComputeVm(provisioning.id, {
+      state: provisioning.desired_state === "deleted" ? "deleting" : "stopping",
+      provider_instance_id:
+        runtime.instance_id ?? provisioning.provider_instance_id,
+      public_ip: runtime.public_ip ?? null,
+      metadata: runtimeMetadata,
+    }))!;
+    await insertComputeInstance(interrupted);
+    if (interrupted.desired_state === "deleted") {
+      return await remove(interrupted);
+    }
+    return await stop(interrupted);
+  }
+  if (
+    provisioning.provider === "nebius" &&
+    provisioning.desired_pricing_model === "spot" &&
+    provisioning.effective_pricing_model === "spot" &&
+    !runtime.public_ip
+  ) {
+    const waiting = (await updateComputeVm(provisioning.id, {
+      provider_instance_id:
+        runtime.instance_id ?? provisioning.provider_instance_id,
+      public_ip: null,
+      metadata: runtimeMetadata,
+    }))!;
+    await insertComputeInstance(waiting);
+    return await recoverFromSpotCapacityFailure(
+      waiting,
+      new Error(
+        "Nebius accepted the Spot VM but it is still waiting for resources and has no public IP",
+      ),
+    );
   }
   if (runtime.public_ip !== provisioning.public_ip) {
     throw new Error(
       `provider attached unexpected public IP '${runtime.public_ip ?? "none"}' instead of reserved '${provisioning.public_ip}'`,
     );
   }
-  const metadata = {
-    ...(provisioning.metadata ?? {}),
-    runtime: computeRuntimeMetadata(provisioning.metadata?.runtime, runtime),
-  };
   const starting = (await updateComputeVm(vm.id, {
     state: "starting",
     provider_instance_id:
       runtime.instance_id ?? provisioning.provider_instance_id,
     public_ip: runtime.public_ip ?? null,
-    metadata,
+    metadata: runtimeMetadata,
   }))!;
   await insertComputeInstance(starting);
   await reconcileVmBilling(starting, "running");
@@ -1685,8 +1807,19 @@ async function start(vm: ComputeVmRow) {
     return await remove(vm);
   }
   if (vm.desired_state === "stopped") return await reconcile(vm);
-  const observed = await inspectProviderComputeVm(vm);
+  let observed = await inspectAndRecordProviderComputeVm(vm);
   if (observed.status === "missing") return await provision(vm);
+  const observedPricingModel = observed.instance?.metadata?.pricing_model;
+  if (
+    (observedPricingModel === "spot" || observedPricingModel === "on_demand") &&
+    observedPricingModel !== vm.effective_pricing_model
+  ) {
+    await observeVmPhase(vm, "provider_set_pricing", async () =>
+      setProviderComputePricing(vm, vm.effective_pricing_model),
+    );
+    observed = await inspectAndRecordProviderComputeVm(vm);
+    if (observed.status === "missing") return await provision(vm);
+  }
   await observeVmPhase(vm, "provider_set_machine_type", async () =>
     setProviderComputeMachineType(vm),
   );
@@ -1700,7 +1833,7 @@ async function start(vm: ComputeVmRow) {
     await observeVmPhase(vm, "provider_start", async () =>
       startProviderComputeVm(vm),
     );
-    const observed = await inspectProviderComputeVm(vm);
+    const observed = await inspectAndRecordProviderComputeVm(vm);
     if (vm.home_volume_id) {
       const volume = await getComputeVolumeById(vm.home_volume_id);
       if (!volume) throw new Error("attached compute volume is unavailable");
@@ -1716,54 +1849,48 @@ async function start(vm: ComputeVmRow) {
     }
     await markReady(vm, observed.instance ?? {});
   } catch (err) {
+    const current = await getComputeVmById(vm.id);
+    if (current?.desired_state === "stopped") return await reconcile(current);
+    if (current?.desired_state === "deleted") return await remove(current);
     if (
       vm.desired_pricing_model === "spot" &&
       vm.effective_pricing_model === "spot"
     ) {
-      const attempt = Number(vm.spot_recovery_state?.attempt ?? 0) + 1;
-      const recoveryState = {
-        ...(vm.spot_recovery_state ?? {}),
-        phase: "retrying_spot",
-        attempt,
-        next_retry_at: new Date(
-          Date.now() +
-            computeSpotRetryDelayMs({
-              attempt,
-              policy: vm.spot_recovery_policy,
-            }),
-        ).toISOString(),
-      };
-      const next = (await updateComputeVm(vm.id, {
-        state: "recovering",
-        spot_recovery_state: recoveryState,
-        error: `${err}`.slice(0, 4000),
-      }))!;
-      if (
-        attempt >=
-          DEFAULT_SPOT_RECOVERY_POLICY.max_restore_attempts_before_fallback &&
-        vm.allow_on_demand_fallback
-      ) {
-        return await switchToOnDemand(next);
-      }
-      throw new RetryableComputeWorkError(
-        `${err}`,
-        new Date(recoveryState.next_retry_at),
-      );
+      return await recoverFromSpotCapacityFailure(vm, err);
     }
     throw err;
   }
+}
+
+async function recoverFromSpotCapacityFailure(vm: ComputeVmRow, err: unknown) {
+  const decision = spotCapacityRecoveryDecision(vm);
+  const next = (await updateComputeVm(vm.id, {
+    state: "recovering",
+    spot_recovery_state: {
+      ...(vm.spot_recovery_state ?? {}),
+      phase: "retrying_spot",
+      attempt: decision.attempt,
+      next_retry_at: decision.retryAt.toISOString(),
+    },
+    error: `${err}`.slice(0, 4000),
+  }))!;
+  if (decision.fallback) {
+    return await switchToOnDemand(next);
+  }
+  throw new RetryableComputeWorkError(`${err}`, decision.retryAt);
 }
 
 async function switchToOnDemand(vm: ComputeVmRow) {
   if (!vm.allow_on_demand_fallback) {
     throw new Error("Standard fallback is not authorized");
   }
+  const policy =
+    normalizeSpotRecoveryPolicy(vm.spot_recovery_policy) ??
+    DEFAULT_SPOT_RECOVERY_POLICY;
   const holdUntil =
     vm.spot_recovery_state?.standard_hold_until ??
     new Date(
-      Date.now() +
-        DEFAULT_SPOT_RECOVERY_POLICY.rapid_preemption_standard_hold_minutes *
-          60_000,
+      Date.now() + policy.rapid_preemption_standard_hold_minutes * 60_000,
     ).toISOString();
   await setProviderComputePricing(vm, "on_demand");
   const fallback = (await updateComputeVm(vm.id, {
@@ -2057,7 +2184,7 @@ async function reconcile(vm: ComputeVmRow) {
   ) {
     return await remove(vm);
   }
-  const observed = await inspectProviderComputeVm(vm);
+  const observed = await inspectAndRecordProviderComputeVm(vm);
   if (vm.desired_state === "stopped") {
     if (observed.status === "running" || observed.status === "starting") {
       return await stop(vm);
@@ -2207,15 +2334,145 @@ async function handleWork(row: ComputeWorkRow) {
   }
 }
 
-export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
+export function startComputeVmWorker(
+  opts: { interval_ms?: number; concurrency?: number } = {},
+) {
   const workerId = `compute-${process.pid}-${randomUUID().slice(0, 8)}`;
   const intervalMs = opts.interval_ms ?? 2000;
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 4));
   let running = false;
   let stopped = false;
   let lastReconcile = 0;
   let lastEgressMeter = 0;
   let lastProviderInventory = 0;
+  let lastProviderObservation = 0;
+  let providerObservationRunning = false;
   let queueSchemaReady = false;
+  const activeWork = new Set<Promise<void>>();
+
+  const processWork = async (row: ComputeWorkRow) => {
+    const startedAt = Date.now();
+    const heartbeat = setInterval(() => {
+      void heartbeatComputeWork({ id: row.id, worker_id: workerId }).catch(
+        (err) =>
+          logger.warn("managed compute work heartbeat failed", {
+            id: row.id,
+            resource_id: row.resource_id,
+            err,
+          }),
+      );
+    }, 60_000);
+    heartbeat.unref();
+    try {
+      await handleWork(row);
+      await finishComputeWork({ id: row.id, state: "done" });
+      logger.info("managed compute work completed", {
+        id: row.id,
+        resource_kind: row.resource_kind,
+        resource_id: row.resource_id,
+        action: row.action,
+        outcome: "success",
+        duration_ms: Date.now() - startedAt,
+      });
+    } catch (err) {
+      const error = `${err}`.slice(0, 4000);
+      logger.warn("compute work failed", {
+        id: row.id,
+        resource_id: row.resource_id,
+        action: row.action,
+        outcome: "failure",
+        duration_ms: Date.now() - startedAt,
+        err,
+      });
+      if (
+        row.resource_kind === "vm" &&
+        err instanceof RetryableComputeWorkError
+      ) {
+        const vm = await getComputeVmById(row.resource_id);
+        if (vm) {
+          await updateComputeVm(vm.id, {
+            state: err.failureState,
+            error: err.failureState === "provisioning" ? null : error,
+          });
+          await appendComputeEvent({
+            vm,
+            actor_kind: "worker",
+            action: row.action,
+            idempotency_key: row.idempotency_key,
+            old_state: vm.state,
+            new_state: err.failureState,
+            status: "retrying",
+            details: {
+              error,
+              retry_at: err.retryAt.toISOString(),
+            },
+          });
+        }
+        // Close this work item before enqueueing its replacement so the
+        // per-resource work deduplication does not suppress the retry.
+        await finishComputeWork({ id: row.id, state: "failed", error });
+        await enqueueComputeWork({
+          resource_id: row.resource_id,
+          action: row.action,
+          idempotency_key: `retry:${row.resource_id}:${row.action}:${err.retryAt.toISOString()}`,
+          payload: row.payload,
+          not_before: err.retryAt,
+        });
+        return;
+      }
+      const vm =
+        row.resource_kind === "vm"
+          ? await getComputeVmById(row.resource_id)
+          : undefined;
+      if (vm) {
+        await updateComputeVm(vm.id, { state: "failed", error });
+        await appendComputeEvent({
+          vm,
+          actor_kind: "worker",
+          action: row.action,
+          idempotency_key: row.idempotency_key,
+          old_state: vm.state,
+          new_state: "failed",
+          status: "failure",
+          details: { error },
+        });
+      }
+      if (row.resource_kind === "volume") {
+        const volume = await getComputeVolumeById(row.resource_id);
+        if (volume) {
+          await updateComputeVolume(volume.id, { state: "failed", error });
+          await appendComputeVolumeEvent({
+            volume,
+            actor_kind: "worker",
+            action: row.action,
+            idempotency_key: row.idempotency_key,
+            old_state: volume.state,
+            new_state: "failed",
+            status: "failure",
+            details: { error },
+          });
+        }
+      }
+      await finishComputeWork({ id: row.id, state: "failed", error });
+    } finally {
+      clearInterval(heartbeat);
+    }
+  };
+
+  const launchWork = (row: ComputeWorkRow) => {
+    let task!: Promise<void>;
+    task = processWork(row)
+      .catch((err) =>
+        logger.warn("managed compute work finalization failed", {
+          id: row.id,
+          resource_id: row.resource_id,
+          err,
+        }),
+      )
+      .finally(() => activeWork.delete(task));
+    activeWork.add(task);
+  };
+
   const tick = async () => {
     if (running || stopped) return;
     running = true;
@@ -2226,6 +2483,26 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
         logger.info("managed compute work queue schema is ready");
       }
       await enqueueExpiredComputeVms();
+      if (
+        !providerObservationRunning &&
+        Date.now() - lastProviderObservation >=
+          COMPUTE_PROVIDER_OBSERVATION_INTERVAL_MS
+      ) {
+        lastProviderObservation = Date.now();
+        providerObservationRunning = true;
+        void withSessionAdvisoryLock({
+          lockKey: COMPUTE_PROVIDER_OBSERVATION_LOCK_KEY,
+          fn: refreshComputeProviderObservations,
+        })
+          .catch((err) =>
+            logger.warn("managed compute provider observation pass failed", {
+              err,
+            }),
+          )
+          .finally(() => {
+            providerObservationRunning = false;
+          });
+      }
       if (Date.now() - lastReconcile >= 15_000) {
         lastReconcile = Date.now();
         const config = await getComputeVmConfig();
@@ -2256,108 +2533,14 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
         await enqueueComputeReconciliation();
         await enqueueComputeVolumeReconciliation();
       }
-      const rows = await claimComputeWork({ worker_id: workerId, limit: 2 });
-      await Promise.all(
-        rows.map(async (row) => {
-          const startedAt = Date.now();
-          try {
-            await handleWork(row);
-            await finishComputeWork({ id: row.id, state: "done" });
-            logger.info("managed compute work completed", {
-              id: row.id,
-              resource_kind: row.resource_kind,
-              resource_id: row.resource_id,
-              action: row.action,
-              outcome: "success",
-              duration_ms: Date.now() - startedAt,
-            });
-          } catch (err) {
-            const error = `${err}`.slice(0, 4000);
-            logger.warn("compute work failed", {
-              id: row.id,
-              resource_id: row.resource_id,
-              action: row.action,
-              outcome: "failure",
-              duration_ms: Date.now() - startedAt,
-              err,
-            });
-            if (
-              row.resource_kind === "vm" &&
-              computeWorkFailureState(err) === "recovering" &&
-              err instanceof RetryableComputeWorkError
-            ) {
-              const vm = await getComputeVmById(row.resource_id);
-              if (vm) {
-                await appendComputeEvent({
-                  vm,
-                  actor_kind: "worker",
-                  action: row.action,
-                  idempotency_key: row.idempotency_key,
-                  old_state: vm.state,
-                  new_state: "recovering",
-                  status: "retrying",
-                  details: {
-                    error,
-                    retry_at: err.retryAt.toISOString(),
-                  },
-                });
-              }
-              // Close this work item before enqueueing its replacement so the
-              // per-resource work deduplication does not suppress the retry.
-              await finishComputeWork({
-                id: row.id,
-                state: "failed",
-                error,
-              });
-              await enqueueComputeWork({
-                resource_id: row.resource_id,
-                action: row.action,
-                idempotency_key: `retry:${row.resource_id}:${row.action}:${err.retryAt.toISOString()}`,
-                payload: row.payload,
-                not_before: err.retryAt,
-              });
-              return;
-            }
-            const vm =
-              row.resource_kind === "vm"
-                ? await getComputeVmById(row.resource_id)
-                : undefined;
-            if (vm) {
-              await updateComputeVm(vm.id, { state: "failed", error });
-              await appendComputeEvent({
-                vm,
-                actor_kind: "worker",
-                action: row.action,
-                idempotency_key: row.idempotency_key,
-                old_state: vm.state,
-                new_state: "failed",
-                status: "failure",
-                details: { error },
-              });
-            }
-            if (row.resource_kind === "volume") {
-              const volume = await getComputeVolumeById(row.resource_id);
-              if (volume) {
-                await updateComputeVolume(volume.id, {
-                  state: "failed",
-                  error,
-                });
-                await appendComputeVolumeEvent({
-                  volume,
-                  actor_kind: "worker",
-                  action: row.action,
-                  idempotency_key: row.idempotency_key,
-                  old_state: volume.state,
-                  new_state: "failed",
-                  status: "failure",
-                  details: { error },
-                });
-              }
-            }
-            await finishComputeWork({ id: row.id, state: "failed", error });
-          }
-        }),
-      );
+      const available = concurrency - activeWork.size;
+      if (available > 0) {
+        const rows = await claimComputeWork({
+          worker_id: workerId,
+          limit: available,
+        });
+        for (const row of rows) launchWork(row);
+      }
     } catch (err) {
       logger.warn("compute worker tick failed", { err });
     } finally {
@@ -2366,7 +2549,11 @@ export function startComputeVmWorker(opts: { interval_ms?: number } = {}) {
   };
   void tick();
   const timer = setInterval(() => void tick(), intervalMs);
-  logger.info("compute VM worker started", { worker_id: workerId, intervalMs });
+  logger.info("compute VM worker started", {
+    worker_id: workerId,
+    intervalMs,
+    concurrency,
+  });
   return () => {
     stopped = true;
     clearInterval(timer);

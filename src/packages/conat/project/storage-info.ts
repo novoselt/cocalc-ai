@@ -53,6 +53,11 @@ export interface ProjectStorageRetainedSummary {
   label: string;
   bytes: number;
   detail?: string;
+  // Number of entries in the project's .snapshots directory, when it could be
+  // determined.  undefined means "unknown" and must never be treated as 0:
+  // consumers only get to say the retained bytes are not snapshot-related when
+  // this is explicitly 0.
+  snapshotCount?: number;
 }
 
 export interface ProjectStorageSharedScratchSummary {

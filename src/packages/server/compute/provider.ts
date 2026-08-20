@@ -6,6 +6,7 @@
 import {
   GcpProvider,
   NebiusProvider,
+  type NebiusCapacityAdvice,
   type HostRuntime,
   type HostSpec,
 } from "@cocalc/cloud";
@@ -53,6 +54,10 @@ let subnetInventoryCache:
     }
   | undefined;
 const NETWORK_CACHE_MS = 60_000;
+const NEBIUS_CAPACITY_CACHE_MS = 60_000;
+let nebiusCapacityCache:
+  | { project_id: string; checked_at: number; advice: NebiusCapacityAdvice[] }
+  | undefined;
 const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
   "0.0.0.0/8",
   "10.0.0.0/8",
@@ -279,6 +284,30 @@ export async function getProviderComputeRegions(): Promise<
   const config = await getComputeVmConfig();
   const subnets = await discoverProviderComputeSubnetworks(config);
   return subnets == null ? undefined : new Set(subnets.keys());
+}
+
+export async function getNebiusComputeCapacityAdvice(): Promise<
+  NebiusCapacityAdvice[]
+> {
+  const settings = await getServerSettings();
+  const region = getNebiusRegionKeys(settings)[0];
+  if (!region) return [];
+  const { creds } = await context("nebius", region);
+  const cached = nebiusCapacityCache;
+  if (
+    cached &&
+    cached.project_id === creds.parentId &&
+    Date.now() - cached.checked_at < NEBIUS_CAPACITY_CACHE_MS
+  ) {
+    return cached.advice;
+  }
+  const advice = await nebiusProvider.listCapacityAdvice(creds);
+  nebiusCapacityCache = {
+    project_id: creds.parentId,
+    checked_at: Date.now(),
+    advice,
+  };
+  return advice;
 }
 
 export async function requireProviderComputeSubnetwork(
@@ -698,8 +727,9 @@ ${keys}
 COCALC_MANAGED_VM_KEYS
 chown user:user /home/user/.ssh/authorized_keys
 chmod 0600 /home/user/.ssh/authorized_keys
-install -d -m 0755 /run/cocalc-managed-vm
-printf '%s\n' '${vm.bootstrap_revision}' >/run/cocalc-managed-vm/bootstrap-ready
+install -d -m 0755 /var/lib/cocalc-managed-vm /run/cocalc-managed-vm
+printf '%s\n' '${vm.bootstrap_revision}' >/var/lib/cocalc-managed-vm/bootstrap-ready
+cp /var/lib/cocalc-managed-vm/bootstrap-ready /run/cocalc-managed-vm/bootstrap-ready
 `;
 }
 
@@ -1628,7 +1658,9 @@ export async function setProviderComputePricing(
   if (vm.provider === "gcp") {
     await gcpProvider.setPricingModel(runtimeFor(vm), pricingModel, creds);
   } else {
-    await nebiusProvider.setPricingModel(runtimeFor(vm), pricingModel, creds);
+    // Nebius preemptibility is immutable. Preserve the boot/home disks and
+    // static address, then let the worker provision the replacement instance.
+    await nebiusProvider.deleteInstanceOnly(runtimeFor(vm), creds);
   }
 }
 

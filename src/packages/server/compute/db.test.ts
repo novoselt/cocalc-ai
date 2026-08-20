@@ -14,6 +14,7 @@ import {
   enqueueExpiredComputeVms,
   enqueueComputeReconciliation,
   finishComputeWork,
+  heartbeatComputeWork,
   insertComputeVm,
   getComputeVmById,
   listComputeVmsForBillingEnforcement,
@@ -22,6 +23,7 @@ import {
   listOwnedComputeVms,
   resolveProjectComputeVm,
   updateComputeVmEgressMetadata,
+  updateComputeVmProviderObservation,
 } from "./db";
 import type { ComputeVmRow } from "./types";
 import type { ComputeVolumeRow } from "./types";
@@ -260,6 +262,34 @@ describe("compute VM durable state", () => {
     });
   });
 
+  it("reserves a newly provisioning volume before it becomes ready", async () => {
+    const owner = randomUUID();
+    const project = randomUUID();
+    const volume = await insertComputeVolume(
+      volumeInput({
+        owner_account_id: owner,
+        project_id: project,
+        state: "requested",
+      }),
+      2,
+    );
+
+    const vm = await insertComputeVm(
+      vmInput({
+        owner_account_id: owner,
+        project_id: project,
+        home_volume_id: volume.id,
+      }),
+    );
+
+    expect(vm.home_volume_id).toBe(volume.id);
+    await expect(getComputeVolumeById(volume.id)).resolves.toMatchObject({
+      state: "requested",
+      attached_vm_id: vm.id,
+      attachment_state: "reserved",
+    });
+  });
+
   it("resolves only an unambiguous VM attached to the project", async () => {
     const project = randomUUID();
     const first = await insertComputeVm(
@@ -425,6 +455,34 @@ describe("compute VM durable state", () => {
     });
   });
 
+  it("heartbeats long-running work leases", async () => {
+    const vm = await insertComputeVm(vmInput());
+    await enqueueComputeWork({
+      resource_id: vm.id,
+      action: "provision",
+      idempotency_key: "provision-heartbeat",
+    });
+    const [claimed] = await claimComputeWork({
+      worker_id: "worker-heartbeat",
+      limit: 1,
+    });
+    await getPool().query(
+      "UPDATE compute_resource_work SET locked_at=NOW() - interval '20 minutes' WHERE id=$1",
+      [claimed.id],
+    );
+
+    await heartbeatComputeWork({
+      id: claimed.id,
+      worker_id: "worker-heartbeat",
+    });
+
+    const { rows } = await getPool().query(
+      "SELECT locked_at > NOW() - interval '1 minute' AS fresh FROM compute_resource_work WHERE id=$1",
+      [claimed.id],
+    );
+    expect(rows[0]).toEqual({ fresh: true });
+  });
+
   it("serializes different actions for one VM across workers", async () => {
     const firstVm = await insertComputeVm(vmInput({ name: "first-vm" }));
     const secondVm = await insertComputeVm(vmInput({ name: "second-vm" }));
@@ -523,6 +581,37 @@ describe("compute VM durable state", () => {
         },
       },
       runtime: { provider_status: "RUNNING" },
+    });
+  });
+
+  it("retains the last cloud state when a later provider check fails", async () => {
+    const vm = await insertComputeVm(
+      vmInput({
+        metadata: {
+          runtime: { provider_status: "RUNNING" },
+          provider_observation: {
+            state: "running",
+            observed_at: "2026-08-20T04:00:00.000Z",
+            checked_at: "2026-08-20T04:00:00.000Z",
+            error: null,
+          },
+        },
+      }),
+    );
+
+    const updated = await updateComputeVmProviderObservation(vm.id, {
+      checked_at: "2026-08-20T04:01:00.000Z",
+      error: "provider API timeout",
+    });
+
+    expect(updated?.metadata).toEqual({
+      runtime: { provider_status: "RUNNING" },
+      provider_observation: {
+        state: "running",
+        observed_at: "2026-08-20T04:00:00.000Z",
+        checked_at: "2026-08-20T04:01:00.000Z",
+        error: "provider API timeout",
+      },
     });
   });
 

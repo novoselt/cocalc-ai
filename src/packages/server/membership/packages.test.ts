@@ -302,6 +302,26 @@ describe("membership packages", () => {
       await resolveMembershipForAccount(first_account_id);
     expect(revokedMembership.class).toBe("free");
     expect(revokedMembership.source).toBe("free");
+
+    const allocationFacts = await getPool().query(
+      `SELECT channel, source_kind, active_memberships
+         FROM membership_allocation_facts
+        WHERE fact_key LIKE $1
+        ORDER BY source_kind`,
+      [`package-assignment:${firstAssignment.id}:%`],
+    );
+    expect(allocationFacts.rows).toEqual([
+      {
+        channel: "team",
+        source_kind: "assignment",
+        active_memberships: 1,
+      },
+      {
+        channel: "team",
+        source_kind: "correction",
+        active_memberships: -1,
+      },
+    ]);
   });
 
   it("marks self-purchased course package grants distinctly", async () => {
@@ -467,6 +487,53 @@ describe("membership packages", () => {
     );
   });
 
+  it("records course purchase revenue and capacity separately from assignments", async () => {
+    const owner_account_id = uuid();
+    const course_project_id = uuid();
+    await createTestAccount(owner_account_id);
+    await getPool("medium").query(
+      `INSERT INTO projects (project_id, title, users, course, last_edited)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, NOW())`,
+      [
+        course_project_id,
+        "Analytics Course",
+        JSON.stringify({ [owner_account_id]: { group: "owner" } }),
+        JSON.stringify({
+          type: "student",
+          project_id: course_project_id,
+          path: "analytics.course",
+        }),
+      ],
+    );
+
+    const purchase = await purchaseMembershipPackage({
+      account_id: owner_account_id,
+      amount: 75,
+      fulfillment_id: `course-analytics-${uuid()}`,
+      product: {
+        type: "membership-package",
+        kind: "course",
+        membership_class: courseTier,
+        course_project_id,
+        seat_count: 3,
+      },
+    });
+    const { rows } = await getPool().query(
+      `SELECT channel, active_memberships, purchased_capacity, revenue_cents
+         FROM membership_allocation_facts
+        WHERE purchase_id=$1`,
+      [purchase.purchase_id],
+    );
+    expect(rows).toEqual([
+      {
+        channel: "course",
+        active_memberships: 0,
+        purchased_capacity: 3,
+        revenue_cents: "7500",
+      },
+    ]);
+  });
+
   it("quotes verified direct student course purchases without a local course project row", async () => {
     const course_project_id = uuid();
     const student_project_id = uuid();
@@ -560,6 +627,14 @@ describe("membership packages", () => {
         revenue_cents: "2500",
       },
     ]);
+    const assignmentFacts = await getPool().query(
+      `SELECT COUNT(*)::int AS count
+         FROM membership_allocation_facts
+        WHERE account_id=$1
+          AND fact_key LIKE 'package-assignment:%'`,
+      [account_id],
+    );
+    expect(assignmentFacts.rows[0]?.count).toBe(0);
   });
 
   it("allows expanding an existing package without resupplying the package kind", async () => {

@@ -1,0 +1,127 @@
+/*
+ *  This file is part of CoCalc: Copyright © 2026 Sagemath, Inc.
+ *  License: MS-RSL – see LICENSE.md for details
+ */
+
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+import type { MembershipAllocationDailyRow } from "@cocalc/conat/hub/api/purchases";
+
+import {
+  buildMembershipAllocationDailyExport,
+  MembershipAnalyticsExport,
+  membershipAllocationDailyExportCsv,
+} from "./membership-analytics-export";
+
+function row(
+  day: string,
+  overrides: Partial<MembershipAllocationDailyRow> = {},
+): MembershipAllocationDailyRow {
+  return {
+    day,
+    channel: "personal",
+    membership_class: "standard",
+    billing_interval: "month",
+    lifecycle: "first_paid",
+    previous_membership_class: null,
+    previous_billing_interval: null,
+    tier_change: "none",
+    active_memberships: 1,
+    purchased_capacity: 0,
+    revenue_cents: 58,
+    fact_count: 1,
+    ...overrides,
+  };
+}
+
+describe("membership analytics export", () => {
+  const payload = buildMembershipAllocationDailyExport({
+    rows: [
+      row("2026-08-09"),
+      row("2026-08-10", {
+        channel: "team",
+        membership_class: "pro",
+        billing_interval: "year",
+        lifecycle: "renewal",
+        active_memberships: 3,
+        purchased_capacity: 5,
+        revenue_cents: 493,
+      }),
+      row("2026-08-11", { revenue_cents: 59 }),
+      row("2026-08-12"),
+    ],
+    tiers: [
+      { id: "standard", label: "Standard", priority: 20 },
+      { id: "pro", label: "Pro", priority: 30 },
+    ],
+    channels: ["personal", "team"],
+    startDay: "2026-08-10",
+    endDay: "2026-08-11",
+    exportedAt: new Date("2026-08-18T12:00:00.000Z"),
+  });
+
+  it("exports selected daily rows without applying chart breakdowns", () => {
+    expect(payload).toEqual({
+      format: "cocalc-membership-allocation-daily",
+      version: 1,
+      exported_at: "2026-08-18T12:00:00.000Z",
+      range: { start_day: "2026-08-10", end_day: "2026-08-11" },
+      channels: ["personal", "team"],
+      tiers: [
+        { id: "standard", label: "Standard", priority: 20 },
+        { id: "pro", label: "Pro", priority: 30 },
+      ],
+      rows: [
+        expect.objectContaining({
+          day: "2026-08-10",
+          channel: "team",
+          membership_class: "pro",
+          active_memberships: 3,
+          purchased_capacity: 5,
+          revenue_cents: 493,
+        }),
+        expect.objectContaining({
+          day: "2026-08-11",
+          channel: "personal",
+          membership_class: "standard",
+          revenue_cents: 59,
+        }),
+      ],
+    });
+    expect(membershipAllocationDailyExportCsv(payload)).toContain(
+      "day,channel,membership_class,billing_interval,lifecycle,previous_membership_class,previous_billing_interval,tier_change,active_memberships,purchased_capacity,revenue_cents,fact_count",
+    );
+  });
+
+  it("offers keyboard-accessible CSV and JSON downloads", async () => {
+    const createObjectURL = jest.fn(() => "blob:membership-export");
+    const revokeObjectURL = jest.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectURL,
+    });
+    const click = jest
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+
+    render(<MembershipAnalyticsExport payload={payload} />);
+    const exportButton = screen.getByRole("button", { name: "Export" });
+    exportButton.focus();
+    expect(exportButton).toHaveFocus();
+    fireEvent.click(exportButton);
+
+    const json = await screen.findByRole("button", {
+      name: /Daily buckets \(JSON\)/,
+    });
+    fireEvent.click(json);
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:membership-export");
+
+    click.mockRestore();
+  });
+});

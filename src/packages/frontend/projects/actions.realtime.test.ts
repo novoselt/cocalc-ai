@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { List, Map as ImmutableMap } from "immutable";
 
 import { redux as appRedux } from "@cocalc/frontend/app-framework";
+import { project_redux_name } from "@cocalc/util/redux/name";
 import { accountFeedStreamName } from "../../conat/hub/api/account-feed";
 import { getSharedAccountDStream } from "@cocalc/frontend/conat/account-dstream";
 
@@ -1355,6 +1356,7 @@ describe("ProjectsActions realtime feed", () => {
     });
     const resetProjectHostRuntime = jest.fn();
     const redux = {
+      hasStore: jest.fn(() => false),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
@@ -1438,13 +1440,18 @@ describe("ProjectsActions realtime feed", () => {
       }),
     });
     const redux = {
+      hasStore: jest.fn(
+        (name: string) => name === project_redux_name(projectId),
+      ),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
         }
+        if (name === project_redux_name(projectId)) {
+          return projectStore;
+        }
         return ImmutableMap();
       }),
-      getProjectStore: jest.fn(() => projectStore),
       _set_state: jest.fn((state) => {
         if (state.projects.project_map != null) {
           projectMap = state.projects.project_map;
@@ -1583,13 +1590,13 @@ describe("ProjectsActions realtime feed", () => {
       ],
     ]);
     const redux = {
+      hasStore: jest.fn(() => false),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
         }
         return ImmutableMap();
       }),
-      getProjectStore: jest.fn(() => ImmutableMap()),
       _set_state: jest.fn((state) => {
         if (state.projects.project_map != null) {
           projectMap = state.projects.project_map;
@@ -1658,13 +1665,18 @@ describe("ProjectsActions realtime feed", () => {
       }),
     });
     const redux = {
+      hasStore: jest.fn(
+        (name: string) => name === project_redux_name(projectId),
+      ),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
         }
+        if (name === project_redux_name(projectId)) {
+          return projectStore;
+        }
         return ImmutableMap();
       }),
-      getProjectStore: jest.fn(() => projectStore),
       _set_state: jest.fn((state) => {
         if (state.projects.project_map != null) {
           projectMap = state.projects.project_map;
@@ -1925,13 +1937,18 @@ describe("ProjectsActions realtime feed", () => {
       }),
     });
     const redux = {
+      hasStore: jest.fn(
+        (name: string) => name === project_redux_name(projectId),
+      ),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
         }
+        if (name === project_redux_name(projectId)) {
+          return projectStore;
+        }
         return ImmutableMap();
       }),
-      getProjectStore: jest.fn(() => projectStore),
       _set_state: jest.fn((state) => {
         if (state.projects.project_map != null) {
           projectMap = state.projects.project_map;
@@ -1980,6 +1997,7 @@ describe("ProjectsActions realtime feed", () => {
     openProjects = List([projectId]);
     const resetProjectHostRuntime = jest.fn();
     const redux = {
+      hasStore: jest.fn(() => false),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
@@ -2327,6 +2345,7 @@ describe("ProjectsActions realtime feed", () => {
       },
     });
     const redux = {
+      hasStore: jest.fn(() => false),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
@@ -2382,13 +2401,18 @@ describe("ProjectsActions realtime feed", () => {
       }),
     });
     const redux = {
+      hasStore: jest.fn(
+        (name: string) => name === project_redux_name(projectId),
+      ),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
         }
+        if (name === project_redux_name(projectId)) {
+          return projectStore;
+        }
         return ImmutableMap();
       }),
-      getProjectStore: jest.fn(() => projectStore),
       _set_state: jest.fn((state) => {
         if (state.projects.project_map != null) {
           projectMap = state.projects.project_map;
@@ -2458,13 +2482,18 @@ describe("ProjectsActions realtime feed", () => {
       }),
     });
     const redux = {
+      hasStore: jest.fn(
+        (name: string) => name === project_redux_name(projectId),
+      ),
       getStore: jest.fn((name: string) => {
         if (name === "account") {
           return ImmutableMap({ account_id: "acct-1" });
         }
+        if (name === project_redux_name(projectId)) {
+          return projectStore;
+        }
         return ImmutableMap();
       }),
-      getProjectStore: jest.fn(() => projectStore),
       _set_state: jest.fn((state) => {
         if (state.projects.project_map != null) {
           projectMap = state.projects.project_map;

@@ -97,6 +97,85 @@ export interface HostProcessSnapshotResponse {
   output: HostDiagnosticCommandOutput;
 }
 
+export interface HostAbuseProcessSnapshotRequest {
+  max_projects?: number;
+  max_processes?: number;
+  timeout_ms?: number;
+}
+
+export interface HostAbuseProcessSnapshotResponse {
+  version: 1;
+  captured_at: string;
+  duration_ms: number;
+  coverage: "complete" | "partial" | "unavailable";
+  project_count: number;
+  active_project_count: number;
+  cgroup_count: number;
+  process_count: number;
+  vanished_process_count: number;
+  projects: Array<{
+    project_id: string;
+    process_count: number;
+    processes: Array<{ name: string; count: number }>;
+  }>;
+  issues: Array<{
+    scope: "project_pool" | "project" | "cgroup";
+    code: string;
+    project_id?: string;
+  }>;
+  truncated: {
+    projects: boolean;
+    processes: boolean;
+    deadline: boolean;
+    issues: boolean;
+  };
+}
+
+export interface HostAbuseFilesystemSnapshotRequest {
+  max_projects?: number;
+  max_entries_per_project?: number;
+  max_total_entries?: number;
+  max_depth?: number;
+  timeout_ms?: number;
+}
+
+export interface HostAbuseFilesystemSnapshotResponse {
+  version: 1;
+  fingerprint_version: "tree-metadata-v1";
+  captured_at: string;
+  duration_ms: number;
+  coverage: "complete" | "partial" | "unavailable";
+  project_count: number;
+  fingerprint_count: number;
+  total_entry_count: number;
+  missing_project_count: number;
+  skipped_large_project_count: number;
+  projects: Array<{
+    project_id: string;
+    structure_sha256: string;
+    metadata_sha256: string;
+    examined_count: number;
+    entry_count: number;
+    file_count: number;
+    directory_count: number;
+    symlink_count: number;
+    other_count: number;
+    excluded_count: number;
+    complete: boolean;
+  }>;
+  issues: Array<{
+    scope: "project_pool" | "project";
+    code: string;
+    project_id?: string;
+  }>;
+  truncated: {
+    projects: boolean;
+    total_entries: boolean;
+    deadline: boolean;
+    issues: boolean;
+  };
+}
+
 export interface HostNetworkSnapshotRequest {
   limit?: number;
 }
@@ -661,6 +740,12 @@ export interface HostControlApi {
   getProcessSnapshot: (
     opts?: HostProcessSnapshotRequest,
   ) => Promise<HostProcessSnapshotResponse>;
+  getAbuseProcessSnapshot: (
+    opts?: HostAbuseProcessSnapshotRequest,
+  ) => Promise<HostAbuseProcessSnapshotResponse>;
+  getAbuseFilesystemSnapshot: (
+    opts?: HostAbuseFilesystemSnapshotRequest,
+  ) => Promise<HostAbuseFilesystemSnapshotResponse>;
   getNetworkSnapshot: (
     opts?: HostNetworkSnapshotRequest,
   ) => Promise<HostNetworkSnapshotResponse>;

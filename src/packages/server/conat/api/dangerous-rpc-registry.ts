@@ -67,6 +67,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "changes a managed compute VM's recurring machine cost",
   },
+  "compute.setVmPricingModel": {
+    decision: "fresh-auth-required",
+    reason: "changes a managed compute VM's recurring pricing model and cost",
+  },
   "compute.setVolumeFundingMode": {
     decision: "fresh-auth-required",
     reason: "changes who funds recurring managed compute storage costs",
@@ -100,6 +104,16 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason:
       "admin-only bounded and audited host log inspection with server-side caps and redaction",
+  },
+  "adminHost.scanAbuseProcesses": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "admin-only bounded and audited per-project process-name inspection without argv, environment, paths, or process ids",
+  },
+  "adminHost.scanAbuseFilesystems": {
+    decision: "fresh-auth-not-required",
+    reason:
+      "admin-only bounded and audited project tree fingerprint inspection without file contents, paths, or symlink targets",
   },
   "adminSupport.update": {
     decision: "fresh-auth-required",

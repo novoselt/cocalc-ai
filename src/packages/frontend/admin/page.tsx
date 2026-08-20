@@ -21,7 +21,7 @@ import { cocalc_setup_profile } from "@cocalc/frontend/components/constants";
 import { set_url_with_search } from "@cocalc/frontend/history";
 import { COLORS } from "@cocalc/util/theme";
 import { RegistrationToken } from "./registration-token";
-import { MembershipAnalyticsAdmin } from "./personal-membership-analytics";
+import { RevenueAnalyticsAdmin } from "./revenue-analytics";
 import { MembershipTiers } from "./membership-tiers";
 import SiteSettings from "./site-settings";
 import { UserSearch } from "./users/user-search";
@@ -555,14 +555,14 @@ function getAdminSections({
       ),
     },
     {
-      key: "personal-membership-analytics",
-      title: "Personal Analytics",
-      description: "Review membership counts, purchases, and lifecycle events.",
+      key: "revenue-analytics",
+      title: "Revenue Analytics",
+      description: "Compare revenue and activity across commercial products.",
       pageDescription: null,
-      pageTitle: "Personal Membership Analytics",
+      pageTitle: "Revenue Analytics",
       icon: "line-chart",
       group: "commercial",
-      component: () => <MembershipAnalyticsAdmin />,
+      component: () => <RevenueAnalyticsAdmin />,
     },
     {
       key: "software-licenses",

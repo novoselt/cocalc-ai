@@ -219,6 +219,14 @@ describe("ChatLog immediate steer rendering", () => {
 
     const userProps = lastRenderedMessageProps("user-1");
     expect(userProps?.attachedSteers).toBeUndefined();
+    expect(lastRenderedMessageProps("steer-1")).toEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          message_id: "steer-1",
+          acp_send_mode: "immediate",
+        }),
+      }),
+    );
     const assistantProps = lastRenderedMessageProps("assistant-1");
     expect(assistantProps?.expandedCodexActivity).toBe(true);
     expect(assistantProps?.activitySteers).toEqual([
@@ -388,6 +396,8 @@ describe("ChatLog immediate steer rendering", () => {
     );
 
     expect(screen.queryByText("Guidance sent")).toBeNull();
+    expect(lastRenderedMessageProps("steer-1")).toBeDefined();
+    expect(lastRenderedMessageProps("steer-2")).toBeDefined();
     const userProps = lastRenderedMessageProps("user-1");
     expect(userProps?.attachedSteers).toEqual([
       expect.objectContaining({

@@ -11,7 +11,7 @@ export type AdminSection =
   | "codex-pools"
   | "managed-cpu"
   | "managed-egress"
-  | "personal-membership-analytics"
+  | "revenue-analytics"
   | "membership-tiers"
   | "project-backup-shards"
   | "retention"
@@ -34,7 +34,7 @@ const ADMIN_SECTIONS = new Set<AdminSection>([
   "codex-pools",
   "managed-cpu",
   "managed-egress",
-  "personal-membership-analytics",
+  "revenue-analytics",
   "membership-tiers",
   "project-backup-shards",
   "retention",

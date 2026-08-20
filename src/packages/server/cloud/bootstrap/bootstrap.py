@@ -3670,6 +3670,15 @@ PROJECT_IO_PRESSURE_MODE_STATE="/run/cocalc-project-pool-pressure-mode"
 PROJECT_NETWORK_RECONCILE_ATTEMPTS="3"
 PROJECT_NETWORK_BOOT_RECONCILE_ATTEMPTS="20"
 PROJECT_NETWORK_BOOT_RECONCILE_DELAY_SECONDS="2"
+PRIVILEGED_RUSTIC_CACHE="/root/.cache/rustic"
+PRIVILEGED_RUSTIC_CACHE_LOCK="/run/lock/cocalc-privileged-rustic-cache.lock"
+PRIVILEGED_RUSTIC_CACHE_MAX_BYTES="$((4 * 1024 * 1024 * 1024))"
+PRIVILEGED_RUSTIC_CACHE_TARGET_BYTES="$((3 * 1024 * 1024 * 1024))"
+PRIVILEGED_RUSTIC_CACHE_HARD_BYTES="$((6 * 1024 * 1024 * 1024))"
+PRIVILEGED_RUSTIC_ROOT_MIN_FREE_BYTES="$((5 * 1024 * 1024 * 1024))"
+PRIVILEGED_RUSTIC_ROOT_TARGET_FREE_BYTES="$((6 * 1024 * 1024 * 1024))"
+PRIVILEGED_RUSTIC_ROOT_CRITICAL_FREE_BYTES="$((2 * 1024 * 1024 * 1024))"
+PRIVILEGED_RUSTIC_CACHE_MIN_AGE_SECONDS="$((24 * 60 * 60))"
 # Full-chain reads are only used by background reconciliation and can take
 # over ten seconds on a busy host with hundreds of cgroup/socket rules.
 # Foreground project creation uses an append-only write and does not pay this
@@ -3681,6 +3690,80 @@ deny() {
   local detail="$2"
   echo "SECURITY_DENY code=${code} detail=${detail}" >&2
   exit 2
+}
+
+maintain_privileged_rustic_cache() {
+  local cache_bytes root_free_bytes urgent cutoff entry_bytes newest entry
+  if [ ! -d "$PRIVILEGED_RUSTIC_CACHE" ]; then
+    return 0
+  fi
+  cache_bytes="$(du -s -B1 -- "$PRIVILEGED_RUSTIC_CACHE" 2>/dev/null | cut -f1)"
+  root_free_bytes="$(df --output=avail -B1 / 2>/dev/null | tail -n 1 | tr -d ' ')"
+  if ! echo "$cache_bytes" | grep -Eq '^[0-9]+$' || \
+     ! echo "$root_free_bytes" | grep -Eq '^[0-9]+$'; then
+    return 0
+  fi
+  if [ "$cache_bytes" -le "$PRIVILEGED_RUSTIC_CACHE_MAX_BYTES" ] && \
+     [ "$root_free_bytes" -ge "$PRIVILEGED_RUSTIC_ROOT_MIN_FREE_BYTES" ]; then
+    return 0
+  fi
+
+  urgent=false
+  if [ "$cache_bytes" -gt "$PRIVILEGED_RUSTIC_CACHE_HARD_BYTES" ] || \
+     [ "$root_free_bytes" -lt "$PRIVILEGED_RUSTIC_ROOT_CRITICAL_FREE_BYTES" ]; then
+    urgent=true
+  fi
+  cutoff="$(($(date +%s) - PRIVILEGED_RUSTIC_CACHE_MIN_AGE_SECONDS))"
+  while IFS=$'\t' read -r entry_bytes newest entry; do
+    if [ "$cache_bytes" -le "$PRIVILEGED_RUSTIC_CACHE_TARGET_BYTES" ] && \
+       [ "$root_free_bytes" -ge "$PRIVILEGED_RUSTIC_ROOT_TARGET_FREE_BYTES" ]; then
+      break
+    fi
+    if ! echo "$entry_bytes" | grep -Eq '^[0-9]+$' || \
+       ! echo "$newest" | grep -Eq '^[0-9]+$'; then
+      continue
+    fi
+    case "$entry" in
+      "$PRIVILEGED_RUSTIC_CACHE"/[0-9a-fA-F][0-9a-fA-F]*) ;;
+      *) continue ;;
+    esac
+    if [ "${#entry}" -ne "$((${#PRIVILEGED_RUSTIC_CACHE} + 65))" ] || \
+       ! basename "$entry" | grep -Eq '^[0-9a-fA-F]{64}$' || \
+       [ ! -d "$entry" ] || [ -L "$entry" ]; then
+      continue
+    fi
+    if [ "$urgent" = false ] && [ "$newest" -ge "$cutoff" ]; then
+      continue
+    fi
+    # Also protect Rustic processes not yet updated to use the shared lock.
+    if pgrep -x rustic >/dev/null 2>&1; then
+      return 0
+    fi
+    if rm -rf --one-file-system -- "$entry"; then
+      cache_bytes="$((cache_bytes > entry_bytes ? cache_bytes - entry_bytes : 0))"
+      root_free_bytes="$((root_free_bytes + entry_bytes))"
+      logger -t cocalc-runtime-storage \
+        "removed stale privileged Rustic cache entry=$(basename "$entry") bytes=$entry_bytes"
+    fi
+  done < <(
+    for entry in "$PRIVILEGED_RUSTIC_CACHE"/*; do
+      [ -d "$entry" ] && [ ! -L "$entry" ] || continue
+      basename "$entry" | grep -Eq '^[0-9a-fA-F]{64}$' || continue
+      du -s -B1 --time --time-style=+%s -- "$entry" 2>/dev/null || true
+    done | sort -t $'\t' -k2,2n
+  )
+}
+
+prepare_privileged_rustic_cache() {
+  exec 7>"$PRIVILEGED_RUSTIC_CACHE_LOCK"
+  # An exclusive lock is available only when no cooperating Rustic operation
+  # is active. If it is unavailable, join the existing shared lock below.
+  if flock -n -x 7; then
+    maintain_privileged_rustic_cache || true
+  fi
+  if ! flock -s -w 120 7; then
+    deny "privileged-rustic-cache-lock-timeout" "$PRIVILEGED_RUSTIC_CACHE_LOCK"
+  fi
 }
 
 acquire_project_cgroup_lock() {
@@ -6753,6 +6836,7 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     if [[ "$repo_profile" == *.toml ]]; then
       repo_profile="${repo_profile%.toml}"
     fi
+    prepare_privileged_rustic_cache
     rustic_cmd=("$(rustic_binary)" -P "$repo_profile")
     cd "$src"
     if ! "${rustic_cmd[@]}" repoinfo >/dev/null 2>&1; then
@@ -6777,6 +6861,7 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     if [[ "$repo_profile" == *.toml ]]; then
       repo_profile="${repo_profile%.toml}"
     fi
+    prepare_privileged_rustic_cache
     exec "$(rustic_binary)" -P "$repo_profile" restore "$@" "$snapshot" "$dest"
     ;;
   project-rustic-backup|project-rustic-backup-maintenance)
@@ -6828,6 +6913,7 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     if [ "$cmd" = "project-rustic-backup-maintenance" ]; then
       attach_maintenance_worker
     fi
+    prepare_privileged_rustic_cache
     rustic_cmd=("$(rustic_binary)" -P "$repo_profile")
     cd "$src"
     backup_status=0
@@ -6862,6 +6948,7 @@ EOF_COCALC_FIX_SETID_RUNTIME_HELPERS
     if [[ "$repo_profile" == *.toml ]]; then
       repo_profile="${repo_profile%.toml}"
     fi
+    prepare_privileged_rustic_cache
     exec "$(rustic_binary)" -P "$repo_profile" restore "$snapshot" "$dest"
     ;;
   rootfs-manifest)

@@ -40,9 +40,9 @@ describe("admin routing", () => {
       kind: "index",
       section: "active-users",
     });
-    expect(parseAdminRoute("admin/personal-membership-analytics")).toEqual({
+    expect(parseAdminRoute("admin/revenue-analytics")).toEqual({
       kind: "index",
-      section: "personal-membership-analytics",
+      section: "revenue-analytics",
     });
     expect(parseAdminRoute("admin/codex-pools")).toEqual({
       kind: "index",

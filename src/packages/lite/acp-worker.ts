@@ -79,6 +79,16 @@ export async function main(): Promise<void> {
   try {
     await runDetachedAcpQueueWorker(client);
   } finally {
+    // The worker returns after the idle timeout; the Codex app-server children
+    // must be disposed here too (not only on SIGTERM), otherwise they linger,
+    // keep this process alive via their stdio and hold the rollout thread
+    // store writer, so the next worker fails "thread/resume ... already has
+    // an active writer" on every follow-up turn.
+    try {
+      await disposeAcpAgents();
+    } catch (err) {
+      logger.warn("ACP worker failed to dispose agents on exit", err);
+    }
     try {
       client.close();
     } catch {

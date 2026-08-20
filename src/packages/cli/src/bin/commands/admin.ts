@@ -2373,6 +2373,128 @@ Merge comments are private unless their corresponding --*-comment-public flag is
     );
 
   adminHost
+    .command("abuse-filesystems <host>")
+    .description(
+      "show audited, bounded project tree fingerprints for abuse triage",
+    )
+    .option("--max-projects <n>", "max active project cgroups", "2000")
+    .option(
+      "--max-entries-per-project <n>",
+      "max tree entries per project",
+      "2000",
+    )
+    .option("--max-total-entries <n>", "max tree entries per host", "50000")
+    .option("--max-depth <n>", "max tree depth", "4")
+    .option("--timeout-ms <n>", "host-side scan deadline", "10000")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          maxProjects?: string;
+          maxEntriesPerProject?: string;
+          maxTotalEntries?: string;
+          maxDepth?: string;
+          timeoutMs?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "admin host abuse-filesystems",
+          async (ctx) => {
+            return await ctx.hub.adminHost.scanAbuseFilesystems({
+              host,
+              max_projects: parsePositiveIntegerOption({
+                name: "--max-projects",
+                value: opts.maxProjects,
+                fallback: 2_000,
+                max: 5_000,
+              }),
+              max_entries_per_project: parsePositiveIntegerOption({
+                name: "--max-entries-per-project",
+                value: opts.maxEntriesPerProject,
+                fallback: 2_000,
+                max: 10_000,
+              }),
+              max_total_entries: parsePositiveIntegerOption({
+                name: "--max-total-entries",
+                value: opts.maxTotalEntries,
+                fallback: 50_000,
+                max: 250_000,
+              }),
+              max_depth: parsePositiveIntegerOption({
+                name: "--max-depth",
+                value: opts.maxDepth,
+                fallback: 4,
+                max: 8,
+              }),
+              timeout_ms: parsePositiveIntegerOption({
+                name: "--timeout-ms",
+                value: opts.timeoutMs,
+                fallback: 10_000,
+                max: 30_000,
+              }),
+              reason: opts.reason,
+            });
+          },
+        );
+      },
+    );
+
+  adminHost
+    .command("abuse-processes <host>")
+    .description(
+      "show an audited, sanitized per-project process snapshot for abuse triage",
+    )
+    .option("--max-projects <n>", "max project cgroups", "2000")
+    .option("--max-processes <n>", "max project processes", "10000")
+    .option("--timeout-ms <n>", "host-side scan deadline", "5000")
+    .option("--reason <reason>", "human-readable reason for audit")
+    .action(
+      async (
+        host: string,
+        opts: {
+          maxProjects?: string;
+          maxProcesses?: string;
+          timeoutMs?: string;
+          reason?: string;
+        },
+        command: Command,
+      ) => {
+        await withContext(
+          command,
+          "admin host abuse-processes",
+          async (ctx) => {
+            return await ctx.hub.adminHost.scanAbuseProcesses({
+              host,
+              max_projects: parsePositiveIntegerOption({
+                name: "--max-projects",
+                value: opts.maxProjects,
+                fallback: 2_000,
+                max: 5_000,
+              }),
+              max_processes: parsePositiveIntegerOption({
+                name: "--max-processes",
+                value: opts.maxProcesses,
+                fallback: 10_000,
+                max: 50_000,
+              }),
+              timeout_ms: parsePositiveIntegerOption({
+                name: "--timeout-ms",
+                value: opts.timeoutMs,
+                fallback: 5_000,
+                max: 15_000,
+              }),
+              reason: opts.reason,
+            });
+          },
+        );
+      },
+    );
+
+  adminHost
     .command("ps <host>")
     .description("show audited project-host process snapshot")
     .option("--limit <n>", "max process rows", "50")

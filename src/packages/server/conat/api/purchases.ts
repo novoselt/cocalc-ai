@@ -70,6 +70,7 @@ import {
   resolveMembershipDetailsForAccount,
   resolveMembershipForAccount,
 } from "@cocalc/server/membership/resolve";
+import { getMembershipTrialOffers as getMembershipTrialOffers0 } from "@cocalc/server/membership/trial-offers";
 import {
   listConfiguredBays,
   listConfiguredBaysAuthoritative,
@@ -261,6 +262,10 @@ export async function setAutoBalance({
 
 export async function getMembership({ account_id }) {
   return await resolveMembershipForAccount(account_id);
+}
+
+export async function getMembershipTrialOffers({ account_id }) {
+  return await getMembershipTrialOffers0(requireAccount(account_id));
 }
 
 async function resolveTargetAccountHomeBay({

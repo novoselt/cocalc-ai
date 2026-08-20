@@ -192,7 +192,7 @@ export async function getGcpAcceleratorImage(
   };
 }
 
-const pickNebiusImageFamily = (
+export const pickNebiusImage = (
   images: NebiusImage[],
   wantsGpu: boolean,
   opts: {
@@ -200,7 +200,7 @@ const pickNebiusImageFamily = (
     platform?: string | null;
     arch?: string | null;
   } = {},
-): string | undefined => {
+): NebiusImage | undefined => {
   const normalizeArch = (raw?: string | null) => {
     if (!raw) return undefined;
     const upper = raw.toUpperCase();
@@ -309,8 +309,23 @@ const pickNebiusImageFamily = (
     if (timeA !== timeB) return timeB - timeA;
     return 0;
   });
-  return sorted[0]?.family ?? undefined;
+  return sorted[0];
 };
+
+export async function getNebiusMinimumBootDiskGb(opts: {
+  region: string;
+  platform?: string | null;
+  arch?: string | null;
+  wantsGpu: boolean;
+}): Promise<number> {
+  const image = pickNebiusImage(await loadNebiusImages(), opts.wantsGpu, opts);
+  const catalogMinimum = Number(image?.minimum_disk_size_gb ?? 0);
+  const fallbackMinimum = opts.wantsGpu ? 40 : 20;
+  return Math.max(
+    fallbackMinimum,
+    Number.isFinite(catalogMinimum) ? catalogMinimum : 0,
+  );
+}
 
 export async function buildHostSpec(row: HostRow): Promise<HostSpec> {
   const metadata = row.metadata ?? {};
@@ -454,14 +469,14 @@ export async function buildHostSpec(row: HostRow): Promise<HostSpec> {
       machine.metadata?.architecture ??
       machine.metadata?.cpu_arch ??
       undefined;
-    const family = pickNebiusImageFamily(images, wantsGpu, {
+    const image = pickNebiusImage(images, wantsGpu, {
       region: row.region,
       platform,
       arch: archHint,
     });
-    if (family) {
+    if (image?.family) {
       sourceImage = undefined;
-      sourceImageFamily = family;
+      sourceImageFamily = image.family;
     } else {
       throw new Error(
         `no Nebius Ubuntu ${MIN_UBUNTU_VERSION / 100}+ images available for region ${row.region ?? "unknown"}`,

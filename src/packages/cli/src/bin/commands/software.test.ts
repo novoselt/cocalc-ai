@@ -3475,7 +3475,7 @@ test("software deploy host-bootstrap separates publish from rollout", async () =
     "--artifact",
     "bootstrap-environment",
     "--desired-version",
-    artifactId,
+    sha256,
     "--reason",
     "software-deploy-host-bootstrap",
   ]);
