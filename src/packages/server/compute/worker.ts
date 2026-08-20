@@ -898,16 +898,21 @@ async function reconcileComputeProviderInventory() {
   );
   for (const vm of vms) {
     if (!isComputeVmV2(vm)) continue;
+    const providerInstance = providerInventory.instances.find((instance) =>
+      providerComputeInstanceIsExpected(instance, [vm]),
+    );
     const instanceMissing =
-      !providerInstances.has(
-        providerKey(vm.provider, vm.provider_instance_id),
-      ) && !!vm.ready_at;
+      vm.desired_state === "running" && !providerInstance && !!vm.ready_at;
+    const stoppedInstanceDrift =
+      vm.desired_state === "stopped" &&
+      !!providerInstance &&
+      stoppedVmProviderInstanceNeedsReconciliation(providerInstance.status);
     const addressMissing =
       vm.desired_state === "running" &&
       !!vm.public_address_id &&
       providerInventory.addresses_observed &&
       !providerAddresses.has(providerKey(vm.provider, vm.public_address_id));
-    if (instanceMissing || addressMissing) {
+    if (instanceMissing || stoppedInstanceDrift || addressMissing) {
       await enqueueComputeWork({
         resource_id: vm.id,
         action: "reconcile",
@@ -1325,9 +1330,29 @@ export function computeVmProviderObservationAge(
   return Number.isFinite(checkedAt) ? Math.max(0, now - checkedAt) : Infinity;
 }
 
+export function computeVmNeedsProviderObservation(
+  vm: Pick<ComputeVmRow, "provider" | "desired_state" | "state">,
+): boolean {
+  // Nebius implements an intentional stop by deleting the instance while
+  // retaining its disks. Provider inventory independently detects cloud drift.
+  return !(
+    vm.provider === "nebius" &&
+    vm.desired_state === "stopped" &&
+    vm.state === "stopped"
+  );
+}
+
+export function stoppedVmProviderInstanceNeedsReconciliation(
+  status: string | undefined,
+): boolean {
+  if (!status) return true;
+  return !["STOPPED", "STOPPING", "TERMINATED"].includes(status.toUpperCase());
+}
+
 async function refreshComputeProviderObservations() {
   const candidates = (await listComputeVmsForInventory())
     .filter(isComputeVmV2)
+    .filter(computeVmNeedsProviderObservation)
     .sort(
       (left, right) =>
         computeVmProviderObservationAge(right) -
@@ -1977,6 +2002,14 @@ async function stop(vm: ComputeVmRow) {
     current.desired_state === "running"
       ? current
       : await releaseVmNetwork(await syncVmProjectSshConfig(current, false));
+  const providerStoppedAt = new Date().toISOString();
+  await updateComputeVmProviderObservation(vm.id, {
+    state: "stopped",
+    checked_at: providerStoppedAt,
+    observed_at: providerStoppedAt,
+    error: null,
+    public_ip: null,
+  });
   const next = (await updateComputeVm(vm.id, {
     state: transition.state,
     stopped_at: new Date(),

@@ -1769,7 +1769,7 @@ export class NebiusProvider implements CloudProvider {
       .map((item) => ({
         instance_id: item.metadata?.id ?? "",
         name: item.metadata?.name ?? "",
-        status: item.status?.state?.toString(),
+        status: item.status?.state?.name,
         public_ip: normalizeIp(
           item.status?.networkInterfaces?.[0]?.publicIpAddress?.address,
         ),
