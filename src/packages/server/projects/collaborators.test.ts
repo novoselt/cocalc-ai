@@ -2209,6 +2209,45 @@ describe("project collaborators local bay access", () => {
     );
   });
 
+  it("does not let the inviter redeem their own email invite", async () => {
+    const inviteId = "77777777-7777-4777-8777-777777777777";
+    const token = "self-redeem-token";
+    queryMock = jest.fn(async (sql: string) => {
+      if (
+        sql.includes(
+          "SELECT invite_id, project_id, inviter_account_id, status, token_hash",
+        )
+      ) {
+        return {
+          rows: [
+            {
+              invite_id: inviteId,
+              project_id: PROJECT_ID,
+              inviter_account_id: ACCOUNT_ID,
+              status: "pending",
+              token_hash: inviteTokenHash(token),
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const { redeemEmailProjectInvite } = await import("./collaborators");
+    await expect(
+      redeemEmailProjectInvite({
+        account_id: ACCOUNT_ID,
+        invite_id: inviteId,
+        token,
+      }),
+    ).rejects.toThrow("You created this project invitation");
+    expect(addUserToProject).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("SET status='accepted'"),
+      expect.any(Array),
+    );
+  });
+
   it("previews email token invites without adding a collaborator", async () => {
     const inviteId = "77777777-7777-4777-8777-777777777777";
     const token = "preview-invite-token";

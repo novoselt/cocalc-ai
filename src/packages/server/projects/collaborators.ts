@@ -3763,6 +3763,11 @@ export async function redeemEmailProjectInvite({
     project_id,
     token,
   });
+  if (invite.inviter_account_id === account_id) {
+    throw new Error(
+      "You created this project invitation. Sign out and open the link using the CoCalc account you want to add.",
+    );
+  }
   await assertInviteSenderCanStillGrantAccess({ pool, invite });
   const role = normalizeInviteRole(invite.invite_role);
   const { rows: collabRows } = await pool.query<{
@@ -3891,6 +3896,11 @@ export async function respondEmailProjectInvite({
     project_id,
     token,
   });
+  if (invite.inviter_account_id === account_id) {
+    throw new Error(
+      "You created this project invitation. Sign out and open the link using the CoCalc account you want to add.",
+    );
+  }
   const nextStatus: ProjectCollabInviteStatus =
     normalizedAction === "block" ? "blocked" : "declined";
   const pool = getPool();

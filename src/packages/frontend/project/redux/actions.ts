@@ -1491,7 +1491,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
   }
 
   // Save the given file in this project (if it is open) to disk.
-  save_file(opts): void {
+  async save_file(opts): Promise<void> {
     opts = defaults(opts, { path: required });
     if (this.isViewerProjectUser()) {
       return;
@@ -1507,11 +1507,11 @@ export class ProjectActions extends Actions<ProjectStoreState> {
       return;
     }
 
-    project_file.save(opts.path, this.redux, this.project_id);
+    await project_file.save(opts.path, this.redux, this.project_id);
   }
 
   // Save all open files in this project
-  save_all_files(): void {
+  async save_all_files(): Promise<void> {
     if (this.isViewerProjectUser()) {
       return;
     }
@@ -1523,6 +1523,7 @@ export class ProjectActions extends Actions<ProjectStoreState> {
     if (store == undefined) {
       return;
     }
+    const saves: Promise<void>[] = [];
     store.get("open_files").forEach((val, path) => {
       const component = val.get("component");
       if (component == null) {
@@ -1532,8 +1533,9 @@ export class ProjectActions extends Actions<ProjectStoreState> {
         // that has not yet been initialized).
         return;
       }
-      project_file.save(path, this.redux, this.project_id);
+      saves.push(project_file.save(path, this.redux, this.project_id));
     });
+    await Promise.all(saves);
   }
 
   public open_in_new_browser_window(path: string, fullscreen = "kiosk"): void {

@@ -261,6 +261,7 @@ export function ActionBox({
       readOnlySource || (!!dnd_copy_dest && dnd_copy_dest !== project_id),
     );
   const [overwrite, set_overwrite] = useState<boolean>(true);
+  const [copying, setCopying] = useState<boolean>(false);
   const [deleteWithSudo, setDeleteWithSudo] = useState<boolean>(false);
   const [deleteFromSnapshots, setDeleteFromSnapshots] =
     useState<boolean>(false);
@@ -802,7 +803,8 @@ export function ActionBox({
     }
   }
 
-  function copy_click(): void {
+  async function copy_click(): Promise<void> {
+    if (copying) return;
     const destination_project_id = copy_destination_project_id;
     const destination_directory = copy_destination_directory;
     const paths = checked_files.toArray();
@@ -823,31 +825,43 @@ export function ActionBox({
       });
       return;
     }
-    if (
-      destination_project_id != undefined &&
-      project_id !== destination_project_id
-    ) {
-      onUserFilesystemChange?.();
-      actions.copyPathBetweenProjects({
-        src: { project_id, path: crossProjectCopySourcePath(paths) },
-        dest: {
-          project_id: destination_project_id,
-          path: crossProjectSingleItemDestPath({
-            paths,
-            destinationDirectory: destination_directory,
-          }),
-        },
-        options: { force: overwrite, recursive: true },
+    setCopying(true);
+    try {
+      // Copy is a filesystem operation, so flush editors in this browser first.
+      await actions.save_all_files();
+      if (
+        destination_project_id != undefined &&
+        project_id !== destination_project_id
+      ) {
+        onUserFilesystemChange?.();
+        void actions.copyPathBetweenProjects({
+          src: { project_id, path: crossProjectCopySourcePath(paths) },
+          dest: {
+            project_id: destination_project_id,
+            path: crossProjectSingleItemDestPath({
+              paths,
+              destinationDirectory: destination_directory,
+            }),
+          },
+          options: { force: overwrite, recursive: true },
+        });
+      } else {
+        onUserFilesystemChange?.();
+        void actions.copyPaths({
+          src: paths,
+          dest: destination_directory,
+        });
+      }
+      clear();
+    } catch (err) {
+      alert_message({
+        type: "error",
+        title: "Copy failed",
+        message: `Unable to save open files before copying: ${err}`,
       });
-    } else {
-      onUserFilesystemChange?.();
-      actions.copyPaths({
-        src: paths,
-        dest: destination_directory,
-      });
+    } finally {
+      setCopying(false);
     }
-
-    clear();
   }
 
   function valid_copy_input(): boolean {
@@ -914,6 +928,13 @@ export function ActionBox({
           </Alert>
         )}
         <div>{render_selected_files_list()}</div>
+        {!readOnlySource && (
+          <p>
+            Copy uses saved files on disk. CoCalc first saves files open in this
+            browser; changes open only in another browser must be saved there
+            first.
+          </p>
+        )}
       </>
     );
   }
@@ -951,7 +972,8 @@ export function ActionBox({
                 <AntdButton
                   type="primary"
                   onClick={copy_click}
-                  disabled={!valid_copy_input()}
+                  disabled={copying || !valid_copy_input()}
+                  loading={copying}
                 >
                   <Icon name="files" /> Copy {size} {misc.plural(size, "Item")}
                 </AntdButton>
