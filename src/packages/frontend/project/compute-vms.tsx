@@ -2736,6 +2736,8 @@ export function ProjectComputeVms({
     }
   };
 
+  const volumesById = new Map(volumes.map((volume) => [volume.id, volume]));
+
   const vmColumns: ColumnsType<ComputeVm> = [
     {
       title: "VM",
@@ -2803,23 +2805,36 @@ export function ProjectComputeVms({
     },
     {
       title: "Configuration",
-      width: 175,
-      render: (_, vm) => (
-        <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
-          <Text strong>{vm.machine_type}</Text>
-          <Text type="secondary">
-            {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
-            {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
-          </Text>
-          <Text type="secondary">{vm.zone ?? vm.region}</Text>
-          <Text type="secondary">Boot disk · {vm.boot_disk_gb} GB</Text>
-          {vm.gpu_type && (
+      width: 220,
+      render: (_, vm) => {
+        const homeVolume = vm.home_volume_id
+          ? volumesById.get(vm.home_volume_id)
+          : undefined;
+        return (
+          <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+            <Text strong>{vm.machine_type}</Text>
             <Text type="secondary">
-              {vm.gpu_count}× {vm.gpu_type}
+              {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
+              {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
             </Text>
-          )}
-        </Space>
-      ),
+            <Text type="secondary">{vm.zone ?? vm.region}</Text>
+            <Text type="secondary">Boot disk · {vm.boot_disk_gb} GB</Text>
+            <Text type="secondary">
+              Home volume ·{" "}
+              {homeVolume
+                ? `${homeVolume.name} · ${homeVolume.effective_size_gb} GB · ${homeVolume.attachment_state}`
+                : vm.home_volume_id
+                  ? `ID ${vm.home_volume_id.slice(0, 8)}`
+                  : "none"}
+            </Text>
+            {vm.gpu_type && (
+              <Text type="secondary">
+                {vm.gpu_count}× {vm.gpu_type}
+              </Text>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: "Cost & usage",
