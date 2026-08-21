@@ -92,6 +92,7 @@ import { getCatalog as getHostCatalog } from "./hosts";
 import { loadNebiusInstanceTypes } from "@cocalc/server/cloud/providers";
 import { getNebiusMinimumBootDiskGb } from "@cocalc/server/cloud/host-util";
 import { getManagedVmProjectSshPublicKey } from "@cocalc/server/projects/managed-vm-ssh-config";
+import { publicComputeVmMetadata } from "@cocalc/server/compute/public";
 import {
   defaultComputeZone,
   regionFromComputeZone,
@@ -367,12 +368,7 @@ async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
     metadata,
     ...result
   } = vm;
-  const {
-    ssh_public_keys: _sshPublicKeys,
-    project_ssh_public_keys: _projectSshPublicKeys,
-    provider_observation: _providerObservation,
-    ...publicMetadata
-  } = metadata ?? {};
+  const publicMetadata = publicComputeVmMetadata(metadata);
   const providerObservation = vm.metadata?.provider_observation ?? {};
   const providerState = [
     "missing",
