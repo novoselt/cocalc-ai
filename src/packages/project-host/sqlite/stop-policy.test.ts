@@ -7,7 +7,9 @@ import { closeDatabase } from "@cocalc/lite/hub/sqlite/database";
 import {
   getProjectStopPolicy,
   getProjectStopState,
+  hasRecentProjectBrowserActivity,
   listProjectStopPolicies,
+  noteProjectBrowserActivity,
   upsertProjectStopPolicy,
   upsertProjectStopState,
 } from "./stop-policy";
@@ -55,6 +57,7 @@ describe("project stop policy sqlite", () => {
     upsertProjectStopState({
       project_id,
       last_started_ms: 111,
+      last_browser_activity_ms: 150,
       pressure_cooldown_until_ms: 222,
       pressure_stop_window_started_ms: 200,
       pressure_stop_count: 1,
@@ -71,6 +74,7 @@ describe("project stop policy sqlite", () => {
     expect(getProjectStopState(project_id)).toMatchObject({
       project_id,
       last_started_ms: 111,
+      last_browser_activity_ms: 150,
       pressure_cooldown_until_ms: 222,
       pressure_stop_window_started_ms: 200,
       pressure_stop_count: 1,
@@ -80,6 +84,25 @@ describe("project stop policy sqlite", () => {
       last_decision_reason: "startup_protected",
       last_decision_pressure_zone: "pressure",
     });
+  });
+
+  it("records browser activity and checks its freshness", () => {
+    noteProjectBrowserActivity(project_id, 10_000);
+
+    expect(
+      hasRecentProjectBrowserActivity({
+        project_id,
+        max_age_ms: 2_000,
+        now_ms: 11_999,
+      }),
+    ).toBe(true);
+    expect(
+      hasRecentProjectBrowserActivity({
+        project_id,
+        max_age_ms: 2_000,
+        now_ms: 12_001,
+      }),
+    ).toBe(false);
   });
 
   it("allows explicitly clearing project stop state fields", () => {

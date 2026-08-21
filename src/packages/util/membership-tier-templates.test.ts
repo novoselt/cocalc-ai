@@ -168,6 +168,18 @@ describe("membership tier templates", () => {
     );
   });
 
+  it("limits background runtime only for the free tier", () => {
+    expect(TIER_TEMPLATES.free.usage_limits).toEqual(
+      expect.objectContaining({ browser_idle_timeout_seconds: 1800 }),
+    );
+    for (const [id, tier] of Object.entries(TIER_TEMPLATES)) {
+      if (id === "free") continue;
+      expect(tier.usage_limits).not.toHaveProperty(
+        "browser_idle_timeout_seconds",
+      );
+    }
+  });
+
   it("keeps the student template price without exposing course checkout", () => {
     const tier = applyMembershipTierTemplateFallbacks({
       id: "student",

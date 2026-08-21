@@ -45,6 +45,7 @@ const AI_LIMIT_KEYS = [
 const AI_LIMIT_KEY_SET = new Set<string>(AI_LIMIT_KEYS);
 const NUMERIC_USAGE_LIMIT_KEYS = new Set<keyof MembershipUsageLimits>([
   "shared_compute_priority",
+  "browser_idle_timeout_seconds",
   "total_storage_soft_bytes",
   "total_storage_hard_bytes",
   "max_projects",
@@ -141,6 +142,12 @@ const OVERRIDE_EFFECT_FIELDS = [
     section: "ai_limits",
     key: "units_7d",
     ...MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS.ai_limits.units_7d,
+  },
+  {
+    section: "usage_limits",
+    key: "browser_idle_timeout_seconds",
+    ...MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS.usage_limits
+      .browser_idle_timeout_seconds,
   },
   {
     section: "usage_limits",

@@ -36,6 +36,7 @@ import {
 const INTERNAL_RUN_QUOTA_FIELDS = new Set([
   "io_class",
   "shared_compute_priority",
+  "browser_idle_timeout",
 ]);
 
 export function formatRunQuotaForDisplay(rq: RunQuotaType): DisplayQuota {

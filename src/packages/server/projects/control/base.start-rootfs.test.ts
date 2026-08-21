@@ -78,6 +78,7 @@ jest.mock("@cocalc/server/projects/rootfs-state", () => ({
 
 jest.mock("@cocalc/server/membership/project-defaults", () => ({
   __esModule: true,
+  getMembershipBrowserIdleTimeoutForAccount: jest.fn(async () => 0),
   getMembershipProjectDefaultsForAccount: jest.fn(async () => ({})),
   getMembershipRuntimeSchedulingForAccount: jest.fn(async () => ({
     io_class: "standard",
@@ -491,6 +492,7 @@ describe("BaseProject.start RootFS sealing", () => {
       disk_quota: 5000,
       io_class: "standard",
       shared_compute_priority: 0,
+      browser_idle_timeout: 0,
       network: true,
       member_host: true,
     });
@@ -582,6 +584,9 @@ describe("BaseProject.start RootFS sealing", () => {
             memory_limit: 4000,
             disk_quota: 5000,
             idle_timeout: 600,
+            browser_idle_timeout: 600,
+            io_class: "standard",
+            shared_compute_priority: 0,
             network: true,
             member_host: true,
           },
@@ -612,6 +617,9 @@ describe("BaseProject.start RootFS sealing", () => {
         }
         return {};
       });
+    jest
+      .mocked(projectDefaults.getMembershipBrowserIdleTimeoutForAccount)
+      .mockResolvedValue(1200);
     const quotaModule = await import("@cocalc/util/upgrades/quota");
     jest.mocked(quotaModule.quota).mockImplementation((settings: any) => ({
       memory_limit: settings?.memory ?? 0,
@@ -623,9 +631,20 @@ describe("BaseProject.start RootFS sealing", () => {
     const project = new BaseProject(PROJECT_ID);
     const restartMock = jest.fn(async () => undefined);
     project.restart = restartMock;
+    updateProjectRunQuotaOnHostMock.mockRejectedValueOnce(
+      new Error("old project host"),
+    );
 
     await project.setAllQuotas();
+    await new Promise((resolve) => setImmediate(resolve));
 
+    expect(updateProjectRunQuotaOnHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_quota: expect.objectContaining({
+          browser_idle_timeout: 1200,
+        }),
+      }),
+    );
     expect(restartMock).not.toHaveBeenCalled();
   });
 });

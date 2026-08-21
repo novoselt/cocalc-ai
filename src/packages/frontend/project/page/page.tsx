@@ -123,6 +123,7 @@ import {
 import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
 import { markStartupPhaseOnce } from "@cocalc/frontend/app/startup-phase";
 import { HostRecoveryBanner } from "./host-recovery-banner";
+import ProjectBrowserRuntimeLimitBanner from "./browser-runtime-limit-banner";
 
 const START_BANNER = false;
 
@@ -255,6 +256,31 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     publicDirectoryShare: props.publicDirectoryShare,
   });
   const isViewer = projectCtx.projectAccess.role === "viewer";
+  const browserRuntimePresenceEnabled =
+    !props.publicDirectoryShare &&
+    !isViewer &&
+    projectCtx.projectAccess.capabilities.useProjectRuntime;
+  useEffect(() => {
+    if (!browserRuntimePresenceEnabled) return;
+    let closed = false;
+    const reportPresence = async () => {
+      if (closed) return;
+      try {
+        await webapp_client.conat_client.reportProjectBrowserRuntimePresence({
+          project_id,
+        });
+      } catch {
+        // Route recovery and later heartbeats retry automatically. Presence
+        // failures must not disrupt the project page.
+      }
+    };
+    void reportPresence();
+    const timer = setInterval(() => void reportPresence(), 45_000);
+    return () => {
+      closed = true;
+      clearInterval(timer);
+    };
+  }, [browserRuntimePresenceEnabled, project_id]);
   const host_id = useProjectMapField<string>(project_id, "host_id");
   const hostInfo = useHostInfo(host_id, {
     enabled: !props.publicDirectoryShare,
@@ -1198,6 +1224,9 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         ) : null}
         {renderHostUnavailableBanner()}
         {renderRuntimeRecoveryBanner()}
+        {!hardDeleteBlocked && browserRuntimePresenceEnabled ? (
+          <ProjectBrowserRuntimeLimitBanner project_id={project_id} />
+        ) : null}
         {renderTopRow()}
         <div
           style={{

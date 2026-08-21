@@ -66,6 +66,9 @@ export function normalizeMembershipEffectiveLimits(
     shared_compute_priority: normalizeNonNegativeInteger(
       usageLimits?.shared_compute_priority,
     ),
+    browser_idle_timeout_seconds: normalizeNonNegativeInteger(
+      usageLimits?.browser_idle_timeout_seconds,
+    ),
     total_storage_soft_bytes: normalizeNonNegativeInteger(
       usageLimits?.total_storage_soft_bytes,
     ),

@@ -45,6 +45,10 @@ jest.mock("./managed-egress-runtime", () => ({
 
 import { __test__, createProjectHostConatAuth } from "./conat-auth";
 import { createProjectHostBrowserSessionToken } from "./browser-session";
+import {
+  BROWSER_RUNTIME_PRESENCE_AUTH_SCOPE,
+  browserRuntimePresenceSubject,
+} from "@cocalc/conat/project-host/browser-runtime-presence";
 
 describe("project-host Conat auth", () => {
   const host_id = "00000000-1000-4000-8000-000000000099";
@@ -203,7 +207,40 @@ describe("project-host Conat auth", () => {
     ).resolves.toMatchObject({
       account_id,
       auth_iat_s: expect.any(Number),
+      auth_scopes: [BROWSER_RUNTIME_PRESENCE_AUTH_SCOPE],
     });
+  });
+
+  it("reserves runtime presence for collaborator browser sessions", async () => {
+    mockGetRow.mockReturnValue({
+      users: { [account_id]: { group: "collaborator" } },
+    });
+    const { isAllowed } = createProjectHostConatAuth({ host_id });
+    const subject = browserRuntimePresenceSubject({ project_id, account_id });
+
+    await expect(
+      isAllowed({
+        user: {
+          account_id,
+          auth_scopes: [BROWSER_RUNTIME_PRESENCE_AUTH_SCOPE],
+        },
+        type: "pub",
+        subject,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      isAllowed({ user: { account_id }, type: "pub", subject }),
+    ).resolves.toBe(false);
+    await expect(
+      isAllowed({
+        user: {
+          account_id,
+          auth_scopes: [BROWSER_RUNTIME_PRESENCE_AUTH_SCOPE],
+        },
+        type: "sub",
+        subject,
+      }),
+    ).resolves.toBe(false);
   });
 
   it("only allows project-scoped auth from trusted local addresses", async () => {

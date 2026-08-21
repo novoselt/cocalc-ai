@@ -122,6 +122,10 @@ import { rusticBackupBrowser } from "./rustic-backup-browser";
 import { startRusticCacheMaintenance } from "./rustic-cache-maintenance";
 import { startStorageAdmissionController } from "./storage-admission";
 import {
+  startBrowserIdleStopMaintenance,
+  startBrowserRuntimePresenceService,
+} from "./browser-runtime";
+import {
   assertLocalBindOrInsecure,
   assertSecureUrlOrLocal,
 } from "@cocalc/backend/network/policy";
@@ -1510,6 +1514,17 @@ export async function main(
     wireProjectsApi(runnerApi);
   const stopStoppedVolumePreparationMaintenance =
     startStoppedVolumePreparationMaintenance();
+  const stopBrowserRuntimePresenceService = startBrowserRuntimePresenceService({
+    client: conatClient,
+  });
+  const stopBrowserIdleStopMaintenance = startBrowserIdleStopMaintenance({
+    stopProject: async (project_id) => {
+      await hubApi.projects.stop({
+        project_id,
+        runtime_exit_reason: "browser_idle_timeout",
+      });
+    },
+  });
   startExamWatchdog();
   const stopRawNetworkEgressLoop = startManagedRawNetworkEgressLoop({
     runnerApi,
@@ -1676,6 +1691,8 @@ export async function main(
     stopRawNetworkEgressLoop?.();
     stopCpuUsageLoop?.();
     stopStoppedVolumePreparationMaintenance();
+    stopBrowserRuntimePresenceService();
+    stopBrowserIdleStopMaintenance();
     stopEventLoopStallMonitor?.();
     stopGcpPreemptionWatcher();
     stopConatRevocationKickLoop?.();

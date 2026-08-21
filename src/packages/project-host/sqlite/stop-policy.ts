@@ -16,6 +16,7 @@ export interface ProjectStopPolicyRow extends HostProjectStopPolicyRow {
 export interface ProjectStopStateRow {
   project_id: string;
   last_started_ms?: number | null;
+  last_browser_activity_ms?: number | null;
   last_pressure_stop_ms?: number | null;
   pressure_cooldown_until_ms?: number | null;
   pressure_stop_window_started_ms?: number | null;
@@ -60,6 +61,7 @@ function ensureStopPolicyTables() {
     CREATE TABLE IF NOT EXISTS project_stop_state (
       project_id TEXT PRIMARY KEY,
       last_started_ms INTEGER,
+      last_browser_activity_ms INTEGER,
       last_pressure_stop_ms INTEGER,
       pressure_cooldown_until_ms INTEGER,
       pressure_stop_window_started_ms INTEGER,
@@ -82,6 +84,11 @@ function ensureStopPolicyTables() {
   if (!columns.has("pressure_stop_window_started_ms")) {
     db.exec(
       "ALTER TABLE project_stop_state ADD COLUMN pressure_stop_window_started_ms INTEGER",
+    );
+  }
+  if (!columns.has("last_browser_activity_ms")) {
+    db.exec(
+      "ALTER TABLE project_stop_state ADD COLUMN last_browser_activity_ms INTEGER",
     );
   }
   if (!columns.has("pressure_stop_count")) {
@@ -201,6 +208,7 @@ export function upsertProjectStopState(row: ProjectStopStateRow): void {
         `
           SELECT
             last_started_ms,
+            last_browser_activity_ms,
             last_pressure_stop_ms,
             pressure_cooldown_until_ms,
             pressure_stop_window_started_ms,
@@ -221,6 +229,9 @@ export function upsertProjectStopState(row: ProjectStopStateRow): void {
   const nextLastStartedMs = hasOwn("last_started_ms")
     ? (row.last_started_ms ?? null)
     : (existing.last_started_ms ?? null);
+  const nextLastBrowserActivityMs = hasOwn("last_browser_activity_ms")
+    ? (row.last_browser_activity_ms ?? null)
+    : (existing.last_browser_activity_ms ?? null);
   const nextLastPressureStopMs = hasOwn("last_pressure_stop_ms")
     ? (row.last_pressure_stop_ms ?? null)
     : (existing.last_pressure_stop_ms ?? null);
@@ -255,6 +266,7 @@ export function upsertProjectStopState(row: ProjectStopStateRow): void {
       INSERT INTO project_stop_state(
         project_id,
         last_started_ms,
+        last_browser_activity_ms,
         last_pressure_stop_ms,
         pressure_cooldown_until_ms,
         pressure_stop_window_started_ms,
@@ -266,9 +278,10 @@ export function upsertProjectStopState(row: ProjectStopStateRow): void {
         last_decision_pressure_zone,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id) DO UPDATE SET
         last_started_ms=excluded.last_started_ms,
+        last_browser_activity_ms=excluded.last_browser_activity_ms,
         last_pressure_stop_ms=excluded.last_pressure_stop_ms,
         pressure_cooldown_until_ms=excluded.pressure_cooldown_until_ms,
         pressure_stop_window_started_ms=excluded.pressure_stop_window_started_ms,
@@ -283,6 +296,7 @@ export function upsertProjectStopState(row: ProjectStopStateRow): void {
   ).run(
     row.project_id,
     nextLastStartedMs,
+    nextLastBrowserActivityMs,
     nextLastPressureStopMs,
     nextPressureCooldownUntilMs,
     nextPressureStopWindowStartedMs,
@@ -307,6 +321,7 @@ export function getProjectStopState(
         SELECT
           project_id,
           last_started_ms,
+          last_browser_activity_ms,
           last_pressure_stop_ms,
           pressure_cooldown_until_ms,
           pressure_stop_window_started_ms,
@@ -333,6 +348,7 @@ export function listProjectStopStates(): ProjectStopStateRow[] {
         SELECT
           project_id,
           last_started_ms,
+          last_browser_activity_ms,
           last_pressure_stop_ms,
           pressure_cooldown_until_ms,
           pressure_stop_window_started_ms,
@@ -348,4 +364,31 @@ export function listProjectStopStates(): ProjectStopStateRow[] {
       `,
     )
     .all() as ProjectStopStateRow[];
+}
+
+export function noteProjectBrowserActivity(
+  project_id: string,
+  now_ms = Date.now(),
+): void {
+  upsertProjectStopState({
+    project_id,
+    last_browser_activity_ms: Math.max(0, Math.floor(now_ms)),
+  });
+}
+
+export function hasRecentProjectBrowserActivity({
+  project_id,
+  max_age_ms,
+  now_ms = Date.now(),
+}: {
+  project_id: string;
+  max_age_ms: number;
+  now_ms?: number;
+}): boolean {
+  const last = getProjectStopState(project_id)?.last_browser_activity_ms;
+  return (
+    last != null &&
+    Number.isFinite(last) &&
+    last >= now_ms - Math.max(0, max_age_ms)
+  );
 }

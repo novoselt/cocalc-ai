@@ -61,6 +61,14 @@ export const MEMBERSHIP_ENTITLEMENT_OVERRIDE_DESCRIPTIONS = {
     },
   },
   usage_limits: {
+    browser_idle_timeout_seconds: {
+      label: "Browser idle timeout",
+      unit: "seconds",
+      adminDescription:
+        "Stops sponsored project runtimes after this many seconds without an authenticated CoCalc browser tab. Zero disables the policy.",
+      userDescription:
+        "How long projects may keep running without an open CoCalc browser tab.",
+    },
     total_storage_soft_bytes: {
       label: "Total storage soft cap",
       unit: "GB",

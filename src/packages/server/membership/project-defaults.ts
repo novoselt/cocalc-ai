@@ -1,4 +1,5 @@
 import type { MembershipEntitlements } from "@cocalc/conat/hub/api/purchases";
+import { getEffectiveMembershipUsageLimits } from "./effective-limits";
 import { resolveMembershipForAccount } from "./resolve";
 
 const SETTINGS_FIELDS = ["memory", "memory_request", "disk_quota"] as const;
@@ -94,6 +95,17 @@ export async function getMembershipRuntimeSchedulingForAccount(
   return runtimeSchedulingFromSharedComputePriority(
     resolution.effective_limits?.shared_compute_priority ??
       resolution.entitlements?.usage_limits?.shared_compute_priority,
+  );
+}
+
+export async function getMembershipBrowserIdleTimeoutForAccount(
+  account_id?: string,
+): Promise<number> {
+  if (!account_id) return 0;
+  const resolution = await resolveMembershipForAccount(account_id);
+  return (
+    getEffectiveMembershipUsageLimits(resolution)
+      .browser_idle_timeout_seconds ?? 0
   );
 }
 

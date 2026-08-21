@@ -30,6 +30,7 @@ export type DedicatedHostEgressPolicy =
 
 export interface MembershipUsageLimits {
   shared_compute_priority?: number;
+  browser_idle_timeout_seconds?: number;
   total_storage_soft_bytes?: number;
   total_storage_hard_bytes?: number;
   max_projects?: number;
@@ -121,6 +122,7 @@ export interface AiLimitOverrides {
 
 export interface AccountUsageLimitOverrides {
   shared_compute_priority?: NumericLimitRule;
+  browser_idle_timeout_seconds?: NumericLimitRule;
   total_storage_soft_bytes?: NumericLimitRule;
   total_storage_hard_bytes?: NumericLimitRule;
   max_projects?: NumericLimitRule;

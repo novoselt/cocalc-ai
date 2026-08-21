@@ -28,7 +28,10 @@ import {
   markProjectSecretsCacheMaterialized,
   syncProjectSecretsCache,
 } from "../project-secrets-cache";
-import { upsertProjectStopState } from "../sqlite/stop-policy";
+import {
+  hasRecentProjectBrowserActivity,
+  upsertProjectStopState,
+} from "../sqlite/stop-policy";
 import {
   type CreateProjectOptions,
   type ProjectState,
@@ -150,6 +153,7 @@ import {
   isProjectDiskQuotaStartBlocked,
 } from "../project-start-quota";
 import { normalizeRunQuota, runnerConfigFromQuota } from "../run-quota";
+import { browserIdleTimeoutSeconds } from "../browser-runtime";
 import { withBtrfsMutationContext } from "@cocalc/file-server/btrfs/operation-cache";
 import {
   acceptProjectVolumeQuotaDesired,
@@ -178,6 +182,7 @@ const LRO_PUBLISH_RETRY_ATTEMPTS = 20;
 const LRO_PUBLISH_RETRY_DELAY_MS = 500;
 const LRO_PUBLISH_ATTEMPT_TIMEOUT_MS = 3000;
 const RUNNER_START_PORT_RETRY_LIMIT = 5;
+const BROWSER_RUNTIME_AUTOSTART_PRESENCE_MAX_AGE_MS = 2 * 60_000;
 const RUNNER_START_PORT_RETRY_BASE_DELAY_MS = 250;
 const OCCUPIED_PROJECT_PORT_CACHE_TTL_MS = 250;
 const STOPPED_VOLUME_PREPARATION_SWEEP_MS = Math.max(
@@ -1977,7 +1982,9 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
     beginProjectHostActivity(activity_id, "start");
     let resolved: StartMetadata | undefined;
     try {
-      const cachedLifecycleState = `${getProject(project_id)?.state ?? ""}`;
+      const cachedProject = getProject(project_id);
+      const cachedLifecycleState = `${cachedProject?.state ?? ""}`;
+      const cachedRuntimeExitReason = cachedProject?.runtime_exit_reason;
       // A successful stop durably records "opened" locally. In that normal
       // warm-start case, avoid a redundant Podman status round trip: the
       // runner's container preflight remains authoritative and fail-safe. If
@@ -2049,6 +2056,19 @@ export function wireProjectsApi(runnerApi: RunnerApi) {
       if (autostart && startMetadata.autostart_enabled === false) {
         throw new Error(
           "Automatic starts are disabled for this project. Use the project Start button, then try again.",
+        );
+      }
+      if (
+        autostart &&
+        cachedRuntimeExitReason === "browser_idle_timeout" &&
+        browserIdleTimeoutSeconds(startMetadata.run_quota) > 0 &&
+        !hasRecentProjectBrowserActivity({
+          project_id,
+          max_age_ms: BROWSER_RUNTIME_AUTOSTART_PRESENCE_MAX_AGE_MS,
+        })
+      ) {
+        throw new Error(
+          "This free project stopped after its CoCalc browser tabs closed. Open the project in CoCalc before using automatic services again.",
         );
       }
       const normalizedImage = getImage({ image: startMetadata.image });

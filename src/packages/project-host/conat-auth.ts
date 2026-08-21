@@ -40,6 +40,11 @@ import { getAccountRevokedBeforeMs } from "./sqlite/account-revocations";
 import { resolveProjectHostBrowserSessionFromCookieHeader } from "./browser-session";
 import { getProjectHostManagedEgressBlockedMessage } from "./managed-egress-runtime";
 import { getLocalExamAccountProjectId } from "./exam/identity";
+import {
+  BROWSER_RUNTIME_PRESENCE_AUTH_SCOPE,
+  isBrowserRuntimePresenceSubject,
+  parseBrowserRuntimePresenceSubject,
+} from "@cocalc/conat/project-host/browser-runtime-presence";
 
 const authDecisionCache = new TTL<string, boolean>({
   max: 20_000,
@@ -293,6 +298,7 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
       return {
         account_id: browserSession.account_id,
         auth_iat_s: browserSession.iat_s,
+        auth_scopes: [BROWSER_RUNTIME_PRESENCE_AUTH_SCOPE],
       } satisfies CoCalcUser;
     }
     const handshakeProjectAuth = readProjectScopedAuth(socket);
@@ -353,6 +359,21 @@ export function createProjectHostConatAuth({ host_id }: { host_id: string }): {
       })
     ) {
       return false;
+    }
+    if (isBrowserRuntimePresenceSubject(subject)) {
+      const presence = parseBrowserRuntimePresenceSubject(subject);
+      return (
+        userType === "account" &&
+        examProjectId == null &&
+        type === "pub" &&
+        presence?.account_id === userId &&
+        user.auth_scopes?.includes(BROWSER_RUNTIME_PRESENCE_AUTH_SCOPE) ===
+          true &&
+        isProjectCollaboratorLocal({
+          account_id: userId,
+          project_id: presence.project_id,
+        })
+      );
     }
     const cacheKey = `${userType}:${userId}:${type}:${subject}`;
     const cacheable = shouldCacheAuthDecision(subject);
