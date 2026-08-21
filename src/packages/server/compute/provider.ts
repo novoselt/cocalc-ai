@@ -1536,22 +1536,11 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
     const encoded = Buffer.from(`${keys}\n`).toString("base64");
     await execFileAsync(
       "ssh",
-      [
-        "-i",
-        controller.privateKeyPath,
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-        `user@${host}`,
-        "bash",
-        "-lc",
-        `tmp=$(mktemp) && echo '${encoded}' | base64 -d > "$tmp" && sudo install -d -m 0755 /var/lib/cocalc-managed-vm && sudo install -m 0600 "$tmp" /var/lib/cocalc-managed-vm/authorized_keys && install -d -m 0700 ~/.ssh && install -m 0600 "$tmp" ~/.ssh/authorized_keys && rm -f "$tmp"`,
-      ],
+      nebiusManagedSshKeySyncArgs({
+        privateKeyPath: controller.privateKeyPath,
+        host,
+        encoded,
+      }),
       { timeout: 30_000 },
     );
     return;
@@ -1573,6 +1562,37 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
     }),
     creds,
   );
+}
+
+export function nebiusManagedSshKeySyncArgs(opts: {
+  privateKeyPath: string;
+  host: string;
+  encoded: string;
+}): string[] {
+  // OpenSSH concatenates every argument after the host into one remote shell
+  // command. Keep the script in exactly one argument so substitutions and
+  // redirects happen in that shell instead of being split around `bash -lc`.
+  const command =
+    `tmp=$(mktemp) && printf %s ${opts.encoded} | base64 -d > "$tmp"` +
+    ` && sudo install -d -m 0755 /var/lib/cocalc-managed-vm` +
+    ` && sudo install -m 0600 "$tmp" /var/lib/cocalc-managed-vm/authorized_keys` +
+    ` && install -d -m 0700 ~/.ssh` +
+    ` && install -m 0600 "$tmp" ~/.ssh/authorized_keys` +
+    ` && rm -f "$tmp"`;
+  return [
+    "-i",
+    opts.privateKeyPath,
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "IdentitiesOnly=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    `user@${opts.host}`,
+    command,
+  ];
 }
 
 async function runProviderComputeWindowsPowerShell(

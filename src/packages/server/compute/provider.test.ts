@@ -10,6 +10,7 @@ import {
   managedWindowsSshKeysScript,
   managedWindowsVmBootstrapScript,
   mergeManagedNebiusSpec,
+  nebiusManagedSshKeySyncArgs,
   providerComputeStatusWithPresence,
   providerComputeSshHost,
   providerInstanceIdIsProvisional,
@@ -85,6 +86,23 @@ describe("managedVmBootstrapScript", () => {
     expect(decodeBootstrapKeys(script)).toBe(
       "ssh-ed25519 AAAAOWNER owner\nssh-ed25519 AAAACONTROLLER controller\n",
     );
+  });
+});
+
+describe("nebiusManagedSshKeySyncArgs", () => {
+  it("passes the entire remote key update as one OpenSSH argument", () => {
+    const args = nebiusManagedSshKeySyncArgs({
+      privateKeyPath: "/controller/id_ed25519",
+      host: "203.0.113.10",
+      encoded: "QUJDRAo=",
+    });
+    const hostIndex = args.indexOf("user@203.0.113.10");
+
+    expect(hostIndex).toBeGreaterThan(0);
+    expect(args.slice(hostIndex + 1)).toHaveLength(1);
+    expect(args.at(-1)).toContain("tmp=$(mktemp)");
+    expect(args.at(-1)).toContain("printf %s QUJDRAo=");
+    expect(args.at(-1)).not.toContain("bash -lc");
   });
 });
 
