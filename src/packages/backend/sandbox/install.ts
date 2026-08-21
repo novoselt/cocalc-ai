@@ -176,14 +176,15 @@ function getBlitInstallScript(): string {
   const openh264Url = `https://static.crates.io/crates/openh264-sys2/${openh264Archive}`;
   const prefix = join(binPath, "..");
   const licenseDir = join(prefix, "share", "licenses", "blit");
+  const target = join(binPath, "blit");
   return [
     "set -eu",
     'tmp="$(mktemp -d)"',
     "trap 'rm -rf \"$tmp\"' EXIT",
     `curl -fL "${releaseBase}/${archive}" -o "$tmp/${archive}"`,
     `printf '%s  %s\\n' "${BLIT_SHA256[currentArch]}" "$tmp/${archive}" | sha256sum -c -`,
-    `mkdir -p "${prefix}" "${licenseDir}"`,
-    `tar -xzf "$tmp/${archive}" -C "${prefix}"`,
+    `mkdir -p "${binPath}" "${licenseDir}"`,
+    `tar -xzf "$tmp/${archive}" -C "$tmp" bin/blit`,
     `curl -fL "${licenseUrl}" -o "$tmp/LICENSE"`,
     `printf '%s  %s\\n' "${BLIT_LICENSE_SHA256}" "$tmp/LICENSE" | sha256sum -c -`,
     `install -m 0644 "$tmp/LICENSE" "${licenseDir}/LICENSE"`,
@@ -192,6 +193,7 @@ function getBlitInstallScript(): string {
     `tar -xzf "$tmp/${openh264Archive}" -C "$tmp" "openh264-sys2-${OPENH264_CRATE_VERSION}/upstream/LICENSE"`,
     `install -m 0644 "$tmp/openh264-sys2-${OPENH264_CRATE_VERSION}/upstream/LICENSE" "${licenseDir}/OPENH264-LICENSE"`,
     `printf '%s\\n' 'Blit ${BLIT_VERSION} (non-GPL OpenH264 build)' 'Source: https://github.com/indent-com/blit/tree/05002b31cbe429b3198b528e3cb2a0f6a068c750' 'Binary: ${releaseBase}/${archive}' 'OpenH264 source crate: ${openh264Url}' > "${licenseDir}/SOURCE"`,
+    `install -m 0755 "$tmp/bin/blit" "${target}"`,
   ].join("; ");
 }
 
@@ -199,15 +201,22 @@ function getXwaylandSatelliteInstallScript(): string {
   const currentArch = graphicalToolArch();
   const releaseArch = currentArch === "x64" ? "x86_64" : "aarch64";
   const archive = `xwayland-satellite-${XWAYLAND_SATELLITE_VERSION}-linux-${releaseArch}.tar.xz`;
+  const archiveRoot = archive.slice(0, -".tar.xz".length);
   const releaseBase = `https://github.com/sagemathinc/xwayland-satellite-builds/releases/download/${XWAYLAND_SATELLITE_RELEASE}`;
   const prefix = join(binPath, "..");
+  const licenseDir = join(prefix, "share", "licenses", "xwayland-satellite");
+  const target = join(binPath, "xwayland-satellite");
   return [
     "set -eu",
     'tmp="$(mktemp -d)"',
     "trap 'rm -rf \"$tmp\"' EXIT",
     `curl -fL "${releaseBase}/${archive}" -o "$tmp/${archive}"`,
     `printf '%s  %s\\n' "${XWAYLAND_SATELLITE_SHA256[currentArch]}" "$tmp/${archive}" | sha256sum -c -`,
-    `tar -xJf "$tmp/${archive}" -C "${prefix}" --strip-components=1`,
+    `mkdir -p "${binPath}" "${licenseDir}"`,
+    `tar -xJf "$tmp/${archive}" -C "$tmp"`,
+    `install -m 0644 "$tmp/${archiveRoot}/share/licenses/xwayland-satellite/LICENSE" "${licenseDir}/LICENSE"`,
+    `install -m 0644 "$tmp/${archiveRoot}/share/licenses/xwayland-satellite/SOURCE" "${licenseDir}/SOURCE"`,
+    `install -m 0755 "$tmp/${archiveRoot}/bin/xwayland-satellite" "${target}"`,
   ].join("; ");
 }
 
