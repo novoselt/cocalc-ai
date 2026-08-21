@@ -15,7 +15,10 @@ import {
   managedVmProjectAccessNeedsSync,
   managedVmProjectConfigShouldBeEnabled,
   providerComputeInstanceIsExpected,
+  providerRuntimePublicAddressStatus,
+  providerStartDisposition,
   RetryableComputeWorkError,
+  shouldRecoverSpotCapacityFailure,
   stoppedVmProviderInstanceNeedsReconciliation,
   runtimeIdentityChanged,
   spotCapacityRecoveryDecision,
@@ -324,6 +327,53 @@ describe("compute VM work failure state", () => {
       ),
     ).toBe(true);
     expect(isSpotCapacityError(new Error("invalid machine type"))).toBe(false);
+  });
+
+  it("does not treat delayed Nebius networking as Spot exhaustion", () => {
+    expect(
+      providerRuntimePublicAddressStatus({
+        provider: "nebius",
+        expected: "203.0.113.10",
+        observed: undefined,
+      }),
+    ).toBe("pending");
+    expect(
+      shouldRecoverSpotCapacityFailure(
+        {
+          desired_pricing_model: "spot",
+          effective_pricing_model: "spot",
+        } as any,
+        new Error(
+          "Nebius accepted the VM and is still assigning its public IP",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("enters Spot recovery only for explicit capacity failures", () => {
+    const vm = {
+      desired_pricing_model: "spot",
+      effective_pricing_model: "spot",
+    } as any;
+    expect(
+      shouldRecoverSpotCapacityFailure(
+        vm,
+        new Error("RESOURCE_POOL_EXHAUSTED: no capacity"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRecoverSpotCapacityFailure(
+        vm,
+        new Error("SSH readiness timed out for 203.0.113.10"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not start an instance the provider already reports running", () => {
+    expect(providerStartDisposition("running")).toBe("ready");
+    expect(providerStartDisposition("starting")).toBe("wait");
+    expect(providerStartDisposition("missing")).toBe("provision");
+    expect(providerStartDisposition("stopped")).toBe("start");
   });
 
   it("uses the configured Spot retry threshold before Standard fallback", () => {

@@ -1228,6 +1228,36 @@ export function isSpotCapacityError(err: unknown): boolean {
   ].some((pattern) => message.includes(pattern));
 }
 
+export function shouldRecoverSpotCapacityFailure(
+  vm: Pick<ComputeVmRow, "desired_pricing_model" | "effective_pricing_model">,
+  err: unknown,
+): boolean {
+  return (
+    vm.desired_pricing_model === "spot" &&
+    vm.effective_pricing_model === "spot" &&
+    isSpotCapacityError(err)
+  );
+}
+
+export function providerRuntimePublicAddressStatus(opts: {
+  provider: ComputeVmRow["provider"];
+  expected: string | null | undefined;
+  observed: string | undefined;
+}): "ready" | "pending" | "mismatch" {
+  if (opts.provider === "nebius" && !opts.observed) return "pending";
+  if (opts.observed === opts.expected) return "ready";
+  return "mismatch";
+}
+
+export function providerStartDisposition(
+  status: "missing" | "starting" | "running" | "stopping" | "stopped" | "error",
+): "provision" | "wait" | "ready" | "start" {
+  if (status === "missing") return "provision";
+  if (status === "starting" || status === "stopping") return "wait";
+  if (status === "running") return "ready";
+  return "start";
+}
+
 function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
@@ -1828,11 +1858,7 @@ async function provision(vm: ComputeVmRow) {
       createProviderComputeVm(provisioning, volume),
     );
   } catch (err) {
-    if (
-      provisioning.desired_pricing_model === "spot" &&
-      provisioning.effective_pricing_model === "spot" &&
-      isSpotCapacityError(err)
-    ) {
+    if (shouldRecoverSpotCapacityFailure(provisioning, err)) {
       return await recoverFromSpotCapacityFailure(provisioning, err);
     }
     throw err;
@@ -1849,7 +1875,7 @@ async function provision(vm: ComputeVmRow) {
       state: provisioning.desired_state === "deleted" ? "deleting" : "stopping",
       provider_instance_id:
         runtime.instance_id ?? provisioning.provider_instance_id,
-      public_ip: runtime.public_ip ?? null,
+      public_ip: runtime.public_ip ?? provisioning.public_ip,
       metadata: runtimeMetadata,
     }))!;
     await insertComputeInstance(interrupted);
@@ -1858,27 +1884,26 @@ async function provision(vm: ComputeVmRow) {
     }
     return await stop(interrupted);
   }
-  if (
-    provisioning.provider === "nebius" &&
-    provisioning.desired_pricing_model === "spot" &&
-    provisioning.effective_pricing_model === "spot" &&
-    !runtime.public_ip
-  ) {
+  const addressStatus = providerRuntimePublicAddressStatus({
+    provider: provisioning.provider,
+    expected: provisioning.public_ip,
+    observed: runtime.public_ip,
+  });
+  if (addressStatus === "pending") {
     const waiting = (await updateComputeVm(provisioning.id, {
       provider_instance_id:
         runtime.instance_id ?? provisioning.provider_instance_id,
-      public_ip: null,
+      public_ip: provisioning.public_ip,
       metadata: runtimeMetadata,
     }))!;
     await insertComputeInstance(waiting);
-    return await recoverFromSpotCapacityFailure(
-      waiting,
-      new Error(
-        "Nebius accepted the Spot VM but it is still waiting for resources and has no public IP",
-      ),
+    throw new RetryableComputeWorkError(
+      "Nebius accepted the VM and is still assigning its public IP",
+      new Date(Date.now() + 5_000),
+      "provisioning",
     );
   }
-  if (runtime.public_ip !== provisioning.public_ip) {
+  if (addressStatus === "mismatch") {
     throw new Error(
       `provider attached unexpected public IP '${runtime.public_ip ?? "none"}' instead of reserved '${provisioning.public_ip}'`,
     );
@@ -1887,7 +1912,7 @@ async function provision(vm: ComputeVmRow) {
     state: "starting",
     provider_instance_id:
       runtime.instance_id ?? provisioning.provider_instance_id,
-    public_ip: runtime.public_ip ?? null,
+    public_ip: runtime.public_ip ?? provisioning.public_ip,
     metadata: runtimeMetadata,
   }))!;
   await insertComputeInstance(starting);
@@ -1912,8 +1937,9 @@ async function start(vm: ComputeVmRow) {
   }
   if (vm.desired_state === "stopped") return await reconcile(vm);
   let observed = await inspectAndRecordProviderComputeVm(vm);
-  if (observed.status === "missing") return await provision(vm);
-  if (observed.status === "starting" || observed.status === "stopping") return;
+  let disposition = providerStartDisposition(observed.status);
+  if (disposition === "provision") return await provision(vm);
+  if (disposition === "wait") return;
   if (
     observed.status === "error" &&
     vm.provider === "nebius" &&
@@ -1935,7 +1961,21 @@ async function start(vm: ComputeVmRow) {
       setProviderComputePricing(vm, vm.effective_pricing_model),
     );
     observed = await inspectAndRecordProviderComputeVm(vm);
-    if (observed.status === "missing") return await provision(vm);
+    disposition = providerStartDisposition(observed.status);
+    if (disposition === "provision") return await provision(vm);
+    if (disposition === "wait") return;
+  }
+  if (disposition === "ready") {
+    if (
+      vm.public_ip &&
+      observed.instance?.public_ip &&
+      observed.instance.public_ip !== vm.public_ip
+    ) {
+      throw new Error(
+        `running VM public IP drifted from reserved address '${vm.public_ip}' to '${observed.instance.public_ip}'`,
+      );
+    }
+    return await markReady(vm, observed.instance ?? {});
   }
   await observeVmPhase(vm, "provider_set_machine_type", async () =>
     setProviderComputeMachineType(vm),
@@ -1951,6 +1991,14 @@ async function start(vm: ComputeVmRow) {
       startProviderComputeVm(vm),
     );
     const observed = await inspectAndRecordProviderComputeVm(vm);
+    const disposition = providerStartDisposition(observed.status);
+    if (disposition === "provision") return await provision(vm);
+    if (disposition === "wait") return;
+    if (disposition !== "ready") {
+      throw new Error(
+        `provider VM did not enter a running state after start (status=${observed.status})`,
+      );
+    }
     if (vm.home_volume_id) {
       const volume = await getComputeVolumeById(vm.home_volume_id);
       if (!volume) throw new Error("attached compute volume is unavailable");
@@ -1969,10 +2017,7 @@ async function start(vm: ComputeVmRow) {
     const current = await getComputeVmById(vm.id);
     if (current?.desired_state === "stopped") return await reconcile(current);
     if (current?.desired_state === "deleted") return await remove(current);
-    if (
-      vm.desired_pricing_model === "spot" &&
-      vm.effective_pricing_model === "spot"
-    ) {
+    if (shouldRecoverSpotCapacityFailure(vm, err)) {
       return await recoverFromSpotCapacityFailure(vm, err);
     }
     throw err;

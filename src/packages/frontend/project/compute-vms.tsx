@@ -865,7 +865,8 @@ function VmCreateModal({
                   zone,
                   machine_type,
                   pricing_model,
-                  allow_on_demand_fallback: pricing_model === "spot",
+                  allow_on_demand_fallback:
+                    nextProvider !== "nebius" && pricing_model === "spot",
                   gpu_type: undefined,
                   gpu_count: 0,
                   home_volume: undefined,
@@ -1423,7 +1424,8 @@ function VmCreateModal({
                           const pricing_model = event.target.value;
                           patchDraft({
                             pricing_model,
-                            allow_on_demand_fallback: pricing_model === "spot",
+                            allow_on_demand_fallback:
+                              provider !== "nebius" && pricing_model === "spot",
                           });
                         }}
                       >
