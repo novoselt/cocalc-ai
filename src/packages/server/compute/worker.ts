@@ -1264,6 +1264,12 @@ export function runningVmWorkAlreadySatisfied(
   return vm.state === "ready" && vm.desired_state === "running";
 }
 
+export function vmReadinessIntentIsRunning(
+  vm: Pick<ComputeVmRow, "desired_state"> | undefined,
+): boolean {
+  return vm?.desired_state === "running";
+}
+
 function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
@@ -1462,6 +1468,7 @@ async function waitForSsh(
     : undefined;
   const command = managedVmReadinessCommand(vm, expectedHomeDevice);
   while (Date.now() < deadline) {
+    if (!vmReadinessIntentIsRunning(await getComputeVmById(vm.id))) return;
     try {
       await new Promise<void>((resolve, reject) => {
         const socket = net.createConnection({ host, port: 22 });

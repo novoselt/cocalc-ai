@@ -24,6 +24,7 @@ import {
   runningVmWorkAlreadySatisfied,
   spotCapacityRecoveryDecision,
   volumeAttachedToVm,
+  vmReadinessIntentIsRunning,
 } from "./worker";
 import {
   effectiveComputeVolumeSizeGb,
@@ -390,6 +391,19 @@ describe("compute VM work failure state", () => {
         desired_state: "running",
       } as any),
     ).toBe(false);
+  });
+
+  it("cancels readiness polling when newer intent stops or deletes the VM", () => {
+    expect(
+      vmReadinessIntentIsRunning({ desired_state: "running" } as any),
+    ).toBe(true);
+    expect(
+      vmReadinessIntentIsRunning({ desired_state: "stopped" } as any),
+    ).toBe(false);
+    expect(
+      vmReadinessIntentIsRunning({ desired_state: "deleted" } as any),
+    ).toBe(false);
+    expect(vmReadinessIntentIsRunning(undefined)).toBe(false);
   });
 
   it("uses the configured Spot retry threshold before Standard fallback", () => {
