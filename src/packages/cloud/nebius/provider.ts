@@ -1305,7 +1305,10 @@ export class NebiusProvider implements CloudProvider {
               // Nebius requires ipAddress to be present even when auto-assigning.
               ipAddress: IPAddress.create({}),
               publicIpAddress: PublicIPAddress.create({
-                static: true,
+                // Project hosts use a provider-managed dynamic address. Managed
+                // compute VMs pass an explicit allocation so their controller
+                // can safely recreate the instance around a persistent disk.
+                static: !!spec.metadata?.public_address_id,
                 ...(spec.metadata?.public_address_id
                   ? {
                       allocation: {

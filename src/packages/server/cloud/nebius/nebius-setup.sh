@@ -11,8 +11,10 @@ set -euo pipefail
 # Service account name and resource prefix used by CoCalc.
 NEBIUS_SA_NAME="${NEBIUS_SA_NAME:-cocalc-launchpad}"
 NEBIUS_PREFIX="${NEBIUS_PREFIX:-cocalc-host}"
-# Default regions we support right now (one project per region).
-REGIONS=("eu-north1" "eu-west1" "me-west1" "us-central1")
+# Regions CoCalc can configure automatically (one project per region). Private
+# regions are harmless here: the wizard includes them only when the tenant has
+# a project there.
+REGIONS=("eu-north1" "eu-west1" "me-west1" "uk-south1" "us-central1")
 
 START_MARKER="=== COCALC NEBIUS CONFIG START ==="
 END_MARKER="=== COCALC NEBIUS CONFIG END ==="

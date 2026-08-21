@@ -121,6 +121,144 @@ beforeEach(async () => {
 });
 
 describe("cloud host start failures", () => {
+  it("detaches a stopped persistent Nebius host while preserving data disks", async () => {
+    const hostId = "4fe12fef-b8ad-4c17-a989-ed24f8f9da19";
+    const deleteHost = jest.fn(async () => undefined);
+    const stopHost = jest.fn(async () => undefined);
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        capabilities: { supportsStop: true },
+        provider: { deleteHost, stopHost },
+      },
+      creds: {},
+    });
+    await upsertProjectHost({
+      id: hostId,
+      name: "Stopped Nebius host",
+      region: "eu-north1",
+      status: "stopping",
+      public_url: "https://host.example.test",
+      internal_url: "https://host.example.test",
+      ssh_server: "192.0.2.10:2222",
+      metadata: {
+        owner: "acct-owner",
+        machine: {
+          cloud: "nebius",
+          machine_type: "1gpu-8vcpu-32gb",
+          disk_gb: 186,
+          disk_type: "ssd_io_m3",
+          shared_disk_gb: 372,
+          shared_disk_type: "ssd_io_m3",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "nebius",
+          instance_id: "computeinstance-host",
+          public_ip: "192.0.2.10",
+          metadata: {
+            diskIds: {
+              boot: "computedisk-boot",
+              data: "computedisk-data",
+              scratch: "computedisk-scratch",
+            },
+            shared_disk_name: "host-scratch",
+          },
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.stop({
+      id: "stop-nebius-detach-1",
+      vm_id: hostId,
+      action: "stop",
+      payload: { provider: "nebius" },
+    } as any);
+
+    expect(deleteHost).toHaveBeenCalledWith(
+      expect.objectContaining({ instance_id: "computeinstance-host" }),
+      {},
+      { preserveDataDisk: true },
+    );
+    expect(stopHost).not.toHaveBeenCalled();
+    expect(removeHostSshKnownHostAliasMock).toHaveBeenCalledWith({
+      host_id: hostId,
+      reason: "stop",
+    });
+    const { rows } = await getPool().query(
+      `SELECT status, public_url, internal_url, ssh_server, metadata
+         FROM project_hosts WHERE id=$1`,
+      [hostId],
+    );
+    expect(rows[0]).toMatchObject({
+      status: "off",
+      public_url: null,
+      internal_url: null,
+      ssh_server: null,
+    });
+    expect(rows[0].metadata.runtime).toBeUndefined();
+    expect(rows[0].metadata.machine.metadata).toMatchObject({
+      data_disk_id: "computedisk-data",
+      shared_disk_id: "computedisk-scratch",
+      shared_disk_name: "host-scratch",
+    });
+  });
+
+  it("uses provider stop when a Nebius data disk cannot be proven", async () => {
+    const hostId = "b37b81d9-b411-4134-8576-3feb5a440289";
+    const deleteHost = jest.fn(async () => undefined);
+    const stopHost = jest.fn(async () => undefined);
+    getProviderContextMock.mockResolvedValue({
+      entry: {
+        capabilities: { supportsStop: true },
+        provider: {
+          deleteHost,
+          stopHost,
+          getStatus: jest.fn(async () => "off"),
+        },
+      },
+      creds: {},
+    });
+    await upsertProjectHost({
+      id: hostId,
+      name: "Legacy Nebius host",
+      region: "eu-north1",
+      status: "stopping",
+      metadata: {
+        owner: "acct-owner",
+        machine: {
+          cloud: "nebius",
+          machine_type: "1gpu-8vcpu-32gb",
+          disk_gb: 186,
+          disk_type: "ssd_io_m3",
+          storage_mode: "persistent",
+        },
+        runtime: {
+          provider: "nebius",
+          instance_id: "computeinstance-legacy",
+          metadata: { diskIds: { boot: "computedisk-boot" } },
+        },
+      },
+    });
+
+    const { cloudHostHandlers } = await import("./host-work");
+    await cloudHostHandlers.stop({
+      id: "stop-nebius-safe-fallback-1",
+      vm_id: hostId,
+      action: "stop",
+      payload: { provider: "nebius" },
+    } as any);
+
+    expect(stopHost).toHaveBeenCalled();
+    expect(deleteHost).not.toHaveBeenCalled();
+    const { rows } = await getPool().query(
+      "SELECT status, metadata FROM project_hosts WHERE id=$1",
+      [hostId],
+    );
+    expect(rows[0].status).toBe("off");
+    expect(rows[0].metadata.runtime.instance_id).toBe("computeinstance-legacy");
+  });
+
   it("does not resurrect stale runtime metadata after reprovision start fails", async () => {
     const hostId = "2058bae4-d049-40b9-88ba-187a7091da55";
     const quotaError = new Error(
