@@ -819,11 +819,6 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
                     updated_at: "2026-05-10T15:02:00Z",
                     message: "Host software reconciled",
                   },
-                  bootstrap_lifecycle: {
-                    summary_status: "in_sync",
-                    last_reconcile_started_at: "2026-05-10T15:01:00Z",
-                    last_reconcile_finished_at: "2026-05-10T15:02:00Z",
-                  },
                 },
               },
             ],
