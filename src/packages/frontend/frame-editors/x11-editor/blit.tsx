@@ -17,6 +17,7 @@ import {
   INSTALL_GRAPHICAL_APPS_COMMAND,
   parseBlitPrerequisites,
 } from "./blit-app";
+import { BlitLauncher } from "./blit-launcher";
 
 interface Props {
   is_current: boolean;
@@ -155,8 +156,8 @@ export function Blit({ is_current, project_id, reload }: Props) {
               </Typography.Text>
             </>
           }
-          message="Graphical application support is not installed"
           showIcon
+          title="Graphical application support is not installed"
           type="warning"
         />
       </Flex>
@@ -165,19 +166,32 @@ export function Blit({ is_current, project_id, reload }: Props) {
 
   if (src) {
     return (
-      <iframe
-        allow="autoplay; camera; clipboard-read; clipboard-write; fullscreen; microphone"
-        aria-label="Blit graphical applications"
-        key={src}
-        src={src}
+      <Flex
         style={{
-          border: 0,
-          display: is_current ? "block" : "none",
+          display: is_current ? "flex" : "none",
           height: "100%",
+          minHeight: 0,
+          minWidth: 0,
           width: "100%",
         }}
-        title="Blit graphical applications"
-      />
+        vertical
+      >
+        <BlitLauncher project_id={project_id} />
+        <iframe
+          allow="autoplay; camera; clipboard-read; clipboard-write; fullscreen; microphone"
+          aria-label="Blit graphical applications"
+          key={src}
+          src={src}
+          style={{
+            border: 0,
+            flex: "1 1 auto",
+            minHeight: 0,
+            minWidth: 0,
+            width: "100%",
+          }}
+          title="Blit graphical applications"
+        />
+      </Flex>
     );
   }
 
@@ -196,8 +210,8 @@ export function Blit({ is_current, project_id, reload }: Props) {
             </Button>
           }
           description={error}
-          message="Unable to start graphical applications"
           showIcon
+          title="Unable to start graphical applications"
           type="error"
         />
       ) : (
