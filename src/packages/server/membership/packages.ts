@@ -322,6 +322,12 @@ function normalizePackageRecord(
   };
 }
 
+function assertMembershipPackageCanExpand(pkg: MembershipPackageRecord): void {
+  if (pkg.expires_at != null && pkg.expires_at.valueOf() <= Date.now()) {
+    throw Error("cannot add seats to an expired membership package");
+  }
+}
+
 function normalizeAssignmentRecord(
   row: RawMembershipPackageAssignment,
 ): MembershipPackageAssignment {
@@ -1492,6 +1498,7 @@ export async function resolveMembershipPackageQuote(
     if (!existing) {
       throw Error("membership package not found");
     }
+    assertMembershipPackageCanExpand(existing);
     await getPurchasableMembershipTierForPackageKind({
       kind: existing.kind,
       membership_class: existing.membership_class,
@@ -1719,7 +1726,8 @@ export async function addMembershipPackageSeats(
     package_id,
     action: "expand membership package",
     client,
-    fn: async ({ client: dbClient }) => {
+    fn: async ({ client: dbClient, pkg }) => {
+      assertMembershipPackageCanExpand(pkg);
       const delta = normalizeSeatCount(seat_count);
       const { rows } = await getQueryClient(dbClient).query(
         `

@@ -167,5 +167,6 @@ describe("course membership package helpers", () => {
     expect(getCourseMembershipPackage([expired, active], "course-1")?.id).toBe(
       "active",
     );
+    expect(getCourseMembershipPackage([expired], "course-1")).toBeUndefined();
   });
 });

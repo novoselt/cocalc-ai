@@ -51,6 +51,7 @@ import { uuid } from "@cocalc/util/misc";
 import { resolveMembershipForAccount } from "./resolve";
 import { getMembershipClaimIdentity } from "./claim-directory";
 import {
+  addMembershipPackageSeats,
   assignMembershipPackageSeat,
   claimCourseMembershipPackageSeatsForAcceptedInvite,
   claimMembershipPackageSeat,
@@ -662,6 +663,43 @@ describe("membership packages", () => {
     expect(quote.package_id).toBe(package_id);
     expect(quote.kind).toBe("team");
     expect(quote.total_price).toBe(20);
+  });
+
+  it("rejects expanding an expired membership package", async () => {
+    const owner_account_id = uuid();
+    await createTestAccount(owner_account_id);
+
+    const package_id = await createTestMembershipPackage({
+      owner_account_id,
+      kind: "team",
+      membership_class: teamTier,
+      seat_count: 2,
+      expires_at: dayjs().subtract(1, "minute").toDate(),
+      metadata: {
+        interval: "month",
+        seat_price: 20,
+      },
+    });
+
+    const error = "cannot add seats to an expired membership package";
+    await expect(
+      resolveMembershipPackageQuote({
+        type: "membership-package",
+        membership_class: teamTier,
+        seat_count: 1,
+        package_id,
+      }),
+    ).rejects.toThrow(error);
+    await expect(
+      addMembershipPackageSeats({ package_id, seat_count: 1 }),
+    ).rejects.toThrow(error);
+
+    const details = await listMembershipPackageDetailsForOwner({
+      owner_account_id,
+    });
+    expect(details.find(({ id }) => id === package_id)).toMatchObject({
+      seat_count: 2,
+    });
   });
 
   it("updates project usage attribution when assigning and revoking a course seat", async () => {
