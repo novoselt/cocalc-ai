@@ -42,6 +42,7 @@ import initHttpServer from "./http";
 import initRobots from "./robots";
 import initSitemap from "./sitemap";
 import { applyBaselineSecurityHeaders } from "./security-headers";
+import { setApplicationShellCacheHeaders } from "./application-shell-cache";
 import getServerSettings from "./server-settings";
 import basePath from "@cocalc/backend/base-path";
 import { conatSocketioCount, root } from "@cocalc/backend/data";
@@ -64,7 +65,6 @@ const PYTHON_API_PATH = join(root, "python", "cocalc-api", "site");
 
 // Used for longterm caching of files. This should be in units of seconds.
 const MAX_AGE = Math.round(ms("10 days") / 1000);
-const SHORT_AGE = Math.round(ms("10 seconds") / 1000);
 const PUBLIC_APP_SUBDOMAIN_REWRITE_TIMEOUT_MS = 250;
 
 function isEnabled(value: unknown): boolean {
@@ -362,21 +362,7 @@ export default async function init(opts: Options): Promise<{
   return { httpServer, router };
 }
 
-// The application shells are mutable, they are what a client revalidates to
-// discover a new build, and the bay frontdoor attaches a per-client
-// worker-affinity cookie to them. They must therefore stay out of shared
-// caches: `private` keeps the short browser-side lifetime without letting
-// Cloudflare or an intermediate proxy hand one client's shell (and cookie) to
-// another.
-function cacheShortTerm(res) {
-  res.setHeader(
-    "Cache-Control",
-    `private, max-age=${SHORT_AGE}, must-revalidate`,
-  );
-  res.setHeader("Expires", expiresAfter(SHORT_AGE));
-}
-
-// MAX_AGE/SHORT_AGE are seconds, Date.now() is milliseconds.
+// MAX_AGE is seconds, Date.now() is milliseconds.
 function expiresAfter(seconds: number): string {
   return new Date(Date.now() + seconds * 1000).toUTCString();
 }
@@ -499,25 +485,25 @@ async function initStatic(router) {
     "/static/app.html",
     staticCompression,
     express.static(join(staticPath, "app.html"), {
-      setHeaders: cacheShortTerm,
+      setHeaders: setApplicationShellCacheHeaders,
     }),
   );
   router.use(
     "/static/embed.html",
     staticCompression,
     express.static(join(staticPath, "embed.html"), {
-      setHeaders: cacheShortTerm,
+      setHeaders: setApplicationShellCacheHeaders,
     }),
   );
   router.use(
     "/static/ultralite.html",
     staticCompression,
     express.static(join(staticPath, "ultralite.html"), {
-      setHeaders: cacheShortTerm,
+      setHeaders: setApplicationShellCacheHeaders,
     }),
   );
   router.get(/^\/essential(?:\/.*)?$/, staticCompression, (_req, res, next) => {
-    cacheShortTerm(res);
+    setApplicationShellCacheHeaders(res);
     const staticBase = basePath === "/" ? "/static/" : `${basePath}/static/`;
     void readFile(join(staticPath, "ultralite.html"), "utf8")
       .then((html) => {
