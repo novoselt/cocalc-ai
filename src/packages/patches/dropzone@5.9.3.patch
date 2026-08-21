@@ -1,0 +1,38 @@
+diff --git a/dist/dropzone.js b/dist/dropzone.js
+index db7e403b5b19bee24f65d6a9b09fbc4b02b840f9..7783ed957670b5de3343ab0154e742b01f3647f5 100644
+--- a/dist/dropzone.js
++++ b/dist/dropzone.js
+@@ -8099,8 +8099,12 @@ var Dropzone = /*#__PURE__*/function (_Emitter) {
+           _this2.hiddenFileInput.style.width = "0";
+           Dropzone.getElement(_this2.options.hiddenInputContainer, "hiddenInputContainer").appendChild(_this2.hiddenFileInput);
+ 
+-          _this2.hiddenFileInput.addEventListener("change", function () {
+-            var files = _this2.hiddenFileInput.files;
++          _this2.hiddenFileInput.addEventListener("change", function (event) {
++            var input = event.currentTarget; // The native file picker can dispatch after destroy() has cleared
++            // hiddenFileInput. Ignore that stale input instead of crashing.
++
++            if (input !== _this2.hiddenFileInput) return;
++            var files = input.files;
+ 
+             if (files.length) {
+               var _iterator = dropzone_createForOfIteratorHelper(files, true),
+diff --git a/src/dropzone.js b/src/dropzone.js
+index 9986f0b632e7b9c2b9036104bf3422281d303f54..ebd7bd160dce9ccdd650be2ab7ad3e36e01c310a 100644
+--- a/src/dropzone.js
++++ b/src/dropzone.js
+@@ -272,8 +272,12 @@ export default class Dropzone extends Emitter {
+           this.options.hiddenInputContainer,
+           "hiddenInputContainer"
+         ).appendChild(this.hiddenFileInput);
+-        this.hiddenFileInput.addEventListener("change", () => {
+-          let { files } = this.hiddenFileInput;
++        this.hiddenFileInput.addEventListener("change", (event) => {
++          const input = event.currentTarget;
++          // The native file picker can dispatch after destroy() has cleared
++          // hiddenFileInput. Ignore that stale input instead of crashing.
++          if (input !== this.hiddenFileInput) return;
++          let { files } = input;
+           if (files.length) {
+             for (let file of files) {
+               this.addFile(file);
