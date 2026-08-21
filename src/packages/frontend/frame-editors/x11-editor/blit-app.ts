@@ -8,6 +8,8 @@ import type { AppSpec } from "@cocalc/conat/project/api/apps";
 export const BLIT_APP_ID = "cocalc-blit-x11";
 export const BLIT_PASSPHRASE = "cocalc-private-project";
 
+const SHELL_ARRAY_ARGS = "$" + "{args[@]}";
+
 const START_SCRIPT = String.raw`set -euo pipefail
 
 # Blit and xwayland-satellite are normally installed per-user. Blit discovers
@@ -27,6 +29,45 @@ state_dir="$HOME/.local/state/cocalc/blit"
 runtime_dir="$state_dir/runtime"
 mkdir -p "$runtime_dir"
 chmod 700 "$runtime_dir"
+
+# Project isolation prevents nested network namespaces from configuring their
+# loopback device. Glycin otherwise mistakes bwrap for usable and GTK apps
+# crash while loading icons. Keep every other bwrap isolation layer and share
+# only the network namespace for glycin's image-loader processes.
+real_bwrap="$(command -v bwrap || true)"
+if [ -n "$real_bwrap" ]; then
+  compat_bin="$state_dir/compat-bin"
+  mkdir -p "$compat_bin"
+  cat > "$compat_bin/bwrap" <<'BWRAP'
+#!/bin/bash
+set -euo pipefail
+
+is_glycin=false
+has_share_net=false
+for arg in "$@"; do
+  case "$arg" in
+    */glycin-loaders/*) is_glycin=true ;;
+    --share-net) has_share_net=true ;;
+  esac
+done
+
+if [ "$is_glycin" != true ] || [ "$has_share_net" = true ]; then
+  exec "$COCALC_REAL_BWRAP" "$@"
+fi
+
+args=()
+for arg in "$@"; do
+  args+=("$arg")
+  if [ "$arg" = "--unshare-all" ]; then
+    args+=("--share-net")
+  fi
+done
+exec "$COCALC_REAL_BWRAP" "${SHELL_ARRAY_ARGS}"
+BWRAP
+  chmod 700 "$compat_bin/bwrap"
+  export COCALC_REAL_BWRAP="$real_bwrap"
+  export PATH="$compat_bin:$PATH"
+fi
 
 export XDG_RUNTIME_DIR="$runtime_dir"
 export BLIT_SOCK="$runtime_dir/server.sock"

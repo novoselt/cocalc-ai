@@ -46,4 +46,11 @@ describe("Blit managed app", () => {
     expect(script).toContain("BLIT_SERVER_NAME=cocalc-x11");
     expect(script).toContain('wait -n "$server_pid" "$gateway_pid"');
   });
+
+  it("keeps glycin sandboxed without a nested network namespace", () => {
+    const script = createBlitAppSpec().command.args[1];
+    expect(script).toContain("*/glycin-loaders/*) is_glycin=true");
+    expect(script).toContain('args+=("--share-net")');
+    expect(script).toMatch(/exec "\$COCALC_REAL_BWRAP" "\$\{args\[@\]\}"/);
+  });
 });
