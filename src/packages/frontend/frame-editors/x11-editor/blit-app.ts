@@ -10,6 +10,10 @@ export const BLIT_PASSPHRASE = "cocalc-private-project";
 
 const START_SCRIPT = String.raw`set -euo pipefail
 
+# Blit and xwayland-satellite are normally installed per-user. Blit discovers
+# the satellite when its compositor starts, so this must precede server start.
+export PATH="$HOME/.local/bin:$PATH"
+
 if command -v blit >/dev/null 2>&1; then
   blit_bin="$(command -v blit)"
 elif [ -x "$HOME/.local/bin/blit" ]; then
