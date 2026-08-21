@@ -129,6 +129,7 @@ export function PriceSummaryRow({
         display: "block",
         border: `1px solid ${current ? COLORS.BLUE_L : COLORS.GRAY_LL}`,
         borderRadius: 8,
+        boxSizing: "border-box",
         padding: "5px 7px",
         background: current ? COLORS.BLUE_LLLL : "white",
         boxShadow: current ? "0 1px 4px rgba(68, 116, 192, 0.18)" : undefined,
@@ -163,11 +164,17 @@ export function PriceSummaryRow({
           alignItems: "baseline",
         }}
       >
-        <Typography.Text strong={current} style={{ fontSize: 13 }}>
+        <Typography.Text
+          strong={current}
+          style={{ fontSize: 13, whiteSpace: "nowrap" }}
+        >
           {priceLabel(estimate)}
         </Typography.Text>
         {monthlyLabel(estimate) ? (
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 11, whiteSpace: "nowrap" }}
+          >
             {monthlyLabel(estimate)}
           </Typography.Text>
         ) : null}

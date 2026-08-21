@@ -192,9 +192,16 @@ export function NebiusCapacityPicker({
                     style={{ width: "100%" }}
                   >
                     <Flex gap={8} justify="space-between" align="start">
-                      <Text strong>{option.platformLabel}</Text>
+                      <Text strong style={{ minWidth: 0 }}>
+                        {option.platformLabel}
+                      </Text>
                       {option.priceLabel && (
-                        <Text strong>{option.priceLabel}</Text>
+                        <Text
+                          strong
+                          style={{ flexShrink: 0, whiteSpace: "nowrap" }}
+                        >
+                          {option.priceLabel}
+                        </Text>
                       )}
                     </Flex>
                     <Text code>{option.machineType}</Text>

@@ -115,6 +115,12 @@ describe("NebiusCapacityPicker", () => {
     expect(
       screen.getAllByRole("radio", { name: /NVIDIA RTX PRO 6000/i })[0],
     ).toHaveAccessibleName(/us-central1/i);
+    for (const price of screen.getAllByText(/\/hr$/)) {
+      expect(price.closest(".ant-typography")).toHaveStyle({
+        flexShrink: 0,
+        whiteSpace: "nowrap",
+      });
+    }
     fireEvent.click(priceSort);
     expect(priceSort).toBeChecked();
     expect(
