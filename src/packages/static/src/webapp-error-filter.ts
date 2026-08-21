@@ -81,6 +81,13 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
   const socketIoTransportClosed =
     message === "socket has been disconnected" ||
     message === "error: socket has been disconnected";
+  const conatTransportClosed =
+    message === "disconnected" ||
+    message === "error: disconnected" ||
+    /^error: once: ["'][^"']+["'] not emitted before ["']closed["']$/.test(
+      message,
+    ) ||
+    /^once: ["'][^"']+["'] not emitted before ["']closed["']$/.test(message);
   const conatSocketRequestTimedOut =
     message === "request timed out" || message === "error: request timed out";
   const conatRequestTimedOut =
@@ -99,6 +106,7 @@ export function isIgnorableUnhandledRejection(reason: unknown): boolean {
     routingUnavailable ||
     conatInfoBootstrapTimeout ||
     socketIoTransportClosed ||
+    conatTransportClosed ||
     conatSocketRequestTimedOut ||
     conatRequestTimedOut ||
     filesystemServerStarting ||
