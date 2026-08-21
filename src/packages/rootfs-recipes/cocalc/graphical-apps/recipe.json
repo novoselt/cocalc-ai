@@ -1,0 +1,8 @@
+{
+  "id": "cocalc/graphical-apps",
+  "version": 1,
+  "description": "Install the Xwayland, Vulkan software-rendering, D-Bus, and desktop data required for browser-streamed graphical applications.",
+  "inputs": {},
+  "run": { "shell": "bash", "script": "install.sh" },
+  "verify": { "shell": "bash", "script": "verify.sh" }
+}

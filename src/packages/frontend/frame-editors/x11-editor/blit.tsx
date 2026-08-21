@@ -12,8 +12,10 @@ import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
   addBlitPassphrase,
   BLIT_APP_ID,
+  CHECK_BLIT_PREREQUISITES,
   createBlitAppSpec,
-  INSTALL_BLIT_COMMAND,
+  INSTALL_GRAPHICAL_APPS_COMMAND,
+  parseBlitPrerequisites,
 } from "./blit-app";
 
 interface Props {
@@ -22,22 +24,61 @@ interface Props {
   reload?: number;
 }
 
-type Stage = "starting" | "installing" | "ready";
+type Stage =
+  | "checking"
+  | "starting"
+  | "installing"
+  | "needs-packages"
+  | "ready";
 
 export function Blit({ is_current, project_id, reload }: Props) {
-  const [stage, setStage] = useState<Stage>("starting");
+  const [stage, setStage] = useState<Stage>("checking");
   const [error, setError] = useState<string>();
+  const [missingPackages, setMissingPackages] = useState<string[]>([]);
   const [src, setSrc] = useState<string>();
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let canceled = false;
-    setStage("starting");
+    setStage("checking");
     setError(undefined);
+    setMissingPackages([]);
     setSrc(undefined);
     void (async () => {
+      const check = await exec({
+        project_id,
+        command: "bash",
+        args: ["-lc", CHECK_BLIT_PREREQUISITES],
+        timeout: 30,
+        err_on_exit: false,
+      });
+      const prerequisites = parseBlitPrerequisites(
+        `${check.stdout}\n${check.stderr}`,
+      );
+      if (prerequisites.missingTools.length) {
+        throw new Error(
+          `The project host is missing CoCalc graphical application tools: ${prerequisites.missingTools.join(
+            ", ",
+          )}. Upgrade the project host tools bundle and retry.`,
+        );
+      }
+      if (prerequisites.missingPackages.length) {
+        if (!canceled) {
+          setMissingPackages(prerequisites.missingPackages);
+          setStage("needs-packages");
+        }
+        return;
+      }
+      if (check.exit_code !== 0) {
+        throw new Error(
+          check.stderr || "Unable to check graphical application support.",
+        );
+      }
+      if (!canceled) {
+        setStage("starting");
+      }
       const api = webapp_client.conat_client.projectApi({ project_id });
-      const saved = await api.apps.upsertAppSpec(createBlitAppSpec());
+      const saved = await api.apps.upsertAppSpec(createBlitAppSpec(project_id));
       const spec = saved.spec as AppSpec;
       const status = await api.apps.ensureRunning(BLIT_APP_ID, {
         timeout: 60_000,
@@ -53,7 +94,7 @@ export function Blit({ is_current, project_id, reload }: Props) {
         throw new Error("Blit started but CoCalc did not provide an app URL.");
       }
       if (!canceled) {
-        setSrc(addBlitPassphrase(url));
+        setSrc(addBlitPassphrase(url, project_id));
         setStage("ready");
       }
     })().catch((err) => {
@@ -66,25 +107,60 @@ export function Blit({ is_current, project_id, reload }: Props) {
     };
   }, [project_id, reload, retry]);
 
-  async function install(): Promise<void> {
+  async function installPackages(): Promise<void> {
     setStage("installing");
     setError(undefined);
     try {
       const result = await exec({
         project_id,
         command: "bash",
-        args: ["-lc", INSTALL_BLIT_COMMAND],
-        timeout: 180,
+        args: ["-lc", INSTALL_GRAPHICAL_APPS_COMMAND],
+        timeout: 20 * 60,
         err_on_exit: true,
       });
       if (result.exit_code !== 0) {
-        throw new Error(result.stderr || "Blit installation failed.");
+        throw new Error(
+          result.stderr || "Graphical application support installation failed.",
+        );
       }
       setRetry((value) => value + 1);
     } catch (err) {
       setError(`${err}`);
-      setStage("starting");
+      setStage("needs-packages");
     }
+  }
+
+  if (stage === "needs-packages" && !error) {
+    return (
+      <Flex
+        align="center"
+        justify="center"
+        style={{ height: "100%", padding: 24 }}
+      >
+        <Alert
+          action={
+            <Button type="primary" onClick={installPackages}>
+              Install graphical application support
+            </Button>
+          }
+          description={
+            <>
+              <Typography.Paragraph>
+                This project needs approximately 400 MB of Ubuntu packages for
+                Xwayland and software rendering. Installation modifies only this
+                project&apos;s writable root filesystem.
+              </Typography.Paragraph>
+              <Typography.Text type="secondary">
+                Missing: {missingPackages.join(", ")}
+              </Typography.Text>
+            </>
+          }
+          message="Graphical application support is not installed"
+          showIcon
+          type="warning"
+        />
+      </Flex>
+    );
   }
 
   if (src) {
@@ -115,36 +191,24 @@ export function Blit({ is_current, project_id, reload }: Props) {
       {error ? (
         <Alert
           action={
-            <Flex gap="small" vertical>
-              <Button onClick={() => setRetry((value) => value + 1)}>
-                Retry
-              </Button>
-              <Button loading={stage === "installing"} onClick={install}>
-                Install stock Blit
-              </Button>
-            </Flex>
+            <Button onClick={() => setRetry((value) => value + 1)}>
+              Retry
+            </Button>
           }
-          description={
-            <>
-              <Typography.Paragraph>
-                This prototype requires the stock Blit binary in the project.
-                Installation uses Blit&apos;s official installer and writes to
-                <Typography.Text code>~/.local/bin</Typography.Text>.
-              </Typography.Paragraph>
-              <Typography.Text code>{INSTALL_BLIT_COMMAND}</Typography.Text>
-            </>
-          }
+          description={error}
           message="Unable to start graphical applications"
           showIcon
           type="error"
         />
       ) : (
-        <Flex align="center" gap="middle" vertical>
+        <Flex align="center" aria-live="polite" gap="middle" vertical>
           <Spin size="large" />
           <Typography.Text>
             {stage === "installing"
-              ? "Installing stock Blit..."
-              : "Starting the Blit Wayland compositor..."}
+              ? "Installing graphical application support..."
+              : stage === "checking"
+                ? "Checking graphical application support..."
+                : "Starting the Blit Wayland compositor..."}
           </Typography.Text>
         </Flex>
       )}

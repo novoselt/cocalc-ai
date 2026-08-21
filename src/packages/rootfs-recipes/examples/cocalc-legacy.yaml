@@ -137,6 +137,8 @@ steps:
   - uses: cocalc/rstudio
     timeout: 2400
 
+  - uses: cocalc/graphical-apps
+
   - uses: cocalc/code-server
     with:
       prefix: /opt/code-server
@@ -225,7 +227,7 @@ verify:
 publish:
   label: CoCalc Legacy Compatibility
   slug: cocalc-legacy
-  description: CoCalc.com-style compatibility image for migrated projects, with comprehensive LaTeX, SageMath 10.9, Julia, R, Python scientific packages, JupyterLab, RStudio Server, VS Code/code-server, shell tools, and SFTP support.
+  description: CoCalc.com-style compatibility image for migrated projects, with comprehensive LaTeX, SageMath 10.9, Julia, R, Python scientific packages, JupyterLab, RStudio Server, VS Code/code-server, browser-streamed graphical application support, shell tools, and SFTP support.
   family: cocalc-legacy
   version: "2026.06"
   channel: stable
@@ -246,6 +248,7 @@ publish:
       - Julia
       - R, RStudio, and the tidyverse
       - VS Code
+      - Graphical Linux applications
       - User pip installs
   tags:
     - cocalc

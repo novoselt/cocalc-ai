@@ -6,59 +6,55 @@
 import {
   addBlitPassphrase,
   BLIT_APP_ID,
-  BLIT_PASSPHRASE,
+  CHECK_BLIT_PREREQUISITES,
   createBlitAppSpec,
+  GRAPHICAL_APPS_PACKAGES,
+  INSTALL_GRAPHICAL_APPS_COMMAND,
+  parseBlitPrerequisites,
 } from "./blit-app";
 
 describe("Blit managed app", () => {
   it("uses the private websocket-aware prefix-stripping proxy", () => {
-    const spec = createBlitAppSpec();
+    const spec = createBlitAppSpec("project-id");
+    expect(spec.version).toBe(1);
     expect(spec.id).toBe(BLIT_APP_ID);
     expect(spec.kind).toBe("service");
+    expect(spec.command).toEqual({
+      exec: "/opt/cocalc/tools/current/cocalc-x11",
+      env: { BLIT_PASSPHRASE: "project-id" },
+    });
     expect(spec.proxy).toMatchObject({
       open_mode: "proxy",
       strip_prefix: true,
       websocket: true,
     });
-    expect(spec.command.env).toEqual({ BLIT_PASSPHRASE });
   });
 
-  it("keeps the Blit credential in the URL fragment", () => {
-    const url = addBlitPassphrase(
-      "https://host/project/port/1234/?auth=secret#old",
-    );
-    expect(url).toBe(
-      `https://host/project/port/1234/?auth=secret#psk=${encodeURIComponent(BLIT_PASSPHRASE)}`,
+  it("adds the project-specific Blit handshake to the URL fragment", () => {
+    expect(addBlitPassphrase("https://example.test/app#old", "a/b")).toBe(
+      "https://example.test/app#psk=a%2Fb",
     );
   });
 
-  it("starts both managed processes and provides a CPU-host Vulkan fallback", () => {
-    const spec = createBlitAppSpec();
-    const script = spec.command.args[1];
-    expect(script).toContain('"$blit_bin" server');
-    expect(script).toContain("--verbose");
-    expect(script).toContain('"$blit_bin" terminal start');
-    expect(script).toContain('"$blit_bin" gateway');
-    expect(script).toContain(
-      'export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-    );
-    expect(script).toContain("vk_swiftshader_icd.json");
-    expect(script).toContain("BLIT_SERVER_NAME=cocalc-x11");
-    expect(script).toContain('wait -n "$server_pid" "$gateway_pid"');
+  it("checks every packaged graphical application dependency", () => {
+    for (const packageName of GRAPHICAL_APPS_PACKAGES) {
+      expect(CHECK_BLIT_PREREQUISITES).toContain(packageName);
+      expect(INSTALL_GRAPHICAL_APPS_COMMAND).toContain(packageName);
+    }
+    expect(CHECK_BLIT_PREREQUISITES).toContain("cocalc-x11");
+    expect(CHECK_BLIT_PREREQUISITES).toContain("xwayland-satellite");
+    expect(INSTALL_GRAPHICAL_APPS_COMMAND).toContain("sudo -n apt-get update");
+    expect(INSTALL_GRAPHICAL_APPS_COMMAND).toContain("--no-install-recommends");
   });
 
-  it("falls back from glycin's unavailable nested sandbox", () => {
-    const script = createBlitAppSpec().command.args[1];
-    expect(script).toContain("export GLYCIN_DISABLE_SANDBOX=i-know-the-risks");
-    expect(script).toContain("*/glycin-loaders/*)");
-    expect(script).toContain("is_glycin=true");
-    expect(script).toContain('if [ -f "$arg" ] && [ -x "$arg" ]');
-    expect(script).toContain(
-      "for key in RUST_BACKTRACE RUST_LOG XDG_RUNTIME_DIR",
-    );
-    expect(script).toMatch(
-      /exec \/usr\/bin\/env -i "\$\{env_args\[@\]\}" "\$loader" "\$\{loader_args\[@\]\}"/,
-    );
-    expect(script).not.toContain("--share-net");
+  it("parses missing tools and packages", () => {
+    expect(
+      parseBlitPrerequisites(
+        "missing-tool:blit\nmissing-package:xwayland\nnoise\n",
+      ),
+    ).toEqual({
+      missingPackages: ["xwayland"],
+      missingTools: ["blit"],
+    });
   });
 });

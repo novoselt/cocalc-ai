@@ -6,162 +6,86 @@
 import type { AppSpec } from "@cocalc/conat/project/api/apps";
 
 export const BLIT_APP_ID = "cocalc-blit-x11";
-export const BLIT_PASSPHRASE = "cocalc-private-project";
+const COCALC_TOOLS = "/opt/cocalc/tools/current";
+const COCALC_X11 = `${COCALC_TOOLS}/cocalc-x11`;
 
-const SHELL_ENV_ARGS = "$" + "{env_args[@]}";
-const SHELL_INDIRECT_KEY = "$" + "{!key}";
-const SHELL_LOADER_ARGS = "$" + "{loader_args[@]}";
+export const GRAPHICAL_APPS_PACKAGES = [
+  "adwaita-icon-theme",
+  "dbus-daemon",
+  "libegl1",
+  "libxcb-cursor0",
+  "mesa-vulkan-drivers",
+  "shared-mime-info",
+  "xwayland",
+] as const;
 
-const START_SCRIPT = String.raw`set -euo pipefail
+const GRAPHICAL_APPS_PACKAGE_LIST = GRAPHICAL_APPS_PACKAGES.join(" ");
+const DPKG_STATUS = "$" + "{Status}";
 
-# Blit and xwayland-satellite are normally installed per-user. Blit discovers
-# the satellite when its compositor starts, so this must precede server start.
-export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-
-if command -v blit >/dev/null 2>&1; then
-  blit_bin="$(command -v blit)"
-elif [ -x "$HOME/.local/bin/blit" ]; then
-  blit_bin="$HOME/.local/bin/blit"
-else
-  echo "Blit is not installed. Install it from https://blit.sh first." >&2
-  exit 127
-fi
-
-state_dir="$HOME/.local/state/cocalc/blit"
-runtime_dir="$state_dir/runtime"
-mkdir -p "$runtime_dir"
-chmod 700 "$runtime_dir"
-
-# Project isolation prevents bubblewrap from nesting the namespaces used by
-# glycin. Glycin 2.2 supports this explicit fallback; the wrapper implements
-# the same cleared-environment loader launch for glycin 2.1. The project
-# container remains the outer sandbox, and unrelated bwrap calls are unchanged.
-export GLYCIN_DISABLE_SANDBOX=i-know-the-risks
-real_bwrap="$(command -v bwrap || true)"
-if [ -n "$real_bwrap" ]; then
-  compat_bin="$state_dir/compat-bin"
-  mkdir -p "$compat_bin"
-  cat > "$compat_bin/bwrap" <<'BWRAP'
-#!/bin/bash
-set -euo pipefail
-
-is_glycin=false
-loader=""
-loader_args=()
-for arg in "$@"; do
-  if [ -n "$loader" ]; then
-    loader_args+=("$arg")
-  fi
-  case "$arg" in
-    */glycin-loaders/*)
-      is_glycin=true
-      if [ -f "$arg" ] && [ -x "$arg" ]; then
-        loader="$arg"
-        loader_args=()
-      fi
-      ;;
-  esac
-done
-
-if [ "$is_glycin" != true ] || [ -z "$loader" ]; then
-  exec "$COCALC_REAL_BWRAP" "$@"
-fi
-
-env_args=()
-for key in RUST_BACKTRACE RUST_LOG XDG_RUNTIME_DIR; do
-  if [ -v "$key" ]; then
-    env_args+=("$key=${SHELL_INDIRECT_KEY}")
+export const CHECK_BLIT_PREREQUISITES = String.raw`set -uo pipefail
+status=0
+for tool in apt-get dpkg-query sudo; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf 'missing-tool:%s\n' "$tool"
+    status=20
   fi
 done
-
-exec /usr/bin/env -i "${SHELL_ENV_ARGS}" "$loader" "${SHELL_LOADER_ARGS}"
-BWRAP
-  chmod 700 "$compat_bin/bwrap"
-  export COCALC_REAL_BWRAP="$real_bwrap"
-  export PATH="$compat_bin:$PATH"
-fi
-
-export XDG_RUNTIME_DIR="$runtime_dir"
-export BLIT_SOCK="$runtime_dir/server.sock"
-export BLIT_REMOTES="$state_dir/remotes"
-export BLIT_SERVER_NAME=cocalc-x11
-export BLIT_ADDR="$HOST:$PORT"
-export BLIT_PROXY=0
-export BLIT_XWAYLAND=1
-
-# Stock CoCalc images include Chromium's SwiftShader but may not include a
-# system Vulkan ICD. Blit currently needs a Vulkan compositor even when video
-# encoding is done in software.
-if ! compgen -G "/usr/share/vulkan/icd.d/*.json" >/dev/null &&
-   ! compgen -G "/etc/vulkan/icd.d/*.json" >/dev/null; then
-  for icd in \
-    /usr/lib/chromium/vk_swiftshader_icd.json \
-    /usr/lib/chromium-browser/vk_swiftshader_icd.json; do
-    if [ -f "$icd" ]; then
-      export VK_DRIVER_FILES="$icd"
-      export VK_ICD_FILENAMES="$icd"
-      break
-    fi
-  done
-fi
-
-printf 'local = socket:%s\n' "$BLIT_SOCK" > "$BLIT_REMOTES"
-
-server_pid=""
-gateway_pid=""
-cleanup() {
-  trap - EXIT INT TERM
-  [ -z "$gateway_pid" ] || kill "$gateway_pid" 2>/dev/null || true
-  [ -z "$server_pid" ] || kill "$server_pid" 2>/dev/null || true
-  [ -z "$gateway_pid" ] || wait "$gateway_pid" 2>/dev/null || true
-  [ -z "$server_pid" ] || wait "$server_pid" 2>/dev/null || true
-  rm -f "$BLIT_SOCK"
-}
-trap cleanup EXIT INT TERM
-
-rm -f "$BLIT_SOCK"
-"$blit_bin" server \
-  --export-sock \
-  --inject-path \
-  --verbose \
-  --max-ptys 16 \
-  --no-extensions \
-  --no-channels &
-server_pid=$!
-
-for _ in $(seq 1 100); do
-  [ -S "$BLIT_SOCK" ] && break
-  kill -0 "$server_pid" 2>/dev/null || wait "$server_pid"
-  sleep 0.1
+for tool in blit cocalc-x11 xwayland-satellite; do
+  if [ ! -x "${COCALC_TOOLS}/$tool" ]; then
+    printf 'missing-tool:%s\n' "$tool"
+    status=20
+  fi
 done
-[ -S "$BLIT_SOCK" ] || { echo "Blit server socket did not appear." >&2; exit 1; }
+[ "$status" -ne 20 ] || exit "$status"
 
-# The stock browser shortcut does not reliably create a terminal when Blit is
-# reached through a gateway remote. Seed one so a new .x11 editor is usable.
-"$blit_bin" terminal start >/dev/null
-
-"$blit_bin" gateway &
-gateway_pid=$!
-
-# A managed app should stop if either half fails; leaving a healthy-looking
-# gateway in front of a dead compositor is especially confusing.
-set +e
-wait -n "$server_pid" "$gateway_pid"
-status=$?
-set -e
+for package in ${GRAPHICAL_APPS_PACKAGE_LIST}; do
+  if ! dpkg-query -W -f='${DPKG_STATUS}' "$package" 2>/dev/null |
+       grep -q 'install ok installed'; then
+    printf 'missing-package:%s\n' "$package"
+    status=21
+  fi
+done
 exit "$status"`;
 
-export function createBlitAppSpec(): AppSpec {
+export const INSTALL_GRAPHICAL_APPS_COMMAND = String.raw`set -euo pipefail
+sudo -n true
+sudo -n apt-get update
+sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  --no-install-recommends ${GRAPHICAL_APPS_PACKAGE_LIST}
+sudo -n apt-get clean
+sudo -n rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb`;
+
+export interface BlitPrerequisites {
+  missingPackages: string[];
+  missingTools: string[];
+}
+
+export function parseBlitPrerequisites(output: string): BlitPrerequisites {
+  const missingPackages: string[] = [];
+  const missingTools: string[] = [];
+  for (const line of output.split("\n")) {
+    if (line.startsWith("missing-package:")) {
+      missingPackages.push(line.slice("missing-package:".length));
+    } else if (line.startsWith("missing-tool:")) {
+      missingTools.push(line.slice("missing-tool:".length));
+    }
+  }
+  return { missingPackages, missingTools };
+}
+
+export function createBlitAppSpec(projectId: string): AppSpec {
   return {
     version: 1,
     id: BLIT_APP_ID,
-    title: "Graphical applications (Blit prototype)",
+    title: "Graphical applications",
     kind: "service",
     command: {
-      exec: "bash",
-      args: ["-lc", START_SCRIPT],
+      exec: COCALC_X11,
       env: {
-        BLIT_PASSPHRASE,
+        // The authenticated project proxy is the security boundary. Blit also
+        // requires a matching gateway passphrase, so use a project-specific,
+        // collaborator-stable value rather than one global shared value.
+        BLIT_PASSPHRASE: projectId,
       },
     },
     lifecycle: {
@@ -189,9 +113,6 @@ export function createBlitAppSpec(): AppSpec {
   };
 }
 
-export function addBlitPassphrase(url: string): string {
-  return `${url.split("#", 1)[0]}#psk=${encodeURIComponent(BLIT_PASSPHRASE)}`;
+export function addBlitPassphrase(url: string, projectId: string): string {
+  return `${url.split("#", 1)[0]}#psk=${encodeURIComponent(projectId)}`;
 }
-
-export const INSTALL_BLIT_COMMAND =
-  "curl -fsSL https://install.blit.sh | BLIT_PREFIX=$HOME/.local sh";
