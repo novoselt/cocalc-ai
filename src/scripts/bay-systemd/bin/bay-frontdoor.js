@@ -381,14 +381,40 @@ function isContentAddressedStaticRequest(req) {
   );
 }
 
-function prepareResponseHeaders(req, headers, worker, changed) {
-  if (!isContentAddressedStaticRequest(req)) {
-    return addAffinityCookie(headers, worker, changed);
+// Only a successfully served asset is safe to pin. A hashed URL that 404s or
+// errors during a release must never be stored: `immutable` would keep that
+// failure at the edge, and in every browser that saw it, for a full year.
+function isImmutableStaticStatus(statusCode) {
+  return statusCode === 200 || statusCode === 203 || statusCode === 304;
+}
+
+// A response marked `public` may be stored by Cloudflare and by any proxy
+// between us and the browser. Attaching the per-client worker-affinity cookie
+// to one hands whichever worker the first visitor drew to everyone who is
+// later served that stored copy, and makes Cloudflare bypass the asset. A
+// response that must carry affinity has to say `private` (or no-store).
+function isPubliclyCacheable(headers) {
+  const value = headers?.["cache-control"];
+  const text = Array.isArray(value) ? value.join(",") : `${value ?? ""}`;
+  return text
+    .split(",")
+    .some((directive) => directive.trim().toLowerCase() === "public");
+}
+
+function prepareResponseHeaders(req, headers, worker, changed, statusCode) {
+  if (isContentAddressedStaticRequest(req)) {
+    if (!isImmutableStaticStatus(statusCode)) {
+      return { ...headers, "cache-control": "no-store" };
+    }
+    return {
+      ...headers,
+      "cache-control": `public, max-age=${immutableStaticMaxAgeSeconds}, immutable`,
+    };
   }
-  return {
-    ...headers,
-    "cache-control": `public, max-age=${immutableStaticMaxAgeSeconds}, immutable`,
-  };
+  if (isPubliclyCacheable(headers)) {
+    return headers;
+  }
+  return addAffinityCookie(headers, worker, changed);
 }
 
 function firstHeaderValue(value) {
@@ -499,9 +525,16 @@ function proxyHttp(req, res) {
       timeout: upstreamTimeoutMs,
     },
     (upstreamRes) => {
+      const statusCode = upstreamRes.statusCode ?? 502;
       res.writeHead(
-        upstreamRes.statusCode ?? 502,
-        prepareResponseHeaders(req, upstreamRes.headers, worker, changed),
+        statusCode,
+        prepareResponseHeaders(
+          req,
+          upstreamRes.headers,
+          worker,
+          changed,
+          statusCode,
+        ),
       );
       upstreamRes.pipe(res);
     },
@@ -603,6 +636,8 @@ module.exports = {
   evictWorkerUpgrades,
   formatHealthError,
   isContentAddressedStaticRequest,
+  isImmutableStaticStatus,
+  isPubliclyCacheable,
   prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,

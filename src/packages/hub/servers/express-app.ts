@@ -362,15 +362,23 @@ export default async function init(opts: Options): Promise<{
   return { httpServer, router };
 }
 
+// The application shells are mutable, they are what a client revalidates to
+// discover a new build, and the bay frontdoor attaches a per-client
+// worker-affinity cookie to them. They must therefore stay out of shared
+// caches: `private` keeps the short browser-side lifetime without letting
+// Cloudflare or an intermediate proxy hand one client's shell (and cookie) to
+// another.
 function cacheShortTerm(res) {
   res.setHeader(
     "Cache-Control",
-    `public, max-age=${SHORT_AGE}, must-revalidate`,
+    `private, max-age=${SHORT_AGE}, must-revalidate`,
   );
-  res.setHeader(
-    "Expires",
-    new Date(Date.now().valueOf() + SHORT_AGE).toUTCString(),
-  );
+  res.setHeader("Expires", expiresAfter(SHORT_AGE));
+}
+
+// MAX_AGE/SHORT_AGE are seconds, Date.now() is milliseconds.
+function expiresAfter(seconds: number): string {
+  return new Date(Date.now() + seconds * 1000).toUTCString();
 }
 
 function cacheNoStore(res) {
@@ -403,10 +411,7 @@ function setPublicViewerShellHeaders(res) {
 // and we use this function to set appropriate headers at various points below.
 function cacheLongTerm(res) {
   res.setHeader("Cache-Control", `public, max-age=${MAX_AGE}, must-revalidate`);
-  res.setHeader(
-    "Expires",
-    new Date(Date.now().valueOf() + MAX_AGE).toUTCString(),
-  );
+  res.setHeader("Expires", expiresAfter(MAX_AGE));
 }
 
 function resolvePublicAssetsPath(): string | undefined {
