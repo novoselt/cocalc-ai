@@ -766,8 +766,8 @@ describe("hosts.reconcileHostSoftwareInternal", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it.each(["helpers", "environment"] as const)(
-    "forces %s-only bootstrap reconcile without runtime rollout",
+  it.each(["full", "helpers", "environment"] as const)(
+    "accepts durable completion for a forced %s bootstrap reconcile with a stale lifecycle cache",
     async (bootstrapScope) => {
       const ssh = makeSshChild();
       spawnMock = jest.fn(() => ssh.child);

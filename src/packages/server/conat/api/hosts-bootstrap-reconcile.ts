@@ -274,12 +274,12 @@ function hostBootstrapReconcileObservedAfterBaseline(
 function hostBootstrapReconcileSucceeded(
   state: HostBootstrapReconcileState,
   baseline?: HostBootstrapReconcileState,
-  acceptBootstrapDone = false,
 ): boolean {
-  // Helper/environment reconciles do not restart project-host, so its cached
-  // lifecycle report may not advance. The bootstrap status is reported
-  // independently and is durable evidence that this invocation completed.
-  if (acceptBootstrapDone && state.bootstrap_status === "done") {
+  // The lifecycle report is cached by project-host and may not advance after
+  // either a non-restarting reconcile or a full reconcile that restarts it.
+  // Bootstrap status is reported independently and is durable evidence that
+  // this invocation completed, provided it changed after our baseline.
+  if (state.bootstrap_status === "done") {
     return baseline
       ? hostBootstrapReconcileObservedAfterBaseline(baseline, state)
       : true;
@@ -364,11 +364,9 @@ function hostBootstrapReconcileFailure(
 async function waitForHostBootstrapReconcile({
   host_id,
   baseline,
-  scope,
 }: {
   host_id: string;
   baseline: HostBootstrapReconcileState;
-  scope: HostBootstrapReconcileScope;
 }): Promise<void> {
   const startedAt = Date.now();
   let sawActivity = false;
@@ -388,7 +386,7 @@ async function waitForHostBootstrapReconcile({
       if (failure) {
         throw new Error(failure);
       }
-      if (hostBootstrapReconcileSucceeded(state, baseline, scope !== "full")) {
+      if (hostBootstrapReconcileSucceeded(state, baseline)) {
         return;
       }
     }
@@ -674,6 +672,5 @@ echo "started bootstrap reconcile pid=$BOOTSTRAP_PID log=$BOOTSTRAP_LOG"
   await waitForHostBootstrapReconcile({
     host_id: opts.host_id,
     baseline,
-    scope,
   });
 }
