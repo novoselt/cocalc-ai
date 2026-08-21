@@ -1,4 +1,8 @@
-import { projectsReadyForSessionRestore, restoreSessionState } from "./session";
+import {
+  getOpenFilesForSessionClose,
+  projectsReadyForSessionRestore,
+  restoreSessionState,
+} from "./session";
 
 function makeStore(values: Record<string, unknown>) {
   return {
@@ -33,6 +37,30 @@ describe("projectsReadyForSessionRestore", () => {
         liteMode: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("getOpenFilesForSessionClose", () => {
+  it("does not initialize a full project store for a reduced project tab", () => {
+    const redux = {
+      hasProjectStore: jest.fn(() => false),
+      getProjectStore: jest.fn(),
+    } as any;
+
+    expect(getOpenFilesForSessionClose(redux, "project-1")).toBeUndefined();
+    expect(redux.getProjectStore).not.toHaveBeenCalled();
+  });
+
+  it("returns open files from an existing full project store", () => {
+    const openFiles = ["a.txt", "b.ipynb"];
+    const redux = {
+      hasProjectStore: jest.fn(() => true),
+      getProjectStore: jest.fn(() => ({
+        get: jest.fn(() => ({ toJS: () => openFiles })),
+      })),
+    } as any;
+
+    expect(getOpenFilesForSessionClose(redux, "project-1")).toBe(openFiles);
   });
 });
 
