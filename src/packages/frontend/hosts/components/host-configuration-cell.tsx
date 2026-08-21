@@ -48,18 +48,24 @@ function getSelfHostDetail(host: Host): string | undefined {
   return kindLabel ?? modeLabel ?? undefined;
 }
 
-function HostConfigChip({
+export function HostConfigChip({
   icon,
   label,
   detail,
   tone = "default",
   tooltip,
+  onClick,
+  ariaLabel,
+  style: styleOverride,
 }: {
   icon: React.ReactNode;
   label: React.ReactNode;
   detail?: React.ReactNode;
   tone?: "default" | "blue" | "amber" | "muted";
   tooltip?: React.ReactNode;
+  onClick?: () => void;
+  ariaLabel?: string;
+  style?: React.CSSProperties;
 }) {
   const colors =
     tone === "blue"
@@ -85,20 +91,8 @@ function HostConfigChip({
               background: "white",
               text: COLORS.GRAY_D,
             };
-  const chip = (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 7,
-        border: `1px solid ${colors.border}`,
-        borderRadius: 10,
-        background: colors.background,
-        padding: "5px 8px",
-        minHeight: 30,
-        lineHeight: 1.1,
-      }}
-    >
+  const content = (
+    <>
       <span style={{ color: colors.text, fontSize: 15, lineHeight: 1 }}>
         {icon}
       </span>
@@ -115,7 +109,39 @@ function HostConfigChip({
           </Typography.Text>
         ) : null}
       </span>
-    </span>
+    </>
+  );
+  const style: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 7,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 10,
+    background: colors.background,
+    padding: "5px 8px",
+    minHeight: 30,
+    lineHeight: 1.1,
+    ...(onClick
+      ? {
+          color: "inherit",
+          cursor: "pointer",
+          font: "inherit",
+          textAlign: "left",
+        }
+      : {}),
+    ...styleOverride,
+  };
+  const chip = onClick ? (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      onClick={onClick}
+      style={style}
+    >
+      {content}
+    </button>
+  ) : (
+    <span style={style}>{content}</span>
   );
   return tooltip ? <Tooltip title={tooltip}>{chip}</Tooltip> : chip;
 }

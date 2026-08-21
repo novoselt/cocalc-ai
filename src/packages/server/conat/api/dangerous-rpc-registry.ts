@@ -63,6 +63,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-not-required",
     reason: "removes delegated project-agent compute authority",
   },
+  "compute.revokeSshKey": {
+    decision: "fresh-auth-not-required",
+    reason: "removes a direct SSH public key from an account-owned VM",
+  },
   "compute.revokeVmProjectAccess": {
     decision: "fresh-auth-not-required",
     reason: "removes project SSH/data-plane access from an account-owned VM",

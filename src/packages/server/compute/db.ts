@@ -555,6 +555,66 @@ export async function addComputeVmSshPublicKey({
   }
 }
 
+export function computeVmSshPublicKeys(vm: ComputeVmRow): string[] {
+  return Array.from(
+    new Set(
+      [
+        vm.ssh_public_key,
+        ...(Array.isArray(vm.metadata?.ssh_public_keys)
+          ? vm.metadata.ssh_public_keys
+          : []),
+      ]
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+export async function removeComputeVmSshPublicKey({
+  id,
+  owner_account_id,
+  ssh_public_key,
+}: {
+  id: string;
+  owner_account_id: string;
+  ssh_public_key: string;
+}): Promise<{ vm: ComputeVmRow; removed: boolean }> {
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<ComputeVmRow>(
+      "SELECT * FROM compute_vms " +
+        "WHERE id=$1 AND owner_account_id=$2 AND deleted_at IS NULL " +
+        "FOR UPDATE",
+      [id, owner_account_id],
+    );
+    const vm = rows[0];
+    if (!vm) {
+      throw new Error("compute VM not found or access denied");
+    }
+    const current = computeVmSshPublicKeys(vm);
+    const remaining = current.filter((key) => key !== ssh_public_key);
+    if (remaining.length === current.length) {
+      await client.query("COMMIT");
+      return { vm, removed: false };
+    }
+    const metadata = { ...vm.metadata, ssh_public_keys: remaining };
+    const updated = await client.query<ComputeVmRow>(
+      "UPDATE compute_vms " +
+        "SET ssh_public_key=$2, metadata=$3::jsonb, updated_at=NOW() " +
+        "WHERE id=$1 RETURNING *",
+      [id, remaining[0] ?? "", JSON.stringify(metadata)],
+    );
+    await client.query("COMMIT");
+    return { vm: updated.rows[0]!, removed: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function insertComputeInstance(vm: ComputeVmRow) {
   await pool().query(
     `INSERT INTO compute_vm_instances (

@@ -196,6 +196,13 @@ export interface ComputeVmProjectAccess {
   metadata: Record<string, any>;
 }
 
+export interface ComputeVmSshKey {
+  fingerprint: string;
+  key_type: string;
+  comment?: string;
+  ssh_public_key: string;
+}
+
 export interface ComputeVolume {
   id: string;
   name: string;
@@ -302,6 +309,8 @@ export const compute = {
   listProjectVms: authFirstRequireAccountOrComputeProject,
   getProjectVm: authFirstRequireAccountOrComputeProject,
   authorizeSshKey: authFirstRequireAccount,
+  listVmSshKeys: authFirstRequireAccount,
+  revokeSshKey: authFirstRequireAccount,
   listVmProjectAccess: authFirstRequireAccount,
   grantVmProjectAccess: authFirstRequireAccount,
   revokeVmProjectAccess: authFirstRequireAccount,
@@ -362,6 +371,16 @@ export interface ComputeApi {
     ssh_public_key: string;
     idempotency_key: string;
   }) => Promise<ComputeVm>;
+  listVmSshKeys: (opts: {
+    account_id?: string;
+    id_or_name: string;
+  }) => Promise<ComputeVmSshKey[]>;
+  revokeSshKey: (opts: {
+    account_id?: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVmSshKey[]>;
   listVmProjectAccess: (opts: {
     account_id?: string;
     id_or_name?: string;

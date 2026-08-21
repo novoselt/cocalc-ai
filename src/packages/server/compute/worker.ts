@@ -1712,6 +1712,13 @@ async function syncVmProjectAccess(
   return next;
 }
 
+async function reconcileVmSshAccess(vm: ComputeVmRow): Promise<void> {
+  if (vm.state !== "ready" || !vm.public_ip) return;
+  await observeVmPhase(vm, "sync_ssh_authorized_keys", async () =>
+    ensureProviderComputeSshAccess(vm),
+  );
+}
+
 async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
   const publicIp = runtime.public_ip;
   if (!publicIp) throw new Error("provider VM has no public IPv4 address");
@@ -2463,6 +2470,8 @@ async function handleWork(row: ComputeWorkRow) {
       return await remove(vm);
     case "reconcile":
       return await reconcile(vm);
+    case "reconcile_ssh_access":
+      return await reconcileVmSshAccess(vm);
     case "funding_transition":
       return await transitionVmFunding(vm, row.payload?.funding_mode);
     case "probe_spot":

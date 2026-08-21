@@ -8,6 +8,7 @@ import {
   Button,
   Checkbox,
   Collapse,
+  Descriptions,
   Divider,
   Dropdown,
   Flex,
@@ -34,6 +35,7 @@ import type {
   ComputeVolume,
   ComputeVm,
   ComputeVmProjectAccess,
+  ComputeVmSshKey,
 } from "@cocalc/conat/hub/api/compute";
 import { useRedux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import {
@@ -60,6 +62,8 @@ import {
 } from "../hosts/components/host-options-select";
 import { NebiusCapacityNotice } from "../hosts/components/nebius-capacity-notice";
 import { HostPriceBreakdown } from "../hosts/components/host-price-breakdown";
+import { HostConfigChip } from "../hosts/components/host-configuration-cell";
+import { PriceSummaryRow } from "../hosts/components/host-pricing-summary";
 import { useHostPricingSettings } from "../hosts/hooks/use-host-pricing-settings";
 import {
   getGcpMachineTypeOptions,
@@ -91,6 +95,7 @@ import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-se
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import { getPageUrlPath } from "@cocalc/frontend/page-routing";
+import { CloudServerOutlined, EnvironmentOutlined } from "@ant-design/icons";
 
 const { Paragraph, Text, Title } = Typography;
 const COPYABLE_PROPS = {
@@ -253,11 +258,12 @@ function storedPriceEstimate(
   };
 }
 
-function vmStoredPriceEstimate(
+function vmStoredRunningPriceEstimate(
   vm: ComputeVm,
+  pricingModel: "spot" | "on_demand",
 ): ProviderPriceEstimate | undefined {
   return storedPriceEstimate(
-    vm.metadata?.billing?.running_rates?.[vm.effective_pricing_model],
+    vm.metadata?.billing?.running_rates?.[pricingModel],
     [
       ...(vm.operating_system === "windows"
         ? [
@@ -267,6 +273,12 @@ function vmStoredPriceEstimate(
       "The persistent boot disk continues to cost money while the VM is stopped.",
     ],
   );
+}
+
+function vmStoredPriceEstimate(
+  vm: ComputeVm,
+): ProviderPriceEstimate | undefined {
+  return vmStoredRunningPriceEstimate(vm, vm.effective_pricing_model);
 }
 
 function vmStoredStoppedPriceEstimate(
@@ -2203,42 +2215,149 @@ function VmStartModal({
   );
 }
 
-function VmProjectAccessModal({
+function VmDetailsModal({
+  vm,
+  homeVolume,
+  onClose,
+}: {
+  vm?: ComputeVm;
+  homeVolume?: ComputeVolume;
+  onClose: () => void;
+}) {
+  if (!vm) return null;
+  const machineLabel = vm.gpu_type
+    ? `${vm.gpu_count}x ${vm.gpu_type}`
+    : vm.machine_type;
+  return (
+    <Modal
+      open
+      title={
+        <Space>
+          <Icon name="server" />
+          <span>{vm.name}</span>
+          <Tag>{vmDisplayState(vm)}</Tag>
+        </Space>
+      }
+      footer={<Button onClick={onClose}>Close</Button>}
+      onCancel={onClose}
+      width={760}
+    >
+      <Paragraph type="secondary">
+        Account-owned virtual machine created{" "}
+        <TimeAgo date={new Date(vm.created_at)} />.
+      </Paragraph>
+      <Descriptions bordered column={{ xs: 1, sm: 2 }} size="small">
+        <Descriptions.Item label="Name">{vm.name}</Descriptions.Item>
+        <Descriptions.Item label="VM ID">
+          <Text copyable={{ text: vm.id }} code>
+            {vm.id}
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label="Provider">
+          {getProviderDescriptor(vm.provider).label}
+        </Descriptions.Item>
+        <Descriptions.Item label="Location">
+          {vm.zone ?? vm.region}
+        </Descriptions.Item>
+        <Descriptions.Item label="Instance">{machineLabel}</Descriptions.Item>
+        <Descriptions.Item label="Machine type">
+          {vm.machine_type}
+        </Descriptions.Item>
+        <Descriptions.Item label="Resources">
+          {vm.cpu} vCPU · {vm.ram_gb} GB RAM
+        </Descriptions.Item>
+        <Descriptions.Item label="Architecture">
+          {vm.architecture}
+        </Descriptions.Item>
+        <Descriptions.Item label="Operating system">
+          {vm.operating_system === "windows"
+            ? "Windows Server 2022"
+            : vm.operating_system_version || "Linux"}
+        </Descriptions.Item>
+        <Descriptions.Item label="Pricing">
+          {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
+        </Descriptions.Item>
+        <Descriptions.Item label="Boot disk">
+          {vm.boot_disk_gb} GB
+        </Descriptions.Item>
+        <Descriptions.Item label="Home volume">
+          {homeVolume
+            ? `${homeVolume.name} · ${homeVolume.effective_size_gb} GB · ${homeVolume.attachment_state}`
+            : vm.home_volume_id
+              ? `ID ${vm.home_volume_id}`
+              : "None"}
+        </Descriptions.Item>
+        <Descriptions.Item label="SSH hostname" span={2}>
+          {vm.public_hostname ? (
+            <Text copyable={{ text: vm.public_hostname }} code>
+              {vm.public_hostname}
+            </Text>
+          ) : (
+            "Not assigned"
+          )}
+        </Descriptions.Item>
+        <Descriptions.Item label="Created">
+          {new Date(vm.created_at).toLocaleString()}
+        </Descriptions.Item>
+        <Descriptions.Item label="Updated">
+          {new Date(vm.updated_at).toLocaleString()}
+        </Descriptions.Item>
+      </Descriptions>
+    </Modal>
+  );
+}
+
+export function VmAccessModal({
   vm,
   access,
+  sshKeys,
+  loadingKeys,
   saving,
   onClose,
   onGrant,
   onRevoke,
+  onAddSshKey,
+  onRevokeSshKey,
 }: {
   vm?: ComputeVm;
   access: ComputeVmProjectAccess[];
+  sshKeys: ComputeVmSshKey[];
+  loadingKeys: boolean;
   saving: boolean;
   onClose: () => void;
   onGrant: (projectId: string) => Promise<void>;
   onRevoke: (projectId: string) => Promise<void>;
+  onAddSshKey: (sshPublicKey: string) => Promise<boolean>;
+  onRevokeSshKey: (sshPublicKey: string) => Promise<void>;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
+  const [sshPublicKey, setSshPublicKey] = useState("");
   const current = vm
     ? access.filter(({ vm_id }) => vm_id === vm.id)
     : ([] as ComputeVmProjectAccess[]);
 
-  useEffect(() => setSelectedProjectId(undefined), [vm?.id]);
+  useEffect(() => {
+    setSelectedProjectId(undefined);
+    setSshPublicKey("");
+  }, [vm?.id]);
 
   return (
     <Modal
       open={vm != null}
-      title={vm ? `Project access to ${vm.name}` : "Project access"}
+      title={vm ? `Access to ${vm.name}` : "VM access"}
       footer={<Button onClick={onClose}>Close</Button>}
       onCancel={onClose}
       width={680}
     >
       <Paragraph type="secondary">
-        Granted projects receive only SSH access and a managed{" "}
-        <Text code>~/.ssh/config</Text> alias. VM lifecycle, configuration,
-        billing, and deletion remain account-owner operations.
+        Granted projects can SSH to the VM via a managed{" "}
+        <Text code>~/.ssh/config</Text> alias. The VM does not gain the ability
+        to SSH to the project or direct access to any project files. VM
+        lifecycle, configuration, billing, and deletion are controlled only by
+        the account.
       </Paragraph>
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Title level={5}>Projects with access</Title>
+      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
         {current.map((item) => (
           <Flex
             key={item.project_id}
@@ -2247,7 +2366,7 @@ function VmProjectAccessModal({
             gap={12}
             wrap
           >
-            <Space direction="vertical" size={0}>
+            <Space orientation="vertical" size={0}>
               <ProjectTitle project_id={item.project_id} trunc={48} />
               <Text type="secondary" code>
                 {item.project_id}
@@ -2320,6 +2439,77 @@ function VmProjectAccessModal({
       >
         Grant SSH access
       </Button>
+      <Divider />
+      <Title level={5}>Public SSH keys</Title>
+      <Paragraph type="secondary">
+        These public keys can connect directly to the VM as{" "}
+        <Text code>{vm?.ssh_user || "user"}</Text>. Private keys never leave
+        their owners.
+      </Paragraph>
+      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+        {sshKeys.map((key) => (
+          <Flex
+            key={key.fingerprint}
+            align="center"
+            justify="space-between"
+            gap={12}
+            wrap
+          >
+            <Space orientation="vertical" size={0} style={{ minWidth: 0 }}>
+              <Text strong>{key.comment || key.key_type}</Text>
+              <Text
+                type="secondary"
+                code
+                copyable={{ text: key.ssh_public_key }}
+              >
+                {key.fingerprint}
+              </Text>
+            </Space>
+            <Popconfirm
+              title="Remove this SSH key?"
+              description="Connections using its private key will no longer be authorized after provider reconciliation."
+              okText="Remove key"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => onRevokeSshKey(key.ssh_public_key)}
+            >
+              <Button danger disabled={saving} size="small">
+                Remove
+              </Button>
+            </Popconfirm>
+          </Flex>
+        ))}
+        {!loadingKeys && sshKeys.length === 0 && (
+          <Alert
+            showIcon
+            type="info"
+            title="No direct SSH keys are authorized."
+          />
+        )}
+        {loadingKeys && <Text type="secondary">Loading SSH keys…</Text>}
+      </Space>
+      <Input.TextArea
+        aria-label="Public SSH key"
+        autoSize={{ minRows: 2, maxRows: 4 }}
+        placeholder="ssh-ed25519 AAAA… name@example.com"
+        value={sshPublicKey}
+        onChange={(event) => setSshPublicKey(event.target.value)}
+        style={{ marginTop: 16 }}
+      />
+      <Button
+        type="primary"
+        disabled={!sshPublicKey.trim()}
+        loading={saving}
+        onClick={() => {
+          const key = sshPublicKey.trim();
+          if (!key) return;
+          void onAddSshKey(key).then((added) => {
+            if (added) setSshPublicKey("");
+          });
+        }}
+        style={{ marginTop: 12 }}
+      >
+        Add public key
+      </Button>
     </Modal>
   );
 }
@@ -2355,6 +2545,9 @@ export function ProjectComputeVms({
     [],
   );
   const [accessVm, setAccessVm] = useState<ComputeVm>();
+  const [detailsVm, setDetailsVm] = useState<ComputeVm>();
+  const [directSshKeys, setDirectSshKeys] = useState<ComputeVmSshKey[]>([]);
+  const [loadingDirectSshKeys, setLoadingDirectSshKeys] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -2504,6 +2697,30 @@ export function ProjectComputeVms({
       cancelled = true;
     };
   }, [isVisible, projectId]);
+
+  useEffect(() => {
+    if (!accessVm || !accountMode) {
+      setDirectSshKeys([]);
+      setLoadingDirectSshKeys(false);
+      return;
+    }
+    let cancelled = false;
+    setLoadingDirectSshKeys(true);
+    void webapp_client.conat_client.hub.compute
+      .listVmSshKeys({ id_or_name: accessVm.id })
+      .then((keys) => {
+        if (!cancelled) setDirectSshKeys(keys);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDirectSshKeys(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessVm?.id, accountMode]);
 
   const defaultVm = (): VmDraft => {
     const catalogDefaultZone = catalog?.defaults.zone ?? "us-central1-a";
@@ -2684,6 +2901,56 @@ export function ProjectComputeVms({
       });
       setNotice(`Project SSH access to '${vm.name}' is being removed.`);
       await load({ refreshCatalogAndGrants: false, showLoading: false });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addDirectSshKey = async (sshPublicKey: string) => {
+    if (!accessVm) return false;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      const completed = await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.compute.authorizeSshKey({
+          browser_id: webapp_client.browser_id,
+          id_or_name: vm.id,
+          ssh_public_key: sshPublicKey,
+          idempotency_key: uuid(),
+        });
+      });
+      if (!completed) return false;
+      setDirectSshKeys(
+        await webapp_client.conat_client.hub.compute.listVmSshKeys({
+          id_or_name: vm.id,
+        }),
+      );
+      setNotice(`SSH key access to '${vm.name}' was authorized.`);
+      return true;
+    } catch (err) {
+      setError(String(err));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revokeDirectSshKey = async (sshPublicKey: string) => {
+    if (!accessVm) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      const keys = await webapp_client.conat_client.hub.compute.revokeSshKey({
+        id_or_name: vm.id,
+        ssh_public_key: sshPublicKey,
+        idempotency_key: uuid(),
+      });
+      setDirectSshKeys(keys);
+      setNotice(`SSH key removal from '${vm.name}' is being reconciled.`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -3055,74 +3322,95 @@ export function ProjectComputeVms({
       title: "VM",
       dataIndex: "name",
       fixed: "left",
-      width: 180,
+      width: 160,
       render: (name: string, vm) => (
         <Space direction="vertical" size={0}>
-          <Text strong>{name}</Text>
-          <Text copyable={{ text: vm.id }} type="secondary">
-            ID {vm.id.slice(0, 8)}
-          </Text>
+          <Button
+            type="link"
+            aria-label={`View details for ${name}`}
+            onClick={() => setDetailsVm(vm)}
+            style={{ height: "auto", padding: 0, textAlign: "left" }}
+          >
+            <Text strong style={{ color: "inherit" }}>
+              {name}
+            </Text>
+          </Button>
+          <Text type="secondary">ID {vm.id.slice(0, 8)}</Text>
         </Space>
       ),
     },
     {
       title: "Status",
       dataIndex: "state",
-      width: 190,
+      width: 165,
       render: (state: string, vm) => {
         const providerState = vm.provider_state;
         const displayState = vmDisplayState(vm);
         const providerObservationStale =
           vm.provider_observed_at != null &&
           Date.now() - new Date(vm.provider_observed_at).valueOf() > 2 * 60_000;
-        const setupDiffers = providerState != null && displayState !== state;
         const recoverySummary =
           state === "recovering" || vm.effective_pricing_model === "on_demand"
             ? vmSpotRecoverySummary(vm)
             : undefined;
         return (
           <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
-            <Tag
-              color={
-                providerObservationStale
-                  ? "orange"
-                  : displayState === "running" || displayState === "ready"
-                    ? "green"
-                    : displayState === "error" || displayState === "failed"
-                      ? "red"
-                      : undefined
+            <Popover
+              trigger="click"
+              title={`Status of ${vm.name}`}
+              content={
+                <Space direction="vertical" size={4} style={{ maxWidth: 430 }}>
+                  <Text>CoCalc state: {state}</Text>
+                  <Text>Desired state: {vm.desired_state}</Text>
+                  <Text>Cloud state: {providerState ?? "not observed"}</Text>
+                  {vm.provider_observed_at && (
+                    <Text type="secondary">
+                      Cloud observed{" "}
+                      <TimeAgo date={new Date(vm.provider_observed_at)} />
+                    </Text>
+                  )}
+                  {vm.provider_observation_error && (
+                    <Text
+                      type="danger"
+                      copyable={{ text: vm.provider_observation_error }}
+                    >
+                      {vm.provider_observation_error}
+                    </Text>
+                  )}
+                  {vm.error && (
+                    <Text type="danger" copyable={{ text: vm.error }}>
+                      {vm.error}
+                    </Text>
+                  )}
+                </Space>
               }
-              style={{ marginInlineEnd: 0, width: "fit-content" }}
             >
-              {displayState.charAt(0).toUpperCase() + displayState.slice(1)}
-            </Tag>
+              <Button
+                type="text"
+                aria-label={`${displayState} status; show details`}
+                style={{ height: "auto", padding: 0 }}
+              >
+                <Tag
+                  color={
+                    providerObservationStale
+                      ? "orange"
+                      : displayState === "running" || displayState === "ready"
+                        ? "green"
+                        : displayState === "error" || displayState === "failed"
+                          ? "red"
+                          : undefined
+                  }
+                  style={{ marginInlineEnd: 0 }}
+                >
+                  {displayState.charAt(0).toUpperCase() + displayState.slice(1)}
+                </Tag>
+              </Button>
+            </Popover>
             {providerObservationStale && vm.provider_observed_at && (
               <Text type={providerObservationStale ? "danger" : "secondary"}>
                 Cloud status stale:{" "}
                 <TimeAgo date={new Date(vm.provider_observed_at)} />
               </Text>
-            )}
-            {(setupDiffers || providerState === "error") && (
-              <Popover
-                trigger="click"
-                title="VM status details"
-                content={
-                  <Space direction="vertical" size={4}>
-                    <Text>CoCalc: {state}</Text>
-                    <Text>Cloud: {providerState}</Text>
-                    {vm.provider_observed_at && (
-                      <Text type="secondary">
-                        Observed{" "}
-                        <TimeAgo date={new Date(vm.provider_observed_at)} />
-                      </Text>
-                    )}
-                  </Space>
-                }
-              >
-                <Button size="small" type="link" style={{ padding: 0 }}>
-                  Status details
-                </Button>
-              </Popover>
             )}
             {vm.provider_observation_error && (
               <Popover
@@ -3186,43 +3474,46 @@ export function ProjectComputeVms({
       title: "Configuration",
       width: 220,
       render: (_, vm) => {
-        const homeVolume = vm.home_volume_id
-          ? volumesById.get(vm.home_volume_id)
-          : undefined;
+        const machineLabel = vm.gpu_type
+          ? `${vm.gpu_count}x ${vm.gpu_type}`
+          : vm.machine_type;
         return (
-          <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
-            <Text strong>
-              {vm.gpu_type
-                ? `${vm.gpu_count}× ${vm.gpu_type}`
-                : vm.machine_type}
-            </Text>
-            {vm.gpu_type && <Text type="secondary">{vm.machine_type}</Text>}
-            <Text type="secondary">
-              {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
-              {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
-            </Text>
-            <Text type="secondary">{vm.zone ?? vm.region}</Text>
-            <Text type="secondary">Boot disk · {vm.boot_disk_gb} GB</Text>
-            <Text type="secondary">
-              Home volume ·{" "}
-              {homeVolume
-                ? `${homeVolume.name} · ${homeVolume.effective_size_gb} GB · ${homeVolume.attachment_state}`
-                : vm.home_volume_id
-                  ? `ID ${vm.home_volume_id.slice(0, 8)}`
-                  : "none"}
-            </Text>
+          <Space direction="vertical" size={6} style={{ minWidth: 0 }}>
+            <HostConfigChip
+              icon={<CloudServerOutlined />}
+              label={machineLabel}
+              detail={
+                vm.gpu_type
+                  ? `${vm.machine_type} · ${vm.cpu} vCPU · ${vm.ram_gb} GB`
+                  : `${vm.cpu} vCPU · ${vm.ram_gb} GB RAM`
+              }
+              ariaLabel={`View configuration for ${vm.name}`}
+              onClick={() => setDetailsVm(vm)}
+              style={{ width: "100%" }}
+            />
+            <HostConfigChip
+              icon={<EnvironmentOutlined />}
+              label={vm.zone ?? vm.region}
+              detail={getProviderDescriptor(vm.provider).label}
+              tone="blue"
+              ariaLabel={`View location for ${vm.name}`}
+              onClick={() => setDetailsVm(vm)}
+              style={{ width: "100%" }}
+            />
           </Space>
         );
       },
     },
     {
       title: "Cost & usage",
-      width: 190,
+      width: 220,
       render: (_, vm) => {
         const egress = vm.egress_summary;
         const gb = Number(egress.current_month_bytes ?? 0) / 1_000_000_000;
         const cost = Number(egress.current_month_cost_usd ?? 0);
         const estimate = vmStoredPriceEstimate(vm);
+        const standardEstimate = vmStoredRunningPriceEstimate(vm, "on_demand");
+        const spotEstimate = vmStoredRunningPriceEstimate(vm, "spot");
         const stoppedEstimate = vmStoredStoppedPriceEstimate(vm);
         const egressLabel = egressRateLabel(vm);
         const freeEgress = providerEgressIsFree(vm.provider);
@@ -3286,20 +3577,48 @@ export function ProjectComputeVms({
                 width: "100%",
               }}
             >
-              <Space direction="vertical" size={0} align="start">
-                <Text>
-                  {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
-                </Text>
-                <Text type="secondary">{vm.funding_mode}</Text>
+              <span
+                style={{
+                  alignItems: "stretch",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 3,
+                  width: "100%",
+                }}
+              >
+                <PriceSummaryRow
+                  label="Standard"
+                  current={
+                    vm.state !== "stopped" &&
+                    vm.effective_pricing_model === "on_demand"
+                  }
+                  estimate={standardEstimate}
+                />
+                <PriceSummaryRow
+                  label="Spot"
+                  current={
+                    vm.state !== "stopped" &&
+                    vm.effective_pricing_model === "spot"
+                  }
+                  estimate={spotEstimate}
+                />
+                <PriceSummaryRow
+                  label="Stopped"
+                  note="disk only"
+                  current={vm.state === "stopped"}
+                  estimate={stoppedEstimate}
+                />
                 {freeEgress ? (
-                  <Text type="secondary">Egress is free</Text>
+                  <Text type="secondary" style={{ paddingInline: 4 }}>
+                    Egress is free
+                  </Text>
                 ) : (
-                  <Text type="secondary">
+                  <Text type="secondary" style={{ paddingInline: 4 }}>
                     {egressLabel} · {gb.toFixed(gb >= 10 ? 1 : 3)} GB
                     {egress.stale ? " · usage reporting delayed" : ""}
                   </Text>
                 )}
-              </Space>
+              </span>
             </Button>
           </Popover>
         );
@@ -3307,7 +3626,7 @@ export function ProjectComputeVms({
     },
     {
       title: "Actions",
-      width: 215,
+      width: 185,
       render: (_, vm) => {
         const transitioning = ["starting", "stopping", "deleting"].includes(
           vm.state,
@@ -3327,8 +3646,11 @@ export function ProjectComputeVms({
           vm.operating_system === "windows" && vm.public_hostname
             ? `ssh -N -L 3389:localhost:3389 ${vm.ssh_user || "user"}@${vm.public_hostname}`
             : undefined;
+        const linkedProjectCount = projectAccess.filter(
+          ({ vm_id, revoked_at }) => vm_id === vm.id && !revoked_at,
+        ).length;
         return (
-          <Space.Compact>
+          <Flex gap={4} wrap style={{ maxWidth: 180 }}>
             <Popover
               trigger="click"
               placement="bottomRight"
@@ -3465,7 +3787,7 @@ export function ProjectComputeVms({
               ))}
             {accountMode && (
               <Button size="small" onClick={() => setAccessVm(vm)}>
-                Projects
+                Projects ({linkedProjectCount})
               </Button>
             )}
             {accountMode && (
@@ -3556,7 +3878,7 @@ export function ProjectComputeVms({
                 Manage in Compute
               </Button>
             )}
-          </Space.Compact>
+          </Flex>
         );
       },
     },
@@ -3824,7 +4146,7 @@ export function ProjectComputeVms({
         }}
         pagination={false}
         rowKey="id"
-        scroll={{ x: 920 }}
+        scroll={{ x: 950 }}
         size="small"
       />
 
@@ -3976,13 +4298,26 @@ export function ProjectComputeVms({
         />
       )}
       <FreshAuthModal {...freshAuthModalProps} />
-      <VmProjectAccessModal
+      <VmDetailsModal
+        vm={detailsVm}
+        homeVolume={
+          detailsVm?.home_volume_id
+            ? volumesById.get(detailsVm.home_volume_id)
+            : undefined
+        }
+        onClose={() => setDetailsVm(undefined)}
+      />
+      <VmAccessModal
         vm={accessVm}
         access={projectAccess}
+        sshKeys={directSshKeys}
+        loadingKeys={loadingDirectSshKeys}
         saving={saving}
         onClose={() => setAccessVm(undefined)}
         onGrant={grantProjectAccess}
         onRevoke={revokeProjectAccess}
+        onAddSshKey={addDirectSshKey}
+        onRevokeSshKey={revokeDirectSshKey}
       />
     </div>
   );

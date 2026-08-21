@@ -22,6 +22,7 @@ import {
   listComputeVmsForInventory,
   listOwnedComputeVms,
   listProjectComputeVms,
+  removeComputeVmSshPublicKey,
   resolveProjectComputeVm,
   updateComputeVmEgressMetadata,
   updateComputeVmProviderObservation,
@@ -464,6 +465,39 @@ describe("compute VM durable state", () => {
       "ssh-ed25519 AAAATEST owner",
       "ssh-ed25519 AAAASECOND second",
     ]);
+  });
+
+  it("removes direct SSH public keys without changing project keys", async () => {
+    const input = vmInput({
+      metadata: {
+        ssh_public_keys: [
+          "ssh-ed25519 AAAATEST owner",
+          "ssh-ed25519 AAAASECOND second",
+        ],
+        project_ssh_public_keys: ["ssh-ed25519 AAAAPROJECT project"],
+      },
+    });
+    const vm = await insertComputeVm(input);
+    const removed = await removeComputeVmSshPublicKey({
+      id: vm.id,
+      owner_account_id: input.owner_account_id,
+      ssh_public_key: "ssh-ed25519 AAAATEST owner",
+    });
+    const duplicate = await removeComputeVmSshPublicKey({
+      id: vm.id,
+      owner_account_id: input.owner_account_id,
+      ssh_public_key: "ssh-ed25519 AAAATEST owner",
+    });
+
+    expect(removed.removed).toBe(true);
+    expect(removed.vm.ssh_public_key).toBe("ssh-ed25519 AAAASECOND second");
+    expect(removed.vm.metadata.ssh_public_keys).toEqual([
+      "ssh-ed25519 AAAASECOND second",
+    ]);
+    expect(removed.vm.metadata.project_ssh_public_keys).toEqual([
+      "ssh-ed25519 AAAAPROJECT project",
+    ]);
+    expect(duplicate.removed).toBe(false);
   });
 
   it("limits SSH public key metadata growth", async () => {

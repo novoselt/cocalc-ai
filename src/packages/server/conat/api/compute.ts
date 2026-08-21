@@ -8,6 +8,7 @@ import type {
   ComputeCatalog,
   ComputeVolume,
   ComputeVm,
+  ComputeVmSshKey,
   CreateComputeVolumeRequest,
   CreateComputeVmRequest,
 } from "@cocalc/conat/hub/api/compute";
@@ -23,11 +24,13 @@ import {
   addComputeVmSshPublicKey,
   allocateComputeVmPublicHostname,
   appendComputeEvent,
+  computeVmSshPublicKeys,
   enqueueComputeWork,
   insertComputeVm,
   listOwnedComputeVms,
   listProjectComputeVms,
   resolveProjectComputeVm,
+  removeComputeVmSshPublicKey,
   resolveOwnedComputeVm,
   updateComputeVm,
 } from "@cocalc/server/compute/db";
@@ -1833,6 +1836,70 @@ export async function authorizeSshKey(opts: {
   });
 }
 
+function publicVmSshKey(sshPublicKey: string): ComputeVmSshKey {
+  const [keyType = "unknown", encoded = "", ...commentParts] =
+    sshPublicKey.split(/\s+/);
+  const digest = createHash("sha256")
+    .update(Buffer.from(encoded, "base64"))
+    .digest("base64")
+    .replace(/=+$/, "");
+  const comment = commentParts.join(" ").trim();
+  return {
+    fingerprint: `SHA256:${digest}`,
+    key_type: keyType,
+    ...(comment ? { comment } : {}),
+    ssh_public_key: sshPublicKey,
+  };
+}
+
+export async function listVmSshKeys(opts: {
+  account_id?: string;
+  id_or_name: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  return computeVmSshPublicKeys(vm).map(publicVmSshKey);
+}
+
+export async function revokeSshKey(opts: {
+  account_id?: string;
+  id_or_name: string;
+  ssh_public_key: string;
+  idempotency_key: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  const key = normalizeManagedVmSshPublicKey(opts.ssh_public_key);
+  if (!key) throw new Error("ssh_public_key is required");
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  const result = await removeComputeVmSshPublicKey({
+    id: vm.id,
+    owner_account_id: accountId,
+    ssh_public_key: key,
+  });
+  if (result.removed) {
+    await appendComputeEvent({
+      vm: result.vm,
+      actor_account_id: accountId,
+      actor_kind: "human",
+      action: "revoke_ssh_key",
+      idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+      old_state: vm.state,
+      new_state: result.vm.state,
+      status: "requested",
+      details: {
+        authorized_key_count: computeVmSshPublicKeys(result.vm).length,
+        fingerprint: publicVmSshKey(key).fingerprint,
+      },
+    });
+    await enqueueComputeWork({
+      resource_id: vm.id,
+      action: "reconcile_ssh_access",
+      idempotency_key: `revoke-ssh-key:${vm.id}:${opts.idempotency_key}`,
+    });
+  }
+  return computeVmSshPublicKeys(result.vm).map(publicVmSshKey);
+}
+
 export async function prepareWindowsRdp(opts: {
   account_id?: string;
   browser_id?: string;
@@ -1888,11 +1955,7 @@ async function authorizeSshKeyForVm(opts: {
   beforeAdd?: () => Promise<void>;
 }) {
   const { vm, key } = opts;
-  if (vm.state !== "ready" || !vm.public_ip) {
-    throw new Error(
-      `compute VM '${vm.name}' is not SSH-ready (state=${vm.state})`,
-    );
-  }
+  const providerReady = vm.state === "ready" && !!vm.public_ip;
   const existingKeys = Array.from(
     new Set(
       [
@@ -1917,7 +1980,15 @@ async function authorizeSshKeyForVm(opts: {
     next = result.vm;
     added = result.added;
   }
-  await ensureProviderComputeSshAccess(next);
+  if (providerReady) {
+    await ensureProviderComputeSshAccess(next);
+  } else if (added) {
+    await enqueueComputeWork({
+      resource_id: vm.id,
+      action: "reconcile_ssh_access",
+      idempotency_key: `authorize-ssh-key:${vm.id}:${opts.idempotency_key}`,
+    });
+  }
   if (added) {
     const authorizedKeyCount = Array.isArray(next.metadata?.ssh_public_keys)
       ? next.metadata.ssh_public_keys.length
@@ -1930,7 +2001,7 @@ async function authorizeSshKeyForVm(opts: {
       idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
       old_state: vm.state,
       new_state: next.state,
-      status: "completed",
+      status: providerReady ? "completed" : "requested",
       details: { authorized_key_count: authorizedKeyCount },
     });
   }
