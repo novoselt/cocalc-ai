@@ -172,6 +172,49 @@ describe("AgentTitleBarButton", () => {
     );
   });
 
+  it("takes content from the frame's own file but focus from the frame tree", async () => {
+    // A cm frame showing a LaTeX \input'ed subfile: content comes from that
+    // file's actions, while focus/blur and the frame type belong to the
+    // frame-tree actions that own the frame id.
+    const frameActions = actions();
+    frameActions._get_frame_type = jest.fn(() => "cm");
+    const languageModel = jest.fn(async () => undefined);
+    const docActions = actions(languageModel);
+    docActions.languageModelGetContext = () => "subfile text";
+    render(
+      <AgentTitleBarButton
+        id="frame-1"
+        path="/home/user/sub1.tex"
+        type="cm"
+        actions={frameActions}
+        documentActions={docActions}
+        buttonSize="small"
+        buttonStyle={{}}
+        visible
+        buttonRef={jest.fn()}
+        project_id="project-1"
+        showDialog
+        setShowDialog={jest.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Agent prompt"), {
+      target: { value: "Add a paragraph" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+    });
+
+    expect(languageModel).toHaveBeenCalledWith(
+      "frame-1",
+      expect.objectContaining({ frameType: "cm" }),
+      "subfile text",
+    );
+    expect(frameActions._get_frame_type).toHaveBeenCalledWith("frame-1");
+    expect(docActions.focus).not.toHaveBeenCalled();
+    expect(docActions.blur).not.toHaveBeenCalled();
+  });
+
   it("selects and persists a recent agent session", async () => {
     const first = {
       session_id: "session-1",

@@ -28,10 +28,6 @@ export class TerminalActions extends Actions {
     return { type: "terminal" };
   }
 
-  public get_terminal(id: string) {
-    return this.terminals.get(id);
-  }
-
   // this sends a given line "cmd" to the actual terminal
   // the extra options slightly modify what it does – check the interface for the explanation
   public run_command(cmd: string, opts: CmdOpts): void {

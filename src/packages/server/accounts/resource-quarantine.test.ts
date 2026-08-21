@@ -146,4 +146,111 @@ describe("account resource quarantine", () => {
     expect(result.projects_stop_requested).toBe(2);
     expect(result.project_ids).toEqual(["project-1", "project-2"]);
   });
+
+  it("stops active solely owned free projects and deduplicates slot projects", async () => {
+    listClusterBayInfosMock.mockResolvedValue([{ bay_id: "bay-1" }]);
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("UPDATE accounts") && sql.includes("auto_balance")) {
+        return { rows: [{ auto_balance: null }], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE subscriptions")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("stripe_usage_subscription")) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("FROM project_runtime_slots")) {
+        return {
+          rows: [{ project_id: "shared-project", owning_bay_id: "bay-1" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("FROM account_project_index")) {
+        return {
+          rows: [
+            { project_id: "shared-project", owning_bay_id: "bay-1" },
+            { project_id: "free-project", owning_bay_id: "bay-2" },
+          ],
+          rowCount: 2,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    const { quarantineAccountBillingResourcesLocal } =
+      await import("./resource-quarantine");
+    const result = await quarantineAccountBillingResourcesLocal({
+      account_id: ACCOUNT_ID,
+      actor_account_id: "22222222-2222-4222-8222-222222222222",
+      reason: "ban",
+      home_bay_id: "bay-1",
+    });
+
+    expect(projectControlStopMock).toHaveBeenCalledTimes(2);
+    expect(projectControlStopMock).toHaveBeenCalledWith({
+      bay_id: "bay-1",
+      project_id: "shared-project",
+      sole_owner_account_id: ACCOUNT_ID,
+    });
+    expect(projectControlStopMock).toHaveBeenCalledWith({
+      bay_id: "bay-2",
+      project_id: "free-project",
+      sole_owner_account_id: ACCOUNT_ID,
+    });
+    expect(result.projects_stop_requested).toBe(2);
+    expect(result.project_ids).toEqual(["shared-project", "free-project"]);
+
+    const ownershipSql = queryMock.mock.calls.find(([sql]) =>
+      `${sql}`.includes("FROM account_project_index"),
+    )?.[0];
+    expect(ownershipSql).toContain(
+      "users_summary #>> ARRAY[$1::TEXT, 'group'] = 'owner'",
+    );
+    expect(ownershipSql).toContain("member.key <> $1::TEXT");
+    expect(ownershipSql).toContain("FROM projects");
+    expect(ownershipSql).toContain("IN ('opened', 'running', 'starting')");
+  });
+
+  it("still stops slot projects when owned-project discovery fails", async () => {
+    listClusterBayInfosMock.mockResolvedValue([{ bay_id: "bay-1" }]);
+    queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes("UPDATE accounts") && sql.includes("auto_balance")) {
+        return { rows: [{ auto_balance: null }], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE subscriptions")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("stripe_usage_subscription")) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("FROM project_runtime_slots")) {
+        return {
+          rows: [{ project_id: "slot-project", owning_bay_id: "bay-1" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("FROM account_project_index")) {
+        throw new Error("projection unavailable");
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    const { quarantineAccountBillingResourcesLocal } =
+      await import("./resource-quarantine");
+    const result = await quarantineAccountBillingResourcesLocal({
+      account_id: ACCOUNT_ID,
+      actor_account_id: "22222222-2222-4222-8222-222222222222",
+      reason: "ban",
+      home_bay_id: "bay-1",
+    });
+
+    expect(projectControlStopMock).toHaveBeenCalledWith({
+      bay_id: "bay-1",
+      project_id: "slot-project",
+    });
+    expect(result.projects_stop_requested).toBe(1);
+    expect(result.errors).toEqual([
+      "list solely owned active projects: Error: projection unavailable",
+    ]);
+  });
 });

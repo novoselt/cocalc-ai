@@ -23,7 +23,7 @@ import HelpMeFix from "@cocalc/frontend/frame-editors/ai/help-me-fix";
 import { capitalize, is_different, path_split } from "@cocalc/util/misc";
 import { COLORS } from "@cocalc/util/theme";
 import { Actions } from "./actions";
-import { getLatexHelpInput } from "./help-input";
+import { latexBuildCommandString, resolveErrorFile } from "./agent-help";
 import { use_build_logs } from "./hooks";
 import { BuildLogs } from "./types";
 
@@ -141,6 +141,9 @@ const Item: React.FC<ItemProps> = React.memo(
     function renderGetHelp() {
       if (!item.get("line") || group != "errors") return;
       const line = item.get("line");
+      const file = resolveErrorFile(actions.path, item.get("file"));
+      // No document excerpt: the agent reads the live file itself; it just
+      // needs to know which file and line.
       return (
         <HelpMeFix
           style={{ float: "right", marginLeft: "10px" }}
@@ -148,11 +151,14 @@ const Item: React.FC<ItemProps> = React.memo(
           task={"ran latex"}
           error={item.get("message") ?? ""}
           line={item.get("content") ?? ""}
-          input={() => getLatexHelpInput(actions._syncstring, line)}
+          file={file}
+          lineNumber={line}
+          buildCommand={latexBuildCommandString(
+            actions.store.get("build_command"),
+          )}
           language={"latex"}
           extraFileInfo={actions.languageModelExtraFileInfo()}
           tag={"latex-error-frame"}
-          prioritize="end"
         />
       );
     }

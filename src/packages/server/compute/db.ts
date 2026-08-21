@@ -773,6 +773,9 @@ export async function enqueueComputeReconciliation(limit = 100) {
     `SELECT id FROM compute_vms
      WHERE deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
        AND ${COMPUTE_VM_V2_SQL}
+       -- An intentional Nebius stop deletes the instance while retaining its
+       -- disks. Provider inventory still detects an unexpected live instance.
+       AND NOT (provider='nebius' AND desired_state='stopped' AND state='stopped')
      ORDER BY updated_at ASC LIMIT $1`,
     [limit],
   );

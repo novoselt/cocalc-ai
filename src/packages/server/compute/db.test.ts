@@ -627,6 +627,20 @@ describe("compute VM durable state", () => {
     expect(work.rows).toEqual([{ action: "reconcile", state: "queued" }]);
   });
 
+  it("does not continuously reconcile intentionally stopped Nebius VMs", async () => {
+    const vm = await insertComputeVm(vmInput({ provider: "nebius" }));
+    await getPool().query(
+      "UPDATE compute_vms SET state='stopped', desired_state='stopped' WHERE id=$1",
+      [vm.id],
+    );
+    expect(await enqueueComputeReconciliation()).toBe(0);
+    const work = await getPool().query(
+      "SELECT action, state FROM compute_resource_work WHERE resource_id=$1",
+      [vm.id],
+    );
+    expect(work.rows).toEqual([]);
+  });
+
   it("turns running leases into durable emergency-stop reconciliation", async () => {
     const vm = await insertComputeVm(vmInput());
     expect(await enqueueComputeEmergencyStops()).toBe(1);

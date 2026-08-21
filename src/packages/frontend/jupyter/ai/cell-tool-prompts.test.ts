@@ -2,11 +2,16 @@
 
 import { buildHiddenPrompt, buildVisiblePrompt } from "./agent-cell-tool";
 
+jest.mock("@cocalc/frontend/project/home-directory", () => ({
+  getProjectHomeDirectory: () => "/home/user",
+}));
+
 describe("Jupyter cell Agent prompts", () => {
   it("builds a minimal hidden prompt for bugfix mode", () => {
     const prompt = buildHiddenPrompt({
       mode: "bugfix",
-      path: "/tmp/test.ipynb",
+      project_id: "project-1",
+      path: "notebooks/test.ipynb",
       cellId: "cell-17",
       cellType: "code",
       kernelLanguage: "python",
@@ -15,8 +20,11 @@ describe("Jupyter cell Agent prompts", () => {
       targetLanguage: "",
     });
 
-    expect(prompt).toContain("Jupyter notebook path: /tmp/test.ipynb");
+    expect(prompt).toContain(
+      "Jupyter notebook: file `notebooks/test.ipynb` (absolute path `/home/user/notebooks/test.ipynb`)",
+    );
     expect(prompt).toContain("Selected cell id: cell-17");
+    expect(prompt).toContain("read the selected cell (and its outputs)");
     expect(prompt).toContain("Selected cell type: code");
     expect(prompt).toContain(
       "Treat the live in-memory notebook state as the source of truth",

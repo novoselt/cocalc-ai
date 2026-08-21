@@ -26,7 +26,7 @@ import {
 } from "../generic/project-builds";
 import type { ExecuteCodeOutputAsync } from "@cocalc/util/types/execute-code";
 import { Actions as MarkdownActions } from "../markdown-editor/actions";
-import { convert } from "./rmd-converter";
+import { convert, rmdRenderCommand } from "./rmd-converter";
 import { checkProducedFiles } from "./utils";
 const HELP_SLUG = "editors/r-markdown";
 
@@ -260,6 +260,10 @@ export class Actions extends MarkdownActions {
     try {
       const { frontmatter, html } = markdown_to_html_frontmatter(md);
       markdown = html;
+      // remembered so the build log can tell the agent exactly what ran
+      this.setState({
+        build_command: rmdRenderCommand(this.path, frontmatter),
+      });
       output = await convert(
         this.project_id,
         this.path,

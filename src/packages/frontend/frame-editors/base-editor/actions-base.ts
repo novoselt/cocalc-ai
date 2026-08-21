@@ -224,7 +224,10 @@ import { MergeCoordinator } from "../code-editor/sync";
 import { SyncAdapter } from "../code-editor/sync-adapter";
 import "../generic/codemirror-plugins";
 import languageModelCreateChat, { Options } from "../ai/create-chat";
-import type { Scope as LanguageModelScope } from "../ai/types";
+import type {
+  ContextInfo as LanguageModelContextInfo,
+  Scope as LanguageModelScope,
+} from "../ai/types";
 import { SettingsObject } from "../settings/types";
 import type { Terminal } from "../terminal-editor/connected-terminal";
 import { TerminalManager } from "../terminal-editor/terminal-manager";
@@ -2655,6 +2658,14 @@ export class BaseEditorActions<
     return this.terminals.get_terminal(id, parent, terminalThemeOverride);
   }
 
+  // The already-open terminal of a terminal frame, or undefined.  Never
+  // creates one.  A terminal frame can live in any editor (a notebook, a
+  // LaTeX document, ...), not just in a .term file, so this is on the base
+  // actions -- e.g. the agent prompts use it to name the live session.
+  public get_terminal(id: string): Terminal<T> | undefined {
+    return this.terminals?.get(id);
+  }
+
   set_terminal_cwd(id: string, cwd: string): void {
     this.save_editor_state(id, { cwd });
   }
@@ -4357,18 +4368,60 @@ export class BaseEditorActions<
   }
 
   public languageModelGetContext(frameId: string, scope?): string {
-    if (scope) {
-      return this.languageModelGetText(frameId, scope);
+    return this.languageModelGetContextInfo(frameId, scope).text;
+  }
+
+  // Like languageModelGetContext, but also reports which scope the text came
+  // from and -- for CodeMirror based editors -- the 1-based line range it
+  // covers, so an agent with full project access can be pointed at the exact
+  // lines instead of (or in addition to) the pasted text.
+  public languageModelGetContextInfo(
+    frameId: string,
+    scope?: LanguageModelScope,
+  ): LanguageModelContextInfo {
+    // only try the scopes this editor actually supports (the base
+    // languageModelGetText returns the whole document for anything but
+    // "none"/"selection", which would otherwise masquerade as e.g. "cell")
+    const supported = this.languageModelGetScopes();
+    const scopes: LanguageModelScope[] = scope
+      ? [scope]
+      : [
+          ...(["selection", "cell", "section", "page"] as const).filter((s) =>
+            supported.has(s),
+          ),
+          "all",
+        ];
+    let resolved: LanguageModelScope = scopes[scopes.length - 1];
+    let text = "";
+    for (const s of scopes) {
+      text = this.languageModelGetText(frameId, s);
+      resolved = s;
+      if (text) break;
     }
-    let input = this.languageModelGetText(frameId, "selection");
-    if (input) return input;
-    input = this.languageModelGetText(frameId, "cell");
-    if (input) return input;
-    input = this.languageModelGetText(frameId, "section");
-    if (input) return input;
-    input = this.languageModelGetText(frameId, "page");
-    if (input) return input;
-    return this.languageModelGetText(frameId, "all");
+    const info: LanguageModelContextInfo = { text, scope: resolved };
+    const cm = this._get_cm(frameId);
+    if (cm == null || !text) return info;
+    try {
+      const cursor = cm.getCursor();
+      if (cursor != null) {
+        info.cursorLine = cursor.line + 1;
+        info.cursorColumn = cursor.ch + 1;
+      }
+      if (resolved === "selection" && cm.somethingSelected()) {
+        const from = cm.getCursor("from");
+        const to = cm.getCursor("to");
+        info.lineStart = from.line + 1;
+        // a selection ending at column 0 does not include that line
+        info.lineEnd =
+          to.ch === 0 && to.line > from.line ? to.line : to.line + 1;
+      } else if (resolved === "all" && text === cm.getValue()) {
+        info.lineStart = 1;
+        info.lineEnd = cm.lineCount();
+      }
+    } catch {
+      // best effort only
+    }
+    return info;
   }
 
   // used to add extra context like ", which is a Jupyter notebook using the Python 3 kernel"

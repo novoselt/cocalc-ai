@@ -64,8 +64,14 @@ const CONTENT_STYLE = {
 export function CustomMacro(props: WidgetProps) {
   const cmdName =
     (props.descriptor.payload?.cmdName as string | undefined) ?? "?";
+  const args = props.descriptor.payload?.args as string[] | undefined;
+  // Multi-argument macros (`\frac{a}{b}`, `\binom{n}{k}`, …) are one
+  // chip covering the whole call, so the excerpt shows every argument
+  // rather than pretending the first one is all there is.
   const content =
-    (props.descriptor.payload?.content as string | undefined) ?? "";
+    args != null && args.length > 0
+      ? args.join(", ")
+      : ((props.descriptor.payload?.content as string | undefined) ?? "");
   return (
     <Widget {...props}>
       <span style={CHIP_STYLE}>
