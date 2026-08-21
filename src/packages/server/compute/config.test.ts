@@ -57,7 +57,7 @@ describe("managed compute VM configuration", () => {
     const config = resolveComputeVmConfig({ dns: "cocalc.ai" });
     expect(config.mode).toBe("disabled");
     expect(config.staging_legacy_provider).toBe(false);
-    expect(config.max_active_per_project).toBe(10);
+    expect(config.max_active_per_account).toBe(10);
     expect(config.max_active_total).toBe(1_000);
     expect(config.max_volumes_per_account).toBe(10);
     expect(config.max_volume_gb).toBe(10_000);

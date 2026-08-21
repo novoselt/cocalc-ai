@@ -560,7 +560,10 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
 
   vm.command("create <name>")
     .description("create a managed compute VM")
-    .requiredOption("--project <project_id>", "attached CoCalc project")
+    .option(
+      "--project <project_id>",
+      "grant the project SSH access after creation",
+    )
     .option("--provider <provider>", "gcp or nebius", "gcp")
     .option("--os <operating_system>", "linux or windows", "linux")
     .option("--region <region>", "provider region", "us-central1")
@@ -646,7 +649,9 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           home_volume: opts.homeVolume,
           ssh_public_key: key.key,
           configure_project_ssh:
-            opts.sshKey !== false && opts.configureProjectSsh !== false,
+            !!opts.project &&
+            opts.sshKey !== false &&
+            opts.configureProjectSsh !== false,
           idempotency_key: randomUUID(),
         });
         progress(
@@ -1007,7 +1012,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
   volume
     .command("create <name>")
     .description("create a persistent /home/user volume")
-    .requiredOption("--project <project_id>", "attached CoCalc project")
+    .option("--project <project_id>", "legacy project association")
     .option("--provider <provider>", "gcp or nebius", "gcp")
     .option("--region <region>", "provider region", "us-central1")
     .option("--zone <zone>", "provider zone")

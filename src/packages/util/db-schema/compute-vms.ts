@@ -37,7 +37,7 @@ Table({
     },
     project_id: {
       type: "uuid",
-      desc: "Project used for discovery and scoped agent access.",
+      desc: "Deprecated creation-context project; project access is many-to-many in compute_vm_project_access.",
     },
     provider: { type: "string", desc: "Managed provider: gcp or nebius." },
     operating_system: {

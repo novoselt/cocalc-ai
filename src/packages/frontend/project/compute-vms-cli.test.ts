@@ -38,6 +38,21 @@ describe("managed compute CLI equivalents", () => {
     ).not.toContain("--ttl");
   });
 
+  it("renders account-owned resources without a project attachment", () => {
+    expect(
+      vmCreateCli({
+        api: "https://staging.cocalc.ai",
+        values: { name: "account-vm", ssh_public_key: "" },
+      }),
+    ).not.toContain("--project");
+    expect(
+      volumeCreateCli({
+        api: "https://staging.cocalc.ai",
+        values: { name: "account-volume" },
+      }),
+    ).not.toContain("--project");
+  });
+
   it("renders an explicit Windows selection", () => {
     expect(
       vmCreateCli({

@@ -65,7 +65,7 @@ function harness(
                 return {
                   provider_catalogs: { gcp: { entries: [] } },
                   defaults: { provider: "gcp" },
-                  limits: { max_active_per_project: 3 },
+                  limits: { max_active_per_account: 3 },
                   funding_modes: [],
                 };
               },
@@ -207,7 +207,7 @@ describe("vm catalog", () => {
       provider: "gcp",
       catalog: { entries: [] },
       defaults: { provider: "gcp" },
-      limits: { max_active_per_project: 3 },
+      limits: { max_active_per_account: 3 },
       funding_modes: [],
     });
   });
@@ -345,6 +345,20 @@ describe("vm availability", () => {
 });
 
 describe("vm create", () => {
+  it("creates an account-owned VM without a project grant", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "account-vm",
+      "--no-ssh-key",
+    ]);
+    assert.equal(createCalls[0]?.project_id, undefined);
+    assert.equal(createCalls[0]?.configure_project_ssh, false);
+  });
+
   it("defaults to the attached project's deploy key", async () => {
     const { program, createCalls } = harness();
     await program.parseAsync([

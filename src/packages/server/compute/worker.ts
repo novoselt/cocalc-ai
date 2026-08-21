@@ -52,6 +52,7 @@ import {
   ensureProviderComputeVolume,
   ensureProviderComputePublicAddress,
   ensureProviderComputePublicAddressAttached,
+  ensureProviderComputeSshAccess,
   inspectProviderComputeVm,
   inspectProviderComputeVolume,
   getProviderComputePublicEgressBytes,
@@ -74,6 +75,11 @@ import {
 import { getHostOwnerBaySshIdentity } from "@cocalc/server/cloud/ssh-key";
 import { syncManagedVmProjectSshConfig } from "@cocalc/server/projects/managed-vm-ssh-config";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
+import type { ComputeVmProjectAccessRow } from "./types";
+import {
+  listComputeVmProjectAccess,
+  updateComputeVmProjectAccessState,
+} from "./project-access";
 import { effectiveComputeVolumeSizeGb } from "./volume-size";
 import { ensureComputeWorkQueueSchema } from "./schema";
 import {
@@ -1589,57 +1595,6 @@ async function releaseVmNetwork(vm: ComputeVmRow): Promise<ComputeVmRow> {
   }))!;
 }
 
-async function syncVmProjectSshConfig(
-  vm: ComputeVmRow,
-  enabled: boolean,
-): Promise<ComputeVmRow> {
-  if (vm.metadata?.configure_project_ssh !== true) return vm;
-  try {
-    const result = await observeVmPhase(
-      vm,
-      "sync_project_ssh_config",
-      async () =>
-        syncManagedVmProjectSshConfig({
-          account_id: vm.owner_account_id,
-          project_id: vm.project_id,
-          vm_id: vm.id,
-          vm_name: vm.name,
-          hostname: vm.public_hostname,
-          enabled,
-        }),
-    );
-    return (await updateComputeVm(vm.id, {
-      metadata: {
-        ...vm.metadata,
-        project_ssh_config: {
-          state: enabled ? "ready" : "removed",
-          alias: result.alias,
-          updated_at: new Date().toISOString(),
-        },
-      },
-    }))!;
-  } catch (err) {
-    const message = `${(err as Error)?.message ?? err}`.slice(0, 4000);
-    logger.warn("managed compute project SSH config is degraded", {
-      vm_id: vm.id,
-      project_id: vm.project_id,
-      enabled,
-      err: message,
-    });
-    return (await updateComputeVm(vm.id, {
-      metadata: {
-        ...vm.metadata,
-        project_ssh_config: {
-          state: "degraded",
-          desired: enabled ? "present" : "absent",
-          error: message,
-          updated_at: new Date().toISOString(),
-        },
-      },
-    }))!;
-  }
-}
-
 export function managedVmProjectSshConfigNeedsSync(
   vm: Pick<ComputeVmRow, "name" | "metadata">,
 ): boolean {
@@ -1647,6 +1602,108 @@ export function managedVmProjectSshConfigNeedsSync(
     vm.metadata?.project_ssh_config?.state !== "ready" ||
     vm.metadata?.project_ssh_config?.alias !== vm.name
   );
+}
+
+function normalizedProjectAccessKeys(
+  access: ComputeVmProjectAccessRow[],
+): string[] {
+  return Array.from(
+    new Set(
+      access
+        .filter(({ revoked_at }) => !revoked_at)
+        .map(({ ssh_public_key }) => `${ssh_public_key ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+}
+
+export function managedVmProjectAccessNeedsSync(
+  vm: Pick<ComputeVmRow, "metadata">,
+  access: ComputeVmProjectAccessRow[],
+): boolean {
+  const desiredKeys = normalizedProjectAccessKeys(access);
+  const recordedKeys = Array.from(
+    new Set(
+      (vm.metadata?.project_ssh_public_keys ?? [])
+        .map((key) => `${key ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+  return (
+    desiredKeys.join("\n") !== recordedKeys.join("\n") ||
+    access.some(({ revoked_at, state }) =>
+      revoked_at ? state !== "revoked" : state !== "ready",
+    )
+  );
+}
+
+async function syncVmProjectAccess(
+  vm: ComputeVmRow,
+  enabled: boolean,
+): Promise<ComputeVmRow> {
+  const access = await listComputeVmProjectAccess({
+    vm_id: vm.id,
+    include_revoked: true,
+  });
+  const desiredKeys = normalizedProjectAccessKeys(access);
+  let next = (await updateComputeVm(vm.id, {
+    metadata: {
+      ...(vm.metadata ?? {}),
+      project_ssh_public_keys: desiredKeys,
+    },
+  }))!;
+  if (enabled) {
+    await observeVmPhase(next, "sync_project_ssh_authorized_keys", async () =>
+      ensureProviderComputeSshAccess(next),
+    );
+  }
+  for (const grant of access) {
+    const shouldEnable = enabled && !grant.revoked_at;
+    if (!shouldEnable && grant.state === "revoked") continue;
+    if (shouldEnable && !grant.ssh_public_key?.trim()) {
+      await updateComputeVmProjectAccessState({
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        state: "degraded",
+        error: "Project deploy SSH key is missing",
+      });
+      continue;
+    }
+    try {
+      await observeVmPhase(next, "sync_project_ssh_config", async () =>
+        syncManagedVmProjectSshConfig({
+          account_id: vm.owner_account_id,
+          project_id: grant.project_id,
+          vm_id: vm.id,
+          vm_name: vm.name,
+          hostname: vm.public_hostname,
+          enabled: shouldEnable,
+        }),
+      );
+      await updateComputeVmProjectAccessState({
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        state: grant.revoked_at ? "revoked" : "ready",
+        error: null,
+      });
+    } catch (err) {
+      const message = `${(err as Error)?.message ?? err}`.slice(0, 4000);
+      logger.warn("managed compute project access reconciliation degraded", {
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        enabled: shouldEnable,
+        err: message,
+      });
+      await updateComputeVmProjectAccessState({
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        state: "degraded",
+        error: message,
+      });
+    }
+  }
+  next = (await getComputeVmById(vm.id)) ?? next;
+  return next;
 }
 
 async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
@@ -1684,7 +1741,7 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
         : current.spot_recovery_state,
   });
   next = await ensureVmDns(next!);
-  next = await syncVmProjectSshConfig(next!, true);
+  next = await syncVmProjectAccess(next!, true);
   await updateComputeInstance(next!, {
     public_ip: publicIp,
     running: true,
@@ -2031,7 +2088,7 @@ async function stop(vm: ComputeVmRow) {
   const networkState =
     current.desired_state === "running"
       ? current
-      : await releaseVmNetwork(await syncVmProjectSshConfig(current, false));
+      : await releaseVmNetwork(await syncVmProjectAccess(current, false));
   const providerStoppedAt = new Date().toISOString();
   await updateComputeVmProviderObservation(vm.id, {
     state: "stopped",
@@ -2064,10 +2121,7 @@ async function remove(vm: ComputeVmRow) {
     desired_state: "deleted",
   });
   await stopProviderComputeVm(vm);
-  vm = await syncVmProjectSshConfig(
-    (await getComputeVmById(vm.id)) ?? vm,
-    false,
-  );
+  vm = await syncVmProjectAccess((await getComputeVmById(vm.id)) ?? vm, false);
   await observeVmPhase(vm, "provider_delete", async () =>
     deleteProviderComputeVm(vm),
   );
@@ -2256,8 +2310,12 @@ async function reconcile(vm: ComputeVmRow) {
     if (vm.public_address_id || vm.dns_record_id || vm.public_ip) {
       vm = await releaseVmNetwork(vm);
     }
-    if (vm.metadata?.project_ssh_config?.state !== "removed") {
-      vm = await syncVmProjectSshConfig(vm, false);
+    const projectAccess = await listComputeVmProjectAccess({
+      vm_id: vm.id,
+      include_revoked: true,
+    });
+    if (managedVmProjectAccessNeedsSync(vm, projectAccess)) {
+      vm = await syncVmProjectAccess(vm, false);
     }
     if (vm.state !== "stopped") {
       await updateComputeVm(vm.id, {
@@ -2306,8 +2364,12 @@ async function reconcile(vm: ComputeVmRow) {
       await markReady(vm, observed.instance ?? {});
     } else {
       if (vm.dns_state !== "ready") vm = await ensureVmDns(vm);
-      if (managedVmProjectSshConfigNeedsSync(vm)) {
-        await syncVmProjectSshConfig(vm, true);
+      const projectAccess = await listComputeVmProjectAccess({
+        vm_id: vm.id,
+        include_revoked: true,
+      });
+      if (managedVmProjectAccessNeedsSync(vm, projectAccess)) {
+        await syncVmProjectAccess(vm, true);
       }
     }
     return;

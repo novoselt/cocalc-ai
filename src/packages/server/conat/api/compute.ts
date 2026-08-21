@@ -33,6 +33,7 @@ import {
 } from "@cocalc/server/compute/db";
 import type { ComputeVmRow } from "@cocalc/server/compute/types";
 import type { ComputeVolumeRow } from "@cocalc/server/compute/types";
+import type { ComputeVmProjectAccessRow } from "@cocalc/server/compute/types";
 import {
   normalizeManagedVmSshPublicKey,
   resolveManagedVmCreateSshAuthorization,
@@ -104,6 +105,12 @@ import {
 import { deleteHostDns } from "@cocalc/server/cloud/dns";
 import centralLog from "@cocalc/database/postgres/central-log";
 import type { MoneyValue } from "@cocalc/util/money";
+import {
+  grantComputeVmProjectAccess,
+  listComputeVmProjectAccess,
+  refreshComputeVmProjectAccessKey,
+  revokeComputeVmProjectAccess,
+} from "@cocalc/server/compute/project-access";
 
 const MIN_VOLUME_GB = 10;
 const HOURS_PER_MONTH = 730;
@@ -158,6 +165,31 @@ function resolveComputeActor(
     accountId,
     actorKind: opts.agent_auth ? ("agent" as const) : ("human" as const),
   };
+}
+
+async function resolveVmMutationActor(
+  opts: {
+    account_id?: string;
+    project_id?: string;
+    agent_auth?: ComputeAgentAuth;
+  },
+  vm: ComputeVmRow,
+) {
+  const projectId = opts.agent_auth?.project_id ?? vm.project_id ?? "";
+  const actor = resolveComputeActor(opts, projectId || undefined);
+  if (opts.agent_auth) {
+    const access = await listComputeVmProjectAccess({
+      vm_id: vm.id,
+      project_id: projectId,
+    });
+    if (!access.length) {
+      throw Object.assign(
+        new Error("managed-compute capability cannot access this VM"),
+        { code: 403 },
+      );
+    }
+  }
+  return { ...actor, projectId };
 }
 
 async function authorizeComputeMutation(opts: {
@@ -322,6 +354,11 @@ function managedVmSshAlias(vm: Pick<ComputeVmRow, "name">): string {
   return vm.name;
 }
 
+function publicVmProjectAccess(access: ComputeVmProjectAccessRow) {
+  const { ssh_public_key: _sshPublicKey, ...result } = access;
+  return result;
+}
+
 async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
   const {
     ssh_public_key: _sshPublicKey,
@@ -332,6 +369,7 @@ async function publicVm(vm: ComputeVmRow): Promise<ComputeVm> {
   } = vm;
   const {
     ssh_public_keys: _sshPublicKeys,
+    project_ssh_public_keys: _projectSshPublicKeys,
     provider_observation: _providerObservation,
     ...publicMetadata
   } = metadata ?? {};
@@ -674,7 +712,7 @@ export async function getCatalog(opts: {
       boot_disk_gb: 20,
     },
     limits: {
-      max_active_per_project: config.max_active_per_project,
+      max_active_per_account: config.max_active_per_account,
       max_ttl_minutes: config.max_ttl_minutes,
       max_boot_disk_gb: config.max_boot_disk_gb,
       max_volume_gb: config.max_volume_gb,
@@ -688,7 +726,14 @@ export async function createVm(
   const { accountId, actorKind } = resolveComputeActor(opts, opts.project_id);
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
-  await requireProjectMembership(accountId, opts.project_id);
+  if (opts.project_id) {
+    await requireProjectMembership(accountId, opts.project_id);
+  } else if (opts.agent_auth) {
+    throw Object.assign(
+      new Error("agent-created VMs require a project context"),
+      { code: 403 },
+    );
+  }
   const provider = opts.provider;
   if (provider !== "gcp" && provider !== "nebius") {
     throw new Error("provider must be gcp or nebius");
@@ -748,11 +793,6 @@ export async function createVm(
   ) {
     throw new Error(
       `compute volume '${homeVolume.name}' is in a different provider location`,
-    );
-  }
-  if (homeVolume && homeVolume.project_id !== opts.project_id) {
-    throw new Error(
-      `compute volume '${homeVolume.name}' belongs to a different project`,
     );
   }
   const machine = await getComputeMachine({
@@ -931,7 +971,7 @@ export async function createVm(
   await authorizeComputeMutation({
     actor: opts,
     action: "billable",
-    project_id: opts.project_id,
+    project_id: opts.project_id ?? "",
     request: {
       operation: "create-vm",
       operation_id: opts.idempotency_key,
@@ -949,7 +989,8 @@ export async function createVm(
     require_fresh_auth: true,
   });
   const projectKey =
-    opts.configure_project_ssh === true || opts.ssh_public_key == null
+    opts.project_id &&
+    (opts.configure_project_ssh === true || opts.ssh_public_key == null)
       ? await getManagedVmProjectSshPublicKey({
           account_id: accountId,
           project_id: opts.project_id,
@@ -970,7 +1011,7 @@ export async function createVm(
       name,
       owner_account_id: accountId,
       owning_bay_id: getConfiguredBayId(),
-      project_id: opts.project_id,
+      project_id: opts.project_id ?? null,
       provider,
       operating_system: operatingSystem,
       operating_system_version:
@@ -1013,7 +1054,10 @@ export async function createVm(
       dns_error: null,
       public_ports: [22, 443],
       ssh_user: "user",
-      ssh_public_key: sshPublicKey,
+      // A project deploy key belongs exclusively to its revocable access
+      // grant. Keeping it in the VM's primary key slot would make revocation
+      // ineffective.
+      ssh_public_key: configureProjectSsh ? "" : sshPublicKey,
       expires_at:
         ttlMinutes == null ? null : new Date(Date.now() + ttlMinutes * 60_000),
       allow_on_demand_fallback: allowOnDemandFallback,
@@ -1036,7 +1080,10 @@ export async function createVm(
       metadata: {
         machine: { cpu: machine.cpu, ram_gb: machine.ram_gb },
         provider_instance_name: providerInstanceId,
-        ssh_public_keys: sshPublicKey ? [sshPublicKey] : [],
+        ssh_public_keys:
+          !configureProjectSsh && sshPublicKey ? [sshPublicKey] : [],
+        project_ssh_public_keys:
+          configureProjectSsh && projectKey ? [projectKey] : [],
         configure_project_ssh: configureProjectSsh,
         provider_context: config.staging_legacy_provider
           ? "project-host-provider-context"
@@ -1055,10 +1102,19 @@ export async function createVm(
       },
     },
     {
-      max_active_per_project: config.max_active_per_project,
+      max_active_per_account: config.max_active_per_account,
       max_active_total: config.max_active_total,
     },
   );
+  if (opts.project_id && configureProjectSsh && projectKey) {
+    await grantComputeVmProjectAccess({
+      owner_account_id: accountId,
+      vm_id: vm.id,
+      project_id: opts.project_id,
+      ssh_public_key: projectKey,
+      created_by_account_id: accountId,
+    });
+  }
   await appendComputeEvent({
     vm,
     actor_account_id: accountId,
@@ -1089,7 +1145,14 @@ export async function createVolume(
   const { accountId, actorKind } = resolveComputeActor(opts, opts.project_id);
   const config = await getComputeVmConfig();
   requireComputeVmCreateAllowed(config, accountId);
-  await requireProjectMembership(accountId, opts.project_id);
+  if (opts.project_id) {
+    await requireProjectMembership(accountId, opts.project_id);
+  } else if (opts.agent_auth) {
+    throw Object.assign(
+      new Error("agent-created volumes require a project context"),
+      { code: 403 },
+    );
+  }
   const provider = opts.provider;
   if (provider !== "gcp" && provider !== "nebius") {
     throw new Error("provider must be gcp or nebius");
@@ -1152,7 +1215,7 @@ export async function createVolume(
   await authorizeComputeMutation({
     actor: opts,
     action: "billable",
-    project_id: opts.project_id,
+    project_id: opts.project_id ?? "",
     request: {
       operation: "create-volume",
       operation_id: opts.idempotency_key,
@@ -1519,6 +1582,117 @@ export async function listVms(opts: {
   return await Promise.all(rows.map(publicVm));
 }
 
+export async function listVmProjectAccess(opts: {
+  account_id?: string;
+  id_or_name?: string;
+  include_revoked?: boolean;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  const vm = opts.id_or_name
+    ? await resolveOwned(accountId, opts.id_or_name, true)
+    : undefined;
+  return (
+    await listComputeVmProjectAccess({
+      owner_account_id: accountId,
+      vm_id: vm?.id,
+      include_revoked: opts.include_revoked,
+    })
+  ).map(publicVmProjectAccess);
+}
+
+export async function grantVmProjectAccess(opts: {
+  account_id?: string;
+  browser_id?: string;
+  session_hash?: string;
+  id_or_name: string;
+  project_id: string;
+  ssh_public_key?: string;
+  idempotency_key: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  const projectId = `${opts.project_id ?? ""}`.trim();
+  if (!projectId) throw new Error("project_id is required");
+  await requireDangerousSessionAuth({
+    account_id: accountId,
+    browser_id: opts.browser_id,
+    session_hash: opts.session_hash,
+    require_second_factor: "if_enabled",
+  });
+  await requireProjectMembership(accountId, projectId);
+  const vm = await resolveOwned(accountId, opts.id_or_name);
+  const projectKey = normalizeManagedVmSshPublicKey(
+    opts.ssh_public_key ??
+      (await getManagedVmProjectSshPublicKey({
+        account_id: accountId,
+        project_id: projectId,
+      })) ??
+      "",
+  );
+  if (!projectKey) {
+    throw new Error(
+      "project has no deploy SSH key; create its project SSH keypair first",
+    );
+  }
+  const access = await grantComputeVmProjectAccess({
+    owner_account_id: accountId,
+    vm_id: vm.id,
+    project_id: projectId,
+    ssh_public_key: projectKey,
+    created_by_account_id: accountId,
+  });
+  await appendComputeEvent({
+    vm,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    action: "grant_project_access",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: vm.state,
+    new_state: vm.state,
+    status: "requested",
+    details: { project_id: projectId, access_level: access.access_level },
+  });
+  await enqueueComputeWork({
+    resource_id: vm.id,
+    action: "reconcile",
+    idempotency_key: `project-access-grant:${vm.id}:${projectId}:${opts.idempotency_key}`,
+  });
+  return publicVmProjectAccess(access);
+}
+
+export async function revokeVmProjectAccess(opts: {
+  account_id?: string;
+  id_or_name: string;
+  project_id: string;
+  idempotency_key: string;
+}) {
+  const accountId = requireAccount(opts.account_id);
+  const projectId = `${opts.project_id ?? ""}`.trim();
+  if (!projectId) throw new Error("project_id is required");
+  const vm = await resolveOwned(accountId, opts.id_or_name, true);
+  const access = await revokeComputeVmProjectAccess({
+    owner_account_id: accountId,
+    vm_id: vm.id,
+    project_id: projectId,
+  });
+  await appendComputeEvent({
+    vm,
+    actor_account_id: accountId,
+    actor_kind: "human",
+    action: "revoke_project_access",
+    idempotency_key: normalizeIdempotencyKey(opts.idempotency_key),
+    old_state: vm.state,
+    new_state: vm.state,
+    status: "requested",
+    details: { project_id: projectId },
+  });
+  await enqueueComputeWork({
+    resource_id: vm.id,
+    action: "reconcile",
+    idempotency_key: `project-access-revoke:${vm.id}:${projectId}:${opts.idempotency_key}`,
+  });
+  return publicVmProjectAccess(access);
+}
+
 export async function listProjectVms(opts: {
   host_id?: string;
   project_id?: string;
@@ -1803,21 +1977,31 @@ async function authorizeVerifiedProjectSshKey(opts: {
     project_id: projectId,
     vm_id: vm.id,
   });
-  const authorized = await authorizeSshKeyForVm({
-    vm,
-    key,
-    idempotency_key: opts.idempotency_key,
-    actor_kind: "project",
+  let access = await refreshComputeVmProjectAccessKey({
+    vm_id: vm.id,
+    project_id: projectId,
+    ssh_public_key: key,
   });
-  const next = (await updateComputeVm(vm.id, {
-    metadata: { ...vm.metadata, configure_project_ssh: true },
-  }))!;
+  if (!access && vm.project_id === projectId) {
+    access = await grantComputeVmProjectAccess({
+      owner_account_id: vm.owner_account_id,
+      vm_id: vm.id,
+      project_id: projectId,
+      ssh_public_key: key,
+      created_by_account_id: vm.owner_account_id,
+    });
+  }
+  if (!access) {
+    throw Object.assign(new Error("project does not have access to this VM"), {
+      code: 403,
+    });
+  }
   await enqueueComputeWork({
     resource_id: vm.id,
     action: "reconcile",
     idempotency_key: `project-ssh-config:${opts.idempotency_key}`,
   });
-  return { ...authorized, metadata: next.metadata };
+  return await publicVm(vm);
 }
 
 export async function authorizeProjectSshKey(opts: {
@@ -1877,7 +2061,7 @@ async function requestState(opts: {
     requireComputeVmStartAllowed(await getComputeVmConfig(), accountId);
   }
   const vm = await resolveOwned(accountId, opts.id_or_name);
-  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  const { actorKind, projectId } = await resolveVmMutationActor(opts, vm);
   if (opts.desired_state === "running") {
     await requireComputeFunding({
       account_id: accountId,
@@ -1913,7 +2097,7 @@ async function requestState(opts: {
   const authorization = await authorizeComputeMutation({
     actor: opts,
     action: "availability",
-    project_id: vm.project_id,
+    project_id: projectId,
     vm_id: vm.id,
     request: {
       operation: opts.desired_state === "running" ? "start-vm" : "stop-vm",
@@ -2003,7 +2187,7 @@ export async function setVmTtl(opts: {
   );
   const config = await getComputeVmConfig();
   const vm = await resolveOwned(accountId, opts.id_or_name);
-  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  const { actorKind, projectId } = await resolveVmMutationActor(opts, vm);
   if (vm.desired_state === "deleted" || vm.state === "deleting") {
     throw new Error("cannot change the TTL of a deleting VM");
   }
@@ -2066,7 +2250,7 @@ export async function setVmTtl(opts: {
   await authorizeComputeMutation({
     actor: opts,
     action: "billable",
-    project_id: vm.project_id,
+    project_id: projectId,
     vm_id: vm.id,
     request: {
       operation: "set-vm-ttl",
@@ -2129,7 +2313,7 @@ export async function setVmFundingMode(opts: {
     opts.agent_auth?.account_id ?? opts.account_id,
   );
   const vm = await resolveOwned(accountId, opts.id_or_name);
-  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  const { actorKind, projectId } = await resolveVmMutationActor(opts, vm);
   if (actorKind === "agent" && !vm.expires_at) {
     throw Object.assign(
       new Error(
@@ -2160,7 +2344,7 @@ export async function setVmFundingMode(opts: {
   await authorizeComputeMutation({
     actor: opts,
     action: "billable",
-    project_id: vm.project_id,
+    project_id: projectId,
     vm_id: vm.id,
     request: {
       operation: "set-vm-funding",
@@ -2231,7 +2415,7 @@ export async function setVmMachineType(opts: {
     opts.agent_auth?.account_id ?? opts.account_id,
   );
   const vm = await resolveOwned(accountId, opts.id_or_name);
-  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  const { actorKind, projectId } = await resolveVmMutationActor(opts, vm);
   if (vm.state !== "stopped" || vm.desired_state !== "stopped") {
     throw new Error("stop the VM before changing its machine type");
   }
@@ -2351,7 +2535,7 @@ export async function setVmMachineType(opts: {
   await authorizeComputeMutation({
     actor: opts,
     action: "billable",
-    project_id: vm.project_id,
+    project_id: projectId,
     vm_id: vm.id,
     request: {
       operation: "set-vm-machine-type",
@@ -2426,7 +2610,7 @@ export async function setVmPricingModel(opts: {
     opts.agent_auth?.account_id ?? opts.account_id,
   );
   const vm = await resolveOwned(accountId, opts.id_or_name);
-  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  const { actorKind, projectId } = await resolveVmMutationActor(opts, vm);
   if (vm.state !== "stopped" || vm.desired_state !== "stopped") {
     throw new Error("stop the VM before changing its pricing model");
   }
@@ -2453,7 +2637,7 @@ export async function setVmPricingModel(opts: {
   await authorizeComputeMutation({
     actor: opts,
     action: "billable",
-    project_id: vm.project_id,
+    project_id: projectId,
     vm_id: vm.id,
     request: {
       operation: "change-vm-pricing",
@@ -2498,11 +2682,11 @@ export async function deleteVm(opts: {
     opts.agent_auth?.account_id ?? opts.account_id,
   );
   const vm = await resolveOwned(accountId, opts.id_or_name);
-  const { actorKind } = resolveComputeActor(opts, vm.project_id);
+  const { actorKind, projectId } = await resolveVmMutationActor(opts, vm);
   await authorizeComputeMutation({
     actor: opts,
     action: "destructive",
-    project_id: vm.project_id,
+    project_id: projectId,
     vm_id: vm.id,
     request: {
       operation: "delete-vm",

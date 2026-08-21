@@ -56,7 +56,7 @@ export async function insertComputeVm(
     "created_at" | "updated_at" | "ready_at" | "stopped_at" | "deleted_at"
   >,
   limits?: {
-    max_active_per_project: number;
+    max_active_per_account: number;
     max_active_total: number;
   },
 ): Promise<ComputeVmRow> {
@@ -81,21 +81,21 @@ export async function insertComputeVm(
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended('compute-vm-admission', 0))",
       );
-      const { rows: projectRows } = await client.query<{ count: string }>(
+      const { rows: accountRows } = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM compute_vms
-         WHERE project_id=$1 AND deleted_at IS NULL
+         WHERE owner_account_id=$1 AND deleted_at IS NULL
            AND ${COMPUTE_VM_V2_SQL}`,
-        [row.project_id],
+        [row.owner_account_id],
       );
       const { rows: totalRows } = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM compute_vms
          WHERE deleted_at IS NULL AND ${COMPUTE_VM_V2_SQL}`,
       );
-      const projectCount = Number(projectRows[0]?.count ?? 0);
+      const accountCount = Number(accountRows[0]?.count ?? 0);
       const totalCount = Number(totalRows[0]?.count ?? 0);
-      if (projectCount >= limits.max_active_per_project) {
+      if (accountCount >= limits.max_active_per_account) {
         throw new Error(
-          `managed compute VM project limit reached (${projectCount}/${limits.max_active_per_project})`,
+          `managed compute VM account limit reached (${accountCount}/${limits.max_active_per_account})`,
         );
       }
       if (totalCount >= limits.max_active_total) {
@@ -142,7 +142,7 @@ export async function insertComputeVm(
         row.name,
         row.owner_account_id,
         row.owning_bay_id,
-        row.project_id,
+        row.project_id ?? null,
         row.provider,
         row.operating_system,
         row.operating_system_version,
@@ -271,12 +271,25 @@ export async function resolveProjectComputeVm(opts: {
 }) {
   const deletedClause = opts.include_deleted ? "" : "AND deleted_at IS NULL";
   const { rows } = await pool().query<ComputeVmRow>(
-    `SELECT * FROM compute_vms
-     WHERE project_id=$1
-       AND (id::text=$2 OR name=$2)
+    `SELECT vm.* FROM compute_vms vm
+     WHERE (
+         EXISTS (
+           SELECT 1 FROM compute_vm_project_access access
+            WHERE access.vm_id=vm.id AND access.project_id=$1
+              AND access.revoked_at IS NULL
+         )
+         OR (
+           vm.project_id=$1
+           AND NOT EXISTS (
+             SELECT 1 FROM compute_vm_project_access any_access
+              WHERE any_access.vm_id=vm.id
+           )
+         )
+       )
+       AND (vm.id::text=$2 OR vm.name=$2)
        AND ${COMPUTE_VM_V2_SQL}
-       ${deletedClause}
-     ORDER BY created_at DESC LIMIT 2`,
+       ${deletedClause.replaceAll("deleted_at", "vm.deleted_at")}
+     ORDER BY vm.created_at DESC LIMIT 2`,
     [opts.project_id, opts.id_or_name],
   );
   if (rows.length > 1) {
@@ -296,14 +309,27 @@ export async function listOwnedComputeVms(opts: {
   let projectClause = "";
   if (opts.project_id) {
     params.push(opts.project_id);
-    projectClause = `AND project_id=$${params.length}`;
+    projectClause = `AND (
+      EXISTS (
+        SELECT 1 FROM compute_vm_project_access access
+         WHERE access.vm_id=vm.id AND access.project_id=$${params.length}
+           AND access.revoked_at IS NULL
+      )
+      OR (
+        vm.project_id=$${params.length}
+        AND NOT EXISTS (
+          SELECT 1 FROM compute_vm_project_access any_access
+           WHERE any_access.vm_id=vm.id
+        )
+      )
+    )`;
   }
   const deletedClause = opts.include_deleted ? "" : "AND deleted_at IS NULL";
   const { rows } = await pool().query<ComputeVmRow>(
-    `SELECT * FROM compute_vms
-     WHERE owner_account_id=$1 ${projectClause} ${deletedClause}
+    `SELECT vm.* FROM compute_vms vm
+     WHERE vm.owner_account_id=$1 ${projectClause} ${deletedClause.replaceAll("deleted_at", "vm.deleted_at")}
        AND ${COMPUTE_VM_V2_SQL}
-     ORDER BY created_at DESC`,
+     ORDER BY vm.created_at DESC`,
     params,
   );
   return rows;
@@ -315,10 +341,23 @@ export async function listProjectComputeVms(opts: {
 }) {
   const deletedClause = opts.include_deleted ? "" : "AND deleted_at IS NULL";
   const { rows } = await pool().query<ComputeVmRow>(
-    `SELECT * FROM compute_vms
-     WHERE project_id=$1 ${deletedClause}
+    `SELECT vm.* FROM compute_vms vm
+     WHERE (
+         EXISTS (
+           SELECT 1 FROM compute_vm_project_access access
+            WHERE access.vm_id=vm.id AND access.project_id=$1
+              AND access.revoked_at IS NULL
+         )
+         OR (
+           vm.project_id=$1
+           AND NOT EXISTS (
+             SELECT 1 FROM compute_vm_project_access any_access
+              WHERE any_access.vm_id=vm.id
+           )
+         )
+       ) ${deletedClause.replaceAll("deleted_at", "vm.deleted_at")}
        AND ${COMPUTE_VM_V2_SQL}
-     ORDER BY created_at DESC`,
+     ORDER BY vm.created_at DESC`,
     [opts.project_id],
   );
   return rows;

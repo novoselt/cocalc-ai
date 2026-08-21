@@ -856,6 +856,7 @@ function runtimeFor(vm: ComputeVmRow): HostRuntime {
       machine_type: vm.machine_type,
       ssh_public_key: vm.ssh_public_key,
       ssh_public_keys: vm.metadata?.ssh_public_keys,
+      replace_managed_ssh_keys: vm.metadata?.replace_managed_ssh_keys,
       ssh_user: vm.ssh_user,
       public_address_id: vm.public_address_id,
       provisional_instance_id: providerInstanceIdIsProvisional(vm),
@@ -1459,6 +1460,7 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
       managedWindowsSshKeysScript([
         vm.ssh_public_key,
         ...(vm.metadata?.ssh_public_keys ?? []),
+        ...(vm.metadata?.project_ssh_public_keys ?? []),
         controller.publicKey,
       ]),
       controller,
@@ -1472,6 +1474,7 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
       new Set([
         vm.ssh_public_key,
         ...(vm.metadata?.ssh_public_keys ?? []),
+        ...(vm.metadata?.project_ssh_public_keys ?? []),
         controller.publicKey,
       ]),
     )
@@ -1509,9 +1512,11 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
         ssh_public_keys: Array.from(
           new Set([
             ...(vm.metadata?.ssh_public_keys ?? []),
+            ...(vm.metadata?.project_ssh_public_keys ?? []),
             controller.publicKey,
           ]),
         ),
+        replace_managed_ssh_keys: true,
       },
     }),
     creds,

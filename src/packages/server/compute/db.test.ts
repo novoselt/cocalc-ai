@@ -21,6 +21,7 @@ import {
   listComputeVmsForEgressMetering,
   listComputeVmsForInventory,
   listOwnedComputeVms,
+  listProjectComputeVms,
   resolveProjectComputeVm,
   updateComputeVmEgressMetadata,
   updateComputeVmProviderObservation,
@@ -34,6 +35,13 @@ import {
   listComputeVolumesForInventory,
   listOwnedComputeVolumes,
 } from "./volume-db";
+import {
+  activeComputeVmProjectKeys,
+  grantComputeVmProjectAccess,
+  listComputeVmProjectAccess,
+  revokeComputeVmProjectAccess,
+} from "./project-access";
+import { backfillComputeVmProjectAccess } from "@cocalc/database/postgres/schema/compute-vm-project-access";
 
 const postgresIt = process.env.COCALC_TEST_USE_PGLITE ? it.skip : it;
 
@@ -44,6 +52,7 @@ beforeEach(async () => {
   await getPool().query("DELETE FROM compute_resource_work");
   await getPool().query("DELETE FROM compute_resource_events");
   await getPool().query("DELETE FROM compute_vm_instances");
+  await getPool().query("DELETE FROM compute_vm_project_access");
   await getPool().query("DELETE FROM compute_vms");
   await getPool().query("DELETE FROM compute_volumes");
 });
@@ -57,7 +66,9 @@ function vmInput(
     name: overrides.name ?? "test-vm",
     owner_account_id: overrides.owner_account_id ?? randomUUID(),
     owning_bay_id: "bay-0",
-    project_id: overrides.project_id ?? randomUUID(),
+    project_id: Object.prototype.hasOwnProperty.call(overrides, "project_id")
+      ? overrides.project_id
+      : randomUUID(),
     provider: overrides.provider ?? "gcp",
     operating_system: overrides.operating_system ?? "linux",
     operating_system_version:
@@ -95,7 +106,7 @@ function vmInput(
     dns_error: null,
     public_ports: [22, 443],
     ssh_user: "user",
-    ssh_public_key: "ssh-ed25519 AAAATEST owner",
+    ssh_public_key: overrides.ssh_public_key ?? "ssh-ed25519 AAAATEST owner",
     expires_at: Object.prototype.hasOwnProperty.call(overrides, "expires_at")
       ? overrides.expires_at
       : new Date(Date.now() + 60_000),
@@ -155,6 +166,92 @@ function volumeInput(
 }
 
 describe("compute VM durable state", () => {
+  it("resolves only active project access grants", async () => {
+    const owner = randomUUID();
+    const project = randomUUID();
+    const vm = await insertComputeVm(
+      vmInput({ owner_account_id: owner, project_id: null }),
+    );
+    const key = "ssh-ed25519 AAAAPROJECT project";
+
+    await grantComputeVmProjectAccess({
+      owner_account_id: owner,
+      vm_id: vm.id,
+      project_id: project,
+      ssh_public_key: key,
+      created_by_account_id: owner,
+    });
+
+    await expect(
+      resolveProjectComputeVm({ project_id: project, id_or_name: vm.id }),
+    ).resolves.toMatchObject({ id: vm.id });
+    await expect(
+      listProjectComputeVms({ project_id: project }),
+    ).resolves.toEqual([expect.objectContaining({ id: vm.id })]);
+    await expect(activeComputeVmProjectKeys(vm.id)).resolves.toEqual([key]);
+
+    const revoked = await revokeComputeVmProjectAccess({
+      owner_account_id: owner,
+      vm_id: vm.id,
+      project_id: project,
+    });
+    await expect(
+      revokeComputeVmProjectAccess({
+        owner_account_id: owner,
+        vm_id: vm.id,
+        project_id: project,
+      }),
+    ).resolves.toMatchObject({
+      revoked_at: revoked.revoked_at,
+      state: "revoking",
+    });
+
+    await expect(
+      resolveProjectComputeVm({ project_id: project, id_or_name: vm.id }),
+    ).resolves.toBeUndefined();
+    await expect(
+      listProjectComputeVms({ project_id: project }),
+    ).resolves.toEqual([]);
+    await expect(activeComputeVmProjectKeys(vm.id)).resolves.toEqual([]);
+    await expect(
+      listComputeVmProjectAccess({ owner_account_id: owner }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        vm_id: vm.id,
+        project_id: project,
+        state: "revoking",
+      }),
+    ]);
+  });
+
+  it("moves a legacy project deploy key into the revocable grant", async () => {
+    const owner = randomUUID();
+    const project = randomUUID();
+    const key = "ssh-ed25519 AAAALEGACY project";
+    const vm = await insertComputeVm(
+      vmInput({
+        owner_account_id: owner,
+        project_id: project,
+        ssh_public_key: key,
+        metadata: { configure_project_ssh: true },
+      }),
+    );
+
+    await backfillComputeVmProjectAccess(getPool());
+
+    await expect(getComputeVmById(vm.id)).resolves.toMatchObject({
+      ssh_public_key: "",
+    });
+    await expect(listComputeVmProjectAccess({ vm_id: vm.id })).resolves.toEqual(
+      [
+        expect.objectContaining({
+          project_id: project,
+          ssh_public_key: key,
+        }),
+      ],
+    );
+  });
+
   it("quarantines pre-v2 rows while retaining them for provider inventory", async () => {
     const vm = await insertComputeVm(vmInput());
     const volume = await insertComputeVolume(
@@ -314,13 +411,13 @@ describe("compute VM durable state", () => {
     ).rejects.toThrow("ambiguous");
   });
 
-  it("enforces project admission limits without limiting the owner", async () => {
+  it("enforces the account admission limit across project grants", async () => {
     const owner = randomUUID();
     const project = randomUUID();
     await insertComputeVm(
       vmInput({ owner_account_id: owner, project_id: project }),
       {
-        max_active_per_project: 1,
+        max_active_per_account: 1,
         max_active_total: 10,
       },
     );
@@ -332,20 +429,20 @@ describe("compute VM durable state", () => {
           name: "second-vm",
         }),
         {
-          max_active_per_project: 1,
+          max_active_per_account: 1,
           max_active_total: 10,
         },
       ),
-    ).rejects.toThrow("project limit reached");
+    ).rejects.toThrow("account limit reached");
     await expect(
       insertComputeVm(
         vmInput({ owner_account_id: owner, name: "other-project" }),
         {
-          max_active_per_project: 1,
+          max_active_per_account: 1,
           max_active_total: 10,
         },
       ),
-    ).resolves.toMatchObject({ owner_account_id: owner });
+    ).rejects.toThrow("account limit reached");
   });
 
   it("adds SSH public keys idempotently", async () => {
@@ -414,7 +511,7 @@ describe("compute VM durable state", () => {
   });
 
   postgresIt("serializes concurrent site-wide admission", async () => {
-    const limits = { max_active_per_project: 10, max_active_total: 1 };
+    const limits = { max_active_per_account: 10, max_active_total: 1 };
     const results = await Promise.allSettled([
       insertComputeVm(vmInput({ name: "first-vm" }), limits),
       insertComputeVm(vmInput({ name: "second-vm" }), limits),

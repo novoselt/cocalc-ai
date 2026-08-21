@@ -1,4 +1,5 @@
 import { React } from "@cocalc/frontend/app-framework";
+import { Tabs } from "antd";
 import { FreshAuthModal } from "@cocalc/frontend/auth/fresh-auth";
 import { cocalc_setup_profile } from "@cocalc/frontend/components/constants";
 import type { Host } from "@cocalc/conat/hub/api/hosts";
@@ -14,10 +15,15 @@ import {
   type HostCreateDraft,
 } from "./create/host-create-draft";
 import { useHostsPageViewModel } from "./hooks/use-hosts-page-view-model";
+import { ProjectComputeVms } from "@cocalc/frontend/project/compute-vms";
+import { QueryParams } from "@cocalc/frontend/misc/query-params";
 
 const IS_STAR_SETUP_PROFILE = cocalc_setup_profile === "star";
 
 export const HostsPage: React.FC = () => {
+  const [activeTab, setActiveTab] = React.useState<"hosts" | "vms">(() =>
+    QueryParams.get("tab") === "vms" ? "vms" : "hosts",
+  );
   const {
     createVm,
     hostListVm,
@@ -119,18 +125,34 @@ export const HostsPage: React.FC = () => {
           height: "100%",
           minHeight: 0,
           overflow: "auto",
-          padding: "16px 0 0 15px",
+          padding: "8px 0 0 15px",
         }}
       >
-        <HostList
-          vm={{
-            ...hostListVm,
-            createPanelOpen: createModalOpen,
-            onToggleCreatePanel: IS_STAR_SETUP_PROFILE
-              ? undefined
-              : openCreateModal,
+        <Tabs
+          activeKey={activeTab}
+          onChange={(key) => {
+            const tab = key === "vms" ? "vms" : "hosts";
+            setActiveTab(tab);
+            QueryParams.set("tab", tab === "hosts" ? undefined : tab);
           }}
+          items={[
+            { key: "hosts", label: "Project Hosts" },
+            { key: "vms", label: "Virtual Machines" },
+          ]}
         />
+        {activeTab === "hosts" ? (
+          <HostList
+            vm={{
+              ...hostListVm,
+              createPanelOpen: createModalOpen,
+              onToggleCreatePanel: IS_STAR_SETUP_PROFILE
+                ? undefined
+                : openCreateModal,
+            }}
+          />
+        ) : (
+          <ProjectComputeVms />
+        )}
       </div>
       <HostCreateModal
         open={createModalOpen}

@@ -12,6 +12,7 @@ import {
   isSpotCapacityError,
   managedVmReadinessCommand,
   managedVmProjectSshConfigNeedsSync,
+  managedVmProjectAccessNeedsSync,
   providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
   stoppedVmProviderInstanceNeedsReconciliation,
@@ -172,6 +173,52 @@ describe("managed VM project SSH config reconciliation", () => {
         },
       } as any),
     ).toBe(false);
+  });
+
+  it("detects key removals and unfinished access state", () => {
+    const access = [
+      {
+        project_id: "project-a",
+        ssh_public_key: "ssh-ed25519 AAAA project-a",
+        state: "ready",
+        revoked_at: null,
+      },
+      {
+        project_id: "project-b",
+        ssh_public_key: "ssh-ed25519 BBBB project-b",
+        state: "revoked",
+        revoked_at: new Date(),
+      },
+    ] as any;
+    expect(
+      managedVmProjectAccessNeedsSync(
+        {
+          metadata: {
+            project_ssh_public_keys: ["ssh-ed25519 AAAA project-a"],
+          },
+        },
+        access,
+      ),
+    ).toBe(false);
+    expect(
+      managedVmProjectAccessNeedsSync(
+        {
+          metadata: {
+            project_ssh_public_keys: [
+              "ssh-ed25519 AAAA project-a",
+              "ssh-ed25519 BBBB project-b",
+            ],
+          },
+        },
+        access,
+      ),
+    ).toBe(true);
+    expect(
+      managedVmProjectAccessNeedsSync(
+        { metadata: { project_ssh_public_keys: [] } },
+        [{ ...access[0], state: "pending" }],
+      ),
+    ).toBe(true);
   });
 });
 

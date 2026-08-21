@@ -17,6 +17,7 @@ const deleteMock = jest.fn();
 const setSchedulingMock = jest.fn();
 const setMachineTypeMock = jest.fn();
 const setTagsMock = jest.fn();
+const setMetadataMock = jest.fn();
 const firewallGetMock = jest.fn();
 const firewallListMock = jest.fn();
 const firewallInsertMock = jest.fn();
@@ -51,6 +52,7 @@ jest.mock("@google-cloud/compute", () => {
     setScheduling = setSchedulingMock;
     setMachineType = setMachineTypeMock;
     setTags = setTagsMock;
+    setMetadata = setMetadataMock;
     auth = {
       getClient: async () => ({
         request: authRequestMock,
@@ -113,6 +115,7 @@ describe("GcpProvider", () => {
     setSchedulingMock.mockReset();
     setMachineTypeMock.mockReset();
     setTagsMock.mockReset();
+    setMetadataMock.mockReset();
     firewallGetMock.mockReset();
     firewallListMock.mockReset();
     firewallInsertMock.mockReset();
@@ -577,6 +580,64 @@ describe("GcpProvider", () => {
       persistent_boot_disk: true,
       boot_disk_name: "ph-test-boot",
     });
+  });
+
+  it("replaces only the managed SSH user's keys during reconciliation", async () => {
+    getMock.mockResolvedValueOnce([
+      {
+        metadata: {
+          fingerprint: "fingerprint-1",
+          items: [
+            {
+              key: "ssh-keys",
+              value:
+                "user:ssh-ed25519 OLD revoked\nubuntu:ssh-ed25519 KEEP operator",
+            },
+            { key: "custom", value: "preserved" },
+          ],
+        },
+      },
+    ]);
+    setMetadataMock.mockResolvedValueOnce([
+      { latestResponse: { name: "metadata-op", status: "DONE" } },
+    ]);
+    waitMock.mockResolvedValueOnce([{ status: "DONE" }]);
+
+    const provider = new GcpProvider();
+    await provider.ensureSshAccess(
+      {
+        provider: "gcp",
+        instance_id: "compute-vm",
+        zone: "us-central1-a",
+        ssh_user: "user",
+        metadata: {
+          ssh_public_keys: ["ssh-ed25519 NEW active"],
+          ssh_user: "user",
+          replace_managed_ssh_keys: true,
+        },
+      },
+      {
+        project_id: "compute-prod",
+        client_email: "svc@example.com",
+        private_key: "key",
+      },
+    );
+
+    expect(setMetadataMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadataResource: {
+          fingerprint: "fingerprint-1",
+          items: expect.arrayContaining([
+            { key: "custom", value: "preserved" },
+            {
+              key: "ssh-keys",
+              value:
+                "ubuntu:ssh-ed25519 KEEP operator\nuser:ssh-ed25519 NEW active",
+            },
+          ]),
+        },
+      }),
+    );
   });
 
   it("recovers a created host when insert times out after GCP accepts it", async () => {

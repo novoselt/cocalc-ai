@@ -23,7 +23,7 @@ export interface ComputeVmConfig {
   gcp_network?: string;
   gcp_network_tag: string;
   staging_legacy_provider: boolean;
-  max_active_per_project: number;
+  max_active_per_account: number;
   max_active_total: number;
   max_ttl_minutes: number;
   max_boot_disk_gb: number;
@@ -136,7 +136,7 @@ export function resolveComputeVmConfig(settings: Settings): ComputeVmConfig {
     gcp_network: gcpNetwork || undefined,
     gcp_network_tag: gcpNetworkTag,
     staging_legacy_provider,
-    max_active_per_project: positiveInteger(
+    max_active_per_account: positiveInteger(
       settings.compute_vm_max_active_per_project,
       10,
     ),

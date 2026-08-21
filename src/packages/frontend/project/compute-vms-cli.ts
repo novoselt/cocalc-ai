@@ -48,7 +48,7 @@ function ttlArgument(minutes: number): string {
 
 export function vmCreateCli(opts: {
   api: string;
-  project_id: string;
+  project_id?: string;
   values: Partial<VmCreateCliValues>;
 }): string {
   const { values } = opts;
@@ -59,8 +59,6 @@ export function vmCreateCli(opts: {
     "cocalc",
     "vm",
     "create",
-    "--project",
-    opts.project_id,
     "--provider",
     values.provider ?? "gcp",
     "--os",
@@ -74,6 +72,7 @@ export function vmCreateCli(opts: {
     "--machine",
     values.machine_type ?? "e2-standard-2",
   ];
+  if (opts.project_id) args.splice(3, 0, "--project", opts.project_id);
   if (values.zone) args.push("--zone", values.zone);
   if (values.gpu_type && values.gpu_type !== "none") {
     args.push("--gpu-type", values.gpu_type);
@@ -119,7 +118,7 @@ export function vmCreateCli(opts: {
 
 export function volumeCreateCli(opts: {
   api: string;
-  project_id: string;
+  project_id?: string;
   values: Partial<VolumeCreateCliValues>;
 }): string {
   const args = [
@@ -127,8 +126,6 @@ export function volumeCreateCli(opts: {
     "vm",
     "volume",
     "create",
-    "--project",
-    opts.project_id,
     "--provider",
     opts.values.provider ?? "gcp",
     "--funding-mode",
@@ -137,6 +134,7 @@ export function volumeCreateCli(opts: {
     opts.values.region ?? "us-central1",
     `--size-gb=${opts.values.size_gb ?? 50}`,
   ];
+  if (opts.project_id) args.splice(4, 0, "--project", opts.project_id);
   if (opts.values.zone) args.push("--zone", opts.values.zone);
   args.push("--wait", shellQuote(opts.values.name || "home-volume-name"));
   return args.join(" ");

@@ -33,6 +33,7 @@ import type {
   ComputeCatalog,
   ComputeVolume,
   ComputeVm,
+  ComputeVmProjectAccess,
 } from "@cocalc/conat/hub/api/compute";
 import { useRedux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import {
@@ -87,6 +88,9 @@ import {
 } from "./compute-vms-cli";
 import { egressRateLabel, providerEgressIsFree } from "./compute-vms-egress";
 import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-service";
+import { SelectProject } from "@cocalc/frontend/projects/select-project";
+import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
+import { getPageUrlPath } from "@cocalc/frontend/page-routing";
 
 const { Paragraph, Text, Title } = Typography;
 const COPYABLE_PROPS = {
@@ -404,7 +408,7 @@ function VmCreateModal({
   onCreate,
 }: {
   open: boolean;
-  project_id: string;
+  project_id?: string;
   catalog: ComputeCatalog;
   volumes: ComputeVolume[];
   initial: VmDraft;
@@ -413,7 +417,7 @@ function VmCreateModal({
   saving: boolean;
   error?: string;
   preferredR2Region: ReturnType<typeof mapCountryRegionToR2Region>;
-  onGenerateProjectSshKey: () => Promise<string | undefined>;
+  onGenerateProjectSshKey?: () => Promise<string | undefined>;
   onCancel: () => void;
   onCreate: (values: VmDraft) => Promise<void>;
 }) {
@@ -613,9 +617,10 @@ function VmCreateModal({
 
   const withResolvedSshKey = (values: VmDraft): VmDraft => ({
     ...values,
-    ssh_public_key: values.use_project_ssh_key
-      ? (projectSshPublicKey ?? "")
-      : values.ssh_public_key,
+    ssh_public_key:
+      project_id && values.use_project_ssh_key
+        ? (projectSshPublicKey ?? "")
+        : values.ssh_public_key,
   });
 
   const reviewCreate = () =>
@@ -1426,51 +1431,57 @@ function VmCreateModal({
                   )}
                   <Divider />
                   <Title level={5}>SSH access</Title>
-                  <Form.Item
-                    name="configure_project_ssh"
-                    valuePropName="checked"
-                  >
-                    <Checkbox disabled={!draft.use_project_ssh_key}>
-                      Add a managed SSH alias to this project&apos;s{" "}
-                      <Text code>~/.ssh/config</Text> when the VM is ready
-                    </Checkbox>
-                  </Form.Item>
-                  {projectSshPublicKey ? (
-                    <Form.Item
-                      name="use_project_ssh_key"
-                      valuePropName="checked"
-                    >
-                      <Checkbox>
-                        Add this project&apos;s SSH key from{" "}
-                        <Text code>.ssh/id_ed25519.pub</Text>
-                      </Checkbox>
-                    </Form.Item>
-                  ) : (
-                    <Alert
-                      showIcon
-                      type="info"
-                      title="This project does not have an SSH keypair yet."
-                      description="Create an encrypted project SSH keypair, then use its public key for this VM. The project does not need to restart."
-                      action={
-                        <Button
-                          size="small"
-                          loading={saving}
-                          onClick={() => {
-                            setSshKeyError(undefined);
-                            void onGenerateProjectSshKey()
-                              .then((publicKey) => {
-                                if (publicKey) {
-                                  patchDraft({ use_project_ssh_key: true });
-                                }
-                              })
-                              .catch((err) => setSshKeyError(String(err)));
-                          }}
+                  {project_id && (
+                    <>
+                      <Form.Item
+                        name="configure_project_ssh"
+                        valuePropName="checked"
+                      >
+                        <Checkbox disabled={!draft.use_project_ssh_key}>
+                          Add a managed SSH alias to this project&apos;s{" "}
+                          <Text code>~/.ssh/config</Text> when the VM is ready
+                        </Checkbox>
+                      </Form.Item>
+                      {projectSshPublicKey ? (
+                        <Form.Item
+                          name="use_project_ssh_key"
+                          valuePropName="checked"
                         >
-                          Create project SSH keypair
-                        </Button>
-                      }
-                      style={{ marginBottom: 16 }}
-                    />
+                          <Checkbox>
+                            Add this project&apos;s SSH key from{" "}
+                            <Text code>.ssh/id_ed25519.pub</Text>
+                          </Checkbox>
+                        </Form.Item>
+                      ) : (
+                        <Alert
+                          showIcon
+                          type="info"
+                          title="This project does not have an SSH keypair yet."
+                          description="Create an encrypted project SSH keypair, then use its public key for this VM. The project does not need to restart."
+                          action={
+                            <Button
+                              size="small"
+                              loading={saving}
+                              onClick={() => {
+                                setSshKeyError(undefined);
+                                void onGenerateProjectSshKey?.()
+                                  .then((publicKey) => {
+                                    if (publicKey) {
+                                      patchDraft({
+                                        use_project_ssh_key: true,
+                                      });
+                                    }
+                                  })
+                                  .catch((err) => setSshKeyError(String(err)));
+                              }}
+                            >
+                              Create project SSH keypair
+                            </Button>
+                          }
+                          style={{ marginBottom: 16 }}
+                        />
+                      )}
+                    </>
                   )}
                   {sshKeyError && (
                     <Alert
@@ -1484,7 +1495,7 @@ function VmCreateModal({
                   <Form.Item
                     name="ssh_public_key"
                     label={
-                      projectSshPublicKey
+                      project_id && projectSshPublicKey
                         ? "Other SSH public key (optional)"
                         : "SSH public key (optional)"
                     }
@@ -1543,7 +1554,7 @@ function VolumeCreateModal({
   onCreate,
 }: {
   open: boolean;
-  project_id: string;
+  project_id?: string;
   catalog: ComputeCatalog;
   saving: boolean;
   onCancel: () => void;
@@ -2192,15 +2203,138 @@ function VmStartModal({
   );
 }
 
+function VmProjectAccessModal({
+  vm,
+  access,
+  saving,
+  onClose,
+  onGrant,
+  onRevoke,
+}: {
+  vm?: ComputeVm;
+  access: ComputeVmProjectAccess[];
+  saving: boolean;
+  onClose: () => void;
+  onGrant: (projectId: string) => Promise<void>;
+  onRevoke: (projectId: string) => Promise<void>;
+}) {
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
+  const current = vm
+    ? access.filter(({ vm_id }) => vm_id === vm.id)
+    : ([] as ComputeVmProjectAccess[]);
+
+  useEffect(() => setSelectedProjectId(undefined), [vm?.id]);
+
+  return (
+    <Modal
+      open={vm != null}
+      title={vm ? `Project access to ${vm.name}` : "Project access"}
+      footer={<Button onClick={onClose}>Close</Button>}
+      onCancel={onClose}
+      width={680}
+    >
+      <Paragraph type="secondary">
+        Granted projects receive only SSH access and a managed{" "}
+        <Text code>~/.ssh/config</Text> alias. VM lifecycle, configuration,
+        billing, and deletion remain account-owner operations.
+      </Paragraph>
+      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        {current.map((item) => (
+          <Flex
+            key={item.project_id}
+            align="center"
+            justify="space-between"
+            gap={12}
+            wrap
+          >
+            <Space direction="vertical" size={0}>
+              <ProjectTitle project_id={item.project_id} trunc={48} />
+              <Text type="secondary" code>
+                {item.project_id}
+              </Text>
+            </Space>
+            <Space>
+              <Tag
+                color={
+                  item.state === "ready"
+                    ? "green"
+                    : item.state === "degraded"
+                      ? "red"
+                      : "blue"
+                }
+              >
+                {item.state}
+              </Tag>
+              <Popconfirm
+                title={
+                  item.revoked_at
+                    ? "Retry removing this project's VM access?"
+                    : "Remove this project's VM access?"
+                }
+                description="Its SSH key and managed SSH config entry will be removed during reconciliation."
+                okText={item.revoked_at ? "Retry removal" : "Remove access"}
+                okButtonProps={{ danger: true }}
+                onConfirm={() => onRevoke(item.project_id)}
+              >
+                <Button danger disabled={saving} size="small">
+                  {item.revoked_at ? "Retry" : "Remove"}
+                </Button>
+              </Popconfirm>
+            </Space>
+            {item.error && (
+              <Alert
+                showIcon
+                type="warning"
+                title="Access reconciliation needs attention"
+                description={item.error}
+                style={{ width: "100%" }}
+              />
+            )}
+          </Flex>
+        ))}
+        {!current.length && (
+          <Alert
+            showIcon
+            type="info"
+            title="No projects have access to this VM."
+          />
+        )}
+      </Space>
+      <Divider />
+      <Text strong>Grant another project access</Text>
+      <SelectProject
+        exclude={current.map(({ project_id }) => project_id)}
+        fullCollaboratorOnly
+        value={selectedProjectId}
+        onChange={setSelectedProjectId}
+        style={{ marginTop: 8 }}
+      />
+      <Button
+        type="primary"
+        disabled={!selectedProjectId}
+        loading={saving}
+        onClick={() => {
+          if (selectedProjectId) void onGrant(selectedProjectId);
+        }}
+        style={{ marginTop: 12 }}
+      >
+        Grant SSH access
+      </Button>
+    </Modal>
+  );
+}
+
 export function ProjectComputeVms({
   project_id,
   compact = false,
   isVisible = true,
 }: {
-  project_id: string;
+  project_id?: string;
   compact?: boolean;
   isVisible?: boolean;
 }) {
+  const projectId = project_id?.trim() || undefined;
+  const accountMode = projectId == null;
   const accountSshKeys = useRedux("account", "ssh_keys");
   const sshKeys = sshKeyOptions(accountSshKeys);
   const cloudflareCountry = useTypedRedux("customize", "country");
@@ -2217,6 +2351,10 @@ export function ProjectComputeVms({
   const [volumes, setVolumes] = useState<ComputeVolume[]>([]);
   const [catalog, setCatalog] = useState<ComputeCatalog>();
   const [agentGrants, setAgentGrants] = useState<ComputeAgentGrant[]>([]);
+  const [projectAccess, setProjectAccess] = useState<ComputeVmProjectAccess[]>(
+    [],
+  );
+  const [accessVm, setAccessVm] = useState<ComputeVm>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -2233,47 +2371,45 @@ export function ProjectComputeVms({
   const [projectSshPublicKey, setProjectSshPublicKey] = useState<string | null>(
     null,
   );
-  const [projectSshKeyLoading, setProjectSshKeyLoading] = useState(true);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const load = async ({
     refreshCatalogAndGrants = true,
     showLoading = true,
-    projectOnly = false,
   }: {
     refreshCatalogAndGrants?: boolean;
     showLoading?: boolean;
-    projectOnly?: boolean;
   } = {}) => {
     if (showLoading) setLoading(true);
     try {
-      const [ownedVms, projectVolumes, computeCatalog, grants] =
+      const [visibleVms, visibleVolumes, computeCatalog, grants, access] =
         await Promise.all([
-          webapp_client.conat_client.hub.compute.listVms(
-            projectOnly ? { project_id } : {},
-          ),
-          webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
+          projectId
+            ? webapp_client.conat_client.hub.compute.listProjectVms({
+                project_id: projectId,
+              })
+            : webapp_client.conat_client.hub.compute.listVms({}),
+          accountMode
+            ? webapp_client.conat_client.hub.compute.listVolumes({})
+            : Promise.resolve([]),
           refreshCatalogAndGrants
             ? webapp_client.conat_client.hub.compute.getCatalog({})
             : Promise.resolve(undefined),
-          refreshCatalogAndGrants
+          refreshCatalogAndGrants && projectId
             ? webapp_client.conat_client.hub.compute.listAgentGrants({
-                project_id,
+                project_id: projectId,
               })
             : Promise.resolve(undefined),
+          accountMode
+            ? webapp_client.conat_client.hub.compute.listVmProjectAccess({})
+            : Promise.resolve(undefined),
         ]);
-      if (projectOnly) {
-        setAllRows((current) => [
-          ...current.filter((vm) => vm.project_id !== project_id),
-          ...ownedVms,
-        ]);
-      } else {
-        setAllRows(ownedVms);
-      }
-      setRows(ownedVms.filter((vm) => vm.project_id === project_id));
-      setVolumes(projectVolumes);
+      setAllRows(visibleVms);
+      setRows(visibleVms);
+      setVolumes(visibleVolumes);
       if (computeCatalog != null) setCatalog(computeCatalog);
       if (grants != null) setAgentGrants(grants);
+      if (access != null) setProjectAccess(access);
       setError(undefined);
     } catch (err) {
       setError(`${err}`);
@@ -2316,7 +2452,6 @@ export function ProjectComputeVms({
         await load({
           refreshCatalogAndGrants,
           showLoading: firstRun,
-          projectOnly: !refreshCatalogAndGrants,
         });
       } finally {
         firstRun = false;
@@ -2345,13 +2480,16 @@ export function ProjectComputeVms({
       if (timer != null) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [isVisible, project_id]);
+  }, [accountMode, isVisible, projectId]);
 
   useEffect(() => {
     if (!isVisible) return;
+    if (!projectId) {
+      setProjectSshPublicKey(null);
+      return;
+    }
     let cancelled = false;
-    setProjectSshKeyLoading(true);
-    void readProjectDeployPublicKey(project_id)
+    void readProjectDeployPublicKey(projectId)
       .then((publicKey) => {
         if (!cancelled) {
           setProjectSshPublicKey(publicKey?.trim() || null);
@@ -2361,16 +2499,11 @@ export function ProjectComputeVms({
         if (!cancelled) {
           setProjectSshPublicKey(null);
         }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setProjectSshKeyLoading(false);
-        }
       });
     return () => {
       cancelled = true;
     };
-  }, [isVisible, project_id]);
+  }, [isVisible, projectId]);
 
   const defaultVm = (): VmDraft => {
     const catalogDefaultZone = catalog?.defaults.zone ?? "us-central1-a";
@@ -2475,6 +2608,7 @@ export function ProjectComputeVms({
   };
 
   const generateProjectSshKey = async (): Promise<string | undefined> => {
+    if (!projectId) return;
     setSaving(true);
     setError(undefined);
     try {
@@ -2484,7 +2618,7 @@ export function ProjectComputeVms({
           await webapp_client.conat_client.hub.projects.generateProjectSshKeySecret(
             {
               browser_id: webapp_client.browser_id,
-              project_id,
+              project_id: projectId,
             },
           );
         publicKey = result.public_key.trim();
@@ -2496,6 +2630,62 @@ export function ProjectComputeVms({
     } catch (err) {
       setError(String(err));
       throw err;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const grantProjectAccess = async (targetProjectId: string) => {
+    if (!accessVm) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      const completed = await runFreshAuthAction(async () => {
+        let publicKey = await readProjectDeployPublicKey(targetProjectId);
+        if (!publicKey?.trim()) {
+          publicKey = (
+            await webapp_client.conat_client.hub.projects.generateProjectSshKeySecret(
+              {
+                browser_id: webapp_client.browser_id,
+                project_id: targetProjectId,
+              },
+            )
+          ).public_key;
+        }
+        await webapp_client.conat_client.hub.compute.grantVmProjectAccess({
+          browser_id: webapp_client.browser_id,
+          id_or_name: vm.id,
+          project_id: targetProjectId,
+          ssh_public_key: publicKey,
+          idempotency_key: uuid(),
+        });
+      });
+      if (!completed) return;
+      setNotice(`Project SSH access to '${vm.name}' is being configured.`);
+      await load({ refreshCatalogAndGrants: false, showLoading: false });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revokeProjectAccess = async (targetProjectId: string) => {
+    if (!accessVm) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      await webapp_client.conat_client.hub.compute.revokeVmProjectAccess({
+        id_or_name: vm.id,
+        project_id: targetProjectId,
+        idempotency_key: uuid(),
+      });
+      setNotice(`Project SSH access to '${vm.name}' is being removed.`);
+      await load({ refreshCatalogAndGrants: false, showLoading: false });
+    } catch (err) {
+      setError(String(err));
     } finally {
       setSaving(false);
     }
@@ -2514,7 +2704,7 @@ export function ProjectComputeVms({
           }
           const createdVolume =
             await webapp_client.conat_client.hub.compute.createVolume({
-              project_id,
+              project_id: projectId,
               name: values.new_home_volume_name,
               provider: values.provider,
               funding_mode: values.funding_mode,
@@ -2528,7 +2718,7 @@ export function ProjectComputeVms({
           homeVolume = createdVolume.name;
         }
         await webapp_client.conat_client.hub.compute.createVm({
-          project_id,
+          project_id: projectId,
           name: values.name,
           provider: values.provider,
           operating_system: values.operating_system,
@@ -3130,7 +3320,7 @@ export function ProjectComputeVms({
           ? `ssh ${vm.ssh_user || "user"}@${vm.public_hostname}`
           : undefined;
         const projectSshCommand =
-          vm.state === "ready" && vm.metadata?.configure_project_ssh === true
+          projectId && vm.state === "ready"
             ? `ssh ${vm.ssh_alias || vm.name}`
             : undefined;
         const directRdpTunnelCommand =
@@ -3245,109 +3435,127 @@ export function ProjectComputeVms({
                 Connect
               </Button>
             </Popover>
-            {running ? (
-              <Popconfirm
-                title={`Stop ${vm.name}?`}
-                description="Compute and Windows license charges stop, but persistent disk charges continue."
-                okText="Stop VM"
-                cancelText="Keep running"
-                onConfirm={() => void setVmRunning(vm, false)}
-              >
-                <Button size="small" disabled={stopDisabled}>
-                  Stop
+            {accountMode &&
+              (running ? (
+                <Popconfirm
+                  title={`Stop ${vm.name}?`}
+                  description="Compute and Windows license charges stop, but persistent disk charges continue."
+                  okText="Stop VM"
+                  cancelText="Keep running"
+                  onConfirm={() => void setVmRunning(vm, false)}
+                >
+                  <Button size="small" disabled={stopDisabled}>
+                    Stop
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button
+                  size="small"
+                  disabled={transitioning}
+                  onClick={() => {
+                    if (vm.provider === "nebius") {
+                      setStartVm(vm);
+                    } else {
+                      void setVmRunning(vm, true);
+                    }
+                  }}
+                >
+                  Start
                 </Button>
-              </Popconfirm>
-            ) : (
-              <Button
-                size="small"
-                disabled={transitioning}
-                onClick={() => {
-                  if (vm.provider === "nebius") {
-                    setStartVm(vm);
-                  } else {
-                    void setVmRunning(vm, true);
-                  }
-                }}
-              >
-                Start
+              ))}
+            {accountMode && (
+              <Button size="small" onClick={() => setAccessVm(vm)}>
+                Projects
               </Button>
             )}
-            <Dropdown
-              trigger={["click"]}
-              menu={{
-                items: [
-                  {
-                    key: "machine-type",
-                    disabled: vm.state !== "stopped",
-                    label:
-                      vm.state === "stopped"
-                        ? "Change machine type"
-                        : "Change machine type (stop first)",
+            {accountMode && (
+              <Dropdown
+                trigger={["click"]}
+                menu={{
+                  items: [
+                    {
+                      key: "machine-type",
+                      disabled: vm.state !== "stopped",
+                      label:
+                        vm.state === "stopped"
+                          ? "Change machine type"
+                          : "Change machine type (stop first)",
+                    },
+                    {
+                      key: "pricing-model",
+                      disabled: vm.state !== "stopped",
+                      label:
+                        vm.state === "stopped"
+                          ? vm.desired_pricing_model === "spot"
+                            ? "Use Standard pricing"
+                            : "Use Spot pricing"
+                          : "Change pricing (stop first)",
+                    },
+                    {
+                      key: "deadline",
+                      label: vm.expires_at
+                        ? "Change deletion deadline"
+                        : "Set deletion deadline",
+                    },
+                    { key: "similar", label: "Create similar" },
+                    { key: "funding", label: "Change funding" },
+                    { type: "divider" },
+                    {
+                      key: "delete",
+                      danger: true,
+                      disabled: vm.state === "deleting",
+                      label: "Delete VM",
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === "machine-type") {
+                      setMachineTypeError(undefined);
+                      setMachineTypeVm(vm);
+                    } else if (key === "pricing-model") {
+                      Modal.confirm({
+                        title:
+                          vm.desired_pricing_model === "spot"
+                            ? `Use Standard pricing for ${vm.name}?`
+                            : `Use Spot pricing for ${vm.name}?`,
+                        content:
+                          vm.desired_pricing_model === "spot"
+                            ? "The next start uses more reliable Standard capacity at the displayed Standard rate."
+                            : "The next start uses interruptible Spot capacity, which may be unavailable or stop at any time.",
+                        okText: "Change pricing",
+                        onOk: () => changeVmPricing(vm),
+                      });
+                    } else if (key === "deadline") {
+                      setTtlVm(vm);
+                    } else if (key === "similar") {
+                      openSimilar(vm);
+                    } else if (key === "funding") {
+                      changeVmFunding(vm);
+                    } else if (key === "delete") {
+                      Modal.confirm({
+                        title: `Delete ${vm.name}?`,
+                        content:
+                          "The VM, persistent boot disk, public address, and DNS record are deleted. An attached persistent home volume is retained independently.",
+                        okText: "Delete VM",
+                        okButtonProps: { danger: true },
+                        onOk: () => deleteVm(vm),
+                      });
+                    }
                   },
-                  {
-                    key: "pricing-model",
-                    disabled: vm.state !== "stopped",
-                    label:
-                      vm.state === "stopped"
-                        ? vm.desired_pricing_model === "spot"
-                          ? "Use Standard pricing"
-                          : "Use Spot pricing"
-                        : "Change pricing (stop first)",
-                  },
-                  {
-                    key: "deadline",
-                    label: vm.expires_at
-                      ? "Change deletion deadline"
-                      : "Set deletion deadline",
-                  },
-                  { key: "similar", label: "Create similar" },
-                  { key: "funding", label: "Change funding" },
-                  { type: "divider" },
-                  {
-                    key: "delete",
-                    danger: true,
-                    disabled: vm.state === "deleting",
-                    label: "Delete VM",
-                  },
-                ],
-                onClick: ({ key }) => {
-                  if (key === "machine-type") {
-                    setMachineTypeError(undefined);
-                    setMachineTypeVm(vm);
-                  } else if (key === "pricing-model") {
-                    Modal.confirm({
-                      title:
-                        vm.desired_pricing_model === "spot"
-                          ? `Use Standard pricing for ${vm.name}?`
-                          : `Use Spot pricing for ${vm.name}?`,
-                      content:
-                        vm.desired_pricing_model === "spot"
-                          ? "The next start uses more reliable Standard capacity at the displayed Standard rate."
-                          : "The next start uses interruptible Spot capacity, which may be unavailable or stop at any time.",
-                      okText: "Change pricing",
-                      onOk: () => changeVmPricing(vm),
-                    });
-                  } else if (key === "deadline") {
-                    setTtlVm(vm);
-                  } else if (key === "similar") {
-                    openSimilar(vm);
-                  } else if (key === "funding") {
-                    changeVmFunding(vm);
-                  } else if (key === "delete") {
-                    Modal.confirm({
-                      title: `Delete ${vm.name}?`,
-                      content:
-                        "The VM, persistent boot disk, public address, and DNS record are deleted. An attached persistent home volume is retained independently.",
-                      okText: "Delete VM",
-                      okButtonProps: { danger: true },
-                      onOk: () => deleteVm(vm),
-                    });
-                  }
-                },
-              }}
-            >
-              <Button size="small">Manage</Button>
-            </Dropdown>
+                }}
+              >
+                <Button size="small">Manage</Button>
+              </Dropdown>
+            )}
+            {!accountMode && (
+              <Button
+                size="small"
+                onClick={() => {
+                  globalThis.location.href = `${getPageUrlPath({ page: "hosts" })}?tab=vms`;
+                }}
+              >
+                Manage in Compute
+              </Button>
+            )}
           </Space.Compact>
         );
       },
@@ -3489,36 +3697,47 @@ export function ProjectComputeVms({
           </Flex>
           {!compact && (
             <Paragraph type="secondary" style={{ marginBottom: 12 }}>
-              Short-lived machines owned by you and attached to project{" "}
-              <Text code>{shortProjectId(project_id)}</Text>.
+              {accountMode ? (
+                "Account-owned cloud VMs. Grant one or more projects SSH access without transferring lifecycle or billing authority."
+              ) : (
+                <>
+                  VMs this project can access over SSH. Lifecycle,
+                  configuration, and billing are managed from your account
+                  Compute page. Project{" "}
+                  <Text code>{shortProjectId(projectId)}</Text>.
+                </>
+              )}
             </Paragraph>
           )}
         </div>
         <Space>
-          <Button
-            icon={<Icon name="book" />}
-            onClick={() =>
-              openProjectDocs({
-                projectId: project_id,
-                slug: "projects/virtual-machines",
-              })
-            }
-          >
-            Documentation
-          </Button>
-          <Button
-            type="primary"
-            icon={<Icon name="plus" />}
-            disabled={!catalog || projectSshKeyLoading}
-            loading={projectSshKeyLoading}
-            onClick={() => {
-              setVmInitial(defaultVm());
-              setVmCreateError(undefined);
-              setVmModalOpen(true);
-            }}
-          >
-            Create VM
-          </Button>
+          {projectId && (
+            <Button
+              icon={<Icon name="book" />}
+              onClick={() =>
+                openProjectDocs({
+                  projectId,
+                  slug: "projects/virtual-machines",
+                })
+              }
+            >
+              Documentation
+            </Button>
+          )}
+          {accountMode && (
+            <Button
+              type="primary"
+              icon={<Icon name="plus" />}
+              disabled={!catalog}
+              onClick={() => {
+                setVmInitial(defaultVm());
+                setVmCreateError(undefined);
+                setVmModalOpen(true);
+              }}
+            >
+              Create VM
+            </Button>
+          )}
           <Button
             icon={<Icon name="refresh" />}
             loading={loading}
@@ -3599,7 +3818,9 @@ export function ProjectComputeVms({
         dataSource={rows}
         loading={loading && rows.length === 0}
         locale={{
-          emptyText: "No virtual machines are attached to this project.",
+          emptyText: accountMode
+            ? "You do not own any virtual machines."
+            : "No virtual machines are available to this project.",
         }}
         pagination={false}
         rowKey="id"
@@ -3607,54 +3828,64 @@ export function ProjectComputeVms({
         size="small"
       />
 
-      <Flex align="center" justify="space-between" style={{ marginTop: 28 }}>
-        <div>
-          <Flex align="center" gap={4}>
-            <Title level={4} style={{ marginBottom: 0 }}>
-              Persistent home volumes
-            </Title>
-            <Popover
-              trigger="click"
-              title="About persistent home volumes"
-              content={
-                <Paragraph style={{ marginBottom: 0, maxWidth: 400 }}>
-                  Retained independently from virtual machines. A volume can
-                  only be attached at <Text code>/home/user</Text> to a VM from
-                  the same provider and location. Select an existing volume or
-                  create a new one when creating the VM; changing attachments
-                  later is not yet supported.
-                </Paragraph>
-              }
+      {accountMode && (
+        <>
+          <Flex
+            align="center"
+            justify="space-between"
+            style={{ marginTop: 28 }}
+          >
+            <div>
+              <Flex align="center" gap={4}>
+                <Title level={4} style={{ marginBottom: 0 }}>
+                  Persistent home volumes
+                </Title>
+                <Popover
+                  trigger="click"
+                  title="About persistent home volumes"
+                  content={
+                    <Paragraph style={{ marginBottom: 0, maxWidth: 400 }}>
+                      Retained independently from virtual machines. A volume can
+                      only be attached at <Text code>/home/user</Text> to a VM
+                      from the same provider and location. Select an existing
+                      volume or create a new one when creating the VM; changing
+                      attachments later is not yet supported.
+                    </Paragraph>
+                  }
+                >
+                  <Button
+                    aria-label="Persistent volume help"
+                    icon={<Icon name="question-circle" />}
+                    shape="circle"
+                    size="small"
+                    type="text"
+                  />
+                </Popover>
+              </Flex>
+            </div>
+            <Button
+              icon={<Icon name="plus" />}
+              disabled={!catalog}
+              onClick={() => setVolumeModalOpen(true)}
             >
-              <Button
-                aria-label="Persistent volume help"
-                icon={<Icon name="question-circle" />}
-                shape="circle"
-                size="small"
-                type="text"
-              />
-            </Popover>
+              Create volume
+            </Button>
           </Flex>
-        </div>
-        <Button
-          icon={<Icon name="plus" />}
-          disabled={!catalog}
-          onClick={() => setVolumeModalOpen(true)}
-        >
-          Create volume
-        </Button>
-      </Flex>
-      <Table<ComputeVolume>
-        columns={volumeColumns}
-        dataSource={volumes}
-        loading={loading && volumes.length === 0}
-        locale={{ emptyText: "No persistent volumes belong to this project." }}
-        pagination={false}
-        rowKey="id"
-        scroll={{ x: 850 }}
-        size="small"
-        style={{ marginTop: 12 }}
-      />
+          <Table<ComputeVolume>
+            columns={volumeColumns}
+            dataSource={volumes}
+            loading={loading && volumes.length === 0}
+            locale={{
+              emptyText: "You do not own any persistent volumes.",
+            }}
+            pagination={false}
+            rowKey="id"
+            scroll={{ x: 850 }}
+            size="small"
+            style={{ marginTop: 12 }}
+          />
+        </>
+      )}
 
       <Alert
         showIcon
@@ -3674,10 +3905,10 @@ export function ProjectComputeVms({
         style={{ marginTop: 20 }}
       />
 
-      {catalog && vmInitial && (
+      {accountMode && catalog && vmInitial && (
         <VmCreateModal
           open={vmModalOpen}
-          project_id={project_id}
+          project_id={projectId}
           catalog={catalog}
           volumes={volumes}
           initial={vmInitial}
@@ -3694,10 +3925,10 @@ export function ProjectComputeVms({
           onCreate={createVm}
         />
       )}
-      {catalog && (
+      {accountMode && catalog && (
         <VolumeCreateModal
           open={volumeModalOpen}
-          project_id={project_id}
+          project_id={projectId}
           catalog={catalog}
           saving={saving}
           onCancel={() => setVolumeModalOpen(false)}
@@ -3745,6 +3976,14 @@ export function ProjectComputeVms({
         />
       )}
       <FreshAuthModal {...freshAuthModalProps} />
+      <VmProjectAccessModal
+        vm={accessVm}
+        access={projectAccess}
+        saving={saving}
+        onClose={() => setAccessVm(undefined)}
+        onGrant={grantProjectAccess}
+        onRevoke={revokeProjectAccess}
+      />
     </div>
   );
 }

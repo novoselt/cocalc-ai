@@ -4689,9 +4689,11 @@ export class ProjectsActions extends Actions<ProjectsState> {
   cloneProject = async ({
     project_id,
     title,
+    grant_compute_vm_access = false,
   }: {
     project_id: string;
     title?: string;
+    grant_compute_vm_access?: boolean;
   }) => {
     const project = redux
       .getStore("projects")
@@ -4700,6 +4702,16 @@ export class ProjectsActions extends Actions<ProjectsState> {
     if (project == null) {
       throw Error("unknown project");
     }
+    const inheritedVms = grant_compute_vm_access
+      ? (
+          await webapp_client.conat_client.hub.compute.listProjectVms({
+            project_id,
+          })
+        ).filter(
+          ({ owner_account_id }) =>
+            owner_account_id === webapp_client.account_id,
+        )
+      : [];
     // this clones due to src_project_id
     const new_project_id = await webapp_client.project_client.create({
       title: title ?? `Clone of ${project.title}`,
@@ -4708,7 +4720,26 @@ export class ProjectsActions extends Actions<ProjectsState> {
       rootfs_image: project.rootfs_image,
       rootfs_image_id: project.rootfs_image_id,
     });
+    if (inheritedVms.length) {
+      const { public_key } =
+        await webapp_client.conat_client.hub.projects.generateProjectSshKeySecret(
+          {
+            browser_id: webapp_client.browser_id,
+            project_id: new_project_id,
+          },
+        );
+      for (const vm of inheritedVms) {
+        await webapp_client.conat_client.hub.compute.grantVmProjectAccess({
+          browser_id: webapp_client.browser_id,
+          id_or_name: vm.id,
+          project_id: new_project_id,
+          ssh_public_key: public_key,
+          idempotency_key: uuid(),
+        });
+      }
+    }
     this.open_project({ project_id: new_project_id });
+    return new_project_id;
   };
 
   private optimisticProjectStateUpdate = (
