@@ -611,12 +611,17 @@ const nebiusMachineTypeLabel = (entry: NebiusInstance) => {
     "",
   );
   const hardwareLabel = `${entry.name} (${cpuRamLabel}${platformLabel})`;
-  const mainLabel = gpuLabel ? `${gpuLabel} · ${hardwareLabel}` : hardwareLabel;
+  const selectionLabel = gpuLabel
+    ? `${gpuLabel} · ${hardwareLabel}`
+    : hardwareLabel;
+  const mainLabel = gpuLabel || entry.name;
+  const subLabel = gpuLabel ? hardwareLabel : `${cpuRamLabel}${platformLabel}`;
   const searchTerms = machineSearchSuffix(entry.vcpus, entry.memory_gib);
   return {
     mainLabel,
-    label: searchTerms ? `${mainLabel} ${searchTerms}` : mainLabel,
-    selectionLabel: mainLabel,
+    subLabel,
+    label: searchTerms ? `${selectionLabel} ${searchTerms}` : selectionLabel,
+    selectionLabel,
   };
 };
 
@@ -2367,7 +2372,8 @@ export const getNebiusInstanceTypeOptions = (
       ...label,
       hourlyRate,
       selectionLabel: machineLabel.selectionLabel,
-      mainLabel: label.mainLabel ?? machineLabel.mainLabel,
+      mainLabel: machineLabel.mainLabel,
+      subLabel: machineLabel.subLabel,
       detailLabel: getNebiusCapacityInfo(catalog, {
         ...selection,
         machine_type: entry.name,

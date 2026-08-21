@@ -819,27 +819,53 @@ function VmCreateModal({
                 }))}
               onChange={(nextProvider: "gcp" | "nebius") => {
                 const nextCatalog = providerCatalog(catalog, nextProvider);
-                const options = getProviderOptions(nextProvider, nextCatalog, {
-                  pricing_model: draft.pricing_model,
-                });
+                const pricing_model =
+                  nextProvider === "nebius" ? "spot" : "on_demand";
+                const nextSelection: ProviderSelection = {
+                  ...selection,
+                  architecture: "x86_64",
+                  region: undefined,
+                  zone: undefined,
+                  machine_type: undefined,
+                  gpu_type: undefined,
+                  pricing_model,
+                };
+                const options = getProviderOptions(
+                  nextProvider,
+                  nextCatalog,
+                  nextSelection,
+                );
                 const region =
                   nextProvider === "gcp"
                     ? catalog.defaults.region
-                    : options.region?.[0]?.value;
+                    : sortRegionOptionsByPreference({
+                        options: selectablePlacementOptions(
+                          options.region ?? [],
+                        ),
+                        preference: "closest",
+                        preferredRegion: preferredR2Region,
+                      })[0]?.value;
+                const placementOptions = getProviderOptions(
+                  nextProvider,
+                  nextCatalog,
+                  { ...nextSelection, region },
+                );
                 const zone =
                   nextProvider === "gcp"
                     ? catalog.defaults.zone
-                    : options.zone?.[0]?.value;
+                    : placementOptions.zone?.[0]?.value;
                 const machine_type =
                   nextProvider === "gcp"
                     ? catalog.defaults.machine_type
-                    : options.machine_type?.[0]?.value;
+                    : placementOptions.machine_type?.[0]?.value;
                 patchDraft({
                   provider: nextProvider,
                   architecture: "x86_64",
                   region,
                   zone,
                   machine_type,
+                  pricing_model,
+                  allow_on_demand_fallback: pricing_model === "spot",
                   gpu_type: undefined,
                   gpu_count: 0,
                   home_volume: undefined,
@@ -2287,6 +2313,12 @@ function VmDetailsModal({
               ? `ID ${vm.home_volume_id}`
               : "None"}
         </Descriptions.Item>
+        <Descriptions.Item label="Created">
+          {new Date(vm.created_at).toLocaleString()}
+        </Descriptions.Item>
+        <Descriptions.Item label="Updated">
+          {new Date(vm.updated_at).toLocaleString()}
+        </Descriptions.Item>
         <Descriptions.Item label="SSH hostname" span={2}>
           {vm.public_hostname ? (
             <Text copyable={{ text: vm.public_hostname }} code>
@@ -2295,12 +2327,6 @@ function VmDetailsModal({
           ) : (
             "Not assigned"
           )}
-        </Descriptions.Item>
-        <Descriptions.Item label="Created">
-          {new Date(vm.created_at).toLocaleString()}
-        </Descriptions.Item>
-        <Descriptions.Item label="Updated">
-          {new Date(vm.updated_at).toLocaleString()}
         </Descriptions.Item>
       </Descriptions>
     </Modal>

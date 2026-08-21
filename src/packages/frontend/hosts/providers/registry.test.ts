@@ -1450,6 +1450,9 @@ describe("catalog-backed pricing labels", () => {
     })[0];
     expect(option.selectionLabel).toContain("1x NVIDIA RTX PRO 6000");
     expect(option.selectionLabel).toContain("gpu-rtx6000_1gpu-24vcpu-218gb");
+    expect(option.mainLabel).toBe("1x NVIDIA RTX PRO 6000");
+    expect(option.subLabel).toContain("gpu-rtx6000_1gpu-24vcpu-218gb");
+    expect(option.subLabel).toContain("24 vCPU");
   });
 
   it("filters Nebius region-scoped GPU platforms by selected region", () => {
