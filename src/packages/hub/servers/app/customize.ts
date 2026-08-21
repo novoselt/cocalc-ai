@@ -32,6 +32,11 @@ export default function init(router, isPersonal: boolean) {
 
   router.get("/customize", async (req, res) => {
     const start = Date.now();
+    // The body carries the caller's own state (is_authenticated, is_admin) and
+    // Cloudflare-derived geolocation, so it must never be stored by a shared
+    // cache. `no-cache` rather than `no-store` keeps the ETag revalidation that
+    // makes this hot startup request a 304 for a returning client.
+    res.setHeader("Cache-Control", "private, no-cache");
     // If we're behind cloudflare, we expose the detected country in the client.
     // Use a lib like https://github.com/michaelwittig/node-i18n-iso-countries
     // to read the ISO 3166-1 Alpha 2 codes.

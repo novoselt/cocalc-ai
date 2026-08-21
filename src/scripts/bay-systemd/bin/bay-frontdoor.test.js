@@ -12,6 +12,7 @@ const {
   formatHealthError,
   isContentAddressedStaticRequest,
   isImmutableStaticStatus,
+  isPubliclyCacheable,
   prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,
@@ -93,18 +94,60 @@ test("classifies which statuses may be pinned immutably", () => {
   assert.equal(isImmutableStaticStatus(undefined), false);
 });
 
-test("keeps affinity on mutable shells and dynamic responses", () => {
-  const worker = { id: 2 };
-  for (const url of ["/static/app.html", "/api/v2/projects"]) {
+test("never attaches the affinity cookie to a public response", () => {
+  for (const url of ["/", "/webapp/serviceWorker.js", "/favicon.ico"]) {
     const headers = prepareResponseHeaders(
       { url },
-      { "cache-control": "no-store" },
+      { "cache-control": "public, max-age=864000, must-revalidate" },
+      { id: 2 },
+      true,
+      200,
+    );
+    assert.equal(headers["set-cookie"], undefined, url);
+    assert.equal(
+      headers["cache-control"],
+      "public, max-age=864000, must-revalidate",
+      url,
+    );
+  }
+});
+
+test("recognizes the public directive without matching max-age tokens", () => {
+  assert.equal(isPubliclyCacheable({ "cache-control": "public" }), true);
+  assert.equal(
+    isPubliclyCacheable({ "cache-control": "public, max-age=10" }),
+    true,
+  );
+  assert.equal(
+    isPubliclyCacheable({ "cache-control": ["private", "public"] }),
+    true,
+  );
+  assert.equal(
+    isPubliclyCacheable({ "cache-control": "private, max-age=10" }),
+    false,
+  );
+  assert.equal(isPubliclyCacheable({ "cache-control": "no-store" }), false);
+  assert.equal(isPubliclyCacheable({}), false);
+});
+
+test("keeps affinity on mutable shells and dynamic responses", () => {
+  const worker = { id: 2 };
+  const cacheControl = {
+    "/static/app.html": "private, max-age=10, must-revalidate",
+    "/api/v2/projects": "no-store",
+  };
+  for (const [url, value] of Object.entries(cacheControl)) {
+    const headers = prepareResponseHeaders(
+      { url },
+      { "cache-control": value },
       worker,
       true,
+      200,
     );
     assert.match(
       headers["set-cookie"],
       /^cocalc_bay_frontdoor_worker=2(?:\.|;)/,
+      url,
     );
   }
 });

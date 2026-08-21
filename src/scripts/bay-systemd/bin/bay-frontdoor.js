@@ -388,17 +388,33 @@ function isImmutableStaticStatus(statusCode) {
   return statusCode === 200 || statusCode === 203 || statusCode === 304;
 }
 
+// A response marked `public` may be stored by Cloudflare and by any proxy
+// between us and the browser. Attaching the per-client worker-affinity cookie
+// to one hands whichever worker the first visitor drew to everyone who is
+// later served that stored copy, and makes Cloudflare bypass the asset. A
+// response that must carry affinity has to say `private` (or no-store).
+function isPubliclyCacheable(headers) {
+  const value = headers?.["cache-control"];
+  const text = Array.isArray(value) ? value.join(",") : `${value ?? ""}`;
+  return text
+    .split(",")
+    .some((directive) => directive.trim().toLowerCase() === "public");
+}
+
 function prepareResponseHeaders(req, headers, worker, changed, statusCode) {
-  if (!isContentAddressedStaticRequest(req)) {
-    return addAffinityCookie(headers, worker, changed);
+  if (isContentAddressedStaticRequest(req)) {
+    if (!isImmutableStaticStatus(statusCode)) {
+      return { ...headers, "cache-control": "no-store" };
+    }
+    return {
+      ...headers,
+      "cache-control": `public, max-age=${immutableStaticMaxAgeSeconds}, immutable`,
+    };
   }
-  if (!isImmutableStaticStatus(statusCode)) {
-    return { ...headers, "cache-control": "no-store" };
+  if (isPubliclyCacheable(headers)) {
+    return headers;
   }
-  return {
-    ...headers,
-    "cache-control": `public, max-age=${immutableStaticMaxAgeSeconds}, immutable`,
-  };
+  return addAffinityCookie(headers, worker, changed);
 }
 
 function firstHeaderValue(value) {
@@ -621,6 +637,7 @@ module.exports = {
   formatHealthError,
   isContentAddressedStaticRequest,
   isImmutableStaticStatus,
+  isPubliclyCacheable,
   prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,
