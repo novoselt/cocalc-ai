@@ -6,7 +6,6 @@
 import { Alert, Tag, Typography } from "antd";
 
 import { appBasePath } from "@cocalc/frontend/customize/app-base-path";
-import { useProjectRunQuota } from "@cocalc/frontend/project/use-project-run-quota";
 import { joinUrlPath } from "@cocalc/util/url-path";
 
 const { Text } = Typography;
@@ -29,6 +28,16 @@ export function formatBrowserIdleTimeout(seconds: number): {
         ? `${normalized / 60} minute${normalized === 60 ? "" : "s"}`
         : `${normalized} seconds`;
   return { clock, description };
+}
+
+export function browserIdleTimeoutFromRunQuota(runQuota: unknown): number {
+  const value =
+    (runQuota as any)?.get?.("browser_idle_timeout") ??
+    (runQuota as any)?.browser_idle_timeout;
+  const timeoutSeconds = Number(value);
+  return Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+    ? timeoutSeconds
+    : 0;
 }
 
 export function BrowserRuntimeLimitBanner({
@@ -69,18 +78,4 @@ export function BrowserRuntimeLimitBanner({
       }
     />
   );
-}
-
-export default function ProjectBrowserRuntimeLimitBanner({
-  project_id,
-}: {
-  project_id: string;
-}) {
-  const { runQuota } = useProjectRunQuota(project_id);
-  const value =
-    (runQuota as any)?.get?.("browser_idle_timeout") ??
-    (runQuota as any)?.browser_idle_timeout;
-  const timeoutSeconds = Number(value);
-  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) return null;
-  return <BrowserRuntimeLimitBanner timeoutSeconds={timeoutSeconds} />;
 }

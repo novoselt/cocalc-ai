@@ -6,6 +6,7 @@
 import { render, screen } from "@testing-library/react";
 
 import {
+  browserIdleTimeoutFromRunQuota,
   BrowserRuntimeLimitBanner,
   formatBrowserIdleTimeout,
 } from "./browser-runtime-limit-banner";
@@ -31,5 +32,18 @@ describe("BrowserRuntimeLimitBanner", () => {
       clock: "1:30",
       description: "90 seconds",
     });
+  });
+
+  it("only enables presence for an explicit positive browser timeout", () => {
+    expect(browserIdleTimeoutFromRunQuota({ browser_idle_timeout: 1800 })).toBe(
+      1800,
+    );
+    expect(
+      browserIdleTimeoutFromRunQuota({
+        get: (key: string) => (key === "browser_idle_timeout" ? 90 : undefined),
+      }),
+    ).toBe(90);
+    expect(browserIdleTimeoutFromRunQuota({ idle_timeout: 1800 })).toBe(0);
+    expect(browserIdleTimeoutFromRunQuota({ browser_idle_timeout: 0 })).toBe(0);
   });
 });

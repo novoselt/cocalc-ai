@@ -123,7 +123,11 @@ import {
 import { recordSignedInSurfaceReady } from "@cocalc/frontend/app/bootstrap-ux-latency";
 import { markStartupPhaseOnce } from "@cocalc/frontend/app/startup-phase";
 import { HostRecoveryBanner } from "./host-recovery-banner";
-import ProjectBrowserRuntimeLimitBanner from "./browser-runtime-limit-banner";
+import { useProjectRunQuota } from "@cocalc/frontend/project/use-project-run-quota";
+import {
+  browserIdleTimeoutFromRunQuota,
+  BrowserRuntimeLimitBanner,
+} from "./browser-runtime-limit-banner";
 
 const START_BANNER = false;
 
@@ -256,10 +260,15 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
     publicDirectoryShare: props.publicDirectoryShare,
   });
   const isViewer = projectCtx.projectAccess.role === "viewer";
+  const { runQuota: browserRuntimeRunQuota } = useProjectRunQuota(project_id);
+  const browserIdleTimeout = browserIdleTimeoutFromRunQuota(
+    browserRuntimeRunQuota,
+  );
   const browserRuntimePresenceEnabled =
     !props.publicDirectoryShare &&
     !isViewer &&
-    projectCtx.projectAccess.capabilities.useProjectRuntime;
+    projectCtx.projectAccess.capabilities.useProjectRuntime &&
+    browserIdleTimeout > 0;
   useEffect(() => {
     if (!browserRuntimePresenceEnabled) return;
     let closed = false;
@@ -1225,7 +1234,7 @@ const SignedInProjectPage: React.FC<Props> = (props) => {
         {renderHostUnavailableBanner()}
         {renderRuntimeRecoveryBanner()}
         {!hardDeleteBlocked && browserRuntimePresenceEnabled ? (
-          <ProjectBrowserRuntimeLimitBanner project_id={project_id} />
+          <BrowserRuntimeLimitBanner timeoutSeconds={browserIdleTimeout} />
         ) : null}
         {renderTopRow()}
         <div
