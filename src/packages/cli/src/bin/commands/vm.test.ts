@@ -494,6 +494,26 @@ describe("vm create", () => {
     assert.equal(createCalls[0]?.gpu_count, 1);
   });
 
+  it("passes an explicit Nebius provider platform", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "h200-vm",
+      "--provider",
+      "nebius",
+      "--machine",
+      "1gpu-16vcpu-200gb",
+      "--provider-platform",
+      "gpu-h200-sxm",
+    ]);
+    assert.deepEqual(createCalls[0]?.provider_spec, {
+      platform: "gpu-h200-sxm",
+    });
+  });
+
   it("creates Windows with its safer boot-disk default", async () => {
     const { program, createCalls } = harness();
     await program.parseAsync([

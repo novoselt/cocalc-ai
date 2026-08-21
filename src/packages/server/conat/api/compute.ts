@@ -97,10 +97,12 @@ import { getNebiusMinimumBootDiskGb } from "@cocalc/server/cloud/host-util";
 import { getManagedVmProjectSshPublicKey } from "@cocalc/server/projects/managed-vm-ssh-config";
 import { publicComputeVmMetadata } from "@cocalc/server/compute/public";
 import {
+  computeMachineSupportsSpot,
   defaultComputeZone,
   regionFromComputeZone,
   requireComputeZoneInRegions,
   restrictHostCatalogToRegions,
+  selectNebiusComputeMachine,
 } from "@cocalc/server/compute/placement";
 import {
   listComputeOrphans,
@@ -505,12 +507,16 @@ async function getComputeMachine(opts: {
   region: string;
   zone?: string;
   machine_type: string;
+  provider_platform?: string;
 }) {
   if (opts.provider === "nebius") {
-    const machine = (await loadNebiusInstanceTypes()).find(
-      ({ name, regions }) =>
-        name === opts.machine_type &&
-        (!regions?.length || regions.includes(opts.region)),
+    const machine = selectNebiusComputeMachine(
+      await loadNebiusInstanceTypes(),
+      {
+        region: opts.region,
+        machineType: opts.machine_type,
+        platform: opts.provider_platform,
+      },
     );
     if (!machine?.vcpus || !machine.memory_gib) {
       throw new Error(
@@ -800,6 +806,8 @@ export async function createVm(
     region,
     zone,
     machine_type: opts.machine_type,
+    provider_platform:
+      `${opts.provider_spec?.platform ?? ""}`.trim() || undefined,
   });
   if (opts.architecture && opts.architecture !== machine.architecture) {
     throw new Error(
@@ -847,19 +855,12 @@ export async function createVm(
   if (pricingModel !== "spot" && pricingModel !== "on_demand") {
     throw new Error("pricing_model must be spot or on_demand");
   }
-  if (
-    provider === "nebius" &&
-    pricingModel === "spot" &&
-    machine.provider_spec.allowed_for_preemptibles === false
-  ) {
+  const spotSupported = computeMachineSupportsSpot(provider, machine);
+  if (pricingModel === "spot" && !spotSupported) {
     throw new Error(
       `Nebius machine '${machine.machine_type}' does not support Spot capacity`,
     );
   }
-  const spotSupported = !(
-    provider === "nebius" &&
-    machine.provider_spec.allowed_for_preemptibles === false
-  );
   const ttlMinutes =
     opts.ttl_minutes == null ? undefined : Number(opts.ttl_minutes);
   if (actorKind === "agent" && ttlMinutes == null) {
@@ -2502,6 +2503,10 @@ export async function setVmMachineType(opts: {
     region: vm.region,
     zone: vm.zone ?? undefined,
     machine_type: opts.machine_type,
+    // Nebius reuses preset names across GPU platforms. Machine edits must stay
+    // on the VM's existing GPU platform, which is already enforced below.
+    provider_platform:
+      `${vm.provider_spec?.platform ?? ""}`.trim() || undefined,
   });
   if (machine.architecture !== vm.architecture) {
     throw new Error(
@@ -2536,10 +2541,7 @@ export async function setVmMachineType(opts: {
       `the existing ${vm.boot_disk_gb} GB boot disk is too small for ${machine.machine_type}; ${minimumBootDiskGb} GB is required`,
     );
   }
-  const spotSupported = !(
-    vm.provider === "nebius" &&
-    machine.provider_spec.allowed_for_preemptibles === false
-  );
+  const spotSupported = computeMachineSupportsSpot(vm.provider, machine);
   if (vm.desired_pricing_model === "spot" && !spotSupported) {
     throw new Error(
       `Nebius machine '${machine.machine_type}' does not support Spot capacity`,

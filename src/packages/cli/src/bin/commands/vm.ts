@@ -636,6 +636,10 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "allowlisted machine type",
       "e2-standard-2",
     )
+    .option(
+      "--provider-platform <platform>",
+      "provider platform when a machine preset is reused, e.g. gpu-h200-sxm",
+    )
     .option("--spot", "use interruptible Spot capacity", false)
     .option(
       "--allow-standard-fallback",
@@ -699,6 +703,9 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           region: opts.region,
           zone: opts.zone,
           machine_type: opts.machine,
+          provider_spec: opts.providerPlatform
+            ? { platform: opts.providerPlatform }
+            : undefined,
           gpu_type:
             opts.gpuType && opts.gpuType !== "none" ? opts.gpuType : undefined,
           gpu_count: opts.gpuCount == null ? undefined : Number(opts.gpuCount),

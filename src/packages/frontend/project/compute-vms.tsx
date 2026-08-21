@@ -70,6 +70,7 @@ import {
   getGcpPersistentDiskPriceEstimate,
   getGcpRegionOptions,
   getGcpZoneOptions,
+  getNebiusAvailableVmOptions,
   getNebiusMinimumBootDiskGb,
   getProviderDescriptor,
   getProviderOptions,
@@ -92,6 +93,7 @@ import {
 } from "./compute-vms-cli";
 import { egressRateLabel, providerEgressIsFree } from "./compute-vms-egress";
 import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-service";
+import { NebiusVmCapacityPicker } from "./nebius-vm-capacity-picker";
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import { getPageUrlPath } from "@cocalc/frontend/page-routing";
@@ -476,6 +478,7 @@ function VmCreateModal({
     region: draft.region || regionFromZone(draft.zone),
     zone: draft.zone,
     machine_type: draft.machine_type,
+    provider_platform: draft.provider_platform,
     gpu_type: draft.gpu_type,
     pricing_model: draft.pricing_model,
     storage_mode: "persistent",
@@ -827,48 +830,46 @@ function VmCreateModal({
                   region: undefined,
                   zone: undefined,
                   machine_type: undefined,
+                  provider_platform: undefined,
                   gpu_type: undefined,
                   pricing_model,
                 };
-                const options = getProviderOptions(
-                  nextProvider,
-                  nextCatalog,
-                  nextSelection,
-                );
+                const nebiusDefault =
+                  nextProvider === "nebius"
+                    ? getNebiusAvailableVmOptions(
+                        nextCatalog,
+                        {
+                          ...nextSelection,
+                          disk_gb: Math.max(
+                            Number(draft.boot_disk_gb ?? 20),
+                            40,
+                          ),
+                        },
+                        "gpu",
+                      )[0]
+                    : undefined;
                 const region =
                   nextProvider === "gcp"
                     ? catalog.defaults.region
-                    : sortRegionOptionsByPreference({
-                        options: selectablePlacementOptions(
-                          options.region ?? [],
-                        ),
-                        preference: "closest",
-                        preferredRegion: preferredR2Region,
-                      })[0]?.value;
-                const placementOptions = getProviderOptions(
-                  nextProvider,
-                  nextCatalog,
-                  { ...nextSelection, region },
-                );
+                    : nebiusDefault?.region;
                 const zone =
-                  nextProvider === "gcp"
-                    ? catalog.defaults.zone
-                    : placementOptions.zone?.[0]?.value;
+                  nextProvider === "gcp" ? catalog.defaults.zone : undefined;
                 const machine_type =
                   nextProvider === "gcp"
                     ? catalog.defaults.machine_type
-                    : placementOptions.machine_type?.[0]?.value;
+                    : nebiusDefault?.machineType;
                 patchDraft({
                   provider: nextProvider,
                   architecture: "x86_64",
                   region,
                   zone,
                   machine_type,
+                  provider_platform: nebiusDefault?.platform,
                   pricing_model,
                   allow_on_demand_fallback:
-                    nextProvider !== "nebius" && pricing_model === "spot",
-                  gpu_type: undefined,
-                  gpu_count: 0,
+                    nextProvider === "nebius" && pricing_model === "spot",
+                  gpu_type: nebiusDefault?.gpuLabel,
+                  gpu_count: nebiusDefault?.gpuCount ?? 0,
                   home_volume: undefined,
                   create_home_volume: false,
                   boot_disk_gb: Math.max(
@@ -958,95 +959,146 @@ function VmCreateModal({
             </Radio.Group>
           </Form.Item>
         </Flex>
-        <Flex gap={12} wrap>
-          <Form.Item
-            name="region"
-            label={
-              <Flex align="center" justify="space-between" gap={12}>
-                <span>Region</span>
-                <Space size={6}>
-                  <Text type="secondary" style={{ fontWeight: 400 }}>
-                    Sort by price
-                  </Text>
-                  <Switch
-                    size="small"
-                    checked={sortRegionsByPrice}
-                    onChange={setSortRegionsByPrice}
-                  />
-                </Space>
-              </Flex>
-            }
-            rules={[{ required: true }]}
-            style={{ flex: "1 1 280px" }}
-          >
-            <HostOptionsSelect
-              options={regionOptions}
-              disabled={selectedVolume != null || !regionOptions.length}
-              placeholder={
-                regionOptions.length
-                  ? "Select a region"
-                  : "No regions available"
-              }
-              onChange={(region) => {
-                const nextSelection = {
-                  ...selection,
-                  region,
-                  zone: undefined,
-                };
-                const nextZone = compatibleOptions(
-                  provider === "gcp"
-                    ? getGcpZoneOptions(hostCatalog, nextSelection)
-                    : (getProviderOptions(provider, hostCatalog, nextSelection)
-                        .zone ?? []),
-                )[0]?.value;
-                const machinePatch =
-                  provider === "gcp"
-                    ? gcpMachinePatch(
-                        chooseGcpMachine({
-                          ...nextSelection,
-                          zone: nextZone,
-                        }),
-                      )
-                    : {
-                        boot_disk_gb: Math.max(
-                          Number(draft.boot_disk_gb ?? 20),
-                          getNebiusMinimumBootDiskGb(hostCatalog, {
-                            region,
-                            machine_type: draft.machine_type,
-                          }),
-                        ),
-                      };
-                patchDraft({ region, zone: nextZone, ...machinePatch });
-              }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="zone"
-            label="Zone"
-            rules={[{ required: provider === "gcp" }]}
-            style={{ flex: "1 1 280px" }}
-          >
-            {!descriptor.supports.zone ? (
-              <Input disabled placeholder="Provider-managed location" />
-            ) : zoneOptions.length ? (
-              <HostOptionsSelect
-                options={zoneOptions}
+        {provider === "nebius" && (
+          <>
+            <Form.Item name="region" hidden rules={[{ required: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="machine_type" hidden rules={[{ required: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="provider_platform" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="pricing_model" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item label="Available Nebius machines">
+              <NebiusVmCapacityPicker
+                catalog={hostCatalog}
+                selection={selection}
                 disabled={selectedVolume != null}
-                onChange={(zone) => {
+                onPricingModelChange={(pricing_model) => {
+                  patchDraft({
+                    pricing_model,
+                    allow_on_demand_fallback: pricing_model === "spot",
+                  });
+                }}
+                onSelect={(option) => {
+                  patchDraft({
+                    region: option.region,
+                    zone: undefined,
+                    machine_type: option.machineType,
+                    provider_platform: option.platform,
+                    gpu_type: option.gpuLabel,
+                    gpu_count: option.gpuCount,
+                    boot_disk_gb: Math.max(
+                      Number(draft.boot_disk_gb ?? 20),
+                      getNebiusMinimumBootDiskGb(hostCatalog, {
+                        region: option.region,
+                        machine_type: option.machineType,
+                      }),
+                    ),
+                  });
+                }}
+              />
+            </Form.Item>
+          </>
+        )}
+        {provider === "gcp" && (
+          <Flex gap={12} wrap>
+            <Form.Item
+              name="region"
+              label={
+                <Flex align="center" justify="space-between" gap={12}>
+                  <span>Region</span>
+                  <Space size={6}>
+                    <Text type="secondary" style={{ fontWeight: 400 }}>
+                      Sort by price
+                    </Text>
+                    <Switch
+                      size="small"
+                      checked={sortRegionsByPrice}
+                      onChange={setSortRegionsByPrice}
+                    />
+                  </Space>
+                </Flex>
+              }
+              rules={[{ required: true }]}
+              style={{ flex: "1 1 280px" }}
+            >
+              <HostOptionsSelect
+                options={regionOptions}
+                disabled={selectedVolume != null || !regionOptions.length}
+                placeholder={
+                  regionOptions.length
+                    ? "Select a region"
+                    : "No regions available"
+                }
+                onChange={(region) => {
+                  const nextSelection = {
+                    ...selection,
+                    region,
+                    zone: undefined,
+                  };
+                  const nextZone = compatibleOptions(
+                    provider === "gcp"
+                      ? getGcpZoneOptions(hostCatalog, nextSelection)
+                      : (getProviderOptions(
+                          provider,
+                          hostCatalog,
+                          nextSelection,
+                        ).zone ?? []),
+                  )[0]?.value;
                   const machinePatch =
                     provider === "gcp"
                       ? gcpMachinePatch(
-                          chooseGcpMachine({ ...selection, zone }),
+                          chooseGcpMachine({
+                            ...nextSelection,
+                            zone: nextZone,
+                          }),
                         )
-                      : {};
-                  patchDraft({ zone, ...machinePatch });
+                      : {
+                          boot_disk_gb: Math.max(
+                            Number(draft.boot_disk_gb ?? 20),
+                            getNebiusMinimumBootDiskGb(hostCatalog, {
+                              region,
+                              machine_type: draft.machine_type,
+                            }),
+                          ),
+                        };
+                  patchDraft({ region, zone: nextZone, ...machinePatch });
                 }}
               />
-            ) : (
-              <Input disabled={selectedVolume != null} />
-            )}
-          </Form.Item>
-        </Flex>
+            </Form.Item>
+            <Form.Item
+              name="zone"
+              label="Zone"
+              rules={[{ required: provider === "gcp" }]}
+              style={{ flex: "1 1 280px" }}
+            >
+              {!descriptor.supports.zone ? (
+                <Input disabled placeholder="Provider-managed location" />
+              ) : zoneOptions.length ? (
+                <HostOptionsSelect
+                  options={zoneOptions}
+                  disabled={selectedVolume != null}
+                  onChange={(zone) => {
+                    const machinePatch =
+                      provider === "gcp"
+                        ? gcpMachinePatch(
+                            chooseGcpMachine({ ...selection, zone }),
+                          )
+                        : {};
+                    patchDraft({ zone, ...machinePatch });
+                  }}
+                />
+              ) : (
+                <Input disabled={selectedVolume != null} />
+              )}
+            </Form.Item>
+          </Flex>
+        )}
         {descriptor.supports.gpuType &&
           operatingSystem === "linux" &&
           !(provider === "gcp" && draft.architecture === "arm64") &&
@@ -1117,48 +1169,50 @@ function VmCreateModal({
             </Flex>
           )}
         <Flex gap={12} wrap>
-          <Form.Item
-            name="machine_type"
-            label={
-              <Flex align="center" justify="space-between" gap={12}>
-                <span>Machine</span>
-                <Space size={6}>
-                  <Text type="secondary" style={{ fontWeight: 400 }}>
-                    Sort by price
-                  </Text>
-                  <Switch
-                    size="small"
-                    checked={sortMachinesByPrice}
-                    onChange={setSortMachinesByPrice}
-                  />
-                </Space>
-              </Flex>
-            }
-            rules={[{ required: true }]}
-            style={{ flex: "1 1 260px" }}
-          >
-            <HostOptionsSelect
-              options={machineOptions}
-              disabled={machineOptions.length === 0}
-              placeholder="Select a machine available in this zone"
-              onChange={(machine_type) => {
-                patchDraft(
-                  provider === "gcp"
-                    ? gcpMachinePatch(machine_type)
-                    : {
-                        machine_type,
-                        boot_disk_gb: Math.max(
-                          Number(draft.boot_disk_gb ?? 20),
-                          getNebiusMinimumBootDiskGb(hostCatalog, {
-                            region: draft.region,
-                            machine_type,
-                          }),
-                        ),
-                      },
-                );
-              }}
-            />
-          </Form.Item>
+          {provider === "gcp" && (
+            <Form.Item
+              name="machine_type"
+              label={
+                <Flex align="center" justify="space-between" gap={12}>
+                  <span>Machine</span>
+                  <Space size={6}>
+                    <Text type="secondary" style={{ fontWeight: 400 }}>
+                      Sort by price
+                    </Text>
+                    <Switch
+                      size="small"
+                      checked={sortMachinesByPrice}
+                      onChange={setSortMachinesByPrice}
+                    />
+                  </Space>
+                </Flex>
+              }
+              rules={[{ required: true }]}
+              style={{ flex: "1 1 260px" }}
+            >
+              <HostOptionsSelect
+                options={machineOptions}
+                disabled={machineOptions.length === 0}
+                placeholder="Select a machine available in this zone"
+                onChange={(machine_type) => {
+                  patchDraft(
+                    provider === "gcp"
+                      ? gcpMachinePatch(machine_type)
+                      : {
+                          machine_type,
+                          boot_disk_gb: Math.max(
+                            Number(draft.boot_disk_gb ?? 20),
+                            getNebiusMinimumBootDiskGb(hostCatalog, {
+                              region: draft.region,
+                              machine_type,
+                            }),
+                          ),
+                        },
+                  );
+                }}
+              />
+            </Form.Item>
+          )}
           <Form.Item
             name="boot_disk_gb"
             label="Boot disk (GB)"
@@ -1189,13 +1243,6 @@ function VmCreateModal({
             Boot disks cannot currently be enlarged after VM creation.
           </Text>
         </Flex>
-        {provider === "nebius" && draft.machine_type && (
-          <NebiusCapacityNotice
-            catalog={hostCatalog}
-            selection={selection}
-            style={{ marginBottom: 16 }}
-          />
-        )}
         {operatingSystem === "linux" && (
           <>
             <Form.Item name="create_home_volume" hidden valuePropName="checked">
@@ -1412,29 +1459,33 @@ function VmCreateModal({
                 <>
                   <Title level={5}>Pricing and lifetime</Title>
                   <Flex gap={12} wrap>
-                    <Form.Item
-                      name="pricing_model"
-                      label="Pricing model"
-                      style={{ flex: "1 1 320px" }}
-                    >
-                      <Radio.Group
-                        optionType="button"
-                        buttonStyle="solid"
-                        onChange={(event) => {
-                          const pricing_model = event.target.value;
-                          patchDraft({
-                            pricing_model,
-                            allow_on_demand_fallback:
-                              provider !== "nebius" && pricing_model === "spot",
-                          });
-                        }}
+                    {provider !== "nebius" && (
+                      <Form.Item
+                        name="pricing_model"
+                        label="Pricing model"
+                        style={{ flex: "1 1 320px" }}
                       >
-                        <Radio.Button value="spot">
-                          Spot · lower cost
-                        </Radio.Button>
-                        <Radio.Button value="on_demand">Standard</Radio.Button>
-                      </Radio.Group>
-                    </Form.Item>
+                        <Radio.Group
+                          optionType="button"
+                          buttonStyle="solid"
+                          onChange={(event) => {
+                            const pricing_model = event.target.value;
+                            patchDraft({
+                              pricing_model,
+                              allow_on_demand_fallback:
+                                pricing_model === "spot",
+                            });
+                          }}
+                        >
+                          <Radio.Button value="spot">
+                            Spot · lower cost
+                          </Radio.Button>
+                          <Radio.Button value="on_demand">
+                            Standard
+                          </Radio.Button>
+                        </Radio.Group>
+                      </Form.Item>
+                    )}
                     <Form.Item
                       name="ttl_minutes"
                       label="Optional deletion deadline"
@@ -2831,6 +2882,7 @@ export function ProjectComputeVms({
       region: vm.region,
       zone: vm.zone ?? undefined,
       machine_type: vm.machine_type,
+      provider_platform: vm.provider_spec?.platform,
       pricing_model: vm.desired_pricing_model,
       allow_on_demand_fallback: vm.allow_on_demand_fallback,
       ttl_minutes:
@@ -3022,6 +3074,9 @@ export function ProjectComputeVms({
           region: values.region,
           zone: values.zone,
           machine_type: values.machine_type,
+          provider_spec: values.provider_platform
+            ? { platform: values.provider_platform }
+            : undefined,
           gpu_type:
             values.gpu_type && values.gpu_type !== "none"
               ? values.gpu_type

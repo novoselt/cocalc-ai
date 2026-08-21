@@ -12,6 +12,7 @@ export interface VmCreateCliValues {
   region: string;
   zone?: string;
   machine_type: string;
+  provider_platform?: string;
   gpu_type?: string;
   gpu_count?: number;
   pricing_model: "spot" | "on_demand";
@@ -74,6 +75,9 @@ export function vmCreateCli(opts: {
   ];
   if (opts.project_id) args.splice(3, 0, "--project", opts.project_id);
   if (values.zone) args.push("--zone", values.zone);
+  if (values.provider_platform) {
+    args.push("--provider-platform", values.provider_platform);
+  }
   if (values.gpu_type && values.gpu_type !== "none") {
     args.push("--gpu-type", values.gpu_type);
   }

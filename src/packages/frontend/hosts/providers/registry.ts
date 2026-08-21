@@ -144,7 +144,7 @@ type HyperstackFlavor = {
   gpu: string;
   gpu_count: number;
 };
-type NebiusInstance = {
+export type NebiusInstance = {
   name: string;
   platform?: string | null;
   platform_label?: string | null;
@@ -254,6 +254,21 @@ export type NebiusInstanceOption = HostFieldOption<NebiusInstance> & {
   entry: NebiusInstance;
 };
 
+export type NebiusAvailableVmOption = {
+  key: string;
+  region: string;
+  machineType: string;
+  platform?: string;
+  platformLabel: string;
+  cpu: number;
+  ramGiB: number;
+  gpuCount: number;
+  gpuLabel?: string;
+  hourlyRate?: number;
+  priceLabel?: string;
+  capacity: NebiusCapacityInfo;
+};
+
 export const isNebiusSpotSupported = (
   options?: HostFieldOption[],
   machineType?: string,
@@ -271,6 +286,7 @@ export type ProviderSelection = {
   region?: string;
   zone?: string;
   machine_type?: string;
+  provider_platform?: string;
   gpu_type?: string;
   funding_mode?: string;
   cpu_count?: number;
@@ -2147,6 +2163,7 @@ const getNebiusPricingProductsByRegion = (
 export const getNebiusCapacityInfo = (
   catalog: HostCatalog | undefined,
   selection: ProviderSelection,
+  platform?: string,
 ): NebiusCapacityInfo => {
   const pricingModel =
     selection.pricing_model === "spot" ? "spot" : "on_demand";
@@ -2158,7 +2175,9 @@ export const getNebiusCapacityInfo = (
       "global",
     ) ?? [];
   const machine = instances.find(
-    (entry) => entry.name === selection.machine_type,
+    (entry) =>
+      entry.name === selection.machine_type &&
+      (!platform || entry.platform === platform),
   );
   const unsupported =
     pricingModel === "spot" && machine?.allowed_for_preemptibles === false;
@@ -2374,12 +2393,126 @@ export const getNebiusInstanceTypeOptions = (
       selectionLabel: machineLabel.selectionLabel,
       mainLabel: machineLabel.mainLabel,
       subLabel: machineLabel.subLabel,
-      detailLabel: getNebiusCapacityInfo(catalog, {
-        ...selection,
-        machine_type: entry.name,
-      }).summary,
+      detailLabel: getNebiusCapacityInfo(
+        catalog,
+        {
+          ...selection,
+          machine_type: entry.name,
+        },
+        entry.platform ?? undefined,
+      ).summary,
       entry,
     };
+  });
+};
+
+const PREFERRED_NEBIUS_VM = {
+  region: "us-central1",
+  machineType: "1gpu-24vcpu-218gb",
+} as const;
+
+/**
+ * Build stable, globally unique Nebius choices from the live capacity feed.
+ * A VM create form must not offer combinations that the provider reports as
+ * unsupported or exhausted.
+ */
+export const getNebiusAvailableVmOptions = (
+  catalog: HostCatalog | undefined,
+  selection: ProviderSelection,
+  kind: "cpu" | "gpu",
+): NebiusAvailableVmOption[] => {
+  const pricingModel =
+    selection.pricing_model === "spot" ? "spot" : "on_demand";
+  // Nebius currently offers preemptible capacity only for GPU platforms.
+  if (pricingModel === "spot" && kind === "cpu") return [];
+
+  const regions = getNebiusRegionOptions(catalog, {
+    ...selection,
+    region: undefined,
+    machine_type: undefined,
+  }).map(({ value }) => value);
+  const choices = new Map<string, NebiusAvailableVmOption>();
+  for (const region of regions) {
+    const regionSelection = {
+      ...selection,
+      region,
+      machine_type: undefined,
+    };
+    for (const option of getNebiusInstanceTypeOptions(
+      catalog,
+      regionSelection,
+    )) {
+      const entry = option.entry;
+      const gpuCount = Number(entry.gpus ?? 0);
+      if ((kind === "gpu") !== gpuCount > 0) continue;
+      const capacity = getNebiusCapacityInfo(
+        catalog,
+        {
+          ...regionSelection,
+          machine_type: entry.name,
+        },
+        entry.platform ?? undefined,
+      );
+      if (
+        !capacity.supported ||
+        !capacity.reported ||
+        Number(capacity.available ?? 0) <= 0
+      ) {
+        continue;
+      }
+      const key = `${region}\u0000${entry.platform ?? ""}\u0000${entry.name}`;
+      const candidate: NebiusAvailableVmOption = {
+        key,
+        region,
+        machineType: entry.name,
+        platform: entry.platform ?? undefined,
+        platformLabel:
+          entry.gpu_label ??
+          entry.platform_label ??
+          entry.platform ??
+          entry.name,
+        cpu: Number(entry.vcpus ?? 0),
+        ramGiB: Number(entry.memory_gib ?? 0),
+        gpuCount,
+        gpuLabel: entry.gpu_label ?? undefined,
+        hourlyRate: option.hourlyRate,
+        priceLabel: option.priceLabel,
+        capacity,
+      };
+      const previous = choices.get(key);
+      if (
+        !previous ||
+        Number(candidate.capacity.available ?? 0) >
+          Number(previous.capacity.available ?? 0)
+      ) {
+        choices.set(key, candidate);
+      }
+    }
+  }
+
+  return [...choices.values()].sort((left, right) => {
+    const preferred = (value: NebiusAvailableVmOption) =>
+      value.region === PREFERRED_NEBIUS_VM.region &&
+      value.machineType === PREFERRED_NEBIUS_VM.machineType;
+    if (preferred(left) !== preferred(right)) return preferred(left) ? -1 : 1;
+    const platform = left.platformLabel.localeCompare(
+      right.platformLabel,
+      undefined,
+      {
+        numeric: true,
+        sensitivity: "base",
+      },
+    );
+    if (platform !== 0) return platform;
+    if (left.gpuCount !== right.gpuCount) return left.gpuCount - right.gpuCount;
+    if (
+      left.hourlyRate != null &&
+      right.hourlyRate != null &&
+      left.hourlyRate !== right.hourlyRate
+    ) {
+      return left.hourlyRate - right.hourlyRate;
+    }
+    return left.region.localeCompare(right.region);
   });
 };
 

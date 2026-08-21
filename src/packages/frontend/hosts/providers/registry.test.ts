@@ -8,6 +8,7 @@ import {
   getNebiusPersistentDiskPriceEstimate,
   getNebiusMinimumBootDiskGb,
   getNebiusCapacityInfo,
+  getNebiusAvailableVmOptions,
   getNebiusInstanceTypeOptions,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
@@ -76,6 +77,172 @@ describe("Nebius boot disks", () => {
 });
 
 describe("Nebius capacity advice", () => {
+  it("offers only available all-region tuples and never offers Spot CPU", () => {
+    const catalog = testCatalog([
+      {
+        kind: "regions",
+        scope: "global",
+        payload: [
+          { name: "eu-north1" },
+          { name: "me-west1" },
+          { name: "us-central1" },
+        ],
+      },
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [
+          {
+            name: "1gpu-24vcpu-218gb",
+            platform: "gpu-rtx6000",
+            platform_label: "NVIDIA RTX PRO 6000",
+            allowed_for_preemptibles: true,
+            regions: ["eu-north1", "me-west1", "us-central1"],
+            vcpus: 24,
+            memory_gib: 218,
+            gpus: 1,
+            gpu_label: "NVIDIA RTX PRO 6000",
+          },
+          {
+            name: "4vcpu-16gb",
+            platform: "cpu-d3",
+            platform_label: "Intel Ice Lake",
+            allowed_for_preemptibles: false,
+            regions: ["eu-north1", "me-west1", "us-central1"],
+            vcpus: 4,
+            memory_gib: 16,
+            gpus: 0,
+          },
+        ],
+      },
+      {
+        kind: "capacity_advice",
+        scope: "global",
+        payload: [
+          {
+            region: "us-central1",
+            fabric: "fabric-us",
+            platform: "gpu-rtx6000",
+            machine_type: "1gpu-24vcpu-218gb",
+            spot: {
+              available: 28,
+              limit: 32,
+              availability_level: "high",
+              data_state: "fresh",
+            },
+          },
+          {
+            region: "eu-north1",
+            fabric: "fabric-eu",
+            platform: "gpu-rtx6000",
+            machine_type: "1gpu-24vcpu-218gb",
+            spot: {
+              available: 3,
+              limit: 16,
+              availability_level: "medium",
+              data_state: "fresh",
+            },
+          },
+          {
+            region: "me-west1",
+            fabric: "fabric-me",
+            platform: "gpu-rtx6000",
+            machine_type: "1gpu-24vcpu-218gb",
+            spot: {
+              available: 0,
+              limit: 8,
+              availability_level: "low",
+              data_state: "fresh",
+            },
+          },
+          {
+            region: "us-central1",
+            fabric: "fabric-us",
+            platform: "cpu-d3",
+            machine_type: "4vcpu-16gb",
+            spot: {
+              available: 100,
+              limit: 100,
+              availability_level: "high",
+              data_state: "fresh",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      getNebiusAvailableVmOptions(
+        catalog,
+        { pricing_model: "spot" },
+        "gpu",
+      ).map(({ key }) => key),
+    ).toEqual([
+      "us-central1\u0000gpu-rtx6000\u00001gpu-24vcpu-218gb",
+      "eu-north1\u0000gpu-rtx6000\u00001gpu-24vcpu-218gb",
+    ]);
+    expect(
+      getNebiusAvailableVmOptions(catalog, { pricing_model: "spot" }, "cpu"),
+    ).toEqual([]);
+  });
+
+  it("keeps CPU choices available for Standard capacity", () => {
+    const catalog = testCatalog([
+      {
+        kind: "regions",
+        scope: "global",
+        payload: [{ name: "eu-north1" }],
+      },
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [
+          {
+            name: "4vcpu-16gb",
+            platform: "cpu-d3",
+            platform_label: "Intel Ice Lake",
+            allowed_for_preemptibles: false,
+            regions: ["eu-north1"],
+            vcpus: 4,
+            memory_gib: 16,
+            gpus: 0,
+          },
+        ],
+      },
+      {
+        kind: "capacity_advice",
+        scope: "global",
+        payload: [
+          {
+            region: "eu-north1",
+            fabric: "fabric-eu",
+            platform: "cpu-d3",
+            machine_type: "4vcpu-16gb",
+            on_demand: {
+              available: 5,
+              limit: 8,
+              availability_level: "medium",
+              data_state: "fresh",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      getNebiusAvailableVmOptions(
+        catalog,
+        { pricing_model: "on_demand" },
+        "cpu",
+      )[0],
+    ).toMatchObject({
+      key: "eu-north1\u0000cpu-d3\u00004vcpu-16gb",
+      cpu: 4,
+      gpuCount: 0,
+      ramGiB: 16,
+    });
+  });
+
   it("shows fresh Spot availability on the matching machine", () => {
     const catalog = testCatalog([
       {
@@ -1483,19 +1650,53 @@ describe("catalog-backed pricing labels", () => {
           },
         ],
       },
+      {
+        kind: "capacity_advice",
+        scope: "global",
+        payload: [
+          {
+            region: "us-central1",
+            fabric: "fabric-us",
+            platform: "gpu-b200-sxm",
+            machine_type: "1gpu-20vcpu-224gb",
+            spot: {
+              available: 2,
+              limit: 4,
+              availability_level: "medium",
+              data_state: "fresh",
+            },
+          },
+          {
+            region: "me-west1",
+            fabric: "fabric-me",
+            platform: "gpu-b200-sxm-a",
+            machine_type: "1gpu-20vcpu-224gb",
+            spot: {
+              available: 3,
+              limit: 4,
+              availability_level: "high",
+              data_state: "fresh",
+            },
+          },
+        ],
+      },
     ]);
 
     const usOptions = getProviderOptions("nebius", catalog, {
       region: "us-central1",
+      pricing_model: "spot",
     }).machine_type;
     const meOptions = getProviderOptions("nebius", catalog, {
       region: "me-west1",
+      pricing_model: "spot",
     }).machine_type;
 
     expect(usOptions).toHaveLength(1);
     expect(meOptions).toHaveLength(1);
     expect((usOptions[0]?.meta as any)?.platform).toBe("gpu-b200-sxm");
     expect((meOptions[0]?.meta as any)?.platform).toBe("gpu-b200-sxm-a");
+    expect(usOptions[0]?.detailLabel).toContain("2 available");
+    expect(meOptions[0]?.detailLabel).toContain("3 available");
   });
 
   it("labels missing Nebius regional prices explicitly once a machine is selected", () => {
