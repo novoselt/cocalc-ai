@@ -10,6 +10,7 @@ import {
   managedWindowsSshKeysScript,
   managedWindowsVmBootstrapScript,
   mergeManagedNebiusSpec,
+  providerComputeStatusWithPresence,
   providerInstanceIdIsProvisional,
 } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
@@ -151,6 +152,25 @@ describe("isProviderNotFound", () => {
 }`),
       ),
     ).toBe(true);
+  });
+});
+
+describe("providerComputeStatusWithPresence", () => {
+  it("does not confuse a deleted provider instance with a stopped one", () => {
+    expect(providerComputeStatusWithPresence("stopped", undefined)).toBe(
+      "missing",
+    );
+    expect(
+      providerComputeStatusWithPresence("stopped", {
+        instance_id: "instance-1",
+      }),
+    ).toBe("stopped");
+    expect(
+      providerComputeStatusWithPresence("starting", {
+        instance_id: "instance-1",
+        metadata: { provider_state: "STOPPING" },
+      }),
+    ).toBe("stopping");
   });
 });
 

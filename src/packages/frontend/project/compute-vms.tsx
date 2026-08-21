@@ -196,8 +196,24 @@ function pricingLabel(value: string): string {
 }
 
 function egressRateLabel(vm: ComputeVm): string {
-  if (vm.provider === "nebius") return "Egress $0/GB";
+  if (vm.provider === "nebius" || vm.egress_summary.free) {
+    return "Egress is free";
+  }
   return `Egress $0.10/GB${vm.funding_mode === "site-funded" ? " · paid by site" : ""}`;
+}
+
+function vmDisplayState(vm: ComputeVm): string {
+  const providerState = vm.provider_state;
+  if (
+    providerState === "missing" &&
+    ["requested", "provisioning", "starting", "recovering"].includes(vm.state)
+  ) {
+    return vm.state;
+  }
+  if (providerState === "running") {
+    return vm.state === "ready" ? "running" : vm.state;
+  }
+  return providerState ?? vm.state;
 }
 
 const VM_MONTHLY_HOURS = 730;
@@ -2871,16 +2887,15 @@ export function ProjectComputeVms({
       width: 190,
       render: (state: string, vm) => {
         const providerState = vm.provider_state;
-        const displayState = providerState ?? state;
+        const displayState = vmDisplayState(vm);
         const providerObservationStale =
           vm.provider_observed_at != null &&
           Date.now() - new Date(vm.provider_observed_at).valueOf() > 2 * 60_000;
-        const setupDiffers =
-          providerState === "running"
-            ? state !== "ready"
-            : providerState === "stopped"
-              ? state !== "stopped"
-              : false;
+        const setupDiffers = providerState != null && displayState !== state;
+        const recoverySummary =
+          state === "recovering" || vm.effective_pricing_model === "on_demand"
+            ? vmSpotRecoverySummary(vm)
+            : undefined;
         return (
           <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
             <Tag
@@ -2895,20 +2910,35 @@ export function ProjectComputeVms({
               }
               style={{ marginInlineEnd: 0, width: "fit-content" }}
             >
-              {displayState}
+              {displayState.charAt(0).toUpperCase() + displayState.slice(1)}
             </Tag>
-            {providerState && vm.provider_observed_at && (
+            {providerObservationStale && vm.provider_observed_at && (
               <Text type={providerObservationStale ? "danger" : "secondary"}>
-                {providerObservationStale
-                  ? "Cloud status stale: "
-                  : "Cloud observed "}
+                Cloud status stale:{" "}
                 <TimeAgo date={new Date(vm.provider_observed_at)} />
               </Text>
             )}
-            {setupDiffers && (
-              <Text type={state === "failed" ? "danger" : "secondary"}>
-                CoCalc setup: {state}
-              </Text>
+            {(setupDiffers || providerState === "error") && (
+              <Popover
+                trigger="click"
+                title="VM status details"
+                content={
+                  <Space direction="vertical" size={4}>
+                    <Text>CoCalc: {state}</Text>
+                    <Text>Cloud: {providerState}</Text>
+                    {vm.provider_observed_at && (
+                      <Text type="secondary">
+                        Observed{" "}
+                        <TimeAgo date={new Date(vm.provider_observed_at)} />
+                      </Text>
+                    )}
+                  </Space>
+                }
+              >
+                <Button size="small" type="link" style={{ padding: 0 }}>
+                  Status details
+                </Button>
+              </Popover>
             )}
             {vm.provider_observation_error && (
               <Popover
@@ -2933,9 +2963,7 @@ export function ProjectComputeVms({
                 Deletes <TimeAgo date={new Date(vm.expires_at)} />
               </Text>
             )}
-            {vmSpotRecoverySummary(vm) && (
-              <Text type="secondary">{vmSpotRecoverySummary(vm)}</Text>
-            )}
+            {recoverySummary && <Text type="secondary">{recoverySummary}</Text>}
             {state === "failed" && vm.error && (
               <Popover
                 trigger="click"
@@ -2966,9 +2994,6 @@ export function ProjectComputeVms({
                 </Button>
               </Popover>
             )}
-            {!vm.expires_at && (
-              <Text type="secondary">No deletion deadline</Text>
-            )}
           </Space>
         );
       },
@@ -2982,7 +3007,12 @@ export function ProjectComputeVms({
           : undefined;
         return (
           <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
-            <Text strong>{vm.machine_type}</Text>
+            <Text strong>
+              {vm.gpu_type
+                ? `${vm.gpu_count}× ${vm.gpu_type}`
+                : vm.machine_type}
+            </Text>
+            {vm.gpu_type && <Text type="secondary">{vm.machine_type}</Text>}
             <Text type="secondary">
               {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
               {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
@@ -2997,11 +3027,6 @@ export function ProjectComputeVms({
                   ? `ID ${vm.home_volume_id.slice(0, 8)}`
                   : "none"}
             </Text>
-            {vm.gpu_type && (
-              <Text type="secondary">
-                {vm.gpu_count}× {vm.gpu_type}
-              </Text>
-            )}
           </Space>
         );
       },
@@ -3016,6 +3041,7 @@ export function ProjectComputeVms({
         const estimate = vmStoredPriceEstimate(vm);
         const stoppedEstimate = vmStoredStoppedPriceEstimate(vm);
         const egressLabel = egressRateLabel(vm);
+        const freeEgress = vm.provider === "nebius" || egress.free;
         return (
           <Popover
             trigger="click"
@@ -3043,8 +3069,8 @@ export function ProjectComputeVms({
                 )}
                 <Text>
                   Current-month egress: {gb.toFixed(gb >= 10 ? 1 : 3)} GB ·{" "}
-                  {vm.provider === "nebius"
-                    ? "$0/GB"
+                  {freeEgress
+                    ? "free"
                     : vm.funding_mode === "site-funded"
                       ? "$0.10/GB · paid by site"
                       : `$0.10/GB · $${cost.toFixed(2)} charged`}
@@ -3066,17 +3092,29 @@ export function ProjectComputeVms({
           >
             <Button
               type="link"
-              style={{ height: "auto", padding: 0, textAlign: "left" }}
+              style={{
+                height: "auto",
+                maxWidth: "100%",
+                overflow: "hidden",
+                padding: 0,
+                textAlign: "left",
+                whiteSpace: "normal",
+                width: "100%",
+              }}
             >
               <Space direction="vertical" size={0} align="start">
                 <Text>
                   {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
                 </Text>
                 <Text type="secondary">{vm.funding_mode}</Text>
-                <Text type="secondary">
-                  {egressLabel} · {gb.toFixed(gb >= 10 ? 1 : 3)} GB
-                  {egress.stale ? " · usage reporting delayed" : ""}
-                </Text>
+                {freeEgress ? (
+                  <Text type="secondary">Egress is free</Text>
+                ) : (
+                  <Text type="secondary">
+                    {egressLabel} · {gb.toFixed(gb >= 10 ? 1 : 3)} GB
+                    {egress.stale ? " · usage reporting delayed" : ""}
+                  </Text>
+                )}
               </Space>
             </Button>
           </Popover>

@@ -1444,6 +1444,12 @@ describe("catalog-backed pricing labels", () => {
     expect(estimate?.line_items.map((item) => item.label)).toContain(
       "GPU instance",
     );
+    const option = getNebiusInstanceTypeOptions(catalog, {
+      region: "us-central1",
+      pricing_model: "on_demand",
+    })[0];
+    expect(option.selectionLabel).toContain("1x NVIDIA RTX PRO 6000");
+    expect(option.selectionLabel).toContain("gpu-rtx6000_1gpu-24vcpu-218gb");
   });
 
   it("filters Nebius region-scoped GPU platforms by selected region", () => {

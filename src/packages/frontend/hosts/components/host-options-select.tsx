@@ -247,7 +247,7 @@ export function HostOptionsSelect({
           .toLowerCase();
         return haystack.includes(input.trim().toLowerCase());
       }}
-      popupMatchSelectWidth={hasDetailLabels ? 760 : false}
+      popupMatchSelectWidth={hasDetailLabels ? 860 : false}
       optionRender={(option: any) => {
         const data = option.data as HostFieldOption | undefined;
         const mainLabel =
@@ -267,8 +267,8 @@ export function HostOptionsSelect({
                     display: "grid",
                     gap: 12,
                     gridTemplateColumns: detail
-                      ? "360px 170px 110px"
-                      : "360px 170px",
+                      ? "minmax(390px, 1fr) minmax(210px, 250px) 110px"
+                      : "minmax(390px, 1fr) minmax(210px, 250px)",
                     width: "100%",
                   }
                 : {

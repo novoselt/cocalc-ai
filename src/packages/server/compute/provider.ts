@@ -9,6 +9,7 @@ import {
   type NebiusCapacityAdvice,
   type HostRuntime,
   type HostSpec,
+  type RemoteInstance,
 } from "@cocalc/cloud";
 import { GoogleAuth } from "google-auth-library";
 import { execFile } from "node:child_process";
@@ -80,6 +81,19 @@ const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
 
 export function isProviderNotFound(err: unknown): boolean {
   return /not found|was not found|code.?5|404/i.test(`${err}`);
+}
+
+export function providerComputeStatusWithPresence(
+  status: "starting" | "running" | "stopped" | "error",
+  instance: RemoteInstance | undefined,
+): "missing" | "starting" | "running" | "stopping" | "stopped" | "error" {
+  if (!instance) return "missing";
+  const providerState =
+    `${instance.metadata?.provider_state ?? instance.status ?? ""}`.toUpperCase();
+  if (providerState === "STOPPING" || providerState === "DELETING") {
+    return "stopping";
+  }
+  return status;
 }
 
 function requireGcpZone(resource: ComputeVmRow | ComputeVolumeRow): string {
@@ -1616,9 +1630,16 @@ export async function inspectProviderComputeVm(vm: ComputeVmRow) {
       selectedProvider.getStatus(runtime, creds),
       selectedProvider.getInstance(runtime, creds),
     ]);
-    if (instance && vm.provider === "gcp") {
+    // Some provider adapters historically map an absent instance to stopped.
+    // The worker must recreate an instance that was intentionally deleted for
+    // an immutable pricing-model change, not start its stale provider ID.
+    const observedStatus = providerComputeStatusWithPresence(status, instance);
+    if (!instance) {
+      return { status: "missing" as const, instance: undefined };
+    }
+    if (vm.provider === "gcp") {
       assertComputeVmSecurity(instance, config, subnetwork);
-    } else if (instance && vm.provider === "nebius") {
+    } else if (vm.provider === "nebius") {
       const expectedSecurityGroupId =
         await ensureNebiusManagedComputeSecurityGroup(vm.region);
       const observedSecurityGroupIds = Array.isArray(
@@ -1640,7 +1661,7 @@ export async function inspectProviderComputeVm(vm: ComputeVmRow) {
         );
       }
     }
-    return { status, instance };
+    return { status: observedStatus, instance };
   } catch (err) {
     if (/not found|was not found|code.?5/i.test(`${err}`)) {
       return { status: "missing" as const, instance: undefined };

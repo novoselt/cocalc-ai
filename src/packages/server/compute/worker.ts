@@ -1307,6 +1307,15 @@ async function inspectAndRecordProviderComputeVm(vm: ComputeVmRow) {
       instance_id: observed.instance?.instance_id ?? null,
       public_ip: observed.instance?.public_ip ?? null,
       pricing_model: observed.instance?.metadata?.pricing_model ?? null,
+      provider_state:
+        observed.instance?.metadata?.provider_state ??
+        observed.instance?.status ??
+        null,
+      reconciling: observed.instance?.metadata?.reconciling ?? null,
+      maintenance_event_id:
+        observed.instance?.metadata?.maintenance_event_id ?? null,
+      reservation_id: observed.instance?.metadata?.reservation_id ?? null,
+      disk_attachments: observed.instance?.metadata?.disk_attachments ?? null,
     });
     if (updated) vm.metadata = updated.metadata;
     return observed;
@@ -1834,6 +1843,19 @@ async function start(vm: ComputeVmRow) {
   if (vm.desired_state === "stopped") return await reconcile(vm);
   let observed = await inspectAndRecordProviderComputeVm(vm);
   if (observed.status === "missing") return await provision(vm);
+  if (observed.status === "starting" || observed.status === "stopping") return;
+  if (
+    observed.status === "error" &&
+    vm.provider === "nebius" &&
+    vm.effective_pricing_model === "spot"
+  ) {
+    // A terminal Nebius instance cannot be started reliably. Replace only the
+    // instance while preserving its named boot/home disks and static address.
+    await observeVmPhase(vm, "provider_replace_failed_spot", async () =>
+      setProviderComputePricing(vm, vm.effective_pricing_model),
+    );
+    return await provision(vm);
+  }
   const observedPricingModel = observed.instance?.metadata?.pricing_model;
   if (
     (observedPricingModel === "spot" || observedPricingModel === "on_demand") &&
@@ -1930,7 +1952,11 @@ async function switchToOnDemand(vm: ComputeVmRow) {
     },
     error: null,
   }))!;
-  await start(fallback);
+  if (fallback.provider === "nebius") {
+    await provision(fallback);
+  } else {
+    await start(fallback);
+  }
 }
 
 async function probeAndReturnToSpot(vm: ComputeVmRow) {
@@ -1970,7 +1996,11 @@ async function probeAndReturnToSpot(vm: ComputeVmRow) {
     state: "starting",
     effective_pricing_model: "spot",
   }))!;
-  await start(spot);
+  if (spot.provider === "nebius") {
+    await provision(spot);
+  } else {
+    await start(spot);
+  }
 }
 
 export function computePostStopTransition(
@@ -2219,6 +2249,7 @@ async function reconcile(vm: ComputeVmRow) {
   }
   const observed = await inspectAndRecordProviderComputeVm(vm);
   if (vm.desired_state === "stopped") {
+    if (observed.status === "stopping") return;
     if (observed.status === "running" || observed.status === "starting") {
       return await stop(vm);
     }
@@ -2283,6 +2314,12 @@ async function reconcile(vm: ComputeVmRow) {
   }
   if (observed.status === "missing") {
     return await provision(vm);
+  }
+  if (observed.status === "starting" || observed.status === "stopping") {
+    // Nebius reports CREATING, UPDATING, STARTING, STOPPING, and DELETING as
+    // transitional. The periodic reconcile will observe convergence; issuing
+    // another start while the provider is reconciling causes operation races.
+    return;
   }
   // Spot preemption leaves the persistent-root instance terminated. Record it
   // only on the ready -> terminated edge so repeated provider observations do

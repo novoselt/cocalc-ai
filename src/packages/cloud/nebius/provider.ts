@@ -74,6 +74,26 @@ import type {
 
 const logger = getLogger("cloud:nebius:provider");
 
+export function normalizeNebiusInstanceStatus(
+  state?: string,
+): "starting" | "running" | "stopping" | "stopped" | "error" {
+  switch (`${state ?? ""}`.toUpperCase()) {
+    case InstanceStatus_InstanceState.RUNNING.name:
+      return "running";
+    case InstanceStatus_InstanceState.STOPPED.name:
+      return "stopped";
+    case InstanceStatus_InstanceState.CREATING.name:
+    case InstanceStatus_InstanceState.UPDATING.name:
+    case InstanceStatus_InstanceState.STARTING.name:
+      return "starting";
+    case InstanceStatus_InstanceState.STOPPING.name:
+    case InstanceStatus_InstanceState.DELETING.name:
+      return "stopping";
+    default:
+      return "error";
+  }
+}
+
 type NebiusRuntimeMeta = {
   diskIds?: {
     boot?: string;
@@ -1725,6 +1745,16 @@ export class NebiusProvider implements CloudProvider {
         ...(platform ? { platform } : {}),
         pricing_model: preemptible ? "spot" : "on_demand",
         preemptible,
+        provider_state: status,
+        reconciling: instance.status?.reconciling ?? false,
+        maintenance_event_id: instance.status?.maintenanceEventId || undefined,
+        reservation_id: instance.status?.reservationId || undefined,
+        disk_attachments:
+          instance.status?.diskAttachments?.map((attachment) => ({
+            id: attachment.id,
+            name: attachment.name,
+            managed: attachment.isManaged,
+          })) ?? [],
         security_group_ids: securityGroupIds,
         service_account_id: instance.spec?.serviceAccountId || undefined,
       },
@@ -1739,11 +1769,8 @@ export class NebiusProvider implements CloudProvider {
     if (!instance) {
       return "stopped";
     }
-    const state = instance?.status ?? "";
-    if (state === InstanceStatus_InstanceState.RUNNING.name) return "running";
-    if (state === InstanceStatus_InstanceState.STOPPED.name) return "stopped";
-    if (state === InstanceStatus_InstanceState.STARTING.name) return "starting";
-    return "error";
+    const status = normalizeNebiusInstanceStatus(instance.status);
+    return status === "stopping" ? "starting" : status;
   }
 
   async listInstances(
