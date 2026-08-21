@@ -11,6 +11,7 @@ import {
   managedWindowsVmBootstrapScript,
   mergeManagedNebiusSpec,
   providerComputeStatusWithPresence,
+  providerComputeSshHost,
   providerInstanceIdIsProvisional,
 } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
@@ -171,6 +172,23 @@ describe("providerComputeStatusWithPresence", () => {
         metadata: { provider_state: "STOPPING" },
       }),
     ).toBe("stopping");
+  });
+});
+
+describe("providerComputeSshHost", () => {
+  it("prefers the reserved IP while newly published DNS is propagating", () => {
+    expect(
+      providerComputeSshHost({
+        public_ip: "203.0.113.10",
+        public_hostname: "vm.example.test",
+      } as any),
+    ).toBe("203.0.113.10");
+    expect(
+      providerComputeSshHost({
+        public_ip: null,
+        public_hostname: "vm.example.test",
+      } as any),
+    ).toBe("vm.example.test");
   });
 });
 

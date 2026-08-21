@@ -1258,6 +1258,12 @@ export function providerStartDisposition(
   return "start";
 }
 
+export function runningVmWorkAlreadySatisfied(
+  vm: Pick<ComputeVmRow, "state" | "desired_state">,
+): boolean {
+  return vm.state === "ready" && vm.desired_state === "running";
+}
+
 function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
@@ -1808,6 +1814,7 @@ async function provision(vm: ComputeVmRow) {
     await updateComputeVm(vm.id, { state: "stopped", error: null });
     return;
   }
+  if (runningVmWorkAlreadySatisfied(vm)) return;
   const beginningNewGeneration =
     !!vm.ready_at && vm.metadata?.provider_generation_provisioning !== true;
   let provisioning = (await updateComputeVm(vm.id, {
@@ -1936,6 +1943,7 @@ async function start(vm: ComputeVmRow) {
     return await remove(vm);
   }
   if (vm.desired_state === "stopped") return await reconcile(vm);
+  if (runningVmWorkAlreadySatisfied(vm)) return;
   let observed = await inspectAndRecordProviderComputeVm(vm);
   let disposition = providerStartDisposition(observed.status);
   if (disposition === "provision") return await provision(vm);

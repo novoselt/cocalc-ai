@@ -21,6 +21,7 @@ import {
   shouldRecoverSpotCapacityFailure,
   stoppedVmProviderInstanceNeedsReconciliation,
   runtimeIdentityChanged,
+  runningVmWorkAlreadySatisfied,
   spotCapacityRecoveryDecision,
   volumeAttachedToVm,
 } from "./worker";
@@ -374,6 +375,21 @@ describe("compute VM work failure state", () => {
     expect(providerStartDisposition("starting")).toBe("wait");
     expect(providerStartDisposition("missing")).toBe("provision");
     expect(providerStartDisposition("stopped")).toBe("start");
+  });
+
+  it("discards stale running work after the VM becomes ready", () => {
+    expect(
+      runningVmWorkAlreadySatisfied({
+        state: "ready",
+        desired_state: "running",
+      } as any),
+    ).toBe(true);
+    expect(
+      runningVmWorkAlreadySatisfied({
+        state: "starting",
+        desired_state: "running",
+      } as any),
+    ).toBe(false);
   });
 
   it("uses the configured Spot retry threshold before Standard fallback", () => {

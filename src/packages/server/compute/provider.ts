@@ -96,6 +96,12 @@ export function providerComputeStatusWithPresence(
   return status;
 }
 
+export function providerComputeSshHost(
+  vm: Pick<ComputeVmRow, "public_ip" | "public_hostname">,
+): string | undefined {
+  return vm.public_ip || vm.public_hostname || undefined;
+}
+
 function requireGcpZone(resource: ComputeVmRow | ComputeVolumeRow): string {
   if (resource.provider !== "gcp") {
     throw new Error(
@@ -1468,7 +1474,7 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
     return;
   }
   if (vm.provider === "nebius") {
-    const host = vm.public_hostname || vm.public_ip;
+    const host = providerComputeSshHost(vm);
     if (!host) throw new Error("managed compute VM has no SSH address");
     const keys = Array.from(
       new Set([
@@ -1528,7 +1534,7 @@ async function runProviderComputeWindowsPowerShell(
   script: string,
   identity?: { privateKeyPath: string },
 ): Promise<void> {
-  const host = vm.public_hostname || vm.public_ip;
+  const host = providerComputeSshHost(vm);
   if (!host) throw new Error("managed compute VM has no SSH address");
   const selectedIdentity = identity ?? (await getHostOwnerBaySshIdentity());
   const encoded = Buffer.from(script, "utf16le").toString("base64");
