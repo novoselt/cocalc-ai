@@ -85,6 +85,7 @@ import {
   type VmCreateCliValues,
   type VolumeCreateCliValues,
 } from "./compute-vms-cli";
+import { egressRateLabel, providerEgressIsFree } from "./compute-vms-egress";
 import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-service";
 
 const { Paragraph, Text, Title } = Typography;
@@ -193,13 +194,6 @@ function hourlyPrice(vm: ComputeVm): string {
 
 function pricingLabel(value: string): string {
   return value === "spot" ? "Spot" : "Standard";
-}
-
-function egressRateLabel(vm: ComputeVm): string {
-  if (vm.provider === "nebius" || vm.egress_summary.free) {
-    return "Egress is free";
-  }
-  return `Egress $0.10/GB${vm.funding_mode === "site-funded" ? " · paid by site" : ""}`;
 }
 
 function vmDisplayState(vm: ComputeVm): string {
@@ -3041,7 +3035,7 @@ export function ProjectComputeVms({
         const estimate = vmStoredPriceEstimate(vm);
         const stoppedEstimate = vmStoredStoppedPriceEstimate(vm);
         const egressLabel = egressRateLabel(vm);
-        const freeEgress = vm.provider === "nebius" || egress.free;
+        const freeEgress = providerEgressIsFree(vm.provider);
         return (
           <Popover
             trigger="click"
