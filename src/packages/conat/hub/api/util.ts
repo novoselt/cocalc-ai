@@ -113,6 +113,8 @@ export const authFirstRequireComputeProject = async ({
     ) {
       throw new Error("invalid managed-compute agent identity");
     }
+    delete args[0].account_id;
+    delete args[0].host_id;
     args[0].project_id = project_id;
     args[0].agent_auth = {
       account_id,
@@ -124,6 +126,29 @@ export const authFirstRequireComputeProject = async ({
     return args;
   }
   return await authFirstRequireProjectOrHost({ args, project_id, host_id });
+};
+
+export const authFirstRequireAccountOrComputeProject = async (context) => {
+  if (context.auth_actor === "agent") {
+    return await authFirstRequireComputeProject(context);
+  }
+  if (context.account_id) {
+    if (context.args[0] == null) context.args[0] = {} as any;
+    const projectId = `${context.args[0].project_id ?? ""}`.trim();
+    if (!projectId) throw new Error("project_id is required");
+    delete context.args[0].host_id;
+    delete context.args[0].agent_auth;
+    context.args[0].account_id = context.account_id;
+    if (context.auth_session_hash && context.args[0].session_hash == null) {
+      context.args[0].session_hash = context.auth_session_hash;
+    }
+    return context.args;
+  }
+  if (context.args[0] != null) {
+    delete context.args[0].account_id;
+    delete context.args[0].agent_auth;
+  }
+  return await authFirstRequireComputeProject(context);
 };
 
 export const authFirstRequireAccountOrComputeAgent = async (context) => {

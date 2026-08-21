@@ -1690,6 +1690,7 @@ export async function revokeVmProjectAccess(opts: {
 }
 
 export async function listProjectVms(opts: {
+  account_id?: string;
   host_id?: string;
   project_id?: string;
   include_deleted?: boolean;
@@ -1717,6 +1718,7 @@ export async function getVm(opts: { account_id?: string; id_or_name: string }) {
 }
 
 export async function getProjectVm(opts: {
+  account_id?: string;
   host_id?: string;
   project_id?: string;
   id_or_name: string;
@@ -1738,6 +1740,7 @@ export async function getProjectVm(opts: {
 }
 
 export async function listProjectVolumes(opts: {
+  account_id?: string;
   host_id?: string;
   project_id?: string;
   include_deleted?: boolean;
@@ -1758,6 +1761,7 @@ export async function listProjectVolumes(opts: {
 }
 
 export async function getProjectVolume(opts: {
+  account_id?: string;
   host_id?: string;
   project_id?: string;
   id_or_name: string;
@@ -1779,11 +1783,16 @@ export async function getProjectVolume(opts: {
 }
 
 async function requireComputeProjectReadIdentity(opts: {
+  account_id?: string;
   host_id?: string;
   project_id?: string;
 }): Promise<string> {
   const projectId = `${opts.project_id ?? ""}`.trim();
   if (!projectId) throw new Error("must be a project");
+  const accountId = `${opts.account_id ?? ""}`.trim();
+  if (accountId) {
+    await requireProjectMembership(accountId, projectId);
+  }
   const hostId = `${opts.host_id ?? ""}`.trim();
   if (hostId) {
     await assertComputeProjectAssignedToHost({

@@ -177,6 +177,88 @@ describe("hub API argument transforms", () => {
     ).rejects.toThrow("must be a host");
   });
 
+  it("authorizes project VM reads for collaborators without trusting spoofed principals", async () => {
+    const accountArgs = await transformArgs({
+      name: "compute.listProjectVms",
+      args: [
+        {
+          account_id: "spoofed-account",
+          project_id: "project-1",
+          host_id: "spoofed-host",
+        },
+      ],
+      account_id: "account-1",
+    });
+    expect(accountArgs[0]).toMatchObject({
+      account_id: "account-1",
+      project_id: "project-1",
+    });
+    expect(accountArgs[0].host_id).toBeUndefined();
+
+    const projectArgs = await transformArgs({
+      name: "compute.listProjectVms",
+      args: [
+        {
+          account_id: "spoofed-account",
+          project_id: "spoofed-project",
+        },
+      ],
+      project_id: "project-1",
+    });
+    expect(projectArgs[0]).toEqual({ project_id: "project-1" });
+
+    const hostArgs = await transformArgs({
+      name: "compute.listProjectVms",
+      args: [
+        {
+          account_id: "spoofed-account",
+          project_id: "project-1",
+          host_id: "spoofed-host",
+        },
+      ],
+      host_id: "host-1",
+    });
+    expect(hostArgs[0]).toEqual({
+      project_id: "project-1",
+      host_id: "host-1",
+    });
+
+    const agentArgs = await transformArgs({
+      name: "compute.listProjectVms",
+      args: [
+        {
+          account_id: "spoofed-account",
+          project_id: "spoofed-project",
+          host_id: "spoofed-host",
+        },
+      ],
+      account_id: "agent-owner",
+      project_id: "project-1",
+      auth_actor: "agent",
+      auth_token_fingerprint: "a".repeat(64),
+      auth_iat_s: 100,
+      auth_exp_s: 1000,
+    });
+    expect(agentArgs[0]).toEqual({
+      project_id: "project-1",
+      agent_auth: {
+        account_id: "agent-owner",
+        project_id: "project-1",
+        token_fingerprint: "a".repeat(64),
+        issued_at_s: 100,
+        expires_at_s: 1000,
+      },
+    });
+
+    await expect(
+      transformArgs({
+        name: "compute.listProjectVms",
+        args: [{}],
+        account_id: "account-1",
+      }),
+    ).rejects.toThrow("project_id is required");
+  });
+
   it("restricts managed metering RPCs to project or host principals", async () => {
     const rpcNames = [
       "system.recordManagedProjectEgress",

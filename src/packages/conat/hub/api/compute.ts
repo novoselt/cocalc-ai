@@ -7,6 +7,7 @@ import {
   authFirstRequireAccount,
   authFirstRequireHost,
   authFirstRequireComputeProject,
+  authFirstRequireAccountOrComputeProject,
   authFirstRequireAccountOrComputeAgent,
 } from "./util";
 import type { HostCatalog } from "./hosts";
@@ -298,8 +299,8 @@ export const compute = {
   createVm: authFirstRequireAccountOrComputeAgent,
   listVms: authFirstRequireAccount,
   getVm: authFirstRequireAccount,
-  listProjectVms: authFirstRequireComputeProject,
-  getProjectVm: authFirstRequireComputeProject,
+  listProjectVms: authFirstRequireAccountOrComputeProject,
+  getProjectVm: authFirstRequireAccountOrComputeProject,
   authorizeSshKey: authFirstRequireAccount,
   listVmProjectAccess: authFirstRequireAccount,
   grantVmProjectAccess: authFirstRequireAccount,
@@ -317,8 +318,8 @@ export const compute = {
   createVolume: authFirstRequireAccountOrComputeAgent,
   listVolumes: authFirstRequireAccount,
   getVolume: authFirstRequireAccount,
-  listProjectVolumes: authFirstRequireComputeProject,
-  getProjectVolume: authFirstRequireComputeProject,
+  listProjectVolumes: authFirstRequireAccountOrComputeProject,
+  getProjectVolume: authFirstRequireAccountOrComputeProject,
   resizeVolume: authFirstRequireAccountOrComputeAgent,
   setVolumeFundingMode: authFirstRequireAccountOrComputeAgent,
   deleteVolume: authFirstRequireAccountOrComputeAgent,
@@ -342,11 +343,13 @@ export interface ComputeApi {
     id_or_name: string;
   }) => Promise<ComputeVm>;
   listProjectVms: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     include_deleted?: boolean;
   }) => Promise<ComputeVm[]>;
   getProjectVm: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     id_or_name: string;
@@ -461,11 +464,13 @@ export interface ComputeApi {
     id_or_name: string;
   }) => Promise<ComputeVolume>;
   listProjectVolumes: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     include_deleted?: boolean;
   }) => Promise<ComputeVolume[]>;
   getProjectVolume: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     id_or_name: string;
