@@ -39,7 +39,9 @@ describe("Blit managed app", () => {
     expect(script).toContain("--verbose");
     expect(script).toContain('"$blit_bin" terminal start');
     expect(script).toContain('"$blit_bin" gateway');
-    expect(script).toContain('export PATH="$HOME/.local/bin:$PATH"');
+    expect(script).toContain(
+      'export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
+    );
     expect(script).toContain("vk_swiftshader_icd.json");
     expect(script).toContain("BLIT_SERVER_NAME=cocalc-x11");
     expect(script).toContain('wait -n "$server_pid" "$gateway_pid"');
