@@ -381,9 +381,19 @@ function isContentAddressedStaticRequest(req) {
   );
 }
 
-function prepareResponseHeaders(req, headers, worker, changed) {
+// Only a successfully served asset is safe to pin. A hashed URL that 404s or
+// errors during a release must never be stored: `immutable` would keep that
+// failure at the edge, and in every browser that saw it, for a full year.
+function isImmutableStaticStatus(statusCode) {
+  return statusCode === 200 || statusCode === 203 || statusCode === 304;
+}
+
+function prepareResponseHeaders(req, headers, worker, changed, statusCode) {
   if (!isContentAddressedStaticRequest(req)) {
     return addAffinityCookie(headers, worker, changed);
+  }
+  if (!isImmutableStaticStatus(statusCode)) {
+    return { ...headers, "cache-control": "no-store" };
   }
   return {
     ...headers,
@@ -499,9 +509,16 @@ function proxyHttp(req, res) {
       timeout: upstreamTimeoutMs,
     },
     (upstreamRes) => {
+      const statusCode = upstreamRes.statusCode ?? 502;
       res.writeHead(
-        upstreamRes.statusCode ?? 502,
-        prepareResponseHeaders(req, upstreamRes.headers, worker, changed),
+        statusCode,
+        prepareResponseHeaders(
+          req,
+          upstreamRes.headers,
+          worker,
+          changed,
+          statusCode,
+        ),
       );
       upstreamRes.pipe(res);
     },
@@ -603,6 +620,7 @@ module.exports = {
   evictWorkerUpgrades,
   formatHealthError,
   isContentAddressedStaticRequest,
+  isImmutableStaticStatus,
   prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,

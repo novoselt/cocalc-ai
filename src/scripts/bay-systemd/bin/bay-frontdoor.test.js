@@ -11,6 +11,7 @@ process.env.COCALC_BAY_PUBLIC_INGRESS_MODE = "cloudflare-proxy";
 const {
   formatHealthError,
   isContentAddressedStaticRequest,
+  isImmutableStaticStatus,
   prepareResponseHeaders,
   proxyRequestHeaders,
   recordWorkerHealth,
@@ -49,10 +50,47 @@ test("does not poison immutable static assets with the affinity cookie", () => {
     },
     { id: 2 },
     true,
+    200,
   );
   assert.equal(headers["set-cookie"], undefined);
   assert.equal(headers["cache-control"], "public, max-age=31536000, immutable");
   assert.equal(headers.etag, 'W/"asset"');
+});
+
+test("keeps the immutable policy on hashed asset revalidations", () => {
+  const headers = prepareResponseHeaders(
+    { url: "/static/app-6e50741dfe558fe6.js" },
+    { etag: 'W/"asset"' },
+    { id: 2 },
+    true,
+    304,
+  );
+  assert.equal(headers["cache-control"], "public, max-age=31536000, immutable");
+});
+
+test("never pins a failed hashed asset response", () => {
+  for (const statusCode of [404, 500, 502, 503]) {
+    const headers = prepareResponseHeaders(
+      { url: "/static/app-6e50741dfe558fe6.js" },
+      { "content-type": "text/plain; charset=utf-8" },
+      { id: 2 },
+      true,
+      statusCode,
+    );
+    assert.equal(headers["cache-control"], "no-store", `status ${statusCode}`);
+    assert.equal(headers["set-cookie"], undefined, `status ${statusCode}`);
+  }
+});
+
+test("classifies which statuses may be pinned immutably", () => {
+  assert.equal(isImmutableStaticStatus(200), true);
+  assert.equal(isImmutableStaticStatus(203), true);
+  assert.equal(isImmutableStaticStatus(304), true);
+  assert.equal(isImmutableStaticStatus(206), false);
+  assert.equal(isImmutableStaticStatus(302), false);
+  assert.equal(isImmutableStaticStatus(404), false);
+  assert.equal(isImmutableStaticStatus(502), false);
+  assert.equal(isImmutableStaticStatus(undefined), false);
 });
 
 test("keeps affinity on mutable shells and dynamic responses", () => {
