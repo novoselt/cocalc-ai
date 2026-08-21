@@ -302,6 +302,7 @@ async function collectOne({
         },
       ],
       options: input.options ?? { recursive: true },
+      flush_collaborative: true,
     },
     status: "queued",
   } as any);

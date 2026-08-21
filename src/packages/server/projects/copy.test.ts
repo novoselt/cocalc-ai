@@ -11,6 +11,7 @@ let waitLroMock: jest.Mock;
 let getLroMock: jest.Mock;
 let getProjectFileServerClientMock: jest.Mock;
 let applyPendingCopiesMock: jest.Mock;
+let flushJupyterNotebooksToDiskMock: jest.Mock;
 let getRoutedHostControlClientMock: jest.Mock;
 let getExplicitProjectRoutedClientMock: jest.Mock;
 let statMock: jest.Mock;
@@ -119,9 +120,12 @@ describe("projects.copyProjectFiles", () => {
     }));
     getBackupFilesMock = jest.fn(async () => []);
     deleteBackupMock = jest.fn(async () => undefined);
+    flushJupyterNotebooksToDiskMock = jest.fn(async () => ({ notebooks: [] }));
     const getBackupsMock = jest.fn(async () => []);
     getProjectFileServerClientMock = jest.fn(async () => ({
       cp: (...args: any[]) => cpMock(...args),
+      flushJupyterNotebooksToDisk: (...args: any[]) =>
+        flushJupyterNotebooksToDiskMock(...args),
       getBackupFiles: (...args: any[]) => getBackupFilesMock(...args),
       deleteBackup: (...args: any[]) => deleteBackupMock(...args),
       getBackups: getBackupsMock,
@@ -171,6 +175,32 @@ describe("projects.copyProjectFiles", () => {
     expect(createBackupMock).not.toHaveBeenCalled();
   });
 
+  it("uses exact replacement for same-host course collection copies", async () => {
+    queryMock = makeProjectQuery({ src: "h1", dest: "h1" });
+    const { copyProjectFiles } = await import("./copy");
+    const result = await copyProjectFiles({
+      account_id: "acct",
+      timeout_ms: 0,
+      flush_collaborative: true,
+      src: { project_id: "src", path: "assignment" },
+      dests: [{ project_id: "dest", path: "collected/student" }],
+      options: { recursive: true },
+    });
+
+    expect(result).toEqual({
+      queued: 0,
+      local: 1,
+      snapshot_id: undefined,
+      source_versions: [],
+    });
+    expect(cpMock).toHaveBeenCalledWith({
+      src: { project_id: "src", path: "assignment" },
+      dest: { project_id: "dest", path: "collected/student" },
+      options: { recursive: true },
+      exact: true,
+    });
+  });
+
   it("rejects cross-host copies from /tmp with clear error", async () => {
     queryMock = makeProjectQuery({ src: "h1", dest: "h2" });
     const { copyProjectFiles } = await import("./copy");
@@ -186,6 +216,23 @@ describe("projects.copyProjectFiles", () => {
     );
 
     expect(cpMock).not.toHaveBeenCalled();
+    expect(upsertMock).not.toHaveBeenCalled();
+    expect(createBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a destination host lacks exact collection support", async () => {
+    queryMock = makeProjectQuery({ src: "h1", dest: "h2" });
+    const { copyProjectFiles } = await import("./copy");
+
+    await expect(
+      copyProjectFiles({
+        account_id: "acct",
+        timeout_ms: 0,
+        flush_collaborative: true,
+        src: { project_id: "src", path: "assignment" },
+        dests: [{ project_id: "dest", path: "collected/student" }],
+      }),
+    ).rejects.toThrow("does not support exact collection");
     expect(upsertMock).not.toHaveBeenCalled();
     expect(createBackupMock).not.toHaveBeenCalled();
   });
@@ -215,6 +262,7 @@ describe("projects.copyProjectFiles", () => {
         dest_project_id: "dest",
         dest_path: "b.txt",
         snapshot_id: "snap-existing",
+        exact: false,
       }),
     );
     expect(getRoutedHostControlClientMock).toHaveBeenCalledWith(
@@ -300,10 +348,25 @@ describe("projects.copyProjectFiles", () => {
     };
     const createPathCopyArchiveMock = jest.fn(async () => archive);
     const applyPathCopyArchiveMock = jest.fn(async () => ({ applied: 1 }));
+    const sourceVersions = [
+      {
+        path: "a.ipynb",
+        sync_path: ".a.ipynb.sage-jupyter2",
+        version: "version-1",
+        sha256: "notebook-sha",
+        bytes: 123,
+        saved_at: "2026-08-21T00:00:00.000Z",
+      },
+    ];
+    flushJupyterNotebooksToDiskMock.mockResolvedValue({
+      notebooks: sourceVersions,
+    });
     getProjectFileServerClientMock = jest.fn(async ({ project_id }) => {
       if (project_id === "src") {
         return {
           cp: (...args: any[]) => cpMock(...args),
+          flushJupyterNotebooksToDisk: (...args: any[]) =>
+            flushJupyterNotebooksToDiskMock(...args),
           createPathCopyArchive: (...args: any[]) =>
             createPathCopyArchiveMock(...args),
           getBackupFiles: (...args: any[]) => getBackupFilesMock(...args),
@@ -312,6 +375,7 @@ describe("projects.copyProjectFiles", () => {
         };
       }
       return {
+        getCopyCapabilities: jest.fn(async () => ({ exact_replace: true })),
         applyPathCopyArchive: (...args: any[]) =>
           applyPathCopyArchiveMock(...args),
       };
@@ -323,6 +387,7 @@ describe("projects.copyProjectFiles", () => {
       account_id: "acct",
       timeout_ms: 0,
       progress,
+      flush_collaborative: true,
       src: { project_id: "src", path: "/root/a.txt" },
       dests: [{ project_id: "dest", path: "/root/b.txt" }],
     });
@@ -332,6 +397,14 @@ describe("projects.copyProjectFiles", () => {
       local: 0,
       fast_remote: 1,
       snapshot_id: undefined,
+      source_versions: sourceVersions,
+      archive_sha256: "sha",
+      archive_bytes: 3,
+    });
+    expect(flushJupyterNotebooksToDiskMock).toHaveBeenCalledWith({
+      project_id: "src",
+      paths: ["a.txt"],
+      actor_account_id: "acct",
     });
     expect(createPathCopyArchiveMock).toHaveBeenCalledWith({
       project_id: "src",
@@ -346,11 +419,14 @@ describe("projects.copyProjectFiles", () => {
       dests: [
         {
           project_id: "dest",
-          roots: [{ archive_path: "a.txt", dest_path: "b.txt" }],
+          roots: [{ archive_path: "a.txt", dest_path: "b.txt", exact: true }],
         },
       ],
       options: undefined,
     });
+    expect(progress).toHaveBeenCalledWith(
+      expect.objectContaining({ step: "save-source" }),
+    );
     expect(progress).toHaveBeenCalledWith(
       expect.objectContaining({ step: "archive" }),
     );
@@ -359,6 +435,33 @@ describe("projects.copyProjectFiles", () => {
     );
     expect(upsertMock).not.toHaveBeenCalled();
     expect(createBackupMock).not.toHaveBeenCalled();
+
+    applyPathCopyArchiveMock.mockClear();
+    const ordinaryResult = await copyProjectFiles({
+      account_id: "acct",
+      timeout_ms: 0,
+      src: { project_id: "src", path: "/root/a.txt" },
+      dests: [{ project_id: "dest", path: "/root/b.txt" }],
+    });
+    expect(ordinaryResult).toEqual({
+      queued: 0,
+      local: 0,
+      fast_remote: 1,
+      snapshot_id: undefined,
+      archive_sha256: "sha",
+      archive_bytes: 3,
+    });
+    expect(applyPathCopyArchiveMock).toHaveBeenLastCalledWith({
+      archive,
+      dests: [
+        {
+          project_id: "dest",
+          roots: [{ archive_path: "a.txt", dest_path: "b.txt" }],
+        },
+      ],
+      options: undefined,
+    });
+    expect(flushJupyterNotebooksToDiskMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the queued backup path when the bounded archive is too large", async () => {
@@ -371,6 +474,8 @@ describe("projects.copyProjectFiles", () => {
       if (project_id === "src") {
         return {
           cp: (...args: any[]) => cpMock(...args),
+          flushJupyterNotebooksToDisk: (...args: any[]) =>
+            flushJupyterNotebooksToDiskMock(...args),
           createPathCopyArchive: (...args: any[]) =>
             createPathCopyArchiveMock(...args),
           getBackupFiles: (...args: any[]) => getBackupFilesMock(...args),
@@ -379,6 +484,7 @@ describe("projects.copyProjectFiles", () => {
         };
       }
       return {
+        getCopyCapabilities: jest.fn(async () => ({ exact_replace: true })),
         applyPathCopyArchive: jest.fn(async () => ({ applied: 1 })),
       };
     });
@@ -387,6 +493,7 @@ describe("projects.copyProjectFiles", () => {
     const result = await copyProjectFiles({
       account_id: "acct",
       timeout_ms: 0,
+      flush_collaborative: true,
       src: { project_id: "src", path: "/root/a.txt" },
       dests: [{ project_id: "dest", path: "/root/b.txt" }],
     });
@@ -395,6 +502,7 @@ describe("projects.copyProjectFiles", () => {
       queued: 1,
       local: 0,
       snapshot_id: "snap-1",
+      source_versions: [],
     });
     expect(createPathCopyArchiveMock).toHaveBeenCalledTimes(1);
     expect(createBackupMock).toHaveBeenCalledTimes(1);
@@ -403,6 +511,13 @@ describe("projects.copyProjectFiles", () => {
         src_path: "a.txt",
         dest_path: "b.txt",
         snapshot_id: "snap-1",
+        exact: true,
+      }),
+    );
+    expect(createBackupMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        skip_collab_check: true,
       }),
     );
   });

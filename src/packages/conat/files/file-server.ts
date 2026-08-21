@@ -178,7 +178,23 @@ export interface PathCopyArchiveDestination {
   roots: {
     archive_path: string;
     dest_path: string;
+    // The hub has already resolved the final destination path. This prevents
+    // directory-target semantics from nesting a recollected assignment.
+    exact?: boolean;
   }[];
+}
+
+export interface CollaborativeNotebookSourceVersion {
+  path: string;
+  sync_path: string;
+  version: string;
+  sha256: string;
+  bytes: number;
+  saved_at: string;
+}
+
+export interface FlushCollaborativePathsResult {
+  notebooks: CollaborativeNotebookSourceVersion[];
 }
 
 export interface ExternalProjectBackupIndexResult {
@@ -270,7 +286,21 @@ export interface Fileserver {
     src: { project_id: string; path: string | string[] };
     dest: { project_id: string; path: string };
     options?: CopyOptions;
+    exact?: boolean;
   }) => Promise<void>;
+
+  getCopyCapabilities: (opts: { project_id: string }) => Promise<{
+    exact_replace: true;
+  }>;
+
+  // Persist the current collaborative state of notebooks below these paths
+  // before a point-in-time course collection or similar server-side copy.
+  flushJupyterNotebooksToDisk: (opts: {
+    project_id: string;
+    paths: string[];
+    actor_account_id: string;
+    max_notebooks?: number;
+  }) => Promise<FlushCollaborativePathsResult>;
 
   // Bounded cross-host copy fast path. The source host creates a compressed
   // archive from a read-only snapshot, the hub forwards it, and the destination

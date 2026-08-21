@@ -26,6 +26,7 @@ const WORKER_ID = randomUUID();
 
 const progressSteps: Record<string, number> = {
   validate: 5,
+  "save-source": 20,
   archive: 35,
   backup: 40,
   queue: 70,
@@ -102,6 +103,7 @@ async function handleCopyOp(op: LroSummary): Promise<void> {
   const options = input.options;
   const src_home = input.src_home;
   const src_read_policy = input.src_read_policy;
+  const flush_collaborative = input.flush_collaborative === true;
   const account_id = op.created_by ?? input.account_id;
 
   if (!account_id || !src || !dests.length) {
@@ -194,18 +196,34 @@ async function handleCopyOp(op: LroSummary): Promise<void> {
       op_id,
       progress,
       snapshot_id,
+      flush_collaborative,
       queue_mode,
       shouldAbort,
     });
 
-    if (result.snapshot_id && !storedSnapshot) {
+    const audit = {
+      ...(result.snapshot_id ? { snapshot_id: result.snapshot_id } : {}),
+      ...(result.source_versions
+        ? { source_versions: result.source_versions }
+        : {}),
+      ...(result.archive_sha256
+        ? { archive_sha256: result.archive_sha256 }
+        : {}),
+      ...(result.archive_bytes != null
+        ? { archive_bytes: result.archive_bytes }
+        : {}),
+    };
+    let resultBase = op.result ?? {};
+    if (Object.keys(audit).length > 0) {
+      const current = await getLro(op_id);
+      resultBase = current?.result ?? resultBase;
       const updated = await updateLro({
         op_id,
-        result: { ...(op.result ?? {}), snapshot_id: result.snapshot_id },
+        result: { ...resultBase, ...audit },
       });
       await publishSummarySafe(updated, {
         op_id,
-        when: "store-snapshot-id",
+        when: "store-copy-audit",
       });
     }
 
@@ -260,7 +278,7 @@ async function handleCopyOp(op: LroSummary): Promise<void> {
         op_id,
         status: "succeeded",
         progress_summary,
-        result: progress_summary,
+        result: { ...resultBase, ...audit, ...progress_summary },
         error: null,
       });
       await publishSummarySafe(updated, {

@@ -179,6 +179,7 @@ describe("projects.copy-db", () => {
       dest_project_id: DEST_PROJECT_ID,
       dest_path: "/root/a.txt",
       snapshot_id: "snap-3",
+      exact: true,
       expires_at: new Date(Date.now() + 60_000),
     };
     const inserted = await insertCopyRowIfMissing(row);
@@ -190,6 +191,7 @@ describe("projects.copy-db", () => {
     const listed = await listCopiesByOpId({ op_id: row.op_id });
     expect(listed).toHaveLength(1);
     expect(listed[0].snapshot_id).toBe("snap-3");
+    expect(listed[0].exact).toBe(true);
   });
 
   it("reclaims stale applying copies before later conflicting copies", async () => {
@@ -314,6 +316,62 @@ describe("projects.copy-db", () => {
       status: "succeeded",
       finished_at: expect.any(Date),
     });
+  });
+
+  it("preserves source audit metadata when queued copies finish", async () => {
+    const { ensureLroSchema } = await import("@cocalc/server/lro/lro-db");
+    const { ensureCopySchema, updateCopyStatus, upsertCopyRow } =
+      await import("./copy-db");
+    await ensureLroSchema();
+    await ensureCopySchema();
+    const op_id = "99999999-9999-4999-8999-999999999999";
+    const source_versions = [
+      {
+        path: "assignment/work.ipynb",
+        version: "version-1",
+        sha256: "sha256",
+      },
+    ];
+    await getPool().query(
+      `
+        INSERT INTO long_running_operations
+          (op_id, kind, scope_type, scope_id, status, input, result, progress_summary, expires_at)
+        VALUES
+          ($1, 'copy-path-between-projects', 'project', $2, 'running', '{}'::jsonb, $3::jsonb, '{}'::jsonb, now() + interval '1 hour')
+      `,
+      [op_id, SRC_PROJECT_ID, JSON.stringify({ source_versions })],
+    );
+    const row = await upsertCopyRow({
+      op_id,
+      src_project_id: SRC_PROJECT_ID,
+      src_path: "assignment/work.ipynb",
+      dest_project_id: DEST_PROJECT_ID,
+      dest_path: "collected/work.ipynb",
+      snapshot_id: "snap-audit",
+      expires_at: new Date(Date.now() + 60_000),
+    });
+
+    await updateCopyStatus({
+      copy_id: row.copy_id,
+      key: {
+        src_project_id: SRC_PROJECT_ID,
+        src_path: "assignment/work.ipynb",
+        dest_project_id: DEST_PROJECT_ID,
+        dest_path: "collected/work.ipynb",
+      },
+      status: "done",
+    });
+
+    const { rows } = await getPool().query<{
+      status: string;
+      result: Record<string, any>;
+    }>("SELECT status, result FROM long_running_operations WHERE op_id=$1", [
+      op_id,
+    ]);
+    expect(rows[0].status).toBe("succeeded");
+    expect(rows[0].result).toEqual(
+      expect.objectContaining({ source_versions, done: 1, total: 1 }),
+    );
   });
 
   it("does not let terminal parent LRO copy rows block later copies", async () => {

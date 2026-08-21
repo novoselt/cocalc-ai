@@ -1,0 +1,167 @@
+/*
+ * This file is part of CoCalc: Copyright (c) 2026 Sagemath, Inc.
+ * License: MS-RSL - see LICENSE.md for details
+ */
+
+import { createHash } from "node:crypto";
+
+let documentMock: any;
+const saveJupyterIpynbMock = jest.fn();
+const jupyterNotebookContentsMock = jest.fn();
+
+jest.mock("@cocalc/sync/editor/db", () => ({
+  SyncDB: jest.fn(() => documentMock),
+}));
+
+jest.mock("./jupyter-ipynb", () => ({
+  saveJupyterIpynb: (...args: any[]) => saveJupyterIpynbMock(...args),
+}));
+
+jest.mock("./jupyter-notebook-contents", () => ({
+  jupyterNotebookContents: (...args: any[]) =>
+    jupyterNotebookContentsMock(...args),
+}));
+
+function stat(kind: "file" | "directory" | "symlink") {
+  return {
+    isFile: () => kind === "file",
+    isDirectory: () => kind === "directory",
+    isSymbolicLink: () => kind === "symlink",
+  };
+}
+
+describe("collaborative Jupyter collection flush", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jupyterNotebookContentsMock.mockReturnValue(
+      '{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}\n',
+    );
+  });
+
+  it("finds notebooks recursively without following links or checkpoints", async () => {
+    const lstat = jest.fn(async (value: string) => {
+      const kinds: Record<string, "file" | "directory" | "symlink"> = {
+        assignment: "directory",
+        "assignment/a.ipynb": "file",
+        "assignment/notes.txt": "file",
+        "assignment/nested": "directory",
+        "assignment/nested/b.ipynb": "file",
+        "assignment/link": "symlink",
+      };
+      if (!kinds[value]) throw new Error(`unexpected path ${value}`);
+      return stat(kinds[value]);
+    });
+    const readdir = jest.fn(async (value: string) => {
+      if (value === "assignment") {
+        return [
+          { name: "a.ipynb" },
+          { name: "notes.txt" },
+          { name: "nested" },
+          { name: "link" },
+          { name: ".ipynb_checkpoints" },
+        ];
+      }
+      if (value === "assignment/nested") {
+        return [{ name: "b.ipynb" }];
+      }
+      throw new Error(`unexpected directory ${value}`);
+    });
+    const { findJupyterNotebooks } =
+      await import("./jupyter-collaborative-flush");
+
+    await expect(
+      findJupyterNotebooks({
+        filesystem: { lstat, readdir } as any,
+        paths: ["assignment"],
+      }),
+    ).resolves.toEqual(["assignment/a.ipynb", "assignment/nested/b.ipynb"]);
+    expect(lstat).not.toHaveBeenCalledWith("assignment/.ipynb_checkpoints");
+  });
+
+  it("saves a stable collaborative version and records its disk hash", async () => {
+    documentMock = {
+      wait_until_ready: jest.fn(async () => undefined),
+      newestVersion: jest.fn(() => "version-1"),
+      get_doc: jest.fn(() => ({})),
+      close: jest.fn(async () => undefined),
+    };
+    const saved = Buffer.from("portable notebook on disk");
+    const readFile = jest
+      .fn()
+      .mockResolvedValueOnce('{"metadata":{}}')
+      .mockResolvedValueOnce(saved);
+    saveJupyterIpynbMock.mockResolvedValue({ bytes: saved.length });
+    const { flushJupyterNotebook } =
+      await import("./jupyter-collaborative-flush");
+
+    const result = await flushJupyterNotebook({
+      project_id: "project",
+      notebook_path: "assignment/work.ipynb",
+      actor_account_id: "instructor",
+      filesystem: { readFile } as any,
+      syncClient: {} as any,
+    });
+
+    expect(saveJupyterIpynbMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "assignment/work.ipynb",
+        version: "version-1",
+        bytes: saved.length,
+        sha256: createHash("sha256").update(saved).digest("hex"),
+      }),
+    );
+    expect(documentMock.close).toHaveBeenCalled();
+  });
+
+  it("retries when the collaborative version changes during a save", async () => {
+    const versions = ["version-1", "version-1", "version-2", "version-2"];
+    documentMock = {
+      wait_until_ready: jest.fn(async () => undefined),
+      newestVersion: jest.fn(() => versions.shift() ?? "version-2"),
+      get_doc: jest.fn(() => ({})),
+      close: jest.fn(async () => undefined),
+    };
+    const saved = Buffer.from("second save");
+    const readFile = jest
+      .fn()
+      .mockResolvedValueOnce('{"metadata":{}}')
+      .mockResolvedValueOnce(saved);
+    saveJupyterIpynbMock.mockResolvedValue({ bytes: saved.length });
+    const { flushJupyterNotebook } =
+      await import("./jupyter-collaborative-flush");
+
+    const result = await flushJupyterNotebook({
+      project_id: "project",
+      notebook_path: "assignment/work.ipynb",
+      actor_account_id: "instructor",
+      filesystem: { readFile } as any,
+      syncClient: {} as any,
+    });
+
+    expect(saveJupyterIpynbMock).toHaveBeenCalledTimes(2);
+    expect(result?.version).toBe("version-2");
+  });
+
+  it("does not overwrite a disk-only notebook with an empty sync document", async () => {
+    documentMock = {
+      wait_until_ready: jest.fn(async () => undefined),
+      newestVersion: jest.fn(() => undefined),
+      get_doc: jest.fn(() => ({})),
+      close: jest.fn(async () => undefined),
+    };
+    const { flushJupyterNotebook } =
+      await import("./jupyter-collaborative-flush");
+
+    await expect(
+      flushJupyterNotebook({
+        project_id: "project",
+        notebook_path: "assignment/work.ipynb",
+        actor_account_id: "instructor",
+        filesystem: {} as any,
+        syncClient: {} as any,
+      }),
+    ).resolves.toBeUndefined();
+    expect(saveJupyterIpynbMock).not.toHaveBeenCalled();
+  });
+});

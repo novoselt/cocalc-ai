@@ -3,6 +3,7 @@ import { conat } from "@cocalc/backend/conat";
 import getLogger from "@cocalc/backend/logger";
 import getPool from "@cocalc/database/pool";
 import {
+  type CollaborativeNotebookSourceVersion,
   type Fileserver,
   type PathCopyArchiveDestination,
   type PathCopyArchiveRoot,
@@ -551,10 +552,12 @@ function buildFastArchiveDestinations({
   dests,
   rootPlans,
   singleExactDest,
+  exactDest,
 }: {
   dests: CopyDestWithHost[];
   rootPlans: ArchiveRootPlan[];
   singleExactDest: boolean;
+  exactDest: boolean;
 }): PathCopyArchiveDestination[] {
   return dests.map((dest) => ({
     project_id: dest.project_id,
@@ -569,6 +572,7 @@ function buildFastArchiveDestinations({
             path.posix.join(dest.path, root.archivePath),
             "dest.path",
           ),
+      ...(exactDest ? { exact: true } : {}),
     })),
   }));
 }
@@ -582,6 +586,7 @@ async function tryFastRemoteCopyArchive({
   timeout_ms,
   progress,
   shouldAbort,
+  exact_dest,
 }: {
   srcProjectClient: Fileserver;
   src_project_id: string;
@@ -591,7 +596,16 @@ async function tryFastRemoteCopyArchive({
   timeout_ms: number;
   progress?: CopyProgress;
   shouldAbort?: () => Promise<boolean>;
-}): Promise<{ used: false } | { used: true; applied: number }> {
+  exact_dest: boolean;
+}): Promise<
+  | { used: false }
+  | {
+      used: true;
+      applied: number;
+      archive_sha256: string;
+      archive_bytes: number;
+    }
+> {
   if (
     !rootPlans?.length ||
     options?.dereference ||
@@ -684,12 +698,18 @@ async function tryFastRemoteCopyArchive({
         dests: group,
         rootPlans,
         singleExactDest,
+        exactDest: exact_dest,
       }),
       options,
     });
     applied += result.applied;
   }
-  return { used: true, applied };
+  return {
+    used: true,
+    applied,
+    archive_sha256: archive.sha256,
+    archive_bytes: archive.bytes,
+  };
 }
 
 async function getHostIds(project_ids: string[]): Promise<Map<string, string>> {
@@ -716,6 +736,47 @@ async function getHostIds(project_ids: string[]): Promise<Map<string, string>> {
     }
   }
   return map;
+}
+
+async function assertExactCopyDestinationsSupported({
+  remoteDests,
+  timeout_ms,
+}: {
+  remoteDests: CopyDestWithHost[];
+  timeout_ms: number;
+}): Promise<void> {
+  const projectByHost = new Map<string, string>();
+  for (const dest of remoteDests) {
+    if (!projectByHost.has(dest.host_id)) {
+      projectByHost.set(dest.host_id, dest.project_id);
+    }
+  }
+  await Promise.all(
+    Array.from(projectByHost.entries()).map(async ([host_id, project_id]) => {
+      const client = await getProjectFileServerClient({
+        project_id,
+        timeout: timeout_ms,
+      });
+      if (typeof client.getCopyCapabilities !== "function") {
+        throw new Error(
+          `destination project host ${host_id} does not support exact collection; please upgrade the host`,
+        );
+      }
+      try {
+        const capabilities = await client.getCopyCapabilities({ project_id });
+        if (capabilities.exact_replace !== true) {
+          throw new Error("exact replacement is unavailable");
+        }
+      } catch (err) {
+        if (isUnknownServiceMethodError(err, "getCopyCapabilities")) {
+          throw new Error(
+            `destination project host ${host_id} does not support exact collection; please upgrade the host`,
+          );
+        }
+        throw err;
+      }
+    }),
+  );
 }
 
 async function getProjectBackupFreshness({
@@ -952,6 +1013,7 @@ export async function copyProjectFiles({
   op_id,
   progress,
   snapshot_id,
+  flush_collaborative = false,
   skip_queue = false,
   queue_mode = "upsert",
   timeout_ms = COPY_FILES_TIMEOUT_MS,
@@ -966,6 +1028,7 @@ export async function copyProjectFiles({
   op_id?: string;
   progress?: CopyProgress;
   snapshot_id?: string;
+  flush_collaborative?: boolean;
   skip_queue?: boolean;
   queue_mode?: QueueMode;
   timeout_ms?: number;
@@ -975,6 +1038,9 @@ export async function copyProjectFiles({
   local: number;
   fast_remote?: number;
   snapshot_id?: string;
+  source_versions?: CollaborativeNotebookSourceVersion[];
+  archive_sha256?: string;
+  archive_bytes?: number;
 }> {
   if (!account_id) {
     throw new Error("account_id is required");
@@ -1052,6 +1118,35 @@ export async function copyProjectFiles({
     });
   }
 
+  let sourceVersions: CollaborativeNotebookSourceVersion[] | undefined;
+  if (flush_collaborative && !snapshot_id) {
+    report(progress, {
+      step: "save-source",
+      message: "saving collaborative notebooks before collection",
+      detail: { paths: backupSrcPaths.length },
+    });
+    if (typeof srcProjectClient.flushJupyterNotebooksToDisk !== "function") {
+      throw new Error(
+        "source project host does not support consistent notebook collection; please upgrade the host",
+      );
+    }
+    try {
+      const flushed = await srcProjectClient.flushJupyterNotebooksToDisk({
+        project_id: src.project_id,
+        paths: backupSrcPaths,
+        actor_account_id: account_id,
+      });
+      sourceVersions = flushed.notebooks;
+    } catch (err) {
+      if (isUnknownServiceMethodError(err, "flushJupyterNotebooksToDisk")) {
+        throw new Error(
+          "source project host does not support consistent notebook collection; please upgrade the host",
+        );
+      }
+      throw err;
+    }
+  }
+
   const localDests: CopyDest[] = [];
   const remoteDests: CopyDestWithHost[] = [];
   for (const dest of normalizedDests) {
@@ -1062,10 +1157,15 @@ export async function copyProjectFiles({
       remoteDests.push({ ...dest, host_id: destHostId });
     }
   }
+  if (flush_collaborative && remoteDests.length) {
+    await assertExactCopyDestinationsSupported({ remoteDests, timeout_ms });
+  }
 
   let queuedCount = 0;
   let localCount = 0;
   let fastRemoteCount = 0;
+  let archiveSha256: string | undefined;
+  let archiveBytes: number | undefined;
 
   if (remoteDests.length && !skip_queue) {
     if (srcPaths.some((p) => p === "/scratch" || p.startsWith("/scratch/"))) {
@@ -1089,9 +1189,12 @@ export async function copyProjectFiles({
         timeout_ms,
         progress,
         shouldAbort,
+        exact_dest: flush_collaborative,
       });
       if (fastCopy.used) {
         fastRemoteCount += fastCopy.applied;
+        archiveSha256 = fastCopy.archive_sha256;
+        archiveBytes = fastCopy.archive_bytes;
         report(progress, {
           step: "copy-remote",
           message: `copied ${fastCopy.applied} remote path(s) with bounded archive`,
@@ -1123,18 +1226,20 @@ export async function copyProjectFiles({
     let createdBackup = false;
     let reusedBackup = false;
     if (!snapshot_id) {
-      const reusableBackup = await findReusableBackupSnapshot({
-        client: backupClient,
-        project_id: src.project_id,
-        src_paths: srcPaths,
-        backup_src_paths: backupSrcPaths,
-      }).catch((err) => {
-        logger.warn("copyProjectFiles: reusable backup lookup failed", {
-          project_id: src.project_id,
-          err: `${err}`,
-        });
-        return undefined;
-      });
+      const reusableBackup = sourceVersions?.length
+        ? undefined
+        : await findReusableBackupSnapshot({
+            client: backupClient,
+            project_id: src.project_id,
+            src_paths: srcPaths,
+            backup_src_paths: backupSrcPaths,
+          }).catch((err) => {
+            logger.warn("copyProjectFiles: reusable backup lookup failed", {
+              project_id: src.project_id,
+              err: `${err}`,
+            });
+            return undefined;
+          });
       if (reusableBackup?.id) {
         snapshot_id = reusableBackup.id;
         reusedBackup = true;
@@ -1148,7 +1253,7 @@ export async function copyProjectFiles({
           account_id,
           project_id: src.project_id,
           tags,
-          skip_collab_check: src_read_policy != null,
+          skip_collab_check: flush_collaborative || src_read_policy != null,
         });
         snapshot_id = backup.id;
         createdBackup = true;
@@ -1189,7 +1294,7 @@ export async function copyProjectFiles({
           account_id,
           project_id: src.project_id,
           tags,
-          skip_collab_check: src_read_policy != null,
+          skip_collab_check: flush_collaborative || src_read_policy != null,
         });
         snapshot_id = backup.id;
         reusedBackup = false;
@@ -1228,6 +1333,7 @@ export async function copyProjectFiles({
                     op_id,
                     snapshot_id,
                     options,
+                    exact: flush_collaborative,
                     expires_at: expiresAt,
                   })
                 : await upsertCopyRow({
@@ -1238,6 +1344,7 @@ export async function copyProjectFiles({
                     op_id,
                     snapshot_id,
                     options,
+                    exact: flush_collaborative,
                     expires_at: expiresAt,
                   });
             if (queue_mode === "upsert" || inserted) {
@@ -1263,6 +1370,7 @@ export async function copyProjectFiles({
                   op_id,
                   snapshot_id,
                   options,
+                  exact: flush_collaborative,
                   expires_at: expiresAt,
                 })
               : await upsertCopyRow({
@@ -1273,6 +1381,7 @@ export async function copyProjectFiles({
                   op_id,
                   snapshot_id,
                   options,
+                  exact: flush_collaborative,
                   expires_at: expiresAt,
                 });
           if (queue_mode === "upsert" || inserted) {
@@ -1325,7 +1434,12 @@ export async function copyProjectFiles({
     const client = srcProjectClient;
     for (const dest of localDests) {
       if (normalizedBasePath == null) {
-        await client.cp({ src: normalizedSrc, dest, options });
+        await client.cp({
+          src: normalizedSrc,
+          dest,
+          options,
+          ...(flush_collaborative ? { exact: true } : {}),
+        });
         localCount += srcPaths.length;
         continue;
       }
@@ -1340,6 +1454,7 @@ export async function copyProjectFiles({
             ),
           },
           options,
+          ...(flush_collaborative ? { exact: true } : {}),
         });
         localCount += 1;
       }
@@ -1352,5 +1467,8 @@ export async function copyProjectFiles({
     local: localCount,
     ...(fastRemoteCount ? { fast_remote: fastRemoteCount } : {}),
     snapshot_id,
+    ...(sourceVersions ? { source_versions: sourceVersions } : {}),
+    ...(archiveSha256 ? { archive_sha256: archiveSha256 } : {}),
+    ...(archiveBytes != null ? { archive_bytes: archiveBytes } : {}),
   };
 }

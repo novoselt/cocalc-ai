@@ -242,7 +242,9 @@ import {
 import {
   archivePathIsAllowed,
   decodePathCopyArchiveListing,
+  replacePathFromStaging,
 } from "./path-copy-archive";
+import { flushJupyterNotebooksToDisk } from "./jupyter-collaborative-flush";
 
 type SshTarget = { type: "project"; project_id: string };
 
@@ -2542,12 +2544,14 @@ async function cp({
   src,
   dest,
   options,
+  exact,
 }: {
   // src paths are relative to the src volume
   src: { project_id: string; path: string | string[] };
   // dest path is relative to the dest volume
   dest: { project_id: string; path: string };
   options?: CopyOptions;
+  exact?: boolean;
 }): Promise<void> {
   if (fs == null) {
     throw Error("file server not initialized");
@@ -2570,6 +2574,42 @@ async function cp({
   });
   let srcPaths = await srcFs.safeAbsPaths(src.path);
   let destPath = await destFs.safeAbsPath(dest.path);
+
+  if (exact) {
+    if (typeof src.path !== "string") {
+      throw new Error("exact copy requires one source path");
+    }
+    if (destPath === destVolume.path) {
+      throw new Error("exact copy destination cannot be project root");
+    }
+    const destStat = await lstatIfExists(destPath);
+    const force = options?.force ?? true;
+    if (destStat && !force) {
+      if (options?.errorOnExist) {
+        const err = new Error(
+          "SystemError [ERR_FS_CP_EEXIST]: Target already exists",
+        );
+        // @ts-ignore
+        err.code = "ERR_FS_CP_EEXIST";
+        throw err;
+      }
+      return;
+    }
+    await replacePathFromStaging({
+      source: srcPaths[0],
+      destination: destPath,
+      destinationExists: destStat != null,
+      copy: async (source, destination) => {
+        await cpExec(source, destination, {
+          ...options,
+          recursive: options?.recursive ?? true,
+          reflink: true,
+        });
+      },
+    });
+    void touchProjectLastEdited(dest.project_id, "cp-exact");
+    return;
+  }
 
   const toRelative = (path: string) => {
     if (!path.startsWith(fs!.subvolumes.fs.path)) {
@@ -2913,7 +2953,7 @@ async function applyPathCopyArchive({
         }
 
         let destStat = await lstatIfExists(destAbs);
-        if (destStat?.isDirectory() && root.source_path) {
+        if (!rootDest.exact && destStat?.isDirectory() && root.source_path) {
           destPath = normalizePathCopyArchivePath(
             path.posix.join(destPath, path.posix.basename(root.source_path)),
             "destination path",
@@ -2938,14 +2978,17 @@ async function applyPathCopyArchive({
           applied += 1;
           continue;
         }
-        if (destStat && force) {
-          await rm(destAbs, { recursive: true, force: true });
-        }
-        await mkdir(dirname(destAbs), { recursive: true });
-        await cpExec(sourceAbs, destAbs, {
-          ...options,
-          recursive: options?.recursive ?? true,
-          reflink: true,
+        await replacePathFromStaging({
+          source: sourceAbs,
+          destination: destAbs,
+          destinationExists: destStat != null,
+          copy: async (source, destination) => {
+            await cpExec(source, destination, {
+              ...options,
+              recursive: options?.recursive ?? true,
+              reflink: true,
+            });
+          },
         });
         applied += 1;
         void touchProjectLastEdited(dest.project_id, "path-copy-archive");
@@ -4979,6 +5022,10 @@ export async function initFileServer({
     getQuota: reuseInFlight(getQuota),
     setQuota,
     cp,
+    getCopyCapabilities: async () => ({ exact_replace: true }),
+    flushJupyterNotebooksToDisk: reuseInFlight((opts) =>
+      flushJupyterNotebooksToDisk({ client, ...opts }),
+    ),
     createPathCopyArchive: reuseInFlight(createPathCopyArchive),
     applyPathCopyArchive: reuseInFlight(applyPathCopyArchive),
     // backups

@@ -22,6 +22,7 @@ import {
   PROJECT_RUNTIME_HOME_ALIASES,
   projectRuntimeHomeRelativePath,
 } from "@cocalc/util/project-runtime";
+import { replacePathFromStaging } from "./path-copy-archive";
 
 const logger = getLogger("project-host:pending-copies");
 
@@ -154,7 +155,7 @@ async function applyCopyRow(row: ProjectCopyRow): Promise<void> {
   }
 
   let destStat = await statIfExists(destAbs);
-  if (destStat?.isDirectory() && srcPath) {
+  if (!row.exact && destStat?.isDirectory() && srcPath) {
     destPath = normalizeCopyPath(
       path.posix.join(destPath, path.posix.basename(srcPath)),
       "dest_path",
@@ -178,12 +179,6 @@ async function applyCopyRow(row: ProjectCopyRow): Promise<void> {
     });
     return;
   }
-  if (destExists && force) {
-    await rm(destAbs, { recursive: true, force: true });
-  }
-
-  await mkdir(path.dirname(destAbs), { recursive: true });
-
   const stagingId = randomUUID();
   const stagingRel = path.posix.join(COPY_STAGING_DIR, stagingId, destPath);
   const stagingRoot = path.join(projectRoot, COPY_STAGING_DIR, stagingId);
@@ -202,10 +197,17 @@ async function applyCopyRow(row: ProjectCopyRow): Promise<void> {
     if (!(await exists(stagingAbs))) {
       throw new Error(`restore produced no data at ${stagingRel}`);
     }
-    await cpExec(stagingAbs, destAbs, {
-      ...row.options,
-      recursive: row.options?.recursive ?? true,
-      reflink: true,
+    await replacePathFromStaging({
+      source: stagingAbs,
+      destination: destAbs,
+      destinationExists: destExists,
+      copy: async (source, destination) => {
+        await cpExec(source, destination, {
+          ...row.options,
+          recursive: row.options?.recursive ?? true,
+          reflink: true,
+        });
+      },
     });
     void touchProjectLastEdited(row.dest_project_id, "pending-copy");
   } finally {

@@ -81,6 +81,10 @@ describe("create basic mocked file server and test it out", () => {
         options?;
       }): Promise<void> => {},
 
+      getCopyCapabilities: async () => ({ exact_replace: true }),
+
+      flushJupyterNotebooksToDisk: async (_opts: any) => ({ notebooks: [] }),
+
       createPathCopyArchive: async (_opts: any): Promise<any> => {
         throw new Error("not implemented in test stub");
       },
