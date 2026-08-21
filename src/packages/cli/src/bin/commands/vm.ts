@@ -525,6 +525,64 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       });
     });
 
+  const access = vm
+    .command("access")
+    .description("manage project SSH access to account-owned VMs");
+
+  access
+    .command("list [vm]")
+    .description("list active or pending project access grants")
+    .option("--include-revoked", "include fully revoked grants", false)
+    .action(
+      async (
+        idOrName: string | undefined,
+        opts: { includeRevoked?: boolean },
+        command: Command,
+      ) => {
+        await withContext(command, "vm access list", async (ctx) => {
+          requireAccountAuth(ctx, "vm access list");
+          return await ctx.hub.compute.listVmProjectAccess({
+            id_or_name: idOrName,
+            include_revoked: opts.includeRevoked === true,
+          });
+        });
+      },
+    );
+
+  access
+    .command("grant <vm>")
+    .description("grant a project SSH access to an account-owned VM")
+    .requiredOption("--project <project_id>", "project to grant access")
+    .action(
+      async (idOrName: string, opts: { project: string }, command: Command) => {
+        await withContext(command, "vm access grant", async (ctx) => {
+          requireAccountAuth(ctx, "vm access grant");
+          return await ctx.hub.compute.grantVmProjectAccess({
+            id_or_name: idOrName,
+            project_id: opts.project,
+            idempotency_key: randomUUID(),
+          });
+        });
+      },
+    );
+
+  access
+    .command("revoke <vm>")
+    .description("revoke a project's SSH access to an account-owned VM")
+    .requiredOption("--project <project_id>", "project to revoke access")
+    .action(
+      async (idOrName: string, opts: { project: string }, command: Command) => {
+        await withContext(command, "vm access revoke", async (ctx) => {
+          requireAccountAuth(ctx, "vm access revoke");
+          return await ctx.hub.compute.revokeVmProjectAccess({
+            id_or_name: idOrName,
+            project_id: opts.project,
+            idempotency_key: randomUUID(),
+          });
+        });
+      },
+    );
+
   vm.command("orphans")
     .description("list managed-compute provider orphans (admin only)")
     .option("--include-resolved", "include resolved orphan observations", false)

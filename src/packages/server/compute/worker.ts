@@ -1637,6 +1637,12 @@ export function managedVmProjectAccessNeedsSync(
   );
 }
 
+export function managedVmProjectConfigShouldBeEnabled(
+  grant: Pick<ComputeVmProjectAccessRow, "revoked_at">,
+): boolean {
+  return !grant.revoked_at;
+}
+
 async function syncVmProjectAccess(
   vm: ComputeVmRow,
   enabled: boolean,
@@ -1658,9 +1664,9 @@ async function syncVmProjectAccess(
     );
   }
   for (const grant of access) {
-    const shouldEnable = enabled && !grant.revoked_at;
-    if (!shouldEnable && grant.state === "revoked") continue;
-    if (shouldEnable && !grant.ssh_public_key?.trim()) {
+    const shouldEnableConfig = managedVmProjectConfigShouldBeEnabled(grant);
+    if (!shouldEnableConfig && grant.state === "revoked") continue;
+    if (shouldEnableConfig && !grant.ssh_public_key?.trim()) {
       await updateComputeVmProjectAccessState({
         vm_id: vm.id,
         project_id: grant.project_id,
@@ -1677,7 +1683,7 @@ async function syncVmProjectAccess(
           vm_id: vm.id,
           vm_name: vm.name,
           hostname: vm.public_hostname,
-          enabled: shouldEnable,
+          enabled: shouldEnableConfig,
         }),
       );
       await updateComputeVmProjectAccessState({
@@ -1691,7 +1697,7 @@ async function syncVmProjectAccess(
       logger.warn("managed compute project access reconciliation degraded", {
         vm_id: vm.id,
         project_id: grant.project_id,
-        enabled: shouldEnable,
+        enabled: shouldEnableConfig,
         err: message,
       });
       await updateComputeVmProjectAccessState({

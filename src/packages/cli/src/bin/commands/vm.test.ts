@@ -40,6 +40,9 @@ function harness(
   const listCalls: any[] = [];
   const projectListCalls: any[] = [];
   const catalogCalls: any[] = [];
+  const accessListCalls: any[] = [];
+  const accessGrantCalls: any[] = [];
+  const accessRevokeCalls: any[] = [];
   const rdpCalls: any[] = [];
   const stateCalls: Array<{ action: "start" | "stop"; opts: any }> = [];
   const program = new Command();
@@ -76,6 +79,18 @@ function harness(
               listProjectVms: async (callOpts: any) => {
                 projectListCalls.push(callOpts);
                 return [];
+              },
+              listVmProjectAccess: async (callOpts: any) => {
+                accessListCalls.push(callOpts);
+                return [];
+              },
+              grantVmProjectAccess: async (callOpts: any) => {
+                accessGrantCalls.push(callOpts);
+                return { ...callOpts, state: "pending" };
+              },
+              revokeVmProjectAccess: async (callOpts: any) => {
+                accessRevokeCalls.push(callOpts);
+                return { ...callOpts, state: "revoking" };
               },
               getVm: async () => ({
                 id: "vm-id",
@@ -186,10 +201,72 @@ function harness(
     listCalls,
     projectListCalls,
     catalogCalls,
+    accessListCalls,
+    accessGrantCalls,
+    accessRevokeCalls,
     rdpCalls,
     stateCalls,
   };
 }
+
+describe("vm project access", () => {
+  it("lists access grants for one account-owned VM", async () => {
+    const { program, accessListCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "access",
+      "list",
+      "build-vm",
+      "--include-revoked",
+    ]);
+    assert.deepEqual(accessListCalls, [
+      { id_or_name: "build-vm", include_revoked: true },
+    ]);
+  });
+
+  it("grants and revokes project access with idempotency keys", async () => {
+    const { program, accessGrantCalls, accessRevokeCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "access",
+      "grant",
+      "build-vm",
+      "--project",
+      "project-id",
+    ]);
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "access",
+      "revoke",
+      "build-vm",
+      "--project",
+      "project-id",
+    ]);
+    assert.equal(accessGrantCalls[0]?.id_or_name, "build-vm");
+    assert.equal(accessGrantCalls[0]?.project_id, "project-id");
+    assert.match(accessGrantCalls[0]?.idempotency_key, /^[0-9a-f-]{36}$/);
+    assert.equal(accessRevokeCalls[0]?.id_or_name, "build-vm");
+    assert.equal(accessRevokeCalls[0]?.project_id, "project-id");
+    assert.match(accessRevokeCalls[0]?.idempotency_key, /^[0-9a-f-]{36}$/);
+  });
+
+  it("rejects project-scoped authentication", async () => {
+    const { program } = harness({
+      projectId: "project-id",
+      projectAuth: true,
+    });
+    await assert.rejects(
+      program.parseAsync(["node", "cocalc", "vm", "access", "list"]),
+      /account authentication/,
+    );
+  });
+});
 
 describe("vm catalog", () => {
   it("queries and selects the live provider catalog", async () => {

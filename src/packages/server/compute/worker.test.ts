@@ -13,6 +13,7 @@ import {
   managedVmReadinessCommand,
   managedVmProjectSshConfigNeedsSync,
   managedVmProjectAccessNeedsSync,
+  managedVmProjectConfigShouldBeEnabled,
   providerComputeInstanceIsExpected,
   RetryableComputeWorkError,
   stoppedVmProviderInstanceNeedsReconciliation,
@@ -153,6 +154,15 @@ describe("managed VM provider observations", () => {
 });
 
 describe("managed VM project SSH config reconciliation", () => {
+  it("keeps active project SSH config while the VM is stopped", () => {
+    expect(
+      managedVmProjectConfigShouldBeEnabled({ revoked_at: null } as any),
+    ).toBe(true);
+    expect(
+      managedVmProjectConfigShouldBeEnabled({ revoked_at: new Date() } as any),
+    ).toBe(false);
+  });
+
   it("rewrites legacy aliases even when their old state is ready", () => {
     expect(
       managedVmProjectSshConfigNeedsSync({
