@@ -312,9 +312,30 @@ describe("vm list scope", () => {
   });
 
   it("uses COCALC_PROJECT_ID as the account-authenticated default filter", async () => {
-    const { program, listCalls } = harness({ projectId: "project-id" });
+    const { program, listCalls, projectListCalls } = harness({
+      projectId: "project-id",
+    });
     await program.parseAsync(["node", "cocalc", "vm", "list"]);
-    assert.equal(listCalls[0]?.project_id, "project-id");
+    assert.deepEqual(projectListCalls, [
+      { project_id: "project-id", include_deleted: false },
+    ]);
+    assert.equal(listCalls.length, 0);
+  });
+
+  it("uses the collaborator-aware listing for an explicit project", async () => {
+    const { program, listCalls, projectListCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "list",
+      "--project",
+      "project-id",
+    ]);
+    assert.deepEqual(projectListCalls, [
+      { project_id: "project-id", include_deleted: false },
+    ]);
+    assert.equal(listCalls.length, 0);
   });
 
   it("lists the whole account only when account authentication is available", async () => {

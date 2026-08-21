@@ -508,10 +508,14 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             ? await ctx.hub.compute.listProjectVms({
                 include_deleted: opts.includeDeleted === true,
               })
-            : await ctx.hub.compute.listVms({
-                project_id: requestedProjectId,
-                include_deleted: opts.includeDeleted === true,
-              });
+            : requestedProjectId
+              ? await ctx.hub.compute.listProjectVms({
+                  project_id: requestedProjectId,
+                  include_deleted: opts.includeDeleted === true,
+                })
+              : await ctx.hub.compute.listVms({
+                  include_deleted: opts.includeDeleted === true,
+                });
           return opts.long ? rows : vmListSummary(rows);
         });
       },
