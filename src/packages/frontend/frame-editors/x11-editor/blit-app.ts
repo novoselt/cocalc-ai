@@ -70,6 +70,7 @@ rm -f "$BLIT_SOCK"
 "$blit_bin" server \
   --export-sock \
   --inject-path \
+  --verbose \
   --max-ptys 16 \
   --no-extensions \
   --no-channels &
