@@ -59,6 +59,7 @@ import {
   listProviderComputeInventory,
   probeProviderComputeSpot,
   releaseProviderComputePublicAddress,
+  replaceProviderComputeInstance,
   resizeProviderComputeVolume,
   setProviderComputeMachineType,
   setProviderComputePricing,
@@ -1270,6 +1271,22 @@ export function vmReadinessIntentIsRunning(
   return vm?.desired_state === "running";
 }
 
+export function shouldRepairNebiusSshAfterRestart(
+  vm: Pick<
+    ComputeVmRow,
+    "provider" | "ready_at" | "metadata" | "desired_state"
+  >,
+  err: unknown,
+): boolean {
+  return (
+    vm.provider === "nebius" &&
+    vm.desired_state === "running" &&
+    !!vm.ready_at &&
+    vm.metadata?.provider_generation_provisioning !== true &&
+    /permission denied \(publickey\)/i.test(`${err}`)
+  );
+}
+
 function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
@@ -1765,9 +1782,40 @@ async function reconcileVmSshAccess(vm: ComputeVmRow): Promise<void> {
 async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
   const publicIp = runtime.public_ip;
   if (!publicIp) throw new Error("provider VM has no public IPv4 address");
-  await observeVmPhase(vm, "verify_bootstrap", async () =>
-    waitForSsh(vm, publicIp),
-  );
+  try {
+    await observeVmPhase(vm, "verify_bootstrap", async () =>
+      waitForSsh(vm, publicIp),
+    );
+  } catch (err) {
+    const current = await getComputeVmById(vm.id);
+    if (current && shouldRepairNebiusSshAfterRestart(current, err)) {
+      const message =
+        "Nebius VM lost its managed SSH authorization after restart; replacing only the instance while preserving its disks and address";
+      const repairing = (await updateComputeVm(current.id, {
+        state: "recovering",
+        error: message,
+      }))!;
+      await appendComputeEvent({
+        vm: repairing,
+        actor_kind: "worker",
+        action: "repair_ssh_access",
+        idempotency_key: `repair-ssh:${repairing.id}:${repairing.instance_generation}`,
+        old_state: current.state,
+        new_state: "recovering",
+        status: "started",
+        details: { provider: "nebius" },
+      });
+      await observeVmPhase(repairing, "provider_replace_lost_ssh", async () =>
+        replaceProviderComputeInstance(repairing),
+      );
+      await updateComputeInstance(repairing, {
+        deleted: true,
+        terminal_reason: "lost_managed_ssh_authorization",
+      });
+      return await provision(repairing);
+    }
+    throw err;
+  }
   const current = await getComputeVmById(vm.id);
   if (!current || current.desired_state !== "running") {
     if (current?.desired_state === "stopped") return await stop(current);
@@ -2471,12 +2519,33 @@ async function reconcile(vm: ComputeVmRow) {
     const interrupted = (await updateComputeVm(vm.id, {
       state: "recovering",
       public_ip: null,
+      error:
+        "Provider stopped this Spot VM; restarting automatically. This is usually a Spot preemption, not a capacity error.",
       spot_recovery_state: {
         ...recorded.state,
         phase: "retrying_spot",
         attempt: 0,
       },
     }))!;
+    await updateComputeInstance(interrupted, {
+      preempted: true,
+      terminal_reason: "provider_spot_interruption",
+    });
+    await appendComputeEvent({
+      vm: interrupted,
+      actor_kind: "worker",
+      action: "spot_interrupted",
+      idempotency_key: `spot-interrupted:${interrupted.id}:${interrupted.instance_generation}:${recorded.state.last_preempted_at}`,
+      old_state: "ready",
+      new_state: "recovering",
+      status: "detected",
+      details: {
+        provider_state:
+          observed.instance?.metadata?.provider_state ??
+          observed.instance?.status ??
+          observed.status,
+      },
+    });
     if (recorded.circuit_breaker_triggered && vm.allow_on_demand_fallback) {
       return await switchToOnDemand(interrupted);
     }

@@ -26,6 +26,12 @@ describe("managedVmBootstrapScript", () => {
     },
   } as ComputeVmRow;
 
+  function decodeBootstrapKeys(script: string): string {
+    const encoded = script.match(/printf '%s' '([^']+)' \| base64 -d/)?.[1];
+    expect(encoded).toBeDefined();
+    return Buffer.from(encoded!, "base64").toString("utf8");
+  }
+
   it("creates only the v2 user and readiness contract without a volume", () => {
     const script = managedVmBootstrapScript(vm);
 
@@ -36,8 +42,9 @@ describe("managedVmBootstrapScript", () => {
     expect(script).toContain("userdel --remove ubuntu");
     expect(script).toContain("user ALL=(ALL) NOPASSWD:ALL");
     expect(script).toContain("/home/user/.ssh/authorized_keys");
-    expect(script).toContain("ssh-ed25519 AAAAOWNER owner");
-    expect(script).toContain("ssh-ed25519 AAAACONTROLLER controller");
+    expect(decodeBootstrapKeys(script)).toBe(
+      "ssh-ed25519 AAAAOWNER owner\nssh-ed25519 AAAACONTROLLER controller\n",
+    );
     expect(script).toContain("/var/lib/cocalc-managed-vm/bootstrap-ready");
     expect(script).toContain("/run/cocalc-managed-vm/bootstrap-ready");
     expect(script).toContain("'2'");
@@ -64,6 +71,20 @@ describe("managedVmBootstrapScript", () => {
       "systemctl enable --now cocalc-grow-home-filesystem.timer",
     );
     expect(script).not.toContain("/work");
+  });
+
+  it("restores Nebius managed SSH keys on every boot", () => {
+    const script = managedVmBootstrapScript({
+      ...vm,
+      provider: "nebius",
+    } as ComputeVmRow);
+
+    expect(script).toContain("cocalc-restore-managed-ssh-keys.service");
+    expect(script).toContain("Before=ssh.service sshd.service");
+    expect(script).toContain("/var/lib/cocalc-managed-vm/authorized_keys");
+    expect(decodeBootstrapKeys(script)).toBe(
+      "ssh-ed25519 AAAAOWNER owner\nssh-ed25519 AAAACONTROLLER controller\n",
+    );
   });
 });
 

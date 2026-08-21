@@ -651,8 +651,10 @@ export async function updateComputeInstance(
     public_ip?: string | null;
     running?: boolean;
     ready?: boolean;
+    preempted?: boolean;
     stopped?: boolean;
     deleted?: boolean;
+    terminal_reason?: string;
   },
 ) {
   const sets: string[] = [];
@@ -666,8 +668,14 @@ export async function updateComputeInstance(
   }
   if (updates.running) sets.push("running_at=COALESCE(running_at,NOW())");
   if (updates.ready) sets.push("ready_at=COALESCE(ready_at,NOW())");
+  if (updates.preempted) {
+    sets.push("preempted_at=COALESCE(preempted_at,NOW())");
+  }
   if (updates.stopped) sets.push("stopped_at=COALESCE(stopped_at,NOW())");
   if (updates.deleted) sets.push("deleted_at=COALESCE(deleted_at,NOW())");
+  if (updates.terminal_reason !== undefined) {
+    addValue("terminal_reason", updates.terminal_reason);
+  }
   if (!sets.length) return;
   await pool().query(
     `UPDATE compute_vm_instances SET ${sets.join(", ")}

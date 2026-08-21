@@ -1373,7 +1373,6 @@ export class NebiusProvider implements CloudProvider {
             spec.pricing_model === "spot"
               ? PreemptibleSpec.create({
                   onPreemption: PreemptibleSpec_PreemptionPolicy.STOP,
-                  priority: 3,
                 })
               : undefined,
           hostname: name,

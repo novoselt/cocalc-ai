@@ -239,7 +239,7 @@ describe("NebiusProvider", () => {
     expect(createArgs.spec.preemptible.onPreemption).toBe(
       PreemptibleSpec_PreemptionPolicy.STOP,
     );
-    expect(createArgs.spec.preemptible.priority).toBe(3);
+    expect(createArgs.spec.preemptible.priority).toBe(0);
     expect(createArgs.spec.recoveryPolicy).toBe(InstanceRecoveryPolicy.FAIL);
     expect(createArgs.spec.networkInterfaces[0].publicIpAddress.static).toBe(
       false,

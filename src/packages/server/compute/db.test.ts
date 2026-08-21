@@ -15,6 +15,7 @@ import {
   enqueueComputeReconciliation,
   finishComputeWork,
   heartbeatComputeWork,
+  insertComputeInstance,
   insertComputeVm,
   getComputeVmById,
   listComputeVmsForBillingEnforcement,
@@ -26,6 +27,7 @@ import {
   resolveProjectComputeVm,
   updateComputeVmEgressMetadata,
   updateComputeVmProviderObservation,
+  updateComputeInstance,
 } from "./db";
 import type { ComputeVmRow } from "./types";
 import type { ComputeVolumeRow } from "./types";
@@ -167,6 +169,29 @@ function volumeInput(
 }
 
 describe("compute VM durable state", () => {
+  it("records provider interruptions on the active instance generation", async () => {
+    const vm = await insertComputeVm(vmInput());
+    await insertComputeInstance(vm);
+
+    await updateComputeInstance(vm, {
+      preempted: true,
+      terminal_reason: "provider_spot_interruption",
+    });
+
+    const { rows } = await getPool().query(
+      `SELECT preempted_at IS NOT NULL AS preempted, terminal_reason
+       FROM compute_vm_instances
+       WHERE vm_id=$1 AND generation=$2`,
+      [vm.id, vm.instance_generation],
+    );
+    expect(rows).toEqual([
+      {
+        preempted: true,
+        terminal_reason: "provider_spot_interruption",
+      },
+    ]);
+  });
+
   it("resolves only active project access grants", async () => {
     const owner = randomUUID();
     const project = randomUUID();

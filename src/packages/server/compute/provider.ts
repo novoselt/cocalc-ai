@@ -653,6 +653,41 @@ export function managedVmBootstrapScript(
         .filter(Boolean),
     ),
   ).join("\n");
+  const encodedKeys = Buffer.from(`${keys}\n`, "utf8").toString("base64");
+  const nebiusKeyRestore =
+    vm.provider === "nebius"
+      ? `install -d -m 0755 /var/lib/cocalc-managed-vm
+printf '%s' '${encodedKeys}' | base64 -d >/var/lib/cocalc-managed-vm/authorized_keys
+chmod 0600 /var/lib/cocalc-managed-vm/authorized_keys
+cat >/usr/local/sbin/cocalc-restore-managed-ssh-keys <<'EOF'
+#!/bin/bash
+set -euo pipefail
+test -f /var/lib/cocalc-managed-vm/authorized_keys || exit 0
+install -d -m 0700 -o user -g user /home/user/.ssh
+install -m 0600 -o user -g user /var/lib/cocalc-managed-vm/authorized_keys /home/user/.ssh/authorized_keys
+EOF
+chmod 0755 /usr/local/sbin/cocalc-restore-managed-ssh-keys
+cat >/etc/systemd/system/cocalc-restore-managed-ssh-keys.service <<'EOF'
+[Unit]
+Description=Restore CoCalc managed SSH keys
+After=local-fs.target
+Before=ssh.service sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cocalc-restore-managed-ssh-keys
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable cocalc-restore-managed-ssh-keys.service
+/usr/local/sbin/cocalc-restore-managed-ssh-keys
+`
+      : `printf '%s' '${encodedKeys}' | base64 -d >/home/user/.ssh/authorized_keys
+chown user:user /home/user/.ssh/authorized_keys
+chmod 0600 /home/user/.ssh/authorized_keys
+`;
   const volumeDevice = volume
     ? vm.provider === "gcp"
       ? `/dev/disk/by-id/google-${volume.provider_disk_id}`
@@ -757,11 +792,7 @@ fi
 
 ${volumeSetup}
 install -d -m 0700 -o user -g user /home/user/.ssh
-cat >/home/user/.ssh/authorized_keys <<'COCALC_MANAGED_VM_KEYS'
-${keys}
-COCALC_MANAGED_VM_KEYS
-chown user:user /home/user/.ssh/authorized_keys
-chmod 0600 /home/user/.ssh/authorized_keys
+${nebiusKeyRestore}
 install -d -m 0755 /var/lib/cocalc-managed-vm /run/cocalc-managed-vm
 printf '%s\n' '${vm.bootstrap_revision}' >/var/lib/cocalc-managed-vm/bootstrap-ready
 cp /var/lib/cocalc-managed-vm/bootstrap-ready /run/cocalc-managed-vm/bootstrap-ready
@@ -1519,7 +1550,7 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
         `user@${host}`,
         "bash",
         "-lc",
-        `echo '${encoded}' | base64 -d > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`,
+        `tmp=$(mktemp) && echo '${encoded}' | base64 -d > "$tmp" && sudo install -d -m 0755 /var/lib/cocalc-managed-vm && sudo install -m 0600 "$tmp" /var/lib/cocalc-managed-vm/authorized_keys && install -d -m 0700 ~/.ssh && install -m 0600 "$tmp" ~/.ssh/authorized_keys && rm -f "$tmp"`,
       ],
       { timeout: 30_000 },
     );
@@ -1709,6 +1740,17 @@ export async function setProviderComputePricing(
     // static address, then let the worker provision the replacement instance.
     await nebiusProvider.deleteInstanceOnly(runtimeFor(vm), creds);
   }
+}
+
+export async function replaceProviderComputeInstance(vm: ComputeVmRow) {
+  if (vm.provider !== "nebius") {
+    throw new Error(
+      "provider instance replacement is only supported on Nebius",
+    );
+  }
+  if (providerInstanceIdIsProvisional(vm)) return;
+  const { creds } = await context("nebius", vm.region);
+  await nebiusProvider.deleteInstanceOnly(runtimeFor(vm), creds);
 }
 
 export async function probeProviderComputeSpot(vm: ComputeVmRow) {

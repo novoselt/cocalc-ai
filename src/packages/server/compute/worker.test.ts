@@ -22,6 +22,7 @@ import {
   stoppedVmProviderInstanceNeedsReconciliation,
   runtimeIdentityChanged,
   runningVmWorkAlreadySatisfied,
+  shouldRepairNebiusSshAfterRestart,
   spotCapacityRecoveryDecision,
   volumeAttachedToVm,
   vmReadinessIntentIsRunning,
@@ -404,6 +405,36 @@ describe("compute VM work failure state", () => {
       vmReadinessIntentIsRunning({ desired_state: "deleted" } as any),
     ).toBe(false);
     expect(vmReadinessIntentIsRunning(undefined)).toBe(false);
+  });
+
+  it("repairs a previously verified Nebius VM that loses its managed SSH key", () => {
+    const vm = {
+      provider: "nebius",
+      desired_state: "running",
+      ready_at: new Date(),
+      metadata: { provider_generation_provisioning: false },
+    } as any;
+    expect(
+      shouldRepairNebiusSshAfterRestart(
+        vm,
+        new Error("user@host: Permission denied (publickey)."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRepairNebiusSshAfterRestart(
+        { ...vm, ready_at: null },
+        new Error("Permission denied (publickey)."),
+      ),
+    ).toBe(false);
+    expect(
+      shouldRepairNebiusSshAfterRestart(
+        { ...vm, metadata: { provider_generation_provisioning: true } },
+        new Error("Permission denied (publickey)."),
+      ),
+    ).toBe(false);
+    expect(
+      shouldRepairNebiusSshAfterRestart(vm, new Error("TCP 22 timeout")),
+    ).toBe(false);
   });
 
   it("uses the configured Spot retry threshold before Standard fallback", () => {
