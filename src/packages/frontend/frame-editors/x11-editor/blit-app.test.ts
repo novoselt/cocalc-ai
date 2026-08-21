@@ -36,6 +36,7 @@ describe("Blit managed app", () => {
     const spec = createBlitAppSpec();
     const script = spec.command.args[1];
     expect(script).toContain('"$blit_bin" server');
+    expect(script).toContain('"$blit_bin" terminal start');
     expect(script).toContain('"$blit_bin" gateway');
     expect(script).toContain("vk_swiftshader_icd.json");
     expect(script).toContain("BLIT_SERVER_NAME=cocalc-x11");

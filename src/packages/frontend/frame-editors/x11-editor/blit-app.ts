@@ -78,6 +78,10 @@ for _ in $(seq 1 100); do
 done
 [ -S "$BLIT_SOCK" ] || { echo "Blit server socket did not appear." >&2; exit 1; }
 
+# The stock browser shortcut does not reliably create a terminal when Blit is
+# reached through a gateway remote. Seed one so a new .x11 editor is usable.
+"$blit_bin" terminal start >/dev/null
+
 "$blit_bin" gateway &
 gateway_pid=$!
 
