@@ -69,6 +69,7 @@ export interface ProjectCopyRow {
   op_id: string | null;
   snapshot_id: string;
   options: CopyOptions | null;
+  exact: boolean;
   status: ProjectCopyState;
   last_error: string | null;
   attempt: number;

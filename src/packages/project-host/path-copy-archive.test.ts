@@ -3,9 +3,13 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   archivePathIsAllowed,
   decodePathCopyArchiveListing,
+  replacePathFromStaging,
 } from "./path-copy-archive";
 
 describe("path copy archive listings", () => {
@@ -44,5 +48,68 @@ describe("path copy archive listings", () => {
     expect(() =>
       decodePathCopyArchiveListing(Buffer.from('"assignment/file" trailing\n')),
     ).toThrow("unexpected output");
+  });
+
+  it("replaces an existing directory at the exact destination", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "cocalc-copy-replace-"));
+    try {
+      const source = path.join(root, "source-assignment");
+      const destination = path.join(root, "collected-assignment");
+      await mkdir(source);
+      await mkdir(destination);
+      await writeFile(path.join(source, "new.txt"), "new");
+      await writeFile(path.join(destination, "old.txt"), "old");
+
+      await replacePathFromStaging({
+        source,
+        destination,
+        destinationExists: true,
+        copy: async (src, dest) => {
+          await cp(src, dest, { recursive: true });
+        },
+      });
+
+      expect(await readFile(path.join(destination, "new.txt"), "utf8")).toBe(
+        "new",
+      );
+      await expect(
+        readFile(path.join(destination, "old.txt"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        readFile(
+          path.join(destination, "source-assignment", "new.txt"),
+          "utf8",
+        ),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the destination untouched when staging the copy fails", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "cocalc-copy-replace-"));
+    try {
+      const source = path.join(root, "source");
+      const destination = path.join(root, "destination");
+      await mkdir(source);
+      await mkdir(destination);
+      await writeFile(path.join(destination, "keep.txt"), "keep");
+
+      await expect(
+        replacePathFromStaging({
+          source,
+          destination,
+          destinationExists: true,
+          copy: async () => {
+            throw new Error("copy failed");
+          },
+        }),
+      ).rejects.toThrow("copy failed");
+      expect(await readFile(path.join(destination, "keep.txt"), "utf8")).toBe(
+        "keep",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
