@@ -11,12 +11,12 @@ import {
 } from "./blit-app";
 
 describe("Blit managed app", () => {
-  it("uses the private websocket-aware port proxy", () => {
+  it("uses the private websocket-aware prefix-stripping proxy", () => {
     const spec = createBlitAppSpec();
     expect(spec.id).toBe(BLIT_APP_ID);
     expect(spec.kind).toBe("service");
     expect(spec.proxy).toMatchObject({
-      open_mode: "port",
+      open_mode: "proxy",
       strip_prefix: true,
       websocket: true,
     });

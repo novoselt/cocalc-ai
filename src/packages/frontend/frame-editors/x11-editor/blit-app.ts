@@ -117,7 +117,9 @@ export function createBlitAppSpec(): AppSpec {
       base_path: `/apps/${BLIT_APP_ID}`,
       strip_prefix: true,
       websocket: true,
-      open_mode: "port",
+      // Blit resolves workers and sockets relative to the document URL, so
+      // CoCalc must strip its route prefix before forwarding each subrequest.
+      open_mode: "proxy",
       health_path: "/",
       readiness_timeout_s: 30,
     },
