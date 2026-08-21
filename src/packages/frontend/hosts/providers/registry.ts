@@ -469,7 +469,7 @@ const buildBasePayload = (
         ? vals.disk
         : undefined;
   return {
-    name: vals.name ?? "My Host",
+    name: `${vals.name ?? ""}`.trim(),
     region: getDefaultRegion(vals, options),
     size: machine_type ?? vals.size ?? SIZES[0].value,
     gpu: wantsGpu,
@@ -3193,7 +3193,7 @@ export const PROVIDER_REGISTRY: Record<HostProvider, HostProviderDescriptor> = {
       }
       const storage_mode = vals.storage_mode || "persistent";
       return {
-        name: vals.name ?? "My Host",
+        name: `${vals.name ?? ""}`.trim(),
         region: "pending",
         size: "custom",
         gpu: false,

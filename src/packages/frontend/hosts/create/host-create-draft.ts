@@ -98,7 +98,6 @@ export type NormalizedHostCreateDraft = {
   activeFields: HostFieldId[];
 };
 
-const DEFAULT_NAME = "My host";
 const DEFAULT_DISK_GB = 100;
 const MIN_DISK_GB = MIN_PROJECT_HOST_DISK_GB;
 const NEBIUS_DISK_INCREMENT_GB = 93;
@@ -190,11 +189,6 @@ const getFieldOptions = (
   };
 };
 
-const similarName = (name: string | undefined): string => {
-  const base = (name ?? DEFAULT_NAME).trim() || DEFAULT_NAME;
-  return /\s+\(similar\)$/i.test(base) ? base : `${base} (similar)`;
-};
-
 const readAutoGrow = (host: Host) => {
   const metadata = (host.machine?.metadata ?? {}) as Record<string, any>;
   const nested = (metadata.auto_grow ?? {}) as Record<string, any>;
@@ -247,7 +241,7 @@ export function buildDefaultDraft(
 ): HostCreateDraft {
   return normalizeDraft(
     {
-      name: DEFAULT_NAME,
+      name: "",
       provider: firstEnabledProvider(context),
       start_after_create: true,
       region_preference: "cheapest",
@@ -278,7 +272,8 @@ export function buildSimilarDraft(
   const sharedScratchAutoGrow = readSharedScratchAutoGrow(host);
   return normalizeDraft(
     {
-      name: similarName(host.name),
+      // Require an intentional title even when copying an existing host.
+      name: "",
       provider,
       start_after_create: true,
       region_preference: "cheapest",
@@ -338,7 +333,7 @@ export function normalizeDraft(
     ...descriptor.fields.advanced,
   ];
   let draft: HostCreateDraft = {
-    name: (input.name ?? DEFAULT_NAME).trim() || DEFAULT_NAME,
+    name: `${input.name ?? ""}`.trim(),
     provider,
     funding_mode: input.funding_mode,
     start_after_create: input.start_after_create !== false,

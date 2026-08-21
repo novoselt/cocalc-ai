@@ -355,6 +355,7 @@ import {
 } from "./hosts-bootstrap-reconcile";
 import {
   createHostInternalHelper,
+  normalizeProjectHostTitle,
   restartHostInternalHelper,
   startHostInternalHelper,
   stopHostInternalHelper,
@@ -6037,6 +6038,7 @@ export async function createHost({
   machine?: Host["machine"];
 }): Promise<Host> {
   const owner = requireAccount(account_id);
+  const title = normalizeProjectHostTitle(name);
   const requestedFundingMode = normalizeRequestedHostFundingMode(funding_mode);
   await assertUserHostCreateAllowed({ account_id: owner });
   assertProjectHostDiskTypeSupported({
@@ -6076,7 +6078,7 @@ export async function createHost({
   });
   return await createHostInternalHelper({
     owner,
-    name,
+    name: title,
     region,
     size,
     gpu,

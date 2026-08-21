@@ -74,6 +74,17 @@ function pool() {
   return getPool();
 }
 
+export function normalizeProjectHostTitle(value: unknown): string {
+  const title = `${value ?? ""}`.trim();
+  if (!title) {
+    throw new Error("Project host title is required");
+  }
+  if (title.length > 100) {
+    throw new Error("Project host title must be at most 100 characters");
+  }
+  return title;
+}
+
 function billingMetadataFromSession({
   billableSession,
   started_at,
@@ -324,6 +335,7 @@ export async function createHostInternalHelper({
     opts?: { scope?: string; can_start?: boolean; can_place?: boolean },
   ) => Host;
 }): Promise<Host> {
+  const title = normalizeProjectHostTitle(name);
   const id = randomUUID();
   const machineCloud = normalizeProviderId(machine?.cloud);
   const isSelfHost = machineCloud === "self-host";
@@ -392,7 +404,7 @@ export async function createHostInternalHelper({
     const connector = await createConnectorRecord({
       account_id: owner,
       host_id: id,
-      name,
+      name: title,
     });
     connectorId = connector.connector_id;
     resolvedRegion = connectorId;
@@ -443,7 +455,7 @@ export async function createHostInternalHelper({
      VALUES ($1,$2,$3,$4,$5,NOW(),NOW(),$6,$7)`,
     [
       id,
-      name,
+      title,
       resolvedRegion,
       initialStatus,
       {
@@ -491,7 +503,7 @@ export async function createHostInternalHelper({
     await reconcileDedicatedHostPurchaseSessionForAccount({
       account_id: owner,
       host_id: id,
-      host_name: name,
+      host_name: title,
       host_bay_id: getConfiguredBayId(),
       provider: machineCloud!,
       region: resolvedRegion,

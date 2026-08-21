@@ -739,9 +739,13 @@ function VmCreateModal({
         <Flex gap={12} wrap>
           <Form.Item
             name="name"
-            label="Name"
+            label="VM title"
             rules={[
-              { required: true },
+              {
+                required: true,
+                whitespace: true,
+                message: "Enter a descriptive title for this VM.",
+              },
               {
                 pattern: /^[a-z][a-z0-9-]{0,31}$/,
                 message:
@@ -750,7 +754,7 @@ function VmCreateModal({
             ]}
             style={{ flex: "1 1 220px" }}
           >
-            <Input autoFocus />
+            <Input autoFocus placeholder="e.g. llama-benchmark" />
           </Form.Item>
           <Form.Item
             name="funding_mode"
@@ -2841,12 +2845,8 @@ export function ProjectComputeVms({
           )[0]?.value
         : undefined;
     const zone = nearestZone ?? catalogDefaultZone;
-    const name = availableName(
-      "compute-vm",
-      allRows.map((vm) => vm.name),
-    );
     return {
-      name,
+      name: "",
       provider: defaultProvider,
       operating_system: catalog?.defaults.operating_system ?? "linux",
       funding_mode: catalog?.default_funding_mode ?? "account-prepaid",
@@ -2860,7 +2860,7 @@ export function ProjectComputeVms({
       boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
       create_home_volume: false,
       new_home_volume_name: availableName(
-        name + "-home",
+        "vm-home",
         volumes.map((volume) => volume.name),
       ),
       new_home_volume_size_gb: 50,
@@ -2872,9 +2872,9 @@ export function ProjectComputeVms({
 
   const openSimilar = (vm: ComputeVm) => {
     const ttlMinutes = originalTtlMinutes(vm);
-    const name = similarName(vm.name, allRows);
+    const suggestedVolumeStem = similarName(vm.name, allRows);
     setVmInitial({
-      name,
+      name: "",
       provider: vm.provider,
       operating_system: vm.operating_system ?? "linux",
       funding_mode: vm.funding_mode,
@@ -2892,7 +2892,7 @@ export function ProjectComputeVms({
       boot_disk_gb: vm.boot_disk_gb,
       create_home_volume: false,
       new_home_volume_name: availableName(
-        name + "-home",
+        suggestedVolumeStem + "-home",
         volumes.map((volume) => volume.name),
       ),
       new_home_volume_size_gb: 50,

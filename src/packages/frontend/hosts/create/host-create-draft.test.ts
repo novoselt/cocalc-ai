@@ -314,6 +314,7 @@ describe("host-create-draft", () => {
 
     const draft = buildDefaultDraft(context);
     expect(draft).toMatchObject({
+      name: "",
       provider: "gcp",
       region: "us-west1",
       zone: "us-west1-a",
@@ -328,7 +329,7 @@ describe("host-create-draft", () => {
 
     const payload = buildCreateHostPayloadFromDraft(draft, context);
     expect(payload).toMatchObject({
-      name: "My host",
+      name: "",
       funding_mode: "account-postpaid",
       start_after_create: true,
       machine: {
@@ -434,7 +435,7 @@ describe("host-create-draft", () => {
     );
 
     expect(draft).toMatchObject({
-      name: "Nebius CPU (similar)",
+      name: "",
       provider: "nebius",
       machine_type: "cpu-d3-standard-4",
       pricing_model: "on_demand",
@@ -741,7 +742,7 @@ describe("host-create-draft", () => {
     );
 
     expect(draft).toMatchObject({
-      name: "Lambda GPU (similar)",
+      name: "",
       provider: "lambda",
       machine_type: "gpu_1x_a10",
       region: "us-west-1",
@@ -770,7 +771,7 @@ describe("host-create-draft", () => {
     );
 
     expect(draft).toMatchObject({
-      name: "Hyperstack GPU (similar)",
+      name: "",
       provider: "hyperstack",
       region: "canada-1",
       size: "gpu-a100",

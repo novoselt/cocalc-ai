@@ -56,7 +56,6 @@ export const HostCreateForm: React.FC<HostCreateFormProps> = ({
   const watchedMachineType = Form.useWatch("machine_type", form);
   const watchedProviderPlatform = Form.useWatch("provider_platform", form);
   const watchedPricingModel = Form.useWatch("pricing_model", form);
-  const watchedSshTarget = Form.useWatch("self_host_ssh_target", form);
   const watchedFundingMode = Form.useWatch("funding_mode", form);
   const nebiusSpotSupported = React.useMemo(
     () =>
@@ -107,15 +106,6 @@ export const HostCreateForm: React.FC<HostCreateFormProps> = ({
       setFormFields({ disk: 100, disk_gb: 100 });
     }
   }, [draftManaged, form, setFormFields, simpleSelfHost]);
-  React.useEffect(() => {
-    if (draftManaged) return;
-    if (!simpleSelfHost) return;
-    const nextName = (watchedSshTarget ?? "").trim();
-    if (!nextName) return;
-    if (form.getFieldValue("name") !== nextName) {
-      setFormFields({ name: nextName });
-    }
-  }, [draftManaged, form, setFormFields, simpleSelfHost, watchedSshTarget]);
   React.useEffect(() => {
     if (draftManaged) return;
     if (!showSpotFields) return;
@@ -198,8 +188,23 @@ export const HostCreateForm: React.FC<HostCreateFormProps> = ({
         <>
           {simpleSelfHost ? (
             <>
-              <Form.Item name="name" hidden>
-                <Input />
+              <Form.Item
+                name="name"
+                label="Project host title"
+                rules={[
+                  {
+                    required: true,
+                    whitespace: true,
+                    message: "Enter a descriptive title for this host.",
+                  },
+                  { max: 100, message: "Title is too long." },
+                ]}
+              >
+                <Input
+                  autoFocus
+                  placeholder="e.g. Local course server"
+                  maxLength={100}
+                />
               </Form.Item>
               <Form.Item name="self_host_kind" hidden>
                 <Input />
@@ -234,10 +239,21 @@ export const HostCreateForm: React.FC<HostCreateFormProps> = ({
                   <Col xs={24} md={showSpotFields ? 12 : 24}>
                     <Form.Item
                       name="name"
-                      label="Name"
-                      initialValue={draftManaged ? undefined : "My host"}
+                      label="Project host title"
+                      rules={[
+                        {
+                          required: true,
+                          whitespace: true,
+                          message: "Enter a descriptive title for this host.",
+                        },
+                        { max: 100, message: "Title is too long." },
+                      ]}
                     >
-                      <Input placeholder="My host" />
+                      <Input
+                        autoFocus
+                        placeholder="e.g. Fall numerical methods course"
+                        maxLength={100}
+                      />
                     </Form.Item>
                   </Col>
                   {showSpotFields && (

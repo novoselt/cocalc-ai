@@ -114,6 +114,14 @@ function TestSharedScratchWithMismatchedCatalog() {
 }
 
 describe("HostCreateForm", () => {
+  it("requires an explicit project-host title without a generic default", () => {
+    const html = renderToStaticMarkup(<TestHostCreateForm />);
+
+    expect(html).toContain("Project host title");
+    expect(html).toContain("Fall numerical methods course");
+    expect(html).not.toContain("My host");
+  });
+
   it("mounts advanced storage fields before the panel is expanded", () => {
     const html = renderToStaticMarkup(<TestHostCreateForm />);
 
