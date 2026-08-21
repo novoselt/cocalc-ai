@@ -145,6 +145,7 @@ export interface DedicatedHostPurchase {
   region?: string | null;
   billing_state?: DedicatedHostBillingState;
   machine_type?: string | null;
+  provider_platform?: string | null;
   pricing_model?: "on_demand" | "spot" | null;
   funding_lane: "prepaid" | "credit";
   hourly_cost_usd: MoneyValue;

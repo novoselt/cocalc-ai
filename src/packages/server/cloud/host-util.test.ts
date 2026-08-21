@@ -114,6 +114,80 @@ describe("buildHostSpec", () => {
     );
   });
 
+  it("rejects ambiguous Nebius machine names without a platform", async () => {
+    loadNebiusInstanceTypesMock.mockResolvedValue([
+      {
+        name: "1gpu-24vcpu-218gb",
+        platform: "gpu-rtx6000",
+        regions: ["us-central1"],
+        gpus: 1,
+      },
+      {
+        name: "1gpu-24vcpu-218gb",
+        platform: "gpu-h200-sxm",
+        regions: ["us-central1"],
+        gpus: 1,
+      },
+    ]);
+
+    await expect(
+      buildHostSpec({
+        id: "832da43c-d18e-406d-8e1d-c28973378b24",
+        region: "us-central1",
+        metadata: {
+          machine: {
+            cloud: "nebius",
+            machine_type: "1gpu-24vcpu-218gb",
+            metadata: {},
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "Nebius machine '1gpu-24vcpu-218gb' is ambiguous in us-central1; specify its provider platform",
+    );
+  });
+
+  it("uses the explicitly selected Nebius platform", async () => {
+    loadNebiusInstanceTypesMock.mockResolvedValue([
+      {
+        name: "1gpu-24vcpu-218gb",
+        platform: "gpu-h200-sxm",
+        regions: ["us-central1"],
+        gpus: 1,
+      },
+      {
+        name: "1gpu-24vcpu-218gb",
+        platform: "gpu-rtx6000",
+        regions: ["us-central1"],
+        gpus: 1,
+      },
+    ]);
+    loadNebiusImagesMock.mockResolvedValue([
+      {
+        id: "cuda-13",
+        family: "ubuntu24.04-cuda13.0",
+        architecture: "AMD64",
+        recommended_platforms: ["gpu-rtx6000"],
+        region: "us-central1",
+      },
+    ]);
+
+    const spec = await buildHostSpec({
+      id: "832da43c-d18e-406d-8e1d-c28973378b24",
+      region: "us-central1",
+      metadata: {
+        machine: {
+          cloud: "nebius",
+          machine_type: "1gpu-24vcpu-218gb",
+          metadata: { platform: "gpu-rtx6000" },
+        },
+      },
+    });
+
+    expect(spec.metadata.platform).toBe("gpu-rtx6000");
+    expect(spec.metadata.source_image_family).toBe("ubuntu24.04-cuda13.0");
+  });
+
   it("prefers the newest Nebius CUDA image family for GPU hosts", async () => {
     loadNebiusInstanceTypesMock.mockResolvedValue([
       {

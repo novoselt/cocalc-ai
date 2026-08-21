@@ -59,6 +59,10 @@ const NEBIUS_CAPACITY_CACHE_MS = 60_000;
 let nebiusCapacityCache:
   | { project_id: string; checked_at: number; advice: NebiusCapacityAdvice[] }
   | undefined;
+const nebiusCapacityRequests = new Map<
+  string,
+  Promise<NebiusCapacityAdvice[]>
+>();
 const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
   "0.0.0.0/8",
   "10.0.0.0/8",
@@ -321,13 +325,24 @@ export async function getNebiusComputeCapacityAdvice(): Promise<
   ) {
     return cached.advice;
   }
-  const advice = await nebiusProvider.listCapacityAdvice(creds);
-  nebiusCapacityCache = {
-    project_id: creds.parentId,
-    checked_at: Date.now(),
-    advice,
-  };
-  return advice;
+  const pending = nebiusCapacityRequests.get(creds.parentId);
+  if (pending) return await pending;
+  const request = nebiusProvider.listCapacityAdvice(creds).then((advice) => {
+    nebiusCapacityCache = {
+      project_id: creds.parentId,
+      checked_at: Date.now(),
+      advice,
+    };
+    return advice;
+  });
+  nebiusCapacityRequests.set(creds.parentId, request);
+  try {
+    return await request;
+  } finally {
+    if (nebiusCapacityRequests.get(creds.parentId) === request) {
+      nebiusCapacityRequests.delete(creds.parentId);
+    }
+  }
 }
 
 export async function requireProviderComputeSubnetwork(

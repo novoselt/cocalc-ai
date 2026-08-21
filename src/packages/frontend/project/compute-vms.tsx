@@ -70,7 +70,7 @@ import {
   getGcpPersistentDiskPriceEstimate,
   getGcpRegionOptions,
   getGcpZoneOptions,
-  getNebiusAvailableVmOptions,
+  getNebiusPlacementOptions,
   getNebiusMinimumBootDiskGb,
   getProviderDescriptor,
   getProviderOptions,
@@ -93,7 +93,7 @@ import {
 } from "./compute-vms-cli";
 import { egressRateLabel, providerEgressIsFree } from "./compute-vms-egress";
 import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-service";
-import { NebiusVmCapacityPicker } from "./nebius-vm-capacity-picker";
+import { NebiusCapacityPicker } from "../hosts/components/nebius-capacity-picker";
 import { SelectProject } from "@cocalc/frontend/projects/select-project";
 import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
 import { getPageUrlPath } from "@cocalc/frontend/page-routing";
@@ -836,7 +836,7 @@ function VmCreateModal({
                 };
                 const nebiusDefault =
                   nextProvider === "nebius"
-                    ? getNebiusAvailableVmOptions(
+                    ? getNebiusPlacementOptions(
                         nextCatalog,
                         {
                           ...nextSelection,
@@ -974,7 +974,7 @@ function VmCreateModal({
               <Input />
             </Form.Item>
             <Form.Item label="Available Nebius machines">
-              <NebiusVmCapacityPicker
+              <NebiusCapacityPicker
                 catalog={hostCatalog}
                 selection={selection}
                 disabled={selectedVolume != null}

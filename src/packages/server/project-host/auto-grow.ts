@@ -487,6 +487,7 @@ async function resolveBillableSharedScratchAutoGrowSession({
     region: row.region,
     zone: machine.zone,
     machine_type: machine.machine_type ?? metadata.size,
+    provider_platform: machine.metadata?.platform,
     disk_gb: machine.disk_gb,
     disk_type: machine.disk_type,
     shared_disk_gb: nextDisk,

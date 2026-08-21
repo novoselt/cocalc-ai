@@ -481,6 +481,7 @@ describe("host-create-draft", () => {
     });
     expect(payload.machine.cloud).toBe("nebius");
     expect(payload.machine.machine_type).toBe("1gpu-16vcpu-200gb");
+    expect(payload.machine.metadata.platform).toBe("gpu-h200-sxm");
   });
 
   it("normalizes Nebius disks to the provider-required 93 GB increments", () => {
@@ -944,6 +945,7 @@ describe("host-create-draft", () => {
       provider: "nebius",
       region: "us-central1",
       machine_type: "1gpu-24vcpu-218gb",
+      provider_platform: "gpu-rtx6000",
       pricing_model: "on_demand",
     });
   });

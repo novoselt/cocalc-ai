@@ -8,7 +8,7 @@ import {
   getNebiusPersistentDiskPriceEstimate,
   getNebiusMinimumBootDiskGb,
   getNebiusCapacityInfo,
-  getNebiusAvailableVmOptions,
+  getNebiusPlacementOptions,
   getNebiusInstanceTypeOptions,
   getHostPricingModeEstimates,
   getGcpMachineTypeOptions,
@@ -172,17 +172,15 @@ describe("Nebius capacity advice", () => {
     ]);
 
     expect(
-      getNebiusAvailableVmOptions(
-        catalog,
-        { pricing_model: "spot" },
-        "gpu",
-      ).map(({ key }) => key),
+      getNebiusPlacementOptions(catalog, { pricing_model: "spot" }, "gpu").map(
+        ({ key }) => key,
+      ),
     ).toEqual([
       "us-central1\u0000gpu-rtx6000\u00001gpu-24vcpu-218gb",
       "eu-north1\u0000gpu-rtx6000\u00001gpu-24vcpu-218gb",
     ]);
     expect(
-      getNebiusAvailableVmOptions(catalog, { pricing_model: "spot" }, "cpu"),
+      getNebiusPlacementOptions(catalog, { pricing_model: "spot" }, "cpu"),
     ).toEqual([]);
   });
 
@@ -230,7 +228,7 @@ describe("Nebius capacity advice", () => {
     ]);
 
     expect(
-      getNebiusAvailableVmOptions(
+      getNebiusPlacementOptions(
         catalog,
         { pricing_model: "on_demand" },
         "cpu",
@@ -240,6 +238,43 @@ describe("Nebius capacity advice", () => {
       cpu: 4,
       gpuCount: 0,
       ramGiB: 16,
+    });
+  });
+
+  it("keeps Standard CPU catalog choices when capacity advice omits CPUs", () => {
+    const catalog = testCatalog([
+      {
+        kind: "regions",
+        scope: "global",
+        payload: [{ name: "us-central1" }],
+      },
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [
+          {
+            name: "16vcpu-64gb",
+            platform: "cpu-d3",
+            platform_label: "AMD Epyc Genoa",
+            allowed_for_preemptibles: false,
+            regions: ["us-central1"],
+            vcpus: 16,
+            memory_gib: 64,
+            gpus: 0,
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      getNebiusPlacementOptions(
+        catalog,
+        { pricing_model: "on_demand" },
+        "cpu",
+      )[0],
+    ).toMatchObject({
+      key: "us-central1\u0000cpu-d3\u000016vcpu-64gb",
+      capacity: { reported: false },
     });
   });
 
@@ -868,6 +903,21 @@ describe("isNebiusSpotSupported", () => {
         "unknown",
       ),
     ).toBe(true);
+  });
+
+  it("does not borrow Spot support from another machine when selection is missing", () => {
+    expect(
+      isNebiusSpotSupported(
+        [
+          {
+            value: "gpu-h200",
+            label: "H200",
+            meta: { allowed_for_preemptibles: true },
+          },
+        ],
+        "missing-machine",
+      ),
+    ).toBe(false);
   });
 });
 

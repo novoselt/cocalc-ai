@@ -4,18 +4,18 @@
  */
 
 import type { HostCatalog } from "@cocalc/conat/hub/api/hosts";
-import { Alert, Flex, Radio, Space, Tag, Typography } from "antd";
-import { useEffect, useState } from "react";
+import { Alert, Flex, Radio, Space, Switch, Tag, Typography } from "antd";
+import { useEffect, useMemo, useState } from "react";
 import { COLORS } from "@cocalc/util/theme";
 import {
-  getNebiusAvailableVmOptions,
-  type NebiusAvailableVmOption,
+  getNebiusPlacementOptions,
+  type NebiusPlacementOption,
   type ProviderSelection,
-} from "../hosts/providers/registry";
+} from "../providers/registry";
 
 const { Text } = Typography;
 
-export function NebiusVmCapacityPicker({
+export function NebiusCapacityPicker({
   catalog,
   selection,
   disabled,
@@ -26,16 +26,16 @@ export function NebiusVmCapacityPicker({
   selection: ProviderSelection;
   disabled?: boolean;
   onPricingModelChange: (value: "spot" | "on_demand") => void;
-  onSelect: (option: NebiusAvailableVmOption) => void;
+  onSelect: (option: NebiusPlacementOption) => void;
 }) {
   const pricingModel =
     selection.pricing_model === "spot" ? "spot" : "on_demand";
-  const currentGpuOptions = getNebiusAvailableVmOptions(
+  const currentGpuOptions = getNebiusPlacementOptions(
     catalog,
     selection,
     "gpu",
   );
-  const currentCpuOptions = getNebiusAvailableVmOptions(
+  const currentCpuOptions = getNebiusPlacementOptions(
     catalog,
     selection,
     "cpu",
@@ -55,9 +55,28 @@ export function NebiusVmCapacityPicker({
   const [kind, setKind] = useState<"cpu" | "gpu">(
     selectedCpu && !selectedGpu ? "cpu" : "gpu",
   );
+  const [sortByPrice, setSortByPrice] = useState(false);
   const effectiveKind = pricingModel === "spot" ? "gpu" : kind;
-  const options =
-    effectiveKind === "gpu" ? currentGpuOptions : currentCpuOptions;
+  const options = useMemo(() => {
+    const current =
+      effectiveKind === "gpu" ? currentGpuOptions : currentCpuOptions;
+    if (!sortByPrice) return current;
+    return [...current].sort((left, right) => {
+      if (left.hourlyRate == null && right.hourlyRate != null) return 1;
+      if (left.hourlyRate != null && right.hourlyRate == null) return -1;
+      if (
+        left.hourlyRate != null &&
+        right.hourlyRate != null &&
+        left.hourlyRate !== right.hourlyRate
+      ) {
+        return left.hourlyRate - right.hourlyRate;
+      }
+      return left.platformLabel.localeCompare(right.platformLabel, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+  }, [currentCpuOptions, currentGpuOptions, effectiveKind, sortByPrice]);
   const selected = options.find(
     ({ region, machineType, platform }) =>
       region === selection.region &&
@@ -72,16 +91,12 @@ export function NebiusVmCapacityPicker({
 
   const chooseKind = (nextKind: "cpu" | "gpu") => {
     setKind(nextKind);
-    const nextOptions = getNebiusAvailableVmOptions(
-      catalog,
-      selection,
-      nextKind,
-    );
+    const nextOptions = getNebiusPlacementOptions(catalog, selection, nextKind);
     if (nextOptions[0]) onSelect(nextOptions[0]);
   };
 
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={12} style={{ width: "100%" }}>
       <Flex gap={12} wrap align="center">
         <Radio.Group
           aria-label="Nebius pricing model"
@@ -114,6 +129,14 @@ export function NebiusVmCapacityPicker({
         {pricingModel === "spot" && (
           <Text type="secondary">Nebius Spot capacity is GPU-only.</Text>
         )}
+        <Switch
+          checked={sortByPrice}
+          checkedChildren="Price"
+          unCheckedChildren="Recommended"
+          disabled={disabled}
+          onChange={setSortByPrice}
+          aria-label="Sort Nebius machines by price"
+        />
       </Flex>
 
       {options.length === 0 ? (
@@ -164,7 +187,7 @@ export function NebiusVmCapacityPicker({
                   }}
                 >
                   <Space
-                    direction="vertical"
+                    orientation="vertical"
                     size={3}
                     style={{ width: "100%" }}
                   >
@@ -181,12 +204,17 @@ export function NebiusVmCapacityPicker({
                     </Text>
                     <Flex gap={6} wrap align="center">
                       <Tag color="blue">{option.region}</Tag>
-                      <Tag color="green">
-                        {option.capacity.available} available
-                      </Tag>
-                      {option.capacity.dataState !== "fresh" && (
-                        <Tag>{option.capacity.dataState} data</Tag>
+                      {option.capacity.reported ? (
+                        <Tag color="green">
+                          {option.capacity.available} available
+                        </Tag>
+                      ) : (
+                        <Tag>Capacity not reported</Tag>
                       )}
+                      {option.capacity.reported &&
+                        option.capacity.dataState !== "fresh" && (
+                          <Tag>{option.capacity.dataState} data</Tag>
+                        )}
                     </Flex>
                   </Space>
                 </Radio>

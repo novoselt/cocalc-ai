@@ -39,6 +39,7 @@ type UseHostFormArgs = {
   selectedRegion?: string;
   selectedZone?: string;
   selectedMachineType?: string;
+  selectedProviderPlatform?: string;
   selectedGpuType?: string;
   selectedPricingModel?: string;
   selectedDiskType?: string;
@@ -80,6 +81,7 @@ export const useHostForm = ({
   selectedRegion,
   selectedZone,
   selectedMachineType,
+  selectedProviderPlatform,
   selectedGpuType,
   selectedPricingModel,
   selectedDiskType,
@@ -124,6 +126,7 @@ export const useHostForm = ({
       region: selectedRegion,
       zone: selectedZone,
       machine_type: selectedMachineType,
+      provider_platform: selectedProviderPlatform,
       gpu_type: selectedGpuType,
       pricing_model: selectedPricingModel,
       storage_mode: selectedStorageMode,
@@ -140,6 +143,7 @@ export const useHostForm = ({
       selectedRegion,
       selectedZone,
       selectedMachineType,
+      selectedProviderPlatform,
       selectedGpuType,
       selectedPricingModel,
       selectedStorageMode,

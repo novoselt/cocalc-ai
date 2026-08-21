@@ -63,6 +63,7 @@ export type HostCreateDraft = {
   region?: string;
   zone?: string;
   machine_type?: string;
+  provider_platform?: string;
   gpu_type?: string;
   size?: string;
   gpu?: string;
@@ -292,6 +293,10 @@ export function buildSimilarDraft(
       region: host.region ?? undefined,
       zone: host.machine?.zone ?? undefined,
       machine_type: host.machine?.machine_type ?? undefined,
+      provider_platform:
+        typeof host.machine?.metadata?.platform === "string"
+          ? host.machine.metadata.platform
+          : undefined,
       gpu_type: host.machine?.gpu_type ?? "none",
       size: host.machine?.machine_type ?? host.size ?? undefined,
       storage_mode: host.machine?.storage_mode ?? "persistent",
@@ -358,6 +363,7 @@ export function normalizeDraft(
     region: input.region,
     zone: input.zone,
     machine_type: input.machine_type,
+    provider_platform: input.provider_platform,
     gpu_type: input.gpu_type,
     size: input.size,
     gpu: input.gpu,
@@ -412,6 +418,27 @@ export function normalizeDraft(
   }
 
   const fieldOptions = getFieldOptions(provider, draft, context);
+  if (provider === "nebius" && draft.machine_type) {
+    const candidates = (fieldOptions.machine_type ?? []).filter(
+      (option) => option.value === draft.machine_type,
+    );
+    const exact = candidates.find((option) => {
+      const meta = (option.meta ?? {}) as { platform?: string };
+      return meta.platform === draft.provider_platform;
+    });
+    if (!exact) {
+      const platforms = new Set(
+        candidates
+          .map((option) => {
+            const meta = (option.meta ?? {}) as { platform?: string };
+            return meta.platform;
+          })
+          .filter((value): value is string => !!value),
+      );
+      draft.provider_platform =
+        platforms.size === 1 ? [...platforms][0] : undefined;
+    }
+  }
   const storageSupport = getProviderStorageSupport(
     provider,
     getCatalog(provider, context)?.provider_capabilities,
@@ -463,6 +490,10 @@ export function normalizeDraft(
     draft.shared_disk_type = undefined;
   }
 
+  if (provider !== "nebius") {
+    draft.provider_platform = undefined;
+  }
+
   const sharedDiskType = draft.shared_disk_gb
     ? (draft.shared_disk_type ?? defaultSharedDiskTypeForProvider(provider))
     : undefined;
@@ -482,6 +513,7 @@ export function normalizeDraft(
     const spotSupported = isNebiusSpotSupported(
       fieldOptions.machine_type,
       draft.machine_type,
+      draft.provider_platform,
     );
     if (!spotSupported && draft.pricing_model === "spot") {
       draft.pricing_model = "on_demand";
@@ -744,7 +776,19 @@ const setPrimaryComputeOption = (
         : selectNebiusGpuMachineType(nebiusOptions, {
             requireSpot: draft.pricing_model === "spot",
           });
-    if (selected) draft[field] = selected;
+    if (selected) {
+      draft[field] = selected;
+      const selectedOption = nebiusOptions?.find(
+        (option) => option.value === selected,
+      );
+      const meta = (selectedOption?.meta ?? {}) as {
+        platform?: string;
+        gpu_label?: string;
+        gpus?: number;
+      };
+      draft.provider_platform = meta.platform;
+      draft.gpu_type = (meta.gpus ?? 0) > 0 ? meta.gpu_label : "none";
+    }
     return;
   }
   const selected =

@@ -67,6 +67,7 @@ export interface DedicatedHostRateEstimateInput {
   region?: string | null;
   zone?: string | null;
   machine_type?: string | null;
+  provider_platform?: string | null;
   disk_gb?: number | null;
   disk_type?: string | null;
   shared_disk_gb?: number | null;
@@ -1332,7 +1333,10 @@ async function estimateNebiusRateBreakdown(
   ]);
   const instance = machineType
     ? (instances as NebiusCatalogInstanceType[]).find(
-        (entry) => entry.name === machineType,
+        (entry) =>
+          entry.name === machineType &&
+          (!input.provider_platform ||
+            entry.platform === input.provider_platform),
       )
     : undefined;
   if (machineType && !instance) return undefined;
@@ -1365,6 +1369,7 @@ function pricingConfiguration(
     ...(billingState === "running"
       ? {
           machine_type: input.machine_type ?? null,
+          provider_platform: input.provider_platform ?? null,
           pricing_model: input.pricing_model ?? null,
           operating_system: input.operating_system ?? "linux",
         }

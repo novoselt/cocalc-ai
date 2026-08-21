@@ -48,7 +48,6 @@ import {
   deleteOrphanProviderComputeBootDisk,
   deleteOrphanProviderComputeInstance,
   getProviderComputeRegions,
-  getNebiusComputeCapacityAdvice,
   requireProviderComputeSubnetwork,
   stopOrphanProviderComputeInstance,
 } from "@cocalc/server/compute/provider";
@@ -667,16 +666,6 @@ export async function getCatalog(opts: {
       account_id: accountId,
       provider: "nebius",
     });
-    try {
-      const capacity = await getNebiusComputeCapacityAdvice();
-      providerCatalogs.nebius.entries.push({
-        kind: "capacity_advice",
-        scope: "global",
-        payload: capacity,
-      });
-    } catch {
-      // Capacity advice is best effort and must not make the catalog unusable.
-    }
   } catch {
     // Nebius is omitted until its provider credentials/catalog are configured.
   }
@@ -902,6 +891,7 @@ export async function createVm(
     region,
     zone,
     machine_type: machine.machine_type,
+    provider_platform: machine.provider_spec?.platform,
     gpu_type: machine.gpu_type ?? undefined,
     gpu_count: machine.gpu_count,
     disk_gb: bootDiskGb,
@@ -2552,6 +2542,7 @@ export async function setVmMachineType(opts: {
     region: vm.region,
     zone: vm.zone,
     machine_type: machine.machine_type,
+    provider_platform: machine.provider_spec?.platform,
     gpu_type: machine.gpu_type ?? undefined,
     gpu_count: machine.gpu_count,
     disk_gb: vm.boot_disk_gb,

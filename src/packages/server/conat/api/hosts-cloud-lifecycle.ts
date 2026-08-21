@@ -198,6 +198,7 @@ async function resolveBillableHostSessionConfig({
     region,
     zone: machine?.zone,
     machine_type: machine?.machine_type ?? size,
+    provider_platform: machine?.metadata?.platform,
     disk_gb: machine?.disk_gb,
     disk_type: machine?.disk_type,
     shared_disk_gb: machine?.shared_disk_gb,

@@ -218,6 +218,7 @@ export const HostEditModal: React.FC<HostEditModalProps> = ({
     selectedRegion,
     selectedZone,
     selectedMachineType,
+    selectedProviderPlatform,
     selectedGpuType,
     selectedPricingModel,
     selectedDiskType,
@@ -254,6 +255,7 @@ export const HostEditModal: React.FC<HostEditModalProps> = ({
     selectedRegion,
     selectedZone,
     selectedMachineType,
+    selectedProviderPlatform,
     selectedGpuType,
     selectedPricingModel,
     selectedDiskType,
@@ -444,8 +446,17 @@ export const HostEditModal: React.FC<HostEditModalProps> = ({
   const nebiusSpotSupported = React.useMemo(
     () =>
       providerId !== "nebius" ||
-      isNebiusSpotSupported(fieldOptions.machine_type, watchedMachineType),
-    [fieldOptions.machine_type, providerId, watchedMachineType],
+      isNebiusSpotSupported(
+        fieldOptions.machine_type,
+        watchedMachineType,
+        selectedProviderPlatform,
+      ),
+    [
+      fieldOptions.machine_type,
+      providerId,
+      selectedProviderPlatform,
+      watchedMachineType,
+    ],
   );
   const storageSupport = providerDescriptor
     ? getProviderStorageSupport(providerId, catalog?.provider_capabilities)

@@ -2,7 +2,7 @@
 
 import type { HostCatalog } from "@cocalc/conat/hub/api/hosts";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { NebiusVmCapacityPicker } from "./nebius-vm-capacity-picker";
+import { NebiusCapacityPicker } from "./nebius-capacity-picker";
 
 const catalog: HostCatalog = {
   provider_capabilities: {},
@@ -26,6 +26,16 @@ const catalog: HostCatalog = {
           vcpus: 24,
           memory_gib: 218,
           gpus: 1,
+        },
+        {
+          name: "16vcpu-64gb",
+          platform: "cpu-d3",
+          platform_label: "AMD Epyc Genoa",
+          allowed_for_preemptibles: false,
+          regions: ["eu-north1", "us-central1"],
+          vcpus: 16,
+          memory_gib: 64,
+          gpus: 0,
         },
       ],
     },
@@ -59,14 +69,32 @@ const catalog: HostCatalog = {
         },
       ],
     },
+    {
+      kind: "prices",
+      scope: "global",
+      payload: [
+        {
+          product: "Preemptible NVIDIA RTX PRO 6000",
+          region: "us-central1",
+          price_usd: "2",
+          unit: "GPU hour",
+        },
+        {
+          product: "Preemptible NVIDIA RTX PRO 6000",
+          region: "eu-north1",
+          price_usd: "1",
+          unit: "GPU hour",
+        },
+      ],
+    },
   ],
 };
 
-describe("NebiusVmCapacityPicker", () => {
+describe("NebiusCapacityPicker", () => {
   it("shows unique all-region choices and exposes them to keyboard users", () => {
     const onSelect = jest.fn();
     render(
-      <NebiusVmCapacityPicker
+      <NebiusCapacityPicker
         catalog={catalog}
         selection={{
           pricing_model: "spot",
@@ -80,6 +108,18 @@ describe("NebiusVmCapacityPicker", () => {
     );
 
     expect(screen.getByRole("radio", { name: "CPU" })).toBeDisabled();
+    const priceSort = screen.getByRole("switch", {
+      name: "Sort Nebius machines by price",
+    });
+    expect(priceSort).not.toBeChecked();
+    expect(
+      screen.getAllByRole("radio", { name: /NVIDIA RTX PRO 6000/i })[0],
+    ).toHaveAccessibleName(/us-central1/i);
+    fireEvent.click(priceSort);
+    expect(priceSort).toBeChecked();
+    expect(
+      screen.getAllByRole("radio", { name: /NVIDIA RTX PRO 6000/i })[0],
+    ).toHaveAccessibleName(/eu-north1/i);
     const usChoice = screen.getByRole("radio", {
       name: /NVIDIA RTX PRO 6000.*us-central1/i,
     });
@@ -98,10 +138,34 @@ describe("NebiusVmCapacityPicker", () => {
     );
   });
 
+  it("shows Standard CPU catalog choices when capacity is not reported", () => {
+    render(
+      <NebiusCapacityPicker
+        catalog={catalog}
+        selection={{
+          pricing_model: "on_demand",
+          region: "us-central1",
+          machine_type: "16vcpu-64gb",
+          provider_platform: "cpu-d3",
+        }}
+        onPricingModelChange={jest.fn()}
+        onSelect={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "CPU" }));
+    expect(
+      screen.getAllByRole("radio", { name: /AMD Epyc Genoa.*16 vCPU/i }),
+    ).toHaveLength(2);
+    expect(screen.getAllByText("Capacity not reported").length).toBeGreaterThan(
+      0,
+    );
+  });
+
   it("reports pricing-model changes through a named radio control", () => {
     const onPricingModelChange = jest.fn();
     render(
-      <NebiusVmCapacityPicker
+      <NebiusCapacityPicker
         catalog={catalog}
         selection={{
           pricing_model: "spot",

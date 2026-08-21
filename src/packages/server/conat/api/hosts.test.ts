@@ -104,6 +104,7 @@ let estimateDedicatedHostRateMock: jest.Mock;
 let reconcileDedicatedHostPurchaseSessionForAccountMock: jest.Mock;
 let getDedicatedHostWindowUsageForHostLocalMock: jest.Mock;
 let eraseActiveExamRunBeforeHostStopLocalMock: jest.Mock;
+let getNebiusComputeCapacityAdviceMock: jest.Mock;
 const originalFetch = global.fetch;
 
 function dedicatedHostRateEstimate(hourly_cost_usd: string) {
@@ -331,6 +332,12 @@ jest.mock("@cocalc/server/cloud/ssh-key", () => ({
 jest.mock("@cocalc/server/cloud/provider-context", () => ({
   __esModule: true,
   getProviderContext: (...args: any[]) => getProviderContextMock(...args),
+}));
+
+jest.mock("@cocalc/server/compute/provider", () => ({
+  __esModule: true,
+  getNebiusComputeCapacityAdvice: (...args: any[]) =>
+    getNebiusComputeCapacityAdviceMock(...args),
 }));
 
 jest.mock("@cocalc/database/settings/site-url", () => ({
@@ -633,6 +640,7 @@ beforeEach(() => {
     spend_7d_usd: "0",
   }));
   eraseActiveExamRunBeforeHostStopLocalMock = jest.fn(async () => false);
+  getNebiusComputeCapacityAdviceMock = jest.fn(async () => []);
   fetchMock = jest.fn();
   global.fetch = fetchMock as any;
   hostConnectionGetMock = jest.fn();
@@ -1553,6 +1561,77 @@ describe("hosts.getCatalog", () => {
       }),
     ).rejects.toThrow("self-hosted hosts are limited to admins");
     expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("replaces cached Nebius capacity with fresh provider advice", async () => {
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("FROM cloud_catalog_cache")) {
+        return {
+          rows: [
+            {
+              kind: "instance_types",
+              scope: "global",
+              payload: [{ name: "1gpu-24vcpu-218gb" }],
+            },
+            {
+              kind: "capacity_advice",
+              scope: "global",
+              payload: [{ region: "stale" }],
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const freshCapacity = [
+      {
+        region: "us-central1",
+        platform: "gpu-rtx6000",
+        machine_type: "1gpu-24vcpu-218gb",
+      },
+    ];
+    getNebiusComputeCapacityAdviceMock.mockResolvedValue(freshCapacity);
+    const { getCatalog } = await import("./hosts");
+
+    const catalog = await getCatalog({
+      account_id: ACCOUNT_ID,
+      provider: "nebius",
+    });
+
+    expect(
+      catalog.entries.filter(({ kind }) => kind === "capacity_advice"),
+    ).toEqual([
+      {
+        kind: "capacity_advice",
+        scope: "global",
+        payload: freshCapacity,
+      },
+    ]);
+    expect(catalog.entries.some(({ kind }) => kind === "instance_types")).toBe(
+      true,
+    );
+  });
+
+  it("keeps the base Nebius catalog when capacity advice fails", async () => {
+    const rows = [
+      {
+        kind: "instance_types",
+        scope: "global",
+        payload: [{ name: "16vcpu-64gb" }],
+      },
+    ];
+    queryMock = jest.fn(async (sql: string) => {
+      if (sql.includes("FROM cloud_catalog_cache")) return { rows };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    getNebiusComputeCapacityAdviceMock.mockRejectedValue(
+      new Error("capacity unavailable"),
+    );
+    const { getCatalog } = await import("./hosts");
+
+    await expect(
+      getCatalog({ account_id: ACCOUNT_ID, provider: "nebius" }),
+    ).resolves.toMatchObject({ entries: rows });
   });
 });
 

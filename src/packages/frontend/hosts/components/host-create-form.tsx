@@ -54,6 +54,7 @@ export const HostCreateForm: React.FC<HostCreateFormProps> = ({
     provider.selectedProvider !== "none" &&
     provider.selectedProvider !== "self-host";
   const watchedMachineType = Form.useWatch("machine_type", form);
+  const watchedProviderPlatform = Form.useWatch("provider_platform", form);
   const watchedPricingModel = Form.useWatch("pricing_model", form);
   const watchedSshTarget = Form.useWatch("self_host_ssh_target", form);
   const watchedFundingMode = Form.useWatch("funding_mode", form);
@@ -63,11 +64,13 @@ export const HostCreateForm: React.FC<HostCreateFormProps> = ({
       isNebiusSpotSupported(
         provider.fields.options.machine_type,
         watchedMachineType,
+        watchedProviderPlatform,
       ),
     [
       provider.fields.options.machine_type,
       provider.selectedProvider,
       watchedMachineType,
+      watchedProviderPlatform,
     ],
   );
   const previousPricingModelRef = React.useRef<"on_demand" | "spot">(
@@ -262,6 +265,7 @@ export const HostCreateForm: React.FC<HostCreateFormProps> = ({
                 hideProviderSelect
                 draftManaged={draftManaged}
                 onDraftPatch={updateDraftManagedFields}
+                pricingSettings={pricingSettings}
               />
             </>
           )}
