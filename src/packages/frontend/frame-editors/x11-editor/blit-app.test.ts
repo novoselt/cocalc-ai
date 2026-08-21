@@ -47,10 +47,18 @@ describe("Blit managed app", () => {
     expect(script).toContain('wait -n "$server_pid" "$gateway_pid"');
   });
 
-  it("keeps glycin sandboxed without a nested network namespace", () => {
+  it("falls back from glycin's unavailable nested sandbox", () => {
     const script = createBlitAppSpec().command.args[1];
-    expect(script).toContain("*/glycin-loaders/*) is_glycin=true");
-    expect(script).toContain('args+=("--share-net")');
-    expect(script).toMatch(/exec "\$COCALC_REAL_BWRAP" "\$\{args\[@\]\}"/);
+    expect(script).toContain("export GLYCIN_DISABLE_SANDBOX=i-know-the-risks");
+    expect(script).toContain("*/glycin-loaders/*)");
+    expect(script).toContain("is_glycin=true");
+    expect(script).toContain('if [ -f "$arg" ] && [ -x "$arg" ]');
+    expect(script).toContain(
+      "for key in RUST_BACKTRACE RUST_LOG XDG_RUNTIME_DIR",
+    );
+    expect(script).toMatch(
+      /exec \/usr\/bin\/env -i "\$\{env_args\[@\]\}" "\$loader" "\$\{loader_args\[@\]\}"/,
+    );
+    expect(script).not.toContain("--share-net");
   });
 });

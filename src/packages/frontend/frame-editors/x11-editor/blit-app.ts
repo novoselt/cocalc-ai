@@ -8,7 +8,9 @@ import type { AppSpec } from "@cocalc/conat/project/api/apps";
 export const BLIT_APP_ID = "cocalc-blit-x11";
 export const BLIT_PASSPHRASE = "cocalc-private-project";
 
-const SHELL_ARRAY_ARGS = "$" + "{args[@]}";
+const SHELL_ENV_ARGS = "$" + "{env_args[@]}";
+const SHELL_INDIRECT_KEY = "$" + "{!key}";
+const SHELL_LOADER_ARGS = "$" + "{loader_args[@]}";
 
 const START_SCRIPT = String.raw`set -euo pipefail
 
@@ -30,10 +32,11 @@ runtime_dir="$state_dir/runtime"
 mkdir -p "$runtime_dir"
 chmod 700 "$runtime_dir"
 
-# Project isolation prevents nested network namespaces from configuring their
-# loopback device. Glycin otherwise mistakes bwrap for usable and GTK apps
-# crash while loading icons. Keep every other bwrap isolation layer and share
-# only the network namespace for glycin's image-loader processes.
+# Project isolation prevents bubblewrap from nesting the namespaces used by
+# glycin. Glycin 2.2 supports this explicit fallback; the wrapper implements
+# the same cleared-environment loader launch for glycin 2.1. The project
+# container remains the outer sandbox, and unrelated bwrap calls are unchanged.
+export GLYCIN_DISABLE_SANDBOX=i-know-the-risks
 real_bwrap="$(command -v bwrap || true)"
 if [ -n "$real_bwrap" ]; then
   compat_bin="$state_dir/compat-bin"
@@ -43,26 +46,35 @@ if [ -n "$real_bwrap" ]; then
 set -euo pipefail
 
 is_glycin=false
-has_share_net=false
+loader=""
+loader_args=()
 for arg in "$@"; do
+  if [ -n "$loader" ]; then
+    loader_args+=("$arg")
+  fi
   case "$arg" in
-    */glycin-loaders/*) is_glycin=true ;;
-    --share-net) has_share_net=true ;;
+    */glycin-loaders/*)
+      is_glycin=true
+      if [ -f "$arg" ] && [ -x "$arg" ]; then
+        loader="$arg"
+        loader_args=()
+      fi
+      ;;
   esac
 done
 
-if [ "$is_glycin" != true ] || [ "$has_share_net" = true ]; then
+if [ "$is_glycin" != true ] || [ -z "$loader" ]; then
   exec "$COCALC_REAL_BWRAP" "$@"
 fi
 
-args=()
-for arg in "$@"; do
-  args+=("$arg")
-  if [ "$arg" = "--unshare-all" ]; then
-    args+=("--share-net")
+env_args=()
+for key in RUST_BACKTRACE RUST_LOG XDG_RUNTIME_DIR; do
+  if [ -v "$key" ]; then
+    env_args+=("$key=${SHELL_INDIRECT_KEY}")
   fi
 done
-exec "$COCALC_REAL_BWRAP" "${SHELL_ARRAY_ARGS}"
+
+exec /usr/bin/env -i "${SHELL_ENV_ARGS}" "$loader" "${SHELL_LOADER_ARGS}"
 BWRAP
   chmod 700 "$compat_bin/bwrap"
   export COCALC_REAL_BWRAP="$real_bwrap"
