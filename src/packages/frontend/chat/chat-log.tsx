@@ -354,6 +354,7 @@ interface Props {
   path: string;
   messages?: ChatMessages;
   threadIndex?: Map<string, ThreadIndexEntry>;
+  docVersion?: number;
   mode: Mode;
   scrollToBottomRef?: MutableRefObject<(force?: boolean) => void>;
   setLastVisible?: (x: Date | null) => void;
@@ -389,6 +390,7 @@ export function ChatLog({
   path,
   messages: messagesProp,
   threadIndex,
+  docVersion,
   scrollToBottomRef,
   mode,
   setLastVisible,
@@ -423,7 +425,7 @@ export function ChatLog({
   const account_id = useTypedRedux("account", "account_id");
   const steerCollections = useMemo(
     () => collectSteers({ messages, visibleKeys, acpState }),
-    [messages, visibleKeys, acpState],
+    [messages, visibleKeys, acpState, docVersion],
   );
   const anyOverlayOpen = useAnyChatOverlayOpen();
   const activeTopTab = useTypedRedux("page", "active_top_tab");
@@ -461,6 +463,7 @@ export function ChatLog({
   }, [
     messages,
     account_id,
+    docVersion,
     singleThreadView,
     steerCollections.representedMessageIds,
     visibleKeys,
@@ -1435,21 +1438,49 @@ export function MessageList({
     key: string;
     render: () => ReactNode;
   };
-  // Virtuoso memoizes mounted items. Put the current renderer in row data so
-  // message-cache and ACP-state updates invalidate those items directly instead
-  // of depending on when Virtuoso republishes a callback or reads a mutable ref.
+  const steerRowKey = (date: string): string => {
+    const message = getMessageAtDate({
+      messages,
+      date: parseFloat(date),
+    });
+    const messageId = `${field<string>(message, "message_id") ?? ""}`.trim();
+    if (!messageId) return date;
+    const activitySteers =
+      activitySteersByAssistantMessageId?.get(messageId) ?? [];
+    const attachedSteers =
+      attachedSteersByParentMessageId?.get(messageId) ?? [];
+    const revision = [
+      ...activitySteers.map(
+        ({ messageId, state }) => `activity:${messageId}:${state}`,
+      ),
+      ...attachedSteers.map(
+        ({ messageId, state }) => `attached:${messageId}:${state}`,
+      ),
+    ].join("|");
+    return revision ? `${date}:${revision}` : date;
+  };
+  // Virtuoso memoizes mounted items. The key includes guidance revisions so an
+  // existing assistant activity row remounts when guidance is added or changes
+  // state, without remounting the rest of the chat history.
   const virtuosoData: ChatVirtualRow[] = Array.from(
     { length: sortedDates.length + 1 },
-    (_, index) => ({
-      key: sortedDates[index] ?? "end",
-      render:
-        index === sortedDates.length
-          ? () => <div style={{ height: "25px" }} />
-          : () => renderMessage(index),
-    }),
+    (_, index) => {
+      const date = sortedDates[index];
+      return {
+        key: date == null ? "end" : steerRowKey(date),
+        render:
+          index === sortedDates.length
+            ? () => <div style={{ height: "25px" }} />
+            : () => renderMessage(index),
+      };
+    },
   );
   const renderVirtuosoItem = useCallback(
     (_index: number, row: ChatVirtualRow) => row.render(),
+    [],
+  );
+  const computeVirtuosoItemKey = useCallback(
+    (_index: number, row: ChatVirtualRow) => row.key,
     [],
   );
   const handleVirtuosoRangeChanged = useCallback(
@@ -1644,6 +1675,7 @@ export function MessageList({
         atTopThreshold={240}
         itemSize={measureVirtuosoItem}
         itemContent={renderVirtuosoItem}
+        computeItemKey={computeVirtuosoItemKey}
         rangeChanged={manualScrollRef ? handleVirtuosoRangeChanged : undefined}
         atBottomStateChange={
           manualScrollRef ? handleVirtuosoAtBottomStateChange : undefined

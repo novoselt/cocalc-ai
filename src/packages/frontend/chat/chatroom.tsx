@@ -2532,6 +2532,7 @@ export function ChatPanel({
         path={path}
         messages={messages as ChatMessages}
         threadIndex={indexedThreads ?? threadIndex}
+        docVersion={docVersion}
         acpState={acpState}
         scrollToBottomRef={scrollToBottomRef}
         scrollCacheId={scrollCacheId}
