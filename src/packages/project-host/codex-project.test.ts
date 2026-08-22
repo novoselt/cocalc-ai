@@ -514,6 +514,81 @@ describe("initCodexProjectRunner", () => {
     await restarted!.close();
   });
 
+  it("retries transient failures while rotating a turn token", async () => {
+    const scratch = await mkTempDir("codex-project-turn-token-retry-");
+    hubApi.hosts.issueProjectHostAgentAuthToken
+      .mockResolvedValueOnce({
+        token: "turn-one-token",
+        expires_at: Date.now() + 60_000,
+      })
+      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: 408 }))
+      .mockResolvedValueOnce({
+        token: "turn-two-token",
+        expires_at: Date.now() + 60_000,
+      });
+    const { createProjectCliTokenLease } =
+      await import("./codex/codex-project");
+    const lease = await createProjectCliTokenLease({
+      projectId: "6bc2c387-4c80-4a79-aa68-65d8e68a6a52",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      agentSessionKey: "thread-1\0turn-1",
+      currentEnv: {},
+      home: scratch,
+      scratch,
+      refreshMs: 60_000,
+    });
+
+    try {
+      await lease!.setAgentSessionKey("thread-1\0turn-2");
+      expect(await fs.readFile(lease!.hostPath, "utf8")).toBe(
+        "turn-two-token\n",
+      );
+      expect(hubApi.hosts.issueProjectHostAgentAuthToken).toHaveBeenCalledTimes(
+        3,
+      );
+      const calls = hubApi.hosts.issueProjectHostAgentAuthToken.mock.calls;
+      expect(calls[1][0].session_id).toBe(calls[2][0].session_id);
+      expect(calls[1][0].session_id).not.toBe(calls[0][0].session_id);
+    } finally {
+      await lease!.close();
+    }
+  });
+
+  it("does not retry authorization failures while rotating a turn token", async () => {
+    const scratch = await mkTempDir("codex-project-turn-token-denied-");
+    hubApi.hosts.issueProjectHostAgentAuthToken
+      .mockResolvedValueOnce({
+        token: "turn-one-token",
+        expires_at: Date.now() + 60_000,
+      })
+      .mockRejectedValueOnce(new Error("not authorized"));
+    const { createProjectCliTokenLease } =
+      await import("./codex/codex-project");
+    const lease = await createProjectCliTokenLease({
+      projectId: "6bc2c387-4c80-4a79-aa68-65d8e68a6a52",
+      accountId: "00000000-0000-4000-8000-000000000001",
+      agentSessionKey: "thread-1\0turn-1",
+      currentEnv: {},
+      home: scratch,
+      scratch,
+      refreshMs: 60_000,
+    });
+
+    try {
+      await expect(
+        lease!.setAgentSessionKey("thread-1\0turn-2"),
+      ).rejects.toThrow("unable to rotate the project-scoped agent token");
+      expect(hubApi.hosts.issueProjectHostAgentAuthToken).toHaveBeenCalledTimes(
+        2,
+      );
+      expect(await fs.readFile(lease!.hostPath, "utf8")).toBe(
+        "turn-one-token\n",
+      );
+    } finally {
+      await lease!.close();
+    }
+  });
+
   it("falls back to the bundled project runtime cocalc command when no host cli is resolvable", async () => {
     spawnMock.mockReturnValue(new FakeProc());
     execFileMock.mockImplementation((_cmd, args, _opts, cb) => {
