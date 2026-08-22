@@ -20,7 +20,7 @@ describe("Blit managed app", () => {
     expect(spec.id).toBe(BLIT_APP_ID);
     expect(spec.kind).toBe("service");
     expect(spec.command).toEqual({
-      exec: "/opt/cocalc/tools/current/cocalc-x11",
+      exec: "cocalc-x11",
       env: { BLIT_PASSPHRASE: "project-id" },
     });
     expect(spec.proxy).toMatchObject({
@@ -37,6 +37,10 @@ describe("Blit managed app", () => {
   });
 
   it("checks every packaged graphical application dependency", () => {
+    expect(CHECK_BLIT_PREREQUISITES).toContain(
+      'if ! command -v "$tool" >/dev/null 2>&1',
+    );
+    expect(CHECK_BLIT_PREREQUISITES).not.toContain("/opt/cocalc/");
     for (const packageName of GRAPHICAL_APPS_PACKAGES) {
       expect(CHECK_BLIT_PREREQUISITES).toContain(packageName);
       expect(INSTALL_GRAPHICAL_APPS_COMMAND).toContain(packageName);

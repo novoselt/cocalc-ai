@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="/opt/cocalc/tools/current:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-
 for command in blit xwayland-satellite Xwayland dbus-daemon; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Required graphical application command is missing: $command" >&2

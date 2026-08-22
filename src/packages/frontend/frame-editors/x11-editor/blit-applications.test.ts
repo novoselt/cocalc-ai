@@ -34,6 +34,8 @@ describe("Blit application catalog", () => {
     expect(LAUNCH_BLIT_APPLICATION_COMMAND).toContain(
       "socket:$HOME/.local/state/cocalc/blit/runtime/server.sock",
     );
+    expect(LAUNCH_BLIT_APPLICATION_COMMAND).toContain("exec blit");
+    expect(LAUNCH_BLIT_APPLICATION_COMMAND).not.toContain("/opt/cocalc/");
   });
 
   it("parses explicit installed and missing responses", () => {

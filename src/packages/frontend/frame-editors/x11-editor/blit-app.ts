@@ -6,8 +6,6 @@
 import type { AppSpec } from "@cocalc/conat/project/api/apps";
 
 export const BLIT_APP_ID = "cocalc-blit-x11";
-const COCALC_TOOLS = "/opt/cocalc/tools/current";
-const COCALC_X11 = `${COCALC_TOOLS}/cocalc-x11`;
 
 export const GRAPHICAL_APPS_PACKAGES = [
   "adwaita-icon-theme",
@@ -31,7 +29,7 @@ for tool in apt-get dpkg-query sudo; do
   fi
 done
 for tool in blit cocalc-x11 xwayland-satellite; do
-  if [ ! -x "${COCALC_TOOLS}/$tool" ]; then
+  if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'missing-tool:%s\n' "$tool"
     status=20
   fi
@@ -80,7 +78,7 @@ export function createBlitAppSpec(projectId: string): AppSpec {
     title: "Graphical applications",
     kind: "service",
     command: {
-      exec: COCALC_X11,
+      exec: "cocalc-x11",
       env: {
         // The authenticated project proxy is the security boundary. Blit also
         // requires a matching gateway passphrase, so use a project-specific,

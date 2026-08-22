@@ -126,7 +126,7 @@ sudo -n rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb`;
 const BASH_ARGUMENTS_FROM_SECOND = "$" + "{@:2}";
 
 export const LAUNCH_BLIT_APPLICATION_COMMAND = String.raw`set -euo pipefail
-exec /opt/cocalc/tools/current/blit \
+exec blit \
   --on "socket:$HOME/.local/state/cocalc/blit/runtime/server.sock" \
   terminal start --tag "$1" -- "${BASH_ARGUMENTS_FROM_SECOND}"`;
 
