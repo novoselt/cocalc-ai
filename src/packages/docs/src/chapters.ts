@@ -57,8 +57,8 @@ export const DOCS_CHAPTERS: DocsChapter[] = [
     category: "Terminal",
     startEntryId: "terminal.use-terminal",
     summary:
-      "Run shells inside projects, manage processes, and use terminal sessions as part of reproducible work.",
-    workflows: ["Shells", "Processes", "Project tools"],
+      "Run shells and graphical Linux applications inside projects, manage processes, and use persistent sessions as part of reproducible work.",
+    workflows: ["Shells", "Graphical apps", "Processes", "Project tools"],
   },
   {
     category: "Files",

@@ -3,7 +3,13 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   CHECK_BLIT_APPLICATION_COMMAND,
   INSTALL_CHROMIUM_APPLICATION_COMMAND,
@@ -63,6 +69,29 @@ describe("Blit application launcher", () => {
       command: "bash",
       project_id: "project-id",
     });
+  });
+
+  it("confirms before shutting down the shared project session", async () => {
+    const onShutdown = jest.fn().mockResolvedValue(undefined);
+    render(<BlitLauncher onShutdown={onShutdown} project_id="project-id" />);
+
+    const shutdown = screen.getByRole("button", { name: "Shut down" });
+    shutdown.focus();
+    expect(shutdown).toHaveFocus();
+    fireEvent.click(shutdown);
+
+    const confirmation = await screen.findByRole("tooltip");
+    expect(
+      within(confirmation).getByText("Shut down graphical applications?"),
+    ).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText(/for all connected browsers/),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Shut down" }),
+    );
+
+    await waitFor(() => expect(onShutdown).toHaveBeenCalledTimes(1));
   });
 
   it("checks and directly launches an installed application", async () => {

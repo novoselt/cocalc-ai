@@ -28,6 +28,8 @@ interface Props {
 type Stage =
   | "checking"
   | "starting"
+  | "stopped"
+  | "stopping"
   | "installing"
   | "needs-packages"
   | "ready";
@@ -131,6 +133,25 @@ export function Blit({ is_current, project_id, reload }: Props) {
     }
   }
 
+  async function shutdown(): Promise<void> {
+    const previousSrc = src;
+    const api = webapp_client.conat_client.projectApi({ project_id });
+    setStage("stopping");
+    setSrc(undefined);
+    try {
+      await api.apps.upsertAppSpec(createBlitAppSpec(project_id, false));
+      await api.apps.stopApp(BLIT_APP_ID);
+      setStage("stopped");
+    } catch (err) {
+      await api.apps
+        .upsertAppSpec(createBlitAppSpec(project_id))
+        .catch(() => {});
+      setSrc(previousSrc);
+      setStage("ready");
+      throw err;
+    }
+  }
+
   if (stage === "needs-packages" && !error) {
     return (
       <Flex
@@ -176,7 +197,11 @@ export function Blit({ is_current, project_id, reload }: Props) {
         }}
         vertical
       >
-        <BlitLauncher project_id={project_id} />
+        <BlitLauncher
+          onShutdown={shutdown}
+          project_id={project_id}
+          shuttingDown={stage === "stopping"}
+        />
         <iframe
           allow="autoplay; camera; clipboard-read; clipboard-write; fullscreen; microphone"
           aria-label="Blit graphical applications"
@@ -190,6 +215,31 @@ export function Blit({ is_current, project_id, reload }: Props) {
             width: "100%",
           }}
           title="Blit graphical applications"
+        />
+      </Flex>
+    );
+  }
+
+  if (stage === "stopped") {
+    return (
+      <Flex
+        align="center"
+        justify="center"
+        style={{ height: "100%", padding: 24 }}
+      >
+        <Alert
+          action={
+            <Button
+              type="primary"
+              onClick={() => setRetry((value) => value + 1)}
+            >
+              Start graphical applications
+            </Button>
+          }
+          description="All graphical windows and terminals in the shared project session were closed."
+          showIcon
+          title="Graphical applications are shut down"
+          type="info"
         />
       </Flex>
     );
@@ -220,9 +270,11 @@ export function Blit({ is_current, project_id, reload }: Props) {
           <Typography.Text>
             {stage === "installing"
               ? "Installing graphical application support..."
-              : stage === "checking"
-                ? "Checking graphical application support..."
-                : "Starting the Blit Wayland compositor..."}
+              : stage === "stopping"
+                ? "Shutting down graphical applications..."
+                : stage === "checking"
+                  ? "Checking graphical application support..."
+                  : "Starting the Blit Wayland compositor..."}
           </Typography.Text>
         </Flex>
       )}

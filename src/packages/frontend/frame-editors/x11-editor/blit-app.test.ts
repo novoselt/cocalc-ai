@@ -28,6 +28,11 @@ describe("Blit managed app", () => {
       strip_prefix: true,
       websocket: true,
     });
+    expect(spec.wake.enabled).toBe(true);
+  });
+
+  it("can disable proxy wake for an explicit shared-session shutdown", () => {
+    expect(createBlitAppSpec("project-id", false).wake.enabled).toBe(false);
   });
 
   it("adds the project-specific Blit handshake to the URL fragment", () => {

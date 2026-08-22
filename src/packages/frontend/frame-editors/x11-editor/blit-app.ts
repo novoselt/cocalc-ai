@@ -71,7 +71,10 @@ export function parseBlitPrerequisites(output: string): BlitPrerequisites {
   return { missingPackages, missingTools };
 }
 
-export function createBlitAppSpec(projectId: string): AppSpec {
+export function createBlitAppSpec(
+  projectId: string,
+  wakeEnabled = true,
+): AppSpec {
   return {
     version: 1,
     id: BLIT_APP_ID,
@@ -104,7 +107,7 @@ export function createBlitAppSpec(projectId: string): AppSpec {
       readiness_timeout_s: 30,
     },
     wake: {
-      enabled: true,
+      enabled: wakeEnabled,
       keep_warm_s: 15 * 60,
       startup_timeout_s: 45,
     },

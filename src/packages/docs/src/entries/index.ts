@@ -66,6 +66,7 @@ const DOCS_ENTRY_IDS = [
   "api.http-api",
   "projects.open-terminal",
   "terminal.use-terminal",
+  "terminal.graphical-applications",
   "terminal.ssh-access",
   "files.project-files",
   "files.explorer",
@@ -130,6 +131,7 @@ const DOCS_ENTRY_IDS = [
 const DOCS_PLUS_ENTRY_IDS = new Set<string>([
   "projects.open-terminal",
   "terminal.use-terminal",
+  "terminal.graphical-applications",
   "files.project-files",
   "files.explorer",
   "files.markdown",

@@ -3,7 +3,15 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
-import { Alert, Button, Flex, Modal, Typography, theme } from "antd";
+import {
+  Alert,
+  Button,
+  Flex,
+  Modal,
+  Popconfirm,
+  Typography,
+  theme,
+} from "antd";
 import { useState } from "react";
 import { Icon } from "@cocalc/frontend/components";
 import { exec } from "@cocalc/frontend/frame-editors/generic/client";
@@ -18,7 +26,9 @@ import {
 } from "./blit-applications";
 
 interface Props {
+  onShutdown?: () => Promise<void>;
   project_id: string;
+  shuttingDown?: boolean;
 }
 
 function errorMessage(err: unknown): string {
@@ -37,7 +47,11 @@ function installExecArgs(install: BlitApplicationInstall): string[] {
   ];
 }
 
-export function BlitLauncher({ project_id }: Props) {
+export function BlitLauncher({
+  onShutdown,
+  project_id,
+  shuttingDown = false,
+}: Props) {
   const { token } = theme.useToken();
   const [busyAppId, setBusyAppId] = useState<string>();
   const [installedAppIds, setInstalledAppIds] = useState<Set<string>>(
@@ -141,6 +155,17 @@ export function BlitLauncher({ project_id }: Props) {
     }
   }
 
+  async function shutdown(): Promise<void> {
+    if (!onShutdown || busyAppId || installing || shuttingDown) return;
+    setError(undefined);
+    setStatus(undefined);
+    try {
+      await onShutdown();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   return (
     <>
       <div
@@ -161,7 +186,9 @@ export function BlitLauncher({ project_id }: Props) {
           {BLIT_APPLICATIONS.map((app) => (
             <Button
               disabled={
-                (busyAppId != null && busyAppId !== app.id) || installing
+                (busyAppId != null && busyAppId !== app.id) ||
+                installing ||
+                shuttingDown
               }
               icon={
                 <span aria-hidden="true">
@@ -177,6 +204,26 @@ export function BlitLauncher({ project_id }: Props) {
               {app.label}
             </Button>
           ))}
+          {onShutdown && (
+            <Popconfirm
+              cancelText="Cancel"
+              description="This closes every graphical window and terminal in the shared project session for all connected browsers."
+              okButtonProps={{ danger: true }}
+              okText="Shut down"
+              onConfirm={shutdown}
+              title="Shut down graphical applications?"
+            >
+              <Button
+                danger
+                disabled={busyAppId != null || installing}
+                loading={shuttingDown}
+                size="small"
+                style={{ flex: "0 0 auto", marginInlineStart: "auto" }}
+              >
+                Shut down
+              </Button>
+            </Popconfirm>
+          )}
         </Flex>
         {(status || error) && (
           <Typography.Text
