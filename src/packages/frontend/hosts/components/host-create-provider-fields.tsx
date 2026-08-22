@@ -21,6 +21,7 @@ import {
 } from "@cocalc/util/consts";
 import { MIN_PROJECT_HOST_DISK_GB } from "@cocalc/util/project-host-limits";
 import { COLORS } from "@cocalc/util/theme";
+import type { DedicatedHostSurchargeSettings } from "@cocalc/util/project-host-pricing";
 import type { HostCreateViewModel } from "../hooks/use-host-create-view-model";
 import { getDiskTypeOptions } from "../constants";
 import { isNebiusSpotSupported } from "../providers/registry";
@@ -34,6 +35,7 @@ import {
 import { SshTargetLabel } from "./ssh-target-help";
 import { useMachineTypeSortMode } from "../hooks/use-machine-type-sort-mode";
 import { HostSharedScratchFields } from "./host-shared-scratch-fields";
+import { NebiusCapacityPicker } from "./nebius-capacity-picker";
 
 const MIN_DISK_SIZE = MIN_PROJECT_HOST_DISK_GB;
 const MAX_DISK_SIZE = 10_000;
@@ -53,6 +55,7 @@ type HostCreateProviderFieldsProps = {
   hideProviderSelect?: boolean;
   draftManaged?: boolean;
   onDraftPatch?: (patch: Record<string, any>) => void;
+  pricingSettings?: DedicatedHostSurchargeSettings;
 };
 
 export const HostCreateProviderFields: React.FC<
@@ -63,6 +66,7 @@ export const HostCreateProviderFields: React.FC<
   hideProviderSelect = false,
   draftManaged = false,
   onDraftPatch,
+  pricingSettings,
 }) => {
   const { providerOptions, selectedProvider, fields, catalogError, storage } =
     provider;
@@ -81,9 +85,11 @@ export const HostCreateProviderFields: React.FC<
   const watchedRegion = Form.useWatch("region", form);
   const watchedZone = Form.useWatch("zone", form);
   const watchedMachineType = Form.useWatch("machine_type", form);
+  const watchedProviderPlatform = Form.useWatch("provider_platform", form);
   const watchedSize = Form.useWatch("size", form);
   const watchedGpuType = Form.useWatch("gpu_type", form);
   const watchedPricingModel = Form.useWatch("pricing_model", form);
+  const watchedPriceDisplay = Form.useWatch("price_display", form);
   const watchedStorageMode = Form.useWatch("storage_mode", form);
   const watchedDisk = Form.useWatch("disk", form);
   const watchedDiskGb = Form.useWatch("disk_gb", form);
@@ -103,9 +109,10 @@ export const HostCreateProviderFields: React.FC<
   const watchedSelfHostTarget = Form.useWatch("self_host_ssh_target", form);
   const watchedRegionPreference = Form.useWatch("region_preference", form);
   const showRegionPreference =
+    selectedProvider === "gcp" && schema.primary.includes("region");
+  const showPriceDisplay =
     (selectedProvider === "gcp" || selectedProvider === "nebius") &&
     schema.primary.includes("region");
-  const showPriceDisplay = showRegionPreference;
   const selfHostAlphaEnabled = !!useTypedRedux(
     "customize",
     "project_hosts_self_host_alpha_enabled",
@@ -142,8 +149,17 @@ export const HostCreateProviderFields: React.FC<
   const nebiusSpotSupported = React.useMemo(
     () =>
       selectedProvider !== "nebius" ||
-      isNebiusSpotSupported(displayOptions.machine_type, watchedMachineType),
-    [displayOptions.machine_type, selectedProvider, watchedMachineType],
+      isNebiusSpotSupported(
+        displayOptions.machine_type,
+        watchedMachineType,
+        watchedProviderPlatform,
+      ),
+    [
+      displayOptions.machine_type,
+      selectedProvider,
+      watchedMachineType,
+      watchedProviderPlatform,
+    ],
   );
   const showSpotHint =
     watchedRegionPreference === "cheapest" &&
@@ -346,8 +362,9 @@ export const HostCreateProviderFields: React.FC<
 
   React.useEffect(() => {
     if (draftManaged) return;
+    if (selectedProvider === "nebius") return;
     ensureFieldValue("region", watchedRegion);
-  }, [draftManaged, ensureFieldValue, watchedRegion]);
+  }, [draftManaged, ensureFieldValue, selectedProvider, watchedRegion]);
 
   React.useEffect(() => {
     if (draftManaged) return;
@@ -356,8 +373,9 @@ export const HostCreateProviderFields: React.FC<
 
   React.useEffect(() => {
     if (draftManaged) return;
+    if (selectedProvider === "nebius") return;
     ensureFieldValue("machine_type", watchedMachineType);
-  }, [draftManaged, ensureFieldValue, watchedMachineType]);
+  }, [draftManaged, ensureFieldValue, selectedProvider, watchedMachineType]);
 
   React.useEffect(() => {
     if (draftManaged) return;
@@ -558,9 +576,55 @@ export const HostCreateProviderFields: React.FC<
             </Typography.Text>
           ) : null}
         </Typography.Text>
-        <Row gutter={[10, 0]} style={{ marginTop: 6 }}>
-          {schema.primary.map(renderField)}
-        </Row>
+        {selectedProvider === "nebius" ? (
+          <div style={{ marginTop: 8, marginBottom: 12 }}>
+            <Form.Item name="region" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="machine_type" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="provider_platform" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="gpu_type" hidden>
+              <Input />
+            </Form.Item>
+            <NebiusCapacityPicker
+              catalog={provider.catalog}
+              selection={{
+                region: watchedRegion,
+                machine_type: watchedMachineType,
+                provider_platform: watchedProviderPlatform,
+                pricing_model: watchedPricingModel,
+                price_display:
+                  watchedPriceDisplay === "monthly" ? "monthly" : "hourly",
+                pricing_settings: pricingSettings,
+                storage_mode: watchedStorageMode,
+                disk_type: watchedDiskType,
+                disk_gb: diskValue,
+              }}
+              onPricingModelChange={(pricingModel) =>
+                setFormFields({ pricing_model: pricingModel })
+              }
+              onSelect={(option) =>
+                setFormFields({
+                  region: option.region,
+                  machine_type: option.machineType,
+                  provider_platform: option.platform,
+                  gpu_type:
+                    option.gpuCount > 0
+                      ? (option.gpuLabel ?? option.platformLabel)
+                      : "none",
+                })
+              }
+            />
+          </div>
+        ) : (
+          <Row gutter={[10, 0]} style={{ marginTop: 6 }}>
+            {schema.primary.map(renderField)}
+          </Row>
+        )}
       </div>
       {showDiskFields && (
         <div style={FIELD_GROUP_STYLE}>

@@ -12,12 +12,21 @@ import {
   isSpotCapacityError,
   managedVmReadinessCommand,
   managedVmProjectSshConfigNeedsSync,
+  managedVmProjectAccessNeedsSync,
+  managedVmProjectConfigShouldBeEnabled,
   providerComputeInstanceIsExpected,
+  providerRuntimePublicAddressStatus,
+  providerStartDisposition,
   RetryableComputeWorkError,
+  shouldRecoverSpotCapacityFailure,
+  shouldReplaceNebiusSpotInterruption,
   stoppedVmProviderInstanceNeedsReconciliation,
   runtimeIdentityChanged,
+  runningVmWorkAlreadySatisfied,
+  shouldRepairNebiusSshAfterRestart,
   spotCapacityRecoveryDecision,
   volumeAttachedToVm,
+  vmReadinessIntentIsRunning,
 } from "./worker";
 import {
   effectiveComputeVolumeSizeGb,
@@ -151,7 +160,51 @@ describe("managed VM provider observations", () => {
   });
 });
 
+describe("Nebius Spot interruption recovery", () => {
+  const interrupted = {
+    provider: "nebius",
+    desired_pricing_model: "spot",
+    effective_pricing_model: "spot",
+    state: "recovering",
+    spot_recovery_state: {
+      phase: "retrying_spot",
+      last_preempted_at: "2026-08-22T00:00:00.000Z",
+    },
+  } as any;
+
+  it("replaces an interrupted instance to obtain a fresh placement", () => {
+    expect(shouldReplaceNebiusSpotInterruption(interrupted)).toBe(true);
+  });
+
+  it("does not replace unrelated recovery or GCP instances", () => {
+    expect(
+      shouldReplaceNebiusSpotInterruption({
+        ...interrupted,
+        spot_recovery_state: { phase: "retrying_spot" },
+      }),
+    ).toBe(false);
+    expect(
+      shouldReplaceNebiusSpotInterruption({ ...interrupted, provider: "gcp" }),
+    ).toBe(false);
+    expect(
+      shouldReplaceNebiusSpotInterruption({
+        ...interrupted,
+        effective_pricing_model: "on_demand",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("managed VM project SSH config reconciliation", () => {
+  it("keeps active project SSH config while the VM is stopped", () => {
+    expect(
+      managedVmProjectConfigShouldBeEnabled({ revoked_at: null } as any),
+    ).toBe(true);
+    expect(
+      managedVmProjectConfigShouldBeEnabled({ revoked_at: new Date() } as any),
+    ).toBe(false);
+  });
+
   it("rewrites legacy aliases even when their old state is ready", () => {
     expect(
       managedVmProjectSshConfigNeedsSync({
@@ -172,6 +225,52 @@ describe("managed VM project SSH config reconciliation", () => {
         },
       } as any),
     ).toBe(false);
+  });
+
+  it("detects key removals and unfinished access state", () => {
+    const access = [
+      {
+        project_id: "project-a",
+        ssh_public_key: "ssh-ed25519 AAAA project-a",
+        state: "ready",
+        revoked_at: null,
+      },
+      {
+        project_id: "project-b",
+        ssh_public_key: "ssh-ed25519 BBBB project-b",
+        state: "revoked",
+        revoked_at: new Date(),
+      },
+    ] as any;
+    expect(
+      managedVmProjectAccessNeedsSync(
+        {
+          metadata: {
+            project_ssh_public_keys: ["ssh-ed25519 AAAA project-a"],
+          },
+        },
+        access,
+      ),
+    ).toBe(false);
+    expect(
+      managedVmProjectAccessNeedsSync(
+        {
+          metadata: {
+            project_ssh_public_keys: [
+              "ssh-ed25519 AAAA project-a",
+              "ssh-ed25519 BBBB project-b",
+            ],
+          },
+        },
+        access,
+      ),
+    ).toBe(true);
+    expect(
+      managedVmProjectAccessNeedsSync(
+        { metadata: { project_ssh_public_keys: [] } },
+        [{ ...access[0], state: "pending" }],
+      ),
+    ).toBe(true);
   });
 });
 
@@ -267,6 +366,127 @@ describe("compute VM work failure state", () => {
       ),
     ).toBe(true);
     expect(isSpotCapacityError(new Error("invalid machine type"))).toBe(false);
+  });
+
+  it("does not treat delayed Nebius networking as Spot exhaustion", () => {
+    expect(
+      providerRuntimePublicAddressStatus({
+        provider: "nebius",
+        expected: "203.0.113.10",
+        observed: undefined,
+      }),
+    ).toBe("pending");
+    expect(
+      providerRuntimePublicAddressStatus({
+        provider: "nebius",
+        expected: undefined,
+        observed: "203.0.113.11",
+      }),
+    ).toBe("ready");
+    expect(
+      shouldRecoverSpotCapacityFailure(
+        {
+          desired_pricing_model: "spot",
+          effective_pricing_model: "spot",
+        } as any,
+        new Error(
+          "Nebius accepted the VM and is still assigning its public IP",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("enters Spot recovery only for explicit capacity failures", () => {
+    const vm = {
+      desired_pricing_model: "spot",
+      effective_pricing_model: "spot",
+    } as any;
+    expect(
+      shouldRecoverSpotCapacityFailure(
+        vm,
+        new Error("RESOURCE_POOL_EXHAUSTED: no capacity"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRecoverSpotCapacityFailure(
+        vm,
+        new Error("SSH readiness timed out for 203.0.113.10"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not start an instance the provider already reports running", () => {
+    expect(providerStartDisposition("running")).toBe("ready");
+    expect(providerStartDisposition("starting")).toBe("wait");
+    expect(providerStartDisposition("missing")).toBe("provision");
+    expect(providerStartDisposition("stopped")).toBe("start");
+  });
+
+  it("discards stale running work after the VM becomes ready", () => {
+    expect(
+      runningVmWorkAlreadySatisfied({
+        state: "ready",
+        desired_state: "running",
+      } as any),
+    ).toBe(true);
+    expect(
+      runningVmWorkAlreadySatisfied({
+        state: "starting",
+        desired_state: "running",
+      } as any),
+    ).toBe(false);
+    expect(
+      runningVmWorkAlreadySatisfied(
+        {
+          state: "ready",
+          desired_state: "running",
+        } as any,
+        { providerConfirmedMissing: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("cancels readiness polling when newer intent stops or deletes the VM", () => {
+    expect(
+      vmReadinessIntentIsRunning({ desired_state: "running" } as any),
+    ).toBe(true);
+    expect(
+      vmReadinessIntentIsRunning({ desired_state: "stopped" } as any),
+    ).toBe(false);
+    expect(
+      vmReadinessIntentIsRunning({ desired_state: "deleted" } as any),
+    ).toBe(false);
+    expect(vmReadinessIntentIsRunning(undefined)).toBe(false);
+  });
+
+  it("repairs a previously verified Nebius VM that loses its managed SSH key", () => {
+    const vm = {
+      provider: "nebius",
+      desired_state: "running",
+      ready_at: new Date(),
+      metadata: { provider_generation_provisioning: false },
+    } as any;
+    expect(
+      shouldRepairNebiusSshAfterRestart(
+        vm,
+        new Error("user@host: Permission denied (publickey)."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRepairNebiusSshAfterRestart(
+        { ...vm, ready_at: null },
+        new Error("Permission denied (publickey)."),
+      ),
+    ).toBe(false);
+    expect(
+      shouldRepairNebiusSshAfterRestart(
+        { ...vm, metadata: { provider_generation_provisioning: true } },
+        new Error("Permission denied (publickey)."),
+      ),
+    ).toBe(false);
+    expect(
+      shouldRepairNebiusSshAfterRestart(vm, new Error("TCP 22 timeout")),
+    ).toBe(false);
   });
 
   it("uses the configured Spot retry threshold before Standard fallback", () => {

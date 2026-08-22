@@ -67,6 +67,7 @@ import {
 } from "@cocalc/frontend/misc/remember-me";
 import { PROJECT_HOST_BROWSER_SESSION_BOOTSTRAP_PATH } from "@cocalc/conat/auth/project-host-browser-session";
 import { PROJECT_HOST_HTTP_AUTH_QUERY_PARAM } from "@cocalc/conat/auth/project-host-http";
+import { browserRuntimePresenceSubject } from "@cocalc/conat/project-host/browser-runtime-presence";
 import { parseRetryInAboutSeconds } from "@cocalc/conat/auth/retry-window";
 import {
   get as getLroStream,
@@ -2584,6 +2585,35 @@ export class ConatClient extends EventEmitter {
         },
       );
     }
+  };
+
+  public reportProjectBrowserRuntimePresence = async ({
+    project_id,
+  }: {
+    project_id: string;
+  }): Promise<void> => {
+    if (usesDefaultProjectConnection()) return;
+    if (!isValidUUID(project_id)) {
+      throw new Error(`invalid project_id '${project_id}'`);
+    }
+    const account_id = this.client.account_id;
+    if (typeof account_id !== "string" || !isValidUUID(account_id)) return;
+    const routing = await this.ensureProjectRoutingInfo(project_id);
+    if (!routing) return;
+    await this.ensureProjectHostBrowserSession({
+      host_id: routing.host_id,
+      routing_key: routing.routing_key,
+      address: routing.address,
+      project_id,
+    });
+    const routing_key = routing.routing_key ?? routing.host_id;
+    const cn = this.getOrCreateRoutedHubClient({ ...routing, project_id });
+    await this.ensureRoutedHubClientConnected({ routing_key, project_id });
+    await cn.publish(
+      browserRuntimePresenceSubject({ project_id, account_id }),
+      { browser_id: this.client.browser_id },
+      { timeout: 5_000, waitForInterest: true },
+    );
   };
 
   // Project-host routing + auth design:

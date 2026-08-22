@@ -37,6 +37,7 @@ const FORM_SYNC_FIELDS: Array<keyof HostCreateDraft> = [
   "region",
   "zone",
   "machine_type",
+  "provider_platform",
   "gpu_type",
   "size",
   "gpu",

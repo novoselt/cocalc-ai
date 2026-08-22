@@ -1,4 +1,7 @@
-import { NebiusProvider } from "../nebius/provider";
+import {
+  NebiusProvider,
+  normalizeNebiusInstanceStatus,
+} from "../nebius/provider";
 import type { HostSpec } from "../types";
 import {
   DiskSpec_DiskType,
@@ -236,8 +239,43 @@ describe("NebiusProvider", () => {
     expect(createArgs.spec.preemptible.onPreemption).toBe(
       PreemptibleSpec_PreemptionPolicy.STOP,
     );
-    expect(createArgs.spec.preemptible.priority).toBe(3);
+    expect(createArgs.spec.preemptible.priority).toBe(0);
     expect(createArgs.spec.recoveryPolicy).toBe(InstanceRecoveryPolicy.FAIL);
+    expect(createArgs.spec.reservationPolicy).toBeUndefined();
+    expect(createArgs.spec.networkInterfaces[0].publicIpAddress.static).toBe(
+      false,
+    );
+  });
+
+  it("uses a static public address only for an explicit allocation", async () => {
+    await new NebiusProvider().createHost(
+      buildSpec({
+        metadata: {
+          machine_type: "spot-enabled-machine",
+          platform: "spot-platform",
+          source_image: "image-1",
+          storage_mode: "persistent",
+          public_address_id: "allocation-1",
+        },
+      }),
+      {
+        parentId: "project-1",
+        serviceAccountId: "svc-1",
+        publicKeyId: "pub-1",
+        privateKeyPem: "key",
+        sshPublicKey: "ssh-ed25519 AAAA",
+        subnetId: "subnet-1",
+      },
+    );
+
+    const publicAddress =
+      instancesCreateMock.mock.calls[0][0].spec.networkInterfaces[0]
+        .publicIpAddress;
+    expect(publicAddress.static).toBe(true);
+    expect(publicAddress.allocation).toEqual({
+      $case: "allocationId",
+      allocationId: "allocation-1",
+    });
   });
 
   it("adopts a matching instance from the paginated parent listing", async () => {
@@ -927,5 +965,28 @@ describe("NebiusProvider", () => {
       shared_disk_id: "scratch-disk",
       shared_disk_name: "spot-host-scratch",
     });
+  });
+});
+
+describe("normalizeNebiusInstanceStatus", () => {
+  it.each(["CREATING", "UPDATING", "STARTING"])(
+    "treats %s as a provider transition",
+    (state) => {
+      expect(normalizeNebiusInstanceStatus(state)).toBe("starting");
+    },
+  );
+
+  it.each(["STOPPING", "DELETING"])(
+    "keeps the direction of the %s transition",
+    (state) => {
+      expect(normalizeNebiusInstanceStatus(state)).toBe("stopping");
+    },
+  );
+
+  it("keeps stable and terminal states distinct", () => {
+    expect(normalizeNebiusInstanceStatus("RUNNING")).toBe("running");
+    expect(normalizeNebiusInstanceStatus("STOPPED")).toBe("stopped");
+    expect(normalizeNebiusInstanceStatus("ERROR")).toBe("error");
+    expect(normalizeNebiusInstanceStatus(undefined)).toBe("error");
   });
 });

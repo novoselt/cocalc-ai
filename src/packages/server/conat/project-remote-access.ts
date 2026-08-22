@@ -23,7 +23,10 @@ import {
   type ProjectViewerReadPolicy,
 } from "@cocalc/util/project-access";
 import { isValidUUID } from "@cocalc/util/misc";
+import { mapParallelLimit } from "@cocalc/util/async-utils";
 import * as publicDirectoryShares from "@cocalc/server/conat/api/public-directory-shares";
+
+const PROJECT_ACCESS_BATCH_CONCURRENCY = 20;
 
 type LocalProjectReferenceRow = {
   project_id: string;
@@ -349,8 +352,9 @@ export async function assertProjectCollaboratorAccessAllowRemoteBatch({
     throw Error("invalid project_id -- all must be valid uuid's");
   }
   const local = await loadLocalProjectReferences(uniqueProjectIds);
-  return await Promise.all(
-    uniqueProjectIds.map(async (project_id) => {
+  return await mapParallelLimit(
+    uniqueProjectIds,
+    async (project_id) => {
       const reference = local.get(project_id);
       if (
         reference?.owning_bay_id === getConfiguredBayId() &&
@@ -366,6 +370,7 @@ export async function assertProjectCollaboratorAccessAllowRemoteBatch({
         project_id,
         warmRoute,
       });
-    }),
+    },
+    PROJECT_ACCESS_BATCH_CONCURRENCY,
   );
 }

@@ -15,6 +15,7 @@ export function getSortedDates(
   messages: ChatMessages,
   _account_id: string,
   visibleKeys?: Set<string>,
+  hiddenMessageIds?: ReadonlySet<string>,
 ): {
   dates: string[];
   numChildren: NumChildren;
@@ -33,6 +34,7 @@ export function getSortedDates(
     const messageKey = `${messageDate.valueOf()}`;
     if (visibleKeys && !visibleKeys.has(messageKey)) continue;
     const messageId = `${field<string>(message, "message_id") ?? ""}`.trim();
+    if (messageId && hiddenMessageIds?.has(messageId)) continue;
     visibleMessages.push(message);
     if (messageId) visibleById.set(messageId, message);
   }

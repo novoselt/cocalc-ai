@@ -184,6 +184,7 @@ function isActiveAcpAssistantTurn({
 type SteerCollections = {
   attachedByParentMessageId: Map<string, AttachedSteerMessage[]>;
   byAssistantMessageId: Map<string, AttachedSteerMessage[]>;
+  representedMessageIds: Set<string>;
 };
 
 function collectSteers({
@@ -197,6 +198,7 @@ function collectSteers({
 }): SteerCollections {
   const attachedByParentMessageId = new Map<string, AttachedSteerMessage[]>();
   const byAssistantMessageId = new Map<string, AttachedSteerMessage[]>();
+  const representedMessageIds = new Set<string>();
   const byMessageId = new Map<string, ChatMessageTyped>();
   for (const [, message] of messages) {
     if (message == null) continue;
@@ -233,24 +235,30 @@ function collectSteers({
       text,
       state,
     };
+    const activeAssistantTurn = isActiveAcpAssistantTurn({
+      message: assistantMessageId
+        ? byMessageId.get(assistantMessageId)
+        : undefined,
+      acpState,
+    });
+    // Hide the durable row only after an alternative visible representation exists.
+    if (activeAssistantTurn && assistantMessageId) {
+      const next = byAssistantMessageId.get(assistantMessageId) ?? [];
+      next.push(steer);
+      byAssistantMessageId.set(assistantMessageId, next);
+      representedMessageIds.add(messageId);
+      continue;
+    }
+    if (!byMessageId.has(anchoredParentId)) continue;
     if (assistantMessageId) {
       const next = byAssistantMessageId.get(assistantMessageId) ?? [];
       next.push(steer);
       byAssistantMessageId.set(assistantMessageId, next);
     }
-    if (
-      isActiveAcpAssistantTurn({
-        message: assistantMessageId
-          ? byMessageId.get(assistantMessageId)
-          : undefined,
-        acpState,
-      })
-    ) {
-      continue;
-    }
     const next = attachedByParentMessageId.get(anchoredParentId) ?? [];
     next.push(steer);
     attachedByParentMessageId.set(anchoredParentId, next);
+    representedMessageIds.add(messageId);
   }
   for (const list of attachedByParentMessageId.values()) {
     list.sort((a, b) => cmp(a.date, b.date));
@@ -261,6 +269,7 @@ function collectSteers({
   return {
     attachedByParentMessageId,
     byAssistantMessageId,
+    representedMessageIds,
   };
 }
 
@@ -435,6 +444,7 @@ export function ChatLog({
       messages,
       account_id!,
       visibleKeys,
+      steerCollections.representedMessageIds,
     );
     // TODO: This is an ugly hack because I'm tired and need to finish this.
     // The right solution would be to move this filtering to the store.
@@ -447,7 +457,13 @@ export function ChatLog({
       );
     }, 1);
     return { dates, numChildren };
-  }, [messages, account_id, singleThreadView, visibleKeys]);
+  }, [
+    messages,
+    account_id,
+    singleThreadView,
+    steerCollections.representedMessageIds,
+    visibleKeys,
+  ]);
 
   useEffect(() => {
     if (!canAutoScroll) {

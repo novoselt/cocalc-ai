@@ -508,10 +508,14 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
             ? await ctx.hub.compute.listProjectVms({
                 include_deleted: opts.includeDeleted === true,
               })
-            : await ctx.hub.compute.listVms({
-                project_id: requestedProjectId,
-                include_deleted: opts.includeDeleted === true,
-              });
+            : requestedProjectId
+              ? await ctx.hub.compute.listProjectVms({
+                  project_id: requestedProjectId,
+                  include_deleted: opts.includeDeleted === true,
+                })
+              : await ctx.hub.compute.listVms({
+                  include_deleted: opts.includeDeleted === true,
+                });
           return opts.long ? rows : vmListSummary(rows);
         });
       },
@@ -524,6 +528,64 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
         return await getVmForContext(ctx, idOrName);
       });
     });
+
+  const access = vm
+    .command("access")
+    .description("manage project SSH access to account-owned VMs");
+
+  access
+    .command("list [vm]")
+    .description("list active or pending project access grants")
+    .option("--include-revoked", "include fully revoked grants", false)
+    .action(
+      async (
+        idOrName: string | undefined,
+        opts: { includeRevoked?: boolean },
+        command: Command,
+      ) => {
+        await withContext(command, "vm access list", async (ctx) => {
+          requireAccountAuth(ctx, "vm access list");
+          return await ctx.hub.compute.listVmProjectAccess({
+            id_or_name: idOrName,
+            include_revoked: opts.includeRevoked === true,
+          });
+        });
+      },
+    );
+
+  access
+    .command("grant <vm>")
+    .description("grant a project SSH access to an account-owned VM")
+    .requiredOption("--project <project_id>", "project to grant access")
+    .action(
+      async (idOrName: string, opts: { project: string }, command: Command) => {
+        await withContext(command, "vm access grant", async (ctx) => {
+          requireAccountAuth(ctx, "vm access grant");
+          return await ctx.hub.compute.grantVmProjectAccess({
+            id_or_name: idOrName,
+            project_id: opts.project,
+            idempotency_key: randomUUID(),
+          });
+        });
+      },
+    );
+
+  access
+    .command("revoke <vm>")
+    .description("revoke a project's SSH access to an account-owned VM")
+    .requiredOption("--project <project_id>", "project to revoke access")
+    .action(
+      async (idOrName: string, opts: { project: string }, command: Command) => {
+        await withContext(command, "vm access revoke", async (ctx) => {
+          requireAccountAuth(ctx, "vm access revoke");
+          return await ctx.hub.compute.revokeVmProjectAccess({
+            id_or_name: idOrName,
+            project_id: opts.project,
+            idempotency_key: randomUUID(),
+          });
+        });
+      },
+    );
 
   vm.command("orphans")
     .description("list managed-compute provider orphans (admin only)")
@@ -560,7 +622,10 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
 
   vm.command("create <name>")
     .description("create a managed compute VM")
-    .requiredOption("--project <project_id>", "attached CoCalc project")
+    .option(
+      "--project <project_id>",
+      "grant the project SSH access after creation",
+    )
     .option("--provider <provider>", "gcp or nebius", "gcp")
     .option("--os <operating_system>", "linux or windows", "linux")
     .option("--region <region>", "provider region", "us-central1")
@@ -570,6 +635,10 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
       "--machine <machine_type>",
       "allowlisted machine type",
       "e2-standard-2",
+    )
+    .option(
+      "--provider-platform <platform>",
+      "provider platform when a machine preset is reused, e.g. gpu-h200-sxm",
     )
     .option("--spot", "use interruptible Spot capacity", false)
     .option(
@@ -634,6 +703,9 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           region: opts.region,
           zone: opts.zone,
           machine_type: opts.machine,
+          provider_spec: opts.providerPlatform
+            ? { platform: opts.providerPlatform }
+            : undefined,
           gpu_type:
             opts.gpuType && opts.gpuType !== "none" ? opts.gpuType : undefined,
           gpu_count: opts.gpuCount == null ? undefined : Number(opts.gpuCount),
@@ -646,7 +718,9 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
           home_volume: opts.homeVolume,
           ssh_public_key: key.key,
           configure_project_ssh:
-            opts.sshKey !== false && opts.configureProjectSsh !== false,
+            !!opts.project &&
+            opts.sshKey !== false &&
+            opts.configureProjectSsh !== false,
           idempotency_key: randomUUID(),
         });
         progress(
@@ -1007,7 +1081,7 @@ export function registerVmCommand(program: Command, deps: VmCommandDeps) {
   volume
     .command("create <name>")
     .description("create a persistent /home/user volume")
-    .requiredOption("--project <project_id>", "attached CoCalc project")
+    .option("--project <project_id>", "legacy project association")
     .option("--provider <provider>", "gcp or nebius", "gcp")
     .option("--region <region>", "provider region", "us-central1")
     .option("--zone <zone>", "provider zone")

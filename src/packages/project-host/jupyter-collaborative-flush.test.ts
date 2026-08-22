@@ -4,6 +4,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { SyncDB } from "@cocalc/sync/editor/db";
 
 let documentMock: any;
 const saveJupyterIpynbMock = jest.fn();
@@ -103,6 +104,11 @@ describe("collaborative Jupyter collection flush", () => {
     });
 
     expect(saveJupyterIpynbMock).toHaveBeenCalledTimes(1);
+    expect(SyncDB).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/home/user/assignment/.work.ipynb.sage-jupyter2",
+      }),
+    );
     expect(result).toEqual(
       expect.objectContaining({
         path: "assignment/work.ipynb",

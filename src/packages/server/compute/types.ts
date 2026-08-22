@@ -34,7 +34,7 @@ export interface ComputeVmRow {
   name: string;
   owner_account_id: string;
   owning_bay_id: string;
-  project_id: string;
+  project_id?: string | null;
   provider: ManagedComputeProviderId;
   operating_system: ManagedComputeOperatingSystem;
   operating_system_version: string;
@@ -90,6 +90,37 @@ export interface ComputeVmRow {
   spot_recovery_policy: Record<string, any>;
   spot_recovery_state: Record<string, any>;
   idempotency_key: string;
+  error?: string | null;
+  metadata: Record<string, any>;
+}
+
+export interface ComputeVmInstanceTimingRow {
+  vm_id: string;
+  generation: number;
+  created_at: Date;
+  running_at?: Date | null;
+  ready_at?: Date | null;
+}
+
+export type ComputeVmProjectAccessState =
+  | "pending"
+  | "ready"
+  | "degraded"
+  | "revoking"
+  | "revoked";
+
+export interface ComputeVmProjectAccessRow {
+  vm_id: string;
+  project_id: string;
+  owner_account_id: string;
+  owning_bay_id: string;
+  access_level: "connect";
+  ssh_public_key?: string | null;
+  state: ComputeVmProjectAccessState;
+  created_by_account_id?: string | null;
+  created_at: Date;
+  updated_at: Date;
+  revoked_at?: Date | null;
   error?: string | null;
   metadata: Record<string, any>;
 }

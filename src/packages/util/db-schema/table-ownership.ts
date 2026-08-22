@@ -517,6 +517,7 @@ export const TABLE_OWNERSHIP = {
   ...entries(
     [
       "compute_vms",
+      "compute_vm_project_access",
       "compute_vm_instances",
       "compute_volumes",
       "compute_egress_meter_intervals",
@@ -528,10 +529,11 @@ export const TABLE_OWNERSHIP = {
       authority: "owner_account_id",
       portability: "stable",
       secondary_reference_fields: {
-        project_id: "Project attachment controls discovery but not authority.",
+        project_id:
+          "Revocable project access controls discovery and SSH data-plane access, but not authority.",
       },
       notes:
-        "Account-owned managed compute state. Project attachment controls discovery but does not transfer ownership.",
+        "Account-owned managed compute state. Many projects may receive revocable SSH access without receiving lifecycle or billing authority.",
     },
   ),
 

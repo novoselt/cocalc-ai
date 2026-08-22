@@ -58,6 +58,7 @@ import { startLroExpirationMaintenance } from "@cocalc/server/lro/expiration-mai
 import { startUsageRetentionMaintenance } from "@cocalc/server/membership/usage-retention-maintenance";
 import { startActiveUserMapHistoryMaintenance } from "@cocalc/server/active-user-map-history";
 import { startGrowthAnalyticsMaintenance } from "@cocalc/server/growth-analytics/maintenance";
+import { startFrontendAssetHealthMaintenance } from "@cocalc/server/monitoring/frontend-assets";
 
 export { loadConatConfiguration };
 
@@ -163,6 +164,7 @@ export function startConatApiBackgroundWorkers(): void {
   startAiSessionReconciliationMaintenance();
   if (isPrimaryBayWorker()) {
     startSiteFundedCodexMaintenance();
+    startFrontendAssetHealthMaintenance();
   }
   if (isPrimaryBayWorker()) {
     startPurchasesMaintenanceLoop();

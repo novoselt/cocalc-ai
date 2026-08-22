@@ -126,6 +126,7 @@ import {
   listServerProviders,
 } from "@cocalc/server/cloud/providers";
 import { getProviderContext } from "@cocalc/server/cloud/provider-context";
+import { getNebiusComputeCapacityAdvice } from "@cocalc/server/compute/provider";
 import { getServerSettings } from "@cocalc/database/settings/server-settings";
 import { revokeProjectHostTokensForHost } from "@cocalc/server/project-host/bootstrap-token";
 import {
@@ -354,6 +355,7 @@ import {
 } from "./hosts-bootstrap-reconcile";
 import {
   createHostInternalHelper,
+  normalizeProjectHostTitle,
   restartHostInternalHelper,
   startHostInternalHelper,
   stopHostInternalHelper,
@@ -4795,6 +4797,22 @@ export async function getCatalog({
     ),
   };
 
+  if (cloud === "nebius") {
+    try {
+      const capacity = await getNebiusComputeCapacityAdvice();
+      catalog.entries = catalog.entries.filter(
+        ({ kind }) => kind !== "capacity_advice",
+      );
+      catalog.entries.push({
+        kind: "capacity_advice",
+        scope: "global",
+        payload: capacity,
+      });
+    } catch {
+      // Capacity advice is best effort and must not hide the base catalog.
+    }
+  }
+
   return catalog;
 }
 
@@ -6020,6 +6038,7 @@ export async function createHost({
   machine?: Host["machine"];
 }): Promise<Host> {
   const owner = requireAccount(account_id);
+  const title = normalizeProjectHostTitle(name);
   const requestedFundingMode = normalizeRequestedHostFundingMode(funding_mode);
   await assertUserHostCreateAllowed({ account_id: owner });
   assertProjectHostDiskTypeSupported({
@@ -6059,7 +6078,7 @@ export async function createHost({
   });
   return await createHostInternalHelper({
     owner,
-    name,
+    name: title,
     region,
     size,
     gpu,
@@ -7631,6 +7650,7 @@ export async function updateHostMachine({
       region: nextRegion,
       zone: nextMachine.zone,
       machine_type: nextMachine.machine_type ?? metadata.size,
+      provider_platform: nextMachine.metadata?.platform,
       disk_gb: nextMachine.disk_gb,
       disk_type: nextMachine.disk_type,
       shared_disk_gb: nextMachine.shared_disk_gb,

@@ -520,6 +520,14 @@ export class ChatMessageCache extends EventEmitter {
     return { applied, skipped };
   }
 
+  upsertLocalMessage(row: unknown): boolean {
+    const { applied } = this.hydrateArchivedRows([row]);
+    if (applied > 0) {
+      this.noteEvent("upsertLocalMessage");
+    }
+    return applied > 0;
+  }
+
   private applySnapshot(snapshot: ChatCacheSnapshot): void {
     const before = this.messagesByDate.size;
     this.messagesById = produce(snapshot.mapById, () => {});

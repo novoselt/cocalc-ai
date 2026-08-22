@@ -1149,6 +1149,20 @@ class BootstrapRuntimeUserContractTest(unittest.TestCase):
         self.assertIn("fingerprint", contract)
         self.assertNotIn("probe_error", contract)
 
+    def test_stale_boot_detection_includes_runtime_namespace_failures(self) -> None:
+        for error in (
+            "current system boot ID differs from cached boot ID",
+            "Error: cannot re-exec process to join the existing user namespace",
+            "cannot join the existing user namespace",
+            "failed to reexec runtime",
+            "invalid internal status",
+        ):
+            with self.subTest(error=error):
+                proc = subprocess.CompletedProcess([], 125, "", error)
+                self.assertTrue(bootstrap.podman_has_stale_boot_state(proc))
+        proc = subprocess.CompletedProcess([], 124, "", "operation timed out")
+        self.assertFalse(bootstrap.podman_has_stale_boot_state(proc))
+
     def test_stale_boot_repair_refuses_live_project_runtimes(self) -> None:
         cfg = make_cfg(tempfile.mkdtemp())
         original_active = bootstrap.project_host_runtime_is_active
@@ -3175,6 +3189,10 @@ reserve_project_startup_io_capacity
             self.assertIn("prepare_podman_boot()", rootctl_text)
             self.assertIn(
                 "project runtime processes are active; refusing Podman boot preparation",
+                rootctl_text,
+            )
+            self.assertIn(
+                "project runtime process observed during boot preparation; waiting for transient startup work",
                 rootctl_text,
             )
             self.assertIn(

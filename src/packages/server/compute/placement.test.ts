@@ -4,9 +4,11 @@
  */
 
 import {
+  computeMachineSupportsSpot,
   defaultComputeZone,
   requireComputeZoneInRegions,
   restrictHostCatalogToRegions,
+  selectNebiusComputeMachine,
 } from "./placement";
 
 const catalog = {
@@ -35,6 +37,48 @@ const catalog = {
 };
 
 describe("managed compute placement", () => {
+  it("allows Nebius Spot only for explicitly supported GPU machines", () => {
+    expect(
+      computeMachineSupportsSpot("nebius", {
+        gpu_count: 1,
+        provider_spec: { allowed_for_preemptibles: true },
+      }),
+    ).toBe(true);
+    expect(
+      computeMachineSupportsSpot("nebius", {
+        gpu_count: 0,
+        provider_spec: { allowed_for_preemptibles: true },
+      }),
+    ).toBe(false);
+    expect(
+      computeMachineSupportsSpot("nebius", {
+        gpu_count: 1,
+        provider_spec: {},
+      }),
+    ).toBe(false);
+    expect(computeMachineSupportsSpot("gcp", { gpu_count: 0 })).toBe(true);
+  });
+
+  it("resolves reused Nebius presets by provider platform", () => {
+    const machines = [
+      { name: "1gpu-16vcpu-200gb", platform: "gpu-h100-sxm" },
+      { name: "1gpu-16vcpu-200gb", platform: "gpu-h200-sxm" },
+    ];
+    expect(() =>
+      selectNebiusComputeMachine(machines, {
+        region: "us-central1",
+        machineType: "1gpu-16vcpu-200gb",
+      }),
+    ).toThrow("specify its provider platform");
+    expect(
+      selectNebiusComputeMachine(machines, {
+        region: "us-central1",
+        machineType: "1gpu-16vcpu-200gb",
+        platform: "gpu-h200-sxm",
+      })?.platform,
+    ).toBe("gpu-h200-sxm");
+  });
+
   it("limits the shared host catalog to configured network regions", () => {
     const restricted = restrictHostCatalogToRegions(
       catalog,

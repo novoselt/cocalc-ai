@@ -173,6 +173,51 @@ describe("project remote access", () => {
     expect(resolveProjectBayMock).not.toHaveBeenCalled();
   });
 
+  it("bounds concurrent remote authorization fallbacks", async () => {
+    const projectIds = Array.from(
+      { length: 21 },
+      (_, index) =>
+        `22222222-2222-4222-8222-${`${index + 1}`.padStart(12, "0")}`,
+    );
+    const pool = (await import("@cocalc/database/pool")).default as jest.Mock;
+    pool.mockReturnValue({ query: jest.fn(async () => ({ rows: [] })) });
+    let active = 0;
+    let maxActive = 0;
+    const release: Array<() => void> = [];
+    resolveProjectBayMock = jest.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => release.push(resolve));
+      active -= 1;
+      return { bay_id: "bay-remote" };
+    });
+    projectReferenceGetMock = jest.fn(async ({ project_id }) => ({
+      project_id,
+      title: "Remote project",
+      host_id: null,
+      owning_bay_id: "bay-remote",
+      users: { [ACCOUNT_ID]: { group: "collaborator" } },
+    }));
+    const { assertProjectCollaboratorAccessAllowRemoteBatch } =
+      await import("./project-remote-access");
+
+    const authorization = assertProjectCollaboratorAccessAllowRemoteBatch({
+      account_id: ACCOUNT_ID,
+      project_ids: projectIds,
+      warmRoute: false,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(resolveProjectBayMock).toHaveBeenCalledTimes(20);
+    expect(maxActive).toBe(20);
+    release.shift()?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resolveProjectBayMock).toHaveBeenCalledTimes(21);
+    for (const resolve of release) resolve();
+    await expect(authorization).resolves.toHaveLength(21);
+    expect(maxActive).toBe(20);
+  });
+
   it("resolves temporary public-share grants as viewer access", async () => {
     resolveProjectBayMock = jest.fn(async () => null);
     getLocalProjectAccessStatusMock = jest.fn(async () => "missing-project");

@@ -257,6 +257,10 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
   const watchedSharedDiskGb = Form.useWatch("shared_disk_gb", formInstance);
   const watchedSharedDiskType = Form.useWatch("shared_disk_type", formInstance);
   const watchedMachineType = Form.useWatch("machine_type", formInstance);
+  const watchedProviderPlatform = Form.useWatch(
+    "provider_platform",
+    formInstance,
+  );
   const watchedGpuType = Form.useWatch("gpu_type", formInstance);
   const watchedPricingModel = Form.useWatch("pricing_model", formInstance);
   const watchedPriceDisplay = Form.useWatch("price_display", formInstance);
@@ -294,6 +298,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
       region: watchedRegion,
       zone: watchedZone,
       machine_type: watchedMachineType,
+      provider_platform: watchedProviderPlatform,
       gpu_type: watchedGpuType,
       funding_mode: watchedFundingMode,
       pricing_model: watchedPricingModel,
@@ -315,6 +320,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
       watchedSharedDiskType,
       watchedGpuType,
       watchedMachineType,
+      watchedProviderPlatform,
       watchedFundingMode,
       watchedPriceDisplay,
       watchedPricingModel,
@@ -438,6 +444,7 @@ export const HostCreateCard: React.FC<HostCreateCardProps> = ({
     missingSelfHostTarget ||
     noFundingModes ||
     missingFundingMode ||
+    (provider.selectedProvider === "nebius" && !watchedProviderPlatform) ||
     selectionHasUnavailablePrice ||
     (priceSelectionComplete && supportsCatalogPricing && !livePriceEstimate);
   const requiredCatalogFields = React.useMemo<HostFieldId[]>(

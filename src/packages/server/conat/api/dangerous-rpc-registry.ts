@@ -35,6 +35,10 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
     decision: "fresh-auth-required",
     reason: "deletes a managed compute VM and its persistent root disk",
   },
+  "compute.grantVmProjectAccess": {
+    decision: "fresh-auth-required",
+    reason: "authorizes a project SSH identity on an account-owned VM",
+  },
   "compute.setVmTtl": {
     decision: "fresh-auth-required",
     reason: "changes or removes a managed compute VM spending deadline",
@@ -58,6 +62,14 @@ export const DANGEROUS_RPC_DECISIONS: Record<string, DangerousRpcDecision> = {
   "compute.revokeAgentGrant": {
     decision: "fresh-auth-not-required",
     reason: "removes delegated project-agent compute authority",
+  },
+  "compute.revokeSshKey": {
+    decision: "fresh-auth-not-required",
+    reason: "removes a direct SSH public key from an account-owned VM",
+  },
+  "compute.revokeVmProjectAccess": {
+    decision: "fresh-auth-not-required",
+    reason: "removes project SSH/data-plane access from an account-owned VM",
   },
   "compute.setVmFundingMode": {
     decision: "fresh-auth-required",

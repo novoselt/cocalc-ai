@@ -263,6 +263,7 @@ export const TIER_TEMPLATES = {
     },
     usage_limits: {
       shared_compute_priority: 0,
+      browser_idle_timeout_seconds: 1800,
       max_sponsored_running_projects: 1,
       notification_email_send_limit_5h: 10,
       notification_email_send_limit_7d: 40,

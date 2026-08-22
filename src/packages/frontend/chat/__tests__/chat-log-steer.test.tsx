@@ -166,7 +166,7 @@ describe("ChatLog immediate steer rendering", () => {
     expect(lastRenderedMessageProps("user-1")?.acpState).toBeUndefined();
   });
 
-  it("renders immediate steer rows inline while the anchored Codex turn is still running", () => {
+  it("renders immediate guidance once in the running Codex activity", () => {
     render(
       <ChatLog
         project_id="project-1"
@@ -174,7 +174,7 @@ describe("ChatLog immediate steer rendering", () => {
         mode="standalone"
         actions={{ clearScrollRequest: jest.fn() } as any}
         selectedThread="thread-1"
-        acpState={new Map([["message:steer-1", "sending"]]) as any}
+        acpState={new Map() as any}
         messages={
           new Map([
             [
@@ -208,6 +208,7 @@ describe("ChatLog immediate steer rendering", () => {
                 thread_id: "thread-1",
                 sender_id: "acct-1",
                 acp_send_mode: "immediate",
+                acp_state: "sending",
                 parent_message_id: "assistant-1",
                 history: [{ content: "actually say hello" }],
               },
@@ -219,14 +220,7 @@ describe("ChatLog immediate steer rendering", () => {
 
     const userProps = lastRenderedMessageProps("user-1");
     expect(userProps?.attachedSteers).toBeUndefined();
-    expect(lastRenderedMessageProps("steer-1")).toEqual(
-      expect.objectContaining({
-        message: expect.objectContaining({
-          message_id: "steer-1",
-          acp_send_mode: "immediate",
-        }),
-      }),
-    );
+    expect(lastRenderedMessageProps("steer-1")).toBeUndefined();
     const assistantProps = lastRenderedMessageProps("assistant-1");
     expect(assistantProps?.expandedCodexActivity).toBe(true);
     expect(assistantProps?.activitySteers).toEqual([
@@ -239,7 +233,119 @@ describe("ChatLog immediate steer rendering", () => {
     ]);
   });
 
-  it("renders multiple queued immediate steer rows for the same live Codex turn", () => {
+  it("keeps unresolved immediate guidance visible as a durable chat row", () => {
+    render(
+      <ChatLog
+        project_id="project-1"
+        path="thread.chat"
+        mode="standalone"
+        actions={{ clearScrollRequest: jest.fn() } as any}
+        selectedThread="thread-1"
+        acpState={new Map() as any}
+        messages={
+          new Map([
+            [
+              "1000",
+              {
+                date: 1000,
+                message_id: "user-1",
+                thread_id: "thread-1",
+                sender_id: "acct-1",
+                history: [{ content: "say hi" }],
+              },
+            ],
+            [
+              "2000",
+              {
+                date: 2000,
+                message_id: "assistant-1",
+                thread_id: "thread-1",
+                parent_message_id: "user-1",
+                sender_id: "acct-codex",
+                acp_account_id: "acct-codex",
+                generating: true,
+                history: [{ content: "hello" }],
+              },
+            ],
+            [
+              "3000",
+              {
+                date: 3000,
+                message_id: "steer-unresolved",
+                thread_id: "thread-1",
+                sender_id: "acct-1",
+                acp_send_mode: "immediate",
+                parent_message_id: "assistant-1",
+                history: [{ content: "durable fallback guidance" }],
+              },
+            ],
+          ]) as any
+        }
+      />,
+    );
+
+    expect(lastRenderedMessageProps("steer-unresolved")).toEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          message_id: "steer-unresolved",
+          acp_send_mode: "immediate",
+        }),
+      }),
+    );
+    expect(
+      lastRenderedMessageProps("assistant-1")?.activitySteers,
+    ).toBeUndefined();
+  });
+
+  it("keeps guidance visible when its attachment target is missing", () => {
+    render(
+      <ChatLog
+        project_id="project-1"
+        path="thread.chat"
+        mode="standalone"
+        actions={{ clearScrollRequest: jest.fn() } as any}
+        selectedThread="thread-1"
+        acpState={new Map([["message:steer-orphaned", "sent"]]) as any}
+        messages={
+          new Map([
+            [
+              "2000",
+              {
+                date: 2000,
+                message_id: "assistant-1",
+                thread_id: "thread-1",
+                parent_message_id: "missing-user-message",
+                sender_id: "acct-codex",
+                acp_account_id: "acct-codex",
+                generating: false,
+                history: [{ content: "hello" }],
+              },
+            ],
+            [
+              "3000",
+              {
+                date: 3000,
+                message_id: "steer-orphaned",
+                thread_id: "thread-1",
+                sender_id: "acct-1",
+                acp_send_mode: "immediate",
+                acp_state: "sent",
+                parent_message_id: "assistant-1",
+                history: [{ content: "orphaned durable guidance" }],
+              },
+            ],
+          ]) as any
+        }
+      />,
+    );
+
+    expect(lastRenderedMessageProps("steer-orphaned")).toBeDefined();
+    expect(
+      lastRenderedMessageProps("assistant-1")?.activitySteers,
+    ).toBeUndefined();
+  });
+
+  it("renders multiple queued guidance messages once in the same live turn", () => {
     render(
       <ChatLog
         project_id="project-1"
@@ -308,6 +414,8 @@ describe("ChatLog immediate steer rendering", () => {
     );
 
     const assistantProps = lastRenderedMessageProps("assistant-1");
+    expect(lastRenderedMessageProps("steer-1")).toBeUndefined();
+    expect(lastRenderedMessageProps("steer-2")).toBeUndefined();
     expect(assistantProps?.expandedCodexActivity).toBe(true);
     expect(assistantProps?.activitySteers).toEqual([
       expect.objectContaining({
@@ -396,8 +504,8 @@ describe("ChatLog immediate steer rendering", () => {
     );
 
     expect(screen.queryByText("Guidance sent")).toBeNull();
-    expect(lastRenderedMessageProps("steer-1")).toBeDefined();
-    expect(lastRenderedMessageProps("steer-2")).toBeDefined();
+    expect(lastRenderedMessageProps("steer-1")).toBeUndefined();
+    expect(lastRenderedMessageProps("steer-2")).toBeUndefined();
     const userProps = lastRenderedMessageProps("user-1");
     expect(userProps?.attachedSteers).toEqual([
       expect.objectContaining({

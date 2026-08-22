@@ -128,4 +128,50 @@ describe("Nebius catalog", () => {
     );
     expect(catalog.images[0]?.minimum_disk_size_gb).toBe(40);
   });
+
+  it("adds documented B300 presets for a configured uk-south1 project", async () => {
+    platformsListMock.mockResolvedValue({ items: [], nextPageToken: "" });
+    imagesListPublicMock.mockResolvedValue({
+      items: [image("cuda-uk", ["gpu-b300-sxm"])],
+      nextPageToken: "",
+    });
+    mockFetchNebiusPricingFromDocs.mockResolvedValue([
+      {
+        service: "Compute",
+        product: "Preemptible NVIDIA B300 NVLink",
+        region: "uk-south1",
+        price_usd: "3.40",
+        unit: "GPU hour",
+        valid_from: "2026-08-21",
+      },
+    ]);
+
+    const catalog = await fetchNebiusCatalog({
+      serviceAccountId: "svc",
+      publicKeyId: "pub",
+      privateKeyPem: "key",
+      parentId: "parent",
+      regions: ["uk-south1"],
+    });
+
+    expect(catalog.regions).toEqual(["uk-south1"]);
+    expect(catalog.instance_types).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "1gpu-24vcpu-346gb",
+          platform: "gpu-b300-sxm",
+          regions: ["uk-south1"],
+          gpus: 1,
+          vcpus: 24,
+          memory_gib: 346,
+        }),
+        expect.objectContaining({
+          name: "8gpu-192vcpu-2768gb",
+          platform: "gpu-b300-sxm",
+          regions: ["uk-south1"],
+          gpus: 8,
+        }),
+      ]),
+    );
+  });
 });

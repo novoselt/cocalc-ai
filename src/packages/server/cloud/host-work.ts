@@ -480,6 +480,27 @@ function clearDeletedProviderDiskIdentity(metadata: any, providerId?: string) {
   return nextMetadata;
 }
 
+function metadataWithPreservedNebiusDisks(metadata: any, runtime: any) {
+  const nextMetadata = { ...(metadata ?? {}) };
+  const nextMachine = { ...(nextMetadata.machine ?? {}) };
+  const nextMachineMeta = { ...(nextMachine.metadata ?? {}) };
+  const runtimeMeta = runtime?.metadata ?? {};
+  const dataDiskId = runtimeMeta.diskIds?.data;
+  const sharedDiskId = runtimeMeta.diskIds?.scratch;
+  if (dataDiskId) {
+    nextMachineMeta.data_disk_id = dataDiskId;
+  }
+  if (sharedDiskId) {
+    nextMachineMeta.shared_disk_id = sharedDiskId;
+    if (runtimeMeta.shared_disk_name) {
+      nextMachineMeta.shared_disk_name = runtimeMeta.shared_disk_name;
+    }
+  }
+  nextMachine.metadata = nextMachineMeta;
+  nextMetadata.machine = nextMachine;
+  return nextMetadata;
+}
+
 async function observeStoppedStartFailure(opts: {
   action?: string;
   row: any;
@@ -521,22 +542,28 @@ function metadataForNebiusRecreateFallback(opts: {
   effectivePricing: HostPricingModel;
   state?: HostSpotRecoveryState;
 }) {
-  const nextMetadata = withPricingAndRecoveryMetadata(
-    setRuntimeObservedAt(opts.metadata ?? {}, new Date()),
-    {
-      desired_pricing_model: opts.desiredPricing,
-      effective_pricing_model: opts.effectivePricing,
-      spot_recovery_state: opts.state,
-    },
+  const nextMetadata = metadataWithPreservedNebiusDisks(
+    withPricingAndRecoveryMetadata(
+      setRuntimeObservedAt(opts.metadata ?? {}, new Date()),
+      {
+        desired_pricing_model: opts.desiredPricing,
+        effective_pricing_model: opts.effectivePricing,
+        spot_recovery_state: opts.state,
+      },
+    ),
+    opts.runtime,
   );
-  const nextMachine = { ...(nextMetadata.machine ?? {}) };
-  const nextMachineMeta = { ...(nextMachine.metadata ?? {}) };
-  const dataDiskId = opts.runtime?.metadata?.diskIds?.data;
-  if (dataDiskId) {
-    nextMachineMeta.data_disk_id = dataDiskId;
-  }
-  nextMachine.metadata = nextMachineMeta;
-  nextMetadata.machine = nextMachine;
+  delete nextMetadata.runtime;
+  delete nextMetadata.dns;
+  delete nextMetadata.cloudflare_tunnel;
+  return nextMetadata;
+}
+
+function metadataForDetachedNebiusStop(metadata: any, runtime: any) {
+  const nextMetadata = metadataWithPreservedNebiusDisks(
+    setRuntimeObservedAt(metadata ?? {}, new Date()),
+    runtime,
+  );
   delete nextMetadata.runtime;
   delete nextMetadata.dns;
   delete nextMetadata.cloudflare_tunnel;
@@ -2306,6 +2333,63 @@ async function handleStop(row: any) {
     const { entry, creds } = await getProviderContext(providerId, {
       region: row.region,
     });
+    const preservedNebiusDataDisk = runtime?.metadata?.diskIds?.data;
+    if (
+      providerId === "nebius" &&
+      machine.storage_mode === "persistent" &&
+      preservedNebiusDataDisk
+    ) {
+      // Nebius keeps stopped VMs and all of their compute/network quota
+      // reservations. Project-host boot disks are disposable, so retain only
+      // the project-data and optional shared scratch disks while the host is
+      // off. A later start provisions a fresh VM around those disks.
+      await entry.provider.deleteHost(runtime, creds, {
+        preserveDataDisk: true,
+      });
+      if (await hasCloudflareTunnel()) {
+        await deleteCloudflareTunnel({
+          host_id: row.id,
+          tunnel: row.metadata?.cloudflare_tunnel,
+        });
+      }
+      if (
+        row.metadata?.dns?.record_id &&
+        row.metadata?.dns?.record_id !==
+          row.metadata?.cloudflare_tunnel?.record_id &&
+        (await hasDns())
+      ) {
+        await deleteHostDns({
+          record_id: row.metadata.dns.record_id,
+          name: row.metadata.dns.name,
+        });
+      }
+      await removeHostSshKnownHostAlias({
+        host_id: row.id,
+        reason: "stop",
+      });
+      const nextMetadata = metadataForDetachedNebiusStop(row.metadata, runtime);
+      await updateHostRow(row.id, {
+        metadata: nextMetadata,
+        status: "off",
+        public_url: null,
+        internal_url: null,
+        ssh_server: null,
+        last_seen: null,
+      });
+      await logCloudVmEvent({
+        vm_id: row.id,
+        action: "stop",
+        status: "success",
+        provider: providerId,
+        spec: machine,
+        runtime: {
+          ...runtime,
+          detached_instance: true,
+          preserved_data_disk_id: preservedNebiusDataDisk,
+        },
+      });
+      return;
+    }
     supportsStop = entry.capabilities.supportsStop;
     await entry.provider.stopHost(runtime, creds);
     if (providerId === "nebius" || providerId === "hyperstack") {

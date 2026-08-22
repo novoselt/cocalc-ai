@@ -284,6 +284,24 @@ describe("hosts.createHost", () => {
     });
   });
 
+  it("rejects a blank project-host title before admission or persistence", async () => {
+    const { createHost } = await import("./hosts");
+
+    await expect(
+      createHost({
+        account_id: ACCOUNT_ID,
+        name: "   ",
+        region: "us-west1",
+        size: "e2-standard-2",
+        machine: { cloud: "gcp" },
+      }),
+    ).rejects.toThrow("Project host title is required");
+
+    expect(assertDedicatedHostAdmissionForAccountMock).not.toHaveBeenCalled();
+    expect(estimateDedicatedHostRateMock).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it("does not seed cloud hosts with a synthetic heartbeat", async () => {
     const { createHost } = await import("./hosts");
     const host = await createHost({

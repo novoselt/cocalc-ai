@@ -144,7 +144,7 @@ type HyperstackFlavor = {
   gpu: string;
   gpu_count: number;
 };
-type NebiusInstance = {
+export type NebiusInstance = {
   name: string;
   platform?: string | null;
   platform_label?: string | null;
@@ -181,6 +181,20 @@ type NebiusCapacityAdvice = {
   machine_type: string;
   spot?: NebiusCapacityAvailability;
   on_demand?: NebiusCapacityAvailability;
+};
+
+export type NebiusCapacityInfo = {
+  available?: number;
+  availabilityLevel: string;
+  dataState: string;
+  effectiveAt?: string;
+  fabric?: string;
+  limit?: number;
+  modelLabel: "Spot" | "Standard";
+  pricingModel: "spot" | "on_demand";
+  reported: boolean;
+  summary: string;
+  supported: boolean;
 };
 
 export const getNebiusMinimumBootDiskGb = (
@@ -240,14 +254,35 @@ export type NebiusInstanceOption = HostFieldOption<NebiusInstance> & {
   entry: NebiusInstance;
 };
 
+export type NebiusPlacementOption = {
+  key: string;
+  region: string;
+  machineType: string;
+  platform?: string;
+  platformLabel: string;
+  cpu: number;
+  ramGiB: number;
+  gpuCount: number;
+  gpuLabel?: string;
+  hourlyRate?: number;
+  priceLabel?: string;
+  capacity: NebiusCapacityInfo;
+};
+
 export const isNebiusSpotSupported = (
   options?: HostFieldOption[],
   machineType?: string,
+  platform?: string,
 ): boolean => {
-  const selected =
-    options?.find((opt) => opt.value === machineType) ?? options?.[0];
-  if (!selected) return true;
-  const meta = (selected.meta ?? {}) as NebiusInstance;
+  const selected = options?.find((opt) => {
+    if (opt.value !== machineType) return false;
+    const meta = (opt.meta ?? {}) as NebiusInstance;
+    return !platform || meta.platform === platform;
+  });
+  if (machineType && !selected) return false;
+  const effective = selected ?? options?.[0];
+  if (!effective) return true;
+  const meta = (effective.meta ?? {}) as NebiusInstance;
   return meta.allowed_for_preemptibles !== false;
 };
 
@@ -257,6 +292,7 @@ export type ProviderSelection = {
   region?: string;
   zone?: string;
   machine_type?: string;
+  provider_platform?: string;
   gpu_type?: string;
   funding_mode?: string;
   cpu_count?: number;
@@ -433,7 +469,7 @@ const buildBasePayload = (
         ? vals.disk
         : undefined;
   return {
-    name: vals.name ?? "My Host",
+    name: `${vals.name ?? ""}`.trim(),
     region: getDefaultRegion(vals, options),
     size: machine_type ?? vals.size ?? SIZES[0].value,
     gpu: wantsGpu,
@@ -592,12 +628,22 @@ const nebiusMachineTypeLabel = (entry: NebiusInstance) => {
     ? ` · ${entry.platform_label}`
     : "";
   const cpuRamLabel = formatCpuRamLabel(entry.vcpus, entry.memory_gib);
-  const gpuLabel = formatGpuLabel(entry.gpus, entry.gpu_label);
-  const mainLabel = `${entry.name} (${cpuRamLabel}${gpuLabel}${platformLabel})`;
+  const gpuLabel = formatGpuLabel(entry.gpus, entry.gpu_label).replace(
+    /^\s*·\s*/,
+    "",
+  );
+  const hardwareLabel = `${entry.name} (${cpuRamLabel}${platformLabel})`;
+  const selectionLabel = gpuLabel
+    ? `${gpuLabel} · ${hardwareLabel}`
+    : hardwareLabel;
+  const mainLabel = gpuLabel || entry.name;
+  const subLabel = gpuLabel ? hardwareLabel : `${cpuRamLabel}${platformLabel}`;
   const searchTerms = machineSearchSuffix(entry.vcpus, entry.memory_gib);
   return {
     mainLabel,
-    label: searchTerms ? `${mainLabel} ${searchTerms}` : mainLabel,
+    subLabel,
+    label: searchTerms ? `${selectionLabel} ${searchTerms}` : selectionLabel,
+    selectionLabel,
   };
 };
 
@@ -701,7 +747,11 @@ const estimateNebiusSelectionUsdPerHour = (
       "instance_types",
       "global",
     ) ?? []
-  ).find((entry) => entry.name === machineType);
+  ).find(
+    (entry) =>
+      entry.name === machineType &&
+      (!next.provider_platform || entry.platform === next.provider_platform),
+  );
   if (!instance) return undefined;
   return applyDedicatedHostSurchargeToHourlyRate(
     estimateNebiusCatalogRateUsdPerHour({
@@ -733,7 +783,11 @@ const estimateNebiusSelectionBreakdown = (
       "instance_types",
       "global",
     ) ?? []
-  ).find((entry) => entry.name === machineType);
+  ).find(
+    (entry) =>
+      entry.name === machineType &&
+      (!next.provider_platform || entry.platform === next.provider_platform),
+  );
   if (!instance) return undefined;
   return applyDedicatedHostSurchargeToBreakdown(
     estimateNebiusCatalogRateBreakdown({
@@ -2120,40 +2174,108 @@ const getNebiusPricingProductsByRegion = (
   return { gpu: gpuProducts, cpu: cpuProducts };
 };
 
-const getNebiusCapacityLabel = (
+export const getNebiusCapacityInfo = (
   catalog: HostCatalog | undefined,
   selection: ProviderSelection,
-  entry: NebiusInstance,
-): string | undefined => {
-  if (!selection.region) return;
+  platform?: string,
+): NebiusCapacityInfo => {
+  const pricingModel =
+    selection.pricing_model === "spot" ? "spot" : "on_demand";
+  const modelLabel = pricingModel === "spot" ? "Spot" : "Standard";
+  const instances =
+    getCatalogEntryPayload<NebiusInstance[]>(
+      catalog,
+      "instance_types",
+      "global",
+    ) ?? [];
+  const machine = instances.find(
+    (entry) =>
+      entry.name === selection.machine_type &&
+      (!platform || entry.platform === platform),
+  );
+  const unsupported =
+    pricingModel === "spot" && machine?.allowed_for_preemptibles === false;
+  if (unsupported) {
+    return {
+      availabilityLevel: "unsupported",
+      dataState: "unknown",
+      modelLabel,
+      pricingModel,
+      reported: false,
+      summary: `${modelLabel} capacity: not supported`,
+      supported: false,
+    };
+  }
+  if (!selection.region) {
+    return {
+      availabilityLevel: "unknown",
+      dataState: "unknown",
+      modelLabel,
+      pricingModel,
+      reported: false,
+      summary: `Select a region to see ${modelLabel} capacity`,
+      supported: true,
+    };
+  }
   const advice =
     getCatalogEntryPayload<NebiusCapacityAdvice[]>(
       catalog,
       "capacity_advice",
       "global",
     ) ?? [];
-  const pricing = selection.pricing_model === "spot" ? "spot" : "on_demand";
   const candidates = advice
     .filter(
       (item) =>
         item.region === selection.region &&
-        item.machine_type === entry.name &&
-        (!entry.platform || item.platform === entry.platform),
+        item.machine_type === selection.machine_type &&
+        (!machine?.platform || item.platform === machine.platform),
     )
-    .map((item) => item[pricing])
-    .filter((item): item is NebiusCapacityAvailability => !!item)
+    .map((item) => ({ advice: item, capacity: item[pricingModel] }))
+    .filter(
+      (
+        item,
+      ): item is {
+        advice: NebiusCapacityAdvice;
+        capacity: NebiusCapacityAvailability;
+      } => !!item.capacity,
+    )
     .sort((a, b) => {
       const freshness = (value: NebiusCapacityAvailability) =>
         value.data_state === "fresh" ? 2 : value.data_state === "stale" ? 1 : 0;
-      return freshness(b) - freshness(a) || b.available - a.available;
+      return (
+        freshness(b.capacity) - freshness(a.capacity) ||
+        b.capacity.available - a.capacity.available
+      );
     });
-  const capacity = candidates[0];
-  if (!capacity) return;
-  const model = pricing === "spot" ? "Spot" : "Standard";
-  const level = capacity.availability_level.replaceAll("_", " ");
+  const selected = candidates[0];
+  if (!selected) {
+    return {
+      availabilityLevel: "unknown",
+      dataState: "unknown",
+      modelLabel,
+      pricingModel,
+      reported: false,
+      summary: `${modelLabel} capacity: not reported for this machine and region`,
+      supported: true,
+    };
+  }
+  const { advice: selectedAdvice, capacity } = selected;
+  const level = capacity.availability_level.replace(/_/g, " ");
   const freshness =
     capacity.data_state === "fresh" ? "" : `, ${capacity.data_state} data`;
-  return `${model} capacity: ${level}, ${capacity.available} available${freshness}`;
+  return {
+    available: capacity.available,
+    availabilityLevel: capacity.availability_level,
+    dataState: capacity.data_state,
+    effectiveAt: capacity.effective_at,
+    fabric: selectedAdvice.fabric,
+    limit: capacity.limit,
+    modelLabel,
+    pricingModel,
+    reported: true,
+    summary: `${modelLabel} capacity: ${level}, ${capacity.available} available, quota ${capacity.limit}${freshness}`,
+    supported: true,
+  };
 };
 
 const matchesNebiusPricing = (
@@ -2271,6 +2393,7 @@ export const getNebiusInstanceTypeOptions = (
     const machineLabel = nebiusMachineTypeLabel(entry);
     const hourlyRate = estimateNebiusSelectionUsdPerHour(catalog, selection, {
       machine_type: entry.name,
+      provider_platform: entry.platform ?? undefined,
     });
     const label = appendPriceStateLabel({
       label: machineLabel.label,
@@ -2282,11 +2405,131 @@ export const getNebiusInstanceTypeOptions = (
       value: entry.name,
       ...label,
       hourlyRate,
-      selectionLabel: entry.name,
-      mainLabel: label.mainLabel ?? machineLabel.mainLabel,
-      detailLabel: getNebiusCapacityLabel(catalog, selection, entry),
+      selectionLabel: machineLabel.selectionLabel,
+      mainLabel: machineLabel.mainLabel,
+      subLabel: machineLabel.subLabel,
+      detailLabel: getNebiusCapacityInfo(
+        catalog,
+        {
+          ...selection,
+          machine_type: entry.name,
+        },
+        entry.platform ?? undefined,
+      ).summary,
       entry,
     };
+  });
+};
+
+const PREFERRED_NEBIUS_VM = {
+  region: "us-central1",
+  machineType: "1gpu-24vcpu-218gb",
+} as const;
+
+/**
+ * Build stable, globally unique Nebius choices from the live capacity feed.
+ * A create form must not offer GPU combinations that the provider reports as
+ * unsupported, exhausted, or unknown. Nebius does not currently report CPU
+ * capacity, so Standard CPU choices fall back to the regional catalog.
+ */
+export const getNebiusPlacementOptions = (
+  catalog: HostCatalog | undefined,
+  selection: ProviderSelection,
+  kind: "cpu" | "gpu",
+): NebiusPlacementOption[] => {
+  const pricingModel =
+    selection.pricing_model === "spot" ? "spot" : "on_demand";
+  // Nebius currently offers preemptible capacity only for GPU platforms.
+  if (pricingModel === "spot" && kind === "cpu") return [];
+
+  const regions = getNebiusRegionOptions(catalog, {
+    ...selection,
+    region: undefined,
+    machine_type: undefined,
+  }).map(({ value }) => value);
+  const choices = new Map<string, NebiusPlacementOption>();
+  for (const region of regions) {
+    const regionSelection = {
+      ...selection,
+      region,
+      machine_type: undefined,
+      provider_platform: undefined,
+    };
+    for (const option of getNebiusInstanceTypeOptions(
+      catalog,
+      regionSelection,
+    )) {
+      const entry = option.entry;
+      const gpuCount = Number(entry.gpus ?? 0);
+      if ((kind === "gpu") !== gpuCount > 0) continue;
+      const capacity = getNebiusCapacityInfo(
+        catalog,
+        {
+          ...regionSelection,
+          machine_type: entry.name,
+        },
+        entry.platform ?? undefined,
+      );
+      if (
+        !capacity.supported ||
+        (capacity.reported && Number(capacity.available ?? 0) <= 0) ||
+        (!capacity.reported && kind !== "cpu")
+      ) {
+        continue;
+      }
+      const key = `${region}\u0000${entry.platform ?? ""}\u0000${entry.name}`;
+      const candidate: NebiusPlacementOption = {
+        key,
+        region,
+        machineType: entry.name,
+        platform: entry.platform ?? undefined,
+        platformLabel:
+          entry.gpu_label ??
+          entry.platform_label ??
+          entry.platform ??
+          entry.name,
+        cpu: Number(entry.vcpus ?? 0),
+        ramGiB: Number(entry.memory_gib ?? 0),
+        gpuCount,
+        gpuLabel: gpuCount > 0 ? (entry.gpu_label ?? undefined) : undefined,
+        hourlyRate: option.hourlyRate,
+        priceLabel: option.priceLabel,
+        capacity,
+      };
+      const previous = choices.get(key);
+      if (
+        !previous ||
+        Number(candidate.capacity.available ?? 0) >
+          Number(previous.capacity.available ?? 0)
+      ) {
+        choices.set(key, candidate);
+      }
+    }
+  }
+
+  return [...choices.values()].sort((left, right) => {
+    const preferred = (value: NebiusPlacementOption) =>
+      value.region === PREFERRED_NEBIUS_VM.region &&
+      value.machineType === PREFERRED_NEBIUS_VM.machineType;
+    if (preferred(left) !== preferred(right)) return preferred(left) ? -1 : 1;
+    const platform = left.platformLabel.localeCompare(
+      right.platformLabel,
+      undefined,
+      {
+        numeric: true,
+        sensitivity: "base",
+      },
+    );
+    if (platform !== 0) return platform;
+    if (left.gpuCount !== right.gpuCount) return left.gpuCount - right.gpuCount;
+    if (
+      left.hourlyRate != null &&
+      right.hourlyRate != null &&
+      left.hourlyRate !== right.hourlyRate
+    ) {
+      return left.hourlyRate - right.hourlyRate;
+    }
+    return left.region.localeCompare(right.region);
   });
 };
 
@@ -2855,11 +3098,25 @@ export const PROVIDER_REGISTRY: Record<HostProvider, HostProviderDescriptor> = {
       region: getNebiusRegionOptions(catalog, selection),
     }),
     buildCreatePayload: (vals, ctx) => {
-      const instance = findOption<NebiusInstance>(
+      const matchingOptions = optionsFor(
         "machine_type",
-        vals.machine_type,
         ctx.fieldOptions,
-      );
+      ).filter((option) => {
+        if (option.value !== vals.machine_type) return false;
+        const entry = (option.meta ?? {}) as NebiusInstance;
+        return (
+          !vals.provider_platform || entry.platform === vals.provider_platform
+        );
+      });
+      if (!vals.provider_platform && matchingOptions.length > 1) {
+        throw new Error(
+          `Nebius instance type '${vals.machine_type}' is ambiguous; select a hardware platform`,
+        );
+      }
+      const instance = matchingOptions[0]?.meta as NebiusInstance | undefined;
+      if (!instance) {
+        throw new Error("Select an available Nebius instance type");
+      }
       const gpuCount = instance?.gpus ?? 0;
       const wantsGpu = gpuCount > 0;
       return buildBasePayload(
@@ -2869,7 +3126,11 @@ export const PROVIDER_REGISTRY: Record<HostProvider, HostProviderDescriptor> = {
           machine_type: vals.machine_type || undefined,
           gpu_type: wantsGpu ? instance?.gpu_label : undefined,
           gpu_count: gpuCount || undefined,
-          metadata: machineResourceMetadata(instance ?? {}),
+          metadata: {
+            ...machineResourceMetadata(instance),
+            platform: instance.platform,
+            platform_label: instance.platform_label,
+          },
         },
         wantsGpu,
       );
@@ -2932,7 +3193,7 @@ export const PROVIDER_REGISTRY: Record<HostProvider, HostProviderDescriptor> = {
       }
       const storage_mode = vals.storage_mode || "persistent";
       return {
-        name: vals.name ?? "My Host",
+        name: `${vals.name ?? ""}`.trim(),
         region: "pending",
         size: "custom",
         gpu: false,

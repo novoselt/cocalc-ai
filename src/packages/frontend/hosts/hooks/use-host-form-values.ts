@@ -5,6 +5,7 @@ export const useHostFormValues = (form: FormInstance) => {
   const selectedRegion = Form.useWatch("region", form);
   const selectedZone = Form.useWatch("zone", form);
   const selectedMachineType = Form.useWatch("machine_type", form);
+  const selectedProviderPlatform = Form.useWatch("provider_platform", form);
   const selectedGpuType = Form.useWatch("gpu_type", form);
   const selectedPricingModel = Form.useWatch("pricing_model", form);
   const selectedDiskType = Form.useWatch("disk_type", form);
@@ -28,6 +29,7 @@ export const useHostFormValues = (form: FormInstance) => {
     selectedRegion,
     selectedZone,
     selectedMachineType,
+    selectedProviderPlatform,
     selectedGpuType,
     selectedPricingModel,
     selectedDiskType,

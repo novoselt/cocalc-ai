@@ -1645,10 +1645,12 @@ async function fetchSmokeUrl({
   url,
   timeoutMs,
   deps,
+  method = "GET",
 }: {
   url: string;
   timeoutMs: number;
   deps: SoftwareCommandDeps;
+  method?: "GET" | "HEAD";
 }): Promise<string> {
   const smokeFetch = deps.fetch ?? globalThis.fetch;
   if (!smokeFetch) {
@@ -1658,11 +1660,11 @@ async function fetchSmokeUrl({
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await smokeFetch(url, {
-      method: "GET",
+      method,
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new Error(`GET ${url} returned HTTP ${response.status}`);
+      throw new Error(`${method} ${url} returned HTTP ${response.status}`);
     }
     return `HTTP ${response.status}`;
   } catch (err) {
@@ -1675,7 +1677,48 @@ async function fetchSmokeUrl({
   }
 }
 
-async function smokeHttpChecks({
+type FrontendAssetHistory = {
+  schema: 1;
+  builds: { assets?: unknown }[];
+};
+
+function frontendAssetsFromHistory(value: unknown): string[] {
+  const history = value as FrontendAssetHistory;
+  if (history?.schema !== 1 || !Array.isArray(history.builds)) {
+    throw new Error("frontend asset history has an unsupported schema");
+  }
+  if (history.builds.length < 1 || history.builds.length > 2) {
+    throw new Error("frontend asset history must contain one or two builds");
+  }
+  const assets: string[] = [];
+  for (const build of history.builds) {
+    if (!Array.isArray(build?.assets) || build.assets.length === 0) {
+      throw new Error("frontend asset history contains an empty build");
+    }
+    for (const value of build.assets) {
+      const asset = `${value ?? ""}`.replace(/\\/g, "/");
+      if (
+        !asset ||
+        asset.startsWith("/") ||
+        asset.split("/").includes("..") ||
+        !/(?:^|[-.])[0-9a-f]{16,}(?=[-.]|$)/i.test(
+          asset.slice(asset.lastIndexOf("/") + 1),
+        )
+      ) {
+        throw new Error(
+          `frontend asset history contains unsafe path: ${asset}`,
+        );
+      }
+      assets.push(asset);
+      if (assets.length > 10_000) {
+        throw new Error("frontend asset history exceeds 10000 files");
+      }
+    }
+  }
+  return [...new Set(assets)];
+}
+
+async function smokeFrontendAssetHistory({
   api,
   timeoutMs,
   deps,
@@ -1683,6 +1726,69 @@ async function smokeHttpChecks({
   api: string;
   timeoutMs: number;
   deps: SoftwareCommandDeps;
+}): Promise<string> {
+  const smokeFetch = deps.fetch ?? globalThis.fetch;
+  if (!smokeFetch) {
+    throw new Error("software smoke requires fetch support");
+  }
+  const historyUrl = appendUrlPath(api, "/static/frontend-build-history.json");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await smokeFetch(historyUrl, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GET ${historyUrl} returned HTTP ${response.status}`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+  const assets = frontendAssetsFromHistory(await response.json());
+  const failures: string[] = [];
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(20, assets.length) },
+    async () => {
+      while (next < assets.length) {
+        const asset = assets[next++];
+        const url = appendUrlPath(api, `/static/${asset}`);
+        try {
+          await fetchSmokeUrl({ url, timeoutMs, deps, method: "HEAD" });
+        } catch {
+          try {
+            await fetchSmokeUrl({ url, timeoutMs, deps, method: "HEAD" });
+          } catch (err) {
+            failures.push(
+              `${asset}: ${err instanceof Error ? err.message : `${err}`}`,
+            );
+          }
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (failures.length) {
+    throw new Error(
+      `${failures.length}/${assets.length} retained frontend assets failed: ${failures.slice(0, 5).join("; ")}`,
+    );
+  }
+  return `${assets.length} current/previous content-addressed assets returned HTTP 200`;
+}
+
+async function smokeHttpChecks({
+  api,
+  timeoutMs,
+  deps,
+  checkFrontendAssets = false,
+}: {
+  api: string;
+  timeoutMs: number;
+  deps: SoftwareCommandDeps;
+  checkFrontendAssets?: boolean;
 }): Promise<SoftwareSmokeCheck[]> {
   const checks: SoftwareSmokeCheck[] = [];
   for (const [check, path] of [
@@ -1705,6 +1811,15 @@ async function smokeHttpChecks({
             timeoutMs,
             deps,
           }),
+        deps,
+      ),
+    );
+  }
+  if (checkFrontendAssets) {
+    checks.push(
+      await runTimedSmokeCheck(
+        "current and previous frontend assets",
+        async () => await smokeFrontendAssetHistory({ api, timeoutMs, deps }),
         deps,
       ),
     );
@@ -5082,6 +5197,8 @@ Supported deploy/smoke components:
               api: target.api,
               timeoutMs,
               deps,
+              checkFrontendAssets:
+                component === "static" || component === "bay",
             })),
           );
         }

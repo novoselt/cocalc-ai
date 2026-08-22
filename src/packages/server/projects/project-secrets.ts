@@ -598,16 +598,19 @@ export async function copyProjectSecrets({
   source_project_id,
   target_project_id,
   names,
+  exclude_names,
   overwrite = false,
   account_id,
 }: {
   source_project_id: string;
   target_project_id: string;
   names?: string[];
+  exclude_names?: string[];
   overwrite?: boolean;
   account_id: string;
 }): Promise<CopyProjectSecretsResult> {
   const selectedNames = normalizeNames(names);
+  const excludedNames = normalizeNames(exclude_names) ?? [];
   const key = await getProjectSecretsKey();
   return await withTransaction(async (db) => {
     await ensureProjectSecretsSchema(db);
@@ -616,6 +619,10 @@ export async function copyProjectSecrets({
     if (selectedNames) {
       params.push(selectedNames);
       nameSql = "AND name = ANY($2::TEXT[])";
+    }
+    if (excludedNames.length) {
+      params.push(excludedNames);
+      nameSql += ` AND NOT name = ANY($${params.length}::TEXT[])`;
     }
     const { rows: sourceRows } = await db.query(
       `SELECT name, encrypted_value, value_bytes

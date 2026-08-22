@@ -7,6 +7,7 @@ import {
   authFirstRequireAccount,
   authFirstRequireHost,
   authFirstRequireComputeProject,
+  authFirstRequireAccountOrComputeProject,
   authFirstRequireAccountOrComputeAgent,
 } from "./util";
 import type { HostCatalog } from "./hosts";
@@ -95,7 +96,7 @@ export interface ComputeVm {
   name: string;
   owner_account_id: string;
   owning_bay_id: string;
-  project_id: string;
+  project_id?: string | null;
   provider: ManagedComputeProviderId;
   operating_system: ManagedComputeOperatingSystem;
   operating_system_version: string;
@@ -122,6 +123,7 @@ export interface ComputeVm {
   provider_checked_at?: string | Date | null;
   provider_observation_error?: string | null;
   instance_generation: number;
+  current_instance_timing?: ComputeVmInstanceTiming | null;
   provider_instance_id: string;
   public_address_id?: string | null;
   public_address_state: string;
@@ -154,11 +156,18 @@ export interface ComputeVm {
   metadata: Record<string, any>;
 }
 
+export interface ComputeVmInstanceTiming {
+  generation: number;
+  created_at: string | Date;
+  running_at?: string | Date | null;
+  ready_at?: string | Date | null;
+}
+
 export interface CreateComputeVmRequest {
   account_id?: string;
   browser_id?: string;
   session_hash?: string;
-  project_id: string;
+  project_id?: string;
   name: string;
   provider: ManagedComputeProviderId;
   operating_system?: ManagedComputeOperatingSystem;
@@ -178,6 +187,28 @@ export interface CreateComputeVmRequest {
   ssh_public_key?: string;
   configure_project_ssh?: boolean;
   idempotency_key: string;
+}
+
+export interface ComputeVmProjectAccess {
+  vm_id: string;
+  project_id: string;
+  owner_account_id: string;
+  owning_bay_id: string;
+  access_level: "connect";
+  state: "pending" | "ready" | "degraded" | "revoking" | "revoked";
+  created_by_account_id?: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+  revoked_at?: string | Date | null;
+  error?: string | null;
+  metadata: Record<string, any>;
+}
+
+export interface ComputeVmSshKey {
+  fingerprint: string;
+  key_type: string;
+  comment?: string;
+  ssh_public_key: string;
 }
 
 export interface ComputeVolume {
@@ -220,7 +251,7 @@ export interface CreateComputeVolumeRequest {
   account_id?: string;
   browser_id?: string;
   session_hash?: string;
-  project_id: string;
+  project_id?: string;
   name: string;
   provider: ManagedComputeProviderId;
   region: string;
@@ -261,7 +292,7 @@ export interface ComputeCatalog {
     boot_disk_gb: number;
   };
   limits: {
-    max_active_per_project: number;
+    max_active_per_account: number;
     max_ttl_minutes: number;
     max_boot_disk_gb: number;
     max_volume_gb: number;
@@ -283,9 +314,14 @@ export const compute = {
   createVm: authFirstRequireAccountOrComputeAgent,
   listVms: authFirstRequireAccount,
   getVm: authFirstRequireAccount,
-  listProjectVms: authFirstRequireComputeProject,
-  getProjectVm: authFirstRequireComputeProject,
+  listProjectVms: authFirstRequireAccountOrComputeProject,
+  getProjectVm: authFirstRequireAccountOrComputeProject,
   authorizeSshKey: authFirstRequireAccount,
+  listVmSshKeys: authFirstRequireAccount,
+  revokeSshKey: authFirstRequireAccount,
+  listVmProjectAccess: authFirstRequireAccount,
+  grantVmProjectAccess: authFirstRequireAccount,
+  revokeVmProjectAccess: authFirstRequireAccount,
   prepareWindowsRdp: authFirstRequireAccount,
   authorizeProjectSshKey: authFirstRequireComputeProject,
   authorizeProjectSshKeyFromHost: authFirstRequireHost,
@@ -299,8 +335,8 @@ export const compute = {
   createVolume: authFirstRequireAccountOrComputeAgent,
   listVolumes: authFirstRequireAccount,
   getVolume: authFirstRequireAccount,
-  listProjectVolumes: authFirstRequireComputeProject,
-  getProjectVolume: authFirstRequireComputeProject,
+  listProjectVolumes: authFirstRequireAccountOrComputeProject,
+  getProjectVolume: authFirstRequireAccountOrComputeProject,
   resizeVolume: authFirstRequireAccountOrComputeAgent,
   setVolumeFundingMode: authFirstRequireAccountOrComputeAgent,
   deleteVolume: authFirstRequireAccountOrComputeAgent,
@@ -324,11 +360,13 @@ export interface ComputeApi {
     id_or_name: string;
   }) => Promise<ComputeVm>;
   listProjectVms: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     include_deleted?: boolean;
   }) => Promise<ComputeVm[]>;
   getProjectVm: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     id_or_name: string;
@@ -341,6 +379,36 @@ export interface ComputeApi {
     ssh_public_key: string;
     idempotency_key: string;
   }) => Promise<ComputeVm>;
+  listVmSshKeys: (opts: {
+    account_id?: string;
+    id_or_name: string;
+  }) => Promise<ComputeVmSshKey[]>;
+  revokeSshKey: (opts: {
+    account_id?: string;
+    id_or_name: string;
+    ssh_public_key: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVmSshKey[]>;
+  listVmProjectAccess: (opts: {
+    account_id?: string;
+    id_or_name?: string;
+    include_revoked?: boolean;
+  }) => Promise<ComputeVmProjectAccess[]>;
+  grantVmProjectAccess: (opts: {
+    account_id?: string;
+    browser_id?: string;
+    session_hash?: string;
+    id_or_name: string;
+    project_id: string;
+    ssh_public_key?: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVmProjectAccess>;
+  revokeVmProjectAccess: (opts: {
+    account_id?: string;
+    id_or_name: string;
+    project_id: string;
+    idempotency_key: string;
+  }) => Promise<ComputeVmProjectAccess>;
   prepareWindowsRdp: (opts: {
     account_id?: string;
     browser_id?: string;
@@ -423,11 +491,13 @@ export interface ComputeApi {
     id_or_name: string;
   }) => Promise<ComputeVolume>;
   listProjectVolumes: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     include_deleted?: boolean;
   }) => Promise<ComputeVolume[]>;
   getProjectVolume: (opts: {
+    account_id?: string;
     host_id?: string;
     project_id?: string;
     id_or_name: string;

@@ -42,10 +42,28 @@ function sizeToResources(size?: string): { cpu: number; ram_gb: number } {
   }
 }
 
-async function resolveNebiusInstanceType(machineType?: string) {
+async function resolveNebiusInstanceType(
+  machineType?: string,
+  platform?: string,
+  region?: string,
+) {
   if (!machineType) return undefined;
   const types = await loadNebiusInstanceTypes();
-  return types.find((entry) => entry.name === machineType);
+  const matches = types.filter(
+    (entry) =>
+      entry.name === machineType &&
+      (!platform || entry.platform === platform) &&
+      (!entry.regions?.length || !region || entry.regions.includes(region)),
+  );
+  if (!platform) {
+    const platforms = new Set(matches.map((entry) => entry.platform ?? ""));
+    if (platforms.size > 1) {
+      throw new Error(
+        `Nebius machine '${machineType}' is ambiguous in ${region ?? "the selected region"}; specify its provider platform`,
+      );
+    }
+  }
+  return matches[0];
 }
 
 const isNebiusGpuFamily = (family?: string | null) =>
@@ -424,8 +442,17 @@ export async function buildHostSpec(row: HostRow): Promise<HostSpec> {
   delete sanitizedMetadata.source_image_project;
   let nebiusInstanceType =
     providerId === "nebius"
-      ? await resolveNebiusInstanceType(machine.machine_type)
+      ? await resolveNebiusInstanceType(
+          machine.machine_type,
+          platform,
+          row.region,
+        )
       : undefined;
+  if (providerId === "nebius" && machine.machine_type && !nebiusInstanceType) {
+    throw new Error(
+      `Nebius machine '${machine.machine_type}' with platform '${platform ?? "unspecified"}' is not available in ${row.region ?? "the selected region"}`,
+    );
+  }
   if (!platform && providerId === "nebius") {
     platform = nebiusInstanceType?.platform;
     if (platform) {
@@ -457,6 +484,8 @@ export async function buildHostSpec(row: HostRow): Promise<HostSpec> {
       if (!nebiusInstanceType) {
         nebiusInstanceType = await resolveNebiusInstanceType(
           machine.machine_type,
+          platform,
+          row.region,
         );
       }
       if ((nebiusInstanceType?.gpus ?? 0) > 0) {

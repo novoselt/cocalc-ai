@@ -1,4 +1,5 @@
 import rspack, { type WebpackPluginInstance } from "@rspack/core";
+import { frontendManifestAssets } from "./frontend-build-assets";
 
 export const FRONTEND_BUILD_MANIFEST = "frontend-build.json";
 
@@ -8,6 +9,7 @@ type FrontendBuildManifest = {
   build_timestamp: number;
   build_date: string;
   fingerprint: string;
+  assets?: string[];
 };
 
 class FrontendBuildManifestPlugin implements WebpackPluginInstance {
@@ -20,13 +22,17 @@ class FrontendBuildManifestPlugin implements WebpackPluginInstance {
       compilation.hooks.processAssets.tap(
         {
           name: this.name,
-          stage: rspack.Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL,
+          stage: rspack.Compilation.PROCESS_ASSETS_STAGE_REPORT,
         },
         () => {
+          const manifest = {
+            ...this.manifest,
+            assets: frontendManifestAssets(compilation),
+          };
           compilation.emitAsset(
             FRONTEND_BUILD_MANIFEST,
             new rspack.sources.RawSource(
-              `${JSON.stringify(this.manifest, null, 2)}\n`,
+              `${JSON.stringify(manifest, null, 2)}\n`,
             ),
           );
         },

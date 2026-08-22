@@ -38,6 +38,21 @@ describe("managed compute CLI equivalents", () => {
     ).not.toContain("--ttl");
   });
 
+  it("renders account-owned resources without a project attachment", () => {
+    expect(
+      vmCreateCli({
+        api: "https://staging.cocalc.ai",
+        values: { name: "account-vm", ssh_public_key: "" },
+      }),
+    ).not.toContain("--project");
+    expect(
+      volumeCreateCli({
+        api: "https://staging.cocalc.ai",
+        values: { name: "account-volume" },
+      }),
+    ).not.toContain("--project");
+  });
+
   it("renders an explicit Windows selection", () => {
     expect(
       vmCreateCli({
@@ -86,6 +101,26 @@ describe("managed compute CLI equivalents", () => {
     expect(command).toContain("--machine g2-standard-4");
     expect(command).toContain("--gpu-type nvidia-l4 --gpu-count 1");
     expect(command).toContain("--boot-disk-gb=40");
+  });
+
+  it("identifies a Nebius machine by platform as well as preset", () => {
+    const command = vmCreateCli({
+      api: "https://staging.cocalc.ai",
+      values: {
+        name: "gpu-vm",
+        provider: "nebius",
+        region: "us-central1",
+        machine_type: "1gpu-24vcpu-218gb",
+        provider_platform: "gpu-rtx6000",
+        pricing_model: "spot",
+        allow_on_demand_fallback: true,
+        boot_disk_gb: 40,
+      },
+    });
+    expect(command).toContain(
+      "--region us-central1 --machine 1gpu-24vcpu-218gb --provider-platform gpu-rtx6000",
+    );
+    expect(command).toContain("--spot --allow-standard-fallback");
   });
 
   it("makes a deliberately keyless browser configuration explicit", () => {

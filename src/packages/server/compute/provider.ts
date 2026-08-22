@@ -9,6 +9,7 @@ import {
   type NebiusCapacityAdvice,
   type HostRuntime,
   type HostSpec,
+  type RemoteInstance,
 } from "@cocalc/cloud";
 import { GoogleAuth } from "google-auth-library";
 import { execFile } from "node:child_process";
@@ -38,6 +39,11 @@ import { getComputeVmConfig, type ComputeVmConfig } from "./config";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
 import { assertComputeVmSecurity } from "./security";
 import { regionFromComputeZone } from "./placement";
+import {
+  managedComputeVmProviderPrefix,
+  managedComputeVmResourceBelongsToEnvironment,
+  managedComputeVolumeResourceBelongsToEnvironment,
+} from "./resource-names";
 
 const gcpProvider = new GcpProvider();
 const nebiusProvider = new NebiusProvider();
@@ -58,6 +64,10 @@ const NEBIUS_CAPACITY_CACHE_MS = 60_000;
 let nebiusCapacityCache:
   | { project_id: string; checked_at: number; advice: NebiusCapacityAdvice[] }
   | undefined;
+const nebiusCapacityRequests = new Map<
+  string,
+  Promise<NebiusCapacityAdvice[]>
+>();
 const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
   "0.0.0.0/8",
   "10.0.0.0/8",
@@ -80,6 +90,25 @@ const REQUIRED_NON_PUBLIC_IPV4_RANGES = [
 
 export function isProviderNotFound(err: unknown): boolean {
   return /not found|was not found|code.?5|404/i.test(`${err}`);
+}
+
+export function providerComputeStatusWithPresence(
+  status: "starting" | "running" | "stopped" | "error",
+  instance: RemoteInstance | undefined,
+): "missing" | "starting" | "running" | "stopping" | "stopped" | "error" {
+  if (!instance) return "missing";
+  const providerState =
+    `${instance.metadata?.provider_state ?? instance.status ?? ""}`.toUpperCase();
+  if (providerState === "STOPPING" || providerState === "DELETING") {
+    return "stopping";
+  }
+  return status;
+}
+
+export function providerComputeSshHost(
+  vm: Pick<ComputeVmRow, "public_ip" | "public_hostname">,
+): string | undefined {
+  return vm.public_ip || vm.public_hostname || undefined;
 }
 
 function requireGcpZone(resource: ComputeVmRow | ComputeVolumeRow): string {
@@ -301,13 +330,24 @@ export async function getNebiusComputeCapacityAdvice(): Promise<
   ) {
     return cached.advice;
   }
-  const advice = await nebiusProvider.listCapacityAdvice(creds);
-  nebiusCapacityCache = {
-    project_id: creds.parentId,
-    checked_at: Date.now(),
-    advice,
-  };
-  return advice;
+  const pending = nebiusCapacityRequests.get(creds.parentId);
+  if (pending) return await pending;
+  const request = nebiusProvider.listCapacityAdvice(creds).then((advice) => {
+    nebiusCapacityCache = {
+      project_id: creds.parentId,
+      checked_at: Date.now(),
+      advice,
+    };
+    return advice;
+  });
+  nebiusCapacityRequests.set(creds.parentId, request);
+  try {
+    return await request;
+  } finally {
+    if (nebiusCapacityRequests.get(creds.parentId) === request) {
+      nebiusCapacityRequests.delete(creds.parentId);
+    }
+  }
 }
 
 export async function requireProviderComputeSubnetwork(
@@ -618,6 +658,41 @@ export function managedVmBootstrapScript(
         .filter(Boolean),
     ),
   ).join("\n");
+  const encodedKeys = Buffer.from(`${keys}\n`, "utf8").toString("base64");
+  const nebiusKeyRestore =
+    vm.provider === "nebius"
+      ? `install -d -m 0755 /var/lib/cocalc-managed-vm
+printf '%s' '${encodedKeys}' | base64 -d >/var/lib/cocalc-managed-vm/authorized_keys
+chmod 0600 /var/lib/cocalc-managed-vm/authorized_keys
+cat >/usr/local/sbin/cocalc-restore-managed-ssh-keys <<'EOF'
+#!/bin/bash
+set -euo pipefail
+test -f /var/lib/cocalc-managed-vm/authorized_keys || exit 0
+install -d -m 0700 -o user -g user /home/user/.ssh
+install -m 0600 -o user -g user /var/lib/cocalc-managed-vm/authorized_keys /home/user/.ssh/authorized_keys
+EOF
+chmod 0755 /usr/local/sbin/cocalc-restore-managed-ssh-keys
+cat >/etc/systemd/system/cocalc-restore-managed-ssh-keys.service <<'EOF'
+[Unit]
+Description=Restore CoCalc managed SSH keys
+After=local-fs.target
+Before=ssh.service sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cocalc-restore-managed-ssh-keys
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable cocalc-restore-managed-ssh-keys.service
+/usr/local/sbin/cocalc-restore-managed-ssh-keys
+`
+      : `printf '%s' '${encodedKeys}' | base64 -d >/home/user/.ssh/authorized_keys
+chown user:user /home/user/.ssh/authorized_keys
+chmod 0600 /home/user/.ssh/authorized_keys
+`;
   const volumeDevice = volume
     ? vm.provider === "gcp"
       ? `/dev/disk/by-id/google-${volume.provider_disk_id}`
@@ -722,11 +797,7 @@ fi
 
 ${volumeSetup}
 install -d -m 0700 -o user -g user /home/user/.ssh
-cat >/home/user/.ssh/authorized_keys <<'COCALC_MANAGED_VM_KEYS'
-${keys}
-COCALC_MANAGED_VM_KEYS
-chown user:user /home/user/.ssh/authorized_keys
-chmod 0600 /home/user/.ssh/authorized_keys
+${nebiusKeyRestore}
 install -d -m 0755 /var/lib/cocalc-managed-vm /run/cocalc-managed-vm
 printf '%s\n' '${vm.bootstrap_revision}' >/var/lib/cocalc-managed-vm/bootstrap-ready
 cp /var/lib/cocalc-managed-vm/bootstrap-ready /run/cocalc-managed-vm/bootstrap-ready
@@ -842,6 +913,7 @@ function runtimeFor(vm: ComputeVmRow): HostRuntime {
       machine_type: vm.machine_type,
       ssh_public_key: vm.ssh_public_key,
       ssh_public_keys: vm.metadata?.ssh_public_keys,
+      replace_managed_ssh_keys: vm.metadata?.replace_managed_ssh_keys,
       ssh_user: vm.ssh_user,
       public_address_id: vm.public_address_id,
       provisional_instance_id: providerInstanceIdIsProvisional(vm),
@@ -863,7 +935,10 @@ async function context(
       config,
       creds: {
         service_account_json: config.gcp_service_account_json,
-        prefix: "cocalc-vm",
+        prefix: managedComputeVmProviderPrefix(config.environment).replace(
+          /-$/,
+          "",
+        ),
       },
     };
   }
@@ -991,6 +1066,28 @@ export async function listProviderComputeInventory(opts: {
     ...opts.volumes.map(({ provider }) => provider),
   ]);
   const config = await getComputeVmConfig();
+  const expectedInstanceNames = new Set(
+    opts.vms.map(
+      (vm) =>
+        `${vm.metadata?.provider_instance_name ?? vm.provider_instance_id}`,
+    ),
+  );
+  const expectedDiskNames = new Set([
+    ...opts.vms.map(({ boot_disk_id }) => boot_disk_id),
+    ...opts.volumes.map(({ provider_disk_id }) => provider_disk_id),
+  ]);
+  const expectedAddressIds = new Set(
+    opts.vms
+      .map(({ public_address_id }) => public_address_id)
+      .filter((id): id is string => !!id),
+  );
+  const includeVmName = (name?: string) =>
+    expectedInstanceNames.has(`${name ?? ""}`) ||
+    managedComputeVmResourceBelongsToEnvironment(name, config.environment);
+  const includeDiskName = (name?: string) =>
+    expectedDiskNames.has(`${name ?? ""}`) ||
+    managedComputeVmResourceBelongsToEnvironment(name, config.environment) ||
+    managedComputeVolumeResourceBelongsToEnvironment(name, config.environment);
   let disks_observed = false;
   let addresses_observed = false;
   if (
@@ -1000,8 +1097,9 @@ export async function listProviderComputeInventory(opts: {
   ) {
     const { creds } = await context("gcp");
     for (const instance of await gcpProvider.listInstances(creds, {
-      namePrefix: "cocalc-vm-",
+      namePrefix: "cocalc-",
     })) {
+      if (!includeVmName(instance.name)) continue;
       instances.push({
         provider: "gcp",
         instance_id: instance.instance_id,
@@ -1018,14 +1116,11 @@ export async function listProviderComputeInventory(opts: {
     })) {
       const zone = `${zonePath ?? ""}`.split("/").pop();
       for (const disk of scoped.disks ?? []) {
-        if (
-          disk.name?.startsWith("cocalc-vm-") ||
-          disk.name?.startsWith("cocalc-vol-")
-        ) {
+        if (includeDiskName(disk.name ?? undefined)) {
           disks.push({
             provider: "gcp",
             id: `${disk.name}`,
-            name: disk.name,
+            name: `${disk.name}`,
             zone,
           });
         }
@@ -1040,7 +1135,13 @@ export async function listProviderComputeInventory(opts: {
     })) {
       const region = `${regionPath ?? ""}`.split("/").pop();
       for (const address of scoped.addresses ?? []) {
-        if (`${address.name ?? ""}`.startsWith("cocalc-vm-")) {
+        if (
+          managedComputeVmResourceBelongsToEnvironment(
+            address.name,
+            config.environment,
+          ) ||
+          expectedAddressIds.has(`${address.name ?? ""}`)
+        ) {
           addresses.push({
             provider: "gcp",
             id: `${address.name}`,
@@ -1065,8 +1166,9 @@ export async function listProviderComputeInventory(opts: {
   for (const region of nebiusRegions) {
     const { creds } = await context("nebius", region);
     for (const instance of await nebiusProvider.listInstances(creds, {
-      namePrefix: "cocalc-vm-",
+      namePrefix: "cocalc-",
     })) {
+      if (!includeVmName(instance.name)) continue;
       instances.push({
         provider: "nebius",
         instance_id: instance.instance_id,
@@ -1078,6 +1180,7 @@ export async function listProviderComputeInventory(opts: {
     for (const disk of await nebiusProvider.listPersistentDisks(creds, {
       namePrefix: "cocalc-",
     })) {
+      if (!includeDiskName(disk.name)) continue;
       disks.push({
         provider: "nebius",
         id: disk.id,
@@ -1086,8 +1189,17 @@ export async function listProviderComputeInventory(opts: {
       });
     }
     for (const address of await nebiusProvider.listPublicAddresses(creds, {
-      namePrefix: "cocalc-vm-",
+      namePrefix: "cocalc-",
     })) {
+      if (
+        !managedComputeVmResourceBelongsToEnvironment(
+          address.name,
+          config.environment,
+        ) &&
+        !expectedAddressIds.has(address.id)
+      ) {
+        continue;
+      }
       addresses.push({
         provider: "nebius",
         id: address.id,
@@ -1189,7 +1301,8 @@ export async function deleteOrphanProviderComputeBootDisk(
   resource: OrphanProviderResource,
 ): Promise<void> {
   const name = `${resource.resource_name ?? ""}`;
-  if (!name.startsWith("cocalc-vm-")) {
+  const config = await getComputeVmConfig();
+  if (!managedComputeVmResourceBelongsToEnvironment(name, config.environment)) {
     throw new Error("refusing to automatically delete a non-boot VM disk");
   }
   if (resource.provider === "nebius") {
@@ -1198,7 +1311,6 @@ export async function deleteOrphanProviderComputeBootDisk(
     return;
   }
   if (!resource.zone) throw new Error("orphan GCP boot disk has no zone");
-  const config = await getComputeVmConfig();
   const { options, project } = gcpClientOptions(config);
   try {
     const [operation] = await new DisksClient(options).delete({
@@ -1445,6 +1557,7 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
       managedWindowsSshKeysScript([
         vm.ssh_public_key,
         ...(vm.metadata?.ssh_public_keys ?? []),
+        ...(vm.metadata?.project_ssh_public_keys ?? []),
         controller.publicKey,
       ]),
       controller,
@@ -1452,12 +1565,13 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
     return;
   }
   if (vm.provider === "nebius") {
-    const host = vm.public_hostname || vm.public_ip;
+    const host = providerComputeSshHost(vm);
     if (!host) throw new Error("managed compute VM has no SSH address");
     const keys = Array.from(
       new Set([
         vm.ssh_public_key,
         ...(vm.metadata?.ssh_public_keys ?? []),
+        ...(vm.metadata?.project_ssh_public_keys ?? []),
         controller.publicKey,
       ]),
     )
@@ -1467,22 +1581,11 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
     const encoded = Buffer.from(`${keys}\n`).toString("base64");
     await execFileAsync(
       "ssh",
-      [
-        "-i",
-        controller.privateKeyPath,
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-        `user@${host}`,
-        "bash",
-        "-lc",
-        `echo '${encoded}' | base64 -d > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`,
-      ],
+      nebiusManagedSshKeySyncArgs({
+        privateKeyPath: controller.privateKeyPath,
+        host,
+        encoded,
+      }),
       { timeout: 30_000 },
     );
     return;
@@ -1495,13 +1598,46 @@ export async function ensureProviderComputeSshAccess(vm: ComputeVmRow) {
         ssh_public_keys: Array.from(
           new Set([
             ...(vm.metadata?.ssh_public_keys ?? []),
+            ...(vm.metadata?.project_ssh_public_keys ?? []),
             controller.publicKey,
           ]),
         ),
+        replace_managed_ssh_keys: true,
       },
     }),
     creds,
   );
+}
+
+export function nebiusManagedSshKeySyncArgs(opts: {
+  privateKeyPath: string;
+  host: string;
+  encoded: string;
+}): string[] {
+  // OpenSSH concatenates every argument after the host into one remote shell
+  // command. Keep the script in exactly one argument so substitutions and
+  // redirects happen in that shell instead of being split around `bash -lc`.
+  const command =
+    `tmp=$(mktemp) && printf %s ${opts.encoded} | base64 -d > "$tmp"` +
+    ` && sudo install -d -m 0755 /var/lib/cocalc-managed-vm` +
+    ` && sudo install -m 0600 "$tmp" /var/lib/cocalc-managed-vm/authorized_keys` +
+    ` && install -d -m 0700 ~/.ssh` +
+    ` && install -m 0600 "$tmp" ~/.ssh/authorized_keys` +
+    ` && rm -f "$tmp"`;
+  return [
+    "-i",
+    opts.privateKeyPath,
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "IdentitiesOnly=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    `user@${opts.host}`,
+    command,
+  ];
 }
 
 async function runProviderComputeWindowsPowerShell(
@@ -1509,7 +1645,7 @@ async function runProviderComputeWindowsPowerShell(
   script: string,
   identity?: { privateKeyPath: string },
 ): Promise<void> {
-  const host = vm.public_hostname || vm.public_ip;
+  const host = providerComputeSshHost(vm);
   if (!host) throw new Error("managed compute VM has no SSH address");
   const selectedIdentity = identity ?? (await getHostOwnerBaySshIdentity());
   const encoded = Buffer.from(script, "utf16le").toString("base64");
@@ -1616,9 +1752,16 @@ export async function inspectProviderComputeVm(vm: ComputeVmRow) {
       selectedProvider.getStatus(runtime, creds),
       selectedProvider.getInstance(runtime, creds),
     ]);
-    if (instance && vm.provider === "gcp") {
+    // Some provider adapters historically map an absent instance to stopped.
+    // The worker must recreate an instance that was intentionally deleted for
+    // an immutable pricing-model change, not start its stale provider ID.
+    const observedStatus = providerComputeStatusWithPresence(status, instance);
+    if (!instance) {
+      return { status: "missing" as const, instance: undefined };
+    }
+    if (vm.provider === "gcp") {
       assertComputeVmSecurity(instance, config, subnetwork);
-    } else if (instance && vm.provider === "nebius") {
+    } else if (vm.provider === "nebius") {
       const expectedSecurityGroupId =
         await ensureNebiusManagedComputeSecurityGroup(vm.region);
       const observedSecurityGroupIds = Array.isArray(
@@ -1640,7 +1783,7 @@ export async function inspectProviderComputeVm(vm: ComputeVmRow) {
         );
       }
     }
-    return { status, instance };
+    return { status: observedStatus, instance };
   } catch (err) {
     if (/not found|was not found|code.?5/i.test(`${err}`)) {
       return { status: "missing" as const, instance: undefined };
@@ -1662,6 +1805,17 @@ export async function setProviderComputePricing(
     // static address, then let the worker provision the replacement instance.
     await nebiusProvider.deleteInstanceOnly(runtimeFor(vm), creds);
   }
+}
+
+export async function replaceProviderComputeInstance(vm: ComputeVmRow) {
+  if (vm.provider !== "nebius") {
+    throw new Error(
+      "provider instance replacement is only supported on Nebius",
+    );
+  }
+  if (providerInstanceIdIsProvisional(vm)) return;
+  const { creds } = await context("nebius", vm.region);
+  await nebiusProvider.deleteInstanceOnly(runtimeFor(vm), creds);
 }
 
 export async function probeProviderComputeSpot(vm: ComputeVmRow) {

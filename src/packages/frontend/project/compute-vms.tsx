@@ -8,6 +8,7 @@ import {
   Button,
   Checkbox,
   Collapse,
+  Descriptions,
   Divider,
   Dropdown,
   Flex,
@@ -33,6 +34,8 @@ import type {
   ComputeCatalog,
   ComputeVolume,
   ComputeVm,
+  ComputeVmProjectAccess,
+  ComputeVmSshKey,
 } from "@cocalc/conat/hub/api/compute";
 import { useRedux, useTypedRedux } from "@cocalc/frontend/app-framework";
 import {
@@ -57,13 +60,17 @@ import {
   HostOptionsSelect,
   sortMachineTypeOptions,
 } from "../hosts/components/host-options-select";
+import { NebiusCapacityNotice } from "../hosts/components/nebius-capacity-notice";
 import { HostPriceBreakdown } from "../hosts/components/host-price-breakdown";
+import { HostConfigChip } from "../hosts/components/host-configuration-cell";
+import { PriceSummaryRow } from "../hosts/components/host-pricing-summary";
 import { useHostPricingSettings } from "../hosts/hooks/use-host-pricing-settings";
 import {
   getGcpMachineTypeOptions,
   getGcpPersistentDiskPriceEstimate,
   getGcpRegionOptions,
   getGcpZoneOptions,
+  getNebiusPlacementOptions,
   getNebiusMinimumBootDiskGb,
   getProviderDescriptor,
   getProviderOptions,
@@ -84,7 +91,14 @@ import {
   type VmCreateCliValues,
   type VolumeCreateCliValues,
 } from "./compute-vms-cli";
+import { egressRateLabel, providerEgressIsFree } from "./compute-vms-egress";
+import { vmStartupExpectation } from "./compute-vms-startup";
 import { readProjectDeployPublicKey } from "./settings/project-to-project-ssh-service";
+import { NebiusCapacityPicker } from "../hosts/components/nebius-capacity-picker";
+import { SelectProject } from "@cocalc/frontend/projects/select-project";
+import { ProjectTitle } from "@cocalc/frontend/projects/project-title";
+import { getPageUrlPath } from "@cocalc/frontend/page-routing";
+import { CloudServerOutlined, EnvironmentOutlined } from "@ant-design/icons";
 
 const { Paragraph, Text, Title } = Typography;
 const COPYABLE_PROPS = {
@@ -96,6 +110,7 @@ const COPYABLE_PROPS = {
 const NEBIUS_VOLUME_INCREMENT_GB = 93;
 const VM_REFRESH_BASE_MS = 12_000;
 const VM_REFRESH_JITTER_MS = 6_000;
+const VM_CATALOG_REFRESH_MS = 60_000;
 
 function hasProjectVmAvailabilityScope(grant: ComputeAgentGrant): boolean {
   return (
@@ -193,9 +208,18 @@ function pricingLabel(value: string): string {
   return value === "spot" ? "Spot" : "Standard";
 }
 
-function egressRateLabel(vm: ComputeVm): string {
-  if (vm.provider === "nebius") return "Egress $0/GB";
-  return `Egress $0.10/GB${vm.funding_mode === "site-funded" ? " · paid by site" : ""}`;
+function vmDisplayState(vm: ComputeVm): string {
+  const providerState = vm.provider_state;
+  if (
+    providerState === "missing" &&
+    ["requested", "provisioning", "starting", "recovering"].includes(vm.state)
+  ) {
+    return vm.state;
+  }
+  if (providerState === "running") {
+    return vm.state === "ready" ? "running" : vm.state;
+  }
+  return providerState ?? vm.state;
 }
 
 const VM_MONTHLY_HOURS = 730;
@@ -237,11 +261,12 @@ function storedPriceEstimate(
   };
 }
 
-function vmStoredPriceEstimate(
+function vmStoredRunningPriceEstimate(
   vm: ComputeVm,
+  pricingModel: "spot" | "on_demand",
 ): ProviderPriceEstimate | undefined {
   return storedPriceEstimate(
-    vm.metadata?.billing?.running_rates?.[vm.effective_pricing_model],
+    vm.metadata?.billing?.running_rates?.[pricingModel],
     [
       ...(vm.operating_system === "windows"
         ? [
@@ -251,6 +276,12 @@ function vmStoredPriceEstimate(
       "The persistent boot disk continues to cost money while the VM is stopped.",
     ],
   );
+}
+
+function vmStoredPriceEstimate(
+  vm: ComputeVm,
+): ProviderPriceEstimate | undefined {
+  return vmStoredRunningPriceEstimate(vm, vm.effective_pricing_model);
 }
 
 function vmStoredStoppedPriceEstimate(
@@ -392,7 +423,7 @@ function VmCreateModal({
   onCreate,
 }: {
   open: boolean;
-  project_id: string;
+  project_id?: string;
   catalog: ComputeCatalog;
   volumes: ComputeVolume[];
   initial: VmDraft;
@@ -401,7 +432,7 @@ function VmCreateModal({
   saving: boolean;
   error?: string;
   preferredR2Region: ReturnType<typeof mapCountryRegionToR2Region>;
-  onGenerateProjectSshKey: () => Promise<string | undefined>;
+  onGenerateProjectSshKey?: () => Promise<string | undefined>;
   onCancel: () => void;
   onCreate: (values: VmDraft) => Promise<void>;
 }) {
@@ -448,6 +479,7 @@ function VmCreateModal({
     region: draft.region || regionFromZone(draft.zone),
     zone: draft.zone,
     machine_type: draft.machine_type,
+    provider_platform: draft.provider_platform,
     gpu_type: draft.gpu_type,
     pricing_model: draft.pricing_model,
     storage_mode: "persistent",
@@ -601,9 +633,10 @@ function VmCreateModal({
 
   const withResolvedSshKey = (values: VmDraft): VmDraft => ({
     ...values,
-    ssh_public_key: values.use_project_ssh_key
-      ? (projectSshPublicKey ?? "")
-      : values.ssh_public_key,
+    ssh_public_key:
+      project_id && values.use_project_ssh_key
+        ? (projectSshPublicKey ?? "")
+        : values.ssh_public_key,
   });
 
   const reviewCreate = () =>
@@ -648,7 +681,7 @@ function VmCreateModal({
                       Boot disk: {confirmedDraft.boot_disk_gb} GB
                     </Text>
                     <Text>
-                      Capacity: {pricingLabel(confirmedDraft.pricing_model)}
+                      Pricing: {pricingLabel(confirmedDraft.pricing_model)}
                       {price
                         ? ` · ${price.hourly_label} (${price.monthly_label})`
                         : " · price unavailable"}
@@ -707,9 +740,13 @@ function VmCreateModal({
         <Flex gap={12} wrap>
           <Form.Item
             name="name"
-            label="Name"
+            label="VM title"
             rules={[
-              { required: true },
+              {
+                required: true,
+                whitespace: true,
+                message: "Enter a descriptive title for this VM.",
+              },
               {
                 pattern: /^[a-z][a-z0-9-]{0,31}$/,
                 message:
@@ -718,7 +755,7 @@ function VmCreateModal({
             ]}
             style={{ flex: "1 1 220px" }}
           >
-            <Input autoFocus />
+            <Input autoFocus placeholder="e.g. llama-benchmark" />
           </Form.Item>
           <Form.Item
             name="funding_mode"
@@ -790,29 +827,54 @@ function VmCreateModal({
                 }))}
               onChange={(nextProvider: "gcp" | "nebius") => {
                 const nextCatalog = providerCatalog(catalog, nextProvider);
-                const options = getProviderOptions(nextProvider, nextCatalog, {
-                  pricing_model: draft.pricing_model,
-                });
+                const pricing_model =
+                  nextProvider === "nebius" ? "spot" : "on_demand";
+                const nextSelection: ProviderSelection = {
+                  ...selection,
+                  architecture: "x86_64",
+                  region: undefined,
+                  zone: undefined,
+                  machine_type: undefined,
+                  provider_platform: undefined,
+                  gpu_type: undefined,
+                  pricing_model,
+                };
+                const nebiusDefault =
+                  nextProvider === "nebius"
+                    ? getNebiusPlacementOptions(
+                        nextCatalog,
+                        {
+                          ...nextSelection,
+                          disk_gb: Math.max(
+                            Number(draft.boot_disk_gb ?? 20),
+                            40,
+                          ),
+                        },
+                        "gpu",
+                      )[0]
+                    : undefined;
                 const region =
                   nextProvider === "gcp"
                     ? catalog.defaults.region
-                    : options.region?.[0]?.value;
+                    : nebiusDefault?.region;
                 const zone =
-                  nextProvider === "gcp"
-                    ? catalog.defaults.zone
-                    : options.zone?.[0]?.value;
+                  nextProvider === "gcp" ? catalog.defaults.zone : undefined;
                 const machine_type =
                   nextProvider === "gcp"
                     ? catalog.defaults.machine_type
-                    : options.machine_type?.[0]?.value;
+                    : nebiusDefault?.machineType;
                 patchDraft({
                   provider: nextProvider,
                   architecture: "x86_64",
                   region,
                   zone,
                   machine_type,
-                  gpu_type: undefined,
-                  gpu_count: 0,
+                  provider_platform: nebiusDefault?.platform,
+                  pricing_model,
+                  allow_on_demand_fallback:
+                    nextProvider === "nebius" && pricing_model === "spot",
+                  gpu_type: nebiusDefault?.gpuLabel,
+                  gpu_count: nebiusDefault?.gpuCount ?? 0,
                   home_volume: undefined,
                   create_home_volume: false,
                   boot_disk_gb: Math.max(
@@ -902,95 +964,146 @@ function VmCreateModal({
             </Radio.Group>
           </Form.Item>
         </Flex>
-        <Flex gap={12} wrap>
-          <Form.Item
-            name="region"
-            label={
-              <Flex align="center" justify="space-between" gap={12}>
-                <span>Region</span>
-                <Space size={6}>
-                  <Text type="secondary" style={{ fontWeight: 400 }}>
-                    Sort by price
-                  </Text>
-                  <Switch
-                    size="small"
-                    checked={sortRegionsByPrice}
-                    onChange={setSortRegionsByPrice}
-                  />
-                </Space>
-              </Flex>
-            }
-            rules={[{ required: true }]}
-            style={{ flex: "1 1 280px" }}
-          >
-            <HostOptionsSelect
-              options={regionOptions}
-              disabled={selectedVolume != null || !regionOptions.length}
-              placeholder={
-                regionOptions.length
-                  ? "Select a region"
-                  : "No regions available"
-              }
-              onChange={(region) => {
-                const nextSelection = {
-                  ...selection,
-                  region,
-                  zone: undefined,
-                };
-                const nextZone = compatibleOptions(
-                  provider === "gcp"
-                    ? getGcpZoneOptions(hostCatalog, nextSelection)
-                    : (getProviderOptions(provider, hostCatalog, nextSelection)
-                        .zone ?? []),
-                )[0]?.value;
-                const machinePatch =
-                  provider === "gcp"
-                    ? gcpMachinePatch(
-                        chooseGcpMachine({
-                          ...nextSelection,
-                          zone: nextZone,
-                        }),
-                      )
-                    : {
-                        boot_disk_gb: Math.max(
-                          Number(draft.boot_disk_gb ?? 20),
-                          getNebiusMinimumBootDiskGb(hostCatalog, {
-                            region,
-                            machine_type: draft.machine_type,
-                          }),
-                        ),
-                      };
-                patchDraft({ region, zone: nextZone, ...machinePatch });
-              }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="zone"
-            label="Zone"
-            rules={[{ required: provider === "gcp" }]}
-            style={{ flex: "1 1 280px" }}
-          >
-            {!descriptor.supports.zone ? (
-              <Input disabled placeholder="Provider-managed location" />
-            ) : zoneOptions.length ? (
-              <HostOptionsSelect
-                options={zoneOptions}
+        {provider === "nebius" && (
+          <>
+            <Form.Item name="region" hidden rules={[{ required: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="machine_type" hidden rules={[{ required: true }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="provider_platform" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="pricing_model" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item label="Available Nebius machines">
+              <NebiusCapacityPicker
+                catalog={hostCatalog}
+                selection={selection}
                 disabled={selectedVolume != null}
-                onChange={(zone) => {
+                onPricingModelChange={(pricing_model) => {
+                  patchDraft({
+                    pricing_model,
+                    allow_on_demand_fallback: pricing_model === "spot",
+                  });
+                }}
+                onSelect={(option) => {
+                  patchDraft({
+                    region: option.region,
+                    zone: undefined,
+                    machine_type: option.machineType,
+                    provider_platform: option.platform,
+                    gpu_type: option.gpuLabel,
+                    gpu_count: option.gpuCount,
+                    boot_disk_gb: Math.max(
+                      Number(draft.boot_disk_gb ?? 20),
+                      getNebiusMinimumBootDiskGb(hostCatalog, {
+                        region: option.region,
+                        machine_type: option.machineType,
+                      }),
+                    ),
+                  });
+                }}
+              />
+            </Form.Item>
+          </>
+        )}
+        {provider === "gcp" && (
+          <Flex gap={12} wrap>
+            <Form.Item
+              name="region"
+              label={
+                <Flex align="center" justify="space-between" gap={12}>
+                  <span>Region</span>
+                  <Space size={6}>
+                    <Text type="secondary" style={{ fontWeight: 400 }}>
+                      Sort by price
+                    </Text>
+                    <Switch
+                      size="small"
+                      checked={sortRegionsByPrice}
+                      onChange={setSortRegionsByPrice}
+                    />
+                  </Space>
+                </Flex>
+              }
+              rules={[{ required: true }]}
+              style={{ flex: "1 1 280px" }}
+            >
+              <HostOptionsSelect
+                options={regionOptions}
+                disabled={selectedVolume != null || !regionOptions.length}
+                placeholder={
+                  regionOptions.length
+                    ? "Select a region"
+                    : "No regions available"
+                }
+                onChange={(region) => {
+                  const nextSelection = {
+                    ...selection,
+                    region,
+                    zone: undefined,
+                  };
+                  const nextZone = compatibleOptions(
+                    provider === "gcp"
+                      ? getGcpZoneOptions(hostCatalog, nextSelection)
+                      : (getProviderOptions(
+                          provider,
+                          hostCatalog,
+                          nextSelection,
+                        ).zone ?? []),
+                  )[0]?.value;
                   const machinePatch =
                     provider === "gcp"
                       ? gcpMachinePatch(
-                          chooseGcpMachine({ ...selection, zone }),
+                          chooseGcpMachine({
+                            ...nextSelection,
+                            zone: nextZone,
+                          }),
                         )
-                      : {};
-                  patchDraft({ zone, ...machinePatch });
+                      : {
+                          boot_disk_gb: Math.max(
+                            Number(draft.boot_disk_gb ?? 20),
+                            getNebiusMinimumBootDiskGb(hostCatalog, {
+                              region,
+                              machine_type: draft.machine_type,
+                            }),
+                          ),
+                        };
+                  patchDraft({ region, zone: nextZone, ...machinePatch });
                 }}
               />
-            ) : (
-              <Input disabled={selectedVolume != null} />
-            )}
-          </Form.Item>
-        </Flex>
+            </Form.Item>
+            <Form.Item
+              name="zone"
+              label="Zone"
+              rules={[{ required: provider === "gcp" }]}
+              style={{ flex: "1 1 280px" }}
+            >
+              {!descriptor.supports.zone ? (
+                <Input disabled placeholder="Provider-managed location" />
+              ) : zoneOptions.length ? (
+                <HostOptionsSelect
+                  options={zoneOptions}
+                  disabled={selectedVolume != null}
+                  onChange={(zone) => {
+                    const machinePatch =
+                      provider === "gcp"
+                        ? gcpMachinePatch(
+                            chooseGcpMachine({ ...selection, zone }),
+                          )
+                        : {};
+                    patchDraft({ zone, ...machinePatch });
+                  }}
+                />
+              ) : (
+                <Input disabled={selectedVolume != null} />
+              )}
+            </Form.Item>
+          </Flex>
+        )}
         {descriptor.supports.gpuType &&
           operatingSystem === "linux" &&
           !(provider === "gcp" && draft.architecture === "arm64") &&
@@ -1061,48 +1174,50 @@ function VmCreateModal({
             </Flex>
           )}
         <Flex gap={12} wrap>
-          <Form.Item
-            name="machine_type"
-            label={
-              <Flex align="center" justify="space-between" gap={12}>
-                <span>Machine</span>
-                <Space size={6}>
-                  <Text type="secondary" style={{ fontWeight: 400 }}>
-                    Sort by price
-                  </Text>
-                  <Switch
-                    size="small"
-                    checked={sortMachinesByPrice}
-                    onChange={setSortMachinesByPrice}
-                  />
-                </Space>
-              </Flex>
-            }
-            rules={[{ required: true }]}
-            style={{ flex: "1 1 260px" }}
-          >
-            <HostOptionsSelect
-              options={machineOptions}
-              disabled={machineOptions.length === 0}
-              placeholder="Select a machine available in this zone"
-              onChange={(machine_type) => {
-                patchDraft(
-                  provider === "gcp"
-                    ? gcpMachinePatch(machine_type)
-                    : {
-                        machine_type,
-                        boot_disk_gb: Math.max(
-                          Number(draft.boot_disk_gb ?? 20),
-                          getNebiusMinimumBootDiskGb(hostCatalog, {
-                            region: draft.region,
-                            machine_type,
-                          }),
-                        ),
-                      },
-                );
-              }}
-            />
-          </Form.Item>
+          {provider === "gcp" && (
+            <Form.Item
+              name="machine_type"
+              label={
+                <Flex align="center" justify="space-between" gap={12}>
+                  <span>Machine</span>
+                  <Space size={6}>
+                    <Text type="secondary" style={{ fontWeight: 400 }}>
+                      Sort by price
+                    </Text>
+                    <Switch
+                      size="small"
+                      checked={sortMachinesByPrice}
+                      onChange={setSortMachinesByPrice}
+                    />
+                  </Space>
+                </Flex>
+              }
+              rules={[{ required: true }]}
+              style={{ flex: "1 1 260px" }}
+            >
+              <HostOptionsSelect
+                options={machineOptions}
+                disabled={machineOptions.length === 0}
+                placeholder="Select a machine available in this zone"
+                onChange={(machine_type) => {
+                  patchDraft(
+                    provider === "gcp"
+                      ? gcpMachinePatch(machine_type)
+                      : {
+                          machine_type,
+                          boot_disk_gb: Math.max(
+                            Number(draft.boot_disk_gb ?? 20),
+                            getNebiusMinimumBootDiskGb(hostCatalog, {
+                              region: draft.region,
+                              machine_type,
+                            }),
+                          ),
+                        },
+                  );
+                }}
+              />
+            </Form.Item>
+          )}
           <Form.Item
             name="boot_disk_gb"
             label="Boot disk (GB)"
@@ -1347,30 +1462,35 @@ function VmCreateModal({
               forceRender: true,
               children: (
                 <>
-                  <Title level={5}>Capacity and lifetime</Title>
+                  <Title level={5}>Pricing and lifetime</Title>
                   <Flex gap={12} wrap>
-                    <Form.Item
-                      name="pricing_model"
-                      label="Capacity"
-                      style={{ flex: "1 1 320px" }}
-                    >
-                      <Radio.Group
-                        optionType="button"
-                        buttonStyle="solid"
-                        onChange={(event) => {
-                          const pricing_model = event.target.value;
-                          patchDraft({
-                            pricing_model,
-                            allow_on_demand_fallback: pricing_model === "spot",
-                          });
-                        }}
+                    {provider !== "nebius" && (
+                      <Form.Item
+                        name="pricing_model"
+                        label="Pricing model"
+                        style={{ flex: "1 1 320px" }}
                       >
-                        <Radio.Button value="spot">
-                          Spot · lower cost
-                        </Radio.Button>
-                        <Radio.Button value="on_demand">Standard</Radio.Button>
-                      </Radio.Group>
-                    </Form.Item>
+                        <Radio.Group
+                          optionType="button"
+                          buttonStyle="solid"
+                          onChange={(event) => {
+                            const pricing_model = event.target.value;
+                            patchDraft({
+                              pricing_model,
+                              allow_on_demand_fallback:
+                                pricing_model === "spot",
+                            });
+                          }}
+                        >
+                          <Radio.Button value="spot">
+                            Spot · lower cost
+                          </Radio.Button>
+                          <Radio.Button value="on_demand">
+                            Standard
+                          </Radio.Button>
+                        </Radio.Group>
+                      </Form.Item>
+                    )}
                     <Form.Item
                       name="ttl_minutes"
                       label="Optional deletion deadline"
@@ -1407,51 +1527,57 @@ function VmCreateModal({
                   )}
                   <Divider />
                   <Title level={5}>SSH access</Title>
-                  <Form.Item
-                    name="configure_project_ssh"
-                    valuePropName="checked"
-                  >
-                    <Checkbox disabled={!draft.use_project_ssh_key}>
-                      Add a managed SSH alias to this project&apos;s{" "}
-                      <Text code>~/.ssh/config</Text> when the VM is ready
-                    </Checkbox>
-                  </Form.Item>
-                  {projectSshPublicKey ? (
-                    <Form.Item
-                      name="use_project_ssh_key"
-                      valuePropName="checked"
-                    >
-                      <Checkbox>
-                        Add this project&apos;s SSH key from{" "}
-                        <Text code>.ssh/id_ed25519.pub</Text>
-                      </Checkbox>
-                    </Form.Item>
-                  ) : (
-                    <Alert
-                      showIcon
-                      type="info"
-                      title="This project does not have an SSH keypair yet."
-                      description="Create an encrypted project SSH keypair, then use its public key for this VM. The project does not need to restart."
-                      action={
-                        <Button
-                          size="small"
-                          loading={saving}
-                          onClick={() => {
-                            setSshKeyError(undefined);
-                            void onGenerateProjectSshKey()
-                              .then((publicKey) => {
-                                if (publicKey) {
-                                  patchDraft({ use_project_ssh_key: true });
-                                }
-                              })
-                              .catch((err) => setSshKeyError(String(err)));
-                          }}
+                  {project_id && (
+                    <>
+                      <Form.Item
+                        name="configure_project_ssh"
+                        valuePropName="checked"
+                      >
+                        <Checkbox disabled={!draft.use_project_ssh_key}>
+                          Add a managed SSH alias to this project&apos;s{" "}
+                          <Text code>~/.ssh/config</Text> when the VM is ready
+                        </Checkbox>
+                      </Form.Item>
+                      {projectSshPublicKey ? (
+                        <Form.Item
+                          name="use_project_ssh_key"
+                          valuePropName="checked"
                         >
-                          Create project SSH keypair
-                        </Button>
-                      }
-                      style={{ marginBottom: 16 }}
-                    />
+                          <Checkbox>
+                            Add this project&apos;s SSH key from{" "}
+                            <Text code>.ssh/id_ed25519.pub</Text>
+                          </Checkbox>
+                        </Form.Item>
+                      ) : (
+                        <Alert
+                          showIcon
+                          type="info"
+                          title="This project does not have an SSH keypair yet."
+                          description="Create an encrypted project SSH keypair, then use its public key for this VM. The project does not need to restart."
+                          action={
+                            <Button
+                              size="small"
+                              loading={saving}
+                              onClick={() => {
+                                setSshKeyError(undefined);
+                                void onGenerateProjectSshKey?.()
+                                  .then((publicKey) => {
+                                    if (publicKey) {
+                                      patchDraft({
+                                        use_project_ssh_key: true,
+                                      });
+                                    }
+                                  })
+                                  .catch((err) => setSshKeyError(String(err)));
+                              }}
+                            >
+                              Create project SSH keypair
+                            </Button>
+                          }
+                          style={{ marginBottom: 16 }}
+                        />
+                      )}
+                    </>
                   )}
                   {sshKeyError && (
                     <Alert
@@ -1465,7 +1591,7 @@ function VmCreateModal({
                   <Form.Item
                     name="ssh_public_key"
                     label={
-                      projectSshPublicKey
+                      project_id && projectSshPublicKey
                         ? "Other SSH public key (optional)"
                         : "SSH public key (optional)"
                     }
@@ -1524,7 +1650,7 @@ function VolumeCreateModal({
   onCreate,
 }: {
   open: boolean;
-  project_id: string;
+  project_id?: string;
   catalog: ComputeCatalog;
   saving: boolean;
   onCancel: () => void;
@@ -2084,6 +2210,13 @@ function VmMachineTypeModal({
           style={{ width: "100%" }}
         />
       </div>
+      {vm.provider === "nebius" && machineType && (
+        <NebiusCapacityNotice
+          catalog={hostCatalog}
+          selection={selection}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       {estimate && (
         <HostPriceBreakdown
           estimate={estimate}
@@ -2111,15 +2244,371 @@ function VmMachineTypeModal({
   );
 }
 
+function VmStartModal({
+  vm,
+  catalog,
+  onCancel,
+  onStart,
+}: {
+  vm?: ComputeVm;
+  catalog: ComputeCatalog;
+  onCancel: () => void;
+  onStart: (vm: ComputeVm) => Promise<boolean>;
+}) {
+  const [starting, setStarting] = useState(false);
+
+  useEffect(() => setStarting(false), [vm]);
+
+  if (!vm) return null;
+  const hostCatalog = providerCatalog(catalog, vm.provider);
+  const selection: ProviderSelection = {
+    region: vm.region,
+    machine_type: vm.machine_type,
+    pricing_model: vm.desired_pricing_model,
+  };
+
+  return (
+    <Modal
+      open
+      title={`Start ${vm.name}?`}
+      okText="Start VM"
+      cancelText="Cancel"
+      confirmLoading={starting}
+      onCancel={onCancel}
+      onOk={async () => {
+        setStarting(true);
+        try {
+          await onStart(vm);
+        } finally {
+          setStarting(false);
+        }
+      }}
+    >
+      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Text>
+          {vm.machine_type} · {vm.region} ·{" "}
+          {pricingLabel(vm.desired_pricing_model)}
+        </Text>
+        <NebiusCapacityNotice catalog={hostCatalog} selection={selection} />
+        <Text type="secondary">
+          To choose a different machine or pricing model, cancel and use the
+          Manage menu while this VM is stopped.
+        </Text>
+      </Space>
+    </Modal>
+  );
+}
+
+function VmDetailsModal({
+  vm,
+  homeVolume,
+  onClose,
+}: {
+  vm?: ComputeVm;
+  homeVolume?: ComputeVolume;
+  onClose: () => void;
+}) {
+  if (!vm) return null;
+  const machineLabel = vm.gpu_type
+    ? `${vm.gpu_count}x ${vm.gpu_type}`
+    : vm.machine_type;
+  return (
+    <Modal
+      open
+      title={
+        <Space>
+          <Icon name="server" />
+          <span>{vm.name}</span>
+          <Tag>{vmDisplayState(vm)}</Tag>
+        </Space>
+      }
+      footer={<Button onClick={onClose}>Close</Button>}
+      onCancel={onClose}
+      width={760}
+    >
+      <Paragraph type="secondary">
+        Account-owned virtual machine created{" "}
+        <TimeAgo date={new Date(vm.created_at)} />.
+      </Paragraph>
+      <Descriptions bordered column={{ xs: 1, sm: 2 }} size="small">
+        <Descriptions.Item label="Name">{vm.name}</Descriptions.Item>
+        <Descriptions.Item label="VM ID">
+          <Text copyable={{ text: vm.id }} code>
+            {vm.id}
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label="Provider">
+          {getProviderDescriptor(vm.provider).label}
+        </Descriptions.Item>
+        <Descriptions.Item label="Location">
+          {vm.zone ?? vm.region}
+        </Descriptions.Item>
+        <Descriptions.Item label="Instance">{machineLabel}</Descriptions.Item>
+        <Descriptions.Item label="Machine type">
+          {vm.machine_type}
+        </Descriptions.Item>
+        <Descriptions.Item label="Resources">
+          {vm.cpu} vCPU · {vm.ram_gb} GB RAM
+        </Descriptions.Item>
+        <Descriptions.Item label="Architecture">
+          {vm.architecture}
+        </Descriptions.Item>
+        <Descriptions.Item label="Operating system">
+          {vm.operating_system === "windows"
+            ? "Windows Server 2022"
+            : vm.operating_system_version || "Linux"}
+        </Descriptions.Item>
+        <Descriptions.Item label="Pricing">
+          {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
+        </Descriptions.Item>
+        <Descriptions.Item label="Boot disk">
+          {vm.boot_disk_gb} GB
+        </Descriptions.Item>
+        <Descriptions.Item label="Home volume">
+          {homeVolume
+            ? `${homeVolume.name} · ${homeVolume.effective_size_gb} GB · ${homeVolume.attachment_state}`
+            : vm.home_volume_id
+              ? `ID ${vm.home_volume_id}`
+              : "None"}
+        </Descriptions.Item>
+        <Descriptions.Item label="Created">
+          {new Date(vm.created_at).toLocaleString()}
+        </Descriptions.Item>
+        <Descriptions.Item label="Updated">
+          {new Date(vm.updated_at).toLocaleString()}
+        </Descriptions.Item>
+        <Descriptions.Item label="SSH hostname" span={2}>
+          {vm.public_hostname ? (
+            <Text copyable={{ text: vm.public_hostname }} code>
+              {vm.public_hostname}
+            </Text>
+          ) : (
+            "Not assigned"
+          )}
+        </Descriptions.Item>
+      </Descriptions>
+    </Modal>
+  );
+}
+
+export function VmAccessModal({
+  vm,
+  access,
+  sshKeys,
+  loadingKeys,
+  saving,
+  onClose,
+  onGrant,
+  onRevoke,
+  onAddSshKey,
+  onRevokeSshKey,
+}: {
+  vm?: ComputeVm;
+  access: ComputeVmProjectAccess[];
+  sshKeys: ComputeVmSshKey[];
+  loadingKeys: boolean;
+  saving: boolean;
+  onClose: () => void;
+  onGrant: (projectId: string) => Promise<void>;
+  onRevoke: (projectId: string) => Promise<void>;
+  onAddSshKey: (sshPublicKey: string) => Promise<boolean>;
+  onRevokeSshKey: (sshPublicKey: string) => Promise<void>;
+}) {
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
+  const [sshPublicKey, setSshPublicKey] = useState("");
+  const current = vm
+    ? access.filter(({ vm_id }) => vm_id === vm.id)
+    : ([] as ComputeVmProjectAccess[]);
+
+  useEffect(() => {
+    setSelectedProjectId(undefined);
+    setSshPublicKey("");
+  }, [vm?.id]);
+
+  return (
+    <Modal
+      open={vm != null}
+      title={vm ? `Access to ${vm.name}` : "VM access"}
+      footer={<Button onClick={onClose}>Close</Button>}
+      onCancel={onClose}
+      width={680}
+    >
+      <Paragraph type="secondary">
+        Granted projects can SSH to the VM via a managed{" "}
+        <Text code>~/.ssh/config</Text> alias. The VM does not gain the ability
+        to SSH to the project or direct access to any project files. VM
+        lifecycle, configuration, billing, and deletion are controlled only by
+        the account.
+      </Paragraph>
+      <Title level={5}>Projects with access</Title>
+      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+        {current.map((item) => (
+          <Flex
+            key={item.project_id}
+            align="center"
+            justify="space-between"
+            gap={12}
+            wrap
+          >
+            <Space orientation="vertical" size={0}>
+              <ProjectTitle project_id={item.project_id} trunc={48} />
+              <Text type="secondary" code>
+                {item.project_id}
+              </Text>
+            </Space>
+            <Space>
+              <Tag
+                color={
+                  item.state === "ready"
+                    ? "green"
+                    : item.state === "degraded"
+                      ? "red"
+                      : "blue"
+                }
+              >
+                {item.state}
+              </Tag>
+              <Popconfirm
+                title={
+                  item.revoked_at
+                    ? "Retry removing this project's VM access?"
+                    : "Remove this project's VM access?"
+                }
+                description="Its SSH key and managed SSH config entry will be removed during reconciliation."
+                okText={item.revoked_at ? "Retry removal" : "Remove access"}
+                okButtonProps={{ danger: true }}
+                onConfirm={() => onRevoke(item.project_id)}
+              >
+                <Button danger disabled={saving} size="small">
+                  {item.revoked_at ? "Retry" : "Remove"}
+                </Button>
+              </Popconfirm>
+            </Space>
+            {item.error && (
+              <Alert
+                showIcon
+                type="warning"
+                title="Access reconciliation needs attention"
+                description={item.error}
+                style={{ width: "100%" }}
+              />
+            )}
+          </Flex>
+        ))}
+        {!current.length && (
+          <Alert
+            showIcon
+            type="info"
+            title="No projects have access to this VM."
+          />
+        )}
+      </Space>
+      <Divider />
+      <Text strong>Grant another project access</Text>
+      <SelectProject
+        exclude={current.map(({ project_id }) => project_id)}
+        fullCollaboratorOnly
+        value={selectedProjectId}
+        onChange={setSelectedProjectId}
+        style={{ marginTop: 8 }}
+      />
+      <Button
+        type="primary"
+        disabled={!selectedProjectId}
+        loading={saving}
+        onClick={() => {
+          if (selectedProjectId) void onGrant(selectedProjectId);
+        }}
+        style={{ marginTop: 12 }}
+      >
+        Grant SSH access
+      </Button>
+      <Divider />
+      <Title level={5}>Public SSH keys</Title>
+      <Paragraph type="secondary">
+        These public keys can connect directly to the VM as{" "}
+        <Text code>{vm?.ssh_user || "user"}</Text>. Private keys never leave
+        their owners.
+      </Paragraph>
+      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+        {sshKeys.map((key) => (
+          <Flex
+            key={key.fingerprint}
+            align="center"
+            justify="space-between"
+            gap={12}
+            wrap
+          >
+            <Space orientation="vertical" size={0} style={{ minWidth: 0 }}>
+              <Text strong>{key.comment || key.key_type}</Text>
+              <Text
+                type="secondary"
+                code
+                copyable={{ text: key.ssh_public_key }}
+              >
+                {key.fingerprint}
+              </Text>
+            </Space>
+            <Popconfirm
+              title="Remove this SSH key?"
+              description="Connections using its private key will no longer be authorized after provider reconciliation."
+              okText="Remove key"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => onRevokeSshKey(key.ssh_public_key)}
+            >
+              <Button danger disabled={saving} size="small">
+                Remove
+              </Button>
+            </Popconfirm>
+          </Flex>
+        ))}
+        {!loadingKeys && sshKeys.length === 0 && (
+          <Alert
+            showIcon
+            type="info"
+            title="No direct SSH keys are authorized."
+          />
+        )}
+        {loadingKeys && <Text type="secondary">Loading SSH keys…</Text>}
+      </Space>
+      <Input.TextArea
+        aria-label="Public SSH key"
+        autoSize={{ minRows: 2, maxRows: 4 }}
+        placeholder="ssh-ed25519 AAAA… name@example.com"
+        value={sshPublicKey}
+        onChange={(event) => setSshPublicKey(event.target.value)}
+        style={{ marginTop: 16 }}
+      />
+      <Button
+        type="primary"
+        disabled={!sshPublicKey.trim()}
+        loading={saving}
+        onClick={() => {
+          const key = sshPublicKey.trim();
+          if (!key) return;
+          void onAddSshKey(key).then((added) => {
+            if (added) setSshPublicKey("");
+          });
+        }}
+        style={{ marginTop: 12 }}
+      >
+        Add public key
+      </Button>
+    </Modal>
+  );
+}
+
 export function ProjectComputeVms({
   project_id,
   compact = false,
   isVisible = true,
 }: {
-  project_id: string;
+  project_id?: string;
   compact?: boolean;
   isVisible?: boolean;
 }) {
+  const projectId = project_id?.trim() || undefined;
+  const accountMode = projectId == null;
   const accountSshKeys = useRedux("account", "ssh_keys");
   const sshKeys = sshKeyOptions(accountSshKeys);
   const cloudflareCountry = useTypedRedux("customize", "country");
@@ -2136,6 +2625,13 @@ export function ProjectComputeVms({
   const [volumes, setVolumes] = useState<ComputeVolume[]>([]);
   const [catalog, setCatalog] = useState<ComputeCatalog>();
   const [agentGrants, setAgentGrants] = useState<ComputeAgentGrant[]>([]);
+  const [projectAccess, setProjectAccess] = useState<ComputeVmProjectAccess[]>(
+    [],
+  );
+  const [accessVm, setAccessVm] = useState<ComputeVm>();
+  const [detailsVm, setDetailsVm] = useState<ComputeVm>();
+  const [directSshKeys, setDirectSshKeys] = useState<ComputeVmSshKey[]>([]);
+  const [loadingDirectSshKeys, setLoadingDirectSshKeys] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -2146,52 +2642,51 @@ export function ProjectComputeVms({
   const [resizeVolumeTarget, setResizeVolumeTarget] = useState<ComputeVolume>();
   const [ttlVm, setTtlVm] = useState<ComputeVm>();
   const [machineTypeVm, setMachineTypeVm] = useState<ComputeVm>();
+  const [startVm, setStartVm] = useState<ComputeVm>();
   const [machineTypeError, setMachineTypeError] = useState<string>();
   const [vmInitial, setVmInitial] = useState<VmDraft>();
   const [projectSshPublicKey, setProjectSshPublicKey] = useState<string | null>(
     null,
   );
-  const [projectSshKeyLoading, setProjectSshKeyLoading] = useState(true);
   const { runFreshAuthAction, freshAuthModalProps } = useFreshAuthAction();
 
   const load = async ({
     refreshCatalogAndGrants = true,
     showLoading = true,
-    projectOnly = false,
   }: {
     refreshCatalogAndGrants?: boolean;
     showLoading?: boolean;
-    projectOnly?: boolean;
   } = {}) => {
     if (showLoading) setLoading(true);
     try {
-      const [ownedVms, projectVolumes, computeCatalog, grants] =
+      const [visibleVms, visibleVolumes, computeCatalog, grants, access] =
         await Promise.all([
-          webapp_client.conat_client.hub.compute.listVms(
-            projectOnly ? { project_id } : {},
-          ),
-          webapp_client.conat_client.hub.compute.listVolumes({ project_id }),
+          projectId
+            ? webapp_client.conat_client.hub.compute.listProjectVms({
+                project_id: projectId,
+              })
+            : webapp_client.conat_client.hub.compute.listVms({}),
+          accountMode
+            ? webapp_client.conat_client.hub.compute.listVolumes({})
+            : Promise.resolve([]),
           refreshCatalogAndGrants
             ? webapp_client.conat_client.hub.compute.getCatalog({})
             : Promise.resolve(undefined),
-          refreshCatalogAndGrants
+          refreshCatalogAndGrants && projectId
             ? webapp_client.conat_client.hub.compute.listAgentGrants({
-                project_id,
+                project_id: projectId,
               })
             : Promise.resolve(undefined),
+          accountMode
+            ? webapp_client.conat_client.hub.compute.listVmProjectAccess({})
+            : Promise.resolve(undefined),
         ]);
-      if (projectOnly) {
-        setAllRows((current) => [
-          ...current.filter((vm) => vm.project_id !== project_id),
-          ...ownedVms,
-        ]);
-      } else {
-        setAllRows(ownedVms);
-      }
-      setRows(ownedVms.filter((vm) => vm.project_id === project_id));
-      setVolumes(projectVolumes);
+      setAllRows(visibleVms);
+      setRows(visibleVms);
+      setVolumes(visibleVolumes);
       if (computeCatalog != null) setCatalog(computeCatalog);
       if (grants != null) setAgentGrants(grants);
+      if (access != null) setProjectAccess(access);
       setError(undefined);
     } catch (err) {
       setError(`${err}`);
@@ -2203,7 +2698,9 @@ export function ProjectComputeVms({
   useEffect(() => {
     if (!isVisible) return;
     let disposed = false;
+    let firstRun = true;
     let inFlight = false;
+    let nextCatalogRefreshAt = 0;
     let refreshCatalogNext = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -2222,15 +2719,19 @@ export function ProjectComputeVms({
         return;
       }
       inFlight = true;
-      const refreshCatalogAndGrants = refreshCatalogNext;
+      const refreshCatalogAndGrants =
+        refreshCatalogNext || Date.now() >= nextCatalogRefreshAt;
       refreshCatalogNext = false;
+      if (refreshCatalogAndGrants) {
+        nextCatalogRefreshAt = Date.now() + VM_CATALOG_REFRESH_MS;
+      }
       try {
         await load({
           refreshCatalogAndGrants,
-          showLoading: refreshCatalogAndGrants,
-          projectOnly: !refreshCatalogAndGrants,
+          showLoading: firstRun,
         });
       } finally {
+        firstRun = false;
         inFlight = false;
         if (disposed || !documentIsVisible()) return;
         if (refreshCatalogNext) {
@@ -2256,13 +2757,16 @@ export function ProjectComputeVms({
       if (timer != null) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [isVisible, project_id]);
+  }, [accountMode, isVisible, projectId]);
 
   useEffect(() => {
     if (!isVisible) return;
+    if (!projectId) {
+      setProjectSshPublicKey(null);
+      return;
+    }
     let cancelled = false;
-    setProjectSshKeyLoading(true);
-    void readProjectDeployPublicKey(project_id)
+    void readProjectDeployPublicKey(projectId)
       .then((publicKey) => {
         if (!cancelled) {
           setProjectSshPublicKey(publicKey?.trim() || null);
@@ -2272,16 +2776,35 @@ export function ProjectComputeVms({
         if (!cancelled) {
           setProjectSshPublicKey(null);
         }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setProjectSshKeyLoading(false);
-        }
       });
     return () => {
       cancelled = true;
     };
-  }, [isVisible, project_id]);
+  }, [isVisible, projectId]);
+
+  useEffect(() => {
+    if (!accessVm || !accountMode) {
+      setDirectSshKeys([]);
+      setLoadingDirectSshKeys(false);
+      return;
+    }
+    let cancelled = false;
+    setLoadingDirectSshKeys(true);
+    void webapp_client.conat_client.hub.compute
+      .listVmSshKeys({ id_or_name: accessVm.id })
+      .then((keys) => {
+        if (!cancelled) setDirectSshKeys(keys);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDirectSshKeys(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessVm?.id, accountMode]);
 
   const defaultVm = (): VmDraft => {
     const catalogDefaultZone = catalog?.defaults.zone ?? "us-central1-a";
@@ -2323,12 +2846,8 @@ export function ProjectComputeVms({
           )[0]?.value
         : undefined;
     const zone = nearestZone ?? catalogDefaultZone;
-    const name = availableName(
-      "compute-vm",
-      allRows.map((vm) => vm.name),
-    );
     return {
-      name,
+      name: "",
       provider: defaultProvider,
       operating_system: catalog?.defaults.operating_system ?? "linux",
       funding_mode: catalog?.default_funding_mode ?? "account-prepaid",
@@ -2342,7 +2861,7 @@ export function ProjectComputeVms({
       boot_disk_gb: catalog?.defaults.boot_disk_gb ?? 20,
       create_home_volume: false,
       new_home_volume_name: availableName(
-        name + "-home",
+        "vm-home",
         volumes.map((volume) => volume.name),
       ),
       new_home_volume_size_gb: 50,
@@ -2354,9 +2873,9 @@ export function ProjectComputeVms({
 
   const openSimilar = (vm: ComputeVm) => {
     const ttlMinutes = originalTtlMinutes(vm);
-    const name = similarName(vm.name, allRows);
+    const suggestedVolumeStem = similarName(vm.name, allRows);
     setVmInitial({
-      name,
+      name: "",
       provider: vm.provider,
       operating_system: vm.operating_system ?? "linux",
       funding_mode: vm.funding_mode,
@@ -2364,6 +2883,7 @@ export function ProjectComputeVms({
       region: vm.region,
       zone: vm.zone ?? undefined,
       machine_type: vm.machine_type,
+      provider_platform: vm.provider_spec?.platform,
       pricing_model: vm.desired_pricing_model,
       allow_on_demand_fallback: vm.allow_on_demand_fallback,
       ttl_minutes:
@@ -2373,7 +2893,7 @@ export function ProjectComputeVms({
       boot_disk_gb: vm.boot_disk_gb,
       create_home_volume: false,
       new_home_volume_name: availableName(
-        name + "-home",
+        suggestedVolumeStem + "-home",
         volumes.map((volume) => volume.name),
       ),
       new_home_volume_size_gb: 50,
@@ -2386,6 +2906,7 @@ export function ProjectComputeVms({
   };
 
   const generateProjectSshKey = async (): Promise<string | undefined> => {
+    if (!projectId) return;
     setSaving(true);
     setError(undefined);
     try {
@@ -2395,7 +2916,7 @@ export function ProjectComputeVms({
           await webapp_client.conat_client.hub.projects.generateProjectSshKeySecret(
             {
               browser_id: webapp_client.browser_id,
-              project_id,
+              project_id: projectId,
             },
           );
         publicKey = result.public_key.trim();
@@ -2407,6 +2928,112 @@ export function ProjectComputeVms({
     } catch (err) {
       setError(String(err));
       throw err;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const grantProjectAccess = async (targetProjectId: string) => {
+    if (!accessVm) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      const completed = await runFreshAuthAction(async () => {
+        let publicKey = await readProjectDeployPublicKey(targetProjectId);
+        if (!publicKey?.trim()) {
+          publicKey = (
+            await webapp_client.conat_client.hub.projects.generateProjectSshKeySecret(
+              {
+                browser_id: webapp_client.browser_id,
+                project_id: targetProjectId,
+              },
+            )
+          ).public_key;
+        }
+        await webapp_client.conat_client.hub.compute.grantVmProjectAccess({
+          browser_id: webapp_client.browser_id,
+          id_or_name: vm.id,
+          project_id: targetProjectId,
+          ssh_public_key: publicKey,
+          idempotency_key: uuid(),
+        });
+      });
+      if (!completed) return;
+      setNotice(`Project SSH access to '${vm.name}' is being configured.`);
+      await load({ refreshCatalogAndGrants: false, showLoading: false });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revokeProjectAccess = async (targetProjectId: string) => {
+    if (!accessVm) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      await webapp_client.conat_client.hub.compute.revokeVmProjectAccess({
+        id_or_name: vm.id,
+        project_id: targetProjectId,
+        idempotency_key: uuid(),
+      });
+      setNotice(`Project SSH access to '${vm.name}' is being removed.`);
+      await load({ refreshCatalogAndGrants: false, showLoading: false });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addDirectSshKey = async (sshPublicKey: string) => {
+    if (!accessVm) return false;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      const completed = await runFreshAuthAction(async () => {
+        await webapp_client.conat_client.hub.compute.authorizeSshKey({
+          browser_id: webapp_client.browser_id,
+          id_or_name: vm.id,
+          ssh_public_key: sshPublicKey,
+          idempotency_key: uuid(),
+        });
+      });
+      if (!completed) return false;
+      setDirectSshKeys(
+        await webapp_client.conat_client.hub.compute.listVmSshKeys({
+          id_or_name: vm.id,
+        }),
+      );
+      setNotice(`SSH key access to '${vm.name}' was authorized.`);
+      return true;
+    } catch (err) {
+      setError(String(err));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revokeDirectSshKey = async (sshPublicKey: string) => {
+    if (!accessVm) return;
+    setSaving(true);
+    setError(undefined);
+    try {
+      const vm = accessVm;
+      const keys = await webapp_client.conat_client.hub.compute.revokeSshKey({
+        id_or_name: vm.id,
+        ssh_public_key: sshPublicKey,
+        idempotency_key: uuid(),
+      });
+      setDirectSshKeys(keys);
+      setNotice(`SSH key removal from '${vm.name}' is being reconciled.`);
+    } catch (err) {
+      setError(String(err));
     } finally {
       setSaving(false);
     }
@@ -2425,7 +3052,7 @@ export function ProjectComputeVms({
           }
           const createdVolume =
             await webapp_client.conat_client.hub.compute.createVolume({
-              project_id,
+              project_id: projectId,
               name: values.new_home_volume_name,
               provider: values.provider,
               funding_mode: values.funding_mode,
@@ -2439,7 +3066,7 @@ export function ProjectComputeVms({
           homeVolume = createdVolume.name;
         }
         await webapp_client.conat_client.hub.compute.createVm({
-          project_id,
+          project_id: projectId,
           name: values.name,
           provider: values.provider,
           operating_system: values.operating_system,
@@ -2448,6 +3075,9 @@ export function ProjectComputeVms({
           region: values.region,
           zone: values.zone,
           machine_type: values.machine_type,
+          provider_spec: values.provider_platform
+            ? { platform: values.provider_platform }
+            : undefined,
           gpu_type:
             values.gpu_type && values.gpu_type !== "none"
               ? values.gpu_type
@@ -2514,7 +3144,10 @@ export function ProjectComputeVms({
     }
   };
 
-  const setVmRunning = async (vm: ComputeVm, running: boolean) => {
+  const setVmRunning = async (
+    vm: ComputeVm,
+    running: boolean,
+  ): Promise<boolean> => {
     setError(undefined);
     try {
       const action = running ? "startVm" : "stopVm";
@@ -2527,14 +3160,16 @@ export function ProjectComputeVms({
       };
       if (running) {
         const completed = await runFreshAuthAction(execute);
-        if (!completed) return;
+        if (!completed) return false;
       } else {
         await execute();
       }
       setNotice(`VM '${vm.name}' is ${running ? "starting" : "stopping"}.`);
       await load();
+      return true;
     } catch (err) {
       setError(`${err}`);
+      return false;
     }
   };
 
@@ -2771,59 +3406,95 @@ export function ProjectComputeVms({
       title: "VM",
       dataIndex: "name",
       fixed: "left",
-      width: 180,
+      width: 160,
       render: (name: string, vm) => (
         <Space direction="vertical" size={0}>
-          <Text strong>{name}</Text>
-          <Text copyable={{ text: vm.id }} type="secondary">
-            ID {vm.id.slice(0, 8)}
-          </Text>
+          <Button
+            type="link"
+            aria-label={`View details for ${name}`}
+            onClick={() => setDetailsVm(vm)}
+            style={{ height: "auto", padding: 0, textAlign: "left" }}
+          >
+            <Text strong style={{ color: "inherit" }}>
+              {name}
+            </Text>
+          </Button>
+          <Text type="secondary">ID {vm.id.slice(0, 8)}</Text>
         </Space>
       ),
     },
     {
       title: "Status",
       dataIndex: "state",
-      width: 190,
+      width: 165,
       render: (state: string, vm) => {
         const providerState = vm.provider_state;
-        const displayState = providerState ?? state;
+        const displayState = vmDisplayState(vm);
         const providerObservationStale =
           vm.provider_observed_at != null &&
           Date.now() - new Date(vm.provider_observed_at).valueOf() > 2 * 60_000;
-        const setupDiffers =
-          providerState === "running"
-            ? state !== "ready"
-            : providerState === "stopped"
-              ? state !== "stopped"
-              : false;
+        const recoverySummary =
+          state === "recovering" || vm.effective_pricing_model === "on_demand"
+            ? vmSpotRecoverySummary(vm)
+            : undefined;
+        const startupExpectation = vmStartupExpectation(vm);
         return (
           <Space direction="vertical" size={1} style={{ minWidth: 0 }}>
-            <Tag
-              color={
-                providerObservationStale
-                  ? "orange"
-                  : displayState === "running" || displayState === "ready"
-                    ? "green"
-                    : displayState === "error" || displayState === "failed"
-                      ? "red"
-                      : undefined
+            <Popover
+              trigger="click"
+              title={`Status of ${vm.name}`}
+              content={
+                <Space direction="vertical" size={4} style={{ maxWidth: 430 }}>
+                  <Text>CoCalc state: {state}</Text>
+                  <Text>Desired state: {vm.desired_state}</Text>
+                  <Text>Cloud state: {providerState ?? "not observed"}</Text>
+                  {vm.provider_observed_at && (
+                    <Text type="secondary">
+                      Cloud observed{" "}
+                      <TimeAgo date={new Date(vm.provider_observed_at)} />
+                    </Text>
+                  )}
+                  {vm.provider_observation_error && (
+                    <Text
+                      type="danger"
+                      copyable={{ text: vm.provider_observation_error }}
+                    >
+                      {vm.provider_observation_error}
+                    </Text>
+                  )}
+                  {vm.error && (
+                    <Text type="danger" copyable={{ text: vm.error }}>
+                      {vm.error}
+                    </Text>
+                  )}
+                </Space>
               }
-              style={{ marginInlineEnd: 0, width: "fit-content" }}
             >
-              {displayState}
-            </Tag>
-            {providerState && vm.provider_observed_at && (
+              <Button
+                type="text"
+                aria-label={`${displayState} status; show details`}
+                style={{ height: "auto", padding: 0 }}
+              >
+                <Tag
+                  color={
+                    providerObservationStale
+                      ? "orange"
+                      : displayState === "running" || displayState === "ready"
+                        ? "green"
+                        : displayState === "error" || displayState === "failed"
+                          ? "red"
+                          : undefined
+                  }
+                  style={{ marginInlineEnd: 0 }}
+                >
+                  {displayState.charAt(0).toUpperCase() + displayState.slice(1)}
+                </Tag>
+              </Button>
+            </Popover>
+            {providerObservationStale && vm.provider_observed_at && (
               <Text type={providerObservationStale ? "danger" : "secondary"}>
-                {providerObservationStale
-                  ? "Cloud status stale: "
-                  : "Cloud observed "}
+                Cloud status stale:{" "}
                 <TimeAgo date={new Date(vm.provider_observed_at)} />
-              </Text>
-            )}
-            {setupDiffers && (
-              <Text type={state === "failed" ? "danger" : "secondary"}>
-                CoCalc setup: {state}
               </Text>
             )}
             {vm.provider_observation_error && (
@@ -2849,8 +3520,18 @@ export function ProjectComputeVms({
                 Deletes <TimeAgo date={new Date(vm.expires_at)} />
               </Text>
             )}
-            {vmSpotRecoverySummary(vm) && (
-              <Text type="secondary">{vmSpotRecoverySummary(vm)}</Text>
+            {recoverySummary && <Text type="secondary">{recoverySummary}</Text>}
+            {startupExpectation && (
+              <Text
+                type={
+                  startupExpectation.takingLongerThanUsual
+                    ? "warning"
+                    : "secondary"
+                }
+                style={{ fontSize: 12 }}
+              >
+                {startupExpectation.text}
+              </Text>
             )}
             {state === "failed" && vm.error && (
               <Popover
@@ -2882,9 +3563,6 @@ export function ProjectComputeVms({
                 </Button>
               </Popover>
             )}
-            {!vm.expires_at && (
-              <Text type="secondary">No deletion deadline</Text>
-            )}
           </Space>
         );
       },
@@ -2893,45 +3571,49 @@ export function ProjectComputeVms({
       title: "Configuration",
       width: 220,
       render: (_, vm) => {
-        const homeVolume = vm.home_volume_id
-          ? volumesById.get(vm.home_volume_id)
-          : undefined;
+        const machineLabel = vm.gpu_type
+          ? `${vm.gpu_count}x ${vm.gpu_type}`
+          : vm.machine_type;
         return (
-          <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
-            <Text strong>{vm.machine_type}</Text>
-            <Text type="secondary">
-              {getProviderDescriptor(vm.provider).label} · {vm.architecture} ·{" "}
-              {vm.operating_system === "windows" ? "Windows 2022" : "Linux"}
-            </Text>
-            <Text type="secondary">{vm.zone ?? vm.region}</Text>
-            <Text type="secondary">Boot disk · {vm.boot_disk_gb} GB</Text>
-            <Text type="secondary">
-              Home volume ·{" "}
-              {homeVolume
-                ? `${homeVolume.name} · ${homeVolume.effective_size_gb} GB · ${homeVolume.attachment_state}`
-                : vm.home_volume_id
-                  ? `ID ${vm.home_volume_id.slice(0, 8)}`
-                  : "none"}
-            </Text>
-            {vm.gpu_type && (
-              <Text type="secondary">
-                {vm.gpu_count}× {vm.gpu_type}
-              </Text>
-            )}
+          <Space direction="vertical" size={6} style={{ minWidth: 0 }}>
+            <HostConfigChip
+              icon={<CloudServerOutlined />}
+              label={machineLabel}
+              detail={
+                vm.gpu_type
+                  ? `${vm.machine_type} · ${vm.cpu} vCPU · ${vm.ram_gb} GB`
+                  : `${vm.cpu} vCPU · ${vm.ram_gb} GB RAM`
+              }
+              ariaLabel={`View configuration for ${vm.name}`}
+              onClick={() => setDetailsVm(vm)}
+              style={{ width: "100%" }}
+            />
+            <HostConfigChip
+              icon={<EnvironmentOutlined />}
+              label={vm.zone ?? vm.region}
+              detail={getProviderDescriptor(vm.provider).label}
+              tone="blue"
+              ariaLabel={`View location for ${vm.name}`}
+              onClick={() => setDetailsVm(vm)}
+              style={{ width: "100%" }}
+            />
           </Space>
         );
       },
     },
     {
       title: "Cost & usage",
-      width: 190,
+      width: 220,
       render: (_, vm) => {
         const egress = vm.egress_summary;
         const gb = Number(egress.current_month_bytes ?? 0) / 1_000_000_000;
         const cost = Number(egress.current_month_cost_usd ?? 0);
         const estimate = vmStoredPriceEstimate(vm);
+        const standardEstimate = vmStoredRunningPriceEstimate(vm, "on_demand");
+        const spotEstimate = vmStoredRunningPriceEstimate(vm, "spot");
         const stoppedEstimate = vmStoredStoppedPriceEstimate(vm);
         const egressLabel = egressRateLabel(vm);
+        const freeEgress = providerEgressIsFree(vm.provider);
         return (
           <Popover
             trigger="click"
@@ -2959,8 +3641,8 @@ export function ProjectComputeVms({
                 )}
                 <Text>
                   Current-month egress: {gb.toFixed(gb >= 10 ? 1 : 3)} GB ·{" "}
-                  {vm.provider === "nebius"
-                    ? "$0/GB"
+                  {freeEgress
+                    ? "free"
                     : vm.funding_mode === "site-funded"
                       ? "$0.10/GB · paid by site"
                       : `$0.10/GB · $${cost.toFixed(2)} charged`}
@@ -2982,18 +3664,58 @@ export function ProjectComputeVms({
           >
             <Button
               type="link"
-              style={{ height: "auto", padding: 0, textAlign: "left" }}
+              style={{
+                height: "auto",
+                maxWidth: "100%",
+                overflow: "hidden",
+                padding: 0,
+                textAlign: "left",
+                whiteSpace: "normal",
+                width: "100%",
+              }}
             >
-              <Space direction="vertical" size={0} align="start">
-                <Text>
-                  {pricingLabel(vm.effective_pricing_model)} · {hourlyPrice(vm)}
-                </Text>
-                <Text type="secondary">{vm.funding_mode}</Text>
-                <Text type="secondary">
-                  {egressLabel} · {gb.toFixed(gb >= 10 ? 1 : 3)} GB
-                  {egress.stale ? " · usage reporting delayed" : ""}
-                </Text>
-              </Space>
+              <span
+                style={{
+                  alignItems: "stretch",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 3,
+                  width: "100%",
+                }}
+              >
+                <PriceSummaryRow
+                  label="Standard"
+                  current={
+                    vm.state !== "stopped" &&
+                    vm.effective_pricing_model === "on_demand"
+                  }
+                  estimate={standardEstimate}
+                />
+                <PriceSummaryRow
+                  label="Spot"
+                  current={
+                    vm.state !== "stopped" &&
+                    vm.effective_pricing_model === "spot"
+                  }
+                  estimate={spotEstimate}
+                />
+                <PriceSummaryRow
+                  label="Stopped"
+                  note="disk only"
+                  current={vm.state === "stopped"}
+                  estimate={stoppedEstimate}
+                />
+                {freeEgress ? (
+                  <Text type="secondary" style={{ paddingInline: 4 }}>
+                    Egress is free
+                  </Text>
+                ) : (
+                  <Text type="secondary" style={{ paddingInline: 4 }}>
+                    {egressLabel} · {gb.toFixed(gb >= 10 ? 1 : 3)} GB
+                    {egress.stale ? " · usage reporting delayed" : ""}
+                  </Text>
+                )}
+              </span>
             </Button>
           </Popover>
         );
@@ -3001,7 +3723,7 @@ export function ProjectComputeVms({
     },
     {
       title: "Actions",
-      width: 215,
+      width: 185,
       render: (_, vm) => {
         const transitioning = ["starting", "stopping", "deleting"].includes(
           vm.state,
@@ -3014,15 +3736,18 @@ export function ProjectComputeVms({
           ? `ssh ${vm.ssh_user || "user"}@${vm.public_hostname}`
           : undefined;
         const projectSshCommand =
-          vm.state === "ready" && vm.metadata?.configure_project_ssh === true
+          projectId && vm.state === "ready"
             ? `ssh ${vm.ssh_alias || vm.name}`
             : undefined;
         const directRdpTunnelCommand =
           vm.operating_system === "windows" && vm.public_hostname
             ? `ssh -N -L 3389:localhost:3389 ${vm.ssh_user || "user"}@${vm.public_hostname}`
             : undefined;
+        const linkedProjectCount = projectAccess.filter(
+          ({ vm_id, revoked_at }) => vm_id === vm.id && !revoked_at,
+        ).length;
         return (
-          <Space.Compact>
+          <Flex gap={4} wrap style={{ maxWidth: 180 }}>
             <Popover
               trigger="click"
               placement="bottomRight"
@@ -3129,104 +3854,128 @@ export function ProjectComputeVms({
                 Connect
               </Button>
             </Popover>
-            {running ? (
-              <Popconfirm
-                title={`Stop ${vm.name}?`}
-                description="Compute and Windows license charges stop, but persistent disk charges continue."
-                okText="Stop VM"
-                cancelText="Keep running"
-                onConfirm={() => void setVmRunning(vm, false)}
-              >
-                <Button size="small" disabled={stopDisabled}>
-                  Stop
+            {accountMode &&
+              (running ? (
+                <Popconfirm
+                  title={`Stop ${vm.name}?`}
+                  description="Compute and Windows license charges stop, but persistent disk charges continue."
+                  okText="Stop VM"
+                  cancelText="Keep running"
+                  onConfirm={() => void setVmRunning(vm, false)}
+                >
+                  <Button size="small" disabled={stopDisabled}>
+                    Stop
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button
+                  size="small"
+                  disabled={transitioning}
+                  onClick={() => {
+                    if (vm.provider === "nebius") {
+                      setStartVm(vm);
+                    } else {
+                      void setVmRunning(vm, true);
+                    }
+                  }}
+                >
+                  Start
                 </Button>
-              </Popconfirm>
-            ) : (
-              <Button
-                size="small"
-                disabled={transitioning}
-                onClick={() => void setVmRunning(vm, true)}
-              >
-                Start
+              ))}
+            {accountMode && (
+              <Button size="small" onClick={() => setAccessVm(vm)}>
+                Projects ({linkedProjectCount})
               </Button>
             )}
-            <Dropdown
-              trigger={["click"]}
-              menu={{
-                items: [
-                  {
-                    key: "machine-type",
-                    disabled: vm.state !== "stopped",
-                    label:
-                      vm.state === "stopped"
-                        ? "Change machine type"
-                        : "Change machine type (stop first)",
+            {accountMode && (
+              <Dropdown
+                trigger={["click"]}
+                menu={{
+                  items: [
+                    {
+                      key: "machine-type",
+                      disabled: vm.state !== "stopped",
+                      label:
+                        vm.state === "stopped"
+                          ? "Change machine type"
+                          : "Change machine type (stop first)",
+                    },
+                    {
+                      key: "pricing-model",
+                      disabled: vm.state !== "stopped",
+                      label:
+                        vm.state === "stopped"
+                          ? vm.desired_pricing_model === "spot"
+                            ? "Use Standard pricing"
+                            : "Use Spot pricing"
+                          : "Change pricing (stop first)",
+                    },
+                    {
+                      key: "deadline",
+                      label: vm.expires_at
+                        ? "Change deletion deadline"
+                        : "Set deletion deadline",
+                    },
+                    { key: "similar", label: "Create similar" },
+                    { key: "funding", label: "Change funding" },
+                    { type: "divider" },
+                    {
+                      key: "delete",
+                      danger: true,
+                      disabled: vm.state === "deleting",
+                      label: "Delete VM",
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === "machine-type") {
+                      setMachineTypeError(undefined);
+                      setMachineTypeVm(vm);
+                    } else if (key === "pricing-model") {
+                      Modal.confirm({
+                        title:
+                          vm.desired_pricing_model === "spot"
+                            ? `Use Standard pricing for ${vm.name}?`
+                            : `Use Spot pricing for ${vm.name}?`,
+                        content:
+                          vm.desired_pricing_model === "spot"
+                            ? "The next start uses more reliable Standard capacity at the displayed Standard rate."
+                            : "The next start uses interruptible Spot capacity, which may be unavailable or stop at any time.",
+                        okText: "Change pricing",
+                        onOk: () => changeVmPricing(vm),
+                      });
+                    } else if (key === "deadline") {
+                      setTtlVm(vm);
+                    } else if (key === "similar") {
+                      openSimilar(vm);
+                    } else if (key === "funding") {
+                      changeVmFunding(vm);
+                    } else if (key === "delete") {
+                      Modal.confirm({
+                        title: `Delete ${vm.name}?`,
+                        content:
+                          "The VM, persistent boot disk, public address, and DNS record are deleted. An attached persistent home volume is retained independently.",
+                        okText: "Delete VM",
+                        okButtonProps: { danger: true },
+                        onOk: () => deleteVm(vm),
+                      });
+                    }
                   },
-                  {
-                    key: "pricing-model",
-                    disabled: vm.state !== "stopped",
-                    label:
-                      vm.state === "stopped"
-                        ? vm.desired_pricing_model === "spot"
-                          ? "Use Standard pricing"
-                          : "Use Spot pricing"
-                        : "Change pricing (stop first)",
-                  },
-                  {
-                    key: "deadline",
-                    label: vm.expires_at
-                      ? "Change deletion deadline"
-                      : "Set deletion deadline",
-                  },
-                  { key: "similar", label: "Create similar" },
-                  { key: "funding", label: "Change funding" },
-                  { type: "divider" },
-                  {
-                    key: "delete",
-                    danger: true,
-                    disabled: vm.state === "deleting",
-                    label: "Delete VM",
-                  },
-                ],
-                onClick: ({ key }) => {
-                  if (key === "machine-type") {
-                    setMachineTypeError(undefined);
-                    setMachineTypeVm(vm);
-                  } else if (key === "pricing-model") {
-                    Modal.confirm({
-                      title:
-                        vm.desired_pricing_model === "spot"
-                          ? `Use Standard pricing for ${vm.name}?`
-                          : `Use Spot pricing for ${vm.name}?`,
-                      content:
-                        vm.desired_pricing_model === "spot"
-                          ? "The next start uses more reliable Standard capacity at the displayed Standard rate."
-                          : "The next start uses interruptible Spot capacity, which may be unavailable or stop at any time.",
-                      okText: "Change pricing",
-                      onOk: () => changeVmPricing(vm),
-                    });
-                  } else if (key === "deadline") {
-                    setTtlVm(vm);
-                  } else if (key === "similar") {
-                    openSimilar(vm);
-                  } else if (key === "funding") {
-                    changeVmFunding(vm);
-                  } else if (key === "delete") {
-                    Modal.confirm({
-                      title: `Delete ${vm.name}?`,
-                      content:
-                        "The VM, persistent boot disk, public address, and DNS record are deleted. An attached persistent home volume is retained independently.",
-                      okText: "Delete VM",
-                      okButtonProps: { danger: true },
-                      onOk: () => deleteVm(vm),
-                    });
-                  }
-                },
-              }}
-            >
-              <Button size="small">Manage</Button>
-            </Dropdown>
-          </Space.Compact>
+                }}
+              >
+                <Button size="small">Manage</Button>
+              </Dropdown>
+            )}
+            {!accountMode && (
+              <Button
+                size="small"
+                onClick={() => {
+                  globalThis.location.href = `${getPageUrlPath({ page: "hosts" })}?tab=vms`;
+                }}
+              >
+                Manage in Compute
+              </Button>
+            )}
+          </Flex>
         );
       },
     },
@@ -3367,36 +4116,47 @@ export function ProjectComputeVms({
           </Flex>
           {!compact && (
             <Paragraph type="secondary" style={{ marginBottom: 12 }}>
-              Short-lived machines owned by you and attached to project{" "}
-              <Text code>{shortProjectId(project_id)}</Text>.
+              {accountMode ? (
+                "Account-owned cloud VMs. Grant one or more projects SSH access without transferring lifecycle or billing authority."
+              ) : (
+                <>
+                  VMs this project can access over SSH. Lifecycle,
+                  configuration, and billing are managed from your account
+                  Compute page. Project{" "}
+                  <Text code>{shortProjectId(projectId)}</Text>.
+                </>
+              )}
             </Paragraph>
           )}
         </div>
         <Space>
-          <Button
-            icon={<Icon name="book" />}
-            onClick={() =>
-              openProjectDocs({
-                projectId: project_id,
-                slug: "projects/virtual-machines",
-              })
-            }
-          >
-            Documentation
-          </Button>
-          <Button
-            type="primary"
-            icon={<Icon name="plus" />}
-            disabled={!catalog || projectSshKeyLoading}
-            loading={projectSshKeyLoading}
-            onClick={() => {
-              setVmInitial(defaultVm());
-              setVmCreateError(undefined);
-              setVmModalOpen(true);
-            }}
-          >
-            Create VM
-          </Button>
+          {projectId && (
+            <Button
+              icon={<Icon name="book" />}
+              onClick={() =>
+                openProjectDocs({
+                  projectId,
+                  slug: "projects/virtual-machines",
+                })
+              }
+            >
+              Documentation
+            </Button>
+          )}
+          {accountMode && (
+            <Button
+              type="primary"
+              icon={<Icon name="plus" />}
+              disabled={!catalog}
+              onClick={() => {
+                setVmInitial(defaultVm());
+                setVmCreateError(undefined);
+                setVmModalOpen(true);
+              }}
+            >
+              Create VM
+            </Button>
+          )}
           <Button
             icon={<Icon name="refresh" />}
             loading={loading}
@@ -3477,62 +4237,74 @@ export function ProjectComputeVms({
         dataSource={rows}
         loading={loading && rows.length === 0}
         locale={{
-          emptyText: "No virtual machines are attached to this project.",
+          emptyText: accountMode
+            ? "You do not own any virtual machines."
+            : "No virtual machines are available to this project.",
         }}
         pagination={false}
         rowKey="id"
-        scroll={{ x: 920 }}
+        scroll={{ x: 950 }}
         size="small"
       />
 
-      <Flex align="center" justify="space-between" style={{ marginTop: 28 }}>
-        <div>
-          <Flex align="center" gap={4}>
-            <Title level={4} style={{ marginBottom: 0 }}>
-              Persistent home volumes
-            </Title>
-            <Popover
-              trigger="click"
-              title="About persistent home volumes"
-              content={
-                <Paragraph style={{ marginBottom: 0, maxWidth: 400 }}>
-                  Retained independently from virtual machines. A volume can
-                  only be attached at <Text code>/home/user</Text> to a VM from
-                  the same provider and location. Select an existing volume or
-                  create a new one when creating the VM; changing attachments
-                  later is not yet supported.
-                </Paragraph>
-              }
+      {accountMode && (
+        <>
+          <Flex
+            align="center"
+            justify="space-between"
+            style={{ marginTop: 28 }}
+          >
+            <div>
+              <Flex align="center" gap={4}>
+                <Title level={4} style={{ marginBottom: 0 }}>
+                  Persistent home volumes
+                </Title>
+                <Popover
+                  trigger="click"
+                  title="About persistent home volumes"
+                  content={
+                    <Paragraph style={{ marginBottom: 0, maxWidth: 400 }}>
+                      Retained independently from virtual machines. A volume can
+                      only be attached at <Text code>/home/user</Text> to a VM
+                      from the same provider and location. Select an existing
+                      volume or create a new one when creating the VM; changing
+                      attachments later is not yet supported.
+                    </Paragraph>
+                  }
+                >
+                  <Button
+                    aria-label="Persistent volume help"
+                    icon={<Icon name="question-circle" />}
+                    shape="circle"
+                    size="small"
+                    type="text"
+                  />
+                </Popover>
+              </Flex>
+            </div>
+            <Button
+              icon={<Icon name="plus" />}
+              disabled={!catalog}
+              onClick={() => setVolumeModalOpen(true)}
             >
-              <Button
-                aria-label="Persistent volume help"
-                icon={<Icon name="question-circle" />}
-                shape="circle"
-                size="small"
-                type="text"
-              />
-            </Popover>
+              Create volume
+            </Button>
           </Flex>
-        </div>
-        <Button
-          icon={<Icon name="plus" />}
-          disabled={!catalog}
-          onClick={() => setVolumeModalOpen(true)}
-        >
-          Create volume
-        </Button>
-      </Flex>
-      <Table<ComputeVolume>
-        columns={volumeColumns}
-        dataSource={volumes}
-        loading={loading && volumes.length === 0}
-        locale={{ emptyText: "No persistent volumes belong to this project." }}
-        pagination={false}
-        rowKey="id"
-        scroll={{ x: 850 }}
-        size="small"
-        style={{ marginTop: 12 }}
-      />
+          <Table<ComputeVolume>
+            columns={volumeColumns}
+            dataSource={volumes}
+            loading={loading && volumes.length === 0}
+            locale={{
+              emptyText: "You do not own any persistent volumes.",
+            }}
+            pagination={false}
+            rowKey="id"
+            scroll={{ x: 850 }}
+            size="small"
+            style={{ marginTop: 12 }}
+          />
+        </>
+      )}
 
       <Alert
         showIcon
@@ -3552,10 +4324,10 @@ export function ProjectComputeVms({
         style={{ marginTop: 20 }}
       />
 
-      {catalog && vmInitial && (
+      {accountMode && catalog && vmInitial && (
         <VmCreateModal
           open={vmModalOpen}
-          project_id={project_id}
+          project_id={projectId}
           catalog={catalog}
           volumes={volumes}
           initial={vmInitial}
@@ -3572,10 +4344,10 @@ export function ProjectComputeVms({
           onCreate={createVm}
         />
       )}
-      {catalog && (
+      {accountMode && catalog && (
         <VolumeCreateModal
           open={volumeModalOpen}
-          project_id={project_id}
+          project_id={projectId}
           catalog={catalog}
           saving={saving}
           onCancel={() => setVolumeModalOpen(false)}
@@ -3602,6 +4374,18 @@ export function ProjectComputeVms({
         />
       )}
       {catalog && (
+        <VmStartModal
+          vm={startVm}
+          catalog={catalog}
+          onCancel={() => setStartVm(undefined)}
+          onStart={async (vm) => {
+            const started = await setVmRunning(vm, true);
+            if (started) setStartVm(undefined);
+            return started;
+          }}
+        />
+      )}
+      {catalog && (
         <VolumeResizeModal
           volume={resizeVolumeTarget}
           maxSizeGb={catalog.limits.max_volume_gb}
@@ -3611,6 +4395,27 @@ export function ProjectComputeVms({
         />
       )}
       <FreshAuthModal {...freshAuthModalProps} />
+      <VmDetailsModal
+        vm={detailsVm}
+        homeVolume={
+          detailsVm?.home_volume_id
+            ? volumesById.get(detailsVm.home_volume_id)
+            : undefined
+        }
+        onClose={() => setDetailsVm(undefined)}
+      />
+      <VmAccessModal
+        vm={accessVm}
+        access={projectAccess}
+        sshKeys={directSshKeys}
+        loadingKeys={loadingDirectSshKeys}
+        saving={saving}
+        onClose={() => setAccessVm(undefined)}
+        onGrant={grantProjectAccess}
+        onRevoke={revokeProjectAccess}
+        onAddSshKey={addDirectSshKey}
+        onRevokeSshKey={revokeDirectSshKey}
+      />
     </div>
   );
 }

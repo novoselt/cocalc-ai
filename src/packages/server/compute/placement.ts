@@ -73,3 +73,44 @@ export function defaultComputeZone(catalog: HostCatalog): string {
     "us-central1-a"
   );
 }
+
+export function computeMachineSupportsSpot(
+  provider: "gcp" | "nebius",
+  machine: {
+    gpu_count?: number | null;
+    provider_spec?: { allowed_for_preemptibles?: boolean | null };
+  },
+): boolean {
+  if (provider !== "nebius") return true;
+  return (
+    Number(machine.gpu_count ?? 0) > 0 &&
+    machine.provider_spec?.allowed_for_preemptibles === true
+  );
+}
+
+export function selectNebiusComputeMachine<
+  T extends {
+    name: string;
+    platform?: string | null;
+    regions?: string[] | null;
+  },
+>(
+  machines: T[],
+  opts: { region: string; machineType: string; platform?: string },
+): T | undefined {
+  const matches = machines.filter(
+    ({ name, platform, regions }) =>
+      name === opts.machineType &&
+      (!regions?.length || regions.includes(opts.region)) &&
+      (!opts.platform || platform === opts.platform),
+  );
+  if (!opts.platform) {
+    const platforms = new Set(matches.map(({ platform }) => platform ?? ""));
+    if (platforms.size > 1) {
+      throw new Error(
+        `Nebius machine '${opts.machineType}' is ambiguous in ${opts.region}; specify its provider platform`,
+      );
+    }
+  }
+  return matches[0];
+}

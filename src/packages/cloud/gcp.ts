@@ -2279,22 +2279,23 @@ async function ensureSshMetadata(
       if (!fingerprint) return;
       const items = instance?.metadata?.items ?? [];
       const current = items.find((item) => item.key === "ssh-keys");
+      const replaceManagedKeys =
+        runtime.metadata?.replace_managed_ssh_keys === true;
       const nextLines = new Set(
         (current?.value ?? "")
           .split("\n")
           .map((line) => line.trim())
-          .filter((line) => !!line),
+          .filter(
+            (line) =>
+              !!line &&
+              (!replaceManagedKeys || !line.startsWith(`${sshUser}:`)),
+          ),
       );
-      let changed = false;
       for (const key of sshPublicKeys) {
-        const entry = `${sshUser}:${key}`;
-        if (!nextLines.has(entry)) {
-          nextLines.add(entry);
-          changed = true;
-        }
+        nextLines.add(`${sshUser}:${key}`);
       }
-      if (!changed) return;
       const nextValue = Array.from(nextLines).join("\n");
+      if ((current?.value ?? "") === nextValue) return;
       const nextItems = items.filter((item) => item.key !== "ssh-keys");
       nextItems.push({ key: "ssh-keys", value: nextValue });
       const [response] = await client.setMetadata({

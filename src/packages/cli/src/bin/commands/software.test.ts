@@ -4257,12 +4257,24 @@ test("software deploy host-runtime-stack starts one paced stack campaign", async
 test("software smoke static runs HTTP checks against the profile API", async () => {
   const dir = mkdtempSync(join(tmpdir(), "software-smoke-static-"));
   const urls: string[] = [];
+  const methods: string[] = [];
   const program = createProgram(
     makeDeps({
       localStore: join(dir, "store"),
-      fetch: async (input) => {
+      fetch: async (input, init) => {
         urls.push(`${input}`);
-        return { ok: true, status: 200 } as Response;
+        methods.push(`${init?.method ?? "GET"}`);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            schema: 1,
+            builds: [
+              { assets: ["app-0123456789abcdef.js"] },
+              { assets: ["app-fedcba9876543210.js"] },
+            ],
+          }),
+        } as Response;
       },
     }),
   );
@@ -4284,7 +4296,11 @@ test("software smoke static runs HTTP checks against the profile API", async () 
     "https://staging.cocalc.ai/webapp/favicon.ico",
     "https://staging.cocalc.ai/project-host/compute-vm-setup.sh",
     "https://staging.cocalc.ai/cdn/pdfjs-dist/cmaps/UniJIS-UTF16-H.bcmap",
+    "https://staging.cocalc.ai/static/frontend-build-history.json",
+    "https://staging.cocalc.ai/static/app-0123456789abcdef.js",
+    "https://staging.cocalc.ai/static/app-fedcba9876543210.js",
   ]);
+  assert.deepEqual(methods.slice(-3), ["GET", "HEAD", "HEAD"]);
 });
 
 test("software smoke hub also runs Rocket host route health", async () => {

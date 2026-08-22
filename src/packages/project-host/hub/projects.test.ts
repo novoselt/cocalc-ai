@@ -43,6 +43,7 @@ const searchChatStoreArchived = jest.fn();
 const deleteChatStoreData = jest.fn();
 const vacuumChatStore = jest.fn();
 const upsertProjectStopState = jest.fn();
+const hasRecentProjectBrowserActivity = jest.fn(() => false);
 const assertManagedRawNetworkStartAllowedBestEffortMock = jest.fn();
 const getCodexAppServerAccountStatus = jest.fn();
 const resolveCodexAuthRuntime = jest.fn();
@@ -110,7 +111,13 @@ jest.mock("../sqlite/projects", () => ({
   upsertProject: (...args: any[]) => upsertProject(...args),
 }));
 jest.mock("../sqlite/stop-policy", () => ({
+  hasRecentProjectBrowserActivity: (...args: any[]) =>
+    hasRecentProjectBrowserActivity(...args),
   upsertProjectStopState: (...args: any[]) => upsertProjectStopState(...args),
+}));
+jest.mock("../browser-runtime", () => ({
+  browserIdleTimeoutSeconds: (run_quota: any) =>
+    Number(run_quota?.browser_idle_timeout) || 0,
 }));
 jest.mock("../master-status", () => ({
   getMasterConatClient: (...args: any[]) => getMasterConatClient(...args),
@@ -315,6 +322,8 @@ describe("project host start ACP rehydrate ordering", () => {
     deleteChatStoreData.mockReset();
     vacuumChatStore.mockReset();
     upsertProjectStopState.mockReset();
+    hasRecentProjectBrowserActivity.mockReset();
+    hasRecentProjectBrowserActivity.mockReturnValue(false);
     assertManagedRawNetworkStartAllowedBestEffortMock.mockReset();
     getCodexAppServerAccountStatus.mockReset();
     resolveCodexAuthRuntime.mockReset();
@@ -1956,6 +1965,39 @@ describe("project host start ACP rehydrate ordering", () => {
         args: [{ project_id }],
       }),
     );
+    expect(runnerApi.start).not.toHaveBeenCalled();
+  });
+
+  it("requires fresh browser presence after a browser-idle stop", async () => {
+    const runnerApi = {
+      start: jest.fn(async () => ({ state: "running" })),
+      stop: jest.fn(),
+    } as any;
+    getProject.mockReturnValue({
+      state: "opened",
+      runtime_exit_reason: "browser_idle_timeout",
+      image: customImage,
+      run_quota: { browser_idle_timeout: 1800 },
+    });
+    getMasterConatClient.mockReturnValue({ nats: true });
+    callHub.mockResolvedValue({
+      title: "free project",
+      users: { "test-account-id": { group: "owner" } },
+      image: customImage,
+      run_quota: { browser_idle_timeout: 1800 },
+      autostart_enabled: true,
+    });
+
+    const { wireProjectsApi } = await import("./projects");
+    wireProjectsApi(runnerApi);
+
+    await expect(
+      hubApi.projects.start({ project_id, autostart: true }),
+    ).rejects.toThrow("CoCalc browser tabs closed");
+    expect(hasRecentProjectBrowserActivity).toHaveBeenCalledWith({
+      project_id,
+      max_age_ms: 120_000,
+    });
     expect(runnerApi.start).not.toHaveBeenCalled();
   });
 

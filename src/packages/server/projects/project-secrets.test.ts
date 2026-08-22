@@ -181,6 +181,41 @@ describe("project secrets database helpers", () => {
     });
   });
 
+  it("excludes project-specific deploy identities from broad copies", async () => {
+    await insertAccountAndProject(SOURCE_PROJECT_ID);
+    await insertAccountAndProject(TARGET_PROJECT_ID);
+    await setProjectSecret({
+      project_id: SOURCE_PROJECT_ID,
+      name: "SSH_PRIVATE_KEY",
+      value: "must-not-be-cloned",
+      account_id: ACCOUNT_ID,
+    });
+    await setProjectSecret({
+      project_id: SOURCE_PROJECT_ID,
+      name: "API_KEY",
+      value: "copy-me",
+      account_id: ACCOUNT_ID,
+    });
+
+    await expect(
+      copyProjectSecrets({
+        source_project_id: SOURCE_PROJECT_ID,
+        target_project_id: TARGET_PROJECT_ID,
+        exclude_names: ["SSH_PRIVATE_KEY"],
+        account_id: ACCOUNT_ID,
+      }),
+    ).resolves.toEqual({
+      copied: ["API_KEY"],
+      conflicts: [],
+      missing: [],
+    });
+    await expect(
+      listProjectSecrets({ project_id: TARGET_PROJECT_ID }),
+    ).resolves.toEqual([
+      expect.objectContaining({ name: "API_KEY", value_bytes: 7 }),
+    ]);
+  });
+
   it("can refuse to overwrite an existing secret", async () => {
     await insertAccountAndProject(SOURCE_PROJECT_ID);
 

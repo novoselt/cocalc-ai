@@ -567,6 +567,7 @@ describe("projects.createProject clone routing", () => {
       source_project_id: SOURCE_PROJECT_ID,
       target_project_id: project_id,
       account_id: ACCOUNT_ID,
+      exclude_names: ["SSH_PRIVATE_KEY"],
     });
     expect(hostControlCreateProjectMock).toHaveBeenCalledWith(
       expect.objectContaining({

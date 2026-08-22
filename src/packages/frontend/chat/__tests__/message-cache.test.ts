@@ -39,6 +39,43 @@ class MockSyncdb extends EventEmitter {
 }
 
 describe("ChatMessageCache message_id index", () => {
+  it("replaces an optimistic local guidance row with its authoritative update", async () => {
+    const root = {
+      event: "chat",
+      sender_id: "codex-1",
+      date: "2026-01-01T00:00:00.000Z",
+      message_id: "assistant-1",
+      thread_id: "thread-1",
+      history: [{ content: "working" }],
+    };
+    const syncdb = new MockSyncdb([root]);
+    const cache = new ChatMessageCache(syncdb as any);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const guidance = {
+      event: "chat",
+      sender_id: "user-1",
+      date: "2026-01-01T00:00:01.000Z",
+      message_id: "guidance-1",
+      thread_id: "thread-1",
+      parent_message_id: "assistant-1",
+      acp_send_mode: "immediate",
+      acp_state: "sending",
+      history: [{ content: "use the index" }],
+    };
+
+    expect(cache.upsertLocalMessage(guidance)).toBe(true);
+    expect(cache.getByMessageId("guidance-1")?.acp_state).toBe("sending");
+    expect(cache.getMessages().size).toBe(2);
+
+    const acknowledged = { ...guidance, acp_state: "sent" };
+    syncdb.replaceRows([root, acknowledged]);
+    syncdb.emit("change", new Set([acknowledged]));
+
+    expect(cache.getByMessageId("guidance-1")?.acp_state).toBe("sent");
+    expect(cache.getMessages().size).toBe(2);
+    cache.dispose();
+  });
+
   it("indexes messages by message_id and updates on change events", async () => {
     const rows = [
       {

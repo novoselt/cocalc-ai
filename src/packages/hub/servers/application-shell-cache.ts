@@ -3,6 +3,8 @@
  *  License: MS-RSL - see LICENSE.md for details
  */
 
+import { expiresAfterSeconds } from "./cache-headers";
+
 const APPLICATION_SHELL_MAX_AGE_SECONDS = 10;
 
 interface HeaderResponse {
@@ -18,8 +20,6 @@ export function setApplicationShellCacheHeaders(res: HeaderResponse): void {
   );
   res.setHeader(
     "Expires",
-    new Date(
-      Date.now() + APPLICATION_SHELL_MAX_AGE_SECONDS * 1000,
-    ).toUTCString(),
+    expiresAfterSeconds(APPLICATION_SHELL_MAX_AGE_SECONDS),
   );
 }

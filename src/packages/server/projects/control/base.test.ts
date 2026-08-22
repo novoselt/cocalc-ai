@@ -68,7 +68,12 @@ jest.mock("@cocalc/database/postgres/quota-site-settings", () => ({
 
 jest.mock("@cocalc/server/membership/project-defaults", () => ({
   __esModule: true,
+  getMembershipBrowserIdleTimeoutForAccount: jest.fn(async () => 0),
   getMembershipProjectDefaultsForAccount: jest.fn(async () => ({})),
+  getMembershipRuntimeSchedulingForAccount: jest.fn(async () => ({
+    io_class: "standard",
+    shared_compute_priority: 0,
+  })),
 }));
 
 describe("BaseProject local ownership", () => {

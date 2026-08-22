@@ -992,6 +992,9 @@ export class ChatActions extends Actions<ChatState> {
     } as ChatMessage;
     if (send_mode === "immediate") {
       (message as any).acp_send_mode = "immediate";
+      if (recoveredNotSent !== true) {
+        (message as any).acp_state = "sending";
+      }
     }
     if (recoveredNotSent === true) {
       (message as any).acp_state = "not-sent";
@@ -1004,6 +1007,25 @@ export class ChatActions extends Actions<ChatState> {
     }
     if (!this.setSyncdb(message)) {
       return "";
+    }
+    const initialAcpState =
+      recoveredNotSent === true
+        ? "not-sent"
+        : send_mode === "immediate"
+          ? "sending"
+          : undefined;
+    if (initialAcpState != null) {
+      const nextAcpState = (this.store.get("acpState") ?? fromJS({})).set(
+        `message:${message_id}`,
+        initialAcpState,
+      );
+      this.store.setState({ acpState: nextAcpState });
+    }
+    if (send_mode === "immediate") {
+      // Syncdoc changes are throttled, but guidance must move from the composer
+      // into the running activity immediately. The authoritative row replaces
+      // this exact message_id/date when the syncdoc change arrives.
+      this.messageCache?.upsertLocalMessage(message);
     }
     if (!explicitReplyThreadId) {
       const threadKey = thread_id;
@@ -1043,14 +1065,6 @@ export class ChatActions extends Actions<ChatState> {
     // Commit locally before async model dispatch. This does NOT wait for
     // backend/client propagation; it just finalizes the local patchflow state.
     this.syncdb.commit();
-    if (recoveredNotSent === true) {
-      const nextAcpState = (this.store.get("acpState") ?? fromJS({})).set(
-        `message:${message_id}`,
-        "not-sent",
-      );
-      this.store.setState({ acpState: nextAcpState });
-    }
-
     const project_id = this.store?.get("project_id");
     const path = this.store?.get("path");
     if (!path) {

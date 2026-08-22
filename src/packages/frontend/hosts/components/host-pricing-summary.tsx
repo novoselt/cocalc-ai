@@ -103,16 +103,40 @@ function PriceModeRow({
 }) {
   const note = modeNote({ mode, host, standard, spot });
   return (
-    <div
+    <PriceSummaryRow
+      label={modeLabel(mode, host)}
+      note={note}
+      current={current}
+      estimate={estimate}
+    />
+  );
+}
+
+export function PriceSummaryRow({
+  label,
+  note,
+  current,
+  estimate,
+}: {
+  label: string;
+  note?: string;
+  current: boolean;
+  estimate?: ProviderPriceEstimate;
+}) {
+  return (
+    <span
       style={{
+        display: "block",
         border: `1px solid ${current ? COLORS.BLUE_L : COLORS.GRAY_LL}`,
         borderRadius: 8,
+        boxSizing: "border-box",
         padding: "5px 7px",
         background: current ? COLORS.BLUE_LLLL : "white",
         boxShadow: current ? "0 1px 4px rgba(68, 116, 192, 0.18)" : undefined,
+        width: "100%",
       }}
     >
-      <div
+      <span
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -121,7 +145,7 @@ function PriceModeRow({
         }}
       >
         <Typography.Text strong={current} style={{ fontSize: 12 }}>
-          {modeLabel(mode, host)}
+          {label}
         </Typography.Text>
         {note ? (
           <Typography.Text
@@ -131,8 +155,8 @@ function PriceModeRow({
             {note}
           </Typography.Text>
         ) : null}
-      </div>
-      <div
+      </span>
+      <span
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -140,16 +164,22 @@ function PriceModeRow({
           alignItems: "baseline",
         }}
       >
-        <Typography.Text strong={current} style={{ fontSize: 13 }}>
+        <Typography.Text
+          strong={current}
+          style={{ fontSize: 13, whiteSpace: "nowrap" }}
+        >
           {priceLabel(estimate)}
         </Typography.Text>
         {monthlyLabel(estimate) ? (
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 11, whiteSpace: "nowrap" }}
+          >
             {monthlyLabel(estimate)}
           </Typography.Text>
         ) : null}
-      </div>
-    </div>
+      </span>
+    </span>
   );
 }
 

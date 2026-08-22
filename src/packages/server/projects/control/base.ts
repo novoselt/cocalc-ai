@@ -54,6 +54,7 @@ import {
   upsertPublishedRootfsRelease,
 } from "@cocalc/server/rootfs/releases";
 import {
+  getMembershipBrowserIdleTimeoutForAccount,
   getMembershipProjectDefaultsForAccount,
   getMembershipRuntimeSchedulingForAccount,
 } from "@cocalc/server/membership/project-defaults";
@@ -137,13 +138,13 @@ function runQuotaForRestartComparison(
   if (run_quota == null || typeof run_quota !== "object") {
     return {};
   }
-  // idle_timeout is retained as legacy/future-policy metadata.  The current
-  // CoCalc-AI project-host does not enforce it, so changing it must not restart
-  // a running project.
-  const { idle_timeout: _idle_timeout, ...rest } = run_quota as Record<
-    string,
-    unknown
-  >;
+  // Idle policy is enforced by project-host maintenance, not the runtime
+  // cgroup. Changing either field must not restart a running project.
+  const {
+    idle_timeout: _idle_timeout,
+    browser_idle_timeout: _browser_idle_timeout,
+    ...rest
+  } = run_quota as Record<string, unknown>;
   return rest;
 }
 
@@ -515,16 +516,19 @@ export class BaseProject extends EventEmitter {
       return;
     }
 
-    if (
-      isEqual(
-        runQuotaForRestartComparison(current.run_quota),
-        runQuotaForRestartComparison(nextRunQuota),
-      )
-    ) {
+    if (isEqual(current.run_quota, nextRunQuota)) {
       dbg("running, but no quotas changed");
       return;
     } else {
-      dbg("running and a non-idle quota changed; reconfigure live cgroup");
+      const runtimeConfigurationChanged = !isEqual(
+        runQuotaForRestartComparison(current.run_quota),
+        runQuotaForRestartComparison(nextRunQuota),
+      );
+      dbg(
+        runtimeConfigurationChanged
+          ? "running and a runtime quota changed; reconfigure live cgroup"
+          : "running and only idle policy changed; update host metadata",
+      );
       // CRITICAL: do not await on this host operation. The set_all_quotas call must
       // complete quickly (in an HTTP request), whereas restart can easily take 20s,
       // and there is no reason to wait on it. During a rolling upgrade, fall
@@ -539,6 +543,10 @@ export class BaseProject extends EventEmitter {
           });
           dbg("live quota reconfiguration worked");
         } catch (err) {
+          if (!runtimeConfigurationChanged) {
+            dbg(`live idle-policy update failed; not restarting -- ${err}`);
+            return;
+          }
           dbg(`live quota reconfiguration failed; restarting -- ${err}`);
           try {
             await this.restart();
@@ -611,15 +619,22 @@ export class BaseProject extends EventEmitter {
         last_active,
         last_started_by,
       });
-      const [runtimeDefaults, runtimeScheduling] = await Promise.all([
-        getMembershipProjectDefaultsForAccount(runtime_account_id),
-        getMembershipRuntimeSchedulingForAccount(runtime_account_id),
-      ]);
+      const [runtimeDefaults, runtimeScheduling, browserIdleTimeoutSeconds] =
+        await Promise.all([
+          getMembershipProjectDefaultsForAccount(runtime_account_id),
+          getMembershipRuntimeSchedulingForAccount(runtime_account_id),
+          getMembershipBrowserIdleTimeoutForAccount(runtime_account_id),
+        ]);
       const site_settings = await getQuotaSiteSettings(); // quick, usually cached
       nextRunQuota = quota(runtimeDefaults, undefined, site_settings);
       nextRunQuota.io_class = runtimeScheduling.io_class;
       nextRunQuota.shared_compute_priority =
         runtimeScheduling.shared_compute_priority;
+      // Launchpad/Lite uses a workspace-local runtime and has no direct
+      // browser-to-project-host presence channel.
+      nextRunQuota.browser_idle_timeout = isWorkspaceProjectRuntime()
+        ? 0
+        : browserIdleTimeoutSeconds;
 
       if (storage_account_id && storage_account_id !== runtime_account_id) {
         const storageDefaults =

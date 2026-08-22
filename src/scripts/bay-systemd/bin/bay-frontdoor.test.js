@@ -55,6 +55,9 @@ test("does not poison immutable static assets with the affinity cookie", () => {
   );
   assert.equal(headers["set-cookie"], undefined);
   assert.equal(headers["cache-control"], "public, max-age=31536000, immutable");
+  const expiresInMs = Date.parse(headers.expires) - Date.now();
+  assert.ok(expiresInMs > 364 * 24 * 60 * 60 * 1000);
+  assert.ok(expiresInMs <= 365 * 24 * 60 * 60 * 1000);
   assert.equal(headers.etag, 'W/"asset"');
 });
 

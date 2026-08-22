@@ -359,6 +359,7 @@ stage_static_bundle_release() {
     "${TARGET_RELEASE}/runtime/control-plane/bundle/nebius" \
     "${TARGET_RELEASE}/bay-static-manifest.json"
   run rsync -a "${extract_dir}/" "$TARGET_RELEASE/"
+  preserve_previous_static_assets
   preserve_previous_cdn_assets "$current_release"
   make_target_release_accessible
   run chown -R "${BAY_USER}:${BAY_GROUP}" \
@@ -457,6 +458,125 @@ preserve_previous_static_assets() {
   # available until the retained release ages out instead of stranding clients
   # that navigate after the deploy.
   run rsync -a --ignore-existing "${previous_static}/" "${target_static}/"
+}
+
+prepare_frontend_asset_history() {
+  local target_static="${TARGET_RELEASE}/runtime/control-plane/static"
+  local current_manifest="${target_static}/frontend-build.json"
+  if [[ ! -f "$current_manifest" ]]; then
+    echo "release is missing frontend asset manifest: ${current_manifest}" >&2
+    exit 1
+  fi
+
+  local previous_static=""
+  if [[ -L "$CURRENT_LINK" ]]; then
+    local current_release
+    current_release="$(readlink -f "$CURRENT_LINK")"
+    if [[ -n "$current_release" && "$current_release" != "$TARGET_RELEASE" ]]; then
+      previous_static="${current_release}/runtime/control-plane/static"
+    fi
+  fi
+
+  local node_bin
+  node_bin="$(find_node)"
+  "$node_bin" - "$target_static" "$previous_static" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const [targetRoot, previousRoot] = process.argv.slice(2);
+const MAX_ASSETS = 10_000;
+const HASHED_ASSET = /(?:^|[-.])[0-9a-f]{16,}(?=[-.]|$)/i;
+
+function safeAsset(value) {
+  const asset = `${value ?? ""}`.replaceAll("\\", "/");
+  if (!asset || asset.startsWith("/") || asset.split("/").includes("..")) {
+    throw new Error(`unsafe frontend asset path: ${asset}`);
+  }
+  if (!HASHED_ASSET.test(path.posix.basename(asset))) {
+    throw new Error(`frontend asset is not content-addressed: ${asset}`);
+  }
+  return asset;
+}
+
+function readManifest(root) {
+  if (!root) return;
+  const filename = path.join(root, "frontend-build.json");
+  if (!fs.existsSync(filename)) return;
+  return JSON.parse(fs.readFileSync(filename, "utf8"));
+}
+
+function scanAssets(root, directory = root) {
+  if (!root || !fs.existsSync(directory)) return [];
+  const assets = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      assets.push(...scanAssets(root, absolute));
+    } else if (entry.isFile() && HASHED_ASSET.test(entry.name)) {
+      assets.push(path.relative(root, absolute).replaceAll("\\", "/"));
+    }
+    if (assets.length > MAX_ASSETS) {
+      throw new Error(`frontend asset manifest exceeds ${MAX_ASSETS} files`);
+    }
+  }
+  return assets;
+}
+
+function normalizeBuild(manifest, root, allowScan) {
+  if (!manifest) return;
+  const manifestAssets = Array.isArray(manifest.assets) ? manifest.assets : [];
+  const rawAssets = allowScan
+    ? [...manifestAssets, ...scanAssets(root)]
+    : manifestAssets;
+  if (!rawAssets?.length) {
+    throw new Error(`frontend manifest in ${root} has no asset inventory`);
+  }
+  if (rawAssets.length > MAX_ASSETS) {
+    throw new Error(`frontend asset manifest exceeds ${MAX_ASSETS} files`);
+  }
+  const assets = [...new Set(rawAssets.map(safeAsset))].sort();
+  for (const asset of assets) {
+    const filename = path.resolve(targetRoot, asset);
+    if (!filename.startsWith(`${path.resolve(targetRoot)}${path.sep}`)) {
+      throw new Error(`frontend asset escapes static root: ${asset}`);
+    }
+    if (!fs.statSync(filename, { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`retained frontend asset is missing: ${asset}`);
+    }
+  }
+  return {
+    git_revision: `${manifest.git_revision ?? ""}`,
+    build_timestamp: Number(manifest.build_timestamp) || 0,
+    build_date: `${manifest.build_date ?? ""}`,
+    fingerprint: `${manifest.fingerprint ?? ""}`,
+    assets,
+  };
+}
+
+const current = normalizeBuild(readManifest(targetRoot), targetRoot, false);
+const previous = normalizeBuild(readManifest(previousRoot), previousRoot, true);
+const builds = [current];
+if (
+  previous &&
+  (previous.fingerprint !== current.fingerprint ||
+    previous.build_timestamp !== current.build_timestamp ||
+    previous.assets.some((asset) => !current.assets.includes(asset)))
+) {
+  builds.push(previous);
+}
+const history = {
+  schema: 1,
+  generated_at: new Date().toISOString(),
+  builds,
+};
+const output = path.join(targetRoot, "frontend-build-history.json");
+const temporary = `${output}.tmp-${process.pid}`;
+fs.writeFileSync(temporary, `${JSON.stringify(history, null, 2)}\n`);
+fs.renameSync(temporary, output);
+console.log(
+  `validated frontend assets: builds=${builds.length} files=${builds.reduce((sum, build) => sum + build.assets.length, 0)}`,
+);
+NODE
 }
 
 preserve_previous_cdn_assets() {
@@ -832,6 +952,14 @@ main() {
     stage_bundle_release
   else
     stage_source_release
+  fi
+  if [[ -n "$STATIC_BUNDLE_PATH" || -n "$BUNDLE_PATH" ]]; then
+    prepare_frontend_asset_history
+  elif [[
+    -z "$HUB_BUNDLE_PATH" &&
+      -f "${TARGET_RELEASE}/runtime/control-plane/static/frontend-build.json"
+  ]]; then
+    prepare_frontend_asset_history
   fi
   validate_release
   if [[ -n "$STATIC_BUNDLE_PATH" ]]; then

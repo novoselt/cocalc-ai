@@ -18,6 +18,7 @@ import { SYNCDB_OPTIONS } from "@cocalc/jupyter/redux/sync";
 import { SyncDB } from "@cocalc/sync/editor/db";
 import type { DBDocument } from "@cocalc/sync/editor/db/doc";
 import { syncdbPath } from "@cocalc/util/jupyter/names";
+import { DEFAULT_PROJECT_RUNTIME_HOME } from "@cocalc/util/project-runtime";
 import { saveJupyterIpynb } from "./jupyter-ipynb";
 import { jupyterNotebookContents } from "./jupyter-notebook-contents";
 
@@ -118,7 +119,11 @@ export async function flushJupyterNotebook({
   filesystem: FilesystemClient;
   syncClient: SyncClient;
 }): Promise<CollaborativeNotebookSourceVersion | undefined> {
-  const sync_path = syncdbPath(notebook_path);
+  // Filesystem scans return paths relative to the project volume, while sync
+  // documents use the canonical path visible inside the project runtime.
+  const sync_path = syncdbPath(
+    path.posix.join(DEFAULT_PROJECT_RUNTIME_HOME, notebook_path),
+  );
   const doc = new SyncDB({
     project_id,
     client: syncClient,

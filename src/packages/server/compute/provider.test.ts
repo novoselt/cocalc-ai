@@ -10,6 +10,9 @@ import {
   managedWindowsSshKeysScript,
   managedWindowsVmBootstrapScript,
   mergeManagedNebiusSpec,
+  nebiusManagedSshKeySyncArgs,
+  providerComputeStatusWithPresence,
+  providerComputeSshHost,
   providerInstanceIdIsProvisional,
 } from "./provider";
 import type { ComputeVmRow, ComputeVolumeRow } from "./types";
@@ -24,6 +27,12 @@ describe("managedVmBootstrapScript", () => {
     },
   } as ComputeVmRow;
 
+  function decodeBootstrapKeys(script: string): string {
+    const encoded = script.match(/printf '%s' '([^']+)' \| base64 -d/)?.[1];
+    expect(encoded).toBeDefined();
+    return Buffer.from(encoded!, "base64").toString("utf8");
+  }
+
   it("creates only the v2 user and readiness contract without a volume", () => {
     const script = managedVmBootstrapScript(vm);
 
@@ -34,8 +43,9 @@ describe("managedVmBootstrapScript", () => {
     expect(script).toContain("userdel --remove ubuntu");
     expect(script).toContain("user ALL=(ALL) NOPASSWD:ALL");
     expect(script).toContain("/home/user/.ssh/authorized_keys");
-    expect(script).toContain("ssh-ed25519 AAAAOWNER owner");
-    expect(script).toContain("ssh-ed25519 AAAACONTROLLER controller");
+    expect(decodeBootstrapKeys(script)).toBe(
+      "ssh-ed25519 AAAAOWNER owner\nssh-ed25519 AAAACONTROLLER controller\n",
+    );
     expect(script).toContain("/var/lib/cocalc-managed-vm/bootstrap-ready");
     expect(script).toContain("/run/cocalc-managed-vm/bootstrap-ready");
     expect(script).toContain("'2'");
@@ -62,6 +72,37 @@ describe("managedVmBootstrapScript", () => {
       "systemctl enable --now cocalc-grow-home-filesystem.timer",
     );
     expect(script).not.toContain("/work");
+  });
+
+  it("restores Nebius managed SSH keys on every boot", () => {
+    const script = managedVmBootstrapScript({
+      ...vm,
+      provider: "nebius",
+    } as ComputeVmRow);
+
+    expect(script).toContain("cocalc-restore-managed-ssh-keys.service");
+    expect(script).toContain("Before=ssh.service sshd.service");
+    expect(script).toContain("/var/lib/cocalc-managed-vm/authorized_keys");
+    expect(decodeBootstrapKeys(script)).toBe(
+      "ssh-ed25519 AAAAOWNER owner\nssh-ed25519 AAAACONTROLLER controller\n",
+    );
+  });
+});
+
+describe("nebiusManagedSshKeySyncArgs", () => {
+  it("passes the entire remote key update as one OpenSSH argument", () => {
+    const args = nebiusManagedSshKeySyncArgs({
+      privateKeyPath: "/controller/id_ed25519",
+      host: "203.0.113.10",
+      encoded: "QUJDRAo=",
+    });
+    const hostIndex = args.indexOf("user@203.0.113.10");
+
+    expect(hostIndex).toBeGreaterThan(0);
+    expect(args.slice(hostIndex + 1)).toHaveLength(1);
+    expect(args.at(-1)).toContain("tmp=$(mktemp)");
+    expect(args.at(-1)).toContain("printf %s QUJDRAo=");
+    expect(args.at(-1)).not.toContain("bash -lc");
   });
 });
 
@@ -151,6 +192,42 @@ describe("isProviderNotFound", () => {
 }`),
       ),
     ).toBe(true);
+  });
+});
+
+describe("providerComputeStatusWithPresence", () => {
+  it("does not confuse a deleted provider instance with a stopped one", () => {
+    expect(providerComputeStatusWithPresence("stopped", undefined)).toBe(
+      "missing",
+    );
+    expect(
+      providerComputeStatusWithPresence("stopped", {
+        instance_id: "instance-1",
+      }),
+    ).toBe("stopped");
+    expect(
+      providerComputeStatusWithPresence("starting", {
+        instance_id: "instance-1",
+        metadata: { provider_state: "STOPPING" },
+      }),
+    ).toBe("stopping");
+  });
+});
+
+describe("providerComputeSshHost", () => {
+  it("prefers the reserved IP while newly published DNS is propagating", () => {
+    expect(
+      providerComputeSshHost({
+        public_ip: "203.0.113.10",
+        public_hostname: "vm.example.test",
+      } as any),
+    ).toBe("203.0.113.10");
+    expect(
+      providerComputeSshHost({
+        public_ip: null,
+        public_hostname: "vm.example.test",
+      } as any),
+    ).toBe("vm.example.test");
   });
 });
 

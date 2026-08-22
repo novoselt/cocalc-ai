@@ -275,6 +275,15 @@ function hostBootstrapReconcileSucceeded(
   state: HostBootstrapReconcileState,
   baseline?: HostBootstrapReconcileState,
 ): boolean {
+  // The lifecycle report is cached by project-host and may not advance after
+  // either a non-restarting reconcile or a full reconcile that restarts it.
+  // Bootstrap status is reported independently and is durable evidence that
+  // this invocation completed, provided it changed after our baseline.
+  if (state.bootstrap_status === "done") {
+    return baseline
+      ? hostBootstrapReconcileObservedAfterBaseline(baseline, state)
+      : true;
+  }
   if (state.lifecycle_summary_status === "in_sync") {
     if (!baseline) {
       return state.lifecycle_current_operation !== "reconcile";

@@ -76,6 +76,7 @@ import {
   isWorkspaceProjectRuntime,
 } from "@cocalc/server/launchpad/project-runtime";
 import { normalizeCoursePath } from "@cocalc/util/course-path";
+import { PROJECT_SECRETS_SSH_PRIVATE_KEY_NAME } from "@cocalc/util/project-secrets";
 import { recordServerGrowthEvent } from "@cocalc/server/growth-analytics/server-events";
 
 const log = getLogger("server:projects:create");
@@ -708,6 +709,7 @@ async function createProjectImpl(
         source_project_id: src_project_id,
         target_project_id: project_id,
         account_id: account_id!,
+        exclude_names: [PROJECT_SECRETS_SSH_PRIVATE_KEY_NAME],
       });
       if (result.copied.length > 0) {
         log.info("createProject: cloned project secrets", {

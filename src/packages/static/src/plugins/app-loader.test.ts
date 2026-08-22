@@ -9,6 +9,7 @@ test("renders the shared public head placeholder into the app template", () => {
   expect(html.split(PUBLIC_HEAD_PLACEHOLDER)).toHaveLength(2);
   expect(html.split(PUBLIC_BODY_PLACEHOLDER)).toHaveLength(2);
   expect(html).toContain('data-cocalc-entry="app"');
+  expect(html).toContain('id="cocalc-crash-container" data-nosnippet');
   expect(html).not.toContain("cocalc-public-head-placeholder");
   expect(html).not.toContain("cocalc-public-body-placeholder -->");
   expect(html).not.toContain("cocalc-entry-placeholder");

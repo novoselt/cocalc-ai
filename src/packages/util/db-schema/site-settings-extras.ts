@@ -1742,8 +1742,8 @@ export const EXTRAS: SettingsExtras = {
     subgroup: "GCP Isolation",
   },
   compute_vm_max_active_per_project: {
-    name: "Managed Compute VMs: Maximum Active Per Project",
-    desc: "Maximum undeleted VM leases associated with one project.",
+    name: "Managed Compute VMs: Maximum Active Per Account",
+    desc: "Maximum undeleted VM leases owned by one account. The setting key retains its legacy name for compatibility.",
     default: "10",
     to_val: to_int,
     valid: only_pos_int,

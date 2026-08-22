@@ -92,6 +92,8 @@ interface QuotaBase {
 interface QuotaOnPrem {
   io_class?: "standard" | "member" | "premium";
   shared_compute_priority?: number;
+  // Explicit browser-presence policy. Zero or missing disables idle stopping.
+  browser_idle_timeout?: number;
   ext_rw?: boolean;
   patch?: { [key: string]: string | object }[];
   gpu?: GPU | boolean;

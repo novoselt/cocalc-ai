@@ -44,6 +44,7 @@ import "./compute-resource-events";
 import "./compute-resource-work";
 import "./compute-egress-meter-intervals";
 import "./compute-site-funded-usage";
+import "./compute-vm-project-access";
 import "./compute-vm-turn-grants";
 import "./compute-vm-orphans";
 import "./compute-vm-instances";

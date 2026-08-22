@@ -334,11 +334,13 @@ export const Page: React.FC = () => {
     return (
       <NavTab
         name="hosts"
+        label="Compute"
         label_class={NAV_CLASS}
         icon={"server"}
         active_top_tab={active_top_tab}
-        hide_label={!show_label}
-        tooltip="Manage your project hosts"
+        hide_label
+        ariaLabel="Compute"
+        tooltip="Manage project hosts and virtual machines"
       />
     );
   }
@@ -443,6 +445,8 @@ export const Page: React.FC = () => {
         })}
         icon="edit"
         label={intl.formatMessage(labels.projects)}
+        hide_label={isNarrow}
+        ariaLabel={intl.formatMessage(labels.projects)}
       />
     );
   }

@@ -790,7 +790,8 @@ export interface ProjectState {
   runtime_exit_reason?:
     | "container_missing"
     | "host_pressure"
-    | "host_pressure_free";
+    | "host_pressure_free"
+    | "browser_idle_timeout";
   http_port?: number;
   ssh_port?: number;
   project_bundle_version?: string;

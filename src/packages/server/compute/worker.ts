@@ -52,12 +52,14 @@ import {
   ensureProviderComputeVolume,
   ensureProviderComputePublicAddress,
   ensureProviderComputePublicAddressAttached,
+  ensureProviderComputeSshAccess,
   inspectProviderComputeVm,
   inspectProviderComputeVolume,
   getProviderComputePublicEgressBytes,
   listProviderComputeInventory,
   probeProviderComputeSpot,
   releaseProviderComputePublicAddress,
+  replaceProviderComputeInstance,
   resizeProviderComputeVolume,
   setProviderComputeMachineType,
   setProviderComputePricing,
@@ -74,6 +76,11 @@ import {
 import { getHostOwnerBaySshIdentity } from "@cocalc/server/cloud/ssh-key";
 import { syncManagedVmProjectSshConfig } from "@cocalc/server/projects/managed-vm-ssh-config";
 import type { ComputeVmRow, ComputeVolumeRow, ComputeWorkRow } from "./types";
+import type { ComputeVmProjectAccessRow } from "./types";
+import {
+  listComputeVmProjectAccess,
+  updateComputeVmProjectAccessState,
+} from "./project-access";
 import { effectiveComputeVolumeSizeGb } from "./volume-size";
 import { ensureComputeWorkQueueSchema } from "./schema";
 import {
@@ -1222,6 +1229,92 @@ export function isSpotCapacityError(err: unknown): boolean {
   ].some((pattern) => message.includes(pattern));
 }
 
+export function shouldRecoverSpotCapacityFailure(
+  vm: Pick<ComputeVmRow, "desired_pricing_model" | "effective_pricing_model">,
+  err: unknown,
+): boolean {
+  return (
+    vm.desired_pricing_model === "spot" &&
+    vm.effective_pricing_model === "spot" &&
+    isSpotCapacityError(err)
+  );
+}
+
+export function shouldReplaceNebiusSpotInterruption(
+  vm: Pick<
+    ComputeVmRow,
+    | "provider"
+    | "desired_pricing_model"
+    | "effective_pricing_model"
+    | "state"
+    | "spot_recovery_state"
+  >,
+): boolean {
+  return (
+    vm.provider === "nebius" &&
+    vm.desired_pricing_model === "spot" &&
+    vm.effective_pricing_model === "spot" &&
+    vm.state === "recovering" &&
+    vm.spot_recovery_state?.phase === "retrying_spot" &&
+    !!vm.spot_recovery_state?.last_preempted_at
+  );
+}
+
+export function providerRuntimePublicAddressStatus(opts: {
+  provider: ComputeVmRow["provider"];
+  expected: string | null | undefined;
+  observed: string | undefined;
+}): "ready" | "pending" | "mismatch" {
+  if (opts.provider === "nebius" && !opts.observed) return "pending";
+  if (opts.provider === "nebius" && !opts.expected && opts.observed) {
+    return "ready";
+  }
+  if (opts.observed === opts.expected) return "ready";
+  return "mismatch";
+}
+
+export function providerStartDisposition(
+  status: "missing" | "starting" | "running" | "stopping" | "stopped" | "error",
+): "provision" | "wait" | "ready" | "start" {
+  if (status === "missing") return "provision";
+  if (status === "starting" || status === "stopping") return "wait";
+  if (status === "running") return "ready";
+  return "start";
+}
+
+export function runningVmWorkAlreadySatisfied(
+  vm: Pick<ComputeVmRow, "state" | "desired_state">,
+  opts?: { providerConfirmedMissing?: boolean },
+): boolean {
+  return (
+    !opts?.providerConfirmedMissing &&
+    vm.state === "ready" &&
+    vm.desired_state === "running"
+  );
+}
+
+export function vmReadinessIntentIsRunning(
+  vm: Pick<ComputeVmRow, "desired_state"> | undefined,
+): boolean {
+  return vm?.desired_state === "running";
+}
+
+export function shouldRepairNebiusSshAfterRestart(
+  vm: Pick<
+    ComputeVmRow,
+    "provider" | "ready_at" | "metadata" | "desired_state"
+  >,
+  err: unknown,
+): boolean {
+  return (
+    vm.provider === "nebius" &&
+    vm.desired_state === "running" &&
+    !!vm.ready_at &&
+    vm.metadata?.provider_generation_provisioning !== true &&
+    /permission denied \(publickey\)/i.test(`${err}`)
+  );
+}
+
 function spotState(vm: ComputeVmRow) {
   return (
     normalizeSpotRecoveryState(vm.spot_recovery_state) ?? { phase: "idle" }
@@ -1307,6 +1400,15 @@ async function inspectAndRecordProviderComputeVm(vm: ComputeVmRow) {
       instance_id: observed.instance?.instance_id ?? null,
       public_ip: observed.instance?.public_ip ?? null,
       pricing_model: observed.instance?.metadata?.pricing_model ?? null,
+      provider_state:
+        observed.instance?.metadata?.provider_state ??
+        observed.instance?.status ??
+        null,
+      reconciling: observed.instance?.metadata?.reconciling ?? null,
+      maintenance_event_id:
+        observed.instance?.metadata?.maintenance_event_id ?? null,
+      reservation_id: observed.instance?.metadata?.reservation_id ?? null,
+      disk_attachments: observed.instance?.metadata?.disk_attachments ?? null,
     });
     if (updated) vm.metadata = updated.metadata;
     return observed;
@@ -1411,6 +1513,7 @@ async function waitForSsh(
     : undefined;
   const command = managedVmReadinessCommand(vm, expectedHomeDevice);
   while (Date.now() < deadline) {
+    if (!vmReadinessIntentIsRunning(await getComputeVmById(vm.id))) return;
     try {
       await new Promise<void>((resolve, reject) => {
         const socket = net.createConnection({ host, port: 22 });
@@ -1513,6 +1616,10 @@ export function runtimeIdentityChanged(
 }
 
 async function ensureVmPublicAddress(vm: ComputeVmRow): Promise<ComputeVmRow> {
+  // Nebius-managed VMs use provider-assigned dynamic addresses. The instance
+  // controller records the observed address and updates DNS after creation.
+  // Existing leases with a reserved address keep using it until it is released.
+  if (vm.provider === "nebius" && !vm.public_address_id) return vm;
   const observed = await observeVmPhase(vm, "ensure_public_address", async () =>
     ensureProviderComputePublicAddress(vm),
   );
@@ -1580,57 +1687,6 @@ async function releaseVmNetwork(vm: ComputeVmRow): Promise<ComputeVmRow> {
   }))!;
 }
 
-async function syncVmProjectSshConfig(
-  vm: ComputeVmRow,
-  enabled: boolean,
-): Promise<ComputeVmRow> {
-  if (vm.metadata?.configure_project_ssh !== true) return vm;
-  try {
-    const result = await observeVmPhase(
-      vm,
-      "sync_project_ssh_config",
-      async () =>
-        syncManagedVmProjectSshConfig({
-          account_id: vm.owner_account_id,
-          project_id: vm.project_id,
-          vm_id: vm.id,
-          vm_name: vm.name,
-          hostname: vm.public_hostname,
-          enabled,
-        }),
-    );
-    return (await updateComputeVm(vm.id, {
-      metadata: {
-        ...vm.metadata,
-        project_ssh_config: {
-          state: enabled ? "ready" : "removed",
-          alias: result.alias,
-          updated_at: new Date().toISOString(),
-        },
-      },
-    }))!;
-  } catch (err) {
-    const message = `${(err as Error)?.message ?? err}`.slice(0, 4000);
-    logger.warn("managed compute project SSH config is degraded", {
-      vm_id: vm.id,
-      project_id: vm.project_id,
-      enabled,
-      err: message,
-    });
-    return (await updateComputeVm(vm.id, {
-      metadata: {
-        ...vm.metadata,
-        project_ssh_config: {
-          state: "degraded",
-          desired: enabled ? "present" : "absent",
-          error: message,
-          updated_at: new Date().toISOString(),
-        },
-      },
-    }))!;
-  }
-}
-
 export function managedVmProjectSshConfigNeedsSync(
   vm: Pick<ComputeVmRow, "name" | "metadata">,
 ): boolean {
@@ -1640,12 +1696,158 @@ export function managedVmProjectSshConfigNeedsSync(
   );
 }
 
+function normalizedProjectAccessKeys(
+  access: ComputeVmProjectAccessRow[],
+): string[] {
+  return Array.from(
+    new Set(
+      access
+        .filter(({ revoked_at }) => !revoked_at)
+        .map(({ ssh_public_key }) => `${ssh_public_key ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+}
+
+export function managedVmProjectAccessNeedsSync(
+  vm: Pick<ComputeVmRow, "metadata">,
+  access: ComputeVmProjectAccessRow[],
+): boolean {
+  const desiredKeys = normalizedProjectAccessKeys(access);
+  const recordedKeys = Array.from(
+    new Set(
+      (vm.metadata?.project_ssh_public_keys ?? [])
+        .map((key) => `${key ?? ""}`.trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+  return (
+    desiredKeys.join("\n") !== recordedKeys.join("\n") ||
+    access.some(({ revoked_at, state }) =>
+      revoked_at ? state !== "revoked" : state !== "ready",
+    )
+  );
+}
+
+export function managedVmProjectConfigShouldBeEnabled(
+  grant: Pick<ComputeVmProjectAccessRow, "revoked_at">,
+): boolean {
+  return !grant.revoked_at;
+}
+
+async function syncVmProjectAccess(
+  vm: ComputeVmRow,
+  enabled: boolean,
+): Promise<ComputeVmRow> {
+  const access = await listComputeVmProjectAccess({
+    vm_id: vm.id,
+    include_revoked: true,
+  });
+  const desiredKeys = normalizedProjectAccessKeys(access);
+  let next = (await updateComputeVm(vm.id, {
+    metadata: {
+      ...(vm.metadata ?? {}),
+      project_ssh_public_keys: desiredKeys,
+    },
+  }))!;
+  if (enabled) {
+    await observeVmPhase(next, "sync_project_ssh_authorized_keys", async () =>
+      ensureProviderComputeSshAccess(next),
+    );
+  }
+  for (const grant of access) {
+    const shouldEnableConfig = managedVmProjectConfigShouldBeEnabled(grant);
+    if (!shouldEnableConfig && grant.state === "revoked") continue;
+    if (shouldEnableConfig && !grant.ssh_public_key?.trim()) {
+      await updateComputeVmProjectAccessState({
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        state: "degraded",
+        error: "Project deploy SSH key is missing",
+      });
+      continue;
+    }
+    try {
+      await observeVmPhase(next, "sync_project_ssh_config", async () =>
+        syncManagedVmProjectSshConfig({
+          account_id: vm.owner_account_id,
+          project_id: grant.project_id,
+          vm_id: vm.id,
+          vm_name: vm.name,
+          hostname: vm.public_hostname,
+          enabled: shouldEnableConfig,
+        }),
+      );
+      await updateComputeVmProjectAccessState({
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        state: grant.revoked_at ? "revoked" : "ready",
+        error: null,
+      });
+    } catch (err) {
+      const message = `${(err as Error)?.message ?? err}`.slice(0, 4000);
+      logger.warn("managed compute project access reconciliation degraded", {
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        enabled: shouldEnableConfig,
+        err: message,
+      });
+      await updateComputeVmProjectAccessState({
+        vm_id: vm.id,
+        project_id: grant.project_id,
+        state: "degraded",
+        error: message,
+      });
+    }
+  }
+  next = (await getComputeVmById(vm.id)) ?? next;
+  return next;
+}
+
+async function reconcileVmSshAccess(vm: ComputeVmRow): Promise<void> {
+  if (vm.state !== "ready" || !vm.public_ip) return;
+  await observeVmPhase(vm, "sync_ssh_authorized_keys", async () =>
+    ensureProviderComputeSshAccess(vm),
+  );
+}
+
 async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
   const publicIp = runtime.public_ip;
   if (!publicIp) throw new Error("provider VM has no public IPv4 address");
-  await observeVmPhase(vm, "verify_bootstrap", async () =>
-    waitForSsh(vm, publicIp),
-  );
+  try {
+    await observeVmPhase(vm, "verify_bootstrap", async () =>
+      waitForSsh(vm, publicIp),
+    );
+  } catch (err) {
+    const current = await getComputeVmById(vm.id);
+    if (current && shouldRepairNebiusSshAfterRestart(current, err)) {
+      const message =
+        "Nebius VM lost its managed SSH authorization after restart; replacing only the instance while preserving its disks and address";
+      const repairing = (await updateComputeVm(current.id, {
+        state: "recovering",
+        error: message,
+      }))!;
+      await appendComputeEvent({
+        vm: repairing,
+        actor_kind: "worker",
+        action: "repair_ssh_access",
+        idempotency_key: `repair-ssh:${repairing.id}:${repairing.instance_generation}`,
+        old_state: current.state,
+        new_state: "recovering",
+        status: "started",
+        details: { provider: "nebius" },
+      });
+      await observeVmPhase(repairing, "provider_replace_lost_ssh", async () =>
+        replaceProviderComputeInstance(repairing),
+      );
+      await updateComputeInstance(repairing, {
+        deleted: true,
+        terminal_reason: "lost_managed_ssh_authorization",
+      });
+      return await provision(repairing);
+    }
+    throw err;
+  }
   const current = await getComputeVmById(vm.id);
   if (!current || current.desired_state !== "running") {
     if (current?.desired_state === "stopped") return await stop(current);
@@ -1675,7 +1877,7 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
         : current.spot_recovery_state,
   });
   next = await ensureVmDns(next!);
-  next = await syncVmProjectSshConfig(next!, true);
+  next = await syncVmProjectAccess(next!, true);
   await updateComputeInstance(next!, {
     public_ip: publicIp,
     running: true,
@@ -1693,12 +1895,16 @@ async function markReady(vm: ComputeVmRow, runtime: ObservedRuntime) {
   await reconcileVmBilling(next!, "running");
 }
 
-async function provision(vm: ComputeVmRow) {
+async function provision(
+  vm: ComputeVmRow,
+  opts?: { providerConfirmedMissing?: boolean },
+) {
   if (vm.desired_state === "deleted") return await remove(vm);
   if (vm.desired_state === "stopped") {
     await updateComputeVm(vm.id, { state: "stopped", error: null });
     return;
   }
+  if (runningVmWorkAlreadySatisfied(vm, opts)) return;
   const beginningNewGeneration =
     !!vm.ready_at && vm.metadata?.provider_generation_provisioning !== true;
   let provisioning = (await updateComputeVm(vm.id, {
@@ -1714,6 +1920,9 @@ async function provision(vm: ComputeVmRow) {
       provider_generation_provisioning: !!vm.ready_at,
     },
   }))!;
+  // This timestamp is the user-visible beginning of provider provisioning,
+  // not the later point when the provider creation call returns.
+  await insertComputeInstance(provisioning);
   let volume: ComputeVolumeRow | undefined;
   if (provisioning.home_volume_id) {
     volume = await getComputeVolumeById(provisioning.home_volume_id);
@@ -1749,11 +1958,7 @@ async function provision(vm: ComputeVmRow) {
       createProviderComputeVm(provisioning, volume),
     );
   } catch (err) {
-    if (
-      provisioning.desired_pricing_model === "spot" &&
-      provisioning.effective_pricing_model === "spot" &&
-      isSpotCapacityError(err)
-    ) {
+    if (shouldRecoverSpotCapacityFailure(provisioning, err)) {
       return await recoverFromSpotCapacityFailure(provisioning, err);
     }
     throw err;
@@ -1761,6 +1966,11 @@ async function provision(vm: ComputeVmRow) {
   const latest = await getComputeVmById(provisioning.id);
   if (!latest) return;
   provisioning = latest;
+  await updateComputeInstance(provisioning, {
+    provider_instance_id:
+      runtime.instance_id ?? provisioning.provider_instance_id,
+    public_ip: runtime.public_ip ?? provisioning.public_ip,
+  });
   const runtimeMetadata = {
     ...(provisioning.metadata ?? {}),
     runtime: computeRuntimeMetadata(provisioning.metadata?.runtime, runtime),
@@ -1770,7 +1980,7 @@ async function provision(vm: ComputeVmRow) {
       state: provisioning.desired_state === "deleted" ? "deleting" : "stopping",
       provider_instance_id:
         runtime.instance_id ?? provisioning.provider_instance_id,
-      public_ip: runtime.public_ip ?? null,
+      public_ip: runtime.public_ip ?? provisioning.public_ip,
       metadata: runtimeMetadata,
     }))!;
     await insertComputeInstance(interrupted);
@@ -1779,27 +1989,26 @@ async function provision(vm: ComputeVmRow) {
     }
     return await stop(interrupted);
   }
-  if (
-    provisioning.provider === "nebius" &&
-    provisioning.desired_pricing_model === "spot" &&
-    provisioning.effective_pricing_model === "spot" &&
-    !runtime.public_ip
-  ) {
+  const addressStatus = providerRuntimePublicAddressStatus({
+    provider: provisioning.provider,
+    expected: provisioning.public_ip,
+    observed: runtime.public_ip,
+  });
+  if (addressStatus === "pending") {
     const waiting = (await updateComputeVm(provisioning.id, {
       provider_instance_id:
         runtime.instance_id ?? provisioning.provider_instance_id,
-      public_ip: null,
+      public_ip: provisioning.public_ip,
       metadata: runtimeMetadata,
     }))!;
     await insertComputeInstance(waiting);
-    return await recoverFromSpotCapacityFailure(
-      waiting,
-      new Error(
-        "Nebius accepted the Spot VM but it is still waiting for resources and has no public IP",
-      ),
+    throw new RetryableComputeWorkError(
+      "Nebius accepted the VM and is still assigning its public IP",
+      new Date(Date.now() + 5_000),
+      "provisioning",
     );
   }
-  if (runtime.public_ip !== provisioning.public_ip) {
+  if (addressStatus === "mismatch") {
     throw new Error(
       `provider attached unexpected public IP '${runtime.public_ip ?? "none"}' instead of reserved '${provisioning.public_ip}'`,
     );
@@ -1808,7 +2017,7 @@ async function provision(vm: ComputeVmRow) {
     state: "starting",
     provider_instance_id:
       runtime.instance_id ?? provisioning.provider_instance_id,
-    public_ip: runtime.public_ip ?? null,
+    public_ip: runtime.public_ip ?? provisioning.public_ip,
     metadata: runtimeMetadata,
   }))!;
   await insertComputeInstance(starting);
@@ -1832,8 +2041,23 @@ async function start(vm: ComputeVmRow) {
     return await remove(vm);
   }
   if (vm.desired_state === "stopped") return await reconcile(vm);
+  if (runningVmWorkAlreadySatisfied(vm)) return;
   let observed = await inspectAndRecordProviderComputeVm(vm);
-  if (observed.status === "missing") return await provision(vm);
+  let disposition = providerStartDisposition(observed.status);
+  if (disposition === "provision") return await provision(vm);
+  if (disposition === "wait") return;
+  if (
+    observed.status === "error" &&
+    vm.provider === "nebius" &&
+    vm.effective_pricing_model === "spot"
+  ) {
+    // A terminal Nebius instance cannot be started reliably. Replace only the
+    // instance while preserving its named boot/home disks and static address.
+    await observeVmPhase(vm, "provider_replace_failed_spot", async () =>
+      setProviderComputePricing(vm, vm.effective_pricing_model),
+    );
+    return await provision(vm);
+  }
   const observedPricingModel = observed.instance?.metadata?.pricing_model;
   if (
     (observedPricingModel === "spot" || observedPricingModel === "on_demand") &&
@@ -1843,7 +2067,21 @@ async function start(vm: ComputeVmRow) {
       setProviderComputePricing(vm, vm.effective_pricing_model),
     );
     observed = await inspectAndRecordProviderComputeVm(vm);
-    if (observed.status === "missing") return await provision(vm);
+    disposition = providerStartDisposition(observed.status);
+    if (disposition === "provision") return await provision(vm);
+    if (disposition === "wait") return;
+  }
+  if (disposition === "ready") {
+    if (
+      vm.public_ip &&
+      observed.instance?.public_ip &&
+      observed.instance.public_ip !== vm.public_ip
+    ) {
+      throw new Error(
+        `running VM public IP drifted from reserved address '${vm.public_ip}' to '${observed.instance.public_ip}'`,
+      );
+    }
+    return await markReady(vm, observed.instance ?? {});
   }
   await observeVmPhase(vm, "provider_set_machine_type", async () =>
     setProviderComputeMachineType(vm),
@@ -1859,6 +2097,14 @@ async function start(vm: ComputeVmRow) {
       startProviderComputeVm(vm),
     );
     const observed = await inspectAndRecordProviderComputeVm(vm);
+    const disposition = providerStartDisposition(observed.status);
+    if (disposition === "provision") return await provision(vm);
+    if (disposition === "wait") return;
+    if (disposition !== "ready") {
+      throw new Error(
+        `provider VM did not enter a running state after start (status=${observed.status})`,
+      );
+    }
     if (vm.home_volume_id) {
       const volume = await getComputeVolumeById(vm.home_volume_id);
       if (!volume) throw new Error("attached compute volume is unavailable");
@@ -1877,10 +2123,7 @@ async function start(vm: ComputeVmRow) {
     const current = await getComputeVmById(vm.id);
     if (current?.desired_state === "stopped") return await reconcile(current);
     if (current?.desired_state === "deleted") return await remove(current);
-    if (
-      vm.desired_pricing_model === "spot" &&
-      vm.effective_pricing_model === "spot"
-    ) {
+    if (shouldRecoverSpotCapacityFailure(vm, err)) {
       return await recoverFromSpotCapacityFailure(vm, err);
     }
     throw err;
@@ -1930,7 +2173,11 @@ async function switchToOnDemand(vm: ComputeVmRow) {
     },
     error: null,
   }))!;
-  await start(fallback);
+  if (fallback.provider === "nebius") {
+    await provision(fallback);
+  } else {
+    await start(fallback);
+  }
 }
 
 async function probeAndReturnToSpot(vm: ComputeVmRow) {
@@ -1970,7 +2217,11 @@ async function probeAndReturnToSpot(vm: ComputeVmRow) {
     state: "starting",
     effective_pricing_model: "spot",
   }))!;
-  await start(spot);
+  if (spot.provider === "nebius") {
+    await provision(spot);
+  } else {
+    await start(spot);
+  }
 }
 
 export function computePostStopTransition(
@@ -2001,7 +2252,7 @@ async function stop(vm: ComputeVmRow) {
   const networkState =
     current.desired_state === "running"
       ? current
-      : await releaseVmNetwork(await syncVmProjectSshConfig(current, false));
+      : await releaseVmNetwork(await syncVmProjectAccess(current, false));
   const providerStoppedAt = new Date().toISOString();
   await updateComputeVmProviderObservation(vm.id, {
     state: "stopped",
@@ -2034,10 +2285,7 @@ async function remove(vm: ComputeVmRow) {
     desired_state: "deleted",
   });
   await stopProviderComputeVm(vm);
-  vm = await syncVmProjectSshConfig(
-    (await getComputeVmById(vm.id)) ?? vm,
-    false,
-  );
+  vm = await syncVmProjectAccess((await getComputeVmById(vm.id)) ?? vm, false);
   await observeVmPhase(vm, "provider_delete", async () =>
     deleteProviderComputeVm(vm),
   );
@@ -2219,14 +2467,19 @@ async function reconcile(vm: ComputeVmRow) {
   }
   const observed = await inspectAndRecordProviderComputeVm(vm);
   if (vm.desired_state === "stopped") {
+    if (observed.status === "stopping") return;
     if (observed.status === "running" || observed.status === "starting") {
       return await stop(vm);
     }
     if (vm.public_address_id || vm.dns_record_id || vm.public_ip) {
       vm = await releaseVmNetwork(vm);
     }
-    if (vm.metadata?.project_ssh_config?.state !== "removed") {
-      vm = await syncVmProjectSshConfig(vm, false);
+    const projectAccess = await listComputeVmProjectAccess({
+      vm_id: vm.id,
+      include_revoked: true,
+    });
+    if (managedVmProjectAccessNeedsSync(vm, projectAccess)) {
+      vm = await syncVmProjectAccess(vm, false);
     }
     if (vm.state !== "stopped") {
       await updateComputeVm(vm.id, {
@@ -2275,14 +2528,24 @@ async function reconcile(vm: ComputeVmRow) {
       await markReady(vm, observed.instance ?? {});
     } else {
       if (vm.dns_state !== "ready") vm = await ensureVmDns(vm);
-      if (managedVmProjectSshConfigNeedsSync(vm)) {
-        await syncVmProjectSshConfig(vm, true);
+      const projectAccess = await listComputeVmProjectAccess({
+        vm_id: vm.id,
+        include_revoked: true,
+      });
+      if (managedVmProjectAccessNeedsSync(vm, projectAccess)) {
+        await syncVmProjectAccess(vm, true);
       }
     }
     return;
   }
   if (observed.status === "missing") {
-    return await provision(vm);
+    return await provision(vm, { providerConfirmedMissing: true });
+  }
+  if (observed.status === "starting" || observed.status === "stopping") {
+    // Nebius reports CREATING, UPDATING, STARTING, STOPPING, and DELETING as
+    // transitional. The periodic reconcile will observe convergence; issuing
+    // another start while the provider is reconciling causes operation races.
+    return;
   }
   // Spot preemption leaves the persistent-root instance terminated. Record it
   // only on the ready -> terminated edge so repeated provider observations do
@@ -2299,19 +2562,57 @@ async function reconcile(vm: ComputeVmRow) {
     const interrupted = (await updateComputeVm(vm.id, {
       state: "recovering",
       public_ip: null,
+      error:
+        vm.provider === "nebius"
+          ? "Provider stopped this Spot VM; recreating the instance on a fresh placement while preserving its disks and address. This is usually a Spot preemption, not a capacity error."
+          : "Provider stopped this Spot VM; restarting automatically. This is usually a Spot preemption, not a capacity error.",
       spot_recovery_state: {
         ...recorded.state,
         phase: "retrying_spot",
         attempt: 0,
       },
     }))!;
+    await updateComputeInstance(interrupted, {
+      preempted: true,
+      terminal_reason: "provider_spot_interruption",
+    });
+    await appendComputeEvent({
+      vm: interrupted,
+      actor_kind: "worker",
+      action: "spot_interrupted",
+      idempotency_key: `spot-interrupted:${interrupted.id}:${interrupted.instance_generation}:${recorded.state.last_preempted_at}`,
+      old_state: "ready",
+      new_state: "recovering",
+      status: "detected",
+      details: {
+        provider_state:
+          observed.instance?.metadata?.provider_state ??
+          observed.instance?.status ??
+          observed.status,
+      },
+    });
     if (recorded.circuit_breaker_triggered && vm.allow_on_demand_fallback) {
       return await switchToOnDemand(interrupted);
     }
     vm = interrupted;
   }
-  // Starting the same instance preserves the named root disk and is
-  // idempotent.
+  if (shouldReplaceNebiusSpotInterruption(vm)) {
+    // A stopped Nebius preemptible instance can be evicted again immediately
+    // when restarted on the same placement. Recreate only the instance so the
+    // persistent disks and static address survive while Nebius chooses a fresh
+    // placement, matching a new Console VM creation.
+    await observeVmPhase(vm, "provider_replace_preempted_spot", async () =>
+      replaceProviderComputeInstance(vm),
+    );
+    await updateComputeInstance(vm, {
+      deleted: true,
+      preempted: true,
+      terminal_reason: "provider_spot_interruption",
+    });
+    return await provision(vm);
+  }
+  // GCP can restart the same terminated Spot instance while preserving its
+  // named root disk.
   await updateComputeVm(vm.id, {
     state: vm.desired_pricing_model === "spot" ? "recovering" : "starting",
     public_ip: null,
@@ -2358,6 +2659,8 @@ async function handleWork(row: ComputeWorkRow) {
       return await remove(vm);
     case "reconcile":
       return await reconcile(vm);
+    case "reconcile_ssh_access":
+      return await reconcileVmSshAccess(vm);
     case "funding_transition":
       return await transitionVmFunding(vm, row.payload?.funding_mode);
     case "probe_spot":

@@ -25,6 +25,7 @@ import {
   syncTableSchemaColumnInvariants,
 } from "./column-invariants";
 import { getIndexActions, syncTableSchemaIndexes } from "./index-convergence";
+import { backfillComputeVmProjectAccess } from "./compute-vm-project-access";
 
 const log = getLogger("db:schema:sync");
 
@@ -435,6 +436,9 @@ export async function syncSchema(
     }
     if (dbSchema.purchases != null) {
       await ensurePurchaseCostCentsSchema(db);
+    }
+    if (dbSchema.compute_vm_project_access != null) {
+      await backfillComputeVmProjectAccess(db);
     }
     dbg("backfilling account display names");
     await backfillAccountDisplayNames(db);

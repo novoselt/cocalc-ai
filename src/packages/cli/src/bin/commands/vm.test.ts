@@ -40,6 +40,9 @@ function harness(
   const listCalls: any[] = [];
   const projectListCalls: any[] = [];
   const catalogCalls: any[] = [];
+  const accessListCalls: any[] = [];
+  const accessGrantCalls: any[] = [];
+  const accessRevokeCalls: any[] = [];
   const rdpCalls: any[] = [];
   const stateCalls: Array<{ action: "start" | "stop"; opts: any }> = [];
   const program = new Command();
@@ -65,7 +68,7 @@ function harness(
                 return {
                   provider_catalogs: { gcp: { entries: [] } },
                   defaults: { provider: "gcp" },
-                  limits: { max_active_per_project: 3 },
+                  limits: { max_active_per_account: 3 },
                   funding_modes: [],
                 };
               },
@@ -76,6 +79,18 @@ function harness(
               listProjectVms: async (callOpts: any) => {
                 projectListCalls.push(callOpts);
                 return [];
+              },
+              listVmProjectAccess: async (callOpts: any) => {
+                accessListCalls.push(callOpts);
+                return [];
+              },
+              grantVmProjectAccess: async (callOpts: any) => {
+                accessGrantCalls.push(callOpts);
+                return { ...callOpts, state: "pending" };
+              },
+              revokeVmProjectAccess: async (callOpts: any) => {
+                accessRevokeCalls.push(callOpts);
+                return { ...callOpts, state: "revoking" };
               },
               getVm: async () => ({
                 id: "vm-id",
@@ -186,10 +201,72 @@ function harness(
     listCalls,
     projectListCalls,
     catalogCalls,
+    accessListCalls,
+    accessGrantCalls,
+    accessRevokeCalls,
     rdpCalls,
     stateCalls,
   };
 }
+
+describe("vm project access", () => {
+  it("lists access grants for one account-owned VM", async () => {
+    const { program, accessListCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "access",
+      "list",
+      "build-vm",
+      "--include-revoked",
+    ]);
+    assert.deepEqual(accessListCalls, [
+      { id_or_name: "build-vm", include_revoked: true },
+    ]);
+  });
+
+  it("grants and revokes project access with idempotency keys", async () => {
+    const { program, accessGrantCalls, accessRevokeCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "access",
+      "grant",
+      "build-vm",
+      "--project",
+      "project-id",
+    ]);
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "access",
+      "revoke",
+      "build-vm",
+      "--project",
+      "project-id",
+    ]);
+    assert.equal(accessGrantCalls[0]?.id_or_name, "build-vm");
+    assert.equal(accessGrantCalls[0]?.project_id, "project-id");
+    assert.match(accessGrantCalls[0]?.idempotency_key, /^[0-9a-f-]{36}$/);
+    assert.equal(accessRevokeCalls[0]?.id_or_name, "build-vm");
+    assert.equal(accessRevokeCalls[0]?.project_id, "project-id");
+    assert.match(accessRevokeCalls[0]?.idempotency_key, /^[0-9a-f-]{36}$/);
+  });
+
+  it("rejects project-scoped authentication", async () => {
+    const { program } = harness({
+      projectId: "project-id",
+      projectAuth: true,
+    });
+    await assert.rejects(
+      program.parseAsync(["node", "cocalc", "vm", "access", "list"]),
+      /account authentication/,
+    );
+  });
+});
 
 describe("vm catalog", () => {
   it("queries and selects the live provider catalog", async () => {
@@ -207,7 +284,7 @@ describe("vm catalog", () => {
       provider: "gcp",
       catalog: { entries: [] },
       defaults: { provider: "gcp" },
-      limits: { max_active_per_project: 3 },
+      limits: { max_active_per_account: 3 },
       funding_modes: [],
     });
   });
@@ -235,9 +312,30 @@ describe("vm list scope", () => {
   });
 
   it("uses COCALC_PROJECT_ID as the account-authenticated default filter", async () => {
-    const { program, listCalls } = harness({ projectId: "project-id" });
+    const { program, listCalls, projectListCalls } = harness({
+      projectId: "project-id",
+    });
     await program.parseAsync(["node", "cocalc", "vm", "list"]);
-    assert.equal(listCalls[0]?.project_id, "project-id");
+    assert.deepEqual(projectListCalls, [
+      { project_id: "project-id", include_deleted: false },
+    ]);
+    assert.equal(listCalls.length, 0);
+  });
+
+  it("uses the collaborator-aware listing for an explicit project", async () => {
+    const { program, listCalls, projectListCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "list",
+      "--project",
+      "project-id",
+    ]);
+    assert.deepEqual(projectListCalls, [
+      { project_id: "project-id", include_deleted: false },
+    ]);
+    assert.equal(listCalls.length, 0);
   });
 
   it("lists the whole account only when account authentication is available", async () => {
@@ -345,6 +443,20 @@ describe("vm availability", () => {
 });
 
 describe("vm create", () => {
+  it("creates an account-owned VM without a project grant", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "account-vm",
+      "--no-ssh-key",
+    ]);
+    assert.equal(createCalls[0]?.project_id, undefined);
+    assert.equal(createCalls[0]?.configure_project_ssh, false);
+  });
+
   it("defaults to the attached project's deploy key", async () => {
     const { program, createCalls } = harness();
     await program.parseAsync([
@@ -380,6 +492,26 @@ describe("vm create", () => {
       "1",
     ]);
     assert.equal(createCalls[0]?.gpu_count, 1);
+  });
+
+  it("passes an explicit Nebius provider platform", async () => {
+    const { program, createCalls } = harness();
+    await program.parseAsync([
+      "node",
+      "cocalc",
+      "vm",
+      "create",
+      "h200-vm",
+      "--provider",
+      "nebius",
+      "--machine",
+      "1gpu-16vcpu-200gb",
+      "--provider-platform",
+      "gpu-h200-sxm",
+    ]);
+    assert.deepEqual(createCalls[0]?.provider_spec, {
+      platform: "gpu-h200-sxm",
+    });
   });
 
   it("creates Windows with its safer boot-disk default", async () => {
