@@ -78,9 +78,12 @@ async function x11_apps(): Promise<Capabilities> {
   return ret;
 }
 
-// determines if X11 support exists at all
+// Graphical applications use project-host tools injected into the project PATH.
 async function get_x11(): Promise<boolean> {
-  return await have("xpra");
+  const tools = await Promise.all(
+    ["blit", "cocalc-x11", "xwayland-satellite"].map(have),
+  );
+  return tools.every(Boolean);
 }
 
 // Quarto document formatter (on top of pandoc)
