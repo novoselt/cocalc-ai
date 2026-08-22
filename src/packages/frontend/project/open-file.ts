@@ -5,11 +5,11 @@
 
 // Implement the open_file actions for opening one single file in a project.
 
+import type { Filesystem } from "@cocalc/conat/files/fs";
 import { alert_message } from "@cocalc/frontend/alerts";
 import { redux } from "@cocalc/frontend/app-framework";
 import { local_storage } from "@cocalc/frontend/editor-local-storage";
 import Fragment, { FragmentId } from "@cocalc/frontend/misc/fragment-id";
-import { remove } from "@cocalc/frontend/project-file";
 import { ProjectActions } from "@cocalc/frontend/project_actions";
 import { webapp_client } from "@cocalc/frontend/webapp-client";
 import {
@@ -394,6 +394,19 @@ export async function open_file(
     });
   }
 
+  if (shouldConvertLegacyWorksheetOnOpen(opts, isViewerProjectOpen(actions))) {
+    if (is_kiosk()) {
+      alert_message({
+        type: "error",
+        message: `CoCalc is in Kiosk mode, so you may not open "${opts.path}".  Please try visiting ${document.location.origin} directly.`,
+        timeout: 15,
+      });
+      return;
+    }
+    await open_sagews_worksheet(actions, opts);
+    return;
+  }
+
   const tabIsOpened = () =>
     !!actions.get_store()?.get("open_files")?.has(displayPath);
   const workingDirectory = (path = displayPath) =>
@@ -645,11 +658,6 @@ export async function open_file(
       return;
     }
 
-    if (ext === "sagews") {
-      await open_sagews_worksheet(actions, opts);
-      return;
-    }
-
     get_side_chat_state(actions.project_id, opts);
 
     store = actions.get_store(); // because async stuff happened above.
@@ -730,6 +738,22 @@ export async function open_file(
   await continueOpen();
 }
 
+export function shouldConvertLegacyWorksheetOnOpen(
+  opts: Pick<OpenFileOpts, "path" | "ext" | "foreground" | "wait_for_ready">,
+  viewerProject: boolean,
+): boolean {
+  if (viewerProject) {
+    return false;
+  }
+  const foreground = opts.foreground ?? true;
+  const hydrate =
+    foreground ||
+    (opts.wait_for_ready ?? foreground) ||
+    PRELOAD_BACKGROUND_TABS;
+  const ext = (opts.ext ?? filename_extension(opts.path)).toLowerCase();
+  return hydrate && ext === "sagews";
+}
+
 function isViewerProjectOpen(actions: ProjectActions): boolean {
   if (isPublicDirectoryShareOpen(actions)) {
     return true;
@@ -792,11 +816,15 @@ async function open_sagews_worksheet(
       return;
     }
     actions.open_files.delete(opts.path);
-    await remove(opts.path, redux, actions.project_id);
+    redux.getActions("page").save_session();
   };
 
   try {
-    if (!(await file_exists(actions.project_id, ipynb_path))) {
+    await ensureProjectIsOpenWithRetry(actions, {
+      foreground_project: opts.foreground_project,
+    });
+    const fs = actions.fs();
+    if (!(await fileHasContent(fs, ipynb_path))) {
       alert_message({
         type: "info",
         message: `Converting '${opts.path}' to a Jupyter notebook...`,
@@ -805,10 +833,11 @@ async function open_sagews_worksheet(
       const { default: sagewsToIpynb } =
         await import("@cocalc/frontend/frame-editors/sagews-editor/sagews-to-ipynb");
       const ipynb = sagewsToIpynb(raw);
-      await webapp_client.project_client.write_text_file({
+      await publishSagewsNotebookAtomically({
         project_id: actions.project_id,
         path: ipynb_path,
         content: JSON.stringify(ipynb, undefined, 2),
+        fs,
       });
     }
     await clear_sagews_tab();
@@ -834,19 +863,50 @@ export async function readSagewsWorksheetText(
   return content.toString("utf8");
 }
 
-async function file_exists(project_id: string, path: string): Promise<boolean> {
-  const f = path_split(path);
-  try {
-    await webapp_client.project_client.exec({
-      project_id,
-      command: "test",
-      args: ["-e", f.tail],
-      path: f.head,
-      err_on_exit: true,
-    });
-    return true;
-  } catch (err) {
+async function fileHasContent(
+  fs: Pick<Filesystem, "exists" | "stat">,
+  path: string,
+): Promise<boolean> {
+  if (!(await fs.exists(path))) {
     return false;
+  }
+  return (await fs.stat(path)).size > 0;
+}
+
+export async function publishSagewsNotebookAtomically({
+  project_id,
+  path,
+  content,
+  fs,
+}: {
+  project_id: string;
+  path: string;
+  content: string;
+  fs: Pick<Filesystem, "stat" | "rename" | "rm">;
+}): Promise<void> {
+  const { head, tail } = path_split(path);
+  const directoryPrefix = head ? `${head}/` : path.startsWith("/") ? "/" : "";
+  const tempPath = `${directoryPrefix}.${tail}.cocalc-sagews-${uuid()}.tmp`;
+  let published = false;
+  try {
+    await webapp_client.project_client.write_text_file({
+      project_id,
+      path: tempPath,
+      content,
+    });
+    const expectedBytes = new TextEncoder().encode(content).byteLength;
+    const actualBytes = (await fs.stat(tempPath)).size;
+    if (actualBytes !== expectedBytes) {
+      throw new Error(
+        `converted notebook write was incomplete (${actualBytes} of ${expectedBytes} bytes)`,
+      );
+    }
+    await fs.rename(tempPath, path);
+    published = true;
+  } finally {
+    if (!published) {
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    }
   }
 }
 

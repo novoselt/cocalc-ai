@@ -109,7 +109,10 @@ async function refreshCopyOperation(op_id: string): Promise<void> {
       status,
       progress_summary,
       error: status === "failed" ? lastError : null,
-      result: status === "succeeded" ? progress_summary : undefined,
+      result:
+        status === "succeeded"
+          ? { ...(lro?.result ?? {}), ...progress_summary }
+          : undefined,
     });
     if (updated) {
       await publishLroSummary({
@@ -134,6 +137,7 @@ export type ProjectCopyInsert = ProjectCopyKey & {
   op_id?: string;
   snapshot_id: string;
   options?: any;
+  exact?: boolean;
   expires_at: Date;
 };
 
@@ -150,6 +154,7 @@ export async function ensureCopySchema(): Promise<void> {
       op_id UUID,
       snapshot_id TEXT NOT NULL,
       options JSONB DEFAULT '{}'::jsonb,
+      exact BOOLEAN NOT NULL DEFAULT FALSE,
       status TEXT NOT NULL,
       last_error TEXT,
       attempt INTEGER DEFAULT 0,
@@ -192,6 +197,9 @@ export async function ensureCopySchema(): Promise<void> {
   `);
   await pool().query(
     "ALTER TABLE project_copies ADD COLUMN IF NOT EXISTS op_id UUID",
+  );
+  await pool().query(
+    "ALTER TABLE project_copies ADD COLUMN IF NOT EXISTS exact BOOLEAN NOT NULL DEFAULT FALSE",
   );
   await pool().query(
     "CREATE INDEX IF NOT EXISTS project_copies_status_idx ON project_copies(status)",
@@ -302,6 +310,7 @@ export async function upsertCopyRow(
     op_id,
     snapshot_id,
     options,
+    exact = false,
     expires_at,
   } = row;
   const existing = await pool().query<{ snapshot_id: string }>(
@@ -320,12 +329,13 @@ export async function upsertCopyRow(
   const { rows } = await pool().query(
     `
       INSERT INTO project_copies
-        (src_project_id, src_path, dest_project_id, dest_path, op_id, snapshot_id, options, status, attempt, last_attempt_at, expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',0,NULL,$8)
+        (src_project_id, src_path, dest_project_id, dest_path, op_id, snapshot_id, options, exact, status, attempt, last_attempt_at, expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',0,NULL,$9)
       ON CONFLICT (op_id, src_project_id, src_path, dest_project_id, dest_path) DO UPDATE
         SET op_id=EXCLUDED.op_id,
             snapshot_id=EXCLUDED.snapshot_id,
             options=EXCLUDED.options,
+            exact=EXCLUDED.exact,
             status='queued',
             last_error=NULL,
             attempt=0,
@@ -342,6 +352,7 @@ export async function upsertCopyRow(
       op_id ?? null,
       snapshot_id,
       options ?? null,
+      exact,
       expires_at,
     ],
   );
@@ -367,13 +378,14 @@ export async function insertCopyRowIfMissing(
     op_id,
     snapshot_id,
     options,
+    exact = false,
     expires_at,
   } = row;
   const { rows } = await pool().query(
     `
       INSERT INTO project_copies
-        (src_project_id, src_path, dest_project_id, dest_path, op_id, snapshot_id, options, status, attempt, last_attempt_at, expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',0,NULL,$8)
+        (src_project_id, src_path, dest_project_id, dest_path, op_id, snapshot_id, options, exact, status, attempt, last_attempt_at, expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',0,NULL,$9)
       ON CONFLICT (op_id, src_project_id, src_path, dest_project_id, dest_path) DO NOTHING
       RETURNING *
     `,
@@ -385,6 +397,7 @@ export async function insertCopyRowIfMissing(
       op_id ?? null,
       snapshot_id,
       options ?? null,
+      exact,
       expires_at,
     ],
   );

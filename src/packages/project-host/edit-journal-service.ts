@@ -20,7 +20,6 @@ import {
   type TextJournalSaveRequest,
 } from "@cocalc/conat/project/edit-journal";
 import { SyncClient } from "@cocalc/conat/sync-doc/sync-client";
-import { export_to_ipynb } from "@cocalc/jupyter/ipynb/export-to-ipynb";
 import { IPynbImporter } from "@cocalc/jupyter/ipynb/import-from-ipynb";
 import { SYNCDB_OPTIONS } from "@cocalc/jupyter/redux/sync";
 import { SyncDB } from "@cocalc/sync/editor/db";
@@ -29,6 +28,7 @@ import { SyncString } from "@cocalc/sync/editor/string/sync";
 import { isProjectCollaboratorGroup } from "@cocalc/conat/auth/subject-policy";
 import { getRow } from "@cocalc/lite/hub/sqlite/database";
 import { syncdbPath } from "@cocalc/util/jupyter/names";
+import { jupyterNotebookContents } from "./jupyter-notebook-contents";
 
 const logger = getLogger("project-host:edit-journal");
 
@@ -155,42 +155,11 @@ function notebookPatch(
   return [...sourcePatch, ...withSources.make_patch(target)] as DbPatch;
 }
 
-function notebookContents(doc: DBDocument, requestedNotebook: any): string {
-  const cells: Record<string, any> = {};
-  const cellList: Array<{ id: string; pos: number }> = [];
-  doc.get({ type: "cell" })?.forEach((value: any) => {
-    const cell = immutableValue(value);
-    const id = `${cell?.id ?? ""}`;
-    if (!id) return;
-    cells[id] = cell;
-    cellList.push({
-      id,
-      pos: Number.isFinite(cell.pos) ? cell.pos : Number.MAX_SAFE_INTEGER,
-    });
-  });
-  cellList.sort((a, b) => a.pos - b.pos || a.id.localeCompare(b.id));
-  const settings =
-    immutableValue(doc.get_one({ type: "settings" })) ?? ({} as any);
-  const metadata = structuredClone(settings.metadata ?? {});
-  const requestedKernel = requestedNotebook?.metadata?.kernelspec;
-  const kernelName = `${settings.kernel ?? requestedKernel?.name ?? ""}`;
-  const kernelspec =
-    requestedKernel?.name?.toLowerCase() === kernelName.toLowerCase()
-      ? structuredClone(requestedKernel)
-      : kernelName
-        ? { name: kernelName, display_name: kernelName }
-        : {};
-  const ipynb = export_to_ipynb({
-    cells: structuredClone(cells),
-    cell_list: cellList.map(({ id }) => id),
-    metadata,
-    kernelspec,
-    language_info: metadata.language_info,
-  });
-  return `${JSON.stringify(ipynb, null, 1)}\n`;
-}
-
-export const __test__ = { notebookContents, notebookPatch, sha256 };
+export const __test__ = {
+  notebookContents: jupyterNotebookContents,
+  notebookPatch,
+  sha256,
+};
 
 export async function initProjectEditJournalService(client: Client) {
   const syncClient = new SyncClient(client);
@@ -389,7 +358,10 @@ export async function initProjectEditJournalService(client: Client) {
         : await sync.commitExactPatch(patch, {
             meta: journalMeta(request),
           });
-      const contents = notebookContents(sync.get_doc() as DBDocument, notebook);
+      const contents = jupyterNotebookContents(
+        sync.get_doc() as DBDocument,
+        notebook,
+      );
       if (duplicate && diskHash !== request.base_sha256 && disk !== contents) {
         throw Object.assign(
           new Error("notebook changed after the journal commit"),

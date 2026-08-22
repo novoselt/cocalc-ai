@@ -15,6 +15,7 @@ let mockCallHub: jest.Mock;
 let mockCpExec: jest.Mock;
 let mockRustic: jest.Mock;
 let mockStatusUpdates: any[];
+let mockExact: boolean;
 
 jest.mock("@cocalc/backend/logger", () => {
   const logger = {
@@ -85,6 +86,7 @@ describe("project-host pending copies", () => {
   beforeEach(async () => {
     projectRoot = await mkdtemp(path.join(os.tmpdir(), "cocalc-copy-test-"));
     mockStatusUpdates = [];
+    mockExact = true;
     mockCallHub = jest.fn(async ({ name, args }) => {
       if (name === "hosts.claimPendingCopies") {
         return [
@@ -96,6 +98,7 @@ describe("project-host pending copies", () => {
             dest_path: "foo",
             snapshot_id: "snap-1",
             options: { force: true },
+            exact: mockExact,
           },
         ];
       }
@@ -120,7 +123,7 @@ describe("project-host pending copies", () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it("copies into an existing destination directory instead of replacing it", async () => {
+  it("replaces the exact destination instead of nesting a recollection", async () => {
     await mkdir(path.join(projectRoot, "foo"));
 
     const { applyPendingCopies } = await import("./pending-copies");
@@ -132,16 +135,14 @@ describe("project-host pending copies", () => {
         status: "done",
       }),
     ]);
-    expect((await stat(path.join(projectRoot, "foo"))).isDirectory()).toBe(
-      true,
+    expect((await stat(path.join(projectRoot, "foo"))).isFile()).toBe(true);
+    await expect(readFile(path.join(projectRoot, "foo"), "utf8")).resolves.toBe(
+      "notebook payload",
     );
-    await expect(
-      readFile(path.join(projectRoot, "foo", "test.ipynb"), "utf8"),
-    ).resolves.toBe("notebook payload");
     const [stagingPath, destPath, copyOptions] = mockCpExec.mock.calls[0];
     expect(stagingPath).toContain(path.join(".copy-staging"));
-    expect(stagingPath.endsWith(path.join("foo", "test.ipynb"))).toBe(true);
-    expect(destPath).toBe(path.join(projectRoot, "foo", "test.ipynb"));
+    expect(stagingPath.endsWith("foo")).toBe(true);
+    expect(destPath).toContain(path.join(projectRoot, ".foo.cocalc-incoming-"));
     expect(copyOptions).toEqual(
       expect.objectContaining({
         recursive: true,
@@ -172,5 +173,17 @@ describe("project-host pending copies", () => {
     await expect(readFile(path.join(projectRoot, "foo"), "utf8")).resolves.toBe(
       "notebook payload",
     );
+  });
+
+  it("retains directory-target behavior for ordinary queued copies", async () => {
+    mockExact = false;
+    await mkdir(path.join(projectRoot, "foo"));
+
+    const { applyPendingCopies } = await import("./pending-copies");
+    await expect(applyPendingCopies({ limit: 1 })).resolves.toBe(1);
+
+    await expect(
+      readFile(path.join(projectRoot, "foo", "test.ipynb"), "utf8"),
+    ).resolves.toBe("notebook payload");
   });
 });

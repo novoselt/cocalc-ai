@@ -3,6 +3,8 @@
  *  License: MS-RSL – see LICENSE.md for details
  */
 
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 import { decodeTarCQuotedString } from "./legacy-migration/tar-output";
@@ -44,4 +46,49 @@ export function archivePathIsAllowed({
     }
   }
   return false;
+}
+
+export async function replacePathFromStaging({
+  source,
+  destination,
+  destinationExists,
+  copy,
+}: {
+  source: string;
+  destination: string;
+  destinationExists: boolean;
+  copy: (source: string, destination: string) => Promise<void>;
+}): Promise<void> {
+  const parent = path.dirname(destination);
+  const basename = path.basename(destination);
+  const token = randomUUID();
+  const incoming = path.join(parent, `.${basename}.cocalc-incoming-${token}`);
+  const previous = path.join(parent, `.${basename}.cocalc-previous-${token}`);
+  await mkdir(parent, { recursive: true });
+  try {
+    await copy(source, incoming);
+    if (!destinationExists) {
+      await rename(incoming, destination);
+      return;
+    }
+    await rename(destination, previous);
+    try {
+      await rename(incoming, destination);
+    } catch (err) {
+      try {
+        await rename(previous, destination);
+      } catch (restoreErr) {
+        const failure = new Error(
+          `copy replacement and rollback both failed for ${destination}: ${err}; rollback: ${restoreErr}`,
+        );
+        // @ts-ignore -- Error.cause is unavailable in this package's lib target.
+        failure.cause = restoreErr;
+        throw failure;
+      }
+      throw err;
+    }
+    await rm(previous, { recursive: true, force: true }).catch(() => {});
+  } finally {
+    await rm(incoming, { recursive: true, force: true }).catch(() => {});
+  }
 }

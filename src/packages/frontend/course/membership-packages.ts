@@ -54,13 +54,15 @@ export function getCourseMembershipPackage(
   course_project_id: string,
 ): MembershipPackageDetails | undefined {
   return packages
-    .filter((membershipPackage) =>
-      isCourseMembershipPackageForProject(membershipPackage, course_project_id),
+    .filter(
+      (membershipPackage) =>
+        isCourseMembershipPackageForProject(
+          membershipPackage,
+          course_project_id,
+        ) && isMembershipPackageCurrentlyActive(membershipPackage),
     )
     .sort(
       (left, right) =>
-        Number(isMembershipPackageCurrentlyActive(right)) -
-          Number(isMembershipPackageCurrentlyActive(left)) ||
         toTime(right.updated) - toTime(left.updated) ||
         toTime(right.created) - toTime(left.created),
     )[0];
